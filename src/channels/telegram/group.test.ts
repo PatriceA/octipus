@@ -28,12 +28,14 @@ describe('Telegram group mapping', () => {
     expect(other).toMatchObject({ mentioned: false, text: '@bob ship it' });
   });
 
-  test('commands: /join and /leave@bot are the group commands; another bot\'s command is not ours', () => {
-    expect(toTelegramGroupInbound(message({ text: '/join', entities: [{ type: 'bot_command', offset: 0, length: 5 }] }), me))
+  test('commands: /join@bot and /leave@bot are the group commands; bare or another bot\'s command is not ours', () => {
+    expect(toTelegramGroupInbound(message({ text: '/join@octipus_bot', entities: [{ type: 'bot_command', offset: 0, length: 17 }] }), me))
       .toMatchObject({ mentioned: true, text: 'join' });
+    expect(toTelegramGroupInbound(message({ text: '/join', entities: [{ type: 'bot_command', offset: 0, length: 5 }] }), me))
+      .toMatchObject({ mentioned: false, text: '/join' });
     expect(toTelegramGroupInbound(message({ text: '/leave@octipus_bot', entities: [{ type: 'bot_command', offset: 0, length: 18 }] }), me))
       .toMatchObject({ mentioned: true, text: 'leave' });
-    expect(toTelegramGroupInbound(message({ text: '/link', entities: [{ type: 'bot_command', offset: 0, length: 5 }] }), me))
+    expect(toTelegramGroupInbound(message({ text: '/link@octipus_bot', entities: [{ type: 'bot_command', offset: 0, length: 17 }] }), me))
       .toMatchObject({ mentioned: true, text: 'link' });
     expect(toTelegramGroupInbound(message({ text: '/stop@octipus_bot now', entities: [{ type: 'bot_command', offset: 0, length: 17 }] }), me))
       .toMatchObject({ mentioned: true, text: '/stop now' });

@@ -438,13 +438,19 @@ Built:
   `createConversationAsync` when needed). `link` in the 1:1 chat gives a link
   code. No greeting when added to a group chat or channel.
 - Telegram: `group` / `supergroup` chats; `@botname`, a text mention, a
-  command (`/join`, `/leave@botname`) or a reply to the bot addresses it; a
+  command for this bot (`/leave@botname`; bare commands go to every bot) or a
+  reply to the bot addresses it; a supergroup upgrade moves the enrolment and
+  sessions to the new chat id; a
   group is one thread, a forum topic its own; `take this` replying to a
   message takes that message. `/link` is never answered in a group (it used to
   post the code there). `allowedUsers` applies per sender, silently.
 - Transcripts from an in-memory buffer of what the bot saw (§3).
-- Text the bot repeats gets a word joiner after `@`, so Telegram does not
-  turn a member's `@username` into a mention.
+- Text the bot repeats gets a word joiner after an `@` that starts a word,
+  so Telegram does not turn a member's `@username` into a mention.
+- Prompts say how to answer on each platform (`answerHow`): Teams only
+  delivers mentions, Telegram (privacy mode) mentions and replies; with the
+  budget used up, a bare yes/no in an existing thread or chat still reaches
+  the prompt.
 
 Not built: reactions as a take trigger on Teams (no custom emoji) and
 Telegram (the bot cannot read the reacted message), permalinks for Teams.

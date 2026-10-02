@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { MAIN_THREAD } from '@/channels/group-handler';
-import { conversationKind, splitConversationId, type TeamsActivityLike, threadConversationId, toGroupInbound } from './group';
+import { conversationKind, plain, splitConversationId, type TeamsActivityLike, threadConversationId, toGroupInbound } from './group';
 
 const BOT = '28:app';
 const activity = (over: Partial<TeamsActivityLike> = {}): TeamsActivityLike => ({
@@ -49,7 +49,11 @@ describe('Teams group mapping', () => {
       entities: [{ type: 'mention', text: '<at>Bob</at>', mentioned: { id: '29:bob' } }],
     }));
     expect(inbound).toMatchObject({ channelId: '19:chat@thread.v2', replyThread: MAIN_THREAD, threadId: undefined, mentioned: false });
-    expect(inbound?.text).toBe('<at>Bob</at> can you check?');
+    expect(inbound?.text).toBe('@Bob can you check?');
+  });
+
+  test('HTML entities and tags become text', () => {
+    expect(plain('<div>a &lt; b &amp;&amp; c</div><br>next')).toBe('a < b && c \nnext');
   });
 
   test('a 1:1 chat is not a group; HTML is reduced to text', () => {

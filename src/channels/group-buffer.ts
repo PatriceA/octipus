@@ -17,15 +17,20 @@ export const BUFFER_BOT_ID = 'octipus:bot';
 const MAX_PER_THREAD = 40;
 const MAX_THREADS = 2_000;
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/** Longer messages are cut: the transcript clips each one to 1,200 characters anyway. */
+const MAX_TEXT_CHARS = 1_500;
 
 const threads = new Map<string, ChannelMessage[]>();
 const key = (channelType: string, channelId: string, thread: string) => `${channelType}\u0000${channelId}\u0000${thread}`;
 
 /** Record one message in a thread (or a chat's single thread). A repeat of the same id replaces it. */
-export function recordGroupMessage(channelType: string, channelId: string, thread: string, message: ChannelMessage): void {
+export function recordGroupMessage(
+  channelType: string, channelId: string, thread: string, message: ChannelMessage, now = Date.now(),
+): void {
   const k = key(channelType, channelId, thread);
-  const list = (threads.get(k) ?? []).filter(m => m.id !== message.id);
-  list.push(message);
+  const cutoff = new Date(now - MAX_AGE_MS).toISOString();
+  const list = (threads.get(k) ?? []).filter(m => m.id !== message.id && m.at >= cutoff);
+  list.push(message.text.length > MAX_TEXT_CHARS ? { ...message, text: message.text.slice(0, MAX_TEXT_CHARS) } : message);
   if (list.length > MAX_PER_THREAD) list.splice(0, list.length - MAX_PER_THREAD);
   threads.delete(k); // re-insert: Map order doubles as LRU order
   threads.set(k, list);
@@ -43,6 +48,12 @@ export function groupMessages(channelType: string, channelId: string, thread: st
 /** One recorded message by id, in that thread. */
 export function findGroupMessage(channelType: string, channelId: string, thread: string, id: string): ChannelMessage | undefined {
   return groupMessages(channelType, channelId, thread).find(m => m.id === id);
+}
+
+/** Forget a chat's threads (it was enrolled afresh, or left). */
+export function forgetGroupChat(channelType: string, channelId: string): void {
+  const prefix = key(channelType, channelId, '');
+  for (const k of [...threads.keys()]) if (k.startsWith(prefix)) threads.delete(k);
 }
 
 /** Test seam. */

@@ -7,7 +7,7 @@ import {
   type TurnContext,
 } from 'botbuilder';
 import { generateLinkCode } from '@/channels/linking';
-import { BUFFER_BOT_ID, findGroupMessage, groupMessages, recordGroupMessage } from '@/channels/group-buffer';
+import { BUFFER_BOT_ID, findGroupMessage, forgetGroupChat, groupMessages, recordGroupMessage } from '@/channels/group-buffer';
 import { type GroupDeps, type GroupMember, groupHints, handleGroupMessage, MAIN_THREAD } from '@/channels/group-handler';
 import { shouldSendHint } from '@/channels/hint-limiter';
 import { getConfig } from '@/config';
@@ -206,6 +206,7 @@ export class TeamsChannel extends BaseChannel {
     // unless enrolled and addressed. Only 1:1 chats take the path below.
     const inbound = toGroupInbound(activity as TeamsActivityLike, activity);
     if (inbound) {
+      this.accounts.delete(inbound.user); // re-insert: Map order doubles as LRU order
       this.accounts.set(inbound.user, {
         account: { id: activity.from.id, name: activity.from.name, aadObjectId: activity.from.aadObjectId },
         serviceUrl: activity.serviceUrl,
@@ -223,7 +224,7 @@ export class TeamsChannel extends BaseChannel {
     // `link` in the 1:1 chat: a code to enter under Settings → Channels.
     if (/^\/?link$/i.test((activity.text ?? '').trim())) {
       const code = await generateLinkCode({ channelType: 'teams', channelUserId: teamsUserId, channelUserName: userName });
-      await context.sendActivity(`Your link code: **${code}**\n\nEnter it in the Octipus web app under Settings → Channels within 5 minutes.`);
+      await context.sendActivity(`Your link code: **${code}**\n\nEnter it in the Octipus web app under Settings → Channels within 15 minutes.`);
       return;
     }
 
@@ -503,6 +504,10 @@ export class TeamsChannel extends BaseChannel {
         });
       },
       shouldSendHint: (key) => shouldSendHint(`teams:${key}`),
+      forget: (channelId) => {
+        this.groupConversations.delete(channelId);
+        forgetGroupChat('teams', channelId);
+      },
       seen: (msg) => {
         this.groupConversations.add(msg.channelId);
         if (!msg.text) return;
@@ -537,7 +542,8 @@ export class TeamsChannel extends BaseChannel {
   override async sendTyping(channelId: string, _active: boolean = true): Promise<void> {
     if (!this.adapter) return;
     const reference = this.conversationReferences.get(channelId);
-    if (!reference) return;
+    // In a team channel the indicator would go to the channel, not the thread.
+    if (!reference || (reference.conversation as { conversationType?: string } | undefined)?.conversationType === 'channel') return;
     try {
       await this.adapter.continueConversation(reference as Partial<Activity>, async (context) => {
         await context.sendActivity({ type: 'typing' });

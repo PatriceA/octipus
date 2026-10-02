@@ -7,7 +7,7 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import type { JoinResult } from '@/channels/group-channels';
 import type { GroupChannel } from '@/db/schema/group-channels';
-import { type GroupDeps, type GroupInbound, groupHints, handleGroupMessage, MAIN_THREAD } from './group-handler';
+import { answerHow, type GroupDeps, type GroupInbound, groupHints, handleGroupMessage, MAIN_THREAD } from './group-handler';
 
 const group: GroupChannel = {
   id: 'g1', channelType: 'telegram', channelId: '-1001', label: 'Release crew',
@@ -92,10 +92,38 @@ describe('handleGroupMessage', () => {
     expect(ctx.calls.private).toEqual([hints.takeWhat]);
   });
 
-  test('with the budget used up, a bare yes replying to the bot still goes through', async () => {
+  test('with the budget used up, a bare yes in the chat still goes through, replying or mentioning', async () => {
     ctx = makeDeps({ budgetPause: vi.fn(async () => ({ resetsAt: '2026-11-01T00:00:00.000Z' })) });
     expect(await handleGroupMessage(inbound({ text: 'yes', mentioned: false, repliedToBot: true }), ctx.deps)).toBe('dispatched');
-    expect(await handleGroupMessage(inbound({ text: 'yes', messageId: '52' }), ctx.deps)).toBe('paused');
+    expect(await handleGroupMessage(inbound({ text: 'yes', messageId: '52' }), ctx.deps)).toBe('dispatched');
+    // A post that starts its own thread (a new Teams channel post) has no prompt to answer.
+    expect(await handleGroupMessage(inbound({ text: 'yes', messageId: '53', replyThread: '53' }), ctx.deps)).toBe('paused');
+    expect(await handleGroupMessage(inbound({ text: 'yes please', messageId: '54' }), ctx.deps)).toBe('paused');
+  });
+
+  test('link and join refusals are private and once a day', async () => {
+    await handleGroupMessage(inbound({ text: 'link' }), ctx.deps);
+    await handleGroupMessage(inbound({ text: 'link', messageId: '55' }), ctx.deps);
+    ctx.deps.join = vi.fn(async (): Promise<JoinResult> => ({ status: 'taken', ownerName: 'bob' }));
+    await handleGroupMessage(inbound({ text: 'join', messageId: '56' }), ctx.deps);
+    await handleGroupMessage(inbound({ text: 'join', messageId: '57' }), ctx.deps);
+    expect(ctx.calls.private).toEqual([hints.linkInChannel, hints.taken('bob')]);
+  });
+
+  test('prompts say how to answer on each platform', () => {
+    expect(answerHow('slack', '90.0')).toBe('in the thread');
+    expect(answerHow('teams', MAIN_THREAD)).toBe('mentioning me');
+    expect(answerHow('teams', '17000')).toBe('in the thread, mentioning me');
+    expect(answerHow('telegram', MAIN_THREAD)).toBe('as a reply to my message, or mentioning me');
+  });
+
+  test('enrolling and leaving forget what the adapter kept about the chat', async () => {
+    const forget = vi.fn();
+    ctx = makeDeps({ findGroup: vi.fn(async () => null), forget });
+    await handleGroupMessage(inbound({ text: 'join' }), ctx.deps);
+    ctx = makeDeps({ forget });
+    await handleGroupMessage(inbound({ text: 'leave' }), ctx.deps);
+    expect(forget).toHaveBeenCalledTimes(2);
   });
 
   test('platform texts: how to link, and how the conversation continues', async () => {

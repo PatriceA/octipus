@@ -150,6 +150,7 @@ describe('taking work on (phase 2)', () => {
   test('quietText: mentions become plain text and nobody is pinged', () => {
     expect(quietText('<!here> *ship* <@U1> <!subteam^S9|@devs> <!channel|channel>')).toBe('@\u2060here ship @\u2060U1 @\u2060devs @\u2060channel');
     expect(quietText('ask @anna_s about it')).toBe('ask @\u2060anna_s about it');
+    expect(quietText('mail alice@example.com')).toBe('mail alice@example.com');
   });
 
   test("someone else's message is fenced and attributed, and cannot close its fence", () => {

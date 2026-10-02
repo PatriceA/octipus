@@ -51,12 +51,15 @@ export function teamsUserKey(from: TeamsActivityLike['from']): string {
   return from.aadObjectId || from.id;
 }
 
-/** Teams sends mentions as `<at>Name</at>` and a little HTML; plain text for the handler. */
-function plain(text: string): string {
+const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", '#39': "'", nbsp: ' ' };
+
+/** Teams sends mentions as `<at>Name</at>` and some HTML; plain text for the handler. */
+export function plain(text: string): string {
   return text
-    .replace(/<\/?(?:p|div|span)[^>]*>/gi, ' ')
+    .replace(/<at>([^<]*)<\/at>/gi, '@$1')
     .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/&nbsp;/g, ' ')
+    .replace(/<\/?[a-z][^>]*>/gi, ' ')
+    .replace(/&(amp|lt|gt|quot|apos|#39|nbsp);/g, (_m, name: string) => ENTITIES[name] ?? '')
     .replace(/[ \t]+/g, ' ')
     .trim();
 }

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from 'vitest';
-import { clearGroupBuffer, findGroupMessage, groupMessages, recordGroupMessage } from './group-buffer';
+import { clearGroupBuffer, findGroupMessage, forgetGroupChat, groupMessages, recordGroupMessage } from './group-buffer';
 
 const msg = (id: string, at = new Date().toISOString()) => ({ id, conversationId: 'c', author: 'Anna', authorId: 'u', text: `m${id}`, at });
 
@@ -22,6 +22,17 @@ describe('group buffer', () => {
     expect(groupMessages('telegram', 'c', 'main')).toHaveLength(1);
     expect(findGroupMessage('telegram', 'c', 'main', '1')?.text).toBe('edited');
     expect(findGroupMessage('telegram', 'c', 'main', '2')).toBeUndefined();
+  });
+
+  test('long messages are cut; forgetting a chat drops all its threads only', () => {
+    recordGroupMessage('teams', 'c', 't', { ...msg('1'), text: 'x'.repeat(5_000) });
+    recordGroupMessage('teams', 'c', 't2', msg('2'));
+    recordGroupMessage('teams', 'c2', 't', msg('3'));
+    expect(groupMessages('teams', 'c', 't')[0]!.text).toHaveLength(1_500);
+    forgetGroupChat('teams', 'c');
+    expect(groupMessages('teams', 'c', 't')).toEqual([]);
+    expect(groupMessages('teams', 'c', 't2')).toEqual([]);
+    expect(groupMessages('teams', 'c2', 't')).toHaveLength(1);
   });
 
   test('messages older than a day are dropped', () => {

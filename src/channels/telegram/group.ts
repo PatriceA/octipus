@@ -2,8 +2,9 @@
  * Telegram groups, mapped onto the group-channel rules
  * (`src/channels/group-handler.ts`).
  *
- * - **Addressing.** `@botname`, a text mention of the bot, a command
- *   (`/join`, `/leave@botname`), or a reply to one of the bot's messages.
+ * - **Addressing.** `@botname`, a text mention of the bot, a command for it
+ *   (`/join@botname` — a bare `/join` goes to every bot in the group), or a
+ *   reply to one of the bot's messages.
  *   With privacy mode on (BotFather's default) that is all the bot receives.
  * - **Threads.** Telegram groups have reply chains, not threads: a group is
  *   one conversation (`MAIN_THREAD`), and replies answer the message that
@@ -78,8 +79,9 @@ export function toTelegramGroupInbound<Raw>(msg: TelegramMessageLike, me: BotIde
       mentioned = true;
       text = text.slice(0, e.offset) + text.slice(e.offset + e.length);
     } else if (e.type === 'bot_command' && e.offset === 0) {
+      // In a group a bare `/help` goes to every bot in it: only `/cmd@thisbot` is ours.
       const [name, target] = part.slice(1).split('@') as [string, string | undefined];
-      if (target !== undefined && `@${target}`.toLowerCase() !== botName) continue; // another bot's command
+      if (target === undefined || `@${target}`.toLowerCase() !== botName) continue;
       mentioned = true;
       // `/join` → `join`; other commands (`/stop`) stay commands, without the @botname.
       const replacement = GROUP_COMMANDS.has(name.toLowerCase()) ? name.toLowerCase() : `/${name}`;

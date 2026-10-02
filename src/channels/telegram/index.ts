@@ -1,5 +1,5 @@
 import { Bot, type Context, InputFile } from 'grammy';
-import { BUFFER_BOT_ID, findGroupMessage, groupMessages, recordGroupMessage } from '@/channels/group-buffer';
+import { BUFFER_BOT_ID, findGroupMessage, forgetGroupChat, groupMessages, recordGroupMessage } from '@/channels/group-buffer';
 import { type GroupDeps, type GroupMember, groupHints, handleGroupMessage, MAIN_THREAD } from '@/channels/group-handler';
 import { shouldSendHint } from '@/channels/hint-limiter';
 import { generateLinkCode } from '@/channels/linking';
@@ -62,6 +62,20 @@ export class TelegramChannel extends BaseChannel {
       await this.handleMessage(ctx, 'voice');
     });
 
+    // A group upgraded to a supergroup gets a new chat id: keep its enrolment.
+    this.bot.on('message:migrate_to_chat_id', async (ctx) => {
+      const from = String(ctx.chat.id);
+      const to = String(ctx.message.migrate_to_chat_id);
+      try {
+        const { moveGroupChannel } = await import('@/channels/group-channels');
+        await moveGroupChannel('telegram', from, to);
+        this.groupChats.delete(from);
+        forgetGroupChat('telegram', from);
+      } catch (err) {
+        channelLogger.error({ err, from, to }, 'Could not move the Telegram group enrolment to its new chat id');
+      }
+    });
+
     // Error handling
     this.bot.catch((err) => {
       this.emitError(err.error as Error);
@@ -100,7 +114,7 @@ export class TelegramChannel extends BaseChannel {
     // Send attachments first
     if (response.attachments?.length) {
       for (const attachment of response.attachments) {
-        await this.sendAttachment(chatId, attachment, response.replyTo);
+        await this.sendAttachment(chatId, attachment, response.replyTo, response.threadId);
       }
     }
 
@@ -108,6 +122,7 @@ export class TelegramChannel extends BaseChannel {
     const MAX_LEN = 4096;
     const chunks = this.splitMessage(response.content, MAX_LEN);
     let lastMessageId = '';
+    const sentIds: string[] = [];
 
     for (let i = 0; i < chunks.length; i++) {
       const options: Record<string, unknown> = {
@@ -126,6 +141,7 @@ export class TelegramChannel extends BaseChannel {
       try {
         const result = await this.bot.api.sendMessage(chatId, chunks[i], options);
         lastMessageId = String(result.message_id);
+        sentIds.push(lastMessageId);
       } catch (err: any) {
         if (err?.error_code === 400) {
           if (options.reply_to_message_id) {
@@ -136,6 +152,7 @@ export class TelegramChannel extends BaseChannel {
           }
           const result = await this.bot.api.sendMessage(chatId, chunks[i], options);
           lastMessageId = String(result.message_id);
+          sentIds.push(lastMessageId);
         } else {
           throw err;
         }
@@ -143,10 +160,10 @@ export class TelegramChannel extends BaseChannel {
     }
 
     if (this.groupChats.has(channelId)) {
-      recordGroupMessage('telegram', channelId, response.threadId ?? MAIN_THREAD, {
-        id: lastMessageId || `sent-${Date.now()}`, conversationId: channelId, author: 'Octipus', authorId: BUFFER_BOT_ID,
-        text: response.content, at: new Date().toISOString(),
-      });
+      // One entry per message sent, so a reply to any part is found as the bot's.
+      sentIds.forEach((id, i) => recordGroupMessage('telegram', channelId, response.threadId ?? MAIN_THREAD, {
+        id, conversationId: channelId, author: 'Octipus', authorId: BUFFER_BOT_ID, text: chunks[i] ?? '', at: new Date().toISOString(),
+      }));
     }
     return lastMessageId;
   }
@@ -243,6 +260,10 @@ export class TelegramChannel extends BaseChannel {
         });
       },
       shouldSendHint: (key) => shouldSendHint(`telegram:${key}`),
+      forget: (chatId) => {
+        this.groupChats.delete(chatId);
+        forgetGroupChat('telegram', chatId);
+      },
       seen: (msg) => {
         this.groupChats.add(msg.channelId);
         const at = new Date((ctx.message?.date ?? Date.now() / 1000) * 1000).toISOString();
@@ -265,26 +286,24 @@ export class TelegramChannel extends BaseChannel {
           });
         }
       },
-      dispatch: ({ channelId, member, userName, text, threadId, group, context, message, take }) => {
-        void (async () => {
-          const attachments = await this.extractAttachments(ctx, attachmentType).catch((err: unknown) => {
-            channelLogger.warn({ err }, 'Telegram group: reading the attachment failed');
-            return [] as Attachment[];
-          });
-          this.emitMessage(this.createUnifiedMessage(channelId, member.id, text, {
-            userName,
-            threadId,
-            attachments: attachments.length > 0 ? attachments : undefined,
-            metadata: {
-              telegramUserId: message.user,
-              // Replies and the progress reactions go on this message.
-              messageId: message.messageId,
-              groupChannelId: group.id,
-              groupContext: context,
-              ...(take ? { take } : {}),
-            },
-          }));
-        })();
+      dispatch: async ({ channelId, member, userName, text, threadId, group, context, message, take }) => {
+        const attachments = await this.extractAttachments(ctx, attachmentType).catch((err: unknown) => {
+          channelLogger.warn({ err }, 'Telegram group: reading the attachment failed');
+          return [] as Attachment[];
+        });
+        this.emitMessage(this.createUnifiedMessage(channelId, member.id, text, {
+          userName,
+          threadId,
+          attachments: attachments.length > 0 ? attachments : undefined,
+          metadata: {
+            telegramUserId: message.user,
+            // Replies and the progress reactions go on this message.
+            messageId: message.messageId,
+            groupChannelId: group.id,
+            groupContext: context,
+            ...(take ? { take } : {}),
+          },
+        }));
       },
     };
   }
@@ -325,6 +344,7 @@ export class TelegramChannel extends BaseChannel {
       const message = ctx.message as TelegramMessageLike | undefined;
       const inbound = message ? toTelegramGroupInbound(message, { id: ctx.me.id, username: ctx.me.username }, ctx) : null;
       if (!inbound) return;
+      this.names.delete(inbound.user); // re-insert: Map order doubles as LRU order
       this.names.set(inbound.user, telegramName(message?.from));
       if (this.names.size > 5_000) this.names.delete(this.names.keys().next().value as string);
       try {
@@ -464,12 +484,15 @@ export class TelegramChannel extends BaseChannel {
     return attachments;
   }
 
-  private async sendAttachment(chatId: number, attachment: Attachment, replyTo?: string): Promise<void> {
+  private async sendAttachment(chatId: number, attachment: Attachment, replyTo?: string, threadId?: string): Promise<void> {
     if (!this.bot) return;
 
     const options: Record<string, unknown> = {};
     if (replyTo) {
       options.reply_to_message_id = parseInt(replyTo, 10);
+    }
+    if (threadId && /^\d+$/.test(threadId)) {
+      options.message_thread_id = parseInt(threadId, 10);
     }
 
     switch (attachment.type) {

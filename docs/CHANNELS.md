@@ -263,8 +263,9 @@ what it can read back:
 
 | | Slack | Teams | Telegram |
 |---|---|---|---|
-| Enrol / remove | `@Octipus join` / `leave` | `@Octipus join` / `leave` | `@yourbot join`, or `/join` / `/leave` |
-| Addressed by | a mention, or a reply in a thread it is in | a mention (Teams delivers nothing else without RSC) | a mention, a command, or a reply to one of its messages |
+| Enrol / remove | `@Octipus join` / `leave` | `@Octipus join` / `leave` | `@yourbot join`, or `/join@yourbot` / `/leave@yourbot` |
+| Addressed by | a mention, or a reply in a thread it is in | a mention (Teams delivers nothing else without RSC) | a mention, a `/command@yourbot`, or a reply to one of its messages |
+| Answer a prompt | `yes` in the thread | `@Octipus yes` | `yes` as a reply to the prompt, or `@yourbot yes` |
 | Answers in | the message's thread | the post's thread; a group chat as a whole | a reply to the message; a forum topic's own thread |
 | Transcript | the thread, read back | what the bot saw (below) | what the bot saw (below) |
 | Private messages | ephemeral, in the channel | the member's 1:1 chat with the bot | the member's private chat with the bot |
@@ -275,7 +276,7 @@ what it can read back:
   history), so the transcript is built from the messages the bot saw in the
   enrolled chat — members' messages that reached it and its own replies. It is
   kept in memory only: at most 40 messages per thread, none older than a day,
-  and emptied by a restart. With Telegram's privacy mode on (the default) the
+  emptied by a restart and when the chat is enrolled again or left. With Telegram's privacy mode on (the default) the
   bot sees only messages addressed to it and the messages they reply to.
 - **Private messages.** Hints and approval details go to the member's 1:1
   chat with the bot. Teams opens one if needed; Telegram can only write to
@@ -287,7 +288,11 @@ what it can read back:
   Telegram members send `/link` in a private chat. Neither is answered in a
   group.
 - **Telegram `allowedUsers`** applies to the sender: in a group, a message
-  from anyone else is ignored without a reply.
+  from anyone else is ignored without a reply. A bare `/command` goes to every
+  bot in a group, so Octipus only takes `/command@yourbot`.
+- **Telegram supergroup upgrade.** When a group becomes a supergroup it gets a
+  new chat id; the enrolment and the members' sessions move with it.
+- `link` and refused `join`s get their private answer once a day.
 - Taken-task notices and other text the bot repeats never mention anyone: an
   `@name` from a member's message is posted with a word joiner after the `@`.
 

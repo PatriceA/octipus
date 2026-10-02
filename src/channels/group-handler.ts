@@ -101,6 +101,8 @@ export interface GroupDeps<Raw = unknown> {
   shouldSendHint(key: string): boolean;
   /** Every message in an enrolled chat that reaches the bot, addressed or not (for adapters that keep a transcript). */
   seen?(msg: GroupInbound<Raw>, group: GroupChannel): void;
+  /** The chat was enrolled or left: drop what the adapter kept about it. */
+  forget?(channelId: string): void;
   dispatch(input: {
     channelId: string;
     member: GroupMember;
@@ -113,7 +115,7 @@ export interface GroupDeps<Raw = unknown> {
     message: GroupInbound<Raw>;
     /** Set when the member asked the bot to take the work on (`take this`, 🐙). */
     take?: TakeRequest;
-  }): void;
+  }): void | Promise<void>;
 }
 
 export type GroupOutcome =
@@ -128,6 +130,18 @@ export type GroupOutcome =
 
 /** The single thread of a chat without threads (a Teams group chat, a Telegram group). */
 export const MAIN_THREAD = 'main';
+
+/**
+ * How a member answers a prompt in a group chat, for the prompt texts. Teams
+ * delivers only messages that mention the bot; Telegram (privacy mode) only
+ * those and replies to the bot.
+ */
+export function answerHow(channelType: string, threadId?: string): string {
+  const inThread = threadId !== undefined && threadId !== MAIN_THREAD;
+  if (channelType === 'teams') return inThread ? 'in the thread, mentioning me' : 'mentioning me';
+  if (channelType === 'telegram') return 'as a reply to my message, or mentioning me';
+  return threadId ? 'in the thread' : 'in the chat';
+}
 
 /** What the member "says" when they take a message on with a reaction. */
 export const TAKE_REACTION_TEXT = 'Take this on.';
@@ -199,7 +213,7 @@ export async function handleGroupMessage<Raw>(msg: GroupInbound<Raw>, deps: Grou
   const where = hintTarget(msg);
 
   if (command === 'link') {
-    await deps.postPrivate(user, deps.hints.linkInChannel, where);
+    if (deps.shouldSendHint(`link:${user}`)) await deps.postPrivate(user, deps.hints.linkInChannel, where);
     return 'hint';
   }
 
@@ -233,7 +247,8 @@ export async function handleGroupMessage<Raw>(msg: GroupInbound<Raw>, deps: Grou
 
   // A bare yes/no may answer a prompt raised before the budget ran out, so it
   // still goes through; a new turn it would start is refused by the budget.
-  const answering = (msg.threadId !== undefined || msg.repliedToBot === true) && bareReply(text);
+  // Not one that starts a new thread: no prompt can be waiting there.
+  const answering = msg.replyThread !== msg.messageId && bareReply(text);
   if (!answering && await budgetPaused(group, msg.channelId, msg.replyThread, deps)) return 'paused';
 
   if (!text && !msg.hasFiles) {
@@ -274,7 +289,7 @@ export async function handleGroupMessage<Raw>(msg: GroupInbound<Raw>, deps: Grou
   const context = await deps.readContext({
     channelId: msg.channelId, messageId: msg.messageId, threadId: msg.threadId, replyThread: msg.replyThread, label: group.label,
   });
-  deps.dispatch({
+  await deps.dispatch({
     channelId: msg.channelId,
     member,
     userName: await deps.displayName(user),
@@ -333,7 +348,7 @@ export async function handleGroupReaction<Raw>(
   // The taken message is left out of the transcript: it reaches the turn as
   // the request itself (see `takeContext`).
   const context = await deps.readContext({ channelId, messageId, threadId: taken.threadId, replyThread, label: group.label });
-  deps.dispatch({
+  await deps.dispatch({
     channelId,
     member,
     userName: await deps.displayName(user),
@@ -368,25 +383,27 @@ async function budgetPaused<Raw>(group: GroupChannel, channelId: string, threadI
 
 async function join<Raw>(msg: GroupInbound<Raw>, deps: GroupDeps<Raw>): Promise<GroupOutcome> {
   const where = hintTarget(msg);
+  // Refusals are private and, on some platforms, open a direct chat: once a day.
+  const refuse = async (text: string) => {
+    if (deps.shouldSendHint(`join:${msg.channelId}:${msg.user}`)) await deps.postPrivate(msg.user, text, where);
+    return 'hint' as const;
+  };
   const member = await deps.findMember(msg.user);
-  if (!member || !member.isActive) {
-    await deps.postPrivate(msg.user, deps.hints.linkFirst, where);
-    return 'hint';
-  }
+  if (!member || !member.isActive) return refuse(deps.hints.linkFirst);
   const result = await deps.join({ channelId: msg.channelId, label: await deps.channelLabel(msg.channelId), userId: member.id });
   switch (result.status) {
     case 'enrolled':
+      deps.forget?.(msg.channelId);
       await deps.postInThread(msg.channelId, msg.replyThread, deps.hints.joined(deps.bot, member.username));
       return 'joined';
     case 'took_over':
+      deps.forget?.(msg.channelId);
       await deps.postInThread(msg.channelId, msg.replyThread, deps.hints.joined(deps.bot, member.username, result.previousOwner));
       return 'joined';
     case 'already_yours':
-      await deps.postPrivate(msg.user, deps.hints.alreadyYours, where);
-      return 'hint';
+      return refuse(deps.hints.alreadyYours);
     case 'taken':
-      await deps.postPrivate(msg.user, deps.hints.taken(result.ownerName), where);
-      return 'hint';
+      return refuse(deps.hints.taken(result.ownerName));
   }
 }
 
@@ -400,6 +417,7 @@ async function leave<Raw>(msg: GroupInbound<Raw>, deps: GroupDeps<Raw>): Promise
   const result = await deps.leave({ channelId: msg.channelId, userId: member.id, isAdmin: member.isAdmin });
   if (result === 'left') {
     await deps.postInThread(msg.channelId, msg.replyThread, leftText(deps.bot));
+    deps.forget?.(msg.channelId);
     return 'left';
   }
   await deps.postPrivate(msg.user, result === 'not_owner' ? deps.hints.notOwner : deps.hints.notEnrolledLeave, where);
