@@ -15,6 +15,8 @@ beforeEach(() => {
 test('routes through the configured model with prefixes and serial batches of eight', async () => {
   const config = await cocoIndexEmbeddingSettings();
   expect(config.settings.envs.OPENAI_API_BASE).toBe('http://127.0.0.1:3005/api/connectors/cocoindex/document');
+  expect(config.settings.embedding.indexing_params).toEqual({ input_type: 'document' });
+  expect(config.settings.embedding.query_params).toEqual({ input_type: 'query' });
   const result = await embedCocoIndex(Array(17).fill('text'), config.model, 'query', 'admin');
   expect(mock.embed.mock.calls.map(call => call[0].length)).toEqual([8, 8, 1]);
   expect(mock.embed.mock.calls[0]).toEqual([Array(8).fill('query: text'), 'embed-v1', { userId: 'admin', modelConfigName: 'embed' }]);
