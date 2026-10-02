@@ -1,10 +1,23 @@
 import { Bot, type Context, InputFile } from 'grammy';
+import { BUFFER_BOT_ID, findGroupMessage, groupMessages, recordGroupMessage } from '@/channels/group-buffer';
+import { type GroupDeps, type GroupMember, groupHints, handleGroupMessage, MAIN_THREAD } from '@/channels/group-handler';
+import { shouldSendHint } from '@/channels/hint-limiter';
 import { generateLinkCode } from '@/channels/linking';
 import { getConfig } from '@/config';
 import type { Config } from '@/config/schema';
 import type { Attachment, ChannelResponse, ChannelType } from '@/core/types';
 import { channelLogger } from '@/utils/logger';
 import { BaseChannel } from '../interface';
+import {
+  isGroupChat, type TelegramMessageLike, telegramName, telegramPermalink, telegramThread, toTelegramGroupInbound,
+} from './group';
+
+const HINTS = groupHints({
+  platform: 'Telegram',
+  linkHow: 'send me /link in a private chat',
+  takeAlso: 'or reply to a message with `@Octipus take this`',
+  followHow: 'reply to my messages to continue',
+});
 
 export class TelegramChannel extends BaseChannel {
   readonly type: ChannelType = 'telegram';
@@ -12,6 +25,10 @@ export class TelegramChannel extends BaseChannel {
 
   private bot: Bot | null = null;
   private allowedUsers: Set<string> = new Set();
+  /** Enrolled groups seen since start: the bot's replies there join the transcript. */
+  private groupChats = new Set<string>();
+  /** Members' names as last seen in groups, by Telegram user id. */
+  private names = new Map<string, string>();
 
   override isEnabled(config: Config): boolean {
     return Boolean(config.telegram?.botToken);
@@ -96,6 +113,10 @@ export class TelegramChannel extends BaseChannel {
       const options: Record<string, unknown> = {
         parse_mode: 'Markdown',
       };
+      // A forum topic is a group thread; a plain group is one (`main`).
+      if (response.threadId && /^\d+$/.test(response.threadId)) {
+        options.message_thread_id = parseInt(response.threadId, 10);
+      }
 
       // Only set reply-to on the first chunk
       if (i === 0 && response.replyTo) {
@@ -121,7 +142,151 @@ export class TelegramChannel extends BaseChannel {
       }
     }
 
+    if (this.groupChats.has(channelId)) {
+      recordGroupMessage('telegram', channelId, response.threadId ?? MAIN_THREAD, {
+        id: lastMessageId || `sent-${Date.now()}`, conversationId: channelId, author: 'Octipus', authorId: BUFFER_BOT_ID,
+        text: response.content, at: new Date().toISOString(),
+      });
+    }
     return lastMessageId;
+  }
+
+  /** A direct message to a Telegram user; false when they never started a chat with the bot. */
+  private async sendDirect(telegramUserId: string, text: string): Promise<boolean> {
+    if (!this.bot) return false;
+    try {
+      await this.send(telegramUserId, { content: text });
+      return true;
+    } catch (err) {
+      channelLogger.debug({ err }, 'Telegram direct message failed (the user may not have started a chat with the bot)');
+      return false;
+    }
+  }
+
+  /** The approval details etc. for a group: in the member's private chat with the bot. */
+  override async sendPrivate(_channelId: string, userId: string, response: ChannelResponse): Promise<boolean> {
+    const { getChannelBindingManager } = await import('@/security/channel-bindings');
+    const identities = (await getChannelBindingManager().listForUser(userId))
+      .filter(i => i.channelType === 'telegram' && i.verifiedAt);
+    let delivered = false;
+    for (const identity of identities) {
+      if (await this.sendDirect(identity.externalId, response.content)) delivered = true;
+    }
+    return delivered;
+  }
+
+  /** Platform calls for `handleGroupMessage`, for one group message. */
+  private groupDeps(ctx: Context, attachmentType?: string): GroupDeps<Context> {
+    const me = ctx.me;
+    const botUserId = String(me.id);
+    return {
+      botUserId,
+      bot: `@${me.username}`,
+      hints: HINTS,
+      findGroup: async (chatId) => {
+        const { findGroupChannel } = await import('@/channels/group-channels');
+        return findGroupChannel('telegram', chatId);
+      },
+      isGroupActive: async (group) => {
+        const { isGroupChannelActive } = await import('@/channels/group-channels');
+        return isGroupChannelActive(group);
+      },
+      isThreadActive: async (groupId, threadId) => {
+        const { isGroupThreadActive } = await import('@/channels/group-channels');
+        return isGroupThreadActive(groupId, threadId);
+      },
+      findMember: async (telegramUserId): Promise<GroupMember | null> => {
+        const { getChannelBindingManager } = await import('@/security/channel-bindings');
+        const user = await getChannelBindingManager().findUserRecordByExternalId('telegram', telegramUserId);
+        return user ? { id: user.id, username: user.username, isActive: user.isActive, isAdmin: user.isAdmin } : null;
+      },
+      join: async ({ channelId, label, userId }) => {
+        const { joinGroupChannel } = await import('@/channels/group-channels');
+        return joinGroupChannel({ channelType: 'telegram', channelId, label, userId });
+      },
+      leave: async ({ channelId, userId, isAdmin }) => {
+        const { leaveGroupChannel } = await import('@/channels/group-channels');
+        return leaveGroupChannel({ channelType: 'telegram', channelId, userId, isAdmin });
+      },
+      channelLabel: async () => (ctx.chat && 'title' in ctx.chat ? ctx.chat.title ?? null : null),
+      displayName: async (telegramUserId) => this.names.get(telegramUserId) ?? 'a member',
+      postPrivate: async (telegramUserId, text, where) => {
+        if (await this.sendDirect(telegramUserId, text)) return;
+        // They never opened a private chat with the bot: answer their message
+        // in place. The hints carry no secrets (never a link code).
+        await this.send(where.channelId, { content: text, replyTo: where.messageId, threadId: telegramThread(ctx.message ?? {}) })
+          .catch((err: unknown) => channelLogger.error({ err }, 'Telegram group: hint failed'));
+      },
+      postInThread: async (chatId, threadId, text) => {
+        await this.send(chatId, { content: text, threadId })
+          .catch((err: unknown) => channelLogger.error({ err }, 'Telegram group: posting failed'));
+      },
+      readContext: async ({ channelId, messageId, replyThread, label }) => {
+        const { renderGroupContext } = await import('@/core/channels/group-context');
+        return renderGroupContext(groupMessages('telegram', channelId, replyThread), {
+          currentMessageId: messageId,
+          botIds: new Set([BUFFER_BOT_ID]),
+          conversationName: label ?? undefined,
+          scope: replyThread === MAIN_THREAD ? 'channel' : 'thread',
+        });
+      },
+      readMessage: async (chatId, id) => {
+        const m = findGroupMessage('telegram', chatId, telegramThread(ctx.message ?? {}), id);
+        return m ? { text: m.text, user: m.authorId === BUFFER_BOT_ID ? botUserId : m.authorId ?? null } : null;
+      },
+      permalink: async (chatId, id) => telegramPermalink(chatId, id),
+      budgetPause: async (group) => {
+        const { groupChannelPause } = await import('@/security/spend-budgets');
+        return groupChannelPause(group.id).catch((err: unknown) => {
+          channelLogger.warn({ err, groupId: group.id }, 'Group channel budget check failed — not pausing');
+          return null;
+        });
+      },
+      shouldSendHint: (key) => shouldSendHint(`telegram:${key}`),
+      seen: (msg) => {
+        this.groupChats.add(msg.channelId);
+        const at = new Date((ctx.message?.date ?? Date.now() / 1000) * 1000).toISOString();
+        // The message replied to is often the only way the bot sees it (privacy mode).
+        const reply = msg.replyTo;
+        if (reply?.text && !findGroupMessage('telegram', msg.channelId, msg.replyThread, reply.id)) {
+          const from = ctx.message?.reply_to_message?.from;
+          recordGroupMessage('telegram', msg.channelId, msg.replyThread, {
+            id: reply.id, conversationId: msg.channelId,
+            author: reply.user === botUserId ? 'Octipus' : telegramName(from),
+            authorId: reply.user === botUserId ? BUFFER_BOT_ID : reply.user ?? undefined,
+            text: reply.text,
+            at: new Date((ctx.message?.reply_to_message?.date ?? Date.now() / 1000) * 1000).toISOString(),
+          });
+        }
+        if (msg.text) {
+          recordGroupMessage('telegram', msg.channelId, msg.replyThread, {
+            id: msg.messageId, conversationId: msg.channelId, author: this.names.get(msg.user) ?? 'a member', authorId: msg.user,
+            text: msg.text, at,
+          });
+        }
+      },
+      dispatch: ({ channelId, member, userName, text, threadId, group, context, message, take }) => {
+        void (async () => {
+          const attachments = await this.extractAttachments(ctx, attachmentType).catch((err: unknown) => {
+            channelLogger.warn({ err }, 'Telegram group: reading the attachment failed');
+            return [] as Attachment[];
+          });
+          this.emitMessage(this.createUnifiedMessage(channelId, member.id, text, {
+            userName,
+            threadId,
+            attachments: attachments.length > 0 ? attachments : undefined,
+            metadata: {
+              telegramUserId: message.user,
+              // Replies and the progress reactions go on this message.
+              messageId: message.messageId,
+              groupChannelId: group.id,
+              groupContext: context,
+              ...(take ? { take } : {}),
+            },
+          }));
+        })();
+      },
+    };
   }
 
   override async setReaction(channelId: string, messageId: string, emoji: string): Promise<void> {
@@ -149,6 +314,26 @@ export class TelegramChannel extends BaseChannel {
     const userId = String(ctx.from?.id);
     const chatId = String(ctx.chat?.id);
     const userName = ctx.from?.username || ctx.from?.first_name;
+
+    // Groups follow the group-channel rules: silent unless enrolled and
+    // addressed, and `/link` never answered there. Only private chats take
+    // the path below.
+    if (isGroupChat(ctx.chat)) {
+      // `allowedUsers` limits who may use the bot, not which groups it is in:
+      // other senders are ignored, without a reply in front of everyone.
+      if (this.allowedUsers.size > 0 && !this.allowedUsers.has(userId)) return;
+      const message = ctx.message as TelegramMessageLike | undefined;
+      const inbound = message ? toTelegramGroupInbound(message, { id: ctx.me.id, username: ctx.me.username }, ctx) : null;
+      if (!inbound) return;
+      this.names.set(inbound.user, telegramName(message?.from));
+      if (this.names.size > 5_000) this.names.delete(this.names.keys().next().value as string);
+      try {
+        await handleGroupMessage(inbound, this.groupDeps(ctx, attachmentType));
+      } catch (err) {
+        channelLogger.error({ err, chatId }, 'Telegram group message handling failed');
+      }
+      return;
+    }
 
     // Check if user is allowed
     if (this.allowedUsers.size > 0 && !this.allowedUsers.has(userId)) {
@@ -189,7 +374,40 @@ export class TelegramChannel extends BaseChannel {
       return;
     }
 
-    // Extract attachments
+    const attachments = await this.extractAttachments(ctx, attachmentType);
+
+    // Handle channel-specific commands locally; pass everything else through
+    if (content.startsWith('/')) {
+      const cmd = content.split(/\s+/)[0].toLowerCase();
+      // /start and /link are Telegram-only commands
+      if (cmd === '/start') {
+        await ctx.reply('Hello! I am your AI assistant. How can I help you today?');
+        return;
+      }
+      if (cmd === '/link') {
+        await ctx.reply('Your account is already linked!');
+        return;
+      }
+      // All other commands (/help, /status, /clear, /plan, /experts, /models, /stop)
+      // flow through as regular messages to the centralized command registry
+    }
+
+    // Create and emit unified message
+    const message = this.createUnifiedMessage(chatId, user.id, content, {
+      userName,
+      replyTo: ctx.message?.reply_to_message ? String(ctx.message.reply_to_message.message_id) : undefined,
+      attachments: attachments.length > 0 ? attachments : undefined,
+      metadata: {
+        telegramUserId: userId,
+        messageId: ctx.message?.message_id,
+      },
+    });
+
+    this.emitMessage(message);
+  }
+
+  /** The photo, document or voice note of a message, as attachments to download. */
+  private async extractAttachments(ctx: Context, attachmentType?: string): Promise<Attachment[]> {
     const attachments: Attachment[] = [];
 
     // Telegram returns `file_path` as a server-controlled string we then embed
@@ -243,34 +461,7 @@ export class TelegramChannel extends BaseChannel {
       }
     }
 
-    // Handle channel-specific commands locally; pass everything else through
-    if (content.startsWith('/')) {
-      const cmd = content.split(/\s+/)[0].toLowerCase();
-      // /start and /link are Telegram-only commands
-      if (cmd === '/start') {
-        await ctx.reply('Hello! I am your AI assistant. How can I help you today?');
-        return;
-      }
-      if (cmd === '/link') {
-        await ctx.reply('Your account is already linked!');
-        return;
-      }
-      // All other commands (/help, /status, /clear, /plan, /experts, /models, /stop)
-      // flow through as regular messages to the centralized command registry
-    }
-
-    // Create and emit unified message
-    const message = this.createUnifiedMessage(chatId, user.id, content, {
-      userName,
-      replyTo: ctx.message?.reply_to_message ? String(ctx.message.reply_to_message.message_id) : undefined,
-      attachments: attachments.length > 0 ? attachments : undefined,
-      metadata: {
-        telegramUserId: userId,
-        messageId: ctx.message?.message_id,
-      },
-    });
-
-    this.emitMessage(message);
+    return attachments;
   }
 
   private async sendAttachment(chatId: number, attachment: Attachment, replyTo?: string): Promise<void> {

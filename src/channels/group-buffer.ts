@@ -1,0 +1,51 @@
+/**
+ * Recent messages of group chats on platforms where the bot cannot read the
+ * conversation back (Teams without Graph RSC, Telegram — the Bot API has no
+ * history call). The adapter records what it sees — members' messages that
+ * reach the bot and the bot's own replies — and the next turn's transcript is
+ * rendered from it (`renderGroupContext`).
+ *
+ * Kept in memory only, bounded per thread and in total, and dropped after a
+ * day: it is a short-term view of the conversation, not a store. A restart
+ * empties it; the next turn then sees only what follows.
+ */
+import type { ChannelMessage } from '@/core/channels/messages';
+
+/** The author id the bot's own messages are recorded under. */
+export const BUFFER_BOT_ID = 'octipus:bot';
+
+const MAX_PER_THREAD = 40;
+const MAX_THREADS = 2_000;
+const MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+const threads = new Map<string, ChannelMessage[]>();
+const key = (channelType: string, channelId: string, thread: string) => `${channelType}\u0000${channelId}\u0000${thread}`;
+
+/** Record one message in a thread (or a chat's single thread). A repeat of the same id replaces it. */
+export function recordGroupMessage(channelType: string, channelId: string, thread: string, message: ChannelMessage): void {
+  const k = key(channelType, channelId, thread);
+  const list = (threads.get(k) ?? []).filter(m => m.id !== message.id);
+  list.push(message);
+  if (list.length > MAX_PER_THREAD) list.splice(0, list.length - MAX_PER_THREAD);
+  threads.delete(k); // re-insert: Map order doubles as LRU order
+  threads.set(k, list);
+  if (threads.size > MAX_THREADS) threads.delete(threads.keys().next().value as string);
+}
+
+/** The thread's recorded messages, oldest first, without the ones past a day. */
+export function groupMessages(channelType: string, channelId: string, thread: string, now = Date.now()): ChannelMessage[] {
+  const list = threads.get(key(channelType, channelId, thread));
+  if (!list) return [];
+  const cutoff = new Date(now - MAX_AGE_MS).toISOString();
+  return list.filter(m => m.at >= cutoff);
+}
+
+/** One recorded message by id, in that thread. */
+export function findGroupMessage(channelType: string, channelId: string, thread: string, id: string): ChannelMessage | undefined {
+  return groupMessages(channelType, channelId, thread).find(m => m.id === id);
+}
+
+/** Test seam. */
+export function clearGroupBuffer(): void {
+  threads.clear();
+}

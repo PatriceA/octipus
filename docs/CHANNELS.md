@@ -255,8 +255,41 @@ If the owner's account is deactivated, the channel is paused (one notice) until
 another linked member types `@Octipus join` to take it over. Admins see every
 enrolment under **Admin → Group channels** and can revoke one.
 
-Slack is the only platform with group mode so far; Teams and Telegram groups
-follow ([plan](plans/group-chat-bot.md)).
+#### Teams and Telegram groups
+
+The same rules hold in Teams team channels and group chats and in Telegram
+groups; the platforms differ in how the bot is addressed, where it answers and
+what it can read back:
+
+| | Slack | Teams | Telegram |
+|---|---|---|---|
+| Enrol / remove | `@Octipus join` / `leave` | `@Octipus join` / `leave` | `@yourbot join`, or `/join` / `/leave` |
+| Addressed by | a mention, or a reply in a thread it is in | a mention (Teams delivers nothing else without RSC) | a mention, a command, or a reply to one of its messages |
+| Answers in | the message's thread | the post's thread; a group chat as a whole | a reply to the message; a forum topic's own thread |
+| Transcript | the thread, read back | what the bot saw (below) | what the bot saw (below) |
+| Private messages | ephemeral, in the channel | the member's 1:1 chat with the bot | the member's private chat with the bot |
+| Take work on | `take this …`, 🐙 | `take this …` | `take this …`; alone, as a reply, the message replied to |
+
+- **Transcript.** Bots cannot read a Teams or Telegram conversation back
+  (Teams would need Graph resource-specific consent, Telegram's Bot API has no
+  history), so the transcript is built from the messages the bot saw in the
+  enrolled chat — members' messages that reached it and its own replies. It is
+  kept in memory only: at most 40 messages per thread, none older than a day,
+  and emptied by a restart. With Telegram's privacy mode on (the default) the
+  bot sees only messages addressed to it and the messages they reply to.
+- **Private messages.** Hints and approval details go to the member's 1:1
+  chat with the bot. Teams opens one if needed; Telegram can only write to
+  someone who has started a chat with the bot (every linked member has, to
+  `/link`). A hint for someone the bot cannot reach privately is posted as a
+  reply to their message — hints never carry a link code. Approval details
+  are never posted in the group.
+- **Linking.** Teams members send `link` to the bot in a 1:1 chat for a code;
+  Telegram members send `/link` in a private chat. Neither is answered in a
+  group.
+- **Telegram `allowedUsers`** applies to the sender: in a group, a message
+  from anyone else is ignored without a reply.
+- Taken-task notices and other text the bot repeats never mention anyone: an
+  `@name` from a member's message is posted with a word joiner after the `@`.
 
 ---
 

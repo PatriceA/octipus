@@ -37,9 +37,9 @@ export function GroupChannelsSection() {
     <div>
       <h3 className="text-xs font-bold text-on-surface-variant uppercase mb-2">Group channels</h3>
       <p className="text-xs text-on-surface-variant mb-3">
-        Invite the bot to a Slack channel, then type <code>@Octipus join</code> there. It answers when mentioned,
-        replies in threads, and acts with the permissions and workspace of whoever asks. Remove it here or with{' '}
-        <code>@Octipus leave</code>.
+        Invite the bot to a Slack channel, a Teams channel or group chat, or a Telegram group, then type{' '}
+        <code>@Octipus join</code> there. It answers when mentioned, replies in threads, and acts with the
+        permissions and workspace of whoever asks. Remove it here or with <code>@Octipus leave</code>.
       </p>
       {error && <p className="text-xs text-error mb-2">! {error}</p>}
       {isLoading ? (

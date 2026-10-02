@@ -23,8 +23,8 @@ import { type GroupChannel, groupChannels } from '@/db/schema/group-channels';
 import { users } from '@/db/schema/users';
 import { channelLogger } from '@/utils/logger';
 
-/** Chat platforms group mode supports so far (phase 1 of the plan: Slack). */
-export const GROUP_CHANNEL_TYPES = ['slack'] as const;
+/** Chat platforms with group mode. */
+export const GROUP_CHANNEL_TYPES = ['slack', 'teams', 'telegram'] as const;
 export type GroupChannelType = (typeof GROUP_CHANNEL_TYPES)[number];
 
 /** A group channel with the owner's name, for the settings and admin pages. */

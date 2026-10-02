@@ -483,10 +483,10 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `capabilities` | `tools` | 1 |
 | `capabilities` | `utils` | 7 |
 | `channels` | `config` | 6 |
-| `channels` | `core` | 19 |
+| `channels` | `core` | 21 |
 | `channels` | `db` | 32 |
 | `channels` | `models` | 2 |
-| `channels` | `security` | 14 |
+| `channels` | `security` | 20 |
 | `channels` | `utils` | 22 |
 | `channels` | `voice` | 2 |
 | `config` | `channels` | 1 |

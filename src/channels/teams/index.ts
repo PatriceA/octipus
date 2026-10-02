@@ -6,11 +6,32 @@ import {
   MessageFactory,
   type TurnContext,
 } from 'botbuilder';
+import { generateLinkCode } from '@/channels/linking';
+import { BUFFER_BOT_ID, findGroupMessage, groupMessages, recordGroupMessage } from '@/channels/group-buffer';
+import { type GroupDeps, type GroupMember, groupHints, handleGroupMessage, MAIN_THREAD } from '@/channels/group-handler';
+import { shouldSendHint } from '@/channels/hint-limiter';
 import { getConfig } from '@/config';
 import type { Config } from '@/config/schema';
 import type { Attachment, ChannelResponse, ChannelType } from '@/core/types';
 import { channelLogger } from '@/utils/logger';
 import { BaseChannel } from '../interface';
+import {
+  conversationKind, splitConversationId, type TeamsActivityLike, threadConversationId, toGroupInbound,
+} from './group';
+
+const HINTS = groupHints({
+  platform: 'Teams',
+  linkHow: 'send me `link` in a 1:1 chat',
+  takeAlso: 'or reply in a thread with `@Octipus take this` to take its first message',
+  followHow: 'I reply in the thread (in a group chat, mention me each time)',
+});
+
+/** Who a Teams user is, as last seen: enough to open a 1:1 chat with them. */
+interface KnownAccount {
+  account: { id: string; name?: string; aadObjectId?: string };
+  serviceUrl: string;
+  tenantId?: string;
+}
 
 const CONVREF_PREFIX = 'teams:convref:';
 
@@ -21,6 +42,10 @@ export class TeamsChannel extends BaseChannel {
   private adapter: CloudAdapter | null = null;
   private conversationReferences: Map<string, Partial<Activity>> = new Map();
   private referencesLoaded: Promise<number> | null = null;
+  /** Enrolled group conversations (base ids) seen since start: the bot's replies there join the transcript. */
+  private groupConversations = new Set<string>();
+  /** Teams users seen in group chats, by `teamsUserKey`: their names, and how to reach them privately. */
+  private accounts = new Map<string, KnownAccount>();
 
   override isEnabled(config: Config): boolean {
     return Boolean(config.teams?.appId);
@@ -148,6 +173,14 @@ export class TeamsChannel extends BaseChannel {
     };
     this.conversationReferences.set(activity.conversation.id, reference as Partial<Activity>);
     await this.persistReference(activity.conversation.id, reference);
+    // A channel's thread replies arrive on `<channel>;messageid=<root>`; group
+    // channels are keyed by the channel itself, so keep a reference for that too.
+    const { base, root } = splitConversationId(activity.conversation.id);
+    if (root !== undefined) {
+      const baseReference = { ...reference, conversation: { ...activity.conversation, id: base } };
+      this.conversationReferences.set(base, baseReference as Partial<Activity>);
+      await this.persistReference(base, baseReference);
+    }
 
     switch (activity.type) {
       case ActivityTypes.Message:
@@ -169,6 +202,31 @@ export class TeamsChannel extends BaseChannel {
     const conversationId = activity.conversation.id;
     const userName = activity.from.name;
 
+    // Group chats and team channels follow the group-channel rules: silent
+    // unless enrolled and addressed. Only 1:1 chats take the path below.
+    const inbound = toGroupInbound(activity as TeamsActivityLike, activity);
+    if (inbound) {
+      this.accounts.set(inbound.user, {
+        account: { id: activity.from.id, name: activity.from.name, aadObjectId: activity.from.aadObjectId },
+        serviceUrl: activity.serviceUrl,
+        tenantId: (activity.conversation as { tenantId?: string }).tenantId,
+      });
+      if (this.accounts.size > 5_000) this.accounts.delete(this.accounts.keys().next().value as string);
+      try {
+        await handleGroupMessage(inbound, this.groupDeps(activity));
+      } catch (err) {
+        channelLogger.error({ err, conversationId: inbound.channelId }, 'Teams group message handling failed');
+      }
+      return;
+    }
+
+    // `link` in the 1:1 chat: a code to enter under Settings → Channels.
+    if (/^\/?link$/i.test((activity.text ?? '').trim())) {
+      const code = await generateLinkCode({ channelType: 'teams', channelUserId: teamsUserId, channelUserName: userName });
+      await context.sendActivity(`Your link code: **${code}**\n\nEnter it in the Octipus web app under Settings → Channels within 5 minutes.`);
+      return;
+    }
+
     // Find user binding (Phase 2e: scoped O(1) lookup on
     // `channel_identities`, JSONB fallback for legacy bindings).
     const { getChannelBindingManager } = await import('@/security/channel-bindings');
@@ -176,7 +234,7 @@ export class TeamsChannel extends BaseChannel {
 
     if (!user) {
       channelLogger.info({ teamsUserId, userName }, 'New Teams user - needs linking');
-      await context.sendActivity('Welcome! Please link your account. Contact an administrator for assistance.');
+      await context.sendActivity('Welcome! Send me `link` to get a code, then enter it in the Octipus web app under Settings → Channels.');
       return;
     }
 
@@ -224,6 +282,8 @@ export class TeamsChannel extends BaseChannel {
 
   private async handleConversationUpdate(context: TurnContext): Promise<void> {
     const activity = context.activity;
+    // In group chats and channels the bot stays silent until a member enrols it.
+    if (conversationKind(activity as TeamsActivityLike) !== 'personal') return;
 
     if (activity.membersAdded) {
       for (const member of activity.membersAdded) {
@@ -265,10 +325,15 @@ export class TeamsChannel extends BaseChannel {
       throw new Error('Teams adapter not connected');
     }
 
-    const reference = this.conversationReferences.get(channelId);
-    if (!reference) {
+    const stored = this.conversationReferences.get(channelId);
+    if (!stored) {
       throw new Error(`No conversation reference for channel: ${channelId}`);
     }
+    // In a team channel, a reply in a thread goes to `<channel>;messageid=<root>`.
+    const conversation = stored.conversation as { id: string; conversationType?: string } | undefined;
+    const reference = conversation?.conversationType === 'channel' && response.threadId
+      ? { ...stored, conversation: { ...conversation, id: threadConversationId(conversation.id, response.threadId) } }
+      : stored;
 
     let activityId = '';
 
@@ -297,7 +362,176 @@ export class TeamsChannel extends BaseChannel {
       activityId = result?.id || '';
     });
 
+    if (this.groupConversations.has(channelId) && (response.threadId || conversation?.conversationType !== 'channel')) {
+      recordGroupMessage('teams', channelId, response.threadId ?? MAIN_THREAD, {
+        id: activityId || `sent-${Date.now()}`, conversationId: channelId, author: 'Octipus', authorId: BUFFER_BOT_ID,
+        text: response.content, at: new Date().toISOString(),
+      });
+    }
     return activityId;
+  }
+
+  /**
+   * A message only this Teams user sees: in their 1:1 chat with the bot,
+   * opened if needed (Teams has no ephemeral messages). False when there is
+   * no way to reach them privately.
+   */
+  private async sendDirect(userKey: string, text: string): Promise<boolean> {
+    if (!this.adapter) return false;
+    for (const conversationId of this.personalConversationsFor(userKey)) {
+      try {
+        await this.send(conversationId, { content: text });
+        return true;
+      } catch (err) {
+        channelLogger.warn({ err, conversationId }, 'Teams 1:1 message failed');
+      }
+    }
+    const known = this.accounts.get(userKey);
+    const appId = getConfig().teams?.appId;
+    if (!known || !appId) return false;
+    try {
+      let sent = false;
+      await this.adapter.createConversationAsync(appId, 'msteams', known.serviceUrl, 'https://api.botframework.com', {
+        isGroup: false,
+        bot: { id: `28:${appId}`, name: 'Octipus' },
+        members: [known.account],
+        tenantId: known.tenantId,
+        channelData: known.tenantId ? { tenant: { id: known.tenantId } } : undefined,
+      } as never, async (context) => {
+        const ref = {
+          user: known.account,
+          bot: context.activity.recipient,
+          conversation: { ...context.activity.conversation, conversationType: 'personal' },
+          channelId: 'msteams',
+          serviceUrl: known.serviceUrl,
+        };
+        this.conversationReferences.set(context.activity.conversation.id, ref as Partial<Activity>);
+        await this.persistReference(context.activity.conversation.id, ref);
+        await context.sendActivity(MessageFactory.text(text));
+        sent = true;
+      });
+      return sent;
+    } catch (err) {
+      channelLogger.warn({ err }, 'Could not open a Teams 1:1 chat for a private message');
+      return false;
+    }
+  }
+
+  /** The approval details etc. for a group thread: in the member's 1:1 chat with the bot. */
+  override async sendPrivate(_channelId: string, userId: string, response: ChannelResponse): Promise<boolean> {
+    const { getChannelBindingManager } = await import('@/security/channel-bindings');
+    const identities = (await getChannelBindingManager().listForUser(userId))
+      .filter(i => i.channelType === 'teams' && i.verifiedAt);
+    let delivered = false;
+    for (const identity of identities) {
+      if (await this.sendDirect(identity.externalId, response.content)) delivered = true;
+    }
+    return delivered;
+  }
+
+  /** Platform calls for `handleGroupMessage`, for one inbound activity. */
+  private groupDeps(activity: Activity): GroupDeps<Activity> {
+    const kind = conversationKind(activity as TeamsActivityLike);
+    const botUserId = activity.recipient.id;
+    const nameOf = (key: string) => this.accounts.get(key)?.account.name;
+    return {
+      botUserId,
+      bot: `@${activity.recipient.name || 'Octipus'}`,
+      hints: HINTS,
+      findGroup: async (channelId) => {
+        const { findGroupChannel } = await import('@/channels/group-channels');
+        return findGroupChannel('teams', channelId);
+      },
+      isGroupActive: async (group) => {
+        const { isGroupChannelActive } = await import('@/channels/group-channels');
+        return isGroupChannelActive(group);
+      },
+      isThreadActive: async (groupId, threadId) => {
+        const { isGroupThreadActive } = await import('@/channels/group-channels');
+        return isGroupThreadActive(groupId, threadId);
+      },
+      findMember: async (userKey): Promise<GroupMember | null> => {
+        const { getChannelBindingManager } = await import('@/security/channel-bindings');
+        const user = await getChannelBindingManager().findUserRecordByExternalId('teams', userKey);
+        return user ? { id: user.id, username: user.username, isActive: user.isActive, isAdmin: user.isAdmin } : null;
+      },
+      join: async ({ channelId, label, userId }) => {
+        const { joinGroupChannel } = await import('@/channels/group-channels');
+        return joinGroupChannel({ channelType: 'teams', channelId, label, userId });
+      },
+      leave: async ({ channelId, userId, isAdmin }) => {
+        const { leaveGroupChannel } = await import('@/channels/group-channels');
+        return leaveGroupChannel({ channelType: 'teams', channelId, userId, isAdmin });
+      },
+      channelLabel: async () => {
+        const name = (activity.channelData as TeamsActivityLike['channelData'])?.channel?.name ?? activity.conversation.name;
+        return name ? (kind === 'channel' ? `#${name}` : name) : null;
+      },
+      displayName: async (userKey) => nameOf(userKey) ?? 'a member',
+      postPrivate: async (userKey, text, where) => {
+        if (await this.sendDirect(userKey, text)) return;
+        // No way to reach them privately: answer their message in place. The
+        // hints carry no secrets (never a link code).
+        await this.send(where.channelId, { content: text, threadId: where.threadId ?? (kind === 'channel' ? where.messageId : undefined) })
+          .catch((err: unknown) => channelLogger.error({ err }, 'Teams group: hint failed'));
+      },
+      postInThread: async (channelId, threadId, text) => {
+        await this.send(channelId, { content: text, threadId: kind === 'channel' ? threadId : undefined })
+          .catch((err: unknown) => channelLogger.error({ err }, 'Teams group: posting in the thread failed'));
+      },
+      readContext: async ({ channelId, messageId, replyThread, label }) => {
+        const { renderGroupContext } = await import('@/core/channels/group-context');
+        return renderGroupContext(groupMessages('teams', channelId, replyThread), {
+          currentMessageId: messageId,
+          botIds: new Set([BUFFER_BOT_ID]),
+          conversationName: label ?? undefined,
+          scope: kind === 'channel' ? 'thread' : 'channel',
+        });
+      },
+      // Only messages the bot saw can be read back: a thread's root, when it
+      // mentioned the bot or was posted by it.
+      readMessage: async (channelId, id) => {
+        const m = findGroupMessage('teams', channelId, kind === 'channel' ? id : MAIN_THREAD, id);
+        return m ? { text: m.text, user: m.authorId === BUFFER_BOT_ID ? botUserId : m.authorId ?? null } : null;
+      },
+      permalink: async () => undefined,
+      budgetPause: async (group) => {
+        const { groupChannelPause } = await import('@/security/spend-budgets');
+        return groupChannelPause(group.id).catch((err: unknown) => {
+          channelLogger.warn({ err, groupId: group.id }, 'Group channel budget check failed — not pausing');
+          return null;
+        });
+      },
+      shouldSendHint: (key) => shouldSendHint(`teams:${key}`),
+      seen: (msg) => {
+        this.groupConversations.add(msg.channelId);
+        if (!msg.text) return;
+        recordGroupMessage('teams', msg.channelId, msg.replyThread, {
+          id: msg.messageId, conversationId: msg.channelId, author: nameOf(msg.user) ?? 'a member', authorId: msg.user,
+          text: msg.text, at: new Date().toISOString(),
+        });
+      },
+      dispatch: ({ channelId, member, userName, text, threadId, group, context, message, take }) => {
+        const attachments: Attachment[] = (activity.attachments ?? [])
+          .filter(a => a.contentUrl)
+          .map(a => ({ type: this.mapContentType(a.contentType), url: a.contentUrl, mimeType: a.contentType, filename: a.name }));
+        this.emitMessage(this.createUnifiedMessage(channelId, member.id, text, {
+          userName,
+          threadId,
+          attachments: attachments.length > 0 ? attachments : undefined,
+          metadata: {
+            teamsUserId: message.user,
+            activityId: message.messageId,
+            serviceUrl: activity.serviceUrl,
+            // Replies answer this message (`replyToId`).
+            messageId: message.messageId,
+            groupChannelId: group.id,
+            groupContext: context,
+            ...(take ? { take } : {}),
+          },
+        }));
+      },
+    };
   }
 
   override async sendTyping(channelId: string, _active: boolean = true): Promise<void> {
