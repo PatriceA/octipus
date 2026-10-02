@@ -127,7 +127,7 @@ const DELEGATION_TOOLS = new Set(['spawn_child', 'escalate_to_other_lane']);
  * question the post-run evidence gate answers: a stage held to "you ran no
  * commands" must be judged against the very set that does the counting.
  */
-export const COMMAND_TOOLS = new Set(['shell__run', 'shell__run_background']);
+export const COMMAND_TOOLS = new Set(['shell__run', 'shell__run_background', 'run_test_container']);
 
 /**
  * One-line preview of a tool's return value for UI streaming. Strings are

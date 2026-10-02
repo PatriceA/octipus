@@ -658,6 +658,10 @@ export class SwarmSpawner {
     // registerTool is keyed by name.
     const { buildSkillLoaderHandlers } = await import('@/tools/skill-loader');
     childTools.push(...buildSkillLoaderHandlers());
+    if (['qa', 'review'].includes(childRole)) {
+      const { buildTestContainerHandlers } = await import('@/tools/test-container');
+      childTools.push(...buildTestContainerHandlers());
+    }
 
     // Lazy tool discovery for a swarm child. The root agent has had it since the
     // gate moved off `provider === 'ollama'`, and the pipeline-stage path has it
