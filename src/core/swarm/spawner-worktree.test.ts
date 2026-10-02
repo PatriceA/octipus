@@ -389,7 +389,7 @@ describe.skipIf(inIntegration)('SwarmSpawner — worktree isolation', () => {
       expect(captured.metadata.length).toBeGreaterThan(0);
       for (const md of captured.metadata) {
         expect(md.worktreePath).toBe(parentTree.path);
-        expect(md.projectPath).toBeUndefined();
+        expect(md.projectPath).toBe(parentTree.path);
       }
       expect(worktreeDirs()).toEqual(['cparent1']);
       expect(result.worktree).toBeUndefined();
@@ -414,8 +414,22 @@ describe.skipIf(inIntegration)('SwarmSpawner — worktree isolation', () => {
       await runReal('native-model', { worktreePath: projectPath });
       for (const md of captured.metadata) {
         expect(md.worktreePath).toBeUndefined();
-        expect(md.projectPath).toBeUndefined();
+        expect(md.projectPath).toBe(projectPath);
       }
+    });
+
+    it.each(['cli/claude-code', 'native-model'])('passes the approved session project to %s child file tools', async model => {
+      refreshConfigKey('swarm.worktreeIsolation', false);
+      await runReal(model, { projectPath: '/untrusted-parent-path' });
+      expect(captured.metadata.length).toBeGreaterThan(0);
+      for (const md of captured.metadata) expect(md.projectPath).toBe(projectPath);
+    });
+
+    it('does not grant a parent-supplied project path outside dev mode', async () => {
+      devMode = false;
+      await runReal('cli/claude-code', { projectPath });
+      expect(captured.metadata.length).toBeGreaterThan(0);
+      for (const md of captured.metadata) expect(md.projectPath).toBeUndefined();
     });
 
     it('a top-level coding CLI child gets its own worktree, reused by its crash retry', async () => {
@@ -424,6 +438,7 @@ describe.skipIf(inIntegration)('SwarmSpawner — worktree isolation', () => {
       expect(paths.length).toBe(2);
       expect(paths[0]).toMatch(new RegExp(`^${join(base, 'worktrees')}/c[0-9a-f]{20}$`));
       expect(paths[1]).toBe(paths[0]);
+      for (const md of captured.metadata) expect(md.projectPath).toBe(md.worktreePath);
       // Nothing was done: settled as no_changes and cleaned up.
       expect(result.worktree?.merge).toBe('no_changes');
       expect(worktreeDirs()).toEqual([]);

@@ -342,6 +342,20 @@ describe('real users — nested per-user root', () => {
     expect(existsSync(res.path)).toBe(true);
   });
 
+  test('QA child relative reads use the project instead of the role session directory', async () => {
+    const projectPath = mkdtempSync(join(tmpdir(), 'octipus-qa-project-'));
+    mkdirSync(join(projectPath, 'tests', 'analyzer'), { recursive: true });
+    writeFileSync(join(projectPath, 'pyproject.toml'), '[tool.pytest.ini_options]');
+    writeFileSync(join(projectPath, 'tests/analyzer/test_llm_providers_yaais.py'), '# regression');
+    const tool = await makeTool();
+    const context = ctx({ role: 'qa', topic: 'qa', metadata: { projectPath } });
+    for (const path of ['pyproject.toml', 'tests/analyzer/test_llm_providers_yaais.py']) {
+      const result = await tool.handler('read_file').execute({ path }, context) as { path: string; content: string };
+      expect(result.path).toBe(join(projectPath, path));
+      expect(result.content).toBeTruthy();
+    }
+  });
+
   test('without projectPath, a path inside an external project dir is still rejected', async () => {
     const projectPath = mkdtempSync(join(tmpdir(), 'octipus-other-'));
     const tool = await makeTool();
@@ -350,13 +364,13 @@ describe('real users — nested per-user root', () => {
     ).rejects.toThrow(/outside allowed workspace directories/);
   });
 
-  test('a native descendant of a worktree child writes into the worktree, not the user project', async () => {
+  test('a descendant of a worktree child writes into the worktree, not the user project', async () => {
     // The metadata the spawner gives a native agent spawned by a worktree child.
     const { inheritedTreeMetadata } = await import('@/core/swarm/worktree');
     const worktree = mkdtempSync(join(tmpdir(), 'octipus-wt-'));
     const userProject = mkdtempSync(join(tmpdir(), 'octipus-userproj-'));
     const tool = await makeTool();
-    const context = ctx({ metadata: inheritedTreeMetadata(worktree, false) });
+    const context = ctx({ metadata: inheritedTreeMetadata(worktree) });
 
     const res = (await tool.handler('write_file').execute(
       { path: 'src/feature.ts', content: 'export const f = 1\n' },

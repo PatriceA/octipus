@@ -126,7 +126,7 @@ describe.skipIf(!hasBwrap)('wrapCommand — mode "auto" with bwrap installed', (
     const out = wrapCommand(['pytest', '--version'], { workspaceRoot: workspace, path: '/usr/bin:/bin' });
     try {
       const argv = out.argv.join('\n');
-      for (const dir of ['bin', 'lib']) {
+      for (const dir of ['bin', 'lib', 'share/uv/tools', 'share/uv/python']) {
         const path = join(homedir(), '.local', dir);
         expect(argv).toContain(`--ro-bind-try\n${path}\n${path}`);
       }

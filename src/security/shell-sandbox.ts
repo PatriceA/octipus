@@ -160,6 +160,10 @@ function buildBwrapArgs(binary: string, options: WrapOptions, scratch: string): 
     // Expose only these runtime directories, never the whole home directory.
     '--ro-bind-try', join(homedir(), '.local', 'bin'), join(homedir(), '.local', 'bin'),
     '--ro-bind-try', join(homedir(), '.local', 'lib'), join(homedir(), '.local', 'lib'),
+    // uv tool entry points are symlinks to venvs whose interpreters can
+    // themselves live in uv's managed Python directory. Both are runtime-only.
+    '--ro-bind-try', join(homedir(), '.local/share/uv/tools'), join(homedir(), '.local/share/uv/tools'),
+    '--ro-bind-try', join(homedir(), '.local/share/uv/python'), join(homedir(), '.local/share/uv/python'),
     '--setenv', 'PATH', commandPath,
     // Per-spawn scratch (the legacy /tmp/assistant- prefix lives here).
     // Bound BEFORE the workspace so that workspaces under /tmp aren't

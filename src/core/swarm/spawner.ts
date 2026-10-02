@@ -1498,11 +1498,14 @@ export class SwarmSpawner {
     const inheritedTree = inheritedWorktreeOf(opts.parentContext);
     const attemptWorktree =
       inheritedTree ?? (opts.worktree && attemptIsCli ? opts.worktree.path : undefined);
-    const treeMetadata = inheritedTree
-      ? inheritedTreeMetadata(inheritedTree, attemptIsCli)
-      : attemptWorktree
-        ? { worktreePath: attemptWorktree }
-        : {};
+    // CLI cwd and registered tools must see the same tree. Tools resolve
+    // relative paths using projectPath even when invoked by a CLI worker.
+    // Only the persisted dev-mode session may grant access to a shared project.
+    const projectPath = attemptWorktree ?? await devProjectPathForSession(opts.parent.rootSessionId);
+    const treeMetadata = attemptWorktree
+      ? inheritedTreeMetadata(attemptWorktree)
+      : projectPath ? { projectPath } : {};
+
 
     // Phase 2: for Agents (depth 1), build the child's AgentNode up front
     // so we can register `spawn_child` + `escalate_to_other_lane`
