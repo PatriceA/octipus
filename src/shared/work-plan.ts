@@ -21,7 +21,8 @@ export const planUpdateSchema = z.object({
     response: z.string().trim().min(1).max(1000),
   })).max(50).default([]),
 }).refine(v => new Set(v.steps.map(s => s.id)).size === v.steps.length, 'Step IDs must be unique');
-export type PlanUpdate = z.infer<typeof planUpdateSchema>;
+/** explicitEvidenceUpdates is internal patch provenance, stripped from model input by the schema. */
+export type PlanUpdate = z.infer<typeof planUpdateSchema> & { explicitEvidenceUpdates?: string[] };
 /** Patch existing steps only; omitted fields and unrelated steps are preserved. */
 export const planPatchSchema = z.object({
   revision: z.number().int().nonnegative(),
@@ -46,11 +47,11 @@ export function expandWorkPlanPatch(state: WorkPlanState, patch: z.infer<typeof 
   for (const update of patch.stepUpdates) {
     if (!plan.steps.some(s => s.id === update.id)) throw new Error(`Unknown plan step "${update.id}". Read the plan or submit a full update to add steps.`);
   }
-  return planUpdateSchema.parse({
+  return { ...planUpdateSchema.parse({
     ...plan, ...patch,
     kind: patch.kind ?? plan.kind,
     steps: plan.steps.map(step => ({ ...step, ...patch.stepUpdates.find(s => s.id === step.id) })),
-  });
+  }), explicitEvidenceUpdates: patch.stepUpdates.filter(step => step.evidence !== undefined).map(step => step.id) };
 }
 export interface PlanFeedback {
   id: string;
@@ -107,7 +108,7 @@ export function reviseWorkPlan(state: WorkPlanState, input: PlanUpdate): WorkPla
   // done, and its stored title and evidence win over the resend's wording. It
   // used to require a byte-equal resend, and a model that paraphrased its own
   // evidence was refused six times in one run (2026-09-17) while the plan
-  // never advanced.
+  // never advanced. Explicit evidence patches may append new observations.
   const steps = input.steps.map(s => ({ ...s }));
   for (const step of old?.steps ?? []) {
     if (step.status !== 'done') continue;
@@ -115,7 +116,14 @@ export function reviseWorkPlan(state: WorkPlanState, input: PlanUpdate): WorkPla
     if (!sent || sent.status !== 'done') {
       throw new Error(`Step "${step.id}" is completed and must stay in the plan as done, with its evidence. Add a follow-up step for further work instead.`);
     }
-    sent.title = step.title; sent.evidence = step.evidence;
+    sent.title = step.title;
+    if (input.explicitEvidenceUpdates?.includes(step.id) && sent.evidence.trim()) {
+      const addition = sent.evidence;
+      sent.evidence = step.evidence.includes(addition) ? step.evidence
+        : addition.includes(step.evidence) ? addition
+        : `${step.evidence}\n\n${addition}`;
+      if (sent.evidence.length > 2000) throw new Error(`Step "${step.id}" evidence exceeds 2000 characters. Add a follow-up step instead.`);
+    } else sent.evidence = step.evidence;
   }
   const feedback = (old?.feedback ?? []).map(f => ({ ...f }));
   for (const reply of input.feedbackResponses) {

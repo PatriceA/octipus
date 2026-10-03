@@ -39,6 +39,8 @@ beforeEach(() => {
   root = join(base, 'worktrees');
   mkdirSync(repo);
   git(repo, 'init', '-q', '-b', 'main');
+  git(repo, 'config', 'user.name', 'Test');
+  git(repo, 'config', 'user.email', 'test@example.com');
   writeFileSync(join(repo, 'README.md'), 'line one\n');
   writeFileSync(join(repo, '.gitignore'), 'node_modules/\n');
   commitAll(repo, 'init');
@@ -169,12 +171,22 @@ describe('finishWorktree', () => {
     expect(readFileSync(join(repo, 'feature.ts'), 'utf-8')).toContain('x = 1');
     // A real merge commit (--no-ff) whose second parent is the child's head.
     expect(git(repo, 'rev-parse', 'HEAD^2').trim()).toBe(report.headSha);
-    expect(git(repo, 'log', '-1', '--format=%an', report.headSha).trim()).toBe('Octipus agent');
+    expect(git(repo, 'log', '-1', '--format=%an', report.headSha).trim()).toBe('Test');
+    expect(git(repo, 'log', '-1', '--format=%ae|%ce').trim()).toBe('test@example.com|test@example.com');
 
     const cleaned = await removeWorktree(h, { merged: true });
     expect(cleaned).toEqual({ removed: true, branchDeleted: true });
     expect(existsSync(h.path)).toBe(false);
     expect(branchExists('octipus/ok1')).toBe(false);
+  });
+
+  it('uses a fallback identity only when no identity is configured', async () => {
+    git(repo, 'config', 'user.name', ''); git(repo, 'config', 'user.email', '');
+    const h = await createWorktree(repo, 'fallback', { root });
+    writeFileSync(join(h.path, 'new.txt'), 'new');
+    const report = await finishWorktree(h, { merge: true });
+    expect(report.merge).toBe('merged');
+    expect(git(repo, 'log', '-1', '--format=%ae|%ce').trim()).toBe('octipus-agent@localhost|octipus-agent@localhost');
   });
 
   it('keeps commits the child made itself', async () => {

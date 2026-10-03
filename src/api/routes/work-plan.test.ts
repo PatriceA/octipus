@@ -213,6 +213,10 @@ describe('durable learning checks', () => {
     expect((await (await view()).json()).checks).toHaveLength(1);
     await tool.execute({ revision: 2, summary: 'Verified', stepUpdates: [{ id: 'b', status: 'done', evidence: 'Tests pass' }] }, context);
     expect((await (await view()).json()).checks).toHaveLength(2);
+    const receipt = await tool.execute({ revision: 3, summary: 'Independent review complete', stepUpdates: [{ id: 'b', evidence: 'Review passed' }] }, context);
+    expect(receipt).toMatchObject({ changedSteps: [{ id: 'b', status: 'done' }] });
+    expect((await workPlanRepository.read(learnSid, alice)).current!.steps.find(step => step.id === 'b')!.evidence).toBe('Tests pass\n\nReview passed');
+
     expect((await view(bob)).status).toBe(404);
     const { backgroundJobRepository } = await import('@/db/repositories/background-job-repository');
     const jobs = (await backgroundJobRepository.recentForUser(alice)).filter(j => j.payload.sessionId === learnSid);
