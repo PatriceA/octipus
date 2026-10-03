@@ -582,6 +582,23 @@ describeUnit('LiteLLMClient — complete routing', () => {
     infoSpy.mockRestore();
   });
 
+  test('a reasoning model that spends the whole budget thinking is retried with headroom, then given it up front', async () => {
+    const budgets: number[] = [];
+    routerState.resolveProvider = {
+      name: 'openrouter',
+      complete: async (opts) => {
+        budgets.push(opts.maxTokens);
+        const starved = opts.maxTokens <= 600;
+        return { content: starved ? '' : '{"facts":[]}', finishReason: starved ? 'length' : 'stop',
+          usage: { inputTokens: 1, outputTokens: opts.maxTokens, totalTokens: 1, reasoningTokens: starved ? 600 : 1500 }, model: opts.model, latencyMs: 1 };
+      },
+    };
+    const client = new LiteLLMClient();
+    expect((await client.complete({ model: 'thinker', messages: [userMsg('hi')], maxTokens: 600 })).content).toBe('{"facts":[]}');
+    expect((await client.complete({ model: 'thinker', messages: [userMsg('hi')], maxTokens: 600 })).content).toBe('{"facts":[]}');
+    expect(budgets).toEqual([600, 8_600, 8_600]);
+  });
+
   test('applyModelOverrides merges endpoint from registry when apiKeyRef is unset', async () => {
     let received: any;
     routerState.resolveProvider = {

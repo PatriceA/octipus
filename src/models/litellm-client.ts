@@ -253,6 +253,13 @@ export function createThinkStreamFilter() {
 /**
  * Client for LiteLLM proxy - provides unified API for all LLM providers
  */
+/** Measured: deepseek-v4.1-flash reasons 1.6k–2.6k tokens before a 300-token JSON answer. */
+const REASONING_HEADROOM = 8_000;
+const reasoningHeadroom = new Set<string>();
+function starvedByReasoning(r: CompletionResult): boolean {
+  return r.finishReason === 'length' && !r.content?.trim() && !r.toolCalls?.length && (r.usage.reasoningTokens ?? 0) > 0;
+}
+
 export class LiteLLMClient {
   private client: OpenAI;
   private defaultModel: string;
@@ -351,7 +358,24 @@ export class LiteLLMClient {
    * different provider — that masks bugs (stale config, missing API key,
    * provider down) behind confusing "model not found" errors.
    */
+  /**
+   * Callers size `maxTokens` for the ANSWER (the memory judge asks for 50). A
+   * reasoning model spends that budget thinking and returns nothing with
+   * finish=length, so the caller silently gets "". Retry once with headroom,
+   * and give that model the headroom up front from then on.
+   * ponytail: learned per process; a restart re-pays one wasted call per model.
+   */
   async complete(options: CompletionOptions): Promise<CompletionResult> {
+    const model = options.model || this.defaultModel;
+    const headroom = reasoningHeadroom.has(model) && options.maxTokens ? REASONING_HEADROOM : 0;
+    const result = await this.completeOnce(headroom ? { ...options, maxTokens: options.maxTokens! + headroom } : options);
+    if (headroom || !options.maxTokens || !starvedByReasoning(result)) return result;
+    reasoningHeadroom.add(model);
+    modelLogger.warn({ model, maxTokens: options.maxTokens, reasoningTokens: result.usage.reasoningTokens }, 'Reasoning used the whole output budget; retrying with headroom');
+    return this.completeOnce({ ...options, maxTokens: options.maxTokens + REASONING_HEADROOM });
+  }
+
+  private async completeOnce(options: CompletionOptions): Promise<CompletionResult> {
     const resolvedModel = options.model || this.defaultModel;
 
     const { getProviderRouter } = await import('@/models/providers');
