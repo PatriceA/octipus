@@ -155,7 +155,8 @@ async function main() {
     // the `mcp` tool (which the old `octipus_get_skill` path required).
     const { getAgentManager } = await import('@/core/agent-manager');
     const { buildSkillLoaderHandlers } = await import('@/tools/skill-loader');
-    for (const handler of buildSkillLoaderHandlers()) {
+    const { buildTestContainerHandlers } = await import('@/tools/test-container');
+    for (const handler of [...buildSkillLoaderHandlers(), ...buildTestContainerHandlers()]) {
       getAgentManager().registerGlobalTool(handler);
     }
 

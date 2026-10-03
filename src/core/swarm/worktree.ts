@@ -548,20 +548,9 @@ export function worktreeCwdOverride(
   }
 }
 
-/**
- * Context metadata for a DESCENDANT of a worktree child, so it works in that
- * worktree instead of the shared project the session names.
- *
- * - `worktreePath` for everyone: a CLI descendant's cwd (see
- *   `worktreeCwdOverride`), and how the next generation inherits it in turn.
- * - `projectPath` for a native descendant: the native file, shell, data and
- *   knowledge tools resolve relative paths against it, allow it as their only
- *   extra sandbox prefix, and default `shell__run`'s cwd to it. With it set to
- *   the worktree, the user's real project is outside that sandbox, exactly as
- *   it is for any native swarm child today (they get no `projectPath` at all).
- */
-export function inheritedTreeMetadata(worktreePath: string, isCli: boolean): Record<string, string> {
-  return isCli ? { worktreePath } : { worktreePath, projectPath: worktreePath };
+/** Keep CLI cwd and registered tool paths in the same inherited or owned tree. */
+export function inheritedTreeMetadata(worktreePath: string): Record<string, string> {
+  return { worktreePath, projectPath: worktreePath };
 }
 
 export interface StaleWorktreeResult {

@@ -62,7 +62,10 @@ export const connectorRoutes = new Elysia({ prefix: '/connectors' })
       set.status = 413; return { error: 'Embedding batch too large' };
     }
     try {
-      const result = await embedCocoIndex(inputs, body.model, params.side === 'query' ? 'query' : 'document', user.id);
+      // CocoIndex shares one API base; its supported per-side input_type
+      // distinguishes retrieval queries from indexed documents.
+      const side = body.input_type ?? (params.side === 'query' ? 'query' : 'document');
+      const result = await embedCocoIndex(inputs, body.model, side, user.id);
       if (!result) { set.status = 429; return { error: 'Embedding request already active; retry shortly' }; }
       return result;
     } catch (error) {
@@ -73,6 +76,7 @@ export const connectorRoutes = new Elysia({ prefix: '/connectors' })
     model: t.String({ minLength: 1, maxLength: 200 }),
     input: t.Union([t.String({ maxLength: 64_000 }), t.Array(t.String({ maxLength: 64_000 }), { minItems: 1, maxItems: 64 })]),
     encoding_format: t.Optional(t.String()),
+    input_type: t.Optional(t.Union([t.Literal('document'), t.Literal('query')])),
   }) })
 
   .get('/cocoindex', async ({ user, set }) => {

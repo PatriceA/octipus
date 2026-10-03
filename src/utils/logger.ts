@@ -34,6 +34,7 @@ const streams = pino.multistream([
 export const logger = pino(
   {
     level: logLevel,
+    serializers: { err: pino.stdSerializers.err, error: pino.stdSerializers.err },
     base: { service: 'octipus' },
     timestamp: pino.stdTimeFunctions.isoTime,
     // Stamp the ambient runId (WS4) onto every log line emitted inside an

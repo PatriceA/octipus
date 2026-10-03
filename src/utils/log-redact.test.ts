@@ -88,3 +88,11 @@ describe('redactLogObject', () => {
     expect(input.nested.token).toBe('t');
   });
 });
+
+test('the real logger serializes Error fields named error as well as err', async () => {
+  const { logger } = await import('./logger');
+  const { getRecent } = await import('./log-stream');
+  logger.error({ error: new Error('worker exit diagnostic'), workerId: 'serialization-regression' }, 'Worker failed');
+  const record = getRecent().find(row => row.workerId === 'serialization-regression');
+  expect(record?.error).toMatchObject({ type: 'Error', message: 'worker exit diagnostic', stack: expect.stringContaining('worker exit diagnostic') });
+});

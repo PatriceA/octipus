@@ -4,7 +4,7 @@ import { join } from 'path';
 
 /**
  * Pre-tool-use guard for managed CLI agents: blocks shell commands that talk
- * to the network (curl, Invoke-RestMethod, python/node fetch one-liners, a
+ * to integrations (authenticated/mutating HTTP clients, script clients, a
  * local MCP endpoint) so agents reach services through Octipus's registered
  * tools instead of a hand-rolled client. The prompt alone was ignored in
  * practice. `# octipus-fallback: <reason>` in the command lets it through.
@@ -17,7 +17,7 @@ import { join } from 'path';
 /** Tool names the Claude/Codex hook matches; agy's shell tool is `run_command`. */
 export const SHELL_GUARD_TOOL_MATCHER = 'Bash|PowerShell';
 
-export const SHELL_GUARD_MESSAGE = 'Blocked by Octipus: network/API calls from the shell bypass registered tools. '
+export const SHELL_GUARD_MESSAGE = 'Blocked by Octipus: this shell API/client call may bypass registered tools. Public unauthenticated curl GET/HEAD requests and package installation are allowed. '
   + 'Use Octipus mcp_list_tools/mcp_call_tool for MCP servers, or list_tools/describe_tool/call_discovered_tool for integrations. '
   + 'If no suitable tool exists, re-run the command with the comment `# octipus-fallback: <reason>` appended.';
 
@@ -32,15 +32,43 @@ export function shellGuardBlockReason(command: string): string | null {
   const head = (segment: string): string => (segment.trim()
     .replace(/^(?:\w+=\S*\s+|(?:sudo|exec|env|time|&|\()\s*)+/i, '')
     .match(/^["']?([^\s"']+)/)?.[1] ?? '').split(/[\\/]/).pop()!.toLowerCase().replace(/\.(exe|cmd)$/, '');
-  // git, builds, tests and package managers never make these calls themselves; commit messages may mention them.
+  // Commit messages may mention client commands without executing them.
   const segments = command.split(/&&|\|\||[;|\n]|\$\(|`/).filter(segment => head(segment) !== 'git');
-  const heads = segments.map(head);
-  if (heads.some(h => ['curl', 'wget', 'iwr', 'irm', 'invoke-webrequest', 'invoke-restmethod'].includes(h))
+  // This is an integration-routing hint, not a network security boundary.
+  // Permit plain public reads; auth, uploads, custom headers, config files,
+  // dynamic arguments and private/service endpoints still use discovery.
+  const publicCurlRead = (segment: string): boolean => {
+    if (/[$`\\]/.test(segment)) return false;
+    const words = segment.match(/"[^"\n]*"|'[^'\n]*'|[^\s]+/g)?.map(word => word.replace(/^(['"])(.*)\1$/, '$2')) ?? [];
+    if (!/^(.+[/\\])?curl(?:\.exe)?$/i.test(words.shift() ?? '')) return false;
+    let urls = 0;
+    const valueFlags = new Set(['-o', '--output', '--max-time', '--connect-timeout', '--retry']);
+    for (let i = 0; i < words.length; i++) {
+      const word = words[i];
+      if (valueFlags.has(word)) { if (!words[++i] || words[i].startsWith('-')) return false; continue; }
+      if (word === '-X' || word === '--request') { if (!['GET', 'HEAD'].includes(words[++i])) return false; continue; }
+      if (/^-[sSfIL]+$/.test(word) || ['--silent', '--show-error', '--fail', '--head', '--location', '--compressed'].includes(word)) continue;
+      let url: URL;
+      try { url = new URL(word); } catch { return false; }
+      const host = url.hostname.toLowerCase();
+      if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password
+        || !host.includes('.') || /^(?:\d|\[)/.test(host)
+        || /(?:^|\.)(?:localhost|local|internal|test|invalid)$/.test(host)
+        || /(?:^|\/)mcp(?:\/|$)/i.test(url.pathname)) return false;
+      urls++;
+    }
+    return urls > 0;
+  };
+  if (segments.some(segment => {
+      const h = head(segment);
+      return h === 'curl' ? !publicCurlRead(segment) : ['wget', 'iwr', 'irm', 'invoke-webrequest', 'invoke-restmethod'].includes(h);
+    })
     || segments.some(segment => /\bInvoke-(WebRequest|RestMethod)\b|Net\.WebClient|System\.Net\.Http|Start-BitsTransfer/i.test(segment))) {
     return 'shell HTTP client';
   }
-  if (heads.some(h => /^(python[\d.]*|py|node|bun|deno)$/.test(h))
-    && /urllib|\brequests\b|http\.client|httpx|aiohttp|\bfetch\s*\(|\bhttps?\.(request|get)\s*\(|['"](node:)?https?['"]|XMLHttpRequest|WebSocket|\bsocket\b/.test(command)) {
+  const scripts = segments.filter(segment => !/\b(?:python[\d.]*|py)(?:["'])?\s+-m\s+pip\b/.test(segment));
+  if (scripts.some(segment => /^(python[\d.]*|py|node|bun|deno)$/.test(head(segment)))
+    && /urllib|\brequests\b|http\.client|httpx|aiohttp|\bfetch\s*\(|\bhttps?\.(request|get)\s*\(|['"](node:)?https?['"]|XMLHttpRequest|WebSocket|\bsocket\b/.test(scripts.join('\n'))) {
     return 'network call from a script';
   }
   if (segments.some(segment => /(localhost|127\.\d+\.\d+\.\d+|\[::1\])(:\d+)?\/mcp\b/i.test(segment))) return 'local MCP endpoint';

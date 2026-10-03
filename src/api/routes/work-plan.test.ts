@@ -47,6 +47,47 @@ describe('plan API and agent handoff', () => {
     const { sessionRepository } = await import('@/db/repositories/session-repository');
     expect((await sessionRepository.findById(sid))!.metadata!.keep).toBe(true);
   });
+  it('publishes pipeline items without a worker needing root plan tools and persists progress', async () => {
+    const { executeRaw } = await import('@/db/postgres');
+    const pipelineSid = randomUUID();
+    await executeRaw(`INSERT INTO sessions (id, user_id, channel_type, channel_id, metadata) VALUES ('${pipelineSid}', '${alice}', 'webchat', 'pipeline-plan', '{"keep":true}')`);
+    const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+    const pipeline = await pipelineRepository.create({ rootAgentId: 'root', sessionId: pipelineSid, userId: alice, title: 'Implement feature', type: 'development' });
+    const [item] = await pipelineRepository.addPlanItems([{ pipelineId: pipeline.id, ordinal: 0, title: 'Implement endpoint' }]);
+    const read = async () => {
+      const response = await app.handle(new Request(`http://localhost/api/sessions/${pipelineSid}/plan`, { headers: { 'x-test-user': alice } }));
+      expect(response.status).toBe(200);
+      return response.json();
+    };
+    expect((await read()).current.steps[0]).toMatchObject({ id: item.id, status: 'pending' });
+    await pipelineRepository.updatePlanItem(item.id, { status: 'running' });
+    expect((await read()).current.steps[0].status).toBe('working');
+    // Exercise the same status-write path used by the worker-failure catch.
+    // The manager does not mutate the active plan item when a worker throws.
+    const { PipelineManager } = await import('@/core/agent/pipeline-manager');
+    const manager = new PipelineManager();
+    await (manager as any).updatePipeline(pipeline.id, { status: 'failed', summary: 'QA could not run tests' });
+    expect((await read()).current.steps[0]).toMatchObject({ status: 'blocked', evidence: 'QA could not run tests' });
+    expect((await pipelineRepository.getPlanItems(pipeline.id))[0].status).toBe('running');
+    await (manager as any).updatePipeline(pipeline.id, { status: 'running' });
+    expect((await read()).current.steps[0].status).toBe('working');
+    await pipelineRepository.updatePlanItem(item.id, { status: 'done', result: 'Tests passed' });
+    await (manager as any).updatePipeline(pipeline.id, { status: 'completed' });
+    const second = await pipelineRepository.create({ rootAgentId: 'root', sessionId: pipelineSid, userId: alice,
+      title: 'Next feature', type: 'development', createdAt: new Date(pipeline.createdAt.getTime() + 1000) });
+    const [secondItem] = await pipelineRepository.addPlanItems([{ pipelineId: second.id, ordinal: 0, title: 'Implement next feature' }]);
+    expect((await read()).current.sourcePipelineId).toBe(second.id);
+    expect((await read()).previous[0].steps[0]).toMatchObject({ id: item.id, status: 'done' });
+    const state = await workPlanRepository.read(pipelineSid, alice);
+    const update = createWorkPlanTools().find(tool => tool.name === 'update_work_plan')!;
+    await update.execute({ revision: state.revision, title: 'Coordinator revision', goal: 'Also release', summary: 'Follow-up',
+      steps: [...state.current!.steps, { id: 'release', title: 'Release check', status: 'pending', evidence: '' }],
+    }, { sessionId: pipelineSid, userId: alice } as AgentContext);
+    await pipelineRepository.updatePlanItem(secondItem.id, { status: 'running' });
+    expect((await read()).current.title).toBe('Coordinator revision');
+    expect((await read()).current.steps.map((step: { id: string }) => step.id)).toContain('release');
+  });
+
   it('isolates other users on both routes and repository calls', async () => {
     expect((await request('GET', '/plan', undefined, bob)).status).toBe(404);
     expect((await request('POST', '/plan/feedback', { planId: 'unknown', revision: 2, text: 'other user' }, bob)).status).toBe(404);

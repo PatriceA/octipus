@@ -18,7 +18,7 @@ const skill = (over: Partial<Skill>): Skill =>
 describe('buildSkillLoaderHandlers', () => {
   test('exposes list_skills + get_skill with no toolId (stay core under lazy discovery)', () => {
     const hs = handlers();
-    expect(hs.map((h) => h.name).sort()).toEqual(['get_skill', 'list_skills', 'update_skill']);
+    expect(hs.map((h) => h.name).sort()).toEqual(['get_skill', 'list_skills', 'read_skill_resource', 'run_skill_script', 'update_skill']);
     for (const h of hs) expect(h.toolId).toBeUndefined();
   });
 

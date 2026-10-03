@@ -178,6 +178,16 @@ describe('CLIOutputParser — codex JSONL fixture', () => {
     expect(h.text).toBe('All done.');
   });
 
+  it('treats the hook-trust startup advisory as a warning, preserving real failures', () => {
+    const h = makeParser();
+    const message = '`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation.';
+    h.feed({ type: 'error', message }, 'Codex CLI');
+    h.feed({ type: 'item.completed', item: { id: 'warning', type: 'error', message } }, 'Codex CLI');
+    expect(h.runErrors).toEqual([]);
+    h.feed({ type: 'turn.failed', error: { message: 'actual failure' } }, 'Codex CLI');
+    expect(h.runErrors).toEqual(['actual failure']);
+  });
+
   it('surfaces codex turn.failed / error as a run error', () => {
     const h = makeParser();
     h.feed({ type: 'turn.failed', error: { message: 'model overloaded' } }, 'Codex CLI');

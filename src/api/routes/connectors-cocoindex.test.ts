@@ -128,3 +128,20 @@ test('embedding endpoint preserves document/query mode and applies backpressure'
   const oversized = await request('POST', '/document/embeddings', { model: 'configured', input: Array(5).fill('x'.repeat(64_000)) });
   expect(oversized.status).toBe(413);
 });
+
+test.each(['document', 'query'])('shared embedding endpoint honors input_type=%s', async side => {
+  fixture.embed.mockResolvedValue({ object: 'list', data: [{ embedding: [1, 2], index: 0 }] });
+  const response = await request('POST', '/document/embeddings', {
+    model: 'configured', input: ['text'], input_type: side,
+  });
+  expect(response.status).toBe(200);
+  expect(fixture.embed).toHaveBeenCalledWith(['text'], 'configured', side, 'admin');
+});
+
+test('shared embedding endpoint rejects unsupported input types', async () => {
+  const response = await request('POST', '/document/embeddings', {
+    model: 'configured', input: ['text'], input_type: 'invalid',
+  });
+  expect(response.status).toBe(422);
+  expect(fixture.embed).not.toHaveBeenCalled();
+});

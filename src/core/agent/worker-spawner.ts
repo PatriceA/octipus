@@ -421,6 +421,14 @@ export async function spawnWorker(
     roleTools = applyToolCap(roleTools, agentCfg.smallModelMaxTools, { role: agentRole, modelId: finalModel });
   }
 
+  // Framework capability: a bounded test environment for QA/review, without
+  // granting Docker administration. Advertise it in pipeline worker prompts
+  // as well as registering it globally; count it in the execution contract.
+  if (['qa', 'review'].includes(agentRole)) {
+    const { buildTestContainerHandlers } = await import('@/tools/test-container');
+    roleTools.push(...buildTestContainerHandlers());
+  }
+
   // ── Capability contract (wave 3) ────────────────────────────────
   // Last point where the toolset is still the one the worker will run with,
   // and the first where every subtraction has happened: stage narrowing,
@@ -1138,7 +1146,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
             depth: 1,
             topicPath: stageNode.topicPath,
             role: agentRole,
-            status: 'failed',
+            status: errMsg.includes('Permission denied') ? 'denied' : 'tool_error',
             error: errMsg.slice(0, 200),
           },
         });

@@ -100,6 +100,16 @@ describe('ToolExecutor — side-effect counters', () => {
     expect(c.filesChanged).toBe(0);
   });
 
+  test('counts a disposable container test as command evidence without a repository mutation', async () => {
+    const exec = freshExecutor(tool('run_test_container', async () => ({ exitCode: 0, stdout: '12 passed' })));
+    await exec.handleToolCalls([{ id: '1', name: 'run_test_container', arguments: {} }]);
+    const counters = exec.getSideEffectCounters();
+    expect(counters.commandsRun).toBe(1);
+    expect(counters.filesChanged).toBe(0);
+    const { stageEvidenceFailure } = await import('./agent/pipeline-manager');
+    expect(stageEvidenceFailure({ runsCommands: true, readOnly: true }, counters, 0)).toBeNull();
+  });
+
   test('toolCalls is derived as the exact sum of byName', async () => {
     const exec = freshExecutor(tool('a', ok), tool('b', ok));
     await exec.handleToolCalls([

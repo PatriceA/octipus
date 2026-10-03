@@ -658,6 +658,10 @@ export class SwarmSpawner {
     // registerTool is keyed by name.
     const { buildSkillLoaderHandlers } = await import('@/tools/skill-loader');
     childTools.push(...buildSkillLoaderHandlers());
+    if (['qa', 'review'].includes(childRole)) {
+      const { buildTestContainerHandlers } = await import('@/tools/test-container');
+      childTools.push(...buildTestContainerHandlers());
+    }
 
     // Lazy tool discovery for a swarm child. The root agent has had it since the
     // gate moved off `provider === 'ollama'`, and the pipeline-stage path has it
@@ -1498,11 +1502,14 @@ export class SwarmSpawner {
     const inheritedTree = inheritedWorktreeOf(opts.parentContext);
     const attemptWorktree =
       inheritedTree ?? (opts.worktree && attemptIsCli ? opts.worktree.path : undefined);
-    const treeMetadata = inheritedTree
-      ? inheritedTreeMetadata(inheritedTree, attemptIsCli)
-      : attemptWorktree
-        ? { worktreePath: attemptWorktree }
-        : {};
+    // CLI cwd and registered tools must see the same tree. Tools resolve
+    // relative paths using projectPath even when invoked by a CLI worker.
+    // Only the persisted dev-mode session may grant access to a shared project.
+    const projectPath = attemptWorktree ?? await devProjectPathForSession(opts.parent.rootSessionId);
+    const treeMetadata = attemptWorktree
+      ? inheritedTreeMetadata(attemptWorktree)
+      : projectPath ? { projectPath } : {};
+
 
     // Phase 2: for Agents (depth 1), build the child's AgentNode up front
     // so we can register `spawn_child` + `escalate_to_other_lane`

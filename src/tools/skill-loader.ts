@@ -15,10 +15,12 @@
 
 import type { ToolHandler } from '@/core/agent-base';
 import { getSkillRegistry } from '@/skills/registry';
+import { buildSkillResourceHandlers } from './skill-runtime';
 import { updateSkill } from '@/skills/update';
 
 export function buildSkillLoaderHandlers(): ToolHandler[] {
   return [
+    ...buildSkillResourceHandlers(),
     {
       name: 'update_skill',
       description: 'Update an existing Octipus skill in place. Read it with get_skill first, then send only changed fields. Content replaces the full Markdown body; empty content switches to structured fields. Keeps the skill ID and role assignments. Mounted skills must be edited at their source and reloaded.',

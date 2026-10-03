@@ -24,7 +24,7 @@ export async function cocoIndexEmbeddingSettings() {
     label: model.name,
     settings: {
       embedding: { provider: 'litellm', model: `openai/${identity}`, min_interval_ms: 500,
-        indexing_params: { api_base: `${base}/document` }, query_params: { api_base: `${base}/query` } },
+        indexing_params: { input_type: 'document' }, query_params: { input_type: 'query' } },
       envs: { OPENAI_API_BASE: `${base}/document`, OPENAI_API_KEY: token },
       daemon: { idle_timeout_minutes: 10, keep_alive_with_mcp: false },
     },

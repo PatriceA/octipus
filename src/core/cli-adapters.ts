@@ -1461,6 +1461,7 @@ export class CLIOutputParser {
 
       if (itemType === 'error') {
         const message = (item.message || 'codex reported an error') as string;
+        if (isCodexHookTrustWarning(message)) { this.emit('observation', { warning: message }); return null; }
         this.emit('error', { error: message });
         this.callbacks.onRunError?.(message);
         return null;
@@ -1534,6 +1535,7 @@ export class CLIOutputParser {
 
     if (type === 'error') {
       const message = (event.message || 'codex reported an error') as string;
+      if (isCodexHookTrustWarning(message)) { this.emit('observation', { warning: message }); return null; }
       this.emit('error', { error: message });
       this.callbacks.onRunError?.(message);
       return null;
@@ -1684,4 +1686,9 @@ function codexMcpToolName(item: Record<string, unknown>): string {
   const server = item.server as string | undefined;
   const tool = item.tool as string | undefined;
   return [server, tool].filter(Boolean).join('.') || 'mcp_tool';
+}
+
+/** Codex also sends this startup advisory as an error-shaped JSON event. */
+export function isCodexHookTrustWarning(message: string): boolean {
+  return /^(?:WARNING:\s*)?`?--dangerously-bypass-hook-trust`? is enabled\. Enabled hooks may run without review for this invocation\.$/i.test(message.trim());
 }

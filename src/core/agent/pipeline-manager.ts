@@ -2991,10 +2991,7 @@ export class PipelineManager {
   }
 
   private async updatePipeline(id: string, data: Partial<NewPipeline>) {
-    await this.db
-      .update(pipelines)
-      .set({ ...data, updatedAt: new Date() })
-      .where(eq(pipelines.id, id));
+    await pipelineRepository.updatePipeline(id, data);
   }
 
   private async updateNode(id: string, data: Partial<NewPipelineNode>) {

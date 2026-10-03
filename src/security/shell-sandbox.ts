@@ -41,7 +41,7 @@
  */
 import { existsSync } from 'node:fs';
 import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getConfig } from '@/config';
 import { coreLogger } from '@/utils/logger';
@@ -61,6 +61,8 @@ export interface WrapOptions {
   /** Additional read-write paths. Use sparingly; each one widens
    *  the blast radius of a compromise. */
   extraReadWrite?: string[];
+  /** Command environment PATH, before adding the mounted user executables. */
+  path?: string;
 }
 
 export interface WrapResult {
@@ -131,6 +133,12 @@ export function getSandboxMode(): SandboxMode {
  * /tmp scratch, no network unless asked.
  */
 function buildBwrapArgs(binary: string, options: WrapOptions, scratch: string): string[] {
+  const projectBin = join(options.workspaceRoot, '.venv', 'bin');
+  const commandPath = [
+    ...(existsSync(projectBin) ? [projectBin] : []),
+    options.path ?? process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
+    join(homedir(), '.local', 'bin'),
+  ].join(':');
   const args: string[] = [
     binary,
     // New mount namespace + tmp root.
@@ -148,6 +156,15 @@ function buildBwrapArgs(binary: string, options: WrapOptions, scratch: string): 
     '--ro-bind-try', '/bin', '/bin',
     '--ro-bind-try', '/etc', '/etc',
     '--ro-bind-try', '/opt', '/opt',
+    // User-installed command entry points and Python user-site packages.
+    // Expose only these runtime directories, never the whole home directory.
+    '--ro-bind-try', join(homedir(), '.local', 'bin'), join(homedir(), '.local', 'bin'),
+    '--ro-bind-try', join(homedir(), '.local', 'lib'), join(homedir(), '.local', 'lib'),
+    // uv tool entry points are symlinks to venvs whose interpreters can
+    // themselves live in uv's managed Python directory. Both are runtime-only.
+    '--ro-bind-try', join(homedir(), '.local/share/uv/tools'), join(homedir(), '.local/share/uv/tools'),
+    '--ro-bind-try', join(homedir(), '.local/share/uv/python'), join(homedir(), '.local/share/uv/python'),
+    '--setenv', 'PATH', commandPath,
     // Per-spawn scratch (the legacy /tmp/assistant- prefix lives here).
     // Bound BEFORE the workspace so that workspaces under /tmp aren't
     // shadowed by this overlay — order matters in bwrap.
