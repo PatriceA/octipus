@@ -220,6 +220,13 @@ describe.skipIf(process.platform === 'win32')('CocoIndexService', () => {
     expect((await f.service.getStatus()).error).toContain('index failed');
     expect(f.calls.filter((call) => call.args.join(' ') === 'daemon stop')).toHaveLength(2);
   });
+  test('an index that never finishes still records its model, so re-setup does not reset it', async () => {
+    const f = fixture({ oldModel: 'Snowflake/snowflake-arctic-embed-xs', indexError: new Error('timed out') });
+    await f.service.install('/workspace/repo', 'sentence-transformers/all-MiniLM-L6-v2');
+    await f.service.waitForIdle();
+    const meta = [...f.writes.entries()].find(([path]) => path.endsWith('octipus-connector.json'));
+    expect(meta?.[1]).toContain('all-MiniLM-L6-v2');
+  });
 });
 
 /**
