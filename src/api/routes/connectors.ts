@@ -51,16 +51,23 @@ function buildCallbackHtml(opts: { success: boolean; connectorId: string; error?
 /** CSP header value that allows the OAuth callback's inline script (no external resources). */
 const CALLBACK_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'";
 
+const COCOINDEX_EMBED_MAX_CHARS = 4_000;
+
 export const connectorRoutes = new Elysia({ prefix: '/connectors' })
   .use(apiContext)
 
   .post('/cocoindex/:side/embeddings', async ({ user, body, params, set }) => {
     if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
     if (!user.isAdmin) { set.status = 403; return { error: 'Admin access required' }; }
-    const inputs: string[] = typeof body.input === 'string' ? [body.input] : body.input;
-    if (inputs.reduce((size, text) => size + text.length, 0) > 256_000) {
+    // ccc chunks are ~1k chars; a longer one is an unsplittable blob (base64
+    // fonts, data URIs). Rejecting it fails the whole file, which ccc then
+    // re-embeds on every run — truncate instead. 64 x 4k keeps a batch bounded.
+    const raw: string[] = typeof body.input === 'string' ? [body.input] : body.input;
+    // ponytail: total cap only; a batch of blobs over 8M chars still fails, raise it if one shows up.
+    if (raw.reduce((size, text) => size + text.length, 0) > 8_000_000) {
       set.status = 413; return { error: 'Embedding batch too large' };
     }
+    const inputs = raw.map(text => text.slice(0, COCOINDEX_EMBED_MAX_CHARS));
     try {
       // CocoIndex shares one API base; its supported per-side input_type
       // distinguishes retrieval queries from indexed documents.
@@ -74,7 +81,7 @@ export const connectorRoutes = new Elysia({ prefix: '/connectors' })
     }
   }, { params: t.Object({ side: t.Union([t.Literal('document'), t.Literal('query')]) }), body: t.Object({
     model: t.String({ minLength: 1, maxLength: 200 }),
-    input: t.Union([t.String({ maxLength: 64_000 }), t.Array(t.String({ maxLength: 64_000 }), { minItems: 1, maxItems: 64 })]),
+    input: t.Union([t.String({ maxLength: 8_000_000 }), t.Array(t.String({ maxLength: 8_000_000 }), { minItems: 1, maxItems: 64 })]),
     encoding_format: t.Optional(t.String()),
     input_type: t.Optional(t.Union([t.Literal('document'), t.Literal('query')])),
   }) })
