@@ -1,6 +1,6 @@
 import type { Browser, BrowserContext, Page } from 'playwright';
 import type { ToolManifest } from '@/core/types';
-import { decide, decisionModelBound, type DecisionSite } from '@/models/decision';
+import { decide, decisionModelBound, type DecisionSite, recordShadow } from '@/models/decision';
 import { coreLogger, toolLogger } from '@/utils/logger';
 import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 
@@ -485,7 +485,7 @@ async function pageStateHints(page: Page): Promise<{ pageState?: string[] }> {
     return answers ? Object.entries(answers).filter(([, a]) => a.type === 'noul' && a.p >= HINT_P).map(([k]) => k) : null;
   };
   if (!BROWSER_HINTS_LIVE) {
-    void ask().then((hints) => { if (hints) coreLogger.info({ site: BROWSER_SITE.id, wouldAdd: hints }, 'decision shadow'); });
+    void ask().then((hints) => { if (hints) recordShadow({ site: BROWSER_SITE.id, wouldAdd: hints }); });
     return {};
   }
   const hints = await ask();

@@ -21,7 +21,7 @@ import type {
   PlanItemRow,
 } from '@/db/schema/pipelines';
 import { pipelineNodes, pipelines } from '@/db/schema/pipelines';
-import { decide, type DecisionSite } from '@/models/decision';
+import { decide, type DecisionSite, recordShadow } from '@/models/decision';
 import { getModelRegistry, type ModelRegistry } from '@/models/model-registry';
 import { getTopicConfig } from '@/models/topic-config';
 import { WorkspaceFS } from '@/security/workspace-fs';
@@ -3034,6 +3034,6 @@ function shadowQaVerdict(output: string, parsedPassed: boolean | null): void {
   }).then((answers) => {
     const a = answers?.passed;
     if (a?.type !== 'noul') return;
-    coreLogger.info({ site: QA_SITE.id, parsed: parsedPassed, decision: a.p >= 0.5, p: Number(a.p.toFixed(3)), agreed: parsedPassed === null ? null : parsedPassed === (a.p >= 0.5) }, 'decision shadow');
+    recordShadow({ site: QA_SITE.id, parsed: parsedPassed, decision: a.p >= 0.5, p: Number(a.p.toFixed(3)), agreed: parsedPassed === null ? null : parsedPassed === (a.p >= 0.5) });
   });
 }
