@@ -85,7 +85,7 @@ describe('startTakenWork', () => {
     await startTakenWork({ message, sessionId: SESSION, group, request: { text: 'x', messageKey: 'C1:2' } });
     const content = (send.mock.calls[0]![2] as { content: string }).content;
     expect(content).not.toMatch(/<[@!]/);
-    expect(content).toContain('@channel deploy is broken, @U123 @oncall');
+    expect(content).toContain('@\u2060channel deploy is broken, @\u2060U123 @\u2060oncall');
   });
 
   test('taken already: told privately, no turn', async () => {
@@ -111,7 +111,7 @@ describe('announceTakenTaskClosed', () => {
 
   test('a broadcast mention in the title is not repeated as one', async () => {
     await announceTakenTaskClosed({ task: task({ status: 'done', title: 'Tell <!channel> about it' }), previousStatus: 'open', cause: 'closed' });
-    expect((send.mock.calls[0]![2] as { content: string }).content).toBe('✅ Done: *Tell @channel about it*');
+    expect((send.mock.calls[0]![2] as { content: string }).content).toBe('✅ Done: *Tell @\u2060channel about it*');
   });
 
   test('silent for other tasks, other owners, and removed or paused channels', async () => {

@@ -124,6 +124,17 @@ describe('enrolment', () => {
     expect(await gc.leaveGroupChannel({ channelType: 'slack', channelId: 'C1', userId: annaId, isAdmin: false })).toBe('not_enrolled');
   });
 
+  test('a chat that changes id (Telegram supergroup upgrade) keeps its enrolment and sessions', async () => {
+    await gc.joinGroupChannel({ channelType: 'telegram', channelId: '-41', label: 'Crew', userId: annaId });
+    const group = (await gc.findGroupChannel('telegram', '-41'))!;
+    const sessionId = await gc.resolveGroupSession({ userId: annaId, group, threadId: 'main' });
+    expect(await gc.moveGroupChannel('telegram', '-41', '-10041')).toBe(true);
+    expect(await gc.findGroupChannel('telegram', '-41')).toBeNull();
+    expect(await gc.findGroupChannel('telegram', '-10041')).toMatchObject({ id: group.id, ownerUserId: annaId });
+    expect((await sessionRepository.findById(sessionId))?.channelId).toBe('-10041');
+    expect(await gc.moveGroupChannel('telegram', '-99', '-10099')).toBe(false);
+  });
+
   test('an enrolment change is visible at once, not after the cache expires', async () => {
     expect(await gc.findGroupChannel('slack', 'C1')).toBeNull();
     await enrol('C1', annaId);

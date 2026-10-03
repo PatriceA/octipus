@@ -20,6 +20,7 @@ import { attendChat, newestApprovalPostedAt, startApprovalPrompts, tryResolveApp
 import { processChannelAttachments } from './attachment-handler';
 import { startTakenWork, type TakenWork, takeRequestOf } from './take-work';
 import { startTakenTaskNotices } from './taken-task-notices';
+import { answerHow } from './group-handler';
 import { getUMI } from './interface';
 import { fileAt, writeFileAt } from '@/utils/fs-file';
 import { whichSync } from '@/utils/proc';
@@ -653,7 +654,7 @@ export async function forwardPermissionRequestToChannel(request: PermissionReque
       const { userRepository } = await import('@/db/repositories/user-repository');
       const name = (await userRepository.findById(userId))?.username ?? 'The requester';
       const shownPrivately = await umi.sendPrivate(channelType, channelId, userId, {
-        content: `🔒 Permission required: the agent wants to use "${toolName}".${detail}\n\nReply "yes" or "no" in the thread.`,
+        content: `🔒 Permission required: the agent wants to use "${toolName}".${detail}\n\nReply "yes" or "no" ${answerHow(channelType, threadId)}.`,
         threadId,
       }).catch((err: unknown) => {
         channelLogger.warn({ err, channelType }, 'Private permission details could not be delivered');
@@ -665,7 +666,7 @@ export async function forwardPermissionRequestToChannel(request: PermissionReque
         ? 'I sent you the details privately; only you can see them.'
         : 'I could not show you the details privately here; check the request in the Octipus web app, or reply "no".';
       await umi.send(channelType, channelId, {
-        content: `🔒 ${name}: Octipus needs your permission to use "${toolName}". ${where}\n\nOnly ${name} can reply "yes" to allow or "no" to deny.`,
+        content: `🔒 ${name}: Octipus needs your permission to use "${toolName}". ${where}\n\nOnly ${name} can reply "yes" to allow or "no" to deny, ${answerHow(channelType, threadId)}.`,
         threadId,
       });
     } else {
