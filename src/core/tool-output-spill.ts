@@ -109,7 +109,9 @@ export async function spillToolOutput(
     // express nothing, so the restriction has to be applied as an ACL.
     await restrictToOwnerAsync(dirname(abs), 'directory');
     await restrictToOwnerAsync(abs);
-    return previewFor(text, relPath);
+    // File tools may resolve relative paths against a dev repository/worktree.
+    // Return the actual storage location so the saved output stays retrievable.
+    return previewFor(text, abs);
   } catch (err) {
     coreLogger.warn(
       { err, toolCallId: opts.toolCallId, tool: opts.toolName, chars: text.length },

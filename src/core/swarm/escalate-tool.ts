@@ -28,7 +28,7 @@ import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
 import { getCallGraph } from './call-graph';
 import { getSwarmSpawner, type SwarmSpawner } from './spawner';
-import { formatChildResult, validateSpawnChildArgs } from './swarm-tool';
+import { formatChildResult, validateSpawnChildArgs, TASK_BRIEF_MAX } from './swarm-tool';
 import type { AgentNode, SpawnChildParams } from './types';
 
 export function createEscalateTool(
@@ -58,7 +58,7 @@ export function createEscalateTool(
           description: 'The lane to retry on — "build", "verify", "everyday" or "research". Must not be the lane you are already running.',
         },
         subtopic: { type: 'string' },
-        taskBrief: { type: 'string', maxLength: 4000 },
+        taskBrief: { type: 'string', maxLength: TASK_BRIEF_MAX },
         expectedOutput: {
           type: 'object',
           properties: {

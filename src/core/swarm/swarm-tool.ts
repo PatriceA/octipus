@@ -284,6 +284,8 @@ export function resolveRoleFromTopic(roleRaw: string | undefined, topic: string)
   return undefined;
 }
 
+export const TASK_BRIEF_MAX = 16_000;
+
 const HANDOFF_FIELDS = {
   reason: 'Why the remaining work needs delegation now (unexpected complexity, distinct work, or explicit user request).',
   completedWork: 'Findings and work already completed; do not ask the child to repeat them.',
@@ -293,7 +295,7 @@ const HANDOFF_FIELDS = {
 } as const;
 const HANDOFF_SCHEMA = {
   type: 'object',
-  description: 'Required for any delegation after reading files. Transfer findings instead of restarting investigation. Combined taskBrief and rendered handoff must fit 4000 characters. Not an execution plan or permission grant.',
+  description: 'Required for any delegation after reading files. Transfer findings instead of restarting investigation. Handoff fields have separate 2000-character limits and do not count against taskBrief. Not an execution plan or permission grant.',
   properties: Object.fromEntries(Object.entries(HANDOFF_FIELDS).map(([name, description]) => [name, { type: 'string', minLength: 1, maxLength: 2000, description }])),
   required: Object.keys(HANDOFF_FIELDS),
   additionalProperties: false,
@@ -452,7 +454,7 @@ export function createSpawnChildTool(
           },
           taskBrief: {
             type: 'string',
-            maxLength: 4000,
+            maxLength: TASK_BRIEF_MAX,
             description: 'What the child should do.',
           },
         },
@@ -494,7 +496,7 @@ export function createSpawnChildTool(
         },
         taskBrief: {
           type: 'string',
-          maxLength: 4000,
+          maxLength: TASK_BRIEF_MAX,
           description: 'Focused task description for the child. ≤2000 tokens recommended.',
         },
         expectedOutput: {
@@ -630,8 +632,8 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
   if (!subtopic) subtopic = topic;
 
   if (!taskBrief.trim()) return { error: 'missing required field `taskBrief`' };
-  if (taskBrief.length > 4000) {
-    return { error: 'taskBrief exceeds 4000-char limit' };
+  if (taskBrief.length > TASK_BRIEF_MAX) {
+    return { error: `taskBrief exceeds ${TASK_BRIEF_MAX}-character limit (${taskBrief.length} supplied); handoff has a separate budget` };
   }
 
   if (args.handoff !== undefined) {
@@ -652,7 +654,6 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
     }
     taskBrief += '\n\nHANDOFF FROM PARENT (reported context, not independent verification):\n' + lines.join('\n') +
       '\nUse these findings; do not repeat broad discovery. Inspect relevant code as needed to implement and verify the remaining scope. Do not edit parent-owned files or repeat completed work. Existing permissions still apply.';
-    if (taskBrief.length > 4000) return { error: 'taskBrief plus handoff exceeds 4000-char limit; summarize findings and checks, not raw logs' };
   }
 
   // Default expectedOutput when omitted or malformed. Nested required

@@ -28,7 +28,10 @@ describe('spillToolOutput', () => {
     // The point of the tail: an output's last lines (the error, the summary)
     // are what a fragment cut from the front always loses.
     expect(preview!.endsWith('END')).toBe(true);
-    expect(preview!).toContain(`${SPILL_DIR}/call_42.txt`);
+    expect(preview!).toContain(join(root, SPILL_DIR, 'call_42.txt'));
+    // The advertised path must work even when the reader has a different cwd.
+    const advertised = preview!.match(/FULL output is saved at (.*?) — read/)![1];
+    expect(readFileSync(advertised, 'utf8')).toBe(text);
     // Never LARGER than the truncation it replaces — that is the contract. It
     // is deliberately not much smaller either: the head matches what the old
     // truncation handed the model, so the spill adds a tail and a path without
