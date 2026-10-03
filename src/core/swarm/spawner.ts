@@ -687,7 +687,7 @@ export class SwarmSpawner {
         const { buildToolDiscoveryHandlers } = await import('@/tools/tool-discovery');
         const selected = selectCoreToolIds(brief.taskBrief, childCoreToolIds);
         const { longTail } = splitRoleTools(childTools, selected);
-        const discoveryHandlers = buildToolDiscoveryHandlers(longTail);
+        const discoveryHandlers = buildToolDiscoveryHandlers(childTools);
         if (discoveryHandlers.length > 0) {
           childTools.push(...discoveryHandlers);
           childToolAdvertisement = { mode: 'lazy', coreToolIds: selected };

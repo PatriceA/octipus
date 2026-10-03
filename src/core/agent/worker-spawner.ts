@@ -827,7 +827,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
         const { splitRoleTools } = await import('./tool-split');
         const { buildToolDiscoveryHandlers } = await import('@/tools/tool-discovery');
         const { longTail } = splitRoleTools(roleTools, workerCoreToolIds ?? roleConfig.coreToolIds);
-        const discoveryHandlers = buildToolDiscoveryHandlers(longTail);
+        const discoveryHandlers = buildToolDiscoveryHandlers(roleTools);
         if (discoveryHandlers.length > 0) {
           // Register ALL role tools + the discovery meta-tools (dispatch must
           // keep working); only advertisement shrinks (filtered in agent-worker).

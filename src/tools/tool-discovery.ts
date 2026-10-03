@@ -22,20 +22,20 @@ import { TOOL_DISCOVERY_TOOL_ID } from '@/core/agent/tool-split';
 const SEARCH_LIMIT = 15;
 
 /**
- * Build the `list_tools` / `describe_tool` handlers closed over a worker's
- * long-tail set. Returns an empty array when there's nothing to discover (so we
+ * Build discovery over the worker's complete authorized tool set, including
+ * already-advertised tools. Returns an empty array when there are no tools (so we
  * don't advertise dead meta-tools).
  */
-export function buildToolDiscoveryHandlers(longTail: ToolHandler[]): ToolHandler[] {
-  if (longTail.length === 0) return [];
+export function buildToolDiscoveryHandlers(availableTools: ToolHandler[]): ToolHandler[] {
+  if (availableTools.length === 0) return [];
 
-  const byName = new Map(longTail.map((t) => [t.name, t]));
+  const byName = new Map(availableTools.map((t) => [t.name, t]));
 
   return [
     {
       name: 'list_tools',
       description:
-        'List additional tools available to you beyond the ones already shown. ' +
+        'List all tools available to you, including tools already shown. ' +
         'Returns each tool name and a one-line description (no parameters). ' +
         'Pass an optional `query` describing what you want to do to get the most ' +
         'relevant tools ranked first (recommended when the list is long). ' +
@@ -48,7 +48,7 @@ export function buildToolDiscoveryHandlers(longTail: ToolHandler[]): ToolHandler
             type: 'string',
             description:
               'Optional. What you want to accomplish (e.g. "read a PDF", "send a Slack message"). ' +
-              'Ranks the additional tools by relevance and returns the best matches.',
+              'Ranks the available tools by relevance and returns the best matches.',
           },
         },
       },
@@ -71,7 +71,7 @@ export function buildToolDiscoveryHandlers(longTail: ToolHandler[]): ToolHandler
     {
       name: 'describe_tool',
       description:
-        'Get the full parameter schema for one of the additional tools returned by list_tools. ' +
+        'Get the full parameter schema for any tool available to this worker, including already-shown tools. ' +
         'After describing a tool you can call it directly by its name.',
       parameters: {
         type: 'object',
