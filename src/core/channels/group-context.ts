@@ -44,7 +44,9 @@ export function flattenLine(text: string): string {
 /**
  * Members' text made safe for the bot to repeat in the channel: on one line,
  * with no mention that would ping anyone (`<!channel>`, `<!here>`, `<@U…>`,
- * `<!subteam^…>` become plain `@name` text) and no stray bold markers.
+ * `<!subteam^…>` become plain `@name` text, and a word joiner after an `@`
+ * that starts a word — not an email address — keeps Telegram from turning `@username` into a mention) and no stray bold
+ * markers.
  */
 export function quietText(text: string): string {
   return flattenLine(text)
@@ -52,7 +54,8 @@ export function quietText(text: string): string {
       const name = (label ?? id.replace(/^subteam\^/, '')).replace(/^@/, '');
       return `@${name}`;
     })
-    .replaceAll('*', '');
+    .replaceAll('*', '')
+    .replace(/(^|[^\w.+-])@(?=\w)/g, '$1@\u2060');
 }
 
 function clip(text: string): string {

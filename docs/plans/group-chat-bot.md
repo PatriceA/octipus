@@ -1,9 +1,10 @@
 # Group chat bot — Octipus as a member of a team channel
 
-> **Design plan, 2026-10-01.** Phase 1 (Slack, mention mode) and phase 2
-> (taking up work, channel budgets) are implemented; user-facing behaviour is
-> documented in [CHANNELS.md → Group channels](../CHANNELS.md#group-channels).
-> Phases 3–4 are not built. Paths and line numbers in "What breaks today"
+> **Design plan, 2026-10-01.** Phase 1 (Slack, mention mode), phase 2
+> (taking up work, channel budgets) and phase 3 (Teams and Telegram groups)
+> are implemented; user-facing behaviour is documented in
+> [CHANNELS.md → Group channels](../CHANNELS.md#group-channels). Phase 4 is
+> not built. Paths and line numbers in "What breaks today"
 > reflect `main` at v0.6.0, before phase 1.
 
 ## Goal
@@ -105,7 +106,7 @@ Enrolment is a new table rather than overloading notification destinations
 ```
 group_channels
   id               uuid pk
-  channel_type     text          -- slack (teams | telegram later)
+  channel_type     text          -- slack | teams | telegram
   channel_id       text          -- platform conversation id
   label            text          -- #name when readable
   owner_user_id    uuid          -- who enrolled it; controls the enrolment
@@ -157,9 +158,12 @@ members are in the thread, the second member sees the first member's question
 and the answer. The request itself is attributed: `Anna Schmidt: can we ship on
 Friday?`.
 
-No transcript is stored by Octipus in phase 1: reading the thread at turn time
+No transcript is stored by Octipus for Slack: reading the thread at turn time
 is accurate, needs no retention policy, and costs one API call per addressed
-message. A buffer becomes necessary only for listen mode (§7).
+message. Teams and Telegram bots cannot read a conversation back, so there the
+adapter keeps what it saw in an in-memory buffer (`src/channels/group-buffer.ts`:
+40 messages per thread, one day, gone on restart) and renders the transcript
+from it.
 
 The session indexes: migration 0121 rewrites 0028's one-active-session-per-chat
 index to skip group sessions and adds one active session per
@@ -421,11 +425,44 @@ Acceptance (each has a test):
   enforced for members' runs there, notifies the owner, and stops turns with
   one notice (`spend-budgets.test.ts`, `slack/group.test.ts`).
 
-### Phase 3 — Teams and Telegram groups
+### Phase 3 — Teams and Telegram groups — done
 
-- Teams mention detection via entities, Telegram `chat.type` and mention / reply
-  detection; per-platform thread mapping.
-- Telegram `allowedUsers` applied per sender in groups.
+Built:
+- The rules moved into a platform-neutral handler (`src/channels/group-handler.ts`);
+  each adapter maps its events onto it (`slack/group.ts`, `teams/group.ts`,
+  `telegram/group.ts`) and supplies the platform calls.
+- Teams: mention entity for `recipient.id`; a team channel is keyed by its
+  conversation id without `;messageid=`, the root post is the thread and
+  replies are sent to `<channel>;messageid=<root>`; a group chat is one
+  thread. Private messages go to the member's 1:1 chat (opened with
+  `createConversationAsync` when needed). `link` in the 1:1 chat gives a link
+  code. No greeting when added to a group chat or channel.
+- Telegram: `group` / `supergroup` chats; `@botname`, a text mention, a
+  command for this bot (`/leave@botname`; bare commands go to every bot) or a
+  reply to the bot addresses it; a supergroup upgrade moves the enrolment and
+  sessions to the new chat id; a
+  group is one thread, a forum topic its own; `take this` replying to a
+  message takes that message. `/link` is never answered in a group (it used to
+  post the code there). `allowedUsers` applies per sender, silently.
+- Transcripts from an in-memory buffer of what the bot saw (§3).
+- Text the bot repeats gets a word joiner after an `@` that starts a word,
+  so Telegram does not turn a member's `@username` into a mention.
+- Prompts say how to answer on each platform (`answerHow`): Teams only
+  delivers mentions, Telegram (privacy mode) mentions and replies; with the
+  budget used up, a bare yes/no in an existing thread or chat still reaches
+  the prompt.
+
+Not built: reactions as a take trigger on Teams (no custom emoji) and
+Telegram (the bot cannot read the reacted message), permalinks for Teams.
+
+Acceptance (each has a test):
+- The Slack rules hold unchanged on the shared handler (`slack/group.test.ts`).
+- A reply to the bot addresses it; a chat without threads is never
+  "followed"; `take this` takes the replied-to message
+  (`group-handler.test.ts`).
+- Teams thread / group-chat mapping and mention detection
+  (`teams/group.test.ts`); Telegram mentions, commands, replies, forum topics
+  (`telegram/group.test.ts`); the buffer's bounds (`group-buffer.test.ts`).
 
 ### Phase 4 — Listen and proactive
 
@@ -467,8 +504,8 @@ destination, so approving its step led nowhere).
 
 1. **Guest answers** — should unlinked members ever get read-only answers?
    Phase 1: no.
-2. **Transcript retention** — only relevant once listen mode needs a stored
-   buffer (§7); phase 1 stores none.
+2. **Transcript retention** — Slack stores none; Teams and Telegram keep an
+   in-memory buffer (§3). Listen mode (§7) may need a stored one.
 3. **Shared notifications** — should enrolment also let members' hooks post
    to the channel without an admin-approved destination? (A monitor set up in
    a thread already answers there.)

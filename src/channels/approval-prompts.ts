@@ -35,6 +35,7 @@ import type { ChannelType, UnifiedMessage } from '@/core/types';
 import { isUuid } from '@/db/repositories/scoped';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { channelLogger } from '@/utils/logger';
+import { answerHow } from './group-handler';
 import { getUMI } from './interface';
 import { EXTERNAL_CHANNELS, loadNotifyScope, resolveTarget, sendResolved } from './ownership';
 
@@ -227,7 +228,7 @@ async function postWithoutDetails(input: {
   const name = (await userRepository.findById(userId))?.username ?? 'The requester';
   const umi = getUMI();
   const shown = await umi.sendPrivate(channelType, channelId, userId, {
-    content: `${details(data)}\n\nReply \`yes\` or \`no\` ${threadId ? 'in the thread' : 'in the chat'}.${data.options?.length ? ' The other options are in the Octipus web app.' : ''}`,
+    content: `${details(data)}\n\nReply \`yes\` or \`no\` ${answerHow(channelType, threadId)}.${data.options?.length ? ' The other options are in the Octipus web app.' : ''}`,
     threadId,
   }).catch((err: unknown) => {
     channelLogger.warn({ err, channelType }, 'Private approval details could not be delivered');
@@ -237,7 +238,7 @@ async function postWithoutDetails(input: {
   await umi.send(channelType, channelId, {
     content: `⏳ ${name}: a step needs your approval. ${shown
       ? 'I sent you the details privately; only you can see them.'
-      : 'The details are in the Octipus web app, since others can read this chat.'}\n\nOnly ${name} can reply \`yes\` or \`no\`.`,
+      : 'The details are in the Octipus web app, since others can read this chat.'}\n\nOnly ${name} can reply \`yes\` or \`no\`, ${answerHow(channelType, threadId)}.`,
     threadId,
   });
   return true;

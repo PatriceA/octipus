@@ -20,11 +20,12 @@ import { isUuid } from '@/db/repositories/scoped';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { getDb } from '@/db/postgres';
 import { type GroupChannel, groupChannels } from '@/db/schema/group-channels';
+import { sessions } from '@/db/schema/sessions';
 import { users } from '@/db/schema/users';
 import { channelLogger } from '@/utils/logger';
 
-/** Chat platforms group mode supports so far (phase 1 of the plan: Slack). */
-export const GROUP_CHANNEL_TYPES = ['slack'] as const;
+/** Chat platforms with group mode. */
+export const GROUP_CHANNEL_TYPES = ['slack', 'teams', 'telegram'] as const;
 export type GroupChannelType = (typeof GROUP_CHANNEL_TYPES)[number];
 
 /** A group channel with the owner's name, for the settings and admin pages. */
@@ -232,6 +233,32 @@ async function audit(userId: string, group: GroupChannel, details: Record<string
     // The change itself is committed; a missing audit row is logged, not fatal.
     channelLogger.error({ err, groupChannelId: group.id }, 'group channel audit log failed');
   }
+}
+
+/**
+ * The platform gave the chat a new id (a Telegram group upgraded to a
+ * supergroup): move the enrolment and the chat's sessions to it, so the bot
+ * keeps answering there and notices for open work still arrive. False when
+ * the chat was not enrolled.
+ */
+export async function moveGroupChannel(channelType: GroupChannelType, fromId: string, toId: string): Promise<boolean> {
+  const moved = await getDb().transaction(async (tx) => {
+    const [row] = await tx
+      .update(groupChannels)
+      .set({ channelId: toId, updatedAt: new Date() })
+      .where(and(eq(groupChannels.channelType, channelType), eq(groupChannels.channelId, fromId)))
+      .returning();
+    if (!row) return null;
+    await tx
+      .update(sessions)
+      .set({ channelId: toId })
+      .where(and(eq(sessions.channelType, channelType), eq(sessions.channelId, fromId)));
+    return row;
+  });
+  invalidateChannel(channelType, fromId);
+  invalidateChannel(channelType, toId);
+  if (moved) channelLogger.info({ channelType, fromId, toId }, 'Group channel moved to a new chat id');
+  return moved !== null;
 }
 
 // ── Sessions ────────────────────────────────────────────────────────────────
