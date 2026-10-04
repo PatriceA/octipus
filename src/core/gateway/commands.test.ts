@@ -190,11 +190,12 @@ describe('CommandRegistry', () => {
     expect(result!.text).toContain('No active session');
   });
 
-  test('getAvailable filters by trust level', () => {
-    const userCmds = registry.getAvailable('user');
-    const allNames = userCmds.map(c => c.name);
-    expect(allNames).toContain('help');
-    expect(allNames).toContain('status');
+  test('getAvailable hides admin-only commands from non-admins', () => {
+    const userNames = registry.getAvailable(false).map(c => c.name);
+    expect(userNames).toContain('help');
+    expect(userNames).toContain('status');
+    expect(userNames).not.toContain('reload-extensions');
+    expect(registry.getAvailable(true).map(c => c.name)).toContain('reload-extensions');
   });
 
   test('custom command registration', async () => {
@@ -202,7 +203,6 @@ describe('CommandRegistry', () => {
       name: 'test',
       aliases: ['t'],
       description: 'Test command',
-      minTrustLevel: 'user',
       handler: async (ctx) => ({ text: `Hello ${ctx.args.name || 'world'}` }),
       args: [{ name: 'name', required: false, description: 'Name' }],
     });

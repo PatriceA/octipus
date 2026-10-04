@@ -23,7 +23,7 @@ The Gateway Hub is the central WebSocket entry point for all clients — web UI,
 ```
 CONNECTING → AUTHENTICATING → ACTIVE → DRAINING → CLOSED
                                 │
-                                ├─ Idle timeout (30min remote, none local)
+                                ├─ Idle timeout
                                 ├─ Rate limit exceeded
                                 ├─ Auth token expired
                                 └─ Server shutdown (graceful drain)
@@ -36,16 +36,42 @@ Clients connect to `ws://host:port/gateway` and must send an auth message within
 | Client Type | Auth Method | Trust Level |
 |-------------|-------------|-------------|
 | Web UI | `session_token` | `user` |
-| TUI | `local` (file token at `~/.octipus/local-token`) | `local` |
-| Channel adapters | `hmac` (per-adapter key) | `system` |
+| TUI / editor | `session_token` (the CLI login in `~/.octipus/session.json`) | `user` |
 | Mobile/IDE | `session_token` or `api_key` | `user` |
-| API/System | `api_key` (MASTER_KEY) | `system` |
+| Automation | `api_key` (a personal API token, `octi_…`) | `user` |
+
+There are two methods, `session_token` and `api_key`, and one trust level for
+people: `user`. Trust never widens what a connection may see or touch:
+
+- Events reach a connection only when they belong to its user.
+- Every ownership check compares user ids — joining a session, `/history`,
+  `/proposals`, answering a permission request or approval, `agent.stop`. An
+  admin's connection gets no further than anyone else's.
+- Admin-only commands (`/reload-extensions`, `/mcp reconnect`) read
+  `users.is_admin` from the database when they run.
+- An admin answers someone else's permission request or approval only through
+  the audited REST routes `POST /api/admin/permission-requests/:id/resolve`
+  and `POST /api/admin/approvals/:id/resolve` (each takes a `reason`).
+
+The machine token (`local`, `~/.octipus/local-token`) and the `hmac` adapter
+method were removed: the first reached every user's sessions from loopback,
+the second was never wired. The TUI signs in with the CLI login instead (see
+[the TUI guide](../guides/tui.md)).
+
+### Client address
+
+The address used for the pre-auth cap and the audit log is the socket's peer
+address. `X-Forwarded-For` / `X-Real-IP` are believed only when that peer is
+listed in `security.trustedProxies` (`TRUSTED_PROXIES`); see
+[CONFIGURATION.md](../CONFIGURATION.md#reverse-proxy). REST rate limits, login
+lockouts and the audit log use the same rule (`src/security/client-ip.ts`).
 
 ### Connection Budgets
 
 - Max 10 connections per user
-- Max 50 connections per IP
-- Max 20 pre-auth connections per IP
+- Max 20 connections per address that have not authenticated yet. There is
+  no per-address cap on signed-in connections: behind a reverse proxy every
+  client shares one address, and that cap would become an install-wide one.
 
 ## Protocol
 
@@ -61,8 +87,8 @@ Clients connect to `ws://host:port/gateway` and must send an auth message within
 | `subscribe` | Subscribe to event patterns (e.g., `agent.*`) |
 | `unsubscribe` | Remove event subscriptions |
 | `permission.respond` | Approve/deny a permission request |
-| `approval.respond` | Approve/deny a pipeline approval |
-| `agent.stop` | Stop a running agent (admin/local only) |
+| `approval.respond` | Approve/deny a pipeline approval (the requester only) |
+| `agent.stop` | Stop one of your own running agents |
 | `ping` | Heartbeat |
 
 ### Gateway → Client
@@ -112,12 +138,12 @@ The `connectEventBridge()` function subscribes to:
 
 Sliding window rate limiter per connection per action type:
 
-| Action | User Limit | Local Limit | System Limit |
-|--------|-----------|-------------|--------------|
-| `chat.send` | 30/min | 60/min | 200/min |
-| `command` | 60/min | 120/min | 200/min |
-| `subscribe` | 30/min | 60/min | 100/min |
-| default | 60/min | 120/min | 300/min |
+| Action | User Limit |
+|--------|-----------|
+| `chat.send` | 30/min |
+| `command` | 60/min |
+| `subscribe` | 30/min |
+| default | 60/min |
 
 ## Commands
 
@@ -128,7 +154,7 @@ Built-in commands available via the gateway protocol:
 | `/help` | `/h`, `/?` | List available commands |
 | `/status` | `/s` | Show session status and running agents |
 | `/expert` | `/e` | Switch expert or list available |
-| `/abort` | `/stop`, `/cancel` | Cancel all running agents |
+| `/abort` | `/stop`, `/cancel` | Cancel your running agents |
 | `/clear` | `/cls` | Clear conversation display |
 | `/compact` | | Compact session context |
 | `/cost` | | Show cumulative token usage and cost for this session |
@@ -192,7 +218,7 @@ src/core/gateway/
 ├── connection-manager.ts # Auth, budgets, connection lifecycle
 ├── event-bus.ts          # Central pub/sub with replay buffer
 ├── rate-limiter.ts       # Sliding window per-connection limiter
-├── local-auth.ts         # ~/.octipus/local-token auth
+├── cli-session.ts        # The CLI login (~/.octipus/session.json) terminal clients use
 ├── presence.ts           # Who's connected, idle timeouts
 ├── commands.ts           # Command registry + 9 built-in commands
 ├── feedback.ts           # Emoji reactions + stall detection
@@ -202,7 +228,6 @@ src/core/gateway/
 ├── message-handler.ts    # Dispatches inbound client messages
 ├── presence.ts           # Presence tracking
 ├── rate-limiter.ts       # Per-connection rate limits
-├── local-auth.ts         # Local/HMAC trust levels
 ├── steering.ts           # chat.steer / chat.interject handling
 ├── hub.ts                # GatewayHub singleton (wires everything)
 └── index.ts              # Public exports

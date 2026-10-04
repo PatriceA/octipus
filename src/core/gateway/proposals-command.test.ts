@@ -18,7 +18,8 @@ describe('/proposals', () => {
   const approveSpy = vi.spyOn(service, 'approveProposal');
   const rejectSpy = vi.spyOn(service, 'rejectProposal');
 
-  const ctx = { userId: 'local', sessionId: 's1', clientType: 'tui', trustLevel: 'local' as const };
+  const uuid = '11111111-1111-4111-8111-111111111111';
+  const ctx = { userId: uuid, sessionId: 's1', clientType: 'tui', trustLevel: 'user' as const };
 
   beforeEach(() => {
     registry = new CommandRegistry();
@@ -44,14 +45,14 @@ describe('/proposals', () => {
   test('approve <n> promotes the nth row of that same list', async () => {
     approveSpy.mockResolvedValue({ promoted: 'skill', id: 'e-9', name: 'k8s-triage', record: {} });
     const result = await registry.execute('/proposals approve 2', ctx);
-    expect(approveSpy).toHaveBeenCalledWith('p-2', { userId: undefined });
+    expect(approveSpy).toHaveBeenCalledWith('p-2', { userId: uuid });
     expect(result!.text).toContain('is now a skill');
   });
 
   test('reject <n> reports the suppression date', async () => {
     rejectSpy.mockResolvedValue(new Date('2026-12-01T00:00:00Z'));
     const result = await registry.execute('/proposals reject 1', ctx);
-    expect(rejectSpy).toHaveBeenCalledWith('p-1', undefined);
+    expect(rejectSpy).toHaveBeenCalledWith('p-1', uuid);
     expect(result!.text).toContain('2026-12-01');
   });
 
@@ -75,9 +76,9 @@ describe('/proposals', () => {
     expect(rejectSpy).not.toHaveBeenCalled();
   });
 
-  test('a plain user is scoped to their own proposals', async () => {
-    const uuid = '11111111-1111-4111-8111-111111111111';
-    await registry.execute('/proposals', { ...ctx, userId: uuid, trustLevel: 'user' });
+  test('every caller, admins included, is scoped to their own proposals', async () => {
+    await registry.execute('/proposals', ctx);
     expect(listSpy).toHaveBeenCalledWith(uuid);
+    expect(listSpy).not.toHaveBeenCalledWith(undefined);
   });
 });

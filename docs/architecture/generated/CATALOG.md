@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-430 mounted routes across 63 route files. The path is the full one, group prefix included — what a client actually calls.
+434 mounted routes across 64 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -18,6 +18,8 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/a/:slug/bundle.js` | `src/api/routes/artifact-pages.ts` |
 | GET | `/a/:slug/embed` | `src/api/routes/artifact-pages.ts` |
 | GET | `/a/:slug/export/:exportId` | `src/api/routes/artifact-pages.ts` |
+| GET | `/api/admin/approvals` | `src/api/routes/admin-approvals.ts` |
+| POST | `/api/admin/approvals/:id/resolve` | `src/api/routes/admin-approvals.ts` |
 | GET | `/api/admin/audit` | `src/api/routes/admin.ts` |
 | GET | `/api/admin/group-channels` | `src/api/routes/admin.ts` |
 | DELETE | `/api/admin/group-channels/:id` | `src/api/routes/admin.ts` |
@@ -40,6 +42,8 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/admin/orgs/:id/sso` | `src/api/routes/orgs.ts` |
 | PATCH | `/api/admin/orgs/:id/sso` | `src/api/routes/orgs.ts` |
 | GET | `/api/admin/orgs/:id/usage` | `src/api/routes/orgs.ts` |
+| GET | `/api/admin/permission-requests` | `src/api/routes/admin-approvals.ts` |
+| POST | `/api/admin/permission-requests/:id/resolve` | `src/api/routes/admin-approvals.ts` |
 | GET | `/api/admin/quotas` | `src/api/routes/admin.ts` |
 | DELETE | `/api/admin/quotas/:userId` | `src/api/routes/admin.ts` |
 | GET | `/api/admin/quotas/:userId` | `src/api/routes/admin.ts` |
@@ -465,14 +469,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 21 |
 | `api` | `config` | 20 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 90 |
-| `api` | `db` | 103 |
+| `api` | `core` | 91 |
+| `api` | `db` | 104 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 3 |
 | `api` | `models` | 31 |
 | `api` | `plugins` | 1 |
-| `api` | `security` | 83 |
+| `api` | `security` | 95 |
 | `api` | `services` | 4 |
 | `api` | `shared` | 2 |
 | `api` | `skills` | 6 |
@@ -508,7 +512,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `channels` | 7 |
 | `core` | `config` | 34 |
 | `core` | `connectors` | 2 |
-| `core` | `db` | 210 |
+| `core` | `db` | 212 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 5 |
@@ -518,7 +522,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `shared` | 13 |
 | `core` | `skills` | 10 |
 | `core` | `tools` | 16 |
-| `core` | `utils` | 154 |
+| `core` | `utils` | 153 |
 | `db` | `config` | 3 |
 | `db` | `core` | 10 |
 | `db` | `models` | 1 |
@@ -554,12 +558,12 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `plugins` | `security` | 1 |
 | `plugins` | `tools` | 1 |
 | `plugins` | `utils` | 3 |
-| `security` | `config` | 12 |
+| `security` | `config` | 13 |
 | `security` | `connectors` | 3 |
 | `security` | `core` | 2 |
 | `security` | `db` | 58 |
 | `security` | `tools` | 1 |
-| `security` | `utils` | 21 |
+| `security` | `utils` | 22 |
 | `services` | `capabilities` | 5 |
 | `services` | `config` | 3 |
 | `services` | `core` | 2 |

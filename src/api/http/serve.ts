@@ -49,7 +49,7 @@ export function listen(app: App, options: ListenOptions): RunningServer {
       return;
     }
     wss.handleUpgrade(req, socket, head, (raw) => {
-      attach(raw, route.handlers, url, req.headers, req.socket.remoteAddress ?? '127.0.0.1');
+      attach(raw, route.handlers, url, req.headers, req.socket.remoteAddress);
     });
   });
 
@@ -71,7 +71,9 @@ function attach(
   handlers: WebSocketHandlers,
   url: URL,
   headers: Record<string, string | string[] | undefined>,
-  remoteAddress: string,
+  // Undefined only when the socket is already gone; never defaulted to
+  // loopback, which would make a dropped address look like a local one.
+  remoteAddress: string | undefined,
 ): void {
   const request = new Request(url, {
     headers: Object.entries(headers).flatMap(([k, v]) =>

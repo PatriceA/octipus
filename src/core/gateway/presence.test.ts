@@ -67,7 +67,7 @@ describe('PresenceTracker', () => {
 
   test('getStats computes correct counts', () => {
     tracker.track(makeContext({ connectionId: 'c1', userId: 'u1', clientType: 'webchat', trustLevel: 'user' }));
-    tracker.track(makeContext({ connectionId: 'c2', userId: 'u1', clientType: 'tui', trustLevel: 'local' }));
+    tracker.track(makeContext({ connectionId: 'c2', userId: 'u1', clientType: 'tui', trustLevel: 'agent' }));
     tracker.track(makeContext({ connectionId: 'c3', userId: 'u2', clientType: 'webchat', trustLevel: 'user' }));
 
     const stats = tracker.getStats();
@@ -76,7 +76,7 @@ describe('PresenceTracker', () => {
     expect(stats.byClientType.webchat).toBe(2);
     expect(stats.byClientType.tui).toBe(1);
     expect(stats.byTrustLevel.user).toBe(2);
-    expect(stats.byTrustLevel.local).toBe(1);
+    expect(stats.byTrustLevel.agent).toBe(1);
   });
 
   test('idle timeout callback fires for expired connections', () => {

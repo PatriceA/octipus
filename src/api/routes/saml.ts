@@ -38,6 +38,7 @@ import { organizations, orgMembers } from '@/db/schema/organizations';
 import { orgSsoConfig, type OrgSsoConfig } from '@/db/schema/org-sso';
 import { users } from '@/db/schema/users';
 import { getSessionManager } from '@/security/auth/session';
+import { recordedClientIp } from '@/security/client-ip';
 import { coreLogger } from '@/utils/logger';
 
 type Samlify = typeof import('samlify');
@@ -252,7 +253,7 @@ export const samlRoutes = new Elysia({ prefix: '/saml' })
           .onConflictDoNothing();
 
         const { token } = await getSessionManager().create(user.id, {
-          ipAddress: request.headers.get('x-forwarded-for') ?? undefined,
+          ipAddress: recordedClientIp(request, ctx.socketAddress),
           userAgent: request.headers.get('user-agent') ?? undefined,
         });
 

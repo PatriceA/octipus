@@ -63,6 +63,9 @@ export function loadFromEnvLegacy(): Partial<Config> {
       })(),
       vaultDenyUnscopedSecrets: process.env.VAULT_DENY_UNSCOPED_SECRETS === 'true',
       dockerIsolation: process.env.DOCKER_ISOLATION === 'enforce' ? 'enforce' : 'off',
+      trustedProxies: process.env.TRUSTED_PROXIES
+        ? process.env.TRUSTED_PROXIES.split(',').map((s) => s.trim()).filter(Boolean)
+        : defaultConfig.security!.trustedProxies!,
     },
     api: {
       host: process.env.API_HOST || process.env.HOST || defaultConfig.api!.host!,

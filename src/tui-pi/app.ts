@@ -94,6 +94,8 @@ export class OctipusTuiApp {
   private readonly decisions: DecisionQueue;
   private paletteHandle: OverlayHandle | null = null;
   private loginHandle: OverlayHandle | null = null;
+  /** The login prompt opens by itself once per run; after that, /login. */
+  private loginPrompted = false;
   private exiting = false;
   private readonly onShutdown?: () => Promise<void>;
   /** Lazily-built local voice (push-to-talk). Null until first talk-key press. */
@@ -281,6 +283,17 @@ export class OctipusTuiApp {
         this.lastStatus = event.status;
         return;
       case 'permission.resolved': this.decisions.resolve(event.requestId, event.status); return;
+      case 'login_required':
+        // No stored login, or the gateway rejected it. Ask once; if the user
+        // dismisses the prompt, /login brings it back.
+        if (this.loginPrompted) {
+          this.pushMessage('system', `${event.reason}. Use /login to sign in.`);
+          return;
+        }
+        this.loginPrompted = true;
+        this.pushMessage('system', `${event.reason}. Sign in with your Octipus account to continue.`);
+        this.openLoginPrompt();
+        return;
       case 'permission':
         this.decisions.push(event);
         return;
@@ -605,13 +618,12 @@ export class OctipusTuiApp {
         const session = readCliSession();
         clearCliSession();
         if (!session) {
-          this.pushMessage('system', 'Not signed in — already running as the local machine account.');
+          this.pushMessage('system', 'Not signed in. Use /login to sign in.');
           return;
         }
-        this.pushMessage('system', `Signed out ${session.username}. Reconnecting as the local machine account…`);
-        void this.adapter.reauthenticate().catch((err: unknown) => {
-          this.pushMessage('system', `Reconnect failed: ${(err as Error).message}`);
-        });
+        this.pushMessage('system', `Signed out ${session.username}. Use /login to sign in again.`);
+        // Drop the connection: it still carries the old principal.
+        this.adapter.disconnect();
         return;
       }
       case 'whoami': {
@@ -619,8 +631,7 @@ export class OctipusTuiApp {
         this.pushMessage('system', session
           ? `${session.username}${session.isAdmin ? ' (admin)' : ''} · ${session.userId}`
             + (session.expiresAt ? ` · session expires ${new Date(session.expiresAt).toLocaleString()}` : '')
-          : 'Signed in as the local machine account — no user account, so no personal memories, '
-            + 'user-scoped vault secrets, or account settings. Use /login to sign in.');
+          : 'Not signed in. Use /login to sign in.');
         return;
       }
       case 'project': {

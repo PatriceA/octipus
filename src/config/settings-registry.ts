@@ -933,6 +933,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'MOBILE_SESSION_MAX_AGE',
   },
   {
+    key: 'security.trustedProxies',
+    category: 'security',
+    valueType: 'string_array',
+    defaultValue: [],
+    description:
+      'Reverse proxies (addresses or CIDR ranges, e.g. 127.0.0.1 or 10.0.0.0/8) whose X-Forwarded-For / X-Real-IP headers are believed. Empty: the socket address is the client address and forwarded headers are ignored. Set this to your proxy when Octipus runs behind nginx, Caddy or a load balancer, or every client shares the proxy address for rate limits, lockouts and audit.',
+    isSecret: false,
+    envVar: 'TRUSTED_PROXIES',
+  },
+  {
     key: 'security.totpIssuer',
     category: 'security',
     valueType: 'string',

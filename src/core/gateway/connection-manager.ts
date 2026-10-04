@@ -1,7 +1,6 @@
 
 import { randomBytes } from 'crypto';
 import { coreLogger } from '@/utils/logger';
-import { validateLocalAuth } from './local-auth';
 import {
   type AuthMessage,
   type ConnectionContext,
@@ -28,21 +27,27 @@ export interface ServerWebSocket<T = unknown> {
 
 export interface GatewayConnection {
   ws: ServerWebSocket<any>;
+  /** Client address from `clientIp` (security/client-ip.ts), fixed at open. */
+  ip: string;
   state: ConnectionState;
   context: ConnectionContext | null;
   authTimer: NodeJS.Timeout | null;
   createdAt: number;
 }
 
+/**
+ * There is no cap per address on authenticated connections: behind a reverse
+ * proxy every client shares one address, and such a cap would become an
+ * install-wide one. An address is capped only while it holds connections that
+ * have not authenticated yet; once signed in, the per-user cap applies.
+ */
 interface ConnectionBudget {
   maxPerUser: number;
-  maxPerIp: number;
   maxPreAuth: number;
 }
 
 const DEFAULT_BUDGET: ConnectionBudget = {
   maxPerUser: 10,
-  maxPerIp: 50,
   maxPreAuth: 20,
 };
 
@@ -53,14 +58,12 @@ const AUTH_TIMEOUT_MS = 5_000;
 export class ConnectionManager {
   private connections: Map<string, GatewayConnection> = new Map();
   private byUser: Map<string, Set<string>> = new Map();
-  private byIp: Map<string, Set<string>> = new Map();
   private preAuthByIp: Map<string, number> = new Map();
   private rateLimiter: GatewayRateLimiter;
   private budget: ConnectionBudget;
 
   // External auth handler — set by the gateway server
   private sessionValidator: ((token: string) => Promise<{ userId: string; username: string; isAdmin: boolean } | null>) | null = null;
-  private hmacValidator: ((key: string, channelType: string) => Promise<boolean>) | null = null;
 
   // Event callback for audit logging
   onAuditEvent?: (event: string, data: Record<string, unknown>) => void;
@@ -74,10 +77,6 @@ export class ConnectionManager {
     this.sessionValidator = validator;
   }
 
-  setHmacValidator(validator: (key: string, channelType: string) => Promise<boolean>): void {
-    this.hmacValidator = validator;
-  }
-
   getRateLimiter(): GatewayRateLimiter {
     return this.rateLimiter;
   }
@@ -85,10 +84,11 @@ export class ConnectionManager {
   // ── Connection Lifecycle ──────────────────────────────────────
 
   /**
-   * Register a new WebSocket connection (pre-auth).
+   * Register a new WebSocket connection (pre-auth). `ip` must come from
+   * `clientIp`, never from a forwarded header read directly.
    */
   handleOpen(ws: ServerWebSocket<any>, ip: string): string | null {
-    // Check pre-auth budget per IP
+    // The only per-address cap: connections that have not authenticated yet.
     const preAuthCount = this.preAuthByIp.get(ip) || 0;
     if (preAuthCount >= this.budget.maxPreAuth) {
       coreLogger.warn({ ip, preAuthCount }, 'Pre-auth connection budget exceeded');
@@ -96,17 +96,10 @@ export class ConnectionManager {
       return null;
     }
 
-    // Check per-IP budget
-    const ipConns = this.byIp.get(ip);
-    if (ipConns && ipConns.size >= this.budget.maxPerIp) {
-      coreLogger.warn({ ip, count: ipConns.size }, 'Per-IP connection budget exceeded');
-      this.onAuditEvent?.('gateway.connection.rejected', { ip, reason: 'ip_budget' });
-      return null;
-    }
-
     const connectionId = randomBytes(16).toString('hex');
     const conn: GatewayConnection = {
       ws,
+      ip,
       state: 'authenticating',
       context: null,
       createdAt: Date.now(),
@@ -117,10 +110,6 @@ export class ConnectionManager {
 
     this.connections.set(connectionId, conn);
     this.preAuthByIp.set(ip, preAuthCount + 1);
-
-    // Track by IP
-    if (!this.byIp.has(ip)) this.byIp.set(ip, new Set());
-    this.byIp.get(ip)!.add(connectionId);
 
     return connectionId;
   }
@@ -210,18 +199,8 @@ export class ConnectionManager {
       });
     }
 
-    // Clean up IP tracking
-    const ip = conn.context?.ip;
-    if (ip) {
-      this.byIp.get(ip)?.delete(connectionId);
-      if (this.byIp.get(ip)?.size === 0) this.byIp.delete(ip);
-
-      // Decrement pre-auth count if was still pre-auth
-      if (!conn.context) {
-        const count = this.preAuthByIp.get(ip) || 0;
-        if (count > 0) this.preAuthByIp.set(ip, count - 1);
-      }
-    }
+    // A connection that never authenticated still holds its pre-auth slot.
+    if (conn.state === 'authenticating') this.releasePreAuth(conn.ip);
 
     this.rateLimiter.removeConnection(connectionId);
     this.connections.delete(connectionId);
@@ -230,9 +209,13 @@ export class ConnectionManager {
   // ── Auth ────────────────────────────────────────────────────────
 
   private async handleAuth(connectionId: string, conn: GatewayConnection, msg: AuthMessage): Promise<void> {
-    const ip = this.getConnectionIp(connectionId);
+    const ip = conn.ip;
     let userId: string | undefined;
-    let trustLevel: TrustLevel = 'user';
+    // Every authenticated connection is `user` trust: trust never widens what
+    // a connection may see or touch. Admin rights come from the database
+    // (`isAdmin` below, re-read where a command needs it), not from where the
+    // connection comes from or which credential it used.
+    const trustLevel: TrustLevel = 'user';
     let isAdmin = false;
 
     try {
@@ -253,56 +236,8 @@ export class ConnectionManager {
             return;
           }
           userId = session.userId;
+          // The validator reads `is_admin` from the users row at auth time.
           isAdmin = session.isAdmin;
-          // An admin signing in ON THIS MACHINE keeps the reach the machine
-          // token already gave them — otherwise logging in to the TUI would be
-          // a downgrade: no /reload, for the same person at the same keyboard.
-          // The loopback test is not decoration: `local` also means "may see
-          // every user's events" (hub.ts), and unlike the `local` method below
-          // — which `validateLocalAuth` refuses off-loopback — a session token
-          // travels, so a remote admin console would silently start receiving
-          // other users' replies and permission prompts.
-          const { isLoopbackIp } = await import('./local-auth');
-          trustLevel = session.isAdmin && isLoopbackIp(ip) ? 'local' : 'user';
-          break;
-        }
-
-        case 'local': {
-          const token = msg.credentials.token as string;
-          if (!token) {
-            this.sendAuthError(conn, 'Missing local token');
-            return;
-          }
-          const result = validateLocalAuth(token, ip);
-          if (!result.valid) {
-            this.sendAuthError(conn, result.reason || 'Local auth failed');
-            return;
-          }
-          // Local auth gets a synthetic "local" user ID
-          userId = 'local';
-          trustLevel = 'local';
-          isAdmin = true;
-          break;
-        }
-
-        case 'hmac': {
-          if (!this.hmacValidator) {
-            this.sendAuthError(conn, 'HMAC auth not configured');
-            return;
-          }
-          const key = msg.credentials.key as string;
-          const channelType = msg.credentials.channelType as string;
-          if (!key || !channelType) {
-            this.sendAuthError(conn, 'Missing HMAC key or channel type');
-            return;
-          }
-          const valid = await this.hmacValidator(key, channelType);
-          if (!valid) {
-            this.sendAuthError(conn, 'Invalid HMAC credentials');
-            return;
-          }
-          userId = `adapter:${channelType}`;
-          trustLevel = 'system';
           break;
         }
 
@@ -330,7 +265,6 @@ export class ConnectionManager {
                 .limit(1);
               if (u) {
                 userId = u.id;
-                trustLevel = u.isAdmin ? 'system' : 'user';
                 isAdmin = u.isAdmin;
                 break;
               }
@@ -368,9 +302,7 @@ export class ConnectionManager {
         conn.authTimer = null;
       }
 
-      // Decrement pre-auth counter
-      const preAuth = this.preAuthByIp.get(ip) || 0;
-      if (preAuth > 0) this.preAuthByIp.set(ip, preAuth - 1);
+      this.releasePreAuth(ip);
 
       conn.state = 'active';
       conn.context = {
@@ -394,7 +326,7 @@ export class ConnectionManager {
         type: 'auth_ok',
         connectionId,
         userId,
-        capabilities: this.getCapabilities(trustLevel, isAdmin),
+        capabilities: this.getCapabilities(isAdmin),
         serverTime: new Date().toISOString(),
         serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       });
@@ -431,8 +363,7 @@ export class ConnectionManager {
 
   private sendAuthError(conn: GatewayConnection, reason: string): void {
     this.send(conn, { type: 'auth_error', reason });
-    const ip = conn.context?.ip || 'unknown';
-    this.onAuditEvent?.('gateway.auth.failure', { ip, reason });
+    this.onAuditEvent?.('gateway.auth.failure', { ip: conn.ip, reason });
 
     try {
       conn.ws.close(4001, reason);
@@ -500,22 +431,16 @@ export class ConnectionManager {
 
   // ── Helpers ─────────────────────────────────────────────────────
 
-  private getConnectionIp(connectionId: string): string {
-    // Scan byIp to find which IP owns this connection
-    for (const [ip, ids] of this.byIp) {
-      if (ids.has(connectionId)) return ip;
-    }
-    return 'unknown';
+  private releasePreAuth(ip: string): void {
+    const count = this.preAuthByIp.get(ip) || 0;
+    if (count > 1) this.preAuthByIp.set(ip, count - 1);
+    else this.preAuthByIp.delete(ip);
   }
 
-  private getCapabilities(trustLevel: TrustLevel, isAdmin: boolean): string[] {
-    const caps = ['chat', 'subscribe', 'commands', 'ping'];
-    if (trustLevel === 'local' || trustLevel === 'system' || isAdmin) {
-      caps.push('admin', 'agent.stop');
-    }
-    if (trustLevel === 'system') {
-      caps.push('channel.send', 'channel.status');
-    }
+  private getCapabilities(isAdmin: boolean): string[] {
+    // `agent.stop` stops the caller's own agents, so every user has it.
+    const caps = ['chat', 'subscribe', 'commands', 'ping', 'agent.stop'];
+    if (isAdmin) caps.push('admin');
     return caps;
   }
 
@@ -533,7 +458,6 @@ export class ConnectionManager {
     }
     this.connections.clear();
     this.byUser.clear();
-    this.byIp.clear();
     this.preAuthByIp.clear();
     this.rateLimiter.destroy();
   }

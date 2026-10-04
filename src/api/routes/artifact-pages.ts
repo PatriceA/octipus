@@ -38,6 +38,7 @@ import { artifactLifecycleBus } from '@/core/artifacts/lifecycle-bus';
 import { recordArtifactView } from '@/core/artifacts/scheduler';
 import { artifactSdkFilePath, resolveArtifactSettings } from '@/core/artifacts/settings';
 import type { Artifact } from '@/db/schema/artifacts';
+import { clientIp } from '@/security/client-ip';
 import { coreLogger } from '@/utils/logger';
 import { fileAt } from '@/utils/fs-file';
 
@@ -46,15 +47,6 @@ const TOKEN_TTL_SECONDS = 5 * 60;
 interface AuthResult {
   artifact: Artifact;
   scope: 'view' | 'view+refresh';
-}
-
-function clientIp(request: Request): string {
-  return (
-    request.headers.get('cf-connecting-ip') ||
-    request.headers.get('x-real-ip') ||
-    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-    'unknown'
-  );
 }
 
 async function authorizeForRequest(opts: {
@@ -211,7 +203,7 @@ function buildOuterHtml(artifact: Artifact, embedSrc: string): string {
 type HandlerCtx = any;
 
 async function handleOuter(ctx: HandlerCtx) {
-  const rl = checkRateLimit(`a:${clientIp(ctx.request)}`, { capacity: 30, refillPerSecond: 1 });
+  const rl = checkRateLimit(`a:${clientIp(ctx.request, ctx.socketAddress)}`, { capacity: 30, refillPerSecond: 1 });
   if (!rl.allowed) {
     ctx.set.status = 429;
     ctx.set.headers['retry-after'] = String(rl.retryAfterSeconds ?? 1);
@@ -234,7 +226,7 @@ async function handleOuter(ctx: HandlerCtx) {
 }
 
 async function handleEmbed(ctx: HandlerCtx) {
-  const rl = checkRateLimit(`embed:${clientIp(ctx.request)}`, { capacity: 30, refillPerSecond: 1 });
+  const rl = checkRateLimit(`embed:${clientIp(ctx.request, ctx.socketAddress)}`, { capacity: 30, refillPerSecond: 1 });
   if (!rl.allowed) {
     ctx.set.status = 429;
     ctx.set.headers['retry-after'] = String(rl.retryAfterSeconds ?? 1);
@@ -324,7 +316,7 @@ async function handleEmbed(ctx: HandlerCtx) {
 
 /** Serve the current version's built JS bundle. Same auth as the embed. */
 async function handleBundle(ctx: HandlerCtx) {
-  const rl = checkRateLimit(`bundle:${clientIp(ctx.request)}`, { capacity: 30, refillPerSecond: 1 });
+  const rl = checkRateLimit(`bundle:${clientIp(ctx.request, ctx.socketAddress)}`, { capacity: 30, refillPerSecond: 1 });
   if (!rl.allowed) {
     ctx.set.status = 429;
     ctx.set.headers['retry-after'] = String(rl.retryAfterSeconds ?? 1);
@@ -354,7 +346,7 @@ async function handleBundle(ctx: HandlerCtx) {
 }
 
 async function handleExport(ctx: HandlerCtx) {
-  const rl = checkRateLimit(`export:${clientIp(ctx.request)}`, { capacity: 30, refillPerSecond: 1 });
+  const rl = checkRateLimit(`export:${clientIp(ctx.request, ctx.socketAddress)}`, { capacity: 30, refillPerSecond: 1 });
   if (!rl.allowed) {
     ctx.set.status = 429;
     ctx.set.headers['retry-after'] = String(rl.retryAfterSeconds ?? 1);

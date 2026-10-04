@@ -1,5 +1,6 @@
 import { Elysia } from '@/api/http';
 import type { Principal } from '@/security/principal';
+import { clientIp } from '@/security/client-ip';
 import { isAuthenticated } from '@/security/principal';
 import { getRateLimiter } from '@/security/rate-limiter';
 import { apiLogger } from '@/utils/logger';
@@ -79,14 +80,6 @@ function shouldWarn(key: string, windowSecs: number): boolean {
   return true;
 }
 
-function clientIp(request: Request): string {
-  return (
-    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-    request.headers.get('x-real-ip') ||
-    'unknown'
-  );
-}
-
 /**
  * Rate-limiting middleware.
  *
@@ -101,8 +94,8 @@ function clientIp(request: Request): string {
  *      `quotaManager.getEffectiveQuota(userId).maxApiCallsPerMinute`.
  *      Octipus is always multi-user, so this fires for ANY request
  *      carrying an authenticated Principal — including the lone operator
- *      of a single-user install. Anonymous traffic and the legacy
- *      `system`/`local` sentinels fall through. The window is reused from
+ *      of a single-user install. Anonymous traffic and the internal
+ *      `system` principal fall through. The window is reused from
  *      `getRateLimiter()` so the storage backend (Redis or in-memory) is
  *      shared with layer 1. The default cap (`api.rateLimitMax`) is kept
  *      in line with the per-IP baseline so it doesn't throttle normal
@@ -117,12 +110,12 @@ export const rateLimitMiddleware = new Elysia({ name: 'rate-limit' }).onBeforeHa
   // hook, but Elysia's typed context here is narrower than what we
   // actually receive at runtime. Cast to any for the principal lookup.
   async (ctx: any) => {
-    const { request, set } = ctx;
+    const { request, set, socketAddress } = ctx;
     const url = new URL(request.url);
 
     // ── Layer 1: per-IP on CREDENTIAL endpoints ────────────────────
     if (isCredentialAttempt(url.pathname)) {
-      const ip = clientIp(request);
+      const ip = clientIp(request, socketAddress);
 
       const rateLimiter = getRateLimiter();
       const result = await rateLimiter.check(`auth:ip:${ip}`, AUTH_RATE_LIMIT, AUTH_RATE_WINDOW_SECS);
@@ -147,7 +140,7 @@ export const rateLimitMiddleware = new Elysia({ name: 'rate-limit' }).onBeforeHa
 
     // ── Layer 1b: baseline per-IP cap on all /api/* (any mode) ──────
     if (BASELINE_IP_LIMIT > 0) {
-      const ip = clientIp(request);
+      const ip = clientIp(request, socketAddress);
       const rateLimiter = getRateLimiter();
       const result = await rateLimiter.check(`api:ip:${ip}`, BASELINE_IP_LIMIT, BASELINE_IP_WINDOW_SECS);
       if (!result.allowed) {
@@ -163,7 +156,7 @@ export const rateLimitMiddleware = new Elysia({ name: 'rate-limit' }).onBeforeHa
     // ── Layer 2: per-user (Phase 3c-2) ─────────────────────────────
     const principal = (ctx as { principal?: Principal }).principal;
     if (!principal || !isAuthenticated(principal)) return;
-    if (principal.userId === 'system' || principal.userId === 'local') return;
+    if (principal.userId === 'system') return;
 
     try {
       const { getQuotaManager } = await import('@/security/quotas');

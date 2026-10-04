@@ -59,8 +59,8 @@ export interface ExtensionCommandDef {
   aliases?: string[];
   description: string;
   args?: { name: string; required: boolean; description: string }[];
-  /** Default `'user'`. Use `'local'` to require local-trust. */
-  minTrustLevel?: TrustLevel;
+  /** Admins only, checked against the database when the command runs. Default false. */
+  adminOnly?: boolean;
   handler: (ctx: ExtensionCommandContext) => Promise<{ text: string; ephemeral?: boolean }>;
 }
 

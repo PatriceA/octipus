@@ -40,6 +40,7 @@ export const defaultConfig: Partial<Config> = {
     shellSandbox: 'off',
     vaultDenyUnscopedSecrets: false,
     dockerIsolation: 'off',
+    trustedProxies: [],
   },
   api: {
     host: '0.0.0.0',

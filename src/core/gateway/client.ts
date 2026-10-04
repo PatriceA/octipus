@@ -1,5 +1,4 @@
 import { clearCliSession, readCliSession } from '@/core/gateway/cli-session';
-import { ensureLocalToken, readLocalToken } from '@/core/gateway/local-auth';
 import type { ClientMessage, GatewayMessage } from '@/core/gateway/protocol';
 import type { ChatAttachment } from '@/shared/chat-attachments';
 
@@ -12,11 +11,18 @@ export interface GatewayClientOptions {
   onStatusChange?: (status: ConnectionStatus) => void;
   onError?: (error: string) => void;
   /**
-   * Who this client is now acting as — null for the local machine account.
-   * Fires on every connect and when a rejected login is cleared, so a status
-   * bar can't keep showing a signed-in user whose session is already gone.
+   * Who this client is now acting as — null when signed out. Fires on every
+   * connect and when a rejected login is cleared, so a status bar can't keep
+   * showing a signed-in user whose session is already gone.
    */
   onIdentityChange?: (identity: { username: string; userId: string } | null) => void;
+  /**
+   * There is no usable CLI login: none stored, or the gateway rejected it.
+   * The client does not connect until one is stored (`loginWithPassword`)
+   * and `connect()` / `reauthenticate()` is called again. Without this
+   * handler the condition is reported through `onError`.
+   */
+  onLoginRequired?: (reason: string) => void;
   /**
    * Phase 4 workspace propagation. When set, the connect URL gets
    * a `?workspace=<slug-or-uuid>` query parameter that the backend
@@ -31,7 +37,9 @@ export interface GatewayClientOptions {
 
 /**
  * Gateway WebSocket client for the TUI.
- * Connects to ws://localhost:PORT/gateway with local-token auth.
+ * Connects to ws://localhost:PORT/gateway with the stored CLI login
+ * (`~/.octipus/session.json`, written by `loginWithPassword`). There is no
+ * machine account: a terminal acts as a signed-in user or not at all.
  */
 export class GatewayClient {
   private ws: WebSocket | null = null;
@@ -40,9 +48,8 @@ export class GatewayClient {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 10;
-  /** Who the last connect authenticated as, or null for the local sentinel. */
+  /** Who the last connect authenticated as, or null when signed out. */
   private authenticatedAs: { username: string; userId: string } | null = null;
-  private usedStoredSession = false;
 
   constructor(options: GatewayClientOptions) {
     this.options = options;
@@ -57,15 +64,19 @@ export class GatewayClient {
     const url = ws
       ? `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}workspace=${encodeURIComponent(ws)}`
       : baseUrl;
-    // A stored login wins over the machine token: it makes this terminal the
+    // The stored login is the only credential: it makes this terminal the
     // same principal as the browser (own memories, own vault secrets, own
-    // settings) instead of the account-less 'local' sentinel.
+    // settings, and only that user's sessions and events).
     const session = readCliSession();
-    const auth = session
-      ? { method: 'session_token' as const, credentials: { token: session.token } }
-      : { method: 'local' as const, credentials: { token: readLocalToken() || ensureLocalToken() } };
-    this.authenticatedAs = session ? { username: session.username, userId: session.userId } : null;
-    this.usedStoredSession = session !== null;
+    if (!session) {
+      this.authenticatedAs = null;
+      this.options.onIdentityChange?.(null);
+      this.setStatus('disconnected');
+      this.requireLogin('Not signed in');
+      return;
+    }
+    const auth = { method: 'session_token' as const, credentials: { token: session.token } };
+    this.authenticatedAs = { username: session.username, userId: session.userId };
     this.options.onIdentityChange?.(this.authenticatedAs);
 
     this.setStatus('connecting');
@@ -131,7 +142,7 @@ export class GatewayClient {
     this.setStatus('disconnected');
   }
 
-  /** The signed-in user, or null when running as the local sentinel. */
+  /** The signed-in user, or null when signed out. */
   getIdentity(): { username: string; userId: string } | null {
     return this.authenticatedAs;
   }
@@ -237,24 +248,13 @@ export class GatewayClient {
 
       case 'auth_error':
         this.setStatus('error');
-        if (this.usedStoredSession) {
-          // The stored login is dead (expired, revoked, or the server was
-          // reset). Drop it rather than reconnect-looping against it — the
-          // next connect falls back to the local token, so the TUI still
-          // works while the user re-runs /login.
-          clearCliSession();
-          this.authenticatedAs = null;
-          this.usedStoredSession = false;
-          this.options.onError?.(`Login expired (${msg.reason}). Signed out — use /login to sign in again.`);
-          this.options.onIdentityChange?.(null);
-          // Actually fall back. `onclose` only retries a connection that was
-          // live, and this one never authenticated, so without this the TUI
-          // sits disconnected until the user types a command — the session
-          // expires overnight and the morning's first message goes nowhere.
-          void this.connect();
-        } else {
-          this.options.onError?.(`Auth failed: ${msg.reason}`);
-        }
+        // The stored login is dead (expired, revoked, the account was
+        // deactivated, or the server was reset). Drop it rather than
+        // reconnect-looping against it, and ask for a new one.
+        clearCliSession();
+        this.authenticatedAs = null;
+        this.options.onIdentityChange?.(null);
+        this.requireLogin(`Login rejected (${msg.reason})`);
         break;
 
       case 'event':
@@ -281,6 +281,11 @@ export class GatewayClient {
         this.options.onError?.(`${msg.code}: ${msg.message}`);
         break;
     }
+  }
+
+  private requireLogin(reason: string): void {
+    if (this.options.onLoginRequired) this.options.onLoginRequired(reason);
+    else this.options.onError?.(`${reason} — sign in with /login in the TUI first.`);
   }
 
   private setStatus(status: ConnectionStatus): void {

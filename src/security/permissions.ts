@@ -521,89 +521,61 @@ export class PermissionManager {
   /**
    * Approve a permission request.
    *
-   * Phase 1c: cross-tenant resolution is now blocked. The WHERE clause
-   * requires the request's `user_id` to match the principal calling
-   * approve. Pre-Phase-1c the gateway handler called this with
-   * `context.userId` as `resolvedBy`, but the row update accepted any
-   * `requestId` with status='pending' — so any authenticated caller
-   * with a leaked requestId could approve another user's request.
-   * Now: alice approving bob's requestId is a silent no-op (returns
-   * false, same shape as "request id doesn't exist or already
-   * resolved"), so attackers can't enumerate live requests by probing.
-   *
-   * Admins (`{ admin: true }`) bypass the user filter — they may
-   * intervene from the admin console once Phase 2 ships.
+   * Only the requester answers: the WHERE clause requires the request's
+   * `user_id` to match `resolvedBy`. Alice approving bob's requestId is a
+   * silent no-op (returns false, same shape as "request id doesn't exist or
+   * already resolved"), so ids cannot be probed. There is no admin override
+   * here — an admin answering someone else's request goes through
+   * `resolveAsAdmin`, which only the audited admin route calls.
    */
-  async approve(
-    requestId: string,
-    resolvedBy: string,
-    resolution?: string,
-    opts?: { admin?: boolean },
-  ): Promise<boolean> {
-    const filters = [
-      eq(permissionRequests.id, requestId),
-      eq(permissionRequests.status, 'pending'),
-      sql`(${permissionRequests.expiresAt} IS NULL OR ${permissionRequests.expiresAt} > NOW())`,
-    ];
-    if (!opts?.admin) filters.push(eq(permissionRequests.userId, resolvedBy));
-
-    const result = await this.db
-      .update(permissionRequests)
-      .set({
-        status: 'approved',
-        resolvedBy,
-        resolvedAt: new Date(),
-        resolution,
-      })
-      .where(and(...filters))
-      .returning();
-
-    if (result.length > 0) {
-      const request = result[0];
-      this.emitResolved(request, 'approved');
-
-      await auditRepository.log({
-        userId: request.userId,
-        action: 'permission_granted',
-        resourceType: 'permission',
-        resourceId: requestId,
-        sessionId: request.sessionId || undefined,
-        details: { toolId: request.toolId, action: request.action, resolvedBy },
-      }).catch(err => coreLogger.error({ err, requestId }, 'Approval saved but audit logging failed'));
-
-      // Notify waiting code
-      const callback = this.pendingRequests.get(requestId);
-      if (callback) {
-        this.pendingRequests.delete(requestId);
-        callback(true, resolution);
-      }
-
-      securityLogger.info({ requestId, resolvedBy }, 'Permission approved');
-      return true;
-    }
-
-    return false;
+  async approve(requestId: string, resolvedBy: string, resolution?: string): Promise<boolean> {
+    return (await this.settle(requestId, 'approved', resolvedBy, resolution, resolvedBy)) !== null;
   }
 
   /**
-   * Deny a permission request. Same cross-tenant guard as `approve`.
+   * Deny a permission request. Same owner rule as `approve`.
    */
-  async deny(
+  async deny(requestId: string, resolvedBy: string, resolution?: string): Promise<boolean> {
+    return (await this.settle(requestId, 'denied', resolvedBy, resolution, resolvedBy)) !== null;
+  }
+
+  /**
+   * An admin answering another user's request. The one caller is the audited
+   * `POST /api/admin/permission-requests/:id/resolve`, which records the
+   * reason; no other path skips the owner check. Returns the resolved request,
+   * or null when it was not pending.
+   */
+  async resolveAsAdmin(
     requestId: string,
+    approved: boolean,
+    adminUserId: string,
+    reason: string,
+  ): Promise<PermissionRequest | null> {
+    return this.settle(requestId, approved ? 'approved' : 'denied', adminUserId, reason, null);
+  }
+
+  /** `owner` null skips the owner check — only `resolveAsAdmin` passes it. */
+  private async settle(
+    requestId: string,
+    status: 'approved' | 'denied',
     resolvedBy: string,
-    resolution?: string,
-    opts?: { admin?: boolean },
-  ): Promise<boolean> {
+    resolution: string | undefined,
+    owner: string | null,
+  ): Promise<PermissionRequest | null> {
     const filters = [
       eq(permissionRequests.id, requestId),
       eq(permissionRequests.status, 'pending'),
     ];
-    if (!opts?.admin) filters.push(eq(permissionRequests.userId, resolvedBy));
+    // An approval must not land on a request that has already timed out.
+    if (status === 'approved') {
+      filters.push(sql`(${permissionRequests.expiresAt} IS NULL OR ${permissionRequests.expiresAt} > NOW())`);
+    }
+    if (owner !== null) filters.push(eq(permissionRequests.userId, owner));
 
     const result = await this.db
       .update(permissionRequests)
       .set({
-        status: 'denied',
+        status,
         resolvedBy,
         resolvedAt: new Date(),
         resolution,
@@ -611,31 +583,51 @@ export class PermissionManager {
       .where(and(...filters))
       .returning();
 
-    if (result.length > 0) {
-      const request = result[0];
-      this.emitResolved(request, 'denied');
+    const request = result[0];
+    if (!request) return null;
 
-      await auditRepository.log({
-        userId: request.userId,
-        action: 'permission_denied',
-        resourceType: 'permission',
-        resourceId: requestId,
-        sessionId: request.sessionId || undefined,
-        details: { toolId: request.toolId, action: request.action, resolvedBy, reason: resolution },
-      }).catch(err => coreLogger.error({ err, requestId }, 'Denial saved but audit logging failed'));
+    this.emitResolved(request, status);
 
-      // Notify waiting code
-      const callback = this.pendingRequests.get(requestId);
-      if (callback) {
-        this.pendingRequests.delete(requestId);
-        callback(false, resolution);
-      }
+    const approved = status === 'approved';
+    await auditRepository.log({
+      userId: request.userId,
+      action: approved ? 'permission_granted' : 'permission_denied',
+      resourceType: 'permission',
+      resourceId: requestId,
+      sessionId: request.sessionId || undefined,
+      details: approved
+        ? { toolId: request.toolId, action: request.action, resolvedBy }
+        : { toolId: request.toolId, action: request.action, resolvedBy, reason: resolution },
+    }).catch(err => coreLogger.error({ err, requestId }, approved
+      ? 'Approval saved but audit logging failed'
+      : 'Denial saved but audit logging failed'));
 
-      securityLogger.info({ requestId, resolvedBy, reason: resolution }, 'Permission denied');
-      return true;
+    // Notify waiting code
+    const callback = this.pendingRequests.get(requestId);
+    if (callback) {
+      this.pendingRequests.delete(requestId);
+      callback(approved, resolution);
     }
 
-    return false;
+    if (approved) securityLogger.info({ requestId, resolvedBy }, 'Permission approved');
+    else securityLogger.info({ requestId, resolvedBy, reason: resolution }, 'Permission denied');
+    return request;
+  }
+
+  /**
+   * Every pending request on the install, for the admin console's triage
+   * list. Answering one still goes through `resolveAsAdmin`.
+   */
+  async getAllPendingRequests(): Promise<PermissionRequest[]> {
+    return this.db
+      .select()
+      .from(permissionRequests)
+      .where(
+        and(
+          eq(permissionRequests.status, 'pending'),
+          sql`(${permissionRequests.expiresAt} IS NULL OR ${permissionRequests.expiresAt} > NOW())`
+        )
+      );
   }
 
   /**

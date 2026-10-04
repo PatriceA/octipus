@@ -63,7 +63,7 @@ export function buildExtensionContext(
         aliases: def.aliases ?? [],
         description: def.description,
         args: def.args,
-        minTrustLevel: def.minTrustLevel ?? 'user',
+        adminOnly: def.adminOnly ?? false,
         handler: async (ctx) => {
           try {
             return await def.handler({

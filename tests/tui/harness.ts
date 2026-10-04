@@ -25,6 +25,12 @@ export class TuiHarness {
   private constructor(entry: string, server: WebSocketServer, cols: number, rows: number) {
     this.server = server;
     mkdirSync(this.project);
+    // The TUI signs in with the stored CLI login and nothing else; without
+    // one it opens the login prompt instead of connecting.
+    mkdirSync(join(this.home, '.octipus'));
+    writeFileSync(join(this.home, '.octipus', 'session.json'), JSON.stringify({
+      token: 'test-session-token', userId: '11111111-1111-4111-8111-111111111111', username: 'tester', isAdmin: false,
+    }));
     writeFileSync(join(this.project, 'example.ts'), 'const greeting = "hello";\n' + 'x'.repeat(120) + '\n');
     this.screen = new Terminal({ cols, rows, allowProposedApi: true, scrollback: 100 });
     this.screen.parser.registerOscHandler(52, data => { this.clipboardRequests.push(data); return true; });

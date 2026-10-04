@@ -60,6 +60,9 @@ function ctx(userId: string, metadata: Record<string, unknown> = {}): AgentConte
   };
 }
 
+/** Every request in these tests is alice's; only the requester answers. */
+const asAlice = { forUserId: aliceId };
+
 async function row(id: string) {
   const { rows } = await queryRaw(`SELECT * FROM agent_approvals WHERE id = '${id}'`);
   return rows[0] as {
@@ -93,7 +96,7 @@ describe('ApprovalManager persistence', () => {
 
     expect(await row(id)).toMatchObject({ status: 'pending', user_id: aliceId, summary: 'Deploy', options: ['Yes', 'No'] });
 
-    await manager.resolveApproval(id, false);
+    await manager.resolveApproval(id, false, undefined, asAlice);
     await answer;
   });
 
@@ -112,11 +115,11 @@ describe('ApprovalManager persistence', () => {
     const { id, answer } = await ask(manager, ctx(aliceId));
 
     const [first, second] = await Promise.all([
-      manager.resolveApproval(id, false, 'No'),
-      manager.resolveApproval(id, true, 'Yes'),
+      manager.resolveApproval(id, false, 'No', asAlice),
+      manager.resolveApproval(id, true, 'Yes', asAlice),
     ]);
     expect([first, second]).toEqual([true, false]);
-    expect(await manager.resolveApproval(id, true)).toBe(false);
+    expect(await manager.resolveApproval(id, true, undefined, asAlice)).toBe(false);
     expect(await answer).toMatchObject({ approved: false });
     expect((await row(id))?.status).toBe('denied');
   });
@@ -139,13 +142,24 @@ describe('ApprovalManager persistence', () => {
       }),
     });
 
-    expect(await manager.resolveApproval(id, true, 'Yes')).toBe(true);
+    expect(await manager.resolveApproval(id, true, 'Yes', asAlice)).toBe(true);
     expect(await answer).toMatchObject({ approved: true, response: 'Yes' });
     expect((await row(id))?.status).toBe('pending');
 
     expect(await manager.resolveApprovalDetailed(id, false, undefined, { forUserId: bobId })).toEqual({ status: 'not_found' });
-    expect(await manager.resolveApprovalDetailed(id, false)).toEqual({ status: 'already_resolved' });
+    expect(await manager.resolveApprovalDetailed(id, false, undefined, asAlice)).toEqual({ status: 'already_resolved' });
     expect((await row(id))?.status).toBe('pending');
+  });
+
+  test('an admin answers someone else\'s request only through resolveApprovalAsAdmin', async () => {
+    const manager = new mod.ApprovalManager();
+    const { id, answer } = await ask(manager, ctx(aliceId));
+
+    expect(await manager.resolveApprovalDetailed(id, true, undefined, { forUserId: bobId })).toEqual({ status: 'not_found' });
+    const result = await manager.resolveApprovalAsAdmin(id, true, 'Go', bobId);
+    expect(result).toEqual({ outcome: { status: 'resolved' }, request: expect.objectContaining({ userId: aliceId }) });
+    expect(await answer).toMatchObject({ approved: true, response: 'Go' });
+    expect(await row(id)).toMatchObject({ status: 'approved', resolved_by: bobId });
   });
 
   test('another user cannot answer it', async () => {
@@ -155,7 +169,7 @@ describe('ApprovalManager persistence', () => {
     expect(await manager.resolveApprovalDetailed(id, true, undefined, { forUserId: bobId })).toEqual({ status: 'not_found' });
     expect((await row(id))?.status).toBe('pending');
 
-    await manager.resolveApproval(id, false);
+    await manager.resolveApproval(id, false, undefined, asAlice);
     await answer;
   });
 
@@ -166,7 +180,7 @@ describe('ApprovalManager persistence', () => {
 
     expect(await answer).toMatchObject({ approved: false, reason: 'Approval timed out' });
     await vi.waitFor(async () => expect((await row(id))?.status).toBe('expired'));
-    expect(await manager.resolveApprovalDetailed(id, true))
+    expect(await manager.resolveApprovalDetailed(id, true, undefined, asAlice))
       .toEqual({ status: 'timed_out', message: mod.TIMED_OUT_APPROVAL_MESSAGE });
   });
 
@@ -174,12 +188,12 @@ describe('ApprovalManager persistence', () => {
     const manager = new mod.ApprovalManager();
     const { id: live, answer } = await ask(manager, ctx(aliceId));
     const thisBoot = (await row(live))!.boot_id;
-    await manager.resolveApproval(live, false);
+    await manager.resolveApproval(live, false, undefined, asAlice);
     await answer;
 
     // The timeout has dropped the waiter but its expiry has not landed yet.
     const dropped = await insertOrphan(thisBoot);
-    expect(await manager.resolveApprovalDetailed(dropped, true))
+    expect(await manager.resolveApprovalDetailed(dropped, true, undefined, asAlice))
       .toEqual({ status: 'timed_out', message: mod.TIMED_OUT_APPROVAL_MESSAGE });
     expect(await row(dropped)).toMatchObject({ status: 'expired', response: mod.TIMED_OUT_APPROVAL_MESSAGE });
   });
@@ -194,7 +208,7 @@ describe('orphaned approvals', () => {
     expect(await mod.releaseOrphanedApprovals()).toBe(0);
 
     // Answered after the sweep, it still explains the restart.
-    expect(await new mod.ApprovalManager().resolveApprovalDetailed(orphan, true))
+    expect(await new mod.ApprovalManager().resolveApprovalDetailed(orphan, true, undefined, asAlice))
       .toEqual({ status: 'orphaned', message: mod.ORPHANED_APPROVAL_MESSAGE });
   });
 
@@ -206,9 +220,9 @@ describe('orphaned approvals', () => {
     expect(await manager.resolveApprovalDetailed(orphan, true, undefined, { forUserId: aliceId }))
       .toEqual({ status: 'orphaned', message: mod.ORPHANED_APPROVAL_MESSAGE });
     expect((await row(orphan))?.status).toBe('expired');
-    expect(await manager.resolveApprovalDetailed(orphan, true))
+    expect(await manager.resolveApprovalDetailed(orphan, true, undefined, asAlice))
       .toEqual({ status: 'orphaned', message: mod.ORPHANED_APPROVAL_MESSAGE });
-    expect(await manager.resolveApprovalDetailed(randomUUID(), true)).toEqual({ status: 'not_found' });
+    expect(await manager.resolveApprovalDetailed(randomUUID(), true, undefined, asAlice)).toEqual({ status: 'not_found' });
   });
 });
 

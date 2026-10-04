@@ -2,7 +2,6 @@ import { randomBytes } from 'crypto';
 import { coreLogger } from '@/utils/logger';
 import { ConnectionManager } from './connection-manager';
 import { GatewayEventBus } from './event-bus';
-import { ensureLocalToken } from './local-auth';
 import type { ClientMessage, ConnectionContext, GatewayEvent } from './protocol';
 import { PROTOCOL_VERSION } from './protocol';
 import { GatewayRateLimiter } from './rate-limiter';
@@ -36,13 +35,10 @@ export class GatewayHub {
   }
 
   /**
-   * Start the gateway hub. Generates local token if needed.
+   * Start the gateway hub.
    */
   async start(): Promise<void> {
     if (this.started) return;
-
-    // Ensure local auth token exists
-    ensureLocalToken();
 
     this.started = true;
     coreLogger.info({ protocolVersion: PROTOCOL_VERSION }, 'Gateway hub started');
@@ -69,13 +65,6 @@ export class GatewayHub {
   }
 
   /**
-   * Set the HMAC validator for channel adapters.
-   */
-  setHmacValidator(validator: (key: string, channelType: string) => Promise<boolean>): void {
-    this.connectionManager.setHmacValidator(validator);
-  }
-
-  /**
    * Set the handler for authenticated client messages.
    */
   setMessageHandler(handler: (connectionId: string, context: ConnectionContext, message: ClientMessage) => Promise<void> | void): void {
@@ -99,8 +88,9 @@ export class GatewayHub {
     this.connectionManager.broadcast(
       { type: 'event', event: fullEvent },
       (ctx) => {
-        // Security: only deliver events the connection is allowed to see
-        if (fullEvent.userId && fullEvent.userId !== ctx.userId && ctx.trustLevel !== 'system' && ctx.trustLevel !== 'local') {
+        // Security: only deliver events the connection is allowed to see.
+        // No trust level widens this.
+        if (fullEvent.userId && fullEvent.userId !== ctx.userId) {
           return false;
         }
         // Check subscription patterns

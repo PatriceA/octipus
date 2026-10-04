@@ -33,7 +33,7 @@ export const OCTIPUS_SLASH_COMMANDS: OctipusSlashCommand[] = [
   tui({ name: 'project',  description: 'Show or set the active project path',
         argumentHint: '<path>' }),
   tui({ name: 'login',    description: 'Sign in to your Octipus account (memories, vault secrets, settings)' }),
-  tui({ name: 'logout',   description: 'Sign out — falls back to the local machine account' }),
+  tui({ name: 'logout',   description: 'Sign out — the TUI disconnects until you /login again' }),
   tui({ name: 'whoami',   description: 'Show which account this terminal is acting as' }),
   tui({ name: 'workspace', description: 'Show or switch the active workspace (- for default)',
         argumentHint: '<slug|->' }),

@@ -35,6 +35,7 @@ LOG_LEVEL=info
 LOG_STDERR=0                           # 1 = write logs to stderr instead of stdout
 GATEWAY_STDIO=0                        # 1 = also serve the gateway protocol over this process's stdin/stdout as JSON lines (same as `--stdio`); logs move to stderr
 CORS_ORIGINS=http://localhost:3007   # your web origin; code default is http://localhost:3001
+TRUSTED_PROXIES=                       # reverse proxies whose X-Forwarded-For is believed; see "Reverse proxy" below
 
 # ─── Models ───────────────────────────────────────────────────
 LITELLM_URL=http://localhost:4000      # LiteLLM proxy (optional)
@@ -154,6 +155,33 @@ Both this `tokens` cap and `AGENT_MAX_TOKEN_BUDGET` (`agent.maxTokenBudget`, per
 | `compaction.growthMultiplier` | 2.0 | Trigger compaction when current context grows by this multiple relative to the last compaction baseline. |
 | `compaction.hardCeiling` | 1_000_000 | Hard ceiling in tokens — compaction always runs above this threshold regardless of other gates. |
 
+
+## Reverse proxy
+
+Octipus takes a client's address from the TCP connection. The
+`X-Forwarded-For` and `X-Real-IP` headers are ignored — anyone can send them —
+unless the connection comes from a proxy listed in `security.trustedProxies`
+(env `TRUSTED_PROXIES`, comma-separated; addresses or CIDR ranges, IPv4 or
+IPv6). The address is used for the per-address REST rate limits, the login
+and passkey lockouts, the gateway's cap on unauthenticated connections, and
+the audit log. It never grants anything: there is no "local" trust, so a
+request from loopback is treated like any other.
+
+Behind nginx, Caddy or a load balancer, list the proxy, or every client
+shares the proxy's address for those limits:
+
+```env
+# nginx / Caddy on the same host
+TRUSTED_PROXIES=127.0.0.1,::1
+# a load balancer subnet
+TRUSTED_PROXIES=10.0.0.0/8
+```
+
+The proxy must set (not append to a client-supplied) `X-Forwarded-For`, or
+append the peer address as nginx's `$proxy_add_x_forwarded_for` does: the
+header is read right to left, skipping trusted proxies, and the first other
+hop is the client. An entry that is not an address or CIDR range is rejected
+when the configuration loads.
 
 ## Docker Services
 

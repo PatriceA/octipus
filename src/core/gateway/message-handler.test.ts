@@ -9,15 +9,20 @@ afterEach(() => { vi.restoreAllMocks(); });
 
 test('another user\'s existing session is refused for a user-trust connection', async () => {
   vi.spyOn(sessionRepository, 'findById').mockResolvedValue({ id: sid, userId: other } as never);
-  expect(await sessionAccessError(sid, { userId: me, trustLevel: 'user' })).toBe('Session not found');
+  expect(await sessionAccessError(sid, { userId: me })).toBe('Session not found');
 });
 
-test('own, not-yet-created, channel-style, and trusted-console sessions pass', async () => {
+test('own, not-yet-created, and channel-style sessions pass', async () => {
   const findById = vi.spyOn(sessionRepository, 'findById').mockResolvedValue({ id: sid, userId: me } as never);
-  expect(await sessionAccessError(sid, { userId: me, trustLevel: 'user' })).toBeNull();
+  expect(await sessionAccessError(sid, { userId: me })).toBeNull();
   findById.mockResolvedValue(null);
-  expect(await sessionAccessError(sid, { userId: me, trustLevel: 'user' })).toBeNull();
+  expect(await sessionAccessError(sid, { userId: me })).toBeNull();
   findById.mockResolvedValue({ id: sid, userId: other } as never);
-  expect(await sessionAccessError('telegram-123', { userId: me, trustLevel: 'user' })).toBeNull();
-  expect(await sessionAccessError(sid, { userId: 'local', trustLevel: 'local' })).toBeNull();
+  expect(await sessionAccessError('telegram-123', { userId: me })).toBeNull();
+});
+
+test('no trust level or admin flag opens another user\'s session', async () => {
+  vi.spyOn(sessionRepository, 'findById').mockResolvedValue({ id: sid, userId: other } as never);
+  const adminConnection = { userId: me, trustLevel: 'user' as const, metadata: { isAdmin: true } };
+  expect(await sessionAccessError(sid, adminConnection)).toBe('Session not found');
 });

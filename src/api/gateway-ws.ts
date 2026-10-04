@@ -1,6 +1,7 @@
 import type { Elysia } from '@/api/http';
 import { getGatewayHub } from '@/core/gateway/hub';
 import { getSessionManager } from '@/security/auth/session';
+import { clientIp } from '@/security/client-ip';
 import { apiLogger } from '@/utils/logger';
 
 /**
@@ -25,11 +26,8 @@ export function setupGatewayWebSocket(app: Elysia): void {
 
   app.ws('/gateway', {
     open(ws) {
-      const _url = new URL(ws.data.request.url);
-      const ip = ws.data.request.headers.get('x-forwarded-for')
-        || ws.data.request.headers.get('x-real-ip')
-        || ws.remoteAddress
-        || '127.0.0.1';
+      // Forwarded headers count only when the peer is a trusted proxy.
+      const ip = clientIp(ws.data.request, ws.remoteAddress);
 
       const connectionId = hub.connectionManager.handleOpen(ws as any, ip);
       if (!connectionId) {

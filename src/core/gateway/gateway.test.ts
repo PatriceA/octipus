@@ -181,13 +181,13 @@ describe('GatewayRateLimiter', () => {
     expect(limiter.check('conn1', 'command', 'user').allowed).toBe(true);
   });
 
-  test('system trust level has higher limits', () => {
-    // System limit for chat.send is 200/min
-    for (let i = 0; i < 200; i++) {
-      const r = limiter.check('conn1', 'chat.send', 'system');
+  test('agent trust level has its own limits', () => {
+    // Agent limit for chat.send is 100/min
+    for (let i = 0; i < 100; i++) {
+      const r = limiter.check('conn1', 'chat.send', 'agent');
       expect(r.allowed).toBe(true);
     }
-    expect(limiter.check('conn1', 'chat.send', 'system').allowed).toBe(false);
+    expect(limiter.check('conn1', 'chat.send', 'agent').allowed).toBe(false);
   });
 
   test('getUsage returns correct count', () => {

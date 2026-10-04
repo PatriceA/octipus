@@ -252,18 +252,29 @@ export function setupWebSocket(app: Elysia): void {
           case 'voice': {
             // Toggle voice mode: narrate lifecycle to this connection, and put the
             // active session into the root agent's propose-then-confirm gate.
-            data.voiceOn = !!parsed.on;
             const voiceSid = parsed.sessionId ? String(parsed.sessionId) : data.voiceSessionId;
             if (voiceSid) {
-              getAgentService().setVoiceMode(voiceSid, !!parsed.on);
+              // Owner check, as for `steer`: another user's session is refused
+              // before anything changes. A session that does not exist yet (a
+              // fresh chat) is allowed — the gate is keyed by (session, user),
+              // so it only ever affects this user's own turns.
+              const { sessionRepository } = await import('@/db/repositories/session-repository');
+              const owner = (await sessionRepository.findById(voiceSid))?.userId;
+              if (owner !== undefined && owner !== userId) {
+                ws.send(JSON.stringify({ type: 'voice_error', error: 'Session not found', sessionId: voiceSid }));
+                break;
+              }
+              getAgentService().setVoiceMode(voiceSid, userId, !!parsed.on);
               // Remember the session so close() can clear it; forget it on 'off'.
               data.voiceSessionId = parsed.on ? voiceSid : undefined;
             }
+            data.voiceOn = !!parsed.on;
             break;
           }
 
-          case 'permission_response':
-            // Handle permission approval/denial
+          case 'permission_response': {
+            // Handle permission approval/denial. The manager matches the
+            // request's owner: only the requester answers here.
             const permissionManager = getPermissionManager();
             if (parsed.approved) {
               await permissionManager.approve(parsed.requestId, userId, parsed.resolution);
@@ -271,6 +282,7 @@ export function setupWebSocket(app: Elysia): void {
               await permissionManager.deny(parsed.requestId, userId, parsed.resolution);
             }
             break;
+          }
 
           case 'chat': {
             const content = (parsed.content || '').trim();
@@ -345,16 +357,15 @@ export function setupWebSocket(app: Elysia): void {
           }
 
           case 'approval_response': {
-            // Resolve a pending root agent approval
-            // Same rule as REST /chat/approve: admins may answer any request.
+            // Resolve a pending root agent approval. Same rule as REST
+            // /chat/approve: only the requester answers; an admin answering
+            // someone else's goes through POST /api/admin/approvals/:id/resolve.
             const orch = getAgentService();
-            const { userRepository } = await import('@/db/repositories/user-repository');
-            const isAdmin = !!(await userRepository.findById(userId))?.isAdmin;
             const outcome = await orch.resolveApprovalDetailed(
               parsed.requestId,
               parsed.approved,
               parsed.response,
-              { forUserId: isAdmin ? undefined : userId, resolvedBy: userId },
+              { forUserId: userId, resolvedBy: userId },
             );
             ws.send(JSON.stringify({
               type: 'approval_resolved',
@@ -418,8 +429,8 @@ export function setupWebSocket(app: Elysia): void {
 
       // Clear this connection's voice flag so a session left in voice mode isn't
       // stuck in the propose-then-confirm gate after a refresh/disconnect.
-      if (data.voiceSessionId) {
-        getAgentService().setVoiceMode(data.voiceSessionId, false);
+      if (data.voiceSessionId && data.userId) {
+        getAgentService().setVoiceMode(data.voiceSessionId, data.userId, false);
         data.voiceSessionId = undefined;
       }
 
