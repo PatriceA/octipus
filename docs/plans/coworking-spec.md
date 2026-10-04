@@ -42,11 +42,11 @@ These affect every install with more than one user, today.
 
 | # | Leak | Evidence |
 |---|---|---|
-| L1 | The agent's documents tool lists and reads **every user's** documents, including OCR text | `src/tools/documents/index.ts:64,66,100` call `documentRepository.findByCategory / listRecent / findById`, which have no owner filter (`src/db/repositories/document-repository.ts:3-5,17-21,40`) |
+| L1 | The agent's documents tool lists and reads **every user's** documents, including OCR text | `src/tools/documents/index.ts:64,66,100` call `documentRepository.findByCategory / listRecent / findById`, which have no owner filter (`src/db/repositories/document-repository.ts:40,54,77`) |
 | L2 | The knowledge base is install-wide: chunks are stored without user or workspace, and `GET /api/knowledge` lists and reads every chunk; the documents and knowledge tools search all of it | `src/core/rag/embeddings.ts:306-331` (`userId: ownerUserId ?? null`), `src/core/documents/processor.ts:947-953`, `src/tools/filesystem/index.ts:160-161` (auto-index on every write), `src/core/research/persist.ts:90-95`, `src/api/routes/knowledge.ts:63,176`, `src/tools/documents/index.ts:133`, `src/tools/knowledge/index.ts:163-169` |
 | L3 | Global search returns every user's session titles and hooks | `src/api/routes/search.ts:52-62` |
 | L4 | Swarm and pipeline events reach every signed-in browser | `userId: undefined` at `src/core/agent/worker-spawner.ts:951,1080,1136`, `src/core/swarm/spawner.ts:259,474,2408,2418`; all ten `pipeline_event` emits in `src/core/agent/pipeline-manager.ts` (893…2959) carry no user; `/ws` forwards user-less events (`src/api/websocket.ts:113,163`), and so does the gateway (`src/core/gateway/hub.ts:103`) |
-| L5 | A remote admin gets `local` trust (all users' events) by sending `X-Forwarded-For: 127.0.0.1`; any admin API token gets `system` trust from anywhere | `src/api/gateway-ws.ts:28-31` (ip from client headers first), `src/core/gateway/connection-manager.ts:266,333`, `hub.ts:103` |
+| L5 | A remote admin gets `local` trust by sending `X-Forwarded-For: 127.0.0.1` (or simply through a reverse proxy on the same host); any admin API token gets `system` trust from anywhere. Both trust levels see every user's events and pass every session ownership check: chat into or steer any session, read any session's history, see every user's skill proposals, answer anyone's permission requests, stop any agent | `src/api/gateway-ws.ts:28-31` (ip from client headers first), `src/core/gateway/connection-manager.ts:262-266,333`, `hub.ts:103`, `message-handler.ts:35-36,467,572`, `commands.ts:330-345,393-399` |
 | L6 | The `/ws` `voice` frame toggles voice mode on any session id | `src/api/websocket.ts:252-262` (no owner check; compare `steer` at `:381`) |
 | L7 | Deactivated users keep access: sessions, API tokens, passkeys, SAML, every socket; trust and admin flags are snapshots | `src/security/auth/session.ts:159-178`, `src/api/server.ts:203-213,236-240`, `src/api/routes/saml.ts:233-257`, `src/api/websocket.ts:458,559`, `src/api/voice-ws.ts:126`, `src/api/gateway-ws.ts:15-24`, `connection-manager.ts:256-266,324-335`; `revokeAllForUser` has no caller (`session.ts:292`) |
 | L8 | A SCIM token of one org can deactivate any user on the install | `src/api/routes/scim.ts:305-310` (DELETE scopes only the `org_members` delete; compare PATCH's org join at `:246-251`) |
@@ -149,7 +149,11 @@ Octipus says it is always multi-user (`src/config/schema.ts:398-403`,
   `src/core/cli-agent-worker.ts:429`, `progress-message.ts:23`,
   `src/core/learning/queue.ts:29`, `src/api/routes/models.ts:515`,
   `src/api/routes/skills.ts:70`, `src/core/gateway/commands.ts:343`,
-  `message-handler.ts:40,250`.
+  `message-handler.ts:40,250`, `src/skills/selection-command.ts:21`,
+  `src/hooks/actions.ts:279`, `src/channels/approval-prompts.ts:165`; the
+  gateway skips the check entirely for `local`/`system` trust
+  (`message-handler.ts:35-36`), and the agents routes let admins act on any
+  agent (`src/api/routes/agents.ts:173,305,347,381,417`).
 - `readSessionHistory` has four consumers: agent worker (`agent-worker.ts:552`),
   direct responses (`direct-response.ts:70`), CLI turns
   (`cli-agent-worker.ts:377,892`), compaction (`session-compaction.ts:92`).
@@ -267,8 +271,8 @@ Octipus says it is always multi-user (`src/config/schema.ts:398-403`,
   goes through `src/db/repositories/space.ts`, keyed only by `workspace_id` after
   a membership check. Personal paths never return rows of a shared workspace —
   for authors and for admins alike (I2).
-- **D4 — `user_id` on a space row means "author".** It stays NOT NULL for audit
-  and attribution and grants nothing.
+- **D4 — `user_id` on a content row in a space means "author".** It stays
+  NOT NULL on content tables for audit and attribution and grants nothing.
 - **D5 — Membership is read from the database** per request, at the start of
   every turn, in `routeApprovalFor` (every tool decision), and on every
   space-scoped socket frame that changes state. The one exception is document
@@ -308,10 +312,13 @@ Octipus says it is always multi-user (`src/config/schema.ts:398-403`,
   keeps today's `checkSpend`.
 - **D14 — Install CLI models are personal subscriptions unless marked.** In
   space sessions they resolve only when `metadata.cliAgent.sharedUse === true`.
-- **D15 — Space content is never orphaned into personal scope.** Space rows get
-  `ON DELETE RESTRICT` to the workspace; a space is archived, then purged by an
-  explicit job that deletes every space-owned row; the user-delete path refuses
-  to delete a space's last owner.
+- **D15 — Space content is never orphaned into personal scope.** A space is
+  archived (no writes, no agent runs), then purged by an explicit job that
+  deletes every row of every `workspace_id` table (`WORKSPACE_TABLES`, §4.3) and
+  verifies none is left before it deletes the workspace row; nothing else ever
+  deletes a shared workspace. Foreign keys keep their personal semantics
+  (`SET NULL`), so personal workspace deletion is unchanged. Any user-deletion
+  path refuses to delete a space's last owner.
 - **D16 — Single process.** Room fan-out, presence and document state live in
   memory. Multi-process real time is out of scope and documented as such.
 - **D17 — Spaces are always available.** No feature switch. Who may create a
@@ -361,128 +368,203 @@ ship first.
 
 ### 4.1 S0a — Close the live leaks (L1–L10)
 
-**Documents (L1).** `documentRepository.findByCategory`, `listRecent`,
-`findById` are deleted; the documents tool uses `scopedRepos(principalFromContext(context)).documents`
-(`listOwnByCategory`, `listOwn`, `findById`, `scoped.ts:465-551`).
+**Documents (L1).** `documentRepository.findByCategory` and `listRecent`
+(`document-repository.ts:54,77`) are deleted; `findById` (`:40`) is renamed
+`findByIdSystem` and allowlisted for its six system callers (job recovery,
+document queue and processor, channel delivery: `src/channels/index.ts:291,339`,
+`src/core/jobs/recover.ts:26`, `src/core/documents/queue.ts:63,167`,
+`processor.ts:175`). The documents tool uses
+`scopedRepos(agentPrincipal(context)).documents` (`listOwnByCategory`,
+`listOwn`, `findById`, `scoped.ts:465-551`). `agentPrincipal(context)` is the
+one builder of a principal from an agent context and always sets
+`isAdmin: false`, as `TasksTool.principalFor` does today
+(`src/tools/tasks/index.ts:298-311`), so an admin's agent never inherits the
+repos' admin bypass.
 
-**Knowledge base (L2).** One scope type replaces every `userId?` parameter:
+**Knowledge base (L2).** One scope type replaces every `userId?` parameter and
+composes with the existing repo-visibility `SearchScope`
+(`embeddings.ts:125-138`) by conjunction:
 
 ```ts
 type KnowledgeScope =
   | { kind: 'personal'; userId: string; workspaceId: string | null }
   | { kind: 'space'; workspaceId: string }   // from S1
-  | { kind: 'install' };                       // admin tools and system jobs only
+  | { kind: 'install' };                       // admin (audited) and system jobs only
+// Product docs (user_id NULL, metadata.source = 'octipus-docs', seed-docs.ts:25,57,163)
+// are readable under every scope.
 ```
 
-- `EmbeddingService.store/indexText` (`embeddings.ts:306-331,361-371`) require
-  `{ ownerUserId, workspaceId }`. Every caller passes them: documents processor
-  (`processor.ts:931-953`), notes reindex (`src/core/knowledge/notes.ts:183-197`),
-  filesystem auto-index and `index_file` (`filesystem/index.ts:160-161`, FileIndexer),
-  research `persistReport` (`research/persist.ts:90-95`), repo registry.
-- `search`, `ftsSearch`, `hybridSearch`, `listAll`, `readById`,
-  `getAncestorHeadings`, `searchGlobalDocs` take a `KnowledgeScope` and apply
-  one predicate builder `scopePredicate(scope)`.
-- `GET /api/knowledge` and `/:id` use the caller's personal scope; an admin
-  sees install-wide only with `?scope=install`, audited.
-- Migration `0125_knowledge_scope.sql`: rows with `user_id IS NULL` get the
-  owner of their source where it is known (documents by `document_id`, research
-  by report owner); rows whose owner cannot be derived keep `user_id NULL` and become
-  `install` rows, visible only to admins (audited) and system jobs (open
-  question 5). The PR
-  description lists the counts on a sample install.
+- **Writes.** `store`/`indexText` (`embeddings.ts:306-371`) require
+  `{ ownerUserId, workspaceId }` (product docs pass `{ product: true }`). The
+  dedup key becomes `(purpose, source_id, content_sha256, user_id,
+  workspace_id)` (`src/db/schema/embeddings.ts:147`), so two users indexing the
+  same path never overwrite or adopt each other's rows. Callers: documents
+  processor (`processor.ts:931-953`), notes reindex (`notes.ts:183-197`),
+  research `persistReport` (`research/persist.ts:90-95`), the file indexer
+  (`src/core/rag/indexer.ts:30-81`: filesystem auto-index
+  `filesystem/index.ts:160-161`, knowledge tool `index_file` and
+  `index_directory` `tools/knowledge/index.ts:265`, `POST /api/knowledge/index`
+  `knowledge.ts:338`), repo registry (`registry-service.ts:110-117`), seed docs.
+- **Reads and mutations.** `search`, `ftsSearch`, `hybridSearch`, `listAll`,
+  `readById`, `getAncestorHeadings`, `searchGlobalDocs`, `deleteById`,
+  `deleteBySource`, `isFileIndexed`, `verify`, `cleanup`, `getStats` take a
+  `KnowledgeScope` through one `scopePredicate(scope)`. Install-wide cleanup and
+  stats require `{ kind: 'install' }`: admin-only routes, audited.
+- **Routes and tools.** `GET/DELETE /api/knowledge[/:id]`, `POST /cleanup`,
+  `GET /stats`, `/cleanup-history`, `POST /index` (`knowledge.ts:63,86-100,176,
+  190-230,245,264,338`) and the knowledge tool's `cleanup_knowledge`,
+  `verify_knowledge`, `index_directory`, `knowledge_stats`
+  (`tools/knowledge/index.ts:121,265,290-310`) use the caller's personal scope;
+  admins get install scope only through `?scope=install`, audited.
+- **Migration `0125_knowledge_scope.sql`** assigns owners to `user_id IS NULL`
+  rows: `doc:` rows (documents and research reports, which are `documents` rows,
+  `persist.ts:72`) join `documents` on `embeddings.doc_id`
+  (`schema/embeddings.ts:121`) and take `user_id` (cast only when it matches the
+  UUID pattern, since `documents.user_id` is text) and `workspace_id`; file rows
+  take user and workspace from their path
+  `<rootPath>/users/<uid>/workspaces/<segment>/files/…` (segment `default` →
+  that user's default workspace); product docs stay `user_id NULL` and are
+  marked by their source. Rows matching none of these stay `install` rows,
+  visible to admins (audited) and system jobs only (open question 5). The PR
+  states the counts on a sample install.
 
 **Global search (L3).** `src/api/routes/search.ts` filters sessions and hooks by
 `user_id = me` and uses the caller's knowledge scope.
 
 **Events (L4).** `GatewayEvent.userId` and `TurnEvent.userId`
-(`protocol.ts:125-133`, `service.ts:53-58`) become required, with an explicit
-`GLOBAL` marker for genuinely global events (none today). `AgentNode` gains
-`userId` (`src/core/swarm/types.ts:246-264`), set where nodes are built. Every
-emitter in L4 is stamped. Delivery rule on `/ws` and the gateway:
-`event.userId === connection.userId`; `system`/`local` trust no longer widens
-it (gateway trust below). Artifact events gain `workspaceId` and go to owners of that workspace
-(members from S1); the live-artifact page client's `artifact_token` auth method
-does not exist in the gateway (`web/public/octipus-artifact-client.js`,
-`connection-manager.ts:239-349`) and is added: a token from
-`artifact_share_links` subscribes to that artifact's events only.
+(`protocol.ts:125-133`, `service.ts:53-58`) become required. The only user-less
+events are named in `GLOBAL_EVENT_TYPES` with a reason: gateway connection
+audit events before authentication (`hub.ts:174-185`) go to no client;
+`extension.notify` (`src/extensions/api.ts:86-94`) is stamped with the
+extension's installing user. `AgentNode` gains `userId`
+(`src/core/swarm/types.ts:246-264`), set where nodes are built. Every emitter in
+L4 is stamped, including all ten `pipeline_event` sites and
+`swarm.call_graph_cycle_blocked`. Delivery on `/ws` (until S0d removes it) and
+the gateway: `event.userId === connection.userId`, whatever the trust level.
+Artifact events gain `workspaceId` and go to owners of that workspace (members
+from S1); the gateway gains the `artifact_token` auth method the live-artifact
+client already sends (`web/public/octipus-artifact-client.js`;
+`connection-manager.ts:239-349` has none), subscribing that connection to that
+artifact's events only.
 
-**Gateway trust (L5).** The connection ip is the socket's remote address; a
-forwarded header counts only when the remote address is in
-`security.trustedProxies` (new, default empty). Admin API tokens get `user`
-trust. `local` trust no longer means "sees every user's events"; it keeps only
-the machine-level commands (`commands.ts:342,398`). Trust and admin are
-re-evaluated on every `onUserChanged` (deactivation, below).
+**Client addresses (L5).** One `clientIp(request, socketAddress)` helper
+honours forwarded headers only when the socket address is in
+`security.trustedProxies` (new; default empty; the operator docs show the
+setting for a reverse proxy). The gateway (`gateway-ws.ts:28-31`), REST rate
+limits (`rate-limit.ts:84`), auth lockouts (`auth.ts:24,141,365,521`) and audit
+(`audit-shadow.ts:70`) all use it. The gateway's per-IP cap applies to
+connections that have not authenticated yet only, so a proxy does not become an
+install-wide cap.
+
+**Trust levels (L5).** Trust never widens what a connection may see or touch:
+
+- The `local` auth method and the `local` trust level are removed, and the TUI
+  moves to the CLI login, in this PR (described under §4.2); the
+  session-token upgrade to `local` on loopback (`connection-manager.ts:262-266`)
+  goes with it.
+- Admin API tokens get `user` trust (`connection-manager.ts:333`); `system`
+  trust is for HMAC channel adapters only.
+- Every ownership check compares user ids regardless of trust:
+  `sessionAccessError` (`message-handler.ts:35-36`), permission answers
+  (`:467`), `agent.stop` (`:572`), the `history` command and skill proposals
+  (`commands.ts:330-345,393-399`). Machine-level commands (`/reload`,
+  `commands.ts:479`) require `isAdmin` read from the database.
+- Trust and admin are recomputed by `onUserChanged` (below).
 
 **Voice (L6).** The `voice` frame checks session ownership like `steer`; the
 plan gate is keyed by `(sessionId, userId)` (`service.ts:567-575`).
 
-**Deactivation (L7, L8).** Checks move into the three choke points:
+**Deactivation (L7, L8).**
 
 - `SessionManager.validate` reads `users.is_active, is_admin, username` by
-  primary key; inactive → revoke and return null; the returned `isAdmin` is the
-  database value. `SessionManager.create` refuses inactive users (covers SAML,
-  passkey, pairing, login).
+  primary key; inactive → revoke and return null; `isAdmin` is the database
+  value. `SessionManager.create` refuses inactive users (covers password, SAML,
+  passkey, pairing).
 - `ApiTokenManager.validate` (`src/security/api-tokens.ts:170-200`) joins
   `users` and requires `is_active`.
-- One `setUserActive(userId, active, actor)` helper is the only writer of
-  `is_active` (admin PATCH `admin.ts:121-172`, SCIM PATCH `scim.ts:264`, SCIM
-  DELETE). Deactivation revokes sessions (`revokeAllForUser`), closes every
-  socket of the user (gateway, `/voice`, browser bridge), stops their agents,
-  expires their pending permission and approval requests, and is audited.
+- One `setUserActive(userId, active, actor, source)` helper is the only writer
+  of `is_active`. It records `users.deactivated_by` (`admin | scim:<orgId>`)
+  so SCIM `active:true` never re-enables a user an admin deactivated. Callers:
+  admin PATCH (`admin.ts:121-172`), SCIM PATCH (`scim.ts:264`), SCIM DELETE.
+- Deactivation revokes sessions (`revokeAllForUser`), closes every socket of
+  the user (gateway, `/voice`, browser bridge), stops their agents, expires
+  their pending permission and approval requests, and is audited.
 - Hooks, recurring tasks, monitors and heartbeats skip inactive users at fire
   time (`src/hooks/manager.ts:125`, `cron-runner.ts`, `heartbeat.ts`).
 - Impersonation of an inactive target ends the impersonation
   (`server.ts:246-256`).
-- `onUserChanged(userId)` also fires on `is_admin` changes and closes the
-  user's gateway connections so trust is recomputed.
-- SCIM DELETE answers 404 for users who are not members of the token's org,
-  and sets `is_active=false` only when no org membership remains (L8).
+- `onUserChanged(userId)` fires on `is_active` and `is_admin` changes and closes
+  the user's gateway connections, so admin rights are recomputed on reconnect.
+- **SCIM (L8).** DELETE and PATCH answer 404 for users who are not members of
+  the token's org; both set `is_active=false` only when no other org membership
+  remains (otherwise they only remove the membership).
 
 **Artifacts tool (L9).** `resolveDefaultWorkspaceId` is deleted; the tool uses
-`context.workspaceId` and fails loudly when it is absent (house rule 1). All 14
-call sites (`src/tools/artifacts/index.ts`).
+`context.workspaceId` and fails loudly when it is absent (house rule 1), at all
+14 call sites.
 
-**Admin approvals (L10).** Unchanged for personal sessions in S0; S1 adds the
-membership requirement for space sessions (D9).
+**Admin approvals (L10).** Permission and approval requests are answered by
+their requester. An admin answers someone else's request only through
+`POST /api/admin/permission-requests/:id/resolve` with a reason, which is
+audited; the generic answer paths (`websocket.ts:349-352`,
+`permissions.ts:548`, `message-handler.ts:467`) drop the admin bypass.
 
 **Tests:** `src/api/leaks.isolation.test.ts` — two users; B gets nothing of A's
-documents (tool and route), knowledge entries, search hits, swarm, pipeline and
-turn events (on `/ws` and the gateway), voice toggle; a remote admin with a
-forged forwarded header gets `user` trust; a deactivated user's session, API
-token, passkey, SAML login and every socket fail; a SCIM token cannot deactivate
-another org's user; a hook of a deactivated user does not fire.
+documents (tool and route), knowledge entries (read, delete, cleanup, stats),
+search hits, swarm, pipeline and turn events (`/ws` and gateway), voice toggle,
+history command, permission requests; an admin on loopback behind a proxy
+without `trustedProxies` gets `user` trust and cannot open another user's
+session; a forged forwarded header changes nothing; a deactivated user's
+session, API token, passkey, SAML login and every socket fail; a demoted
+admin's socket is closed and reconnects without admin rights; a SCIM token
+cannot deactivate another org's user; a hook of a deactivated user does not
+fire; product docs stay searchable for a non-admin after 0125.
 
 ### 4.2 S0b — One multi-user model
 
 - **Workspaces are always on.** `multiuser.orgWorkspaces` is removed from the
-  schema, defaults, registry, legacy loader and runtime loader; its readers
-  (`workspace-resolver.ts:79`, `src/api/routes/orgs.ts:41-46`) drop the branch.
-  `/api/orgs` routes remain admin-gated, not flag-gated. A startup migration step
-  deletes a stored `multiuser.orgWorkspaces` settings row.
-- **The local machine token belongs to a user.** `octi` setup mints the local
-  token for a named user (the admin running setup) and stores the user id with
-  it (`src/core/gateway/local-auth.ts`); the gateway `local` method signs in as
-  that user. `resolveUserId`'s "first admin" fallback
-  (`resolve-user.ts:10-24`) is deleted; a non-UUID user id reaching a UUID
-  column is a bug and throws.
-- **`'system'` is only for system jobs.** No connection can authenticate as
-  `system` or `local` users. `WorkspaceFS.forAgent` for a system job requires an
-  explicit `{ system: true, root }` and never the shared flat root for a user
-  path (`workspace-fs.ts:171-212`); rate-limit, docker and connector special
-  cases for `'local'` are removed (`rate-limit.ts:166`, `docker-isolation.ts:35`,
-  `atlassian/index.ts:98`).
-- Stale `multiuser.enabled` comments and the dead `/auth/me` branch are removed.
+  schema, defaults, registry, legacy loader and runtime loader, and every reader
+  drops the branch: `workspace-resolver.ts:79`, `src/api/routes/orgs.ts:41-46`,
+  the admin UI copy (`web/app/admin/orgs/page.tsx:58`), the tests that set it
+  (`orgs.isolation.test.ts:117-121`, `swarm.test.ts:45`,
+  `workspace-resolver.test.ts:65`), the comments in `schema/organizations.ts:26`,
+  `principal.ts:56`, `server.ts:290`, `orgs.ts:14`, and the docs
+  (`docs/architecture/MULTI-USER.md`, `docs/QA.md`). `/api/orgs` routes remain
+  admin-gated. A startup step deletes a stored `multiuser.orgWorkspaces`
+  settings row.
+- **No pseudo-user sign-in.** The gateway `local` auth method is removed. The
+  TUI signs in with the existing CLI login (`src/core/gateway/cli-session.ts`,
+  `session.json` with a session token); a TUI without one prompts once ("run
+  octi login"). The hub stops minting `~/.octipus/local-token` at boot
+  (`hub.ts:45`) and the client stops minting its own (`client.ts:66`).
+  `resolveUserId`'s "first admin" fallback (`resolve-user.ts:10-24`) is deleted;
+  a non-UUID user id reaching a UUID column is a bug and throws.
+- **`'system'` is only for system jobs**, never a connection identity. Each
+  special case is restated as "real user or system job": `WorkspaceFS.forAgent`
+  for a system job requires an explicit `{ system: true, root }` and never the
+  flat root for a user path (`workspace-fs.ts:171-212`); system jobs keep their
+  rate-limit exemption (`rate-limit.ts:166`) and stay outside per-user docker
+  isolation (`docker-isolation.ts:35`); per-user connectors keep refusing calls
+  without a real user (`atlassian/index.ts:98`, restated as "no user → refuse").
+- Stale `multiuser.enabled` comments and the dead `/auth/me` branch
+  (`auth.ts:288-302`) are removed.
 - **Fail closed on workspace resolution.** The derive answers 503 for an
   authenticated `/api` or `/v1` request when resolution throws, instead of
   continuing unscoped (`server.ts:302-308`).
 - **Auth hygiene on the path:** register and login write audit rows; the login
-  page reads `requiresTOTP` and shows the TOTP field; login and register accept
-  a validated same-origin `returnTo`; device pairing stores `sha256(code)` and
-  redeems with one conditional `DELETE … RETURNING`.
+  page reads `requiresTOTP` and shows the TOTP field (`page.tsx:63`,
+  `auth.ts:76`); login and register accept a validated same-origin `returnTo`;
+  device pairing codes are stored as `sha256(code)` in the KV store and redeemed
+  with an atomic get-and-delete (`GETDEL`, or a Lua script on Redis;
+  `devices.ts:80-87`).
+- **User deletion.** No route deletes users today (`userRepository.delete` has
+  no production caller). Any future deletion path must call
+  `assertDeletable(userId)` (S1 adds "not the last owner of a space").
 
-**Tests:** settings have no `orgWorkspaces` key; the TUI local token signs in as
-its bound user; a non-UUID user id at a UUID column throws; a resolver failure
-answers 503; TOTP sign-in works in the web (Playwright).
+**Tests:** no `orgWorkspaces` key anywhere; the TUI signs in through the CLI
+login and gets that user's identity; a non-UUID user id at a UUID column
+throws; a resolver failure answers 503; TOTP sign-in works in the web
+(Playwright); a pairing code redeems once under two concurrent requests.
 
 ### 4.3 S0c — Workspaces become real
 
@@ -497,84 +579,119 @@ answers 503; TOTP sign-in works in the web (Playwright).
   the segment, except the user's default workspace, which keeps the literal
   `default` segment so no existing file moves. `forAgent` takes the full
   `AgentContext` (not `{ userId }`) and `forSession(session)` uses
-  `session.workspaceId`; all callers listed in note 05 §2 and r2 #7 are changed
-  (`shell/index.ts:240`, `swarm/spawner.ts:58,2583`, `swarm/scorers.ts:712,927`,
+  `session.workspaceId`; every caller found by grep changes, among them
+  `shell/index.ts:240`, `swarm/spawner.ts:58,2583`, `swarm/scorers.ts:712,927`,
   `src/api/routes/workspace.ts:27`, `knowledge.ts:297`, `sessions.ts:375-517`,
   `script-runner.ts:32`, `pipeline-manager.ts:2056`, `cli-agent-worker.ts:799`,
-  `cli-compaction.ts:34`, `test-container.ts:70`, `message-handler.ts:251`). A
-  test fails on any remaining `forAgent({ userId`.
-  Files that today sit in `default` but were created from a non-default
-  workspace stay in `default`; the CHANGELOG says so.
+  `cli-compaction.ts:34`, `test-container.ts:70`, `message-handler.ts:251`,
+  `connectors/cocoindex.ts:223`, `gateway/commands.ts:536`,
+  `repos/registry-service.ts:20,27`, `agent/service.ts:531`,
+  `root-runner.ts:510`, `worker-spawner.ts:147,671`, `tool-output-spill.ts:100`,
+  `tools/filesystem/index.ts:679`, `tools/data/index.ts:184`,
+  `tools/knowledge/index.ts:23`. A test fails on any remaining
+  `forAgent({ userId`. Files that today sit in `default` but were created from a
+  non-default workspace stay in `default`; the CHANGELOG says so.
 - **Shell cwd** must lie inside the workspace root, an allowed extra, or the
   dev-mode `projectPath`. Documented as correctness, not a sandbox.
-- **Memories follow the session's workspace.** This is a behaviour change for
-  users of several workspaces (memories learned in a non-default workspace were
-  filed under the default); CHANGELOG note, no migration.
+- **Memories follow the session's workspace**, including memories written after
+  compaction (`session-compaction.ts:190` passes `workspaceId: null` today) and
+  the plan path (`service.ts:510`). Behaviour change for users of several
+  workspaces (memories learned in a non-default workspace were filed under the
+  default); CHANGELOG note, no migration.
 - **Notes.** All note routes (`/`, `/query`, `/index`, `/tags`, `/:id`,
   backlinks, `/capture`) use `principal.workspaceId` with the personal rule
   `(workspace_id = $ws OR workspace_id IS NULL)`; `getBySlug` and
   `getOrCreateDaily` try `$ws` first, then `NULL`, so an existing user-level
   daily note is found. `workspaceId` leaves the request bodies.
-- **Foreign keys and repair** (migration `0126_workspace_integrity.sql`):
-  rows of notes, tasks, knowledge links, workspace repos and background jobs
-  whose `workspace_id` names a missing workspace or one owned by another user
-  are reset to `NULL`; then each gets
-  `REFERENCES workspaces(id) ON DELETE SET NULL` (personal semantics; S1 changes
-  space rows to RESTRICT through D15's purge rule).
-- **Transfer moves everything** the workspace owns: the list is one exported
-  array `WORKSPACE_OWNED_TABLES` (sessions, documents, hooks, vault, notes,
-  tasks, memories, artifacts, agents, knowledge links, embeddings, pipelines,
-  background jobs, workspace repos) with a test that fails when a table with a
-  `workspace_id` column is in neither it nor `NOT_WORKSPACE_OWNED` with a reason.
-  Vault rows are re-encrypted under the new owner in the same transaction.
-  The backfill script uses the same array.
+- **Repair and foreign keys** (migration `0126_workspace_integrity.sql`), in
+  order, in one file:
+  1. For notes whose `workspace_id` names a missing workspace or a workspace
+     owned by another user: when setting it to `NULL` would collide with the
+     author's user-level note of the same slug
+     (`notes_user_slug_uidx`, `0066_uneven_the_hand.sql:20-21`), rename the
+     younger note's slug to `slug || '-' || left(id::text, 8)` first; then set
+     `workspace_id = NULL`.
+  2. The same reset (without slugs) for tasks, knowledge links, workspace repos
+     and background jobs.
+  3. Within each remaining workspace, rename younger duplicates of
+     `(workspace_id, slug)` the same way, so S1's `notes_ws_slug_uidx` can be
+     created.
+  4. Add `REFERENCES workspaces(id) ON DELETE SET NULL` to those five tables.
+- **One table list.** `WORKSPACE_TABLES` (`src/db/workspace-tables.ts`) lists
+  every table with a `workspace_id` column and, per table, its action on
+  transfer (`move` / `n/a`) and on space purge (`delete` / `n/a`, S1). A test
+  reads `information_schema.columns` and fails when a `workspace_id` table is
+  missing. Transfer moves every `move` table in one transaction, re-encrypting
+  vault rows under the new owner; the backfill script uses the same list.
 - **Vault.** `getByName` returns workspace rows by decrypting under the row's
   own scope and owner; the `workspace_id IS NULL` arm is removed for
   `scope='workspace'`.
 
 **Tests:** a turn in a non-default workspace writes its task, artifact, files
 and memories there; the TUI's workspace is honoured; daily capture does not
-duplicate a user-level daily note; transfer moves every listed table; a
-transferred workspace secret decrypts.
+duplicate a user-level daily note; 0126 runs on a fixture with colliding and
+foreign-stamped notes; transfer moves every `move` table; a transferred
+workspace secret decrypts.
 
 ### 4.4 S0d — The web on the gateway
 
 - The web opens one gateway connection per tab: `/auth/ws-ticket` → `auth`
   with `method: 'session_token'` (ticket) → subscribe. The chat page's handler
-  (`web/app/chat/page.tsx:688-1157`) moves from legacy frames to gateway
-  envelopes:
+  (`web/app/chat/page.tsx:688-1157`), the permission context
+  (`web/lib/permission-context.tsx:153-200`) and the recommended-models panel
+  (`web/components/models/recommended-models-panel.tsx:94`) share that one
+  connection.
 
-  | Legacy `/ws` frame | Gateway |
+  | Legacy frame | Gateway |
   |---|---|
-  | `agent_event` (incl. `thought/text_delta`) | `chat.delta`, `agent.*` (event-bridge) |
-  | `turn_event`, `chat_response`, `chat_error` | `chat.response`, `rootAgent.status`, `chat.error` (new) |
-  | `permission_request` (and `/ws/permissions`) | `permission.request`, `permission.resolved` |
+  | `connected` | `auth_ok` |
+  | `agent_event` (incl. `thought/text_delta`) | `chat.delta`, `agent.*` (event bridge) |
+  | `turn_event`: `chat_response`, `status_update`, `approval_required`, `worker_*`, `team_*`, `pipeline_event` | `chat.response`, `rootAgent.status`, `agent.approval_required`, `agent.spawned/completed`, `team.*`, `pipeline.event` (already bridged, `event-bridge.ts:159-171`) |
+  | `chat_error` | `chat.error` (new) |
+  | `permission_request` | `permission.request`, `permission.resolved` |
+  | `/ws/permissions` `pending_requests` | `permission.pending` (new snapshot, below) |
+  | `/ws/permissions` `response_recorded`, `approval_resolved` | `permission.resolved`, `approval.resolved` (new) |
   | `swarm_event` | `swarm.*` |
   | `document_event` | `document.*` (new, user-stamped) |
   | `model_install_progress` | `model.install_progress` (new) |
-  | `steer_result` | `command.result` |
-  | `voice`, `speak` | `voice.set` (client), `voice.speak` (new) |
+  | `steer_result` | `chat.message {injected:true}`, or the `chat.send` fallback (`message-handler.ts:528-552`) |
+  | `speak` | `voice.speak` (new) |
+  | client `voice` | `voice.set` (new client message) |
   | client `chat`, `steer`, `approval_response`, `permission_response` | `chat.send`, `chat.steer`, `approval.respond`, `permission.respond` |
 
+- **Pending snapshot.** On subscribing, a connection receives
+  `permission.pending` with the user's open permission requests and root-agent
+  approvals; live `permission.*` frames that arrive during hydration are queued
+  and applied after it, as `/ws/permissions` does today
+  (`websocket.ts:466-495`, `permission-context.tsx:168-200`).
+- **In-app proactive delivery** (`resolveTarget → webChatChannel.sendToUser`,
+  `src/channels/ownership.ts:183-190`) becomes a user-stamped `chat.message`
+  gateway event.
 - `chat.send` gains `workspaceId`; the server resolves and stamps it.
 - Rate limits: chat messages keep their current buckets (`chat.send` 30/min,
-  commands 60/min for `user` trust, `src/core/gateway/rate-limiter.ts:13-36`);
-  room and document frames get their own buckets (§6.6, §7.3).
+  commands 60/min for `user` trust, per connection,
+  `src/core/gateway/rate-limiter.ts:13-36`); room and document frames get their
+  own buckets (§6.6, §7.3).
+- Connections per user: `gateway.maxConnectionsPerUser` (default 20, today a
+  constant 10, `connection-manager.ts:43-47`); a tab over the cap shows "Too
+  many open tabs" instead of failing silently.
 - `src/api/http/serve.ts` sets `maxPayload` to `gateway.maxFrameBytes`
   (default 256 KiB).
 - Replay: a reconnecting tab sends `replay { sessionId, afterEventId }`; the
-  hub serves `getReplay` after an ownership (later: room access) check. Buffers
-  are pruned when a session is deleted or archived and capped per process
+  hub serves `getReplay` after an ownership check. Buffers are pruned when a
+  session is deleted or archived and capped per process
   (`gateway.replayMaxSessions`, default 500, LRU).
 - Legacy `/ws` and `/ws/permissions` are removed with their tests; the browser
-  extension's `/ws/browser-bridge` and `/voice` stay (separate clients).
+  extension's `/ws/browser-bridge` and `/voice` stay (separate clients, covered
+  by the S0a choke points).
 - Web: `api.setWorkspaceId(id)` runs synchronously inside `switchWorkspace`,
   then `queryClient.clear()`; query keys of workspace-scoped data include the
   workspace id. The dead `web/components/chat/chat-message.tsx` is removed.
 
 **Tests:** Playwright specs that stub `/ws` move to stubbing `/gateway`
-(`page.routeWebSocket(/\/gateway/)`); a gateway test proves two tabs of one user
-both receive their events; a workspace switch never fetches with the old header.
+(`page.routeWebSocket(/\/gateway/)`); two tabs of one user both receive their
+events; a tab opened after a permission request was raised shows it; a
+workspace switch never fetches with the old header.
 
 ---
 
@@ -626,7 +743,7 @@ CREATE TABLE IF NOT EXISTS workspace_invites (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
--- One slug per space; legacy duplicates were cleared by 0126's repair.
+-- One slug per workspace; 0126 (S0c) renamed legacy duplicates.
 CREATE UNIQUE INDEX IF NOT EXISTS notes_ws_slug_uidx ON notes(workspace_id, slug) WHERE workspace_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS knowledge_links_ws_to_idx ON knowledge_links(workspace_id, to_type, to_id);
 CREATE INDEX IF NOT EXISTS embeddings_ws_idx ON embeddings(workspace_id) WHERE workspace_id IS NOT NULL;
@@ -657,9 +774,13 @@ spaces have `user_id NULL` (D2).
 | `run_agent_write` | ✓ | ✓ | – | – | – |
 | `manage_members`, `manage_invites`, `manage_space` | ✓ | – | – | – | – |
 
-The last owner cannot be removed, demoted or leave (`last_owner`). The user
-delete path (`src/db/repositories/user-repository.ts:63`) refuses to delete a
-user who is the last owner of any space, listing those spaces.
+The last owner cannot be removed, demoted or leave (`last_owner`).
+`assertDeletable(userId)` (S0b) refuses a user who is the last owner of any
+space, listing those spaces; no route deletes users today
+(`userRepository.delete`, `src/db/repositories/user-repository.ts:63`, has no
+production caller).
+
+Room posts and space memory in the table apply from S2.
 
 ### 5.3 Space service, invites
 
@@ -711,15 +832,19 @@ user who is the last owner of any space, listing those spaces.
   `/api/auth/*`, `/api/me/workspaces`, `GET /api/spaces` and `/api/health`, so a
   removed member's client can recover (`web/lib/auth-context.tsx:81-86` logs out
   on any `/auth/me` failure).
-- **Route allowlist in a space.** A `spaceRouteGuard` rejects with 404 every
-  `/api` route not on `SPACE_ROUTES` when `workspaceKind === 'shared'`:
-  notes, tasks (+comments), documents, artifacts (+pages), space files,
-  knowledge (space scope), sessions (the member's private space chats), rooms,
-  spaces, memory → space memory, notifications, auth/me. Everything else
-  (hooks, pipelines, recurring tasks, monitors, agents, research, runs, swarm,
-  trajectories, verification, skills, models, …) is personal and refuses a
-  space header. The list is a single exported constant with a test that every
-  mounted route is classified.
+- **Which routes act on a space.** `SPACE_ROUTES` (one exported constant)
+  lists the routes that act on the space when the header names one: notes,
+  tasks (+comments), documents, artifacts (+pages), space files, knowledge
+  (space scope), sessions (the member's private chats in the space), spaces,
+  notifications; rooms and space memory from S2, documents hub from S3. Every
+  other route is personal: when the header names a space, it runs with the
+  caller's **default personal workspace** instead (the principal is rewritten
+  before the handler), so a member viewing a space still answers approvals
+  (`/api/chat/approve`, `web/lib/permission-context.tsx:96-100`), picks models
+  (`/api/models`), searches and edits settings. Personal routes therefore never
+  act on space rows, and the web needs no per-call header logic. A test
+  classifies every mounted route, and a web test drives the app's own calls
+  with a space selected.
 
 ### 5.5 Access layer (`src/db/repositories/space.ts`)
 
@@ -789,11 +914,16 @@ any `data.workspaceId`) and `user_id = author`, and check `can()`.
   | swarm and worker children (`swarm/spawner.ts:1599`, `worker-spawner.ts`) | inherited |
   | visitors' requests (S7) | `remote` |
 
+  Hand-built contexts move into `buildAgentContext` too: `POST /api/pipelines`
+  (`routes/pipelines.ts:172-185`), `pipeline-manager.ts:1771,2461`,
+  `hooks/actions.ts:646`, the monitor probe (`monitors/service.ts:86`). A test
+  fails on `: AgentContext = {` outside `context.ts`.
+
   `fundingFor` returns `own` for every trigger until S5 (§9.1). In a space,
   `schedule` and `monitor` have no producer (the tools are personal-only, below);
   `listen` arrives with room modes in S5.
 - **Tools.** Each content tool gets `reposFor(context)` returning
-  `contentRepos(principalFromContext(context))`; the call sites to rewrite are
+  `contentRepos(agentPrincipal(context))`; the call sites to rewrite are
   `notes/index.ts:65,98,100,106,129,147,248,261,289,337`,
   `documents/index.ts:64,66,100,133`, `knowledge/index.ts:163-169,234`,
   `artifacts/index.ts` (14 sites), `tasks/index.ts:299-311`.
@@ -801,16 +931,24 @@ any `data.workspaceId`) and `user_id = author`, and check `can()`.
   (`create_hook`, `src/tools/scheduling/index.ts:100`), monitors, pipelines,
   research persistence, memory tools, `sync_vault`, `index_file`, personal
   connectors' write actions. The agent is told why.
-- **Role cap (I4).** `routeApproval` takes a required `space: { role } | null`
-  (a missing argument is a type error) and returns `deny` for actions above the
-  role. All six callers pass it (§1.7). "Allowed for commenter" is an explicit
-  per-tool list `COMMENTER_TOOLS` (read and search tools, `*_read` actions as in
-  `flow-guard.ts:138`, task comments, room posts), not `isReadOnlyAction`.
-  `stripMutatingTools` (`root-runner.ts:281`) also runs for commenters.
-  **CLI models**: in a space session a commenter's turn may only use API models;
-  editors' CLI turns run with the vendor's own permission mode forced to the
-  Octipus decision path (no `--dangerously-skip-permissions`,
-  `cli-adapters.ts:720`, inside spaces).
+- **One decision function (I4, I6, D5).** `routeApprovalFor(context, call,
+  permission)` (async) replaces the bare `routeApproval` at all six callers
+  (§1.7): (1) for a space context it re-reads membership and role; (2) applies
+  the role cap **before** anything else, because `routeApproval` returns
+  `execute` for any non-ASK level first (`approval-policy.ts:97-102`); (3)
+  applies the space write rule of I6 (below); (4) calls the pure
+  `routeApproval`. A lint test bans `routeApproval(` outside this function.
+  "Allowed for commenter" is an explicit per-tool list `COMMENTER_TOOLS` (read
+  and search tools, `*_read` actions as in `flow-guard.ts:138`, task comments,
+  room posts from S2), not `isReadOnlyAction`. `stripMutatingTools`
+  (`root-runner.ts:281`) also runs for commenters.
+- **CLI models in spaces.** Native CLI tools must not bypass the cap:
+  Claude Code runs with its stdio permission tool, which routes every native
+  call through `cli-permissions.ts` and therefore `routeApprovalFor`
+  (`cli-adapters.ts:674`); Codex runs with the `read-only` sandbox and
+  Antigravity with `--mode plan` in every space session
+  (`cli-adapters.ts:716-720,783-811`), so their writes can only happen through
+  Octipus tools. Commenters' turns use API models only. Each adapter has a test.
 - **Memories (I7).** `sessionAudience(session) → { shared, personalMemoryOff,
   kind: 'personal' | 'group' | 'space' | 'room' }` in `src/core/agent/audience.ts`
   replaces the derivation at `service.ts:317`; its uses at
@@ -820,15 +958,20 @@ any `data.workspaceId`) and `user_id = author`, and check `can()`.
   branches (`service.ts:329-330`) run only for `kind:'group'`; rooms use
   `room-context.ts` (§6.4); the `/command` gate (`:392`) applies to `group` and
   `room`.
-- **I6 rule.** `ensureSpaceSessionKnown(sessionId) → { spaceId } | null`
-  (async, mirrors `ensureSharedAudienceKnown`) runs before each decision;
-  `applyFlowGuard` gains the space id and applies the space write rule even when
-  the mode is `off`. The prompt says "writes data from your personal sources
-  into <space>" without a member count.
-- **Approvals.** Requester only; admins who are not members cannot answer
-  requests whose `permission_requests.workspace_id` is a space (D9).
-- **Membership during a turn.** `routeApprovalFor` re-reads membership on every
-  tool decision (D5).
+- **I6 rule.** Inside `routeApprovalFor`, so it covers every dispatch path: in
+  a space session whose flow label has `private`, a write into space content
+  (notes, tasks, documents, artifacts, files under the space root, space memory)
+  is ASK even when the flow-guard mode is `off`. The prompt says "writes data
+  from your personal sources into <space>". The space id comes from the
+  context; `applyFlowGuard` keeps its current role.
+- **Personal profiles stay out.** `sessionAudience` also returns
+  `personalProfileOff`; the requester's profile facts and relationship search
+  are not injected into space sessions (`worker-spawner.ts:568-605`,
+  `direct-response.ts:121-130`).
+- **Approvals.** `PermissionManager.request` stamps
+  `permission_requests.workspace_id` from `context.workspaceId`. Requests are
+  answered by their requester (S0a); the admin resolve route refuses requests of
+  a space the admin is not a member of (D9).
 
 ### 5.7 Routes (`src/api/routes/spaces.ts`)
 
@@ -857,19 +1000,20 @@ Authenticated, TypeBox bodies with `additionalProperties: false`, typed
 
 ### 5.8 Purge (I9, D15)
 
-- In `0127`, foreign keys from space-owned tables to `workspaces` become
-  `ON DELETE RESTRICT`: notes, tasks, knowledge links, documents, artifacts
-  (was CASCADE), embeddings, memories, sessions, agents, agent events, swarm
-  nodes, trajectories, pipelines, notifications, task state, vault, hooks,
-  background jobs, workspace repos. Personal workspaces keep their behaviour
-  because they are not purged through this path (personal workspace delete
-  first moves rows to user level explicitly, as today's SET NULL did).
-- `purgeSpace` deletes in one transaction every row of `SPACE_OWNED_TABLES`
-  (the same array as transfer, §4.3) with `workspace_id = $id`, plus rows keyed
-  by those sessions (`agents`, `tool_actions`, `run_events`), then the workspace;
-  a missed table makes the final delete fail on RESTRICT instead of orphaning.
-  After commit, the space file and document trees are removed, with a retry
-  sweep for failures.
+- Only `purgeSpace(actor, id)` deletes a shared workspace, and only one that has
+  been archived for `spaces.purgeAfterArchiveDays` (no writes and no agent runs
+  since, so nothing races the purge).
+- In one transaction it deletes, for every `WORKSPACE_TABLES` entry whose purge
+  action is `delete`, the rows with `workspace_id = $id` (artifacts, whose
+  foreign key cascades today, included explicitly), plus rows keyed by the
+  space's sessions without a cascading key (`agents`, `tool_actions`,
+  `run_events`); then it counts rows with `workspace_id = $id` in every
+  `workspace_id` table (from `information_schema`) and aborts if any remain;
+  then it deletes the workspace row. After commit it removes
+  `<workspace.rootPath>/spaces/{id}` and `<workspace.documentsPath>/spaces/{id}`,
+  with a retry sweep for failures.
+- A personal workspace delete (`orgs.ts:434-448`) refuses shared workspaces and
+  otherwise keeps today's `SET NULL` behaviour.
 
 ### 5.9 Membership changes (I5)
 
@@ -877,7 +1021,9 @@ Authenticated, TypeBox bodies with `additionalProperties: false`, typed
 version (D5), stops that user's agents and queued room turns in the space,
 expires their pending requests there, unsubscribes their sockets from the
 space's rooms, documents and presence, pauses data sources they own in the
-space. Archive calls `stopSpaceAgents(workspaceId)`.
+space. Archive calls `stopSpaceAgents(workspaceId)`. (Room, document and presence
+subscriptions exist from S2/S3; until then the function stops agents, expires
+requests and pauses data sources.)
 
 ### 5.10 Web
 
@@ -917,9 +1063,13 @@ space. Archive calls `stopSpaceAgents(workspaceId)`.
   another member's dependent task.
 - `src/core/knowledge/space-links.test.ts`: link resolution never crosses
   personal and space scopes.
-- `src/core/spaces/purge.test.ts`: every table with `workspace_id` is
-  classified; a deliberately missed table makes purge fail; files are removed;
-  deleting the last owner's account is refused.
+- `src/core/spaces/purge.test.ts`: purge after a real agent turn in the space
+  leaves no row in any `workspace_id` table; a row in an unlisted table makes
+  purge abort; files are removed; a personal workspace delete still sets
+  `NULL`; `assertDeletable` refuses the last owner.
+- I6 on the base-tool and MCP paths; personal profiles absent from a space turn;
+  CLI adapters in spaces (Claude permission tool, Codex read-only, Antigravity
+  plan); no `knowledge` chunk of a space has a NULL `workspace_id`.
 - Playwright `tests/web/spaces.spec.ts`: create, invite link, join with
   returnTo, role-aware editor, removed-member redirect.
 
@@ -1528,7 +1678,7 @@ visitors are proposals only.
 | Key | Phase | Default |
 |---|---|---|
 | `security.trustedProxies` | S0a | `[]` |
-| `gateway.maxFrameBytes`, `gateway.replayMaxSessions` | S0d | 262144, 500 |
+| `gateway.maxFrameBytes`, `gateway.replayMaxSessions`, `gateway.maxConnectionsPerUser` | S0d | 262144, 500, 20 |
 | `spaces.creation`, `spaces.maxMembers`, `spaces.inviteMaxTtlHours`, `spaces.purgeAfterArchiveDays` | S1 | `any_user`, 50, 720, 7 |
 | `spaces.memoryMaxItems`, `rooms.maxQueuedPerMember`, `rooms.approvalTimeoutMinutes`, `rooms.transcriptWindowChars` | S2 | 50, 3, 30, 6000 |
 | `spaces.noteMaxBytes`, `spaces.docMaxUpdatesPerSecond`, `spaces.docPersistDebounceMs`, `spaces.docReindexMinutes`, `spaces.fileLeaseTtlSeconds` | S3 | 192 KiB, 30, 2000, 10, 180 |
