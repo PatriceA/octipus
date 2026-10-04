@@ -2,8 +2,12 @@
  * Phase 4 — workspace_id backfill.
  *
  * Walks every user, ensures they have a default workspace, and stamps
- * their existing sessions / documents / hooks with that workspace id
- * (only rows where `workspace_id IS NULL`).
+ * their user-level rows (`workspace_id IS NULL`) of every table that
+ * WORKSPACE_TABLES (`src/db/workspace-tables.ts`) marks `move` — the
+ * tables whose rows are a workspace's working state — with that
+ * workspace id. Vault: only `scope='workspace'` secrets. Notes: a
+ * user-level note whose slug the default workspace already uses stays
+ * user-level (the slug names one note per workspace).
  *
  * Idempotent — re-running on a fully-backfilled database is a no-op.
  *
@@ -24,10 +28,11 @@
  * partitioned.
  */
 import { eq, sql } from 'drizzle-orm';
-import { initializeDb, getDb, executeRaw } from '../src/db/postgres';
+import { initializeDb, getDb } from '../src/db/postgres';
 import { initializeStorage } from '../src/db/storage';
 import { runMigrations } from '../src/db/migrate';
 import { users } from '../src/db/schema/users';
+import { workspaceMoveTables } from '../src/db/workspace-tables';
 import { getOrgWorkspaceManager } from '../src/security/orgs';
 import { logger } from '../src/utils/logger';
 
@@ -67,22 +72,18 @@ async function main() {
 
   logger.info({ users: userRows.length, dryRun: args.dryRun }, 'Workspace backfill: starting');
 
-  // Tables to backfill — keyed by table name, with the SQL `user_id`
-  // type. Some tables store user_id as text, others as uuid; the
-  // executeRaw UPDATE has to match.
-  const TABLES: { table: string; uuidUserId: boolean }[] = [
-    { table: 'sessions',         uuidUserId: true  },
-    { table: 'documents',        uuidUserId: false }, // text
-    { table: 'hooks',            uuidUserId: true  },
-    { table: 'agents',           uuidUserId: false }, // text
-    { table: 'notifications',    uuidUserId: true  },
-    { table: 'trajectory_runs',  uuidUserId: true  },
-    { table: 'pipelines',        uuidUserId: true  },
-    { table: 'embeddings',       uuidUserId: true  },
-    { table: 'agent_events',     uuidUserId: false }, // text
-    { table: 'swarm_nodes',      uuidUserId: false }, // text
-    { table: 'vault',            uuidUserId: false }, // text — only scope='workspace' rows are backfilled
-  ];
+  // The same list workspace transfer walks. `user_id` is text on some
+  // tables and uuid on others, so it is compared to a bound parameter.
+  const TABLES = workspaceMoveTables();
+  // Per-table predicate on the rows to stamp, for a given target workspace.
+  const extraClause = (t: (typeof TABLES)[number], wsId: string | null) => {
+    const parts = [];
+    if (t.rowFilter) parts.push(sql` AND ${sql.raw(t.rowFilter)}`);
+    if (t.table === 'notes' && wsId) {
+      parts.push(sql` AND NOT EXISTS (SELECT 1 FROM notes taken WHERE taken.workspace_id = ${wsId} AND taken.user_id = notes.user_id AND taken.slug = notes.slug)`);
+    }
+    return sql.join(parts, sql``);
+  };
 
   const totals: Record<string, number> = {};
   for (const t of TABLES) totals[t.table] = 0;
@@ -91,14 +92,9 @@ async function main() {
     // Per-table count of unstamped rows.
     const counts: Record<string, number> = {};
     for (const t of TABLES) {
-      const userClause = t.uuidUserId
-        ? `user_id = '${user.id}'::uuid`
-        : `user_id = '${user.id}'`;
-      // Vault: only backfill workspace-scoped rows.
-      const scopeClause = t.table === 'vault' ? `AND scope = 'workspace'` : '';
       const rows = await db.execute(sql`
         SELECT count(*)::int AS c FROM ${sql.identifier(t.table)}
-        WHERE ${sql.raw(userClause)} AND workspace_id IS NULL ${sql.raw(scopeClause)}
+        WHERE ${sql.identifier(t.ownerColumn)} = ${user.id} AND workspace_id IS NULL${extraClause(t, null)}
       `);
       const r = rows as unknown as Array<{ c: number }> | { rows: Array<{ c: number }> };
       const arr = Array.isArray(r) ? r : (r.rows ?? []);
@@ -117,15 +113,13 @@ async function main() {
 
     for (const t of TABLES) {
       if (counts[t.table] === 0) continue;
-      const userClause = t.uuidUserId
-        ? `user_id = '${user.id}'::uuid`
-        : `user_id = '${user.id}'`;
-      const scopeClause = t.table === 'vault' ? `AND scope = 'workspace'` : '';
-      await executeRaw(
-        `UPDATE ${t.table} SET workspace_id = '${ws.id}'
-         WHERE ${userClause} AND workspace_id IS NULL ${scopeClause}`,
-      );
-      totals[t.table] += counts[t.table];
+      const updated = await db.execute(sql`
+        UPDATE ${sql.identifier(t.table)} SET workspace_id = ${ws.id}
+        WHERE ${sql.identifier(t.ownerColumn)} = ${user.id} AND workspace_id IS NULL${extraClause(t, ws.id)}
+        RETURNING 1
+      `);
+      const r = updated as unknown as unknown[] | { rows: unknown[] };
+      totals[t.table] += Array.isArray(r) ? r.length : (r.rows ?? []).length;
     }
 
     logger.info(
@@ -137,8 +131,7 @@ async function main() {
   // Sanity check: per-table count of remaining unstamped rows.
   const remaining: Record<string, number> = {};
   for (const t of TABLES) {
-    const scopeClause = t.table === 'vault' ? `WHERE scope = 'workspace' AND workspace_id IS NULL` : 'WHERE workspace_id IS NULL';
-    const rows = await db.execute(sql`SELECT count(*)::int AS c FROM ${sql.identifier(t.table)} ${sql.raw(scopeClause)}`);
+    const rows = await db.execute(sql`SELECT count(*)::int AS c FROM ${sql.identifier(t.table)} WHERE workspace_id IS NULL${extraClause(t, null)}`);
     const r = rows as unknown as Array<{ c: number }> | { rows: Array<{ c: number }> };
     const arr = Array.isArray(r) ? r : (r.rows ?? []);
     remaining[t.table] = arr[0]?.c ?? 0;

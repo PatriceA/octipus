@@ -81,6 +81,37 @@ the proxy's address, or every client shares the proxy's address for rate
 limits. Extensions that registered commands with `minTrustLevel: 'local'`
 now use `adminOnly: true`.
 
+### Workspaces: notes, integrity, transfer and workspace secrets
+
+- **Notes follow the request's workspace** (coworking S0c). Every note route
+  (list, query, index, tags, read, backlinks, suggestions, pin, delete,
+  capture) shows the current workspace's notes plus user-level ones, and new
+  notes land in the current workspace. `workspaceId` is no longer accepted in
+  the `POST /api/notes` and `POST /api/notes/capture` bodies. A slug lookup in
+  a workspace falls back to a user-level note of that slug, so daily capture
+  appends to an existing user-level daily note instead of creating a second
+  one.
+- **Migration 0127 repairs workspace stamps.** Notes, tasks, knowledge links,
+  repos and background jobs whose `workspace_id` named a deleted workspace or
+  another user's workspace become user-level; a note that would then clash
+  with a user-level note of the same slug is renamed `<slug>-<first 8 chars of
+  its id>` (the existing user-level note, or the oldest, keeps the slug). The
+  five columns now reference `workspaces(id) ON DELETE SET NULL`, like every
+  other `workspace_id`. Deleting a workspace renames its notes the same way
+  when their slug is already used at user level.
+- **Transfer moves the whole workspace.** Transferring a workspace now moves
+  the previous owner's rows of every workspace table — notes, tasks,
+  memories, embeddings, links, repos, agents, pipelines, jobs and the rest,
+  not only sessions, documents and hooks — in one transaction. Workspace
+  secrets are re-encrypted under the recipient's key; before, a transferred
+  secret could no longer be decrypted. The table list lives in
+  `src/db/workspace-tables.ts`, and `scripts/backfill-workspace-id.ts` uses
+  it too (it now also stamps notes, tasks, memories and links).
+- **Workspace secrets resolve by name.** `getByName` with a workspace now
+  returns that workspace's secret (it was selected, then never decrypted). A
+  `scope='workspace'` secret bound to no workspace is no longer shown or
+  returned in every workspace.
+
 ## v0.6.0 — Shared work, budgets, and stronger review (2026-10-01)
 
 Octipus 0.6.0 brings a shared task board for people and role agents, dollar

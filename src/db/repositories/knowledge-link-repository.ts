@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lt, or, type SQL, sql } from 'drizzle-orm';
 import type { WikiLink } from '@/core/knowledge/wikilink';
 import { coreLogger } from '@/utils/logger';
 import { getDb } from '../postgres';
@@ -7,6 +7,13 @@ import {
   knowledgeLinks,
   type NewKnowledgeLink,
 } from '../schema/knowledge-links';
+
+/** The personal workspace rule, or no condition when no workspace is given. */
+function linksInWorkspace(workspaceId: string | undefined): SQL | undefined {
+  return workspaceId === undefined
+    ? undefined
+    : sql`(${knowledgeLinks.workspaceId} = ${workspaceId} OR ${knowledgeLinks.workspaceId} IS NULL)`;
+}
 
 /**
  * Knowledge-graph Tier 1 — CRUD + resolution for `knowledge_links`.
@@ -72,20 +79,27 @@ export class KnowledgeLinkRepository {
     return rows[0] ?? null;
   }
 
-  /** Outgoing edges from an entity ("what does X link to"), tenant-scoped. */
-  async getOutgoing(userId: string, fromType: string, fromId: string): Promise<KnowledgeLink[]> {
+  /**
+   * Outgoing edges from an entity ("what does X link to"), tenant-scoped.
+   * With `workspaceId`, only edges of that workspace or user-level ones.
+   */
+  async getOutgoing(userId: string, fromType: string, fromId: string, workspaceId?: string): Promise<KnowledgeLink[]> {
     return this.db
       .select()
       .from(knowledgeLinks)
-      .where(and(eq(knowledgeLinks.userId, userId), eq(knowledgeLinks.fromType, fromType), eq(knowledgeLinks.fromId, fromId)));
+      .where(and(eq(knowledgeLinks.userId, userId), eq(knowledgeLinks.fromType, fromType), eq(knowledgeLinks.fromId, fromId), linksInWorkspace(workspaceId)));
   }
 
-  /** Backlinks — resolved edges pointing at an entity ("what links to X"), tenant-scoped. */
-  async getBacklinks(userId: string, toType: string, toId: string): Promise<KnowledgeLink[]> {
+  /**
+   * Backlinks — resolved edges pointing at an entity ("what links to X"),
+   * tenant-scoped. With `workspaceId`, only edges of that workspace or
+   * user-level ones.
+   */
+  async getBacklinks(userId: string, toType: string, toId: string, workspaceId?: string): Promise<KnowledgeLink[]> {
     return this.db
       .select()
       .from(knowledgeLinks)
-      .where(and(eq(knowledgeLinks.userId, userId), eq(knowledgeLinks.toType, toType), eq(knowledgeLinks.toId, toId)));
+      .where(and(eq(knowledgeLinks.userId, userId), eq(knowledgeLinks.toType, toType), eq(knowledgeLinks.toId, toId), linksInWorkspace(workspaceId)));
   }
 
   /**

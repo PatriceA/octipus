@@ -30,6 +30,11 @@ const sourceIdFor = (id: string) => `${SOURCE_PREFIX}:${id}`;
 
 export interface SaveNoteInput {
   userId: string;
+  /**
+   * The caller's workspace. A new note is created there (`null` =
+   * user-level); an existing note is looked up under the personal rule
+   * (this workspace or user-level) and keeps its own scope.
+   */
   workspaceId?: string | null;
   /** Update target. Omit to create (slug derived from `slug` or `title`). */
   id?: string;
@@ -77,7 +82,7 @@ export class NoteService {
     const desiredSlug = input.slug ? slugify(input.slug) : input.id ? null : slugify(title);
     let existing: Note | null = null;
     if (input.id) {
-      existing = await this.notes.getById(userId, input.id);
+      existing = await this.notes.getById(userId, input.id, workspaceId ?? undefined);
       if (!existing) throw new Error(`Note ${input.id} not found for this user`);
     } else if (desiredSlug) {
       existing = await this.notes.getBySlug(userId, workspaceId, desiredSlug);
@@ -130,9 +135,11 @@ export class NoteService {
     }
 
     // 2. Re-link.
+    // Edges carry the note's own scope: updating a user-level note from a
+    // workspace must not file its links under that workspace.
     const linkCounts = await this.links.syncWikilinks({
       userId,
-      workspaceId,
+      workspaceId: note.workspaceId ?? null,
       fromType: SOURCE_PREFIX,
       fromId: note.id,
       wikilinks: parsed.wikilinks,
@@ -198,8 +205,8 @@ export class NoteService {
     }
   }
 
-  async getById(userId: string, id: string): Promise<Note | null> {
-    return this.notes.getById(userId, id);
+  async getById(userId: string, id: string, workspaceId?: string): Promise<Note | null> {
+    return this.notes.getById(userId, id, workspaceId);
   }
 
   async getBySlug(userId: string, workspaceId: string | null, slug: string): Promise<Note | null> {
@@ -218,6 +225,9 @@ export class NoteService {
   /**
    * Get (or lazily create) the daily note for a calendar day. Slug is
    * `daily/YYYY-MM-DD`; created from a minimal template on first access.
+   * With a workspace, the workspace's daily note is used, else an
+   * existing user-level one (`getBySlug`'s fallback) — a new one is only
+   * created when neither exists.
    */
   async getOrCreateDaily(userId: string, workspaceId: string | null, day: string): Promise<Note> {
     const date = normalizeDay(day);
@@ -255,16 +265,16 @@ export class NoteService {
    * (polymorphic, so no FK cascade), then drop the row. For soft delete
    * use `archive`.
    */
-  async remove(userId: string, id: string): Promise<boolean> {
-    const note = await this.notes.getById(userId, id);
+  async remove(userId: string, id: string, workspaceId?: string): Promise<boolean> {
+    const note = await this.notes.getById(userId, id, workspaceId);
     if (!note) return false;
     await this.embeddings.deleteBySource({ ownerUserId: userId, workspaceId: null }, 'note', sourceIdFor(id));
     await this.links.deleteForEntity(SOURCE_PREFIX, id);
     return this.notes.delete(userId, id);
   }
 
-  async archive(userId: string, id: string): Promise<boolean> {
-    return this.notes.archive(userId, id);
+  async archive(userId: string, id: string, workspaceId?: string): Promise<boolean> {
+    return this.notes.archive(userId, id, workspaceId);
   }
 }
 

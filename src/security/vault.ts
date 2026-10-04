@@ -160,6 +160,70 @@ export async function rotateVaultRowMasterKey(
   return 'rotated';
 }
 
+type VaultCiphertextRow = Pick<VaultEntry, 'scope' | 'userId' | 'keyVersion' | 'encryptedValue' | 'encryptionIv' | 'encryptionAuthTag'>;
+
+/**
+ * Decrypt a vault row under its recorded key version, falling through
+ * every older scheme when the column and the ciphertext disagree.
+ *   2: per-(scope, user) HKDF DEK, derived from the row's own scope and owner.
+ *   1: legacy PBKDF2 key (single key for every row).
+ *   0/missing: even older SHA-256(masterKey) — pre-PBKDF2 migration.
+ * `needsReencrypt` is true when the row should be rewritten at
+ * CURRENT_KEY_VERSION. Throws when no scheme decrypts it.
+ */
+function decryptRow(row: VaultCiphertextRow): { plaintext: string; needsReencrypt: boolean } {
+  const encData = {
+    ciphertext: row.encryptedValue,
+    iv: row.encryptionIv,
+    authTag: row.encryptionAuthTag,
+  };
+  const tryAt = (k: Buffer): string | null => {
+    try { return decrypt(encData, k); } catch { return null; }
+  };
+
+  let decrypted: string | null = null;
+  let needsReencrypt = false;
+  if (row.keyVersion === 2) {
+    decrypted = tryAt(dekFor(row.scope, row.userId));
+  } else if (row.keyVersion === 1) {
+    decrypted = tryAt(getPbkdf2Key());
+    needsReencrypt = decrypted !== null;
+  }
+  if (decrypted === null) {
+    // Fall back through every older scheme just in case the column is
+    // out of sync with the actual ciphertext (e.g. partial migration).
+    decrypted = tryAt(dekFor(row.scope, row.userId));
+    if (decrypted === null) decrypted = tryAt(getPbkdf2Key());
+    if (decrypted === null && legacyKey) decrypted = tryAt(legacyKey);
+    if (decrypted !== null) needsReencrypt = true;
+  }
+  if (decrypted === null) {
+    throw new Error('Decryption failed across all known key versions');
+  }
+  return { plaintext: decrypted, needsReencrypt };
+}
+
+/**
+ * Re-encrypt a row for a new owner: decrypt under the row's current
+ * `(scope, userId)` and encrypt under `(scope, newUserId)`. Workspace
+ * transfer rewrites `user_id` on workspace secrets; without this the
+ * recipient's DEK could never open them. Returns the columns to write —
+ * the caller writes them together with the new `user_id` in its own
+ * transaction.
+ */
+export function reencryptVaultRowForOwner(
+  row: VaultCiphertextRow,
+  newUserId: string,
+): Pick<VaultEntry, 'encryptedValue' | 'encryptionIv' | 'encryptionAuthTag' | 'keyVersion'> {
+  const { plaintext } = decryptRow(row);
+  const encrypted = encrypt(plaintext, dekFor(row.scope, newUserId));
+  return {
+    encryptedValue: encrypted.ciphertext,
+    encryptionIv: encrypted.iv,
+    encryptionAuthTag: encrypted.authTag,
+    keyVersion: CURRENT_KEY_VERSION,
+  };
+}
 
 /**
  * Surrounding whitespace is never part of a credential.
@@ -263,52 +327,28 @@ export class Vault {
     if (!entry[0]) {
       return null;
     }
+    return this.readEntry(userId, entry[0]);
+  }
+
+  /**
+   * Decrypt a row the caller already selected under its own ownership
+   * filter. The DEK comes from the row's own `(scope, userId)`, so a
+   * `scope='workspace'` row decrypts here although `get()` (which infers
+   * the scope from the caller) never selects one.
+   */
+  private async readEntry(userId: string, row: VaultEntry): Promise<string | null> {
+    const credentialId = row.id;
 
     // Check expiration
-    if (entry[0].expiresAt && entry[0].expiresAt < new Date()) {
+    if (row.expiresAt && row.expiresAt < new Date()) {
       securityLogger.warn({ credentialId }, 'Credential expired');
       return null;
     }
 
-    const encData = {
-      ciphertext: entry[0].encryptedValue,
-      iv: entry[0].encryptionIv,
-      authTag: entry[0].encryptionAuthTag,
-    };
-    const row = entry[0];
-
-    // Decrypt strategy by key_version:
-    //   2: per-user HKDF DEK, derived from (scope, userId).
-    //   1: legacy PBKDF2 key (single key for every row).
-    //   0/missing: even older SHA-256(masterKey) — pre-PBKDF2 migration.
-    //
-    // We try the recorded version first, then fall through to older
-    // schemes if it fails. On a successful fall-through we opportunistically
-    // re-encrypt the row at CURRENT_KEY_VERSION so the next read is fast.
-    let decrypted: string | null = null;
-    let needsReencrypt = false;
-
-    const tryAt = (k: Buffer): string | null => {
-      try { return decrypt(encData, k); } catch { return null; }
-    };
-
-    if (row.keyVersion === 2) {
-      decrypted = tryAt(dekFor(row.scope, row.userId));
-    } else if (row.keyVersion === 1) {
-      decrypted = tryAt(getPbkdf2Key());
-      needsReencrypt = decrypted !== null;
-    }
-    if (decrypted === null) {
-      // Fall back through every older scheme just in case the column is
-      // out of sync with the actual ciphertext (e.g. partial migration).
-      decrypted = tryAt(dekFor(row.scope, row.userId));
-      if (decrypted === null) decrypted = tryAt(getPbkdf2Key());
-      if (decrypted === null && legacyKey) decrypted = tryAt(legacyKey);
-      if (decrypted !== null) needsReencrypt = true;
-    }
-    if (decrypted === null) {
-      throw new Error('Decryption failed across all known key versions');
-    }
+    // The recorded key version first, then the older schemes. On a
+    // successful fall-through we opportunistically re-encrypt the row at
+    // CURRENT_KEY_VERSION so the next read is fast.
+    const { plaintext: decrypted, needsReencrypt } = decryptRow(row);
 
     if (needsReencrypt) {
       // Opportunistic upgrade — write the row back at CURRENT_KEY_VERSION
@@ -338,7 +378,7 @@ export class Vault {
       .update(vault)
       .set({
         lastAccessedAt: new Date(),
-        accessCount: String(parseInt(entry[0].accessCount || '0', 10) + 1),
+        accessCount: String(parseInt(row.accessCount || '0', 10) + 1),
       })
       .where(eq(vault.id, credentialId));
 
@@ -354,9 +394,11 @@ export class Vault {
    */
   /**
    * Look up a credential by name. When `opts.workspaceId` is set,
-   * also matches `scope='workspace'` rows whose `workspace_id`
-   * equals it (or is NULL — un-backfilled rows stay visible). Phase
-   * 4 follow-up — workspace-scoped vault entries.
+   * also matches `scope='workspace'` rows bound to exactly that
+   * workspace (a workspace row without a workspace belongs to none),
+   * and such a row wins over a same-named user row. The row is
+   * decrypted under its own scope and owner, not the caller's
+   * inferred scope.
    */
   async getByName(
     userId: string,
@@ -369,7 +411,7 @@ export class Vault {
     // context: user-scoped rows always visible, workspace-scoped
     // rows narrow on the column.
     const scopeFilter = workspaceId
-      ? sql`(${vault.scope} = ${scope} OR (${vault.scope} = 'workspace' AND (${vault.workspaceId} = ${workspaceId} OR ${vault.workspaceId} IS NULL)))`
+      ? sql`(${vault.scope} = ${scope} OR (${vault.scope} = 'workspace' AND ${vault.workspaceId} = ${workspaceId}))`
       : eq(vault.scope, scope);
 
     const entry = await this.db
@@ -388,7 +430,7 @@ export class Vault {
       return null;
     }
 
-    return this.get(userId, entry[0].id);
+    return this.readEntry(userId, entry[0]);
   }
 
   /**
@@ -403,8 +445,9 @@ export class Vault {
   ): Promise<Omit<VaultEntry, 'encryptedValue' | 'encryptionIv' | 'encryptionAuthTag'>[]> {
     const scope = inferScope(userId);
     const workspaceId = opts?.workspaceId ?? null;
+    // Same rule as getByName: a workspace row shows only in its own workspace.
     const scopeFilter = workspaceId
-      ? sql`(${vault.scope} = ${scope} OR (${vault.scope} = 'workspace' AND (${vault.workspaceId} = ${workspaceId} OR ${vault.workspaceId} IS NULL)))`
+      ? sql`(${vault.scope} = ${scope} OR (${vault.scope} = 'workspace' AND ${vault.workspaceId} = ${workspaceId}))`
       : eq(vault.scope, scope);
 
     const entries = await this.db

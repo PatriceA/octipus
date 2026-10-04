@@ -208,6 +208,12 @@ workspace NOT NULL). A single unique index over `(user, workspace, slug)`
 would let duplicate user-level slugs through, because Postgres treats NULL
 workspace values as distinct.
 
+`workspace_id` references `workspaces(id) ON DELETE SET NULL` (migration
+`0127_workspace_integrity`): deleting a workspace leaves its notes user-level.
+The note routes apply the personal workspace rule — the request's workspace
+plus user-level notes (`workspace_id IS NULL`) — and a slug lookup in a
+workspace prefers that workspace's note, then falls back to a user-level one.
+
 ### Meetings
 
 A meeting is a note of kind `meeting`, plus one `attended` edge per person.
@@ -257,7 +263,8 @@ carries `indexed: false` — logged loudly, never swallowed.
 ### Daily notes and capture
 
 `getOrCreateDaily(userId, workspaceId, day)` lazily creates `daily/YYYY-MM-DD`
-from a minimal template. `capture()` appends a timestamped bullet to today's
+from a minimal template — unless the workspace already has one, or a
+user-level daily note for that day exists, which is used instead. `capture()` appends a timestamped bullet to today's
 daily note through the same `save()` pipeline, so links and tags in captured
 text are wired immediately. `/capture <text>` is the chat command; it works on
 every channel because commands go through the gateway.

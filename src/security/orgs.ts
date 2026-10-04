@@ -36,11 +36,9 @@
  * documents / hooks / vault and adopt the per-workspace data
  * boundary.
  */
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { auditRepository } from '@/db/repositories/audit-repository';
-import { documents } from '@/db/schema/documents';
-import { hooks } from '@/db/schema/hooks';
 import {
   type NewWorkspace,
   type Organization,
@@ -50,9 +48,10 @@ import {
   type Workspace,
   workspaces,
 } from '@/db/schema/organizations';
-import { sessions } from '@/db/schema/sessions';
 import { users } from '@/db/schema/users';
 import { vault } from '@/db/schema/vault';
+import { workspaceMoveTables } from '@/db/workspace-tables';
+import { reencryptVaultRowForOwner } from '@/security/vault';
 import { securityLogger } from '@/utils/logger';
 
 /**
@@ -430,6 +429,11 @@ export class OrgWorkspaceManager {
    * doing so would leave the user with no place to put new sessions
    * once Phase 4 adopts workspace_id. To "delete" the default,
    * promote a different workspace first via `setDefault`.
+   *
+   * The workspace's rows become user-level (`ON DELETE SET NULL` on every
+   * `workspace_id`). A note whose slug the user already has at user level
+   * would collide on `notes_user_slug_uidx`, so it first gets the
+   * `-<first 8 chars of id>` suffix migration 0127 uses for the same case.
    */
   async delete(userId: string, id: string): Promise<boolean> {
     const existing = await this.findOwnedById(userId, id);
@@ -440,11 +444,18 @@ export class OrgWorkspaceManager {
         'cannot delete the default workspace; promote another one first',
       );
     }
-    const result = await this.db
-      .delete(workspaces)
-      .where(and(eq(workspaces.id, id), eq(workspaces.userId, userId)))
-      .returning({ id: workspaces.id });
-    return result.length > 0;
+    return this.db.transaction(async (tx) => {
+      await tx.execute(sql`
+        UPDATE notes SET slug = notes.slug || '-' || left(notes.id::text, 8)
+        WHERE notes.workspace_id = ${id}
+          AND EXISTS (SELECT 1 FROM notes u WHERE u.user_id = notes.user_id AND u.workspace_id IS NULL AND u.slug = notes.slug)
+      `);
+      const result = await tx
+        .delete(workspaces)
+        .where(and(eq(workspaces.id, id), eq(workspaces.userId, userId)))
+        .returning({ id: workspaces.id });
+      return result.length > 0;
+    });
   }
 
   /**
@@ -476,21 +487,21 @@ export class OrgWorkspaceManager {
    * `recipientUserId`. Atomic — runs in a single transaction so any
    * partial failure rolls back.
    *
-   * What follows the workspace:
-   *   - `sessions`, `documents`, `hooks` rows scoped to this
-   *     workspace_id have their `user_id` reassigned to the recipient.
-   *     These ARE the working state of the workspace; moving the
-   *     workspace without them would orphan the history.
-   *   - `vault` rows with `scope='workspace'` AND `workspace_id` =
-   *     this workspace follow too. Workspace-scoped secrets are part
-   *     of the workspace, not the user.
+   * What follows the workspace: every table WORKSPACE_TABLES marks
+   * `move` (`src/db/workspace-tables.ts`) — sessions, documents, notes,
+   * tasks, memories, embeddings, links, hooks, … — has the previous
+   * owner's rows in this workspace reassigned to the recipient. These
+   * ARE the working state of the workspace; moving the workspace
+   * without them would orphan the history. Workspace-scoped vault
+   * secrets follow too, re-encrypted under the recipient's key.
    *
    * What stays put:
    *   - `vault` rows with `scope='user'` (user's personal secrets) —
    *     those are the user's, not the workspace's, regardless of
    *     where they happened to be created.
-   *   - Artifacts on this workspace stay where they are; the new owner
-   *     simply inherits them via the new ownership.
+   *   - Tables marked `n/a`: notifications (a user's inbox), cleanup
+   *     history, and artifacts, which are keyed by workspace alone and
+   *     so follow the workspace row itself.
    *
    * Edge cases handled:
    *   - Transferring a default workspace clears its `isDefault` flag
@@ -561,31 +572,33 @@ export class OrgWorkspaceManager {
         throw new OrgWorkspaceError('workspace_not_found', 'workspace disappeared mid-transfer');
       }
 
-      // Reassign workspace-scoped working state to the recipient.
-      const updatedAt = new Date();
-      await tx
-        .update(sessions)
-        .set({ userId: recipientUserId, updatedAt })
-        .where(and(eq(sessions.workspaceId, workspaceId), eq(sessions.userId, actorUserId)));
-      // documents has no updatedAt column — only createdAt.
-      await tx
-        .update(documents)
-        .set({ userId: recipientUserId })
-        .where(and(eq(documents.workspaceId, workspaceId), eq(documents.userId, actorUserId)));
-      await tx
-        .update(hooks)
-        .set({ userId: recipientUserId, updatedAt })
-        .where(and(eq(hooks.workspaceId, workspaceId), eq(hooks.userId, actorUserId)));
-      // Workspace-scoped vault rows follow. User-scoped rows stay
-      // with their owner (they're not part of the workspace).
-      await tx
-        .update(vault)
-        .set({ userId: recipientUserId, updatedAt })
-        .where(and(
-          eq(vault.workspaceId, workspaceId),
-          eq(vault.scope, 'workspace'),
-          eq(vault.userId, actorUserId),
-        ));
+      // Reassign the workspace's working state — every `move` table of
+      // WORKSPACE_TABLES — to the recipient. Only the previous owner's
+      // rows move: a row of another user stamped with this workspace
+      // id is not this workspace's to give away.
+      for (const t of workspaceMoveTables()) {
+        const filter = t.rowFilter ? sql` AND ${sql.raw(t.rowFilter)}` : sql``;
+        if (t.reencrypt) {
+          if (t.table !== 'vault') throw new Error(`transfer: no re-encryption path for ${t.table}`);
+          // Vault secrets are encrypted under a key derived from their
+          // owner; rewriting `user_id` alone would leave them unreadable.
+          const rows = await tx
+            .select()
+            .from(vault)
+            .where(and(eq(vault.workspaceId, workspaceId), eq(vault.scope, 'workspace'), eq(vault.userId, actorUserId)));
+          for (const row of rows) {
+            await tx
+              .update(vault)
+              .set({ ...reencryptVaultRowForOwner(row, recipientUserId), userId: recipientUserId, updatedAt: new Date() })
+              .where(eq(vault.id, row.id));
+          }
+          continue;
+        }
+        await tx.execute(sql`
+          UPDATE ${sql.identifier(t.table)} SET ${sql.identifier(t.ownerColumn)} = ${recipientUserId}
+          WHERE workspace_id = ${workspaceId} AND ${sql.identifier(t.ownerColumn)} = ${actorUserId}${filter}
+        `);
+      }
 
       return updated;
     }).then(async (result) => {

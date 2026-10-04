@@ -1,5 +1,6 @@
 import { bigserial, index, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { users } from './users';
+import { workspaces } from './organizations';
 
 /**
  * One row per unit of background work the process runs outside a request:
@@ -37,7 +38,7 @@ export const backgroundJobs = pgTable(
       .references(() => users.id, { onDelete: 'cascade' })
       .notNull(),
     /** NULL = user-level, matching every other scoped table. */
-    workspaceId: uuid('workspace_id'),
+    workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'set null' }),
     /** What a human would call this run: the question, the file name. */
     title: text('title').notNull(),
     stage: text('stage'),

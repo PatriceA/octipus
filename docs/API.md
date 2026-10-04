@@ -376,7 +376,10 @@ this route — see [KNOWLEDGE-GRAPH.md](KNOWLEDGE-GRAPH.md).
 ## Notes
 
 Authored markdown notes — the knowledge graph's Tier 2 surface. Full model in
-[KNOWLEDGE-GRAPH.md](KNOWLEDGE-GRAPH.md).
+[KNOWLEDGE-GRAPH.md](KNOWLEDGE-GRAPH.md). Every route works in the request's
+workspace (`X-Octipus-Workspace`): it sees that workspace's notes plus
+user-level ones, and creates new notes in it. No route takes a `workspaceId`
+in its body.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -385,7 +388,7 @@ Authored markdown notes — the knowledge graph's Tier 2 surface. Full model in
 | POST | `/api/notes/query` | Property query: `{ kind?, tag?, frontmatter?, sort?, order?, limit? }`. |
 | GET | `/api/notes/index` | Lightweight `{id,title,slug,kind}` list — the source for `[[` autocomplete. |
 | GET | `/api/notes/tags` | Tag → count across active notes. |
-| POST | `/api/notes/capture` | Append `{ text, date?, workspaceId? }` to a daily note. |
+| POST | `/api/notes/capture` | Append `{ text, date? }` to the day's daily note (the workspace's, else an existing user-level one). |
 | GET | `/api/notes/:id` | Read a note with its backlinks. |
 | GET | `/api/notes/:id/suggestions` | Semantically related, not-yet-linked entities (computed, not persisted). |
 | PATCH | `/api/notes/:id/pin` | `{ pinned: boolean }`. |

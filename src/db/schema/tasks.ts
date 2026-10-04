@@ -1,5 +1,6 @@
 import { index, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { users } from './users';
+import { workspaces } from './organizations';
 
 /**
  * Personal tasks / todos (feature #6). Distinct from `recurring_tasks` (cron
@@ -17,7 +18,7 @@ export const tasks = pgTable('tasks', {
    * Phase 4 — optional workspace scope. NULL = user-level (visible to every
    * workspace the user owns). FK in the migration uses ON DELETE SET NULL.
    */
-  workspaceId: uuid('workspace_id'),
+  workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'set null' }),
   title: text('title').notNull(),
   notes: text('notes'),
   /** 'open' | 'in_progress' | 'done' | 'archived' — see core/tasks/status.ts. */
