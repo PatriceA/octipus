@@ -276,10 +276,36 @@ mixed into it. Existing memories are not migrated.
   the workspace id) changes synchronously on a switch and the query cache is
   cleared; workspace-scoped queries key on the workspace id.
 
-**Behaviour changes:** the TUI refuses to send a message (e.g. a pasted image)
-larger than `gateway.maxFrameBytes` and says so; raise the setting for larger
-attachments. Approval answers from the web go over the gateway instead of
-`POST /chat/approve` (the route stays for REST clients).
+- **Tabs keep to their own session.** A reply, error, status line or
+  streamed text of another session (another tab's turn) no longer stops this
+  tab's spinner or replaces its streamed text, a tab on "New chat" no longer
+  jumps into another tab's session, and only the spoken turn's own reply is
+  read aloud. `voice.set {on:false}` from a tab that did not turn voice on is
+  ignored, and a closing tab takes a session out of voice mode only when no
+  other tab of the user holds it there.
+- **A refused message says so.** A `chat.send` refused before its turn starts
+  (`INVALID_MESSAGE`, `RATE_LIMITED`, `SESSION_NOT_FOUND`) stops the spinner
+  and shows why; the chat page checks the 100 000-character limit and the
+  frame cap (`auth_ok.maxFrameBytes`) before sending.
+- **Reconnects do not duplicate.** `replay` without `afterEventId` answers
+  `gap: true` with no events (the client reloads from REST) instead of the
+  whole buffer; a replayed reply and another tab's steered message are
+  matched against their persisted rows instead of shown twice. `auth_ok`
+  reports the frame cap the socket enforces (read at start), not a later
+  config value. Replay buffers are also dropped for sessions removed by a
+  space purge. Model install progress is re-read on reconnect.
+- **In-app delivery needs a chat page.** A delivery to `webchat:<you>` counts
+  as delivered only while a connection shows the chat page (it subscribes to
+  the `chat:inbox` resource); an open terminal or a tab on another page no
+  longer counts.
+
+**Behaviour changes:** the TUI uploads pasted or attached images over REST
+(`POST /sessions/:id/attachments`, creating the session first if needed) and
+names them in `fileRefs`, as the web does, so images up to the 10 MiB upload
+limit work under the default `gateway.maxFrameBytes`. Inline `chat.send`
+`attachments` are now held to 256 KiB each. Approval answers from the web go
+over the gateway instead of `POST /chat/approve` (the route stays for REST
+clients).
 
 ## v0.6.0 — Shared work, budgets, and stronger review (2026-10-01)
 

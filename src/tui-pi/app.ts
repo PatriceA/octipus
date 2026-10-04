@@ -378,9 +378,30 @@ export class OctipusTuiApp {
       return;
     }
     const images = this.pendingImages.filter(image => text.includes(image.marker)).map(image => image.attachment);
-    if (images.length) this.adapter.sendChat(this.sessionId, text, this.projectPath, images);
-    else this.adapter.sendChat(this.sessionId, text, this.projectPath);
     this.pendingImages = [];
+    if (images.length) void this.sendWithImages(text, images);
+    else this.adapter.sendChat(this.sessionId, text, this.projectPath);
+  }
+
+  /**
+   * Upload the message's images over REST, then send the turn naming them
+   * (`fileRefs`), as the web does: the gateway frame carries no file bytes,
+   * so its size cap does not limit the image. A session the server has not
+   * seen yet is created by the upload, and the TUI continues in it.
+   */
+  private async sendWithImages(text: string, images: ChatAttachment[]): Promise<void> {
+    const from = this.sessionId;
+    let prepared: Awaited<ReturnType<GatewayAdapter['uploadAttachments']>>;
+    try {
+      prepared = await this.adapter.uploadAttachments(from, images, text);
+    } catch (error) {
+      this.pushMessage('system', `Message not sent: the image upload failed (${error instanceof Error ? error.message : String(error)}). Attach it again.`);
+      return;
+    }
+    if (this.sessionId !== from) return; // switched sessions while uploading
+    this.sessionId = prepared.sessionId;
+    const content = [text, ...prepared.uploaded.map(file => `Attached file: ${file.path}`)].join('\n\n');
+    this.adapter.sendChat(prepared.sessionId, content, this.projectPath, prepared.uploaded.map(file => ({ path: file.path })));
   }
 
   // ── Voice (push-to-talk) ───────────────────────────────────────

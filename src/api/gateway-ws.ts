@@ -47,9 +47,14 @@ export function setupGatewayWebSocket(app: Elysia): void {
 
   hub.setWorkspaceResolver(resolveConnectionWorkspace);
 
+  // Read once, at startup: a frame over it closes the socket (1009). Clients
+  // are told this same number in `auth_ok`, not a later config value the
+  // socket does not enforce.
+  const maxFrameBytes = getConfig().gateway.maxFrameBytes;
+  hub.connectionManager.setMaxFrameBytes(maxFrameBytes);
+
   app.ws('/gateway', {
-    // Read at startup: a frame over it closes the socket (1009).
-    maxPayload: getConfig().gateway.maxFrameBytes,
+    maxPayload: maxFrameBytes,
     open(ws) {
       // Forwarded headers count only when the peer is a trusted proxy.
       const ip = clientIp(ws.data.request, ws.remoteAddress);

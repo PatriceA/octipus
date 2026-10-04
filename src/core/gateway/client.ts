@@ -1,6 +1,20 @@
+import { apiBaseFromGatewayUrl } from '@/core/gateway/cli-login';
 import { clearCliSession, readCliSession } from '@/core/gateway/cli-session';
 import type { ClientMessage, GatewayMessage } from '@/core/gateway/protocol';
 import type { ChatAttachment } from '@/shared/chat-attachments';
+
+const DEFAULT_GATEWAY_URL = 'ws://localhost:3007/gateway';
+
+/** A session file a turn names (`chat.send` `fileRefs`). */
+export interface FileRef { path: string; version?: string }
+
+/** One file stored by `POST /sessions/:id/attachments`. */
+export interface UploadedAttachment { path: string; name: string }
+
+/** An attachment's base64 bytes as a file for a multipart upload. */
+function decodeAttachment(attachment: ChatAttachment): File {
+  return new File([Buffer.from(attachment.data, 'base64')], attachment.name, { type: attachment.mimeType });
+}
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'authenticating' | 'connected' | 'error';
 
@@ -61,7 +75,7 @@ export class GatewayClient {
    * Connect to the gateway.
    */
   async connect(): Promise<void> {
-    const baseUrl = this.options.url || 'ws://localhost:3007/gateway';
+    const baseUrl = this.options.url || DEFAULT_GATEWAY_URL;
     const ws = this.options.getWorkspace?.();
     const url = ws
       ? `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}workspace=${encodeURIComponent(ws)}`
@@ -156,26 +170,68 @@ export class GatewayClient {
   }
 
   /**
-   * Send a chat message.
+   * Send a chat message. Files go up first with `uploadAttachments`; the
+   * turn names them in `fileRefs`, so the frame carries no file bytes.
    */
-  sendChat(sessionId: string, content: string, projectPath?: string, attachments?: ChatAttachment[]): void {
+  sendChat(sessionId: string, content: string, projectPath?: string, fileRefs?: FileRef[]): void {
     const message: ClientMessage = {
       type: 'chat.send',
       sessionId,
       content,
       ...(projectPath ? { projectPath } : {}),
-      ...(attachments?.length ? { attachments } : {}),
+      ...(fileRefs?.length ? { fileRefs } : {}),
     };
     // A frame over the server's cap would close the socket mid-send; say so
     // instead, with the setting that governs it.
     const size = Buffer.byteLength(JSON.stringify(message));
     if (this.maxFrameBytes !== null && size > this.maxFrameBytes) {
       this.options.onError?.(
-        `Message not sent: it is ${Math.ceil(size / 1024)} KiB and the server accepts at most ${Math.floor(this.maxFrameBytes / 1024)} KiB per message (gateway.maxFrameBytes). Attach a smaller image, or raise the setting.`,
+        `Message not sent: it is ${Math.ceil(size / 1024)} KiB and the server accepts at most ${Math.floor(this.maxFrameBytes / 1024)} KiB per message (gateway.maxFrameBytes). Shorten it, or raise the setting.`,
       );
       return;
     }
     this.send(message);
+  }
+
+  /**
+   * Upload files for the next turn over REST (`POST /sessions/:id/attachments`,
+   * as the web does), so their size is bounded by the upload limit rather
+   * than by the gateway's frame cap. A session the server has not seen yet
+   * (the TUI picks its id before the first message) is created first, in
+   * this client's workspace, and its id returned: the caller continues in it.
+   * Throws with the server's reason when the upload fails.
+   */
+  async uploadAttachments(sessionId: string, attachments: ChatAttachment[], title: string): Promise<{ sessionId: string; uploaded: UploadedAttachment[] }> {
+    const session = readCliSession();
+    if (!session) throw new Error('Not signed in');
+    const base = apiBaseFromGatewayUrl(this.options.url || DEFAULT_GATEWAY_URL);
+    const workspace = this.options.getWorkspace?.();
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${session.token}`,
+      ...(workspace ? { 'X-Octipus-Workspace': workspace } : {}),
+    };
+    const upload = async (id: string): Promise<Response> => {
+      const form = new FormData();
+      for (const attachment of attachments) form.append('files', decodeAttachment(attachment));
+      return fetch(`${base}/sessions/${encodeURIComponent(id)}/attachments`, { method: 'POST', headers, body: form });
+    };
+
+    let target = sessionId;
+    let response = await upload(target);
+    if (response.status === 404) {
+      const created = await fetch(`${base}/sessions`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channelType: 'tui', channelId: `tui-${Date.now().toString(36)}`, title: title.slice(0, 100) || 'TUI conversation' }),
+      });
+      const body = (await created.json().catch(() => ({}))) as { id?: string; error?: string };
+      if (!created.ok || !body.id) throw new Error(body.error || `Could not start a session (HTTP ${created.status})`);
+      target = body.id;
+      response = await upload(target);
+    }
+    const body = (await response.json().catch(() => ({}))) as { uploaded?: UploadedAttachment[]; error?: string };
+    if (!response.ok || !body.uploaded) throw new Error(body.error || `Upload failed (HTTP ${response.status})`);
+    return { sessionId: target, uploaded: body.uploaded };
   }
 
   /**

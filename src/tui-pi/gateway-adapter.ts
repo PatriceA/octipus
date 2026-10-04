@@ -8,7 +8,7 @@
  * `AgentSessionEvent` so the rest of the app can pattern-match on
  * `kind` without re-parsing payload shapes.
  */
-import { type ConnectionStatus, GatewayClient, type GatewayClientOptions } from '@/core/gateway/client';
+import { type ConnectionStatus, type FileRef, GatewayClient, type GatewayClientOptions, type UploadedAttachment } from '@/core/gateway/client';
 import type { ChatAttachment } from '@/shared/chat-attachments';
 
 export type Role = 'user' | 'assistant' | 'system';
@@ -152,8 +152,13 @@ export class GatewayAdapter {
 
   // ── Outgoing messages ───────────────────────────────────────────
 
-  sendChat(sessionId: string, content: string, projectPath?: string, attachments?: ChatAttachment[]): void {
-    this.client.sendChat(sessionId, content, projectPath, attachments);
+  sendChat(sessionId: string, content: string, projectPath?: string, fileRefs?: FileRef[]): void {
+    this.client.sendChat(sessionId, content, projectPath, fileRefs);
+  }
+
+  /** Upload images for the next turn (REST); see `GatewayClient.uploadAttachments`. */
+  uploadAttachments(sessionId: string, attachments: ChatAttachment[], title: string): Promise<{ sessionId: string; uploaded: UploadedAttachment[] }> {
+    return this.client.uploadAttachments(sessionId, attachments, title);
   }
 
   sendCommand(name: string, args?: Record<string, string>): void {

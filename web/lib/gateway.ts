@@ -9,8 +9,9 @@
  * (`src/core/gateway/protocol.ts`).
  *
  * On a reconnect it asks the server to `replay` what the watched sessions
- * missed; a replay that cannot bridge the gap is passed on so the page reloads
- * from REST. Over the per-user connection cap the status is `too_many_tabs`
+ * missed after the last event this tab saw of each; a replay that cannot
+ * bridge the gap (or a session with no event seen yet) comes back with
+ * `gap: true`, which is passed on so the page reloads from REST. Over the per-user connection cap the status is `too_many_tabs`
  * and it retries slowly instead of hammering the server.
  */
 import type {
@@ -46,6 +47,8 @@ export class WebGateway {
   private everConnected = false;
   /** This connection's id (`auth_ok`); a steer this tab sent carries it as `steer:<id>`. */
   private connectionId: string | null = null;
+  /** The largest frame the server accepts (`auth_ok.maxFrameBytes`); a bigger one closes the socket. */
+  private maxFrameBytes: number | null = null;
   /** Bumped by every connect, stop and retry: a connect that lost the race drops its socket. */
   private generation = 0;
   private readonly messageListeners = new Set<MessageListener>();
@@ -96,6 +99,22 @@ export class WebGateway {
 
   getConnectionId(): string | null {
     return this.connectionId;
+  }
+
+  /** The server's frame cap, or null before the first sign-in. */
+  getMaxFrameBytes(): number | null {
+    return this.maxFrameBytes;
+  }
+
+  /**
+   * Why `message` would be refused before it reaches a handler: a frame over
+   * the server's cap closes the socket instead of answering. Null when it fits.
+   */
+  frameTooLarge(message: ClientMessage): string | null {
+    if (this.maxFrameBytes === null) return null;
+    const size = new TextEncoder().encode(JSON.stringify(message)).length;
+    if (size <= this.maxFrameBytes) return null;
+    return `it is ${Math.ceil(size / 1024)} KiB and the server accepts at most ${Math.floor(this.maxFrameBytes / 1024)} KiB per message`;
   }
 
   /** Send a client message. False when the connection is not signed in. */
@@ -192,6 +211,7 @@ export class WebGateway {
         const reconnected = this.everConnected;
         this.everConnected = true;
         this.connectionId = message.connectionId;
+        this.maxFrameBytes = message.maxFrameBytes ?? null;
         this.backoffMs = 1_000;
         this.setStatus('connected');
         this.startKeepalive(ws);

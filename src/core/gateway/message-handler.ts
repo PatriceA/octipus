@@ -125,11 +125,13 @@ export function wireMessageHandler(hub: GatewayHub): void {
   hub.setPendingSnapshotProvider(readPendingSnapshot);
 
   // A connection that put a session into voice mode takes it out when it
-  // goes, so a refresh does not leave the session in the planning gate.
+  // goes, so a refresh does not leave the session in the planning gate —
+  // unless another connection of the user still holds it in voice mode.
   hub.setConnectionClosedHandler((context) => {
     const sessionId = context.voiceSessionId;
     if (!sessionId) return;
     context.voiceSessionId = undefined;
+    if (voiceHeldElsewhere(hub, context, sessionId)) return;
     import('@/core/agent')
       .then(({ getAgentService }) => getAgentService().setVoiceMode(sessionId, context.userId, false))
       .catch((err: unknown) => coreLogger.error({ err, sessionId }, 'Could not clear voice mode of a closed connection'));
@@ -678,10 +680,25 @@ async function handleAgentStop(
 }
 
 /**
+ * Does another connection of the user hold `sessionId` in voice mode? Voice
+ * mode is keyed by (session, user) in the root agent, so one connection
+ * leaving it must not take it from a tab that still speaks.
+ */
+function voiceHeldElsewhere(hub: GatewayHub, context: ConnectionContext, sessionId: string): boolean {
+  return hub.connectionManager.getConnectionsByUser(context.userId).some((conn) =>
+    !!conn.context && conn.context.connectionId !== context.connectionId && conn.context.voiceSessionId === sessionId);
+}
+
+/**
  * Put a session into (or out of) voice mode for this connection. Owner check
  * as for `chat.send`: another user's session is refused before anything
  * changes. A session that does not exist yet (a fresh chat) is allowed — the
  * gate is keyed by (session, user), so it only ever affects this user's turns.
+ *
+ * `on:false` is honoured only for the session this connection turned on, and
+ * the root agent leaves voice mode only when no other connection of the user
+ * still holds that session in it: a tab without voice cannot switch off
+ * another tab's.
  */
 async function handleVoiceSet(
   hub: GatewayHub,
@@ -697,12 +714,20 @@ async function handleVoiceSet(
     }
     const { getAgentService } = await import('@/core/agent');
     const service = getAgentService();
+    const previous = context.voiceSessionId;
+    if (!message.on) {
+      if (previous !== message.sessionId) return; // not this connection's voice session
+      context.voiceSessionId = undefined;
+      if (!voiceHeldElsewhere(hub, context, message.sessionId)) service.setVoiceMode(message.sessionId, context.userId, false);
+      return;
+    }
     // Moving voice to another session takes the previous one out first, so
     // its flag is not left set in the root agent.
-    const previous = context.voiceSessionId;
-    if (previous && previous !== message.sessionId) service.setVoiceMode(previous, context.userId, false);
-    service.setVoiceMode(message.sessionId, context.userId, message.on);
-    context.voiceSessionId = message.on ? message.sessionId : undefined;
+    if (previous && previous !== message.sessionId && !voiceHeldElsewhere(hub, context, previous)) {
+      service.setVoiceMode(previous, context.userId, false);
+    }
+    service.setVoiceMode(message.sessionId, context.userId, true);
+    context.voiceSessionId = message.sessionId;
   } catch (err) {
     coreLogger.error({ err, connectionId, sessionId: message.sessionId }, 'voice.set failed');
     hub.connectionManager.sendToConnection(connectionId, { type: 'error', code: 'VOICE_ERROR', message: (err as Error).message });
@@ -723,6 +748,12 @@ async function handleReplay(
 ): Promise<void> {
   if (!(await ownsExistingSession(message.sessionId, context))) {
     hub.connectionManager.sendToConnection(connectionId, { type: 'error', code: 'SESSION_NOT_FOUND', message: 'Session not found' });
+    return;
+  }
+  // No watermark: the client has seen none of the buffer live, so replaying
+  // it would apply old events again. It reloads from REST instead.
+  if (!message.afterEventId) {
+    hub.connectionManager.sendToConnection(connectionId, { type: 'replay', sessionId: message.sessionId, events: [], gap: true });
     return;
   }
   const { events, gap } = hub.eventBus.replaySince(message.sessionId, message.afterEventId);

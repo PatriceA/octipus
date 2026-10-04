@@ -15,6 +15,9 @@
  *   4. writes the `space_purged` audit row and deletes the workspace row
  *      (its members and invites cascade).
  *
+ * After commit the purged sessions are reported to `sessionsRemoved`, so the
+ * gateway drops their replay buffers.
+ *
  * `keep` tables (audit log, cost log, cleanup history) have no foreign key to
  * workspaces, so their rows survive with the id. Nothing of the space ever
  * falls back to a member's personal scope.
@@ -29,6 +32,7 @@ import { join } from 'node:path';
 import { and, eq, sql } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { getDb } from '@/db/postgres';
+import { sessionsRemoved } from '@/db/repositories/session-lifecycle';
 import { workspaces } from '@/db/schema/organizations';
 import { WORKSPACE_TABLES } from '@/db/workspace-tables';
 import { requireCan, SpaceError } from '@/security/space-access';
@@ -76,6 +80,7 @@ function rows<T>(result: unknown): T[] {
 /** Delete a space and everything in it, for good (owner only). */
 export async function purgeSpace(actor: SpaceActor, workspaceId: string): Promise<PurgeResult> {
   const deleted: Record<string, number> = {};
+  const removedSessions: string[] = [];
   await getDb().transaction(async (tx) => {
     requireCan(await getMembership(actor.userId, workspaceId, tx), 'manage_space');
     const [space] = await tx
@@ -101,6 +106,13 @@ export async function purgeSpace(actor: SpaceActor, workspaceId: string): Promis
     const purged = WORKSPACE_TABLES.filter((t) => t.purge === 'delete');
     const ordered = [...purged.filter((t) => t.table !== 'sessions'), ...purged.filter((t) => t.table === 'sessions')];
     for (const t of ordered) {
+      if (t.table === 'sessions') {
+        const result = await tx.execute(sql`DELETE FROM sessions WHERE workspace_id = ${workspaceId} RETURNING id::text AS id`);
+        const ids = rows<{ id: string }>(result).map((r) => r.id);
+        removedSessions.push(...ids);
+        deleted.sessions = (deleted.sessions ?? 0) + ids.length;
+        continue;
+      }
       const result = await tx.execute(sql`DELETE FROM ${sql.identifier(t.table)} WHERE workspace_id = ${workspaceId} RETURNING 1`);
       deleted[t.table] = (deleted[t.table] ?? 0) + rows(result).length;
     }
@@ -120,6 +132,8 @@ export async function purgeSpace(actor: SpaceActor, workspaceId: string): Promis
     await tx.delete(workspaces).where(and(eq(workspaces.id, workspaceId), eq(workspaces.kind, 'shared')));
   });
   securityLogger.warn({ workspaceId, by: actor.userId, deleted }, 'Space purged');
+  // After the commit: the gateway drops the purged sessions' replay buffers.
+  sessionsRemoved(removedSessions);
 
   const leftoverDirectories: string[] = [];
   const dirs = spaceDirectories(workspaceId);

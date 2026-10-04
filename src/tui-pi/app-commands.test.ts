@@ -14,6 +14,7 @@ const gateway = vi.hoisted(() => ({
   listener: (_event: AgentSessionEvent) => {},
   sendCommand: vi.fn(),
   sendChat: vi.fn(),
+  uploadAttachments: vi.fn(),
   getSessionId: () => undefined as string | null | undefined,
 }));
 vi.mock('./gateway-adapter', () => ({ GatewayAdapter: class {
@@ -21,6 +22,7 @@ vi.mock('./gateway-adapter', () => ({ GatewayAdapter: class {
   on(listener: (event: AgentSessionEvent) => void) { gateway.listener = listener; }
   sendCommand = gateway.sendCommand;
   sendChat = gateway.sendChat;
+  uploadAttachments = gateway.uploadAttachments;
   getWorkspace() { return null; }
   disconnect() {}
 } }));
@@ -48,7 +50,7 @@ function mount(options: ConstructorParameters<typeof OctipusTuiApp>[1] = {}) {
   };
 }
 
-beforeEach(() => { gateway.sendCommand.mockClear(); gateway.sendChat.mockClear(); installOctipusKeybindings({}); });
+beforeEach(() => { gateway.sendCommand.mockClear(); gateway.sendChat.mockClear(); gateway.uploadAttachments.mockReset(); installOctipusKeybindings({}); });
 afterEach(() => { vi.useRealTimers(); });
 
 test('unknown slash commands go to the gateway with their argument', async () => {
@@ -193,16 +195,31 @@ test('partial text from a failed turn is dropped, not promoted into history by t
 });
 
 
-test('clipboard image is acknowledged with a placeholder and sent with its bytes', async () => {
+test('clipboard image is acknowledged with a placeholder, uploaded, and the turn names the stored file', async () => {
   image.read.mockResolvedValue({ name: 'clipboard.png', mimeType: 'image/png', data: 'aW1hZ2U=' });
+  // The TUI's session did not exist yet: the upload created one, and the TUI continues in it.
+  gateway.uploadAttachments.mockResolvedValue({ sessionId: 'created-session', uploaded: [{ path: '.octipus/attachments/a/clipboard.png', name: 'clipboard.png' }] });
   const t = mount();
   t.submit('/attach');
   await vi.waitFor(() => expect(t.text()).toContain('[image1] received: clipboard.png'));
   t.submit('What is in [image1]?');
-  expect(gateway.sendChat).toHaveBeenCalledWith(expect.any(String), 'What is in [image1]?', undefined,
-    [{ name: 'clipboard.png', mimeType: 'image/png', data: 'aW1hZ2U=' }]);
+  expect(gateway.uploadAttachments).toHaveBeenCalledWith(expect.any(String), [{ name: 'clipboard.png', mimeType: 'image/png', data: 'aW1hZ2U=' }], 'What is in [image1]?');
+  await vi.waitFor(() => expect(gateway.sendChat).toHaveBeenCalledWith('created-session',
+    'What is in [image1]?\n\nAttached file: .octipus/attachments/a/clipboard.png', undefined, [{ path: '.octipus/attachments/a/clipboard.png' }]));
   t.submit('Next message');
-  expect(gateway.sendChat.mock.calls.at(-1)).toHaveLength(3);
+  expect(gateway.sendChat.mock.calls.at(-1)).toEqual(['created-session', 'Next message', undefined]);
+  await t.app.stop();
+});
+
+test('a failed image upload says so and sends nothing', async () => {
+  image.read.mockResolvedValue({ name: 'clipboard.png', mimeType: 'image/png', data: 'aW1hZ2U=' });
+  gateway.uploadAttachments.mockRejectedValue(new Error('Each attachment must contain data and be no larger than 10 MiB.'));
+  const t = mount();
+  t.submit('/attach');
+  await vi.waitFor(() => expect(t.text()).toContain('[image1] received'));
+  t.submit('Look at [image1]');
+  await vi.waitFor(() => expect(t.text()).toContain('Message not sent: the image upload failed'));
+  expect(gateway.sendChat).not.toHaveBeenCalled();
   await t.app.stop();
 });
 

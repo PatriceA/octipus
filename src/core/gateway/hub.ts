@@ -43,7 +43,6 @@ export class GatewayHub {
     this.connectionManager = new ConnectionManager({
       rateLimiter,
       budget: { maxPerUser: () => getConfig().gateway.maxConnectionsPerUser },
-      maxFrameBytes: () => getConfig().gateway.maxFrameBytes,
     });
     this.eventBus = new GatewayEventBus({ maxSessions: () => getConfig().gateway.replayMaxSessions });
 

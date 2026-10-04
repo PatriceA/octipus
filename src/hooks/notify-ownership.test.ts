@@ -90,9 +90,10 @@ function appFor(uid: string, isAdmin: boolean, plugins: unknown[]): ElysiaLike {
 
 /**
  * A signed-in `/gateway` connection of `userId` on the real hub — the
- * in-app surface `webchat:<userId>` delivers to (one per browser tab).
+ * in-app surface `webchat:<userId>` delivers to (one per browser tab). A
+ * tab on the chat page subscribes to `chat:inbox`, as the web does.
  */
-async function openTab(userId: string): Promise<{ connectionId: string; frames: Array<Record<string, any>>; close: () => void }> {
+async function openTab(userId: string, chatPage = true): Promise<{ connectionId: string; frames: Array<Record<string, any>>; close: () => void }> {
   const { getGatewayHub } = await import('@/core/gateway/hub');
   const hub = getGatewayHub();
   hub.setSessionValidator(async (token) => (token.startsWith('tab:') ? { userId: token.slice(4), username: 'u', isAdmin: false } : null));
@@ -102,6 +103,10 @@ async function openTab(userId: string): Promise<{ connectionId: string; frames: 
   const connectionId = hub.connectionManager.handleOpen(ws, '127.0.0.1')!;
   await hub.connectionManager.handleMessage(connectionId, JSON.stringify({ type: 'auth', method: 'session_token', credentials: { token: `tab:${userId}` }, clientType: 'webchat' }));
   expect(frames.at(-1)).toMatchObject({ type: 'auth_ok', userId });
+  if (chatPage) {
+    await hub.connectionManager.handleMessage(connectionId, JSON.stringify({ type: 'subscribe', resources: ['chat:inbox'] }));
+    await vi.waitFor(() => expect(frames.at(-1)).toEqual({ type: 'subscribed', resources: ['chat:inbox'] }));
+  }
   return { connectionId, frames, close: () => hub.connectionManager.handleClose(connectionId, 1000) };
 }
 
@@ -373,6 +378,17 @@ describe('executeNotify', () => {
       expect(bobTab.frames.filter((f) => f.type === 'event')).toEqual([]);
     } finally {
       for (const tab of [...tabs, bobTab]) tab.close();
+    }
+  });
+
+  test('webchat:<ownId> is not delivered when no open connection shows the chat page', async () => {
+    const terminal = await openTab(aliceId, false);
+    try {
+      const r = await notify({ notifyChannels: [`webchat:${aliceId}`] });
+      expect(r.success).toBe(false);
+      expect(terminal.frames.filter((f) => f.type === 'event' && f.event.type === 'chat.message')).toEqual([]);
+    } finally {
+      terminal.close();
     }
   });
 
