@@ -1,4 +1,5 @@
 import { desc, eq, or, sql } from 'drizzle-orm';
+import { buildAgentContext, fundingFor } from '@/core/agent/context';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { disableDailyBriefingHook, ensureDailyBriefingHook } from '@/core/briefing';
@@ -103,19 +104,19 @@ function buildTestContext(hook: HookRow, input: TestContextInput, now: Date): Tr
     case 'agent_started':
     case 'agent_completed':
     case 'agent_failed':
-      context.agent = {
+      // A sample trigger payload, never run: the action builds its own
+      // context from the hook (hooks/actions.ts).
+      context.agent = buildAgentContext({
         id: `hook-test-${hook.id}`,
         // Empty: resolveHookSessionId falls through to the hook's own session.
         sessionId: '',
         userId: hook.userId,
+        scope: { workspaceId: null, space: null, trigger: 'schedule', funding: fundingFor('schedule', null) },
         topic: config.sessionFilter?.topics?.[0] ?? 'hook',
         model: 'default',
         role: 'general',
         status: hook.trigger === 'agent_started' ? 'running' : hook.trigger === 'agent_failed' ? 'failed' : 'completed',
-        createdAt: now,
-        updatedAt: now,
-        metadata: {},
-      };
+      });
       break;
     case 'tool_executed':
       context.tool = {

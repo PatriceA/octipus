@@ -6,6 +6,7 @@
  * `principalId`, never the requesting viewer.
  */
 
+import { buildAgentContext, fundingFor } from '@/core/agent/context';
 import { artifactsRepository } from '@/db/repositories/artifacts-repository';
 import type { ArtifactDataSource } from '@/db/schema/artifact-data-sources';
 import { coreLogger } from '@/utils/logger';
@@ -347,17 +348,16 @@ async function runSkillQuery(
 
 // ── helpers ──────────────────────────────────────────────────────────
 export function buildSyntheticContext(principalId: string): import('@/core/types').AgentContext {
-  const now = new Date();
-  return {
+  // A scheduled refresh in the principal's own (personal) scope.
+  return buildAgentContext({
     id: `artifact-refresh:${principalId}`,
     sessionId: `artifact-refresh:${principalId}`,
     userId: principalId,
+    scope: { workspaceId: null, space: null, trigger: 'schedule', funding: fundingFor('schedule', null) },
     topic: 'artifact-refresh',
     model: '',
     role: 'system',
     status: 'running',
-    createdAt: now,
-    updatedAt: now,
     metadata: { source: 'artifact-refresh' },
-  };
+  });
 }

@@ -167,7 +167,7 @@ test('native root, native child and CLI child receive full selected system instr
   const manager = new AgentManager();
   await skillSelectionRepository.set(alice, 'selected', 'session', sessionA);
   for (const options of [{ role: 'general', root: true, model: 'test' }, { role: 'coding', model: 'test' }, { role: 'coding', model: 'cli/claude' }]) {
-    const worker = await manager.spawn({ sessionId: sessionA, userId: alice, systemPrompt: 'BASE', ...options });
+    const worker = await manager.spawn({ workspaceId: null, space: null, trigger: 'user', funding: 'own',  sessionId: sessionA, userId: alice, systemPrompt: 'BASE', ...options });
     const messages = (worker as unknown as { messages: import('@/core/types').AgentMessage[] }).messages;
     expect(messages.filter(message => message.role === 'system').map(message => message.content).join('\n')).toContain('COMPLETE INSTRUCTIONS');
     expect(slidingWindowCompact(messages, 1).some(message => message.content.includes('COMPLETE INSTRUCTIONS'))).toBe(true);
@@ -181,7 +181,7 @@ test('only a keyed child on a resumable CLI takes selected skills into its volat
   const manager = new AgentManager();
   await skillSelectionRepository.set(alice, 'selected', 'session', sessionA);
   const systemOf = async (options: { model: string; contextMetadata?: Record<string, unknown> }) => {
-    const worker = await manager.spawn({ sessionId: sessionA, userId: alice, role: 'coding', systemPrompt: 'BASE\n\nCURRENT DATE/TIME: now', ...options });
+    const worker = await manager.spawn({ workspaceId: null, space: null, trigger: 'user', funding: 'own',  sessionId: sessionA, userId: alice, role: 'coding', systemPrompt: 'BASE\n\nCURRENT DATE/TIME: now', ...options });
     const system = (worker as unknown as { messages: import('@/core/types').AgentMessage[] }).messages.filter(message => message.role === 'system');
     manager.remove(worker.getContext().id);
     return system.map(message => message.content);

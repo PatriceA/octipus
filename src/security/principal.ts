@@ -154,20 +154,34 @@ export function principalFromUser(
  * agent's workspace: an admin's agent never inherits the repositories'
  * admin bypass (`scopedRepos` skips the owner filter on by-id reads for
  * admins), so a tool reads and writes exactly what its user owns.
+ *
+ * An agent in a space (`context.space`, set by `buildAgentContext` from the
+ * membership read for the turn) gets a shared principal with the member's
+ * role, so `contentRepos` hands its tools the space's rows by that role.
  */
-export function agentPrincipal(context: Pick<AgentContext, 'userId' | 'workspaceId'>): Principal {
+export function agentPrincipal(context: Pick<AgentContext, 'userId' | 'workspaceId'> & { space?: AgentContext['space'] }): Principal {
   if (!context.userId) {
     throw new Error('Agent context has no userId: a tool reading user data needs the user it works for');
   }
-  return {
-    kind: 'user',
+  const base = {
+    kind: 'user' as const,
     userId: context.userId,
     username: context.userId,
     isAdmin: false,
     sessionToken: null,
     roles: ['user'],
-    workspaceId: context.workspaceId ?? null,
   };
+  if (context.space) {
+    return {
+      ...base,
+      workspaceId: context.space.workspaceId,
+      workspaceKind: 'shared',
+      spaceRole: context.space.role,
+      spaceScope: context.space.scope,
+      spaceArchived: false,
+    };
+  }
+  return { ...base, workspaceId: context.workspaceId ?? null, workspaceKind: 'personal' };
 }
 
 /** True for any principal the rest of the system should consider authenticated. */

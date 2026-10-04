@@ -35,7 +35,7 @@ function ctx(over: Partial<TriggerContext> = {}): TriggerContext {
   return over as TriggerContext;
 }
 function hook(over: Partial<Hook> = {}): Hook {
-  return { id: 'hook-1', userId: 'user-1', sessionId: null, ...over } as Hook;
+  return { id: 'hook-1', userId: '11111111-1111-4111-8111-111111111111', sessionId: null, ...over } as Hook;
 }
 
 describe('resolveHookSessionId', () => {
@@ -106,7 +106,7 @@ describe('executeSpawnAgent: role heartbeat', () => {
     expect(call.role).toBe('coding');
     expect(call.task).toBe('Role heartbeat: ready tasks…');
     expect(call.overrides).toEqual({ extraToolIds: ['tasks'] });
-    expect(call.context).toMatchObject({ sessionId: 'hook-sess', userId: 'user-1', workspaceId: 'ws-1', role: 'coding', attended: false, root: false });
+    expect(call.context).toMatchObject({ sessionId: 'hook-sess', userId: '11111111-1111-4111-8111-111111111111', workspaceId: 'ws-1', role: 'coding', attended: false, root: false });
   });
 
   test('refuses a role heartbeat that did not come through the gate (manual trigger, forged flags)', async () => {

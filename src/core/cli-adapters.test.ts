@@ -1,7 +1,7 @@
 import { parse as parseToml } from 'smol-toml';
 import { execFile } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CLIArgumentBuilder, discoverCodexMcpServers, injectVibeMcpServer, resolveClaudePermissionMode, resolveCodexSandboxMode, resolveVibeMode } from './cli-adapters';
+import { assertCliSpaceMode, CLI_SPACE_MODES, CLIArgumentBuilder, discoverCodexMcpServers, injectVibeMcpServer, resolveClaudePermissionMode, resolveCodexSandboxMode, resolveVibeMode } from './cli-adapters';
 
 vi.mock('node:child_process', () => ({ execFile: vi.fn() }));
 type ExecCb = (err: Error | null, stdout: string, stderr: string) => void;
@@ -229,6 +229,35 @@ describe('run-scoped CLI configuration', () => {
     const agy = builder.build('Antigravity', 'task', { permissionMode: 'full' }, [], null, 100, 'test', connection);
     expect(agy.args).toContain('plan');
     expect(agy.args).not.toContain('--dangerously-skip-permissions');
+  });
+
+  // Coworking §5.6: a CLI model runs in a space only in its adapter's
+  // declared space mode, where its native tools stay behind Octipus's
+  // decision path; one without such a mode is refused.
+  describe('in a shared space', () => {
+    const inSpace = { ...connection, planMode: false, space: true };
+    it('Claude runs in permission mode default with the stdio permission tool and no pre-approved tools', () => {
+      const claude = builder.build('Claude Code', 'task', { permissionMode: 'full', allowedTools: ['Bash', 'Edit'] }, [], null, 100, 'test', inSpace);
+      expect(claude.args[claude.args.indexOf('--permission-mode') + 1]).toBe('default');
+      expect(claude.args[claude.args.indexOf('--permission-prompt-tool') + 1]).toBe('stdio');
+      expect(claude.args).not.toContain('--allowedTools');
+      expect(claude.args).not.toContain('bypassPermissions');
+    });
+    it('Codex runs in the read-only sandbox whatever the model row says', () => {
+      const codex = builder.build('Codex CLI', 'task', { permissionMode: 'full' }, [], null, 100, 'test', inSpace);
+      expect(codex.args[codex.args.indexOf('--sandbox') + 1]).toBe('read-only');
+    });
+    it('Antigravity runs in plan mode, never with skipped permissions', () => {
+      const agy = builder.build('Antigravity', 'task', { permissionMode: 'full' }, [], null, 100, 'test', inSpace);
+      expect(agy.args[agy.args.indexOf('--mode') + 1]).toBe('plan');
+      expect(agy.args).not.toContain('--dangerously-skip-permissions');
+    });
+    it('Mistral Vibe declares no space mode and is refused', () => {
+      expect(CLI_SPACE_MODES['Mistral Vibe']).toBeNull();
+      expect(() => builder.build('Mistral Vibe', 'task', {}, [], null, 100, 'test', inSpace)).toThrow(/cannot run in a shared space/);
+      expect(() => assertCliSpaceMode('Mistral Vibe')).toThrow(/cannot run in a shared space/);
+      for (const adapter of ['Claude Code', 'Codex CLI', 'Antigravity']) expect(assertCliSpaceMode(adapter)).toBeTruthy();
+    });
   });
 
   it('an unlimited turn budget passes no --max-turns', () => {

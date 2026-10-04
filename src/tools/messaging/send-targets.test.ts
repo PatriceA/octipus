@@ -38,7 +38,7 @@ vi.mock('@/channels/ownership', async (importOriginal) => ({
   ownerTargets: () => [{ channelType: 'telegram', channelId: 'tg-self', label: 'telegram:tg-self' }],
 }));
 
-const ctx = (attended: boolean, userId = 'user-1'): AgentContext => ({
+const ctx = (attended: boolean, userId = 'user-1'): AgentContext => ({ space: null, trigger: 'user', funding: 'own', 
   id: 'agent', userId, sessionId: 's', role: 'general', root: false, attended,
   model: '', topic: '', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {},
 });

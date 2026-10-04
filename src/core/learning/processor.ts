@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { sessionAudience } from '@/core/agent/audience';
 import { z } from 'zod';
 import type { BackgroundJob } from '@/db/schema/background-jobs';
 import { sessionRepository } from '@/db/repositories/session-repository';
@@ -31,10 +32,14 @@ export async function processLearningJob(job: Pick<BackgroundJob, 'id' | 'userId
     const payload = learningPayloadSchema.parse(job.payload);
     const session = await sessionRepository.findById(payload.sessionId);
     if (!session || session.userId !== job.userId || session.workspaceId !== job.workspaceId) throw new Error('Learning session ownership or workspace changed');
-    // A group-channel thread carries other members' messages in its prompts;
-    // learning from it could file their words as the requester's facts.
-    if (session.groupChannelId) {
-      await backgroundJobRepository.finish(job.id, { status: 'done', stage: 'skipped_group_channel', result: { reason: 'Group channel conversations are not used for learning.', outputs } });
+    // A group-channel thread or a room carries other members' messages in its
+    // prompts (learning from it could file their words as the requester's
+    // facts), and a space session never feeds personal learning (I7).
+    const audience = await sessionAudience(session);
+    if (audience.personalMemoryOff) {
+      const space = audience.kind === 'space' || audience.kind === 'room';
+      await backgroundJobRepository.finish(job.id, { status: 'done', stage: space ? 'skipped_space' : 'skipped_group_channel', result: {
+        reason: space ? 'Conversations in a shared space are not used for personal learning.' : 'Group channel conversations are not used for learning.', outputs } });
       return;
     }
     let workspaceId = job.workspaceId;

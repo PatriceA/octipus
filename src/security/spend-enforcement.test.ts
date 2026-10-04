@@ -79,7 +79,7 @@ describe('gate: dollar spend budget', () => {
     const { seedSession } = await import('@/test-helpers/multiuser-fixtures');
     const sess = await seedSession({ userId: aliceId });
 
-    const err = await new AgentManager().spawn({ sessionId: sess.id, userId: aliceId, role: 'general' })
+    const err = await new AgentManager().spawn({ workspaceId: null, space: null, trigger: 'user', funding: 'own',  sessionId: sess.id, userId: aliceId, role: 'general' })
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(SpendBudgetExceededError);
     expect((err as InstanceType<typeof SpendBudgetExceededError>).code).toBe('SPEND_BUDGET_EXCEEDED');
@@ -107,7 +107,7 @@ describe('gate: dollar spend budget', () => {
     await upsertBudget({ userId: bobId, scopeKind: 'role', scopeRef: 'general', period: 'day', limitUsd: 2 });
 
     // No role given: the worker runs as 'general', so that budget applies.
-    const err = await new AgentManager().spawn({ sessionId: sess.id, userId: bobId }).catch((e: unknown) => e);
+    const err = await new AgentManager().spawn({ workspaceId: null, space: null, trigger: 'user', funding: 'own',  sessionId: sess.id, userId: bobId }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(SpendBudgetExceededError);
     expect((err as InstanceType<typeof SpendBudgetExceededError>).reason.scopeKind).toBe('role');
   });
@@ -123,7 +123,7 @@ describe('gate: dollar spend budget', () => {
       const { AgentManager } = await import('@/core/agent-manager');
       const { seedSession } = await import('@/test-helpers/multiuser-fixtures');
       const sess = await seedSession({ userId: aliceId });
-      const worker = await new AgentManager().spawn({ sessionId: sess.id, userId: aliceId, model: 'test-model' });
+      const worker = await new AgentManager().spawn({ workspaceId: null, space: null, trigger: 'user', funding: 'own',  sessionId: sess.id, userId: aliceId, model: 'test-model' });
       expect(worker.getContext().userId).toBe(aliceId);
     } finally {
       await executeRaw('ALTER TABLE spend_budgets_off RENAME TO spend_budgets');
@@ -139,7 +139,7 @@ describe('gate: dollar spend budget', () => {
     await seedUsers([{ id: carolId, username: 'carol' }]);
     const sess = await seedSession({ userId: carolId });
     const { AgentManager } = await import('@/core/agent-manager');
-    const worker = await new AgentManager().spawn({ sessionId: sess.id, userId: carolId, model: 'test-model' });
+    const worker = await new AgentManager().spawn({ workspaceId: null, space: null, trigger: 'user', funding: 'own',  sessionId: sess.id, userId: carolId, model: 'test-model' });
 
     // The budget is spent after the spawn, i.e. mid-run.
     const { upsertBudget, _resetSpendBudgetsForTests } = await import('@/security/spend-budgets');
@@ -170,7 +170,7 @@ describe('gate: dollar spend budget', () => {
     await seedUsers([{ id: daveId, username: 'dave' }]);
     const sess = await seedSession({ userId: daveId });
     const { AgentManager } = await import('@/core/agent-manager');
-    const worker = await new AgentManager().spawn({ sessionId: sess.id, userId: daveId, model: 'test-model' });
+    const worker = await new AgentManager().spawn({ workspaceId: null, space: null, trigger: 'user', funding: 'own',  sessionId: sess.id, userId: daveId, model: 'test-model' });
 
     // Spent, so the check will throw once it is released.
     const { upsertBudget, _resetSpendBudgetsForTests } = await import('@/security/spend-budgets');
