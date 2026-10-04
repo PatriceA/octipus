@@ -398,6 +398,7 @@ describe('createSpawnChildTool', () => {
     return {
       id: 'parent-1',
       rootSessionId: '00000000-0000-0000-0000-000000000000',
+      userId: 'user-1',
       parentNodeId: null,
       kind: 'root',
       depth: 0,
@@ -672,6 +673,7 @@ describe('createSpawnChildTool', () => {
     return {
       id: 'agent-1',
       rootSessionId: '00000000-0000-0000-0000-000000000000',
+      userId: 'user-1',
       parentNodeId: 'parent-0',
       kind: 'agent',
       depth: 1,

@@ -35,11 +35,17 @@ export function connectEventBridge(hub: GatewayHub): () => void {
 
     const unsubAgent = agentManager.onEvent((event: AgentEvent) => {
       // AgentEvent carries { type, agentId, data, timestamp } — no userId/
-      // sessionId (those are undefined here; agent lifecycle events reach
-      // clients via the root agent bridge's worker_spawned/worker_completed
-      // → agent.spawned/agent.completed mapping above). The worker's emitted
+      // sessionId; the owner comes from the agent's context. The worker's emitted
       // `type` union is thought|action|observation|error|complete|
       // status_change|permission_request.
+      //
+      // Every event goes to the agent's owner only. An event whose agent is
+      // already gone has no owner to go to and is dropped, never broadcast.
+      const ctx = agentManager.get(event.agentId)?.getContext();
+      if (!ctx) {
+        coreLogger.debug({ agentId: event.agentId, type: event.type }, 'agent event after agent removal — dropped');
+        return;
+      }
 
       // Filter `thought` events down to the iteration-update sub-shape so
       // chats and TUIs can show a "iter N/M" tick while the agent is
@@ -51,11 +57,6 @@ export function connectEventBridge(hub: GatewayHub): () => void {
         if (data?.type === 'text_delta' && typeof data.delta === 'string') {
           // Scoped to the owner and session: the hub filters by userId, the
           // TUI by envelope sessionId.
-          const ctx = agentManager.get(event.agentId)?.getContext();
-          // An unscoped delta would pass the hub's owner filter and every TUI's
-          // session filter — a trailing chunk from an already-removed agent is
-          // dropped, not broadcast.
-          if (!ctx) return;
           hub.publishEvent({
             type: 'chat.delta',
             source: `agent:${event.agentId}`,
@@ -69,6 +70,7 @@ export function connectEventBridge(hub: GatewayHub): () => void {
           hub.publishEvent({
             type: 'agent.iteration',
             source: `agent:${event.agentId}`,
+            userId: ctx.userId,
             payload: { agentId: event.agentId, iteration: data.iteration },
           });
         }
@@ -79,6 +81,7 @@ export function connectEventBridge(hub: GatewayHub): () => void {
           hub.publishEvent({
             type: 'agent.blocked',
             source: `agent:${event.agentId}`,
+            userId: ctx.userId,
             payload: { agentId: event.agentId, reason: data.reason, blockedForMs: data.blockedForMs ?? 0 },
           });
         }
@@ -95,6 +98,7 @@ export function connectEventBridge(hub: GatewayHub): () => void {
       hub.publishEvent({
         type: subtype,
         source: `agent:${event.agentId}`,
+        userId: ctx.userId,
         payload: typeof data === 'object' && data !== null && !Array.isArray(data)
           ? { agentId: event.agentId, ...(data as Record<string, unknown>) }
           : data,
@@ -156,7 +160,7 @@ export function connectEventBridge(hub: GatewayHub): () => void {
 /**
  * Map root agent event types to gateway event type namespaces.
  */
-function mapTurnEventType(type: string): import('./protocol').GatewayEventType {
+function mapTurnEventType(type: string): import('./protocol').UserEventType {
   switch (type) {
     case 'chat_response': return 'chat.response';
     case 'status_update': return 'rootAgent.status';
@@ -171,7 +175,7 @@ function mapTurnEventType(type: string): import('./protocol').GatewayEventType {
 }
 
 /** Keep background replies in the same wire shape as chat.send responses. */
-export function turnEventToGateway(event: TurnEvent): Omit<import('./protocol').GatewayEvent, 'id' | 'timestamp'> {
+export function turnEventToGateway(event: TurnEvent): Omit<import('./protocol').UserGatewayEvent, 'id' | 'timestamp'> {
   return { type: mapTurnEventType(event.type), source: 'root', userId: event.userId, sessionId: event.sessionId,
     payload: event.type === 'chat_response' ? { response: event.data } : event.data };
 }

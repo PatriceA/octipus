@@ -7,6 +7,21 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### Security
+
+- **Events reach their own user only.** Every gateway and turn event now names
+  its user, including swarm, pipeline and agent-stream events that used to go
+  out user-less to every signed-in browser. `/ws` and `/gateway` deliver an
+  event to its user's connections only, whatever the connection's trust level
+  or admin rights.
+- **Live-artifact events go to the artifact only.** Artifact updates are sent
+  to connections subscribed to `artifact:<id>` after an access check (the
+  workspace owner), and the gateway now accepts the `artifact_token` sign-in
+  the embed SDK sends; such a connection can follow its one artifact and
+  nothing else.
+- **The artifacts tool uses the agent's workspace.** It no longer guesses one
+  of the user's workspaces; without a workspace in context it refuses.
+
 ## v0.6.0 — Shared work, budgets, and stronger review (2026-10-01)
 
 Octipus 0.6.0 brings a shared task board for people and role agents, dollar

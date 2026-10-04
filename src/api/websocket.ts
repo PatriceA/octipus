@@ -109,8 +109,8 @@ export function setupWebSocket(app: Elysia): void {
       // Subscribe to root agent events for this user
       const rootAgent = getAgentService();
       const unsubscribeRoot = rootAgent.onEvent((event) => {
-        // Only send events belonging to this user
-        if (event.userId && event.userId !== session.userId) return;
+        // Only this user's events, whatever their admin rights.
+        if (event.userId !== session.userId) return;
         safeSend(turnEventMessage(event));
         // Narrate lifecycle to voice clients — decoupled from the slow reply path,
         // so long agent turns get acked/announced instead of read back stale.
@@ -128,7 +128,7 @@ export function setupWebSocket(app: Elysia): void {
       for (const eventName of ['enqueued', 'processing', 'completed', 'failed'] as const) {
         const handler = (documentId: string, errorOrUserId?: string, maybeUserId?: string) => {
           const docUserId = eventName === 'failed' ? maybeUserId : errorOrUserId;
-          if (docUserId && docUserId !== session.userId) return;
+          if (docUserId !== session.userId) return;
           safeSend({
             type: 'document_event',
             event: eventName,
@@ -160,7 +160,7 @@ export function setupWebSocket(app: Elysia): void {
         const { getGatewayHub } = await import('@/core/gateway/hub');
         const hub = getGatewayHub();
         unsubscribeSwarm = hub.eventBus.subscribe('swarm.*', (event) => {
-          if (event.userId && event.userId !== session.userId) return;
+          if (event.userId !== session.userId) return;
           safeSend({
             type: 'swarm_event',
             event: event.type,

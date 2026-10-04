@@ -891,6 +891,7 @@ export class PipelineManager {
     const rootAgent = getAgentService();
     rootAgent['emit']({
       type: 'pipeline_event',
+      userId,
       sessionId,
       data: {
         event: 'pipeline_created',
@@ -1550,6 +1551,7 @@ export class PipelineManager {
 
     rootAgent['emit']({
       type: 'pipeline_event',
+      userId: pipeline.userId,
       sessionId,
       // The UI and the notification below say the same thing the row does — a
       // run that stopped short must not arrive as a completion anywhere.
@@ -2414,6 +2416,7 @@ export class PipelineManager {
 
     rootAgent['emit']({
       type: 'pipeline_event',
+      userId: pipeline.userId,
       sessionId,
       data: { event: 'stage_started', pipelineId: pipeline.id, stageId: node.id, name: node.name, role: node.role, index: node.ordinal },
       timestamp: new Date(),
@@ -2542,6 +2545,7 @@ export class PipelineManager {
 
       rootAgent['emit']({
         type: 'pipeline_event',
+        userId: pipeline.userId,
         sessionId,
         data: {
           event: 'stage_completed',
@@ -2680,6 +2684,7 @@ export class PipelineManager {
 
       rootAgent['emit']({
         type: 'pipeline_event',
+        userId: pipeline.userId,
         sessionId: pipeline.sessionId,
         data: { event: 'plan_approval_required', pipelineId: pipeline.id, stageId: node.id, items: items.length },
         timestamp: new Date(),
@@ -2743,6 +2748,7 @@ export class PipelineManager {
 
     getAgentService()['emit']({
       type: 'pipeline_event',
+      userId: pipeline.userId,
       sessionId: pipeline.sessionId,
       data: {
         event: 'plan_item_started',
@@ -2814,6 +2820,7 @@ export class PipelineManager {
 
     rootAgent['emit']({
       type: 'pipeline_event',
+      userId: pipeline.userId,
       sessionId: pipeline.sessionId,
       // `fields` rides along so a client can draw a form. The answer comes back
       // as text either way — see `humanFields`, which is advisory by design.
@@ -2880,6 +2887,7 @@ export class PipelineManager {
 
     rootAgent['emit']({
       type: 'pipeline_event',
+      userId: pipeline.userId,
       sessionId: pipeline.sessionId,
       data: { event: 'stage_completed', pipelineId: pipeline.id, stageId: node.id, name: node.name },
       timestamp: new Date(),
@@ -2910,6 +2918,7 @@ export class PipelineManager {
 
     rootAgent['emit']({
       type: 'pipeline_event',
+      userId: pipeline.userId,
       sessionId: pipeline.sessionId,
       data: { event: 'approval_required', pipelineId: pipeline.id, stageId: node.id, name: node.name },
       timestamp: new Date(),
@@ -2957,6 +2966,7 @@ export class PipelineManager {
 
     rootAgent['emit']({
       type: 'pipeline_event',
+      userId: pipeline.userId,
       sessionId: pipeline.sessionId,
       data: {
         event: 'qa_escalation', pipelineId: pipeline.id, qaStageId: node.id, attempts, issues: qaResult.issues,

@@ -27,6 +27,18 @@ export interface ConnectionContext {
   connectedAt: number;
   lastActivityAt: number;
   eventSubscriptions: Set<string>;
+  /**
+   * Resources this connection receives through `GatewayHub.publishToResource`
+   * (`artifact:<id>`, …). Filled only by a `subscribe` whose access check
+   * passed — never by default, never by trust level.
+   */
+  resources: Set<string>;
+  /**
+   * Set on a connection that signed in with an `artifact_token`: the one
+   * artifact it may subscribe to. Such a connection is not a user — it may
+   * only ping and (un)subscribe that artifact's resource.
+   */
+  artifactId?: string;
   metadata: Record<string, unknown>;
 }
 
@@ -122,21 +134,60 @@ export type GatewayEventType =
   // bus. Declaring it here described a second, parallel error channel that has
   // never existed.
 
-export interface GatewayEvent {
+/**
+ * The event types that may travel without a user, each with the reason. Every
+ * other event names the user it belongs to, and the hub delivers it to that
+ * user's connections only, whatever their trust level. None of these reach a
+ * client through the user rule: they stay on the internal bus, or go to a
+ * resource (`artifact:<id>`) through `GatewayHub.publishToResource`.
+ */
+export const GLOBAL_EVENT_TYPES = {
+  audit:
+    'Connection-manager audit signals. Pre-auth ones (rejected or failed connections) have no user yet. Internal bus only, never sent to a client.',
+  'extension.notify':
+    'Host extensions are files the operator installs (~/.octipus/extensions, <cwd>/.octipus/extensions); there is no installing user. Internal bus only (other extensions), never sent to a client.',
+  'artifact.data_updated':
+    'Belongs to an artifact, not a user: sent to the resource artifact:<id> only, to connections that passed the artifact access check.',
+  'artifact.version_updated':
+    'Belongs to an artifact, not a user: sent to the resource artifact:<id> only, to connections that passed the artifact access check.',
+  'artifact.source_error':
+    'Belongs to an artifact, not a user: sent to the resource artifact:<id> only, to connections that passed the artifact access check.',
+} as const satisfies Partial<Record<GatewayEventType, string>>;
+
+export type GlobalEventType = keyof typeof GLOBAL_EVENT_TYPES;
+export type UserEventType = Exclude<GatewayEventType, GlobalEventType>;
+
+export function isGlobalEventType(type: string): type is GlobalEventType {
+  return Object.hasOwn(GLOBAL_EVENT_TYPES, type);
+}
+
+interface GatewayEventBase {
   id: string;
-  type: GatewayEventType;
   source: string;
-  userId?: string;
   sessionId?: string;
   timestamp: number;
   payload: unknown;
 }
 
+/** An event that belongs to one user and is delivered to that user only. */
+export interface UserGatewayEvent extends GatewayEventBase {
+  type: UserEventType;
+  userId: string;
+}
+
+/** One of `GLOBAL_EVENT_TYPES`: may carry no user, never delivered by user. */
+export interface GlobalGatewayEvent extends GatewayEventBase {
+  type: GlobalEventType;
+  userId?: string;
+}
+
+export type GatewayEvent = UserGatewayEvent | GlobalGatewayEvent;
+
 // ── Client → Gateway Messages ─────────────────────────────────────
 
 export const AuthMessageSchema = z.object({
   type: z.literal('auth'),
-  method: z.enum(['session_token', 'api_key', 'hmac', 'local']),
+  method: z.enum(['session_token', 'api_key', 'hmac', 'local', 'artifact_token']),
   credentials: z.record(z.string(), z.unknown()),
   clientType: z.enum(['webchat', 'tui', 'channel', 'mobile', 'acp', 'agent']),
   clientVersion: z.string().optional(),
@@ -178,14 +229,28 @@ export const CommandSchema = z.object({
   sessionId: z.string().uuid().optional(),
 });
 
+/** A resource a connection can subscribe to, e.g. `artifact:<uuid>`. */
+const ResourceSchema = z.string().regex(/^[a-z]+:[A-Za-z0-9_-]{1,128}$/, 'resource must look like <kind>:<id>');
+
+/**
+ * `patterns` are event-type patterns over the connection's own events.
+ * `resources` ask for a resource's events; each is access-checked and answered
+ * with `subscribed` or a `FORBIDDEN` error.
+ */
 export const SubscribeSchema = z.object({
   type: z.literal('subscribe'),
-  patterns: z.array(z.string().min(1).max(100)).min(1).max(50),
+  patterns: z.array(z.string().min(1).max(100)).max(50).optional(),
+  resources: z.array(ResourceSchema).max(50).optional(),
+}).refine(m => (m.patterns?.length ?? 0) + (m.resources?.length ?? 0) > 0, {
+  message: 'subscribe needs at least one pattern or resource',
 });
 
 export const UnsubscribeSchema = z.object({
   type: z.literal('unsubscribe'),
-  patterns: z.array(z.string().min(1).max(100)).min(1).max(50),
+  patterns: z.array(z.string().min(1).max(100)).max(50).optional(),
+  resources: z.array(ResourceSchema).max(50).optional(),
+}).refine(m => (m.patterns?.length ?? 0) + (m.resources?.length ?? 0) > 0, {
+  message: 'unsubscribe needs at least one pattern or resource',
 });
 
 export const PermissionRespondSchema = z.object({
@@ -310,6 +375,12 @@ export interface PongMessage {
   serverTime: string;
 }
 
+/** Acknowledges the resources of a `subscribe` that passed the access check. */
+export interface SubscribedMessage {
+  type: 'subscribed';
+  resources: string[];
+}
+
 export interface EventsDroppedMessage {
   type: 'events_dropped';
   count: number;
@@ -323,6 +394,7 @@ export type GatewayMessage =
   | CommandResultMessage
   | ErrorMessage
   | PongMessage
+  | SubscribedMessage
   | EventsDroppedMessage;
 
 // ── Protocol Version ──────────────────────────────────────────────

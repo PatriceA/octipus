@@ -12,6 +12,7 @@ function makeContext(overrides?: Partial<ConnectionContext>): ConnectionContext 
     connectedAt: Date.now(),
     lastActivityAt: Date.now(),
     eventSubscriptions: new Set(['*']),
+    resources: new Set(),
     metadata: {},
     ...overrides,
   };

@@ -234,6 +234,7 @@ export class ConnectionManager {
     let userId: string | undefined;
     let trustLevel: TrustLevel = 'user';
     let isAdmin = false;
+    let artifactId: string | undefined;
 
     try {
       switch (msg.method) {
@@ -344,6 +345,34 @@ export class ConnectionManager {
           return;
         }
 
+        case 'artifact_token': {
+          // The live-artifact SDK inside an embed page. The token is the one
+          // minted for that page (artifact-pages.ts); the connection is a
+          // viewer of that one artifact, not a user — the hub lets it ping
+          // and subscribe to `artifact:<id>` only.
+          const aid = msg.credentials.artifactId;
+          const token = msg.credentials.token;
+          if (typeof aid !== 'string' || !aid || typeof token !== 'string' || !token) {
+            this.sendAuthError(conn, 'Missing artifact id or token');
+            return;
+          }
+          const { verifyArtifactToken } = await import('@/core/artifacts/token');
+          const payload = verifyArtifactToken(token, { aid });
+          if (!payload) {
+            this.sendAuthError(conn, 'Invalid or expired artifact token');
+            return;
+          }
+          const { artifactsRepository } = await import('@/db/repositories/artifacts-repository');
+          const artifact = await artifactsRepository.getById(aid);
+          if (!artifact || artifact.workspaceId !== payload.wid) {
+            this.sendAuthError(conn, 'Artifact not found');
+            return;
+          }
+          artifactId = aid;
+          userId = `artifact:${aid}`;
+          break;
+        }
+
         default:
           this.sendAuthError(conn, `Unknown auth method: ${msg.method}`);
           return;
@@ -354,9 +383,10 @@ export class ConnectionManager {
         return;
       }
 
-      // Check per-user budget
+      // Check per-user budget. Artifact viewers share one id per artifact and
+      // are not a user; the per-IP budget bounds them.
       const userConns = this.byUser.get(userId);
-      if (userConns && userConns.size >= this.budget.maxPerUser) {
+      if (artifactId === undefined && userConns && userConns.size >= this.budget.maxPerUser) {
         this.sendAuthError(conn, 'Too many connections');
         this.onAuditEvent?.('gateway.connection.rejected', { userId, reason: 'user_budget' });
         return;
@@ -381,7 +411,9 @@ export class ConnectionManager {
         ip,
         connectedAt: Date.now(),
         lastActivityAt: Date.now(),
-        eventSubscriptions: new Set(['*']), // Default: receive all events
+        eventSubscriptions: new Set(['*']), // Default: all of this user's own events
+        resources: new Set(),
+        ...(artifactId !== undefined ? { artifactId } : {}),
         metadata: { isAdmin, clientVersion: msg.clientVersion },
       };
 
@@ -394,7 +426,7 @@ export class ConnectionManager {
         type: 'auth_ok',
         connectionId,
         userId,
-        capabilities: this.getCapabilities(trustLevel, isAdmin),
+        capabilities: artifactId !== undefined ? ['subscribe', 'ping'] : this.getCapabilities(trustLevel, isAdmin),
         serverTime: new Date().toISOString(),
         serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       });

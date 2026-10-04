@@ -40,6 +40,7 @@ Clients connect to `ws://host:port/gateway` and must send an auth message within
 | Channel adapters | `hmac` (per-adapter key) | `system` |
 | Mobile/IDE | `session_token` or `api_key` | `user` |
 | API/System | `api_key` (MASTER_KEY) | `system` |
+| Live-artifact SDK (embed page) | `artifact_token` (`{ artifactId, token }`, minted per page view) | `user`; may only ping and (un)subscribe `artifact:<id>` of that one artifact |
 
 ### Connection Budgets
 
@@ -58,8 +59,8 @@ Clients connect to `ws://host:port/gateway` and must send an auth message within
 | `chat.interject` | Side-channel question sent while root agent is running (non-blocking) |
 | `chat.steer` | Inject a message into the running root agent turn to change course mid-flight |
 | `command` | Execute a gateway command (e.g., `/expert`, `/status`) |
-| `subscribe` | Subscribe to event patterns (e.g., `agent.*`) |
-| `unsubscribe` | Remove event subscriptions |
+| `subscribe` | Subscribe to event patterns over your own events (e.g., `agent.*`) and/or `resources` (e.g., `artifact:<id>`), each access-checked |
+| `unsubscribe` | Remove event patterns and/or resources |
 | `permission.respond` | Approve/deny a permission request |
 | `approval.respond` | Approve/deny a pipeline approval |
 | `agent.stop` | Stop a running agent (admin/local only) |
@@ -75,6 +76,7 @@ Clients connect to `ws://host:port/gateway` and must send an auth message within
 | `command.result` | Result of a command execution |
 | `error` | Error message (rate limit, validation, etc.) |
 | `pong` | Heartbeat response with server time |
+| `subscribed` | The resources of a `subscribe` that passed the access check (a refused one answers `error` `FORBIDDEN`) |
 | `events_dropped` | Notification that events were dropped from the replay buffer |
 
 ## Event Bus
@@ -84,7 +86,8 @@ The `GatewayEventBus` is a typed pub/sub system that replaces scattered EventEmi
 - **Pattern matching**: Subscribe to `agent.*`, `swarm.*`, `chat.message`, or `*` (all events)
 - **Replay buffer**: Last 200 events per session for reconnection (`swarm.*` events included)
 - **Error isolation**: One handler throwing doesn't break other handlers
-- **Security filtering**: Events are only delivered to connections authorized to see them
+- **Per-user delivery**: every event names its user (`GatewayEvent.userId` is required) and goes to that user's connections only — trust level and admin rights widen nothing. The only user-less types are listed in `GLOBAL_EVENT_TYPES` (`protocol.ts`) with their reason, and none of them reach a client by user. The legacy `/ws` socket applies the same rule.
+- **Resource delivery**: `hub.publishToResource(resource, message)` sends to connections whose `ConnectionContext.resources` holds the resource, outside the bus and the user rule. A connection joins a resource only through a `subscribe` that `canSubscribeToResource` (`resource-access.ts`) accepts: `artifact:<id>` for the owner of the artifact's workspace, or for an `artifact_token` connection of that artifact. Live-artifact events (`artifact.data_updated`, `artifact.version_updated`, `artifact.source_error`) travel this way.
 
 ### Event Families
 

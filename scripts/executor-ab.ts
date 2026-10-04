@@ -126,10 +126,11 @@ interface ArmResult {
 }
 
 /** A synthetic depth-0 root agent to hang the spawn off. */
-function makeParent(sessionId: string, signal: AbortSignal): AgentNode {
+function makeParent(sessionId: string, userId: string, signal: AbortSignal): AgentNode {
   return {
     id: `ab-parent-${randomUUID().slice(0, 8)}`,
     rootSessionId: sessionId,
+    userId,
     parentNodeId: null,
     kind: 'root',
     depth: 0,
@@ -172,7 +173,7 @@ async function runArm(
   // back `cancelled` with arm A's node id, and the comparison then reported a
   // free executor that had never run. Separate roots is also the honest model
   // of the experiment — two independent runs of one task.
-  const parent = makeParent(`${sessionId}`, ac.signal);
+  const parent = makeParent(`${sessionId}`, userId, ac.signal);
   const spawner = getSwarmSpawner();
 
   // Persist the parent as a real depth-0 node. A production root agent
