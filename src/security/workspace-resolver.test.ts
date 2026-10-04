@@ -2,18 +2,17 @@
  * Phase 4 — workspace-resolver tests.
  *
  * Verifies that:
- *   - flag off → workspaceId always null
- *   - flag on, no header → user gets their default workspace lazily
- *   - flag on, header is "all" / "default" → default workspace
- *   - flag on, header is owned UUID → that workspace
- *   - flag on, header is cross-tenant UUID → collapses to default
- *   - flag on, header is owned slug → that workspace
- *   - flag on, header is unknown slug → collapses to default
- *   - anonymous principal → workspaceId null even when flag is on
+ *   - no header → user gets their default workspace lazily
+ *   - header is "all" / "default" → default workspace
+ *   - header is owned UUID → that workspace
+ *   - header is cross-tenant UUID → collapses to default
+ *   - header is owned slug → that workspace
+ *   - header is unknown slug → collapses to default
+ *   - anonymous principal → workspaceId null
  *
  * Backed by ephemeral PGlite — no Docker.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -60,11 +59,6 @@ afterAll(async () => {
   await closeDb();
 });
 
-beforeEach(async () => {
-  const { getConfig } = await import('@/config');
-  getConfig().multiuser.orgWorkspaces = false;
-});
-
 const alicePrincipal = {
   kind: 'user' as const,
   userId: aliceId,
@@ -84,29 +78,14 @@ const anonPrincipal = {
   isAdmin: false,
 };
 
-describe('flag-off behavior', () => {
-  test('flag off → real user gets default workspace, header ignored', async () => {
-    const { resolveWorkspace } = await import('@/security/workspace-resolver');
-    const r1 = await resolveWorkspace(alicePrincipal, null);
-    expect(r1.workspaceId).toBe(aliceDefaultId);
-    expect(r1.isDefault).toBe(true);
-    // Header is ignored when switching is disabled — still default.
-    expect((await resolveWorkspace(alicePrincipal, aliceProjectXId)).workspaceId).toBe(aliceDefaultId);
-    expect((await resolveWorkspace(alicePrincipal, 'project-x')).workspaceId).toBe(aliceDefaultId);
-  });
-
-  test('flag off → anonymous still gets workspaceId null', async () => {
+describe('non-user principals', () => {
+  test('anonymous gets workspaceId null', async () => {
     const { resolveWorkspace } = await import('@/security/workspace-resolver');
     expect((await resolveWorkspace(anonPrincipal, null)).workspaceId).toBeNull();
   });
 });
 
-describe('flag-on resolution', () => {
-  beforeEach(async () => {
-    const { getConfig } = await import('@/config');
-    getConfig().multiuser.orgWorkspaces = true;
-  });
-
+describe('resolution', () => {
   test('no header → default workspace', async () => {
     const { resolveWorkspace } = await import('@/security/workspace-resolver');
     const r = await resolveWorkspace(alicePrincipal, null);

@@ -357,7 +357,6 @@ MULTIUSER=true
 MULTIUSER_AUDIT_SHADOW=true
 MULTIUSER_ENFORCE_PERMISSIONS=true
 MULTIUSER_RLS=true
-MULTIUSER_ORG_WORKSPACES=true
 SHELL_SANDBOX=auto         # 'required' once bwrap is installed in the host
 DOCKER_ISOLATION=enforce
 ```
@@ -651,9 +650,8 @@ scope, SCIM provisioning, billing hooks, the tree-sitter
 highlighter, vim named registers, scrollable messages pane, and
 the `/workspace` reconnect.
 
-**Prerequisites.** Multi-user enabled (`MULTIUSER=true`) and the
-`multiuser.orgWorkspaces` flag on (Settings → Configuration →
-Multi-user → Org/Workspaces). At least one admin user available.
+**Prerequisites.** At least one admin user available. Workspaces are
+always on; nothing to enable.
 
 ### 8.1 Web UI — workspace picker
 
@@ -688,9 +686,7 @@ Multi-user → Org/Workspaces). At least one admin user available.
    (or directly via `POST /api/admin/orgs/<id>/members` with a
    user id). The expanded members list updates on the next page
    refresh.
-6. Disable `multiuser.orgWorkspaces` in Settings; reload
-   `/admin/orgs`. The page now shows the "Multi-user orgs are
-   disabled" hint instead of crashing. Re-enable to continue.
+6. With a non-admin session, `GET /api/admin/orgs` answers 403.
 
 ### 8.3 Org-shared models + skills
 

@@ -15,9 +15,8 @@
  * Required env: MASTER_KEY, JWT_SECRET, SESSION_SECRET, plus
  * DATABASE_URL (external mode) or DATA_DIR (embedded).
  *
- * Run BEFORE flipping `MULTIUSER_ORG_WORKSPACES=true` if you want
- * existing rows to be visible inside each user's default workspace
- * once the runtime starts filtering by workspace_id. Skipping the
+ * Run it if you want existing rows with no workspace to belong to
+ * each user's default workspace. Skipping the
  * backfill is also fine — rows with NULL workspace_id continue to
  * be visible across every workspace owned by the user (the
  * "user-level" scope), so nothing breaks; the data just isn't

@@ -3,6 +3,7 @@ import { getConnectorRegistry } from '@/connectors/registry';
 import { ATLASSIAN_CAPABILITIES, CapabilityMappingError, type ConnectorCapability, mapArguments, matchRemoteTool } from '@/core/connectors/capabilities';
 import type { AgentContext, ToolManifest } from '@/core/types';
 import type { MCPToolDefinition } from '@/mcp/protocol';
+import { isRealUserId } from '@/security/principal';
 import { BaseTool, createParameterSchema } from '../base-tool';
 
 /**
@@ -95,7 +96,8 @@ export class AtlassianTool extends BaseTool {
     args: Record<string, unknown>,
     context: AgentContext,
   ): Promise<unknown> {
-    if (!context.userId || context.userId === 'system' || context.userId === 'local') {
+    // The connection is per-user: no real user (a system job) → refuse.
+    if (!isRealUserId(context.userId)) {
       return { error: 'Atlassian tools need a signed-in user — the connection is per-user.' };
     }
 

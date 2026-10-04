@@ -6,26 +6,20 @@
  * stack: it runs after the principal is established and before
  * scopedRepos touch the database.
  *
- * Resolution order:
+ * Workspaces are always on. Resolution order:
  *
- *   1. If `multiuser.orgWorkspaces` is OFF, ignore the header and
- *      return the user's default workspace. Single-user installs
- *      still need a workspace UUID — features like artifacts have
- *      a `workspace_id` FK and can't run without one. The flag
- *      gates header-driven *switching* between multiple workspaces,
- *      not workspace existence.
- *   2. If the header is absent OR points at the literal string
+ *   1. If the header is absent OR points at the literal string
  *      `"all"`, ensure the user has a default workspace and return
  *      its id. Treating "no header" as "default" is what Phase 3g's
  *      `/api/me/workspaces` endpoint advertises — a fresh user gets
  *      a workspace lazily on first read.
- *   3. If the header is a UUID, accept it only when the workspace
+ *   2. If the header is a UUID, accept it only when the workspace
  *      is owned by the principal. Cross-tenant UUIDs collapse to
  *      the user's default workspace — same enumeration-collapse
  *      pattern as scopedRepos. The route never returns 403; an
  *      attacker can't tell whether the UUID belongs to someone
  *      else or doesn't exist.
- *   4. Otherwise treat the header as a slug and look it up by
+ *   3. Otherwise treat the header as a slug and look it up by
  *      `(user_id, slug)`. Misses fall back to the default
  *      workspace.
  *
@@ -37,7 +31,6 @@
  * default — a follow-up may expand that to "no filter" if the
  * product needs it.
  */
-import { getConfig } from '@/config';
 import { getOrgWorkspaceManager } from '@/security/orgs';
 import type { Principal } from '@/security/principal';
 
@@ -45,7 +38,7 @@ import type { Principal } from '@/security/principal';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface WorkspaceResolution {
-  /** UUID of the workspace to scope to. NULL when feature flag is off. */
+  /** UUID of the workspace to scope to. NULL for non-user principals. */
   workspaceId: string | null;
   /**
    * Whether the resolver actually used the user's default. Useful
@@ -73,13 +66,6 @@ export async function resolveWorkspace(
   }
 
   const mgr = getOrgWorkspaceManager();
-
-  // Single-user mode: ignore header, always use the default workspace.
-  // The flag gates multi-workspace switching, not workspace existence.
-  if (!getConfig().multiuser?.orgWorkspaces) {
-    const def = await mgr.ensureDefaultWorkspace(principal.userId);
-    return { workspaceId: def.id, isDefault: true };
-  }
 
   // Empty / sentinel "all" → default workspace.
   const trimmed = header?.trim();

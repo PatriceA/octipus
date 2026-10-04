@@ -291,13 +291,15 @@ export function createServer() {
       };
     })
     // Phase 4 — workspace resolution. Layered as a second `.derive()`
-    // so the auth branch above stays a flat early-return list. When
-    // `multiuser.orgWorkspaces` is off the resolver returns `{
-    // workspaceId: null }` immediately and the principal passes
-    // through untouched. When on, the resolver maps the
-    // `X-Octipus-Workspace` header (slug, uuid, or "all") to a
-    // workspace id owned by the principal; cross-tenant or unknown
-    // headers collapse to the user's default workspace.
+    // so the auth branch above stays a flat early-return list. The
+    // resolver maps the `X-Octipus-Workspace` header (slug, uuid, or
+    // "all") to a workspace id owned by the principal; cross-tenant or
+    // unknown headers collapse to the user's default workspace.
+    //
+    // Fails closed: a principal without its workspace would read every
+    // workspace's rows (the scoped repositories drop the workspace filter
+    // when there is none), so a resolver failure answers 503 below instead
+    // of continuing unscoped. A derive cannot answer, hence the flag.
     .derive(async ({ request, principal }) => {
       if (!principal || principal.kind === 'anonymous') return {};
       const header = request.headers.get('x-octipus-workspace');
@@ -307,9 +309,14 @@ export function createServer() {
         if (workspaceId === null) return {};
         return { principal: { ...principal, workspaceId } };
       } catch (err) {
-        apiLogger.warn({ err }, 'Workspace resolution failed; proceeding without workspace scope');
-        return {};
+        apiLogger.error({ err, userId: principal.userId }, 'Workspace resolution failed; refusing the request');
+        return { workspaceUnresolved: true };
       }
+    })
+    .onBeforeHandle((ctx) => {
+      if (!(ctx as { workspaceUnresolved?: boolean }).workspaceUnresolved) return;
+      ctx.set.status = 503;
+      return { error: 'Workspace unavailable. Try again shortly.' };
     })
     // Rate limiting on auth endpoints (must be before routes)
     .use(rateLimitMiddleware)

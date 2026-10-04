@@ -1,6 +1,7 @@
 import type { ToolManifest } from '@/core/types';
 import { ProfileRepository } from '@/db/repositories/profile-repository';
 import type { ProfileFact } from '@/db/schema/profiles';
+import { requireRealUserId } from '@/security/principal';
 import { toolLogger } from '@/utils/logger';
 import { BaseTool, createParameterSchema } from '../base-tool';
 
@@ -34,13 +35,9 @@ export class ProfilesTool extends BaseTool {
     };
   }
 
-  private async resolveUserId(context: { userId?: string }): Promise<string> {
-    if (context.userId) return context.userId;
-    // Fallback: fetch the first user from the DB
-    const { userRepository } = await import('@/db/repositories/user-repository');
-    const users = await userRepository.listAll();
-    if (users.length === 0) throw new Error('No users found');
-    return users[0].id;
+  /** Profiles belong to a user: a turn without one (a system job) has none to read. */
+  private resolveUserId(context: { userId?: string }): string {
+    return requireRealUserId(context.userId);
   }
 
   protected async registerTools(): Promise<void> {
@@ -49,7 +46,7 @@ export class ProfilesTool extends BaseTool {
       'List all profiles (people, organizations, pets) for the current user.',
       createParameterSchema({}),
       async (_args, context) => {
-        const userId = await this.resolveUserId(context);
+        const userId = this.resolveUserId(context);
         const profilesList = await this.profileRepo.findByUserId(userId);
 
         if (profilesList.length === 0) {
@@ -79,7 +76,7 @@ export class ProfilesTool extends BaseTool {
         name: { type: 'string', description: 'Profile name (fuzzy search)' },
       }),
       async (args, context) => {
-        const userId = await this.resolveUserId(context);
+        const userId = this.resolveUserId(context);
 
         if (args.id) {
           const profile = await this.profileRepo.findById(args.id as string);
@@ -112,7 +109,7 @@ export class ProfilesTool extends BaseTool {
         is_user_profile: { type: 'boolean', description: 'Set to true if this is the user\'s own profile', default: false },
       }),
       async (args, context) => {
-        const userId = await this.resolveUserId(context);
+        const userId = this.resolveUserId(context);
         const isUserProfile = (args.is_user_profile as boolean) || false;
 
         // If creating a user profile, check if one already exists
@@ -261,7 +258,7 @@ export class ProfilesTool extends BaseTool {
         query: { type: 'string', description: 'Search query (matches name and fact values)', required: true },
       }),
       async (args, context) => {
-        const userId = await this.resolveUserId(context);
+        const userId = this.resolveUserId(context);
         const results = await this.profileRepo.search(userId, args.query as string);
 
         if (results.length === 0) {

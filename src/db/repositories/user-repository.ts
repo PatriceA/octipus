@@ -1,4 +1,5 @@
 import { and, eq } from 'drizzle-orm';
+import { assertDeletable } from '@/security/user-deletion';
 import { dbLogger } from '@/utils/logger';
 import { getDb } from '../postgres';
 import { type ChannelBinding, type NewUser, type User, users } from '../schema/users';
@@ -72,7 +73,9 @@ export class UserRepository {
     return result[0] ?? null;
   }
 
+  /** Every user deletion goes through `assertDeletable`; see security/user-deletion.ts. */
   async delete(id: string): Promise<boolean> {
+    await assertDeletable(id);
     const result = await this.db.delete(users).where(eq(users.id, id)).returning();
     if (result.length > 0) {
       dbLogger.info({ userId: id }, 'User deleted');

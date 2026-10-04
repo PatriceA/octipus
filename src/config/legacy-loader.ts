@@ -152,7 +152,6 @@ export function loadFromEnvLegacy(): Partial<Config> {
       auditShadow: process.env.MULTIUSER_AUDIT_SHADOW !== 'false',
       enforcePermissions: process.env.MULTIUSER_ENFORCE_PERMISSIONS !== 'false',
       rlsEnabled: process.env.MULTIUSER_RLS === 'true',
-      orgWorkspaces: process.env.MULTIUSER_ORG_WORKSPACES === 'true',
       // Falls back to the shipped default EXPLICITLY when the variable is
       // unset. The previous `(process.env.X || '').split(',')` produced `[]`
       // for an unset variable, and `deepMerge` treats an array as a scalar —

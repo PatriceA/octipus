@@ -91,8 +91,8 @@ export const securityConfigSchema = z.object({
   shellSandbox: z.enum(['off', 'auto', 'required']).default('off'),
   vaultDenyUnscopedSecrets: z.boolean().default(false),
   /**
-   * Docker tool per-user isolation — Phase 3f. When `'enforce'` and
-   * `multiuser.enabled` is true, the Docker tool:
+   * Docker tool per-user isolation — Phase 3f. When `'enforce'`, the
+   * Docker tool, for a real user (system jobs stay outside it):
    *   - filters list_containers to containers labelled
    *     octipus.user_id=<userId>;
    *   - refuses start/stop/logs/exec on containers that don't carry
@@ -452,15 +452,6 @@ export const multiuserConfigSchema = z.object({
    * code paths continue to work non-disruptively when this is on.
    */
   rlsEnabled: z.boolean().default(false),
-  /**
-   * Org / workspace grouping layer — Phase 3g. When false (default),
-   * the `/api/me/workspaces` and `/api/admin/orgs` routes return 404
-   * and no part of the runtime consults the orgs/workspaces tables.
-   * The schema is in place (migration 0038) so flipping this on later
-   * requires no migration. Phase 4 wires `workspace_id` onto sessions
-   * and documents and gates that on the same flag.
-   */
-  orgWorkspaces: z.boolean().default(false),
 });
 
 // Workspace configuration schema

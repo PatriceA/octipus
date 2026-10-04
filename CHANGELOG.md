@@ -81,6 +81,25 @@ the proxy's address, or every client shares the proxy's address for rate
 limits. Extensions that registered commands with `minTrustLevel: 'local'`
 now use `adminOnly: true`.
 
+### One multi-user model
+
+- **Workspaces are always on.** The `multiuser.orgWorkspaces` setting
+  (`MULTIUSER_ORG_WORKSPACES`) is removed: `/api/me/workspaces` and the
+  workspace header always work, and `/api/admin/orgs` stays admin-only. A
+  stored row for the setting is deleted at startup.
+- **Workspace resolution fails closed.** When the workspace of an
+  authenticated request cannot be resolved, the request answers 503 instead
+  of running without a workspace filter.
+- **No stand-in users.** A user id that is not a real user is no longer mapped
+  to "the first admin" (skills routes) or "the first user" (the profiles
+  tool); it is an error. `'system'` is only ever a system job: system jobs keep
+  their rate-limit exemption and stay outside per-user Docker isolation, and
+  the Atlassian tools refuse without a real user. With
+  `security.dockerIsolation: enforce`, a Docker call with neither now fails
+  instead of running unisolated.
+- **User deletion is guarded.** Deleting a user goes through one check
+  (`assertDeletable`), which refuses the last active admin.
+
 ## v0.6.0 — Shared work, budgets, and stronger review (2026-10-01)
 
 Octipus 0.6.0 brings a shared task board for people and role agents, dollar

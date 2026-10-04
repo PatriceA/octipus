@@ -1019,9 +1019,9 @@ layers shipped in 1b-3 / 3e / 3b.
 
 - `'off'` (default) — no filtering or enforcement. Behavior matches
   pre-3f.
-- `'enforce'` — when `multiuser.enabled` is also true, isolation
-  fires for every authenticated user. Single-user installs and
-  legacy `system`/`local` sentinel callers stay unaffected.
+- `'enforce'` — isolation fires for every real user. System jobs
+  (`userId === 'system'`) stay outside it; any other id that is not a
+  user uuid is a bug and the helper throws rather than run unisolated.
 
 Env: `DOCKER_ISOLATION=enforce`.
 
@@ -1029,8 +1029,8 @@ Env: `DOCKER_ISOLATION=enforce`.
 
 - `userLabel(userId)` → `'octipus.user_id=<uuid>'`.
 - `userNetworkName(userId)` → `'octipus_user_<12-chars>'`.
-- `isolationActive(userId)` — combines flag state + the multiuser
-  master switch + the userId sentinel guard.
+- `isolationActive(userId)` — combines the flag with "real user or
+  system job".
 - `listFilterFlags(userId)` / `runIsolationFlags(userId)` /
   `buildIsolationFlags(userId)` — argv fragments to splice into the
   tool's existing `docker` invocations. Empty array when isolation
@@ -1130,20 +1130,13 @@ workspaces(id, user_id, slug, name, is_default, metadata, …,
   against `org_members`.
 
 No existing table grows a new column. Phase 4 adopts `workspace_id`
-on sessions / documents / hooks / vault and gates the change on the
-same flag.
+on sessions / documents / hooks / vault.
 
-### Config flag (`multiuser.orgWorkspaces`)
+### Always on
 
-- `false` (default) — `/api/me/workspaces` and `/api/admin/orgs`
-  routes return `404 Not Found`. Same shape as a missing route, so
-  fingerprinting can't distinguish "feature exists but disabled"
-  from "feature absent".
-- `true` — the routes light up; the manager honors all CRUD calls.
-
-Env: `MULTIUSER_ORG_WORKSPACES=true`. Independent of the master
-`MULTIUSER` flag; operators can stage org/workspace data ahead of
-flipping the rest of the multi-user stack on, or vice versa.
+Workspaces are always on: there is no setting to switch them off.
+(An earlier setting could; it is removed, and a stored settings row
+for it is deleted at startup.) `/api/admin/orgs` stays admin-gated.
 
 ### Manager (`src/security/orgs.ts`)
 
@@ -1201,8 +1194,8 @@ Mounted under `/api`:
 | POST   | `/admin/orgs/:id/members`                  | admin    | `{userId, role?}` |
 | DELETE | `/admin/orgs/:id/members/:userId`          | admin    | |
 
-Every endpoint returns `404 Not Found` with body `{error: 'Not
-found'}` when `multiuser.orgWorkspaces` is off — fingerprint-safe.
+Cross-tenant workspace ids answer `404 Not Found`, the same as a
+missing one.
 
 ### Tests (38 new)
 
@@ -1212,7 +1205,7 @@ found'}` when `multiuser.orgWorkspaces` is off — fingerprint-safe.
   `findOwnedById`/`rename`/`delete`, atomic default promotion, and
   the "cannot delete default" guard.
 - 18 route guard tests (`src/api/routes/orgs.isolation.test.ts`):
-  flag-off ⇒ 404 across all endpoints; flag-on ⇒ 401 for anon, 403
+  401 for anon, 403
   for non-admin on `/admin/*`, 200 happy paths, 409 on slug
   conflict, 400 on `cannot_delete_default`, 404 on cross-tenant
   PATCH/DELETE.
@@ -1223,12 +1216,8 @@ StdioTransport tests, net **+38** new tests, zero regressions. Lint
 
 ### Operator runbook
 
-```bash
-# Stage the schema (migration 0038 runs automatically on boot).
-# Light up the routes when ready:
-MULTIUSER=true
-MULTIUSER_ORG_WORKSPACES=true
-```
+The schema is created by migration 0038, which runs on boot; the
+routes need no configuration.
 
 Phase 4 wires `workspace_id` onto the user-owned tables and lets
 scopedRepos filter on it.
@@ -1284,8 +1273,7 @@ npx tsx scripts/backfill-workspace-id.ts --user=<uuid>
 Skipping the backfill is also fine: rows with NULL workspace_id
 continue to be visible across every workspace owned by the user
 (the "user-level" scope), so nothing breaks; the data just isn't
-partitioned. Operators usually run the script just before flipping
-`MULTIUSER_ORG_WORKSPACES=true`.
+partitioned.
 
 ### Principal extension
 
@@ -1305,7 +1293,7 @@ all the existing call sites see no change.
 `resolveWorkspace(principal, header)` maps the
 `X-Octipus-Workspace` request header to a workspace UUID:
 
-- Flag off → `{ workspaceId: null }`. Pass-through.
+- Anonymous / system principal → `{ workspaceId: null }`.
 - No header / `"all"` / `"default"` → user's default workspace
   (lazily created on first call).
 - UUID → accepted only if owned by the principal; cross-tenant
@@ -1317,8 +1305,10 @@ all the existing call sites see no change.
 
 The auth derive in `src/api/server.ts` runs the resolver as a
 second `.derive()` step so the auth branch above stays a flat
-list of early returns. When the flag is on the resolver picks up
-on every authenticated request; when off the chain returns early.
+list of early returns. It runs on every authenticated request and
+fails closed: when the resolver throws, the request answers `503`
+instead of continuing without a workspace (which would drop the
+workspace filter from every scoped read).
 
 ### scopedRepos filtering + stamping
 
@@ -1328,8 +1318,8 @@ on every authenticated request; when off the chain returns early.
 ```
 or `undefined` when the principal has no workspace context. The
 NULL clause is intentional: un-backfilled rows stay visible after
-the runtime starts filtering, so a deployment that flips the flag
-without running the backfill keeps working.
+the runtime starts filtering, so a deployment that never ran the
+backfill keeps working.
 
 Wired into `ScopedSessionRepo.findById/listOwn/update/delete`,
 `ScopedDocumentRepo.findById/listOwn/listOwnByCategory/delete/updateStatus`,
@@ -1346,7 +1336,7 @@ seed-data path). Off-feature deployments fall through with NULL.
 
 
 - 9 resolver tests (`src/security/workspace-resolver.test.ts`):
-  flag off ⇒ null; no header ⇒ default; `all`/`default` ⇒ default;
+  no header ⇒ default; `all`/`default` ⇒ default;
   owned UUID ⇒ that workspace; cross-tenant UUID ⇒ default; owned
   slug ⇒ that workspace; unknown slug ⇒ default; cross-tenant slug
   ⇒ default; anonymous ⇒ null.
@@ -1364,13 +1354,9 @@ StdioTransport tests, net **+17** new tests added in this PR
 ### Operator runbook
 
 ```bash
-# Run the backfill once before flipping the runtime.
+# Optionally move rows with no workspace into each user's default.
 npx tsx scripts/backfill-workspace-id.ts --dry-run   # preview
 npx tsx scripts/backfill-workspace-id.ts             # execute
-
-# Flip the runtime:
-MULTIUSER=true
-MULTIUSER_ORG_WORKSPACES=true
 ```
 
 Clients select a workspace per request via

@@ -10,10 +10,8 @@
  * Responsibilities:
  *
  *   - **Org CRUD** is admin-gated. A non-admin asking the manager to
- *     create an organization gets `not_admin`. The manager doesn't
- *     consult `multiuser.orgWorkspaces` itself — that's the route
- *     layer's job — but the helper functions below stay safe even if
- *     a route forgets the check.
+ *     create an organization gets `not_admin`, so the helpers stay
+ *     safe even if a route forgets its admin check.
  *
  *   - **Membership** can be managed by any admin (system_admin); a
  *     later iteration adds `org_admin` role checks via `org_members`.
