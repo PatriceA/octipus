@@ -2,7 +2,9 @@ import { and, eq } from 'drizzle-orm';
 import { assertDeletable } from '@/security/user-deletion';
 import { dbLogger } from '@/utils/logger';
 import { getDb } from '../postgres';
+import { sessions } from '../schema/sessions';
 import { type ChannelBinding, type NewUser, type User, users } from '../schema/users';
+import { sessionsRemoved } from './session-lifecycle';
 
 export class UserRepository {
   private get db() { return getDb(); }
@@ -73,12 +75,19 @@ export class UserRepository {
     return result[0] ?? null;
   }
 
-  /** Every user deletion goes through `assertDeletable`; see security/user-deletion.ts. */
+  /**
+   * Every user deletion goes through `assertDeletable`; see security/user-deletion.ts.
+   * The user's sessions are reported to `sessionsRemoved` once the user is
+   * gone, so the gateway drops their replay buffers. (Today a user who still
+   * has sessions cannot be deleted: `sessions.user_id` does not cascade.)
+   */
   async delete(id: string): Promise<boolean> {
     await assertDeletable(id);
+    const owned = await this.db.select({ id: sessions.id }).from(sessions).where(eq(sessions.userId, id));
     const result = await this.db.delete(users).where(eq(users.id, id)).returning();
     if (result.length > 0) {
       dbLogger.info({ userId: id }, 'User deleted');
+      sessionsRemoved(owned.map((row) => row.id));
       return true;
     }
     return false;

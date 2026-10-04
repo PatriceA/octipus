@@ -13,7 +13,7 @@ export interface GatewayStub {
   readonly sockets: WebSocketRoute[];
   /** Every client message after `auth`, across tabs, in arrival order. */
   readonly sent: Array<Record<string, any>>;
-  /** Tabs that have subscribed (and so been sent their snapshot). */
+  /** Pattern subscriptions so far, one per (re)connect of a tab (each is sent its snapshot). */
   subscribed(): number;
   /** Publish a user event to every tab. Returns the event id. */
   event(type: string, payload: unknown, sessionId?: string, extra?: { source?: string }): string;
@@ -56,9 +56,14 @@ export async function stubGateway(target: Page | BrowserContext, options: Gatewa
         return;
       }
       sent.push(message);
-      if (message.type === 'subscribe') {
+      // Pattern subscriptions get the pending snapshot; resource ones
+      // (`chat:inbox`) are granted, as the hub does.
+      if (message.type === 'subscribe' && message.patterns?.length) {
         subscribed++;
         ws.send(JSON.stringify({ type: 'permission.pending', ...pending }));
+      }
+      if (message.type === 'subscribe' && message.resources?.length) {
+        ws.send(JSON.stringify({ type: 'subscribed', resources: message.resources }));
       }
       if (message.type === 'ping') ws.send(JSON.stringify({ type: 'pong', serverTime: new Date().toISOString() }));
     });

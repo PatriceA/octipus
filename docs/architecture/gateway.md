@@ -81,8 +81,12 @@ lockouts and the audit log use the same rule (`src/security/client-ip.ts`).
   client shares one address, and that cap would become an install-wide one.
 - `gateway.maxFrameBytes` (default 262144, 256 KiB) is the socket's
   `maxPayload` (read at server start): a bigger client frame closes the
-  connection with 1009. `auth_ok` carries it as `maxFrameBytes`, so a client
-  can refuse such a frame itself (the TUI does, for large pasted images).
+  connection with 1009. `auth_ok` carries that same startup value as
+  `maxFrameBytes` (not a later config change the socket does not enforce),
+  so a client can refuse such a frame itself (the web chat page and the TUI
+  do). Files do not travel in frames: the web and the TUI upload them with
+  `POST /sessions/:id/attachments` and send `fileRefs`; inline `chat.send`
+  `attachments` are held to 256 KiB each.
 
 ## Protocol
 
@@ -100,8 +104,8 @@ lockouts and the audit log use the same rule (`src/security/client-ip.ts`).
 | `permission.respond` | Approve/deny a permission request |
 | `approval.respond` | Approve/deny a pipeline approval (the requester only) |
 | `agent.stop` | Stop one of your own running agents |
-| `voice.set` | `{ sessionId, on }` — put one of your sessions into (or out of) voice mode for this connection: the propose-then-confirm gate applies, and its lifecycle is narrated to this connection as `voice.speak`. Cleared when the connection closes |
-| `replay` | `{ sessionId, afterEventId? }` — the events of one of your own sessions after `afterEventId`, for a reconnecting client (answered with `replay`) |
+| `voice.set` | `{ sessionId, on }` — put one of your sessions into (or out of) voice mode for this connection: the propose-then-confirm gate applies, and its lifecycle is narrated to this connection as `voice.speak`. `on:false` counts only for the session this connection turned on; the session leaves voice mode when no connection of the user holds it there any more (also on close) |
+| `replay` | `{ sessionId, afterEventId? }` — the events of one of your own sessions after `afterEventId`, for a reconnecting client (answered with `replay`; without `afterEventId` the answer is `gap: true` with no events) |
 | `ping` | Heartbeat |
 
 `chat.send` takes an optional `workspaceId` (one you own): a session the
@@ -122,7 +126,7 @@ keeps its own.
 | `subscribed` | The resources of a `subscribe` that passed the access check (a refused one answers `error` `FORBIDDEN`) |
 | `events_dropped` | Notification that events were dropped from the replay buffer |
 | `permission.pending` | `{ requests, approvals }` — your open permission requests and root-agent approvals. Sent after every `subscribe` with patterns, and again after a `permission.respond` that found the request already answered. Authoritative: the client replaces its list |
-| `replay` | `{ sessionId, events, gap }` — answer to `replay`; `gap: true` when `afterEventId` is no longer buffered and the client must reload from REST |
+| `replay` | `{ sessionId, events, gap }` — answer to `replay`; `gap: true` when `afterEventId` is missing or no longer buffered and the client must reload from REST |
 
 ### Pending snapshot
 
@@ -161,10 +165,10 @@ comes from now:
 The `GatewayEventBus` is a typed pub/sub system that replaces scattered EventEmitter patterns:
 
 - **Pattern matching**: Subscribe to `agent.*`, `swarm.*`, `chat.message`, or `*` (all events)
-- **Replay buffer**: Last 200 events per session for reconnection (`swarm.*` events included; `voice.speak` is never kept). At most `gateway.replayMaxSessions` sessions (default 500) keep one — the least recently active is dropped first — and a session's buffer goes when it is deleted or archived (`session-lifecycle.ts`). A client reads it with `replay`, for its own existing sessions only.
+- **Replay buffer**: Last 200 events per session for reconnection (`swarm.*` events included; `voice.speak` is never kept). At most `gateway.replayMaxSessions` sessions (default 500) keep one — the least recently active is dropped first — and a session's buffer goes when it is deleted, archived or purged with its space (`session-lifecycle.ts`). A client reads it with `replay`, for its own existing sessions only.
 - **Error isolation**: One handler throwing doesn't break other handlers
 - **Per-user delivery**: every event names its user (`GatewayEvent.userId` is required) and goes to that user's connections only — trust level and admin rights widen nothing. The only user-less types are listed in `GLOBAL_EVENT_TYPES` (`protocol.ts`) with their reason, and none of them reach a client by user. `publishEvent(event, only)` can narrow delivery to some of the user's connections (`voice.speak` goes to the voice-mode connection only), never widen it.
-- **Resource delivery**: `hub.publishToResource(resource, message)` sends to connections whose `ConnectionContext.resources` holds the resource, outside the bus and the user rule. A connection joins a resource only through a `subscribe` that `canSubscribeToResource` (`resource-access.ts`) accepts: `artifact:<id>` for the owner of the artifact's workspace, or for an `artifact_token` connection of that artifact. Live-artifact events (`artifact.data_updated`, `artifact.version_updated`, `artifact.source_error`) travel this way.
+- **Resource delivery**: `hub.publishToResource(resource, message)` sends to connections whose `ConnectionContext.resources` holds the resource, outside the bus and the user rule. A connection joins a resource only through a `subscribe` that `canSubscribeToResource` (`resource-access.ts`) accepts: `artifact:<id>` for the owner of the artifact's workspace, or for an `artifact_token` connection of that artifact; `chat:inbox` for any user connection (the web chat page holds it while open: an in-app delivery to `webchat:<you>` counts as delivered only when one of your connections does). Live-artifact events (`artifact.data_updated`, `artifact.version_updated`, `artifact.source_error`) travel this way.
 
 ### Event Families
 

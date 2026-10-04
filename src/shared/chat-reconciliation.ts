@@ -1,6 +1,13 @@
 type Message = { id: string; role: string; content: string; timestamp: Date | string };
 
-/** REST can lag live delivery. Consume matching optimistic rows one-for-one. */
+/**
+ * Rows shown before REST had them: this tab's optimistic sends (numeric ids)
+ * and rows that arrived as gateway events (`gw-<eventId>`, e.g. another tab's
+ * steered message or a turn's reply). Each is replaced by its persisted copy.
+ */
+const PROVISIONAL_ID = /^(\d+|gw-.+)$/;
+
+/** REST can lag live delivery. Consume matching provisional rows one-for-one. */
 export function reconcileChatMessages<T extends Message>(persisted: T[], visible: T[]): T[] {
   const ids = new Set(persisted.map(message => message.id));
   const visibleIds = new Set(visible.map(message => message.id));
@@ -8,7 +15,7 @@ export function reconcileChatMessages<T extends Message>(persisted: T[], visible
   const anchors = new Map(visible.map(message => [message.id, message.timestamp]));
   const retained = visible.filter(message => {
     if (message.id === '0' || ids.has(message.id)) return false;
-    if (/^\d+$/.test(message.id)) {
+    if (PROVISIONAL_ID.test(message.id)) {
       const index = unmatched.findIndex(row => row.role === message.role && row.content === message.content
         && Math.abs(new Date(row.timestamp).getTime() - new Date(message.timestamp).getTime()) < 60_000);
       if (index >= 0) {

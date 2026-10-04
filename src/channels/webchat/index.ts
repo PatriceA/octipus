@@ -1,4 +1,5 @@
 import type { ChannelResponse, ChannelType } from '@/core/types';
+import { CHAT_INBOX_RESOURCE } from '@/shared/chat-gateway';
 import { generateId } from '@/utils/crypto';
 import { channelLogger } from '@/utils/logger';
 import { BaseChannel } from '../interface';
@@ -34,14 +35,17 @@ export class WebChatChannel extends BaseChannel {
 
   /**
    * Deliver to every open gateway connection of `userId` as a `chat.message`
-   * event (`proactive: true`). Throws when the user has none open, so the
-   * caller can tell an unread delivery from a delivered one.
+   * event (`proactive: true`). Throws when none of them shows the chat page
+   * (subscribed to `CHAT_INBOX_RESOURCE`) — a terminal or a tab on another
+   * page does not render the message — so the caller can tell an unread
+   * delivery from a delivered one.
    */
   async sendToUser(userId: string, response: ChannelResponse): Promise<string[]> {
     const { getGatewayHub } = await import('@/core/gateway/hub');
     const hub = getGatewayHub();
-    if (hub.connectionManager.getConnectionsByUser(userId).length === 0) {
-      throw new Error(`No active connections for user: ${userId}`);
+    const showing = hub.connectionManager.getConnectionsByUser(userId).some((conn) => conn.context?.resources.has(CHAT_INBOX_RESOURCE));
+    if (!showing) {
+      throw new Error(`No open chat page for user: ${userId}`);
     }
 
     const messageId = generateId();

@@ -18,7 +18,12 @@
  *     one of the user's own;
  *   - narration (`voice.speak`) goes to the tab that turned voice on only;
  *   - frames over `gateway.maxFrameBytes` close the socket, and `auth_ok`
- *     tells the client the cap.
+ *     tells the client the cap the socket enforces;
+ *   - `replay` without `afterEventId` answers `gap: true` and no events;
+ *   - a tab without voice cannot take another tab's session out of voice
+ *     mode;
+ *   - an in-app delivery counts only when a connection shows the chat page
+ *     (`chat:inbox`).
  *
  * The model is the only stand-in: `handleMessage` is spied where a turn
  * would run one.
@@ -341,5 +346,101 @@ describe('gateway.maxFrameBytes', () => {
     expect(t.frames.find((f) => f.type === 'auth_ok')).toMatchObject({ maxFrameBytes: cap });
     t.send({ type: 'chat.send', sessionId: aliceSession, content: 'x'.repeat(cap + 1) });
     expect(await t.closed).toBe(1009);
+  });
+
+  test('auth_ok reports the cap the socket enforces, not a later config value', async () => {
+    const { getConfig, refreshConfigKey } = await import('@/config');
+    const enforced = getConfig().gateway.maxFrameBytes;
+    refreshConfigKey('gateway.maxFrameBytes', enforced * 2);
+    try {
+      const t = await tab(aliceId, false);
+      expect(t.frames.find((f) => f.type === 'auth_ok')).toMatchObject({ maxFrameBytes: enforced });
+    } finally {
+      refreshConfigKey('gateway.maxFrameBytes', enforced);
+    }
+  });
+});
+
+// ── Replay without a watermark ───────────────────────────────────
+
+describe('replay without afterEventId', () => {
+  test('answers gap:true with no events, so the client reloads from REST instead of applying old events again', async () => {
+    const { seedSession } = await import('@/test-helpers/multiuser-fixtures');
+    const { id: sessionId } = await seedSession({ userId: aliceId });
+    const alice = await tab(aliceId);
+    await emitTurn({ type: 'status_update', sessionId, userId: aliceId, data: { message: 'old' } });
+    await vi.waitFor(() => expect(alice.events('rootAgent.status').filter((e) => e.sessionId === sessionId)).toHaveLength(1));
+    alice.frames.length = 0;
+    alice.send({ type: 'replay', sessionId });
+    expect(await alice.waitFor((f) => f.type === 'replay')).toEqual({ type: 'replay', sessionId, events: [], gap: true });
+  });
+});
+
+// ── Voice mode across tabs ───────────────────────────────────────
+
+describe('voice mode across tabs', () => {
+  test('a tab without voice cannot end another tab\'s; the last tab holding it does, on off or on close', async () => {
+    const service = await agentService();
+    const setVoice = vi.spyOn(service, 'setVoiceMode');
+    /** A round trip on `t`: every frame it sent before has been handled. */
+    const settled = async (t: Tab) => {
+      t.frames.length = 0;
+      t.send({ type: 'ping' });
+      await t.waitFor((f) => f.type === 'pong');
+    };
+    try {
+      const voiceTab = await tab(aliceId);
+      const plainTab = await tab(aliceId);
+      voiceTab.send({ type: 'voice.set', sessionId: aliceSession, on: true });
+      await vi.waitFor(() => expect(setVoice).toHaveBeenCalledWith(aliceSession, aliceId, true));
+      setVoice.mockClear();
+
+      // The plain tab shows the same session without voice: nothing changes.
+      plainTab.send({ type: 'voice.set', sessionId: aliceSession, on: false });
+      await settled(plainTab);
+      expect(setVoice).not.toHaveBeenCalled();
+
+      // A second tab turns voice on there too; the first closing leaves it on.
+      plainTab.send({ type: 'voice.set', sessionId: aliceSession, on: true });
+      await vi.waitFor(() => expect(setVoice).toHaveBeenCalledWith(aliceSession, aliceId, true));
+      setVoice.mockClear();
+      voiceTab.ws.close();
+      await voiceTab.closed;
+      await settled(plainTab);
+      await new Promise((resolve) => setTimeout(resolve, 50)); // the close handler imports lazily
+      expect(setVoice).not.toHaveBeenCalled();
+
+      // The last tab holding it turns it off: the root agent leaves voice mode.
+      plainTab.send({ type: 'voice.set', sessionId: aliceSession, on: false });
+      await vi.waitFor(() => expect(setVoice).toHaveBeenCalledWith(aliceSession, aliceId, false));
+    } finally {
+      setVoice.mockRestore();
+    }
+  });
+});
+
+// ── In-app delivery ──────────────────────────────────────────────
+
+describe('chat:inbox', () => {
+  test('an in-app delivery counts only when a connection shows the chat page', async () => {
+    const { webChatChannel } = await import('@/channels/webchat');
+    const terminal = await tab(aliceId);
+    await expect(webChatChannel.sendToUser(aliceId, { content: 'unseen' })).rejects.toThrow('No open chat page');
+    expect(terminal.events('chat.message')).toEqual([]);
+
+    const chatPage = await tab(aliceId);
+    chatPage.send({ type: 'subscribe', resources: ['chat:inbox'] });
+    expect(await chatPage.waitFor((f) => f.type === 'subscribed')).toEqual({ type: 'subscribed', resources: ['chat:inbox'] });
+    await webChatChannel.sendToUser(aliceId, { content: 'seen' });
+    await chatPage.waitFor((f) => f.type === 'event' && f.event.type === 'chat.message' && f.event.payload.content === 'seen');
+
+    chatPage.send({ type: 'unsubscribe', resources: ['chat:inbox'] });
+    chatPage.send({ type: 'ping' });
+    await chatPage.waitFor((f) => f.type === 'pong');
+    await expect(webChatChannel.sendToUser(aliceId, { content: 'gone' })).rejects.toThrow('No open chat page');
+
+    // No other id of the kind exists.
+    chatPage.send({ type: 'subscribe', resources: ['chat:other'] });
+    expect(await chatPage.waitFor((f) => f.type === 'error' && f.code === 'FORBIDDEN')).toMatchObject({ message: 'Not allowed to subscribe to chat:other' });
   });
 });

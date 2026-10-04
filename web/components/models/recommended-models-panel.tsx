@@ -76,11 +76,26 @@ export function RecommendedModelsPanel({ onInstalled }: RecommendedModelsPanelPr
   // on the tab's gateway connection).
   const gateway = useGateway();
   const jobHandlersRef = useRef<Map<string, (job: InstallJob) => void>>(new Map());
+  /** modelId → job id of the installs following pushed progress. */
+  const openJobsRef = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     const handlers = jobHandlersRef.current;
-    return () => handlers.clear();
+    const open = openJobsRef.current;
+    return () => { handlers.clear(); open.clear(); };
   }, []);
+
+  // `model.install_progress` is not replayed: an install that finished (or
+  // failed) while the gateway was down would otherwise stay at its last
+  // percent. On every reconnect, read each open job's state once.
+  useEffect(() => gateway.onStatus((status) => {
+    if (status !== 'connected') return;
+    for (const [modelId, jobId] of openJobsRef.current) {
+      api.get<InstallJob>(`/models/install/${jobId}`)
+        .then((job) => jobHandlersRef.current.get(modelId)?.(job))
+        .catch((err: unknown) => console.error('Install progress could not be read after reconnecting', err));
+    }
+  }), [gateway]);
 
   useGatewayMessages((message) => {
     if (message.type !== 'event' || message.event.type !== 'model.install_progress') return;
@@ -121,14 +136,16 @@ export function RecommendedModelsPanel({ onInstalled }: RecommendedModelsPanelPr
 
       // Prefer pushed progress over the gateway; fall back to polling only
       // while it is not connected.
+      const finish = () => { jobHandlersRef.current.delete(entry.id); openJobsRef.current.delete(entry.id); };
       jobHandlersRef.current.set(entry.id, (job) => {
         setJobs((j) => ({ ...j, [entry.id]: job }));
-        if (job.status === 'done') { onInstalled(); jobHandlersRef.current.delete(entry.id); }
-        else if (job.status === 'error') { jobHandlersRef.current.delete(entry.id); }
+        if (job.status === 'done') { onInstalled(); finish(); }
+        else if (job.status === 'error') { finish(); }
       });
+      openJobsRef.current.set(entry.id, res.jobId);
       const wsOk = gateway.getStatus() === 'connected';
       if (!wsOk) {
-        jobHandlersRef.current.delete(entry.id);
+        finish();
         pollJob(res.jobId, entry.id);
       } else {
         // One sync GET to catch an install that already finished before the

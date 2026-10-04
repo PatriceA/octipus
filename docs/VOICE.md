@@ -21,7 +21,7 @@ or local Piper). Detail for each stage is in the sections below.
  WAV 16 kHz mono ──base64──▶ POST /api/voice/transcribe
    │
    ▼  whisper.cpp (ggml-small.bin)             transcribeAudioBuffer → else Voxtral / OpenAI; stripNonSpeech
- transcript ──▶ sendMessage() ──▶ 🧠 ROOT AGENT ──▶ chat_response
+ transcript ──▶ sendMessage() ──▶ 🧠 ROOT AGENT ──▶ chat.response (event over /gateway)
                                                           │
    ┌──────────────────────────────────────────────────────┘
    ▼  /api/voice/speak (whole reply) → stripForSpeech
@@ -40,8 +40,9 @@ or local Piper). Detail for each stage is in the sections below.
    └─ openai  : OpenAIRealtimeSTTEngine → wss OpenAI realtime
    │
    ▼  {type:transcript} frames (running text) → client VAD dispatches delta on silence
- sendMessage() ──▶ 🧠 ROOT AGENT + voice-plan-gate ──▶ chat_response
-   │                        ╲___ narrator: {type:speak} lifecycle frames over /ws
+ sendMessage() ──▶ 🧠 ROOT AGENT + voice-plan-gate ──▶ chat.response (event over /gateway)
+   │                        ╲___ narrator: voice.speak lifecycle events over /gateway,
+   │                             to the tab that sent voice.set {on:true} only
    ▼  per-sentence /api/voice/speak → Mistral TTS ──▶ 🔊
         ◀── barge-in: sustained over-talk (RMS) stops playback, reopens mic (pre-roll flush)
 ```

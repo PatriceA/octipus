@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CHAT_INLINE_ATTACHMENT_MAX_CHARS, CHAT_MESSAGE_MAX_CHARS } from '../../shared/chat-gateway';
 
 // ── Trust Levels ──────────────────────────────────────────────────
 
@@ -247,17 +248,22 @@ export const FileRefSchema = z.object({
 export const ChatSendSchema = z.object({
   type: z.literal('chat.send'),
   sessionId: z.string().uuid(),
-  content: z.string().min(1).max(100_000),
+  content: z.string().min(1).max(CHAT_MESSAGE_MAX_CHARS),
   /**
    * Workspace a NEW session is created in (one the user owns); defaults to
    * the connection's workspace. An existing session keeps its own.
    */
   workspaceId: z.string().uuid().optional(),
   projectPath: z.string().optional(),
+  /**
+   * Small files inline, base64. They share the frame with everything else, so
+   * each is held to the default `gateway.maxFrameBytes`; clients upload larger
+   * files over REST (`POST /sessions/:id/attachments`) and send `fileRefs`.
+   */
   attachments: z.array(z.object({
     name: z.string().min(1).max(255),
     mimeType: z.string().min(1).max(128),
-    data: z.string().min(1).max(14 * 1024 * 1024),
+    data: z.string().min(1).max(CHAT_INLINE_ATTACHMENT_MAX_CHARS),
   })).max(10).optional(),
   /** Session files to inline (current version) into this turn's context. */
   fileRefs: z.array(FileRefSchema).max(10).optional(),
@@ -371,8 +377,10 @@ export const VoiceSetSchema = z.object({
 
 /**
  * `replay` — a reconnecting client asks for the events of one of its own
- * sessions published after `afterEventId` (all buffered ones without it).
- * Answered with a `replay` message.
+ * sessions published after `afterEventId`. Answered with a `replay` message;
+ * without `afterEventId` the client has no watermark to resume from, so the
+ * answer is `gap: true` with no events (it reloads from REST rather than
+ * apply the whole buffer a second time).
  */
 export const ReplaySchema = z.object({
   type: z.literal('replay'),
@@ -490,9 +498,10 @@ export interface PermissionPendingMessage {
 }
 
 /**
- * Answer to `replay`. `gap` is true when `afterEventId` is no longer in the
- * buffer (the session was evicted, or more events passed than are kept): the
- * client cannot catch up from `events` alone and reloads from REST.
+ * Answer to `replay`. `gap` is true when `afterEventId` is missing or no
+ * longer in the buffer (the session was evicted, or more events passed than
+ * are kept): the client cannot catch up from `events` alone and reloads from
+ * REST.
  */
 export interface ReplayMessage {
   type: 'replay';

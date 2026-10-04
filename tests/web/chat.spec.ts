@@ -12,8 +12,8 @@ test.describe('chat page', () => {
         tokens: 12,
       }),
     );
-    // Block WS upgrade so tests don't hang waiting for a live socket.
-    await page.route('**/ws**', (route) => route.abort());
+    // A stand-in `/gateway`, so the page never tries a live socket.
+    await stubGateway(page);
   });
 
   test('loads chat page with session list', async ({ authenticatedPage: page }) => {

@@ -1,3 +1,4 @@
+import { CHAT_INBOX_RESOURCE } from '@/shared/chat-gateway';
 import type { ConnectionContext } from './protocol';
 
 /**
@@ -8,6 +9,9 @@ import type { ConnectionContext } from './protocol';
  * - `artifact:<id>` — an `artifact_token` connection gets its own artifact
  *   and nothing else; a signed-in user gets an artifact whose workspace they
  *   own (members join in with shared spaces).
+ * - `chat:inbox` (`CHAT_INBOX_RESOURCE`) — any signed-in user connection: it
+ *   says "this connection shows the chat page", so an in-app delivery to the
+ *   user counts as delivered. It carries nobody else's data.
  */
 export async function canSubscribeToResource(ctx: ConnectionContext, resource: string): Promise<boolean> {
   const sep = resource.indexOf(':');
@@ -22,6 +26,8 @@ export async function canSubscribeToResource(ctx: ConnectionContext, resource: s
   switch (kind) {
     case 'artifact':
       return userOwnsArtifact(ctx.userId, id);
+    case 'chat':
+      return resource === CHAT_INBOX_RESOURCE;
     default:
       return false;
   }

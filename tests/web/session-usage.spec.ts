@@ -7,7 +7,7 @@ const stats = { requestCount: 2, totalCost: 0.125, totalInputTokens: 100, totalO
 
 test('session usage keeps its row and last totals during failed refreshes', async ({ authenticatedPage: page }) => {
   await page.clock.install();
-  await page.route('**/ws**', route => route.abort());
+  await stubGateway(page);
   let requests = 0;
   let pending: Route | undefined;
   await page.route('**/api/models/usage/session/*', route => {
@@ -40,7 +40,7 @@ test('session usage keeps its row and last totals during failed refreshes', asyn
 });
 
 test('switching sessions does not reuse another session usage totals', async ({ authenticatedPage: page }) => {
-  await page.route('**/ws**', route => route.abort());
+  await stubGateway(page);
   await page.route('**/api/models/usage/session/*', route => route.request().url().endsWith('/sess-1')
     ? json(route, 200, { stats })
     : json(route, 500, { error: 'Unavailable' }));

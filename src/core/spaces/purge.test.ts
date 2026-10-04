@@ -8,6 +8,8 @@
  *   - The space's directories are removed; the sweep removes leftovers.
  *   - A personal workspace delete still sets NULL, and never deletes a space.
  *   - `assertDeletable` refuses the last owner of a space.
+ *   - Purged sessions (and a deleted user's) are reported to
+ *     `sessionsRemoved`, so the gateway drops their replay buffers.
  *
  * Backed by ephemeral PGlite.
  */
@@ -142,8 +144,15 @@ describe('purgeSpace', () => {
     mkdirSync(dirs.documents, { recursive: true });
     writeFileSync(join(dirs.documents, 'upload.pdf'), 'pdf');
 
-    const result = await purgeSpace({ userId: owner }, id);
+    // The gateway hears which sessions went, to drop their replay buffers.
+    const { onSessionsRemoved } = await import('@/db/repositories/session-lifecycle');
+    const removed: string[] = [];
+    const stopListening = onSessionsRemoved((ids) => removed.push(...ids));
+    const result = await purgeSpace({ userId: owner }, id).finally(stopListening);
     expect(result.leftoverDirectories).toEqual([]);
+    expect(removed).toContain(sessionId);
+    expect(removed).not.toContain(controlRows.sessionId);
+    expect(removed).toHaveLength(result.deleted.sessions);
 
     for (const t of WORKSPACE_TABLES) {
       const [row] = await q(`SELECT count(*)::int AS n FROM ${t.table} WHERE workspace_id = $1`, [id]);
@@ -223,5 +232,27 @@ describe('personal workspaces and user deletion', () => {
     await expect(userRepository.delete(owner)).rejects.toMatchObject({ code: 'last_space_owner' });
     // The editor owns no space alone.
     await expect(assertDeletable(editor)).resolves.toBeUndefined();
+  });
+
+  test('a user deletion reports only sessions that are actually gone', async () => {
+    const { userRepository } = await import('@/db/repositories/user-repository');
+    const { onSessionsRemoved } = await import('@/db/repositories/session-lifecycle');
+    const { seedSession, seedUsers } = await import('@/test-helpers/multiuser-fixtures');
+    const withSession = randomUUID();
+    const without = randomUUID();
+    await seedUsers([{ id: withSession, username: `u-${rand(3)}` }, { id: without, username: `u-${rand(3)}` }]);
+    const { id: sessionId } = await seedSession({ userId: withSession });
+    const removed: string[] = [];
+    const stopListening = onSessionsRemoved((ids) => removed.push(...ids));
+    try {
+      // `sessions.user_id` does not cascade: the database refuses, and the
+      // session (still there, still replayable) is not reported gone.
+      await expect(userRepository.delete(withSession)).rejects.toThrow();
+      expect(await q(`SELECT 1 FROM sessions WHERE id = $1`, [sessionId])).toHaveLength(1);
+      expect(await userRepository.delete(without)).toBe(true);
+      expect(removed).toEqual([]);
+    } finally {
+      stopListening();
+    }
   });
 });

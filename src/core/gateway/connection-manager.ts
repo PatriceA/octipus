@@ -96,13 +96,22 @@ export class ConnectionManager {
   /** Called once for every authenticated connection that ends, with its context. */
   onConnectionClosed?: (context: ConnectionContext) => void;
 
-  /** Told to clients in `auth_ok` (`gateway.maxFrameBytes`), so they can refuse a frame the server would. */
-  private readonly maxFrameBytes?: () => number;
+  /**
+   * Told to clients in `auth_ok` (`gateway.maxFrameBytes`), so they can refuse
+   * a frame the server would. The socket's own limit is fixed when it is set
+   * up, so this is the number it was set up with (`setMaxFrameBytes`), never
+   * a later config value the socket does not enforce.
+   */
+  private maxFrameBytes?: number;
 
-  constructor(options?: { budget?: Partial<ConnectionBudget>; rateLimiter?: GatewayRateLimiter; maxFrameBytes?: () => number }) {
+  constructor(options?: { budget?: Partial<ConnectionBudget>; rateLimiter?: GatewayRateLimiter }) {
     this.budget = { ...DEFAULT_BUDGET, ...options?.budget };
     this.rateLimiter = options?.rateLimiter || new GatewayRateLimiter();
-    this.maxFrameBytes = options?.maxFrameBytes;
+  }
+
+  /** The frame cap the socket enforces (its `maxPayload`). */
+  setMaxFrameBytes(bytes: number): void {
+    this.maxFrameBytes = bytes;
   }
 
   private maxPerUser(): number {
@@ -454,7 +463,7 @@ export class ConnectionManager {
         capabilities: artifactId !== undefined ? ['subscribe', 'ping'] : this.getCapabilities(isAdmin),
         serverTime: new Date().toISOString(),
         serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        ...(this.maxFrameBytes ? { maxFrameBytes: this.maxFrameBytes() } : {}),
+        ...(this.maxFrameBytes !== undefined ? { maxFrameBytes: this.maxFrameBytes } : {}),
       });
 
       this.onAuditEvent?.('gateway.auth.success', {
