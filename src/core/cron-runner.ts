@@ -2,6 +2,7 @@ import { and, eq, isNotNull, lte } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { getEmbeddingService } from '@/core/rag/embeddings';
 import { maybeRunHeartbeats } from '@/core/heartbeat';
+import { defaultListenDeps, runListenTick } from '@/channels/group-listen';
 import { getDb } from '@/db/postgres';
 import { agentRepository } from '@/db/repositories/agent-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
@@ -229,6 +230,8 @@ async function maybeCompressTrajectories(): Promise<void> {
   }
 }
 
+const listenDeps = defaultListenDeps();
+
 async function processCronTick(): Promise<void> {
   try {
     await maybeCleanupSessions();
@@ -242,6 +245,10 @@ async function processCronTick(): Promise<void> {
     // WS2 heartbeat — process due per-user heartbeat hooks (gated, cheap-first).
     // Runs before the schedule query's early return below. No-op when disabled.
     await maybeRunHeartbeats(now);
+
+    // Group channels in listen / proactive mode: unanswered questions, gated
+    // cheap-first (src/channels/group-listen.ts). No-op unless enabled.
+    await runListenTick(listenDeps);
 
     // Find schedule-triggered hooks that are due
     const dueHooks = await db

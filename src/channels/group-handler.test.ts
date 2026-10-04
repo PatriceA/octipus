@@ -11,7 +11,8 @@ import { answerHow, type GroupDeps, type GroupInbound, groupHints, handleGroupMe
 
 const group: GroupChannel = {
   id: 'g1', channelType: 'telegram', channelId: '-1001', label: 'Release crew',
-  ownerUserId: 'owner', createdAt: new Date(), updatedAt: new Date(),
+  ownerUserId: 'owner', createdAt: new Date(), updatedAt: new Date(), mode: 'mention', quietHoursStart: null, quietHoursEnd: null,
+  timezone: 'UTC', maxUnpromptedPerDay: 8, minMinutesBetween: 60, lastUnpromptedAt: null, unpromptedDay: null, unpromptedCount: 0,
 };
 const anna = { id: 'u-anna', username: 'anna', isActive: true, isAdmin: false };
 const hints = groupHints({ platform: 'Telegram', linkHow: 'send me /link in a private chat', takeAlso: 'or reply', followHow: 'reply to me' });

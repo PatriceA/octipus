@@ -15,7 +15,8 @@ import {
 const BOT = 'UBOT';
 const group: GroupChannel = {
   id: 'g1', channelType: 'slack', channelId: 'C1', label: '#release',
-  ownerUserId: 'owner', createdAt: new Date(), updatedAt: new Date(),
+  ownerUserId: 'owner', createdAt: new Date(), updatedAt: new Date(), mode: 'mention', quietHoursStart: null, quietHoursEnd: null,
+  timezone: 'UTC', maxUnpromptedPerDay: 8, minMinutesBetween: 60, lastUnpromptedAt: null, unpromptedDay: null, unpromptedCount: 0,
 };
 const anna: GroupMember = { id: 'u-anna', username: 'anna', isActive: true, isAdmin: false };
 /** Messages `readMessage` finds, by ts. */

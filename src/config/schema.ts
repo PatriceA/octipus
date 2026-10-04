@@ -485,6 +485,16 @@ export const sessionsConfigSchema = z.object({
 });
 
 /**
+ * Group channels (docs/plans/group-chat-bot.md). Unprompted posts — the
+ * `listen` and `proactive` channel modes — are off until the operator turns
+ * them on here; a channel in those modes then still passes its own quiet
+ * hours, rate limit and budget before any tokens are spent.
+ */
+export const groupChannelsConfigSchema = z.object({
+  unpromptedEnabled: z.boolean().default(false),
+});
+
+/**
  * WS2 — heartbeat loop. A periodic per-user agent turn that reviews standing
  * context and acts or stays silent. Off by default; a cheap deterministic gate
  * (quiet hours, daily cap, quota, "anything pending?" probe) runs before any
@@ -623,6 +633,7 @@ export const configSchema = z.object({
   skills: skillsConfigSchema.prefault({}),
   heartbeat: heartbeatConfigSchema.prefault({}),
   sessions: sessionsConfigSchema.prefault({}),
+  groupChannels: groupChannelsConfigSchema.prefault({}),
 });
 
 export type Config = z.infer<typeof configSchema>;

@@ -3,7 +3,9 @@
  * conversation back (Teams without Graph RSC, Telegram — the Bot API has no
  * history call). The adapter records what it sees — members' messages that
  * reach the bot and the bot's own replies — and the next turn's transcript is
- * rendered from it (`renderGroupContext`).
+ * rendered from it (`renderGroupContext`). Slack records here too while a
+ * channel is in listen or proactive mode: the unprompted-post probe
+ * (`group-listen.ts`) looks for unanswered questions in it.
  *
  * Kept in memory only, bounded per thread and in total, and dropped after a
  * day: it is a short-term view of the conversation, not a store. A restart
@@ -48,6 +50,30 @@ export function groupMessages(channelType: string, channelId: string, thread: st
 /** One recorded message by id, in that thread. */
 export function findGroupMessage(channelType: string, channelId: string, thread: string, id: string): ChannelMessage | undefined {
   return groupMessages(channelType, channelId, thread).find(m => m.id === id);
+}
+
+/** Every thread of a chat with its recorded messages (none past a day), keyed by thread. */
+export function groupThreads(channelType: string, channelId: string, now = Date.now()): Map<string, ChannelMessage[]> {
+  const prefix = key(channelType, channelId, '');
+  const out = new Map<string, ChannelMessage[]>();
+  for (const k of threads.keys()) {
+    if (!k.startsWith(prefix)) continue;
+    const thread = k.slice(prefix.length);
+    const list = groupMessages(channelType, channelId, thread, now);
+    if (list.length > 0) out.set(thread, list);
+  }
+  return out;
+}
+
+/** One recorded message by id in any thread of the chat, with the thread it is in. */
+export function findGroupMessageAnywhere(
+  channelType: string, channelId: string, id: string,
+): { message: ChannelMessage; thread: string } | undefined {
+  for (const [thread, list] of groupThreads(channelType, channelId)) {
+    const message = list.find(m => m.id === id);
+    if (message) return { message, thread };
+  }
+  return undefined;
 }
 
 /** Forget a chat's threads (it was enrolled afresh, or left). */
