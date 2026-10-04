@@ -50,11 +50,16 @@ export const WORKSPACE_TABLES: readonly WorkspaceTable[] = [
   // Billing history: who spent what, where. Outlives the space.
   { table: 'cost_log', ownerColumn: 'user_id', transfer: 'n/a', purge: 'keep' },
   { table: 'documents', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
+  // A space file's "Ben is editing" lease (S3); spaces are never transferred.
+  { table: 'file_leases', ownerColumn: 'holder_user_id', transfer: 'n/a', purge: 'delete' },
   { table: 'embeddings', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'hooks', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'knowledge_links', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'memories', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'notes', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
+  // Live documents (S3): space notes only, and spaces are never transferred.
+  { table: 'note_edit_proposals', ownerColumn: 'user_id', transfer: 'n/a', purge: 'delete' },
+  { table: 'note_revisions', ownerColumn: null, transfer: 'n/a', purge: 'delete' },
   // A user's inbox: it stays with them.
   { table: 'notifications', ownerColumn: 'user_id', transfer: 'n/a', purge: 'delete' },
   // A request belongs to the agent run that raised it, not to the workspace.
