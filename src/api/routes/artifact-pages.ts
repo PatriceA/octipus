@@ -19,7 +19,6 @@ import { artifactsRepository } from '@/db/repositories/artifacts-repository';
 import { findViewableArtifactBySlug } from '@/db/repositories/space';
 import { workspaces } from '@/db/schema/organizations';
 import { getDb } from '@/db/postgres';
-import { eq } from 'drizzle-orm';
 import { buildEmbedCsp } from '@/core/artifacts/csp';
 import { buildDataBus } from '@/core/artifacts/pipeline';
 import { BUILTIN_TEMPLATES, escapeHtml, renderTemplate } from '@/core/artifacts/render';

@@ -201,7 +201,7 @@ async function postgresTransport(): Promise<WakeupTransport> {
  * member's), a personal task by `user_id = owner` and never one of a space.
  * A ref resolves only when its task is in the scope it names.
  */
-async function defaultResolveTitles(refs: TaskRef[]): Promise<Map<string, string>> {
+export async function defaultResolveTitles(refs: TaskRef[]): Promise<Map<string, string>> {
   const { getDb } = await import('@/db/postgres');
   const { and, eq, inArray } = await import('drizzle-orm');
   const { tasks } = await import('@/db/schema/tasks');

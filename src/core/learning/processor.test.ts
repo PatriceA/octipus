@@ -10,7 +10,10 @@ vi.mock('./evidence', () => ({ gatherEvidence: mock.evidence }));
 vi.mock('@/models/model-registry', () => ({ getModelRegistry: () => ({ getModelForTopic: mock.model }) }));
 vi.mock('@/models/litellm-client', () => ({ getLiteLLMClient: () => ({ complete: mock.complete }) }));
 vi.mock('@/core/knowledge/notes', () => ({ getNoteService: () => ({ save: mock.save }) }));
-vi.mock('@/db/repositories/note-repository', () => ({ getNoteRepository: () => ({ getBySlug: mock.findNote }) }));
+vi.mock('@/db/repositories/note-repository', () => ({
+  getNoteRepository: () => ({ getBySlug: mock.findNote }),
+  personalNoteScope: (userId: string, workspaceId: string | null = null) => ({ kind: 'personal', userId, workspaceId }),
+}));
 vi.mock('@/core/memory/judge', () => ({ judgeAndApply: mock.judge }));
 vi.mock('@/services/file-skill-proposal', () => ({ fileSkillProposal: mock.proposal }));
 vi.mock('@/security/permissions', () => ({ getPermissionManager: () => ({ check: mock.permission }) }));
@@ -87,7 +90,7 @@ test('keeps partial write receipts and reports an indexing failure', async () =>
   mock.save.mockResolvedValue({ created: true, indexed: false, note: { id: 'n1' } });
   mock.judge.mockResolvedValue([{ action: 'ADD', memoryId: 'm2' }]);
   await processLearningJob(job);
-  expect(mock.save.mock.calls[0][0].workspaceId).toBe('w1');
+  expect(mock.save.mock.calls[0][0].scope).toEqual({ kind: 'personal', userId: 'u1', workspaceId: 'w1' });
   expect(mock.judge.mock.calls[0][1]).toMatchObject({ sourceMessageId: 'm1', failOnError: true });
   expect(mock.finish.mock.calls[0][1]).toMatchObject({ status: 'error', stage: 'partial_failure', result: { outputs: [
     { kind: 'knowledge', status: 'saved_unindexed', id: 'n1' }, { kind: 'memory', status: 'saved', id: 'm2' },
