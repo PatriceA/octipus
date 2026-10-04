@@ -1,5 +1,6 @@
 import { boolean, date, index, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
+import { workspaces } from './organizations';
 
 /**
  * Knowledge-graph Tier 2 — authored markdown notes.
@@ -27,7 +28,7 @@ export const notes = pgTable('notes', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id').notNull(),
   /** Optional workspace scope. NULL = user-level. */
-  workspaceId: uuid('workspace_id'),
+  workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'set null' }),
   /** Wikilink target + URL slug. Unique per owner scope. */
   slug: text('slug').notNull(),
   title: text('title').notNull(),

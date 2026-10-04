@@ -12,7 +12,11 @@ const aliceId = randomUUID();
 const bobId = randomUUID();
 let aliceApp: ElysiaLike;
 let bobApp: ElysiaLike;
+/** Alice in a second workspace of hers. */
+let aliceSideApp: ElysiaLike;
 let aliceNoteId: string;
+let aliceDefaultWs: string;
+let aliceSideWs: string;
 
 beforeAll(async () => {
   process.env.STORAGE_MODE = 'embedded';
@@ -30,15 +34,22 @@ beforeAll(async () => {
   const { noteRoutes } = await import('./notes');
   const { graphRoutes } = await import('./graph');
   const { principalFromUser } = await import('@/security/principal');
-  const buildApp = (uid: string, username: string): ElysiaLike =>
+  const { getOrgWorkspaceManager } = await import('@/security/orgs');
+  const mgr = getOrgWorkspaceManager();
+  aliceDefaultWs = (await mgr.ensureDefaultWorkspace(aliceId)).id;
+  aliceSideWs = (await mgr.createWorkspace(aliceId, { slug: 'side', name: 'Side' })).id;
+  const bobDefaultWs = (await mgr.ensureDefaultWorkspace(bobId)).id;
+  // The server derive resolves the request's workspace onto the principal.
+  const buildApp = (uid: string, username: string, workspaceId: string): ElysiaLike =>
     new Elysia()
       .derive(() => {
         const u = { id: uid, username, isAdmin: false };
-        return { user: u, session: null, principal: principalFromUser(u) };
+        return { user: u, session: null, principal: { ...principalFromUser(u), workspaceId } };
       })
       .group('/api', (a) => a.use(noteRoutes).use(graphRoutes)) as unknown as ElysiaLike;
-  aliceApp = buildApp(aliceId, 'alice');
-  bobApp = buildApp(bobId, 'bob');
+  aliceApp = buildApp(aliceId, 'alice', aliceDefaultWs);
+  aliceSideApp = buildApp(aliceId, 'alice', aliceSideWs);
+  bobApp = buildApp(bobId, 'bob', bobDefaultWs);
 });
 
 afterAll(async () => {
@@ -160,5 +171,74 @@ describe('Notes workspace endpoints', () => {
     const bl = read.body.backlinks.find((b: any) => b.endpoint.title === 'Source Note');
     expect(bl).toBeDefined();
     expect(bl.endpoint.resolved).toBe(true);
+  });
+});
+
+describe('Notes in workspaces', () => {
+  test('a note is created in the request workspace and is invisible from another one', async () => {
+    const created = await post(aliceApp, '/api/notes', { title: 'Default only', body: '#wsonly' });
+    const id = created.body.note.id;
+    expect(created.body.note.workspaceId).toBe(aliceDefaultWs);
+
+    expect((await get(aliceSideApp, `/api/notes/${id}`)).status).toBe(404);
+    expect((await get(aliceSideApp, '/api/notes')).body.notes.find((n: any) => n.id === id)).toBeUndefined();
+    expect((await get(aliceSideApp, '/api/notes/index')).body.notes.find((n: any) => n.id === id)).toBeUndefined();
+    expect((await get(aliceSideApp, '/api/notes/tags')).body.tags.find((t: any) => t.tag === 'wsonly')).toBeUndefined();
+    expect((await post(aliceSideApp, '/api/notes/query', { tag: 'wsonly' })).body.notes).toEqual([]);
+    expect((await patch(aliceSideApp, `/api/notes/${id}/pin`, { pinned: true })).status).toBe(404);
+    expect((await get(aliceSideApp, `/api/notes/${id}/suggestions`)).status).toBe(404);
+    expect((await del(aliceSideApp, `/api/notes/${id}`)).status).toBe(404);
+
+    expect((await get(aliceApp, `/api/notes/${id}`)).status).toBe(200);
+  });
+
+  test('a user-level note is visible in every workspace', async () => {
+    const { getNoteService } = await import('@/core/knowledge/notes');
+    const { note } = await getNoteService().save({ userId: aliceId, workspaceId: null, title: 'Everywhere', slug: 'everywhere' });
+    expect((await get(aliceApp, `/api/notes/${note.id}`)).status).toBe(200);
+    expect((await get(aliceSideApp, `/api/notes/${note.id}`)).status).toBe(200);
+    expect((await get(aliceSideApp, '/api/notes/index')).body.notes.some((n: any) => n.id === note.id)).toBe(true);
+  });
+
+  test('a workspaceId in the body is ignored', async () => {
+    const created = await post(aliceApp, '/api/notes', { title: 'Body says side', workspaceId: aliceSideWs });
+    expect(created.body.note.workspaceId).toBe(aliceDefaultWs);
+    const captured = await post(aliceApp, '/api/notes/capture', { text: 'x', date: '2026-08-01', workspaceId: aliceSideWs });
+    expect((await get(aliceApp, `/api/notes/${captured.body.id}`)).body.workspaceId).toBe(aliceDefaultWs);
+  });
+
+  test('daily capture does not duplicate a user-level daily note', async () => {
+    const { getNoteService } = await import('@/core/knowledge/notes');
+    const userLevel = await getNoteService().getOrCreateDaily(aliceId, null, '2026-07-01');
+    expect(userLevel.workspaceId).toBeNull();
+
+    const r = await post(aliceSideApp, '/api/notes/capture', { text: 'from the side workspace', date: '2026-07-01' });
+    expect(r.status).toBe(200);
+    expect(r.body.id).toBe(userLevel.id);
+    const r2 = await post(aliceApp, '/api/notes/capture', { text: 'from the default workspace', date: '2026-07-01' });
+    expect(r2.body.id).toBe(userLevel.id);
+
+    const { queryRaw } = await import('@/db/postgres');
+    const rows = (await queryRaw(`SELECT id, workspace_id, body FROM notes WHERE user_id = $1 AND slug = 'daily/2026-07-01'`, [aliceId])).rows;
+    expect(rows).toHaveLength(1);
+    expect(rows[0].workspace_id).toBeNull();
+    expect(rows[0].body).toContain('from the side workspace');
+    expect(rows[0].body).toContain('from the default workspace');
+  });
+
+  test('a workspace daily note is preferred over the user-level one', async () => {
+    const { getNoteService } = await import('@/core/knowledge/notes');
+    const userLevel = await getNoteService().getOrCreateDaily(aliceId, null, '2026-07-02');
+    // Both exist (written before the fallback, or by an older build).
+    const { queryRaw } = await import('@/db/postgres');
+    const [inSide] = (await queryRaw(
+      `INSERT INTO notes (user_id, workspace_id, slug, title, body, body_sha256, note_kind, note_date)
+       VALUES ($1, $2, 'daily/2026-07-02', '2026-07-02', '', 'sha', 'daily', '2026-07-02') RETURNING id`,
+      [aliceId, aliceSideWs],
+    )).rows;
+    const r = await post(aliceSideApp, '/api/notes/capture', { text: 'side', date: '2026-07-02' });
+    expect(r.body.id).toBe(inSide.id);
+    const d = await post(aliceApp, '/api/notes/capture', { text: 'default', date: '2026-07-02' });
+    expect(d.body.id).toBe(userLevel.id);
   });
 });

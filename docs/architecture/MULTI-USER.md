@@ -2099,3 +2099,34 @@ SSO URL, x509 cert, attribute map, SCIM toggle, vault-ref).
 - Auto-promotion of SCIM `org_admin` group members to
   `role='org_admin'`. Today new SCIM users land as `member`
   and the admin role is set manually.
+
+## 23. Workspace integrity (coworking S0c)
+
+`src/db/workspace-tables.ts` holds `WORKSPACE_TABLES`: every table with a
+`workspace_id` column, its owner column, and its action on workspace transfer
+(`move` / `n/a`) and on space purge (`delete` / `keep`). A database test reads
+`information_schema.columns` and fails when a `workspace_id` table is missing
+from the list, so transfer, the backfill script and the purge cannot forget a
+table.
+
+- **Transfer** (`OrgWorkspaceManager.transfer`) reassigns the previous owner's
+  rows of every `move` table in one transaction. Workspace secrets
+  (`vault.scope='workspace'`) are decrypted under the old owner's DEK and
+  re-encrypted under the recipient's. Notifications, cleanup history and
+  artifacts (keyed by workspace alone) do not move.
+- **Backfill** (`scripts/backfill-workspace-id.ts`) stamps the user-level rows
+  of the same `move` tables with the default workspace; a note whose slug the
+  default workspace already uses stays user-level.
+- **Foreign keys.** Migration `0127_workspace_integrity` resets notes, tasks,
+  knowledge links, workspace repos and background jobs that named a missing
+  workspace or another user's workspace to user-level (renaming a note that
+  would clash with a user-level slug to `<slug>-<id prefix>`), then adds
+  `REFERENCES workspaces(id) ON DELETE SET NULL` to those five columns.
+  Deleting a workspace renames its notes the same way first.
+- **Notes** follow the request's workspace under the personal rule
+  (`workspace_id = $ws OR workspace_id IS NULL`); a slug lookup prefers the
+  workspace's note, then a user-level one.
+- **Vault.** `getByName(user, name, { workspaceId })` returns the workspace's
+  secret, decrypted under the row's own scope and owner, ahead of a user secret
+  of the same name. A workspace secret with no `workspace_id` belongs to no
+  workspace and is not returned.

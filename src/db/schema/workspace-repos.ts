@@ -1,4 +1,5 @@
 import { boolean, index, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { workspaces } from './organizations';
 
 /**
  * Repo registry — the first-class repository entity for multi-repo work.
@@ -35,7 +36,7 @@ export const workspaceRepos = pgTable('workspace_repos', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id').notNull(),
   /** Optional workspace scope. NULL = user-level. Mirrors the rest of the schema. */
-  workspaceId: uuid('workspace_id'),
+  workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'set null' }),
   /** Display name — the directory name unless overridden. */
   name: text('name').notNull(),
   /** Absolute path to the repository root on disk. Unique per owner. */

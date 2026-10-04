@@ -49,9 +49,10 @@ export const vault = pgTable('vault', {
    * rows. Vault.set/get accept this id when the caller wants to
    * narrow a secret to one workspace; reads filter on the column
    * when the request principal carries a workspace context. NULL
-   * for system + user scopes (and for legacy workspace-scoped rows
-   * written before this migration — they remain visible to every
-   * workspace owned by the user).
+   * for system + user scopes. A legacy workspace-scoped row written
+   * before this column has NULL and belongs to no workspace: reads do
+   * not return it (`scripts/backfill-workspace-id.ts` binds such rows to
+   * the owner's default workspace).
    */
   workspaceId: uuid('workspace_id'),
   name: text('name').notNull(),
