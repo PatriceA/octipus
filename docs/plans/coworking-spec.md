@@ -298,12 +298,14 @@ Octipus says it is always multi-user (`src/config/schema.ts:398-403`,
   Adding space policies that nothing enforces would be decoration. The access
   layer plus grep-driven isolation tests are the guarantee; RLS is open
   question 1.
-- **D13 — Funding is explicit, never inferred.** Every agent context carries
-  `funding: 'own' | 'sponsor' | 'install'`, set at the spawn site from the
-  trigger. `install` covers background work on install-level topics
-  (compaction, embeddings, memory extraction, decision models) and is never
-  refused by space funding rules. Until S5, attended work is `own`, paid by the
-  requester on the install or org models they may use.
+- **D13 — Funding is explicit, never inferred.** Every agent context carries a
+  `trigger` (what started it) and a `funding` (`own | sponsor`) decided by
+  `fundingFor` from the trigger — never from `attended`. Both land in S1 with
+  `own` as the only outcome; S5 adds `sponsor`. A third value, `install`, is
+  never an agent's funding: it is stamped only on install-topic model calls
+  (compaction, embeddings, memory extraction, toolshim, decision, vision, ocr)
+  so those rows are told apart in `cost_log`. Every agent spawn and iteration
+  keeps today's `checkSpend`.
 - **D14 — Install CLI models are personal subscriptions unless marked.** In
   space sessions they resolve only when `metadata.cliAgent.sharedUse === true`.
 - **D15 — Space content is never orphaned into personal scope.** Space rows get
@@ -555,8 +557,9 @@ transferred workspace secret decrypts.
   | client `chat`, `steer`, `approval_response`, `permission_response` | `chat.send`, `chat.steer`, `approval.respond`, `permission.respond` |
 
 - `chat.send` gains `workspaceId`; the server resolves and stamps it.
-- Rate limits: chat-scale messages keep the current 60/min/type; room and
-  document frames get their own buckets (§6.6, §7.3).
+- Rate limits: chat messages keep their current buckets (`chat.send` 30/min,
+  commands 60/min for `user` trust, `src/core/gateway/rate-limiter.ts:13-36`);
+  room and document frames get their own buckets (§6.6, §7.3).
 - `src/api/http/serve.ts` sets `maxPayload` to `gateway.maxFrameBytes`
   (default 256 KiB).
 - Replay: a reconnecting tab sends `replay { sessionId, afterEventId }`; the
@@ -766,12 +769,29 @@ any `data.workspaceId`) and `user_id = author`, and check `can()`.
 ### 5.6 The agent inside a space
 
 - **One place builds agent contexts.** `buildAgentContext({ session, userId,
-  trigger, funding })` in `src/core/agent/context.ts` resolves the workspace,
-  membership, role and `space`, and fails closed. Every spawner uses it:
-  `handleMessageInner`, `AgentManager.spawn` (`agent-manager.ts:182`),
-  `POST /api/agents` (`agents.ts:249-255`), the swarm spawner
-  (`swarm/spawner.ts:1599`), the worker spawner, the monitor probe
-  (`monitors/service.ts:86`), hook actions. `SpawnOptions` gains `space`.
+  trigger })` in `src/core/agent/context.ts` resolves the workspace,
+  membership, role and `space`, sets `funding = fundingFor(...)`, and fails
+  closed. Every spawner uses it; `SpawnOptions` gains `space`, `trigger`,
+  `funding`. Children inherit all three from their parent.
+
+  | Spawn site | `trigger` |
+  |---|---|
+  | web, TUI, channel DM turns (`handleMessageInner`) | `user` |
+  | REST `/api/chat`, openai-compat, `POST /api/agents` (`agents.ts:249-255`) | `user` |
+  | room turns (S2), group-channel mentions | `room` |
+  | voice and telephony turns | `user` |
+  | pipelines (`routes/pipelines.ts`, `pipeline-manager.ts`) | the trigger of the session that started them |
+  | hook actions, recurring tasks (`hooks/actions.ts:407,430`, `cron-runner.ts`) | `schedule` |
+  | heartbeat and role turns, task wakeups (`heartbeat.ts`, `wakeups.ts`) | `schedule` |
+  | monitor probes and wake-ups (`monitors/service.ts:86,110`) | `monitor` |
+  | group / room listen and proactive probes (`group-listen.ts`) | `listen` |
+  | background jobs (research, document, learning) | `schedule` |
+  | swarm and worker children (`swarm/spawner.ts:1599`, `worker-spawner.ts`) | inherited |
+  | visitors' requests (S7) | `remote` |
+
+  `fundingFor` returns `own` for every trigger until S5 (§9.1). In a space,
+  `schedule` and `monitor` have no producer (the tools are personal-only, below);
+  `listen` arrives with room modes in S5.
 - **Tools.** Each content tool gets `reposFor(context)` returning
   `contentRepos(principalFromContext(context))`; the call sites to rewrite are
   `notes/index.ts:65,98,100,106,129,147,248,261,289,337`,
@@ -791,9 +811,15 @@ any `data.workspaceId`) and `user_id = author`, and check `can()`.
   editors' CLI turns run with the vendor's own permission mode forced to the
   Octipus decision path (no `--dangerously-skip-permissions`,
   `cli-adapters.ts:720`, inside spaces).
-- **Memories (I7).** `sessionAudience(session) → { shared, personalMemoryOff }`
-  in `src/core/agent/audience.ts` is used at every site: `service.ts:470,624,645,752`,
-  `session-compaction.ts:205`, `learning/processor.ts:36`, `worker-spawner.ts:693-699`.
+- **Memories (I7).** `sessionAudience(session) → { shared, personalMemoryOff,
+  kind: 'personal' | 'group' | 'space' | 'room' }` in `src/core/agent/audience.ts`
+  replaces the derivation at `service.ts:317`; its uses at
+  `service.ts:321,329-330,392,472,510,624,650,753`, `session-compaction.ts:205`,
+  `learning/processor.ts:36` and the child-worker memory load
+  (`worker-spawner.ts:693-699`) read it. The group-context and taken-task
+  branches (`service.ts:329-330`) run only for `kind:'group'`; rooms use
+  `room-context.ts` (§6.4); the `/command` gate (`:392`) applies to `group` and
+  `room`.
 - **I6 rule.** `ensureSpaceSessionKnown(sessionId) → { spaceId } | null`
   (async, mirrors `ensureSharedAudienceKnown`) runs before each decision;
   `applyFlowGuard` gains the space id and applies the space write rule even when
@@ -978,7 +1004,8 @@ resolve paths (`sessions.ts:227`, `session-resolver.ts:56-58`).
   | `/status`, `/help`, `/cancel` | owner | any member (status without other members' details) |
   | `/clear`, title, visibility | owner | room creator or space owner |
   | `/model` | owner | refused (model choice is per requester, S4) |
-  | plan tools, monitors, scripts, test containers, progress rows | owner | the turn's requester, within the role cap |
+  | plan tools, scripts, test containers, progress rows | owner | the turn's requester, within the role cap |
+  | monitors, scheduling | owner | not offered (personal-only tools, §5.6) |
   | learning, voice | owner | refused in rooms |
 
 - **Entry.** Only `handleRoomMessage(roomId, requesterId, postedMessageId)`,
@@ -991,42 +1018,71 @@ resolve paths (`sessions.ts:227`, `session-resolver.ts:56-58`).
   broadcast; a turn starts only when addressed (`@octipus` or the composer
   toggle). Room frames are serialized per connection; order is the server
   `created_at`, with the client's `clientId` echoed for reconciliation.
-- Turn writers never write a second user row for a room: the posted message id
-  is passed in, and `addUserMessage` (`agent-worker.ts:584-597`),
-  `direct-response.ts:151` and the service's guard/voice paths
-  (`service.ts:368,580`) skip persistence for rooms.
+- **Exactly one user row per post, structurally.** For `kind='room'` sessions,
+  every message insert path (`create`, `createForGeneration`, the scoped
+  `create`, `message-repository.ts:131-162`, `scoped.ts:326`) refuses a
+  `role:'user'` row without `authorUserId`, and the posted message id is passed
+  into the turn. The writers that today add a user row then skip it for rooms:
+  `addUserMessage` (`agent-worker.ts:584-597`), the CLI worker
+  (`cli-agent-worker.ts:360-372`), `direct-response.ts:151`, the command
+  registry's `persistCommandExchange` (`commands/registry.ts:80,97,134,161`),
+  the service's input-guard, plan "go", limit and voice paths
+  (`service.ts:372,437,449,580,802`) and steer persistence
+  (`message-handler.ts:74`). A test asserts the refusal.
 
 ### 6.4 The room turn
 
 - **Context** from `buildAgentContext` (requester, space, role,
   `funding:'own'` until S5, `trigger:'room'`).
-- **History is room-aware at the seam**: `readSessionHistory(session, {
-  requesterId })` returns, for rooms, `[checkpoint?] + fenced transcript +
-  current request`, so all four consumers (§1.5) inherit it. The transcript uses
-  a room variant of the group renderer (`room-context.ts`): members by display
-  name from `author_user_id`, assistant rows as `Octipus (you)`, random-tag
-  fence, 6,000-character window, with the notice that the requester is X and
-  everyone sees the reply. The checkpoint summary is placed **inside** the fence.
-  Native conversation snapshots are neither read nor written for rooms
-  (`agent-worker.ts:556,762-767`), and CLI session resume is disabled for rooms.
-- **Compaction** of a room summarizes the attributed transcript and is billed to
-  the requester whose turn triggered it, as `funding:'install'`.
+- **History for rooms.** `readSessionHistory(session)` returns, for rooms,
+  `messages = [fenced block]` where the block holds the checkpoint summary (if
+  any) followed by the attributed transcript from `checkpoint.through` onward,
+  and `rows` = the same rows with author names attached. It never includes the
+  current request: each consumer appends it as today (`agent-worker.ts:584-588`,
+  `direct-response.ts:155`). The transcript renderer (`src/core/rooms/room-context.ts`)
+  names members by display name from `author_user_id`, assistant rows as
+  `Octipus (you)`, uses a random-tag fence, and adds the notice that the
+  requester is X and everyone sees the reply. Native conversation snapshots are
+  neither read nor written for rooms (`agent-worker.ts:556,762-767`), and CLI
+  session resume is disabled for rooms (`cli-agent-worker.ts:892-895` is then
+  unreachable for rooms).
+- **Compaction of rooms** has its own branch in `maybeCompactSession`: it
+  renders the attributed rows itself (`session-compaction.ts:92-143` uses
+  `history.rows`), triggers when the post-checkpoint transcript exceeds
+  `rooms.transcriptWindowChars` (default 6,000) rather than by row count, so
+  the window and the checkpoint never leave a gap, and receives
+  `requesterId` through `MaybeCompactSessionOptions` (the requester of the turn
+  that triggered it; `/compact` uses its caller). The summary call runs under
+  `withProviderUsageContext({ funding: 'install' })`.
 - **Flow labels.** At each room turn start, `private` and `secret` taints are
-  cleared and `suspicious` is set (a requester never inherits another member's
-  consent).
+  cleared and `suspicious` is set, so a requester never inherits another
+  member's consent. This is safe because room turns are serialized (one turn
+  holds the room) and no work of a room turn outlives it: detached children are
+  cancelled with their parent; a test asserts no room agent survives its turn.
+  The private side panel's `suspicious` taint (§6.7) is also per turn: it is set
+  at turn start when a linked transcript is injected.
 - **Approval replies** in rooms are bare `yes`/`no` only, like group threads
   (`approvalReplyFor`, `service.ts:192`).
-- **Queue.** A room turn queue (`src/core/rooms/queue.ts`) records
-  `{ requesterId, messageId, enqueuedAt }`, at most
-  `rooms.maxQueuedPerMember` (default 3) per member; members can cancel their own
-  queued requests; a queued turn re-checks access when it starts. Room turns
-  waiting on an approval give up after `rooms.approvalTimeoutMinutes` (default
-  30) and release the room.
+- **Queue.** The room queue (`src/core/rooms/queue.ts`) is the only waiter on
+  the room: it records `{ requesterId, messageId, enqueuedAt }` and hands the
+  next turn to `handleMessage` only after the previous one finished, so
+  cancelling a queued request just removes it from the room queue
+  (`withSessionTurn` has no way to drop a waiter, `session-turn-lock.ts:2-12`).
+  At most `rooms.maxQueuedPerMember` (default 3) per member; a queued turn
+  re-checks access when handed over. `/stop` from the requester stops their own
+  running turn; an editor+ can also stop it and clear the queue. A room turn
+  waiting on an approval gives up after `rooms.approvalTimeoutMinutes` (default
+  30): the request is expired through the permission or approval manager and
+  the turn's agents are stopped, which releases `withSessionTurn`.
 - **Output.** Deltas stream only to the requester; other members see
   "Octipus is answering Anna" and then the final message after `guardOutput`
-  (`output-guard.ts:70-80`). Every assistant row of a room — final answer,
-  progress rows, direct responses, command notices, background publishes — is
-  broadcast through one hook on `messageRepository.create` for room sessions.
+  (`output-guard.ts:70-80`). Every message row of a room reaches the members
+  through one mechanism: each insert path of `message-repository.ts`
+  (`create`, `createForGeneration`) and `ScopedMessageRepo.create` emits a typed
+  in-process `messageEvents.emit('created', row)` **after commit** (a rolled-back
+  "conversation cleared" insert never broadcasts). `src/core/rooms/fanout.ts`
+  subscribes, resolves the session kind from a bounded cache, and publishes to
+  the room resource (§6.6). No repository imports rooms code.
 - **Cost.** The turn runs inside `withProviderUsageContext({ userId: requester,
   workspaceId, funding })`; `ProviderUsageContext` and `logUsageWithCost` gain
   `workspaceId` and `funding` (`instrumented.ts:7-36`, `cost-tracker.ts:107-120`).
@@ -1050,9 +1106,26 @@ resolve paths (`sessions.ts:227`, `session-resolver.ts:56-58`).
   (one per 3 s), `room.cancel_queued {messageId}`.
 - Events: `room.message`, `room.turn` (`queued|started|waiting|done`, requester
   name, model label), `room.presence`, `room.typing`, `room.read`,
-  `room.removed`, `space.presence`. Delivery is by subscription with an access
-  check at subscribe time and on every `onMembershipChanged` /
-  `onRoomAccessChanged` (private-room member removal, visibility change).
+  `room.removed`, `space.presence`, `task.changed` (S5), `doc.*` (S3).
+- **Resource delivery.** The hub today delivers by event-type pattern and the
+  event's single user (`hub.ts:93-112`; `ConnectionContext` holds only type
+  patterns, `protocol.ts:20-31`), so space events need a second path:
+  `ConnectionContext.resources: Set<'space:<id>' | 'room:<id>' | 'doc:<id>'>`,
+  filled only by `space.subscribe`, `room.subscribe` and `doc.join` after an
+  access check, and pruned by `onMembershipChanged` / `onRoomAccessChanged`;
+  `hub.publishToResource(resource, message)` sends through
+  `connectionManager.broadcast` with a resource filter, outside the event bus
+  and outside the S0a user rule. A test proves a second member receives a
+  `room.message` while every other event still obeys the user rule.
+- **Catch-up** after a reconnect is served from `messages` (paged by id) for
+  rooms, not from the event bus replay.
+- **Access checks per frame (D5).** Database membership read: `space.subscribe`,
+  `room.subscribe`, `room.post`, `room.read`, `room.cancel_queued`, `doc.join`.
+  In-process membership version: `room.typing`, `doc.update`, `doc.awareness`.
+- `onRoomAccessChanged(roomId)` (private-room member removal, visibility
+  change) does for the room what `onMembershipChanged` does for the space:
+  prunes subscriptions, stops the removed member's running and queued turns
+  there, expires their pending requests there.
 - `space.presence` shows `where` (room or note) only when the recipient can
   access it (I3).
 - Rate buckets: `room.post` 30/min, `room.typing` 20/min per connection.
@@ -1129,18 +1202,27 @@ DROP-IF-EXISTS pattern.
   rebuilds a doc from `notes.body`; a client with a different epoch discards its
   local doc and re-seeds, so a reconnect never duplicates text. Concurrent first
   joins share one init promise.
-- Limits: frame size `gateway.maxFrameBytes`; note size
-  `spaces.noteMaxBytes` (default 1 MiB); `doc.update` at most
+- Limits: note size `spaces.noteMaxBytes` (default 192 KiB, which keeps a full
+  `doc.sync` inside `gateway.maxFrameBytes` = 256 KiB; a startup check fails if
+  `noteMaxBytes` exceeds three quarters of `maxFrameBytes`); `doc.update` at most
   `spaces.docMaxUpdatesPerSecond` (30) and `doc.awareness` at most 10/s per
   connection. Updates check the membership version (D5).
 - **Every note writer goes through the hub** when the note is open:
   `NoteService` mutations (save, capture, archive, meeting notes) call
-  `hub.applyExternal(noteId, base, next, origin)`. The hub computes the patch
-  `base → next` and applies it at Yjs relative positions on the current doc;
-  if the patch does not apply cleanly the write is refused as stale (REST 409,
-  tool error), so concurrent edits are never reverted. Surrogate pairs are kept
-  intact. When the note is not open, writes use one conditional
-  `UPDATE … WHERE sha256(body) = $base RETURNING`.
+  `hub.applyExternal(noteId, baseSha256, next, origin)`. The hub keeps, per open
+  doc, a bounded ring of `sha256 → text` for every state it has applied
+  (last 200 states or 30 minutes). It looks up the base text, runs a three-way
+  merge `diff3(base, current, next)`, and on a clean merge applies
+  `diff(current → merged)` to the `Y.Text` in one transaction with the writer
+  as origin; on a conflict or an unknown base the write is refused as stale
+  (REST 409, tool error). Concurrent edits are therefore never reverted.
+  Surrogate pairs are kept intact at cut points. `read_note` and `GET` return
+  the hub's live text and its sha while the note is open, so writers always hold
+  a base the ring knows.
+- **Open/closed races.** One per-note in-process mutex covers the hub's init
+  and persist and every closed-note write. A closed-note write is one
+  conditional `UPDATE … WHERE sha256(body) = $base RETURNING`; the hub's persist
+  is conditional on the sha it last loaded or persisted and reloads on mismatch.
 - **Persist** body and a revision after `spaces.docPersistDebounceMs` idle and
   on last leave; links and the knowledge index are refreshed on last leave or at
   most every `spaces.docReindexMinutes` (10), billed `funding:'install'` to the
@@ -1188,10 +1270,23 @@ human-facing signal, the mutex is the guarantee.
 
 ### 8.1 Model identity
 
-- `AgentContext.model` and `CompletionOptions.modelConfigName` carry the
-  model row's `name` end to end. `getModelByModelId` callers (§1.8) pass
-  `{ userId }` and filter `owner_user_id IS NULL OR owner_user_id = $user`;
-  personal rows never enter global caches.
+- `AgentContext.model` stays the `modelId` — providers, CLI tool configs
+  (`getCLIToolConfig`, `cli-agent-worker.ts:151,495,737-739`,
+  `gateway/commands.ts:162`), toolshim statistics (`agent-worker.ts:1356,2018`,
+  `model-selector.ts:150,160`) and clients (`api/routes/agents.ts:187,270`) read
+  it as such. A new `AgentContext.modelName` carries the row identity and is
+  passed as `CompletionOptions.modelConfigName`; row re-lookups
+  (`agent-worker.ts:2164`, `agent-manager.ts:196`, `providers/index.ts:198`,
+  `litellm-client.ts:449`, `custom/base-custom-provider.ts:50`) use
+  `getModel(modelName)`. Remaining `getModelByModelId` callers pass `{ userId }`
+  and filter `owner_user_id IS NULL OR owner_user_id = $user`; personal rows
+  never enter global caches.
+- **Pricing.** `cost-tracker.ts:95-101`, when it must look up by `modelId`
+  without an owner, considers only `owner_user_id IS NULL` rows, so a personal
+  duplicate never turns install calls into unknown cost. Direct `complete()`
+  callers (research, telephony, compaction, memory, link resolver, evaluators)
+  pass `modelConfigName` from the row they resolved; a test greps for registry
+  rows used without it.
 - Migration `0130_personal_models.sql`: `model_config.owner_user_id` (FK users,
   cascade); `user_model_bindings(user_id, topic, model_name)` for personal topic
   bindings (not `topicRoles`, which the admin topics route rewrites,
@@ -1202,7 +1297,10 @@ human-facing signal, the mutex is the guarantee.
 - Every install-level registry query adds `owner_user_id IS NULL`
   (`model-registry.ts:95-222`, `getAllModels`, `getModelsByProvider`), so
   personal rows never become defaults, topic models or fallbacks for others.
-  Admin model and topic routes refuse personal rows.
+  Admin model and topic routes refuse personal rows. User-facing lists
+  (`/model list`, `/models`, `GET /api/models`, openai-compat `/models`) use
+  `getModelsForUser(userId)`, which returns install/org rows visible to the user
+  plus the user's own personal rows.
 
 ### 8.2 Resolution
 
@@ -1219,6 +1317,13 @@ toolshim, link resolver, weekly review, chunk summarizer, evaluators),
 `decision`, `embedding`, `vision`, `ocr`, compaction, the group-listen probe.
 The `/model` override is keyed by `(sessionId, userId)`.
 
+Explicit model choices go through `resolveModel({ userId, name })`, which
+accepts a name only when the row is visible to that user (install/org rules, or
+`owner_user_id = userId`): `POST /api/agents` (`model`), `POST /api/agents/route`
+(`preferredModel`, `router.ts:117-135`), `/model <id>`, pipeline stage models
+(`pipeline-manager.ts:485,524`) and swarm overrides (`swarm/spawner.ts:2285`).
+A test covers each site with another user's personal model name.
+
 ### 8.3 Keys
 
 One helper `resolveModelKey(row)` resolves under `row.owner_user_id ?? 'system'`
@@ -1231,7 +1336,9 @@ and typesafe cannot back personal rows.
 ### 8.4 Safety of user-supplied model rows
 
 `/api/me/models` builds rows from an allowlist: provider, model id, label,
-endpoint (custom providers only, refused for private and link-local addresses),
+endpoint (custom providers only; the address is resolved and checked against
+private, loopback and link-local ranges on **every request**, the connection is
+pinned to the checked address, and redirects are not followed),
 key or CLI token, topic bindings. No `cliAgent.inheritApiKeys`, `extraArgs`,
 `mcpConfigPath`, `permissionMode` or `extraHeaders`.
 
@@ -1264,16 +1371,25 @@ refusal.
   (`own|unattended|sponsored`, default `unattended`), `sponsor_user_id`
   (`ON DELETE SET NULL`), `sponsor_models jsonb`; spend scopes `space`,
   `space_member`.
-- `AgentContext.trigger: 'user' | 'room' | 'schedule' | 'listen' | 'monitor' |
-  'background'` is set at each spawn site (`buildAgentContext`), and
-  `fundingFor({ space, trigger, requesterId })` decides; `attended` is not used
-  for funding.
+- `fundingFor({ space, trigger, requesterId })` (introduced in S1, §5.6) now
+  returns `sponsor` where the table says so. Outside a space it is always `own`.
 
-  | `agent_funding` | `user`, `room` | `schedule`, `listen`, `monitor` | `background` |
+  | `agent_funding` | `user`, `room` | `listen` | `remote` (S7) |
   |---|---|---|---|
-  | `own` | own | off | install |
-  | `unattended` | own | sponsor | install |
-  | `sponsored` | sponsor (member cap) | sponsor | install |
+  | `own` | own | off | off |
+  | `unattended` | own | sponsor | sponsor |
+  | `sponsored` | sponsor (member cap) | sponsor | sponsor |
+
+  `schedule` and `monitor` have no producer inside a space (§5.6). `install` is
+  not in the table: it is never an agent's funding (D13).
+- **Where `install` is stamped.** Install-topic model calls run inside
+  `withProviderUsageContext({ funding: 'install' })`, overriding the turn's
+  funding they would otherwise inherit (`instrumented.ts:9-11` merges contexts):
+  memory extractor and judge, learning, toolshim (`agent-worker.ts:1985`), link
+  resolver, weekly review, chunk summarizer, evaluators, embeddings, document
+  processor (`processor.ts:277,348,374,504,939,971`), decision models, compaction
+  (`session-compaction.ts:115`, `context-compaction.ts:574`). A test asserts a
+  sponsored turn's toolshim row is `install`.
 
 - Removing or downgrading the sponsor clears `sponsor_user_id` and
   `sponsor_models` in the same transaction, pauses sponsored work and is
@@ -1289,11 +1405,18 @@ refusal.
 - Space budgets are loaded by workspace (`spaceBudgetsOf(workspaceId)`), with a
   partial unique index `(scope_ref, period) WHERE scope_kind IN
   ('space','space_member')`. Owners write them through
-  `PUT /api/spaces/:id/budget`.
+  `PUT /api/spaces/:id/budget`. For these two kinds `spend_budgets.user_id`
+  is the author only: nullable, `ON DELETE SET NULL`, so a budget survives its
+  author's account.
 - `SpendScope` gains `funding` and `spaceId`; all five `checkSpend` call sites
   (§1.8) and the group handler's `budgetPaused` pass them. Own turns check the
-  requester's budgets; sponsored turns check the space budgets; install-funded
-  work checks neither.
+  requester's budgets; sponsored turns check the space budgets. Every agent
+  spawn and iteration keeps a check (D13).
+- Personal scopes (`user`, `role`, `workspace`) add `funding <> 'sponsor'` to
+  `spendSince` (`spend-budgets.ts:198-216`), so spend a sponsor paid never pauses
+  a member's own budget. `install` rows keep counting for the user they are
+  attributed to, as today. A test asserts a sponsored turn never moves a
+  personal budget.
 - Token quota: `tokensPerDay` sums only `agents.funding = 'own'`
   (`quotas.ts:131-134`); concurrency counts all.
 
@@ -1322,24 +1445,31 @@ refusal.
 3. `resolveGroupSession` returns the room for bound channels; turns run as the
    requester. Linked users who are not space members get a private hint and no
    turn. Unlinked people's posts stay platform-only context.
-4. Taken tasks (`src/core/channels/taken-tasks.ts:82,105`,
-   `taken-task-notices.ts`) use the space repo, and the dedup id is per message,
-   not per member.
+4. Taken tasks (`src/core/channels/taken-tasks.ts:82,109-110`,
+   `src/channels/taken-task-notices.ts`) use the space repo, and the dedup id is
+   per message, not per member.
 5. The space budget replaces the channel budget for bound channels; unprompted
    posts use the sponsor and are off without one.
 
 ### 9.5 Space connectors
 
-- Space secrets get their own principal: stored with `scope='workspace'`,
-  `user_id` = the storing owner as author only, encrypted with
-  `dekFor('space', workspaceId)`, read and written only through `space.ts` after
-  a membership check, never matching `workspace_id IS NULL`.
+- Space secrets get their own vault scope: a new `vault_scope` value `'space'`
+  (migration in S5, not used in the same batch), `workspace_id` required,
+  `user_id` = the storing owner as author only. One derivation
+  `dekForRow(row)` replaces the `(scope, userId)` calls in every decrypt path and
+  in rotation (`vault.ts:126-127,296,304,318`, `scripts/rotate-master-key.ts:134`,
+  `rotate-vault-keys.ts`): it uses `workspace_id` for `space` rows and
+  `user_id` otherwise. Space secrets are read and written only through
+  `space.ts` after a membership check. A rotation test includes a space secret.
 - They are used only inside connector code (token getters, `runGh` with a new
   `opts.token`), **never** through `{{secret:}}` injection, so a turn cannot
   route them into a shell or HTTP call; `isVaultAuthenticated` never exempts
   them.
 - Each space connector has its own connect, callback and refresh flow storing
   under the space (`oauth.ts:728-760`).
+- The shell tool in a space session runs without the host's GitHub identity:
+  `GH_TOKEN`, `GITHUB_TOKEN` and the `gh` config directory are stripped from
+  its child env (`gh.ts:25` keeps them today via `GH_KEEP_ENV`).
 
 ### 9.6 Tests
 
@@ -1375,10 +1505,16 @@ Builds on the federation transport (identity, pairing, typed messages) of
 - Nothing of the space is stored on the visitor's install; revocation closes
   live access within one heartbeat.
 
-The member representation is fixed now: a visitor is a
-local `users` row with `kind = 'remote'`, `remote_instance_id` and
-`remote_user_ref`, no password and no login; it holds a normal
-`workspace_members` row and role. The peer principal `peer:<id>` authenticates
+The member representation is fixed now: a visitor is a local `users` row with
+`kind = 'remote'`, `remote_instance_id`, `remote_user_ref`, `email NULL`, and a
+username in a reserved namespace (`<name>@<instance-fingerprint>`); a CHECK
+and the validation of registration, SCIM and admin creation reject `@` in local
+usernames, so no local user can take a visitor's name. Remote rows cannot sign
+in: `SessionManager.create`, `ApiTokenManager`, impersonation, SAML JIT and
+passkeys refuse them; admin user lists and SCIM exclude them; quotas and
+budgets apply to the host-side work they trigger, which is always sponsored
+(`trigger:'remote'`, §9.1). Each holds a normal `workspace_members` row and
+role. The peer principal `peer:<id>` authenticates
 the install; the host maps each `space.*` message to that visitor's user row.
 `space.*` operations map to the federation's capability enum; file writes from
 visitors are proposals only.
@@ -1394,10 +1530,13 @@ visitors are proposals only.
 | `security.trustedProxies` | S0a | `[]` |
 | `gateway.maxFrameBytes`, `gateway.replayMaxSessions` | S0d | 262144, 500 |
 | `spaces.creation`, `spaces.maxMembers`, `spaces.inviteMaxTtlHours`, `spaces.purgeAfterArchiveDays` | S1 | `any_user`, 50, 720, 7 |
-| `spaces.memoryMaxItems`, `rooms.maxQueuedPerMember`, `rooms.approvalTimeoutMinutes` | S2 | 50, 3, 30 |
-| `spaces.noteMaxBytes`, `spaces.docMaxUpdatesPerSecond`, `spaces.docPersistDebounceMs`, `spaces.docReindexMinutes`, `spaces.fileLeaseTtlSeconds` | S3 | 1 MiB, 30, 2000, 10, 180 |
+| `spaces.memoryMaxItems`, `rooms.maxQueuedPerMember`, `rooms.approvalTimeoutMinutes`, `rooms.transcriptWindowChars` | S2 | 50, 3, 30, 6000 |
+| `spaces.noteMaxBytes`, `spaces.docMaxUpdatesPerSecond`, `spaces.docPersistDebounceMs`, `spaces.docReindexMinutes`, `spaces.fileLeaseTtlSeconds` | S3 | 192 KiB, 30, 2000, 10, 180 |
 | `security.registration` | S6 | `open` |
 
+`gateway`, `spaces` and `rooms` are new top-level config sections (the schema
+today has `security`, `api`, `multiuser` and others, `config/schema.ts:593-650`),
+each with schema, defaults, legacy loader and registry entries.
 Each key lands in the PR that reads it (the dead-settings test enforces this),
 with schema default, registry entry and env var; the legacy loader and defaults
 agree with the schema (a test asserts it).
