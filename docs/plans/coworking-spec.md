@@ -1,9 +1,11 @@
 # Coworking — implementation spec
 
-> **Spec, revision 2, 2026-10-04.** This turns [coworking.md](coworking.md)
-> (the concept) into buildable work against `main` at 6c47b51. Revision 1 was
-> reviewed against the code by four independent reviewers (116 findings); this
-> revision folds every verified finding in. Two owner directions shape it:
+> **Spec, revision 3, 2026-10-04.** This turns [coworking.md](coworking.md)
+> (the concept) into buildable work against `main` at 6c47b51. It was reviewed
+> against the code in three rounds by independent reviewers: round one found 116
+> issues in revision 1, round two 81 in revision 2, round three 18 (no blockers)
+> in the pre-final text; every verified finding is folded in. Two owner
+> directions shape it:
 >
 > 1. **Octipus is always multi-user.** No single-user mode, no switch for
 >    workspaces or spaces. Single-user leftovers are removed, not worked around.
@@ -51,7 +53,7 @@ These affect every install with more than one user, today.
 | L7 | Deactivated users keep access: sessions, API tokens, passkeys, SAML, every socket; trust and admin flags are snapshots | `src/security/auth/session.ts:159-178`, `src/api/server.ts:203-213,236-240`, `src/api/routes/saml.ts:233-257`, `src/api/websocket.ts:458,559`, `src/api/voice-ws.ts:126`, `src/api/gateway-ws.ts:15-24`, `connection-manager.ts:256-266,324-335`; `revokeAllForUser` has no caller (`session.ts:292`) |
 | L8 | A SCIM token of one org can deactivate any user on the install | `src/api/routes/scim.ts:305-310` (DELETE scopes only the `org_members` delete; compare PATCH's org join at `:246-251`) |
 | L9 | The artifacts tool imports a function that does not exist and falls back to an arbitrary workspace of the user | `src/tools/artifacts/index.ts:141-153` imports `getOrgWorkspaceManager` from `@/services/org-membership`, which exports only `getUserOrgIds` (`src/services/org-membership.ts:20`); fallback `limit(1)` with no order |
-| L10 | Admins answer any user's permission requests, members or not | `src/api/websocket.ts:349-352`, `src/security/permissions.ts:548` |
+| L10 | Admins answer any user's permission requests and root-agent approvals, members or not | `src/api/websocket.ts:349-357`, `src/security/permissions.ts:548`, `src/api/routes/chat.ts:248-255`, `src/core/gateway/message-handler.ts:467,500-504` |
 
 ### 1.2 Ownership and isolation
 
@@ -396,9 +398,11 @@ type KnowledgeScope =
 
 - **Writes.** `store`/`indexText` (`embeddings.ts:306-371`) require
   `{ ownerUserId, workspaceId }` (product docs pass `{ product: true }`). The
-  dedup key becomes `(purpose, source_id, content_sha256, user_id,
-  workspace_id)` (`src/db/schema/embeddings.ts:147`), so two users indexing the
-  same path never overwrite or adopt each other's rows. Callers: documents
+  dedup index `embeddings_dedup_idx` (`0049:28`, `src/db/schema/embeddings.ts:147`)
+  is replaced in 0125 by `(purpose, source_id, content_sha256, user_id,
+  workspace_id) NULLS NOT DISTINCT` (Postgres 16 in compose, PGlite = 17), with
+  the matching `onConflict` target (`embeddings.ts:342-354`), so two users
+  indexing the same path never overwrite or adopt each other's rows. Callers: documents
   processor (`processor.ts:931-953`), notes reindex (`notes.ts:183-197`),
   research `persistReport` (`research/persist.ts:90-95`), the file indexer
   (`src/core/rag/indexer.ts:30-81`: filesystem auto-index
@@ -441,13 +445,22 @@ extension's installing user. `AgentNode` gains `userId`
 L4 is stamped, including all ten `pipeline_event` sites and
 `swarm.call_graph_cycle_blocked`. Delivery on `/ws` (until S0d removes it) and
 the gateway: `event.userId === connection.userId`, whatever the trust level.
-Artifact events gain `workspaceId` and go to owners of that workspace (members
-from S1); the gateway gains the `artifact_token` auth method the live-artifact
-client already sends (`web/public/octipus-artifact-client.js`;
-`connection-manager.ts:239-349` has none), subscribing that connection to that
-artifact's events only.
+**Resource delivery** is the one other path, introduced here and extended in
+S2: `ConnectionContext.resources: Set<string>` (e.g. `artifact:<id>`, later
+`space:`, `room:`, `doc:`), filled only by subscribe messages after an access
+check, and `hub.publishToResource(resource, message)`, which sends through
+`connectionManager.broadcast` with a resource filter, outside the event bus and
+outside the user rule. Artifact events go to the resource `artifact:<id>`; a
+signed-in user subscribes after the workspace check (owner now, members from
+S1); the gateway gains the `artifact_token` auth method the live-artifact client
+already sends (`web/public/octipus-artifact-client.js`;
+`connection-manager.ts:239-349` has none), whose connection may subscribe to
+that one artifact only.
 
-**Client addresses (L5).** One `clientIp(request, socketAddress)` helper
+**Client addresses (L5).** The HTTP layer forwards the socket address
+(`env.incoming.socket.remoteAddress` from `@hono/node-server`, today dropped by
+`App.fetch`, `src/api/http/app.ts:367-373`) into the request context. One
+`clientIp(request, socketAddress)` helper
 honours forwarded headers only when the socket address is in
 `security.trustedProxies` (new; default empty; the operator docs show the
 setting for a reverse proxy). The gateway (`gateway-ws.ts:28-31`), REST rate
@@ -458,17 +471,25 @@ install-wide cap.
 
 **Trust levels (L5).** Trust never widens what a connection may see or touch:
 
-- The `local` auth method and the `local` trust level are removed, and the TUI
-  moves to the CLI login, in this PR (described under §4.2); the
-  session-token upgrade to `local` on loopback (`connection-manager.ts:262-266`)
-  goes with it.
-- Admin API tokens get `user` trust (`connection-manager.ts:333`); `system`
-  trust is for HMAC channel adapters only.
+- The `local` auth method and the `local` trust level are removed. The TUI signs
+  in with the existing CLI login (`src/core/gateway/cli-session.ts`, `cli-login.ts`,
+  `session.json` with a session token) and prompts once when it has none; its
+  `/logout` and `/whoami` (`tui-pi/app.ts:604-614`) stop mentioning a machine
+  account. The hub stops minting `~/.octipus/local-token` at boot (`hub.ts:45`)
+  and the client stops minting its own (`client.ts:66`). The session-token
+  upgrade to `local` on loopback (`connection-manager.ts:262-266`) goes too, as
+  do the `local` entries of the auth enum (`protocol.ts:139`), the rate limiter
+  and `local-auth.test.ts`; `docs/guides/tui.md` and
+  `docs/architecture/gateway.md` are updated. The unused `hmac` method (no caller
+  of `setHmacValidator`) is removed.
+- Admin API tokens get `user` trust (`connection-manager.ts:333`). No connection
+  gets `system` trust.
 - Every ownership check compares user ids regardless of trust:
   `sessionAccessError` (`message-handler.ts:35-36`), permission answers
   (`:467`), `agent.stop` (`:572`), the `history` command and skill proposals
-  (`commands.ts:330-345,393-399`). Machine-level commands (`/reload`,
-  `commands.ts:479`) require `isAdmin` read from the database.
+  (`commands.ts:330-345,393-399`). Commands gated by trust level
+  (`minTrustLevel`, e.g. `reload-extensions`, `commands.ts:578-581`) are gated by
+  `isAdmin` read from the database instead.
 - Trust and admin are recomputed by `onUserChanged` (below).
 
 **Voice (L6).** The `voice` frame checks session ownership like `steer`; the
@@ -506,19 +527,24 @@ plan gate is keyed by `(sessionId, userId)` (`service.ts:567-575`).
 **Admin approvals (L10).** Permission and approval requests are answered by
 their requester. An admin answers someone else's request only through
 `POST /api/admin/permission-requests/:id/resolve` with a reason, which is
-audited; the generic answer paths (`websocket.ts:349-352`,
-`permissions.ts:548`, `message-handler.ts:467`) drop the admin bypass.
+audited; the same holds for root-agent approvals
+(`POST /api/admin/approvals/:id/resolve`). The generic answer paths drop the
+admin bypass: `websocket.ts:349-357`, `permissions.ts:548`,
+`message-handler.ts:467,500-504`, `chat.ts:248-255`; `resolveApprovalDetailed`
+always takes `forUserId`.
 
 **Tests:** `src/api/leaks.isolation.test.ts` — two users; B gets nothing of A's
 documents (tool and route), knowledge entries (read, delete, cleanup, stats),
 search hits, swarm, pipeline and turn events (`/ws` and gateway), voice toggle,
-history command, permission requests; an admin on loopback behind a proxy
+history command, permission requests and root-agent approvals (REST and
+gateway); an admin on loopback behind a proxy
 without `trustedProxies` gets `user` trust and cannot open another user's
 session; a forged forwarded header changes nothing; a deactivated user's
 session, API token, passkey, SAML login and every socket fail; a demoted
 admin's socket is closed and reconnects without admin rights; a SCIM token
 cannot deactivate another org's user; a hook of a deactivated user does not
-fire; product docs stay searchable for a non-admin after 0125.
+fire; product docs stay searchable for a non-admin after 0125; the TUI signs in
+through the CLI login with that user's identity.
 
 ### 4.2 S0b — One multi-user model
 
@@ -532,13 +558,9 @@ fire; product docs stay searchable for a non-admin after 0125.
   (`docs/architecture/MULTI-USER.md`, `docs/QA.md`). `/api/orgs` routes remain
   admin-gated. A startup step deletes a stored `multiuser.orgWorkspaces`
   settings row.
-- **No pseudo-user sign-in.** The gateway `local` auth method is removed. The
-  TUI signs in with the existing CLI login (`src/core/gateway/cli-session.ts`,
-  `session.json` with a session token); a TUI without one prompts once ("run
-  octi login"). The hub stops minting `~/.octipus/local-token` at boot
-  (`hub.ts:45`) and the client stops minting its own (`client.ts:66`).
-  `resolveUserId`'s "first admin" fallback (`resolve-user.ts:10-24`) is deleted;
-  a non-UUID user id reaching a UUID column is a bug and throws.
+- **No pseudo-user ids.** `resolveUserId`'s "first admin" fallback
+  (`resolve-user.ts:10-24`) is deleted; a non-UUID user id reaching a UUID
+  column is a bug and throws. (The `local` sign-in itself is removed in S0a.)
 - **`'system'` is only for system jobs**, never a connection identity. Each
   special case is restated as "real user or system job": `WorkspaceFS.forAgent`
   for a system job requires an explicit `{ system: true, root }` and never the
@@ -561,8 +583,7 @@ fire; product docs stay searchable for a non-admin after 0125.
   no production caller). Any future deletion path must call
   `assertDeletable(userId)` (S1 adds "not the last owner of a space").
 
-**Tests:** no `orgWorkspaces` key anywhere; the TUI signs in through the CLI
-login and gets that user's identity; a non-UUID user id at a UUID column
+**Tests:** no `orgWorkspaces` key anywhere; a non-UUID user id at a UUID column
 throws; a resolver failure answers 503; TOTP sign-in works in the web
 (Playwright); a pairing code redeems once under two concurrent requests.
 
@@ -606,10 +627,11 @@ throws; a resolver failure answers 503; TOTP sign-in works in the web
 - **Repair and foreign keys** (migration `0126_workspace_integrity.sql`), in
   order, in one file:
   1. For notes whose `workspace_id` names a missing workspace or a workspace
-     owned by another user: when setting it to `NULL` would collide with the
-     author's user-level note of the same slug
-     (`notes_user_slug_uidx`, `0066_uneven_the_hand.sql:20-21`), rename the
-     younger note's slug to `slug || '-' || left(id::text, 8)` first; then set
+     owned by another user: within each `(user_id, slug)` group of {existing
+     user-level notes ∪ notes about to be reset}, keep the oldest and rename the
+     others' slug to `slug || '-' || left(id::text, 8)` (so they collide neither
+     with existing user-level notes nor with each other on
+     `notes_user_slug_uidx`, `0066_uneven_the_hand.sql:20-21`); then set
      `workspace_id = NULL`.
   2. The same reset (without slugs) for tasks, knowledge links, workspace repos
      and background jobs.
@@ -619,7 +641,9 @@ throws; a resolver failure answers 503; TOTP sign-in works in the web
   4. Add `REFERENCES workspaces(id) ON DELETE SET NULL` to those five tables.
 - **One table list.** `WORKSPACE_TABLES` (`src/db/workspace-tables.ts`) lists
   every table with a `workspace_id` column and, per table, its action on
-  transfer (`move` / `n/a`) and on space purge (`delete` / `n/a`, S1). A test
+  transfer (`move` / `n/a`) and on space purge (`delete` / `keep`, S1). History
+  tables are `keep`: `audit_log` and `cost_log` (the space's audit trail and
+  billing outlive it); `notifications` and `permission_requests` are `delete`. A test
   reads `information_schema.columns` and fails when a `workspace_id` table is
   missing. Transfer moves every `move` table in one transaction, re-encrypting
   vault rows under the new owner; the backfill script uses the same list.
@@ -753,6 +777,13 @@ CREATE INDEX IF NOT EXISTS audit_log_ws_created_idx ON audit_log(workspace_id, c
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS workspace_id uuid; -- exists; stamped from now on
 ALTER TABLE permission_requests ADD COLUMN IF NOT EXISTS workspace_id uuid;
 
+ALTER TABLE cost_log ADD COLUMN IF NOT EXISTS workspace_id uuid;
+ALTER TABLE cost_log ADD COLUMN IF NOT EXISTS funding text NOT NULL DEFAULT 'own';
+ALTER TABLE cost_log DROP CONSTRAINT IF EXISTS cost_log_funding_chk;
+ALTER TABLE cost_log ADD CONSTRAINT cost_log_funding_chk CHECK (funding IN ('own','sponsor','install'));
+CREATE INDEX IF NOT EXISTS cost_log_ws_funding_idx ON cost_log(workspace_id, funding, created_at) WHERE workspace_id IS NOT NULL;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS funding text NOT NULL DEFAULT 'own';
+
 ALTER TYPE "audit_action" ADD VALUE IF NOT EXISTS 'space_created';
 -- … space_updated, space_archived, space_purged, space_member_added,
 -- space_member_role_changed, space_member_removed, space_invite_created,
@@ -839,12 +870,18 @@ Room posts and space memory in the table apply from S2.
   notifications; rooms and space memory from S2, documents hub from S3. Every
   other route is personal: when the header names a space, it runs with the
   caller's **default personal workspace** instead (the principal is rewritten
-  before the handler), so a member viewing a space still answers approvals
+  before the handler), with one exception: a route that addresses a session,
+  agent or pipeline by id (`?sessionId=`, `/:id`) resolves the workspace from
+  that session, so a member's private space chat still lists and stops its own
+  agents and pipelines (`web/app/chat/page.tsx:343`,
+  `web/app/agents/page.tsx:182,201,210`, `src/api/routes/agents.ts:42,63-64,200`);
+  access then follows the space rules. A member viewing a space still answers
+  approvals
   (`/api/chat/approve`, `web/lib/permission-context.tsx:96-100`), picks models
   (`/api/models`), searches and edits settings. Personal routes therefore never
   act on space rows, and the web needs no per-call header logic. A test
   classifies every mounted route, and a web test drives the app's own calls
-  with a space selected.
+  with a space selected, including a space chat with a running agent.
 
 ### 5.5 Access layer (`src/db/repositories/space.ts`)
 
@@ -859,9 +896,11 @@ any `data.workspaceId`) and `user_id = author`, and check `can()`.
   ignores `data.workspaceId` (`:1047`). Comments in a space are written with the
   commenting member as `user_id`. Wakeups: `wakeupContext` uses the scope
   (`:1308`); wakeup events carry the woken task's `user_id`, and notifications
-  go to that user (`wakeups.ts:282,320`); the role-heartbeat wake and the bridge
-  look tasks up by scope, not by owner (`heartbeat.ts:970`,
-  `wakeup-bridge.ts:172,207`).
+  go to that user (`wakeups.ts:282,320`); the bridge looks tasks up by scope,
+  not by owner (`wakeup-bridge.ts:172,207`). Role agents and role heartbeats are
+  personal automation: a space task is never assigned to a role and never wakes
+  a role heartbeat (`heartbeat.ts:968-975` skips tasks in shared workspaces), so
+  a woken space task only notifies its author and assignee.
 - **Notes and links.** `SpaceNoteRepo` with the `NoteRepository` method set.
   `NoteService` takes a `NoteScope` instead of `userId`. Link resolution
   (`resolveTo`, `resolveGhostRefs`, `countUnresolved`, suggestions; 
@@ -909,7 +948,7 @@ any `data.workspaceId`) and `user_id = author`, and check `can()`.
   | hook actions, recurring tasks (`hooks/actions.ts:407,430`, `cron-runner.ts`) | `schedule` |
   | heartbeat and role turns, task wakeups (`heartbeat.ts`, `wakeups.ts`) | `schedule` |
   | monitor probes and wake-ups (`monitors/service.ts:86,110`) | `monitor` |
-  | group / room listen and proactive probes (`group-listen.ts`) | `listen` |
+  | the turn after a positive group / room listen probe (`group-listen.ts`); the probe call itself is `install` | `listen` |
   | background jobs (research, document, learning) | `schedule` |
   | swarm and worker children (`swarm/spawner.ts:1599`, `worker-spawner.ts`) | inherited |
   | visitors' requests (S7) | `remote` |
@@ -919,7 +958,15 @@ any `data.workspaceId`) and `user_id = author`, and check `can()`.
   `hooks/actions.ts:646`, the monitor probe (`monitors/service.ts:86`). A test
   fails on `: AgentContext = {` outside `context.ts`.
 
-  `fundingFor` returns `own` for every trigger until S5 (§9.1). In a space,
+  `fundingFor` returns `own` for every trigger until S5 (§9.1).
+
+  Every caller of `buildAgentContext` runs the whole turn inside
+  `withProviderUsageContext({ userId, workspaceId, funding })`;
+  `ProviderUsageContext` and `logUsageWithCost` gain `workspaceId` and
+  `funding` (`instrumented.ts:7-36`, `cost-tracker.ts:107-120`), so every cost
+  row of a space turn — private session or room — carries the space and its
+  funding (the columns arrive in 0127). A test asserts it for a private space
+  session. In a space,
   `schedule` and `monitor` have no producer (the tools are personal-only, below);
   `listen` arrives with room modes in S5.
 - **Tools.** Each content tool gets `reposFor(context)` returning
@@ -942,13 +989,20 @@ any `data.workspaceId`) and `user_id = author`, and check `can()`.
   and search tools, `*_read` actions as in `flow-guard.ts:138`, task comments,
   room posts from S2), not `isReadOnlyAction`. `stripMutatingTools`
   (`root-runner.ts:281`) also runs for commenters.
-- **CLI models in spaces.** Native CLI tools must not bypass the cap:
-  Claude Code runs with its stdio permission tool, which routes every native
-  call through `cli-permissions.ts` and therefore `routeApprovalFor`
-  (`cli-adapters.ts:674`); Codex runs with the `read-only` sandbox and
-  Antigravity with `--mode plan` in every space session
-  (`cli-adapters.ts:716-720,783-811`), so their writes can only happen through
-  Octipus tools. Commenters' turns use API models only. Each adapter has a test.
+- **CLI models in spaces.** A CLI tool may run in a space session only in a
+  mode where its native tools cannot act outside Octipus's decision path; each
+  adapter declares that mode, and a tool without one is refused in spaces:
+  - Claude-binary tools (Claude Code, GLM, Kimi): `--permission-mode default`
+    plus the stdio permission tool, which requires connection mode
+    (`cli-adapters.ts:638,672-675`); today's default `acceptEdits` and `full` →
+    `bypassPermissions` (`:428-448`) are overridden in spaces.
+  - Codex: `read-only` sandbox; Antigravity: `--mode plan`
+    (`cli-adapters.ts:716-720,783-811`) — their writes can only happen through
+    Octipus tools.
+  - Mistral Vibe (default `auto-approve`, `cli-adapters.ts:466`): refused in
+    spaces until its adapter declares such a mode.
+
+  Commenters' turns use API models only. Each adapter has a test.
 - **Memories (I7).** `sessionAudience(session) → { shared, personalMemoryOff,
   kind: 'personal' | 'group' | 'space' | 'room' }` in `src/core/agent/audience.ts`
   replaces the derivation at `service.ts:317`; its uses at
@@ -1007,9 +1061,10 @@ Authenticated, TypeBox bodies with `additionalProperties: false`, typed
   action is `delete`, the rows with `workspace_id = $id` (artifacts, whose
   foreign key cascades today, included explicitly), plus rows keyed by the
   space's sessions without a cascading key (`agents`, `tool_actions`,
-  `run_events`); then it counts rows with `workspace_id = $id` in every
-  `workspace_id` table (from `information_schema`) and aborts if any remain;
-  then it deletes the workspace row. After commit it removes
+  `run_events`); then it counts rows with `workspace_id = $id` in every table
+  whose action is `delete` and aborts if any remain; then it writes the
+  `space_purged` audit row and deletes the workspace row. `keep` tables have no
+  foreign key to `workspaces`, so their rows survive with the id. After commit it removes
   `<workspace.rootPath>/spaces/{id}` and `<workspace.documentsPath>/spaces/{id}`,
   with a retry sweep for failures.
 - A personal workspace delete (`orgs.ts:434-448`) refuses shared workspaces and
@@ -1063,9 +1118,9 @@ requests and pauses data sources.)
   another member's dependent task.
 - `src/core/knowledge/space-links.test.ts`: link resolution never crosses
   personal and space scopes.
-- `src/core/spaces/purge.test.ts`: purge after a real agent turn in the space
-  leaves no row in any `workspace_id` table; a row in an unlisted table makes
-  purge abort; files are removed; a personal workspace delete still sets
+- `src/core/spaces/purge.test.ts`: purge after a real agent turn (with audit and
+  cost rows) leaves no row in any `delete` table and keeps the `keep` rows; the
+  `WORKSPACE_TABLES` test fails on an unclassified `workspace_id` column; files are removed; a personal workspace delete still sets
   `NULL`; `assertDeletable` refuses the last owner.
 - I6 on the base-tool and MCP paths; personal profiles absent from a space turn;
   CLI adapters in spaces (Claude permission tool, Codex read-only, Antigravity
@@ -1107,13 +1162,6 @@ CREATE TABLE IF NOT EXISTS room_reads (            -- read state and mute, any r
 );
 
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS author_user_id uuid REFERENCES users(id) ON DELETE SET NULL;
-
-ALTER TABLE cost_log ADD COLUMN IF NOT EXISTS workspace_id uuid;
-ALTER TABLE cost_log ADD COLUMN IF NOT EXISTS funding text NOT NULL DEFAULT 'own';
-ALTER TABLE cost_log DROP CONSTRAINT IF EXISTS cost_log_funding_chk;
-ALTER TABLE cost_log ADD CONSTRAINT cost_log_funding_chk CHECK (funding IN ('own','sponsor','install'));
-CREATE INDEX IF NOT EXISTS cost_log_ws_funding_idx ON cost_log(workspace_id, funding, created_at) WHERE workspace_id IS NOT NULL;
-ALTER TABLE agents ADD COLUMN IF NOT EXISTS funding text NOT NULL DEFAULT 'own';
 
 CREATE TABLE IF NOT EXISTS space_memory (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1160,7 +1208,13 @@ resolve paths (`sessions.ts:227`, `session-resolver.ts:56-58`).
 
 - **Entry.** Only `handleRoomMessage(roomId, requesterId, postedMessageId)`,
   called by the `room.post` gateway message and its REST fallback, starts room
-  turns.
+  turns. The turn pipeline is split: `handleMessageInner` becomes
+  `resolveSession` (personal ownership gate, unchanged) followed by a shared
+  `runTurn({ session, requesterId, message, trigger, postedMessageId? })` that
+  holds the rest (workspace, audience, memory gates, persistence, compaction).
+  `handleRoomMessage` checks `roomAccess` and calls `runTurn` directly, so rooms
+  never pass the personal gate and personal sessions never skip it. A test runs
+  an addressed post by a member who is not the room's creator.
 
 ### 6.3 Posting, addressing, ordering
 
@@ -1215,7 +1269,8 @@ resolve paths (`sessions.ts:227`, `session-resolver.ts:56-58`).
   (`approvalReplyFor`, `service.ts:192`).
 - **Queue.** The room queue (`src/core/rooms/queue.ts`) is the only waiter on
   the room: it records `{ requesterId, messageId, enqueuedAt }` and hands the
-  next turn to `handleMessage` only after the previous one finished, so
+  next turn to `runTurn` (inside `withSessionTurn`) only after the previous
+  one finished, so
   cancelling a queued request just removes it from the room queue
   (`withSessionTurn` has no way to drop a waiter, `session-turn-lock.ts:2-12`).
   At most `rooms.maxQueuedPerMember` (default 3) per member; a queued turn
@@ -1233,9 +1288,8 @@ resolve paths (`sessions.ts:227`, `session-resolver.ts:56-58`).
   "conversation cleared" insert never broadcasts). `src/core/rooms/fanout.ts`
   subscribes, resolves the session kind from a bounded cache, and publishes to
   the room resource (§6.6). No repository imports rooms code.
-- **Cost.** The turn runs inside `withProviderUsageContext({ userId: requester,
-  workspaceId, funding })`; `ProviderUsageContext` and `logUsageWithCost` gain
-  `workspaceId` and `funding` (`instrumented.ts:7-36`, `cost-tracker.ts:107-120`).
+- **Cost.** As every turn (§5.6), the room turn runs inside
+  `withProviderUsageContext({ userId: requester, workspaceId, funding })`.
 
 ### 6.5 Space memory
 
@@ -1257,16 +1311,13 @@ resolve paths (`sessions.ts:227`, `session-resolver.ts:56-58`).
 - Events: `room.message`, `room.turn` (`queued|started|waiting|done`, requester
   name, model label), `room.presence`, `room.typing`, `room.read`,
   `room.removed`, `space.presence`, `task.changed` (S5), `doc.*` (S3).
-- **Resource delivery.** The hub today delivers by event-type pattern and the
-  event's single user (`hub.ts:93-112`; `ConnectionContext` holds only type
-  patterns, `protocol.ts:20-31`), so space events need a second path:
-  `ConnectionContext.resources: Set<'space:<id>' | 'room:<id>' | 'doc:<id>'>`,
-  filled only by `space.subscribe`, `room.subscribe` and `doc.join` after an
-  access check, and pruned by `onMembershipChanged` / `onRoomAccessChanged`;
-  `hub.publishToResource(resource, message)` sends through
-  `connectionManager.broadcast` with a resource filter, outside the event bus
-  and outside the S0a user rule. A test proves a second member receives a
-  `room.message` while every other event still obeys the user rule.
+- **Resource delivery** (the S0a mechanism, §4.1; the hub otherwise delivers by
+  event-type pattern and single user, `hub.ts:93-112`, `protocol.ts:20-31`)
+  gains `space:<id>`, `room:<id>` and `doc:<id>` resources, filled only by
+  `space.subscribe`, `room.subscribe` and `doc.join` after an access check and
+  pruned by `onMembershipChanged` / `onRoomAccessChanged`. A test proves a second
+  member receives a `room.message` while every other event still obeys the user
+  rule.
 - **Catch-up** after a reconnect is served from `messages` (paged by id) for
   rooms, not from the event bus replay.
 - **Access checks per frame (D5).** Database membership read: `space.subscribe`,
@@ -1334,8 +1385,8 @@ row has `workspace_id` and `funding`.
 
 ### 7.1 Dependencies
 
-`yjs`, `y-protocols`, `y-codemirror.next` — justified in the PR (a CRDT is not
-20 lines).
+`yjs`, `y-protocols`, `y-codemirror.next`, and a three-way text merge
+(`node-diff3`) — justified in the PR (a CRDT and diff3 are not 20 lines).
 
 ### 7.2 Schema (migration `0129_live_documents.sql`)
 
@@ -1352,16 +1403,20 @@ DROP-IF-EXISTS pattern.
   rebuilds a doc from `notes.body`; a client with a different epoch discards its
   local doc and re-seeds, so a reconnect never duplicates text. Concurrent first
   joins share one init promise.
-- Limits: note size `spaces.noteMaxBytes` (default 192 KiB, which keeps a full
-  `doc.sync` inside `gateway.maxFrameBytes` = 256 KiB; a startup check fails if
-  `noteMaxBytes` exceeds three quarters of `maxFrameBytes`); `doc.update` at most
+- Limits: note size `spaces.noteMaxBytes` (default 112 KiB); a startup check
+  fails unless `noteMaxBytes` is at most half of `gateway.maxFrameBytes`
+  (256 KiB), which leaves room for base64, the JSON envelope and Yjs overhead in
+  a full `doc.sync`; `doc.update` at most
   `spaces.docMaxUpdatesPerSecond` (30) and `doc.awareness` at most 10/s per
   connection. Updates check the membership version (D5).
 - **Every note writer goes through the hub** when the note is open:
   `NoteService` mutations (save, capture, archive, meeting notes) call
   `hub.applyExternal(noteId, baseSha256, next, origin)`. The hub keeps, per open
-  doc, a bounded ring of `sha256 → text` for every state it has applied
-  (last 200 states or 30 minutes). It looks up the base text, runs a three-way
+  doc, the **bases it has handed out**: whenever `read_note` or the REST `GET`
+  returns `(text, sha)` for an open note, that text is pinned in a per-doc map
+  with a TTL of `spaces.docBaseTtlMinutes` (30), at most 32 bases and 4× the
+  note size per doc (oldest evicted first). Applied keystroke states are never
+  stored. It looks up the base text, runs a three-way
   merge `diff3(base, current, next)`, and on a clean merge applies
   `diff(current → merged)` to the `Y.Text` in one transaction with the writer
   as origin; on a conflict or an unknown base the write is refused as stale
@@ -1464,7 +1519,9 @@ default. Personal rows may bind only `kind:'text'` topics
 (`src/models/topics.ts:26,61-71`). Install-level topics stay install-level and
 are funded `install`: `background` (memory extractor and judge, learning,
 toolshim, link resolver, weekly review, chunk summarizer, evaluators),
-`decision`, `embedding`, `vision`, `ocr`, compaction, the group-listen probe.
+`decision`, `embedding`, `vision`, `ocr`, compaction, and the group-listen
+gate probe (the cheap model call that decides whether to speak). The turn that
+follows a positive probe is an agent turn with `trigger:'listen'` (§5.6).
 The `/model` override is keyed by `(sessionId, userId)`.
 
 Explicit model choices go through `resolveModel({ userId, name })`, which
@@ -1617,9 +1674,12 @@ refusal.
   them.
 - Each space connector has its own connect, callback and refresh flow storing
   under the space (`oauth.ts:728-760`).
-- The shell tool in a space session runs without the host's GitHub identity:
-  `GH_TOKEN`, `GITHUB_TOKEN` and the `gh` config directory are stripped from
-  its child env (`gh.ts:25` keeps them today via `GH_KEEP_ENV`).
+- Space sessions never act with the host's GitHub identity. The shell already
+  strips `GH_TOKEN`/`GITHUB_TOKEN` (`src/security/child-env.ts:56-66`); the
+  remaining exposure is the host's `gh` config under `HOME`
+  (`~/.config/gh/hosts.yml`). In space sessions the shell, `runGh` and CLI tools
+  run with `GH_CONFIG_DIR` (and, for CLI tools, `HOME`) pointing at an empty
+  per-space directory.
 
 ### 9.6 Tests
 
@@ -1657,9 +1717,12 @@ Builds on the federation transport (identity, pairing, typed messages) of
 
 The member representation is fixed now: a visitor is a local `users` row with
 `kind = 'remote'`, `remote_instance_id`, `remote_user_ref`, `email NULL`, and a
-username in a reserved namespace (`<name>@<instance-fingerprint>`); a CHECK
-and the validation of registration, SCIM and admin creation reject `@` in local
-usernames, so no local user can take a visitor's name. Remote rows cannot sign
+username with a leading `~` (`~name@<instance-fingerprint>`, shown as
+`name@instance`). Local usernames may not start with `~`: registration, admin
+creation, SCIM and SAML JIT reject it, and a CHECK enforces it after a migration
+step that renames any existing `~`-prefixed local username. `@` stays allowed,
+because SAML `NameID` and SCIM `userName` are usually e-mail addresses
+(`saml.ts:141-143,221-230`, `scim.ts:42,60,264-265`). Remote rows cannot sign
 in: `SessionManager.create`, `ApiTokenManager`, impersonation, SAML JIT and
 passkeys refuse them; admin user lists and SCIM exclude them; quotas and
 budgets apply to the host-side work they trigger, which is always sponsored
@@ -1681,7 +1744,7 @@ visitors are proposals only.
 | `gateway.maxFrameBytes`, `gateway.replayMaxSessions`, `gateway.maxConnectionsPerUser` | S0d | 262144, 500, 20 |
 | `spaces.creation`, `spaces.maxMembers`, `spaces.inviteMaxTtlHours`, `spaces.purgeAfterArchiveDays` | S1 | `any_user`, 50, 720, 7 |
 | `spaces.memoryMaxItems`, `rooms.maxQueuedPerMember`, `rooms.approvalTimeoutMinutes`, `rooms.transcriptWindowChars` | S2 | 50, 3, 30, 6000 |
-| `spaces.noteMaxBytes`, `spaces.docMaxUpdatesPerSecond`, `spaces.docPersistDebounceMs`, `spaces.docReindexMinutes`, `spaces.fileLeaseTtlSeconds` | S3 | 192 KiB, 30, 2000, 10, 180 |
+| `spaces.noteMaxBytes`, `spaces.docMaxUpdatesPerSecond`, `spaces.docPersistDebounceMs`, `spaces.docReindexMinutes`, `spaces.docBaseTtlMinutes`, `spaces.fileLeaseTtlSeconds` | S3 | 112 KiB, 30, 2000, 10, 30, 180 |
 | `security.registration` | S6 | `open` |
 
 `gateway`, `spaces` and `rooms` are new top-level config sections (the schema
