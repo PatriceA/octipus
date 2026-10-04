@@ -154,7 +154,9 @@ reach your Slack DM only once you have sent it a message since the restart.
 name when it is enrolled as a [group channel](#group-channels) (otherwise the
 settings pages show the channel id). `reactions:read`, with the
 `reaction_added` bot event, lets members of a group channel hand the bot work
-with the 🐙 reaction; without them only `@Octipus take this` does.
+with the 🐙 reaction (without them only `@Octipus take this` does) and rate
+its replies with ✅ / ❌; add the `reaction_removed` event too so a withdrawn
+reaction is withdrawn as feedback.
 
 ### Features
 
@@ -295,6 +297,77 @@ what it can read back:
 - `link` and refused `join`s get their private answer once a day.
 - Taken-task notices and other text the bot repeats never mention anyone: an
   `@name` from a member's message is posted with a word joiner after the `@`.
+
+#### Listen and proactive modes
+
+By default a group channel is in **mention** mode: the bot speaks only when
+addressed. Its owner (Settings → Channels → Group channels) or an admin
+(Admin → Group channels) can switch it to:
+
+- **listen** — when a member's question has gone unanswered for 10 minutes,
+  the bot may *offer* help, in the question's thread: "I could look into why
+  the staging DB is slow. Mention me, or add :octopus: to the question, to
+  hand it to me." It never answers the question itself.
+- **proactive** — the bot may post a short answer instead, marked "Nobody
+  asked me — mention me to go further."
+
+Nothing is posted unprompted until the operator allows it:
+`groupChannels.unpromptedEnabled` (`GROUP_CHANNELS_UNPROMPTED_ENABLED`, off by
+default). Then, every minute, each listening channel goes through a gate that
+spends no tokens — the enrolment is active, the channel is outside its quiet
+hours (whole hours in its time zone; none by default), under its daily cap
+(8 by default) and its minimum gap (60 minutes), and its spend budget and the
+owner's own are not used up — and a probe without a model: the newest member
+question (a `?` and some substance) that is still the last message of its
+thread, at least 10 minutes and at most 3 hours old, posted after the bot's
+last unprompted post, and not looked at before. A message that mentioned or
+replied to the bot is never a candidate (a turn, or for an unlinked member a
+private hint, handles it), nor is anything in a thread the bot is part of, nor
+a top-level question someone else has since followed with a newer top-level
+post. Only then does one call to the
+model bound to the `background` topic decide: `none`, or a draft. At most one
+such call per channel every 5 minutes.
+
+That call has **no tools and sees only the channel's own recent messages**
+(fenced as untrusted text): no member's data can reach it, and it acts for
+nobody. It runs in the owner's "unprompted posts" session for the channel
+(pinned, so retention never removes it and its cost keeps counting), so it
+costs the owner's account and counts against the channel's spend budget.
+Its post pings nobody, and a draft with a link in it is dropped: nobody asked
+for it, and a crafted question could ask for one. A member who takes over a
+paused channel finds it back in mention mode — they pay for unprompted posts
+from then on, so they opt in again. The bot never posts twice in a row: an unprompted post
+always answers a member message newer than its last one. A slot is claimed in
+the database after the draft, so two server processes never both post.
+
+The probe reads the conversation from the in-memory buffer (above): Slack
+channels in listen or proactive mode are recorded there too. The buffer lives
+in the server process that runs the chat adapter, so run Octipus as one
+process (the default) when channels listen; with several, a process may not
+see that a question was answered. Each platform
+must deliver the messages that nobody addressed to the bot:
+
+- **Slack** — the bot already receives every message in channels it is in.
+- **Teams** — only with resource-specific consent: add the
+  `ChannelMessage.Read.Group` (team channels) and `ChatMessage.Read.Chat`
+  (group chats) RSC permissions to the app manifest's `authorization.permissions.resourceSpecific`
+  and reinstall the app in the team or chat. Without it Teams delivers only
+  mentions, and listen mode finds nothing.
+- **Telegram** — turn privacy mode off in BotFather (`/setprivacy` →
+  Disable), then remove and re-add the bot to the group: with privacy mode on
+  it receives only commands, mentions and replies to itself.
+
+#### Feedback on the bot's replies
+
+A ✅ or ❌ (also 👍 / 👎) a linked member puts on one of the bot's messages
+in an enrolled channel is recorded as feedback on that reply
+(`group_channel_feedback`: channel, message, thread, member, ±1), one per
+member and message — a second reaction replaces the first, and taking off
+the reaction that is currently counted withdraws it. Admin → Group
+channels shows the counts. Nothing else happens. Slack needs the
+`reaction_removed` event besides `reaction_added`; Teams counts 👍 / ❤️ and
+😢 / 😠. Telegram reactions are not recorded (the bot would need to be an
+admin and request `message_reaction` updates).
 
 ---
 

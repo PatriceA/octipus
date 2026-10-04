@@ -1137,6 +1137,18 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'SESSION_RETENTION_DAYS',
   },
 
+  // ── Group channels ──
+  {
+    key: 'groupChannels.unpromptedEnabled',
+    category: 'channels',
+    valueType: 'boolean',
+    defaultValue: false,
+    description:
+      'Allow group channels in listen or proactive mode to post unprompted (offers, short answers). Off by default; each channel still has its own quiet hours, rate limit and budget.',
+    isSecret: false,
+    envVar: 'GROUP_CHANNELS_UNPROMPTED_ENABLED',
+  },
+
   // ── Heartbeat (WS2) ──
   {
     key: 'heartbeat.enabled',

@@ -510,6 +510,7 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
   // DELETE /notification-destinations/:id
   // ── Group channels (docs/plans/group-chat-bot.md) ────────────────────
   // GET    /group-channels       every enrolment, with owner and workspace
+  // PATCH  /group-channels/:id   mode, quiet hours, rate limit (audited)
   // DELETE /group-channels/:id   revoke one (audited; the bot goes quiet there)
   .get(
     '/group-channels',
@@ -526,6 +527,40 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
       };
     },
     { detail: { tags: ['admin'] } },
+  )
+
+  .patch(
+    '/group-channels/:id',
+    async (ctx) => {
+      const guard = requireAdmin(ctx);
+      if (!guard.ok) return guard.body;
+      const { params, principal, body, set } = ctx;
+      const { GroupChannelSettingsError, updateGroupChannelSettings } = await import('@/channels/group-channels');
+      try {
+        const updated = await updateGroupChannelSettings(params.id, { userId: principal.userId, isAdmin: true }, body);
+        if (!updated) {
+          set.status = 404;
+          return { error: 'Group channel not found' };
+        }
+        return { groupChannel: updated };
+      } catch (err) {
+        if (!(err instanceof GroupChannelSettingsError)) throw err;
+        set.status = 400;
+        return { error: err.message };
+      }
+    },
+    {
+      params: t.Object({ id: t.String({ pattern: UUID_PATTERN }) }),
+      body: t.Object({
+        mode: t.Optional(t.Union([t.Literal('mention'), t.Literal('listen'), t.Literal('proactive')])),
+        quietHoursStart: t.Optional(t.Union([t.Integer({ minimum: 0, maximum: 23 }), t.Null()])),
+        quietHoursEnd: t.Optional(t.Union([t.Integer({ minimum: 0, maximum: 23 }), t.Null()])),
+        timezone: t.Optional(t.String({ minLength: 1, maxLength: 64 })),
+        maxUnpromptedPerDay: t.Optional(t.Integer({ minimum: 1, maximum: 48 })),
+        minMinutesBetween: t.Optional(t.Integer({ minimum: 10, maximum: 1440 })),
+      }, { additionalProperties: false }),
+      detail: { tags: ['admin'] },
+    },
   )
 
   .delete(

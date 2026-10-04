@@ -15,6 +15,8 @@ const SHOTS = process.env.GROUP_CHANNEL_SHOTS;
 
 const row = (over: Record<string, unknown>) => ({
   channelType: 'slack', label: null, ownerUserId: 'e2e-user-id', ownerName: 'e2etest', ownerActive: true,
+  mode: 'mention', quietHoursStart: null, quietHoursEnd: null, timezone: 'UTC', maxUnpromptedPerDay: 8, minMinutesBetween: 60,
+  lastUnpromptedAt: null, feedback: { up: 0, down: 0 },
   createdAt: '2026-10-01T09:00:00Z', updatedAt: '2026-10-01T09:00:00Z',
   ...over,
 });
@@ -48,12 +50,48 @@ test.describe('group channels', () => {
     await expect(page.getByText('C0OPS')).toBeVisible();
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/settings-group-channels.png`, fullPage: true });
 
-    await expect(page.getByRole('combobox')).toHaveCount(0);
+    // No workspace to pick: the only control per channel is its mode.
+    await expect(page.getByRole('combobox', { name: 'Mode' })).toHaveCount(2);
+    await expect(page.getByRole('combobox', { name: /workspace/i })).toHaveCount(0);
 
     page.once('dialog', (d) => d.accept());
     await page.getByRole('button', { name: 'Remove from C0OPS' }).click();
     await expect(page.getByText('C0OPS')).toHaveCount(0);
     expect(calls.some((c) => c.method === 'DELETE' && c.path === '/api/me/group-channels/g-ops')).toBe(true);
+  });
+
+  test('owner switches a channel to listen mode with quiet hours', async ({ authenticatedPage: page }) => {
+    let mine = [row({ id: 'g-release', channelId: 'C0RELEASE', label: '#release' })];
+    const patches: unknown[] = [];
+    await stubAllDefaults(page);
+    await page.route(/\/api\/me\/group-channels/, async (route: Route) => {
+      const req = route.request();
+      if (req.method() === 'GET') return json(route, 200, { groupChannels: mine });
+      if (req.method() === 'PATCH') {
+        const body = req.postDataJSON() as Record<string, unknown>;
+        patches.push(body);
+        mine = mine.map((g) => ({ ...g, ...body }));
+        return json(route, 200, { groupChannel: mine[0] });
+      }
+      return json(route, 404, { error: 'unexpected' });
+    });
+
+    await page.goto('/settings');
+    await page.getByRole('button', { name: 'Channels' }).click();
+    const form = page.getByRole('form', { name: 'Mode for #release' });
+    await expect(form.getByLabel('Quiet hours start')).toHaveCount(0); // mention mode: nothing else to set
+    await form.getByRole('combobox', { name: 'Mode' }).selectOption('listen');
+    await form.getByLabel('Quiet hours start').fill('20');
+    await expect(form.getByText('Set both quiet-hour bounds, or neither.')).toBeVisible();
+    await form.getByLabel('Quiet hours end').fill('8');
+    await form.getByLabel('Time zone').fill('Europe/Berlin');
+    await form.getByRole('button', { name: 'Save' }).click();
+    await expect.poll(() => patches.length).toBe(1);
+    expect(patches[0]).toEqual({
+      mode: 'listen', quietHoursStart: 20, quietHoursEnd: 8, timezone: 'Europe/Berlin', maxUnpromptedPerDay: 8, minMinutesBetween: 60,
+    });
+    await expect(form.getByRole('button', { name: 'Save' })).toHaveCount(0);
+    if (SHOTS) await page.screenshot({ path: `${SHOTS}/settings-group-channel-listen.png`, fullPage: true });
   });
 
   test('empty state explains how to enrol', async ({ authenticatedPage: page }) => {
@@ -67,7 +105,7 @@ test.describe('group channels', () => {
 
   test('admin sees every enrolment, a paused one, and revokes', async ({ authenticatedPage: page }) => {
     let all = [
-      row({ id: 'g-release', channelId: 'C0RELEASE', label: '#release', ownerName: 'anna' }),
+      row({ id: 'g-release', channelId: 'C0RELEASE', label: '#release', ownerName: 'anna', mode: 'listen', feedback: { up: 3, down: 1 } }),
       row({ id: 'g-old', channelId: 'C0OLD', label: '#legacy', ownerName: 'carol', ownerActive: false }),
     ];
     await stubAllDefaults(page);
@@ -86,6 +124,8 @@ test.describe('group channels', () => {
     await expect(page.getByRole('link', { name: 'Group channels' })).toBeVisible();
     await expect(page.getByText('enrolled by anna')).toBeVisible();
     await expect(page.getByText('paused (owner deactivated)')).toBeVisible();
+    await expect(page.getByText('✅ 3 ❌ 1')).toBeVisible();
+    await expect(page.getByRole('form', { name: 'Mode for #release' }).getByRole('combobox', { name: 'Mode' })).toHaveValue('listen');
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/admin-group-channels.png`, fullPage: true });
 
     page.once('dialog', (d) => d.accept());

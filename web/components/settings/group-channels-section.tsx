@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Trash2, Users } from 'lucide-react';
 import { useState } from 'react';
+import { GroupChannelModeForm } from '@/components/group-channel-mode-form';
 import { api } from '@/lib/api';
 import type { GroupChannelSummary } from '../../../src/shared/types';
 
@@ -11,7 +12,8 @@ import type { GroupChannelSummary } from '../../../src/shared/types';
  *
  * Shared chats this user enrolled Octipus into by typing `@Octipus join` in
  * the channel. Enrolment happens only there (it proves membership); here the
- * owner can remove the bot. Each request runs as the member who asked, in
+ * owner sets the mode (and, for listen / proactive, quiet hours and a rate
+ * limit) or removes the bot. Each request runs as the member who asked, in
  * their own workspace, so there is no workspace to pick.
  */
 export function GroupChannelsSection() {
@@ -41,6 +43,11 @@ export function GroupChannelsSection() {
         <code>@Octipus join</code> there. It answers when mentioned, replies in threads, and acts with the
         permissions and workspace of whoever asks. Remove it here or with <code>@Octipus leave</code>.
       </p>
+      <p className="text-xs text-on-surface-variant mb-3">
+        In <em>listen</em> mode it offers help with questions nobody answered; in <em>proactive</em> mode it may answer
+        them. Those posts use no tools and no one&apos;s data, cost your account, and need an admin to allow unprompted
+        posts.
+      </p>
       {error && <p className="text-xs text-error mb-2">! {error}</p>}
       {isLoading ? (
         <p className="text-sm text-on-surface-variant">Loading…</p>
@@ -51,25 +58,28 @@ export function GroupChannelsSection() {
       ) : (
         <ul className="term-frame rounded-xs divide-y divide-outline-variant/10">
           {groups.map((g) => (
-            <li key={g.id} className="flex flex-wrap items-center gap-3 px-4 py-2 text-sm">
-              <Users className="w-4 h-4 text-on-surface-variant shrink-0" aria-hidden />
-              <span className="text-on-surface flex-1 min-w-0 break-all">
-                {g.label ?? g.channelId}
-                <span className="text-on-surface-variant"> · {g.channelType}</span>
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  if (confirm(`Remove Octipus from ${g.label ?? g.channelId}? It will stay quiet there until someone types @Octipus join.`)) {
-                    removeMutation.mutate(g.id);
-                  }
-                }}
-                title="Remove from channel"
-                aria-label={`Remove from ${g.label ?? g.channelId}`}
-                className="text-on-surface-variant/60 hover:text-error cursor-pointer"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
+            <li key={g.id} className="px-4 py-2 space-y-2 text-sm">
+              <div className="flex flex-wrap items-center gap-3">
+                <Users className="w-4 h-4 text-on-surface-variant shrink-0" aria-hidden />
+                <span className="text-on-surface flex-1 min-w-0 break-all">
+                  {g.label ?? g.channelId}
+                  <span className="text-on-surface-variant"> · {g.channelType}</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (confirm(`Remove Octipus from ${g.label ?? g.channelId}? It will stay quiet there until someone types @Octipus join.`)) {
+                      removeMutation.mutate(g.id);
+                    }
+                  }}
+                  title="Remove from channel"
+                  aria-label={`Remove from ${g.label ?? g.channelId}`}
+                  className="text-on-surface-variant/60 hover:text-error cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <GroupChannelModeForm key={g.updatedAt} group={g} endpoint={`/me/group-channels/${g.id}`} onSaved={invalidate} />
             </li>
           ))}
         </ul>

@@ -58,6 +58,21 @@ export function quietText(text: string): string {
     .replace(/(^|[^\w.+-])@(?=\w)/g, '$1@\u2060');
 }
 
+/**
+ * Text the bot writes on its own (an unprompted post), made safe to post: no
+ * mention that would ping anyone, as in `quietText`, but line breaks and
+ * formatting kept.
+ */
+export function withoutPings(text: string): string {
+  return text
+    .replace(/<([@!])([^>|]*)(?:\|([^>]*))?>/g, (_m, _sigil: string, id: string, label?: string) => {
+      const name = (label ?? id.replace(/^subteam\^/, '')).replace(/^@/, '');
+      return `@${name}`;
+    })
+    .replace(/<at>([^<]*)<\/at>/gi, '@$1')
+    .replace(/(^|[^\w.+-])@(?=\w)/g, '$1@\u2060');
+}
+
 function clip(text: string): string {
   const flat = flattenLine(text);
   return flat.length > MAX_MESSAGE_CHARS ? `${flat.slice(0, MAX_MESSAGE_CHARS)} […]` : flat;

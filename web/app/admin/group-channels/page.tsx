@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Pencil, Plus, Trash2 } from 'lucide-react';
 import { useState } from 'react';
+import { GroupChannelModeForm } from '@/components/group-channel-mode-form';
 import { SpendBudgetMeter } from '@/components/spend-budget-meter';
 import { api } from '@/lib/api';
 import type { SpendBudgetView, SpendPeriod } from '@/lib/spend-budgets';
@@ -51,6 +52,8 @@ export default function AdminGroupChannelsPage() {
         <p className="mt-1 text-xs text-on-surface-variant">
           Shared chats where Octipus answers members who mention it. Each turn runs as the member who asked.
           Revoking makes the bot go quiet in that channel. A spend budget caps what a channel costs, whoever asks.
+          Listen and proactive modes post unprompted only while unprompted posts are allowed under Settings
+          (<code>groupChannels.unpromptedEnabled</code>).
         </p>
       </div>
 
@@ -74,6 +77,9 @@ export default function AdminGroupChannelsPage() {
                 <span className="text-xs text-on-surface-variant">
                   enrolled by {g.ownerName}
                   {!g.ownerActive && <span className="text-warning"> · paused (owner deactivated)</span>}
+                  {(g.feedback.up > 0 || g.feedback.down > 0) && (
+                    <span title="Reactions on the bot's replies"> · ✅ {g.feedback.up} ❌ {g.feedback.down}</span>
+                  )}
                 </span>
                 <button
                   type="button"
@@ -88,6 +94,9 @@ export default function AdminGroupChannelsPage() {
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
+              </div>
+              <div className="pl-[4.25rem]">
+                <GroupChannelModeForm key={g.updatedAt} group={g} endpoint={`/admin/group-channels/${g.id}`} onSaved={refresh} />
               </div>
               <ChannelBudget group={g} onChange={refresh} />
             </li>

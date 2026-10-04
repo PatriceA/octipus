@@ -14,12 +14,14 @@
  *
  * Design: `docs/plans/group-chat-bot.md`.
  */
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull, lte, ne, or, sql } from 'drizzle-orm';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { isUuid } from '@/db/repositories/scoped';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { getDb } from '@/db/postgres';
-import { type GroupChannel, groupChannels } from '@/db/schema/group-channels';
+import {
+  type GroupChannel, GROUP_CHANNEL_MODES, type GroupChannelMode, groupChannelFeedback, groupChannels,
+} from '@/db/schema/group-channels';
 import { sessions } from '@/db/schema/sessions';
 import { users } from '@/db/schema/users';
 import { channelLogger } from '@/utils/logger';
@@ -32,6 +34,8 @@ export type GroupChannelType = (typeof GROUP_CHANNEL_TYPES)[number];
 export interface GroupChannelView extends GroupChannel {
   ownerName: string;
   ownerActive: boolean;
+  /** ✅ / ❌ reactions members put on the bot's messages here. */
+  feedback: { up: number; down: number };
 }
 
 // ── Lookup (hot path: every message in every channel the bot is in) ─────────
@@ -130,7 +134,8 @@ export async function joinGroupChannel(input: {
     if (owner.active) return { status: 'taken', ownerName: owner.name };
     const [updated] = await db
       .update(groupChannels)
-      .set({ ownerUserId: input.userId, updatedAt: new Date() })
+      // The new owner pays for unprompted posts, so they opt in again: back to mention mode.
+      .set({ ownerUserId: input.userId, mode: 'mention', updatedAt: new Date() })
       // Guard on the previous owner so two members taking over at once cannot both win.
       .where(and(eq(groupChannels.id, existing.id), eq(groupChannels.ownerUserId, existing.ownerUserId)))
       .returning();
@@ -186,12 +191,16 @@ async function listViews(ownerUserId?: string): Promise<GroupChannelView[]> {
       group: groupChannels,
       ownerName: users.username,
       ownerActive: users.isActive,
+      up: sql<number>`(SELECT count(*)::int FROM group_channel_feedback f WHERE f.group_channel_id = ${groupChannels.id} AND f.value = 1)`,
+      down: sql<number>`(SELECT count(*)::int FROM group_channel_feedback f WHERE f.group_channel_id = ${groupChannels.id} AND f.value = -1)`,
     })
     .from(groupChannels)
     .innerJoin(users, eq(users.id, groupChannels.ownerUserId))
     .where(ownerUserId ? eq(groupChannels.ownerUserId, ownerUserId) : undefined)
     .orderBy(groupChannels.createdAt);
-  return rows.map(r => ({ ...r.group, ownerName: r.ownerName, ownerActive: r.ownerActive }));
+  return rows.map(r => ({
+    ...r.group, ownerName: r.ownerName, ownerActive: r.ownerActive, feedback: { up: Number(r.up), down: Number(r.down) },
+  }));
 }
 
 export function listGroupChannelsForOwner(userId: string): Promise<GroupChannelView[]> {
@@ -200,6 +209,133 @@ export function listGroupChannelsForOwner(userId: string): Promise<GroupChannelV
 
 export function listAllGroupChannels(): Promise<GroupChannelView[]> {
   return listViews();
+}
+
+// ── Modes and unprompted posts (phase 4) ────────────────────────────────────
+
+/** What an owner (or an admin) may change about an enrolment. */
+export interface GroupChannelSettings {
+  mode?: GroupChannelMode;
+  /** Both set, or both null (no quiet hours). */
+  quietHoursStart?: number | null;
+  quietHoursEnd?: number | null;
+  timezone?: string;
+  maxUnpromptedPerDay?: number;
+  minMinutesBetween?: number;
+}
+
+export class GroupChannelSettingsError extends Error {}
+
+const SETTINGS_KEYS = ['mode', 'quietHoursStart', 'quietHoursEnd', 'timezone', 'maxUnpromptedPerDay', 'minMinutesBetween'] as const;
+
+function isTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function checkSettings(patch: GroupChannelSettings): void {
+  if (patch.mode !== undefined && !GROUP_CHANNEL_MODES.includes(patch.mode)) throw new GroupChannelSettingsError('Unknown mode');
+  const hour = (h: number | null | undefined) => h === undefined || h === null || (Number.isInteger(h) && h >= 0 && h <= 23);
+  if (!hour(patch.quietHoursStart) || !hour(patch.quietHoursEnd)) throw new GroupChannelSettingsError('Quiet hours are whole hours, 0–23');
+  if ((patch.quietHoursStart === null) !== (patch.quietHoursEnd === null)
+    || (patch.quietHoursStart === undefined) !== (patch.quietHoursEnd === undefined)) {
+    throw new GroupChannelSettingsError('Set both quiet-hour bounds, or clear both');
+  }
+  if (patch.timezone !== undefined && !isTimeZone(patch.timezone)) throw new GroupChannelSettingsError('Unknown time zone');
+  if (patch.maxUnpromptedPerDay !== undefined && !(Number.isInteger(patch.maxUnpromptedPerDay) && patch.maxUnpromptedPerDay >= 1 && patch.maxUnpromptedPerDay <= 48)) {
+    throw new GroupChannelSettingsError('Unprompted posts per day: 1–48');
+  }
+  if (patch.minMinutesBetween !== undefined && !(Number.isInteger(patch.minMinutesBetween) && patch.minMinutesBetween >= 10 && patch.minMinutesBetween <= 1440)) {
+    throw new GroupChannelSettingsError('Minutes between unprompted posts: 10–1440');
+  }
+}
+
+/**
+ * Change an enrolment's mode, quiet hours or rate limit: the owner's own, or
+ * any for an admin. Null when not found / not allowed; throws
+ * `GroupChannelSettingsError` for an invalid value.
+ */
+export async function updateGroupChannelSettings(
+  id: string,
+  actor: { userId: string; isAdmin: boolean },
+  patch: GroupChannelSettings,
+): Promise<GroupChannel | null> {
+  if (!isUuid(id)) return null;
+  checkSettings(patch);
+  // Only these columns: a request body may carry anything else (owner, chat id, counters).
+  const set: GroupChannelSettings = {};
+  for (const key of SETTINGS_KEYS) {
+    if (patch[key] !== undefined) (set as Record<string, unknown>)[key] = patch[key];
+  }
+  if (Object.keys(set).length === 0) throw new GroupChannelSettingsError('Nothing to change');
+  const where = actor.isAdmin
+    ? eq(groupChannels.id, id)
+    : and(eq(groupChannels.id, id), eq(groupChannels.ownerUserId, actor.userId));
+  const [updated] = await getDb().update(groupChannels).set({ ...set, updatedAt: new Date() }).where(where).returning();
+  if (!updated) return null;
+  invalidateChannel(updated.channelType, updated.channelId);
+  await audit(actor.userId, updated, { settings: set, byAdmin: actor.isAdmin && updated.ownerUserId !== actor.userId });
+  return updated;
+}
+
+/** Enrolments that may post unprompted (`listen`, `proactive`). Not cached: read once per probe tick. */
+export async function listUnpromptedGroupChannels(): Promise<GroupChannel[]> {
+  return getDb().select().from(groupChannels).where(ne(groupChannels.mode, 'mention'));
+}
+
+/**
+ * Claim the channel's next unprompted post: true when the minimum gap since
+ * the last one has passed and today's count (`day`, local to the channel) is
+ * under the cap. One conditional UPDATE, so of two processes only one wins.
+ */
+export async function claimUnpromptedSlot(group: GroupChannel, now: Date, day: string): Promise<boolean> {
+  const since = new Date(now.getTime() - group.minMinutesBetween * 60_000);
+  const [row] = await getDb()
+    .update(groupChannels)
+    .set({
+      lastUnpromptedAt: now,
+      unpromptedDay: day,
+      unpromptedCount: sql`CASE WHEN ${groupChannels.unpromptedDay} = ${day} THEN ${groupChannels.unpromptedCount} + 1 ELSE 1 END`,
+    })
+    .where(and(
+      eq(groupChannels.id, group.id),
+      ne(groupChannels.mode, 'mention'),
+      or(isNull(groupChannels.lastUnpromptedAt), lte(groupChannels.lastUnpromptedAt, since)),
+      or(sql`${groupChannels.unpromptedDay} IS DISTINCT FROM ${day}`, sql`${groupChannels.unpromptedCount} < ${groupChannels.maxUnpromptedPerDay}`),
+    ))
+    .returning({ id: groupChannels.id });
+  return row !== undefined;
+}
+
+/** A member's ✅ (1) or ❌ (-1) on one of the bot's messages; a second reaction replaces the first. */
+export async function recordGroupFeedback(input: {
+  groupChannelId: string;
+  messageId: string;
+  threadId?: string;
+  userId: string;
+  value: 1 | -1;
+}): Promise<void> {
+  await getDb()
+    .insert(groupChannelFeedback)
+    .values({ ...input, threadId: input.threadId ?? null })
+    .onConflictDoUpdate({
+      target: [groupChannelFeedback.groupChannelId, groupChannelFeedback.messageId, groupChannelFeedback.userId],
+      set: { value: input.value, createdAt: new Date() },
+    });
+}
+
+/** The member took their reaction back. Only the matching value is removed (✅ then ❌, then ✅ removed, keeps ❌). */
+export async function removeGroupFeedback(input: { groupChannelId: string; messageId: string; userId: string; value: 1 | -1 }): Promise<void> {
+  await getDb().delete(groupChannelFeedback).where(and(
+    eq(groupChannelFeedback.groupChannelId, input.groupChannelId),
+    eq(groupChannelFeedback.messageId, input.messageId),
+    eq(groupChannelFeedback.userId, input.userId),
+    eq(groupChannelFeedback.value, input.value),
+  ));
 }
 
 /** Remove an enrolment: the owner's own, or any for an admin. Null when not found / not allowed. */
@@ -309,6 +445,8 @@ export async function resolveGroupSession(input: {
   group: GroupChannel;
   threadId: string;
   title?: string;
+  /** Kept from the retention sweep (the unprompted-posts session: its cost rows must keep counting). */
+  pinned?: boolean;
 }): Promise<string> {
   const threadKey = `${input.group.id}:${input.threadId}`;
   const existing = await sessionRepository.findGroupThreadSession(input.userId, input.group.id, input.threadId);
@@ -328,6 +466,7 @@ export async function resolveGroupSession(input: {
       groupChannelId: input.group.id,
       title: input.title ?? `${input.group.label ?? input.group.channelId} thread`,
       status: 'active',
+      ...(input.pinned ? { pinned: true } : {}),
     });
     rememberThread(threadKey, true);
     return session.id;

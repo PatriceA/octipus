@@ -1,10 +1,9 @@
 # Group chat bot — Octipus as a member of a team channel
 
-> **Design plan, 2026-10-01.** Phase 1 (Slack, mention mode), phase 2
-> (taking up work, channel budgets) and phase 3 (Teams and Telegram groups)
-> are implemented; user-facing behaviour is documented in
-> [CHANNELS.md → Group channels](../CHANNELS.md#group-channels). Phase 4 is
-> not built. Paths and line numbers in "What breaks today"
+> **Design plan, 2026-10-01.** All four phases are implemented: Slack
+> mention mode, taking up work and channel budgets, Teams and Telegram groups,
+> and listen / proactive modes with reaction feedback. User-facing behaviour
+> is documented in [CHANNELS.md → Group channels](../CHANNELS.md#group-channels). Paths and line numbers in "What breaks today"
 > reflect `main` at v0.6.0, before phase 1.
 
 ## Goal
@@ -114,8 +113,9 @@ group_channels
   unique (channel_type, channel_id)
 ```
 
-Columns for later phases (`mode`, `guest_access`, `default_role`, rate-limit
-settings) are added when those phases land, not ahead of them.
+Phase 4 added `mode`, quiet hours and the unprompted-post rate limit
+(migration 0124). `guest_access` and `default_role` were never needed: guests
+get no answers, and every turn runs as the member who asked.
 
 ### 2. When the bot speaks — addressing
 
@@ -464,11 +464,60 @@ Acceptance (each has a test):
   (`teams/group.test.ts`); Telegram mentions, commands, replies, forum topics
   (`telegram/group.test.ts`); the buffer's bounds (`group-buffer.test.ts`).
 
-### Phase 4 — Listen and proactive
+### Phase 4 — Listen and proactive — done
 
-- Heartbeat-style probe and background-lane check; per-channel rate limits and
-  quiet hours; Teams RSC and Telegram privacy-mode docs.
-- ✅ / ❌ feedback recorded for learning.
+Built:
+- Migration 0124: `group_channels.mode` (`mention` / `listen` / `proactive`),
+  quiet hours and time zone, daily cap and minimum gap, the claimed slot
+  (`last_unprompted_at`, `unprompted_day`, `unprompted_count`); the
+  `group_channel_feedback` table. Set by the owner (`PATCH
+  /api/me/group-channels/:id`) or an admin (`PATCH
+  /api/admin/group-channels/:id`) on the settings pages.
+- `groupChannels.unpromptedEnabled` (off by default) is the global switch.
+- `src/channels/group-listen.ts`, on the cron tick: the gate (switch, active
+  enrolment, quiet hours, cap, gap, channel and owner budgets), a probe
+  without a model (the newest member question still last in its thread, 10
+  minutes to 3 hours old, after the last unprompted post, not seen before),
+  then one `background` call — `none` or a draft. `listen` posts an offer
+  with the platform's handover; `proactive` a short answer. The slot is
+  claimed after the draft by a conditional UPDATE.
+- Slack records listening channels in the group buffer, like Teams and
+  Telegram; the bot's own posts are recorded so an answered question is not
+  "unanswered".
+- ✅ / ❌ (👍 / 👎) on the bot's messages: `handleGroupFeedback`, from Slack
+  `reaction_added` / `reaction_removed` and Teams `messageReaction`; counts on
+  Admin → Group channels.
+- Teams RSC and Telegram privacy-mode setup in CHANNELS.md.
+
+Decisions:
+- **The unprompted call has no tools and no requester.** Nobody asked, so no
+  member's permissions or data may be used; running it as the owner with
+  tools would repeat the problem §3 rejected. It sees only the channel's
+  recent messages, which every member can already read, and its cost is the
+  owner's (the owner chose the mode) and the channel's budget.
+- **An offer, not an answer, in listen mode.** The member who wants the help
+  hands it over with a mention or 🐙, and then every phase 1–2 rule applies.
+- **The slot is claimed after the draft.** A `none` costs one model call but
+  no slot; a race between processes costs at most one extra call, never two
+  posts.
+- **Feedback is recorded, nothing more.** It is input for evaluation and
+  session learning later; it changes no behaviour now.
+
+Not built: feedback from Telegram reactions (the bot must be an admin and
+request `message_reaction` updates); unprompted posts about monitors and task
+updates (those already post in every mode).
+
+Acceptance (each has a test):
+- The gate spends nothing on a paused, quiet, capped, too-soon or
+  out-of-budget channel, or without an unanswered question; `none` posts
+  nothing; the bot never posts twice in a row; a lost claim posts nothing
+  (`group-listen.test.ts`).
+- The slot honours the gap, the daily cap and the local day, and never in
+  mention mode; settings are owner/admin only and validated; feedback is one
+  per member and message (`group-channels.test.ts`).
+- Reactions on the bot's replies are recorded, others ignored
+  (`slack/group.test.ts`); the settings form saves the mode and quiet hours
+  (`tests/web/group-channels.spec.ts`).
 
 ## Fixed after the phase 1 review
 
@@ -504,8 +553,10 @@ destination, so approving its step led nowhere).
 
 1. **Guest answers** — should unlinked members ever get read-only answers?
    Phase 1: no.
-2. **Transcript retention** — Slack stores none; Teams and Telegram keep an
-   in-memory buffer (§3). Listen mode (§7) may need a stored one.
+2. **Transcript retention** — Slack stores none in mention mode; Teams,
+   Telegram and listening Slack channels keep an in-memory buffer (§3). A
+   restart forgets it, so a question asked just before one is not offered
+   help; a stored buffer would need a retention policy.
 3. **Shared notifications** — should enrolment also let members' hooks post
    to the channel without an admin-approved destination? (A monitor set up in
    a thread already answers there.)

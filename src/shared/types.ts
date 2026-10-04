@@ -40,6 +40,17 @@ export interface GroupChannelSummary {
   ownerName: string;
   /** False while the owner's account is deactivated: the bot is paused there. */
   ownerActive: boolean;
+  /** `mention`: speaks only when addressed; `listen`: offers help; `proactive`: may answer unasked. */
+  mode: 'mention' | 'listen' | 'proactive';
+  /** No unprompted posts in [start, end) local hours; null = none. */
+  quietHoursStart: number | null;
+  quietHoursEnd: number | null;
+  timezone: string;
+  maxUnpromptedPerDay: number;
+  minMinutesBetween: number;
+  lastUnpromptedAt: string | null;
+  /** ✅ / ❌ reactions members put on the bot's replies. */
+  feedback: { up: number; down: number };
   createdAt: string;
   updatedAt: string;
 }

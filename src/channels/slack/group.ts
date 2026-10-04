@@ -12,7 +12,7 @@
 import type { GroupChannel } from '@/db/schema/group-channels';
 import type { JoinResult, LeaveResult } from '@/channels/group-channels';
 import {
-  type GroupDeps, type GroupMember, type GroupOutcome, groupHints, handleGroupMessage, handleGroupReaction,
+  type GroupDeps, type GroupMember, type GroupOutcome, groupHints, handleGroupFeedback, handleGroupMessage, handleGroupReaction,
 } from '@/channels/group-handler';
 import type { TakeRequest } from '@/core/channels/taken-tasks';
 
@@ -34,6 +34,8 @@ export interface SlackReaction {
   user?: string;
   reaction?: string;
   item?: { type?: string; channel?: string; ts?: string };
+  /** Who wrote the reacted-to message. */
+  item_user?: string;
 }
 
 /** One message read back from Slack. */
@@ -68,6 +70,10 @@ export interface SlackGroupDeps {
   /** When the channel's spend budget is used up: when it resets. Null while it may run. */
   budgetPause(group: GroupChannel): Promise<{ resetsAt: string } | null>;
   shouldSendHint(key: string): boolean;
+  /** Store or withdraw a member's ✅ / ❌ on a bot reply. */
+  feedback?: GroupDeps['feedback'];
+  /** Every message in an enrolled channel that reaches the bot (recorded for listen mode); `addressed` when it mentioned the bot. */
+  seen?(msg: SlackGroupMessage, group: GroupChannel, addressed: boolean): void;
   dispatch(input: {
     channelId: string;
     member: GroupMember;
@@ -84,6 +90,12 @@ export interface SlackGroupDeps {
 
 /** The reaction that takes a message on as a task: 🐙 (`:octopus:`). */
 export const TAKE_REACTION = 'octopus';
+
+/** Reactions on the bot's replies recorded as feedback (`handleGroupFeedback`). */
+export const FEEDBACK_REACTIONS: Readonly<Record<string, 1 | -1>> = {
+  white_check_mark: 1, heavy_check_mark: 1, '+1': 1, thumbsup: 1,
+  x: -1, '-1': -1, thumbsdown: -1,
+};
 
 /** Message subtypes that carry something a member said. Edits, joins, topic changes etc. do not. */
 const SPOKEN_SUBTYPES = new Set(['file_share', 'thread_broadcast']);
@@ -119,6 +131,8 @@ function toGroupDeps(deps: SlackGroupDeps): GroupDeps<SlackGroupMessage> {
     permalink: deps.permalink,
     budgetPause: deps.budgetPause,
     shouldSendHint: deps.shouldSendHint,
+    seen: (msg, group) => { if (msg.raw) deps.seen?.(msg.raw, group, msg.mentioned); },
+    feedback: deps.feedback,
     dispatch: ({ threadId, message, ...rest }) => deps.dispatch({
       ...rest,
       threadTs: threadId,
@@ -152,9 +166,26 @@ export async function handleSlackGroupMessage(msg: SlackGroupMessage, deps: Slac
  * 🐙 on a message in an enrolled channel: the member who reacted takes that
  * message on as a task, worked in its thread (see `handleGroupReaction`).
  */
-export async function handleSlackGroupReaction(ev: SlackReaction, deps: SlackGroupDeps): Promise<GroupOutcome> {
+export async function handleSlackGroupReaction(ev: SlackReaction, deps: SlackGroupDeps): Promise<GroupOutcome | 'feedback'> {
   const channel = ev.item?.channel;
   const ts = ev.item?.ts;
-  if (ev.reaction !== TAKE_REACTION || ev.item?.type !== 'message' || !channel || !ts || !ev.user) return 'ignored';
+  if (ev.item?.type !== 'message' || !channel || !ts || !ev.user || !ev.reaction) return 'ignored';
+  const value = FEEDBACK_REACTIONS[ev.reaction.replace(/::skin-tone-\d$/, '')];
+  if (value !== undefined) {
+    // Slack says whose message it is: ✅ / 👍 on members' messages cost nothing.
+    if (ev.item_user !== undefined && ev.item_user !== deps.botUserId) return 'ignored';
+    return handleGroupFeedback({ user: ev.user, channelId: channel, messageId: ts, value, removed: false }, toGroupDeps(deps));
+  }
+  if (ev.reaction !== TAKE_REACTION) return 'ignored';
   return handleGroupReaction({ user: ev.user, channelId: channel, messageId: ts }, toGroupDeps(deps));
+}
+
+/** A ✅ / ❌ taken back (`reaction_removed`): its feedback is withdrawn. */
+export async function handleSlackGroupReactionRemoved(ev: SlackReaction, deps: SlackGroupDeps): Promise<'feedback' | 'ignored'> {
+  const channel = ev.item?.channel;
+  const ts = ev.item?.ts;
+  const value = ev.reaction ? FEEDBACK_REACTIONS[ev.reaction.replace(/::skin-tone-\d$/, '')] : undefined;
+  if (ev.item?.type !== 'message' || !channel || !ts || !ev.user || value === undefined) return 'ignored';
+  if (ev.item_user !== undefined && ev.item_user !== deps.botUserId) return 'ignored';
+  return handleGroupFeedback({ user: ev.user, channelId: channel, messageId: ts, value, removed: true }, toGroupDeps(deps));
 }

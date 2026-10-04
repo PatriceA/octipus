@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { ChannelMessage } from '@/core/channels/messages';
-import { bareReply, groupTurnContext, omitGroupTranscripts, quietText, renderGroupContext } from './group-context';
+import { bareReply, groupTurnContext, omitGroupTranscripts, quietText, renderGroupContext, withoutPings } from './group-context';
 
 const m = (id: string, author: string, text: string, minute: number, authorId?: string): ChannelMessage => ({
   id, conversationId: 'C1', author, text, authorId,
@@ -145,6 +145,11 @@ describe('taking work on (phase 2)', () => {
     expect(ctx).toContain('--- TAKEN MESSAGE abc123 (by member "Anna") ---');
     expect(ctx).toContain('Staging is slow. ⏎ Please check the DB and the cache.');
     expect(ctx).not.toContain('Their message below is the request.');
+  });
+
+  test('withoutPings: no mention on any platform, line breaks kept', () => {
+    expect(withoutPings('Ask <!here> or <@U1|bob>\n<at>Anna</at>, @oncall — mail a@b.io *now*'))
+      .toBe('Ask @\u2060here or @\u2060bob\n@\u2060Anna, @\u2060oncall — mail a@b.io *now*');
   });
 
   test('quietText: mentions become plain text and nobody is pinged', () => {

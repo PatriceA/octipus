@@ -7,8 +7,10 @@ import {
   type TurnContext,
 } from 'botbuilder';
 import { generateLinkCode } from '@/channels/linking';
-import { BUFFER_BOT_ID, findGroupMessage, forgetGroupChat, groupMessages, recordGroupMessage } from '@/channels/group-buffer';
-import { type GroupDeps, type GroupMember, groupHints, handleGroupMessage, MAIN_THREAD } from '@/channels/group-handler';
+import { BUFFER_BOT_ID, findGroupMessageAnywhere, forgetGroupChat, groupMessages, recordGroupMessage } from '@/channels/group-buffer';
+import {
+  type GroupDeps, type GroupMember, groupHints, handleGroupFeedback, handleGroupMessage, MAIN_THREAD,
+} from '@/channels/group-handler';
 import { shouldSendHint } from '@/channels/hint-limiter';
 import { getConfig } from '@/config';
 import type { Config } from '@/config/schema';
@@ -16,8 +18,11 @@ import type { Attachment, ChannelResponse, ChannelType } from '@/core/types';
 import { channelLogger } from '@/utils/logger';
 import { BaseChannel } from '../interface';
 import {
-  conversationKind, splitConversationId, type TeamsActivityLike, threadConversationId, toGroupInbound,
+  conversationKind, splitConversationId, type TeamsActivityLike, teamsUserKey, threadConversationId, toGroupInbound,
 } from './group';
+
+/** Teams reactions on the bot's replies recorded as feedback. */
+const TEAMS_FEEDBACK: Readonly<Record<string, 1 | -1>> = { like: 1, heart: 1, sad: -1, angry: -1 };
 
 const HINTS = groupHints({
   platform: 'Teams',
@@ -191,6 +196,10 @@ export class TeamsChannel extends BaseChannel {
         await this.handleConversationUpdate(context);
         break;
 
+      case ActivityTypes.MessageReaction:
+        await this.handleReaction(context);
+        break;
+
       default:
         channelLogger.debug({ type: activity.type }, 'Unhandled Teams activity type');
     }
@@ -279,6 +288,30 @@ export class TeamsChannel extends BaseChannel {
     });
 
     this.emitMessage(message);
+  }
+
+  /**
+   * 👍 / ❤️ or 😢 / 😠 on one of the bot's messages in an enrolled group chat
+   * or channel: recorded as feedback on that reply (`handleGroupFeedback`).
+   */
+  private async handleReaction(context: TurnContext): Promise<void> {
+    const activity = context.activity;
+    if (conversationKind(activity as TeamsActivityLike) === 'personal' || !activity.replyToId) return;
+    const { base } = splitConversationId(activity.conversation.id);
+    const deps = this.groupDeps(activity);
+    const changes: Array<[Array<{ type?: string }> | undefined, boolean]> = [
+      [activity.reactionsAdded, false],
+      [activity.reactionsRemoved, true],
+    ];
+    for (const [list, removed] of changes) {
+      for (const reaction of list ?? []) {
+        const value = TEAMS_FEEDBACK[reaction.type ?? ''];
+        if (value === undefined) continue;
+        await handleGroupFeedback({
+          user: teamsUserKey(activity.from as TeamsActivityLike['from']), channelId: base, messageId: activity.replyToId, value, removed,
+        }, deps).catch((err: unknown) => channelLogger.error({ err }, 'Teams group feedback failed'));
+      }
+    }
   }
 
   private async handleConversationUpdate(context: TurnContext): Promise<void> {
@@ -489,11 +522,16 @@ export class TeamsChannel extends BaseChannel {
           scope: kind === 'channel' ? 'thread' : 'channel',
         });
       },
-      // Only messages the bot saw can be read back: a thread's root, when it
-      // mentioned the bot or was posted by it.
+      // Only messages the bot saw can be read back: one that reached it, or one it posted.
       readMessage: async (channelId, id) => {
-        const m = findGroupMessage('teams', channelId, kind === 'channel' ? id : MAIN_THREAD, id);
-        return m ? { text: m.text, user: m.authorId === BUFFER_BOT_ID ? botUserId : m.authorId ?? null } : null;
+        const found = findGroupMessageAnywhere('teams', channelId, id);
+        if (!found) return null;
+        const { message: m, thread } = found;
+        return {
+          text: m.text,
+          user: m.authorId === BUFFER_BOT_ID ? botUserId : m.authorId ?? null,
+          threadId: kind === 'channel' && thread !== id ? thread : undefined,
+        };
       },
       permalink: async () => undefined,
       budgetPause: async (group) => {
@@ -504,6 +542,11 @@ export class TeamsChannel extends BaseChannel {
         });
       },
       shouldSendHint: (key) => shouldSendHint(`teams:${key}`),
+      feedback: async ({ removed, ...input }) => {
+        const { recordGroupFeedback, removeGroupFeedback } = await import('@/channels/group-channels');
+        if (removed) await removeGroupFeedback(input);
+        else await recordGroupFeedback(input);
+      },
       forget: (channelId) => {
         this.groupConversations.delete(channelId);
         forgetGroupChat('teams', channelId);
@@ -513,7 +556,7 @@ export class TeamsChannel extends BaseChannel {
         if (!msg.text) return;
         recordGroupMessage('teams', msg.channelId, msg.replyThread, {
           id: msg.messageId, conversationId: msg.channelId, author: nameOf(msg.user) ?? 'a member', authorId: msg.user,
-          text: msg.text, at: new Date().toISOString(),
+          text: msg.text, at: new Date().toISOString(), addressed: msg.mentioned || msg.repliedToBot === true,
         });
       },
       dispatch: ({ channelId, member, userName, text, threadId, group, context, message, take }) => {

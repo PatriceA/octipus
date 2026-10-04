@@ -1,13 +1,17 @@
 import { App } from '@slack/bolt';
 import type { WebClient } from '@slack/web-api';
+import { BUFFER_BOT_ID, forgetGroupChat, recordGroupMessage } from '@/channels/group-buffer';
 import { generateLinkCode } from '@/channels/linking';
+import type { GroupChannel } from '@/db/schema/group-channels';
 import { getConfig } from '@/config';
 import type { Config } from '@/config/schema';
 import type { Attachment, ChannelResponse, ChannelType } from '@/core/types';
 import { channelLogger } from '@/utils/logger';
 import { BaseChannel } from '../interface';
 import { shouldSendHint } from '../hint-limiter';
-import { type GroupMember, handleSlackGroupMessage, handleSlackGroupReaction, type SlackGroupDeps, type SlackReaction } from './group';
+import {
+  type GroupMember, handleSlackGroupMessage, handleSlackGroupReaction, handleSlackGroupReactionRemoved, type SlackGroupDeps, type SlackGroupMessage, type SlackReaction,
+} from './group';
 
 interface SlackMessage {
   user: string;
@@ -48,6 +52,10 @@ export class SlackChannel extends BaseChannel {
   /** The bot's own user and bot ids (`auth.test`), for mention detection in channels. */
   private botUserId: string | null = null;
   private botId: string | null = null;
+  /** Enrolled channels in listen or proactive mode, as last seen: their messages go to the group buffer. */
+  private listenChannels = new Set<string>();
+  /** Members' display names, by Slack user id. */
+  private names = new Map<string, string>();
 
   override isEnabled(config: Config): boolean {
     return Boolean(config.slack?.botToken);
@@ -108,13 +116,21 @@ export class SlackChannel extends BaseChannel {
     });
 
     // 🐙 on a message in an enrolled channel takes it on as a task (group
-    // channels, phase 2). Needs the `reactions:read` scope and the
-    // `reaction_added` bot event; without them this never fires.
+    // channels, phase 2); ✅ / ❌ on one of the bot's replies is recorded as
+    // feedback (phase 4). Needs the `reactions:read` scope and the
+    // `reaction_added` / `reaction_removed` bot events; without them this never fires.
     this.app.event('reaction_added', async ({ event, client }) => {
       try {
         await handleSlackGroupReaction(event as SlackReaction, this.groupDeps(client));
       } catch (err) {
         channelLogger.error({ err }, 'Slack group reaction handling failed');
+      }
+    });
+    this.app.event('reaction_removed', async ({ event, client }) => {
+      try {
+        await handleSlackGroupReactionRemoved(event as SlackReaction, this.groupDeps(client));
+      } catch (err) {
+        channelLogger.error({ err }, 'Slack group reaction removal handling failed');
       }
     });
 
@@ -249,6 +265,12 @@ export class SlackChannel extends BaseChannel {
         });
       },
       shouldSendHint,
+      seen: (msg, group, addressed) => this.recordForListen(client, msg, group, addressed),
+      feedback: async ({ removed, ...input }) => {
+        const { recordGroupFeedback, removeGroupFeedback } = await import('@/channels/group-channels');
+        if (removed) await removeGroupFeedback(input);
+        else await recordGroupFeedback(input);
+      },
       dispatch: ({ channelId, member, userName, text, threadTs, group, context, message, take }) => {
         const msg = message as SlackMessage;
         const attachments = (msg.files ?? []).map((file): Attachment => ({
@@ -275,6 +297,46 @@ export class SlackChannel extends BaseChannel {
         }));
       },
     };
+  }
+
+  /**
+   * Channels in listen or proactive mode: what members say there is kept in
+   * the group buffer, where the unprompted-post probe looks for unanswered
+   * questions (src/channels/group-listen.ts). Mention-mode channels keep
+   * nothing — their turns read the thread back from Slack.
+   */
+  private recordForListen(client: WebClient, msg: SlackGroupMessage, group: GroupChannel, addressed: boolean): void {
+    if (group.mode === 'mention') {
+      if (this.listenChannels.delete(msg.channel)) forgetGroupChat('slack', msg.channel);
+      return;
+    }
+    this.listenChannels.add(msg.channel);
+    const text = msg.text ?? '';
+    if (!text.trim() || !msg.user) return;
+    const user = msg.user;
+    // Recorded now, in arrival order; the name is filled in for later messages
+    // once the lookup returns (the first one from a member shows their id).
+    recordGroupMessage('slack', msg.channel, msg.thread_ts ?? msg.ts, {
+      id: msg.ts, conversationId: msg.channel, author: this.names.get(user) ?? user, authorId: user, text, addressed,
+      at: new Date(Number(msg.ts) * 1000).toISOString(),
+    });
+    if (!this.names.has(user)) void this.cachedName(client, user);
+  }
+
+  /** A member's display name, looked up once per process (users.info is rate limited). */
+  private async cachedName(client: WebClient, slackUserId: string): Promise<string> {
+    const hit = this.names.get(slackUserId);
+    if (hit) return hit;
+    let name = slackUserId;
+    try {
+      const info = await client.users.info({ user: slackUserId });
+      name = info.user?.real_name || info.user?.name || slackUserId;
+    } catch (err) {
+      channelLogger.debug({ err, slackUserId }, 'Slack users.info failed — using the raw id');
+    }
+    this.names.set(slackUserId, name);
+    if (this.names.size > 5_000) this.names.delete(this.names.keys().next().value as string);
+    return name;
   }
 
   /** The thread (or the channel's latest messages) as a transcript for the turn. */
@@ -356,6 +418,13 @@ export class SlackChannel extends BaseChannel {
 
     const result = await this.app.client.chat.postMessage(options as unknown as Parameters<WebClient['chat']['postMessage']>[0]);
 
+    // The bot's own posts in a listening channel: a question it answered is not "unanswered".
+    if (result.ts && this.listenChannels.has(channelId)) {
+      recordGroupMessage('slack', channelId, response.threadId ?? result.ts, {
+        id: result.ts, conversationId: channelId, author: 'Octipus', authorId: BUFFER_BOT_ID,
+        text: response.content, at: new Date().toISOString(),
+      });
+    }
     return result.ts || '';
   }
 

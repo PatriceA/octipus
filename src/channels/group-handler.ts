@@ -103,6 +103,8 @@ export interface GroupDeps<Raw = unknown> {
   seen?(msg: GroupInbound<Raw>, group: GroupChannel): void;
   /** The chat was enrolled or left: drop what the adapter kept about it. */
   forget?(channelId: string): void;
+  /** Store (or, with `removed`, withdraw) a member's ✅ / ❌ on one of the bot's messages. */
+  feedback?(input: { groupChannelId: string; messageId: string; threadId?: string; userId: string; value: 1 | -1; removed: boolean }): Promise<void>;
   dispatch(input: {
     channelId: string;
     member: GroupMember;
@@ -364,6 +366,30 @@ export async function handleGroupReaction<Raw>(
     take,
   });
   return 'taken';
+}
+
+/**
+ * A ✅ / ❌ (or 👍 / 👎) a member put on — or took off — one of the bot's
+ * messages in an enrolled channel: recorded as feedback on that reply
+ * (`group_channel_feedback`), nothing more. Reactions on other messages,
+ * from unlinked members or in other channels are ignored, silently.
+ */
+export async function handleGroupFeedback<Raw>(
+  ev: { user: string; channelId: string; messageId: string; value: 1 | -1; removed: boolean },
+  deps: GroupDeps<Raw>,
+): Promise<'feedback' | 'ignored'> {
+  if (!deps.feedback || ev.user === deps.botUserId) return 'ignored';
+  const group = await deps.findGroup(ev.channelId);
+  if (!group) return 'ignored';
+  // The cheap lookup first: reading the message back is a rate-limited platform call.
+  const member = await deps.findMember(ev.user);
+  if (!member?.isActive) return 'ignored';
+  const post = await deps.readMessage(ev.channelId, ev.messageId);
+  if (!post || post.user === null || post.user !== deps.botUserId) return 'ignored';
+  await deps.feedback({
+    groupChannelId: group.id, messageId: ev.messageId, threadId: post.threadId, userId: member.id, value: ev.value, removed: ev.removed,
+  });
+  return 'feedback';
 }
 
 /** The name a taken message is attributed to: its author, the bot, or an app. */
