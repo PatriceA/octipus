@@ -9,7 +9,7 @@ import type { InboxItem } from './types';
 let decision: unknown = null;
 let hang = false;
 let llmCalls = 0;
-vi.mock('@/models/decision', () => ({ decide: vi.fn(() => (hang ? new Promise(() => {}) : Promise.resolve(decision))) }));
+vi.mock('@/models/decision', () => ({ recordShadow: vi.fn(), decide: vi.fn(() => (hang ? new Promise(() => {}) : Promise.resolve(decision))) }));
 vi.mock('@/db/repositories/user-repository', () => ({ userRepository: { findById: async () => ({ preferences: {} }) } }));
 vi.mock('@/models/model-registry', async () => ({
   ...(await vi.importActual<typeof import('@/models/model-registry')>('@/models/model-registry')),
