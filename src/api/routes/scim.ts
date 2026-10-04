@@ -21,13 +21,14 @@
  *   PATCH semantics follow RFC 7644 §3.5.2 (replace / add / remove
  *   ops on `userName`, `active`, `emails`, group membership).
  */
-import { and, eq } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getDb } from '@/db/postgres';
 import { orgMembers, organizations } from '@/db/schema/organizations';
 import { orgSsoConfig } from '@/db/schema/org-sso';
 import { users } from '@/db/schema/users';
+import { setUserActive } from '@/security/user-lifecycle';
 import { getVault } from '@/security/vault';
 
 const SCIM_USER_SCHEMA = 'urn:ietf:params:scim:schemas:core:2.0:User';
@@ -96,6 +97,41 @@ async function resolveOrgFromBearer(authHeader: string | undefined): Promise<{ o
     if (stored && stored === token) return { orgId: row.orgId };
   }
   return null;
+}
+
+async function isOrgMember(orgId: string, userId: string): Promise<boolean> {
+  const [row] = await getDb()
+    .select({ userId: orgMembers.userId })
+    .from(orgMembers)
+    .where(and(eq(orgMembers.orgId, orgId), eq(orgMembers.userId, userId)))
+    .limit(1);
+  return !!row;
+}
+
+/**
+ * A SCIM token speaks for one org only: it deactivates the account only when
+ * no other org membership remains; otherwise it only removes this org's
+ * membership. DELETE always drops the membership too; PATCH `active: false`
+ * keeps it while the account is the org's alone, so a later `active: true`
+ * from the same IdP can find the user again. Deactivation runs first, so a
+ * failed membership delete leaves a retry that still finds the member.
+ */
+async function deprovision(
+  orgId: string,
+  userId: string,
+  mode: 'delete' | 'deactivate',
+): Promise<'deactivated' | 'membership_removed'> {
+  const db = getDb();
+  const [other] = await db
+    .select({ orgId: orgMembers.orgId })
+    .from(orgMembers)
+    .where(and(eq(orgMembers.userId, userId), ne(orgMembers.orgId, orgId)))
+    .limit(1);
+  if (!other) await setUserActive(userId, false, null, `scim:${orgId}`);
+  if (other || mode === 'delete') {
+    await db.delete(orgMembers).where(and(eq(orgMembers.orgId, orgId), eq(orgMembers.userId, userId)));
+  }
+  return other ? 'membership_removed' : 'deactivated';
 }
 
 export const scimRoutes = new Elysia({ prefix: '/scim/v2' })
@@ -209,6 +245,7 @@ export const scimRoutes = new Elysia({ prefix: '/scim/v2' })
               username: body.userName,
               email,
               isActive: body.active ?? true,
+              deactivatedBy: body.active === false ? `scim:${ctx.orgId}` : null,
               isAdmin: false,
               // Provisioned users have no password — they sign in via SAML.
               passwordHash: null,
@@ -258,10 +295,11 @@ export const scimRoutes = new Elysia({ prefix: '/scim/v2' })
       // group membership append) is ever handled here, it stops being idempotent
       // and must NOT be exposed to a blind retry.
       const patch: Record<string, unknown> = {};
+      let active: boolean | undefined;
       for (const op of body.Operations) {
         const path = (op.path ?? '').toLowerCase();
         if (op.op.toLowerCase() === 'replace' || op.op.toLowerCase() === 'add') {
-          if (path === 'active') patch.isActive = !!op.value;
+          if (path === 'active') active = !!op.value;
           else if (path === 'username') patch.username = String(op.value);
           else if (path === 'emails' && Array.isArray(op.value)) {
             const v = op.value as { value: string; primary?: boolean }[];
@@ -270,12 +308,27 @@ export const scimRoutes = new Elysia({ prefix: '/scim/v2' })
         }
       }
 
+      // `active` goes through the one writer of `is_active`, and first, so a
+      // refused re-activation changes nothing else either.
+      let leftOrg = false;
+      if (active === true) {
+        const outcome = await setUserActive(params.id, true, null, `scim:${ctx.orgId}`);
+        if (outcome.status === 'refused') {
+          set.status = 409;
+          return scimError(409, 'User was deactivated outside this organization and cannot be re-activated by SCIM');
+        }
+      } else if (active === false) {
+        leftOrg = (await deprovision(ctx.orgId, params.id, 'deactivate')) === 'membership_removed';
+      }
+
       if (Object.keys(patch).length > 0) {
         await db.update(users).set({ ...patch, updatedAt: new Date() }).where(eq(users.id, params.id));
       }
 
       const [refreshed] = await db.select().from(users).where(eq(users.id, params.id)).limit(1);
-      return scimUser(refreshed!);
+      // A user who still belongs to another org is only removed from this one;
+      // to this org's IdP they are deactivated all the same.
+      return scimUser(leftOrg ? { ...refreshed!, isActive: false } : refreshed!);
     },
     {
       params: t.Object({ id: t.String() }),
@@ -297,19 +350,12 @@ export const scimRoutes = new Elysia({ prefix: '/scim/v2' })
       const ctx = await resolveOrgFromBearer(headers.authorization);
       if (!ctx) { set.status = 401; return scimError(401, 'Invalid bearer token'); }
 
-      const db = getDb();
-      // SCIM DELETE = deprovision. Soft-delete: drop org membership +
-      // mark inactive. The user row stays so audit logs remain valid.
-      // Atomic: a failure between the two writes would otherwise leave the user
-      // still a member but inactive (or vice-versa) — an inconsistent state.
-      await db.transaction(async (tx) => {
-        await tx
-          .delete(orgMembers)
-          .where(and(eq(orgMembers.orgId, ctx.orgId), eq(orgMembers.userId, params.id)));
-        await tx.update(users).set({ isActive: false }).where(eq(users.id, params.id));
-      });
+      // SCIM DELETE = deprovision, for members of the token's org only. The
+      // user row stays so audit logs remain valid.
+      if (!(await isOrgMember(ctx.orgId, params.id))) { set.status = 404; return scimError(404, 'User not found'); }
+      await deprovision(ctx.orgId, params.id, 'delete');
       set.status = 204;
-      return '';
+      return null;
     },
     { params: t.Object({ id: t.String() }), detail: { tags: ['scim'] } },
   )

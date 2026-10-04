@@ -11,6 +11,19 @@ export class UserRepository {
     return result[0] ?? null;
   }
 
+  /**
+   * The three columns every authenticated request re-reads (session and API
+   * token validation): a session's own copy is a snapshot from login time.
+   */
+  async findAuthState(id: string): Promise<{ username: string; isAdmin: boolean; isActive: boolean } | null> {
+    const result = await this.db
+      .select({ username: users.username, isAdmin: users.isAdmin, isActive: users.isActive })
+      .from(users)
+      .where(eq(users.id, id))
+      .limit(1);
+    return result[0] ?? null;
+  }
+
   async findByUsername(username: string): Promise<User | null> {
     const result = await this.db.select().from(users).where(eq(users.username, username)).limit(1);
     return result[0] ?? null;

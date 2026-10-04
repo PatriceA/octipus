@@ -4,6 +4,7 @@ import { getSessionManager } from '@/security/auth/session';
 import type { STTEngine } from '@/voice/stt';
 import { apiLogger } from '@/utils/logger';
 import { fileAt } from '@/utils/fs-file';
+import { trackUserSocket } from './user-sockets';
 
 /**
  * Realtime voice WebSocket — `/voice`.
@@ -36,6 +37,8 @@ interface VoiceWsState {
   /** Closes the PCM stream so streamTranscribe drains its tail and finishes. */
   end?: () => void;
   closed?: boolean;
+  /** Drops this socket from the user's socket list (user-sockets.ts). */
+  untrack?: () => void;
 }
 
 function stateOf(ws: { data: unknown }): VoiceWsState {
@@ -139,6 +142,7 @@ export function setupVoiceWebSocket(app: Elysia): void {
 
       const st = stateOf(ws);
       st.userId = session.userId;
+      st.untrack = trackUserSocket(session.userId, ws);
 
       // A ReadableStream fed by inbound binary frames; the STT engine pulls from
       // it while `message` pushes into it.
@@ -236,6 +240,7 @@ export function setupVoiceWebSocket(app: Elysia): void {
     close(ws) {
       const st = stateOf(ws);
       st.closed = true;
+      st.untrack?.();
       st.end?.(); // unblock streamTranscribe so it drains and disposes
       apiLogger.debug({ userId: st.userId }, 'voice-ws closed');
     },

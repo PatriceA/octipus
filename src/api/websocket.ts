@@ -15,6 +15,7 @@ import { apiLogger } from '@/utils/logger';
 import { narrate } from '@/voice/narrator';
 import { getBrowserBridge } from './browser-bridge';
 import { setupVoiceMediaWebSocket } from './voice-media-ws';
+import { trackUserSocket } from './user-sockets';
 import { setupVoiceWebSocket } from './voice-ws';
 
 interface WebSocketData {
@@ -30,6 +31,8 @@ interface WebSocketData {
   /** The session this connection put into voice mode — used to scope narration
    * to it and to clear the root agent's voice flag when the socket closes. */
   voiceSessionId?: string;
+  /** Drops this socket from the user's socket list (user-sockets.ts). */
+  untrack?: () => void;
 }
 
 /**
@@ -204,6 +207,7 @@ export function setupWebSocket(app: Elysia): void {
         webChatChannel.unregisterConnection(connectionId);
       };
       activeConnections.set(session.userId, { ws, cleanup });
+      wsData(ws).untrack = trackUserSocket(session.userId, ws);
 
       // Send connection confirmation
       ws.send(JSON.stringify({
@@ -415,6 +419,7 @@ export function setupWebSocket(app: Elysia): void {
 
     close(ws) {
       const data = wsData(ws);
+      data.untrack?.();
 
       // Clear this connection's voice flag so a session left in voice mode isn't
       // stuck in the propose-then-confirm gate after a refresh/disconnect.
@@ -500,6 +505,7 @@ export function setupWebSocket(app: Elysia): void {
         return;
       }
 
+      wsData(ws).untrack = trackUserSocket(session.userId, ws);
       apiLogger.info({ userId: session.userId }, 'Permission WS connected');
     },
 
@@ -532,6 +538,7 @@ export function setupWebSocket(app: Elysia): void {
 
     close(ws) {
       const data = wsData(ws);
+      data.untrack?.();
       if (data.unsubscribePermissions) {
         try { data.unsubscribePermissions(); } catch { /* ignore */ }
       }
@@ -569,6 +576,7 @@ export function setupWebSocket(app: Elysia): void {
 
       wsData(ws)._bridgeAuthed = true;
       wsData(ws).userId = userId;
+      if (userId) wsData(ws).untrack = trackUserSocket(userId, ws);
       apiLogger.info({ userId }, 'Browser bridge: WebSocket connected, awaiting handshake');
       ws.send(JSON.stringify({ type: 'ready' }));
     },
@@ -614,6 +622,7 @@ export function setupWebSocket(app: Elysia): void {
     },
 
     close(ws) {
+      wsData(ws).untrack?.();
       if (wsData(ws)._bridgeAuthed) {
         bridge.handleDisconnect();
       }

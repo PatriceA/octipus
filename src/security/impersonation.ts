@@ -49,7 +49,7 @@ import { securityLogger } from '@/utils/logger';
  *  open across days. */
 const DEFAULT_TTL_MS = 60 * 60 * 1000; // 1 hour
 
-export type ImpersonationEndReason = 'explicit' | 'replaced' | 'expired';
+export type ImpersonationEndReason = 'explicit' | 'replaced' | 'expired' | 'target_inactive';
 
 export interface StartOptions {
   reason?: string;
@@ -211,6 +211,32 @@ export class ImpersonationManager {
       'Admin impersonation stopped',
     );
     return updated;
+  }
+
+  /**
+   * End every open impersonation of `targetUserId` — its account was
+   * deactivated, so nobody may act as it any more. Returns how many ended.
+   */
+  async endForTarget(targetUserId: string, reason: ImpersonationEndReason = 'target_inactive'): Promise<number> {
+    const ended = await this.db
+      .update(impersonationSessions)
+      .set({ endedAt: new Date(), endedReason: reason })
+      .where(and(
+        eq(impersonationSessions.targetUserId, targetUserId),
+        isNull(impersonationSessions.endedAt),
+      ))
+      .returning();
+    for (const row of ended) {
+      await auditRepository.log({
+        userId: row.actorUserId,
+        action: 'logout',
+        resourceType: 'impersonation_session',
+        resourceId: row.id,
+        details: { impersonate: true, targetUserId, endedReason: reason },
+      });
+    }
+    if (ended.length > 0) securityLogger.warn({ targetUserId, count: ended.length, reason }, 'Admin impersonation ended');
+    return ended.length;
   }
 
   /**

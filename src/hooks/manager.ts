@@ -4,6 +4,7 @@ import type { TriggerType } from '@/core/types';
 import { getDb } from '@/db/postgres';
 import { hookExecutions } from '@/db/schema/hook-executions';
 import { type Hook, hooks, type NewHook, SERVER_TRIGGER_CONFIG_KEYS } from '@/db/schema/hooks';
+import { users } from '@/db/schema/users';
 import { coreLogger } from '@/utils/logger';
 import { type ActionResult, executeAction } from './actions';
 import { checkConditions, matchesTrigger, type TriggerContext, type TriggerEvent } from './triggers';
@@ -158,6 +159,18 @@ export class HookManager extends EventEmitter {
     // Check max executions
     if (!manualTest && hook.maxExecutions && hook.executionCount >= hook.maxExecutions) {
       coreLogger.debug({ hookId: hook.id }, 'Hook max executions reached');
+      return null;
+    }
+
+    // A deactivated owner's hooks never fire — scheduled, heartbeat, webhook
+    // or event alike. Read at fire time: the flag can change between ticks.
+    const [owner] = await this.db
+      .select({ isActive: users.isActive })
+      .from(users)
+      .where(eq(users.id, hook.userId))
+      .limit(1);
+    if (!owner?.isActive) {
+      coreLogger.info({ hookId: hook.id, userId: hook.userId }, 'Hook skipped: owner is deactivated');
       return null;
     }
 

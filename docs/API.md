@@ -306,7 +306,7 @@ inert and stays in the array.
 | POST | `/api/scim/v2/Users` | Create user |
 | GET | `/api/scim/v2/Users/:id` | Get user |
 | PATCH | `/api/scim/v2/Users/:id` | Apply supported SCIM user updates |
-| DELETE | `/api/scim/v2/Users/:id` | Delete user |
+| DELETE | `/api/scim/v2/Users/:id` | Remove the user from the token's org; deactivate when no other org holds them |
 | GET | `/api/scim/v2/Groups` | List groups |
 
 ## Organizations & Admin

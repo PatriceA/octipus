@@ -483,6 +483,31 @@ export class ConnectionManager {
     return [...ids].map(id => this.connections.get(id)).filter(Boolean) as GatewayConnection[];
   }
 
+  /**
+   * Close every connection of `userId`. A connection's identity, trust and
+   * admin rights are fixed at auth, so a deactivation or an admin change ends
+   * them; the client reconnects and authenticates afresh (or is refused).
+   * Returns how many were closed.
+   */
+  closeUserConnections(userId: string, code: number, reason: string): number {
+    const conns = [...(this.byUser.get(userId) ?? [])];
+    for (const connectionId of conns) {
+      const conn = this.connections.get(connectionId);
+      if (!conn) continue;
+      conn.state = 'draining';
+      try {
+        conn.ws.close(code, reason);
+      } catch (err) {
+        coreLogger.warn({ err, connectionId, userId }, 'Could not close a gateway connection');
+      }
+      // The transport's close callback lands later (or never, for a socket
+      // already gone); drop the bookkeeping now so nothing more is sent to it.
+      this.handleClose(connectionId, code, reason);
+    }
+    if (conns.length > 0) coreLogger.info({ userId, count: conns.length, reason }, 'Closed user gateway connections');
+    return conns.length;
+  }
+
   getActiveConnections(): ConnectionContext[] {
     return [...this.connections.values()]
       .filter(c => c.state === 'active' && c.context)

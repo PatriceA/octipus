@@ -4,6 +4,7 @@ import { EXTERNAL_CHANNEL_TYPES, EXTERNAL_CHANNELS } from '@/channels/ownership'
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { userRepository } from '@/db/repositories/user-repository';
 import { isAdmin, isAuthenticated } from '@/security/principal';
+import { onUserChanged, setUserActive } from '@/security/user-lifecycle';
 import { hashPassword } from '@/utils/crypto';
 
 /**
@@ -94,6 +95,7 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
         passwordHash,
         isAdmin: body.isAdmin ?? false,
         isActive: body.isActive ?? true,
+        deactivatedBy: body.isActive === false ? 'admin' : null,
       });
 
       await auditRepository.log({
@@ -133,17 +135,36 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
         return { error: 'You cannot demote or disable yourself. Use a different admin account.' };
       }
 
+      const before = await userRepository.findById(params.id);
+      if (!before) {
+        set.status = 404;
+        return { error: 'User not found' };
+      }
+
       const updates: Record<string, unknown> = {};
       if (body.email !== undefined) updates.email = body.email;
       if (body.isAdmin !== undefined) updates.isAdmin = body.isAdmin;
-      if (body.isActive !== undefined) updates.isActive = body.isActive;
       if (body.password) updates.passwordHash = await hashPassword(body.password);
 
-      const updated = await userRepository.update(params.id, updates as Partial<import('@/db/schema/users').NewUser>);
+      // `is_active` has one writer, which also ends the account's sessions,
+      // sockets, agents and pending prompts on deactivation.
+      if (body.isActive !== undefined) {
+        const outcome = await setUserActive(params.id, body.isActive, principal.userId, 'admin');
+        if (outcome.status === 'not_found') {
+          set.status = 404;
+          return { error: 'User not found' };
+        }
+      }
+
+      const updated = Object.keys(updates).length > 0
+        ? await userRepository.update(params.id, updates as Partial<import('@/db/schema/users').NewUser>)
+        : await userRepository.findById(params.id);
       if (!updated) {
         set.status = 404;
         return { error: 'User not found' };
       }
+      // Admin rights are fixed on a gateway connection at auth: reconnect it.
+      if (body.isAdmin !== undefined && body.isAdmin !== before.isAdmin) await onUserChanged(params.id);
 
       await auditRepository.log({
         userId: principal.userId,
@@ -151,7 +172,7 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
         resourceType: 'user',
         resourceId: updated.id,
         details: {
-          changes: Object.keys(updates),
+          changes: [...Object.keys(updates), ...(body.isActive !== undefined ? ['isActive'] : [])],
           targetUser: updated.username,
           byAdmin: principal.userId,
         },

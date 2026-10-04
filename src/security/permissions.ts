@@ -479,6 +479,26 @@ export class PermissionManager {
   }
 
   /**
+   * Expire every pending request of `userId` and release the agents waiting
+   * on them, as unapproved. Called when the account is deactivated: its
+   * prompts can no longer be answered. Returns how many rows were expired.
+   */
+  async expireForUser(userId: string): Promise<number> {
+    const expired = await this.db
+      .update(permissionRequests)
+      .set({ status: 'expired' })
+      .where(and(eq(permissionRequests.userId, userId), eq(permissionRequests.status, 'pending')))
+      .returning();
+    for (const request of expired) {
+      this.emitResolved(request, 'expired');
+      // The `settle` closure untracks the wait and resolves the agent's await.
+      this.pendingRequests.get(request.id)?.(false);
+    }
+    if (expired.length > 0) securityLogger.info({ userId, count: expired.length }, 'Permission requests expired with the account');
+    return expired.length;
+  }
+
+  /**
    * Subscribe to "this agent is blocked on a human" transitions. The worker
    * uses it to stop its wall clock: with no TTL, a turn would otherwise die of
    * its own timeout while the prompt sat on screen. Returns an unsubscribe.

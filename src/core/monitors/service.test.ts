@@ -28,7 +28,7 @@ const observed = { reason: 'matched' as const, observedAt: new Date().toISOStrin
 
 beforeAll(async () => {
   pg = new PGlite();
-  await pg.exec('CREATE TABLE users(id uuid PRIMARY KEY); CREATE TABLE sessions(id uuid PRIMARY KEY);');
+  await pg.exec('CREATE TABLE users(id uuid PRIMARY KEY, is_active boolean NOT NULL DEFAULT true); CREATE TABLE sessions(id uuid PRIMARY KEY);');
   await pg.exec(readFileSync('src/db/migrations/0110_session_monitors.sql', 'utf8'));
   await pg.query('INSERT INTO users VALUES ($1)', [userId]);
   await pg.query('INSERT INTO sessions VALUES ($1)', [sessionId]);

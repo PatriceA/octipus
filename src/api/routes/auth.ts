@@ -6,7 +6,7 @@ import { redeemLinkCode } from '@/channels/linking';
 import { ensureDailyBriefingHook } from '@/core/briefing';
 import { userRepository } from '@/db/repositories/user-repository';
 import { getPasskeyAuth } from '@/security/auth/passkey';
-import { getSessionManager } from '@/security/auth/session';
+import { getSessionManager, InactiveUserError } from '@/security/auth/session';
 import { getTOTPAuth } from '@/security/auth/totp';
 import { isAuthenticated } from '@/security/principal';
 import { getRateLimiter } from '@/security/rate-limiter';
@@ -535,10 +535,18 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
       }
 
       const sessionManager = getSessionManager();
-      const { token, session } = await sessionManager.create(body.userId, {
-        ipAddress,
-        userAgent: request.headers.get('user-agent') || undefined,
-      });
+      let created: Awaited<ReturnType<typeof sessionManager.create>>;
+      try {
+        created = await sessionManager.create(body.userId, {
+          ipAddress,
+          userAgent: request.headers.get('user-agent') || undefined,
+        });
+      } catch (err) {
+        if (!(err instanceof InactiveUserError)) throw err;
+        set.status = 401;
+        return { error: 'Account is disabled' };
+      }
+      const { token, session } = created;
 
       const user = await userRepository.findById(body.userId);
 
