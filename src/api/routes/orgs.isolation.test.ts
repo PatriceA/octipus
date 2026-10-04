@@ -1,17 +1,13 @@
 /**
  * Phase 3g — orgs/workspaces route guards.
  *
- * Verifies that:
- *   - When `multiuser.orgWorkspaces` is off, every endpoint returns
- *     404 — same shape as a missing route, so a fingerprint scanner
- *     can't tell whether the feature exists.
- *   - When the flag is on:
- *     * /api/me/workspaces requires authentication; admins and users
- *       both manage their *own* workspaces (no admin shortcut).
- *     * /api/admin/orgs requires admin; non-admins get 403.
- *     * Cross-tenant workspace IDs collapse to 404 — alice's UUID
- *       can't be patched/deleted by bob.
- *     * Slug validation surfaces as 400; conflicts as 409.
+ * Workspaces are always on. Verifies that:
+ *   - /api/me/workspaces requires authentication; admins and users
+ *     both manage their *own* workspaces (no admin shortcut).
+ *   - /api/admin/orgs requires admin; non-admins get 403.
+ *   - Cross-tenant workspace IDs collapse to 404 — alice's UUID
+ *     can't be patched/deleted by bob.
+ *   - Slug validation surfaces as 400; conflicts as 409.
  *
  * Backed by ephemeral PGlite — no Docker.
  */
@@ -110,46 +106,13 @@ async function del(app: ElysiaLike, path: string) {
   return { status: res.status, body: await res.json().catch(() => ({})) };
 }
 
-function setFlag(value: boolean) {
-  // Imported lazily because tests above this block also share the
-  // singleton; cheaper than rebuilding the entire config.
-  return import('@/config').then(({ getConfig }) => {
-    getConfig().multiuser.orgWorkspaces = value;
-  });
-}
-
-describe('flag-gated 404 when orgWorkspaces is off', () => {
-  test('GET /api/me/workspaces → 200 with default workspace (always available)', async () => {
-    await setFlag(false);
-    const r = await get(aliceApp, '/api/me/workspaces');
-    expect(r.status).toBe(200);
-    const body = r.body as { workspaces: Array<{ isDefault: boolean }> };
-    expect(body.workspaces.length).toBeGreaterThanOrEqual(1);
-    expect(body.workspaces.some((w) => w.isDefault)).toBe(true);
-  });
-
-  test('POST /api/me/workspaces → 404 (multi-workspace creation gated)', async () => {
-    await setFlag(false);
-    const r = await postJson(aliceApp, '/api/me/workspaces', { slug: 'x', name: 'X' });
-    expect(r.status).toBe(404);
-  });
-
-  test('GET /api/admin/orgs → 404 (even for admin)', async () => {
-    await setFlag(false);
-    const r = await get(adminApp, '/api/admin/orgs');
-    expect(r.status).toBe(404);
-  });
-});
-
-describe('/api/me/workspaces with flag on', () => {
+describe('/api/me/workspaces', () => {
   test('anon → 401', async () => {
-    await setFlag(true);
     const r = await get(anonApp, '/api/me/workspaces');
     expect(r.status).toBe(401);
   });
 
   test('user creates default workspace lazily on first list', async () => {
-    await setFlag(true);
     const r = await get(aliceApp, '/api/me/workspaces');
     expect(r.status).toBe(200);
     expect(Array.isArray(r.body.workspaces)).toBe(true);
@@ -157,7 +120,6 @@ describe('/api/me/workspaces with flag on', () => {
   });
 
   test('user creates a named workspace', async () => {
-    await setFlag(true);
     const r = await postJson(aliceApp, '/api/me/workspaces', { slug: 'project-x', name: 'Project X' });
     expect(r.status).toBe(201);
     expect(r.body.slug).toBe('project-x');
@@ -165,21 +127,18 @@ describe('/api/me/workspaces with flag on', () => {
   });
 
   test('invalid slug → 400', async () => {
-    await setFlag(true);
     const r = await postJson(aliceApp, '/api/me/workspaces', { slug: 'NOT VALID', name: 'X' });
     expect(r.status).toBe(400);
     expect(r.body.code).toBe('invalid_slug');
   });
 
   test('duplicate slug → 409', async () => {
-    await setFlag(true);
     const r = await postJson(aliceApp, '/api/me/workspaces', { slug: 'project-x', name: 'X2' });
     expect(r.status).toBe(409);
     expect(r.body.code).toBe('slug_conflict');
   });
 
   test('cross-user workspace UUID collapses to 404 on PATCH', async () => {
-    await setFlag(true);
     // Find Alice's project-x id, then have Bob try to rename it.
     const list = await get(aliceApp, '/api/me/workspaces');
     const px = list.body.workspaces.find((w: { slug: string }) => w.slug === 'project-x');
@@ -189,7 +148,6 @@ describe('/api/me/workspaces with flag on', () => {
   });
 
   test('cross-user DELETE collapses to 404', async () => {
-    await setFlag(true);
     const list = await get(aliceApp, '/api/me/workspaces');
     const px = list.body.workspaces.find((w: { slug: string }) => w.slug === 'project-x');
     const r = await del(bobApp, `/api/me/workspaces/${px.id}`);
@@ -200,7 +158,6 @@ describe('/api/me/workspaces with flag on', () => {
   });
 
   test('owner can DELETE non-default workspace', async () => {
-    await setFlag(true);
     const list = await get(aliceApp, '/api/me/workspaces');
     const px = list.body.workspaces.find((w: { slug: string }) => w.slug === 'project-x');
     const r = await del(aliceApp, `/api/me/workspaces/${px.id}`);
@@ -209,7 +166,6 @@ describe('/api/me/workspaces with flag on', () => {
   });
 
   test('cannot delete default workspace → 400', async () => {
-    await setFlag(true);
     const list = await get(aliceApp, '/api/me/workspaces');
     const def = list.body.workspaces.find((w: { isDefault: boolean }) => w.isDefault);
     expect(def).toBeDefined();
@@ -219,35 +175,30 @@ describe('/api/me/workspaces with flag on', () => {
   });
 });
 
-describe('/api/admin/orgs with flag on', () => {
+describe('/api/admin/orgs (admin-gated)', () => {
   test('non-admin → 403', async () => {
-    await setFlag(true);
     const r = await get(aliceApp, '/api/admin/orgs');
     expect(r.status).toBe(403);
   });
 
   test('anon → 401', async () => {
-    await setFlag(true);
     const r = await get(anonApp, '/api/admin/orgs');
     expect(r.status).toBe(401);
   });
 
   test('admin creates an org', async () => {
-    await setFlag(true);
     const r = await postJson(adminApp, '/api/admin/orgs', { slug: 'globex', name: 'Globex' });
     expect(r.status).toBe(201);
     expect(r.body.slug).toBe('globex');
   });
 
   test('admin lists every org regardless of membership', async () => {
-    await setFlag(true);
     const r = await get(adminApp, '/api/admin/orgs');
     expect(r.status).toBe(200);
     expect(r.body.orgs.find((o: { slug: string }) => o.slug === 'globex')).toBeDefined();
   });
 
   test('admin adds a member', async () => {
-    await setFlag(true);
     const list = await get(adminApp, '/api/admin/orgs');
     const org = list.body.orgs.find((o: { slug: string }) => o.slug === 'globex');
     const r = await postJson(adminApp, `/api/admin/orgs/${org.id}/members`, {
@@ -259,7 +210,6 @@ describe('/api/admin/orgs with flag on', () => {
   });
 
   test('admin removes a member; idempotent removal returns 404', async () => {
-    await setFlag(true);
     const list = await get(adminApp, '/api/admin/orgs');
     const org = list.body.orgs.find((o: { slug: string }) => o.slug === 'globex');
     const r1 = await del(adminApp, `/api/admin/orgs/${org.id}/members/${aliceId}`);

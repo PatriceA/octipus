@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { Cache, PubSub } from '@/db/cache';
 import { type SettingEntry, settings } from '@/db/schema/settings';
@@ -8,6 +8,13 @@ import { getSettingDefinition, SETTINGS_REGISTRY, type SettingValueType } from '
 
 const PUBSUB_CHANNEL = 'settings:changed';
 const CACHE_TTL = 60; // seconds
+
+/**
+ * Settings that no longer exist. A stored row for one is deleted at startup:
+ * nothing reads it, and a stale row would only mislead whoever finds it.
+ * Workspaces are always on: the first entry used to switch them off.
+ */
+export const REMOVED_SETTING_KEYS: readonly string[] = ['multiuser.orgWorkspaces'];
 
 export interface SettingChangeEvent {
   key: string;
@@ -57,6 +64,13 @@ export class SettingsService {
    */
   async warmCache(): Promise<void> {
     const db = getDb();
+    const removed = await db
+      .delete(settings)
+      .where(inArray(settings.key, [...REMOVED_SETTING_KEYS]))
+      .returning({ key: settings.key });
+    if (removed.length > 0) {
+      logger.info({ keys: removed.map((r) => r.key) }, 'Deleted stored rows of removed settings');
+    }
     const rows = await db.select().from(settings);
 
     for (const row of rows) {
@@ -68,7 +82,7 @@ export class SettingsService {
     // Fill defaults for keys not yet in DB. Precedence:
     //   DB row (already loaded above) > env var > registry default.
     // The previous version always wrote `defaultValue`, so env-only flags
-    // (e.g. MULTIUSER_ORG_WORKSPACES) couldn't be flipped on without an
+    // (e.g. MULTIUSER_RLS) couldn't be flipped on without an
     // explicit DB row — runtime-loader's env fallback then never fired
     // because getSync returned the boolean default instead of `undefined`.
     for (const def of SETTINGS_REGISTRY) {

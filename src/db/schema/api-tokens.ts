@@ -5,9 +5,8 @@ import { users } from './users';
  * Personal access tokens — Phase 2a multi-user.
  *
  * Lets non-browser clients (CI, MCP servers, scripts, the browser
- * extension) authenticate as a real user instead of using the legacy
- * `MASTER_KEY` Bearer fallback. The fallback is suppressed when
- * `multiuser.enabled = true`; this table replaces it.
+ * extension) authenticate as a real user. The legacy `MASTER_KEY`
+ * Bearer fallback is gone; this table replaced it.
  *
  * Token format: `octi_<43-char-base64url>` — 32 bytes of randomness +
  * a stable `octi_` prefix that makes the token recognizable in logs

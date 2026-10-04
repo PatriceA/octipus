@@ -33,8 +33,6 @@ export default function AdminOrgsPage() {
     queryFn: () => api.get<{ orgs: AdminOrg[] }>('/admin/orgs'),
   });
 
-  const flagDisabled = (queryError as Error | null)?.message?.includes('404');
-
   const createMutation = useMutation({
     mutationFn: (body: { slug: string; name: string }) => api.post<AdminOrg>('/admin/orgs', body),
     onSuccess: () => {
@@ -52,10 +50,10 @@ export default function AdminOrgsPage() {
     createMutation.mutate({ slug: createSlug.trim(), name: createName.trim() });
   };
 
-  if (flagDisabled) {
+  if (queryError) {
     return (
       <div className="p-8 text-center text-on-surface-variant">
-        Multi-user orgs are disabled. Enable <code className="text-on-surface">multiuser.orgWorkspaces</code> in settings to manage organizations.
+        Could not load organizations: {(queryError as Error).message}
       </div>
     );
   }

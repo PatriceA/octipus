@@ -156,7 +156,9 @@ export const rateLimitMiddleware = new Elysia({ name: 'rate-limit' }).onBeforeHa
     // ── Layer 2: per-user (Phase 3c-2) ─────────────────────────────
     const principal = (ctx as { principal?: Principal }).principal;
     if (!principal || !isAuthenticated(principal)) return;
-    if (principal.userId === 'system') return;
+    // A request is a real user's or a system job's; only system jobs are
+    // exempt. No connection ever carries the system identity.
+    if (principal.kind === 'system') return;
 
     try {
       const { getQuotaManager } = await import('@/security/quotas');

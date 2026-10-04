@@ -1069,15 +1069,6 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
     envVar: 'MULTIUSER_RLS',
   },
-  {
-    key: 'multiuser.orgWorkspaces',
-    category: 'multiuser',
-    valueType: 'boolean',
-    defaultValue: true,
-    description: 'Phase 4 — exposes /api/me/workspaces and /api/orgs/* and activates the X-Octipus-Workspace header resolver. Off by default so single-user installs see no surface change.',
-    isSecret: false,
-    envVar: 'MULTIUSER_ORG_WORKSPACES',
-  },
 
   // ── Live Artifacts ──
   {

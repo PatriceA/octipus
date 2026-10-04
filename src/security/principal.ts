@@ -53,9 +53,8 @@ export interface Principal {
    *
    * Populated for any real user (`user` / `service`)
    * — the resolver lazily creates a default workspace if needed.
-   * Anonymous / system principals leave it undefined. The
-   * `multiuser.orgWorkspaces` flag only gates header-driven
-   * switching between multiple workspaces, not workspace existence.
+   * Anonymous / system principals leave it undefined. Workspaces
+   * are always on; there is no setting that switches them off.
    */
   readonly workspaceId?: string | null;
   /**
@@ -86,6 +85,31 @@ export const SYSTEM_PRINCIPAL: Principal = Object.freeze({
   sessionToken: null,
   roles: Object.freeze(['system_admin'] as string[]),
 });
+
+/**
+ * The user id in-process system jobs act under. Only system jobs carry it:
+ * no connection, socket or channel message is ever `'system'`.
+ */
+export const SYSTEM_USER_ID = 'system';
+
+const USER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** True for the id of a real user row (`users.id`, a uuid). */
+export function isRealUserId(userId: string | null | undefined): userId is string {
+  return !!userId && USER_ID_RE.test(userId);
+}
+
+/**
+ * A user id about to reach a `uuid` column. Every caller acts for a real user,
+ * so anything else (`'system'`, a username, an empty id) is a bug in the
+ * caller: throw rather than map it onto somebody.
+ */
+export function requireRealUserId(userId: string | null | undefined): string {
+  if (!isRealUserId(userId)) {
+    throw new Error(`Expected a user id (uuid), got ${JSON.stringify(userId ?? null)}`);
+  }
+  return userId;
+}
 
 export interface UserLike {
   id: string;

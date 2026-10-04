@@ -12,9 +12,6 @@
  *      mechanical and the contract is what matters.)
  *   3. rate-limit middleware — per-user API calls per minute.
  *
- * Each gate is gated on `multiuser.enabled`; the flag-off path is
- * tested explicitly so single-user installs don't see new errors.
- *
  * Backed by ephemeral PGlite + the in-memory rate-limiter.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';

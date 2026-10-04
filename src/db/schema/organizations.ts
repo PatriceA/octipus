@@ -23,9 +23,7 @@ import { users } from './users';
  * sessions/documents/etc. once the UI lets users actually switch
  * workspaces.
  *
- * Gated on `multiuser.orgWorkspaces`. Off by default; the REST
- * surface returns 404 when the flag is off so single-user installs
- * see no behavior change.
+ * Always on: every real user has at least a default workspace.
  */
 export const organizations = pgTable('organizations', {
   id: uuid('id').primaryKey().defaultRandom(),

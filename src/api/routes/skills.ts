@@ -13,7 +13,6 @@ import { getSkillModes } from '@/skills/selection';
 import { skillSelectionRepository } from '@/db/repositories/skill-selection-repository';
 import { scopedRepos } from '@/db/repositories/scoped';
 import { isAuthenticated } from '@/security/principal';
-import { resolveUserId } from '@/core/gateway/resolve-user';
 import {
   markdownToSkills,
   type PortableSkill,
@@ -38,7 +37,7 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
 
   .get('/usage', async ({ user, principal, query, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
-    let ownerId = await resolveUserId(user.id);
+    let ownerId: string = user.id;
     if (query.sessionId) {
       const session = await scopedRepos(principal).sessions.findById(query.sessionId);
       if (!session) { set.status = 404; return { error: 'Session not found' }; }
@@ -62,7 +61,7 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
 
   .patch('/usage', async ({ user, principal, body, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
-    const ownerId = await resolveUserId(user.id);
+    const ownerId = user.id;
     if (body.sessionId) {
       const session = await scopedRepos(principal).sessions.findById(body.sessionId);
       if (!session) { set.status = 404; return { error: 'Session not found' }; }
@@ -88,7 +87,7 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
   .get(
     '/',
     async ({ user }) => {
-      const ownerId = user ? await resolveUserId(user.id) : undefined;
+      const ownerId = user?.id;
       const found = await getSkillRegistry().getAll(ownerId);
       return { skills: found.filter(skill => user || skill.isSystem).map(skill => ({ ...skill,
         mounted: isExternalSkillId(skill.id),
@@ -289,7 +288,7 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
   .get(
     '/:id',
     async ({ user, params, set }) => {
-      const skill = await getSkillRegistry().get(params.id, user ? await resolveUserId(user.id) : undefined);
+      const skill = await getSkillRegistry().get(params.id, user?.id);
       if (!skill || (!user && !skill.isSystem)) { set.status = 404; return { error: 'Skill not found' }; }
       return skill;
     },
@@ -369,7 +368,7 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
     '/:id',
     async ({ user, params, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
-      const ownerId = await resolveUserId(user.id);
+      const ownerId = user.id;
       const registry = getSkillRegistry();
       const existing = await registry.get(params.id, ownerId);
       if (!existing) { set.status = 404; return { error: 'Skill not found' }; }

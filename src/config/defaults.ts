@@ -97,7 +97,6 @@ export const defaultConfig: Partial<Config> = {
     auditShadow: true,
     enforcePermissions: true,
     rlsEnabled: false,           // requires non-superuser app role; opt-in
-    orgWorkspaces: true,
     /**
      * Refuse (don't auto-approve) these actions for unattended workers.
      *

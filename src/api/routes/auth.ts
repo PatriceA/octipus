@@ -346,22 +346,6 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
       const actorUserId = principal?.actorUserId ?? null;
       const actorUsername = principal?.actorUsername ?? null;
 
-      // MASTER_KEY system user — not in DB
-      if (user.id === 'system') {
-        return {
-          id: 'system',
-          username: 'system',
-          email: null,
-          isAdmin: true,
-          totpEnabled: false,
-          preferences: {},
-          channelBindings: [],
-          createdAt: new Date().toISOString(),
-          actorUserId,
-          actorUsername,
-        };
-      }
-
       const fullUser = await userRepository.findById(user.id);
       if (!fullUser) {
         return { error: 'User not found' };

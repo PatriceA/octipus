@@ -29,11 +29,6 @@
  *      `sessions.user_id` so the filter happens in SQL, not application
  *      code. Drizzle composes the join behind the scope so callers
  *      can't bypass it by accident.
- *
- * When `multiuser.enabled` is false the wrapper still works — a
- * single-user install simply has every row owned by the bootstrap admin,
- * so every scope check passes. There's no functional change for v0
- * deployments.
  */
 
 import { and, arrayContains, asc, count, desc, eq, getTableColumns, gte, inArray, ne, notExists, notInArray, or, type SQL, sql } from 'drizzle-orm';
@@ -96,7 +91,7 @@ export function isUuid(id: string): boolean {
  *
  * Returns a Drizzle filter narrowing rows to the principal's
  * workspace, OR a no-op when the principal has no workspace context
- * (feature flag off, or the row is "user-level"). Rows with a NULL
+ * (a system job, or the row is "user-level"). Rows with a NULL
  * `workspace_id` are included alongside the matching workspace —
  * NULL means "visible to every workspace owned by this user", so
  * un-backfilled rows stay visible after the runtime starts
