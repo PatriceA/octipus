@@ -1,6 +1,6 @@
 # Coworking — people working together in Octipus
 
-> **Concept, 2026-10-04.** Nothing here is built. This document decides what
+> **Concept, 2026-10-04.** Nothing here is built. The buildable version, reviewed against the code, is [coworking-spec.md](coworking-spec.md). This document decides what
 > coworking means for Octipus, what it needs, and in which order to build it.
 > It sits next to two existing plans:
 > [group-chat-bot.md](group-chat-bot.md) (shipped: Octipus inside a team's
