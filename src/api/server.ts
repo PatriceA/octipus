@@ -386,7 +386,9 @@ export function createServer() {
       const { pathname } = new URL(ctx.request.url);
       if (!pathname.startsWith('/api/') && !pathname.startsWith('/v1/')) return;
       ctx.set.status = 404;
-      return { error: 'Space not found' };
+      // The code tells a client this is its selected workspace going away
+      // (the web switches to the default one), not a missing resource.
+      return { error: 'Space not found', code: 'workspace_denied' };
     })
     // Multi-user phase 0 — shadow-mode audit middleware. Logs one row per
     // state-changing request. Never blocks; gated by config.multiuser.auditShadow.

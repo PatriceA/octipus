@@ -7,6 +7,18 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### Added
+
+- **Shared spaces in the web.** The workspace picker lists "my workspaces"
+  and "shared spaces" (with role badges) and creates a space; a space has a
+  settings page (`/spaces/<id>/settings`: name, members, invites with a
+  copyable link, activity, archive, delete) and invite links open a join page
+  (`/join/<token>`) that signs in or registers and comes back. Notes, tasks
+  and documents follow the member's role (read-only for commenters and
+  viewers, and in an archived space). A removed member is switched back to
+  the default workspace and told so; the server's 404 for a denied workspace
+  now carries `code: "workspace_denied"`. See docs/SPACES.md.
+
 ### Security
 
 - **Events reach their own user only.** Every gateway and turn event now names

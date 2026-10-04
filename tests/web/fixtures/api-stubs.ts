@@ -481,6 +481,8 @@ export async function stubWorkspaces(page: Page): Promise<void> {
     }),
   );
   await page.route('**/api/me/orgs', (route) => json(route, 200, { orgs: [] }));
+  // Shared spaces the user is a member of (none by default); the picker lists them.
+  await page.route('**/api/spaces', (route) => json(route, 200, { spaces: [] }));
 }
 
 export async function stubAllDefaults(page: Page): Promise<void> {

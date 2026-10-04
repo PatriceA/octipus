@@ -186,7 +186,10 @@ describe('non-members and removed members (I3)', () => {
     expect((await call('viewer', 'GET', '/api/notes')).status).toBe(200);
     const removed = await call('owner', 'DELETE', `/api/spaces/${spaceId}/members/${viewerId}`, { space: null });
     expect(removed.status).toBeLessThan(300);
-    expect((await call('viewer', 'GET', '/api/notes')).status).toBe(404);
+    const denied = await call('viewer', 'GET', '/api/notes');
+    expect(denied.status).toBe(404);
+    // The web reads the code to switch back to the default workspace.
+    expect(await denied.json()).toEqual({ error: 'Space not found', code: 'workspace_denied' });
     expect((await call('viewer', 'GET', '/api/tasks')).status).toBe(404);
     expect((await call('viewer', 'GET', '/api/spaces')).status).toBe(200);
     expect((await call('viewer', 'GET', '/api/me/workspaces')).status).toBe(200);

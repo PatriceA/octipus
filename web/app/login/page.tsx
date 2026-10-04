@@ -33,9 +33,11 @@ export default function LoginPage() {
   const { login } = useAuth();
   // `?returnTo=` is attacker-controllable; anything but a same-origin path is
   // ignored. Captured once: the server echoes back what it validated.
-  const requestedReturnTo = useSearchParams().get('returnTo');
+  const searchParams = useSearchParams();
+  const requestedReturnTo = searchParams.get('returnTo');
   const [returnTo] = useState(() => (isSafeReturnTo(requestedReturnTo) ? requestedReturnTo : undefined));
-  const [isLogin, setIsLogin] = useState(true);
+  // `?mode=register` opens on the register tab (the invite page's Register link).
+  const [isLogin, setIsLogin] = useState(() => searchParams.get('mode') !== 'register');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');

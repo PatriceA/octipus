@@ -5,21 +5,21 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useEffect } from 'react';
 import { loginPathReturningTo } from '../../src/shared/return-to';
 import { useAuth } from '@/lib/auth-context';
+import { isPublicPath } from '@/lib/public-routes';
 import { cn } from '@/lib/utils';
 import { GlobalPermissionBanner } from './global-permission-banner';
 import { Header } from './header';
 import { ImpersonationBanner } from './impersonation-banner';
 import { SpendBudgetBanner } from './spend-budget-banner';
 import { Sidebar } from './sidebar';
-
-const PUBLIC_ROUTES = ['/login', '/register', '/forgot-password', '/setup'];
+import { WorkspaceBanner } from './workspace-banner';
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const search = useSearchParams().toString();
   const { isAuthenticated, isLoading } = useAuth();
-  const isPublicRoute = PUBLIC_ROUTES.some(route => pathname.startsWith(route));
+  const isPublicRoute = isPublicPath(pathname);
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated && !isPublicRoute) {
@@ -53,6 +53,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <div className="flex flex-col h-screen bg-background text-on-surface overflow-hidden font-sans">
       <ImpersonationBanner />
       <SpendBudgetBanner />
+      <WorkspaceBanner />
       <div className="flex flex-1 min-h-0">
         <Sidebar />
         <div className="flex flex-col flex-1 min-w-0 bg-background">
