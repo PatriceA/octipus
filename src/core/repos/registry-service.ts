@@ -4,7 +4,7 @@ import { join, resolve } from 'path';
 import { getConfig } from '@/config';
 import { repoRegistryRepository } from '@/db/repositories/repo-registry-repository';
 import { agentPrincipal } from '@/security/principal';
-import { WorkspaceFS } from '@/security/workspace-fs';
+import { isKnownSharedWorkspace, WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
 import { buildRepoEdges, findAmbiguousPackages, type RepoEdge, type RepoGraphNode } from './graph';
 import { findRepoRoots, scanRoots } from './scanner';
@@ -25,9 +25,14 @@ export interface RepoOwner {
   workspaceId: string | null;
 }
 
-/** The workspace roots a user's repos in one workspace can live under. */
+/**
+ * The workspace roots a user's repos in one workspace can live under. A
+ * space has its own files root only: `workspace.additionalPaths` are the
+ * install's personal prefixes, not allowed in space contexts (§5.5).
+ */
 export function userScanRoots(owner: RepoOwner): string[] {
   const fs = WorkspaceFS.forPrincipal(agentPrincipal(owner));
+  if (isKnownSharedWorkspace(owner.workspaceId)) return [fs.root];
   const additional = getConfig().workspace.additionalPaths?.map((p) => resolve(p)) ?? [];
   return [fs.root, ...additional];
 }

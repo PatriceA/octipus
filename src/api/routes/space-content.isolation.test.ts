@@ -168,6 +168,55 @@ describe('members share the space’s notes and tasks', () => {
   });
 });
 
+describe('runs and writes follow the role and the archive (review findings 5, 7)', () => {
+  test('a viewer cannot open a chat in the space; an editor can, and it lands in the space', async () => {
+    expect((await call('viewer', 'POST', '/api/sessions', { body: { channelType: 'webchat', channelId: `v-${rand(3)}` } })).status).toBe(403);
+    const res = await call('editor', 'POST', '/api/sessions', { body: { channelType: 'webchat', channelId: `e-${rand(3)}` } });
+    expect(res.status).toBe(200);
+    expect((await res.json()).workspaceId).toBe(spaceId);
+  });
+
+  test('starting a pipeline never keeps the space principal: no pipeline lands in the space', async () => {
+    const { queryRaw } = await import('@/db/postgres');
+    // The viewer's own chat in the space (written directly: viewers cannot open one).
+    const { rows: [chat] } = await queryRaw(
+      `INSERT INTO sessions (user_id, channel_type, channel_id, workspace_id) VALUES ($1, 'webchat', $2, $3) RETURNING id`,
+      [viewerId, `vchat-${rand(3)}`, spaceId],
+    );
+    for (const [path, body] of [
+      [`/api/pipelines?sessionId=${chat.id}`, { templateName: 'research', description: 'go' }],
+      ['/api/pipelines', { templateName: 'research', description: 'go', sessionId: chat.id }],
+    ] as const) {
+      const res = await call('viewer', 'POST', path, { body });
+      expect(res.status, path).not.toBe(202);
+    }
+    const { rows } = await queryRaw(`SELECT count(*)::int AS n FROM pipelines WHERE workspace_id = $1 OR session_id = $2`, [spaceId, chat.id]);
+    expect(rows[0].n).toBe(0);
+    // Reads by the row keep the space: the viewer still lists their chat's (empty) agents.
+    expect((await call('viewer', 'GET', `/api/agents?sessionId=${chat.id}`)).status).toBe(200);
+  });
+
+  test('an archived space refuses chats, learning runs and chat edits, and still reads', async () => {
+    const created = await call('owner', 'POST', '/api/spaces', { body: { name: 'Frozen' }, space: null });
+    const frozen = (await created.json()).id;
+    const invite = await (await call('owner', 'POST', `/api/spaces/${frozen}/invites`, { body: { role: 'editor' }, space: null })).json();
+    expect((await call('editor', 'POST', `/api/invites/${invite.token}/accept`, { space: null })).status).toBe(200);
+    const chat = await (await call('editor', 'POST', '/api/sessions', { body: { channelType: 'webchat', channelId: `f-${rand(3)}` }, space: frozen })).json();
+    expect(chat.workspaceId).toBe(frozen);
+    expect((await call('owner', 'POST', `/api/spaces/${frozen}/archive`, { space: null })).status).toBe(200);
+
+    expect((await call('editor', 'POST', '/api/sessions', { body: { channelType: 'webchat', channelId: `f2-${rand(3)}` }, space: frozen })).status).toBe(409);
+    expect((await call('editor', 'POST', `/api/sessions/${chat.id}/learning`, { space: frozen })).status).toBe(409);
+    expect((await call('editor', 'POST', `/api/sessions/${chat.id}/monitors/events`, { body: { type: 'ping', payload: {} }, space: frozen })).status).toBe(409);
+    expect((await call('editor', 'PATCH', `/api/sessions/${chat.id}`, { body: { title: 'renamed' }, space: frozen })).status).toBe(409);
+    expect((await call('editor', 'DELETE', `/api/sessions/${chat.id}`, { space: frozen })).status).toBe(409);
+    expect((await call('editor', 'GET', `/api/sessions/${chat.id}`, { space: frozen })).status).toBe(200);
+    const { queryRaw } = await import('@/db/postgres');
+    const { rows } = await queryRaw(`SELECT count(*)::int AS n FROM background_jobs WHERE workspace_id = $1`, [frozen]);
+    expect(rows[0].n).toBe(0);
+  });
+});
+
 describe('non-members and removed members (I3)', () => {
   test('a non-member naming the space gets 404 everywhere, even on personal routes — admin included', async () => {
     for (const [method, path] of [['GET', '/api/notes'], ['GET', '/api/tasks'], ['GET', '/api/sessions'], ['GET', '/api/models'], ['GET', '/api/search?q=launch']]) {

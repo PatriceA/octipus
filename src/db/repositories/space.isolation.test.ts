@@ -21,6 +21,7 @@ import { mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { WORKSPACE_TABLES } from '@/db/workspace-tables';
 import type { Principal } from '@/security/principal';
 
 const rand = (n: number) => randomBytes(n).toString('hex');
@@ -31,57 +32,157 @@ process.env.LOG_LEVEL ??= 'silent';
 
 // ── Grep-driven raw readers ─────────────────────────────────────────────
 
-const CONTENT_SYMBOLS = ['notes', 'tasks', 'taskComments', 'documents', 'artifacts', 'knowledgeLinks', 'embeddings', 'memories', 'sessions', 'messages', 'agents', 'notifications', 'pipelines'];
-const CONTENT_TABLES = ['notes', 'tasks', 'task_comments', 'documents', 'artifacts', 'knowledge_links', 'embeddings', 'memories', 'sessions', 'messages', 'agents', 'notifications', 'pipelines'];
-const RAW_READ = new RegExp(
-  `(?<!Array)\\.(?:from|innerJoin|leftJoin)\\((?:${CONTENT_SYMBOLS.join('|')})\\b|\\b(?:FROM|JOIN)\\s+(?:${CONTENT_TABLES.join('|')})\\b`,
-);
+const ROOT = join(__dirname, '..', '..', '..');
 
 /**
- * Files allowed to read content tables directly, and why. "Personal reader"
- * entries are the §1.2 raw readers: they must carry `notInSharedWorkspace`
- * (checked below).
+ * The content tables: every table with a `workspace_id` (WORKSPACE_TABLES,
+ * kept complete by its own test against the live schema), plus the content
+ * tables keyed through another one (messages by session, task comments by
+ * task).
  */
+const CONTENT_TABLES = [...new Set([...WORKSPACE_TABLES.map((t) => t.table), 'messages', 'task_comments'])];
+
+/** Drizzle export name → table name, read from the schema files. */
+function schemaSymbols(): Map<string, string> {
+  const out = new Map<string, string>();
+  const dir = join(ROOT, 'src', 'db', 'schema');
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith('.ts') || name.endsWith('.test.ts')) continue;
+    const text = readFileSync(join(dir, name), 'utf8');
+    for (const m of text.matchAll(/export const (\w+) = pgTable\(\s*['"](\w+)['"]/g)) out.set(m[1], m[2]);
+  }
+  return out;
+}
+
+const SYMBOL_TABLE = schemaSymbols();
+const CONTENT_SYMBOLS = [...SYMBOL_TABLE].filter(([, table]) => CONTENT_TABLES.includes(table)).map(([symbol]) => symbol);
+
+/**
+ * The names a file reads content tables by: the schema exports, their
+ * aliases (`import { sessions as sessionRows }`), and drizzle `alias(tasks,
+ * …)` bindings.
+ */
+function contentNamesIn(text: string): string[] {
+  const names = new Set(CONTENT_SYMBOLS);
+  for (const m of text.matchAll(/import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*['"][^'"]*schema[^'"]*['"]/g)) {
+    for (const part of m[1].split(',')) {
+      const alias = /^\s*(?:type\s+)?(\w+)\s+as\s+(\w+)\s*$/.exec(part);
+      if (alias && names.has(alias[1])) names.add(alias[2]);
+    }
+  }
+  for (const m of text.matchAll(/(?:const|let)\s+(\w+)\s*=\s*alias\(\s*(\w+)\s*,/g)) {
+    if (names.has(m[2])) names.add(m[1]);
+  }
+  return [...names];
+}
+
+function rawReadPattern(names: string[]): RegExp {
+  const symbols = names.join('|');
+  return new RegExp(
+    [
+      // Drizzle: .from(tasks), .innerJoin(sessionRows, …)
+      `(?<!Array)\\.(?:from|innerJoin|leftJoin|rightJoin|fullJoin)\\(\\s*(?:${symbols})\\b`,
+      // Raw SQL, the keyword in any case: FROM tasks, join  notes, from ${sessions}.
+      // Table names are lowercase identifiers followed by an alias, a clause
+      // or the end of the line — prose ("from hooks, cron", "from AGENTS.md")
+      // is not a read.
+      `\\b[Ff][Rr][Oo][Mm]\\s+(?:(?:${CONTENT_TABLES.join('|')})(?=\\s|$|\\)|\`)|\\$\\{\\s*(?:${symbols})\\s*\\})`,
+      `\\b[Jj][Oo][Ii][Nn]\\s+(?:(?:${CONTENT_TABLES.join('|')})(?=\\s|$|\\)|\`)|\\$\\{\\s*(?:${symbols})\\s*\\})`,
+    ].join('|'),
+  );
+}
+
+/**
+ * Files that read content tables directly, and why. `access layer` files
+ * are the doors themselves. Files in `MARKED` (the unscoped stores: a
+ * blanket entry for one of them hid admins listing every space agent) must
+ * also carry an `i2:` comment on each read — on its line or within the three
+ * lines above — saying why that read cannot hand a space's rows to a
+ * personal caller. "personal reader" files must use `notInSharedWorkspace`
+ * (§1.2).
+ */
+const ACCESS_LAYER = 'access layer';
+const PERSONAL_READER = 'personal reader';
 const ALLOWLIST: Record<string, string> = {
   // The access layer itself.
-  'src/db/repositories/scoped.ts': 'personal repositories (RepoScope)',
-  'src/db/repositories/space.ts': 'space repositories (RepoScope, artifacts by membership)',
-  'src/db/repositories/note-repository.ts': 'notes by NoteScope (personal predicate or space)',
-  'src/db/repositories/knowledge-link-repository.ts': 'links by NoteScope; writes and cleanup by entity id',
-  'src/core/rag/embeddings.ts': 'every read through scopePredicate (KnowledgeScope)',
-  'src/core/rag/retention-service.ts': 'every pass through scopePredicate (KnowledgeScope)',
+  'src/db/repositories/scoped.ts': ACCESS_LAYER,
+  'src/db/repositories/space.ts': ACCESS_LAYER,
+  'src/db/repositories/note-repository.ts': ACCESS_LAYER,
+  'src/db/repositories/knowledge-link-repository.ts': ACCESS_LAYER,
+  'src/core/rag/embeddings.ts': ACCESS_LAYER,
+  'src/core/rag/retention-service.ts': ACCESS_LAYER,
+  'src/core/memory/repository.ts': ACCESS_LAYER,
+  'src/core/spaces/service.ts': ACCESS_LAYER,
+  'src/core/spaces/invites.ts': ACCESS_LAYER,
+  'src/core/spaces/membership.ts': ACCESS_LAYER,
+  'src/core/spaces/purge.ts': ACCESS_LAYER,
   'src/security/workspace-resolver.ts': 'workspace of a session/agent/pipeline the caller owns, by id',
-  // Unscoped repositories keyed by an id the caller already holds (a session, an agent run).
-  'src/db/repositories/session-repository.ts': 'system-side session store, keyed by session id',
-  'src/db/repositories/message-repository.ts': 'system-side message store, keyed by session id',
-  'src/db/repositories/agent-repository.ts': 'system-side agent store, keyed by agent id',
-  'src/db/repositories/document-repository.ts': 'document processor store, keyed by document id',
+  // Unscoped stores keyed by an id the caller already holds (MARKED: per read).
+  'src/db/repositories/session-repository.ts': 'system-side session store',
+  'src/db/repositories/message-repository.ts': 'system-side message store',
+  'src/db/repositories/agent-repository.ts': 'system-side agent store',
+  'src/db/repositories/agent-event-repository.ts': 'agent event stream, by agent id',
+  'src/db/repositories/document-repository.ts': 'document processor store',
   'src/db/repositories/artifacts-repository.ts': 'artifact rows by id or workspace id',
-  'src/db/repositories/pipeline-repository.ts': 'pipeline run state, keyed by pipeline id',
-  'src/db/repositories/task-state-repository.ts': 'session task state, keyed by session id',
+  'src/db/repositories/pipeline-repository.ts': 'pipeline run state',
+  'src/db/repositories/task-state-repository.ts': 'session task state',
+  'src/db/repositories/background-job-repository.ts': 'background job queue',
+  // Other system readers.
   'src/db/repositories/work-plan-repository.ts': "a session's plan, keyed by session id and owner",
-  'src/core/agent/pipeline-manager.ts': 'pipeline run state, keyed by pipeline id',
-  'src/core/learning/evidence.ts': "a session's own messages, keyed by session id",
+  'src/db/repositories/trajectory-repository.ts': 'trajectory runs, by run id (personal lists go through ScopedTrajectoryRepo)',
+  'src/db/repositories/repo-registry-repository.ts': "a user's repository registry (workspace_repos), never a space's",
+  'src/db/repositories/audit-repository.ts': 'audit log (kept history; space activity reads go through the space service)',
+  'src/core/agent/pipeline-manager.ts': 'pipeline run state by id; the personal list route drops space rows (withoutSpaceRows)',
+  'src/core/agent-manager.ts': 'swarm run state, keyed by run',
+  'src/core/swarm/node-repository.ts': 'swarm run state, keyed by run',
   'src/core/invariants.ts': 'system invariant checks',
   'src/core/artifacts/cleanup.ts': 'system cleanup job',
-  'src/core/spaces/membership.ts': "a member's rows in one space, after a membership change",
-  'src/core/spaces/purge.ts': "a space's rows, by its id",
+  'src/core/learning/evidence.ts': "a session's own messages and events, keyed by session id",
+  'src/core/learning/queue.ts': "a session's learning jobs and events, keyed by session id",
+  'src/api/routes/sessions.ts': "a session's learning jobs, after the scoped session lookup",
+  'src/core/notification-service.ts': "a user's own inbox (every notification of a user is theirs)",
   'src/security/orgs.ts': 'workspace transfer/delete, by workspace id',
   'src/security/permissions.ts': "a workspace's permission requests, by workspace id",
   'src/security/quotas.ts': 'counts for quota enforcement',
+  'src/security/user-deletion.ts': 'spaces a user authored content in, by user id (ids and names only)',
+  // Billing history (cost_log is a keep table): a user's own spend.
   'src/security/spend-budgets.ts': 'cost attribution joins',
-  'src/core/notification-service.ts': "a user's own inbox (every notification of a user is theirs)",
-  'src/core/memory/repository.ts': 'personal memories by MemoryAccessScope (space memory is S2)',
+  'src/models/cost-tracker.ts': "a user's own spend",
+  'src/api/routes/runs.ts': "a run's cost, after the scoped run lookup",
+  'src/api/routes/orgs.ts': 'org spend, admin billing',
+  // The vault: a user's secrets; workspace-scoped secrets follow transfer.
+  'src/security/vault.ts': 'secret store',
+  'src/security/oauth.ts': "a user's OAuth tokens in the secret store",
+  // Hooks are personal automation: never offered in space sessions (§5.6).
+  'src/hooks/manager.ts': 'hooks, personal automation',
+  'src/hooks/actions.ts': 'hooks, personal automation',
+  'src/api/routes/hooks.ts': 'hooks, personal automation',
+  'src/api/routes/webhook-incoming.ts': 'hooks, personal automation',
+  'src/core/cron-runner.ts': 'hooks, personal automation',
+  'src/core/briefing.ts': 'hooks, personal automation',
   // §1.2 personal raw readers: each carries notInSharedWorkspace.
-  'src/api/routes/graph.ts': 'personal reader',
-  'src/api/routes/memory.ts': 'personal reader',
-  'src/api/routes/search.ts': 'personal reader',
-  'src/core/heartbeat.ts': 'personal reader',
-  'src/core/tasks/role-agents.ts': 'personal reader',
-  'src/core/tasks/wakeup-bridge.ts': 'personal reader',
-  'src/core/channels/taken-tasks.ts': 'personal reader',
-  'src/core/knowledge/weekly-review.ts': 'personal reader',
+  'src/api/routes/graph.ts': PERSONAL_READER,
+  'src/api/routes/memory.ts': PERSONAL_READER,
+  'src/api/routes/search.ts': PERSONAL_READER,
+  'src/core/heartbeat.ts': PERSONAL_READER,
+  'src/core/tasks/role-agents.ts': PERSONAL_READER,
+  'src/core/tasks/wakeup-bridge.ts': PERSONAL_READER,
+  'src/core/channels/taken-tasks.ts': PERSONAL_READER,
+  'src/core/knowledge/weekly-review.ts': PERSONAL_READER,
 };
+
+/** Unscoped stores whose every read must carry an `i2:` marker. */
+const MARKED = new Set([
+  'src/db/repositories/session-repository.ts',
+  'src/db/repositories/message-repository.ts',
+  'src/db/repositories/agent-repository.ts',
+  'src/db/repositories/agent-event-repository.ts',
+  'src/db/repositories/document-repository.ts',
+  'src/db/repositories/artifacts-repository.ts',
+  'src/db/repositories/pipeline-repository.ts',
+  'src/db/repositories/task-state-repository.ts',
+  'src/db/repositories/background-job-repository.ts',
+]);
 
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];
@@ -98,22 +199,50 @@ function sourceFiles(dir: string): string[] {
 }
 
 describe('raw readers of content tables (grep-driven)', () => {
-  const root = join(__dirname, '..', '..', '..');
-  const readers = new Map<string, string[]>();
-  for (const file of sourceFiles(join(root, 'src'))) {
-    const rel = relative(root, file).split('\\').join('/');
+  /** File → hits, each with whether an `i2:` marker covers it. */
+  const readers = new Map<string, Array<{ hit: string; marked: boolean }>>();
+  for (const file of sourceFiles(join(ROOT, 'src'))) {
+    const rel = relative(ROOT, file).split('\\').join('/');
     if (rel.startsWith('src/db/schema/') || rel.startsWith('src/db/migrations/')) continue;
-    const lines = readFileSync(file, 'utf8').split('\n');
+    const text = readFileSync(file, 'utf8');
+    const pattern = rawReadPattern(contentNamesIn(text));
+    const lines = text.split('\n');
     const hits = lines
-      .map((line, i) => [line, i + 1] as const)
-      .filter(([line]) => RAW_READ.test(line) && !/^\s*(\/\/|\*)/.test(line))
-      .map(([line, n]) => `${n}: ${line.trim()}`);
+      .map((line, i) => ({ line, i }))
+      .filter(({ line }) => pattern.test(line) && !/^\s*(\/\/|\*|\/\*)/.test(line))
+      .map(({ line, i }) => ({
+        hit: `${i + 1}: ${line.trim()}`,
+        marked: lines.slice(Math.max(0, i - 3), i + 1).some((l) => /\bi2:\s*\S/.test(l)),
+      }));
     if (hits.length > 0) readers.set(rel, hits);
   }
 
+  test('the grep sees the tables of WORKSPACE_TABLES and aliased imports', () => {
+    for (const table of ['hooks', 'background_jobs', 'trajectory_runs', 'task_state', 'swarm_nodes', 'agent_events', 'vault', 'sessions']) {
+      expect(CONTENT_TABLES, table).toContain(table);
+    }
+    const pattern = rawReadPattern(contentNamesIn(`import { sessions as sessionRows } from '@/db/schema/sessions';`));
+    expect(pattern.test('db.select().from(sessionRows)')).toBe(true);
+    expect(pattern.test('select id from tasks where x')).toBe(true);
+    expect(pattern.test('LEFT JOIN background_jobs j ON')).toBe(true);
+    expect(pattern.test('FROM ${hooks} h')).toBe(true);
+    expect(pattern.test('join notes n on n.id = x')).toBe(true);
+    expect(pattern.test('Array.from(tasks)')).toBe(false);
+    expect(pattern.test("'Imported notes from vault'")).toBe(false);
+    expect(pattern.test('split from Agents so they')).toBe(false);
+    expect(pattern.test('(never from hooks, cron or heartbeat runs)')).toBe(false);
+  });
+
   test('every raw read of a content table is in an allowlisted file', () => {
-    const unlisted = [...readers.entries()].filter(([file]) => !(file in ALLOWLIST)).map(([file, hits]) => `${file}\n  ${hits.join('\n  ')}`);
+    const unlisted = [...readers.entries()].filter(([file]) => !(file in ALLOWLIST)).map(([file, hits]) => `${file}\n  ${hits.map((h) => h.hit).join('\n  ')}`);
     expect(unlisted, 'add notInSharedWorkspace and list the file, or move the read to a repository').toEqual([]);
+  });
+
+  test('every read of an unscoped store carries an i2: marker', () => {
+    const unmarked = [...readers.entries()]
+      .filter(([file]) => MARKED.has(file))
+      .flatMap(([file, hits]) => hits.filter((h) => !h.marked).map((h) => `${file}:${h.hit}`));
+    expect(unmarked, 'say on the read (`// i2: …`) why it cannot return a space row to a personal caller').toEqual([]);
   });
 
   test('the allowlist has no stale entry', () => {
@@ -122,8 +251,8 @@ describe('raw readers of content tables (grep-driven)', () => {
 
   test('every personal raw reader carries the personal predicate', () => {
     for (const [file, why] of Object.entries(ALLOWLIST)) {
-      if (why !== 'personal reader') continue;
-      expect(readFileSync(join(root, file), 'utf8'), file).toMatch(/notInSharedWorkspace\(/);
+      if (why !== PERSONAL_READER) continue;
+      expect(readFileSync(join(ROOT, file), 'utf8'), file).toMatch(/notInSharedWorkspace\(/);
     }
   });
 });
@@ -310,6 +439,115 @@ describe('personal repositories (I2)', () => {
     expect((await asAlice.sessions.findById(ids.sessions))?.id).toBe(ids.sessions);
     expect((await asAlice.messages.findBySession(ids.sessions)).map((m) => m.id)).toEqual([ids.messages]);
     expect((await asAlice.notifications.list()).map((n) => n.id)).toEqual([ids.notifications]);
+  });
+});
+
+describe('admin bypasses on agents (I2, review finding 2)', () => {
+  test('an admin who is not a member sees no space agent: history list, live list, live by-id, live events, stop', async () => {
+    const { getSessionManager } = await import('@/security/auth/session');
+    const { createServer } = await import('@/api/server');
+    const { getAgentManager } = await import('@/core/agent-manager');
+    const app = createServer();
+    const adminToken = (await getSessionManager().create(admin)).token;
+    const aliceToken = (await getSessionManager().create(alice)).token;
+    const live = await getAgentManager().spawn({ sessionId: ids.sessions, userId: alice, workspaceId: spaceId, topic: 'general', model: 'test-model', role: 'general' });
+    const liveId = live.getContext().id;
+    const call = async (token: string, method: string, path: string, header?: string) => {
+      const headers: Record<string, string> = { authorization: `Bearer ${token}` };
+      if (header) headers['x-octipus-workspace'] = header;
+      return app.handle(new Request(`http://localhost${path}`, { method, headers }));
+    };
+    try {
+      const list = await (await call(adminToken, 'GET', '/api/agents?limit=200')).json();
+      expect(list.agents.map((a: { id: string }) => a.id)).not.toContain(ids.agents);
+      expect(list.agents.map((a: { id: string }) => a.id)).not.toContain(liveId);
+      expect(await (await call(adminToken, 'GET', `/api/agents/${liveId}`)).json()).toEqual({ error: 'Agent not found' });
+      expect(await (await call(adminToken, 'GET', `/api/agents/${liveId}/events`)).json()).toEqual({ error: 'Agent not found' });
+      expect(await (await call(adminToken, 'GET', `/api/agents/${ids.agents}`)).json()).toEqual({ error: 'Agent not found' });
+      expect(await (await call(adminToken, 'POST', `/api/agents/${liveId}/stop`)).json()).toEqual({ error: 'Agent not found' });
+      expect(live.getStatus()).not.toBe('stopped');
+      // Its owner, a member, reaches it from the space.
+      const own = await (await call(aliceToken, 'GET', `/api/agents/${liveId}`, spaceId)).json();
+      expect(own.id).toBe(liveId);
+    } finally {
+      getAgentManager().remove(liveId);
+    }
+  }, 60_000);
+});
+
+describe('the personal door never writes into a space (D3, review finding 6)', () => {
+  test('personal-scope creates handed a space id are refused, through every store', async () => {
+    const { scopedRepos } = await import('./scoped');
+    const { contentRepos } = await import('./content');
+    const { agentPrincipal } = await import('@/security/principal');
+    const { personalNoteScope, PersonalNoteRepo } = await import('./note-repository');
+    // What an agent context inside the space hands the personal door today.
+    const inSpace = agentPrincipal({ userId: alice, workspaceId: spaceId });
+    const r = scopedRepos(inSpace);
+    await expect(r.tasks.create({ title: 'smuggled', source: 'user' })).rejects.toThrow(/shared workspace/);
+    await expect(r.sessions.create({ channelType: 'api', channelId: `x-${rand(3)}` })).rejects.toThrow(/shared workspace/);
+    await expect(r.agents.create({ id: `agent-${randomUUID()}`, sessionId: ids.sessions, role: 'general' })).rejects.toThrow(/shared workspace/);
+    await expect(r.documents.create({ filename: 'f', originalName: 'f', mimeType: 'text/plain', size: 1, storagePath: '/x' })).rejects.toThrow(/shared workspace/);
+    // A caller's explicit workspace id is refused the same way.
+    const personal = scopedRepos(await principal(alice, null));
+    await expect(personal.sessions.create({ channelType: 'api', channelId: `y-${rand(3)}`, workspaceId: spaceId })).rejects.toThrow(/shared workspace/);
+    await expect(personal.documents.create({ filename: 'f', originalName: 'f', mimeType: 'text/plain', size: 1, storagePath: '/x', workspaceId: spaceId })).rejects.toThrow(/shared workspace/);
+    // Notes: the scope itself refuses a known space; the write refuses any.
+    expect(() => personalNoteScope(alice, spaceId)).toThrow(/shared workspace/);
+    const unchecked = new PersonalNoteRepo({ kind: 'personal', userId: alice, workspaceId: spaceId });
+    await expect(unchecked.create({ slug: `s-${rand(3)}`, title: 't', bodySha256: 'x' })).rejects.toThrow(/shared workspace/);
+    // Artifacts: refused before any read or write.
+    await expect(contentRepos(inSpace).artifacts.list()).rejects.toThrow(/shared workspace/);
+    await expect(contentRepos(inSpace).artifacts.create({ slug: `s-${rand(3)}`, title: 't', type: 'html' })).rejects.toThrow(/shared workspace/);
+    const [count] = await q(`SELECT count(*)::int AS n FROM tasks WHERE workspace_id = $1 AND title = 'smuggled'`, [spaceId]);
+    expect(count.n).toBe(0);
+  });
+
+  test('the personal predicate is positive: a row naming no live workspace is nobody’s personal row (review finding 8)', async () => {
+    const { getDb } = await import('@/db/postgres');
+    const { sql } = await import('drizzle-orm');
+    const { notInSharedWorkspace } = await import('./scoped');
+    const [personalWs] = await q(`SELECT id FROM workspaces WHERE user_id = $1 AND kind = 'personal' LIMIT 1`, [alice]);
+    const personalOf = async (id: string | null) => {
+      const result = await getDb().execute(sql`SELECT ${notInSharedWorkspace(id === null ? sql`NULL::uuid` : sql`${id}::uuid`)} AS personal`);
+      const rows = (Array.isArray(result) ? result : (result as { rows: Array<{ personal: boolean }> }).rows) as Array<{ personal: boolean }>;
+      return rows[0].personal;
+    };
+    expect(await personalOf(null)).toBe(true);
+    expect(await personalOf(personalWs.id)).toBe(true);
+    expect(await personalOf(spaceId)).toBe(false);
+    expect(await personalOf(randomUUID())).toBe(false);
+  });
+});
+
+describe('artifact reach through the gateway and public pages (review findings 15, 17)', () => {
+  test('a member subscribes to a space artifact; a non-member admin does not; private stays its creator’s', async () => {
+    const { canSubscribeToResource } = await import('@/core/gateway/resource-access');
+    const ctx = (userId: string) => ({ userId, resources: new Set<string>() }) as unknown as import('@/core/gateway/protocol').ConnectionContext;
+    expect(await canSubscribeToResource(ctx(bob), `artifact:${ids.artifacts}`)).toBe(true);
+    expect(await canSubscribeToResource(ctx(alice), `artifact:${ids.artifacts}`)).toBe(true);
+    expect(await canSubscribeToResource(ctx(admin), `artifact:${ids.artifacts}`)).toBe(false);
+    const [priv] = await q(`INSERT INTO artifacts (slug, workspace_id, created_by_user_id, title, type, visibility) VALUES ($1, $2, $3, 'p', 'html', 'private') RETURNING id`, [`priv-${rand(3)}`, spaceId, alice]);
+    expect(await canSubscribeToResource(ctx(alice), `artifact:${priv.id}`)).toBe(true);
+    expect(await canSubscribeToResource(ctx(bob), `artifact:${priv.id}`)).toBe(false);
+  });
+
+  test('a page slug prefers the viewer’s personal artifact, and guests get no space page', async () => {
+    const { findViewableArtifactBySlug } = await import('./space');
+    const slug = `shared-${rand(3)}`;
+    const [inSpace] = await q(`INSERT INTO artifacts (slug, workspace_id, created_by_user_id, title, type, updated_at) VALUES ($1, $2, $3, 's', 'html', now() + interval '1 hour') RETURNING id`, [slug, spaceId, bob]);
+    expect((await findViewableArtifactBySlug(alice, slug))?.id).toBe(inSpace.id);
+    const [personalWs] = await q(`SELECT id FROM workspaces WHERE user_id = $1 AND kind = 'personal' LIMIT 1`, [alice]);
+    const [mine] = await q(`INSERT INTO artifacts (slug, workspace_id, created_by_user_id, title, type) VALUES ($1, $2, $3, 'p', 'html') RETURNING id`, [slug, personalWs.id, alice]);
+    // The space's row is newer, the personal one still wins.
+    expect((await findViewableArtifactBySlug(alice, slug))?.id).toBe(mine.id);
+    // A guest of the space sees no space page.
+    const guest = randomUUID();
+    const { seedUsers } = await import('@/test-helpers/multiuser-fixtures');
+    await seedUsers([{ id: guest, username: `i-guest-${rand(3)}` }]);
+    await q(`INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, 'guest')`, [spaceId, guest]);
+    expect(await findViewableArtifactBySlug(guest, slug)).toBeNull();
+    await q(`DELETE FROM workspace_members WHERE workspace_id = $1 AND user_id = $2`, [spaceId, guest]);
   });
 });
 

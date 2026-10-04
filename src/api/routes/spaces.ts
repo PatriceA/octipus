@@ -12,6 +12,7 @@ import {
   removeMember,
   renameSpace,
   setRole,
+  type SpaceActor,
   unarchiveSpace,
 } from '@/core/spaces/service';
 import { isAuthenticated, type Principal } from '@/security/principal';
@@ -38,17 +39,21 @@ type RouteCtx = {
   principal: Principal;
 };
 
-/** The caller as a space actor, or null with 401 set. */
-function actorOf(ctx: RouteCtx): { userId: string } | null {
+/**
+ * The caller as a space actor, or null with 401 set. An admin impersonating
+ * a user acts with that user's rights and is named in every audit row (I10).
+ */
+function actorOf(ctx: RouteCtx): SpaceActor | null {
   if (!isAuthenticated(ctx.principal)) {
     ctx.set.status = 401;
     return null;
   }
-  return { userId: ctx.principal.userId };
+  const by = ctx.principal.actorUserId;
+  return { userId: ctx.principal.userId, impersonatedBy: by && by !== ctx.principal.userId ? by : null };
 }
 
 /** Run a space operation, mapping `SpaceError` to its status. */
-async function handle<T>(ctx: RouteCtx, run: (actor: { userId: string }) => Promise<T>): Promise<T | { error: string; code?: string }> {
+async function handle<T>(ctx: RouteCtx, run: (actor: SpaceActor) => Promise<T>): Promise<T | { error: string; code?: string }> {
   const actor = actorOf(ctx);
   if (!actor) return { error: 'Authentication required' };
   try {
@@ -144,8 +149,8 @@ export const spaceRoutes = new Elysia({ prefix: '/spaces' })
 
   // Owner removes a member, or a member removes themselves (leaves).
   .delete('/:id/members/:userId', (ctx) => handle(ctx, async (actor) => {
-    await removeMember(actor, ctx.params.id, ctx.params.userId);
-    return { success: true };
+    // The removal stands even when a follow-up step failed; `warning` says which.
+    return { success: true, ...(await removeMember(actor, ctx.params.id, ctx.params.userId)) };
   }), {
     params: t.Object({ id: t.String(), userId: t.String() }),
     detail: { tags: ['spaces'] },

@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, inArray, lt, type SQL, sql } from 'drizzle-orm';
 import { getDb } from '../postgres';
+import { notInSharedWorkspace } from './scoped';
 import {
   type BackgroundJob,
   type BackgroundJobKind,
@@ -53,6 +54,7 @@ export class BackgroundJobRepository {
   }
 
   async findById(id: string): Promise<BackgroundJob | null> {
+    // i2: by job id, for the worker and the poller that owns the job
     const rows = await this.db.select().from(backgroundJobs).where(eq(backgroundJobs.id, id)).limit(1);
     return rows[0] ?? null;
   }
@@ -70,6 +72,7 @@ export class BackgroundJobRepository {
   async claimNext(kind: BackgroundJobKind): Promise<BackgroundJob | null> {
     const next = this.db
       .select({ id: backgroundJobs.id })
+      // i2: the worker's queue claim, not a user read
       .from(backgroundJobs)
       .where(and(eq(backgroundJobs.kind, kind), eq(backgroundJobs.status, 'queued')))
       .orderBy(asc(backgroundJobs.seq))
@@ -137,6 +140,7 @@ export class BackgroundJobRepository {
   async countByStatus(kind: BackgroundJobKind): Promise<{ queued: number; running: number }> {
     const rows = await this.db
       .select({ status: backgroundJobs.status, n: sql<number>`count(*)::int` })
+      // i2: counts only
       .from(backgroundJobs)
       .where(and(eq(backgroundJobs.kind, kind), inArray(backgroundJobs.status, ['queued', 'running'])))
       .groupBy(backgroundJobs.status);
@@ -174,12 +178,13 @@ export class BackgroundJobRepository {
     return rows.length;
   }
 
-  /** Most recent jobs of a user, newest first — the operator's view. */
+  /** Most recent jobs of a user, newest first — the operator's view (never a space's, I2). */
   async recentForUser(userId: string, limit = 50): Promise<BackgroundJob[]> {
     return this.db
       .select()
+      // i2: a user's jobs, never a space's
       .from(backgroundJobs)
-      .where(eq(backgroundJobs.userId, userId))
+      .where(and(eq(backgroundJobs.userId, userId), notInSharedWorkspace(backgroundJobs.workspaceId)))
       .orderBy(desc(backgroundJobs.seq))
       .limit(limit);
   }

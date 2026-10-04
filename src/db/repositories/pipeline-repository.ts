@@ -62,6 +62,7 @@ export class PipelineRepository {
   async findById(id: string): Promise<Pipeline | null> {
     const result = await this.db
       .select()
+      // i2: pipeline run state by pipeline id, for the pipeline runtime
       .from(pipelines)
       .where(eq(pipelines.id, id))
       .limit(1);
@@ -138,8 +139,10 @@ export class PipelineRepository {
   }
 
   private async syncWorkPlan(tx: Parameters<Parameters<ReturnType<typeof getDb>['transaction']>[0]>[0], pipelineId: string): Promise<void> {
+    // i2: pipeline run state by pipeline id, for the pipeline runtime
     const [pipeline] = await tx.select().from(pipelines).where(eq(pipelines.id, pipelineId));
     if (!pipeline) return;
+    // i2: pipeline run state by pipeline id, for the pipeline runtime
     const [session] = await tx.select().from(sessions)
       .where(and(eq(sessions.id, pipeline.sessionId), eq(sessions.userId, pipeline.userId))).for('update');
     if (!session || session.context?.planMode) return;
@@ -148,6 +151,7 @@ export class PipelineRepository {
       .orderBy(asc(planItems.ordinal), asc(planItems.createdAt));
     const previousId = state.current?.sourcePipelineId;
     const [previousPipeline] = previousId && previousId !== pipelineId
+      // i2: pipeline run state by pipeline id, for the pipeline runtime
       ? await tx.select().from(pipelines).where(and(eq(pipelines.id, previousId), eq(pipelines.sessionId, pipeline.sessionId)))
       : [];
     const next = projectPipelinePlan(state, pipeline, items, previousPipeline);

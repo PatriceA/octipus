@@ -14,13 +14,27 @@ import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { getDb } from '@/db/postgres';
 import { isUuid } from '@/db/repositories/scoped';
-import { type InvitableSpaceRole, workspaceInvites, workspaces } from '@/db/schema/organizations';
+import { type InvitableSpaceRole, workspaceInvites, workspaceMembers, workspaces } from '@/db/schema/organizations';
 import { users } from '@/db/schema/users';
-import { isInvitableRole, requireCan, SpaceError } from '@/security/space-access';
+import { can, isInvitableRole, requireCan, SPACE_ROLES, SpaceError } from '@/security/space-access';
 import { generateToken, sha256 } from '@/utils/crypto';
 import { securityLogger } from '@/utils/logger';
 import { onMembershipGranted } from './membership';
-import { addMemberInTx, getMembership, type SpaceActor, writeSpaceAudit } from './service';
+import { addMemberInTx, auditActor, getMembership, type SpaceActor, writeSpaceAudit } from './service';
+
+/** The roles that may hand out invites: an invite is good only while its creator still holds one. */
+const INVITING_ROLES = SPACE_ROLES.filter((r) => can(r, 'manage_invites'));
+
+/**
+ * The invite's creator still may invite: removing, demoting or losing an
+ * owner ends their links (I5), even one not revoked yet.
+ */
+function creatorMayInvite() {
+  return sql`EXISTS (SELECT 1 FROM ${workspaceMembers} m
+    WHERE m.workspace_id = ${workspaceInvites.workspaceId}
+      AND m.user_id = ${workspaceInvites.createdBy}
+      AND m.role IN (${sql.join(INVITING_ROLES.map((r) => sql`${r}`), sql`, `)}))`;
+}
 
 /** Default lifetime of an invite when the owner names none (then clamped like any other). */
 export const DEFAULT_INVITE_TTL_HOURS = 7 * 24;
@@ -63,7 +77,7 @@ export async function createInvite(
   const expiresAt = new Date(Date.now() + hours * 3600_000);
 
   const invite = await getDb().transaction(async (tx) => {
-    requireCan(await getMembership(actor.userId, workspaceId, tx), 'manage_invites');
+    requireCan(await getMembership(actor.userId, workspaceId, tx, { lock: 'share' }), 'manage_invites');
     const [space] = await tx.select({ archivedAt: workspaces.archivedAt }).from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
     if (space?.archivedAt) throw new SpaceError('archived', 'This space is archived');
     const [row] = await tx
@@ -79,7 +93,7 @@ export async function createInvite(
       })
       .returning();
     await writeSpaceAudit(tx, {
-      actorId: actor.userId,
+      ...auditActor(actor),
       action: 'space_invite_created',
       workspaceId,
       resourceType: 'space_invite',
@@ -121,6 +135,7 @@ export async function previewInvite(token: string): Promise<InvitePreview | null
       sql`${workspaceInvites.useCount} < ${workspaceInvites.maxUses}`,
       eq(workspaces.kind, 'shared'),
       isNull(workspaces.archivedAt),
+      creatorMayInvite(),
     ))
     .limit(1);
   return row ?? null;
@@ -152,6 +167,7 @@ export async function acceptInvite(actor: SpaceActor, token: string): Promise<Ac
         isNull(workspaceInvites.revokedAt),
         sql`${workspaceInvites.expiresAt} > now()`,
         sql`${workspaceInvites.useCount} < ${workspaceInvites.maxUses}`,
+        creatorMayInvite(),
       ))
       .returning({
         id: workspaceInvites.id,
@@ -178,7 +194,7 @@ export async function acceptInvite(actor: SpaceActor, token: string): Promise<Ac
       return { workspaceId: taken.workspaceId, role: existing?.role ?? taken.role, alreadyMember: true };
     }
     await writeSpaceAudit(tx, {
-      actorId: actor.userId,
+      ...auditActor(actor),
       action: 'space_invite_accepted',
       workspaceId: taken.workspaceId,
       resourceType: 'space_invite',
@@ -197,7 +213,7 @@ export async function acceptInvite(actor: SpaceActor, token: string): Promise<Ac
 /** Revoke an invite of this space (owner only). An id of another space is `not_found`. */
 export async function revokeInvite(actor: SpaceActor, workspaceId: string, inviteId: string): Promise<void> {
   await getDb().transaction(async (tx) => {
-    requireCan(await getMembership(actor.userId, workspaceId, tx), 'manage_invites');
+    requireCan(await getMembership(actor.userId, workspaceId, tx, { lock: 'share' }), 'manage_invites');
     if (!isUuid(inviteId)) throw new SpaceError('not_found', 'Invite not found');
     const [row] = await tx
       .select({ id: workspaceInvites.id, revokedAt: workspaceInvites.revokedAt })
@@ -211,7 +227,7 @@ export async function revokeInvite(actor: SpaceActor, workspaceId: string, invit
       .set({ revokedAt: new Date() })
       .where(and(eq(workspaceInvites.id, inviteId), eq(workspaceInvites.workspaceId, workspaceId)));
     await writeSpaceAudit(tx, {
-      actorId: actor.userId,
+      ...auditActor(actor),
       action: 'space_invite_revoked',
       workspaceId,
       resourceType: 'space_invite',

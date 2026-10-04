@@ -950,7 +950,7 @@ export async function markRoleHeartbeatDue(userId: string, taskId: string, now: 
   // A task in a shared workspace (a space) never wakes a role heartbeat:
   // role agents are personal automation (docs/plans/coworking-spec.md §5.5).
   const assignedRole = sql`(SELECT t.assignee_ref FROM tasks t WHERE t.id = ${taskId}::uuid AND t.user_id = ${userId}::uuid AND t.assignee_kind = 'role'
-    AND (t.workspace_id IS NULL OR NOT EXISTS (SELECT 1 FROM workspaces sw WHERE sw.id = t.workspace_id AND sw.kind = 'shared')))`;
+    AND ${notInSharedWorkspace(sql.raw('t.workspace_id'))})`;
   const marked = await db
     .update(hooks)
     .set({ nextRunAt: now, updatedAt: now })

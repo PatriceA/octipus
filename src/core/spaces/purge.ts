@@ -38,7 +38,7 @@ import { WORKSPACE_TABLES } from '@/db/workspace-tables';
 import { requireCan, SpaceError } from '@/security/space-access';
 import { SPACES_DIR, spaceDirectories } from '@/security/workspace-fs';
 import { coreLogger, securityLogger } from '@/utils/logger';
-import { getMembership, type SpaceActor, writeSpaceAudit } from './service';
+import { auditActor, getMembership, type SpaceActor, writeSpaceAudit } from './service';
 
 /**
  * Tables keyed by a session (or a run's root session) whose rows a deleted
@@ -82,7 +82,7 @@ export async function purgeSpace(actor: SpaceActor, workspaceId: string): Promis
   const deleted: Record<string, number> = {};
   const removedSessions: string[] = [];
   await getDb().transaction(async (tx) => {
-    requireCan(await getMembership(actor.userId, workspaceId, tx), 'manage_space');
+    requireCan(await getMembership(actor.userId, workspaceId, tx, { lock: 'share' }), 'manage_space');
     const [space] = await tx
       .select({ archivedAt: workspaces.archivedAt })
       .from(workspaces)
@@ -124,7 +124,7 @@ export async function purgeSpace(actor: SpaceActor, workspaceId: string): Promis
     }
 
     await writeSpaceAudit(tx, {
-      actorId: actor.userId,
+      ...auditActor(actor),
       action: 'space_purged',
       workspaceId,
       details: { deleted },

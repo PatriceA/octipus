@@ -24,6 +24,7 @@ import {
   type ScopedSessionRepo,
   scopedRepos,
   type TaskRepo,
+  assertPersonalWorkspace,
 } from './scoped';
 import { ArtifactStore, type LinkStore, linkStoreFor, spaceRepos } from './space';
 
@@ -36,6 +37,8 @@ export interface ContentRepos {
   readonly role: SpaceRole | null;
   /** Throws `SpaceError` unless `action` is allowed here (always allowed in personal scope). */
   can(action: SpaceAction): void;
+  /** Throws `SpaceError('archived')` when the space reads only; never in personal scope. */
+  assertOpen(): void;
   sessions: ScopedSessionRepo;
   messages: ScopedMessageRepo;
   agents: ScopedAgentRepo;
@@ -65,6 +68,7 @@ export function contentRepos(principal: Principal): ContentRepos {
     workspaceId,
     role: null,
     can,
+    assertOpen: () => undefined,
     sessions: personal.sessions,
     messages: personal.messages,
     agents: personal.agents,
@@ -82,8 +86,13 @@ export function contentRepos(principal: Principal): ContentRepos {
   };
 }
 
-/** Artifacts of the principal's personal workspace; a principal without one has none to reach. */
+/**
+ * Artifacts of the principal's personal workspace; a principal without one
+ * has none to reach, and one naming a space (an agent context there) is
+ * refused before any query (D3).
+ */
 function personalArtifacts(principal: Principal): ArtifactStore {
-  if (!principal.workspaceId) throw new Error('Artifacts need a resolved workspace');
-  return new ArtifactStore(principal.workspaceId, principal.userId, () => undefined);
+  const workspaceId = principal.workspaceId;
+  if (!workspaceId) throw new Error('Artifacts need a resolved workspace');
+  return new ArtifactStore(workspaceId, principal.userId, () => undefined, () => assertPersonalWorkspace(workspaceId));
 }
