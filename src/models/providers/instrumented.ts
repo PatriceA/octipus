@@ -15,13 +15,27 @@ export const SYSTEM_USAGE_USER = '00000000-0000-0000-0000-000000000000';
 async function prepare(options: CompletionOptions, provider: string): Promise<CompletionOptions> {
   options = { ...usageContext.getStore(), ...Object.fromEntries(Object.entries(options).filter(([, value]) => value !== undefined)) } as CompletionOptions;
   let settings: import('@/shared/provider-settings').ProviderSettings | undefined;
+  let row: import('@/db/schema/models').ModelConfigEntry | null = null;
   try {
     const { getModelRegistry } = await import('../model-registry');
     const registry = getModelRegistry();
-    const row = options.modelConfigName ? await registry.getModel(options.modelConfigName) : await registry.getModelByModelId(options.model);
+    row = options.modelConfigName ? await registry.getModel(options.modelConfigName) : await registry.getModelByModelId(options.model, { userId: options.userId });
     settings = row?.metadata?.providerSettings;
   } catch (err) {
     modelLogger.warn({ err, provider }, 'Provider settings unavailable; using request options');
+  }
+  // A personal row (coworking spec §8.3) never reaches a provider without its
+  // owner's key and endpoint: every direct provider is instrumented through
+  // here, and one that found no `apiKey` would fall back to the install's env
+  // key. resolveModelKey throws when the owner stored none.
+  if (row?.ownerUserId) {
+    const { resolveModelKey } = await import('../model-key');
+    options = {
+      ...options,
+      modelConfigName: row.name,
+      apiKey: options.apiKey ?? await resolveModelKey(row),
+      endpoint: options.endpoint ?? row.endpoint ?? undefined,
+    };
   }
   // Callers own extraBody: an omitted field may be an intentional safety override.
   return applyProviderSettings(options, provider, settings);

@@ -191,11 +191,19 @@ export class ProviderRouter {
     return this.providers.filter(p => p.name === 'litellm' || !!p.embed).map(p => p.name);
   }
 
-  /** Resolve provider: check DB config first (handles models like "deepseek-ocr" on Ollama), fall back to name heuristic */
-  async resolveProvider(modelName: string): Promise<ModelProvider> {
+  /**
+   * Resolve provider: check DB config first (handles models like "deepseek-ocr" on Ollama), fall back to name heuristic.
+   * `row.modelConfigName` names the exact row (a personal row can share its
+   * modelId with an install row on another provider); without it the lookup is
+   * by modelId, install rows first, then `row.userId`'s own.
+   */
+  async resolveProvider(modelName: string, row: { modelConfigName?: string; userId?: string } = {}): Promise<ModelProvider> {
     try {
       const { getModelRegistry } = await import('@/models/model-registry');
-      const dbModel = await getModelRegistry().getModelByModelId(modelName);
+      const registry = getModelRegistry();
+      const dbModel = row.modelConfigName
+        ? await registry.getModel(row.modelConfigName)
+        : await registry.getModelByModelId(modelName, { userId: row.userId });
       if (dbModel?.provider) {
         const dbProvider = this.getProviderByName(dbModel.provider);
         if (dbProvider) return dbProvider;
@@ -220,7 +228,7 @@ export class ProviderRouter {
 
   /** Complete with automatic provider selection, rate limiting, and circuit breaking */
   async complete(options: CompletionOptions): Promise<CompletionResult> {
-    const provider = await this.resolveProvider(options.model);
+    const provider = await this.resolveProvider(options.model, options);
     const rateLimitKey = resolveRateLimitKey(provider, options.model);
 
     // Apply thinking budget for reasoning models
@@ -321,7 +329,7 @@ export class ProviderRouter {
 
   /** Stream with automatic provider selection, rate limiting, and circuit breaking */
   async *stream(options: CompletionOptions): AsyncGenerator<StreamChunk> {
-    const provider = await this.resolveProvider(options.model);
+    const provider = await this.resolveProvider(options.model, options);
     const rateLimitKey = resolveRateLimitKey(provider, options.model);
 
     // Apply thinking budget and message transformation (same as complete())
@@ -416,7 +424,9 @@ export class ProviderRouter {
     try {
       const { getModelRegistry } = await import('@/models/model-registry');
       const registry = getModelRegistry();
-      const dbModel = await registry.getModelByModelId(options.model) || await registry.getModel(options.model);
+      const dbModel = options.modelConfigName
+        ? await registry.getModel(options.modelConfigName)
+        : await registry.getModelByModelId(options.model, { userId: options.userId }) || await registry.getModel(options.model);
 
       if (!dbModel) return options;
 

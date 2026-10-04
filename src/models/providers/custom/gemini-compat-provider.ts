@@ -47,7 +47,7 @@ export class CustomGeminiCompatProvider extends BaseCustomProvider implements Mo
         headers,
         body: JSON.stringify(body),
         signal: withTimeoutSignal(120_000, options.signal),
-      }, this.name);
+      }, this.name, this.fetchFor(cfg));
     } catch (err) {
       throw classifyError(err, this.name);
     }
@@ -81,7 +81,7 @@ export class CustomGeminiCompatProvider extends BaseCustomProvider implements Mo
     const idle = createIdleAbort(180_000, options.signal);
     let res: Response;
     try {
-      res = await fetch(url, {
+      res = await this.fetchFor(cfg)(url, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),

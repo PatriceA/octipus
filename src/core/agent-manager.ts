@@ -28,6 +28,8 @@ export interface SpawnOptions {
   workspaceId?: string | null;
   topic?: string;
   model?: string;
+  /** Row identity of `model` (`model_config.name`) when the caller resolved one — see `AgentContext.modelName`. */
+  modelName?: string;
   role?: string;
   /** Mark this agent as the turn's root (see `AgentContext.root`). */
   root?: boolean;
@@ -161,13 +163,32 @@ export class AgentManager {
     // (the caller has already routed, e.g. SwarmSpawner or internal spawnWorker)
     let routedTopic = options.topic || 'general';
     let routedModel = options.model || '';
+    let routedModelName = options.modelName;
 
     if (!options.model) {
       // Only route if model isn't pre-determined
       const router = getRouter();
-      const routing = await router.route(options.topic || '');
+      const routing = await router.route(options.topic || '', undefined, { userId: options.userId });
       routedTopic = routing.topic;
       routedModel = routing.model;
+      routedModelName = routing.modelName;
+    }
+
+    // The row this agent runs on. A caller that resolved a row passes its name;
+    // otherwise the modelId resolves to an install row first, then the
+    // requester's own — never another user's personal row (§8.1).
+    const registry = getModelRegistry();
+    const modelEntry = routedModelName
+      ? await registry.getModel(routedModelName)
+      : await registry.getModelByModelId(routedModel, { userId: options.userId });
+    if (routedModelName && !modelEntry) {
+      throw new Error(`Model '${routedModelName}' is not registered or is disabled`);
+    }
+    if (modelEntry && modelEntry.modelId !== routedModel) {
+      throw new Error(`Model row '${modelEntry.name}' runs '${modelEntry.modelId}', not '${routedModel}'`);
+    }
+    if (modelEntry?.ownerUserId && modelEntry.ownerUserId !== options.userId) {
+      throw new Error(`Model '${modelEntry.name}' is another user's personal model`);
     }
 
     const agentId = generateId();
@@ -179,6 +200,7 @@ export class AgentManager {
       workspaceId: options.workspaceId ?? null,
       topic: routedTopic,
       model: routedModel,
+      modelName: modelEntry?.name,
       role: options.role || 'general',
       root: options.root === true,
       attended: options.attended,
@@ -188,9 +210,6 @@ export class AgentManager {
       metadata: { ...(options.contextMetadata ?? {}) },
     };
 
-    // Determine if this is a CLI model (autonomous sub-agent)
-    const registry = getModelRegistry();
-    const modelEntry = await registry.getModelByModelId(routedModel);
 
     // The window belongs to the MODEL, not to the install. `agent.contextWindowSize`
     // is one number for every agent (32k by default), and every compaction

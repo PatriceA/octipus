@@ -10,7 +10,7 @@ import { getModelRegistry } from '@/models/model-registry';
 import { formatDateTimeContext } from '@/utils/date-context';
 import { coreLogger } from '@/utils/logger';
 import { buildSecurityReminder } from './input-guard';
-import type { ModelSelector } from './model-selector';
+import type { ModelSelector, SelectedModel } from './model-selector';
 import { SECURITY_PREAMBLE } from './roles';
 import { appendSources, type ResponseMetadata } from './types';
 
@@ -61,11 +61,12 @@ async function directResponseInternal(
    * Skip complexity-based routing and use this exact model. The voice plan gate
    * passes the fast `voice`-topic model here so spoken planning turns stay snappy.
    */
-  modelOverride?: string,
+  modelOverride?: SelectedModel,
 ): Promise<{ response: string; metadata: ResponseMetadata }> {
   const startTime = Date.now();
   const client = getLiteLLMClient();
-  const modelName = modelOverride || (await modelSelector.selectByComplexity(complexity));
+  const selected = modelOverride ?? (await modelSelector.selectByComplexity(complexity, { userId }));
+  const modelName = selected.modelId;
 
   const history = await readSessionHistory(sessionId);
   const sessionForBoundary = history.session;
@@ -160,7 +161,7 @@ async function directResponseInternal(
       metadata: { model: cached.model, tokens: 0, latencyMs: Date.now() - startTime, cached: true } };
 
     const registry = getModelRegistry();
-    const resolvedModel = await registry.getModelByModelId(modelName);
+    const resolvedModel = await registry.getModel(selected.name);
     const modelMeta = resolvedModel?.metadata as import('@/db/schema/models').ModelMetadata | null;
 
     // Casual replies should be short, but thinking models (Gemini 3, o1, etc.)

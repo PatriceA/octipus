@@ -7,23 +7,32 @@
  * to `session_overrides` (or similar) is a future expansion; the
  * in-memory shape keeps the change small and reviewable.
  *
+ * Keyed by (sessionId, userId) and holding the registry row NAME (coworking
+ * spec §8.2): in a shared session one member's `/model` choice — possibly
+ * their own personal model — never becomes another member's model, and the
+ * name pins the row even when two rows share a modelId.
+ *
  * Workers (specialist roles) still resolve via topic → model registry.
  * Only the root agent honors this override.
  */
 
 const overrides = new Map<string, string>();
 
-export function setSessionModel(sessionId: string, modelId: string): void {
-  if (!sessionId) return;
-  overrides.set(sessionId, modelId);
+function key(sessionId: string, userId: string): string {
+  return `${sessionId}\u0000${userId}`;
 }
 
-export function getSessionModel(sessionId: string): string | undefined {
-  return overrides.get(sessionId);
+export function setSessionModel(sessionId: string, userId: string, modelName: string): void {
+  if (!sessionId || !userId) return;
+  overrides.set(key(sessionId, userId), modelName);
 }
 
-export function clearSessionModel(sessionId: string): boolean {
-  return overrides.delete(sessionId);
+export function getSessionModel(sessionId: string, userId: string): string | undefined {
+  return overrides.get(key(sessionId, userId));
+}
+
+export function clearSessionModel(sessionId: string, userId: string): boolean {
+  return overrides.delete(key(sessionId, userId));
 }
 
 /** Test helper — wipe the entire map. Production never needs this. */

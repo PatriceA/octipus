@@ -2,7 +2,7 @@ import { and, asc, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { getDb } from '@/db/postgres';
 import { Cache } from '@/db/cache';
-import { type ModelConfigEntry, modelConfig, type NewModelConfigEntry } from '@/db/schema/models';
+import { type ModelConfigEntry, modelConfig, type NewModelConfigEntry, userModelBindings } from '@/db/schema/models';
 import { getCapabilitiesForModel, type ModelCapabilities } from '@/models/capabilities';
 import { SINGLE_MODEL_CHAT_TOPICS } from '@/models/single-model-binding';
 import { canonicalTopic } from '@/models/topics';
@@ -10,6 +10,19 @@ import { getUserOrgIds } from '@/services/org-membership';
 import { modelLogger } from '@/utils/logger';
 
 const CACHE_TTL = 300; // 5 minutes
+
+/**
+ * Install-level rows only (coworking spec §8.1). A personal row
+ * (`owner_user_id` set) belongs to one user: it is never a default, a topic
+ * model, a fallback, or a member of an install-wide list, and it never enters a
+ * global cache.
+ */
+const INSTALL_ROWS = isNull(modelConfig.ownerUserId);
+
+/** Is this a personal (user-owned) row? */
+export function isPersonalModel(row: Pick<ModelConfigEntry, 'ownerUserId'>): boolean {
+  return row.ownerUserId != null;
+}
 
 export class ModelRegistry {
   // Resolve the live connection per access rather than snapshotting it at
@@ -47,7 +60,11 @@ export class ModelRegistry {
   }
 
   /**
-   * Get model configuration by name
+   * Get model configuration by name — the row identity (`name` is unique).
+   * Used to re-read the row a request already resolved (`AgentContext.modelName`,
+   * `CompletionOptions.modelConfigName`); a name a PERSON typed goes through
+   * `resolveModel({ userId, name })`, which checks visibility. Personal rows are
+   * read but never cached.
    */
   async getModel(name: string): Promise<ModelConfigEntry | null> {
     // Check cache first
@@ -61,7 +78,7 @@ export class ModelRegistry {
       .limit(1);
 
     const model = result[0] ?? null;
-    if (model) {
+    if (model && !isPersonalModel(model)) {
       await this.cacheSet(`model:${name}`, model);
     }
 
@@ -69,16 +86,31 @@ export class ModelRegistry {
   }
 
   /**
-   * Get model configuration by modelId (the LiteLLM-facing identifier)
+   * Get model configuration by modelId (the provider-facing identifier).
+   * `modelId` is not unique, so this is a fallback for callers that have no row
+   * name: install rows first, then — only when `userId` is given — that user's
+   * own personal rows. Another user's personal row is never returned.
    */
-  async getModelByModelId(modelId: string): Promise<ModelConfigEntry | null> {
+  async getModelByModelId(modelId: string, opts: { userId?: string } = {}): Promise<ModelConfigEntry | null> {
+    const install = await this.getInstallModelByModelId(modelId);
+    if (install || !opts.userId) return install;
+    const own = await this.db
+      .select()
+      .from(modelConfig)
+      .where(and(eq(modelConfig.modelId, modelId), eq(modelConfig.isEnabled, true), eq(modelConfig.ownerUserId, opts.userId)))
+      .orderBy(asc(modelConfig.name))
+      .limit(1);
+    return own[0] ?? null;
+  }
+
+  private async getInstallModelByModelId(modelId: string): Promise<ModelConfigEntry | null> {
     const cached = await this.cacheGet<ModelConfigEntry>(`model:mid:${modelId}`);
     if (cached) return cached;
 
     const result = await this.db
       .select()
       .from(modelConfig)
-      .where(and(eq(modelConfig.modelId, modelId), eq(modelConfig.isEnabled, true)))
+      .where(and(eq(modelConfig.modelId, modelId), eq(modelConfig.isEnabled, true), INSTALL_ROWS))
       .limit(1);
 
     const model = result[0] ?? null;
@@ -87,6 +119,64 @@ export class ModelRegistry {
     }
 
     return model;
+  }
+
+  /**
+   * The row `name` names when `userId` may use it: an install row (system-wide
+   * or in one of the user's orgs) or the user's own personal row. Disabled rows
+   * are returned too, so a caller can say "disabled" rather than "unknown".
+   */
+  async getModelVisibleTo(name: string, userId: string): Promise<ModelConfigEntry | null> {
+    const rows = await this.db.select().from(modelConfig).where(eq(modelConfig.name, name)).limit(1);
+    const row = rows[0];
+    if (!row) return null;
+    return (await this.isVisibleTo(row, userId)) ? row : null;
+  }
+
+  /** Same as `getModelVisibleTo`, keyed by provider model id (install rows first). */
+  async getModelByModelIdVisibleTo(modelId: string, userId: string): Promise<ModelConfigEntry | null> {
+    const rows = await this.db
+      .select()
+      .from(modelConfig)
+      .where(and(eq(modelConfig.modelId, modelId), or(INSTALL_ROWS, eq(modelConfig.ownerUserId, userId))))
+      .orderBy(sql`${modelConfig.ownerUserId} IS NOT NULL`, desc(modelConfig.isEnabled), asc(modelConfig.name));
+    for (const row of rows) {
+      if (await this.isVisibleTo(row, userId)) return row;
+    }
+    return null;
+  }
+
+  private async isVisibleTo(row: ModelConfigEntry, userId: string): Promise<boolean> {
+    if (row.ownerUserId) return row.ownerUserId === userId;
+    if (!row.orgId) return true;
+    return (await getUserOrgIds(userId)).includes(row.orgId);
+  }
+
+  /** Does `name` name a personal row (anyone's)? Used before passing an unknown name through to a provider. */
+  async isPersonalModelName(name: string): Promise<boolean> {
+    const rows = await this.db
+      .select({ ownerUserId: modelConfig.ownerUserId })
+      .from(modelConfig)
+      .where(eq(modelConfig.name, name))
+      .limit(1);
+    return rows[0]?.ownerUserId != null;
+  }
+
+  /** The personal row a user bound to `topic` (canonical lane), or null. */
+  async getUserBinding(userId: string, rawTopic: string): Promise<ModelConfigEntry | null> {
+    const topic = canonicalTopic(rawTopic);
+    const rows = await this.db
+      .select({ model: modelConfig })
+      .from(userModelBindings)
+      .innerJoin(modelConfig, eq(modelConfig.name, userModelBindings.modelName))
+      .where(and(
+        eq(userModelBindings.userId, userId),
+        eq(userModelBindings.topic, topic),
+        eq(modelConfig.ownerUserId, userId),
+        eq(modelConfig.isEnabled, true),
+      ))
+      .limit(1);
+    return rows[0]?.model ?? null;
   }
 
   /**
@@ -99,7 +189,7 @@ export class ModelRegistry {
     const result = await this.db
       .select()
       .from(modelConfig)
-      .where(and(eq(modelConfig.isDefault, true), eq(modelConfig.isEnabled, true)))
+      .where(and(eq(modelConfig.isDefault, true), eq(modelConfig.isEnabled, true), INSTALL_ROWS))
       .limit(1);
 
     const model = result[0] ?? null;
@@ -129,6 +219,7 @@ export class ModelRegistry {
       .from(modelConfig)
       .where(and(
         eq(modelConfig.isEnabled, true),
+        INSTALL_ROWS,
         sql`${modelConfig.topicRoles}->>${topic} = 'primary'`,
       ))
       .limit(1);
@@ -140,7 +231,7 @@ export class ModelRegistry {
       const legacyResult = await this.db
         .select()
         .from(modelConfig)
-        .where(and(eq(modelConfig.isEnabled, true), sql`${topic} = ANY(${modelConfig.topics})`))
+        .where(and(eq(modelConfig.isEnabled, true), INSTALL_ROWS, sql`${topic} = ANY(${modelConfig.topics})`))
         .orderBy(desc(modelConfig.priority))
         .limit(1);
       model = legacyResult[0] ?? null;
@@ -172,6 +263,7 @@ export class ModelRegistry {
       .from(modelConfig)
       .where(and(
         eq(modelConfig.isEnabled, true),
+        INSTALL_ROWS,
         sql`${modelConfig.topicRoles}->>${topic} = 'backup'`,
       ))
       .limit(1);
@@ -186,49 +278,59 @@ export class ModelRegistry {
   }
 
   /**
-   * Get all enabled models
+   * Get all enabled install-level models (personal rows excluded).
    */
   async getAllModels(): Promise<ModelConfigEntry[]> {
     return this.db
       .select()
       .from(modelConfig)
-      .where(eq(modelConfig.isEnabled, true))
+      .where(and(eq(modelConfig.isEnabled, true), INSTALL_ROWS))
       .orderBy(desc(modelConfig.priority), asc(modelConfig.name));
   }
 
+  /** Every install-level row, enabled or not — the admin registry (personal rows excluded). */
   async getAllModelsIncludeDisabled(): Promise<ModelConfigEntry[]> {
     return this.db
       .select()
       .from(modelConfig)
+      .where(INSTALL_ROWS)
       .orderBy(desc(modelConfig.isEnabled), desc(modelConfig.priority), asc(modelConfig.name));
   }
 
   /**
-   * List models visible to a specific user. System-wide rows
-   * (`org_id IS NULL`) are always included; org-scoped rows are
-   * included when the user belongs to that org. Admins see
-   * everything via `getAllModelsIncludeDisabled`.
+   * List models visible to a specific user: system-wide install rows
+   * (`org_id IS NULL`), org-scoped install rows of the user's orgs, and the
+   * user's own personal rows. Enabled and disabled alike.
    */
   async getModelsForUser(userId: string): Promise<ModelConfigEntry[]> {
     const orgIds = await getUserOrgIds(userId);
-    const visibility = orgIds.length > 0
+    const orgVisible = orgIds.length > 0
       ? or(isNull(modelConfig.orgId), inArray(modelConfig.orgId, orgIds))
       : isNull(modelConfig.orgId);
     return this.db
       .select()
       .from(modelConfig)
-      .where(visibility)
+      .where(or(and(INSTALL_ROWS, orgVisible), eq(modelConfig.ownerUserId, userId)))
       .orderBy(desc(modelConfig.isEnabled), desc(modelConfig.priority), asc(modelConfig.name));
   }
 
+  /** A user's own personal rows. */
+  async getPersonalModels(userId: string): Promise<ModelConfigEntry[]> {
+    return this.db
+      .select()
+      .from(modelConfig)
+      .where(eq(modelConfig.ownerUserId, userId))
+      .orderBy(asc(modelConfig.name));
+  }
+
   /**
-   * Get models by provider
+   * Get install-level models by provider
    */
   async getModelsByProvider(provider: string): Promise<ModelConfigEntry[]> {
     return this.db
       .select()
       .from(modelConfig)
-      .where(and(eq(modelConfig.provider, provider), eq(modelConfig.isEnabled, true)))
+      .where(and(eq(modelConfig.provider, provider), eq(modelConfig.isEnabled, true), INSTALL_ROWS))
       .orderBy(desc(modelConfig.priority));
   }
 
@@ -299,6 +401,10 @@ export class ModelRegistry {
    * Set a model as the default
    */
   async setDefaultModel(name: string): Promise<boolean> {
+    const [target] = await this.db.select({ ownerUserId: modelConfig.ownerUserId }).from(modelConfig).where(eq(modelConfig.name, name)).limit(1);
+    if (target && isPersonalModel(target)) {
+      throw new Error(`Model '${name}' is a personal model and cannot be the install default`);
+    }
     // First, unset current default
     await this.db.update(modelConfig).set({ isDefault: false }).where(eq(modelConfig.isDefault, true));
 

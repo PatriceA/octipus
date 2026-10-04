@@ -4,8 +4,8 @@ import { sessionGeneration } from '@/db/schema/sessions';
 import type { Session } from '@/db/schema/sessions';
 import { agentRepository } from '@/db/repositories/agent-repository';
 import { getCLIToolConfig, resolveCliModelEntry } from './cli-agent-factory';
-import { isChildCliSessionKey } from './cli-session-store';
-import { buildChildEnv } from './cli-child-env';
+import { cliSessionKeyAdapter, isChildCliSessionKey } from './cli-session-store';
+import { cliCredentialOwnerFor, cliEnvFor } from './cli-child-env';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { acquireCliSlot, execCli, windowsShellQuote, windowsShellQuoter } from '@/models/providers/cli-provider';
 import { discoverCodexMcpServers } from './cli-adapters';
@@ -23,14 +23,20 @@ export function rootCliConversation(session: Session) {
 export async function compactCliConversation(session: Session, instructions: string): Promise<string | null> {
   const current = rootCliConversation(session);
   if (!current) return null;
-  const [adapter, record] = current;
+  const [key, record] = current;
+  const adapter = cliSessionKeyAdapter(key);
   if (!record.ownerAgentId) throw new Error('CLI session has no owning agent; cannot safely resolve its provider.');
   const owner = await agentRepository.findById(record.ownerAgentId);
   if (!owner || owner.sessionId !== session.id || owner.userId !== session.userId) throw new Error('CLI session owner is unavailable.');
   const tool = getCLIToolConfig(owner.model);
   if (!tool || (tool.adapter ?? tool.name) !== adapter) throw new Error('CLI session adapter no longer matches its model.');
-  const model = await resolveCliModelEntry(owner.model);
-  const env = buildChildEnv(tool, await tool.buildEnv?.(), model?.metadata?.cliAgent?.inheritApiKeys === true);
+  // The row the vendor session ran on — its credentials are the ones that own
+  // the vendor conversation (§8.5). A mismatch means the record was written
+  // under another owner: refuse rather than compact it with the wrong login.
+  const model = await resolveCliModelEntry(owner.model, { modelName: record.modelName, userId: owner.userId });
+  const credentialOwner = await cliCredentialOwnerFor(model);
+  if ((credentialOwner?.userId ?? undefined) !== record.credentialOwner) throw new Error('CLI session credentials no longer match its model.');
+  const env = cliEnvFor(credentialOwner, tool, await tool.buildEnv?.(), model?.metadata?.cliAgent?.inheritApiKeys === true);
   const cwd = resolve(WorkspaceFS.forSession(session).root);
   const release = await acquireCliSlot();
   let usage: CompletionResult['usage'] = { inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false };

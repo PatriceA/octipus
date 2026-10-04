@@ -1,8 +1,20 @@
+import type { ModelConfigEntry } from '@/db/schema/models';
 import { getModelRegistry } from '@/models/model-registry';
+import { resolveModel } from '@/models/resolve-model';
 import { coreLogger } from '@/utils/logger';
+
+/** No requester (system work): install rows only, by name then modelId. */
+async function installModelByNameOrId(nameOrId: string): Promise<ModelConfigEntry | null> {
+  const registry = getModelRegistry();
+  const byName = await registry.getModel(nameOrId);
+  if (byName && !byName.ownerUserId) return byName;
+  return registry.getModelByModelId(nameOrId);
+}
 
 export interface RoutingDecision {
   model: string;
+  /** Registry row identity (`model_config.name`); absent for a pass-through model id. */
+  modelName?: string;
   topic: string;
   confidence: number;
   reason?: string;
@@ -110,22 +122,32 @@ export class Router {
   }
 
   /**
-   * Route a message to the appropriate model
+   * Route a message to the appropriate model. `requester.userId` scopes both
+   * the explicit choice (only rows that user may see) and the topic route (the
+   * user's personal binding first) — coworking spec §8.2.
    */
-  async route(message: string, preferredModel?: string): Promise<RoutingDecision> {
+  async route(message: string, preferredModel?: string, requester: { userId?: string } = {}): Promise<RoutingDecision> {
     // If a specific model is requested, use it
     if (preferredModel) {
-      const registry = getModelRegistry();
-      // Try by name first, then by modelId
-      const model = await registry.getModel(preferredModel) || await registry.getModelByModelId(preferredModel);
+      // By name first, then by modelId — only rows the requester may see.
+      const model = requester.userId
+        ? await resolveModel({ userId: requester.userId, name: preferredModel })
+        : await installModelByNameOrId(preferredModel);
 
       if (model) {
         return {
           model: model.modelId,
+          modelName: model.name,
           topic: 'specified',
           confidence: 1,
           reason: 'User-specified model',
         };
+      }
+      // Unknown `/`-names would pass through as OpenRouter ids. A name that is a
+      // registered row the requester may not see (another user's personal
+      // model, `u/<id>/<slug>`) must not: check ownership before passing through.
+      if (await getModelRegistry().isPersonalModelName(preferredModel)) {
+        throw new Error(`Model '${preferredModel}' is not available to you`);
       }
       // If not in DB, pass through directly (user may specify a LiteLLM model name)
       return {
@@ -139,9 +161,10 @@ export class Router {
     // Classify the topic
     const { topic, confidence } = this.classifyTopic(message);
 
-    // Get the best model for this topic
+    // Get the best model for this topic: the requester's personal binding
+    // first, then the install binding (§8.2).
     const registry = getModelRegistry();
-    const model = await registry.getModelForTopic(topic);
+    const model = await resolveModel({ userId: requester.userId, topic });
 
     if (!model) {
       // Fall back to default
@@ -158,6 +181,7 @@ export class Router {
 
       return {
         model: defaultModel.modelId,
+        modelName: defaultModel.name,
         topic,
         confidence,
         reason: 'Default model (no topic-specific model available)',
@@ -171,6 +195,7 @@ export class Router {
 
     return {
       model: model.modelId,
+      modelName: model.name,
       topic,
       confidence,
       reason: `Best model for topic: ${topic}`,

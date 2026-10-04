@@ -49,7 +49,7 @@ export class GeminiProvider implements ModelProvider {
   }
 
   async complete(options: CompletionOptions): Promise<CompletionResult> {
-    const apiKey = await this.getApiKey();
+    const apiKey = options.apiKey || await this.getApiKey();
     if (!apiKey) throw classifyError(new Error('Gemini API key not available'), 'gemini');
     const startTime = Date.now();
 
@@ -201,7 +201,7 @@ export class GeminiProvider implements ModelProvider {
   }
 
   async *stream(options: CompletionOptions): AsyncGenerator<StreamChunk> {
-    const client = await this.createClient();
+    const client = await this.createClient(options.apiKey);
 
     // Use the raw formatter (same as non-streaming complete()) so
     // thought_signature on cached assistant tool_calls and the `system`
@@ -349,8 +349,10 @@ export class GeminiProvider implements ModelProvider {
     }
   }
 
-  private async createClient(): Promise<OpenAI> {
-    const apiKey = await this.getApiKey();
+  private async createClient(apiKeyOverride?: string): Promise<OpenAI> {
+    // A personal model row (coworking spec §8.3) carries its owner's key in
+    // `options.apiKey`; it wins over the install's env/vault key.
+    const apiKey = apiKeyOverride || await this.getApiKey();
     if (!apiKey) {
       throw classifyError(new Error('Gemini API key not available. Set GEMINI_API_KEY or store it in the vault.'), 'gemini');
     }
