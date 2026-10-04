@@ -230,6 +230,39 @@ mixed into it. Existing memories are not migrated.
   `workspace_members`, `workspace_invites`, `workspace_id` on `audit_log`,
   `permission_requests` and `cost_log`, `funding` on `cost_log` and `agents`,
   paused flags on artifact data sources, and a per-workspace unique note slug.
+### The web is on the gateway (coworking S0d)
+
+- **One gateway connection per tab.** The web app's chat page, permission
+  prompts, recommended-models panel and documents page share one `/gateway`
+  connection per browser tab (`/auth/ws-ticket` → `auth`). Every tab of a user
+  receives that user's events, so a reply, an error, a steered message or an
+  answered prompt shows in all of them. **The legacy `/ws` and
+  `/ws/permissions` sockets are removed** — integrations still on them must
+  move to `/gateway` (frame mapping in `docs/architecture/gateway.md`). The
+  browser extension's `/ws/browser-bridge` and `/voice` are unchanged.
+- **New gateway messages:** `chat.error`, `approval.resolved`, `document.*`,
+  `model.install_progress` and `voice.speak` events; the `permission.pending`
+  snapshot after `subscribe` (a tab opened after a prompt was raised shows
+  it); client `voice.set` and `replay { sessionId, afterEventId }` (own
+  sessions only). In-app deliveries to `webchat:<you>` arrive as a
+  user-stamped `chat.message`. `approval.respond` for an unknown or foreign
+  request now answers `APPROVAL_NOT_FOUND` instead of nothing.
+- **Limits are settings:** `gateway.maxConnectionsPerUser` (default 20, was a
+  fixed 10; a tab over it shows "Too many open tabs"),
+  `gateway.maxFrameBytes` (default 256 KiB, the gateway socket's
+  `maxPayload` — it was the `ws` default of 100 MiB) and
+  `gateway.replayMaxSessions` (default 500; replay buffers are now capped,
+  least recently active first, and dropped when a session is deleted or
+  archived). Env: `GATEWAY_MAX_CONNECTIONS_PER_USER`,
+  `GATEWAY_MAX_FRAME_BYTES`, `GATEWAY_REPLAY_MAX_SESSIONS`.
+- **Workspace switches are clean.** The API client's workspace header (now
+  the workspace id) changes synchronously on a switch and the query cache is
+  cleared; workspace-scoped queries key on the workspace id.
+
+**Behaviour changes:** the TUI refuses to send a message (e.g. a pasted image)
+larger than `gateway.maxFrameBytes` and says so; raise the setting for larger
+attachments. Approval answers from the web go over the gateway instead of
+`POST /chat/approve` (the route stays for REST clients).
 
 ## v0.6.0 — Shared work, budgets, and stronger review (2026-10-01)
 

@@ -1,6 +1,7 @@
 'use client';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import { useWorkspaceId } from '@/lib/workspace-context';
 
 interface Stats {
   totalCost: number; reportedCost?: number; estimatedCost?: number;
@@ -9,8 +10,9 @@ interface Stats {
   cacheReadTokens?: number; cacheCreationTokens?: number;
 }
 export function SessionCost({ sessionId }: { sessionId: string }) {
+  const workspaceId = useWorkspaceId();
   const { data, isError, errorUpdatedAt, dataUpdatedAt, isFetching, refetch } = useQuery({
-    queryKey: ['session-cost', sessionId],
+    queryKey: ['session-cost', sessionId, workspaceId],
     queryFn: async () => {
       const response = await api.get<{ stats: Stats }>(`/models/usage/session/${encodeURIComponent(sessionId)}`);
       const stats = response?.stats;

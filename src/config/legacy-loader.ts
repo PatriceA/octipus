@@ -186,5 +186,10 @@ export function loadFromEnvLegacy(): Partial<Config> {
       inviteMaxTtlHours: parseInt(process.env.SPACES_INVITE_MAX_TTL_HOURS || '720', 10),
       purgeAfterArchiveDays: parseInt(process.env.SPACES_PURGE_AFTER_ARCHIVE_DAYS || '7', 10),
     },
+    gateway: {
+      maxConnectionsPerUser: parseInt(process.env.GATEWAY_MAX_CONNECTIONS_PER_USER || String(defaultConfig.gateway!.maxConnectionsPerUser), 10),
+      maxFrameBytes: parseInt(process.env.GATEWAY_MAX_FRAME_BYTES || String(defaultConfig.gateway!.maxFrameBytes), 10),
+      replayMaxSessions: parseInt(process.env.GATEWAY_REPLAY_MAX_SESSIONS || String(defaultConfig.gateway!.replayMaxSessions), 10),
+    },
   };
 }

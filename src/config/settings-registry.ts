@@ -1175,6 +1175,34 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
     envVar: 'SPACES_PURGE_AFTER_ARCHIVE_DAYS',
   },
+  // ── Gateway ──
+  {
+    key: 'gateway.maxConnectionsPerUser',
+    category: 'gateway',
+    valueType: 'number',
+    defaultValue: 20,
+    description: 'Gateway connections one user may hold at once (each browser tab holds one). A tab over the cap shows "Too many open tabs".',
+    isSecret: false,
+    envVar: 'GATEWAY_MAX_CONNECTIONS_PER_USER',
+  },
+  {
+    key: 'gateway.maxFrameBytes',
+    category: 'gateway',
+    valueType: 'number',
+    defaultValue: 262_144,
+    description: 'Largest WebSocket frame a gateway client may send, in bytes. Read at server start (restart to apply).',
+    isSecret: false,
+    envVar: 'GATEWAY_MAX_FRAME_BYTES',
+  },
+  {
+    key: 'gateway.replayMaxSessions',
+    category: 'gateway',
+    valueType: 'number',
+    defaultValue: 500,
+    description: 'Sessions whose recent events are kept in memory so a reconnecting tab can replay what it missed. The least recently active is dropped first.',
+    isSecret: false,
+    envVar: 'GATEWAY_REPLAY_MAX_SESSIONS',
+  },
 
   // ── Group channels ──
   {

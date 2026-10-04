@@ -8,6 +8,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Portal } from '@/components/ui/portal';
 import { StatusBadge, type StatusVariant } from '@/components/ui/status-badge';
 import { api } from '@/lib/api';
+import { useWorkspaceId } from '@/lib/workspace-context';
 
 interface Agent {
   id: string;
@@ -171,12 +172,13 @@ interface AgentsResponse {
 }
 
 export default function AgentsPage() {
+  const workspaceId = useWorkspaceId();
   const router = useRouter();
   const [showNewAgent, setShowNewAgent] = useState(false);
   const [offset, setOffset] = useState(0);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['agents', offset],
+    queryKey: ['agents', offset, workspaceId],
     queryFn: async () => {
       try {
         return await api.get<AgentsResponse>(`/agents?limit=${PAGE_SIZE}&offset=${offset}`);

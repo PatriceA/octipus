@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatusBadge, type StatusVariant } from '@/components/ui/status-badge';
 import { api } from '@/lib/api';
+import { useWorkspaceId } from '@/lib/workspace-context';
 
 interface Agent {
   id: string;
@@ -22,8 +23,9 @@ function statusVariant(status: string): StatusVariant {
 }
 
 export function ActiveAgents() {
+  const workspaceId = useWorkspaceId();
   const { data } = useQuery({
-    queryKey: ['agents'],
+    queryKey: ['agents', workspaceId],
     queryFn: async () => {
       try {
         return await api.get<Agent[] | { agents: Agent[]; total?: number }>('/agents');

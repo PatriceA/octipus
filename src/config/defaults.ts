@@ -130,6 +130,11 @@ export const defaultConfig: Partial<Config> = {
     growthMultiplier: 2.0,
     hardCeiling: 1_000_000,
   },
+  gateway: {
+    maxConnectionsPerUser: 20,
+    maxFrameBytes: 262_144,
+    replayMaxSessions: 500,
+  },
   swarm: {
     perUserSpawnsPerMinute: 30,
     orphanReaperIntervalMs: 600_000,

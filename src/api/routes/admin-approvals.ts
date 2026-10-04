@@ -10,7 +10,7 @@ import { isAdmin, isAuthenticated, type Principal } from '@/security/principal';
  * The one door through which an admin answers another user's request.
  *
  * Permission requests (the tool gate) and root-agent approvals are answered
- * by their requester on every generic path — REST, `/ws`, the gateway. An
+ * by their requester on every generic path — REST and the gateway. An
  * admin who must unblock someone else's run does it here, with a reason, and
  * each answer writes an audit row filed under the admin naming the requester,
  * next to the manager's own row filed under the requester naming the admin.

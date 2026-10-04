@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures/auth';
-import type { WebSocketRoute } from '@playwright/test';
+import { stubGateway } from './fixtures/gateway';
 import { stubAllDefaults, json, selectChatSession } from './fixtures/api-stubs';
 
 test.describe('swarm tree', () => {
@@ -51,15 +51,13 @@ for (const status of ['failed', 'tool_error']) {
       role: 'qa', topicPath: 'qa', model: 'qa-model', status: 'running', createdAt: new Date().toISOString() };
     // Keep REST stale so only the pushed event can make this test pass.
     await page.route('**/api/swarm/nodes?*', route => json(route, 200, { nodes: [node] }));
-    let socket: WebSocketRoute | undefined;
-    await page.routeWebSocket(/\/ws\?/, ws => { socket = ws; });
+    const gateway = await stubGateway(page);
     await page.goto('/chat');
     await selectChatSession(page, 'sess-1');
-    await expect.poll(() => !!socket).toBe(true);
+    await expect.poll(() => gateway.subscribed()).toBe(1);
     const row = page.getByText('Swarm Tree (1)', { exact: true }).locator('..').getByText('qa-model', { exact: true }).locator('../..');
     await expect(row).toContainText('running');
-    socket!.send(JSON.stringify({ type: 'swarm_event', event: 'swarm.node_completed', sessionId: 'sess-1',
-      payload: { ...node, nodeId: node.id, status, error: 'QA exited' } }));
+    gateway.event('swarm.node_completed', { ...node, nodeId: node.id, status, error: 'QA exited' }, 'sess-1');
     await expect(row).toContainText('error');
     await expect(row).not.toContainText('running');
   });

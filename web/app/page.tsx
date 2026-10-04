@@ -13,6 +13,7 @@ import { Card } from '@/components/ui/card';
 import { PageHeader } from '@/components/ui/page-header';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { api } from '@/lib/api';
+import { useWorkspaceId } from '@/lib/workspace-context';
 
 interface ServiceHealth {
   status: string;
@@ -48,6 +49,7 @@ interface UsageData {
 }
 
 export default function DashboardPage() {
+  const workspaceId = useWorkspaceId();
   const healthQuery = useQuery({
     queryKey: ['health'],
     retry: false,
@@ -73,7 +75,7 @@ export default function DashboardPage() {
   // — the GLOBAL agent count — so creating one chat (root agent + worker = 2
   // agents) read as "2 sessions". `total` is the full per-user count.
   const sessionsQuery = useQuery({
-    queryKey: ['sessions', 'count'],
+    queryKey: ['sessions', 'count', workspaceId],
     retry: false,
     queryFn: async () => await api.get<{ total?: number }>('/sessions?limit=1'),
   });

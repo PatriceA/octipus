@@ -21,6 +21,7 @@ import {
   SettingsGroup,
   useSettingActions,
 } from './setting-field';
+import { useWorkspaceId } from '@/lib/workspace-context';
 
 interface WorkspaceConfig {
   rootPath: string;
@@ -43,9 +44,10 @@ export function IntegrationsTab() {
 }
 
 function WorkspaceSection() {
+  const workspaceId = useWorkspaceId();
   const queryClient = useQueryClient();
   const { data: workspace, isLoading: wsLoading } = useQuery({
-    queryKey: ['workspace'],
+    queryKey: ['workspace', workspaceId],
     queryFn: () => api.get<WorkspaceConfig>('/workspace'),
   });
   const [newPath, setNewPath] = useState('');

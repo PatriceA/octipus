@@ -420,10 +420,10 @@ export function createServer() {
   app.use(artifactPageRoutes);
   app.use(artifactPageRoutesFallback);
 
-  // WebSocket setup (includes /ws, /ws/permissions, /ws/browser-bridge)
+  // The browser extension's /ws/browser-bridge and the voice sockets
   setupWebSocket(app as any);
 
-  // Gateway WebSocket hub (new unified protocol at /gateway)
+  // Gateway WebSocket hub (/gateway): the web and the TUI
   setupGatewayWebSocket(app as any);
 
   return app;

@@ -20,6 +20,7 @@ import { Portal } from '@/components/ui/portal';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { useWorkspaceId } from '@/lib/workspace-context';
 
 // --- Types ---
 
@@ -109,13 +110,14 @@ function formatDate(dateStr: string): string {
 // --- Entry Detail Dialog ---
 
 function EntryDetailDialog({ entryId, onClose }: { entryId: string; onClose: () => void }) {
+  const workspaceId = useWorkspaceId();
   const queryClient = useQueryClient();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState('');
 
   const { data: entry, isLoading } = useQuery({
-    queryKey: ['knowledge', entryId],
+    queryKey: ['knowledge', entryId, workspaceId],
     queryFn: () => api.get<KnowledgeDetail>(`/knowledge/${entryId}`),
   });
 
@@ -441,6 +443,7 @@ function IndexFilesDialog({ onClose }: { onClose: () => void }) {
 // --- Main Page ---
 
 export default function KnowledgePage() {
+  const workspaceId = useWorkspaceId();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchMode, setSearchMode] = useState<'hybrid' | 'semantic' | 'keyword'>('hybrid');
   const [purposeFilter, setPurposeFilter] = useState<string>('all');
@@ -459,14 +462,14 @@ export default function KnowledgePage() {
 
   // Stats query — surface errors in the banner instead of swallowing them.
   const { data: stats, error: statsError } = useQuery({
-    queryKey: ['knowledge-stats'],
+    queryKey: ['knowledge-stats', workspaceId],
     queryFn: () => api.get<KnowledgeStats>('/knowledge/stats'),
     retry: false,
   });
 
   // Readiness check — 503 means the KB is broken; we show a banner with the reason.
   const { data: readiness, error: readinessError } = useQuery({
-    queryKey: ['knowledge-readiness'],
+    queryKey: ['knowledge-readiness', workspaceId],
     queryFn: () => api.get<KBReadiness>('/knowledge/readiness'),
     retry: false,
     refetchInterval: 30000, // re-check every 30s so the banner clears once fixed
@@ -480,7 +483,7 @@ export default function KnowledgePage() {
 
   // Browse query
   const { data: browseData, isLoading: browseLoading } = useQuery({
-    queryKey: ['knowledge', 'browse', browseOffset, purposeFilter],
+    queryKey: ['knowledge', 'browse', browseOffset, purposeFilter, workspaceId],
     queryFn: async () => {
       const params = new URLSearchParams({ limit: String(BROWSE_LIMIT), offset: String(browseOffset) });
       if (purposeFilter !== 'all') params.set('purpose', purposeFilter);

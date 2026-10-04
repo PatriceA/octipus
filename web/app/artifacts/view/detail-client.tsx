@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useState } from 'react';
 import { api } from '@/lib/api';
+import { useWorkspaceId } from '@/lib/workspace-context';
 
 interface Artifact {
   id: string;
@@ -40,25 +41,26 @@ interface ShareLink {
 }
 
 export default function ArtifactDetailPage() {
+  const workspaceId = useWorkspaceId();
   const id = useSearchParams().get('id') ?? '';
   const router = useRouter();
   const qc = useQueryClient();
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const detail = useQuery({
-    queryKey: ['artifact', id],
+    queryKey: ['artifact', id, workspaceId],
     queryFn: () => api.get<{ artifact: Artifact }>(`/artifacts/${id}`),
   });
   const sources = useQuery({
-    queryKey: ['artifact', id, 'sources'],
+    queryKey: ['artifact', id, 'sources', workspaceId],
     queryFn: () => api.get<{ sources: DataSource[] }>(`/artifacts/${id}/data-sources`),
   });
   const versions = useQuery({
-    queryKey: ['artifact', id, 'versions'],
+    queryKey: ['artifact', id, 'versions', workspaceId],
     queryFn: () => api.get<{ versions: Version[] }>(`/artifacts/${id}/versions`),
   });
   const links = useQuery({
-    queryKey: ['artifact', id, 'links'],
+    queryKey: ['artifact', id, 'links', workspaceId],
     queryFn: () => api.get<{ links: ShareLink[] }>(`/artifacts/${id}/share-links`),
   });
 

@@ -1,6 +1,7 @@
-import type { Route, WebSocketRoute } from '@playwright/test';
+import type { Route } from '@playwright/test';
 import { json, selectChatSession } from './fixtures/api-stubs';
 import { expect, test } from './fixtures/auth';
+import { stubGateway } from './fixtures/gateway';
 
 const stats = { requestCount: 2, totalCost: 0.125, totalInputTokens: 100, totalOutputTokens: 20 };
 
@@ -58,16 +59,13 @@ test('a delayed swarm snapshot preserves a child that arrived over the socket', 
   let hydration: Route | undefined;
   await page.route('**/api/swarm/nodes?*', route => { hydration = route; });
   await page.route('**/api/models/usage/session/*', route => json(route, 200, { stats }));
-  let socket: WebSocketRoute | undefined;
-  await page.routeWebSocket(/\/ws\?/, ws => { socket = ws; });
+  const gateway = await stubGateway(page);
   await page.goto('/chat');
   await selectChatSession(page, 'sess-1');
-  await expect.poll(() => !!socket && !!hydration).toBe(true);
-  socket!.send(JSON.stringify({ type: 'swarm_event', event: 'swarm.node_spawned', sessionId: 'sess-1',
-    payload: { ...root, nodeId: root.id } }));
-  socket!.send(JSON.stringify({ type: 'swarm_event', event: 'swarm.node_spawned', sessionId: 'sess-1',
-    payload: { rootSessionId: 'sess-1', nodeId: 'child-1', parentNodeId: root.id, kind: 'agent', depth: 1,
-      role: 'research', topicPath: 'root/research', model: 'child-model', status: 'running' } }));
+  await expect.poll(() => gateway.subscribed() > 0 && !!hydration).toBe(true);
+  gateway.event('swarm.node_spawned', { ...root, nodeId: root.id }, 'sess-1');
+  gateway.event('swarm.node_spawned', { rootSessionId: 'sess-1', nodeId: 'child-1', parentNodeId: root.id, kind: 'agent', depth: 1,
+    role: 'research', topicPath: 'root/research', model: 'child-model', status: 'running' }, 'sess-1');
   await expect(page.getByText('active agents', { exact: true }).locator('..')).toContainText('1');
   await json(hydration!, 200, { nodes: [root] });
   await expect(page.getByText('Swarm Tree (2)', { exact: true })).toBeVisible();

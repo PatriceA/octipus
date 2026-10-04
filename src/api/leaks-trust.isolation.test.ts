@@ -2,10 +2,12 @@
  * Coworking S0a — L5, L6, L10: trust levels, client addresses, voice, and
  * who answers a request.
  *
- * Drives the real socket paths on a real listening server: `/gateway`, `/ws`
- * and `/ws/permissions` over `ws` clients from 127.0.0.1 (the reverse-proxy
- * case), and the REST routes over `fetch`, so the socket address really comes
- * from the Node socket.
+ * Drives the real socket path on a real listening server: `/gateway` over `ws`
+ * clients from 127.0.0.1 (the reverse-proxy case), and the REST routes over
+ * `fetch`, so the socket address really comes from the Node socket. (The
+ * legacy `/ws` and `/ws/permissions` these tests also drove were retired in
+ * S0d; their voice and answer paths are the gateway's `voice.set`,
+ * `permission.respond` and `approval.respond`.)
  *
  *   - An admin on loopback behind a proxy, with no `trustedProxies`, gets
  *     `user` trust and cannot open another user's session; a forged
@@ -13,7 +15,7 @@
  *     forwarded address is honoured.
  *   - Bob cannot toggle voice mode on Alice's session.
  *   - Bob and an admin cannot answer Alice's permission requests or
- *     root-agent approvals via REST, `/ws` or the gateway; the admin resolve
+ *     root-agent approvals via REST or the gateway; the admin resolve
  *     routes work and write an audit row.
  *   - `/history` and `/proposals` are owner-only, admins included.
  *   - The TUI's gateway client signs in with the stored CLI login.
@@ -74,7 +76,6 @@ beforeAll(async () => {
   const { permissionRequestRoutes } = await import('./routes/permission-requests');
   const { adminApprovalRoutes } = await import('./routes/admin-approvals');
   const { setupGatewayWebSocket } = await import('./gateway-ws');
-  const { setupWebSocket } = await import('./websocket');
   const { getGatewayHub } = await import('@/core/gateway/hub');
   const { wireMessageHandler } = await import('@/core/gateway/message-handler');
 
@@ -89,7 +90,6 @@ beforeAll(async () => {
     })
     .group('/api', (a) => a.use(authRoutes).use(chatRoutes).use(permissionRequestRoutes).use(adminApprovalRoutes));
   setupGatewayWebSocket(app);
-  setupWebSocket(app);
   wireMessageHandler(getGatewayHub());
 
   const server = listen(app, { hostname: '127.0.0.1', port: 0 });
@@ -146,15 +146,6 @@ async function connectionOf(client: Client) {
   const { getGatewayHub } = await import('@/core/gateway/hub');
   const authOk = client.frames.find((f) => f.type === 'auth_ok')!;
   return getGatewayHub().connectionManager.getActiveConnections().find((c) => c.connectionId === authOk.connectionId)!;
-}
-
-async function legacyWs(path: string, userId: string): Promise<Client> {
-  const client = await open(`${path}?token=${tokens[userId]}`);
-  // `open` validates the token asynchronously; wait until it has registered.
-  const { getSessionManager } = await import('@/security/auth/session');
-  await getSessionManager().validate(tokens[userId]);
-  await new Promise((r) => setTimeout(r, 100));
-  return client;
 }
 
 async function rest(path: string, userId: string | null, body?: unknown, headers: Record<string, string> = {}) {
@@ -267,16 +258,24 @@ describe('voice mode (L6)', () => {
     const { getAgentService } = await import('@/core/agent');
     const setVoiceMode = vi.spyOn(getAgentService(), 'setVoiceMode');
     try {
-      const bob = await legacyWs('/ws', bobId);
-      bob.send({ type: 'voice', on: true, sessionId: aliceSession });
-      expect(await bob.waitFor((f) => f.type === 'voice_error')).toMatchObject({ error: 'Session not found', sessionId: aliceSession });
+      const bob = await gateway(bobId);
+      bob.send({ type: 'voice.set', on: true, sessionId: aliceSession });
+      expect(await bob.waitFor((f) => f.type === 'error')).toMatchObject({ code: 'SESSION_NOT_FOUND', message: 'Session not found' });
       expect(setVoiceMode).not.toHaveBeenCalled();
 
-      const alice = await legacyWs('/ws', aliceId);
-      alice.send({ type: 'voice', on: true, sessionId: aliceSession });
+      const alice = await gateway(aliceId);
+      alice.send({ type: 'voice.set', on: true, sessionId: aliceSession });
       await vi.waitFor(() => expect(setVoiceMode).toHaveBeenCalledWith(aliceSession, aliceId, true));
-      alice.send({ type: 'voice', on: false, sessionId: aliceSession });
+      alice.send({ type: 'voice.set', on: false, sessionId: aliceSession });
       await vi.waitFor(() => expect(setVoiceMode).toHaveBeenCalledWith(aliceSession, aliceId, false));
+
+      // A connection that leaves voice mode on takes it off when it closes.
+      setVoiceMode.mockClear();
+      const tab = await gateway(aliceId);
+      tab.send({ type: 'voice.set', on: true, sessionId: aliceSession });
+      await vi.waitFor(() => expect(setVoiceMode).toHaveBeenCalledWith(aliceSession, aliceId, true));
+      tab.ws.close();
+      await vi.waitFor(() => expect(setVoiceMode).toHaveBeenLastCalledWith(aliceSession, aliceId, false));
     } finally {
       setVoiceMode.mockRestore();
     }
@@ -286,19 +285,13 @@ describe('voice mode (L6)', () => {
 // ── Who answers a request ────────────────────────────────────────
 
 describe('permission requests are answered by their requester (L10)', () => {
-  test('Bob and an admin cannot answer Alice\'s request via REST, /ws, /ws/permissions or the gateway', async () => {
+  test('Bob and an admin cannot answer Alice\'s request via REST or the gateway', async () => {
     const id = await alicePermissionRequest();
 
     for (const user of [bobId, adminId]) {
       const res = await rest(`/permission-requests/${id}/respond`, user, { approved: true });
       expect(res.body).toEqual({ error: 'Permission request not found or already resolved' });
     }
-
-    const adminWs = await legacyWs('/ws', adminId);
-    adminWs.send({ type: 'permission_response', requestId: id, approved: true });
-    const adminPerm = await legacyWs('/ws/permissions', adminId);
-    adminPerm.send({ type: 'respond', requestId: id, approved: true });
-    await adminPerm.waitFor((f) => f.type === 'pending_requests');
 
     const adminGw = await gateway(adminId);
     adminGw.send({ type: 'permission.respond', requestId: id, approved: true });
@@ -344,7 +337,7 @@ describe('permission requests are answered by their requester (L10)', () => {
 });
 
 describe('root-agent approvals are answered by their requester (L10)', () => {
-  test('Bob and an admin cannot answer Alice\'s approval via REST, /ws or the gateway', async () => {
+  test('Bob and an admin cannot answer Alice\'s approval via REST or the gateway', async () => {
     const { id, answer } = await aliceApproval();
 
     for (const user of [bobId, adminId]) {
@@ -354,15 +347,11 @@ describe('root-agent approvals are answered by their requester (L10)', () => {
     // The generic pending list is the caller's own, admins included.
     expect((await rest('/chat/approvals/pending', adminId)).body.approvals).toEqual([]);
 
-    const adminWs = await legacyWs('/ws', adminId);
-    adminWs.send({ type: 'approval_response', requestId: id, approved: true });
-    expect(await adminWs.waitFor((f) => f.type === 'approval_resolved')).toMatchObject({ resolved: false });
-
     const adminGw = await gateway(adminId);
     adminGw.send({ type: 'approval.respond', requestId: id, approved: true, response: 'yes' });
-    // `not_found` sends no frame; give the handler its turn, then check.
-    adminGw.send({ type: 'ping' });
-    await adminGw.waitFor((f) => f.type === 'pong');
+    // The same answer REST gives: someone else's id reads as unknown.
+    expect(await adminGw.waitFor((f) => f.type === 'error' && f.code === 'APPROVAL_NOT_FOUND'))
+      .toMatchObject({ message: 'Approval request not found or already resolved' });
 
     expect(await aliceApprovalPending(id)).toBe(true);
 

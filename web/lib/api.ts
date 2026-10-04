@@ -74,7 +74,12 @@ export class ApiError extends Error {
 
 class ApiClient {
   private token: string | null = null;
-  private workspaceSlug: string | null = null;
+  /**
+   * The workspace every request is scoped to (`X-Octipus-Workspace`, by id).
+   * Set synchronously by `switchWorkspace`, before the query cache is
+   * cleared, so no request leaves with the previous workspace's header.
+   */
+  private workspaceId: string | null = null;
   private readPauseUntil = 0;
 
   setToken(token: string | null) {
@@ -95,12 +100,12 @@ class ApiClient {
     return this.token;
   }
 
-  setWorkspaceSlug(slug: string | null) {
-    this.workspaceSlug = slug;
+  setWorkspaceId(id: string | null) {
+    this.workspaceId = id;
   }
 
-  getWorkspaceSlug(): string | null {
-    return this.workspaceSlug;
+  getWorkspaceId(): string | null {
+    return this.workspaceId;
   }
 
   private async request<T>(
@@ -120,8 +125,8 @@ class ApiClient {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    if (this.workspaceSlug) {
-      headers['X-Octipus-Workspace'] = this.workspaceSlug;
+    if (this.workspaceId) {
+      headers['X-Octipus-Workspace'] = this.workspaceId;
     }
 
     const apiUrl = getApiUrl();
@@ -205,7 +210,7 @@ class ApiClient {
     const headers: Record<string, string> = {};
     const token = this.getToken();
     if (token) headers.Authorization = `Bearer ${token}`;
-    if (this.workspaceSlug) headers['X-Octipus-Workspace'] = this.workspaceSlug;
+    if (this.workspaceId) headers['X-Octipus-Workspace'] = this.workspaceId;
     return headers;
   }
 
@@ -247,7 +252,7 @@ class ApiClient {
 
 export const api = new ApiClient();
 
-function buildWsBase(): string {
+export function buildWsBase(): string {
   // Desktop (Tauri): WS goes straight to the chosen backend base URL.
   if (isDesktop()) {
     const desktopWs = getDesktopWsBase();
@@ -265,7 +270,8 @@ function buildWsBase(): string {
 }
 
 /**
- * Get a token usable for the WebSocket handshake (`?token=` URL param).
+ * Get a token usable to sign a socket in: the gateway's `auth` frame
+ * (`method: 'session_token'`), or the `/voice` handshake's `?token=`.
  *
  * Two paths:
  *   1. `localStorage.auth_token` — populated when the login response echoes
@@ -276,7 +282,7 @@ function buildWsBase(): string {
  *      the cookie-only setup. The fetch goes through Next.js's same-origin
  *      proxy so the cookie travels even though the WS itself is cross-origin.
  */
-async function getWsToken(): Promise<string | null> {
+export async function getWsToken(): Promise<string | null> {
   const stored = api.getToken();
   if (stored) return stored;
   try {
@@ -287,20 +293,14 @@ async function getWsToken(): Promise<string | null> {
   }
 }
 
-// WebSocket connection (direct to backend — can't be proxied through Next.js rewrites)
-export function createWebSocket(path: string = '/ws'): WebSocket {
-  const token = api.getToken();
-  return new WebSocket(`${buildWsBase()}${path}?token=${token ?? ''}`);
-}
-
 /**
- * Like `createWebSocket` but fetches a fresh ticket when no long-lived
- * bearer is stored in localStorage. Use this everywhere the legacy
- * `createWebSocket` was used from the browser — call sites that ran in
- * Node (tests, SSR) keep the sync entry point.
+ * Open a socket that signs in through its URL (`/voice`): a fresh ticket
+ * when no long-lived bearer is stored in localStorage. The chat, permission
+ * prompts and install progress use the shared gateway connection instead
+ * (`lib/gateway.ts`).
  */
 export async function createAuthenticatedWebSocket(
-  path: string = '/ws',
+  path: string,
   query?: Record<string, string>,
 ): Promise<WebSocket> {
   const token = await getWsToken();

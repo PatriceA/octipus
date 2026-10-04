@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils';
 import Link from 'next/link';
 import type { Notification } from '@/lib/types/notifications';
 import { WorkspacePicker } from './workspace-picker';
+import { useWorkspaceId } from '@/lib/workspace-context';
 
 interface SearchResult {
   id: string;
@@ -29,6 +30,7 @@ const SEARCH_TYPE_META: Record<SearchResult['type'], { label: string; icon: type
 };
 
 export function Header() {
+  const workspaceId = useWorkspaceId();
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -112,7 +114,7 @@ export function Header() {
 
   const searchEnabled = debouncedQuery.length >= 2;
   const { data: searchData, isFetching: isSearching } = useQuery({
-    queryKey: ['header-search', debouncedQuery],
+    queryKey: ['header-search', debouncedQuery, workspaceId],
     queryFn: () =>
       api.get<{ results: SearchResult[] }>(`/search?q=${encodeURIComponent(debouncedQuery)}&limit=10`),
     enabled: searchEnabled,

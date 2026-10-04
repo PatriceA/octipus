@@ -2,9 +2,11 @@
  * Coworking S0a, L4 and L9 — events and live artifacts across users.
  *
  *   - User B (an admin, on loopback) receives none of user A's swarm,
- *     pipeline and turn events, on the legacy `/ws` socket nor on `/gateway`:
- *     events built here with A's `userId` test the delivery filter, and the
+ *     pipeline, turn, document and model-install events on `/gateway`:
+ *     events built here with A's `userId` test the delivery filter, the real
+ *     event bridge tests that each source is stamped with its owner, and the
  *     real `SwarmSpawner` emitters test that an emitter stamps the owner.
+ *     (The legacy `/ws` these tests also drove was retired in S0d.)
  *   - `artifact_token` viewers are capped per artifact, closed when their
  *     token expires, and closed (their token refused) when the artifact is
  *     deleted or its visibility changes.
@@ -15,9 +17,10 @@
  *   - The artifacts tool writes into `context.workspaceId` and fails when the
  *     agent has none, instead of guessing one of the user's workspaces.
  *
- * Real routes (`/ws`, `/gateway`), real hub and connection manager, real
- * artifacts tool over embedded PGlite. Only the agent runtime behind `/ws` is
- * stood in by an event emitter, and the permission gate allows the tool call.
+ * Real route (`/gateway`), real hub, connection manager and event bridge,
+ * real artifacts tool over embedded PGlite. Only the agent runtime and the
+ * document queue are stood in by event emitters, and the permission gate
+ * allows the tool call.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -50,7 +53,7 @@ const users: Record<string, { userId: string; username: string; isAdmin: boolean
   'tok-bob': { userId: bobId, username: 'bob', isAdmin: true },
 };
 
-const runtime = vi.hoisted(() => ({ turnListeners: new Set<(e: TurnEvent) => void>() }));
+const runtime = vi.hoisted(() => ({ turnListeners: new Set<(e: TurnEvent) => void>(), documents: null as unknown as import('node:events').EventEmitter }));
 
 vi.mock('@/security/auth/session', () => ({
   getSessionManager: () => ({ validate: async (token: string) => users[token] ?? null }),
@@ -62,7 +65,6 @@ vi.mock('@/security/permissions', () => ({
     check: async () => ({ level: 'ALLOW', source: 'policy' }),
   }),
 }));
-vi.mock('@/channels/webchat', () => ({ webChatChannel: { registerConnection: () => randomUUID(), unregisterConnection: () => {} } }));
 vi.mock('@/core/agent-manager', () => ({ getAgentManager: () => ({ onEvent: () => () => {}, get: () => undefined }) }));
 vi.mock('@/core/agent', () => ({
   getAgentService: () => ({
@@ -72,15 +74,14 @@ vi.mock('@/core/agent', () => ({
     },
   }),
 }));
-vi.mock('@/core/documents/queue', () => ({ getDocumentQueue: () => ({ on: () => {}, off: () => {} }) }));
-vi.mock('@/core/gateway/message-handler', () => ({ trySteerRunningRootAgent: async () => false }));
-vi.mock('./browser-bridge', () => ({ getBrowserBridge: () => ({}) }));
-vi.mock('./voice-media-ws', () => ({ setupVoiceMediaWebSocket: () => {} }));
-vi.mock('./voice-ws', () => ({ setupVoiceWebSocket: () => {} }));
+vi.mock('@/core/documents/queue', async () => {
+  const { EventEmitter } = await import('node:events');
+  runtime.documents = new EventEmitter();
+  return { getDocumentQueue: () => runtime.documents };
+});
 
 import { Elysia } from '@/api/http';
 import { setupGatewayWebSocket } from './gateway-ws';
-import { setupWebSocket } from './websocket';
 
 type Frame = Record<string, any>;
 interface FakeSocket { ws: any; frames: Frame[] }
@@ -98,15 +99,8 @@ function fakeSocket(path: string): FakeSocket {
 }
 
 const app = new Elysia();
-setupWebSocket(app);
 setupGatewayWebSocket(app);
 const route = (path: string) => app.websocketRoutes().find(r => r.path === path)!.handlers;
-
-async function openLegacy(token: string): Promise<FakeSocket> {
-  const s = fakeSocket(`/ws?token=${token}`);
-  await route('/ws').open!(s.ws);
-  return s;
-}
 
 async function openGateway(auth: Frame): Promise<FakeSocket> {
   const s = fakeSocket('/gateway');
@@ -156,6 +150,11 @@ beforeAll(async () => {
   // the user" — the old fallback — would pick it, not the one she works in.
   await executeRaw(`INSERT INTO workspaces (id, user_id, slug, name, is_default) VALUES ('${aliceDefaultWs}', '${aliceId}', 'default', 'Default', true)`);
   await executeRaw(`INSERT INTO workspaces (id, user_id, slug, name) VALUES ('${aliceWorkWs}', '${aliceId}', 'work', 'Work')`);
+  // The real bridge, over the stand-in runtime: turn events reach the hub
+  // through it, as in production.
+  const { getGatewayHub } = await import('@/core/gateway/hub');
+  const { connectEventBridge } = await import('@/core/gateway/event-bridge');
+  await connectEventBridge(getGatewayHub());
 }, 120_000);
 
 afterAll(async () => {
@@ -164,23 +163,30 @@ afterAll(async () => {
 });
 
 describe("user B receives none of user A's events", () => {
-  test('legacy /ws: delivery of turn, pipeline and swarm events stamped for A goes to A only', async () => {
-    const a = await openLegacy('tok-alice');
-    const b = await openLegacy('tok-bob');
-    const { hub } = await hubAndBridge();
+  test('the event bridge stamps turn, document and model-install events with their owner', async () => {
+    const a = await openGateway({ method: 'session_token', credentials: { token: 'tok-alice' } });
+    const b = await openGateway({ method: 'session_token', credentials: { token: 'tok-bob' } });
+    await waitForFrame(a, f => f.type === 'auth_ok');
+    await waitForFrame(b, f => f.type === 'auth_ok');
 
     emitTurn({ type: 'chat_response', sessionId: aliceSession, userId: aliceId, data: { response: 'alice-reply' } });
     emitTurn({ type: 'pipeline_event', sessionId: aliceSession, userId: aliceId, data: { event: 'stage_started', pipelineId: 'p-alice' } });
-    hub.publishEvent({
-      type: 'swarm.node_spawned', source: 'swarm:root', userId: aliceId, sessionId: aliceSession,
-      payload: { rootSessionId: aliceSession, nodeId: 'n-alice' },
-    });
+    emitTurn({ type: 'approval_resolved', sessionId: aliceSession, userId: aliceId, data: { requestId: 'appr-alice', status: 'approved' } });
+    runtime.documents.emit('completed', 'doc-alice', aliceId);
+    runtime.documents.emit('failed', 'doc-alice-2', 'parse error', aliceId);
+    // A job with no uploader has nobody to tell: published to no one.
+    runtime.documents.emit('enqueued', 'doc-nobody', undefined);
+    const { emitInstallProgress } = await import('@/capabilities/hwfit/install-events');
+    emitInstallProgress({ id: 'job-alice', modelId: 'm', ownerId: aliceId, bindTopics: [], status: 'pulling', percent: 10, statusText: 'pulling', startedAt: Date.now() });
 
-    const aText = JSON.stringify(a.frames);
-    expect(aText).toContain('alice-reply');
-    expect(aText).toContain('p-alice');
-    expect(aText).toContain('n-alice');
-    expect(JSON.stringify(b.frames)).not.toContain(aliceSession);
+    const events = a.frames.filter(f => f.type === 'event').map(f => f.event);
+    expect(events.map(e => e.type)).toEqual([
+      'chat.response', 'pipeline.event', 'approval.resolved', 'document.completed', 'document.failed', 'model.install_progress',
+    ]);
+    expect(events.every(e => e.userId === aliceId)).toBe(true);
+    expect(events[4].payload).toEqual({ documentId: 'doc-alice-2', error: 'parse error' });
+    expect(JSON.stringify(a.frames)).not.toContain('doc-nobody');
+    expect(b.frames.filter(f => f.type === 'event')).toEqual([]);
   });
 
   test('/gateway: delivery to an admin on loopback filters them out too', async () => {
@@ -207,13 +213,11 @@ describe("user B receives none of user A's events", () => {
 });
 
 describe('a real emitter stamps the owner', () => {
-  test("SwarmSpawner's swarm events reach the node's user only, on /gateway and /ws", async () => {
+  test("SwarmSpawner's swarm events reach the node's user only", async () => {
     const a = await openGateway({ method: 'session_token', credentials: { token: 'tok-alice' } });
     const b = await openGateway({ method: 'session_token', credentials: { token: 'tok-bob' } });
     await waitForFrame(a, f => f.type === 'auth_ok');
     await waitForFrame(b, f => f.type === 'auth_ok');
-    const legacyA = await openLegacy('tok-alice');
-    const legacyB = await openLegacy('tok-bob');
     const { hub } = await hubAndBridge();
 
     const { SwarmSpawner } = await import('@/core/swarm/spawner');
@@ -237,8 +241,6 @@ describe('a real emitter stamps the owner', () => {
     expect(events.map(e => e.type)).toEqual(['swarm.budget_warning', 'swarm.node_spawned', 'swarm.node_completed']);
     expect(events.every(e => e.userId === aliceId)).toBe(true);
     expect(b.frames.filter(f => f.type === 'event')).toEqual([]);
-    expect(JSON.stringify(legacyA.frames)).toContain('child-alice');
-    expect(JSON.stringify(legacyB.frames)).not.toContain('child-alice');
   });
 });
 

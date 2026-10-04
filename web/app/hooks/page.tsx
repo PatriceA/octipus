@@ -8,6 +8,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Portal } from '@/components/ui/portal';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { useWorkspaceId } from '@/lib/workspace-context';
 
 interface Hook {
   id: string;
@@ -207,11 +208,12 @@ function ResultDialog({ result, hookName, onClose }: { result: Record<string, un
 }
 
 function ExecutionLog({ hookId }: { hookId?: string }) {
+  const workspaceId = useWorkspaceId();
   const [expanded, setExpanded] = useState<string | null>(null);
   const [viewingResult, setViewingResult] = useState<{ result: Record<string, unknown>; hookName?: string } | null>(null);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['hook-executions', hookId || 'all'],
+    queryKey: ['hook-executions', hookId || 'all', workspaceId],
     queryFn: async () => {
       try {
         const url = hookId
@@ -1141,6 +1143,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
 }
 
 export default function HooksPage() {
+  const workspaceId = useWorkspaceId();
   const [showCreate, setShowCreate] = useState(false);
   const [editingHook, setEditingHook] = useState<Hook | null>(null);
   const [activeTab, setActiveTab] = useState<'hooks' | 'tasks' | 'calendar' | 'executions'>('hooks');
@@ -1161,7 +1164,7 @@ export default function HooksPage() {
   });
 
   const { data: hooks = [], isLoading } = useQuery({
-    queryKey: ['hooks'],
+    queryKey: ['hooks', workspaceId],
     queryFn: async () => {
       try {
         const res = await api.get<{ hooks: Hook[] }>('/hooks');
@@ -1173,7 +1176,7 @@ export default function HooksPage() {
   });
 
   const { data: suggestions = [] } = useQuery({
-    queryKey: ['hook-suggestions'],
+    queryKey: ['hook-suggestions', workspaceId],
     queryFn: async () => {
       try {
         const res = await api.get<{ suggestions: Array<{ id: string; name: string; description: string; category: string; integration: string }> }>('/hooks/suggestions');

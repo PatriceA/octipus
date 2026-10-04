@@ -14,6 +14,7 @@ import { NotesNavigator } from './notes-navigator';
 import type {
   NoteDetail, NoteFilter, NoteIndexEntry, NoteListResponse, NoteRow, Suggestion, TagCount,
 } from './types';
+import { useWorkspaceId } from '@/lib/workspace-context';
 
 function sameTags(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
@@ -28,6 +29,7 @@ function hasLink(body: string, title: string): boolean {
 }
 
 export function NotesWorkspace() {
+  const workspaceId = useWorkspaceId();
   const qc = useQueryClient();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -57,23 +59,23 @@ export function NotesWorkspace() {
   // the SAME note doesn't clobber in-progress edits.
   const loadedRef = useRef<string | null>(null);
 
-  const list = useQuery<NoteListResponse>({ queryKey: ['notes'], queryFn: () => api.get<NoteListResponse>('/notes?limit=500') });
+  const list = useQuery<NoteListResponse>({ queryKey: ['notes', workspaceId], queryFn: () => api.get<NoteListResponse>('/notes?limit=500') });
   const detail = useQuery<NoteDetail>({
-    queryKey: ['note', selectedId],
+    queryKey: ['note', selectedId, workspaceId],
     queryFn: () => api.get<NoteDetail>(`/notes/${selectedId}`),
     enabled: !!selectedId,
   });
   const suggestions = useQuery<{ suggestions: Suggestion[] }>({
-    queryKey: ['note-suggestions', selectedId],
+    queryKey: ['note-suggestions', selectedId, workspaceId],
     queryFn: () => api.get<{ suggestions: Suggestion[] }>(`/notes/${selectedId}/suggestions`),
     enabled: !!selectedId,
   });
   const noteIndexQ = useQuery<{ notes: NoteIndexEntry[] }>({
-    queryKey: ['note-index'],
+    queryKey: ['note-index', workspaceId],
     queryFn: () => api.get<{ notes: NoteIndexEntry[] }>('/notes/index'),
   });
   const tagsQ = useQuery<{ tags: TagCount[] }>({
-    queryKey: ['note-tags'],
+    queryKey: ['note-tags', workspaceId],
     queryFn: () => api.get<{ tags: TagCount[] }>('/notes/tags'),
   });
 

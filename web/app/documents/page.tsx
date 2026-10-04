@@ -23,6 +23,8 @@ import { Markdown } from '@/components/ui/markdown-renderer';
 import { Portal } from '@/components/ui/portal';
 import { api, getApiUrl } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { useGatewayMessages } from '@/lib/gateway-context';
+import { useWorkspaceId } from '@/lib/workspace-context';
 
 interface Document {
   id: string;
@@ -385,8 +387,9 @@ function DocumentPreview({ documentId, mimeType, originalName }: { documentId: s
 
 // --- Detail Dialog ---
 function DetailDialog({ documentId, onClose, onDelete, onCancel }: { documentId: string; onClose: () => void; onDelete: (id: string) => void; onCancel: (id: string) => void }) {
+  const workspaceId = useWorkspaceId();
   const { data, isLoading } = useQuery({
-    queryKey: ['document', documentId],
+    queryKey: ['document', documentId, workspaceId],
     queryFn: async () => {
       return await api.get<Document>(`/documents/${documentId}`);
     },
@@ -660,12 +663,21 @@ function DocumentCard({
 }
 
 export default function DocumentsPage() {
+  const workspaceId = useWorkspaceId();
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [showUpload, setShowUpload] = useState(false);
   const [viewingDocId, setViewingDocId] = useState<string | null>(null);
   const queryClient = useQueryClient();
+  // Processing progress is pushed (`document.*` on the tab's gateway
+  // connection); the 10 s refetch below stays as the fallback.
+  useGatewayMessages((message) => {
+    if (message.type === 'event' && message.event.type.startsWith('document.')) {
+      void queryClient.invalidateQueries({ queryKey: ['documents'] });
+      void queryClient.invalidateQueries({ queryKey: ['document'] });
+    }
+  });
 
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to delete this document?')) return;
@@ -687,7 +699,7 @@ export default function DocumentsPage() {
   };
 
   const { data, isLoading } = useQuery({
-    queryKey: ['documents'],
+    queryKey: ['documents', workspaceId],
     queryFn: async () => {
       try {
         return await api.get<DocumentsResponse>('/documents');

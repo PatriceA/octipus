@@ -82,6 +82,11 @@ interface RouteDef {
 }
 
 export interface WebSocketHandlers {
+  /**
+   * Largest frame a client may send on this route, in bytes (the socket's
+   * `maxPayload`). Unset: the `ws` library default.
+   */
+  maxPayload?: number;
   open?: (ws: any) => unknown | Promise<unknown>;
   message?: (ws: any, message: any) => unknown | Promise<unknown>;
   close?: (ws: any, code?: number, reason?: string) => unknown | Promise<unknown>;

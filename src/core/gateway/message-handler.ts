@@ -5,7 +5,7 @@ import { isSessionControlMessage } from '@/core/session-controls';
 import { coreLogger } from '@/utils/logger';
 import { getCommandRegistry } from './commands';
 import type { GatewayHub } from './hub';
-import type { ClientMessage, ConnectionContext } from './protocol';
+import type { ClientMessage, ConnectionContext, PendingApproval, PendingPermission, PermissionPendingMessage } from './protocol';
 
 /**
  * Inject a user message into a running root agent turn for this session, if
@@ -37,6 +37,45 @@ export async function sessionAccessError(sessionId: string, context: Pick<Connec
   const { sessionRepository } = await import('@/db/repositories/session-repository');
   const session = await sessionRepository.findById(sessionId);
   return session && session.userId !== context.userId ? 'Session not found' : null;
+}
+
+/**
+ * Is `sessionId` an existing session of this connection's user? Stricter than
+ * `sessionAccessError`: reading a session's past (replay) needs the row, so a
+ * session that does not exist yet is refused like another user's.
+ */
+async function ownsExistingSession(sessionId: string, context: Pick<ConnectionContext, 'userId'>): Promise<boolean> {
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const session = await sessionRepository.findById(sessionId);
+  return session !== null && session.userId === context.userId;
+}
+
+/**
+ * The user's open permission requests and root-agent approvals, in the shape
+ * `permission.request` / `agent.approval_required` carry them.
+ */
+export async function readPendingSnapshot(userId: string): Promise<Omit<PermissionPendingMessage, 'type'>> {
+  const [{ getPermissionManager }, { getAgentService }] = await Promise.all([
+    import('@/security/permissions'),
+    import('@/core/agent'),
+  ]);
+  const rows = await getPermissionManager().getPendingRequests(userId);
+  const requests: PendingPermission[] = rows.map((row) => ({
+    requestId: row.id,
+    toolId: row.toolId,
+    action: row.action,
+    toolName: row.context.toolName,
+    args: row.context.toolArguments,
+    ...(row.sessionId ? { sessionId: row.sessionId } : {}),
+  }));
+  const approvals: PendingApproval[] = getAgentService().getPendingApprovals(userId).map((approval) => ({
+    requestId: approval.id,
+    sessionId: approval.sessionId,
+    summary: approval.summary,
+    question: approval.question,
+    ...(approval.options ? { options: approval.options } : {}),
+  }));
+  return { requests, approvals };
 }
 
 /** Exported for unit tests. */
@@ -83,6 +122,19 @@ export async function trySteerRunningRootAgent(sessionId: string, content: strin
  * to the appropriate backend services (root agent, permissions, agents).
  */
 export function wireMessageHandler(hub: GatewayHub): void {
+  hub.setPendingSnapshotProvider(readPendingSnapshot);
+
+  // A connection that put a session into voice mode takes it out when it
+  // goes, so a refresh does not leave the session in the planning gate.
+  hub.setConnectionClosedHandler((context) => {
+    const sessionId = context.voiceSessionId;
+    if (!sessionId) return;
+    context.voiceSessionId = undefined;
+    import('@/core/agent')
+      .then(({ getAgentService }) => getAgentService().setVoiceMode(sessionId, context.userId, false))
+      .catch((err: unknown) => coreLogger.error({ err, sessionId }, 'Could not clear voice mode of a closed connection'));
+  });
+
   hub.setMessageHandler(async (connectionId, context, message) => {
     switch (message.type) {
       case 'chat.send':
@@ -111,6 +163,14 @@ export function wireMessageHandler(hub: GatewayHub): void {
 
       case 'agent.stop':
         await handleAgentStop(hub, connectionId, context, message);
+        break;
+
+      case 'voice.set':
+        await handleVoiceSet(hub, connectionId, context, message);
+        break;
+
+      case 'replay':
+        await handleReplay(hub, connectionId, context, message);
         break;
 
       default:
@@ -273,6 +333,14 @@ async function handleChatSend(
       type: 'error',
       code: 'CHAT_ERROR',
       message: (err as Error).message,
+    });
+    // Every tab of the user showing this session stops waiting on the turn.
+    hub.publishEvent({
+      type: 'chat.error',
+      source: 'rootAgent',
+      userId: context.userId,
+      sessionId: message.sessionId,
+      payload: { error: (err as Error).message },
     });
   }
 }
@@ -468,6 +536,9 @@ async function handlePermissionRespond(
         code: 'PERMISSION_ERROR',
         message: 'That permission request is no longer pending (already answered, or expired).',
       });
+      // Another client may have answered first: reconcile this one from the
+      // owner's current list.
+      await hub.sendPendingSnapshot(connectionId, context);
     }
   } catch (err) {
     coreLogger.error({ err, connectionId, requestId: message.requestId }, 'Permission respond error');
@@ -500,6 +571,14 @@ async function handleApprovalRespond(
         type: 'error',
         code: 'APPROVAL_EXPIRED',
         message: outcome.message,
+      });
+    } else if (outcome.status !== 'resolved') {
+      // Unknown, someone else's, or answered already: one answer for all
+      // three, as REST /chat/approve gives, so ids cannot be probed.
+      hub.connectionManager.sendToConnection(connectionId, {
+        type: 'error',
+        code: 'APPROVAL_NOT_FOUND',
+        message: 'Approval request not found or already resolved',
       });
     }
   } catch (err) {
@@ -596,4 +675,61 @@ async function handleAgentStop(
       message: (err as Error).message,
     });
   }
+}
+
+/**
+ * Put a session into (or out of) voice mode for this connection. Owner check
+ * as for `chat.send`: another user's session is refused before anything
+ * changes. A session that does not exist yet (a fresh chat) is allowed — the
+ * gate is keyed by (session, user), so it only ever affects this user's turns.
+ */
+async function handleVoiceSet(
+  hub: GatewayHub,
+  connectionId: string,
+  context: ConnectionContext,
+  message: Extract<ClientMessage, { type: 'voice.set' }>,
+): Promise<void> {
+  try {
+    const refused = await sessionAccessError(message.sessionId, context);
+    if (refused) {
+      hub.connectionManager.sendToConnection(connectionId, { type: 'error', code: 'SESSION_NOT_FOUND', message: refused });
+      return;
+    }
+    const { getAgentService } = await import('@/core/agent');
+    const service = getAgentService();
+    // Moving voice to another session takes the previous one out first, so
+    // its flag is not left set in the root agent.
+    const previous = context.voiceSessionId;
+    if (previous && previous !== message.sessionId) service.setVoiceMode(previous, context.userId, false);
+    service.setVoiceMode(message.sessionId, context.userId, message.on);
+    context.voiceSessionId = message.on ? message.sessionId : undefined;
+  } catch (err) {
+    coreLogger.error({ err, connectionId, sessionId: message.sessionId }, 'voice.set failed');
+    hub.connectionManager.sendToConnection(connectionId, { type: 'error', code: 'VOICE_ERROR', message: (err as Error).message });
+  }
+}
+
+/**
+ * Serve a reconnecting client the events of one of its own sessions that it
+ * missed. The session must exist and be the caller's; every replayed event is
+ * the caller's own as well (a buffer is per session, and a session has one
+ * owner — checked again here rather than assumed).
+ */
+async function handleReplay(
+  hub: GatewayHub,
+  connectionId: string,
+  context: ConnectionContext,
+  message: Extract<ClientMessage, { type: 'replay' }>,
+): Promise<void> {
+  if (!(await ownsExistingSession(message.sessionId, context))) {
+    hub.connectionManager.sendToConnection(connectionId, { type: 'error', code: 'SESSION_NOT_FOUND', message: 'Session not found' });
+    return;
+  }
+  const { events, gap } = hub.eventBus.replaySince(message.sessionId, message.afterEventId);
+  hub.connectionManager.sendToConnection(connectionId, {
+    type: 'replay',
+    sessionId: message.sessionId,
+    events: events.filter((event) => event.userId === context.userId),
+    gap,
+  });
 }

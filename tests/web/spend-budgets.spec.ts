@@ -1,6 +1,7 @@
-import type { Page, Route, WebSocketRoute } from '@playwright/test';
+import type { Page, Route } from '@playwright/test';
 import { test, expect } from './fixtures/auth';
 import { json, selectChatSession, stubAllDefaults } from './fixtures/api-stubs';
+import { stubGateway } from './fixtures/gateway';
 
 /**
  * Dollar spend budgets in the web UI, every /api call stubbed:
@@ -328,21 +329,18 @@ test.describe('user: banner and budgets card', () => {
 test.describe('chat: a turn refused by a spend budget', () => {
   test('names the budget, limit, spend and reset time', async ({ authenticatedPage: page }) => {
     await stubAllDefaults(page);
-    let socket: WebSocketRoute | undefined;
-    await page.routeWebSocket(/\/ws\?/, (ws) => { socket = ws; });
+    const gateway = await stubGateway(page);
     await page.goto('/chat');
     await selectChatSession(page, 'sess-1');
-    await expect.poll(() => Boolean(socket)).toBe(true);
+    await expect.poll(() => gateway.subscribed()).toBe(1);
     const reason = {
       budgetId: 'p1', userId: ALICE, scopeKind: 'role', scopeRef: 'coder', period: 'day',
       spentUsd: 10.42, limitUsd: 10, resetsAt: dayEnd.toISOString(),
     };
-    socket!.send(JSON.stringify({
-      type: 'chat_response',
-      sessionId: 'sess-1',
+    gateway.event('chat.response', { response: {
       response: 'Agents are paused: the daily spend budget for the "coder" role of $10.00/day is reached ($10.42 spent this day).',
       metadata: { limit: { code: 'SPEND_BUDGET_EXCEEDED', reason } },
-    }));
+    } }, 'sess-1');
     const card = page.getByTestId('limit-refusal');
     await expect(card).toBeVisible();
     await expect(card).toContainText('Agents are paused — spend budget reached');
