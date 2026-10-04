@@ -61,6 +61,12 @@ export interface ExtensionCommandDef {
   args?: { name: string; required: boolean; description: string }[];
   /** Admins only, checked against the database when the command runs. Default false. */
   adminOnly?: boolean;
+  /**
+   * @deprecated Use `adminOnly`. Trust levels other than 'user' and 'agent'
+   * are gone; 'local' and 'system' register the command as `adminOnly: true`
+   * (with a warning) so a command restricted the old way stays restricted.
+   */
+  minTrustLevel?: 'user' | 'local' | 'system' | 'agent';
   handler: (ctx: ExtensionCommandContext) => Promise<{ text: string; ephemeral?: boolean }>;
 }
 

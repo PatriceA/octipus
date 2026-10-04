@@ -1,5 +1,6 @@
 
 import { randomBytes } from 'crypto';
+import { userChangedSince, userChangeMark } from '@/security/user-change-marks';
 import { coreLogger } from '@/utils/logger';
 import {
   type AuthMessage,
@@ -32,6 +33,8 @@ export interface GatewayConnection {
   state: ConnectionState;
   context: ConnectionContext | null;
   authTimer: NodeJS.Timeout | null;
+  /** `artifact_token` viewers only: closes the connection when the token expires. */
+  expiryTimer?: NodeJS.Timeout;
   createdAt: number;
 }
 
@@ -52,6 +55,14 @@ const DEFAULT_BUDGET: ConnectionBudget = {
 };
 
 const AUTH_TIMEOUT_MS = 5_000;
+/**
+ * Live `artifact_token` viewers of one artifact. They are not a user, so the
+ * per-user cap does not apply; this bounds what one embed token (or a page
+ * opened in many tabs) can hold open.
+ */
+export const MAX_VIEWERS_PER_ARTIFACT = 50;
+/** Same as user-lifecycle's USER_CHANGED_CLOSE_CODE: reconnect to pick up the new rights. */
+const USER_CHANGED_CLOSE_CODE = 4004;
 
 // ── Connection Manager ────────────────────────────────────────────
 
@@ -183,6 +194,7 @@ export class ConnectionManager {
       clearTimeout(conn.authTimer);
       conn.authTimer = null;
     }
+    if (conn.expiryTimer) clearTimeout(conn.expiryTimer);
 
     // Clean up tracking
     if (conn.context) {
@@ -218,6 +230,10 @@ export class ConnectionManager {
     const trustLevel: TrustLevel = 'user';
     let isAdmin = false;
     let artifactId: string | undefined;
+    let artifactTokenExp: number | undefined;
+    // Taken before the credential is checked: see the re-check after
+    // registration below.
+    const mark = userChangeMark();
 
     try {
       switch (msg.method) {
@@ -292,7 +308,10 @@ export class ConnectionManager {
           }
           const { verifyArtifactToken } = await import('@/core/artifacts/token');
           const payload = verifyArtifactToken(token, { aid });
-          if (!payload) {
+          const { isArtifactTokenRevoked } = await import('@/core/artifacts/viewer-access');
+          // A token issued before the artifact's visibility changed (or before
+          // it was deleted) no longer stands for the access it was minted under.
+          if (!payload || isArtifactTokenRevoked(aid, payload.iat)) {
             this.sendAuthError(conn, 'Invalid or expired artifact token');
             return;
           }
@@ -303,6 +322,7 @@ export class ConnectionManager {
             return;
           }
           artifactId = aid;
+          artifactTokenExp = payload.exp;
           userId = `artifact:${aid}`;
           break;
         }
@@ -318,11 +338,12 @@ export class ConnectionManager {
       }
 
       // Check per-user budget. Artifact viewers share one id per artifact and
-      // are not a user; the per-IP budget bounds them.
+      // are not a user: they have a cap per artifact instead.
       const userConns = this.byUser.get(userId);
-      if (artifactId === undefined && userConns && userConns.size >= this.budget.maxPerUser) {
+      const cap = artifactId === undefined ? this.budget.maxPerUser : MAX_VIEWERS_PER_ARTIFACT;
+      if (userConns && userConns.size >= cap) {
         this.sendAuthError(conn, 'Too many connections');
-        this.onAuditEvent?.('gateway.connection.rejected', { userId, reason: 'user_budget' });
+        this.onAuditEvent?.('gateway.connection.rejected', { userId, reason: artifactId === undefined ? 'user_budget' : 'artifact_viewer_budget' });
         return;
       }
 
@@ -352,6 +373,22 @@ export class ConnectionManager {
       // Track by user
       if (!this.byUser.has(userId)) this.byUser.set(userId, new Set());
       this.byUser.get(userId)!.add(connectionId);
+
+      // The user was deactivated or their admin flag changed while this
+      // connection was authenticating: the sweep (closeUserConnections) may
+      // have run before it was registered. Close it; the client reconnects
+      // against the current row.
+      if (userChangedSince(userId, mark)) {
+        this.closeUserConnection(connectionId, USER_CHANGED_CLOSE_CODE, 'Account changed');
+        return;
+      }
+
+      // The token was checked once, above; the connection ends when it expires.
+      if (artifactTokenExp !== undefined) {
+        conn.expiryTimer = setTimeout(() => {
+          this.closeUserConnection(connectionId, 4001, 'Artifact token expired');
+        }, Math.max(0, artifactTokenExp * 1000 - Date.now()));
+      }
 
       // Send auth_ok
       this.send(conn, {
@@ -422,21 +459,32 @@ export class ConnectionManager {
    */
   closeUserConnections(userId: string, code: number, reason: string): number {
     const conns = [...(this.byUser.get(userId) ?? [])];
-    for (const connectionId of conns) {
-      const conn = this.connections.get(connectionId);
-      if (!conn) continue;
-      conn.state = 'draining';
-      try {
-        conn.ws.close(code, reason);
-      } catch (err) {
-        coreLogger.warn({ err, connectionId, userId }, 'Could not close a gateway connection');
-      }
-      // The transport's close callback lands later (or never, for a socket
-      // already gone); drop the bookkeeping now so nothing more is sent to it.
-      this.handleClose(connectionId, code, reason);
-    }
+    for (const connectionId of conns) this.closeUserConnection(connectionId, code, reason);
     if (conns.length > 0) coreLogger.info({ userId, count: conns.length, reason }, 'Closed user gateway connections');
     return conns.length;
+  }
+
+  /**
+   * Close every `artifact_token` viewer of `artifactId` (the artifact was
+   * deleted or its visibility changed). Returns how many were closed.
+   */
+  closeArtifactViewers(artifactId: string, code: number, reason: string): number {
+    return this.closeUserConnections(`artifact:${artifactId}`, code, reason);
+  }
+
+  /** Close one authenticated connection and drop its bookkeeping at once. */
+  private closeUserConnection(connectionId: string, code: number, reason: string): void {
+    const conn = this.connections.get(connectionId);
+    if (!conn) return;
+    conn.state = 'draining';
+    try {
+      conn.ws.close(code, reason);
+    } catch (err) {
+      coreLogger.warn({ err, connectionId, userId: conn.context?.userId }, 'Could not close a gateway connection');
+    }
+    // The transport's close callback lands later (or never, for a socket
+    // already gone); drop the bookkeeping now so nothing more is sent to it.
+    this.handleClose(connectionId, code, reason);
   }
 
   getActiveConnections(): ConnectionContext[] {

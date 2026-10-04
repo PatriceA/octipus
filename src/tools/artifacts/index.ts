@@ -17,6 +17,7 @@ import { refreshSource } from '@/core/artifacts/refresh';
 import { scheduleArtifactRefresh } from '@/core/artifacts/scheduler';
 import { publishArtifactVersionUpdated } from '@/core/artifacts/events';
 import { artifactLifecycleBus } from '@/core/artifacts/lifecycle-bus';
+import { revokeArtifactViewers } from '@/core/artifacts/viewer-access';
 import { BaseTool, createParameterSchema } from '../base-tool';
 
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
@@ -487,6 +488,7 @@ export class ArtifactsTool extends BaseTool {
           const { artifacts: artifactsTable } = await import('@/db/schema/artifacts');
           const { eq } = await import('drizzle-orm');
           await getDb().delete(artifactsTable).where(eq(artifactsTable.id, a.id));
+          await revokeArtifactViewers(a.id, 'Artifact deleted');
           // Built JS lives on disk, not in the row — drop it with the artifact.
           await deleteArtifactBundles(a.id);
           return { id: a.id, purged: true, message: `Artifact "${a.title}" purged` };

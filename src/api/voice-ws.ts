@@ -1,6 +1,7 @@
 import type { Elysia } from '@/api/http';
 import { getConfig } from '@/config';
 import { getSessionManager } from '@/security/auth/session';
+import { userChangeMark } from '@/security/user-change-marks';
 import type { STTEngine } from '@/voice/stt';
 import { apiLogger } from '@/utils/logger';
 import { fileAt } from '@/utils/fs-file';
@@ -126,6 +127,7 @@ export function setupVoiceWebSocket(app: Elysia): void {
         ws.close(4001, 'Authentication required');
         return;
       }
+      const mark = userChangeMark();
       const session = await getSessionManager().validate(token);
       if (!session) {
         ws.close(4001, 'Invalid or expired token');
@@ -142,7 +144,9 @@ export function setupVoiceWebSocket(app: Elysia): void {
 
       const st = stateOf(ws);
       st.userId = session.userId;
-      st.untrack = trackUserSocket(session.userId, ws);
+      const untrack = trackUserSocket(session.userId, ws, mark);
+      if (!untrack) return;
+      st.untrack = untrack;
 
       // A ReadableStream fed by inbound binary frames; the STT engine pulls from
       // it while `message` pushes into it.

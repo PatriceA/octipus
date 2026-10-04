@@ -308,9 +308,9 @@ inert and stays in the array.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/scim/v2/Users` | List users |
-| POST | `/api/scim/v2/Users` | Create user |
+| POST | `/api/scim/v2/Users` | Create user in the token's org (a member with that `userName` is returned as-is; one held outside the org is 409 `uniqueness`) |
 | GET | `/api/scim/v2/Users/:id` | Get user |
-| PATCH | `/api/scim/v2/Users/:id` | Apply supported SCIM user updates |
+| PATCH | `/api/scim/v2/Users/:id` | Apply supported SCIM user updates; `userName`/`emails` only on an account the org alone holds (no other org, not an install admin, no own password), else 403 |
 | DELETE | `/api/scim/v2/Users/:id` | Remove the user from the token's org; deactivate when no other org holds them |
 | GET | `/api/scim/v2/Groups` | List groups |
 
@@ -640,7 +640,24 @@ First message must be `auth` within 5 seconds:
 }
 ```
 
-Auth methods: `session_token`, `local` (TUI), `hmac` (adapters), `api_key`.
+Auth methods:
+
+- `session_token` — `credentials.token`: a login session token (web, TUI after
+  `/login`).
+- `api_key` — `credentials.key`: a personal API token (`octi_…`, Settings →
+  API Tokens).
+- `artifact_token` — `credentials.artifactId` and `credentials.token`: the
+  short-lived token an artifact embed page is served with. The connection is a
+  viewer of that one artifact, not a user: it may only `ping` and
+  (un)subscribe `artifact:<id>`. At most 50 viewer connections per artifact;
+  each closes when its token expires (code 4001), and all close when the
+  artifact is deleted or its visibility changes (code 4003; reload the page
+  for a new token).
+
+Every authenticated connection has `user` trust; there is no `local` trust and
+no loopback exemption. Admin rights come from the user's `isAdmin` flag in the
+database. A connection whose user is deactivated or whose admin flag changes is
+closed (codes 4001 and 4004) and must re-authenticate.
 
 ### Client → Gateway Messages
 
@@ -649,11 +666,11 @@ Auth methods: `session_token`, `local` (TUI), `hmac` (adapters), `api_key`.
 | `auth` | Authentication handshake |
 | `chat.send` | Send chat message (requires `sessionId`, `content`) |
 | `command` | Execute gateway command (`name`, optional `args`) |
-| `subscribe` | Subscribe to event patterns (e.g., `["agent.*"]`) |
-| `unsubscribe` | Remove event subscriptions |
+| `subscribe` | `patterns`: event-type patterns over the connection's own events (e.g., `["agent.*"]`); `resources`: resources to receive events of (e.g., `["artifact:<id>"]`), each access-checked and answered with `subscribed` or a `FORBIDDEN` error |
+| `unsubscribe` | Remove event patterns and/or resources |
 | `permission.respond` | Approve/deny permission request |
 | `approval.respond` | Approve/deny pipeline approval |
-| `agent.stop` | Stop a running agent (admin/local only) |
+| `agent.stop` | Stop one of the connection's own user's running agents (an admin included; another user's agent is `AGENT_NOT_FOUND`) |
 | `ping` | Heartbeat |
 
 ### Gateway → Client Messages
@@ -662,7 +679,8 @@ Auth methods: `session_token`, `local` (TUI), `hmac` (adapters), `api_key`.
 |------|-------------|
 | `auth_ok` | Auth success (includes `connectionId`, `capabilities`, `serverTime`) |
 | `auth_error` | Auth failure |
-| `event` | Gateway event (agent lifecycle, chat response, etc.) |
+| `event` | Gateway event (agent lifecycle, chat response, etc.); only the connection's own user's events, plus those of subscribed resources |
+| `subscribed` | Resources of a `subscribe` that passed the access check |
 | `command.result` | Result of a command |
 | `error` | Error with `code` and `message` |
 | `pong` | Heartbeat response with server time |

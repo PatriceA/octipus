@@ -7,7 +7,15 @@
  *     every open socket fail, and their pending prompts and impersonations end;
  *   - a demoted admin's gateway socket is closed and reconnects without admin;
  *   - a SCIM token cannot deactivate another org's user, and only deactivates
- *     an account no other org holds;
+ *     an account no other org holds; its POST does not adopt an account
+ *     outside its org, and its PATCH renames only accounts the org alone holds;
+ *   - an org's IdP signs in that org's members or new accounts, never another
+ *     account (the admin's included);
+ *   - a socket whose credential was checked before a deactivation and that
+ *     registers after the sweep is closed all the same;
+ *   - an admin's deactivation of an account SCIM already switched off is
+ *     recorded, and a failed deactivation step does not drop the rest of the
+ *     admin's edit;
  *   - a SCIM re-activation does not undo an admin's deactivation;
  *   - a hook of a deactivated user does not fire.
  *
@@ -68,6 +76,11 @@ const DAVE = '10000000-0000-4000-8000-000000000005';
 const ERIN = '10000000-0000-4000-8000-000000000006';
 const FRANK = '10000000-0000-4000-8000-000000000007';
 const GINA = '10000000-0000-4000-8000-000000000008';
+const HANK = '10000000-0000-4000-8000-000000000009';
+const IVY = '10000000-0000-4000-8000-00000000000a';
+const JACK = '10000000-0000-4000-8000-00000000000b';
+const KATE = '10000000-0000-4000-8000-00000000000c';
+const LIAM = '10000000-0000-4000-8000-00000000000d';
 const ORG_A = '20000000-0000-4000-8000-00000000000a';
 const ORG_B = '20000000-0000-4000-8000-00000000000b';
 const TOKEN_A = `scim-a-${rand(8)}`;
@@ -163,6 +176,11 @@ beforeAll(async () => {
     { id: ERIN, username: 'erin' },
     { id: FRANK, username: 'frank' },
     { id: GINA, username: 'gina' },
+    { id: HANK, username: 'hank' },
+    { id: IVY, username: 'ivy' },
+    { id: JACK, username: 'jack' },
+    { id: KATE, username: 'kate' },
+    { id: LIAM, username: 'liam' },
   ]);
   await executeRaw(`INSERT INTO organizations (id, slug, name) VALUES ('${ORG_A}', 'org-a', 'Org A'), ('${ORG_B}', 'org-b', 'Org B')`);
   await executeRaw(
@@ -170,10 +188,12 @@ beforeAll(async () => {
      VALUES ('${ORG_A}', true, true, 'scim-a'), ('${ORG_B}', false, true, 'scim-b')`,
   );
   // carol: SAML user of A. dave: B only. erin: A only. frank: A and B. gina: B only.
+  // hank: A and B. ivy: A only.
   await executeRaw(
     `INSERT INTO org_members (org_id, user_id) VALUES
        ('${ORG_A}', '${CAROL}'), ('${ORG_B}', '${DAVE}'), ('${ORG_A}', '${ERIN}'),
-       ('${ORG_A}', '${FRANK}'), ('${ORG_B}', '${FRANK}'), ('${ORG_B}', '${GINA}')`,
+       ('${ORG_A}', '${FRANK}'), ('${ORG_B}', '${FRANK}'), ('${ORG_B}', '${GINA}'),
+       ('${ORG_A}', '${HANK}'), ('${ORG_B}', '${HANK}'), ('${ORG_A}', '${IVY}')`,
   );
   stubs.scimTokens.set('scim-a', TOKEN_A);
   stubs.scimTokens.set('scim-b', TOKEN_B);
@@ -270,6 +290,109 @@ describe('a deactivated user loses every door at once', () => {
   });
 });
 
+describe("an org's IdP speaks for that org only", () => {
+  test('it cannot sign in an account outside the org, the admin included', async () => {
+    const { orgMembers } = await import('@/db/schema/organizations');
+    for (const username of ['root', 'dave']) {
+      stubs.samlNameId = username;
+      const res = await call('POST', '/api/saml/org-a/acs', { body: { SAMLResponse: 'x' } });
+      expect(res.status).toBe(403);
+      expect(res.headers.get('set-cookie')).toBeNull();
+    }
+    // Not adopted into the org either.
+    for (const id of [ADMIN, DAVE]) {
+      const rows = await db().select().from(orgMembers).where(eq(orgMembers.userId, id));
+      expect(rows.map((r) => r.orgId)).not.toContain(ORG_A);
+    }
+  });
+
+  test('it creates a new account as a member of the org', async () => {
+    const { users } = await import('@/db/schema/users');
+    const { orgMembers } = await import('@/db/schema/organizations');
+    stubs.samlNameId = 'saml-newcomer';
+    const res = await call('POST', '/api/saml/org-a/acs', { body: { SAMLResponse: 'x' } });
+    expect(res.status).toBe(302);
+    expect(res.headers.get('set-cookie')).toContain('session_token=');
+    const [created] = await db().select().from(users).where(eq(users.username, 'saml-newcomer'));
+    const rows = await db().select().from(orgMembers).where(eq(orgMembers.userId, created.id));
+    expect(rows.map((r) => r.orgId)).toEqual([ORG_A]);
+  });
+});
+
+describe('a socket that authenticates across a deactivation', () => {
+  /** Run `change` after the credential check passed and before the socket registers. */
+  async function duringValidation(change: () => Promise<void>): Promise<void> {
+    const { getSessionManager } = await import('@/security/auth/session');
+    const sm = getSessionManager();
+    const original = sm.validate.bind(sm);
+    vi.spyOn(sm, 'validate').mockImplementationOnce(async (token: string) => {
+      const session = await original(token);
+      await change();
+      return session;
+    });
+  }
+
+  test('a /ws socket registered after the sweep is closed', async () => {
+    const { userSocketCount } = await import('./user-sockets');
+    const session = await login(KATE);
+    await duringValidation(async () => {
+      expect((await call('PATCH', `/api/admin/users/${KATE}`, { bearer: adminToken, body: { isActive: false } })).status).toBe(200);
+    });
+    const ws = await openSocket('/ws', `token=${session}`);
+    expect(ws.close).toHaveBeenCalledWith(4004, 'Account changed');
+    expect(userSocketCount(KATE)).toBe(0);
+  });
+
+  test('a gateway connection registered after the sweep is closed, without auth_ok', async () => {
+    const { getGatewayHub } = await import('@/core/gateway/hub');
+    const session = await login(LIAM);
+    await duringValidation(async () => {
+      expect((await call('PATCH', `/api/admin/users/${LIAM}`, { bearer: adminToken, body: { isAdmin: true } })).status).toBe(200);
+    });
+    const gateway = await openGateway(session);
+    expect(gateway.close).toHaveBeenCalledWith(4004, 'Account changed');
+    expect(gateway.frames.some((f) => f.type === 'auth_ok')).toBe(false);
+    expect(getGatewayHub().connectionManager.getConnectionsByUser(LIAM)).toHaveLength(0);
+
+    // A reconnect authenticates with the current row.
+    const again = await openGateway(session);
+    expect(again.frames.at(-1)).toMatchObject({ type: 'auth_ok', userId: LIAM });
+    expect(again.frames.at(-1)!.capabilities).toContain('admin');
+  });
+});
+
+describe('admin deactivation edge cases', () => {
+  test("an admin's deactivation of a SCIM-deactivated account sticks", async () => {
+    const op = (value: boolean) => ({ bearer: TOKEN_A, body: { schemas: [], Operations: [{ op: 'replace', path: 'active', value }] } });
+    expect((await call('PATCH', `/api/scim/v2/Users/${IVY}`, op(false))).status).toBe(200);
+    expect(await isActive(IVY)).toBe(false);
+
+    // Already off: the admin's decision is recorded all the same.
+    expect((await call('PATCH', `/api/admin/users/${IVY}`, { bearer: adminToken, body: { isActive: false } })).status).toBe(200);
+    const { userRepository } = await import('@/db/repositories/user-repository');
+    expect((await userRepository.findById(IVY))!.deactivatedBy).toBe('admin');
+
+    const refused = await call('PATCH', `/api/scim/v2/Users/${IVY}`, op(true));
+    expect(refused.status).toBe(409);
+    expect(await isActive(IVY)).toBe(false);
+  });
+
+  test('a failed deactivation step is reported and the rest of the edit applies', async () => {
+    const { getPermissionManager } = await import('@/security/permissions');
+    const spy = vi.spyOn(getPermissionManager(), 'expireForUser').mockRejectedValueOnce(new Error('db hiccup'));
+    const res = await call('PATCH', `/api/admin/users/${JACK}`, {
+      bearer: adminToken,
+      body: { isActive: false, email: 'jack@example.test' },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.warnings).toEqual(['Deactivation step failed: expire permission requests']);
+    expect(body.email).toBe('jack@example.test');
+    expect(body.isActive).toBe(false);
+    expect(spy).toHaveBeenCalledWith(JACK);
+  });
+});
+
 describe('admin changes reach open gateway connections', () => {
   test('a demoted admin is disconnected and reconnects without admin rights', async () => {
     const session = await login(BOB);
@@ -311,6 +434,44 @@ describe('SCIM speaks for its own org only', () => {
     // Their own org's DELETE, with nothing else left, deactivates.
     expect((await call('DELETE', `/api/scim/v2/Users/${GINA}`, { bearer: TOKEN_B })).status).toBe(204);
     expect(await isActive(GINA)).toBe(false);
+  });
+
+  test('POST does not adopt an account outside the org, so it cannot then delete it', async () => {
+    const userBody = (userName: string) => ({ bearer: TOKEN_A, body: { schemas: [], userName } });
+    for (const [userName, id] of [['root', ADMIN], ['dave', DAVE]] as const) {
+      const res = await call('POST', '/api/scim/v2/Users', userBody(userName));
+      expect(res.status).toBe(409);
+      const body = await res.json();
+      expect(body.scimType).toBe('uniqueness');
+      expect(body.id).toBeUndefined();
+      expect((await call('DELETE', `/api/scim/v2/Users/${id}`, { bearer: TOKEN_A })).status).toBe(404);
+      expect(await isActive(id)).toBe(true);
+    }
+
+    // A member re-POSTed by reconciliation is returned as-is.
+    const again = await call('POST', '/api/scim/v2/Users', userBody('hank'));
+    expect(again.status).toBe(200);
+    expect((await again.json()).id).toBe(HANK);
+  });
+
+  test('PATCH renames only an account the org alone holds', async () => {
+    const { userRepository } = await import('@/db/repositories/user-repository');
+    const rename = (id: string) => call('PATCH', `/api/scim/v2/Users/${id}`, {
+      bearer: TOKEN_A,
+      body: { schemas: [], Operations: [{ op: 'replace', path: 'emails', value: [{ value: `${id.slice(-4)}@org-a.test`, primary: true }] }] },
+    });
+
+    // hank is also in org B: refused, nothing written.
+    const shared = await rename(HANK);
+    expect(shared.status).toBe(403);
+    expect((await userRepository.findById(HANK))!.email).toBeNull();
+
+    // An account the org provisioned itself: allowed.
+    const created = await call('POST', '/api/scim/v2/Users', { bearer: TOKEN_A, body: { schemas: [], userName: 'scim-own' } });
+    expect(created.status).toBe(201);
+    const { id } = await created.json();
+    expect((await rename(id)).status).toBe(200);
+    expect((await userRepository.findById(id))!.email).toBe(`${id.slice(-4)}@org-a.test`);
   });
 
   test("SCIM re-activation never undoes an admin's deactivation", async () => {

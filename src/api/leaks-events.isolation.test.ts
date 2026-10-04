@@ -2,7 +2,12 @@
  * Coworking S0a, L4 and L9 — events and live artifacts across users.
  *
  *   - User B (an admin, on loopback) receives none of user A's swarm,
- *     pipeline and turn events, on the legacy `/ws` socket nor on `/gateway`.
+ *     pipeline and turn events, on the legacy `/ws` socket nor on `/gateway`:
+ *     events built here with A's `userId` test the delivery filter, and the
+ *     real `SwarmSpawner` emitters test that an emitter stamps the owner.
+ *   - `artifact_token` viewers are capped per artifact, closed when their
+ *     token expires, and closed (their token refused) when the artifact is
+ *     deleted or its visibility changes.
  *   - Artifact events go to the resource `artifact:<id>` only: a non-owner's
  *     subscribe is refused, an `artifact_token` connection can subscribe to
  *     its own artifact and nothing else, and may send nothing but
@@ -159,7 +164,7 @@ afterAll(async () => {
 });
 
 describe("user B receives none of user A's events", () => {
-  test('legacy /ws: turn, pipeline and swarm events go to A only', async () => {
+  test('legacy /ws: delivery of turn, pipeline and swarm events stamped for A goes to A only', async () => {
     const a = await openLegacy('tok-alice');
     const b = await openLegacy('tok-bob');
     const { hub } = await hubAndBridge();
@@ -178,7 +183,7 @@ describe("user B receives none of user A's events", () => {
     expect(JSON.stringify(b.frames)).not.toContain(aliceSession);
   });
 
-  test('/gateway: an admin on loopback gets none of them either', async () => {
+  test('/gateway: delivery to an admin on loopback filters them out too', async () => {
     const a = await openGateway({ method: 'session_token', credentials: { token: 'tok-alice' } });
     const b = await openGateway({ method: 'session_token', credentials: { token: 'tok-bob' } });
     await waitForFrame(a, f => f.type === 'auth_ok');
@@ -198,6 +203,42 @@ describe("user B receives none of user A's events", () => {
     const aEvents = a.frames.filter(f => f.type === 'event').map(f => f.event.type);
     expect(aEvents).toEqual(['chat.response', 'pipeline.event', 'swarm.node_spawned', 'swarm.call_graph_cycle_blocked']);
     expect(b.frames.filter(f => f.type === 'event')).toEqual([]);
+  });
+});
+
+describe('a real emitter stamps the owner', () => {
+  test("SwarmSpawner's swarm events reach the node's user only, on /gateway and /ws", async () => {
+    const a = await openGateway({ method: 'session_token', credentials: { token: 'tok-alice' } });
+    const b = await openGateway({ method: 'session_token', credentials: { token: 'tok-bob' } });
+    await waitForFrame(a, f => f.type === 'auth_ok');
+    await waitForFrame(b, f => f.type === 'auth_ok');
+    const legacyA = await openLegacy('tok-alice');
+    const legacyB = await openLegacy('tok-bob');
+    const { hub } = await hubAndBridge();
+
+    const { SwarmSpawner } = await import('@/core/swarm/spawner');
+    const spawner = new SwarmSpawner(hub);
+    const root = SwarmSpawner.makeSwarmRoot({
+      id: 'root-alice', rootSessionId: aliceSession, userId: aliceId, role: 'general', model: 'test',
+      allowedToolIds: [], signal: new AbortController().signal,
+    });
+    root.budget.tokens.used = root.budget.tokens.cap;
+    // The spawner's own publish paths, as a spawn reaches them.
+    const emitters = spawner as unknown as {
+      emitBudgetWarning(node: typeof root): void;
+      emitNodeSpawned(parent: typeof root, payload: Record<string, unknown>): void;
+      emitNodeCompleted(parent: typeof root, payload: Record<string, unknown>): void;
+    };
+    emitters.emitBudgetWarning(root);
+    emitters.emitNodeSpawned(root, { nodeId: 'child-alice' });
+    emitters.emitNodeCompleted(root, { nodeId: 'child-alice' });
+
+    const events = a.frames.filter(f => f.type === 'event').map(f => f.event);
+    expect(events.map(e => e.type)).toEqual(['swarm.budget_warning', 'swarm.node_spawned', 'swarm.node_completed']);
+    expect(events.every(e => e.userId === aliceId)).toBe(true);
+    expect(b.frames.filter(f => f.type === 'event')).toEqual([]);
+    expect(JSON.stringify(legacyA.frames)).toContain('child-alice');
+    expect(JSON.stringify(legacyB.frames)).not.toContain('child-alice');
   });
 });
 
@@ -288,5 +329,71 @@ describe('artifacts', () => {
     expect(viewer.frames.map(f => [f.event.type, f.event.payload.artifactId, f.event.payload.snapshotId])).toEqual([
       ['artifact.data_updated', artifactId, 'snap-1'],
     ]);
+  });
+
+  const viewerToken = async (aid: string, iat: number, exp: number) => {
+    const { signArtifactToken } = await import('@/core/artifacts/token');
+    return signArtifactToken({ aid, wid: aliceWorkWs, scope: 'view', iat, exp });
+  };
+
+  test('a viewer connection closes when its token expires', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const token = await viewerToken(artifactId, now, now + 2);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const viewer = await openGateway({ method: 'artifact_token', credentials: { artifactId, token } });
+      expect(viewer.frames.at(-1)).toMatchObject({ type: 'auth_ok' });
+      vi.advanceTimersByTime(1_000);
+      expect(viewer.ws.close).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(2_000);
+      expect(viewer.ws.close).toHaveBeenCalledWith(4001, 'Artifact token expired');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('viewers of one artifact are capped', async () => {
+    const { MAX_VIEWERS_PER_ARTIFACT } = await import('@/core/gateway/connection-manager');
+    const now = Math.floor(Date.now() / 1000);
+    const token = await viewerToken(otherArtifactId, now - 5, now + 300);
+    const viewers: FakeSocket[] = [];
+    for (let i = 0; i < MAX_VIEWERS_PER_ARTIFACT; i++) {
+      viewers.push(await openGateway({ method: 'artifact_token', credentials: { artifactId: otherArtifactId, token } }));
+    }
+    expect(viewers.every(v => v.frames.at(-1)?.type === 'auth_ok')).toBe(true);
+    const over = await openGateway({ method: 'artifact_token', credentials: { artifactId: otherArtifactId, token } });
+    expect(over.frames.at(-1)).toEqual({ type: 'auth_error', reason: 'Too many connections' });
+
+    // Deleting the artifact closes every viewer, and the token opens nothing.
+    const { artifactsRepository } = await import('@/db/repositories/artifacts-repository');
+    await artifactsRepository.softDelete(otherArtifactId);
+    for (const v of viewers) expect(v.ws.close).toHaveBeenCalledWith(4003, 'Artifact deleted');
+    const { getGatewayHub } = await import('@/core/gateway/hub');
+    expect(getGatewayHub().connectionManager.getConnectionsByUser(`artifact:${otherArtifactId}`)).toEqual([]);
+    const again = await openGateway({ method: 'artifact_token', credentials: { artifactId: otherArtifactId, token } });
+    expect(again.frames.at(-1)).toMatchObject({ type: 'auth_error' });
+  });
+
+  test('a visibility change closes viewers and refuses the tokens issued before it', async () => {
+    const { artifactsRepository } = await import('@/db/repositories/artifacts-repository');
+    const now = Math.floor(Date.now() / 1000);
+    const token = await viewerToken(artifactId, now - 5, now + 300);
+    const viewer = await openGateway({ method: 'artifact_token', credentials: { artifactId, token } });
+    expect(viewer.frames.at(-1)).toMatchObject({ type: 'auth_ok' });
+
+    // A title edit that keeps the visibility leaves viewers alone.
+    const before = (await artifactsRepository.getById(artifactId))!;
+    await artifactsRepository.update(artifactId, { title: 'Board 2', visibility: before.visibility });
+    expect(viewer.ws.close).not.toHaveBeenCalled();
+
+    await artifactsRepository.update(artifactId, { visibility: before.visibility === 'public' ? 'private' : 'public' });
+    expect(viewer.ws.close).toHaveBeenCalledWith(4003, 'Artifact visibility changed');
+    const again = await openGateway({ method: 'artifact_token', credentials: { artifactId, token } });
+    expect(again.frames.at(-1)).toEqual({ type: 'auth_error', reason: 'Invalid or expired artifact token' });
+
+    // A token minted after the change (a page reload) is accepted.
+    const fresh = await viewerToken(artifactId, now + 2, now + 300);
+    const reloaded = await openGateway({ method: 'artifact_token', credentials: { artifactId, token: fresh } });
+    expect(reloaded.frames.at(-1)).toMatchObject({ type: 'auth_ok' });
   });
 });

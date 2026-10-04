@@ -62,8 +62,20 @@ const server = createServer((req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
 
   if (PROXY_PREFIXES.some((p) => url.pathname === p.slice(0, -1) || url.pathname.startsWith(p))) {
+    // Append the peer to X-Forwarded-For, as nginx's
+    // `$proxy_add_x_forwarded_for` does. The backend reads the header right to
+    // left from its trusted proxies, so with this server trusted the hop it
+    // added is the client, and whatever a client wrote further left is
+    // ignored. Passing the header through untouched would let any client of
+    // this port choose its own address.
+    const headers = { ...req.headers };
+    const peer = req.socket.remoteAddress;
+    if (peer) {
+      const prior = req.headers['x-forwarded-for'];
+      headers['x-forwarded-for'] = prior ? `${prior}, ${peer}` : peer;
+    }
     const upstream = httpRequest(
-      { hostname: API.hostname, port: API.port, path: req.url, method: req.method, headers: req.headers },
+      { hostname: API.hostname, port: API.port, path: req.url, method: req.method, headers },
       (up) => {
         res.writeHead(up.statusCode ?? 502, up.headers);
         up.pipe(res);

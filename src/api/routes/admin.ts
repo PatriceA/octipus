@@ -148,12 +148,17 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
       if (body.password) updates.passwordHash = await hashPassword(body.password);
 
       // `is_active` has one writer, which also ends the account's sessions,
-      // sockets, agents and pending prompts on deactivation.
+      // sockets, agents and pending prompts on deactivation. A consequence
+      // that failed does not drop the rest of the edit: it is reported back.
+      const warnings: string[] = [];
       if (body.isActive !== undefined) {
         const outcome = await setUserActive(params.id, body.isActive, principal.userId, 'admin');
         if (outcome.status === 'not_found') {
           set.status = 404;
           return { error: 'User not found' };
+        }
+        if (outcome.status === 'changed') {
+          for (const step of outcome.failedSteps) warnings.push(`Deactivation step failed: ${step}`);
         }
       }
 
@@ -176,10 +181,11 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
           changes: [...Object.keys(updates), ...(body.isActive !== undefined ? ['isActive'] : [])],
           targetUser: updated.username,
           byAdmin: principal.userId,
+          ...(warnings.length > 0 ? { warnings } : {}),
         },
       });
 
-      return publicUser(updated);
+      return warnings.length > 0 ? { ...publicUser(updated), warnings } : publicUser(updated);
     },
     {
       params: t.Object({ id: t.String() }),

@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, eq, ilike, inArray, isNotNull, isNull, lt, or, type SQL, sql } from 'drizzle-orm';
 import { getUserOrgIds } from '@/services/org-membership';
 import { getDb } from '../postgres';
 import { skillTopicAssignments } from '../schema/skill-topic-assignments';
@@ -27,6 +27,14 @@ export type SkillUpdate = Partial<Pick<Skill,
   | 'alwaysInject'
 >>;
 
+/** The skills a user sees: system skills, their own, and their orgs'. */
+async function visibleTo(userId: string): Promise<SQL> {
+  const orgIds = await getUserOrgIds(userId);
+  const clauses = [eq(skills.isSystem, true), eq(skills.userId, userId)];
+  if (orgIds.length > 0) clauses.push(inArray(skills.orgId, orgIds));
+  return or(...clauses)!;
+}
+
 /**
  * Repository for skills + skill-topic assignments. The high-level
  * `SkillRegistry` (in `src/skills/registry.ts`) builds prompt fragments;
@@ -37,13 +45,17 @@ export class SkillRepository {
   private get db() { return getDb(); }
 
   async findAll(userId?: string): Promise<Skill[]> {
-    if (userId) {
-      const orgIds = await getUserOrgIds(userId);
-      const clauses = [eq(skills.isSystem, true), eq(skills.userId, userId)];
-      if (orgIds.length > 0) clauses.push(inArray(skills.orgId, orgIds));
-      return this.db.select().from(skills).where(or(...clauses));
-    }
+    if (userId) return this.db.select().from(skills).where(await visibleTo(userId));
     return this.db.select().from(skills);
+  }
+
+  /** Skills `userId` can see whose name or description matches the ILIKE `pattern`. */
+  async searchVisible(userId: string, pattern: string, limit: number): Promise<Skill[]> {
+    return this.db
+      .select()
+      .from(skills)
+      .where(and(await visibleTo(userId), or(ilike(skills.name, pattern), ilike(skills.description, pattern))))
+      .limit(limit);
   }
 
   async findById(skillId: string): Promise<Skill | undefined> {

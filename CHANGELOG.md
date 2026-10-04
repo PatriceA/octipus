@@ -44,7 +44,25 @@ labels reflect blast radius, not contract guarantees.
 - **SCIM is scoped to its org.** A SCIM token's DELETE and PATCH answer 404 for
   users outside its org, deactivate an account only when no other org holds it,
   and can no longer re-activate an account an admin deactivated (409). SCIM
-  DELETE now answers a proper empty 204.
+  DELETE now answers a proper empty 204. SCIM POST no longer adopts an
+  existing account outside the org by `userName` (409 `uniqueness`), and
+  PATCH changes `userName`/`emails` only on an account the org alone holds
+  (403 otherwise). An org's SAML IdP signs in only that org's members or new
+  accounts; a username held by an account outside the org is refused (403),
+  so an IdP can no longer sign in as the install admin.
+- **Deactivation closes sockets that were still signing in**, and an admin's
+  deactivation of an account SCIM had already switched off is recorded, so
+  that org's SCIM cannot undo it. If a step of a deactivation fails, the admin
+  edit still applies and the response carries `warnings`.
+- **Global search returns only skills the caller can see** (system, own and
+  their orgs'), not other users' private skills.
+- **Live-artifact viewers are bounded.** At most 50 `artifact_token`
+  connections per artifact; each closes when its token expires, and all close
+  (with their tokens refused) when the artifact is deleted or its visibility
+  changes.
+- **The bundled web server appends its peer to `X-Forwarded-For`**, so it can
+  be listed in `TRUSTED_PROXIES` (`127.0.0.1,::1` in the Docker image) without
+  letting clients pick their own address.
 ### Security: trust, client addresses, and who answers a request
 
 - **No more `local` or `system` trust.** The `local` gateway auth method and
@@ -79,7 +97,8 @@ labels reflect blast radius, not contract guarantees.
 Octipus runs behind nginx, Caddy or a load balancer, set `TRUSTED_PROXIES` to
 the proxy's address, or every client shares the proxy's address for rate
 limits. Extensions that registered commands with `minTrustLevel: 'local'`
-now use `adminOnly: true`.
+now use `adminOnly: true`; an extension that still passes `minTrustLevel:
+'local'` or `'system'` gets an admin-only command and a deprecation warning.
 
 ### Security: sign-in hygiene
 

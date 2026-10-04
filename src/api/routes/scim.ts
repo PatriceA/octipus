@@ -109,6 +109,21 @@ async function isOrgMember(orgId: string, userId: string): Promise<boolean> {
 }
 
 /**
+ * Whether the account is this org's own to rename: a member of no other org,
+ * not an install admin, and without a password of its own (the accounts SCIM
+ * and SAML create have none). The caller has already checked membership here.
+ */
+async function isOrgOwned(orgId: string, user: { id: string; isAdmin: boolean; passwordHash: string | null }): Promise<boolean> {
+  if (user.isAdmin || user.passwordHash !== null) return false;
+  const [other] = await getDb()
+    .select({ orgId: orgMembers.orgId })
+    .from(orgMembers)
+    .where(and(eq(orgMembers.userId, user.id), ne(orgMembers.orgId, orgId)))
+    .limit(1);
+  return !other;
+}
+
+/**
  * A SCIM token speaks for one org only: it deactivates the account only when
  * no other org membership remains; otherwise it only removes this org's
  * membership. DELETE always drops the membership too; PATCH `active: false`
@@ -223,17 +238,21 @@ export const scimRoutes = new Elysia({ prefix: '/scim/v2' })
       const db = getDb();
       const email = body.emails?.find((e: { primary?: boolean; value?: string }) => e.primary)?.value ?? body.emails?.[0]?.value ?? null;
 
-      // Upsert by userName. SCIM clients re-POST on every reconciliation.
+      // Upsert by userName within this org. SCIM clients re-POST on every
+      // reconciliation, so a member of this org is returned as-is. A userName
+      // that belongs to an account outside this org is not adopted: the token
+      // speaks for its own org only, and adopting would let it read, patch
+      // and deactivate any account on the install (RFC 7644 §3.3: 409
+      // uniqueness).
       const [existing] = await db.select().from(users).where(eq(users.username, body.userName)).limit(1);
 
       let row: { id: string; username: string; email: string | null; isActive: boolean; createdAt: Date; updatedAt: Date };
       if (existing) {
+        if (!(await isOrgMember(ctx.orgId, existing.id))) {
+          set.status = 409;
+          return { ...scimError(409, 'userName is already taken'), scimType: 'uniqueness' };
+        }
         row = existing as typeof row;
-        // Existing user: just ensure membership (single write, no tx needed).
-        await db
-          .insert(orgMembers)
-          .values({ orgId: ctx.orgId, userId: existing.id, role: 'member' })
-          .onConflictDoNothing();
       } else {
         // Atomic: provision the user and their org membership together so a
         // failure on the membership insert can't leave an orphan user with no
@@ -306,6 +325,15 @@ export const scimRoutes = new Elysia({ prefix: '/scim/v2' })
             patch.email = v.find((e) => e.primary)?.value ?? v[0]?.value ?? null;
           }
         }
+      }
+
+      // userName and email identify the account across the whole install, so
+      // the org may only rewrite them on an account that is its alone (see
+      // `isOrgOwned`). Checked before any write, so a refused PATCH changes
+      // nothing.
+      if (Object.keys(patch).length > 0 && !(await isOrgOwned(ctx.orgId, user.users))) {
+        set.status = 403;
+        return scimError(403, 'userName and emails of an account managed outside this organization cannot be changed');
       }
 
       // `active` goes through the one writer of `is_active`, and first, so a
