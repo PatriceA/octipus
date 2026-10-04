@@ -81,6 +81,24 @@ the proxy's address, or every client shares the proxy's address for rate
 limits. Extensions that registered commands with `minTrustLevel: 'local'`
 now use `adminOnly: true`.
 
+### Security: sign-in hygiene
+
+- **Sign-ins are audited.** `/api/auth/login` and `/api/auth/login-mobile`
+  write a `login` audit row on success and `login_failed` (with the reason:
+  unknown user, bad password, bad TOTP code, disabled, locked out) on failure;
+  `/api/auth/register` writes `user_created`.
+- **TOTP works in the web.** The login page now reads the server's
+  `requiresTOTP` answer, shows the code field and resubmits with the code;
+  TOTP accounts could not sign in from the browser before.
+- **Back to where you were.** Login and register accept a `returnTo` that must
+  be a same-origin path (one leading `/`, no `//`, no backslash, no control
+  characters); anything else is refused with 400. The web sends the page you
+  were on and returns there after sign-in.
+- **Pairing codes are hashed and single-use.** Device pairing codes are stored
+  as `sha256(code)` and redeemed with an atomic get-and-delete, so two
+  concurrent redeems of one code no longer both get a session. Codes issued
+  before the upgrade stop working (they expire within five minutes anyway).
+
 ## v0.6.0 — Shared work, budgets, and stronger review (2026-10-01)
 
 Octipus 0.6.0 brings a shared task board for people and role agents, dollar

@@ -226,6 +226,19 @@ describe.skipIf(!isIntegration)('PostgresStorageProvider (Integration)', () => {
       expect(await provider.getRaw('plain')).toBeNull();
     });
 
+    test('takeRaw hands the value to exactly one concurrent caller, and an expired row to none', async () => {
+      await provider.setRaw('code', 'payload', 60);
+      const results = await Promise.all(Array.from({ length: 5 }, () => provider.takeRaw('code')));
+      expect(results.filter((r) => r !== null)).toEqual(['payload']);
+      expect(await provider.getRaw('code')).toBeNull();
+
+      await provider.setRaw('stale', 'v', 60);
+      await queryRaw(`UPDATE kv_store SET expires_at = now() - interval '1 second' WHERE key = 'stale'`);
+      expect(await provider.takeRaw('stale')).toBeNull();
+      const { rows } = await queryRaw(`SELECT 1 FROM kv_store WHERE key = 'stale'`);
+      expect(rows).toHaveLength(0);
+    });
+
     test('setRawIfAbsent claims once, and takes over an expired row', async () => {
       const results = await Promise.all(
         Array.from({ length: 5 }, (_, i) => provider.setRawIfAbsent('claim', `v${i}`, 60)),

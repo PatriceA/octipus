@@ -269,6 +269,17 @@ export class PostgresStorageProvider implements StorageProvider {
   async getRaw(key: string): Promise<string | null> { return readKey(key); }
   async setRaw(key: string, value: string, ttlSeconds?: number): Promise<void> { await writeKey(key, value, ttlSeconds ?? 0); }
   async delRaw(key: string): Promise<void> { await deleteKey(key); }
+  async takeRaw(key: string): Promise<string | null> {
+    // One statement: the row lock makes a concurrent DELETE of the same key
+    // wait and then find nothing, so exactly one caller gets RETURNING rows.
+    // An expired row is deleted too, but yields null.
+    const { rows } = await queryRaw(
+      `DELETE FROM kv_store WHERE key = $1
+       RETURNING value, (expires_at IS NULL OR expires_at > now()) AS live`,
+      [key],
+    );
+    return rows.length > 0 && rows[0].live ? String(rows[0].value) : null;
+  }
   async setRawIfAbsent(key: string, value: string, ttlSeconds: number): Promise<boolean> {
     // One statement: insert, or take over a row whose TTL has lapsed (the
     // sweep may not have reclaimed it yet). A live row is left alone and

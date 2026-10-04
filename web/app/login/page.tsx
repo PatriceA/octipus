@@ -1,9 +1,10 @@
 'use client';
 
 import { Eye, EyeOff, Loader2 } from 'lucide-react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useState } from 'react';
-import { api } from '@/lib/api';
+import { isSafeReturnTo } from '../../../src/shared/return-to';
+import { ApiError, api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { cn } from '@/lib/utils';
 
@@ -15,9 +16,25 @@ import { cn } from '@/lib/utils';
 const IS_DESKTOP_BUILD = process.env.NEXT_PUBLIC_DESKTOP_BUILD === '1';
 const LOGIN_ENDPOINT = IS_DESKTOP_BUILD ? '/auth/login-mobile' : '/auth/login';
 
+interface SignInResponse {
+  token?: string;
+  user?: { id: string; username: string; isAdmin: boolean };
+  returnTo?: string;
+  error?: string;
+}
+
+/** A 401 that asks for the second factor rather than rejecting the password. */
+function isTotpChallenge(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 401 && err.body.requiresTOTP === true;
+}
+
 export default function LoginPage() {
   const router = useRouter();
   const { login } = useAuth();
+  // `?returnTo=` is attacker-controllable; anything but a same-origin path is
+  // ignored. Captured once: the server echoes back what it validated.
+  const requestedReturnTo = useSearchParams().get('returnTo');
+  const [returnTo] = useState(() => (isSafeReturnTo(requestedReturnTo) ? requestedReturnTo : undefined));
   const [isLogin, setIsLogin] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -25,7 +42,6 @@ export default function LoginPage() {
 
   const [totpRequired, setTotpRequired] = useState(false);
   const [totpCode, setTotpCode] = useState('');
-  const [_totpUserId, setTotpUserId] = useState('');
 
   const [formData, setFormData] = useState({
     username: '',
@@ -48,24 +64,23 @@ export default function LoginPage() {
 
       const endpoint = isLogin ? LOGIN_ENDPOINT : '/auth/register';
       const body = isLogin
-        ? { username: formData.username, password: formData.password }
-        : { username: formData.username, email: formData.email, password: formData.password };
+        ? { username: formData.username, password: formData.password, returnTo }
+        : { username: formData.username, email: formData.email, password: formData.password, returnTo };
 
-      const data = await api.post<{
-        token?: string;
-        user?: { id: string; username: string; isAdmin: boolean };
-        totpRequired?: boolean;
-        error?: string;
-      }>(endpoint, body);
+      let data: SignInResponse;
+      try {
+        data = await api.post<SignInResponse>(endpoint, body);
+      } catch (err) {
+        // The password was right and the account has TOTP on: the server
+        // answers 401 `{ requiresTOTP: true }`; ask for the code and resubmit.
+        if (isLogin && isTotpChallenge(err)) {
+          setTotpRequired(true);
+          return;
+        }
+        throw err;
+      }
 
       if (data.error) throw new Error(data.error);
-
-      if (data.totpRequired) {
-        setTotpRequired(true);
-        setTotpUserId(formData.username);
-        setIsLoading(false);
-        return;
-      }
 
       if (data.user) {
         // Desktop registration creates a cookie-only session; exchange the
@@ -78,12 +93,12 @@ export default function LoginPage() {
           });
           token = m.token || '';
         }
-        login(token, {
+          login(token, {
           id: data.user.id,
           username: data.user.username,
           isAdmin: data.user.isAdmin,
         });
-        router.push('/');
+        router.push(data.returnTo ?? '/');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'authentication failed');
@@ -97,14 +112,11 @@ export default function LoginPage() {
     setError('');
     setIsLoading(true);
     try {
-      const data = await api.post<{
-        token?: string;
-        user?: { id: string; username: string; isAdmin: boolean };
-        error?: string;
-      }>(LOGIN_ENDPOINT, {
+      const data = await api.post<SignInResponse>(LOGIN_ENDPOINT, {
         username: formData.username,
         password: formData.password,
         totpCode,
+        returnTo,
       });
       if (data.error) throw new Error(data.error);
       if (data.user) {
@@ -113,7 +125,7 @@ export default function LoginPage() {
           username: data.user.username,
           isAdmin: data.user.isAdmin,
         });
-        router.push('/');
+        router.push(data.returnTo ?? '/');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'verification failed');

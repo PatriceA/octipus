@@ -39,6 +39,12 @@ export interface StorageProvider {
   setRaw(key: string, value: string, ttlSeconds?: number): Promise<void>;
   delRaw(key: string): Promise<void>;
   /**
+   * Read and delete `key` in one atomic step (Redis `GETDEL`). Returns the
+   * live value, or null when the key is absent or expired. Of two concurrent
+   * callers, exactly one gets the value: the redeem primitive for one-time codes.
+   */
+  takeRaw(key: string): Promise<string | null>;
+  /**
    * Set `key` only if it is absent (an expired key counts as absent), with a
    * TTL, in one atomic step. Returns true when this call set it. The claim
    * primitive for work that must run once across processes.

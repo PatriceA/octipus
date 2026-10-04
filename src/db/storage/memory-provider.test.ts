@@ -249,6 +249,21 @@ describe('MemoryStorageProvider raw ops', () => {
     expect(await provider.getRaw('k')).toBeNull();
   });
 
+  test('takeRaw returns the value to exactly one of concurrent callers and deletes it', async () => {
+    await provider.setRaw('code', 'payload', 60);
+    const results = await Promise.all([provider.takeRaw('code'), provider.takeRaw('code')]);
+    expect(results.filter((r) => r !== null)).toEqual(['payload']);
+    expect(await provider.getRaw('code')).toBeNull();
+  });
+
+  test('takeRaw yields null for an absent or expired key', async () => {
+    expect(await provider.takeRaw('none')).toBeNull();
+    await provider.setRaw('old', 'v', 60);
+    const store = (provider as any).store as Map<string, { value: string; expiresAt: number }>;
+    store.get('old')!.expiresAt = Date.now() - 1;
+    expect(await provider.takeRaw('old')).toBeNull();
+  });
+
   test('setRawIfAbsent sets only an absent or expired key', async () => {
     expect(await provider.setRawIfAbsent('claim', 'a', 60)).toBe(true);
     expect(await provider.setRawIfAbsent('claim', 'b', 60)).toBe(false);

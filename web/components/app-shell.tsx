@@ -1,8 +1,9 @@
 'use client';
 
 import { Loader2 } from 'lucide-react';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useEffect } from 'react';
+import { loginPathReturningTo } from '../../src/shared/return-to';
 import { useAuth } from '@/lib/auth-context';
 import { cn } from '@/lib/utils';
 import { GlobalPermissionBanner } from './global-permission-banner';
@@ -16,14 +17,16 @@ const PUBLIC_ROUTES = ['/login', '/register', '/forgot-password', '/setup'];
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const search = useSearchParams().toString();
   const { isAuthenticated, isLoading } = useAuth();
   const isPublicRoute = PUBLIC_ROUTES.some(route => pathname.startsWith(route));
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated && !isPublicRoute) {
-      router.replace('/login');
+      // Come back to the page that was asked for once signed in.
+      router.replace(loginPathReturningTo(search ? `${pathname}?${search}` : pathname));
     }
-  }, [isLoading, isAuthenticated, isPublicRoute, router]);
+  }, [isLoading, isAuthenticated, isPublicRoute, router, pathname, search]);
 
   if (isPublicRoute) {
     return <>{children}</>;

@@ -1,4 +1,4 @@
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { Elysia, t } from '@/api/http';
 import { networkInterfaces } from 'os';
 import { apiContext } from '@/api/context';
@@ -24,6 +24,14 @@ function getLanIp(): string | null {
 const PAIRING_CODE_PREFIX = 'device:pair:';
 const PAIRING_CODE_TTL = 300; // 5 minutes
 
+/**
+ * The store key for a pairing code. Only `sha256(code)` is stored, so a read of
+ * the KV store (a backup, a debug dump) does not yield a redeemable code.
+ */
+function pairingKey(code: string): string {
+  return `${PAIRING_CODE_PREFIX}${createHash('sha256').update(code).digest('hex')}`;
+}
+
 export const deviceRoutes = new Elysia({ prefix: '/devices' })
   .use(apiContext)
 
@@ -46,7 +54,7 @@ export const deviceRoutes = new Elysia({ prefix: '/devices' })
         createdAt: new Date().toISOString(),
       });
 
-      await store.set(`${PAIRING_CODE_PREFIX}${code}`, pairingData, PAIRING_CODE_TTL);
+      await store.set(pairingKey(code), pairingData, PAIRING_CODE_TTL);
 
       apiLogger.info({ userId: user.id }, 'Device pairing code generated');
 
@@ -78,14 +86,13 @@ export const deviceRoutes = new Elysia({ prefix: '/devices' })
       const { code, deviceName } = body;
       const store = rawStore();
 
-      const pairingDataRaw = await store.get(`${PAIRING_CODE_PREFIX}${code}`);
+      // Read and delete in one atomic step: of two concurrent redeems of the
+      // same code, exactly one gets the pairing data (one-time use).
+      const pairingDataRaw = await store.take(pairingKey(code));
       if (!pairingDataRaw) {
         set.status = 400;
         return { error: 'Invalid or expired pairing code' };
       }
-
-      // Delete the code immediately (one-time use)
-      await store.del(`${PAIRING_CODE_PREFIX}${code}`);
 
       const pairingData = JSON.parse(pairingDataRaw);
       const sessionManager = getSessionManager();

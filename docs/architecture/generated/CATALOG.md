@@ -470,7 +470,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `config` | 20 |
 | `api` | `connectors` | 3 |
 | `api` | `core` | 93 |
-| `api` | `db` | 105 |
+| `api` | `db` | 106 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 3 |
@@ -478,7 +478,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `plugins` | 1 |
 | `api` | `security` | 97 |
 | `api` | `services` | 4 |
-| `api` | `shared` | 2 |
+| `api` | `shared` | 3 |
 | `api` | `skills` | 6 |
 | `api` | `tools` | 4 |
 | `api` | `utils` | 63 |
