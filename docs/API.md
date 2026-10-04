@@ -332,6 +332,32 @@ inert and stays in the array.
 | GET | `/api/admin/impersonate` | List recent impersonation sessions (admin) |
 | GET | `/api/admin/audit` | Audit log (admin) |
 
+## Spaces
+
+Shared workspaces ([SPACES.md](SPACES.md)). A caller who is not a member gets
+404 for every space id; a member whose role lacks the action gets 403
+(`forbidden_role`); `last_owner`, `space_full`, `archived` and
+`not_purgeable` answer 409. Bodies reject unknown fields (422).
+
+| Method | Endpoint | Who | Description |
+|--------|----------|-----|-------------|
+| GET | `/api/spaces` | any user | My spaces with my role |
+| POST | `/api/spaces` | per `spaces.creation` | Create a space `{name}`; the caller becomes its owner |
+| GET | `/api/spaces/:id` | member | Name, my role, member count, archived, funding |
+| PATCH | `/api/spaces/:id` | owner | Rename `{name}` |
+| POST | `/api/spaces/:id/archive` | owner | Make read-only and stop its agents |
+| POST | `/api/spaces/:id/unarchive` | owner | Undo archive |
+| DELETE | `/api/spaces/:id` | owner | Delete for good; only archived for `spaces.purgeAfterArchiveDays` |
+| GET | `/api/spaces/:id/members` | member | `{userId, username, role, joinedAt}` |
+| PATCH | `/api/spaces/:id/members/:userId` | owner | Change role `{role, scope?}` (scope for guests) |
+| DELETE | `/api/spaces/:id/members/:userId` | owner, or self | Remove a member, or leave |
+| GET | `/api/spaces/:id/invites` | owner | Invites (never the token) |
+| POST | `/api/spaces/:id/invites` | owner | `{role, scope?, expiresInHours?, maxUses?}` → `{id, token, role, expiresAt, maxUses}`; the token is shown once |
+| DELETE | `/api/spaces/:id/invites/:inviteId` | owner | Revoke an invite of this space |
+| GET | `/api/spaces/:id/activity` | member | Audit rows of the space, newest first; `?limit=&before=` |
+| GET | `/api/invites/:token` | public | Preview `{spaceName, inviterName, role, expiresAt}`; rate-limited per IP |
+| POST | `/api/invites/:token/accept` | signed in | Join → `{workspaceId, role, alreadyMember}`; rate-limited per IP |
+
 ## Swarm
 
 | Method | Endpoint | Description |

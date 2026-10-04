@@ -50,6 +50,15 @@ function shouldAudit(method: string, pathname: string): boolean {
   return true;
 }
 
+/**
+ * The path as recorded. A space invite token is a bearer secret stored only as
+ * a hash (docs/plans/coworking-spec.md I8), so it never lands in the audit log
+ * in the clear either.
+ */
+export function auditedPath(pathname: string): string {
+  return pathname.replace(/^\/api\/invites\/[^/]+/, '/api/invites/[token]');
+}
+
 /** Map an HTTP path to a coarse resource_type for filtering. */
 export function resourceTypeFromPath(pathname: string): string | undefined {
   // /api/<resource>/... → <resource>
@@ -94,7 +103,7 @@ export async function writeApiAudit(args: {
   const impersonating = !!principal?.actorUserId;
   const baseDetails: Record<string, unknown> = {
     method,
-    path: pathname,
+    path: auditedPath(pathname),
     status,
     duration: durationMs,
     principalKind: principal?.kind ?? 'anonymous',

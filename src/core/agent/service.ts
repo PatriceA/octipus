@@ -955,9 +955,12 @@ export class AgentService {
     return this.approvalManager.getPendingApprovals(forUserId);
   }
 
-  /** Expire every pending approval of a user (account deactivated). */
-  expireApprovalsForUser(userId: string, why: string): Promise<number> {
-    return this.approvalManager.expireForUser(userId, why);
+  /**
+   * Expire every pending approval of a user (account deactivated), or only
+   * those raised in `inSessions` (removed from a space).
+   */
+  expireApprovalsForUser(userId: string, why: string, inSessions?: ReadonlySet<string>): Promise<number> {
+    return this.approvalManager.expireForUser(userId, why, inSessions);
   }
 
   // ── Steering ────────────────────────────────────────────────────

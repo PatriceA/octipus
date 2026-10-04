@@ -506,6 +506,21 @@ export const groupChannelsConfigSchema = z.object({
 });
 
 /**
+ * Shared spaces (docs/plans/coworking-spec.md §5). Spaces are always
+ * available (D17); these keys are policy, not a switch.
+ */
+export const spacesConfigSchema = z.object({
+  /** Who may create a space: every signed-in user, or admins only. */
+  creation: z.enum(['any_user', 'admins']).default('any_user'),
+  /** Most members one space may have; enforced on every add (invite accept). */
+  maxMembers: z.number().int().min(2).max(10_000).default(50),
+  /** Longest lifetime an invite link may ask for, in hours; shorter asks are kept, longer ones clamped. */
+  inviteMaxTtlHours: z.number().int().min(1).max(8760).default(720),
+  /** Days a space must have been archived before its owner may purge it. */
+  purgeAfterArchiveDays: z.number().int().min(0).max(3650).default(7),
+});
+
+/**
  * WS2 — heartbeat loop. A periodic per-user agent turn that reviews standing
  * context and acts or stays silent. Off by default; a cheap deterministic gate
  * (quiet hours, daily cap, quota, "anything pending?" probe) runs before any
@@ -645,11 +660,13 @@ export const configSchema = z.object({
   heartbeat: heartbeatConfigSchema.prefault({}),
   sessions: sessionsConfigSchema.prefault({}),
   groupChannels: groupChannelsConfigSchema.prefault({}),
+  spaces: spacesConfigSchema.prefault({}),
 });
 
 export type Config = z.infer<typeof configSchema>;
 export type HeartbeatConfig = z.infer<typeof heartbeatConfigSchema>;
 export type SessionsConfig = z.infer<typeof sessionsConfigSchema>;
+export type SpacesConfig = z.infer<typeof spacesConfigSchema>;
 export type StorageMode = z.infer<typeof storageModeSchema>;
 export type DatabaseConfig = z.infer<typeof databaseConfigSchema>;
 export type LiteLLMConfig = z.infer<typeof litellmConfigSchema>;

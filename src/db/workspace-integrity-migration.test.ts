@@ -62,6 +62,9 @@ beforeAll(async () => {
     [aliceWs, alice, bobWs, bob],
   );
   for (const t of TABLES) await executeRaw(`ALTER TABLE ${t} DROP CONSTRAINT IF EXISTS ${t}_workspace_id_fkey`);
+  // 0128 (spaces) makes a slug unique per workspace, which 0127's step 3
+  // prepares for; an install upgrading from before 0127 has no such index.
+  await executeRaw('DROP INDEX IF EXISTS notes_ws_slug_uidx');
 
   // `plan`: a user-level note, plus an OLDER note stamped with a gone
   // workspace and a younger one stamped with bob's workspace. The user-level
@@ -91,6 +94,8 @@ beforeAll(async () => {
   await one('jobForeign', `INSERT INTO background_jobs (kind, user_id, title, workspace_id) VALUES ('research', $1, 'j', $2) RETURNING id`, [alice, goneWs]);
 
   await replay0127();
+  // What 0128 then creates must now succeed.
+  await executeRaw('CREATE UNIQUE INDEX IF NOT EXISTS notes_ws_slug_uidx ON notes(workspace_id, slug) WHERE workspace_id IS NOT NULL');
 });
 
 afterAll(async () => {

@@ -341,9 +341,14 @@ export class ApprovalManager {
    * resume with a denial) and any row left pending without one. Used when the
    * account is deactivated: nobody may answer those prompts any more. Returns
    * how many rows were expired.
+   *
+   * `inSessions` narrows it to approvals raised in those sessions (a member
+   * removed from a space loses the prompts of their sessions there only).
    */
-  async expireForUser(userId: string, why: string): Promise<number> {
+  async expireForUser(userId: string, why: string, inSessions?: ReadonlySet<string>): Promise<number> {
+    if (inSessions && inSessions.size === 0) return 0;
     const claimed = this.getPendingApprovals(userId)
+      .filter((approval) => !inSessions || inSessions.has(approval.sessionId))
       .map((approval) => this.claim(approval.id))
       .filter((c): c is NonNullable<typeof c> => c !== null);
     for (const { approval } of claimed) approval.reject(why);
@@ -352,7 +357,11 @@ export class ApprovalManager {
     const expired = await this.db
       .update(agentApprovals)
       .set({ status: 'expired', response: why, resolvedAt: new Date() })
-      .where(and(eq(agentApprovals.status, 'pending'), eq(agentApprovals.userId, userId)))
+      .where(and(
+        eq(agentApprovals.status, 'pending'),
+        eq(agentApprovals.userId, userId),
+        inSessions ? inArray(agentApprovals.sessionId, [...inSessions]) : undefined,
+      ))
       .returning({ id: agentApprovals.id });
     return expired.length;
   }

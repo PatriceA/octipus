@@ -78,7 +78,8 @@ describe('WORKSPACE_TABLES', () => {
   test('history tables are kept on purge, everything else deleted', async () => {
     const { WORKSPACE_TABLES } = await import('./workspace-tables');
     const kept = WORKSPACE_TABLES.filter((t) => t.purge === 'keep').map((t) => t.table);
-    expect(kept).toEqual(['cleanup_audit_log']);
+    expect(kept).toEqual(['audit_log', 'cleanup_audit_log', 'cost_log']);
+    expect(WORKSPACE_TABLES.find((t) => t.table === 'permission_requests')?.purge).toBe('delete');
     expect(WORKSPACE_TABLES.find((t) => t.table === 'notifications')?.purge).toBe('delete');
   });
 });

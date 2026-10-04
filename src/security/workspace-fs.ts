@@ -110,9 +110,14 @@ export const DEFAULT_WORKSPACE_SEGMENT = 'default';
  */
 const workspaceRows = new Map<string, { userId: string; isDefault: boolean }>();
 
-/** Record workspace rows as read from or written to the database. */
-export function noteWorkspaceRows(rows: ReadonlyArray<{ id: string; userId: string; isDefault: boolean }>): void {
+/**
+ * Record workspace rows as read from or written to the database. A shared
+ * workspace (a space, `userId` NULL) has no personal file root and is not
+ * recorded: its files live under `spaces/<id>`, never under a user.
+ */
+export function noteWorkspaceRows(rows: ReadonlyArray<{ id: string; userId: string | null; isDefault: boolean }>): void {
   for (const row of rows) {
+    if (row.userId === null) continue;
     if (row.isDefault) {
       // One default per user (partial unique index): a newly seen default
       // demotes whichever row this process still takes for the default.
@@ -161,6 +166,25 @@ function configuredDataRoot(): string {
   } catch {
     return pathResolve(process.env.WORKSPACE_PATH || process.cwd());
   }
+}
+
+/** The directory under the data root (and under the documents root) that holds every space's files. */
+export const SPACES_DIR = 'spaces';
+
+/**
+ * The two directories a space's files live in (docs/plans/coworking-spec.md
+ * §5.5, §5.8): `<workspace.rootPath>/spaces/<id>` (its files) and
+ * `<workspace.documentsPath>/spaces/<id>` (its uploads). Purge removes both.
+ */
+export function spaceDirectories(workspaceId: string): { root: string; documents: string } {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(workspaceId)) {
+    throw new WorkspaceFsError('INVALID_INPUT', `not a space id: ${workspaceId}`);
+  }
+  const config = getConfig();
+  return {
+    root: pathResolve(config.workspace.rootPath || './workspace', SPACES_DIR, workspaceId),
+    documents: pathResolve(config.workspace.documentsPath || './workspace/documents', SPACES_DIR, workspaceId),
+  };
 }
 
 /**

@@ -1,6 +1,7 @@
 import { and, eq, isNotNull, lte } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { getEmbeddingService } from '@/core/rag/embeddings';
+import { sweepPurgedSpaceFiles } from '@/core/spaces/purge';
 import { maybeRunHeartbeats } from '@/core/heartbeat';
 import { defaultListenDeps, runListenTick } from '@/channels/group-listen';
 import { getDb } from '@/db/postgres';
@@ -17,6 +18,7 @@ const KNOWLEDGE_CLEANUP_INTERVAL_MS = 7 * 24 * 3600_000; // Weekly
 const AGENT_CLEANUP_INTERVAL_MS = 7 * 24 * 3600_000; // Weekly
 const DOCS_REINDEX_INTERVAL_MS = 6 * 3600_000; // Every 6 hours
 const TRAJECTORY_COMPRESS_INTERVAL_MS = 24 * 3600_000; // Daily
+const SPACE_FILES_SWEEP_INTERVAL_MS = 3600_000; // Hourly
 
 /**
  * Default age cap for finished agent rows + their events. Nobody needs an
@@ -30,6 +32,7 @@ let cronTimer: NodeJS.Timeout | null = null;
 let lastSessionCleanup = 0;
 let lastKnowledgeCleanup = 0;
 let lastAgentCleanup = 0;
+let lastSpaceFilesSweep = 0;
 // Seed to boot time, NOT 0: the boot sequence already runs `indexProductDocs()`
 // (src/index.ts) before the cron loop starts, so the immediate first tick must
 // NOT re-run it. The first cron refresh fires one DOCS_REINDEX_INTERVAL_MS
@@ -144,6 +147,22 @@ async function maybeCleanupSessions(): Promise<void> {
   }
 }
 
+/**
+ * Retry for purged spaces whose directories could not be removed at purge
+ * time (src/core/spaces/purge.ts): removes every space directory whose
+ * workspace row is gone.
+ */
+async function maybeSweepPurgedSpaceFiles(): Promise<void> {
+  const now = Date.now();
+  if (now - lastSpaceFilesSweep < SPACE_FILES_SWEEP_INTERVAL_MS) return;
+  lastSpaceFilesSweep = now;
+  try {
+    await sweepPurgedSpaceFiles();
+  } catch (err) {
+    coreLogger.error({ err }, 'Purged space directory sweep failed');
+  }
+}
+
 async function maybeCleanupKnowledge(): Promise<void> {
   const now = Date.now();
   if (now - lastKnowledgeCleanup < KNOWLEDGE_CLEANUP_INTERVAL_MS) return;
@@ -237,6 +256,7 @@ async function processCronTick(): Promise<void> {
     await maybeCleanupSessions();
     await maybeCleanupKnowledge();
     await maybeCleanupAgents();
+    await maybeSweepPurgedSpaceFiles();
     await maybeReindexDocs();
     await maybeCompressTrajectories();
     const db = getDb();

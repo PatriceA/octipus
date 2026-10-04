@@ -77,6 +77,12 @@ SESSION_RETENTION_DAYS=14             # Delete sessions idle this many days (0 =
 # ─── Group channels ──────────────────────────────────────────
 GROUP_CHANNELS_UNPROMPTED_ENABLED=false  # Let channels in listen/proactive mode post unprompted (docs/CHANNELS.md)
 
+# ─── Shared spaces (docs/SPACES.md) ──────────────────────────
+SPACES_CREATION=any_user              # Who may create a space: any_user | admins
+SPACES_MAX_MEMBERS=50                 # Most members per space
+SPACES_INVITE_MAX_TTL_HOURS=720       # Longest invite-link lifetime (hours); longer requests are clamped
+SPACES_PURGE_AFTER_ARCHIVE_DAYS=7     # Days a space stays archived before its owner can delete it
+
 WORKSPACE_PATH=./workspace
 SEARXNG_URL=http://localhost:8888         # SearXNG meta-search (optional)
 

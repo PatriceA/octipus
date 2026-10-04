@@ -58,6 +58,17 @@ export async function refreshSource(sourceId: string): Promise<RefreshResult> {
     coreLogger.error({ sourceId }, 'artifact.refresh.source_missing');
     return { ok: false, error: 'source not found' };
   }
+  // A source of a space artifact whose principal lost write access to the
+  // space is paused (src/core/spaces/membership.ts); an archived space runs
+  // nothing at all.
+  if (source.pausedAt) {
+    coreLogger.info({ sourceId, reason: source.pausedReason }, 'artifact.refresh.paused');
+    return { ok: false, error: `source paused (${source.pausedReason ?? 'paused'})` };
+  }
+  if (await artifactsRepository.isSourceInArchivedSpace(sourceId)) {
+    coreLogger.info({ sourceId }, 'artifact.refresh.space_archived');
+    return { ok: false, error: 'This space is archived' };
+  }
 
   let payload: unknown;
   try {

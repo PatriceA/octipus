@@ -569,6 +569,22 @@ export class AgentManager {
   }
 
   /**
+   * Stop every agent running in a workspace — or, with `userId`, that user's
+   * agents there only. A space archived (all of them) or a member removed or
+   * downgraded (theirs) stops at once (docs/plans/coworking-spec.md §5.9).
+   */
+  stopWorkspace(workspaceId: string, userId?: string): number {
+    let count = 0;
+    for (const agent of Array.from(this.agents.values())) {
+      const context = agent.getContext();
+      if (context.workspaceId !== workspaceId) continue;
+      if (userId !== undefined && context.userId !== userId) continue;
+      if (this.stop(context.id)) count++;
+    }
+    return count;
+  }
+
+  /**
    * Get info about all agents
    */
   list(): AgentInfo[] {

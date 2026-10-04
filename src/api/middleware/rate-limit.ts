@@ -35,7 +35,10 @@ export function isCredentialAttempt(path: string): boolean {
     // narrowing this list from all of `/api/auth/*` to a keyword set dropped
     // it — leaving only the loose baseline layers between a caller and that
     // code space.
-    path.startsWith('/api/auth/channel-bindings/redeem')
+    path.startsWith('/api/auth/channel-bindings/redeem') ||
+    // A space invite token is a bearer secret: previewing or accepting one is
+    // a guess at it (docs/plans/coworking-spec.md §5.7, I8).
+    path.startsWith('/api/invites/')
   );
 }
 const USER_QUOTA_WINDOW_SECS = 60;

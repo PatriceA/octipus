@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { index, inet, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 export const auditActionEnum = pgEnum('audit_action', [
@@ -39,6 +40,19 @@ export const auditActionEnum = pgEnum('audit_action', [
   'task_mutated',
   // An admin read or changed the knowledge base install-wide (`?scope=install`).
   'knowledge_install_access',
+  // Shared spaces (docs/plans/coworking-spec.md §5.1): every membership,
+  // invite, role and lifecycle change, stamped with the space's workspace_id.
+  'space_created',
+  'space_updated',
+  'space_archived',
+  'space_purged',
+  'space_member_added',
+  'space_member_role_changed',
+  'space_member_removed',
+  'space_invite_created',
+  'space_invite_revoked',
+  'space_invite_accepted',
+  'space_content_changed',
 ]);
 
 export const auditLog = pgTable('audit_log', {
@@ -52,12 +66,15 @@ export const auditLog = pgTable('audit_log', {
   userAgent: text('user_agent'),
   channelType: text('channel_type'),
   sessionId: uuid('session_id'),
+  /** The workspace the action happened in (a space's activity feed). No foreign key: history outlives a purged space. */
+  workspaceId: uuid('workspace_id'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   userIdIdx: index('audit_log_user_id_idx').on(table.userId),
   actionIdx: index('audit_log_action_idx').on(table.action),
   resourceTypeIdx: index('audit_log_resource_type_idx').on(table.resourceType),
   createdAtIdx: index('audit_log_created_at_idx').on(table.createdAt),
+  workspaceCreatedIdx: index('audit_log_ws_created_idx').on(table.workspaceId, table.createdAt.desc()).where(sql`${table.workspaceId} IS NOT NULL`),
 }));
 
 export interface AuditDetails {

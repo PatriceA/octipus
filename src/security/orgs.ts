@@ -455,10 +455,19 @@ export class OrgWorkspaceManager {
    * `workspace_id`). A note whose slug the user already has at user level
    * would collide on `notes_user_slug_uidx`, so it first gets the
    * `-<first 8 chars of id>` suffix migration 0127 uses for the same case.
+   *
+   * Only personal workspaces: a shared workspace (a space) has no owning
+   * user, so `findOwnedById` never returns one, and the delete below is
+   * restricted to `kind = 'personal'` as well. Spaces are deleted only by
+   * `purgeSpace` (src/core/spaces/purge.ts), never by falling back to
+   * SET NULL into someone's personal scope.
    */
   async delete(userId: string, id: string): Promise<boolean> {
     const existing = await this.findOwnedById(userId, id);
     if (!existing) return false;
+    if (existing.kind !== 'personal') {
+      throw new OrgWorkspaceError('workspace_not_found', 'workspace not found or not owned by caller');
+    }
     if (existing.isDefault) {
       throw new OrgWorkspaceError(
         'cannot_delete_default',
@@ -473,7 +482,7 @@ export class OrgWorkspaceManager {
       `);
       const result = await tx
         .delete(workspaces)
-        .where(and(eq(workspaces.id, id), eq(workspaces.userId, userId)))
+        .where(and(eq(workspaces.id, id), eq(workspaces.userId, userId), eq(workspaces.kind, 'personal')))
         .returning({ id: workspaces.id });
       return result.length > 0;
     });

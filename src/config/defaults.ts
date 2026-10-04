@@ -119,6 +119,12 @@ export const defaultConfig: Partial<Config> = {
     ocrModel: 'glm-ocr',
     ocrEndpoint: 'http://localhost:11435',
   },
+  spaces: {
+    creation: 'any_user',
+    maxMembers: 50,
+    inviteMaxTtlHours: 720,
+    purgeAfterArchiveDays: 7,
+  },
   compaction: {
     minSavingsRatio: 0.10,
     growthMultiplier: 2.0,

@@ -1,6 +1,7 @@
-import { and, desc, eq, inArray, isNull, lt } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, lt } from 'drizzle-orm';
 import { revokeArtifactViewers } from '@/core/artifacts/viewer-access';
 import { getDb } from '../postgres';
+import { workspaces } from '../schema/organizations';
 import {
   type Artifact,
   artifacts,
@@ -187,6 +188,18 @@ export class ArtifactsRepository {
         updatedAt: new Date(),
       })
       .where(eq(artifactDataSources.id, id));
+  }
+
+  /** Whether the source's artifact belongs to an archived shared workspace. */
+  async isSourceInArchivedSpace(sourceId: string): Promise<boolean> {
+    const [row] = await this.db
+      .select({ id: artifactDataSources.id })
+      .from(artifactDataSources)
+      .innerJoin(artifacts, eq(artifacts.id, artifactDataSources.artifactId))
+      .innerJoin(workspaces, eq(workspaces.id, artifacts.workspaceId))
+      .where(and(eq(artifactDataSources.id, sourceId), eq(workspaces.kind, 'shared'), isNotNull(workspaces.archivedAt)))
+      .limit(1);
+    return row !== undefined;
   }
 
   async deleteSource(id: string): Promise<void> {
