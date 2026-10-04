@@ -73,6 +73,9 @@ AGENT_MAX_ITERATIONS=50               # Max iterations per agent loop
 # ─── Sessions ────────────────────────────────────────────────
 SESSION_RETENTION_DAYS=14             # Delete sessions idle this many days (0 = never); "keep"-marked sessions are exempt
 
+# ─── Group channels ──────────────────────────────────────────
+GROUP_CHANNELS_UNPROMPTED_ENABLED=false  # Let channels in listen/proactive mode post unprompted (docs/CHANNELS.md)
+
 WORKSPACE_PATH=./workspace
 SEARXNG_URL=http://localhost:8888         # SearXNG meta-search (optional)
 

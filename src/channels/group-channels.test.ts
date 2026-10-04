@@ -142,6 +142,66 @@ describe('enrolment', () => {
   });
 });
 
+describe('modes and unprompted posts (phase 4)', () => {
+  test('the owner, or an admin, sets the mode, quiet hours and rate limit; nobody else; bad values are refused', async () => {
+    const r = await enrol('C1', annaId);
+    if (r.status !== 'enrolled') throw new Error('setup');
+    expect(r.group).toMatchObject({ mode: 'mention', timezone: 'UTC', maxUnpromptedPerDay: 8, minMinutesBetween: 60, quietHoursStart: null });
+
+    const set = await gc.updateGroupChannelSettings(r.group.id, { userId: annaId, isAdmin: false }, {
+      mode: 'listen', quietHoursStart: 19, quietHoursEnd: 8, timezone: 'Europe/Berlin', maxUnpromptedPerDay: 4,
+    });
+    expect(set).toMatchObject({ mode: 'listen', quietHoursStart: 19, quietHoursEnd: 8, timezone: 'Europe/Berlin', maxUnpromptedPerDay: 4, minMinutesBetween: 60 });
+    // The cached lookup sees it at once.
+    expect((await gc.findGroupChannel('slack', 'C1'))?.mode).toBe('listen');
+    expect((await gc.listUnpromptedGroupChannels()).map(g => g.id)).toEqual([r.group.id]);
+
+    expect(await gc.updateGroupChannelSettings(r.group.id, { userId: bobId, isAdmin: false }, { mode: 'proactive' })).toBeNull();
+    expect(await gc.updateGroupChannelSettings(r.group.id, { userId: adminId, isAdmin: true }, { mode: 'proactive' })).toMatchObject({ mode: 'proactive' });
+
+    for (const bad of [{ timezone: 'Mars/Olympus' }, { quietHoursStart: 22 }, { quietHoursStart: 25, quietHoursEnd: 3 }, { maxUnpromptedPerDay: 0 }, { minMinutesBetween: 5 }]) {
+      await expect(gc.updateGroupChannelSettings(r.group.id, { userId: annaId, isAdmin: false }, bad)).rejects.toThrow(gc.GroupChannelSettingsError);
+    }
+    expect(await gc.updateGroupChannelSettings(r.group.id, { userId: annaId, isAdmin: false }, { quietHoursStart: null, quietHoursEnd: null }))
+      .toMatchObject({ quietHoursStart: null, quietHoursEnd: null });
+  });
+
+  test('the unprompted slot: one claim per gap, up to the daily cap, counted per local day', async () => {
+    const r = await enrol('C1', annaId);
+    if (r.status !== 'enrolled') throw new Error('setup');
+    const group = (await gc.updateGroupChannelSettings(r.group.id, { userId: annaId, isAdmin: false }, { mode: 'listen', maxUnpromptedPerDay: 2, minMinutesBetween: 30 }))!;
+    const t0 = new Date('2026-10-04T09:00:00Z');
+    const at = (minutes: number) => new Date(t0.getTime() + minutes * 60_000);
+
+    expect(await gc.claimUnpromptedSlot(group, t0, '2026-10-04')).toBe(true);
+    expect(await gc.claimUnpromptedSlot(group, at(10), '2026-10-04')).toBe(false); // within the gap
+    expect(await gc.claimUnpromptedSlot(group, at(31), '2026-10-04')).toBe(true);
+    expect(await gc.claimUnpromptedSlot(group, at(90), '2026-10-04')).toBe(false); // the cap of 2
+    expect(await gc.claimUnpromptedSlot(group, at(24 * 60), '2026-10-05')).toBe(true); // a new day
+    expect(await gc.findGroupChannelById(group.id)).toMatchObject({ unpromptedDay: '2026-10-05', unpromptedCount: 1 });
+
+    // Back in mention mode, no slot is ever claimed.
+    await gc.updateGroupChannelSettings(group.id, { userId: annaId, isAdmin: false }, { mode: 'mention' });
+    expect(await gc.claimUnpromptedSlot(group, at(48 * 60), '2026-10-06')).toBe(false);
+  });
+
+  test('feedback: one per member and message, replaced by a second reaction, withdrawn by value, counted in the list', async () => {
+    const r = await enrol('C1', annaId);
+    if (r.status !== 'enrolled') throw new Error('setup');
+    const g = r.group.id;
+    await gc.recordGroupFeedback({ groupChannelId: g, messageId: '98.0', threadId: '90.0', userId: annaId, value: 1 });
+    await gc.recordGroupFeedback({ groupChannelId: g, messageId: '98.0', userId: bobId, value: -1 });
+    await gc.recordGroupFeedback({ groupChannelId: g, messageId: '98.0', userId: bobId, value: 1 }); // bob changed his mind
+    expect((await gc.listGroupChannelsForOwner(annaId))[0]!.feedback).toEqual({ up: 2, down: 0 });
+
+    // Taking off an ❌ that is no longer there leaves the ✅.
+    await gc.removeGroupFeedback({ groupChannelId: g, messageId: '98.0', userId: bobId, value: -1 });
+    expect((await gc.listAllGroupChannels())[0]!.feedback).toEqual({ up: 2, down: 0 });
+    await gc.removeGroupFeedback({ groupChannelId: g, messageId: '98.0', userId: bobId, value: 1 });
+    expect((await gc.listAllGroupChannels())[0]!.feedback).toEqual({ up: 1, down: 0 });
+  });
+});
+
 describe('group thread sessions', () => {
   test('one session per member per thread, owned by that member, apart from their 1:1 chat', async () => {
     const r = await enrol('C1', annaId);
@@ -233,5 +293,21 @@ describe('routes', () => {
     expect((await call(appFor(annaId, false), 'DELETE', `/admin/group-channels/${r2.group.id}`)).status).toBe(403);
     expect((await call(admin, 'DELETE', `/admin/group-channels/${r2.group.id}`)).json).toEqual({ deleted: true });
     expect(await gc.findGroupChannel('slack', 'C2')).toBeNull();
+  });
+
+  test('PATCH: the owner and admins change the mode; others get 404 (owner route) or 403 (admin route); bad values 400/422', async () => {
+    const r = await enrol('C1', annaId);
+    if (r.status !== 'enrolled') throw new Error('setup');
+    const anna = appFor(annaId, false);
+    const ok = await call(anna, 'PATCH', `/me/group-channels/${r.group.id}`, { mode: 'listen', quietHoursStart: 20, quietHoursEnd: 8 });
+    expect(ok.status).toBe(200);
+    expect(ok.json.groupChannel).toMatchObject({ mode: 'listen', quietHoursStart: 20, quietHoursEnd: 8 });
+    expect((await call(appFor(bobId, false), 'PATCH', `/me/group-channels/${r.group.id}`, { mode: 'proactive' })).status).toBe(404);
+    expect((await call(anna, 'PATCH', `/me/group-channels/${r.group.id}`, { timezone: 'Nowhere/Land' })).status).toBe(400);
+    expect((await call(anna, 'PATCH', `/me/group-channels/${r.group.id}`, { mode: 'shout' })).status).toBeGreaterThanOrEqual(400);
+
+    expect((await call(anna, 'PATCH', `/admin/group-channels/${r.group.id}`, { mode: 'proactive' })).status).toBe(403);
+    const admin = await call(appFor(adminId, true), 'PATCH', `/admin/group-channels/${r.group.id}`, { mode: 'proactive' });
+    expect(admin.json.groupChannel).toMatchObject({ mode: 'proactive' });
   });
 });

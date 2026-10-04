@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, test } from 'vitest';
-import { clearGroupBuffer, findGroupMessage, forgetGroupChat, groupMessages, recordGroupMessage } from './group-buffer';
+import {
+  clearGroupBuffer, findGroupMessage, findGroupMessageAnywhere, forgetGroupChat, groupMessages, groupThreads, recordGroupMessage,
+} from './group-buffer';
 
 const msg = (id: string, at = new Date().toISOString()) => ({ id, conversationId: 'c', author: 'Anna', authorId: 'u', text: `m${id}`, at });
 
@@ -33,6 +35,16 @@ describe('group buffer', () => {
     expect(groupMessages('teams', 'c', 't')).toEqual([]);
     expect(groupMessages('teams', 'c', 't2')).toEqual([]);
     expect(groupMessages('teams', 'c2', 't')).toHaveLength(1);
+  });
+
+  test('a chat\'s threads, and a message found in whichever thread it is', () => {
+    recordGroupMessage('slack', 'C', '90.0', msg('90.0'));
+    recordGroupMessage('slack', 'C', '90.0', msg('91.0'));
+    recordGroupMessage('slack', 'C', '95.0', msg('95.0'));
+    recordGroupMessage('slack', 'C2', '90.0', msg('99.0'));
+    expect([...groupThreads('slack', 'C').keys()].sort()).toEqual(['90.0', '95.0']);
+    expect(findGroupMessageAnywhere('slack', 'C', '91.0')).toMatchObject({ thread: '90.0', message: { id: '91.0' } });
+    expect(findGroupMessageAnywhere('slack', 'C', '99.0')).toBeUndefined();
   });
 
   test('messages older than a day are dropped', () => {

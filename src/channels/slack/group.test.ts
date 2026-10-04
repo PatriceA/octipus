@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 import type { JoinResult } from '@/channels/group-channels';
 import type { GroupChannel } from '@/db/schema/group-channels';
 import {
-  type GroupMember, HINTS, handleSlackGroupMessage, handleSlackGroupReaction, parseTake, type SlackGroupDeps,
+  type GroupMember, HINTS, handleSlackGroupMessage, handleSlackGroupReaction, handleSlackGroupReactionRemoved, parseTake, type SlackGroupDeps,
   type SlackGroupMessage, type SlackPost, type SlackReaction, TAKE_REACTION, TAKE_REACTION_TEXT,
 } from './group';
 
@@ -25,6 +25,7 @@ const posts: Record<string, SlackPost> = {
   '95.5': { text: 'The staging DB is slow again', user: 'U-BOB', botId: null },
   '96.1': { text: 'and the cache too', user: 'U-BOB', botId: null, threadTs: '90.0' },
   '97.0': { text: 'I will look at the cache', user: 'U-ANNA', botId: null },
+  '98.0': { text: 'The cache is cold after the deploy.', user: 'UBOT', botId: 'B1', threadTs: '90.0' },
 };
 
 function makeDeps(over: Partial<SlackGroupDeps> = {}) {
@@ -52,6 +53,7 @@ function makeDeps(over: Partial<SlackGroupDeps> = {}) {
     budgetPause: vi.fn(async () => null),
     shouldSendHint: (key: string) => (hints.has(key) ? false : (hints.add(key), true)),
     dispatch: (input) => { calls.dispatched.push(input); },
+    feedback: vi.fn(async () => {}),
     ...over,
   };
   return { deps, calls };
@@ -329,3 +331,30 @@ describe("the channel's spend budget", () => {
   });
 });
 
+
+describe('✅ / ❌ feedback on the bot\'s replies', () => {
+  const react = (reaction: string, ts = '98.0', user = 'U-ANNA'): SlackReaction =>
+    ({ user, reaction, item: { type: 'message', channel: 'C1', ts } });
+
+  test('recorded for a linked member, on the bot\'s own message, with its thread', async () => {
+    const ctx = makeDeps();
+    expect(await handleSlackGroupReaction(react('white_check_mark'), ctx.deps)).toBe('feedback');
+    expect(await handleSlackGroupReaction(react('-1::skin-tone-3'), ctx.deps)).toBe('feedback');
+    expect(ctx.deps.feedback).toHaveBeenNthCalledWith(1, { groupChannelId: 'g1', messageId: '98.0', threadId: '90.0', userId: 'u-anna', value: 1, removed: false });
+    expect(vi.mocked(ctx.deps.feedback!).mock.calls[1]![0]).toMatchObject({ value: -1, removed: false });
+    expect(await handleSlackGroupReactionRemoved(react('x'), ctx.deps)).toBe('feedback');
+    expect(vi.mocked(ctx.deps.feedback!).mock.calls[2]![0]).toMatchObject({ value: -1, removed: true });
+    expect(ctx.calls).toEqual({ ephemeral: [], thread: [], dispatched: [] });
+  });
+
+  test('ignored on members\' messages, from unlinked members, in unenrolled channels, and for other emoji', async () => {
+    let ctx = makeDeps();
+    expect(await handleSlackGroupReaction(react('white_check_mark', '97.0'), ctx.deps)).toBe('ignored');
+    expect(await handleSlackGroupReaction(react('white_check_mark', '98.0', 'U-STRANGER'), ctx.deps)).toBe('ignored');
+    expect(await handleSlackGroupReactionRemoved(react('eyes'), ctx.deps)).toBe('ignored');
+    ctx = makeDeps({ findGroup: vi.fn(async () => null) });
+    expect(await handleSlackGroupReaction(react('white_check_mark'), ctx.deps)).toBe('ignored');
+    expect(ctx.deps.feedback).not.toHaveBeenCalled();
+    expect(ctx.calls).toEqual({ ephemeral: [], thread: [], dispatched: [] });
+  });
+});
