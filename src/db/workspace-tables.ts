@@ -41,9 +41,14 @@ export const WORKSPACE_TABLES: readonly WorkspaceTable[] = [
   // Keyed by workspace alone (`created_by_user_id` is attribution): they
   // follow the workspace row itself.
   { table: 'artifacts', ownerColumn: null, transfer: 'n/a', purge: 'delete' },
+  // A space's audit trail outlives it (no foreign key to workspaces); the
+  // actor column stays the actor through a transfer.
+  { table: 'audit_log', ownerColumn: 'user_id', transfer: 'n/a', purge: 'keep' },
   { table: 'background_jobs', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   // Retention history of what a cleanup removed.
   { table: 'cleanup_audit_log', ownerColumn: 'user_id', transfer: 'n/a', purge: 'keep' },
+  // Billing history: who spent what, where. Outlives the space.
+  { table: 'cost_log', ownerColumn: 'user_id', transfer: 'n/a', purge: 'keep' },
   { table: 'documents', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'embeddings', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'hooks', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
@@ -52,6 +57,8 @@ export const WORKSPACE_TABLES: readonly WorkspaceTable[] = [
   { table: 'notes', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   // A user's inbox: it stays with them.
   { table: 'notifications', ownerColumn: 'user_id', transfer: 'n/a', purge: 'delete' },
+  // A request belongs to the agent run that raised it, not to the workspace.
+  { table: 'permission_requests', ownerColumn: 'user_id', transfer: 'n/a', purge: 'delete' },
   { table: 'pipelines', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'sessions', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'swarm_nodes', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
@@ -59,6 +66,11 @@ export const WORKSPACE_TABLES: readonly WorkspaceTable[] = [
   { table: 'tasks', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'trajectory_runs', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'vault', ownerColumn: 'user_id', transfer: 'move', purge: 'delete', rowFilter: "scope = 'workspace'", reencrypt: true },
+  // Space membership and invites (S1): only shared workspaces have them, and
+  // shared workspaces are never transferred. The workspace row's own
+  // cascade would delete them; purge deletes them like any other row.
+  { table: 'workspace_invites', ownerColumn: 'created_by', transfer: 'n/a', purge: 'delete' },
+  { table: 'workspace_members', ownerColumn: 'user_id', transfer: 'n/a', purge: 'delete' },
   { table: 'workspace_repos', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
 ];
 

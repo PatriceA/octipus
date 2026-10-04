@@ -52,6 +52,7 @@ import { spendBudgetRoutes } from './routes/spend-budgets';
 import { permissionRequestRoutes } from './routes/permission-requests';
 import { oauthRoutes } from './routes/oauth';
 import { orgAdminRoutes, orgMeRoutes, workspaceMeRoutes } from './routes/orgs';
+import { inviteRoutes, spaceRoutes } from './routes/spaces';
 import { samlRoutes } from './routes/saml';
 import { scimRoutes } from './routes/scim';
 import { pipelineRoutes } from './routes/pipelines';
@@ -343,6 +344,8 @@ export function createServer() {
         .use(orgAdminRoutes)
         .use(orgMeRoutes)
         .use(workspaceMeRoutes)
+        .use(spaceRoutes)
+        .use(inviteRoutes)
         .use(scimRoutes)
         .use(samlRoutes)
         .use(agentRoutes)

@@ -146,6 +146,10 @@ export const costLog = pgTable('cost_log', {
   totalCost: real('total_cost').notNull(),
   requestType: text('request_type'), // chat, completion, embedding
   metadata: jsonb('metadata').$type<CostLogMetadata>().default({}),
+  /** The workspace the call ran in. No foreign key: billing outlives a purged space. */
+  workspaceId: uuid('workspace_id'),
+  /** Who pays: the requester (`own`), a space sponsor (`sponsor`, S5), or the install (`install`-topic calls). */
+  funding: text('funding').$type<CostFunding>().default('own').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   userIdIdx: index('cost_log_user_id_idx').on(table.userId),
@@ -153,6 +157,8 @@ export const costLog = pgTable('cost_log', {
   modelNameIdx: index('cost_log_model_name_idx').on(table.modelName),
   createdAtIdx: index('cost_log_created_at_idx').on(table.createdAt),
 }));
+
+export type CostFunding = 'own' | 'sponsor' | 'install';
 
 export interface CostLogMetadata {
   [key: string]: unknown;

@@ -232,6 +232,7 @@ Open directions (later): federation between Octipus instances, local-first sync 
 | **[API Reference](docs/API.md)** | REST and WebSocket API reference |
 | **[Architecture Catalog](docs/architecture/generated/CATALOG.md)** | Generated from the source and gated in CI: every mounted route, the module import graph, the gateway event matrix |
 | **[Enrichment Features](docs/ENRICHMENT.md)** | Reader, Deep Research, Tasks, Email triage, Hardware-aware onboarding |
+| **[Shared Spaces](docs/SPACES.md)** | Workspaces several people share: roles, invites, archive, purge |
 | **[Configuration](docs/CONFIGURATION.md)** | Env vars, ports, services |
 | **[LiteLLM Proxy](docs/LITELLM.md)** | Route models through a LiteLLM proxy; auth, adding models, 401 fixes |
 | **[Small / Local Models](docs/SMALL-MODELS.md)** | Run on one small local model: setup, what works/degrades, single-model binding |

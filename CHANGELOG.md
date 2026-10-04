@@ -199,6 +199,38 @@ directory. Memories now follow the session's workspace: facts learned in a
 non-default workspace, which were filed under the default one, are no longer
 mixed into it. Existing memories are not migrated.
 
+### Shared spaces (coworking S1, backend)
+
+- **Spaces: workspaces several people share.** A space is a workspace with
+  no owning user; access is membership with a role (`owner`, `editor`,
+  `commenter`, `viewer`, `guest`), read from the database on every request.
+  `POST /api/spaces` creates one (who may: `spaces.creation`, `any_user` by
+  default or `admins`); `/api/spaces/:id/...` renames, archives, lists and
+  manages members and invites, and shows the space's activity. Someone who is
+  not a member gets 404 for every space, admins included. See
+  [docs/SPACES.md](docs/SPACES.md).
+- **Invite links.** Owners create links per role with a clamped lifetime
+  (`spaces.inviteMaxTtlHours`, default 30 days) and a use count; only a hash
+  of the token is stored, a single-use link admits exactly one person, and a
+  revoke reaches only its own space. `GET /api/invites/:token` previews a link
+  without signing in; both invite routes are rate-limited like logins. A space
+  holds at most `spaces.maxMembers` members (default 50).
+- **Removal takes effect at once.** Removing or downgrading a member stops
+  their agents in the space, expires their pending prompts there and pauses
+  the data sources they own on the space's artifacts. The last owner cannot be
+  removed, demoted or leave, and a user who is the last owner of a space
+  cannot be deleted.
+- **Archive, then delete for good.** An archived space is read-only and its
+  agents stop. An owner can delete it once it has been archived for
+  `spaces.purgeAfterArchiveDays` (default 7): every row and file of the space
+  goes, in one transaction; its audit and cost history stay.
+- **Every change is audited** with the space's id (`space_*` audit actions).
+- Migration `0128_spaces` adds `workspaces.kind`, `created_by` and
+  `archived_at` (and makes `user_id` nullable for spaces only),
+  `workspace_members`, `workspace_invites`, `workspace_id` on `audit_log`,
+  `permission_requests` and `cost_log`, `funding` on `cost_log` and `agents`,
+  paused flags on artifact data sources, and a per-workspace unique note slug.
+
 ## v0.6.0 — Shared work, budgets, and stronger review (2026-10-01)
 
 Octipus 0.6.0 brings a shared task board for people and role agents, dollar

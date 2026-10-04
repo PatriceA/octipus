@@ -13,6 +13,8 @@ export const agents = pgTable('agents', {
   userId: text('user_id').notNull(),
   /** Phase 4 follow-up — optional workspace scope. NULL = user-level. */
   workspaceId: uuid('workspace_id'),
+  /** Who pays for the agent's model calls (`own` until sponsored agents, S5). */
+  funding: text('funding').$type<'own' | 'sponsor'>().notNull().default('own'),
   role: text('role').notNull().default('general'),
   model: text('model').notNull().default(''),
   topic: text('topic').notNull().default(''),

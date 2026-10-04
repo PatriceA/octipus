@@ -179,5 +179,12 @@ export function loadFromEnvLegacy(): Partial<Config> {
     oauth: {
       publicUrl: process.env.PUBLIC_URL,
     },
+    spaces: {
+      // Passed through as written: the schema rejects anything but the two values.
+      creation: (process.env.SPACES_CREATION as 'any_user' | 'admins' | undefined) || 'any_user',
+      maxMembers: parseInt(process.env.SPACES_MAX_MEMBERS || '50', 10),
+      inviteMaxTtlHours: parseInt(process.env.SPACES_INVITE_MAX_TTL_HOURS || '720', 10),
+      purgeAfterArchiveDays: parseInt(process.env.SPACES_PURGE_AFTER_ARCHIVE_DAYS || '7', 10),
+    },
   };
 }

@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-434 mounted routes across 64 route files. The path is the full one, group prefix included — what a client actually calls.
+450 mounted routes across 65 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -197,6 +197,8 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/hooks/incoming/:hookId` | `src/api/routes/webhook-incoming.ts` |
 | GET | `/api/hooks/suggestions` | `src/api/routes/hooks.ts` |
 | POST | `/api/hooks/suggestions/:suggestionId/apply` | `src/api/routes/hooks.ts` |
+| GET | `/api/invites/:token` | `src/api/routes/spaces.ts` |
+| POST | `/api/invites/:token/accept` | `src/api/routes/spaces.ts` |
 | GET | `/api/knowledge` | `src/api/routes/knowledge.ts` |
 | DELETE | `/api/knowledge/:id` | `src/api/routes/knowledge.ts` |
 | GET | `/api/knowledge/:id` | `src/api/routes/knowledge.ts` |
@@ -387,6 +389,20 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | PATCH | `/api/skills/topics/bulk/:skillId` | `src/api/routes/skill-topic-assignments.ts` |
 | GET | `/api/skills/usage` | `src/api/routes/skills.ts` |
 | PATCH | `/api/skills/usage` | `src/api/routes/skills.ts` |
+| GET | `/api/spaces` | `src/api/routes/spaces.ts` |
+| POST | `/api/spaces` | `src/api/routes/spaces.ts` |
+| DELETE | `/api/spaces/:id` | `src/api/routes/spaces.ts` |
+| GET | `/api/spaces/:id` | `src/api/routes/spaces.ts` |
+| PATCH | `/api/spaces/:id` | `src/api/routes/spaces.ts` |
+| GET | `/api/spaces/:id/activity` | `src/api/routes/spaces.ts` |
+| POST | `/api/spaces/:id/archive` | `src/api/routes/spaces.ts` |
+| GET | `/api/spaces/:id/invites` | `src/api/routes/spaces.ts` |
+| POST | `/api/spaces/:id/invites` | `src/api/routes/spaces.ts` |
+| DELETE | `/api/spaces/:id/invites/:inviteId` | `src/api/routes/spaces.ts` |
+| GET | `/api/spaces/:id/members` | `src/api/routes/spaces.ts` |
+| DELETE | `/api/spaces/:id/members/:userId` | `src/api/routes/spaces.ts` |
+| PATCH | `/api/spaces/:id/members/:userId` | `src/api/routes/spaces.ts` |
+| POST | `/api/spaces/:id/unarchive` | `src/api/routes/spaces.ts` |
 | GET | `/api/spend-budgets/me` | `src/api/routes/spend-budgets.ts` |
 | GET | `/api/swarm/nodes` | `src/api/routes/swarm.ts` |
 | GET | `/api/swarm/nodes/:id` | `src/api/routes/swarm.ts` |
@@ -469,14 +485,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 21 |
 | `api` | `config` | 19 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 92 |
+| `api` | `core` | 95 |
 | `api` | `db` | 106 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 3 |
 | `api` | `models` | 31 |
 | `api` | `plugins` | 1 |
-| `api` | `security` | 101 |
+| `api` | `security` | 103 |
 | `api` | `services` | 4 |
 | `api` | `shared` | 3 |
 | `api` | `skills` | 6 |
@@ -510,19 +526,19 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `connectors` | `utils` | 5 |
 | `core` | `capabilities` | 1 |
 | `core` | `channels` | 7 |
-| `core` | `config` | 34 |
+| `core` | `config` | 37 |
 | `core` | `connectors` | 2 |
-| `core` | `db` | 216 |
+| `core` | `db` | 232 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 5 |
 | `core` | `models` | 90 |
-| `core` | `security` | 70 |
+| `core` | `security` | 78 |
 | `core` | `services` | 2 |
 | `core` | `shared` | 13 |
 | `core` | `skills` | 10 |
 | `core` | `tools` | 16 |
-| `core` | `utils` | 152 |
+| `core` | `utils` | 158 |
 | `db` | `config` | 3 |
 | `db` | `core` | 12 |
 | `db` | `models` | 1 |
@@ -561,7 +577,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `security` | `api` | 1 |
 | `security` | `config` | 12 |
 | `security` | `connectors` | 3 |
-| `security` | `core` | 5 |
+| `security` | `core` | 6 |
 | `security` | `db` | 63 |
 | `security` | `tools` | 1 |
 | `security` | `utils` | 23 |

@@ -13,6 +13,19 @@ const PUBLIC_PATH_PREFIXES = [
   '/api/settings/setup-status',
 ];
 
+/**
+ * Public routes matched by method AND exact shape — unlike the path-prefix
+ * list above, which ignores the method. `GET /api/invites/<token>` previews an
+ * invite before sign-in; `POST /api/invites/<token>/accept` is NOT public.
+ */
+const PUBLIC_ROUTES: ReadonlyArray<{ method: string; pattern: RegExp }> = [
+  { method: 'GET', pattern: /^\/api\/invites\/[^/]+$/ },
+];
+
+export function isPublicRoute(method: string, path: string): boolean {
+  return PUBLIC_ROUTES.some((route) => route.method === method && route.pattern.test(path));
+}
+
 export function isPublicPath(path: string): boolean {
   // OAuth callbacks are public (state-based auth)
   if (path.match(/^\/api\/auth\/oauth\/\w+\/callback/)) return true;
@@ -56,7 +69,12 @@ export const authGuard = new Elysia({ name: 'auth-guard' })
     const isGuarded = url.pathname.startsWith('/api/') || url.pathname.startsWith('/v1/');
 
     // Skip guard for CORS preflight, non-guarded routes, and public paths.
-    if (ctx.request.method === 'OPTIONS' || !isGuarded || isPublicPath(url.pathname)) {
+    if (
+      ctx.request.method === 'OPTIONS' ||
+      !isGuarded ||
+      isPublicPath(url.pathname) ||
+      isPublicRoute(ctx.request.method, url.pathname)
+    ) {
       return;
     }
 

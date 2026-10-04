@@ -1138,6 +1138,44 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'SESSION_RETENTION_DAYS',
   },
 
+  // ── Shared spaces ──
+  {
+    key: 'spaces.creation',
+    category: 'spaces',
+    valueType: 'string',
+    defaultValue: 'any_user',
+    description: 'Who may create a shared space: any_user (every signed-in user) or admins.',
+    isSecret: false,
+    envVar: 'SPACES_CREATION',
+  },
+  {
+    key: 'spaces.maxMembers',
+    category: 'spaces',
+    valueType: 'number',
+    defaultValue: 50,
+    description: 'Most members one shared space may have. Accepting an invite into a full space fails.',
+    isSecret: false,
+    envVar: 'SPACES_MAX_MEMBERS',
+  },
+  {
+    key: 'spaces.inviteMaxTtlHours',
+    category: 'spaces',
+    valueType: 'number',
+    defaultValue: 720,
+    description: 'Longest lifetime of a space invite link, in hours (default 30 days). Longer requests are clamped.',
+    isSecret: false,
+    envVar: 'SPACES_INVITE_MAX_TTL_HOURS',
+  },
+  {
+    key: 'spaces.purgeAfterArchiveDays',
+    category: 'spaces',
+    valueType: 'number',
+    defaultValue: 7,
+    description: 'Days a shared space must stay archived before its owner can delete it for good.',
+    isSecret: false,
+    envVar: 'SPACES_PURGE_AFTER_ARCHIVE_DAYS',
+  },
+
   // ── Group channels ──
   {
     key: 'groupChannels.unpromptedEnabled',

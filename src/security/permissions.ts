@@ -499,6 +499,31 @@ export class PermissionManager {
   }
 
   /**
+   * Expire `userId`'s pending requests raised in a workspace: stamped with it,
+   * or raised in one of its sessions (rows written before the stamp existed).
+   * A member removed from or downgraded in a space must not answer, or be
+   * left waiting on, a prompt there (docs/plans/coworking-spec.md §5.9).
+   */
+  async expireForUserInWorkspace(userId: string, workspaceId: string): Promise<number> {
+    const expired = await this.db
+      .update(permissionRequests)
+      .set({ status: 'expired' })
+      .where(and(
+        eq(permissionRequests.userId, userId),
+        eq(permissionRequests.status, 'pending'),
+        sql`(${permissionRequests.workspaceId} = ${workspaceId}
+          OR ${permissionRequests.sessionId} IN (SELECT id FROM sessions WHERE workspace_id = ${workspaceId}))`,
+      ))
+      .returning();
+    for (const request of expired) {
+      this.emitResolved(request, 'expired');
+      this.pendingRequests.get(request.id)?.(false);
+    }
+    if (expired.length > 0) securityLogger.info({ userId, workspaceId, count: expired.length }, 'Permission requests expired with the membership');
+    return expired.length;
+  }
+
+  /**
    * Subscribe to "this agent is blocked on a human" transitions. The worker
    * uses it to stop its wall clock: with no TTL, a turn would otherwise die of
    * its own timeout while the prompt sat on screen. Returns an unsubscribe.

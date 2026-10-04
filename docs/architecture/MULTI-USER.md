@@ -2136,3 +2136,47 @@ table.
   secret, decrypted under the row's own scope and owner, ahead of a user secret
   of the same name. A workspace secret with no `workspace_id` belongs to no
   workspace and is not returned.
+
+## 24. Shared spaces (coworking S1)
+
+A space is a workspace with `kind = 'shared'` and `user_id` NULL (migration
+`0128_spaces`; operator and user guide: [docs/SPACES.md](../SPACES.md)).
+Access to it is membership, never ownership:
+
+- **Membership is the only door.** `workspace_members (workspace_id, user_id,
+  role, scope)` is read per request through `getMembership`
+  (`src/core/spaces/service.ts`). Roles are code: `can(role, action)` in
+  `src/security/space-access.ts` (`owner | editor | commenter | viewer |
+  guest`). Non-members get 404 for every space id, admins included; an admin
+  reaches a space only by being a member of it.
+- **No owner row, no personal leak.** Every personal workspace query filters
+  `user_id = me`, so a space never matches it: the creator's workspace list,
+  `findOwned*`, rename, transfer and the personal delete never see a space.
+  The personal delete also refuses `kind <> 'personal'` explicitly.
+- **Invites are bearer secrets**: `sha256(token)` at rest, one conditional
+  `UPDATE` per use, expiry clamped to `spaces.inviteMaxTtlHours`, revoke scoped
+  to the invite's space. `GET /api/invites/:token` is the one public route,
+  listed by method and exact shape in `auth-guard.ts` (`isPublicRoute`); both
+  invite routes count as credential attempts in the per-IP rate limiter.
+- **Removal and downgrade take effect at once** (`onMembershipChanged`): the
+  member's agents in the space stop (`AgentManager.stopWorkspace`), their
+  pending permission requests there expire (`permission_requests.workspace_id`,
+  or a session of the space) along with their root-agent approvals, and data
+  sources they own on the space's artifacts pause
+  (`artifact_data_sources.paused_at`).
+- **Last owner.** No path removes, demotes or lets the last owner leave, and
+  `assertDeletable` refuses to delete a user who is the last owner of a space.
+- **Purge** (`purgeSpace`, `src/core/spaces/purge.ts`) is the only deletion of
+  a shared workspace: owner-only, after `spaces.purgeAfterArchiveDays` of
+  archive, one transaction over `WORKSPACE_TABLES` (`delete` tables, plus rows
+  keyed by the space's sessions), verified empty before the workspace row goes.
+  `audit_log` and `cost_log` (`keep`) carry `workspace_id` without a foreign
+  key and survive. Space directories are removed after commit; the cron runner
+  sweeps leftovers hourly.
+- **Audit.** Every space change writes an audit row with `workspace_id`, in the
+  same transaction (actions `space_*`); `GET /api/spaces/:id/activity` lists
+  them for members.
+
+Still to come (see `docs/plans/coworking-spec.md`): the resolver and principal
+for a space selected in the header (`SPACE_ROUTES`), the space access layer for
+content, the agent inside a space, and the web screens.
