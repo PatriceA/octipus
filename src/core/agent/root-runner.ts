@@ -34,6 +34,9 @@ import delegationPrompt from './delegation-prompt.md';
 import { applyToolCap, isSmallModel } from './small-model';
 import { channelCanPrompt } from '@/security/approval-policy';
 import { ROOT_ROLE } from './types';
+import type { AgentScope } from './context';
+import { spaceSessionNotice, withoutPersonalOnlyTools } from '@/security/space-tools';
+import { can } from '@/security/space-access';
 import type { TurnEvent, AgentService, TurnOutcome } from './service';
 import type { MessageClassification } from './types';
 
@@ -147,22 +150,27 @@ export async function runRootAgent(
   userId: string,
   message: string,
   classification: MessageClassification,
-  guardFlags: string[] = [],
-  channel?: string,
+  guardFlags: string[],
+  channel: string | undefined,
   /**
    * Memory-redesign Phase D — appended to the root agent's system
    * prompt. Pre-rendered by `handleMessage` once per turn so both
    * the root agent and the directResponse path see the same
    * long-term memory block.
    */
-  extraSystemContext: string = '',
-  /** Workspace scope inherited by every spawned child. */
-  workspaceId: string | null = null,
+  extraSystemContext: string,
+  /**
+   * The turn's workspace, space, trigger and funding (`resolveAgentScope`),
+   * inherited by every spawned child.
+   */
+  scope: AgentScope,
   /** Chat/work split (Thread 3): inline vs file deliverable directive. */
   outputDirective: { mode: 'inline' | 'file'; forced: boolean } = { mode: 'inline', forced: false },
   extras: RootRunExtras = {},
 ): Promise<{ response: string; agentId: string; sources: string[]; outcome: TurnOutcome; limit?: LimitRefusal }> {
   const emit = deps.emit;
+  const workspaceId = scope.workspaceId;
+  const space = scope.space;
   const agentManager = getAgentManager();
   // One routing decision, used twice: the model comes from the lane, and so do
   // the lane's temperature and token limit. Computed here rather than inside the
@@ -264,7 +272,7 @@ export async function runRootAgent(
   const rootWorkerRef: { current: AgentWorker | null } = { current: null };
 
   const isLite = promptTier === 'lite';
-  const metaTools = createMetaTools(service, {
+  const allMetaTools = createMetaTools(service, {
     parentNode,
     swarmRefs: {
       detachHookRef: rootDetachHookRef,
@@ -273,6 +281,7 @@ export async function runRootAgent(
     lite: isLite,
     takenTasks: extras.takenTasks,
   });
+  const metaTools = space ? withoutPersonalOnlyTools(allMetaTools) : allMetaTools;
 
   // The root's own tools. `getToolsForRole` is the same gate every worker goes
   // through (capability check, MCP lazy handlers, read-only filtering).
@@ -286,6 +295,13 @@ export async function runRootAgent(
   // granted what the parent does not hold — the same reasoning the read-only
   // role filter documents.
   if (isPlanMode(planSessionCtx)) rootTools = stripMutatingTools(rootTools);
+  // In a space: personal-only tools are not offered (the prompt says why),
+  // and a commenter's turn holds no file-changing tools either — every other
+  // write is refused at call time by `routeApprovalFor`'s role cap.
+  if (space) {
+    rootTools = withoutPersonalOnlyTools(rootTools);
+    if (!can(space.role, 'run_agent_write')) rootTools = stripMutatingTools(rootTools);
+  }
   // The small-model answer to "what runs the loop now": the same loop, a reduced
   // tool set, and a hard iteration cap (below). Gated on `isSmallModel` — the
   // SMALL tier — and not on `isLite`, which is the 24B prompt tier: every worker
@@ -480,7 +496,8 @@ export async function runRootAgent(
 
   // Inject workspace awareness
   const sessionCtx = session?.context as import('@/db/schema/sessions').SessionContext | undefined;
-  const isDevMode = sessionCtx?.devMode === true && !!sessionCtx.projectPath;
+  // No dev-mode project root in a space: its agents work in the space's files.
+  const isDevMode = !space && sessionCtx?.devMode === true && !!sessionCtx.projectPath;
 
   // Plan mode: state what the tool filter below cannot enforce. Volatile tier,
   // because it is a property of this session right now rather than of the
@@ -514,14 +531,18 @@ export async function runRootAgent(
     // otherwise the root agent hands workers absolute paths that fall outside
     // their own sandbox.
     const wsConfig = getConfig();
-    const wsRoot = WorkspaceFS.forPrincipal(agentPrincipal({ userId, workspaceId })).root;
-    const wsAdditional = wsConfig.workspace.additionalPaths?.map((p: string) => resolve(p)).filter(Boolean) || [];
+    // A space's agents work in the space's files only: no extra paths and
+    // no personal repo registry.
+    const wsRoot = space
+      ? WorkspaceFS.forSpace(space.workspaceId).root
+      : WorkspaceFS.forPrincipal(agentPrincipal({ userId, workspaceId })).root;
+    const wsAdditional = space ? [] : wsConfig.workspace.additionalPaths?.map((p: string) => resolve(p)).filter(Boolean) || [];
 
     // Multi-repo: when the repo registry has been scanned, inject the map of
     // the suite (kinds + dependency edges) — the root agent's "mental model"
     // — instead of a bare directory listing. See .octipus/multi-repo-design.md.
     let injectedSuite = false;
-    try {
+    if (!space) try {
       const { loadRepoGraph } = await import('@/core/repos/registry-service');
       const { repos, edges, ambiguousPackages } = await loadRepoGraph({ userId, workspaceId });
       if (repos.length > 0) {
@@ -579,6 +600,13 @@ export async function runRootAgent(
       staticParts.push(`\nWORKSPACE: ${wsRoot}`);
     }
   }
+  // A space session: where the agent is, what the role allows, and why the
+  // personal-only tools are missing.
+  if (space) {
+    const { getSpace } = await import('@/core/spaces/service');
+    const { name } = await getSpace({ userId }, space.workspaceId);
+    staticParts.push(spaceSessionNotice(name, space.role, can(space.role, 'run_agent_write')));
+  }
 
   // Append the volatile per-turn context (date, summary, history) after the
   // whole static/semi-static instruction block — keeps the prefix cacheable.
@@ -620,7 +648,7 @@ export async function runRootAgent(
   const worker = await agentManager.spawn({
     sessionId,
     userId,
-    workspaceId,
+    ...scope,
     topic: routedLane,
     model: modelName,
     modelName: selectedModel.name,

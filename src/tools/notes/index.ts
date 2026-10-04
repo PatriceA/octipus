@@ -7,7 +7,21 @@ import { agentKnowledgeScope } from '@/core/rag/knowledge-scope';
 import type { ToolManifest } from '@/core/types';
 import { isRootAgent } from '@/core/types';
 import { getKnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
-import { getNoteRepository, personalNoteScope } from '@/db/repositories/note-repository';
+import { getNoteRepository, type NoteScope, personalNoteScope } from '@/db/repositories/note-repository';
+import { reposFor } from '@/db/repositories/content';
+import type { AgentContext } from '@/core/types';
+
+/**
+ * The note scope of an agent's tools (§5.6): the space's notes in a space
+ * (through `reposFor`, by the member's role); otherwise the user's personal
+ * notes in the agent's workspace, or across their personal workspaces when
+ * `narrow` is false (by-id reads and the list, as before spaces).
+ */
+function notesScope(context: AgentContext, narrow = true): NoteScope {
+  const repos = reposFor(context);
+  if (repos.kind === 'space' || narrow) return repos.noteScope;
+  return personalNoteScope(context.userId);
+}
 import { BaseTool, createParameterSchema } from '../base-tool';
 
 /**
@@ -63,7 +77,7 @@ export class NotesTool extends BaseTool {
       }),
       async (args, context) => {
         const result = await getNoteService().save({
-          scope: personalNoteScope(context.userId, context.workspaceId ?? null),
+          scope: notesScope(context),
           id: (args.id as string) || undefined,
           slug: (args.slug as string) || undefined,
           title: args.title as string,
@@ -95,15 +109,18 @@ export class NotesTool extends BaseTool {
       async (args, context) => {
         const svc = getNoteService();
         const note = args.id
-          ? await svc.getById(personalNoteScope(context.userId), args.id as string)
+          ? await svc.getById(notesScope(context, false), args.id as string)
           : args.slug
-            ? await svc.getBySlug(personalNoteScope(context.userId, context.workspaceId ?? null), args.slug as string)
+            ? await svc.getBySlug(notesScope(context), args.slug as string)
             : null;
         if (!note) {
           if (!args.id && !args.slug) throw new Error('read_note requires id or slug');
           return { error: 'Note not found.' };
         }
-        const backlinks = await getKnowledgeLinkRepository().getBacklinks(context.userId, 'note', note.id);
+        const repos = reposFor(context);
+        const backlinks = repos.kind === 'space'
+          ? await repos.links.getBacklinks('note', note.id)
+          : await getKnowledgeLinkRepository().getBacklinks(context.userId, 'note', note.id);
         return {
           id: note.id,
           slug: note.slug,
@@ -126,7 +143,7 @@ export class NotesTool extends BaseTool {
         limit: { type: 'number', description: 'Max results (default 50)', default: 50 },
       }),
       async (args, context) => {
-        const list = await getNoteService().list(personalNoteScope(context.userId), {
+        const list = await getNoteService().list(notesScope(context, false), {
           kind: (args.kind as string) || undefined,
           tag: (args.tag as string) || undefined,
           limit: (args.limit as number) || 50,
@@ -162,7 +179,7 @@ export class NotesTool extends BaseTool {
       }),
       async (args, context) => {
         const note = await getNoteService().capture(
-          personalNoteScope(context.userId, context.workspaceId ?? null),
+          notesScope(context),
           args.text as string,
           (args.date as string) || undefined,
         );
@@ -244,7 +261,7 @@ export class NotesTool extends BaseTool {
         limit: { type: 'number', description: 'Max suggestions (default 5)', default: 5 },
       }),
       async (args, context) => {
-        const suggestions = await getSuggestionService().suggestForNote(personalNoteScope(context.userId, context.workspaceId ?? null), args.note_id as string, (args.limit as number) || 5);
+        const suggestions = await getSuggestionService().suggestForNote(notesScope(context), args.note_id as string, (args.limit as number) || 5);
         return { suggestions, hint: suggestions.length === 0 ? 'No suggestions (either nothing related, or no embedding model configured).' : 'Accept a suggestion with knowledge.link_knowledge.' };
       },
       { permissionAction: 'read' },
@@ -257,7 +274,7 @@ export class NotesTool extends BaseTool {
         id: { type: 'string', description: 'Note id', required: true },
       }),
       async (args, context) => {
-        const ok = await getNoteService().archive(personalNoteScope(context.userId), args.id as string);
+        const ok = await getNoteService().archive(notesScope(context, false), args.id as string);
         return { archived: ok };
       },
       { permissionAction: 'write' },
@@ -285,14 +302,16 @@ export class NotesTool extends BaseTool {
         if (order && !['asc', 'desc'].includes(order)) {
           throw new Error(`Unknown order "${order}" — use asc | desc.`);
         }
-        const rows = await getNoteRepository().query(context.userId, {
+        const repos = reposFor(context);
+        const query = {
           kind: (args.kind as string) || undefined,
           tag: (args.tag as string) || undefined,
           frontmatter: (args.frontmatter as Record<string, unknown>) || undefined,
           sort: sort as 'updated' | 'created' | 'title' | 'date' | undefined,
           order: order as 'asc' | 'desc' | undefined,
           limit: Math.min(1000, Math.max(1, (args.limit as number) || 100)),
-        });
+        };
+        const rows = repos.kind === 'space' ? await repos.notes.query(query) : await getNoteRepository().query(context.userId, query);
         return { notes: rows.map((n) => ({ id: n.id, slug: n.slug, title: n.title, kind: n.noteKind, tags: n.tags, noteDate: n.noteDate, frontmatter: n.frontmatter, updatedAt: n.updatedAt })) };
       },
       { permissionAction: 'read' },
@@ -307,6 +326,7 @@ export class NotesTool extends BaseTool {
         hops: { type: 'number', description: 'Neighbourhood radius (default 1)', default: 1 },
       }),
       async (args, context) => {
+        if (context.space) throw new Error('export_canvas is not available in a shared space: the graph walk is per user.');
         const canvas = await getCanvasBuilder().fromNeighbourhood(
           context.userId,
           { type: args.entry_type as string, id: args.entry_id as string },

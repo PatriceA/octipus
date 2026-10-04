@@ -6,7 +6,7 @@ import { ACTIVE_TASK_STATUSES, assigneePatch, TASK_ASSIGNEE_KINDS, TASK_STATUSES
 import { type Nested, nestTasks, normalizeEstimate, toLookup, waitingOn, waitingReason } from '@/core/tasks/structure';
 import { resolveUserTimezone } from '@/core/tasks/timezone';
 import type { AgentContext, ToolManifest } from '@/core/types';
-import { scopedRepos } from '@/db/repositories/scoped';
+import { contentRepos } from '@/db/repositories/content';
 import { agentPrincipal } from '@/security/principal';
 import { BaseTool, createParameterSchema } from '../base-tool';
 
@@ -72,7 +72,7 @@ export class TasksTool extends BaseTool {
           dueBefore = new Date();
           dueBefore.setHours(23, 59, 59, 999);
         }
-        const repo = scopedRepos(principal).tasks;
+        const repo = contentRepos(principal).tasks;
         const status = args.status as string | undefined;
         const [tasks, active] = await Promise.all([
           repo.listOwn({
@@ -123,7 +123,7 @@ export class TasksTool extends BaseTool {
             source: normalizeSource(args.source),
             sourceRef: context.sessionId ? { sessionId: context.sessionId } : undefined,
           };
-          const task = await scopedRepos(principal).tasks.create(values);
+          const task = await contentRepos(principal).tasks.create(values);
           await auditAgentTaskMutation(context, task.id, 'create', changedTaskFields(values));
           return { created: true, task: summarize(task) };
         } catch (err) {
@@ -186,7 +186,7 @@ export class TasksTool extends BaseTool {
       }),
       async (args, context) => {
         const principal = agentPrincipal(context);
-        const repo = scopedRepos(principal).tasks;
+        const repo = contentRepos(principal).tasks;
         const existing = await repo.findById(args.id as string);
         if (!existing) return { error: 'Task not found' };
         const status = args.status as string | undefined;
@@ -229,7 +229,7 @@ export class TasksTool extends BaseTool {
       }),
       async (args, context) => {
         const principal = agentPrincipal(context);
-        const repo = scopedRepos(principal).tasks;
+        const repo = contentRepos(principal).tasks;
         const existing = await repo.findById(args.id as string);
         if (!existing) return { error: 'Task not found' };
         // Idempotent: keep the original completedAt if already done.
@@ -253,7 +253,7 @@ export class TasksTool extends BaseTool {
         release: { type: 'boolean', description: 'Give the claim back instead of taking it' },
       }),
       async (args, context) => {
-        const repo = scopedRepos(agentPrincipal(context)).tasks;
+        const repo = contentRepos(agentPrincipal(context)).tasks;
         const actor = agentActor(context);
         if (args.release) {
           const released = await repo.release(args.id as string, actor);
@@ -283,7 +283,7 @@ export class TasksTool extends BaseTool {
       async (args, context) => {
         const body = typeof args.body === 'string' ? args.body.trim().slice(0, 10_000) : '';
         if (!body) return { error: 'Comment body is required' };
-        const comment = await scopedRepos(agentPrincipal(context)).tasks.addComment(args.id as string, {
+        const comment = await contentRepos(agentPrincipal(context)).tasks.addComment(args.id as string, {
           authorKind: 'agent',
           authorRef: agentActor(context),
           body,

@@ -22,6 +22,15 @@ export interface CompletionOptions {
   agentId?: string;
   requestType?: string;
   accountingMetadata?: Record<string, unknown>;
+  /**
+   * Accounting only, never sent to the provider: the workspace the call
+   * works for and who pays (docs/plans/coworking-spec.md D13). Usually set
+   * by the ambient usage context of the turn (`withAgentUsage`);
+   * install-topic calls (compaction, embeddings, memory extraction,
+   * toolshim, decision, vision, ocr) stamp `install`.
+   */
+  workspaceId?: string | null;
+  funding?: import('@/db/schema/models').CostFunding;
   /** Internal ownership marker, never sent to the provider. */
   accountingOwner?: boolean;
   accountingResponse?: (response: Pick<CompletionResult, 'usage' | 'model' | 'requestId'> & { provider?: string }) => void;

@@ -1,4 +1,5 @@
 import { Elysia, t } from '@/api/http';
+import { buildAgentContext, fundingFor, withAgentUsage } from '@/core/agent/context';
 import { apiContext } from '@/api/context';
 import { ROLE_CONFIGS } from '@/core/agent/roles';
 import { getExtensionRegistry } from '@/extensions/registry';
@@ -300,23 +301,24 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
       // Construct a minimal AgentContext for API-driven execution
       // Keep system user ID as-is so vault lookups (OAuth tokens) work correctly
       const userId = user.id;
-      const context: import('@/core/types').AgentContext = {
+      // A personal route: the principal's workspace is always personal here
+      // (`SPACE_ROUTES`), so the scope is personal.
+      const scope = { workspaceId: principal?.workspaceId ?? null, space: null, trigger: 'user' as const, funding: fundingFor('user', null) };
+      const context = buildAgentContext({
         id: `api-${Date.now().toString(36)}`,
         sessionId: '',
         userId,
-        workspaceId: principal?.workspaceId ?? null,
+        scope,
         topic: 'api',
         model: 'api',
         role: 'general',
         attended: false,
         status: 'running',
-        createdAt: new Date(),
-        updatedAt: new Date(),
         metadata: { source: 'mcp-bridge', isSystemUser: user.id === 'system' },
-      };
+      });
 
       try {
-        const result = await tool.execute(body.args || {}, context);
+        const result = await withAgentUsage(userId, scope, () => tool.execute(body.args || {}, context));
         return { result };
       } catch (err) {
         set.status = err instanceof ApprovalBlockedError ? 409 : 400;

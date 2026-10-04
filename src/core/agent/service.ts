@@ -11,7 +11,7 @@ import { generateRunId, runWithContext } from '@/core/run-context';
 import { type AttachedFileRef, buildAttachedFilesContext } from '@/core/session-files';
 import { recordClassification, recordRootRun } from '@/core/telemetry';
 import { TrajectoryRecorder } from '@/core/trajectories/recorder';
-import type { AgentContext } from '@/core/types';
+import type { AgentContext, AgentTrigger } from '@/core/types';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { getModelRegistry } from '@/models/model-registry';
@@ -30,7 +30,10 @@ import { guardOutput, stripSwarmScaffolding } from './output-guard';
 import { saveProgressMessage } from './progress-message';
 import { filterPII } from './pii-filter';
 import { maybeCompactSession } from './session-compaction';
-import { resolveSession, turnWorkspaceId } from './session-resolver';
+import { resolveSession } from './session-resolver';
+import { type AgentScope, resolveAgentScope, triggerForChannel } from './context';
+import { sessionAudience } from './audience';
+import { bindProviderUsageContext, withProviderUsageContext } from '@/models/providers/instrumented';
 import { appendSources, type MessageClassification, type ResponseMetadata } from './types';
 import { spawnWorker } from './worker-spawner';
 
@@ -194,7 +197,15 @@ export class AgentService {
      * are recognised on it); only the model sees it framed.
      */
     groupTurn?: GroupTurn,
+    /**
+     * What started the turn (coworking §5.6). Omitted: derived from the
+     * channel (`triggerForChannel`) — a group thread is `room`, hook,
+     * heartbeat and cron channels are `schedule`, `monitor` is `monitor`,
+     * every interactive channel is `user`.
+     */
+    trigger?: AgentTrigger,
   ): Promise<TurnResult> {
+    const turnTrigger = trigger ?? triggerForChannel(channel, !!groupTurn);
     // Controls must reach a running turn; queuing /stop behind it defeats cancellation.
     // Background wake-ups always take the normal queue and cannot invoke this path.
     if (!beforeStart) {
@@ -221,9 +232,13 @@ export class AgentService {
     return withSessionTurn(sessionId, async () => {
       await beforeStart?.();
       const runId = generateRunId();
+      // The whole turn runs inside one usage context; the turn binds its
+      // workspace and funding once it has resolved them, so every model call
+      // underneath is attributed to the space and its funding (§5.6).
       return runWithContext(
         { runId, sessionId, userId, channel: channel ?? 'api', origin: channel ?? 'api' },
-        () => this.handleMessageInner(sessionId, userId, message, channel, attachedFiles, forcedOutputMode, false, groupTurn),
+        () => withProviderUsageContext({ userId }, () =>
+          this.handleMessageInner(sessionId, userId, message, channel, attachedFiles, forcedOutputMode, false, groupTurn, turnTrigger)),
       );
     });
   }
@@ -264,6 +279,7 @@ export class AgentService {
     bypassVoiceGate = false,
     /** See `handleMessage`. */
     groupTurn?: GroupTurn,
+    trigger: AgentTrigger = 'user',
   ): Promise<TurnResult> {
     // Trajectory recorder — observes this run for later eval/fine-tuning.
     // Constructed early so the sessionId below can overwrite it.
@@ -309,10 +325,17 @@ export class AgentService {
       const session = await sessionRepository.findById(resolvedSessionId);
       // The turn runs in the session's workspace (the user's default when the
       // session has none), resolved once and threaded through every spawn,
-      // task, artifact, file and memory call below via
-      // `AgentContext.workspaceId`. A workspace the user does not own, or a
-      // failed resolution, fails the turn: it never runs unscoped.
-      const workspaceId = await turnWorkspaceId(userId, session?.workspaceId);
+      // task, artifact, file and memory call below via the agent scope. A
+      // workspace the user neither owns nor may run the agent in (a viewer,
+      // a removed member, an archived space), or a failed resolution, fails
+      // the turn: it never runs unscoped (§5.6).
+      if (!session) throw new Error('Session not found');
+      const scope = await resolveAgentScope({ session, userId, trigger });
+      const workspaceId = scope.workspaceId as string;
+      bindProviderUsageContext({ workspaceId: scope.workspaceId, funding: scope.funding });
+      // Who reads the replies decides whether personal memories, learning and
+      // the profile may enter the turn (D10, I7).
+      const audience = await sessionAudience(session);
 
       trajectory = new TrajectoryRecorder({
         rootSessionId: resolvedSessionId,
@@ -321,10 +344,13 @@ export class AgentService {
         channel,
       });
 
-      // A group-channel thread: the reply is posted where every member can
-      // read it, so the requester's personal memories are neither injected
-      // nor learned from (docs/plans/group-chat-bot.md §4).
-      const sharedAudience = !!session?.groupChannelId;
+      // A group-channel thread or a room: the reply is posted where every
+      // member can read it (docs/plans/group-chat-bot.md §4). In those and in
+      // a space session the requester's personal memories are neither
+      // injected nor learned from (`audience.personalMemoryOff`).
+      const sharedAudience = audience.shared;
+      const memoryOff = audience.personalMemoryOff;
+      const groupThread = audience.kind === 'group';
       // The flow guard's group rule keys on the session; set it from the stored
       // session on every turn, whichever entry point (channel, web chat,
       // background wake-up) the turn came through, and after any restart.
@@ -336,8 +362,8 @@ export class AgentService {
       // Work taken on in this thread (docs/plans/group-chat-bot.md §5): the
       // open tasks and the requester's newest board notes ride along, and the root
       // agent gets `complete_taken_task` for them.
-      const takenTasks = sharedAudience ? await loadTakenTasks(userId, resolvedSessionId) : { tasks: [], block: '' };
-      const groupContextBlock = sharedAudience
+      const takenTasks = groupThread ? await loadTakenTasks(userId, resolvedSessionId) : { tasks: [], block: '' };
+      const groupContextBlock = groupThread
         ? groupTurnContext({ requester: groupTurn?.requester, context: groupTurn?.context, take: groupTurn?.take }) + takenTasks.block
         : '';
       if (session) {
@@ -479,7 +505,7 @@ export class AgentService {
         // plan often references the user's preferences ("use my usual
         // stack"); withholding memory here would degrade plan quality.
         let planMemoryBlock = '';
-        if (!sharedAudience) try {
+        if (!memoryOff) try {
           const memories = await retrieveForContext({
             userId,
             agentScope: classification.topic ?? null,
@@ -498,7 +524,7 @@ export class AgentService {
         const { response, agentId, sources: _planSources, outcome, limit: planLimit } = await this.runRootAgent(
           resolvedSessionId, userId, planMessage, classification, inputGuard.flags, channel,
           planMemoryBlock + groupContextBlock,
-          workspaceId,
+          scope,
           undefined,
           { takenTasks: takenTasks.tasks },
         );
@@ -517,7 +543,7 @@ export class AgentService {
         // executor LLM sees the brief — facts in the brief should
         // get a chance to be extracted. Fire-and-forget like the
         // main path.
-        if (!sharedAudience) updateMemoriesAfterTurn({
+        if (!memoryOff) updateMemoriesAfterTurn({
           userId,
           workspaceId,
           agentScope: classification.topic ?? null,
@@ -595,7 +621,7 @@ export class AgentService {
           // once here — cosmetic transcript dup. Thread a skip-persist flag through
           // runRootAgent if it ever bloats context enough to matter.
           return this.handleMessageInner(
-            resolvedSessionId, userId, action.workMessage, channel, action.attachedFiles, forcedOutputMode, true, groupTurn,
+            resolvedSessionId, userId, action.workMessage, channel, action.attachedFiles, forcedOutputMode, true, groupTurn, trigger,
           );
         }
         if (action.kind === 'propose') {
@@ -632,7 +658,7 @@ export class AgentService {
       // memories without dragging unrelated rows into every turn.
       const memoryScope = classification.topic ?? null;
       let memoryBlock = '';
-      if (!sharedAudience) try {
+      if (!memoryOff) try {
         const memories = await retrieveForContext({
           userId,
           agentScope: memoryScope,
@@ -658,7 +684,7 @@ export class AgentService {
         // Cadence gate. `off` short-circuits before any work; the
         // `on_compaction` path is handled inside session-compaction.ts
         // so the per-turn path skips here.
-        if (memoryCadence !== 'per_turn' || sharedAudience) return;
+        if (memoryCadence !== 'per_turn' || memoryOff) return;
         // Best-effort provenance: pick up the just-persisted user
         // message id. Returns undefined when persistence hasn't landed
         // yet (e.g. the worker persists asynchronously) — that's fine,
@@ -711,7 +737,7 @@ export class AgentService {
       const { response, agentId, sources, outcome, limit } = await this.runRootAgent(
         resolvedSessionId, userId, message, classification, inputGuard.flags, channel,
         turnContext + groupContextBlock,
-        workspaceId,
+        scope,
         { mode: effectiveOutputMode, forced: outputForced },
         { takenTasks: takenTasks.tasks },
       );
@@ -760,8 +786,9 @@ export class AgentService {
       }
 
       fireMemoryUpdate();
-      // Group threads are never learned from (the processor refuses them too).
-      if (outcome === 'success' && agentId && !sharedAudience) {
+      // Group threads, rooms and space sessions are never learned from (the
+      // processor refuses them too).
+      if (outcome === 'success' && agentId && !memoryOff) {
         try {
           const { enqueueTurnLearning } = await import('@/core/learning/queue');
           await enqueueTurnLearning(resolvedSessionId, userId, agentId, new Date(startTime));
@@ -842,17 +869,17 @@ export class AgentService {
     userId: string,
     message: string,
     classification: MessageClassification,
-    guardFlags: string[] = [],
-    channel?: string,
+    guardFlags: string[],
+    channel: string | undefined,
     /**
      * Memory-redesign Phase D — appended to the root agent's system
      * prompt. Pre-rendered by `handleMessage` once per turn so both
      * the root agent and the directResponse path see the same
      * long-term memory block.
      */
-    extraSystemContext: string = '',
-    /** Workspace scope inherited by every spawned child. */
-    workspaceId: string | null = null,
+    extraSystemContext: string,
+    /** The turn's scope, inherited by every spawned child. */
+    scope: AgentScope,
     /** Chat/work split (Thread 3): inline vs file deliverable directive. */
     outputDirective: { mode: 'inline' | 'file'; forced: boolean } = { mode: 'inline', forced: false },
     extras: RootRunExtras = {},
@@ -860,7 +887,7 @@ export class AgentService {
     return runRootAgent(
       this, this.deps,
       sessionId, userId, message, classification, guardFlags, channel,
-      extraSystemContext, workspaceId, outputDirective, extras,
+      extraSystemContext, scope, outputDirective, extras,
     );
   }
 

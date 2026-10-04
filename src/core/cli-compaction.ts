@@ -72,7 +72,8 @@ export async function compactCliConversation(session: Session, instructions: str
   } finally {
     release();
     await recordProviderUsage({ model: owner.model, messages: [], userId: session.userId, sessionId: session.id,
-      modelConfigName: model?.name, accountingMetadata: { purpose: 'cli_compaction' } }, 'cli', { usage, model: owner.model }, !completed);
+      modelConfigName: model?.name, requestType: 'compaction', workspaceId: session.workspaceId ?? null,
+      accountingMetadata: { purpose: 'cli_compaction' } }, 'cli', { usage, model: owner.model }, !completed);
   }
 }
 

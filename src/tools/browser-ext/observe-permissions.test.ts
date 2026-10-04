@@ -6,7 +6,7 @@ vi.mock('@/api/browser-bridge', () => ({ getBrowserBridge: () => ({ sendCommand:
 vi.mock('@/security/permissions', () => ({ getPermissionManager: () => ({ check: mocks.check }) }));
 vi.mock('@/db/repositories/audit-repository', () => ({ auditRepository: { log: async () => {} } }));
 vi.mock('@/core/action-recovery', () => ({ actionRecovery: { run: mocks.recovery }, isReadOnlyAction: (a: string) => a === 'read' }));
-const context: AgentContext = { id: 'probe', userId: 'user', sessionId: 'session', role: 'general', root: false, attended: false, model: '', topic: '', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} };
+const context: AgentContext = { space: null, trigger: 'user', funding: 'own',  id: 'probe', userId: 'user', sessionId: 'session', role: 'general', root: false, attended: false, model: '', topic: '', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} };
 const args = { tabId: 42, url: 'https://ci.example/123', selector: '#status' };
 let tool: BrowserExtTool;
 beforeEach(async () => {

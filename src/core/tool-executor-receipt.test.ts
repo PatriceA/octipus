@@ -15,7 +15,7 @@ import type { AgentContext, ToolCall } from './types';
  */
 
 function makeContext(): AgentContext {
-  return {
+  return { space: null, trigger: 'user', funding: 'own', 
     id: 'agent-test',
     sessionId: '00000000-0000-0000-0000-000000000000',
     userId: 'user-test',

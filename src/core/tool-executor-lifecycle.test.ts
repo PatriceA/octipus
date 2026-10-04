@@ -7,7 +7,7 @@ import * as hooks from '@/hooks/manager';
 import { ToolExecutor } from './tool-executor';
 import type { AgentContext, ToolCall } from './types';
 
-const context = (): AgentContext => ({
+const context = (): AgentContext => ({ space: null, trigger: 'user', funding: 'own', 
   id: 'lifecycle-agent', sessionId: '00000000-0000-0000-0000-000000000000',
   userId: 'test', model: 'test', topic: '', role: 'general', root: true,
   status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {},

@@ -445,6 +445,9 @@ export interface ScorerContext {
   canRunCommands?: boolean;
   /** The child's role, for the permission decision. */
   role?: string;
+  /** The child's session and space, for the space role cap and I6 (`routeApprovalFor`). */
+  sessionId?: string;
+  space?: import('@/core/types').AgentSpace | null;
   /**
    * The dev-mode project directory the child's own tools operated in, when the
    * session has one. Absent for an ordinary session, where the workspace root
@@ -891,28 +894,35 @@ async function evaluate(
       }
       {
         try {
-          const [{ getPermissionManager }, { routeApproval }] = await Promise.all([
+          const [{ getPermissionManager }, { routeApprovalFor }] = await Promise.all([
             import('@/security/permissions'),
-            import('@/security/approval-policy'),
+            import('@/security/approval-route'),
           ]);
           const permission = await getPermissionManager().check(ctx.userId, 'shell', 'execute', {
             command: scorer.command,
           });
           const { getConfig } = await import('@/config');
-          const decision = routeApproval({
-            level: permission.level,
-            role: ctx.role,
-            root: false,
-            attended: false,
-            toolId: 'shell',
+          // In a space the role cap and I6 apply here too (§5.6): the
+          // child's space scope rides on the scorer context.
+          const decision = await routeApprovalFor(
+            {
+              userId: ctx.userId,
+              sessionId: ctx.sessionId,
+              role: ctx.role,
+              root: false,
+              attended: false,
+              workspaceId: ctx.space?.workspaceId ?? null,
+              space: ctx.space ?? null,
+            },
             // The SAME action the permission was read for. `matches()` builds
             // `${toolId}__${action}`, so passing `shell__run` here makes an
             // operator's `unattendedDenyActions: ['shell__execute']` compare
             // against `shell__shell__run` and never fire — while that same
             // entry does block the child's own shell tool.
-            action: 'execute',
-            unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions,
-          });
+            { toolId: 'shell', action: 'execute', toolName: 'run' },
+            permission,
+            { unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions },
+          );
           if (decision.route !== 'execute') {
             return {
               scorer: label,

@@ -21,7 +21,7 @@ let project: string;
 
 function agentCtx(sessionId: string): AgentContext {
   const now = new Date();
-  return {
+  return { space: null, trigger: 'user', funding: 'own', 
     id: 'a1', sessionId, userId: 'u1', workspaceId: null, topic: 'general', model: '', role: 'general',
     status: 'running', createdAt: now, updatedAt: now, metadata: {},
   };

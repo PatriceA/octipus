@@ -428,7 +428,7 @@ describe('createSpawnChildTool', () => {
 
     const result = await tool.execute(
       { topic: 'security', subtopic: 'x' /* missing taskBrief + expectedOutput */ },
-      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+      { space: null, trigger: 'user', funding: 'own',  id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     );
     expect(typeof result).toBe('string');
     expect(String(result)).toContain('spawn_child:');
@@ -453,7 +453,7 @@ describe('createSpawnChildTool', () => {
       role: 'research', topic: 'research', subtopic: 'x',
       taskBrief: 'look into the thing', expectedOutput: 'a note', handoff,
     };
-    const ctx = { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general' as const, status: 'running' as const, createdAt: new Date(), updatedAt: new Date(), metadata: {} };
+    const ctx = { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general' as const, status: 'running' as const, space: null, trigger: 'user' as const, funding: 'own' as const, createdAt: new Date(), updatedAt: new Date(), metadata: {} };
 
     const first = await tool.execute(args, ctx);
     expect(String(first)).toContain('one check before a child starts');
@@ -480,7 +480,7 @@ describe('createSpawnChildTool', () => {
     const tool = createSpawnChildTool(parent, spawner, hooks);
     await tool.execute(
       { role: 'research', topic: 'research', subtopic: 'x', taskBrief: 'look into the thing', expectedOutput: 'a note' },
-      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+      { space: null, trigger: 'user', funding: 'own',  id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     );
     expect(spawned).toBe(1);
     expect(challenges).toBe(0); // the check is not even claimed
@@ -509,7 +509,7 @@ describe('createSpawnChildTool', () => {
     } as unknown as SwarmSpawner;
     await createSpawnChildTool(makeParent(), spawner, undefined, opts).execute(
       { topic: 'security', subtopic: 'oauth', taskBrief: 'Review the flow.', expectedOutput: { shape: 'summary' } },
-      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+      { space: null, trigger: 'user', funding: 'own',  id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     );
     return internal;
   }
@@ -561,7 +561,7 @@ describe('createSpawnChildTool', () => {
         taskBrief: 'Review the flow.',
         expectedOutput: { shape: 'summary' },
       },
-      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+      { space: null, trigger: 'user', funding: 'own',  id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     );
     expect(received).not.toBeNull();
     expect((received as any).topic).toBe('security');
@@ -611,7 +611,7 @@ describe('createSpawnChildTool', () => {
     );
     const tool = createSpawnChildTool(makeParent(), spawner, hooks, { lite });
     expect(tool.parameters.properties).toHaveProperty('handoff');
-    const spawnCtx = { id: 'ctx', sessionId: 's1', userId: 'u', model: '', topic: '', role: 'general' as const, status: 'running' as const, createdAt: new Date(), updatedAt: new Date(), metadata: {} };
+    const spawnCtx = { id: 'ctx', sessionId: 's1', userId: 'u', model: '', topic: '', role: 'general' as const, status: 'running' as const, space: null, trigger: 'user' as const, funding: 'own' as const, createdAt: new Date(), updatedAt: new Date(), metadata: {} };
     // One second thought per turn: the first call after reads asks, the retry starts the child.
     expect(String(await tool.execute({ role: 'coding', taskBrief: 'Complete only the parser fix.', handoff }, spawnCtx)))
       .toContain('one check before a child starts');
@@ -636,13 +636,13 @@ describe('createSpawnChildTool', () => {
     );
     const tool = createSpawnChildTool(makeParent(), spawner, hooks, opts);
     const args = { role: 'architecture', taskBrief: 'implement the feature and fix the bug in the backend code' };
-    const ctx = { id: 'ctx', sessionId: 's1', userId: 'u', model: '', topic: '', role: 'general', status: 'running' as const, createdAt: new Date(), updatedAt: new Date(), metadata: {} };
+    const ctx = { id: 'ctx', sessionId: 's1', userId: 'u', model: '', topic: '', role: 'general', status: 'running' as const, space: null, trigger: 'user' as const, funding: 'own' as const, createdAt: new Date(), updatedAt: new Date(), metadata: {} };
     expect(String(await tool.execute(args, ctx))).toContain('provide handoff');
     expect(called).toBe(false);
     // Past the handoff guard the second thought is still owed once.
-    expect(String(await tool.execute({ ...args, handoff }, ctx))).toContain('one check before a child starts');
+    expect(String(await tool.execute({ space: null, trigger: 'user', funding: 'own',  ...args, handoff }, ctx))).toContain('one check before a child starts');
     expect(called).toBe(false);
-    expect(String(await tool.execute({ ...args, handoff }, ctx))).toContain('status="ok"');
+    expect(String(await tool.execute({ space: null, trigger: 'user', funding: 'own',  ...args, handoff }, ctx))).toContain('status="ok"');
     expect(called).toBe(true);
   });
 
@@ -656,7 +656,7 @@ describe('createSpawnChildTool', () => {
       { current: { registerPendingChild: () => {}, pendingDetachedCount: () => 0, getSideEffectCounters: () => ({ byName: {} }) } }, () => 0,
     );
     await createSpawnChildTool(makeParent(), spawner, hooks).execute({ role: 'coding', taskBrief: 'Implement the parser.' },
-      { id: 'ctx', sessionId: 's1', userId: 'u', model: '', topic: '', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} });
+      { space: null, trigger: 'user', funding: 'own',  id: 'ctx', sessionId: 's1', userId: 'u', model: '', topic: '', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} });
     expect(called).toBe(true);
   });
 
@@ -719,7 +719,7 @@ describe('createSpawnChildTool', () => {
         expectedOutput: { shape: 'summary' },
         mode: 'detach',
       },
-      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'research', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+      { space: null, trigger: 'user', funding: 'own',  id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'research', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     );
     expect(seen).toHaveLength(1);
     expect(String(out)).toContain('status="pending"');
@@ -764,7 +764,7 @@ describe('createSpawnChildTool', () => {
     const context = {
       id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000',
       userId: 'u', model: '', topic: '', role: 'research' as const,
-      status: 'running' as const, createdAt: new Date(), updatedAt: new Date(), metadata: {},
+      status: 'running' as const, space: null, trigger: 'user' as const, funding: 'own' as const, createdAt: new Date(), updatedAt: new Date(), metadata: {},
     };
 
     // A CLI worker leaves the capability ref null. Its child result must be
@@ -807,7 +807,7 @@ describe('createSpawnChildTool', () => {
         expectedOutput: { shape: 'summary' },
         mode: 'detach',
       },
-      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'research', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+      { space: null, trigger: 'user', funding: 'own',  id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'research', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     );
     expect(String(out)).toContain('already at max pending detached (3)');
   });
@@ -824,7 +824,7 @@ describe('createSpawnChildTool', () => {
     });
     const out = String(await tool.execute(
       { topic: 'research', subtopic: 'page-3', taskBrief: 'Summarize source 3', expectedOutput: { shape: 'summary' } },
-      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'research', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+      { space: null, trigger: 'user', funding: 'own',  id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'research', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     ));
     expect(out).toContain('already at max pending detached (2)');
     expect(out).toContain('not spawns per turn');
@@ -862,7 +862,7 @@ describe('createSpawnChildTool', () => {
         expectedOutput: { shape: 'summary' },
         mode: 'detach',
       },
-      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+      { space: null, trigger: 'user', funding: 'own',  id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     );
     expect(seen).toHaveLength(1);
     expect(String(out)).toContain('status="pending"');
@@ -894,7 +894,7 @@ describe('createSpawnChildTool', () => {
         taskBrief: 'brief',
         expectedOutput: { shape: 'summary' },
       },
-      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+      { space: null, trigger: 'user', funding: 'own',  id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     );
     expect(awaitCalled).toBe(true);
     expect(String(out)).toContain('nodeId="n-await"');
@@ -916,7 +916,7 @@ describe('createSpawnChildTool', () => {
     });
     const out = await tool.execute(
       { topic: 'research', subtopic: 'p', taskBrief: 'b', expectedOutput: { shape: 'summary' } },
-      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'research', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+      { space: null, trigger: 'user', funding: 'own',  id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'research', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     );
     expect(registered).toBe(true);
     expect(String(out)).toContain('status="pending"');
@@ -944,7 +944,7 @@ describe('createSpawnChildTool', () => {
         expectedOutput: { shape: 'summary' },
         mode: 'detach',
       },
-      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'research', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+      { space: null, trigger: 'user', funding: 'own',  id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'research', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     );
     expect(awaitCalled).toBe(true);
     expect(String(out)).toContain('nodeId="n1"');
@@ -1043,7 +1043,7 @@ describe('bounded delegation handoff validation', () => {
 });
 
 describe('spawn_child resumeKey', () => {
-  const ctx = { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general' as const, status: 'running' as const, createdAt: new Date(), updatedAt: new Date(), metadata: {} };
+  const ctx = { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general' as const, status: 'running' as const, space: null, trigger: 'user' as const, funding: 'own' as const, createdAt: new Date(), updatedAt: new Date(), metadata: {} };
 
   test('is optional, trimmed and bounded', () => {
     const base = { role: 'coding', taskBrief: 'Fix parser.' };
@@ -1080,7 +1080,7 @@ describe('spawn_child resumeKey', () => {
     try {
       const tool = createSpawnChildTool({ id: 'parent-1', rootSessionId: 's1' } as AgentNode, spawner);
       await tool.execute({ role: 'coding', topic: 'coding', subtopic: 'x', taskBrief: 'Fix parser.', expectedOutput: { shape: 'summary' }, resumeKey: 'parser-fix' }, ctx);
-      await tool.execute({ role: 'coding', topic: 'coding', subtopic: 'x', taskBrief: 'Fix parser.', expectedOutput: { shape: 'summary' } }, ctx);
+      await tool.execute({ space: null, trigger: 'user', funding: 'own',  role: 'coding', topic: 'coding', subtopic: 'x', taskBrief: 'Fix parser.', expectedOutput: { shape: 'summary' } }, ctx);
     } finally {
       agentManagerStub.spawn = null;
     }

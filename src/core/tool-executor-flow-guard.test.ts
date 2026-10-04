@@ -14,7 +14,7 @@ vi.mock('@/security/vault', () => ({ getVault: () => vault }));
 /** The direct-provider loop feeds the flow label and lets it escalate ALLOW. */
 
 const SESSION = '00000000-0000-0000-0000-00000000f10w';
-const context = (): AgentContext => ({
+const context = (): AgentContext => ({ space: null, trigger: 'user', funding: 'own', 
   id: 'agent-flow', sessionId: SESSION, userId: 'user-test', model: 'test', topic: '', role: 'general',
   root: true, attended: false, status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {},
 });

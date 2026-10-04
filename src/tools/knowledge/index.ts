@@ -1,4 +1,5 @@
 import { type EntityRef, entityRefFromSourceId, getKnowledgeGraph, type TraversalDirection } from '@/core/knowledge/graph';
+import { reposFor } from '@/db/repositories/content';
 import { slugify } from '@/core/knowledge/wikilink';
 import { CODE_NOT_INDEXED_MESSAGE, isCodeFile } from '@/core/rag/code-detection';
 import { type EmbeddingPurpose, type SearchScope, getEmbeddingService } from '@/core/rag/embeddings';
@@ -159,7 +160,8 @@ export class KnowledgeTool extends BaseTool {
         // Whose knowledge: the user the agent works for (plus product docs).
         const knowledge = agentKnowledgeScope(context);
         // Optional multi-repo scope: resolve repo names/ids to registry ids.
-        const scope = await resolveRepoScope(args.repos as string | undefined, context.userId, context.workspaceId ?? null);
+        // The repo registry is personal: no repo scope in a space.
+        const scope: SearchScope = context.space ? { allowedRepoIds: [] } : await resolveRepoScope(args.repos as string | undefined, context.userId, context.workspaceId ?? null);
 
         let results;
         switch (searchMode) {
@@ -217,6 +219,9 @@ export class KnowledgeTool extends BaseTool {
         if (entries.length === 0) {
           return { ...base, linked: [], note: 'No graph entry points among the hits (their source ids do not address knowledge entities).' };
         }
+        // The graph walk is per user; in a space it would reach the member's
+        // personal edges, so it is not offered there.
+        if (context.space) return { ...base, linked: [], note: 'Graph traversal is not available in a shared space; use read_knowledge on the hits.' };
         const traversal = await getKnowledgeGraph().traverse(context.userId, entries, { hops: 1, direction: 'both', maxNodes: 25 });
         return {
           ...base,
@@ -357,6 +362,9 @@ export class KnowledgeTool extends BaseTool {
         if (!toRef) {
           throw new Error('link_knowledge requires either to_id or to_ref to identify the target.');
         }
+        // In a space the edge is the space's (by its workspace), authored by
+        // the member; the role was checked by `routeApprovalFor`.
+        reposFor(context).can('write');
         const link = await getKnowledgeLinkRepository().create({
           userId: context.userId,
           workspaceId: context.workspaceId ?? null,
@@ -384,12 +392,18 @@ export class KnowledgeTool extends BaseTool {
         ref: { type: 'string', description: 'Canonical slug/tag to find backlinks by reference (catches ghosts + tags)' },
       }),
       async (args, context) => {
+        // The agent's scope: the space's links in a space, the user's own otherwise.
+        const repos = reposFor(context);
         const repo = getKnowledgeLinkRepository();
         let links;
         if (args.ref) {
-          links = await repo.getBacklinksByRef(context.userId, slugify(args.ref as string));
+          links = repos.kind === 'space'
+            ? await repos.links.getBacklinksByRef(slugify(args.ref as string))
+            : await repo.getBacklinksByRef(context.userId, slugify(args.ref as string));
         } else if (args.entity_type && args.entity_id) {
-          links = await repo.getBacklinks(context.userId, args.entity_type as string, args.entity_id as string);
+          links = repos.kind === 'space'
+            ? await repos.links.getBacklinks(args.entity_type as string, args.entity_id as string)
+            : await repo.getBacklinks(context.userId, args.entity_type as string, args.entity_id as string);
         } else {
           throw new Error('get_backlinks requires either ref, or both entity_type and entity_id.');
         }
@@ -411,6 +425,7 @@ export class KnowledgeTool extends BaseTool {
         link_types: { type: 'string', description: 'Optional comma-separated link types to follow (e.g. "references,derived_from")' },
       }),
       async (args, context) => {
+        if (context.space) throw new Error('traverse_knowledge is not available in a shared space: the graph walk is per user. Use get_backlinks instead.');
         const linkTypes = typeof args.link_types === 'string' && args.link_types
           ? (args.link_types as string).split(',').map((s) => s.trim()).filter(Boolean)
           : undefined;

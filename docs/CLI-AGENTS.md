@@ -179,6 +179,19 @@ counting the outer MCP envelope a second time. Native vendor telemetry can be
 incomplete, so counts are observed evidence rather than a complete audit of the
 host filesystem.
 
+## In shared spaces
+
+An install CLI model is the operator's personal subscription: it serves agents
+in a shared space only when its model row sets
+`metadata.cliAgent.sharedUse: true`. In a space each adapter runs in its
+declared space mode (`CLI_SPACE_MODES` in `src/core/cli-adapters.ts`), where
+its native tools cannot act outside Octipus's decision path: Claude-binary
+tools (Claude Code, GLM, Kimi) use `--permission-mode default` with the stdio
+permission tool and drop pre-approved `allowedTools`; Codex runs in the
+`read-only` sandbox; Antigravity in `--mode plan`. Mistral Vibe declares no
+such mode and is refused in spaces. A commenter's turn uses API models only.
+See [SPACES.md](SPACES.md).
+
 ## Authentication and fallback
 
 By default the child uses the vendor CLI's stored login/configuration. Octipus

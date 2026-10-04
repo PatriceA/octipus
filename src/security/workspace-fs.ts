@@ -355,6 +355,7 @@ export class WorkspaceFS {
       throw new WorkspaceFsError('UNAUTHENTICATED',
         `agent context has no real user (${context.userId || 'none'}); a system job passes { system: true, root }`);
     }
+    if (context.space) return WorkspaceFS.forSpace(context.space.workspaceId);
     if (isKnownSharedWorkspace(context.workspaceId)) return WorkspaceFS.forSpace(context.workspaceId as string);
     return WorkspaceFS.forRequest(agentPrincipal(context), options);
   }

@@ -2,7 +2,7 @@ import { estimateCost } from './pricing';
 import { and, desc, eq, gte, isNull, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { Cache } from '@/db/cache';
-import { type CostLogEntry, costLog, modelConfig, type NewCostLogEntry } from '@/db/schema/models';
+import { type CostFunding, type CostLogEntry, costLog, modelConfig, type NewCostLogEntry } from '@/db/schema/models';
 import { costSourceAggregates } from '@/db/cost-source';
 import { modelLogger } from '@/utils/logger';
 
@@ -125,6 +125,10 @@ export class CostTracker {
       usageAvailable?: boolean;
       provider?: string;
       lookupByModelId?: boolean;
+      /** The workspace the call worked for (a space's id for a space turn). */
+      workspaceId?: string | null;
+      /** Who pays: the requester (`own`), a sponsor, or the install (install-topic calls). */
+      funding?: CostFunding;
     }
   ): Promise<CostLogEntry> {
     const cachedInputTokens = options?.cachedInputTokens ?? 0;
@@ -175,6 +179,8 @@ export class CostTracker {
       sessionId: options?.sessionId,
       agentId: options?.agentId,
       requestType: options?.requestType,
+      workspaceId: options?.workspaceId ?? null,
+      funding: options?.funding ?? 'own',
       metadata: {
         ...options?.metadata,
         costSource,

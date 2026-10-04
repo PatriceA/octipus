@@ -4,11 +4,32 @@ import type { ModelProvider } from './interface';
 import { modelLogger } from '@/utils/logger';
 import { applyProviderSettings } from '../provider-options';
 
-export type ProviderUsageContext = Pick<CompletionOptions, 'userId' | 'sessionId' | 'agentId' | 'modelConfigName' | 'accountingMetadata'>;
+export type ProviderUsageContext = Pick<CompletionOptions, 'userId' | 'sessionId' | 'agentId' | 'modelConfigName' | 'accountingMetadata' | 'workspaceId' | 'funding'>;
 const usageContext = new AsyncLocalStorage<ProviderUsageContext>();
 export function withProviderUsageContext<T>(context: ProviderUsageContext, run: () => T): T {
   return usageContext.run({ ...usageContext.getStore(), ...context }, run);
 }
+
+/**
+ * Fill in the current usage context once a turn has resolved its scope
+ * (`AgentService.handleMessage` opens the context before it knows the
+ * session's workspace). Only this turn's context object changes: each
+ * `withProviderUsageContext` run holds its own copy. Throws outside one.
+ */
+export function bindProviderUsageContext(fields: ProviderUsageContext): void {
+  const store = usageContext.getStore();
+  if (!store) throw new Error('No usage context to bind: run the turn inside withProviderUsageContext');
+  Object.assign(store, fields);
+}
+
+/**
+ * Request types of install-topic calls (compaction, embeddings, memory
+ * extraction, toolshim, decision, vision, ocr): stamped `funding: 'install'`
+ * whatever turn they run in, so their `cost_log` rows are told apart from
+ * the agent's own (D13). The rest of the ambient context (user, session,
+ * workspace) is kept.
+ */
+const INSTALL_REQUEST_TYPES = new Set(['embedding', 'ocr', 'decision', 'vision', 'toolshim', 'compaction', 'memory_extraction']);
 
 export const SYSTEM_USAGE_USER = '00000000-0000-0000-0000-000000000000';
 
@@ -50,6 +71,8 @@ export async function recordProviderUsage(options: CompletionOptions, provider: 
       attributed ? options.userId! : SYSTEM_USAGE_USER,
       options.modelConfigName ?? options.model, result.usage.inputTokens, result.usage.outputTokens,
       { sessionId: options.sessionId, agentId: options.agentId, requestType: options.requestType ?? 'chat',
+        workspaceId: options.workspaceId ?? null,
+        funding: options.requestType && INSTALL_REQUEST_TYPES.has(options.requestType) ? 'install' : options.funding ?? 'own',
         cachedInputTokens: result.usage.cacheReadTokens, cacheCreationTokens: result.usage.cacheCreationTokens,
         reportedCost: result.usage.reportedCost, usageAvailable: result.usage.available !== false,
         provider, lookupByModelId: !options.modelConfigName, metadata: { ...options.accountingMetadata, provider, actualModel: result.model, requestId: result.requestId,

@@ -1,4 +1,6 @@
 import { getConfig } from '@/config';
+import { assertCliSpaceMode } from './cli-adapters';
+import { can, SpaceError } from '@/security/space-access';
 import { buildSelectedSkillPrompt } from '@/skills/selection';
 import { type AgentCompletionReason, readAgentCompletionReason } from '@/shared/agent-completion';
 import { agentEventRepository } from '@/db/repositories/agent-event-repository';
@@ -15,8 +17,10 @@ import { getCLIToolConfig, isCLIProvider, isResumableCliModel } from './cli-agen
 import { CLIAgentWorker } from './cli-agent-worker';
 import { getPermissionManager } from '@/security/permissions';
 import { isRealUserId } from '@/security/principal';
+import { isKnownSharedWorkspace } from '@/security/workspace-fs';
 import { getRouter } from './router';
-import type { AgentContext, AgentStatus } from './types';
+import type { AgentFunding, AgentSpace, AgentStatus, AgentTrigger } from './types';
+import { buildAgentContext, recheckSpace } from './agent/context';
 
 /** Union type for all agent worker implementations */
 export type AnyAgentWorker = AgentWorker | CLIAgentWorker;
@@ -25,7 +29,15 @@ export interface SpawnOptions {
   sessionId: string;
   userId: string;
   /** Workspace UUID for multi-tenant scoping (memory-redesign Phase B). */
-  workspaceId?: string | null;
+  workspaceId: string | null;
+  /**
+   * The space the agent works in, what started it and who pays
+   * (`resolveAgentScope` for a turn, `inheritScope(parent)` for a child —
+   * children inherit all three). See src/core/agent/context.ts.
+   */
+  space: AgentSpace | null;
+  trigger: AgentTrigger;
+  funding: AgentFunding;
   topic?: string;
   model?: string;
   /** Row identity of `model` (`model_config.name`) when the caller resolved one — see `AgentContext.modelName`. */
@@ -153,6 +165,15 @@ export class AgentManager {
       }
     }
 
+    // A space agent starts only while its requester may still run the agent
+    // there (D5, I5): the membership is re-read at every spawn, children
+    // included, so a removed member's next turn fails and a running turn
+    // cannot grow new workers. The current role replaces the snapshot.
+    const space = options.space ? await recheckSpace(options.userId, options.space) : null;
+    if (!space && isKnownSharedWorkspace(options.workspaceId)) {
+      throw new Error('An agent in a space needs its space scope (resolveAgentScope / inheritScope)');
+    }
+
     const config = getConfig();
 
     // Resolve before creating a worker: unavailable required skills must fail visibly.
@@ -193,22 +214,19 @@ export class AgentManager {
 
     const agentId = generateId();
 
-    const context: AgentContext = {
+    const context = buildAgentContext({
       id: agentId,
       sessionId: options.sessionId,
       userId: options.userId,
-      workspaceId: options.workspaceId ?? null,
+      scope: { workspaceId: options.workspaceId ?? null, space, trigger: options.trigger, funding: options.funding },
       topic: routedTopic,
       model: routedModel,
       modelName: modelEntry?.name,
       role: options.role || 'general',
       root: options.root === true,
       attended: options.attended,
-      status: 'idle',
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      metadata: { ...(options.contextMetadata ?? {}) },
-    };
+      metadata: options.contextMetadata,
+    });
 
 
     // The window belongs to the MODEL, not to the install. `agent.contextWindowSize`
@@ -228,6 +246,20 @@ export class AgentManager {
     // A `cli/...` model without a registry row used to fall through to the
     // native worker and hit the provider router with a nonsense model name.
     const isCLI = modelEntry ? isCLIProvider(modelEntry.provider) : !!getCLIToolConfig(routedModel);
+
+    // CLI models in a space (§5.6, D14): only an install CLI model marked
+    // `sharedUse`, only an adapter that declares a space mode, and never for
+    // a commenter's turn (commenters use API models only).
+    if (isCLI && space) {
+      if (!can(space.role, 'run_agent_write')) {
+        throw new SpaceError('forbidden_role', `Your role (${space.role}) runs the agent in this space with API models only; ${routedModel} is a CLI model`);
+      }
+      if (modelEntry?.metadata?.cliAgent?.sharedUse !== true) {
+        throw new SpaceError('forbidden_role', `${routedModel} is a personal CLI subscription and is not available in a shared space (an operator can mark it for shared use)`);
+      }
+      const tool = getCLIToolConfig(routedModel);
+      assertCliSpaceMode(tool?.adapter ?? tool?.name ?? routedModel);
+    }
 
     let worker: AnyAgentWorker;
 
@@ -342,6 +374,7 @@ export class AgentManager {
         userId: options.userId,
         // Workspace spend budgets attribute cost_log rows through this column.
         workspaceId: options.workspaceId ?? null,
+        funding: options.funding,
         role: options.role || 'general',
         model: routedModel,
         topic: routedTopic,

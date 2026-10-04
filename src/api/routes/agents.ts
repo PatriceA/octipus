@@ -1,4 +1,8 @@
 import { Elysia, t } from '@/api/http';
+import { recheckSpace } from '@/core/agent/context';
+import type { AgentSpace } from '@/core/types';
+import { type AgentScope, resolveAgentScope, withAgentUsage } from '@/core/agent/context';
+import { SpaceError, spaceErrorStatus } from '@/security/space-access';
 import { apiContext } from '@/api/context';
 import { getAgentManager } from '@/core/agent-manager';
 import { getRouter } from '@/core/router';
@@ -7,8 +11,7 @@ import { contentRepos } from '@/db/repositories/content';
 import { isAuthenticated } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
 import { readAgentCompletionReason } from '@/shared/agent-completion';
-import { getMembership, isSharedWorkspace, isSpaceArchived } from '@/core/spaces/service';
-import { can } from '@/security/space-access';
+import { getMembership, isSharedWorkspace } from '@/core/spaces/service';
 
 type LiveContext = { userId?: string | null; workspaceId?: string | null };
 
@@ -27,13 +30,21 @@ async function mayReachLive(user: { id: string; isAdmin: boolean }, context: Liv
 
 /**
  * May `user` run their live agent again (`/:id/message`)? Outside spaces,
- * yes. In a space, only while their role may run the agent and the space is
- * not archived (until §5.6's context builder gates every run).
+ * yes. In a space, the membership is re-read the way every spawn re-reads
+ * it (`recheckSpace`, §5.6): only while their role may run the agent and
+ * the space is not archived. A space agent built without its scope never runs.
  */
-async function mayRunLive(userId: string, context: LiveContext): Promise<boolean> {
-  if (!context.workspaceId || !(await isSharedWorkspace(context.workspaceId))) return true;
-  const membership = await getMembership(userId, context.workspaceId);
-  return can(membership?.role, 'run_agent') && !(await isSpaceArchived(context.workspaceId));
+async function mayRunLive(userId: string, context: LiveContext & { space?: AgentSpace | null }): Promise<boolean> {
+  if (context.space) {
+    try {
+      await recheckSpace(userId, context.space);
+      return true;
+    } catch (err) {
+      if (err instanceof SpaceError) return false;
+      throw err;
+    }
+  }
+  return !context.workspaceId || !(await isSharedWorkspace(context.workspaceId));
 }
 
 /**
@@ -263,20 +274,28 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
         return { error: 'Not authenticated' };
       }
 
-      // Spawning in a space waits for §5.6's context builder (role cap,
-      // funding); a space principal never reaches this route's spawn.
-      if (principal.workspaceKind === 'shared') {
-        set.status = 403;
-        return { error: 'Agents cannot be started in a shared space from this route' };
-      }
-
       const { sessionId, topic, model, systemPrompt, message } = body;
 
-      // Verify session ownership through the scoped repo — cross-tenant
-      // requests come back null and surface as "Session not found".
-      const session = await contentRepos(principal).sessions.findById(sessionId);
-      if (!session) {
+      // The body names the session, so the session decides the workspace —
+      // a member's private chat in a space included (the header does not
+      // make this route act on a space). Another user's session is "Session
+      // not found"; in a space, the agent runs only for a role that may run
+      // it (a viewer gets 403, a removed member 404, an archived space 409),
+      // through the one scope resolver every spawner uses (§5.6).
+      const session = await sessionRepository.findById(sessionId);
+      if (!session || session.userId !== user.id) {
+        set.status = 404;
         return { error: 'Session not found' };
+      }
+      let scope: AgentScope;
+      try {
+        scope = await resolveAgentScope({ session, userId: user.id, trigger: 'user' });
+      } catch (err) {
+        if (err instanceof SpaceError) {
+          set.status = spaceErrorStatus(err);
+          return { error: err.message, code: err.code };
+        }
+        throw err;
       }
 
       const agentManager = getAgentManager();
@@ -285,14 +304,17 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
         const agent = await agentManager.spawn({
           sessionId,
           userId: user.id,
+          ...scope,
           topic,
           model,
           systemPrompt,
+          // REST has no approval relay (`channelCanPrompt('api')`).
+          attended: false,
         });
 
         // Start the agent with initial message if provided
         if (message) {
-          agent.run(message).catch((error) => {
+          withAgentUsage(user.id, scope, () => agent.run(message)).catch((error) => {
             apiLogger.error({ error, agentId: agent.getContext().id }, 'Agent run failed');
           });
         }

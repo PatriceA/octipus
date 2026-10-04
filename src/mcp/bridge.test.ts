@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { MCPBridge } from './bridge';
 import type { AgentContext } from '@/core/types';
 
-const dummyContext: AgentContext = {
+const dummyContext: AgentContext = { space: null, trigger: 'user', funding: 'own', 
   id: 'test', sessionId: 'test', userId: 'test', topic: 'test',
   model: 'test', role: 'general', status: 'running',
   createdAt: new Date(), updatedAt: new Date(), metadata: {},

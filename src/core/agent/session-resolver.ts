@@ -1,20 +1,17 @@
 import { sessionRepository } from '@/db/repositories/session-repository';
-import { getOrgWorkspaceManager } from '@/security/orgs';
+import { resolveTurnWorkspace } from './context';
 import { coreLogger } from '@/utils/logger';
 
 /**
  * The workspace a turn (or a new session) works in: `workspaceId` when given,
- * else the user's default workspace. A given workspace must be the user's own
- * (S1 adds space membership); anything else throws, and resolution errors
- * propagate: a turn never runs without a workspace, which would drop every
- * workspace filter and file its rows and files in the wrong place.
+ * else the user's default workspace. A given workspace must be the user's
+ * own, or a space where they may run the agent (not archived); anything else
+ * throws, and resolution errors propagate: a turn never runs without a
+ * workspace, which would drop every workspace filter and file its rows and
+ * files in the wrong place. See `resolveTurnWorkspace` (context.ts).
  */
 export async function turnWorkspaceId(userId: string, workspaceId: string | null | undefined): Promise<string> {
-  const mgr = getOrgWorkspaceManager();
-  if (!workspaceId) return (await mgr.ensureDefaultWorkspace(userId)).id;
-  const ws = await mgr.findOwnedById(userId, workspaceId);
-  if (!ws) throw new Error('Workspace not found');
-  return ws.id;
+  return (await resolveTurnWorkspace(userId, workspaceId)).workspaceId;
 }
 
 /**

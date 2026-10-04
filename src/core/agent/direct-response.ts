@@ -118,9 +118,11 @@ async function directResponseInternal(
     }
     if (summary) sources.push('session summary');
 
-    // Inject user profile context for personalized responses
+    // Inject user profile context for personalized responses — never in a
+    // space or room session, whose answers land in shared content (§5.6).
     let userProfileStr = '';
-    if (userId) {
+    const { sessionAudience } = await import('./audience');
+    if (userId && !(await sessionAudience(session)).personalProfileOff) {
       try {
         const { ProfileRepository } = await import('@/db/repositories/profile-repository');
         const profileRepo = new ProfileRepository();

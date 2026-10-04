@@ -109,6 +109,7 @@ import { asLane } from '@/core/agent/lane-intent';
 import type { ToolAdvertisement } from '@/core/agent-base';
 import { applyRoleFit, buildDelegationGuidance } from './swarm-tool';
 import { isProviderQuotaError } from '@/core/errors/classification';
+import { inheritScope } from '@/core/agent/context';
 import {
   type AgentNode,
   type ChildResult,
@@ -1608,8 +1609,9 @@ export class SwarmSpawner {
         attended: opts.parentContext.attended ?? false,
         // Memory-redesign Phase B — inherit the parent's workspace so
         // task_state and memories rows written by the child carry the
-        // same scope as the root agent that spawned them.
-        workspaceId: opts.parentContext.workspaceId ?? null,
+        // same scope as the root agent that spawned them; and its space,
+        // trigger and funding (coworking §5.6).
+        ...inheritScope(opts.parentContext),
         topic: getRoleConfig(opts.childRole).defaultTopic,
         model: opts.childModel,
         modelName: opts.childModelName,
@@ -1944,6 +1946,8 @@ export class SwarmSpawner {
         { output: result.output, notes: result.notes, receipt: result.receipt },
         buildScorerContext({
           userId: opts.parentContext.userId,
+          sessionId: opts.parentContext.sessionId,
+          space: opts.parentContext.space,
           workspaceRoot: WorkspaceFS.forAgent(opts.parentContext).root,
           filesTouched,
           childTools: opts.childTools,
@@ -2630,6 +2634,8 @@ async function isCliModel(model: string, modelName?: string): Promise<boolean> {
 
 export function buildScorerContext(args: {
   userId?: string;
+  sessionId?: string;
+  space?: import('@/core/types').AgentSpace | null;
   /** The child's workspace root (`WorkspaceFS.forAgent` of the spawning context). */
   workspaceRoot?: string;
   filesTouched: number | null;
@@ -2649,6 +2655,8 @@ export function buildScorerContext(args: {
     // actually got after the parent-intersection and the small-model cap.
     canRunCommands: args.childTools.some((t) => t.toolId === 'shell' || t.name.startsWith('shell__')),
     role: args.childRole,
+    sessionId: args.sessionId,
+    space: args.space ?? null,
     // So a command check dies with a cancelled run rather than outliving it
     // with the awaited spawn still pending.
     signal: args.signal,

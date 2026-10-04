@@ -396,7 +396,7 @@ describe('session ownership', () => {
       expect(r.success).toBe(true);
       expect(seen[0].userId).toBe(aliceId);
       expect(seen[0].sessionId).not.toBe(bobSession);
-      expect(seen[0].root).toBeUndefined();
+      expect(seen[0].root).not.toBe(true);
       expect(seen[0].role).toBe('general');
     } finally {
       spy.mockRestore();

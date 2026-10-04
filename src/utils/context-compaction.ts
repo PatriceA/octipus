@@ -485,6 +485,8 @@ export async function createLLMSummary(
       model: summaryModel,
       modelConfigName: options?.summaryModelName,
       userId: options?.userId,
+      // An install-topic call: stamped `install` in cost_log (D13).
+      requestType: 'compaction',
       messages: [
         {
           role: 'system',

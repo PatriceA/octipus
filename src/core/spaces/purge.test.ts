@@ -146,7 +146,9 @@ async function agentTurnIn(ws: string, userId: string): Promise<{ sessionId: str
   const { resolvedPrincipal } = await import('@/test-helpers/space-fixtures');
   const session = await contentRepos(await resolvedPrincipal(userId, ws)).sessions.create({ channelType: 'web', channelId: `space-chat-${rand(4)}` });
   const { getAgentManager } = await import('@/core/agent-manager');
-  const worker = await getAgentManager().spawn({ sessionId: session.id, userId, workspaceId: ws, topic: 'general', model: 'test-model', role: 'general' });
+  const { resolveAgentScope } = await import('@/core/agent/context');
+  const scope = await resolveAgentScope({ session, userId, trigger: 'user' });
+  const worker = await getAgentManager().spawn({ sessionId: session.id, userId, ...scope, topic: 'general', model: 'test-model', role: 'general' });
   const agentId = worker.getContext().id;
   const answer: CompletionResult = {
     content: 'The launch plan is drafted.',

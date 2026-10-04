@@ -54,7 +54,7 @@ afterEach(async () => {
 });
 
 function ctx(userId: string, metadata: Record<string, unknown> = {}): AgentContext {
-  return {
+  return { space: null, trigger: 'user', funding: 'own', 
     id: 'agent-1', sessionId: randomUUID(), userId, topic: 't', model: 'm', role: 'general',
     status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata,
   };
