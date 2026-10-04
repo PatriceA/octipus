@@ -18,6 +18,7 @@
  */
 import { Elysia } from '@/api/http';
 import { getConfig } from '@/config';
+import { recordedClientIp } from '@/security/client-ip';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import type { Principal } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
@@ -64,12 +65,6 @@ export function resourceTypeFromPath(pathname: string): string | undefined {
 function getPrincipal(ctx: unknown): Principal | null {
   const p = (ctx as { principal?: Principal }).principal;
   return p ?? null;
-}
-
-function getClientIp(headers: Headers): string | undefined {
-  const xff = headers.get('x-forwarded-for');
-  if (xff) return xff.split(',')[0]?.trim();
-  return headers.get('x-real-ip') ?? undefined;
 }
 
 /**
@@ -159,7 +154,7 @@ export const auditShadowMiddleware = new Elysia({ name: 'audit-shadow' })
         pathname: url.pathname,
         status,
         durationMs,
-        ipAddress: getClientIp(ctx.request.headers),
+        ipAddress: recordedClientIp(ctx.request, ctx.socketAddress),
         userAgent: ctx.request.headers.get('user-agent') ?? undefined,
       });
     } catch (err) {

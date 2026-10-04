@@ -7,6 +7,7 @@ import { getSettingsService } from '@/config/settings-service';
 import { rawStore } from '@/db/cache';
 import { getPushService } from '@/core/push/fcm';
 import { getSessionManager, InactiveUserError } from '@/security/auth/session';
+import { recordedClientIp } from '@/security/client-ip';
 import { apiLogger } from '@/utils/logger';
 
 /** Get the first non-internal IPv4 address */
@@ -73,7 +74,7 @@ export const deviceRoutes = new Elysia({ prefix: '/devices' })
   // Redeem a pairing code (unauthenticated — called from mobile app)
   .post(
     '/pair/redeem',
-    async ({ body, request, set }) => {
+    async ({ body, request, set, socketAddress }) => {
       const { code, deviceName } = body;
       const store = rawStore();
 
@@ -89,7 +90,7 @@ export const deviceRoutes = new Elysia({ prefix: '/devices' })
       const pairingData = JSON.parse(pairingDataRaw);
       const sessionManager = getSessionManager();
 
-      const ipAddress = request.headers.get('x-forwarded-for') || undefined;
+      const ipAddress = recordedClientIp(request, socketAddress);
       const userAgent = deviceName || request.headers.get('user-agent') || 'Mobile App';
 
       let created: Awaited<ReturnType<typeof sessionManager.create>>;

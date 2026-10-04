@@ -65,7 +65,7 @@ The compact details show steps near the active step. The full transcript entry r
 
 Typing `/` opens command completion. `/help` lists available commands. Common gateway commands include `/status`, `/abort`, `/cost`, `/changes`, `/expert` and `/compact`.
 
-The standalone chat shell also handles `/login`, `/logout`, `/whoami`, `/project`, `/workspace` and `/resume` locally. These local commands are not all implemented by the editor; its palette includes the shared gateway commands, plan controls and editor shortcuts.
+The standalone chat shell also handles `/login`, `/logout` (sign out and disconnect), `/whoami`, `/project`, `/workspace` and `/resume` locally. These local commands are not all implemented by the editor; its palette includes the shared gateway commands, plan controls and editor shortcuts.
 
 To resume a chat session:
 
@@ -110,7 +110,7 @@ Agent file changes to open buffers are queued for diff review in the default loc
 
 ## Connection and appearance
 
-Both clients connect to the gateway, normally `ws://localhost:3005/gateway`, using a stored CLI login or local-token authentication. Override the port with `API_PORT` or the checkout's `.env`:
+Both clients connect to the gateway, normally `ws://localhost:3005/gateway`, signed in as your Octipus account. The login is stored in `~/.octipus/session.json` (mode 0600). When there is none — first run, after `/logout`, or once the server rejects it (expired, revoked, account deactivated) — the chat shell opens the login prompt once and does not connect until you sign in; `/login` reopens it. There is no machine account: a terminal sees only your sessions and events, like the browser, and an admin account gets no further than any other. The editor uses the same stored login; sign in from the chat shell first. Override the port with `API_PORT` or the checkout's `.env`:
 
 ```bash
 API_PORT=3015 octi edit --project ~/code/myapp

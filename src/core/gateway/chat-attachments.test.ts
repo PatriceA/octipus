@@ -5,7 +5,6 @@ const mock = vi.hoisted(() => ({ handle: vi.fn(async (..._args: unknown[]) => ({
 const sid = 'aaaaaaaa-0000-4000-8000-000000000000';
 vi.mock('@/core/agent', () => ({ getAgentService: () => ({ handleMessage: mock.handle }) }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: { findById: async () => ({ id: 'aaaaaaaa-0000-4000-8000-000000000000', userId: 'user' }) } }));
-vi.mock('./resolve-user', () => ({ resolveUserId: async () => 'user' }));
 vi.mock('@/core/agent/session-resolver', () => ({ resolveSession: async () => 'aaaaaaaa-0000-4000-8000-000000000000' }));
 vi.mock('@/core/chat-uploads', async importOriginal => ({ ...await importOriginal<typeof import('@/core/chat-uploads')>(), storeChatUploads: mock.store }));
 vi.mock('@/security/workspace-fs', () => ({ WorkspaceFS: { forSession: () => ({ root: '/session' }) } }));

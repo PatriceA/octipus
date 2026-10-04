@@ -63,6 +63,11 @@ export interface TurnResult {
   response: string; sessionId?: string; agentId?: string; classification: MessageClassification; metadata?: ResponseMetadata; outcome?: TurnOutcome;
 }
 
+/** The voice-mode key: a session and the user whose turns it gates. */
+function voiceKey(sessionId: string, userId: string): string {
+  return `${userId}:${sessionId}`;
+}
+
 /**
  * The text to hand to `ApprovalManager.tryResolveFromMessage`, or null when
  * this message must not answer an approval. In a group-thread session only a
@@ -94,17 +99,22 @@ export class AgentService {
   private approvalManager = new ApprovalManager();
   private modelSelector = new ModelSelector();
   private _lastWorkerResult: string | null = null;
-  /** Voice "propose-then-confirm" gate + the set of sessions currently in voice mode. */
+  /**
+   * Voice "propose-then-confirm" gate + the set of sessions currently in voice
+   * mode, both keyed by (session, user) — see `voiceKey` — so one user's
+   * toggle can never put another user's turns into the planning gate.
+   */
   private planGate = new VoicePlanGate();
   private voiceSessions = new Set<string>();
 
-  /** Toggle voice mode for a session (set by the mic in the web client). Off clears any pending plan. */
-  setVoiceMode(sessionId: string, on: boolean): void {
+  /** Toggle voice mode for a user's session (set by the mic in the web client). Off clears any pending plan. */
+  setVoiceMode(sessionId: string, userId: string, on: boolean): void {
+    const key = voiceKey(sessionId, userId);
     if (on) {
-      this.voiceSessions.add(sessionId);
+      this.voiceSessions.add(key);
     } else {
-      this.voiceSessions.delete(sessionId);
-      this.planGate.clear(sessionId);
+      this.voiceSessions.delete(key);
+      this.planGate.clear(key);
     }
   }
 
@@ -564,7 +574,8 @@ export class AgentService {
       // reach the tool-capable root loop, including questions classified as
       // ambiguous and follow-ups such as "Yes, look it up online". Tool-level
       // approval policy still applies; the transport is not a planning mode.
-      if (!bypassVoiceGate && channel !== 'mobile-voice' && this.voiceSessions.has(resolvedSessionId)) {
+      const voiceGateKey = voiceKey(resolvedSessionId, userId);
+      if (!bypassVoiceGate && channel !== 'mobile-voice' && this.voiceSessions.has(voiceGateKey)) {
         // Gate vague requests too, not just cleanly-scored 'task'. Spoken input is
         // usually under-specified → the classifier falls to 'ambiguous', which would
         // otherwise reach the raw root agent and get blind-dispatched or dryly told
@@ -572,7 +583,7 @@ export class AgentService {
         // friendly clarify/plan exchange instead. Cancellation is disambiguated
         // inside decide() (the classifier tags both "yes" and "no" as 'approval').
         const isWork = classification.type === 'task' || classification.type === 'ambiguous';
-        const action = this.planGate.decide(resolvedSessionId, message, isWork);
+        const action = this.planGate.decide(voiceGateKey, message, isWork);
         if (action.kind === 'execute') {
           // Confirmed. Record the "yes" turn, then run the stored work the normal
           // way (gate bypassed so it isn't re-proposed), replaying the files the
@@ -598,7 +609,7 @@ export class AgentService {
           );
           // Carry this turn's files (cold) or the ones already accumulated (refinement).
           this.planGate.recordProposal(
-            resolvedSessionId, action.workMessage, action.attachedFiles.length ? action.attachedFiles : attachedFiles,
+            voiceGateKey, action.workMessage, action.attachedFiles.length ? action.attachedFiles : attachedFiles,
           );
           return { response, sessionId: resolvedSessionId, classification, metadata };
         }
@@ -927,13 +938,24 @@ export class AgentService {
     );
   }
 
+  /** Answer an approval as its requester; `forUserId` must own it. */
   resolveApprovalDetailed(
     requestId: string,
     approved: boolean,
-    response?: string,
-    by?: { forUserId?: string; resolvedBy?: string },
+    response: string | undefined,
+    by: { forUserId: string; resolvedBy?: string },
   ): Promise<ApprovalResolveOutcome> {
     return this.approvalManager.resolveApprovalDetailed(requestId, approved, response, by);
+  }
+
+  /** An admin answering someone else's approval — only the audited admin route calls this. */
+  resolveApprovalAsAdmin(
+    requestId: string,
+    approved: boolean,
+    response: string | undefined,
+    adminUserId: string,
+  ): Promise<{ outcome: ApprovalResolveOutcome; request?: { userId: string; sessionId: string } }> {
+    return this.approvalManager.resolveApprovalAsAdmin(requestId, approved, response, adminUserId);
   }
 
   getPendingApprovals(forUserId?: string): ApprovalRequest[] {

@@ -2,7 +2,6 @@ import { randomBytes } from 'crypto';
 import { coreLogger } from '@/utils/logger';
 import { ConnectionManager } from './connection-manager';
 import { GatewayEventBus } from './event-bus';
-import { ensureLocalToken } from './local-auth';
 import type { ClientMessage, ConnectionContext, GatewayMessage, UserGatewayEvent } from './protocol';
 import { PROTOCOL_VERSION } from './protocol';
 import { GatewayRateLimiter } from './rate-limiter';
@@ -37,13 +36,10 @@ export class GatewayHub {
   }
 
   /**
-   * Start the gateway hub. Generates local token if needed.
+   * Start the gateway hub.
    */
   async start(): Promise<void> {
     if (this.started) return;
-
-    // Ensure local auth token exists
-    ensureLocalToken();
 
     this.started = true;
     coreLogger.info({ protocolVersion: PROTOCOL_VERSION }, 'Gateway hub started');
@@ -67,13 +63,6 @@ export class GatewayHub {
    */
   setSessionValidator(validator: (token: string) => Promise<{ userId: string; username: string; isAdmin: boolean } | null>): void {
     this.connectionManager.setSessionValidator(validator);
-  }
-
-  /**
-   * Set the HMAC validator for channel adapters.
-   */
-  setHmacValidator(validator: (key: string, channelType: string) => Promise<boolean>): void {
-    this.connectionManager.setHmacValidator(validator);
   }
 
   /**
@@ -103,6 +92,8 @@ export class GatewayHub {
     this.connectionManager.broadcast(
       { type: 'event', event: fullEvent },
       (ctx) => {
+        // Security: an event reaches its own user's connections only. No
+        // trust level or admin right widens this.
         if (fullEvent.userId !== ctx.userId) return false;
         // Check subscription patterns
         for (const pattern of ctx.eventSubscriptions) {

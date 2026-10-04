@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -51,6 +52,16 @@ export const ollamaConfigSchema = z.object({
   unifiedMemory: z.boolean().default(false).describe('GPU and CPU share one memory pool at one speed (APU / unified memory)'),
 });
 
+/** A `security.trustedProxies` entry: an IP address, or one with a valid prefix length. */
+function isAddressOrCidr(entry: string): boolean {
+  const [address, prefix, extra] = entry.trim().split('/');
+  const family = isIP(address.replace(/^::ffff:(?=\d)/i, ''));
+  if (family === 0 || extra !== undefined) return false;
+  if (prefix === undefined) return true;
+  const bits = Number(prefix);
+  return /^\d+$/.test(prefix) && bits <= (family === 4 ? 32 : 128);
+}
+
 // Security configuration schema
 export const securityConfigSchema = z.object({
   masterKey: z.string().min(32).describe('32-byte hex master encryption key'),
@@ -93,6 +104,15 @@ export const securityConfigSchema = z.object({
    * unaffected.
    */
   dockerIsolation: z.enum(['off', 'enforce']).default('off'),
+  /**
+   * Reverse proxies whose `X-Forwarded-For` / `X-Real-IP` headers are
+   * believed (security/client-ip.ts). Addresses or CIDR ranges. Empty (the
+   * default) means the socket address is the client address, whatever the
+   * headers claim — a forged forwarded header changes nothing.
+   */
+  trustedProxies: z.array(z.string().refine(isAddressOrCidr, {
+    message: 'must be an IP address or CIDR range (e.g. 127.0.0.1, 10.0.0.0/8, fd00::/8)',
+  })).default([]),
 });
 
 // API server configuration schema

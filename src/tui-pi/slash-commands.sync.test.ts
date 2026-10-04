@@ -14,7 +14,7 @@ const HIDDEN = new Set(['work-plan-status']); // internal poll, not a user comma
 test('gateway slash entries mirror the registry (names and aliases)', () => {
   const registry = new CommandRegistry();
   registerBuiltinCommands(registry);
-  const registered = new Map(registry.getAvailable('system').map((c) => [c.name, [...c.aliases].sort()]));
+  const registered = new Map(registry.getAvailable(true).map((c) => [c.name, [...c.aliases].sort()]));
   const listed = new Map(OCTIPUS_SLASH_COMMANDS.filter((c) => c.source === 'gateway').map((c) => [c.name, [...(c.aliases ?? [])].sort()]));
 
   const missingFromTui = [...registered.keys()].filter((n) => !HIDDEN.has(n) && !listed.has(n));

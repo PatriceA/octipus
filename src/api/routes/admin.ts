@@ -3,6 +3,7 @@ import { apiContext } from '@/api/context';
 import { EXTERNAL_CHANNEL_TYPES, EXTERNAL_CHANNELS } from '@/channels/ownership';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { userRepository } from '@/db/repositories/user-repository';
+import { recordedClientIp } from '@/security/client-ip';
 import { isAdmin, isAuthenticated } from '@/security/principal';
 import { onUserChanged, setUserActive } from '@/security/user-lifecycle';
 import { hashPassword } from '@/utils/crypto';
@@ -719,7 +720,7 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
     async (ctx) => {
       const guard = requireAdmin(ctx);
       if (!guard.ok) return guard.body;
-      const { params, body, session, request, set } = ctx as any;
+      const { params, body, session, request, set, socketAddress } = ctx as any;
 
       if (!session?.token) {
         set.status = 400;
@@ -727,10 +728,7 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
       }
 
       const { getImpersonationManager } = await import('@/security/impersonation');
-      const ipAddress =
-        request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-        request.headers.get('x-real-ip') ||
-        undefined;
+      const ipAddress = recordedClientIp(request, socketAddress);
 
       const result = await getImpersonationManager().start(
         { id: ctx.principal.userId, username: ctx.principal.username, isAdmin: true },

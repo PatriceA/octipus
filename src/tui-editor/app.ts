@@ -344,6 +344,11 @@ export class OctipusEditorApp {
       case 'permission': this.decisions.push(event); return;
       case 'approval': this.decisions.push(event); return;
       case 'agent.write': this.handleAgentWrite(event.path, event.newText); return;
+      case 'login_required':
+        // The editor has no login prompt of its own; the chat TUI stores the
+        // login both of them use.
+        this.pushMessage('system', `Error: ${event.reason}. Sign in with /login in the chat TUI (\`octi tui\`), then reopen the editor.`);
+        return;
       case 'command.result':
         if (event.name === 'clear' && !event.error) {
           this.chat.messages.reset();

@@ -38,7 +38,7 @@ export class StatusBar implements Component {
   setStats(stats: CumulativeStats): void { this.stats = stats; }
   setMcp(summary: McpSummary | null): void { this.mcp = summary; }
   setContext(fill: ContextFill | null): void { this.context = fill; }
-  /** Signed-in username, or null while running as the local machine account. */
+  /** Signed-in username, or null while signed out. */
   setUser(user: string | null): void { this.user = user; }
   /** Model of the current or last root turn. Kept after the turn ends: the
    *  activity line that used to carry it disappears with the turn, so which

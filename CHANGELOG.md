@@ -45,6 +45,41 @@ labels reflect blast radius, not contract guarantees.
   users outside its org, deactivate an account only when no other org holds it,
   and can no longer re-activate an account an admin deactivated (409). SCIM
   DELETE now answers a proper empty 204.
+### Security: trust, client addresses, and who answers a request
+
+- **No more `local` or `system` trust.** The `local` gateway auth method and
+  the `~/.octipus/local-token` file are gone (the server no longer writes it),
+  as is the unwired `hmac` method. An admin signed in on loopback, or behind a
+  reverse proxy on the same host, used to see every user's events and pass
+  every session ownership check; admin API tokens did so from anywhere. Every
+  connection is now `user` trust: ownership checks (joining a session,
+  `/history`, `/proposals`, `agent.stop`, `chat.steer`, `chat.interject`)
+  compare user ids, and admin-only commands read `is_admin` from the database.
+  `/abort` and `/status` cover the caller's own agents only.
+- **The TUI signs in with your account.** It uses the CLI login
+  (`~/.octipus/session.json`), opens the login prompt once when there is none,
+  and does not connect without one. `/logout` disconnects.
+- **Client addresses come from the socket.** `X-Forwarded-For` / `X-Real-IP`
+  are honoured only from proxies listed in the new `security.trustedProxies`
+  (`TRUSTED_PROXIES`, default empty) — for the gateway, REST rate limits,
+  login and passkey lockouts, and audit rows. The gateway's per-address cap now
+  applies only to connections that have not authenticated yet.
+- **Voice mode** on `/ws` checks session ownership, and the voice planning gate
+  is keyed by session and user.
+- **Requests are answered by their requester.** Admins no longer answer other
+  users' permission requests or agent approvals through REST, `/ws` or the
+  gateway, and `GET /api/chat/approvals/pending` lists the caller's own. An
+  admin unblocks someone else's run through
+  `POST /api/admin/permission-requests/:id/resolve` or
+  `POST /api/admin/approvals/:id/resolve` with a `reason`, which is audited;
+  `GET /api/admin/permission-requests` and `GET /api/admin/approvals` list
+  what is pending.
+
+**Upgrade notes:** run `/login` in the TUI once (it prompts on start). If
+Octipus runs behind nginx, Caddy or a load balancer, set `TRUSTED_PROXIES` to
+the proxy's address, or every client shares the proxy's address for rate
+limits. Extensions that registered commands with `minTrustLevel: 'local'`
+now use `adminOnly: true`.
 
 ## v0.6.0 — Shared work, budgets, and stronger review (2026-10-01)
 

@@ -6,7 +6,6 @@ import { coreLogger } from '@/utils/logger';
 import { getCommandRegistry } from './commands';
 import type { GatewayHub } from './hub';
 import type { ClientMessage, ConnectionContext } from './protocol';
-import { resolveUserId } from './resolve-user';
 
 /**
  * Inject a user message into a running root agent turn for this session, if
@@ -26,18 +25,18 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /**
  * May this connection use `sessionId`? Null when yes: the session is the
- * caller's own, does not exist yet (a fresh client id), or the caller is a
- * trusted console. Otherwise the refusal text. One gate for every path that
- * binds a connection to a session (chat.send, command adoption) — before it,
- * any authenticated client could attach to another user's existing session
- * by id and read or extend it.
+ * caller's own or does not exist yet (a fresh client id). Otherwise the
+ * refusal text. One gate for every path that binds a connection to a session
+ * (chat.send, chat.steer, chat.interject, command adoption) — before it, any
+ * authenticated client could attach to another user's existing session by id
+ * and read or extend it. It compares user ids and nothing else: no trust
+ * level and no admin flag opens another user's session.
  */
-export async function sessionAccessError(sessionId: string, context: Pick<ConnectionContext, 'userId' | 'trustLevel'>): Promise<string | null> {
-  if (context.trustLevel === 'local' || context.trustLevel === 'system') return null;
+export async function sessionAccessError(sessionId: string, context: Pick<ConnectionContext, 'userId'>): Promise<string | null> {
   if (!UUID_RE.test(sessionId)) return null; // channel-style ids resolve per user inside resolveSession
   const { sessionRepository } = await import('@/db/repositories/session-repository');
   const session = await sessionRepository.findById(sessionId);
-  return session && session.userId !== await resolveUserId(context.userId) ? 'Session not found' : null;
+  return session && session.userId !== context.userId ? 'Session not found' : null;
 }
 
 /** Exported for unit tests. */
@@ -139,9 +138,7 @@ async function handleChatSend(
     // Track the session on the connection for /status command
     context.sessionId = message.sessionId;
 
-    // Resolve the principal up front — we need userId both for the optional
-    // session pre-create below AND for the root agent call.
-    const userId = await resolveUserId(context.userId);
+    const userId = context.userId;
 
     // If a root agent turn is already running for this session, steer it
     // with this message instead of spawning a concurrent turn. Keeps one live
@@ -362,7 +359,12 @@ async function handleChatInterject(
       return;
     }
 
-    const userId = await resolveUserId(context.userId);
+    const refused = await sessionAccessError(message.sessionId, context);
+    if (refused) {
+      hub.connectionManager.sendToConnection(connectionId, { type: 'error', code: 'SESSION_NOT_FOUND', message: refused });
+      return;
+    }
+    const userId = context.userId;
     context.sessionId = message.sessionId;
 
     const { directResponse } = await import('@/core/agent/direct-response');
@@ -454,21 +456,13 @@ async function handlePermissionRespond(
   try {
     const { getPermissionManager } = await import('@/security/permissions');
     const permissionManager = getPermissionManager();
-    // Local/system auth hands us the 'local' sentinel, not a DB UUID, and
-    // both resolvedBy and the user_id filter are uuid columns — passing it
-    // straight through made every TUI approval fail with a Postgres cast
-    // error instead of resolving the request.
-    const userId = await resolveUserId(context.userId);
-    // A local/system TUI is shown every user's prompt, but `resolveUserId`
-    // can only ever name the first admin — resolving another user's request
-    // as that admin matches zero rows and returns false silently, leaving the
-    // run blocked for the whole TTL. Trusted consoles resolve as admins, and
-    // an unresolved request is reported instead of swallowed.
-    const admin = context.trustLevel === 'local' || context.trustLevel === 'system';
-
+    // Only the requester answers: the manager matches the request's owner.
+    // An admin answering someone else's request goes through the audited
+    // POST /api/admin/permission-requests/:id/resolve, never through here.
+    // An unresolved request is reported instead of swallowed.
     const resolved = message.approved
-      ? await permissionManager.approve(message.requestId, userId, undefined, { admin })
-      : await permissionManager.deny(message.requestId, userId, undefined, { admin });
+      ? await permissionManager.approve(message.requestId, context.userId)
+      : await permissionManager.deny(message.requestId, context.userId);
 
     if (!resolved) {
       hub.connectionManager.sendToConnection(connectionId, {
@@ -497,11 +491,11 @@ async function handleApprovalRespond(
     const { getAgentService } = await import('@/core/agent');
     const rootAgent = getAgentService();
 
-    // Same rule as REST /chat/approve: admins may answer any request.
-    const isAdmin = !!(context.metadata as { isAdmin?: boolean } | undefined)?.isAdmin;
+    // Same rule as REST /chat/approve: only the requester answers. Admins
+    // use the audited POST /api/admin/approvals/:id/resolve.
     const outcome = await rootAgent.resolveApprovalDetailed(
       message.requestId, message.approved, message.response,
-      { forUserId: isAdmin ? undefined : context.userId, resolvedBy: context.userId },
+      { forUserId: context.userId, resolvedBy: context.userId },
     );
     if ('message' in outcome) {
       hub.connectionManager.sendToConnection(connectionId, {
@@ -532,8 +526,13 @@ async function handleChatSteer(
   message: Extract<ClientMessage, { type: 'chat.steer' }>,
 ): Promise<void> {
   try {
+    const refused = await sessionAccessError(message.sessionId, context);
+    if (refused) {
+      hub.connectionManager.sendToConnection(connectionId, { type: 'error', code: 'SESSION_NOT_FOUND', message: refused });
+      return;
+    }
     context.sessionId = message.sessionId;
-    const userId = await resolveUserId(context.userId);
+    const userId = context.userId;
 
     if (await trySteerRunningRootAgent(message.sessionId, message.content)) {
       hub.publishEvent({
@@ -568,19 +567,21 @@ async function handleAgentStop(
   context: ConnectionContext,
   message: Extract<ClientMessage, { type: 'agent.stop' }>,
 ): Promise<void> {
-  // Only admin/local trust can stop agents
-  if (context.trustLevel !== 'local' && context.trustLevel !== 'system' && !(context.metadata as any)?.isAdmin) {
-    hub.connectionManager.sendToConnection(connectionId, {
-      type: 'error',
-      code: 'FORBIDDEN',
-      message: 'Insufficient permissions to stop agents',
-    });
-    return;
-  }
-
   try {
     const { getAgentManager } = await import('@/core/agent-manager');
     const agentManager = getAgentManager();
+    // A connection stops its own user's agents only — the owner check compares
+    // user ids, whatever the connection's admin flag. Unknown and foreign ids
+    // get the same answer so ids cannot be probed.
+    const agent = agentManager.get(message.agentId);
+    if (!agent || agent.getContext().userId !== context.userId) {
+      hub.connectionManager.sendToConnection(connectionId, {
+        type: 'error',
+        code: 'AGENT_NOT_FOUND',
+        message: 'Agent not found',
+      });
+      return;
+    }
     agentManager.stop(message.agentId);
 
     hub.publishEvent({

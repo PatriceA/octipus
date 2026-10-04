@@ -21,7 +21,7 @@ import type { GatewayMessage } from './protocol';
 export interface StdioAdapterOptions {
   input: NodeJS.ReadableStream;
   output: NodeJS.WritableStream;
-  /** What the connection manager sees as the peer; loopback by default so `local` auth works. */
+  /** The address the connection manager counts the pre-auth cap against; loopback by default (a pipe is local). */
   ip?: string;
   /** Called once, after the connection is gone (stdin ended, or the hub closed it). */
   onClose?: (reason: string) => void;

@@ -16,6 +16,7 @@ import { auditShadowMiddleware } from './middleware/audit-shadow';
 import { authGuard } from './middleware/auth-guard';
 import { rateLimitMiddleware } from './middleware/rate-limit';
 import { adminRoutes } from './routes/admin';
+import { adminApprovalRoutes } from './routes/admin-approvals';
 import { agentRoutes } from './routes/agents';
 import { apiTokenRoutes } from './routes/api-tokens';
 import { artifactPageRoutes, artifactPageRoutesFallback } from './routes/artifact-pages';
@@ -331,6 +332,7 @@ export function createServer() {
         .use(channelBindingRoutes)
         .use(groupChannelRoutes)
         .use(adminRoutes)
+        .use(adminApprovalRoutes)
         .use(orgAdminRoutes)
         .use(orgMeRoutes)
         .use(workspaceMeRoutes)

@@ -2,14 +2,14 @@ import { z } from 'zod';
 
 // ── Trust Levels ──────────────────────────────────────────────────
 
-export type TrustLevel = 'user' | 'local' | 'system' | 'agent';
-
-export const TRUST_LEVELS: Record<TrustLevel, number> = {
-  agent: 0,
-  user: 1,
-  local: 2,
-  system: 3,
-};
+/**
+ * Trust never widens what a connection may see or touch: every authenticated
+ * connection is `user`, whatever credential it used or where it came from.
+ * Ownership checks compare user ids; admin-only commands read `is_admin` from
+ * the database. (`local` — the machine token — and `system` — admin API tokens
+ * and HMAC adapters — were removed: both reached every user's sessions.)
+ */
+export type TrustLevel = 'user' | 'agent';
 
 // ── Client Types ──────────────────────────────────────────────────
 
@@ -187,7 +187,7 @@ export type GatewayEvent = UserGatewayEvent | GlobalGatewayEvent;
 
 export const AuthMessageSchema = z.object({
   type: z.literal('auth'),
-  method: z.enum(['session_token', 'api_key', 'hmac', 'local', 'artifact_token']),
+  method: z.enum(['session_token', 'api_key', 'artifact_token']),
   credentials: z.record(z.string(), z.unknown()),
   clientType: z.enum(['webchat', 'tui', 'channel', 'mobile', 'acp', 'agent']),
   clientVersion: z.string().optional(),
