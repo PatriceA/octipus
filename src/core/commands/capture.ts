@@ -1,4 +1,5 @@
 import { getNoteService } from '@/core/knowledge/notes';
+import { personalNoteScope } from '@/db/repositories/note-repository';
 import { registerCommand } from './registry';
 
 /**
@@ -15,7 +16,7 @@ registerCommand({
     if (!text) {
       return { response: 'Usage: `/capture <text>` — appends a timestamped line to today\'s daily note.' };
     }
-    const note = await getNoteService().capture(ctx.userId, null, text);
+    const note = await getNoteService().capture(personalNoteScope(ctx.userId), text);
     return { response: `Captured to **${note.slug}**.` };
   },
 });

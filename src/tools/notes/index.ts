@@ -7,7 +7,7 @@ import { agentKnowledgeScope } from '@/core/rag/knowledge-scope';
 import type { ToolManifest } from '@/core/types';
 import { isRootAgent } from '@/core/types';
 import { getKnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
-import { getNoteRepository } from '@/db/repositories/note-repository';
+import { getNoteRepository, personalNoteScope } from '@/db/repositories/note-repository';
 import { BaseTool, createParameterSchema } from '../base-tool';
 
 /**
@@ -63,8 +63,7 @@ export class NotesTool extends BaseTool {
       }),
       async (args, context) => {
         const result = await getNoteService().save({
-          userId: context.userId,
-          workspaceId: context.workspaceId ?? null,
+          scope: personalNoteScope(context.userId, context.workspaceId ?? null),
           id: (args.id as string) || undefined,
           slug: (args.slug as string) || undefined,
           title: args.title as string,
@@ -96,9 +95,9 @@ export class NotesTool extends BaseTool {
       async (args, context) => {
         const svc = getNoteService();
         const note = args.id
-          ? await svc.getById(context.userId, args.id as string)
+          ? await svc.getById(personalNoteScope(context.userId), args.id as string)
           : args.slug
-            ? await svc.getBySlug(context.userId, context.workspaceId ?? null, args.slug as string)
+            ? await svc.getBySlug(personalNoteScope(context.userId, context.workspaceId ?? null), args.slug as string)
             : null;
         if (!note) {
           if (!args.id && !args.slug) throw new Error('read_note requires id or slug');
@@ -127,7 +126,7 @@ export class NotesTool extends BaseTool {
         limit: { type: 'number', description: 'Max results (default 50)', default: 50 },
       }),
       async (args, context) => {
-        const list = await getNoteService().list(context.userId, {
+        const list = await getNoteService().list(personalNoteScope(context.userId), {
           kind: (args.kind as string) || undefined,
           tag: (args.tag as string) || undefined,
           limit: (args.limit as number) || 50,
@@ -163,8 +162,7 @@ export class NotesTool extends BaseTool {
       }),
       async (args, context) => {
         const note = await getNoteService().capture(
-          context.userId,
-          context.workspaceId ?? null,
+          personalNoteScope(context.userId, context.workspaceId ?? null),
           args.text as string,
           (args.date as string) || undefined,
         );
@@ -246,7 +244,7 @@ export class NotesTool extends BaseTool {
         limit: { type: 'number', description: 'Max suggestions (default 5)', default: 5 },
       }),
       async (args, context) => {
-        const suggestions = await getSuggestionService().suggestForNote(context.userId, args.note_id as string, context.workspaceId ?? null, (args.limit as number) || 5);
+        const suggestions = await getSuggestionService().suggestForNote(personalNoteScope(context.userId, context.workspaceId ?? null), args.note_id as string, (args.limit as number) || 5);
         return { suggestions, hint: suggestions.length === 0 ? 'No suggestions (either nothing related, or no embedding model configured).' : 'Accept a suggestion with knowledge.link_knowledge.' };
       },
       { permissionAction: 'read' },
@@ -259,7 +257,7 @@ export class NotesTool extends BaseTool {
         id: { type: 'string', description: 'Note id', required: true },
       }),
       async (args, context) => {
-        const ok = await getNoteService().archive(context.userId, args.id as string);
+        const ok = await getNoteService().archive(personalNoteScope(context.userId), args.id as string);
         return { archived: ok };
       },
       { permissionAction: 'write' },

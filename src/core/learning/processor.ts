@@ -8,7 +8,7 @@ import { getLiteLLMClient } from '@/models/litellm-client';
 import { SECURITY_PREAMBLE } from '@/core/agent/roles';
 import { filterPII } from '@/core/agent/pii-filter';
 import { judgeAndApply } from '@/core/memory/judge';
-import { getNoteRepository } from '@/db/repositories/note-repository';
+import { getNoteRepository, personalNoteScope } from '@/db/repositories/note-repository';
 import { getNoteService } from '@/core/knowledge/notes';
 import { fileSkillProposal } from '@/services/file-skill-proposal';
 import { getPermissionManager } from '@/security/permissions';
@@ -93,7 +93,7 @@ export async function processLearningJob(job: Pick<BackgroundJob, 'id' | 'userId
         if (existing) {
           outputs.push({ kind: 'knowledge', status: 'duplicate', id: existing.id }); continue;
         }
-        const saved = await getNoteService().save({ userId: job.userId, workspaceId,
+        const saved = await getNoteService().save({ scope: personalNoteScope(job.userId, workspaceId),
           slug: `learning-${fingerprint}`, title: filterPII(item.title).filtered, body: body + citations(item.sources),
           tags: ['session-learning'], frontmatter: { sessionId: session.id, learningJobId: job.id, sources: item.sources } });
         outputs.push({ kind: 'knowledge', status: saved.indexed ? saved.created ? 'saved' : 'duplicate' : 'saved_unindexed', id: saved.note.id,

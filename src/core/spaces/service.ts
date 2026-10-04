@@ -22,6 +22,7 @@ import { type AuditDetails, auditLog } from '@/db/schema/audit';
 import { newWorkspaceRow, type SpaceRole, type Workspace, workspaceMembers, workspaces } from '@/db/schema/organizations';
 import { users } from '@/db/schema/users';
 import { requireRealUserId } from '@/security/principal';
+import { noteSharedWorkspace } from '@/security/workspace-fs';
 import {
   can,
   isSpaceRole,
@@ -109,6 +110,9 @@ export async function getMembership(
     ))
     .limit(1);
   if (!row) return null;
+  // The synchronous file-root lookups (`WorkspaceFS.forAgent` / `forSession`)
+  // learn the space from here: every path into a space reads a membership.
+  noteSharedWorkspace(workspaceId);
   return { workspaceId, userId, role: row.role, scope: row.scope ?? null };
 }
 

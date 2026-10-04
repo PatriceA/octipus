@@ -14,6 +14,7 @@
  */
 
 import type { AgentContext } from '@/core/types';
+import type { SpaceRole } from '@/db/schema/organizations';
 import { scopesSatisfy } from './scopes';
 
 export type PrincipalKind = 'user' | 'service' | 'system' | 'anonymous';
@@ -57,6 +58,21 @@ export interface Principal {
    * are always on; there is no setting that switches them off.
    */
   readonly workspaceId?: string | null;
+  /**
+   * Coworking S1 (docs/plans/coworking-spec.md §5.4). `'shared'` when
+   * `workspaceId` names a space the user is a member of — the resolver
+   * read the membership from the database for this request — and
+   * `'personal'` for the user's own workspaces. Unset for principals no
+   * resolver touched (system jobs, agents built before S1 wiring): those
+   * are personal.
+   */
+  readonly workspaceKind?: 'personal' | 'shared';
+  /** The member's role in the space; set exactly when `workspaceKind` is `'shared'`. */
+  readonly spaceRole?: SpaceRole;
+  /** Guests only (S6): what of the space the guest may reach. */
+  readonly spaceScope?: Record<string, unknown> | null;
+  /** The space is archived: reads only, no writes, no agent runs. */
+  readonly spaceArchived?: boolean;
   /**
    * WS6 — API-token scopes. Present (and non-empty) ONLY when the request was
    * authenticated by a scoped personal access token. Undefined for browser

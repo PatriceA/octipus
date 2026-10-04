@@ -1,3 +1,4 @@
+import { personalNoteScope } from '@/db/repositories/note-repository';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
@@ -194,7 +195,7 @@ describe('Notes in workspaces', () => {
 
   test('a user-level note is visible in every workspace', async () => {
     const { getNoteService } = await import('@/core/knowledge/notes');
-    const { note } = await getNoteService().save({ userId: aliceId, workspaceId: null, title: 'Everywhere', slug: 'everywhere' });
+    const { note } = await getNoteService().save({ scope: personalNoteScope(aliceId, null), title: 'Everywhere', slug: 'everywhere' });
     expect((await get(aliceApp, `/api/notes/${note.id}`)).status).toBe(200);
     expect((await get(aliceSideApp, `/api/notes/${note.id}`)).status).toBe(200);
     expect((await get(aliceSideApp, '/api/notes/index')).body.notes.some((n: any) => n.id === note.id)).toBe(true);
@@ -209,7 +210,7 @@ describe('Notes in workspaces', () => {
 
   test('daily capture does not duplicate a user-level daily note', async () => {
     const { getNoteService } = await import('@/core/knowledge/notes');
-    const userLevel = await getNoteService().getOrCreateDaily(aliceId, null, '2026-07-01');
+    const userLevel = await getNoteService().getOrCreateDaily(personalNoteScope(aliceId), '2026-07-01');
     expect(userLevel.workspaceId).toBeNull();
 
     const r = await post(aliceSideApp, '/api/notes/capture', { text: 'from the side workspace', date: '2026-07-01' });
@@ -228,7 +229,7 @@ describe('Notes in workspaces', () => {
 
   test('a workspace daily note is preferred over the user-level one', async () => {
     const { getNoteService } = await import('@/core/knowledge/notes');
-    const userLevel = await getNoteService().getOrCreateDaily(aliceId, null, '2026-07-02');
+    const userLevel = await getNoteService().getOrCreateDaily(personalNoteScope(aliceId), '2026-07-02');
     // Both exist (written before the fallback, or by an older build).
     const { queryRaw } = await import('@/db/postgres');
     const [inSide] = (await queryRaw(

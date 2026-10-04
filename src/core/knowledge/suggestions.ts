@@ -1,5 +1,6 @@
 import { getKnowledgeLinkRepository, type KnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
-import { getNoteRepository, type NoteRepository } from '@/db/repositories/note-repository';
+import { getNoteRepository, type NoteRepository, type NoteScope, noteStoreFor } from '@/db/repositories/note-repository';
+import { noteKnowledgeScope } from '@/core/rag/knowledge-scope';
 import { type EmbeddingService, getEmbeddingService } from '@/core/rag/embeddings';
 import { coreLogger } from '@/utils/logger';
 import { entityRefFromSourceId } from './graph';
@@ -35,18 +36,18 @@ export class SuggestionService {
   ) {}
 
   /**
-   * Suggestions for a note of `workspaceId` (with `null`, the user level):
-   * candidates are the notes of that workspace and user-level notes, the
-   * same rule every personal note read applies, never notes of the user's
-   * other workspaces.
+   * Suggestions stay inside the note's scope: a personal note of
+   * `scope.workspaceId` (with `null`, the user level) is offered the notes
+   * of that workspace and user-level notes — never notes of the user's other
+   * workspaces, never a space's; a space note only the space's.
    */
-  async suggestForNote(userId: string, noteId: string, workspaceId: string | null, limit = 5): Promise<LinkSuggestion[]> {
-    const ws = workspaceId ?? undefined;
-    const note = await this.notes.getById(userId, noteId, ws);
+  async suggestForNote(scope: NoteScope, noteId: string, limit = 5): Promise<LinkSuggestion[]> {
+    const ws = scope.kind === 'personal' ? scope.workspaceId ?? undefined : undefined;
+    const note = await noteStoreFor(scope, this.notes).getById(noteId);
     if (!note) throw new Error(`Note ${noteId} not found for this user`);
 
     // Already-linked targets (by resolved id) to exclude.
-    const existing = await this.links.getOutgoing(userId, 'note', noteId, ws);
+    const existing = await this.links.getOutgoing(scope, 'note', noteId, ws);
     const linkedIds = new Set(existing.filter((e) => e.toId).map((e) => e.toId as string));
     linkedIds.add(noteId); // never suggest self
 
@@ -54,8 +55,8 @@ export class SuggestionService {
     let hits: Awaited<ReturnType<EmbeddingService['hybridSearch']>>;
     try {
       // Pull a buffer beyond `limit` because we filter self/linked below.
-      // Tenant-scoped: only this user's note embeddings are candidates.
-      hits = await this.embeddings.hybridSearch({ kind: 'personal', userId, workspaceId }, query, limit * 4, 'note', undefined, 0.3);
+      // Scoped: only the scope's note embeddings are candidates.
+      hits = await this.embeddings.hybridSearch(scope.kind === 'personal' ? { kind: 'personal', userId: scope.userId, workspaceId: scope.workspaceId } : noteKnowledgeScope(scope), query, limit * 4, 'note', undefined, 0.3);
     } catch (err) {
       coreLogger.warn({ err, component: 'suggestions', noteId }, 'Link suggestions unavailable (no embedding model?)');
       return [];
@@ -65,7 +66,7 @@ export class SuggestionService {
     // row is. Keep only notes readable in this workspace.
     const refs = hits.map((hit) => ({ hit, ref: entityRefFromSourceId(hit.sourceId) }));
     const noteIds = refs.flatMap(({ ref }) => (ref?.type === 'note' ? [ref.id] : []));
-    const visible = new Set((await this.notes.getByIds(userId, noteIds, ws)).map((n) => n.id));
+    const visible = new Set((await noteStoreFor(scope, this.notes).getByIds(noteIds)).map((n) => n.id));
 
     const out: LinkSuggestion[] = [];
     const seen = new Set<string>();

@@ -247,6 +247,31 @@ mixed into it. Existing memories are not migrated.
   `workspace_members`, `workspace_invites`, `workspace_id` on `audit_log`,
   `permission_requests` and `cost_log`, `funding` on `cost_log` and `agents`,
   paused flags on artifact data sources, and a per-workspace unique note slug.
+- **Members work on the space's content.** With a space selected
+  (`X-Octipus-Workspace`), notes (and their links), tasks and comments,
+  documents, artifacts and their pages, knowledge, sessions and notifications
+  read and write the space's rows by the member's role: viewers read,
+  commenters also comment, editors and owners write (a refused write is 403,
+  an archived space 409). Every other route runs in the caller's personal
+  default workspace, except agents and pipelines addressed by id, which follow
+  their session. A header naming a space you are not (or no longer) a member
+  of is 404 on every route but sign-in, health, `/api/me/workspaces` and
+  `GET /api/spaces`.
+- **Personal paths never return a space's rows**, for their author or an
+  admin: the personal repositories, the note and link repositories, the notes
+  graph, global search, knowledge search, role-agent and heartbeat probes,
+  memory routes and the admin session lists all exclude shared workspaces.
+  Links resolve inside one scope, vault sync stays personal, and a space's
+  files live in `<workspace.rootPath>/spaces/<id>/files` and its uploads in
+  `<workspace.documentsPath>/spaces/<id>/`.
+- **Space tasks wake their own people.** Closing a blocker wakes and notifies
+  the dependent task's author (and a user assignee), whoever closed it; a
+  space task never wakes a role heartbeat. A data source of a space artifact
+  refreshes only while its owner may write in the space, and pauses
+  otherwise. Private artifacts in a space are their creator's only.
+- **Notifications carry their workspace.** A notification filed with a
+  `workspaceId` lists in that workspace's inbox (and user-level ones
+  everywhere).
 ### The web is on the gateway (coworking S0d)
 
 - **One gateway connection per tab.** The web app's chat page, permission

@@ -69,6 +69,19 @@ export async function refreshSource(sourceId: string): Promise<RefreshResult> {
     coreLogger.info({ sourceId }, 'artifact.refresh.space_archived');
     return { ok: false, error: 'This space is archived' };
   }
+  // A space artifact's source runs as its principal only while that
+  // principal is a member who may write there (docs/plans/coworking-spec.md
+  // §5.5): read now, from the database, and paused otherwise.
+  const spaceId = await artifactsRepository.spaceOfSource(sourceId);
+  if (spaceId) {
+    const { can, getMembership } = await import('@/core/spaces/service');
+    if (!can((await getMembership(source.principalId, spaceId))?.role, 'write')) {
+      const { syncDataSources } = await import('@/core/spaces/membership');
+      await syncDataSources(spaceId, source.principalId);
+      coreLogger.info({ sourceId, spaceId }, 'artifact.refresh.paused_membership');
+      return { ok: false, error: 'source paused (membership)' };
+    }
+  }
 
   let payload: unknown;
   try {

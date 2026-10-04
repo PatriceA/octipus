@@ -125,6 +125,62 @@ revoked or accepted, purge — writes one audit row carrying the space's
 `workspace_id`. Members read them, newest first, at
 `GET /api/spaces/<id>/activity?limit=50&before=<timestamp>`.
 
+## Working in a space
+
+The web sends the selected workspace in `X-Octipus-Workspace` (an id or a
+slug). When it names a space the caller is a member of, the server marks the
+request's principal shared, with the member's role, read from the database
+for that request.
+
+- **Which routes act on the space.** `SPACE_ROUTES`
+  (`src/api/space-routes.ts`): notes, tasks and comments, documents,
+  artifacts and their hosted pages, knowledge, sessions (the member's own
+  private chats in the space, and their files), spaces and notifications.
+  Every other route — chat approvals, models, search, settings, memories… —
+  runs in the caller's default personal workspace, so a personal route never
+  acts on space rows. Agents and pipelines addressed by id
+  (`/api/agents/:id`, `/api/pipelines/:id`, `?sessionId=`) follow their
+  session's workspace, so a member's chat in a space still lists and stops
+  its agents. `src/api/space-routes.test.ts` classifies every mounted route.
+- **Not a member.** A header naming a space you are not a member of (or no
+  longer are) answers 404 on every `/api` and `/v1` route, except
+  `/api/auth/*`, `/api/health`, `/api/me/workspaces` and `GET /api/spaces`,
+  so a removed member's client can recover.
+- **The access layer.** Space routes go through `contentRepos(principal)`
+  (`src/db/repositories/content.ts`): the personal repositories for a
+  personal principal, `spaceRepos` (`src/db/repositories/space.ts`) for a
+  shared one, with the same methods. In a space every query filters
+  `workspace_id = <space>`; writes stamp the space and the member as author
+  (`user_id`, attribution only) and check the role: viewers read, commenters
+  also comment on tasks, editors and owners write. A refused write is 403; an
+  archived space is read-only (409). A member's sessions, agents, pipelines
+  and notifications stay theirs inside the space.
+- **Personal paths never return space rows**, for their author or an admin:
+  the personal repositories carry the predicate `notInSharedWorkspace`, and
+  so do the raw readers outside them (notes graph, global search, memory
+  routes, role-agent and heartbeat probes, the weekly review, channel tasks).
+  `src/db/repositories/space.isolation.test.ts` fails on a new raw read of a
+  content table outside its allowlist.
+- **Notes and links.** `NoteService` takes a `NoteScope` (personal, or a
+  space). Links resolve inside one scope: a `[[link]]` in a space binds only
+  to the space's notes, a personal one only to personal notes. Vault sync is
+  personal-only.
+- **Files and documents.** A space's files live in
+  `<workspace.rootPath>/spaces/<id>/files` (`WorkspaceFS.forSpace`), with no
+  extra allowed prefixes; uploads go to
+  `<workspace.documentsPath>/spaces/<id>/`. Both go with a purge.
+- **Knowledge.** Space notes, documents and files are indexed with the
+  space's workspace id; the knowledge routes search the space's rows in a
+  space and personal rows elsewhere.
+- **Artifacts.** In a space `private` means the creator only. Hosted pages
+  look an artifact up among the viewer's personal workspaces and the spaces
+  they belong to. A data source of a space artifact refreshes only while its
+  owner may write in the space, and pauses otherwise.
+- **Tasks.** Closing a blocker wakes the dependent task's author and user
+  assignee, whoever closed it. Role agents are personal automation: a space
+  task is never assigned to a role heartbeat and never wakes one.
+- **Guests** have no content access yet: guest scopes arrive with S6.
+
 ## Settings
 
 | Key | Env | Default | Meaning |

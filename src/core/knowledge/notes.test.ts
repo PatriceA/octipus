@@ -1,3 +1,4 @@
+import { personalNoteScope } from '@/db/repositories/note-repository';
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
@@ -67,7 +68,7 @@ describe('NoteService', () => {
 
   test('save creates a note, derives slug, and wires wikilinks + tags', async () => {
     const r = await svc.save({
-      userId,
+      scope: personalNoteScope(userId),
       title: 'My First Note',
       body: 'Links to [[Project Plan]] and is #important',
     });
@@ -80,23 +81,23 @@ describe('NoteService', () => {
   });
 
   test('re-index degrades to indexed:false without an embedding model but still saves', async () => {
-    const r = await svc.save({ userId, title: 'No Model', body: 'body text' });
+    const r = await svc.save({ scope: personalNoteScope(userId), title: 'No Model', body: 'body text' });
     expect(r.created).toBe(true);
     expect(r.indexed).toBe(false);
-    expect(await svc.getById(userId, r.note.id)).not.toBeNull();
+    expect(await svc.getById(personalNoteScope(userId), r.note.id)).not.toBeNull();
   });
 
   test('unchanged body on re-save is a no-op for links', async () => {
-    const first = await svc.save({ userId, title: 'Stable', body: 'has [[a]] link' });
+    const first = await svc.save({ scope: personalNoteScope(userId), title: 'Stable', body: 'has [[a]] link' });
     expect(first.links.added).toBe(1);
-    const second = await svc.save({ userId, id: first.note.id, title: 'Stable', body: 'has [[a]] link' });
+    const second = await svc.save({ scope: personalNoteScope(userId), id: first.note.id, title: 'Stable', body: 'has [[a]] link' });
     expect(second.links).toEqual({ added: 0, removed: 0 });
   });
 
   test('editing the body diffs the links (add + remove)', async () => {
-    const first = await svc.save({ userId, title: 'Edited', body: '[[a]] [[b]]' });
+    const first = await svc.save({ scope: personalNoteScope(userId), title: 'Edited', body: '[[a]] [[b]]' });
     expect(first.links.added).toBe(2);
-    const second = await svc.save({ userId, id: first.note.id, title: 'Edited', body: '[[a]] [[c]]' });
+    const second = await svc.save({ scope: personalNoteScope(userId), id: first.note.id, title: 'Edited', body: '[[a]] [[c]]' });
     expect(second.links.added).toBe(1);
     expect(second.links.removed).toBe(1);
     const refs = (await links.getOutgoing(userId, 'note', first.note.id)).map((e) => e.toRef).sort();
@@ -105,12 +106,12 @@ describe('NoteService', () => {
 
   test('creating a note resolves ghost edges that referenced its slug', async () => {
     // Note B references a not-yet-existing [[Target]].
-    const b = await svc.save({ userId, title: 'B', body: 'see [[Target]]' });
+    const b = await svc.save({ scope: personalNoteScope(userId), title: 'B', body: 'see [[Target]]' });
     const ghost = (await links.getOutgoing(userId, 'note', b.note.id))[0];
     expect(ghost.toId).toBeNull();
 
     // Create Target — the ghost edge should now resolve to it.
-    const target = await svc.save({ userId, title: 'Target' });
+    const target = await svc.save({ scope: personalNoteScope(userId), title: 'Target' });
     const resolved = (await links.getOutgoing(userId, 'note', b.note.id))[0];
     expect(resolved.toId).toBe(target.note.id);
     expect(resolved.toType).toBe('note');
@@ -121,20 +122,20 @@ describe('NoteService', () => {
     // near-miss note by similarity, marking the binding with a confidence.
     // When a note with the *exact* slug later appears, the exact match must
     // win — a guess is never allowed to outlive the real thing.
-    const guessed = await svc.save({ userId, title: 'Nearly Target' });
-    const b = await svc.save({ userId, title: 'Guess Source', body: 'see [[Target]]' });
+    const guessed = await svc.save({ scope: personalNoteScope(userId), title: 'Nearly Target' });
+    const b = await svc.save({ scope: personalNoteScope(userId), title: 'Guess Source', body: 'see [[Target]]' });
 
-    await links.resolveTo({ userId, toRef: 'target', toType: 'note', toId: guessed.note.id, confidence: 0.71 });
+    await links.resolveTo({ scope: userId, toRef: 'target', toType: 'note', toId: guessed.note.id, confidence: 0.71 });
     let edge = (await links.getOutgoing(userId, 'note', b.note.id)).find((e) => e.linkType === 'references');
     expect(edge?.toId).toBe(guessed.note.id);
     expect(edge?.confidence).toBeCloseTo(0.71, 2);
 
     // A second guess must not churn an already-guessed edge.
-    const other = await svc.save({ userId, title: 'Another Near Miss' });
-    expect(await links.resolveTo({ userId, toRef: 'target', toType: 'note', toId: other.note.id, confidence: 0.9 })).toBe(0);
+    const other = await svc.save({ scope: personalNoteScope(userId), title: 'Another Near Miss' });
+    expect(await links.resolveTo({ scope: userId, toRef: 'target', toType: 'note', toId: other.note.id, confidence: 0.9 })).toBe(0);
 
     // Creating the real note reclaims the edge and clears the guess score.
-    const real = await svc.save({ userId, title: 'Target' });
+    const real = await svc.save({ scope: personalNoteScope(userId), title: 'Target' });
     edge = (await links.getOutgoing(userId, 'note', b.note.id)).find((e) => e.linkType === 'references');
     expect(edge?.toId).toBe(real.note.id);
     expect(edge?.confidence).toBeNull();
@@ -144,24 +145,24 @@ describe('NoteService', () => {
     // The QA bug: B exists first, then A links to it. The A→B edge used to
     // stay a ghost (to_id NULL) until B was next saved, so the graph (which
     // only draws resolved edges) showed no connection.
-    const target = await svc.save({ userId, title: 'Existing Target' });
-    const a = await svc.save({ userId, title: 'A', body: 'see [[Existing Target]]' });
+    const target = await svc.save({ scope: personalNoteScope(userId), title: 'Existing Target' });
+    const a = await svc.save({ scope: personalNoteScope(userId), title: 'A', body: 'see [[Existing Target]]' });
     const edge = (await links.getOutgoing(userId, 'note', a.note.id)).find((e) => e.linkType === 'references');
     expect(edge?.toId).toBe(target.note.id);
     expect(edge?.toType).toBe('note');
   });
 
   test('getOrCreateDaily is idempotent and stamps the date', async () => {
-    const d1 = await svc.getOrCreateDaily(userId, null, '2026-06-09T12:00:00Z');
+    const d1 = await svc.getOrCreateDaily(personalNoteScope(userId), '2026-06-09T12:00:00Z');
     expect(d1.slug).toBe('daily/2026-06-09');
     expect(d1.noteKind).toBe('daily');
     expect(d1.noteDate).toBe('2026-06-09');
-    const d2 = await svc.getOrCreateDaily(userId, null, '2026-06-09');
+    const d2 = await svc.getOrCreateDaily(personalNoteScope(userId), '2026-06-09');
     expect(d2.id).toBe(d1.id);
   });
 
   test('capture appends a timestamped bullet to the daily note', async () => {
-    const note = await svc.capture(userId, null, 'remember the [[milk]]', '2026-06-09');
+    const note = await svc.capture(personalNoteScope(userId), 'remember the [[milk]]', '2026-06-09');
     expect(note.body).toContain('remember the [[milk]]');
     expect(note.noteKind).toBe('daily');
     // The captured wikilink is wired.
@@ -170,11 +171,11 @@ describe('NoteService', () => {
   });
 
   test('remove cleans up edges and deletes the row', async () => {
-    const n = await svc.save({ userId, title: 'Doomed', body: '[[x]]' });
+    const n = await svc.save({ scope: personalNoteScope(userId), title: 'Doomed', body: '[[x]]' });
     expect((await links.getOutgoing(userId, 'note', n.note.id))).toHaveLength(1);
-    const removed = await svc.remove(userId, n.note.id);
+    const removed = await svc.remove(personalNoteScope(userId), n.note.id);
     expect(removed).toBe(true);
-    expect(await svc.getById(userId, n.note.id)).toBeNull();
+    expect(await svc.getById(personalNoteScope(userId), n.note.id)).toBeNull();
     expect(await links.getOutgoing(userId, 'note', n.note.id)).toHaveLength(0);
   });
 
@@ -182,8 +183,8 @@ describe('NoteService', () => {
     const other = randomUUID();
     const { seedUsers } = await import('@/test-helpers/multiuser-fixtures');
     await seedUsers([{ id: other, username: 'notes-other' }]);
-    const n = await svc.save({ userId, title: 'Mine', body: 'x' });
-    expect(await svc.getById(other, n.note.id)).toBeNull();
-    expect(await svc.list(other)).toHaveLength(0);
+    const n = await svc.save({ scope: personalNoteScope(userId), title: 'Mine', body: 'x' });
+    expect(await svc.getById(personalNoteScope(other), n.note.id)).toBeNull();
+    expect(await svc.list(personalNoteScope(other))).toHaveLength(0);
   });
 });

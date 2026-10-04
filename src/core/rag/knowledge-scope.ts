@@ -8,10 +8,12 @@
  *
  *   - `personal` — the rows a user owns, narrowed to a workspace when one is
  *     set (rows with a NULL workspace stay visible in every workspace of that
- *     user, as in `scopedRepos`).
- *   - `space` — the rows of one shared workspace. Reserved for S1 (shared
- *     spaces, docs/plans/coworking-spec.md §5): only the S1 resolver builds
- *     it, after its membership check. Nothing builds it before then.
+ *     user, as in `scopedRepos`). Never a space's rows, even the user's own
+ *     (docs/plans/coworking-spec.md §5.5, I2).
+ *   - `space` — the rows of one shared workspace, whoever wrote them. Built
+ *     only from a principal the resolver marked shared after its membership
+ *     check (`principalKnowledgeScope`, `contentRepos`), and from a space
+ *     note's scope.
  *   - `install` — every row. Admin routes reach it only through
  *     `?scope=install`, which is audited; otherwise system jobs only (cron
  *     cleanup, boot indexing).
@@ -22,10 +24,12 @@
  * admins (audited) and system jobs only.
  *
  * Writes name an owner instead (`KnowledgeOwner`): a user and workspace, or
- * the product corpus. There is no "no owner" write.
+ * the product corpus. There is no "no owner" write. Space content is written
+ * by its author with the space's workspace id.
  */
 import { type SQL, sql } from 'drizzle-orm';
 import type { AgentContext } from '@/core/types';
+import type { NoteScope } from '@/db/repositories/note-repository';
 import type { Principal } from '@/security/principal';
 
 export type KnowledgeScope =
@@ -48,6 +52,12 @@ function column(alias: string | undefined, name: string): SQL {
   return sql.raw(alias ? `${alias}.${name}` : name);
 }
 
+/** Not a row of a shared workspace (I2): every personal predicate carries it. */
+function notInSpaceSql(alias?: string): SQL {
+  const ws = column(alias, 'workspace_id');
+  return sql`(${ws} IS NULL OR NOT EXISTS (SELECT 1 FROM workspaces sw WHERE sw.id = ${ws} AND sw.kind = 'shared'))`;
+}
+
 function productDocsSql(alias?: string): SQL {
   return sql`(${column(alias, 'user_id')} IS NULL AND ${column(alias, 'metadata')}->>'source' = ${PRODUCT_DOCS_SOURCE})`;
 }
@@ -64,7 +74,7 @@ export function scopePredicate(scope: KnowledgeScope, access: KnowledgeAccess, a
       const workspace = scope.workspaceId
         ? sql` AND (${column(alias, 'workspace_id')} = ${scope.workspaceId} OR ${column(alias, 'workspace_id')} IS NULL)`
         : sql``;
-      const own = sql`(${column(alias, 'user_id')} = ${scope.userId}${workspace})`;
+      const own = sql`(${column(alias, 'user_id')} = ${scope.userId}${workspace} AND ${notInSpaceSql(alias)})`;
       return access === 'read' ? sql`(${own} OR ${productDocsSql(alias)})` : own;
     }
     case 'space': {
@@ -83,7 +93,11 @@ export function ownerPredicate(owner: KnowledgeOwner, opts: { exactWorkspace: bo
   if ('product' in owner) return productDocsSql();
   const workspace = opts.exactWorkspace
     ? sql` AND workspace_id IS NOT DISTINCT FROM ${owner.workspaceId}`
-    : sql``;
+    : owner.workspaceId
+      // A space's rows are its own source set; a personal owner never
+      // reaches them.
+      ? sql` AND (workspace_id = ${owner.workspaceId} OR ${notInSpaceSql()})`
+      : sql` AND ${notInSpaceSql()}`;
   return sql`(user_id = ${owner.ownerUserId}${workspace})`;
 }
 
@@ -96,13 +110,25 @@ function requireUserId(userId: string | undefined, what: string): string {
   return userId;
 }
 
-/** The personal scope of a request's principal. */
+/**
+ * The scope of a request's principal: the space's, when the resolver marked
+ * the principal shared (a member acting in a space on a space route), else
+ * the personal one.
+ */
 export function principalKnowledgeScope(principal: Principal): KnowledgeScope {
-  return {
-    kind: 'personal',
-    userId: requireUserId(principal.userId, 'Knowledge access'),
-    workspaceId: principal.workspaceId ?? null,
-  };
+  const userId = requireUserId(principal.userId, 'Knowledge access');
+  if (principal.workspaceKind === 'shared') {
+    if (!principal.workspaceId || !principal.spaceRole) throw new Error('A shared principal has no space');
+    return { kind: 'space', workspaceId: principal.workspaceId };
+  }
+  return { kind: 'personal', userId, workspaceId: principal.workspaceId ?? null };
+}
+
+/** The knowledge scope a note scope searches embeddings in. */
+export function noteKnowledgeScope(scope: NoteScope): KnowledgeScope {
+  return scope.kind === 'space'
+    ? { kind: 'space', workspaceId: scope.workspaceId }
+    : { kind: 'personal', userId: scope.userId, workspaceId: null };
 }
 
 /** The personal scope of the user an agent works for. */
@@ -122,7 +148,7 @@ export function agentKnowledgeOwner(context: Pick<AgentContext, 'userId' | 'work
   };
 }
 
-/** The owner of rows a request's principal writes. */
+/** The owner of rows a request's principal writes (in a space: the member, with the space's id). */
 export function principalKnowledgeOwner(principal: Principal): KnowledgeOwner {
   return {
     ownerUserId: requireUserId(principal.userId, 'Knowledge indexing'),

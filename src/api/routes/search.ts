@@ -1,4 +1,5 @@
 import { and, eq, ilike, or } from 'drizzle-orm';
+import { notInSharedWorkspace } from '@/db/repositories/scoped';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getEmbeddingService } from '@/core/rag/embeddings';
@@ -54,7 +55,7 @@ export const searchRoutes = new Elysia({ prefix: '/search' })
         db
           .select({ id: sessions.id, title: sessions.title, channelType: sessions.channelType, status: sessions.status })
           .from(sessions)
-          .where(and(eq(sessions.userId, principal.userId), ilike(sessions.title, pattern)))
+          .where(and(eq(sessions.userId, principal.userId), notInSharedWorkspace(sessions.workspaceId), ilike(sessions.title, pattern)))
           .limit(limit),
 
         // Hooks — search by name or description, the caller's own only

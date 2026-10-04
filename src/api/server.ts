@@ -5,6 +5,7 @@ import { getDb } from '@/db/postgres';
 import { users } from '@/db/schema/users';
 import { getApiTokenManager, looksLikeApiToken } from '@/security/api-tokens';
 import { getSessionManager } from '@/security/auth/session';
+import { SpaceError, spaceErrorStatus } from '@/security/space-access';
 import {
   ANONYMOUS_PRINCIPAL,
   type Principal,
@@ -97,6 +98,41 @@ const DESKTOP_ORIGINS = [
   'http://localhost:3008',
 ];
 
+type Resolution = Awaited<ReturnType<typeof import('@/security/workspace-resolver').resolveWorkspace>>;
+
+/** The principal of a request in the resolved workspace (personal or a space). */
+function withWorkspace(principal: Principal, resolution: Resolution): Principal {
+  const { workspaceKind: _k, spaceRole: _r, spaceScope: _s, spaceArchived: _a, ...base } = principal;
+  void _k; void _r; void _s; void _a;
+  if (resolution.workspaceKind !== 'shared') {
+    return { ...base, workspaceId: resolution.workspaceId, workspaceKind: 'personal' };
+  }
+  return {
+    ...base,
+    workspaceId: resolution.workspaceId,
+    workspaceKind: 'shared',
+    spaceRole: resolution.spaceRole,
+    spaceScope: resolution.spaceScope ?? null,
+    spaceArchived: resolution.spaceArchived ?? false,
+  };
+}
+
+/**
+ * A header naming a space reaches the space only on `SPACE_ROUTES`
+ * (docs/plans/coworking-spec.md §5.4). Every other route runs in the
+ * caller's default personal workspace — except one that addresses a
+ * session, agent or pipeline by id: that one runs in the row's workspace
+ * when it is this space.
+ */
+async function routeWorkspace(userId: string, resolution: Resolution, url: URL): Promise<Resolution> {
+  const { isSpaceRoute, spaceTargetOf } = await import('./space-routes');
+  if (isSpaceRoute(url.pathname)) return resolution;
+  const { defaultWorkspaceResolution, workspaceOfTarget } = await import('@/security/workspace-resolver');
+  const target = spaceTargetOf(url.pathname, url.searchParams);
+  if (target && (await workspaceOfTarget(userId, target)) === resolution.workspaceId) return resolution;
+  return defaultWorkspaceResolution(userId);
+}
+
 export function createServer() {
   const config = getConfig();
 
@@ -138,7 +174,14 @@ export function createServer() {
       apiLogger.debug({ method: request.method, url: request.url }, 'Request received');
     })
     // Error handling
-    .onError(({ error, code }) => {
+    .onError(({ error, code, set }) => {
+      // A space access refusal from the access layer (`contentRepos`) is
+      // its typed status — 404 for a non-member, 403 for a role that lacks
+      // the action, 409 for an archived space — never a 500.
+      if (error instanceof SpaceError) {
+        set.status = spaceErrorStatus(error);
+        return { error: error.message, code: error.code };
+      }
       // Routine client-side conditions (unknown route, bad input) are normal
       // request flow, not server errors — log them at debug so real 5xx errors
       // stand out. Everything else stays at error level.
@@ -295,7 +338,9 @@ export function createServer() {
     // so the auth branch above stays a flat early-return list. The
     // resolver maps the `X-Octipus-Workspace` header (slug, uuid, or
     // "all") to a workspace id owned by the principal; cross-tenant or
-    // unknown headers collapse to the user's default workspace.
+    // unknown headers collapse to the user's default workspace. A space
+    // the caller is a member of resolves to it (shared, with their role)
+    // on `SPACE_ROUTES` only; a space they are not a member of is a 404.
     //
     // Fails closed: a principal without its workspace would read every
     // workspace's rows (the scoped repositories drop the workspace filter
@@ -305,10 +350,20 @@ export function createServer() {
       if (!principal || principal.kind === 'anonymous') return {};
       const header = request.headers.get('x-octipus-workspace');
       try {
-        const { resolveWorkspace } = await import('@/security/workspace-resolver');
-        const { workspaceId } = await resolveWorkspace(principal, header);
-        if (workspaceId === null) return {};
-        return { principal: { ...principal, workspaceId } };
+        const { defaultWorkspaceResolution, resolveWorkspace } = await import('@/security/workspace-resolver');
+        let resolution = await resolveWorkspace(principal, header);
+        const url = new URL(request.url);
+        if (resolution.denied) {
+          // A space the caller is not (or no longer) a member of: 404 below
+          // (I3), except on the few paths a client needs to recover.
+          const { isDeniedWorkspaceExempt } = await import('./space-routes');
+          if (!isDeniedWorkspaceExempt(request.method, url.pathname)) return { workspaceDenied: true };
+          resolution = await defaultWorkspaceResolution(principal.userId);
+        } else if (resolution.workspaceKind === 'shared') {
+          resolution = await routeWorkspace(principal.userId, resolution, url);
+        }
+        if (resolution.workspaceId === null) return {};
+        return { principal: withWorkspace(principal, resolution) };
       } catch (err) {
         apiLogger.error({ err, userId: principal.userId }, 'Workspace resolution failed; refusing the request');
         return { workspaceUnresolved: true };
@@ -323,6 +378,16 @@ export function createServer() {
     .use(rateLimitMiddleware)
     // Auth guard — reject unauthenticated requests to protected routes
     .use(authGuard)
+    // A workspace header naming a space the caller is not a member of: 404 on
+    // `/api` and `/v1` (I3), whatever the route — the client learns the space
+    // is gone instead of acting in another workspace.
+    .onBeforeHandle((ctx) => {
+      if (!(ctx as { workspaceDenied?: boolean }).workspaceDenied) return;
+      const { pathname } = new URL(ctx.request.url);
+      if (!pathname.startsWith('/api/') && !pathname.startsWith('/v1/')) return;
+      ctx.set.status = 404;
+      return { error: 'Space not found' };
+    })
     // Multi-user phase 0 — shadow-mode audit middleware. Logs one row per
     // state-changing request. Never blocks; gated by config.multiuser.auditShadow.
     .use(auditShadowMiddleware)

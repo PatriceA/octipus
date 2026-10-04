@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import type { EmbeddingService } from '@/core/rag/embeddings';
 import type { KnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
-import type { NoteRepository } from '@/db/repositories/note-repository';
+import { type NoteRepository, personalNoteScope } from '@/db/repositories/note-repository';
 import { SuggestionService } from './suggestions';
 
 /**
@@ -39,13 +39,13 @@ function service(seen: { scope?: unknown; outgoingWs?: string }) {
 describe('SuggestionService.suggestForNote', () => {
   test("offers the workspace's and user-level notes, never another workspace's", async () => {
     const seen: { scope?: unknown; outgoingWs?: string } = {};
-    const out = await service(seen).suggestForNote(USER, SELF, WS);
+    const out = await service(seen).suggestForNote(personalNoteScope(USER, WS), SELF);
     expect(out.map((s) => s.id)).toEqual([SAME_WS, USER_LEVEL]);
     expect(seen.scope).toEqual({ kind: 'personal', userId: USER, workspaceId: WS });
     expect(seen.outgoingWs).toBe(WS);
   });
 
   test("a note of another workspace is not found from this one", async () => {
-    await expect(service({}).suggestForNote(USER, OTHER_WS, WS)).rejects.toThrow(/not found/);
+    await expect(service({}).suggestForNote(personalNoteScope(USER, WS), OTHER_WS)).rejects.toThrow(/not found/);
   });
 });

@@ -117,19 +117,42 @@ const workspaceRows = new Map<string, { userId: string; filesDir: string }>();
  */
 export function noteWorkspaceRows(rows: ReadonlyArray<{ id: string; userId: string | null; filesDir: string }>): void {
   for (const row of rows) {
-    if (row.userId === null) continue;
+    if (row.userId === null) {
+      noteSharedWorkspace(row.id);
+      continue;
+    }
     workspaceRows.set(row.id, { userId: row.userId, filesDir: row.filesDir });
   }
+}
+
+/**
+ * Shared workspaces (spaces) this process has seen: their files live under
+ * `spaces/<id>/files` (`forSpace`), and the synchronous `forAgent` /
+ * `forSession` need to know a space id when they see one. Filled at boot
+ * (`loadFileRoots`) and by every membership read (`getMembership`).
+ */
+const sharedWorkspaceIds = new Set<string>();
+
+/** Record a shared workspace id (see `sharedWorkspaceIds`). */
+export function noteSharedWorkspace(id: string): void {
+  sharedWorkspaceIds.add(id);
+}
+
+/** Whether `id` is a shared workspace this process has seen. */
+export function isKnownSharedWorkspace(id: string | null | undefined): boolean {
+  return !!id && sharedWorkspaceIds.has(id);
 }
 
 /** Drop a deleted workspace row. */
 export function forgetWorkspaceRow(id: string): void {
   workspaceRows.delete(id);
+  sharedWorkspaceIds.delete(id);
 }
 
 /** Test hook: clear the known workspace rows. */
 export function _resetWorkspaceRowsForTests(): void {
   workspaceRows.clear();
+  sharedWorkspaceIds.clear();
 }
 
 /**
@@ -258,6 +281,9 @@ export class WorkspaceFS {
       throw new WorkspaceFsError('UNAUTHENTICATED',
         'WorkspaceFS requires an authenticated principal');
     }
+    if (principal.workspaceKind === 'shared' || isKnownSharedWorkspace(principal.workspaceId)) {
+      return WorkspaceFS.forSpace(principal.workspaceId as string, options);
+    }
     const dataRoot = options.dataRoot ?? configuredDataRoot();
     const root = pathResolve(
       dataRoot,
@@ -268,6 +294,20 @@ export class WorkspaceFS {
       'files',
     );
     return new WorkspaceFS(principal, root, options);
+  }
+
+  /**
+   * Build the `WorkspaceFS` of a space (docs/plans/coworking-spec.md §5.5):
+   * `<workspace.rootPath>/spaces/<id>/files`, shared by every member. No
+   * extra prefixes in a space context — not `/tmp/assistant-`, not
+   * `workspace.additionalPaths`, not a caller's: a member's agent reaches
+   * the space's files and nothing of the host beside them.
+   */
+  static forSpace(workspaceId: string, options: WorkspaceFsOptions = {}): WorkspaceFS {
+    // `spaceDirectories` validates the id; a test's `dataRoot` replaces the configured root.
+    const { root } = spaceDirectories(workspaceId);
+    const base = options.dataRoot ? pathResolve(options.dataRoot, SPACES_DIR, workspaceId) : root;
+    return new WorkspaceFS(ANONYMOUS_PRINCIPAL, join(base, 'files'), {});
   }
 
   /**
@@ -315,6 +355,7 @@ export class WorkspaceFS {
       throw new WorkspaceFsError('UNAUTHENTICATED',
         `agent context has no real user (${context.userId || 'none'}); a system job passes { system: true, root }`);
     }
+    if (isKnownSharedWorkspace(context.workspaceId)) return WorkspaceFS.forSpace(context.workspaceId as string);
     return WorkspaceFS.forRequest(agentPrincipal(context), options);
   }
 
@@ -324,6 +365,9 @@ export class WorkspaceFS {
    * paths such an agent may use (knowledge indexing).
    */
   static forRequest(principal: Principal, options: WorkspaceFsOptions = {}): WorkspaceFS {
+    if (principal.workspaceKind === 'shared' || isKnownSharedWorkspace(principal.workspaceId)) {
+      return WorkspaceFS.forSpace(principal.workspaceId as string);
+    }
     return WorkspaceFS.forPrincipal(principal, {
       ...options,
       extraAllowedPrefixes: agentExtraPrefixes(options),
@@ -348,6 +392,9 @@ export class WorkspaceFS {
     session: { userId: string; workspaceId?: string | null; context?: unknown },
     options: WorkspaceFsOptions = {},
   ): WorkspaceFS {
+    // A space session reads back the space's files, whatever its context
+    // says: no dev-mode project root in a space.
+    if (isKnownSharedWorkspace(session.workspaceId)) return WorkspaceFS.forSpace(session.workspaceId as string);
     const ctx = session.context as
       | { devMode?: boolean; projectPath?: string }
       | null

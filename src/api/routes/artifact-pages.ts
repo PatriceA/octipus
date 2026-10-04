@@ -16,9 +16,9 @@ import { Elysia } from '@/api/http';
 import { existsSync } from 'fs';
 import { apiContext } from '@/api/context';
 import { artifactsRepository } from '@/db/repositories/artifacts-repository';
+import { findViewableArtifactBySlug } from '@/db/repositories/space';
 import { workspaces } from '@/db/schema/organizations';
 import { getDb } from '@/db/postgres';
-import { eq } from 'drizzle-orm';
 import { buildEmbedCsp } from '@/core/artifacts/csp';
 import { buildDataBus } from '@/core/artifacts/pipeline';
 import { BUILTIN_TEMPLATES, escapeHtml, renderTemplate } from '@/core/artifacts/render';
@@ -57,22 +57,12 @@ async function authorizeForRequest(opts: {
   let artifact: Artifact | null = null;
 
   if (opts.user) {
-    const db = getDb();
-    const owned = await db
-      .select()
-      .from(workspaces)
-      .where(eq(workspaces.userId, opts.user.id));
-    for (const ws of owned) {
-      const a = await artifactsRepository.getBySlug(ws.id, opts.slug);
-      if (a) {
-        artifact = a;
-        break;
-      }
-    }
+    // The viewer's personal workspaces and the spaces they are a member of
+    // (docs/plans/coworking-spec.md §5.5) — never a workspace looked up by
+    // owner alone, which a space (no owning user) would not match and a raw
+    // `workspaces.user_id` read would. `private` is the creator's only.
+    artifact = await findViewableArtifactBySlug(opts.user.id, opts.slug);
     if (artifact && (artifact.visibility === 'workspace' || artifact.visibility === 'private')) {
-      if (artifact.visibility === 'private' && artifact.createdByUserId !== opts.user.id) {
-        return null;
-      }
       return { artifact, scope: 'view+refresh' };
     }
     if (artifact && artifact.visibility === 'public') {

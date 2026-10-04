@@ -3,7 +3,7 @@ import { apiContext } from '@/api/context';
 import { getAgentManager } from '@/core/agent-manager';
 import { getRouter } from '@/core/router';
 import { sessionRepository } from '@/db/repositories/session-repository';
-import { scopedRepos } from '@/db/repositories/scoped';
+import { contentRepos } from '@/db/repositories/content';
 import { isAuthenticated } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
 import { readAgentCompletionReason } from '@/shared/agent-completion';
@@ -11,7 +11,7 @@ import { readAgentCompletionReason } from '@/shared/agent-completion';
 /**
  * Agents — Phase 1a multi-user conversion.
  *
- * DB lookups go through `scopedRepos(principal).agents`. The in-memory
+ * DB lookups go through `contentRepos(principal).agents`. The in-memory
  * agent manager continues to enforce ownership on `agent.getContext().userId`
  * (the live source of truth for running agents). The two layers compose:
  * a non-admin can only see live agents whose `context.userId` matches and
@@ -39,7 +39,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
         liveAgents = liveAgents.filter((a) => a.userId === user.id);
       }
 
-      const repos = scopedRepos(principal);
+      const repos = contentRepos(principal);
 
       // Pagination over the (potentially unbounded) historical rows. Live
       // agents are a small, active set and are always surfaced on the first
@@ -197,7 +197,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       }
 
       // Fall back to DB history — scoped repo collapses cross-tenant to null.
-      const dbAgent = await scopedRepos(principal).agents.findById(params.id);
+      const dbAgent = await contentRepos(principal).agents.findById(params.id);
       if (!dbAgent) {
         return { error: 'Agent not found' };
       }
@@ -238,7 +238,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
 
       // Verify session ownership through the scoped repo — cross-tenant
       // requests come back null and surface as "Session not found".
-      const session = await scopedRepos(principal).sessions.findById(sessionId);
+      const session = await contentRepos(principal).sessions.findById(sessionId);
       if (!session) {
         return { error: 'Session not found' };
       }
@@ -437,7 +437,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
 
       // Fall back to DB history — but first verify the principal owns
       // this agent so we don't leak event streams cross-tenant.
-      const dbAgent = await scopedRepos(principal).agents.findById(params.id);
+      const dbAgent = await contentRepos(principal).agents.findById(params.id);
       if (!dbAgent) {
         return { error: 'Agent not found' };
       }

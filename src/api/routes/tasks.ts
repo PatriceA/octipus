@@ -10,9 +10,10 @@ import { assigneePatch, isTaskStatus, TASK_ASSIGNEE_KINDS, TASK_STATUSES } from 
 import { normalizeEstimate } from '@/core/tasks/structure';
 import { resolveUserTimezone } from '@/core/tasks/timezone';
 import { queryRaw } from '@/db/postgres';
-import { scopedRepos } from '@/db/repositories/scoped';
+import { contentRepos } from '@/db/repositories/content';
 import type { NewTask } from '@/db/schema/tasks';
 import { isAuthenticated, type Principal } from '@/security/principal';
+import { SpaceError } from '@/security/space-access';
 import { apiLogger } from '@/utils/logger';
 
 const STATUSES = TASK_STATUSES;
@@ -125,7 +126,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         dueBefore = new Date();
         dueBefore.setHours(23, 59, 59, 999);
       }
-      const tasks = await scopedRepos(principal).tasks.listOwn({
+      const tasks = await contentRepos(principal).tasks.listOwn({
         status: query?.status,
         dueBefore,
         category: query?.category,
@@ -213,7 +214,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         set.status = 401;
         return { error: 'Not authenticated' };
       }
-      const task = await scopedRepos(principal).tasks.findById(params.id);
+      const task = await contentRepos(principal).tasks.findById(params.id);
       if (!task) {
         set.status = 404;
         return { error: 'Task not found' };
@@ -247,10 +248,12 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
           ...assigneePatch(body.assigneeKind, body.assigneeRef),
           source: 'user',
         };
-        const task = await scopedRepos(principal).tasks.create(values);
+        const task = await contentRepos(principal).tasks.create(values);
         await auditUserTaskMutation(principal, task, 'create', changedTaskFields(values));
         return task;
       } catch (err) {
+        // A role refusal keeps its status (403 / 409) through the error handler.
+        if (err instanceof SpaceError) throw err;
         set.status = 400;
         return { error: (err as Error).message };
       }
@@ -288,7 +291,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         set.status = 401;
         return { error: 'Not authenticated' };
       }
-      const repo = scopedRepos(principal).tasks;
+      const repo = contentRepos(principal).tasks;
       const existing = await repo.findById(params.id);
       if (!existing) {
         set.status = 404;
@@ -325,6 +328,8 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         }
         return updated;
       } catch (err) {
+        // A role refusal keeps its status (403 / 409) through the error handler.
+        if (err instanceof SpaceError) throw err;
         set.status = 400;
         return { error: (err as Error).message };
       }
@@ -362,7 +367,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         return { error: 'Not authenticated' };
       }
       const actor = body?.actor?.trim() || `user:${user.id}`;
-      const result = await scopedRepos(principal).tasks.checkout(params.id, actor, body?.runId ?? null);
+      const result = await contentRepos(principal).tasks.checkout(params.id, actor, body?.runId ?? null);
       if (result.ok) return result.task;
       if (result.reason === 'not_found') {
         set.status = 404;
@@ -397,7 +402,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         return { error: 'Not authenticated' };
       }
       const actor = body?.actor?.trim() || `user:${user.id}`;
-      const result = await scopedRepos(principal).tasks.release(params.id, actor, { force: body?.force });
+      const result = await contentRepos(principal).tasks.release(params.id, actor, { force: body?.force });
       if (result.ok) return result.task;
       if (result.reason === 'not_found') {
         set.status = 404;
@@ -425,7 +430,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         set.status = 401;
         return { error: 'Not authenticated' };
       }
-      const thread = await scopedRepos(principal).tasks.listComments(params.id);
+      const thread = await contentRepos(principal).tasks.listComments(params.id);
       if (!thread) {
         set.status = 404;
         return { error: 'Task not found' };
@@ -446,7 +451,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         set.status = 401;
         return { error: 'Not authenticated' };
       }
-      const comment = await scopedRepos(principal).tasks.addComment(params.id, {
+      const comment = await contentRepos(principal).tasks.addComment(params.id, {
         authorKind: 'user',
         authorRef: user.id,
         body: body.body,
@@ -472,7 +477,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         set.status = 401;
         return { error: 'Not authenticated' };
       }
-      const repo = scopedRepos(principal).tasks;
+      const repo = contentRepos(principal).tasks;
       // Read first: the audit row is filed under the task's owner.
       const existing = await repo.findById(params.id);
       if (!existing || !(await repo.delete(params.id))) {

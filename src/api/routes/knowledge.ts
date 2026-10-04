@@ -8,6 +8,7 @@ import { type getKBReadiness, isKBReady, kbNotReadyResponse, runKBSelfCheck } fr
 import { getFileIndexer } from '@/core/rag/indexer';
 import { type KnowledgeScope, principalKnowledgeOwner, principalKnowledgeScope } from '@/core/rag/knowledge-scope';
 import { auditRepository } from '@/db/repositories/audit-repository';
+import { contentRepos } from '@/db/repositories/content';
 import type { Principal } from '@/security/principal';
 import { WorkspaceFS, WorkspaceFsError } from '@/security/workspace-fs';
 import { apiLogger } from '@/utils/logger';
@@ -39,13 +40,21 @@ function ensureKBReady(set: any): { error: string; kb: ReturnType<typeof getKBRe
  */
 type ScopeResolution = { scope: KnowledgeScope } | { status: 400 | 403; error: string };
 
+/** Operations that change the knowledge base (the others read it). */
+const WRITE_OPS = new Set(['delete', 'cleanup', 'index']);
+
 async function requestScope(
   principal: Principal,
   requested: string | undefined,
   op: string,
   details: Record<string, unknown> = {},
 ): Promise<ScopeResolution> {
-  if (requested === undefined || requested === 'personal') return { scope: principalKnowledgeScope(principal) };
+  if (requested === undefined || requested === 'personal') {
+    // In a space the scope is the space's (`principalKnowledgeScope`), and
+    // changing what is indexed there is a write the member's role must allow.
+    if (WRITE_OPS.has(op)) contentRepos(principal).can('write');
+    return { scope: principalKnowledgeScope(principal) };
+  }
   if (requested !== 'install') return { status: 400, error: `Unknown scope "${requested}" — use personal or install` };
   if (!principal.isAdmin) return { status: 403, error: 'Install scope requires an admin' };
   await auditRepository.log({
@@ -377,6 +386,7 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
     let safePath: string;
     // Indexed rows belong to the caller, in the caller's workspace — the same
     // personal scope every read of this route uses.
+    contentRepos(principal).can('write');
     const owner = principalKnowledgeOwner(principal);
     const fs = WorkspaceFS.forRequest(principal);
     try {

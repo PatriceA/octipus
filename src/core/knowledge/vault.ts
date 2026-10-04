@@ -1,6 +1,7 @@
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { coreLogger } from '@/utils/logger';
+import { personalNoteScope } from '@/db/repositories/note-repository';
 import { getNoteService, type NoteService } from './notes';
 import type { Note } from '@/db/schema/notes';
 import { slugify } from './wikilink';
@@ -93,9 +94,11 @@ export class VaultSync {
    * Export a user's active, user-level notes to `<dir>/<slug>.md`.
    * Workspace-scoped notes are out of scope for vault sync (lookup on
    * import is user-level) and are skipped to avoid duplicate round-trips.
+   * Vault sync is personal-only: a space's notes never leave through it
+   * (docs/plans/coworking-spec.md §5.5).
    */
   async exportVault(userId: string, dir: string): Promise<VaultExportResult> {
-    const all = (await this.notes.list(userId, { limit: EXPORT_LIMIT })).filter((n) => n.workspaceId === null);
+    const all = (await this.notes.list(personalNoteScope(userId), { limit: EXPORT_LIMIT })).filter((n) => n.workspaceId === null);
     const truncated = all.length >= EXPORT_LIMIT;
     if (truncated) {
       coreLogger.warn({ component: 'vault', userId, limit: EXPORT_LIMIT }, 'Vault export hit the note limit — some notes were not exported');
@@ -124,6 +127,8 @@ export class VaultSync {
    */
   async importVault(userId: string, dir: string, opts: { force?: boolean } = {}): Promise<VaultImportResult> {
     const files = await collectMarkdown(dir);
+    // User-level notes only, never a space's (personal-only, see exportVault).
+    const scope = personalNoteScope(userId);
     const result: VaultImportResult = { imported: 0, updated: 0, unchanged: 0, conflicts: [] };
     for (const abs of files) {
       // Posix separators, because the slug is one: `exportVault` writes
@@ -133,7 +138,7 @@ export class VaultSync {
       const rel = relative(dir, abs).split(sep).join('/').replace(/\.md$/i, '');
       const content = await readFile(abs, 'utf8');
       const parsed = parseNoteFile(content, slugify(rel));
-      const existing = await this.notes.getBySlug(userId, null, parsed.slug);
+      const existing = await this.notes.getBySlug(scope, parsed.slug);
       if (existing) {
         // Compare normalised bodies — editors routinely add/strip a
         // trailing newline, which must not register as a content conflict.
@@ -150,7 +155,7 @@ export class VaultSync {
         if (bodySame && !metaSame) {
           // Body matches; only frontmatter (tags/kind/date/title) changed —
           // a safe metadata sync, not a content conflict.
-          await this.notes.save({ userId, id: existing.id, title: parsed.title, body: parsed.body, noteKind: parsed.noteKind, noteDate: parsed.noteDate, tags: parsed.tags });
+          await this.notes.save({ scope, id: existing.id, title: parsed.title, body: parsed.body, noteKind: parsed.noteKind, noteDate: parsed.noteDate, tags: parsed.tags });
           result.updated++;
           continue;
         }
@@ -159,10 +164,10 @@ export class VaultSync {
           result.conflicts.push(parsed.slug);
           continue;
         }
-        await this.notes.save({ userId, id: existing.id, title: parsed.title, body: parsed.body, noteKind: parsed.noteKind, noteDate: parsed.noteDate, tags: parsed.tags });
+        await this.notes.save({ scope, id: existing.id, title: parsed.title, body: parsed.body, noteKind: parsed.noteKind, noteDate: parsed.noteDate, tags: parsed.tags });
         result.updated++;
       } else {
-        await this.notes.save({ userId, slug: parsed.slug, title: parsed.title, body: parsed.body, noteKind: parsed.noteKind, noteDate: parsed.noteDate, tags: parsed.tags });
+        await this.notes.save({ scope, slug: parsed.slug, title: parsed.title, body: parsed.body, noteKind: parsed.noteKind, noteDate: parsed.noteDate, tags: parsed.tags });
         result.imported++;
       }
     }
