@@ -22,6 +22,7 @@ const SERVER_CATEGORIES = new Set([
   'security',
   'artifacts',
   'sessions',
+  'gateway',
   // 'voice' — has its own dedicated tab in Settings > Voice & Calls
 ]);
 
@@ -67,6 +68,7 @@ const SECTIONS = [
       { category: 'voice', label: 'Voice' },
       { category: 'security', label: 'Security' },
       { category: 'sessions', label: 'Sessions' },
+      { category: 'gateway', label: 'Gateway' },
     ],
   },
   {

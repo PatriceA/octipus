@@ -3,6 +3,7 @@ import { and, desc, eq, isNull, lt, sql, type SQL } from 'drizzle-orm';
 import { dbLogger } from '@/utils/logger';
 import { getDb } from '../postgres';
 import { type NewSession, type Session, sessions } from '../schema/sessions';
+import { sessionsRemoved } from './session-lifecycle';
 
 /** A jsonb path as a bound text[] — keys are parameters, never spliced into an array literal. */
 function jsonPath(path: string[]) {
@@ -163,6 +164,8 @@ export class SessionRepository {
       .where(eq(sessions.id, id))
       .returning();
 
+    // Archived: its live state (the gateway replay buffer) goes.
+    if (result[0] && data.status === 'completed') sessionsRemoved([id]);
     return result[0] ?? null;
   }
 
@@ -294,6 +297,7 @@ export class SessionRepository {
     const result = await this.db.delete(sessions).where(eq(sessions.id, id)).returning();
     if (result.length > 0) {
       dbLogger.info({ sessionId: id }, 'Session deleted');
+      sessionsRemoved([id]);
       return true;
     }
     return false;
@@ -333,6 +337,7 @@ export class SessionRepository {
 
     if (result.length > 0) {
       dbLogger.info({ count: result.length, days }, 'Archived old webchat sessions');
+      sessionsRemoved(result.map((row) => row.id));
     }
     return result.length;
   }

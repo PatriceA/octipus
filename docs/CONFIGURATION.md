@@ -155,6 +155,13 @@ Both this `tokens` cap and `AGENT_MAX_TOKEN_BUDGET` (`agent.maxTokenBudget`, per
 | `compaction.growthMultiplier` | 2.0 | Trigger compaction when current context grows by this multiple relative to the last compaction baseline. |
 | `compaction.hardCeiling` | 1_000_000 | Hard ceiling in tokens — compaction always runs above this threshold regardless of other gates. |
 
+## Gateway Config
+
+| Key | Default | Purpose |
+|---|---|---|
+| `gateway.maxConnectionsPerUser` | 20 | Signed-in `/gateway` connections one user may hold (each browser tab holds one, each TUI one). The one over the cap is refused; the web shows "Too many open tabs". Env: `GATEWAY_MAX_CONNECTIONS_PER_USER`. |
+| `gateway.maxFrameBytes` | 262144 | Largest frame a gateway client may send, in bytes — the socket's `maxPayload`, read at server start. A bigger frame closes the connection (1009). Raise it for large TUI image attachments. Env: `GATEWAY_MAX_FRAME_BYTES`. |
+| `gateway.replayMaxSessions` | 500 | Sessions whose recent events stay in memory so a reconnecting tab can `replay` what it missed; the least recently active is dropped first. Env: `GATEWAY_REPLAY_MAX_SESSIONS`. |
 
 ## Reverse proxy
 

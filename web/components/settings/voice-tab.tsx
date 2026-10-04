@@ -15,6 +15,7 @@ import {
   SettingsGroup,
   useSettingActions,
 } from './setting-field';
+import { useWorkspaceId } from '@/lib/workspace-context';
 
 const PROVIDER_VAULT_KEYS: Record<string, { keys: string[]; labels: string[] }> = {
   twilio: {
@@ -32,6 +33,7 @@ const PROVIDER_VAULT_KEYS: Record<string, { keys: string[]; labels: string[] }> 
 };
 
 export function VoiceTab() {
+  const workspaceId = useWorkspaceId();
   const { handleSave, handleReset, saving, saved } = useSettingActions();
   const [testingHealth, setTestingHealth] = useState(false);
   const [healthResult, setHealthResult] = useState<{ healthy: boolean; error?: string; provider?: string } | null>(null);
@@ -42,7 +44,7 @@ export function VoiceTab() {
   });
 
   const { data: vaultData } = useQuery({
-    queryKey: ['vault'],
+    queryKey: ['vault', workspaceId],
     queryFn: () => api.get<{ credentials: Array<{ name: string }> }>('/vault'),
   });
 

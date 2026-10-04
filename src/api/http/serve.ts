@@ -39,7 +39,17 @@ export function listen(app: App, options: ListenOptions): RunningServer {
   }) as unknown as Server;
 
   const wsRoutes = app.websocketRoutes();
-  const wss = new WebSocketServer({ noServer: true });
+  // One server per frame cap: `maxPayload` is a server option in `ws`, and a
+  // route declares its own (the gateway's is `gateway.maxFrameBytes`).
+  const servers = new Map<number | undefined, WebSocketServer>();
+  const serverFor = (maxPayload: number | undefined): WebSocketServer => {
+    let wss = servers.get(maxPayload);
+    if (!wss) {
+      wss = new WebSocketServer({ noServer: true, ...(maxPayload !== undefined ? { maxPayload } : {}) });
+      servers.set(maxPayload, wss);
+    }
+    return wss;
+  };
 
   nodeServer.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
@@ -48,7 +58,7 @@ export function listen(app: App, options: ListenOptions): RunningServer {
       socket.destroy();
       return;
     }
-    wss.handleUpgrade(req, socket, head, (raw) => {
+    serverFor(route.handlers.maxPayload).handleUpgrade(req, socket, head, (raw) => {
       attach(raw, route.handlers, url, req.headers, req.socket.remoteAddress);
     });
   });
@@ -59,8 +69,10 @@ export function listen(app: App, options: ListenOptions): RunningServer {
       return typeof addr === 'object' && addr ? addr.port : options.port;
     },
     stop: () => {
-      for (const client of wss.clients) client.terminate();
-      wss.close();
+      for (const wss of servers.values()) {
+        for (const client of wss.clients) client.terminate();
+        wss.close();
+      }
       nodeServer.close();
     },
   };

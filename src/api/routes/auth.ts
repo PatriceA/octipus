@@ -368,8 +368,9 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
   )
 
   // WebSocket auth ticket — exchange the HttpOnly session cookie for a
-  // short-lived (60s) bearer token usable in the WS handshake URL
-  // (`ws://.../ws?token=<ticket>`). The web client can't read the
+  // short-lived (60s) bearer token for a socket sign-in: the gateway's
+  // `auth` frame (`method: 'session_token'`), or the `/voice` handshake URL
+  // (`?token=<ticket>`). The web client can't read the
   // HttpOnly session cookie, and SameSite=Strict prevents the cookie from
   // travelling on cross-origin WS handshakes (web at :3007, backend WS at
   // :3005). Without this endpoint the WS never authenticates and chat

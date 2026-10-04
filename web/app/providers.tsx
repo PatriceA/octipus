@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { type ReactNode, useState } from 'react';
 import { DesktopConnectionGate } from '@/components/desktop-connection-gate';
 import { AuthProvider } from '@/lib/auth-context';
+import { GatewayProvider } from '@/lib/gateway-context';
 import { PermissionProvider } from '@/lib/permission-context';
 import { WorkspaceProvider } from '@/lib/workspace-context';
 
@@ -32,9 +33,11 @@ export function Providers({ children }: { children: ReactNode }) {
   const tree = (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <WorkspaceProvider>
-          <PermissionProvider>{children}</PermissionProvider>
-        </WorkspaceProvider>
+        <GatewayProvider>
+          <WorkspaceProvider>
+            <PermissionProvider>{children}</PermissionProvider>
+          </WorkspaceProvider>
+        </GatewayProvider>
       </AuthProvider>
     </QueryClientProvider>
   );

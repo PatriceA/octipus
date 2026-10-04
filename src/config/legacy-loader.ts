@@ -179,5 +179,10 @@ export function loadFromEnvLegacy(): Partial<Config> {
     oauth: {
       publicUrl: process.env.PUBLIC_URL,
     },
+    gateway: {
+      maxConnectionsPerUser: parseInt(process.env.GATEWAY_MAX_CONNECTIONS_PER_USER || String(defaultConfig.gateway!.maxConnectionsPerUser), 10),
+      maxFrameBytes: parseInt(process.env.GATEWAY_MAX_FRAME_BYTES || String(defaultConfig.gateway!.maxFrameBytes), 10),
+      replayMaxSessions: parseInt(process.env.GATEWAY_REPLAY_MAX_SESSIONS || String(defaultConfig.gateway!.replayMaxSessions), 10),
+    },
   };
 }

@@ -1,9 +1,8 @@
 'use client';
 
-import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
-import { createAuthenticatedWebSocket } from './api';
-import { useAuth } from './auth-context';
-import { api } from './api';
+import { createContext, useContext, useState, useCallback, useRef, type ReactNode } from 'react';
+import { useGateway, useGatewayMessages } from './gateway-context';
+import type { GatewayMessage } from './gateway';
 
 export interface PermissionRequest {
   requestId: string;
@@ -32,11 +31,7 @@ interface PermissionContextValue {
   approveApproval: (requestId: string, response?: string) => void;
   /** Deny an approval request */
   denyApproval: (requestId: string) => void;
-  /** Push approval from an external WS (e.g. the chat page's /ws connection) */
-  pushApproval: (approval: ApprovalRequest) => void;
-  /** Push permission from an external WS (e.g. the chat page's /ws connection) */
-  pushPermission: (permission: PermissionRequest) => void;
-  /** Why the last approval answer was refused (e.g. the request expired), until dismissed */
+  /** Why the last answer was refused (e.g. the request expired), until dismissed */
   approvalNotice: string | null;
   dismissApprovalNotice: () => void;
 }
@@ -48,8 +43,6 @@ const PermissionContext = createContext<PermissionContextValue>({
   denyPermission: () => {},
   approveApproval: () => {},
   denyApproval: () => {},
-  pushApproval: () => {},
-  pushPermission: () => {},
   approvalNotice: null,
   dismissApprovalNotice: () => {},
 });
@@ -58,189 +51,102 @@ export function usePermissions() {
   return useContext(PermissionContext);
 }
 
+/** Gateway error codes that answer this tab's approval or permission response. */
+const ANSWER_ERRORS = new Set(['APPROVAL_EXPIRED', 'APPROVAL_NOT_FOUND', 'APPROVAL_ERROR', 'PERMISSION_ERROR']);
+
+/** Not connected: the answer cannot be sent, and the prompt stays up. */
+const OFFLINE_NOTICE = 'Not connected to the server — your answer was not sent. It will be possible again once the connection is back.';
+
+/**
+ * The user's open tool-permission requests and root-agent approvals, kept in
+ * step over the tab's gateway connection: the `permission.pending` snapshot
+ * (after every (re)subscribe) replaces the lists, live `permission.request` /
+ * `agent.approval_required` add to them, and `permission.resolved` /
+ * `approval.resolved` remove from them — whichever tab or channel answered.
+ */
 export function PermissionProvider({ children }: { children: ReactNode }) {
-  const { isAuthenticated } = useAuth();
+  const client = useGateway();
   const [permissions, setPermissions] = useState<PermissionRequest[]>([]);
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [approvalNotice, setApprovalNotice] = useState<string | null>(null);
   const dismissApprovalNotice = useCallback(() => setApprovalNotice(null), []);
 
-  // Requests arrive over two sockets. A late duplicate must not resurrect a
-  // decision already resolved on either surface. Retain across reconnects.
-  const resolvedPermissions = useRef(new Set<string>());
+  // A late duplicate (a live request that also made it into a snapshot)
+  // must not resurrect a decision already resolved. Retained across reconnects.
+  const resolved = useRef(new Set<string>());
   const rememberResolution = useCallback((requestId: string) => {
-    const resolved = resolvedPermissions.current;
-    resolved.add(requestId);
-    if (resolved.size > 2000) resolved.delete(resolved.values().next().value!);
+    const set = resolved.current;
+    set.add(requestId);
+    if (set.size > 2000) set.delete(set.values().next().value!);
   }, []);
 
-  // WebSocket ref for /ws/permissions
-  const permWsRef = useRef<WebSocket | null>(null);
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const reconnectDelayRef = useRef(1000);
-
-  // Respond to a permission request via the /ws/permissions endpoint
-  const respondPermission = useCallback((requestId: string, approved: boolean) => {
-    const ws = permWsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
-        type: 'respond',
-        requestId,
-        approved,
-      }));
+  useGatewayMessages((message: GatewayMessage) => {
+    if (message.type === 'permission.pending') {
+      // Authoritative: a reconnect drops entries resolved while it was down.
+      setPermissions(message.requests
+        .filter((r) => !resolved.current.has(r.requestId))
+        .map((r) => ({ requestId: r.requestId, skillId: r.toolId, action: r.action || r.toolName, args: r.args })));
+      setApprovals(message.approvals
+        .filter((a) => !resolved.current.has(a.requestId))
+        .map((a) => ({ requestId: a.requestId, summary: a.summary, question: a.question, options: a.options })));
+      return;
     }
-    // The authoritative response_recorded broadcast removes the row.
-  }, []);
+    if (message.type === 'error') {
+      if (ANSWER_ERRORS.has(message.code)) setApprovalNotice(message.message);
+      return;
+    }
+    if (message.type !== 'event') return;
+    const { event } = message;
+    const payload = (event.payload ?? {}) as Record<string, unknown>;
+    const requestId = typeof payload.requestId === 'string' ? payload.requestId : '';
+    if (!requestId) return;
+    switch (event.type) {
+      case 'permission.request': {
+        const request: PermissionRequest = {
+          requestId,
+          skillId: String(payload.toolId ?? ''),
+          action: String(payload.action ?? payload.toolName ?? ''),
+          args: payload.args as Record<string, unknown> | undefined,
+        };
+        setPermissions((prev) => resolved.current.has(requestId) || prev.some((p) => p.requestId === requestId) ? prev : [...prev, request]);
+        break;
+      }
+      case 'permission.resolved':
+        rememberResolution(requestId);
+        setPermissions((prev) => prev.filter((p) => p.requestId !== requestId));
+        break;
+      case 'agent.approval_required': {
+        const approval: ApprovalRequest = {
+          requestId,
+          summary: String(payload.summary ?? ''),
+          question: String(payload.question ?? ''),
+          options: Array.isArray(payload.options) ? payload.options.map(String) : undefined,
+        };
+        setApprovals((prev) => resolved.current.has(requestId) || prev.some((a) => a.requestId === requestId) ? prev : [...prev, approval]);
+        break;
+      }
+      case 'approval.resolved':
+        rememberResolution(requestId);
+        setApprovals((prev) => prev.filter((a) => a.requestId !== requestId));
+        break;
+    }
+  });
 
-  // Respond to an approval request via HTTP
+  // The authoritative `permission.resolved` / `approval.resolved` removes the
+  // row; a refusal comes back as an error frame and shows as the notice.
+  const respondPermission = useCallback((requestId: string, approved: boolean) => {
+    if (!client.send({ type: 'permission.respond', requestId, approved })) setApprovalNotice(OFFLINE_NOTICE);
+  }, [client]);
+
   const respondApproval = useCallback((requestId: string, approved: boolean, response?: string) => {
-    // The route answers 200 with `error` when the request is gone — say why.
-    api.post<{ error?: string }>('/chat/approve', { requestId, approved, response })
-      .then((res) => { if (res?.error) setApprovalNotice(res.error); })
-      .catch(console.error);
-    setApprovals(prev => prev.filter(a => a.requestId !== requestId));
-  }, []);
+    const sent = client.send({ type: 'approval.respond', requestId, approved, response: response ?? (approved ? 'approved' : 'denied') });
+    if (!sent) setApprovalNotice(OFFLINE_NOTICE);
+  }, [client]);
 
-  const approvePermission = useCallback((requestId: string) => {
-    respondPermission(requestId, true);
-  }, [respondPermission]);
-
-  const denyPermission = useCallback((requestId: string) => {
-    respondPermission(requestId, false);
-  }, [respondPermission]);
-
-  const approveApproval = useCallback((requestId: string, response?: string) => {
-    respondApproval(requestId, true, response);
-  }, [respondApproval]);
-
-  const denyApproval = useCallback((requestId: string) => {
-    respondApproval(requestId, false);
-  }, [respondApproval]);
-
-  // Push methods for external WS connections (e.g. chat page) to forward events
-  const pushApproval = useCallback((approval: ApprovalRequest) => {
-    setApprovals(prev => {
-      if (prev.some(a => a.requestId === approval.requestId)) return prev;
-      return [...prev, approval];
-    });
-  }, []);
-
-  const pushPermission = useCallback((permission: PermissionRequest) => {
-    setPermissions(prev => {
-      if (resolvedPermissions.current.has(permission.requestId) || prev.some(p => p.requestId === permission.requestId)) return prev;
-      return [...prev, permission];
-    });
-  }, []);
-
-  // Poll for pending approvals (works from any page, no /ws conflict)
-  const pollApprovals = useCallback(async () => {
-    try {
-      const res = await api.get<{ approvals: ApprovalRequest[] }>('/chat/approvals/pending');
-      setApprovals(res.approvals ?? []);
-    } catch { /* ignore */ }
-  }, []);
-
-  // /ws/permissions connection — handles tool permission requests
-  useEffect(() => {
-    if (!isAuthenticated) return;
-
-    let cancelled = false;
-
-    const connect = async () => {
-      if (cancelled) return;
-
-      try {
-        const ws = await createAuthenticatedWebSocket('/ws/permissions');
-        if (cancelled) {
-          try { ws.close(); } catch { /* ignore */ }
-          return;
-        }
-        permWsRef.current = ws;
-
-        ws.onopen = () => {
-          reconnectDelayRef.current = 1000;
-        };
-
-        ws.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-
-            if (data.type === 'pending_requests') {
-              // Initial batch of pending requests on connect
-              const reqs: PermissionRequest[] = (data.requests || []).map((r: any) => ({
-                requestId: r.id || r.requestId,
-                skillId: r.skillId || r.toolId || '',
-                action: r.action || r.toolName || '',
-                args: r.args || r.context,
-              }));
-              // The snapshot is authoritative: a reconnect must drop entries
-              // resolved while this socket was down.
-              setPermissions(reqs.filter(req => !resolvedPermissions.current.has(req.requestId)));
-            } else if (data.type === 'permission_request') {
-              // Live request emitted while we were already connected
-              const req: PermissionRequest = {
-                requestId: data.requestId,
-                skillId: data.skillId || data.toolId || '',
-                action: data.action || data.toolName || '',
-                args: data.args,
-              };
-              if (req.requestId) {
-                setPermissions(prev => {
-                  if (resolvedPermissions.current.has(req.requestId) || prev.some(p => p.requestId === req.requestId)) return prev;
-                  return [...prev, req];
-                });
-              }
-            } else if (data.type === 'response_recorded') {
-              // A response was recorded — remove from every local source.
-              rememberResolution(data.requestId);
-              setPermissions(prev => prev.filter(p => p.requestId !== data.requestId));
-            }
-          } catch { /* ignore parse errors */ }
-        };
-
-        ws.onclose = () => {
-          if (cancelled) return;
-          permWsRef.current = null;
-          reconnectTimerRef.current = setTimeout(() => {
-            reconnectDelayRef.current = Math.min(reconnectDelayRef.current * 1.5, 30000);
-            connect();
-          }, reconnectDelayRef.current);
-        };
-
-        ws.onerror = () => { /* onclose will handle reconnect */ };
-      } catch {
-        if (!cancelled) {
-          reconnectTimerRef.current = setTimeout(connect, reconnectDelayRef.current);
-        }
-      }
-    };
-
-    connect();
-
-    return () => {
-      cancelled = true;
-      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-      if (permWsRef.current) {
-        permWsRef.current.onclose = null;
-        permWsRef.current.close();
-        permWsRef.current = null;
-      }
-    };
-  }, [isAuthenticated, rememberResolution]);
-
-  // Poll for approvals every 5s (fast enough for responsiveness, avoids /ws conflicts)
-  useEffect(() => {
-    if (!isAuthenticated) return;
-
-    // Initial poll via a timer so the setState runs in the timer callback, not
-    // synchronously in the effect body (react-hooks/set-state-in-effect).
-    const initial = setTimeout(pollApprovals, 0);
-    const interval = setInterval(pollApprovals, 5_000);
-    return () => {
-      clearTimeout(initial);
-      clearInterval(interval);
-    };
-  }, [isAuthenticated, pollApprovals]);
+  const approvePermission = useCallback((requestId: string) => respondPermission(requestId, true), [respondPermission]);
+  const denyPermission = useCallback((requestId: string) => respondPermission(requestId, false), [respondPermission]);
+  const approveApproval = useCallback((requestId: string, response?: string) => respondApproval(requestId, true, response), [respondApproval]);
+  const denyApproval = useCallback((requestId: string) => respondApproval(requestId, false), [respondApproval]);
 
   return (
     <PermissionContext.Provider value={{
@@ -250,8 +156,6 @@ export function PermissionProvider({ children }: { children: ReactNode }) {
       denyPermission,
       approveApproval,
       denyApproval,
-      pushApproval,
-      pushPermission,
       approvalNotice,
       dismissApprovalNotice,
     }}>

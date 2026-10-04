@@ -19,6 +19,24 @@ type EventHandler = (event: GatewayEvent) => void;
 const RECORDED_TYPE_PATTERNS = ['swarm.*'] as const;
 
 /**
+ * Event types never kept for replay: a spoken line replayed after a
+ * reconnect would be read aloud again, out of time.
+ */
+const UNRECORDED_TYPES: ReadonlySet<string> = new Set(['voice.speak']);
+
+/** Default `gateway.replayMaxSessions`. */
+const DEFAULT_MAX_SESSIONS = 500;
+
+export interface GatewayEventBusOptions {
+  /**
+   * How many sessions keep a replay buffer; the least recently published-to
+   * session is evicted first. A function so a config change applies to the
+   * next publish.
+   */
+  maxSessions?: number | (() => number);
+}
+
+/**
  * Central typed event bus for the gateway.
  * Replaces scattered EventEmitter patterns with a single pub/sub system.
  */
@@ -33,6 +51,12 @@ export class GatewayEventBus {
   private patternReplayBuffer: Map<string, Map<string, GatewayEvent[]>> = new Map();
   private maxReplayPerSession = 200;
   private eventCounter = 0;
+  private readonly maxSessions: () => number;
+
+  constructor(options: GatewayEventBusOptions = {}) {
+    const max = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
+    this.maxSessions = typeof max === 'function' ? max : () => max;
+  }
 
   /**
    * Subscribe to events matching a pattern.
@@ -56,12 +80,18 @@ export class GatewayEventBus {
    * Publish an event to all matching subscribers.
    */
   publish(event: GatewayEvent): void {
-    // Store in replay buffer by session
-    if (event.sessionId) {
-      if (!this.replayBuffer.has(event.sessionId)) {
-        this.replayBuffer.set(event.sessionId, []);
+    // Store in replay buffer by session. The Map is kept in recency order
+    // (re-inserted on every publish), so its first key is the least recently
+    // active session — the one evicted when the cap is reached.
+    if (event.sessionId && !UNRECORDED_TYPES.has(event.type)) {
+      let buffer = this.replayBuffer.get(event.sessionId);
+      if (buffer) {
+        this.replayBuffer.delete(event.sessionId);
+      } else {
+        buffer = [];
       }
-      const buffer = this.replayBuffer.get(event.sessionId)!;
+      this.replayBuffer.set(event.sessionId, buffer);
+      this.evictOverCap();
       buffer.push(event);
       if (buffer.length > this.maxReplayPerSession) {
         buffer.shift();
@@ -104,6 +134,20 @@ export class GatewayEventBus {
         }
       }
     }
+  }
+
+  /**
+   * The events of `sessionId` after `afterEventId`, for a reconnecting
+   * client. `gap` is true when `afterEventId` is not in the buffer (evicted,
+   * or rolled out of it): the events cannot bridge what the client missed.
+   * The caller checks that the session is the requester's own.
+   */
+  replaySince(sessionId: string, afterEventId?: string): { events: GatewayEvent[]; gap: boolean } {
+    const buffer = this.replayBuffer.get(sessionId) ?? [];
+    if (!afterEventId) return { events: [...buffer], gap: false };
+    const idx = buffer.findIndex(e => e.id === afterEventId);
+    if (idx < 0) return { events: [...buffer], gap: true };
+    return { events: buffer.slice(idx + 1), gap: false };
   }
 
   /**
@@ -152,6 +196,16 @@ export class GatewayEventBus {
     this.replayBuffer.delete(sessionId);
     for (const patternMap of this.patternReplayBuffer.values()) {
       patternMap.delete(sessionId);
+    }
+  }
+
+  /** Drop the least recently active sessions beyond `maxSessions`. */
+  private evictOverCap(): void {
+    const cap = Math.max(1, this.maxSessions());
+    while (this.replayBuffer.size > cap) {
+      const oldest = this.replayBuffer.keys().next().value;
+      if (oldest === undefined) return;
+      this.clearReplay(oldest);
     }
   }
 

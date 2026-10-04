@@ -38,6 +38,7 @@ import { isAdmin, isAuthenticated, type Principal } from '@/security/principal';
 import { TASK_CHECKOUT_TTL_MS } from '@/core/tasks/checkout';
 import { ACTIVE_TASK_STATUSES, isActiveStatus, isTaskStatus } from '@/core/tasks/status';
 import { toLookup, type WaitingOn, waitingOn } from '@/core/tasks/structure';
+import { sessionsRemoved } from './session-lifecycle';
 import { getDb } from '../postgres';
 import { type AgentRecord, agents, type NewAgentRecord } from '../schema/agents';
 import { type BackgroundJob, backgroundJobs } from '../schema/background-jobs';
@@ -207,6 +208,8 @@ export class ScopedSessionRepo {
       .set({ ...safe, updatedAt: new Date() })
       .where(and(...filters.filter((f): f is SQL => f !== undefined)))
       .returning();
+    // Archived: its live state (the gateway replay buffer) goes.
+    if (result[0] && safe.status === 'completed') sessionsRemoved([id]);
     return result[0] ?? null;
   }
 
@@ -220,6 +223,7 @@ export class ScopedSessionRepo {
       .delete(sessions)
       .where(and(...filters.filter((f): f is SQL => f !== undefined)))
       .returning();
+    sessionsRemoved(result.map((row) => row.id));
     return result.length > 0;
   }
 }

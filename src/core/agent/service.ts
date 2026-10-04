@@ -51,7 +51,7 @@ interface TurnEventHandler {
 }
 
 export interface TurnEvent {
-  type: 'chat_response' | 'status_update' | 'approval_required' | 'worker_spawned' | 'worker_completed' | 'pipeline_event';
+  type: 'chat_response' | 'status_update' | 'approval_required' | 'approval_resolved' | 'worker_spawned' | 'worker_completed' | 'pipeline_event';
   sessionId: string;
   userId: string;
   data: unknown;
@@ -96,7 +96,14 @@ async function loadTakenTasks(userId: string, sessionId: string): Promise<{ task
 
 export class AgentService {
   private eventHandlers: Set<TurnEventHandler> = new Set();
-  private approvalManager = new ApprovalManager();
+  /** Every approval leaving the pending list is announced as `approval_resolved`. */
+  private approvalManager = new ApprovalManager((resolved) => this.emit({
+    type: 'approval_resolved',
+    sessionId: resolved.sessionId,
+    userId: resolved.userId,
+    data: { requestId: resolved.requestId, status: resolved.status },
+    timestamp: new Date(),
+  }));
   private modelSelector = new ModelSelector();
   private _lastWorkerResult: string | null = null;
   /**

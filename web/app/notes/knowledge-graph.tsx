@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { api } from '@/lib/api';
+import { useWorkspaceId } from '@/lib/workspace-context';
 
 // ---------------------------------------------------------------------------
 // Knowledge graph — extracted from the old standalone /graph page so it can
@@ -29,8 +30,9 @@ interface GraphResponse { nodes: GraphNode[]; edges: GraphEdge[] }
 const FORCE_LAYOUT_MAX_NODES = 280;
 
 export function KnowledgeGraph({ onOpenNote }: { onOpenNote?: (id: string) => void }) {
+  const workspaceId = useWorkspaceId();
   const [selected, setSelected] = useState<string | null>(null);
-  const graph = useQuery<GraphResponse>({ queryKey: ['graph'], queryFn: () => api.get<GraphResponse>('/graph') });
+  const graph = useQuery<GraphResponse>({ queryKey: ['graph', workspaceId], queryFn: () => api.get<GraphResponse>('/graph') });
 
   const layout = useMemo(() => {
     const nodes = graph.data?.nodes ?? [];

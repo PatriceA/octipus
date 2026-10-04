@@ -40,7 +40,7 @@ characters). Anything else is refused with 400; a valid one is echoed back as
 `returnTo` in the response (`/` when none was sent).
 | POST | `/api/auth/logout` | Yes | Logout and invalidate session |
 | GET | `/api/auth/me` | Yes | Get current user info |
-| GET | `/api/auth/ws-ticket` | Yes | Get short-lived token for WebSocket authentication |
+| GET | `/api/auth/ws-ticket` | Yes | Get a short-lived (60 s) token to sign a socket in: the gateway `auth` frame, or the `/voice` URL |
 | POST | `/api/auth/passkey/register/options` | Yes | Generate WebAuthn registration options |
 | POST | `/api/auth/passkey/register/verify` | Yes | Verify WebAuthn registration response |
 | POST | `/api/auth/passkey/auth/options` | No | Generate WebAuthn authentication options |
@@ -654,6 +654,11 @@ Auth methods:
   artifact is deleted or its visibility changes (code 4003; reload the page
   for a new token).
 
+A user holds at most `gateway.maxConnectionsPerUser` (default 20) signed-in
+connections; the one over the cap gets `auth_error` `Too many connections`.
+A client frame larger than `gateway.maxFrameBytes` (default 262144 bytes,
+echoed in `auth_ok.maxFrameBytes`) closes the socket with code 1009.
+
 Every authenticated connection has `user` trust; there is no `local` trust and
 no loopback exemption. Admin rights come from the user's `isAdmin` flag in the
 database. A connection whose user is deactivated or whose admin flag changes is
@@ -664,26 +669,41 @@ closed (codes 4001 and 4004) and must re-authenticate.
 | Type | Description |
 |------|-------------|
 | `auth` | Authentication handshake |
-| `chat.send` | Send chat message (requires `sessionId`, `content`) |
+| `chat.send` | Send chat message (requires `sessionId`, `content`; optional `workspaceId` — one of yours — for a session the server has not seen yet, `fileRefs`, `outputMode`, `attachments`). A message sent while a turn of that session runs steers it (`chat.message` with `injected: true`) |
+| `chat.steer` | Inject a message into the running turn of one of your sessions (a normal `chat.send` when none runs) |
+| `chat.interject` | A side question answered alongside a running turn |
 | `command` | Execute gateway command (`name`, optional `args`) |
 | `subscribe` | `patterns`: event-type patterns over the connection's own events (e.g., `["agent.*"]`); `resources`: resources to receive events of (e.g., `["artifact:<id>"]`), each access-checked and answered with `subscribed` or a `FORBIDDEN` error |
 | `unsubscribe` | Remove event patterns and/or resources |
 | `permission.respond` | Approve/deny permission request |
 | `approval.respond` | Approve/deny pipeline approval |
 | `agent.stop` | Stop one of the connection's own user's running agents (an admin included; another user's agent is `AGENT_NOT_FOUND`) |
+| `voice.set` | `{ sessionId, on }` — voice mode for one of your sessions on this connection: lifecycle narration arrives as `voice.speak` events; cleared when the connection closes. Another user's session is `SESSION_NOT_FOUND` |
+| `replay` | `{ sessionId, afterEventId? }` — the buffered events of one of your existing sessions after `afterEventId`. Another user's or an unknown session is `SESSION_NOT_FOUND` |
 | `ping` | Heartbeat |
 
 ### Gateway → Client Messages
 
 | Type | Description |
 |------|-------------|
-| `auth_ok` | Auth success (includes `connectionId`, `capabilities`, `serverTime`) |
+| `auth_ok` | Auth success (includes `connectionId`, `capabilities`, `serverTime`, `maxFrameBytes`) |
 | `auth_error` | Auth failure |
 | `event` | Gateway event (agent lifecycle, chat response, etc.); only the connection's own user's events, plus those of subscribed resources |
 | `subscribed` | Resources of a `subscribe` that passed the access check |
 | `command.result` | Result of a command |
 | `error` | Error with `code` and `message` |
 | `pong` | Heartbeat response with server time |
+| `permission.pending` | `{ requests, approvals }`: your open permission requests and root-agent approvals, after every `subscribe` with patterns (events raised while it is read follow it) and after a `permission.respond` that found the request already answered |
+| `replay` | `{ sessionId, events, gap }`: answer to `replay`; `gap` means the events cannot bridge what was missed — reload from REST |
+
+Events of note for clients (`event.type`): `chat.response`, `chat.delta`,
+`chat.error` (a failed turn, to every connection of the user),
+`chat.message` (`injected` steer, `sideChannel` answer, or `proactive` in-app
+delivery to `webchat:<your id>`), `permission.request` / `permission.resolved`,
+`agent.approval_required` / `approval.resolved`, `document.*`,
+`model.install_progress`, `voice.speak`, `swarm.*`, `agent.*`. A refused
+`approval.respond` answers `error` `APPROVAL_NOT_FOUND` (unknown, someone
+else's, or already answered) or `APPROVAL_EXPIRED`.
 
 ### Gateway Commands
 
@@ -727,9 +747,11 @@ shuts down.
 | GET | `/api/gateway/adapters` | Channel adapter status |
 | GET | `/api/health/time` | Server time and timezone |
 
-### Legacy WebSocket (deprecated)
+### Retired sockets
 
-The old `/ws?token=<jwt>` endpoint still works during migration but will be removed. Use `/gateway` for new integrations.
+`/ws` and `/ws/permissions` were removed (coworking S0d); the web app uses
+`/gateway`. The browser extension's `/ws/browser-bridge` and the voice
+sockets (`/voice`, `/voice/media/:provider`) remain.
 
 ## OpenAI-compatible API (`/v1`)
 

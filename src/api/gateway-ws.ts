@@ -1,4 +1,5 @@
 import type { Elysia } from '@/api/http';
+import { getConfig } from '@/config';
 import { getGatewayHub } from '@/core/gateway/hub';
 import { getSessionManager } from '@/security/auth/session';
 import { getOrgWorkspaceManager } from '@/security/orgs';
@@ -25,9 +26,9 @@ export async function resolveConnectionWorkspace(userId: string, hint: string | 
 }
 
 /**
- * Set up the /gateway WebSocket endpoint on the Elysia server.
- * This is the new unified gateway protocol — clients connect here
- * instead of the legacy /ws, /ws/permissions, /ws/browser-bridge endpoints.
+ * Set up the /gateway WebSocket endpoint on the Elysia server: the one socket
+ * the web (one connection per tab) and the TUI speak. The browser extension
+ * (`/ws/browser-bridge`) and voice (`/voice`) keep their own sockets.
  */
 export function setupGatewayWebSocket(app: Elysia): void {
   const hub = getGatewayHub();
@@ -47,6 +48,8 @@ export function setupGatewayWebSocket(app: Elysia): void {
   hub.setWorkspaceResolver(resolveConnectionWorkspace);
 
   app.ws('/gateway', {
+    // Read at startup: a frame over it closes the socket (1009).
+    maxPayload: getConfig().gateway.maxFrameBytes,
     open(ws) {
       // Forwarded headers count only when the peer is a trusted proxy.
       const ip = clientIp(ws.data.request, ws.remoteAddress);

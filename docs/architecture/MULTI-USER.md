@@ -315,7 +315,7 @@ locking themselves out.
 Deactivation has one writer, `setUserActive` (`src/security/user-lifecycle.ts`),
 which records who did it in `users.deactivated_by` (`admin` or
 `scim:<orgId>`) and takes effect at once: the user's sessions are revoked,
-every socket (gateway, `/ws`, `/ws/permissions`, browser bridge, `/voice`) is
+every socket (gateway, browser bridge, `/voice`) is
 closed, their agents stop, pending permission and approval prompts expire, and
 any admin impersonation of them ends. Session and API-token validation re-read
 `is_active` / `is_admin` on every request; hooks, heartbeats and monitors skip

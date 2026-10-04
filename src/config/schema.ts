@@ -485,6 +485,30 @@ export const vaultSyncConfigSchema = z.object({
   direction: z.enum(['export', 'import', 'both']).default('both'),
 });
 
+/**
+ * The `/gateway` WebSocket (docs/architecture/gateway.md): every client —
+ * the web, the TUI — talks to the server over it.
+ */
+export const gatewayConfigSchema = z.object({
+  /**
+   * Authenticated connections one user may hold at once (every browser tab
+   * holds one). The one over the cap is refused with `auth_error` "Too many
+   * connections"; the web shows "Too many open tabs".
+   */
+  maxConnectionsPerUser: z.number().int().min(1).max(1000).default(20),
+  /**
+   * Largest frame a `/gateway` client may send, in bytes (the socket's
+   * `maxPayload`, read at server start). A bigger frame closes the
+   * connection with 1009.
+   */
+  maxFrameBytes: z.number().int().min(16_384).max(64 * 1024 * 1024).default(262_144),
+  /**
+   * Sessions whose recent events are kept in memory for `replay` after a
+   * reconnect. The least recently active session is dropped first.
+   */
+  replayMaxSessions: z.number().int().min(1).max(100_000).default(500),
+});
+
 // Full configuration schema
 export const sessionsConfigSchema = z.object({
   /**
@@ -645,11 +669,13 @@ export const configSchema = z.object({
   heartbeat: heartbeatConfigSchema.prefault({}),
   sessions: sessionsConfigSchema.prefault({}),
   groupChannels: groupChannelsConfigSchema.prefault({}),
+  gateway: gatewayConfigSchema.prefault({}),
 });
 
 export type Config = z.infer<typeof configSchema>;
 export type HeartbeatConfig = z.infer<typeof heartbeatConfigSchema>;
 export type SessionsConfig = z.infer<typeof sessionsConfigSchema>;
+export type GatewayConfig = z.infer<typeof gatewayConfigSchema>;
 export type StorageMode = z.infer<typeof storageModeSchema>;
 export type DatabaseConfig = z.infer<typeof databaseConfigSchema>;
 export type LiteLLMConfig = z.infer<typeof litellmConfigSchema>;

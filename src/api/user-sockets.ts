@@ -1,6 +1,7 @@
 /**
- * Every non-gateway socket a signed-in user holds: legacy `/ws`,
- * `/ws/permissions`, `/ws/browser-bridge` and `/voice`. Each endpoint checks
+ * Every non-gateway socket a signed-in user holds: `/ws/browser-bridge` and
+ * `/voice` (the legacy `/ws` and `/ws/permissions` were retired; the web is
+ * on the gateway). Each endpoint checks
  * its credential once, at open, so without this list a deactivated user's open
  * socket would keep streaming until it dropped on its own. The gateway keeps
  * its own per-user index (ConnectionManager.closeUserConnections).

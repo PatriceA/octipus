@@ -1,42 +1,37 @@
-import type { Route, WebSocketRoute } from '@playwright/test';
+import type { Route } from '@playwright/test';
 import { json, selectChatSession } from './fixtures/api-stubs';
 import { expect, test } from './fixtures/auth';
+import { stubGateway } from './fixtures/gateway';
 
 test('midrun messages appear once, survive reload and keep the active turn running', async ({ authenticatedPage: page }) => {
-  let socket: WebSocketRoute | undefined;
   let persisted: any[] = [];
-  await page.routeWebSocket(/\/ws\?/, ws => { socket = ws; });
+  const gateway = await stubGateway(page);
   await page.route('**/api/sessions/sess-1/messages**', route => json(route, 200, { messages: persisted }));
   await page.goto('/chat');
   await selectChatSession(page, 'sess-1');
-  await expect.poll(() => Boolean(socket)).toBe(true);
+  await expect.poll(() => gateway.subscribed()).toBe(1);
   const input = page.getByPlaceholder(/send a message/i).first();
   await input.fill('Investigate the regression');
   await input.press('Enter');
+  await expect.poll(() => gateway.sent.find(m => m.type === 'chat.send')).toMatchObject({ sessionId: 'sess-1', content: 'Investigate the regression' });
   await expect(page.getByText('Thinking...', { exact: true })).toBeVisible();
   const createdAt = new Date().toISOString();
-  const update = { type: 'turn_event', event: 'status_update', sessionId: 'sess-1',
-    data: { message: 'Found the cause; verifying the fix.', messageId: 'progress-1', createdAt } };
-  socket!.send(JSON.stringify(update));
-  socket!.send(JSON.stringify(update));
-  await expect(page.getByText(update.data.message, { exact: true })).toHaveCount(1);
+  const update = { message: 'Found the cause; verifying the fix.', messageId: 'progress-1', createdAt };
+  gateway.event('rootAgent.status', update, 'sess-1');
+  gateway.event('rootAgent.status', update, 'sess-1');
+  await expect(page.getByText(update.message, { exact: true })).toHaveCount(1);
   await expect(page.getByText('Thinking...', { exact: true })).toBeVisible();
-  persisted = [{ id: 'progress-1', role: 'assistant', content: update.data.message, createdAt, metadata: { kind: 'progress' } }];
-  socket!.send(JSON.stringify({ type: 'chat_response', sessionId: 'sess-1', response: 'Fixed and tested.' }));
+  persisted = [{ id: 'progress-1', role: 'assistant', content: update.message, createdAt, metadata: { kind: 'progress' } }];
+  gateway.event('chat.response', { response: { response: 'Fixed and tested.' } }, 'sess-1');
   await expect(page.getByText('Fixed and tested.', { exact: true })).toHaveCount(1);
   await page.reload();
   await selectChatSession(page, 'sess-1');
-  await expect(page.getByText(update.data.message, { exact: true })).toHaveCount(1);
+  await expect(page.getByText(update.message, { exact: true })).toHaveCount(1);
 });
 
 test('a pasted image is uploaded, referenced in the turn, and survives history reload', async ({ authenticatedPage: page }) => {
-  let socket: WebSocketRoute | undefined;
-  let sent: any;
   let persisted: any[] = [];
-  await page.routeWebSocket(/\/ws\?/, ws => { socket = ws; ws.onMessage(raw => {
-    const message = JSON.parse(String(raw));
-    if (message.type === 'chat') sent = message;
-  }); });
+  const gateway = await stubGateway(page);
   await page.route('**/api/sessions/sess-1/messages**', route => json(route, 200, { messages: persisted }));
   await page.route('**/api/sessions/sess-1/attachments', async route => {
     expect(route.request().headers()['content-type']).toContain('multipart/form-data');
@@ -45,7 +40,7 @@ test('a pasted image is uploaded, referenced in the turn, and survives history r
   });
   await page.goto('/chat');
   await selectChatSession(page, 'sess-1');
-  await expect.poll(() => Boolean(socket)).toBe(true);
+  await expect.poll(() => gateway.subscribed()).toBe(1);
   const input = page.getByPlaceholder(/send a message/i).first();
   await input.fill('Read this image');
   await input.evaluate(element => {
@@ -55,7 +50,8 @@ test('a pasted image is uploaded, referenced in the turn, and survives history r
   });
   await expect(page.getByText('paste.png', { exact: true })).toBeVisible();
   await input.press('Enter');
-  await expect.poll(() => sent?.type).toBe('chat');
+  await expect.poll(() => gateway.sent.find(m => m.type === 'chat.send')?.type).toBe('chat.send');
+  const sent = gateway.sent.find(m => m.type === 'chat.send')!;
   expect(sent.fileRefs).toEqual([{ path: '.octipus/attachments/upload/paste.png' }]);
   expect(sent.content).toContain('Read this image');
   expect(sent.content).toContain('Attached file: .octipus/attachments/upload/paste.png');
@@ -66,10 +62,9 @@ test('a pasted image is uploaded, referenced in the turn, and survives history r
 });
 
 test('stale refresh cannot erase a live answer while activity history is loading', async ({ authenticatedPage: page }) => {
-  let socket: WebSocketRoute | undefined;
   const held: Route[] = [];
   let hold = false;
-  await page.routeWebSocket(/\/ws\?/, ws => { socket = ws; });
+  const gateway = await stubGateway(page);
   await page.route('**/api/sessions/sess-1/messages**', route => hold ? void held.push(route) : json(route, 200, { messages: [] }));
   // Before navigation, so the page's refresh timer is created on the fake
   // clock; installed later, a timer already scheduled on the real clock can
@@ -77,11 +72,11 @@ test('stale refresh cannot erase a live answer while activity history is loading
   await page.clock.install();
   await page.goto('/chat');
   await selectChatSession(page, 'sess-1');
-  await expect.poll(() => Boolean(socket)).toBe(true);
+  await expect.poll(() => gateway.subscribed()).toBe(1);
   hold = true;
   await page.clock.fastForward(10_000);
   await expect.poll(() => held.length).toBeGreaterThan(0);
-  socket!.send(JSON.stringify({ type: 'chat_response', sessionId: 'sess-1', response: 'This answer must stay visible.' }));
+  gateway.event('chat.response', { response: { response: 'This answer must stay visible.' } }, 'sess-1');
   await expect(page.getByText('This answer must stay visible.')).toBeVisible();
   hold = false;
   for (const route of held) await json(route, 200, { messages: [] });
@@ -93,7 +88,7 @@ test('rate-limited history pauses requests, keeps messages and shows an inline e
   let requests = 0;
   let limited = false;
   const messages = [{ id: 'kept', role: 'assistant', content: 'Previously loaded answer', createdAt: new Date().toISOString() }];
-  await page.routeWebSocket(/\/ws\?/, () => {});
+  await stubGateway(page);
   await page.route('**/api/sessions/sess-1/messages**', route => {
     requests++;
     return limited ? route.fulfill({ status: 429, contentType: 'application/json', headers: { 'Retry-After': '30' }, body: JSON.stringify({ error: 'Too many requests. Please try again later.' }) })
@@ -125,7 +120,7 @@ test('chat bounds event backfill and stops polling completed agents', async ({ a
   let messageRequests = 0;
   const agents = Array.from({ length: 8 }, (_, i) => ({ id: `old-${i}`, sessionId: 'sess-1', role: 'coding', model: 'test', status: 'completed',
     createdAt: new Date(2026, 8, 29, 12, i).toISOString(), completedAt: new Date(2026, 8, 29, 12, i + 1).toISOString(), iteration: 1 }));
-  await page.routeWebSocket(/\/ws\?/, () => {});
+  await stubGateway(page);
   await page.route('**/api/sessions/sess-1/messages**', route => { messageRequests++; return json(route, 200, { messages: [] }); });
   await page.route('**/api/agents?sessionId=sess-1', route => json(route, 200, { agents }));
   await page.route('**/api/agents/*/events?**', route => {
