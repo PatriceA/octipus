@@ -352,9 +352,18 @@ describe('✅ / ❌ feedback on the bot\'s replies', () => {
     expect(await handleSlackGroupReaction(react('white_check_mark', '97.0'), ctx.deps)).toBe('ignored');
     expect(await handleSlackGroupReaction(react('white_check_mark', '98.0', 'U-STRANGER'), ctx.deps)).toBe('ignored');
     expect(await handleSlackGroupReactionRemoved(react('eyes'), ctx.deps)).toBe('ignored');
+
     ctx = makeDeps({ findGroup: vi.fn(async () => null) });
     expect(await handleSlackGroupReaction(react('white_check_mark'), ctx.deps)).toBe('ignored');
     expect(ctx.deps.feedback).not.toHaveBeenCalled();
     expect(ctx.calls).toEqual({ ephemeral: [], thread: [], dispatched: [] });
+  });
+
+  test('Slack names the message\'s author: a 👍 on a member\'s message is dropped without reading it back', async () => {
+    const ctx = makeDeps();
+    expect(await handleSlackGroupReaction({ ...react('+1', '97.0'), item_user: 'U-ANNA' }, ctx.deps)).toBe('ignored');
+    expect(await handleSlackGroupReactionRemoved({ ...react('+1', '97.0'), item_user: 'U-ANNA' }, ctx.deps)).toBe('ignored');
+    expect(ctx.deps.readMessage).not.toHaveBeenCalled();
+    expect(await handleSlackGroupReaction({ ...react('+1'), item_user: BOT }, ctx.deps)).toBe('feedback');
   });
 });

@@ -282,7 +282,7 @@ export class TelegramChannel extends BaseChannel {
         if (msg.text) {
           recordGroupMessage('telegram', msg.channelId, msg.replyThread, {
             id: msg.messageId, conversationId: msg.channelId, author: this.names.get(msg.user) ?? 'a member', authorId: msg.user,
-            text: msg.text, at,
+            text: msg.text, at, addressed: msg.mentioned || msg.repliedToBot === true,
           });
         }
       },

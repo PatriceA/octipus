@@ -265,7 +265,7 @@ export class SlackChannel extends BaseChannel {
         });
       },
       shouldSendHint,
-      seen: (msg, group) => this.recordForListen(client, msg, group),
+      seen: (msg, group, addressed) => this.recordForListen(client, msg, group, addressed),
       feedback: async ({ removed, ...input }) => {
         const { recordGroupFeedback, removeGroupFeedback } = await import('@/channels/group-channels');
         if (removed) await removeGroupFeedback(input);
@@ -305,7 +305,7 @@ export class SlackChannel extends BaseChannel {
    * questions (src/channels/group-listen.ts). Mention-mode channels keep
    * nothing — their turns read the thread back from Slack.
    */
-  private recordForListen(client: WebClient, msg: SlackGroupMessage, group: GroupChannel): void {
+  private recordForListen(client: WebClient, msg: SlackGroupMessage, group: GroupChannel, addressed: boolean): void {
     if (group.mode === 'mention') {
       if (this.listenChannels.delete(msg.channel)) forgetGroupChat('slack', msg.channel);
       return;
@@ -314,12 +314,13 @@ export class SlackChannel extends BaseChannel {
     const text = msg.text ?? '';
     if (!text.trim() || !msg.user) return;
     const user = msg.user;
-    void this.cachedName(client, user).then((author) => {
-      recordGroupMessage('slack', msg.channel, msg.thread_ts ?? msg.ts, {
-        id: msg.ts, conversationId: msg.channel, author, authorId: user, text,
-        at: new Date(Number(msg.ts) * 1000).toISOString(),
-      });
+    // Recorded now, in arrival order; the name is filled in for later messages
+    // once the lookup returns (the first one from a member shows their id).
+    recordGroupMessage('slack', msg.channel, msg.thread_ts ?? msg.ts, {
+      id: msg.ts, conversationId: msg.channel, author: this.names.get(user) ?? user, authorId: user, text, addressed,
+      at: new Date(Number(msg.ts) * 1000).toISOString(),
     });
+    if (!this.names.has(user)) void this.cachedName(client, user);
   }
 
   /** A member's display name, looked up once per process (users.info is rate limited). */

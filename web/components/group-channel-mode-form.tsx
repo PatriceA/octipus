@@ -28,7 +28,8 @@ const hour = (v: string) => (v.trim() === '' ? null : Number(v));
  * A group channel's mode, quiet hours and rate limit for unprompted posts.
  * `endpoint` is `/me/group-channels/:id` for the owner, `/admin/group-channels/:id`
  * for an admin. Unprompted posts also need the operator's global switch
- * (`groupChannels.unpromptedEnabled`).
+ * (`groupChannels.unpromptedEnabled`). Callers key it on `group.updatedAt`, so
+ * it starts again from the saved values after any change.
  */
 export function GroupChannelModeForm({ group, endpoint, onSaved }: { group: GroupChannelSummary; endpoint: string; onSaved: () => void }) {
   const initial: Draft = {

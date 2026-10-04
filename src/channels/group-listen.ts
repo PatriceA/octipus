@@ -23,7 +23,7 @@
  * message — the bot never posts twice in a row.
  */
 import { randomBytes } from 'node:crypto';
-import { BUFFER_BOT_ID, groupThreads } from '@/channels/group-buffer';
+import { BUFFER_BOT_ID, type BufferedMessage, groupThreads } from '@/channels/group-buffer';
 import { getConfig } from '@/config';
 import { flattenLine, renderGroupContext, withoutPings } from '@/core/channels/group-context';
 import type { ChannelMessage } from '@/core/channels/messages';
@@ -46,7 +46,7 @@ const CONTEXT_MESSAGES = 30;
 /** A question nobody answered, and where it is. */
 export interface ListenCandidate {
   thread: string;
-  message: ChannelMessage;
+  message: BufferedMessage;
 }
 
 /** Whether a message reads as a question to the channel. */
@@ -59,15 +59,28 @@ export function isQuestion(text: string): boolean {
  * The newest member question that is the last message of its thread, has
  * waited at least `WAIT_MS` but not past `MAX_AGE_MS`, came after the bot's
  * last unprompted post and has not been looked at before. Null when none.
+ *
+ * Not a candidate: a message that mentioned or replied to the bot (a turn —
+ * or, for an unlinked member, a private hint — already handles it), anything
+ * in a thread the bot is part of, and a top-level post (its own thread, as on
+ * Slack) that someone else followed with a newer top-level post — on Slack
+ * people often answer in the channel rather than in the thread.
  */
 export function findCandidate(
-  threads: ReadonlyMap<string, readonly ChannelMessage[]>,
+  threads: ReadonlyMap<string, readonly BufferedMessage[]>,
   opts: { now: number; lastUnpromptedAt: Date | null; considered: (id: string) => boolean },
 ): ListenCandidate | null {
+  // Newest top-level post per author (a thread keyed by its own first message).
+  const topLevel: BufferedMessage[] = [];
+  for (const [thread, messages] of threads) {
+    if (messages[0]?.id === thread) topLevel.push(messages[0]);
+  }
   let best: ListenCandidate | null = null;
   for (const [thread, messages] of threads) {
     const last = messages[messages.length - 1];
-    if (!last || last.authorId === BUFFER_BOT_ID || !isQuestion(last.text)) continue;
+    if (!last || last.authorId === BUFFER_BOT_ID || last.addressed || !isQuestion(last.text)) continue;
+    if (messages.some(m => m.authorId === BUFFER_BOT_ID)) continue;
+    if (thread === last.id && topLevel.some(m => m.at > last.at && m.authorId !== last.authorId)) continue;
     const at = Date.parse(last.at);
     const age = opts.now - at;
     if (!(age >= WAIT_MS && age <= MAX_AGE_MS)) continue;
@@ -81,7 +94,11 @@ export function findCandidate(
 /** The model's reply as a post, or null for `none` / nothing usable. */
 export function parseDraft(text: string | undefined, mode: 'listen' | 'proactive'): string | null {
   const t = (text ?? '').trim().replace(/^["'`]+|["'`]+$/g, '').trim();
-  if (!t || /^none\W*$/i.test(t)) return null;
+  if (!t || /^none\b/i.test(t)) return null;
+  // Nobody asked: no links in the bot's voice (a crafted question could ask for
+  // a phishing link), nor Markdown / platform link syntax (a Telegram
+  // `tg://user` link pings).
+  if (/https?:\/\/|www\.|tg:\/\/|\]\(|<[a-z][a-z0-9+.-]*:/i.test(t)) return null;
   const max = mode === 'listen' ? 300 : MAX_POST_CHARS;
   const cut = t.length > max ? `${t.slice(0, max).trimEnd()}…` : t;
   return withoutPings(cut);
@@ -148,6 +165,8 @@ const PROACTIVE_FOOTER = '_Nobody asked me — mention me to go further._';
 
 export interface ListenDeps {
   enabled(): boolean;
+  /** Whether a model is bound to the `background` topic; checked before anything else costs. */
+  modelReady(): Promise<boolean>;
   now(): Date;
   listGroups(): Promise<GroupChannel[]>;
   isGroupActive(group: GroupChannel): Promise<boolean>;
@@ -179,10 +198,12 @@ function consider(key: string, now: number): void {
 export function resetListenState(): void {
   considered.clear();
   lastProbe.clear();
+  tickRunning = false;
+  warnedNoModel = false;
 }
 
 export type ListenOutcome =
-  | 'disabled' | 'paused' | 'quiet' | 'capped' | 'no_candidate' | 'throttled' | 'budget' | 'none' | 'lost_claim' | 'posted';
+  | 'disabled' | 'paused' | 'quiet' | 'capped' | 'no_candidate' | 'throttled' | 'no_model' | 'budget' | 'none' | 'lost_claim' | 'posted';
 
 /** One channel through the gate; what happened. */
 export async function probeGroup(group: GroupChannel, deps: ListenDeps): Promise<ListenOutcome> {
@@ -203,10 +224,13 @@ export async function probeGroup(group: GroupChannel, deps: ListenDeps): Promise
   if (!candidate) return 'no_candidate';
   const probed = lastProbe.get(group.id);
   if (probed !== undefined && t - probed < PROBE_INTERVAL_MS) return 'throttled';
+  // Set before any await, so an overlapping tick cannot probe the channel too;
+  // a used-up budget is re-checked at the same pace.
+  lastProbe.set(group.id, t);
+  if (!(await deps.modelReady())) return 'no_model';
 
   const sessionId = await deps.session(group);
   if (!(await deps.mayRun(group, sessionId))) return 'budget';
-  lastProbe.set(group.id, t);
   // Looked at once, whatever the model says: it is not asked about it again.
   consider(prefix + candidate.message.id, t);
 
@@ -226,25 +250,41 @@ export async function probeGroup(group: GroupChannel, deps: ListenDeps): Promise
   return 'posted';
 }
 
-/** Every channel in listen or proactive mode, one at a time. Never throws. */
+let tickRunning = false;
+let warnedNoModel = false;
+
+/**
+ * Every channel in listen or proactive mode, one at a time. Never throws. A
+ * tick still running (model calls) makes the next one a no-op, so the cron
+ * loop can start it without waiting.
+ */
 export async function runListenTick(deps: ListenDeps): Promise<void> {
-  if (!deps.enabled()) return;
-  let groups: GroupChannel[];
+  if (tickRunning || !deps.enabled()) return;
+  tickRunning = true;
   try {
-    groups = await deps.listGroups();
-  } catch (err) {
-    channelLogger.error({ err }, 'Group listen: could not list channels');
-    return;
-  }
-  for (const group of groups) {
+    let groups: GroupChannel[];
     try {
-      const outcome = await probeGroup(group, deps);
-      if (outcome === 'posted' || outcome === 'none' || outcome === 'lost_claim') {
-        channelLogger.info({ groupChannelId: group.id, outcome }, 'Group listen probe');
-      }
+      groups = await deps.listGroups();
     } catch (err) {
-      channelLogger.error({ err, groupChannelId: group.id }, 'Group listen probe failed');
+      channelLogger.error({ err }, 'Group listen: could not list channels');
+      return;
     }
+    for (const group of groups) {
+      try {
+        const outcome = await probeGroup(group, deps);
+        if (outcome === 'no_model' && !warnedNoModel) {
+          warnedNoModel = true;
+          channelLogger.warn('Group listen: no model is bound to the "background" topic — unprompted posts are off until one is');
+        }
+        if (outcome === 'posted' || outcome === 'none' || outcome === 'lost_claim') {
+          channelLogger.info({ groupChannelId: group.id, outcome }, 'Group listen probe');
+        }
+      } catch (err) {
+        channelLogger.error({ err, groupChannelId: group.id }, 'Group listen probe failed');
+      }
+    }
+  } finally {
+    tickRunning = false;
   }
 }
 
@@ -262,6 +302,10 @@ export function defaultListenDeps(): ListenDeps {
   return {
     // Read on every tick, so a settings change applies at once.
     enabled: () => getConfig().groupChannels?.unpromptedEnabled === true,
+    modelReady: async () => {
+      const { getModelRegistry } = await import('@/models/model-registry');
+      return !!(await getModelRegistry().getModelForTopic('background'))?.modelId;
+    },
     now: () => new Date(),
     listGroups: async () => (await import('@/channels/group-channels')).listUnpromptedGroupChannels(),
     isGroupActive: async (group) => (await import('@/channels/group-channels')).isGroupChannelActive(group),
@@ -281,6 +325,8 @@ export function defaultListenDeps(): ListenDeps {
     },
     session: async (group) => (await import('@/channels/group-channels')).resolveGroupSession({
       userId: group.ownerUserId, group, threadId: UNPROMPTED_THREAD, title: `${group.label ?? group.channelId} — unprompted posts`,
+      // Never swept by retention: its cost rows count against the channel's budget through it.
+      pinned: true,
     }),
     complete: async ({ system, user, ownerUserId, sessionId }) => {
       const { getModelRegistry } = await import('@/models/model-registry');

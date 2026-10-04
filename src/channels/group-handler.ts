@@ -381,10 +381,11 @@ export async function handleGroupFeedback<Raw>(
   if (!deps.feedback || ev.user === deps.botUserId) return 'ignored';
   const group = await deps.findGroup(ev.channelId);
   if (!group) return 'ignored';
-  const post = await deps.readMessage(ev.channelId, ev.messageId);
-  if (!post || post.user === null || post.user !== deps.botUserId) return 'ignored';
+  // The cheap lookup first: reading the message back is a rate-limited platform call.
   const member = await deps.findMember(ev.user);
   if (!member?.isActive) return 'ignored';
+  const post = await deps.readMessage(ev.channelId, ev.messageId);
+  if (!post || post.user === null || post.user !== deps.botUserId) return 'ignored';
   await deps.feedback({
     groupChannelId: group.id, messageId: ev.messageId, threadId: post.threadId, userId: member.id, value: ev.value, removed: ev.removed,
   });

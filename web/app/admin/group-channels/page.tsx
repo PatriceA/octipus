@@ -96,7 +96,7 @@ export default function AdminGroupChannelsPage() {
                 </button>
               </div>
               <div className="pl-[4.25rem]">
-                <GroupChannelModeForm group={g} endpoint={`/admin/group-channels/${g.id}`} onSaved={refresh} />
+                <GroupChannelModeForm key={g.updatedAt} group={g} endpoint={`/admin/group-channels/${g.id}`} onSaved={refresh} />
               </div>
               <ChannelBudget group={g} onChange={refresh} />
             </li>

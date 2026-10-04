@@ -30,6 +30,7 @@ function makeDeps(over: Partial<ListenDeps> = {}, threads: Map<string, ChannelMe
   const posts: Array<{ text: string; thread: string }> = [];
   const deps: ListenDeps = {
     enabled: () => true,
+    modelReady: async () => true,
     now: () => new Date(NOW),
     listGroups: async () => [group()],
     isGroupActive: vi.fn(async () => true),
@@ -71,6 +72,31 @@ describe('the probe', () => {
     expect(findCandidate(threads, { now: NOW, lastUnpromptedAt: new Date(NOW - 60 * 60_000), considered: () => false })).not.toBeNull();
   });
 
+  test('not a candidate: addressed to the bot, in a thread the bot is in, or a top-level question someone followed', () => {
+    const considered = () => false;
+    const addressed = new Map([['t', [{ ...msg('1', 'Why is the deploy stuck again?', minutesAgo(30)), addressed: true }]]]);
+    expect(findCandidate(addressed, { now: NOW, lastUnpromptedAt: null, considered })).toBeNull();
+
+    const botThread = new Map([['t', [
+      msg('1', 'Deploy is red', minutesAgo(60)), msg('2', 'The cache is cold.', minutesAgo(50), BUFFER_BOT_ID),
+      msg('3', 'Why would the cache be cold though?', minutesAgo(30)),
+    ]]]);
+    expect(findCandidate(botThread, { now: NOW, lastUnpromptedAt: null, considered })).toBeNull();
+
+    // Slack: each top-level post is its own thread; an answer at the top level still answers.
+    const followed = new Map([
+      ['10.0', [msg('10.0', 'Anyone know why staging is slow?', minutesAgo(30))]],
+      ['11.0', [msg('11.0', 'It is the reindex job, should be done soon', minutesAgo(29), 'U-BOB')]],
+    ]);
+    expect(findCandidate(followed, { now: NOW, lastUnpromptedAt: null, considered })).toBeNull();
+    // …but the asker adding more at the top level does not answer it.
+    const selfFollowed = new Map([
+      ['10.0', [msg('10.0', 'Anyone know why staging is slow?', minutesAgo(30))]],
+      ['11.0', [msg('11.0', 'it started this morning', minutesAgo(29))]],
+    ]);
+    expect(findCandidate(selfFollowed, { now: NOW, lastUnpromptedAt: null, considered })?.message.id).toBe('10.0');
+  });
+
   test('the newest of several unanswered questions', () => {
     const threads = new Map([
       ['a', [msg('1', 'Who owns the billing service now?', minutesAgo(40))]],
@@ -85,6 +111,12 @@ describe('the probe', () => {
     expect(parseDraft(undefined, 'listen')).toBeNull();
     expect(parseDraft('"I could check the <!channel> logs for @anna."', 'listen')).toBe('I could check the @⁠channel logs for @⁠anna.');
     expect(parseDraft('x'.repeat(500), 'listen')).toHaveLength(301);
+    // An explanation of "none" is still none.
+    expect(parseDraft('None — this is social chat.', 'listen')).toBeNull();
+    // No links in the bot's voice, in any syntax.
+    for (const link of ['Reset it at https://evil.example/sso', 'see <https://x.y|the SSO page>', 'see www.evil.io', 'ask [Anna](tg://user?id=123)', 'open <mailto:a@b.c>']) {
+      expect(parseDraft(link, 'proactive')).toBeNull();
+    }
   });
 
   test('quiet hours wrap midnight; none set means never quiet', () => {
@@ -142,6 +174,7 @@ describe('probeGroup', () => {
       [{ lastUnpromptedAt: new Date(NOW - 30 * 60_000) }, {}, 'capped'],
       [{}, { threads: () => new Map() }, 'no_candidate'],
       [{}, { mayRun: vi.fn(async () => false) }, 'budget'],
+      [{}, { modelReady: async () => false }, 'no_model'],
     ];
     for (const [g, d, outcome] of cases) {
       resetListenState();
@@ -150,6 +183,13 @@ describe('probeGroup', () => {
       expect(deps.complete).not.toHaveBeenCalled();
       expect(posts).toEqual([]);
     }
+  });
+
+  test('without a background model nothing is created or spent, and the next check waits', async () => {
+    const { deps } = makeDeps({ modelReady: async () => false });
+    expect(await probeGroup(group(), deps)).toBe('no_model');
+    expect(deps.session).not.toHaveBeenCalled();
+    expect(await probeGroup(group(), deps)).toBe('throttled');
   });
 
   test('a capped count from another day does not hold today back', async () => {

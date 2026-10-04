@@ -320,20 +320,31 @@ hours (whole hours in its time zone; none by default), under its daily cap
 owner's own are not used up — and a probe without a model: the newest member
 question (a `?` and some substance) that is still the last message of its
 thread, at least 10 minutes and at most 3 hours old, posted after the bot's
-last unprompted post, and not looked at before. Only then does one call to the
+last unprompted post, and not looked at before. A message that mentioned or
+replied to the bot is never a candidate (a turn, or for an unlinked member a
+private hint, handles it), nor is anything in a thread the bot is part of, nor
+a top-level question someone else has since followed with a newer top-level
+post. Only then does one call to the
 model bound to the `background` topic decide: `none`, or a draft. At most one
 such call per channel every 5 minutes.
 
 That call has **no tools and sees only the channel's own recent messages**
 (fenced as untrusted text): no member's data can reach it, and it acts for
-nobody. It runs in the owner's "unprompted posts" session for the channel, so
-it costs the owner's account and counts against the channel's spend budget.
-Its post pings nobody. The bot never posts twice in a row: an unprompted post
+nobody. It runs in the owner's "unprompted posts" session for the channel
+(pinned, so retention never removes it and its cost keeps counting), so it
+costs the owner's account and counts against the channel's spend budget.
+Its post pings nobody, and a draft with a link in it is dropped: nobody asked
+for it, and a crafted question could ask for one. A member who takes over a
+paused channel finds it back in mention mode — they pay for unprompted posts
+from then on, so they opt in again. The bot never posts twice in a row: an unprompted post
 always answers a member message newer than its last one. A slot is claimed in
 the database after the draft, so two server processes never both post.
 
 The probe reads the conversation from the in-memory buffer (above): Slack
-channels in listen or proactive mode are recorded there too. Each platform
+channels in listen or proactive mode are recorded there too. The buffer lives
+in the server process that runs the chat adapter, so run Octipus as one
+process (the default) when channels listen; with several, a process may not
+see that a question was answered. Each platform
 must deliver the messages that nobody addressed to the bot:
 
 - **Slack** — the bot already receives every message in channels it is in.
@@ -351,7 +362,8 @@ must deliver the messages that nobody addressed to the bot:
 A ✅ or ❌ (also 👍 / 👎) a linked member puts on one of the bot's messages
 in an enrolled channel is recorded as feedback on that reply
 (`group_channel_feedback`: channel, message, thread, member, ±1), one per
-member and message; taking the reaction off withdraws it. Admin → Group
+member and message — a second reaction replaces the first, and taking off
+the reaction that is currently counted withdraws it. Admin → Group
 channels shows the counts. Nothing else happens. Slack needs the
 `reaction_removed` event besides `reaction_added`; Teams counts 👍 / ❤️ and
 😢 / 😠. Telegram reactions are not recorded (the bot would need to be an

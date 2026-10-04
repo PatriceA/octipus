@@ -556,7 +556,7 @@ export class TeamsChannel extends BaseChannel {
         if (!msg.text) return;
         recordGroupMessage('teams', msg.channelId, msg.replyThread, {
           id: msg.messageId, conversationId: msg.channelId, author: nameOf(msg.user) ?? 'a member', authorId: msg.user,
-          text: msg.text, at: new Date().toISOString(),
+          text: msg.text, at: new Date().toISOString(), addressed: msg.mentioned || msg.repliedToBot === true,
         });
       },
       dispatch: ({ channelId, member, userName, text, threadId, group, context, message, take }) => {

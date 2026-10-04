@@ -247,8 +247,10 @@ async function processCronTick(): Promise<void> {
     await maybeRunHeartbeats(now);
 
     // Group channels in listen / proactive mode: unanswered questions, gated
-    // cheap-first (src/channels/group-listen.ts). No-op unless enabled.
-    await runListenTick(listenDeps);
+    // cheap-first (src/channels/group-listen.ts). No-op unless enabled. Not
+    // awaited: its model calls must not hold up scheduled hooks; a tick still
+    // running makes the next one a no-op.
+    void runListenTick(listenDeps);
 
     // Find schedule-triggered hooks that are due
     const dueHooks = await db

@@ -164,6 +164,20 @@ describe('modes and unprompted posts (phase 4)', () => {
     }
     expect(await gc.updateGroupChannelSettings(r.group.id, { userId: annaId, isAdmin: false }, { quietHoursStart: null, quietHoursEnd: null }))
       .toMatchObject({ quietHoursStart: null, quietHoursEnd: null });
+
+    // Only the settings: an owner cannot move the enrolment, hand it to someone else or reset its counters.
+    const sneaky = { mode: 'listen', ownerUserId: bobId, channelId: 'C999', unpromptedCount: -50 } as unknown as Parameters<typeof gc.updateGroupChannelSettings>[2];
+    expect(await gc.updateGroupChannelSettings(r.group.id, { userId: annaId, isAdmin: false }, sneaky))
+      .toMatchObject({ ownerUserId: annaId, channelId: 'C1', unpromptedCount: 0, mode: 'listen' });
+  });
+
+  test('a takeover puts the channel back in mention mode: the new owner opts in again', async () => {
+    const r = await enrol('C1', carolId);
+    if (r.status !== 'enrolled') throw new Error('setup');
+    await gc.updateGroupChannelSettings(r.group.id, { userId: carolId, isAdmin: false }, { mode: 'proactive' });
+    await executeRaw(`UPDATE users SET is_active = false WHERE id = '${carolId}'`);
+    const taken = await enrol('C1', bobId);
+    expect(taken).toMatchObject({ status: 'took_over', group: { ownerUserId: bobId, mode: 'mention' } });
   });
 
   test('the unprompted slot: one claim per gap, up to the daily cap, counted per local day', async () => {
@@ -305,6 +319,8 @@ describe('routes', () => {
     expect((await call(appFor(bobId, false), 'PATCH', `/me/group-channels/${r.group.id}`, { mode: 'proactive' })).status).toBe(404);
     expect((await call(anna, 'PATCH', `/me/group-channels/${r.group.id}`, { timezone: 'Nowhere/Land' })).status).toBe(400);
     expect((await call(anna, 'PATCH', `/me/group-channels/${r.group.id}`, { mode: 'shout' })).status).toBeGreaterThanOrEqual(400);
+    expect((await call(anna, 'PATCH', `/me/group-channels/${r.group.id}`, { mode: 'listen', ownerUserId: bobId })).status).toBeGreaterThanOrEqual(400);
+    expect((await gc.findGroupChannelById(r.group.id))?.ownerUserId).toBe(annaId);
 
     expect((await call(anna, 'PATCH', `/admin/group-channels/${r.group.id}`, { mode: 'proactive' })).status).toBe(403);
     const admin = await call(appFor(adminId, true), 'PATCH', `/admin/group-channels/${r.group.id}`, { mode: 'proactive' });

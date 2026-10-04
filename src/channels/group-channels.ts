@@ -134,7 +134,8 @@ export async function joinGroupChannel(input: {
     if (owner.active) return { status: 'taken', ownerName: owner.name };
     const [updated] = await db
       .update(groupChannels)
-      .set({ ownerUserId: input.userId, updatedAt: new Date() })
+      // The new owner pays for unprompted posts, so they opt in again: back to mention mode.
+      .set({ ownerUserId: input.userId, mode: 'mention', updatedAt: new Date() })
       // Guard on the previous owner so two members taking over at once cannot both win.
       .where(and(eq(groupChannels.id, existing.id), eq(groupChannels.ownerUserId, existing.ownerUserId)))
       .returning();
@@ -225,6 +226,8 @@ export interface GroupChannelSettings {
 
 export class GroupChannelSettingsError extends Error {}
 
+const SETTINGS_KEYS = ['mode', 'quietHoursStart', 'quietHoursEnd', 'timezone', 'maxUnpromptedPerDay', 'minMinutesBetween'] as const;
+
 function isTimeZone(tz: string): boolean {
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: tz });
@@ -263,7 +266,12 @@ export async function updateGroupChannelSettings(
 ): Promise<GroupChannel | null> {
   if (!isUuid(id)) return null;
   checkSettings(patch);
-  const set = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)) as GroupChannelSettings;
+  // Only these columns: a request body may carry anything else (owner, chat id, counters).
+  const set: GroupChannelSettings = {};
+  for (const key of SETTINGS_KEYS) {
+    if (patch[key] !== undefined) (set as Record<string, unknown>)[key] = patch[key];
+  }
+  if (Object.keys(set).length === 0) throw new GroupChannelSettingsError('Nothing to change');
   const where = actor.isAdmin
     ? eq(groupChannels.id, id)
     : and(eq(groupChannels.id, id), eq(groupChannels.ownerUserId, actor.userId));
@@ -437,6 +445,8 @@ export async function resolveGroupSession(input: {
   group: GroupChannel;
   threadId: string;
   title?: string;
+  /** Kept from the retention sweep (the unprompted-posts session: its cost rows must keep counting). */
+  pinned?: boolean;
 }): Promise<string> {
   const threadKey = `${input.group.id}:${input.threadId}`;
   const existing = await sessionRepository.findGroupThreadSession(input.userId, input.group.id, input.threadId);
@@ -456,6 +466,7 @@ export async function resolveGroupSession(input: {
       groupChannelId: input.group.id,
       title: input.title ?? `${input.group.label ?? input.group.channelId} thread`,
       status: 'active',
+      ...(input.pinned ? { pinned: true } : {}),
     });
     rememberThread(threadKey, true);
     return session.id;

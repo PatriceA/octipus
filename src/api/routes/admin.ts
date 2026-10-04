@@ -558,7 +558,7 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
         timezone: t.Optional(t.String({ minLength: 1, maxLength: 64 })),
         maxUnpromptedPerDay: t.Optional(t.Integer({ minimum: 1, maximum: 48 })),
         minMinutesBetween: t.Optional(t.Integer({ minimum: 10, maximum: 1440 })),
-      }),
+      }, { additionalProperties: false }),
       detail: { tags: ['admin'] },
     },
   )

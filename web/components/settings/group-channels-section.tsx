@@ -79,7 +79,7 @@ export function GroupChannelsSection() {
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </div>
-              <GroupChannelModeForm group={g} endpoint={`/me/group-channels/${g.id}`} onSaved={invalidate} />
+              <GroupChannelModeForm key={g.updatedAt} group={g} endpoint={`/me/group-channels/${g.id}`} onSaved={invalidate} />
             </li>
           ))}
         </ul>
