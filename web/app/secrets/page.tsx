@@ -14,7 +14,10 @@ import { ProviderCards } from './provider-cards';
 import { VaultTable } from './vault-table';
 
 export default function SecretsPage() {
-  const { activeWorkspace } = useWorkspace();
+  // Secrets are personal: with a space selected the server runs these routes
+  // in the default personal workspace, so the page scopes to that one too
+  // (never to the space's id).
+  const { personalWorkspace: activeWorkspace } = useWorkspace();
 
   const { data, isLoading: loading, refetch } = useQuery({
     queryKey: ['vault', activeWorkspace?.id ?? null],

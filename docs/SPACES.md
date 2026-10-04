@@ -9,11 +9,9 @@ This page describes what is built. The full design, including the parts
 still to come (rooms, live documents, sponsored agents, guests), is
 [docs/plans/coworking-spec.md](plans/coworking-spec.md).
 
-> **Status (coworking S1, backend foundation).** Spaces, members, roles,
-> invites, archive and purge are in place, with their REST routes. Content
-> routes acting on a space (notes, tasks, documents, artifacts, files in a
-> space), the agent inside a space and the web screens land in the next
-> slices; until then a space holds members and their activity log.
+> **Status (coworking S1).** Spaces, members, roles, invites, archive and
+> purge are in place, with their REST routes, the content routes acting on a
+> space (see "Working in a space") and the web screens (see "In the web").
 
 ## The model
 
@@ -145,7 +143,9 @@ for that request.
 - **Not a member.** A header naming a space you are not a member of (or no
   longer are) answers 404 on every `/api` and `/v1` route, except
   `/api/auth/*`, `/api/health`, `/api/me/workspaces` and `GET /api/spaces`,
-  so a removed member's client can recover.
+  so a removed member's client can recover. The body is
+  `{"error": "Space not found", "code": "workspace_denied"}`; the code tells
+  a client its selected workspace went away, not a missing resource.
 - **The access layer.** Space routes go through `contentRepos(principal)`
   (`src/db/repositories/content.ts`): the personal repositories for a
   personal principal, `spaceRepos` (`src/db/repositories/space.ts`) for a
@@ -180,6 +180,33 @@ for that request.
   assignee, whoever closed it. Role agents are personal automation: a space
   task is never assigned to a role heartbeat and never wakes one.
 - **Guests** have no content access yet: guest scopes arrive with S6.
+
+## In the web
+
+- **Picker** (the header's workspace button): "my workspaces" (your own,
+  with transfer) and "shared spaces" (with your role as a badge, the member
+  count, and a gear to the space's settings); "new shared space…" creates one
+  and switches to it. Switching sends the space's id in `X-Octipus-Workspace`.
+- **Space settings** `/spaces/<id>/settings`: name, members (role, remove;
+  "leave" for yourself), invites (role, expiry, uses; the link is shown once,
+  with a copy button; revoke), activity, archive / unarchive and delete for
+  good. Every member can open it; only owners see the controls that change
+  the space.
+- **Join page** `/join/<token>`: anyone with the link sees the preview; a
+  signed-in user joins with one click, anyone else signs in or registers and
+  comes back to the page (`returnTo`).
+- **Role-aware pages.** Commenters and viewers (and everyone in an archived
+  space) get a read-only notes reader, a task list and board without create,
+  edit, drag or delete, and no document upload or delete; commenters still
+  comment on tasks. A banner says the role, or that the space is archived.
+  The role is read again (`GET /api/spaces/<id>`) on every switch and when
+  the window regains focus.
+- **Removed.** When the server answers `workspace_denied` for the selected
+  space, the web switches to the default workspace and says "You no longer
+  have access to <space>" — also at the next load, if the removal happened
+  while away.
+- Personal-only pages keep working with a space selected; the secrets page
+  scopes to the default personal workspace, as the server does.
 
 ## Settings
 

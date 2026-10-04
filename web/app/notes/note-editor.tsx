@@ -41,6 +41,11 @@ interface EditorProps {
   onOpenSlug?: (slug: string) => void;
   /** Filter by an inline `#tag` clicked in the preview. */
   onTagClick?: (tag: string) => void;
+  /**
+   * The caller may not edit (a commenter or viewer in a space, or an
+   * archived space): the note shows as a preview with no editing controls.
+   */
+  readOnly?: boolean;
 }
 
 const KINDS = ['note', 'daily', 'moc', 'literature'];
@@ -78,8 +83,9 @@ export function NoteEditor(props: EditorProps) {
   const {
     selectedId, draftTitle, setDraftTitle, draftBody, setDraftBody, draftTags, setDraftTags,
     draftKind, setDraftKind, draftFolder, setDraftFolder, slug, noteDate, pinned, onTogglePin,
-    mode, setMode, dirty, saving, onSave, onArchive, noteIndex, tags, onOpenSlug, onTagClick,
+    mode: requestedMode, setMode, dirty, saving, onSave, onArchive, noteIndex, tags, onOpenSlug, onTagClick, readOnly = false,
   } = props;
+  const mode: EditorMode = readOnly ? 'preview' : requestedMode;
 
   const editorRef = useRef<MarkdownEditorHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -145,8 +151,39 @@ export function NoteEditor(props: EditorProps) {
   const preview = draftBody.trim() ? (
     <Markdown content={draftBody} className="max-w-none px-1" onWikilink={onOpenSlug} onTag={onTagClick} />
   ) : (
-    <p className="text-[13px] text-on-surface-variant/60">Nothing to preview yet — switch to Edit to start writing.</p>
+    <p className="text-[13px] text-on-surface-variant/60">
+      {readOnly ? (isNew ? 'Pick a note to read.' : 'This note is empty.') : 'Nothing to preview yet — switch to Edit to start writing.'}
+    </p>
   );
+
+  if (readOnly) {
+    return (
+      <div className="h-full flex flex-col min-w-0" data-testid="note-reader">
+        <div className="flex items-center gap-2 px-5 pt-4 shrink-0">
+          <h2 className="flex-1 min-w-0 text-xl font-semibold truncate">{draftTitle || (isNew ? 'Notes' : '')}</h2>
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-xs border border-outline-variant/40 text-[11px] text-on-surface-variant">
+            <Eye size={12} /> read-only
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-5 pt-2 pb-2 shrink-0 text-[12px]">
+          {draftTags.map((t) => (
+            <span key={t} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-primary-container/60 text-primary text-[11px]">
+              <Hash size={9} />{t}
+            </span>
+          ))}
+          {!isNew && (
+            <span className="inline-flex items-center gap-1 text-on-surface-variant/60 font-mono text-[11px]">
+              {draftKind} <span className="text-outline">·</span> {slug}
+              {noteDate && <span className="text-outline"> · {noteDate}</span>}
+            </span>
+          )}
+        </div>
+        <div className="flex-1 min-h-0 px-5 pb-5">
+          <div className="h-full overflow-y-auto term-frame rounded-xs p-4">{preview}</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-full flex flex-col min-w-0">

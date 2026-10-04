@@ -273,9 +273,10 @@ interface TaskComment {
 /**
  * A task's comment thread, fetched when it opens (mount = open). Agents log
  * progress and hand-offs here through the tasks tool; the user posts as
- * themselves. `truncated` means the server left the oldest out.
+ * themselves. `truncated` means the server left the oldest out. Without
+ * `canComment` (a viewer in a space, an archived space) it is read-only.
  */
-export function CommentsThread({ taskId, indent = true }: { taskId: string; indent?: boolean }) {
+export function CommentsThread({ taskId, indent = true, canComment = true }: { taskId: string; indent?: boolean; canComment?: boolean }) {
   const [comments, setComments] = useState<TaskComment[] | null>(null);
   const [truncated, setTruncated] = useState(false);
   const [error, setError] = useState('');
@@ -339,7 +340,7 @@ export function CommentsThread({ taskId, indent = true }: { taskId: string; inde
         </>
       )}
       {error && <p className="text-[11px] text-error">{error}</p>}
-      <div className="flex gap-2 items-start">
+      {canComment && <div className="flex gap-2 items-start">
         <textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -358,7 +359,7 @@ export function CommentsThread({ taskId, indent = true }: { taskId: string; inde
         >
           <Send className="w-3 h-3" /> Post
         </button>
-      </div>
+      </div>}
     </div>
   );
 }

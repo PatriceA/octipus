@@ -19,7 +19,8 @@ interface NavigatorProps {
   activeTag: string | null;
   setActiveTag: (t: string | null) => void;
   onOpen: (n: NoteRow) => void;
-  onNew: (folder?: string) => void;
+  /** Absent for a role that cannot create notes. */
+  onNew?: (folder?: string) => void;
 }
 
 // --- folder tree (derived from slug paths) ---------------------------------
@@ -105,7 +106,7 @@ interface RowCtx {
 interface FolderCtx extends RowCtx {
   collapsed: Set<string>;
   toggle: (path: string) => void;
-  onNew: (folder?: string) => void;
+  onNew?: (folder?: string) => void;
 }
 interface TagCtx {
   activeTag: string | null;
@@ -150,14 +151,16 @@ function FolderBranch({ name, path, node, depth, ctx }: { name: string; path: st
         {open ? <ChevronDown size={13} className="shrink-0 text-outline" /> : <ChevronRight size={13} className="shrink-0 text-outline" />}
         {open ? <FolderOpen size={13} className="shrink-0 text-primary/80" /> : <Folder size={13} className="shrink-0 text-primary/80" />}
         <span className="truncate text-[13px] font-medium flex-1">{name}</span>
-        <button
-          type="button"
-          title={`New note in ${path}`}
-          onClick={(e) => { e.stopPropagation(); ctx.onNew(path); }}
-          className="opacity-0 group-hover/fld:opacity-100 p-0.5 rounded hover:bg-surface-container-highest text-on-surface-variant"
-        >
-          <Plus size={12} />
-        </button>
+        {ctx.onNew && (
+          <button
+            type="button"
+            title={`New note in ${path}`}
+            onClick={(e) => { e.stopPropagation(); ctx.onNew?.(path); }}
+            className="opacity-0 group-hover/fld:opacity-100 p-0.5 rounded hover:bg-surface-container-highest text-on-surface-variant"
+          >
+            <Plus size={12} />
+          </button>
+        )}
       </div>
       {open && (
         <div>
@@ -263,14 +266,16 @@ export function NotesNavigator({
             </button>
           )}
         </div>
-        <button
-          type="button"
-          onClick={() => onNew()}
-          className="p-1.5 rounded-xs hover:bg-surface-container-high text-on-surface-variant hover:text-primary border border-outline-variant/40"
-          title="New note"
-        >
-          <Plus size={15} />
-        </button>
+        {onNew && (
+          <button
+            type="button"
+            onClick={() => onNew()}
+            className="p-1.5 rounded-xs hover:bg-surface-container-high text-on-surface-variant hover:text-primary border border-outline-variant/40"
+            title="New note"
+          >
+            <Plus size={15} />
+          </button>
+        )}
       </div>
 
       {/* Filter tabs */}
