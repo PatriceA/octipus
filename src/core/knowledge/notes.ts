@@ -109,7 +109,7 @@ export class NoteService {
       // index when no embedding model was configured) rather than assuming
       // success — otherwise `indexed:true` would lie about searchability.
       if (bodyUnchanged) {
-        const indexed = body.trim().length === 0 || (await this.embeddings.countBySource('note', sourceIdFor(note.id))) > 0;
+        const indexed = body.trim().length === 0 || (await this.embeddings.countBySource({ kind: 'personal', userId: note.userId, workspaceId: null }, 'note', sourceIdFor(note.id))) > 0;
         return { note, created, indexed, links: { added: 0, removed: 0 } };
       }
     } else {
@@ -182,11 +182,12 @@ export class NoteService {
   /** Refresh the note's embedding chunks. Returns false (logged) on failure. */
   private async reindex(note: Note): Promise<boolean> {
     try {
-      await this.embeddings.deleteBySource('note', sourceIdFor(note.id));
+      const owner = { ownerUserId: note.userId, workspaceId: note.workspaceId ?? null };
+      await this.embeddings.deleteBySource(owner, 'note', sourceIdFor(note.id));
       if (note.body.trim().length === 0) return true;
-      await this.embeddings.indexText('note', sourceIdFor(note.id), note.body, {
+      await this.embeddings.indexText(owner, 'note', sourceIdFor(note.id), note.body, {
         title: note.title,
-      }, undefined, note.userId);
+      });
       return true;
     } catch (err) {
       coreLogger.warn(
@@ -257,7 +258,7 @@ export class NoteService {
   async remove(userId: string, id: string): Promise<boolean> {
     const note = await this.notes.getById(userId, id);
     if (!note) return false;
-    await this.embeddings.deleteBySource('note', sourceIdFor(id));
+    await this.embeddings.deleteBySource({ ownerUserId: userId, workspaceId: null }, 'note', sourceIdFor(id));
     await this.links.deleteForEntity(SOURCE_PREFIX, id);
     return this.notes.delete(userId, id);
   }

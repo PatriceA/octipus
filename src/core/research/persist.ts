@@ -88,6 +88,7 @@ export async function persistReport(report: ReportDoc, userId: string): Promise<
     // research output. The document is already saved and browsable.
     try {
       const stored = await getEmbeddingService().indexText(
+        { ownerUserId: userId, workspaceId: doc.workspaceId ?? null },
         'document',
         `doc:${doc.id}`,
         markdown,

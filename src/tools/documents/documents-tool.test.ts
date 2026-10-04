@@ -83,7 +83,7 @@ describe('export_document', () => {
     expect(res.downloadUrl).toBe(`/api/documents/${res.documentId}/raw?download=1`);
 
     const { documentRepository } = await import('@/db/repositories/document-repository');
-    const row = await documentRepository.findById(res.documentId);
+    const row = await documentRepository.findByIdSystem(res.documentId);
     expect(row?.userId).toBe(aliceId);
     expect(row?.category).toBe('Exports');
     // Completed on creation: this file is our own output, so re-running the
@@ -103,7 +103,7 @@ describe('export_document', () => {
     expect(res.filename).toBe('Revenue.xlsx');
 
     const { documentRepository } = await import('@/db/repositories/document-repository');
-    const row = await documentRepository.findById(res.documentId);
+    const row = await documentRepository.findByIdSystem(res.documentId);
     const XLSX = await import('xlsx');
     const book = XLSX.read(readFileSync(row!.storagePath), { type: 'buffer' });
     expect(book.SheetNames).toEqual(['Regions']);

@@ -3,6 +3,7 @@ import { getNoteService } from '@/core/knowledge/notes';
 import { getSuggestionService } from '@/core/knowledge/suggestions';
 import { getVaultSync } from '@/core/knowledge/vault';
 import { getEmbeddingService } from '@/core/rag/embeddings';
+import { agentKnowledgeScope } from '@/core/rag/knowledge-scope';
 import type { ToolManifest } from '@/core/types';
 import { isRootAgent } from '@/core/types';
 import { getKnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
@@ -144,7 +145,7 @@ export class NotesTool extends BaseTool {
         limit: { type: 'number', description: 'Max results (default 5)', default: 5 },
       }),
       async (args, context) => {
-        const results = await getEmbeddingService().hybridSearch(args.query as string, (args.limit as number) || 5, 'note', undefined, 0.3, context.userId);
+        const results = await getEmbeddingService().hybridSearch(agentKnowledgeScope(context), args.query as string, (args.limit as number) || 5, 'note', undefined, 0.3);
         return {
           results: results.map((r) => ({ id: r.id, sourceId: r.sourceId, title: r.metadata.title, abstract: r.abstract || r.content.slice(0, 200), similarity: r.similarity.toFixed(3) })),
           hint: 'sourceId is note:<noteId>. Use read_note to load the full note.',

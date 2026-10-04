@@ -37,6 +37,8 @@ export const auditActionEnum = pgEnum('audit_action', [
   'api_request',
   // A task was created / updated / completed / deleted, by a user or an agent.
   'task_mutated',
+  // An admin read or changed the knowledge base install-wide (`?scope=install`).
+  'knowledge_install_access',
 ]);
 
 export const auditLog = pgTable('audit_log', {

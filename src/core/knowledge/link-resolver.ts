@@ -206,12 +206,12 @@ export class LinkResolverService {
 
     // Blocking. Tenant-scoped to this user's notes, like link suggestions.
     const hits = await this.embeddings.hybridSearch(
+      { kind: 'personal', userId, workspaceId: null },
       target,
       MAX_CANDIDATES * 4,
       'note',
       undefined,
       MIN_CANDIDATE_SIMILARITY,
-      userId,
     );
     const blocked = selectCandidates(hits, noteId);
     if (blocked.length === 0) return null;

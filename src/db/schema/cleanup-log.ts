@@ -2,6 +2,12 @@ import { boolean, index, integer, pgTable, text, timestamp, uuid } from 'drizzle
 
 export const cleanupAuditLog = pgTable('cleanup_audit_log', {
   id: uuid('id').primaryKey().defaultRandom(),
+  /**
+   * Whose knowledge base the run cleaned (migration 0125). NULL user and
+   * workspace = an install-wide run (scheduled job or audited admin route).
+   */
+  userId: uuid('user_id'),
+  workspaceId: uuid('workspace_id'),
   triggeredBy: text('triggered_by').notNull().default('manual'), // manual, scheduled, api
   dryRun: boolean('dry_run').notNull().default(false),
   maxAgeDays: integer('max_age_days').notNull().default(30),
@@ -17,6 +23,7 @@ export const cleanupAuditLog = pgTable('cleanup_audit_log', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   createdAtIdx: index('cleanup_audit_log_created_at_idx').on(table.createdAt),
+  userIdIdx: index('cleanup_audit_log_user_id_idx').on(table.userId),
 }));
 
 export type CleanupAuditEntry = typeof cleanupAuditLog.$inferSelect;

@@ -11,7 +11,12 @@ const fixture = vi.hoisted(() => ({
 
 vi.mock('@/api/context', async () => {
   const { App } = await import('@/api/http');
-  return { apiContext: new App().derive(() => ({ user: fixture.user })) };
+  return {
+    apiContext: new App().derive(() => ({
+      user: fixture.user,
+      principal: { kind: 'user', userId: fixture.user.id, username: fixture.user.username, isAdmin: false, workspaceId: null },
+    })),
+  };
 });
 
 vi.mock('@/core/repos/registry-service', () => ({
@@ -74,6 +79,8 @@ describe('POST /api/knowledge/search repository visibility', () => {
     expect(fixture.loadRepoGraph).toHaveBeenCalledWith(fixture.user.id);
     expect(searchMethod).toHaveBeenCalledOnce();
     expect(searchMethod.mock.calls[0].at(-1)).toEqual({ allowedRepoIds: ['repo-a', 'repo-b'] });
+    // The caller's own knowledge, never the install's.
+    expect(searchMethod.mock.calls[0][0]).toEqual({ kind: 'personal', userId: fixture.user.id, workspaceId: null });
   });
 
   test('an explicit unavailable repo id returns 400 before any search executes', async () => {

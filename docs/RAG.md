@@ -139,6 +139,33 @@ low-signal files are excluded (`*CHANGELOG*`, `WEEKLY-CHANGELOG-*`,
   call), and knowledge-tool worker roles are nudged to `search_knowledge`
   for "how do I set up X" questions before answering.
 
+## Who sees what (knowledge scope)
+
+Every chunk has an owner: `user_id` plus an optional `workspace_id`, set at
+write time from the user an agent works for (or the signed-in caller of
+`POST /api/knowledge/index`). Every read and mutation runs inside a
+`KnowledgeScope` (`src/core/rag/knowledge-scope.ts`), turned into SQL by one
+`scopePredicate`:
+
+| Scope | Reads | Writes (delete, cleanup, verify) |
+|---|---|---|
+| `personal` (default everywhere) | the user's own rows, narrowed to the current workspace when one is set (rows with no workspace show in every workspace), plus product docs | the user's own rows only |
+| `install` | every row | every row |
+
+Product docs (`user_id` NULL, `metadata.source = 'octipus-docs'`) are
+readable under every scope and never writable outside `install`. A row with no
+owner that is not a product doc is an *install row*: admins and system jobs
+only. Admins get the personal scope like everyone else; the install scope is
+reached only with `?scope=install` on the `/api/knowledge` routes, which writes
+a `knowledge_install_access` audit row per request. Agents (including an
+admin's) never get it. The scheduled cleanup runs install-wide.
+
+Migration `0125_knowledge_scope.sql` gave existing rows their owner: document
+chunks from their `documents` row, note chunks from their note, file chunks
+from their path (`…/users/<uid>/workspaces/<segment>/files/…`, segment
+`default` = that user's default workspace). Anything else stayed an install
+row.
+
 ## How data gets retrieved
 
 `search_knowledge(query, limit?, purpose?, mode?, min_similarity?, repos?)`
@@ -411,7 +438,8 @@ passes in order:
 4. Short / low-quality entries (`length(content) < minContentLength`)
 
 A weekly run is wired into the cron runner with default thresholds.
-The audit log lands in `cleanup_audit_log`.
+The audit log lands in `cleanup_audit_log`, stamped with the user whose
+knowledge base was cleaned (NULL for an install-wide run).
 
 ### Manual cleanup
 
@@ -422,8 +450,11 @@ curl -X POST http://localhost:3005/api/knowledge/cleanup \
   -d '{"dryRun": true}'
 ```
 
+This cleans the caller's own rows. An admin cleans the whole install with
+`/api/knowledge/cleanup?scope=install` (audited).
+
 Agents can call `cleanup_knowledge(dry_run?, max_age_days?,
-min_content_length?)` via the knowledge tool.
+min_content_length?)` via the knowledge tool; it cleans the user's own rows.
 
 ### Asymmetric retrieval prefixes
 
@@ -485,9 +516,10 @@ Re-running the migration after a successful pin is a no-op.
 
 ## Dedup
 
-A unique index on `(purpose, source_id, content_sha256)` makes
-re-inserting the same content into the same source a no-op rather
-than a duplicate row. The previous "find duplicates by content
+A unique index on `(purpose, source_id, content_sha256, user_id,
+workspace_id) NULLS NOT DISTINCT` makes re-inserting the same content into
+the same source by the same owner a no-op rather than a duplicate row; two
+owners indexing the same path keep separate rows. The previous "find duplicates by content
 match" cleanup pass was retired with the index in place.
 
 ## Schema

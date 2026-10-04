@@ -5,6 +5,7 @@ import { cleanupAuditLog } from '@/db/schema/cleanup-log';
 import { ageInDaysSql, cosineSimilarity, type EmbeddingMetadata, embeddings, freshnessFactorSql } from '@/db/schema/embeddings';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { coreLogger } from '@/utils/logger';
+import { type KnowledgeOwner, type KnowledgeScope, ownerPredicate, PRODUCT_DOCS_SOURCE, scopePredicate } from './knowledge-scope';
 import { chunkMarkdown, looksLikeMarkdown, type StructuralChunk } from './markdown-chunker';
 import { type CleanupOptions, type CleanupResult, runCleanup } from './retention-service';
 
@@ -112,7 +113,7 @@ const MAX_CHUNK_SIZE = 1000; // chars per chunk
 const EMBED_BATCH_SIZE = 64;
 
 /** Provenance tag for the auto-indexed product documentation corpus. */
-const DOCS_SOURCE = 'octipus-docs';
+const DOCS_SOURCE = PRODUCT_DOCS_SOURCE;
 
 /**
  * Optional, additive scoping for the search methods. `globalDocsOnly` hard-
@@ -170,6 +171,8 @@ function repoScopeSql(scope?: SearchScope) {
  * Treat it as a row array of records — callers pass the projected row shape
  * as the type parameter and the helper enforces the access path.
  */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function rows<T = Record<string, unknown>>(r: unknown): T[] {
   if (Array.isArray(r)) return r as T[];
   if (r && typeof r === 'object' && Array.isArray((r as { rows?: unknown }).rows)) {
@@ -304,6 +307,7 @@ export class EmbeddingService {
    * fields without growing a parallel insert path.
    */
   async store(
+    owner: KnowledgeOwner,
     purpose: EmbeddingPurpose,
     sourceId: string,
     content: string,
@@ -315,8 +319,6 @@ export class EmbeddingService {
       headingLevel?: number | null;
       docId?: string | null;
     },
-    /** Owner for tenant-scoped search (e.g. notes). NULL = unscoped/global. */
-    ownerUserId?: string | null,
     /** Source repo (`workspace_repos.id`) for multi-repo scoping. NULL = non-repo. */
     repoId?: string | null,
   ): Promise<string> {
@@ -328,7 +330,8 @@ export class EmbeddingService {
       content,
       embedding,
       model,
-      userId: ownerUserId ?? null,
+      userId: 'product' in owner ? null : owner.ownerUserId,
+      workspaceId: 'product' in owner ? null : owner.workspaceId,
       repoId: repoId ?? null,
       metadata: metadata || {},
       purpose,
@@ -342,30 +345,34 @@ export class EmbeddingService {
       // source say so just now.
       lastVerifiedAt: sql`now()`,
     })
-      // Dedup is enforced by the (purpose, source_id, content_sha256) unique
-      // index. A re-index of unchanged content is a no-op rather than an
-      // error — return the existing row id so callers can chain on it.
+      // Dedup is enforced by the (purpose, source_id, content_sha256, user_id,
+      // workspace_id) NULLS NOT DISTINCT unique index (migration 0125), so two
+      // owners indexing the same path never overwrite or adopt each other's
+      // rows. A re-index of unchanged content by the same owner is a no-op
+      // rather than an error — return the existing row id so callers can
+      // chain on it.
       .onConflictDoUpdate({
-        target: [embeddings.purpose, embeddings.sourceId, embeddings.contentSha256],
+        target: [embeddings.purpose, embeddings.sourceId, embeddings.contentSha256, embeddings.userId, embeddings.workspaceId],
         // Refresh repoId on conflict too — otherwise re-indexing identical content
         // under a (newly) different repo scope would leave the old/NULL repoId.
         // Re-indexing byte-identical content means the source still says it,
         // which is exactly what `last_verified_at` records — so a nightly
         // re-crawl keeps unchanged facts fresh without rewriting a row.
-        set: { lastAccessedAt: sql`now()`, lastVerifiedAt: sql`now()`, repoId: sql`excluded.repo_id` },
+        // Metadata is refreshed as well, so a re-index re-tags a row written
+        // before its source carried a provenance tag.
+        set: { lastAccessedAt: sql`now()`, lastVerifiedAt: sql`now()`, repoId: sql`excluded.repo_id`, metadata: sql`excluded.metadata` },
       })
       .returning({ id: embeddings.id });
     return result[0].id;
   }
 
   async indexText(
+    owner: KnowledgeOwner,
     purpose: EmbeddingPurpose,
     sourceId: string,
     content: string,
     metadata?: EmbeddingMetadata,
     documentId?: string,
-    /** Owner for tenant-scoped search (e.g. notes). NULL = unscoped/global. */
-    ownerUserId?: string | null,
     /** Source repo (`workspace_repos.id`) for multi-repo scoping. NULL = non-repo. */
     repoId?: string | null,
   ): Promise<number> {
@@ -380,7 +387,7 @@ export class EmbeddingService {
     // content looks like Markdown (or the caller's filePath hint says
     // so). Other content types fall through to the flat chunker.
     if (looksLikeMarkdown(content, metadata?.filePath)) {
-      return this.indexStructured(purpose, sourceId, content, metadata, documentId, ownerUserId, repoId);
+      return this.indexStructured(owner, purpose, sourceId, content, metadata, documentId, repoId);
     }
     const chunks = this.chunkText(content);
     if (chunks.length === 0) {
@@ -398,6 +405,7 @@ export class EmbeddingService {
         const embedding = vectors[i];
         if (embedding instanceof Error) throw embedding;
         const id = await this.store(
+          owner,
           purpose,
           sourceId,
           chunks[i],
@@ -408,8 +416,7 @@ export class EmbeddingService {
             totalChunks: chunks.length,
             originalLength: content.length,
           },
-          undefined,
-          ownerUserId,
+          { docId: documentId ?? null },
           repoId,
         );
         storedIds.push(id);
@@ -469,12 +476,12 @@ export class EmbeddingService {
    * count that did succeed.
    */
   private async indexStructured(
+    owner: KnowledgeOwner,
     purpose: EmbeddingPurpose,
     sourceId: string,
     content: string,
     metadata: EmbeddingMetadata | undefined,
     documentId: string | undefined,
-    ownerUserId?: string | null,
     repoId?: string | null,
   ): Promise<number> {
     const chunks: StructuralChunk[] = chunkMarkdown(content);
@@ -495,6 +502,7 @@ export class EmbeddingService {
         const embedding = vectors[i];
         if (embedding instanceof Error) throw embedding;
         const id = await this.store(
+          owner,
           purpose,
           sourceId,
           c.content,
@@ -511,7 +519,6 @@ export class EmbeddingService {
             headingLevel: c.headingLevel,
             docId: documentId ?? null,
           },
-          ownerUserId,
           repoId,
         );
         insertedIds[i] = id;
@@ -556,7 +563,7 @@ export class EmbeddingService {
    * parent (e.g. a flat-chunked row). Use this to inject "you are
    * reading under § A / § B / § C" context next to a hit.
    */
-  async getAncestorHeadings(chunkId: string): Promise<Array<{ id: string; content: string; headingLevel: number | null; sectionPath: string[] | null }>> {
+  async getAncestorHeadings(scope: KnowledgeScope, chunkId: string): Promise<Array<{ id: string; content: string; headingLevel: number | null; sectionPath: string[] | null }>> {
     const db = getDb();
     const out: Array<{ id: string; content: string; headingLevel: number | null; sectionPath: string[] | null }> = [];
     let current: string | null = chunkId;
@@ -579,7 +586,7 @@ export class EmbeddingService {
           sectionPath: embeddings.sectionPath,
         })
         .from(embeddings)
-        .where(eq(embeddings.id, cursor))
+        .where(and(eq(embeddings.id, cursor), scopePredicate(scope, 'read')))
         .limit(1);
       const row = rowRes[0];
       if (!row) break;
@@ -607,7 +614,7 @@ export class EmbeddingService {
    * nothing is actually relevant — useless for small knowledge bases where
    * every entry ranks "in the top N" by default.
    */
-  async search(query: string, limit = 5, purpose?: EmbeddingPurpose, minSimilarity = 0, userId?: string, scope?: SearchScope): Promise<SearchResult[]> {
+  async search(knowledge: KnowledgeScope, query: string, limit = 5, purpose?: EmbeddingPurpose, minSimilarity = 0, scope?: SearchScope): Promise<SearchResult[]> {
     let queryEmbedding: number[];
     try {
       queryEmbedding = await this.generateEmbedding(query, 'query');
@@ -621,11 +628,11 @@ export class EmbeddingService {
     const db = getDb();
 
     const similarityExpr = cosineSimilarity(embeddings.embedding, queryEmbedding);
-    // Tenant scope: when `userId` is given, restrict to that owner's rows.
-    // Used for per-user surfaces (notes); omitted for shared/global KB.
+    // Tenant scope first: the knowledge scope decides whose rows are
+    // candidates at all; the repo scope narrows within it.
     const filters = [
+      scopePredicate(knowledge, 'read'),
       purpose ? eq(embeddings.purpose, purpose) : undefined,
-      userId ? eq(embeddings.userId, userId) : undefined,
       scope?.repoIds?.length ? inArray(embeddings.repoId, scope.repoIds) : undefined,
       repoVisibilitySql(scope),
     ].filter(Boolean);
@@ -675,10 +682,10 @@ export class EmbeddingService {
   }
 
   /** Full-text search only (no embedding needed) */
-  async ftsSearch(query: string, limit = 5, purpose?: EmbeddingPurpose, userId?: string, scope?: SearchScope): Promise<SearchResult[]> {
+  async ftsSearch(knowledge: KnowledgeScope, query: string, limit = 5, purpose?: EmbeddingPurpose, scope?: SearchScope): Promise<SearchResult[]> {
     const db = getDb();
     const purposeFilter = purpose ? sql`AND purpose = ${purpose}` : sql``;
-    const userFilter = userId ? sql`AND user_id = ${userId}` : sql``;
+    const userFilter = sql`AND ${scopePredicate(knowledge, 'read')}`;
     const scopeFilter = globalDocsScopeSql(scope);
     const repoFilter = repoScopeSql(scope);
 
@@ -731,12 +738,12 @@ export class EmbeddingService {
    * top-N vector ranking.
    */
   async hybridSearch(
+    knowledge: KnowledgeScope,
     query: string,
     limit = 5,
     purpose?: EmbeddingPurpose,
     alpha = 0.6,
     minSimilarity = 0,
-    userId?: string,
     scope?: SearchScope,
   ): Promise<SearchResult[]> {
     let queryEmbedding: number[];
@@ -747,14 +754,14 @@ export class EmbeddingService {
         { err, queryLength: query.length },
         'Hybrid search: embedding failed, falling back to keyword-only (FTS)',
       );
-      return this.ftsSearch(query, limit, purpose, userId, scope);
+      return this.ftsSearch(knowledge, query, limit, purpose, scope);
     }
 
     const db = getDb();
     const vecLiteral = `[${queryEmbedding.join(',')}]`;
     const purposeFilter = purpose ? sql`AND purpose = ${purpose}` : sql``;
-    // Tenant scope (notes etc.); omitted for the shared/global KB.
-    const userFilter = userId ? sql`AND user_id = ${userId}` : sql``;
+    // Tenant scope: whose rows are candidates at all.
+    const userFilter = sql`AND ${scopePredicate(knowledge, 'read')}`;
     // Optional hard-scope to the global product-docs corpus (see searchGlobalDocs).
     const scopeFilter = globalDocsScopeSql(scope);
     // Optional multi-repo scope.
@@ -861,7 +868,10 @@ export class EmbeddingService {
    * docs rows, so no over-fetch + post-filter is needed at the call site.
    */
   async searchGlobalDocs(query: string, limit = 8): Promise<SearchResult[]> {
-    return this.hybridSearch(query, limit, 'document', 0.6, 0, undefined, { globalDocsOnly: true });
+    // Product docs are readable under every knowledge scope, and the
+    // `globalDocsOnly` filter admits nothing else, so install scope here
+    // widens nothing.
+    return this.hybridSearch({ kind: 'install' }, query, limit, 'document', 0.6, 0, { globalDocsOnly: true });
   }
 
   /**
@@ -895,32 +905,33 @@ export class EmbeddingService {
    * Awaited rather than fire-and-forget, because a caller who says "verified"
    * needs to know whether it stuck.
    */
-  async markVerified(ids: string[]): Promise<number> {
+  async markVerified(scope: KnowledgeScope, ids: string[]): Promise<number> {
     const unique = [...new Set(ids)].filter((id) => typeof id === 'string' && id.length > 0);
     if (unique.length === 0) return 0;
     const db = getDb();
     const updated = await db
       .update(embeddings)
       .set({ lastVerifiedAt: sql`now()` })
-      .where(inArray(embeddings.id, unique))
+      .where(and(inArray(embeddings.id, unique), scopePredicate(scope, 'write')))
       .returning({ id: embeddings.id });
     return updated.length;
   }
 
   /** The same, addressed by the source that produced the chunks. */
-  async markVerifiedBySource(purpose: EmbeddingPurpose, sourceId: string): Promise<number> {
+  async markVerifiedBySource(scope: KnowledgeScope, purpose: EmbeddingPurpose, sourceId: string): Promise<number> {
     const db = getDb();
     const updated = await db
       .update(embeddings)
       .set({ lastVerifiedAt: sql`now()` })
-      .where(and(eq(embeddings.purpose, purpose), eq(embeddings.sourceId, sourceId)))
+      .where(and(eq(embeddings.purpose, purpose), eq(embeddings.sourceId, sourceId), scopePredicate(scope, 'write')))
       .returning({ id: embeddings.id });
     return updated.length;
   }
 
   // ── Read by ID ────────────────────────────────────────────────────
 
-  async readById(id: string): Promise<SearchResult | null> {
+  async readById(scope: KnowledgeScope, id: string): Promise<SearchResult | null> {
+    if (!UUID_RE.test(id)) return null;
     const db = getDb();
     const result = await db
       .select({
@@ -933,7 +944,7 @@ export class EmbeddingService {
         createdAt: embeddings.createdAt,
       })
       .from(embeddings)
-      .where(eq(embeddings.id, id))
+      .where(and(eq(embeddings.id, id), scopePredicate(scope, 'read')))
       .limit(1);
 
     if (result.length === 0) return null;
@@ -1022,7 +1033,7 @@ export class EmbeddingService {
   // ── Listing & Stats ──────────────────────────────────────────────
 
   /** Paginated listing (excludes embedding vector and full content for performance) */
-  async listAll(limit = 50, offset = 0, purpose?: EmbeddingPurpose): Promise<{
+  async listAll(scope: KnowledgeScope, limit = 50, offset = 0, purpose?: EmbeddingPurpose): Promise<{
     entries: Array<{
       id: string;
       purpose: EmbeddingPurpose;
@@ -1034,7 +1045,8 @@ export class EmbeddingService {
     total: number;
   }> {
     const db = getDb();
-    const conditions = purpose ? eq(embeddings.purpose, purpose) : undefined;
+    const visible = scopePredicate(scope, 'read');
+    const conditions = purpose ? and(visible, eq(embeddings.purpose, purpose)) : visible;
 
     const [entries, countResult] = await Promise.all([
       db.select({
@@ -1050,7 +1062,7 @@ export class EmbeddingService {
         .orderBy(desc(embeddings.createdAt))
         .limit(limit)
         .offset(offset),
-      db.execute(sql`SELECT count(*)::int AS count FROM embeddings ${purpose ? sql`WHERE purpose = ${purpose}` : sql``}`),
+      db.execute(sql`SELECT count(*)::int AS count FROM embeddings WHERE ${visible} ${purpose ? sql`AND purpose = ${purpose}` : sql``}`),
     ]);
 
     return {
@@ -1064,7 +1076,7 @@ export class EmbeddingService {
   }
 
   /** Get stats grouped by purpose, with age distribution and storage metrics */
-  async getStats(): Promise<{
+  async getStats(scope: KnowledgeScope): Promise<{
     total: number;
     byPurpose: Record<string, number>;
     models: string[];
@@ -1075,15 +1087,17 @@ export class EmbeddingService {
     abstractCoverage: { withAbstract: number; withoutAbstract: number };
   }> {
     const db = getDb();
+    const visible = scopePredicate(scope, 'read');
     const [typeResults, modelResults, metaResults, ageResults, abstractResults] = await Promise.all([
-      db.execute(sql`SELECT purpose, count(*)::int AS count FROM embeddings GROUP BY purpose`),
-      db.execute(sql`SELECT DISTINCT model FROM embeddings WHERE model IS NOT NULL`),
+      db.execute(sql`SELECT purpose, count(*)::int AS count FROM embeddings WHERE ${visible} GROUP BY purpose`),
+      db.execute(sql`SELECT DISTINCT model FROM embeddings WHERE model IS NOT NULL AND ${visible}`),
       db.execute(sql`
         SELECT count(*)::int AS total,
                coalesce(avg(length(content)), 0)::int AS avg_len,
                min(created_at)::text AS oldest,
                max(created_at)::text AS newest
         FROM embeddings
+        WHERE ${visible}
       `),
       db.execute(sql`
         SELECT
@@ -1092,12 +1106,14 @@ export class EmbeddingService {
           count(*) FILTER (WHERE created_at >= now() - interval '30 days' AND created_at < now() - interval '7 days')::int AS last_30d,
           count(*) FILTER (WHERE created_at < now() - interval '30 days')::int AS older
         FROM embeddings
+        WHERE ${visible}
       `),
       db.execute(sql`
         SELECT
           count(*) FILTER (WHERE abstract IS NOT NULL)::int AS with_abstract,
           count(*) FILTER (WHERE abstract IS NULL)::int AS without_abstract
         FROM embeddings
+        WHERE ${visible}
       `),
     ]);
 
@@ -1131,12 +1147,12 @@ export class EmbeddingService {
   }
 
   /** Number of stored chunks for a (purpose, sourceId). Cheap presence check. */
-  async countBySource(purpose: EmbeddingPurpose, sourceId: string): Promise<number> {
+  async countBySource(scope: KnowledgeScope, purpose: EmbeddingPurpose, sourceId: string): Promise<number> {
     const db = getDb();
     const r = await db
       .select({ c: sql<number>`count(*)::int` })
       .from(embeddings)
-      .where(and(eq(embeddings.purpose, purpose), eq(embeddings.sourceId, sourceId)));
+      .where(and(eq(embeddings.purpose, purpose), eq(embeddings.sourceId, sourceId), scopePredicate(scope, 'write')));
     return r[0]?.c ?? 0;
   }
 
@@ -1155,7 +1171,7 @@ export class EmbeddingService {
    * first index of pre-existing rows written without the stamp re-indexes
    * once and then becomes idempotent.
    */
-  async isFileIndexed(purpose: EmbeddingPurpose, sourceId: string, fileContent: string, globalOnly = false): Promise<boolean> {
+  async isFileIndexed(owner: KnowledgeOwner, purpose: EmbeddingPurpose, sourceId: string, fileContent: string): Promise<boolean> {
     const db = getDb();
     const sha = sha256Hex(fileContent);
     const r = await db
@@ -1165,10 +1181,9 @@ export class EmbeddingService {
         eq(embeddings.purpose, purpose),
         eq(embeddings.sourceId, sourceId),
         sql`${embeddings.metadata}->>'fileSha' = ${sha}`,
-        // Global-corpus callers (seed-docs) pass true so a hypothetical
-        // per-user row at the same path can't mask the global file as "already
-        // indexed". Defaults to false → existing behaviour for other callers.
-        globalOnly ? sql`${embeddings.userId} IS NULL` : undefined,
+        // Only this owner's rows (exact workspace) count: another owner's
+        // copy of the same path must not mask this one as already indexed.
+        ownerPredicate(owner, { exactWorkspace: true }),
       ))
       .limit(1);
     return r.length > 0;
@@ -1176,23 +1191,29 @@ export class EmbeddingService {
 
   // ── Deletion ──────────────────────────────────────────────────────
 
-  async deleteById(id: string): Promise<boolean> {
+  async deleteById(scope: KnowledgeScope, id: string): Promise<boolean> {
+    if (!UUID_RE.test(id)) return false;
     const db = getDb();
-    const result = await db.delete(embeddings).where(eq(embeddings.id, id)).returning({ id: embeddings.id });
+    const result = await db
+      .delete(embeddings)
+      .where(and(eq(embeddings.id, id), scopePredicate(scope, 'write')))
+      .returning({ id: embeddings.id });
     return result.length > 0;
   }
 
-  async deleteBySource(purpose: EmbeddingPurpose, sourceId: string, globalOnly = false): Promise<number> {
+  /**
+   * Purge one owner's rows of a source before re-indexing it. A user owner
+   * matches across that user's workspaces (one source, one set of rows); it
+   * never reaches another user's rows or the product corpus at the same id.
+   */
+  async deleteBySource(owner: KnowledgeOwner, purpose: EmbeddingPurpose, sourceId: string): Promise<number> {
     const db = getDb();
     const result = await db
       .delete(embeddings)
       .where(and(
         eq(embeddings.purpose, purpose),
         eq(embeddings.sourceId, sourceId),
-        // Global-corpus callers (seed-docs) pass true so the stale-chunk purge
-        // before a re-index can't delete a per-user row that happens to share
-        // the path. Defaults to false → existing behaviour for other callers.
-        globalOnly ? sql`${embeddings.userId} IS NULL` : undefined,
+        ownerPredicate(owner, { exactWorkspace: false }),
       ))
       .returning({ id: embeddings.id });
     return result.length;
@@ -1207,14 +1228,14 @@ export class EmbeddingService {
    * stays close to "search and store". Kept as a service method for
    * call-site stability (cron, knowledge API, knowledge tool).
    */
-  async cleanup(options: CleanupOptions = {}): Promise<CleanupResult> {
-    return runCleanup(options);
+  async cleanup(scope: KnowledgeScope, options: CleanupOptions = {}): Promise<CleanupResult> {
+    return runCleanup(scope, options);
   }
 
   // ── Cleanup History ───────────────────────────────────────────────
 
   /** Retrieve recent cleanup audit log entries */
-  async getCleanupHistory(limit = 20): Promise<Array<{
+  async getCleanupHistory(scope: KnowledgeScope, limit = 20): Promise<Array<{
     id: string;
     triggeredBy: string;
     dryRun: boolean;
@@ -1229,9 +1250,31 @@ export class EmbeddingService {
     createdAt: Date;
   }>> {
     const db = getDb();
+    // A personal scope sees its own runs, a space scope that space's runs,
+    // install scope every run. Runs recorded before migration 0125 carry no
+    // user and are install runs.
+    const visible = scope.kind === 'install'
+      ? undefined
+      : scope.kind === 'personal'
+        ? eq(cleanupAuditLog.userId, scope.userId)
+        : eq(cleanupAuditLog.workspaceId, scope.workspaceId);
     const rows = await db
-      .select()
+      .select({
+        id: cleanupAuditLog.id,
+        triggeredBy: cleanupAuditLog.triggeredBy,
+        dryRun: cleanupAuditLog.dryRun,
+        orphanedDocuments: cleanupAuditLog.orphanedDocuments,
+        staleAgentOutputs: cleanupAuditLog.staleAgentOutputs,
+        shortEntries: cleanupAuditLog.shortEntries,
+        duplicates: cleanupAuditLog.duplicates,
+        totalRemoved: cleanupAuditLog.totalRemoved,
+        totalBefore: cleanupAuditLog.totalBefore,
+        totalAfter: cleanupAuditLog.totalAfter,
+        durationMs: cleanupAuditLog.durationMs,
+        createdAt: cleanupAuditLog.createdAt,
+      })
       .from(cleanupAuditLog)
+      .where(visible)
       .orderBy(desc(cleanupAuditLog.createdAt))
       .limit(limit);
 

@@ -72,6 +72,8 @@ export async function scanUserRepos(userId: string, workspaceId?: string | null)
 export async function indexRepoKnowledge(repo: WorkspaceRepo, userId: string): Promise<void> {
   const { getEmbeddingService, sha256Hex } = await import('@/core/rag/embeddings');
   const service = getEmbeddingService();
+  // The repo's knowledge belongs to the user who registered it, in its workspace.
+  const owner = { ownerUserId: userId, workspaceId: repo.workspaceId ?? null };
 
   // The generated/curated content to index — never raw code.
   const items: Array<{
@@ -107,21 +109,21 @@ export async function indexRepoKnowledge(repo: WorkspaceRepo, userId: string): P
     ['knowledge_artifact', `repo:${repo.id}:map`],
     ['document', `repo:${repo.id}:agents`],
   ] as const) {
-    if (!items.some(item => item.sourceId === sourceId)) await service.deleteBySource(purpose, sourceId);
+    if (!items.some(item => item.sourceId === sourceId)) await service.deleteBySource(owner, purpose, sourceId);
   }
 
   for (const item of items) {
     // Skip the expensive re-embed when the content is byte-for-byte unchanged
     // since the last scan (fileSha stamped on the chunks).
-    if (await service.isFileIndexed(item.purpose, item.sourceId, item.content)) continue;
-    await service.deleteBySource(item.purpose, item.sourceId);
+    if (await service.isFileIndexed(owner, item.purpose, item.sourceId, item.content)) continue;
+    await service.deleteBySource(owner, item.purpose, item.sourceId);
     await service.indexText(
+      owner,
       item.purpose,
       item.sourceId,
       item.content,
       { ...item.metadata, fileSha: sha256Hex(item.content) },
       undefined,
-      userId,
       repo.id,
     );
   }

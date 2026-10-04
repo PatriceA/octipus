@@ -1,7 +1,7 @@
-import { generateId } from '@/utils/crypto';
 import { coreLogger } from '@/utils/logger';
 import { CodeFileNotIndexableError, isCodeFile } from './code-detection';
 import { getEmbeddingService } from './embeddings';
+import type { KnowledgeOwner } from './knowledge-scope';
 import { fileAt, globFiles } from '@/utils/fs-file';
 
 export interface IndexResult {
@@ -27,7 +27,7 @@ export interface IndexGuard {
 }
 
 export class FileIndexer {
-  async indexFile(filePath: string, purpose: 'document' = 'document', guard?: IndexGuard): Promise<number> {
+  async indexFile(owner: KnowledgeOwner, filePath: string, purpose: 'document' = 'document', guard?: IndexGuard): Promise<number> {
     if (guard?.isAllowed && !guard.isAllowed(filePath)) {
       throw new Error(`Path is outside the allowed workspace: ${filePath}`);
     }
@@ -45,18 +45,17 @@ export class FileIndexer {
     if (!content.trim()) return 0;
 
     const service = getEmbeddingService();
-    const _sourceId = generateId();
 
-    // Delete existing embeddings for this file path
-    await service.deleteBySource(purpose, filePath);
+    // Delete this owner's existing embeddings for this file path
+    await service.deleteBySource(owner, purpose, filePath);
 
-    return service.indexText(purpose, filePath, content, {
+    return service.indexText(owner, purpose, filePath, content, {
       filePath,
       language: this.detectLanguage(filePath),
     });
   }
 
-  async indexDirectory(dirPath: string, patterns = ['**/*.md', '**/*.txt'], guard?: IndexGuard): Promise<IndexResult> {
+  async indexDirectory(owner: KnowledgeOwner, dirPath: string, patterns = ['**/*.md', '**/*.txt'], guard?: IndexGuard): Promise<IndexResult> {
     const result: IndexResult = { filesIndexed: 0, chunksStored: 0, errors: [] };
 
     // Use glob to find matching files. `followSymlinks: false` stops the scan
@@ -78,7 +77,7 @@ export class FileIndexer {
           continue;
         }
         try {
-          const chunks = await this.indexFile(path, 'document');
+          const chunks = await this.indexFile(owner, path, 'document');
           result.filesIndexed++;
           result.chunksStored += chunks;
         } catch (err) {

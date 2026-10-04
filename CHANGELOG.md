@@ -21,6 +21,17 @@ labels reflect blast radius, not contract guarantees.
   nothing else.
 - **The artifacts tool uses the agent's workspace.** It no longer guesses one
   of the user's workspaces; without a workspace in context it refuses.
+- **Documents, knowledge and search no longer cross users** (coworking S0a,
+  L1–L3). The documents tool lists, reads and searches only the user's own
+  documents, and an admin's agent no longer inherits the admin bypass. The
+  knowledge base is per user: every chunk has an owner, and the knowledge
+  routes, the knowledge, documents and notes tools, and global search see the
+  caller's own entries plus the product docs. Admins reach the whole
+  knowledge base only with `?scope=install` on `/api/knowledge`, which is
+  audited. Global search returns only the caller's sessions and hooks.
+  Migration 0125 assigns owners to existing chunks (documents, notes, and
+  workspace files by path); chunks it cannot attribute are visible to admins
+  through `?scope=install` only.
 
 ## v0.6.0 — Shared work, budgets, and stronger review (2026-10-01)
 

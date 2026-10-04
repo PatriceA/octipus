@@ -3,10 +3,10 @@ import { slugify } from '@/core/knowledge/wikilink';
 import { CODE_NOT_INDEXED_MESSAGE, isCodeFile } from '@/core/rag/code-detection';
 import { type EmbeddingPurpose, type SearchScope, getEmbeddingService } from '@/core/rag/embeddings';
 import { getFileIndexer } from '@/core/rag/indexer';
+import { agentKnowledgeOwner, agentKnowledgeScope } from '@/core/rag/knowledge-scope';
 import type { AgentContext, ToolManifest } from '@/core/types';
 import { getKnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
 import { decide, type DecisionSite, recordShadow } from '@/models/decision';
-import { coreLogger } from '@/utils/logger';
 import { WorkspaceFS, WorkspaceFsError } from '@/security/workspace-fs';
 import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 
@@ -116,9 +116,9 @@ export class KnowledgeTool extends BaseTool {
       'knowledge_stats',
       'Get detailed knowledge base statistics including entry counts by source type, age distribution, content metrics, and abstract coverage.',
       createParameterSchema({}),
-      async () => {
+      async (_args, context) => {
         const service = getEmbeddingService();
-        const stats = await service.getStats();
+        const stats = await service.getStats(agentKnowledgeScope(context));
         return {
           ...stats,
           summary: `${stats.total} entries across ${Object.keys(stats.byPurpose).length} purposes. Avg content length: ${stats.avgContentLength} chars. Abstract coverage: ${stats.abstractCoverage.withAbstract}/${stats.total}.`,
@@ -154,19 +154,21 @@ export class KnowledgeTool extends BaseTool {
         // bunch". Tune per-deployment via min_similarity if needed.
         const minSimilarity = userMin ?? (searchMode === 'semantic' ? 0.35 : searchMode === 'keyword' ? 0 : 0.3);
 
+        // Whose knowledge: the user the agent works for (plus product docs).
+        const knowledge = agentKnowledgeScope(context);
         // Optional multi-repo scope: resolve repo names/ids to registry ids.
         const scope = await resolveRepoScope(args.repos as string | undefined, context.userId);
 
         let results;
         switch (searchMode) {
           case 'semantic':
-            results = await service.search(args.query as string, limit, purpose, minSimilarity, undefined, scope);
+            results = await service.search(knowledge, args.query as string, limit, purpose, minSimilarity, scope);
             break;
           case 'keyword':
-            results = await service.ftsSearch(args.query as string, limit, purpose, undefined, scope);
+            results = await service.ftsSearch(knowledge, args.query as string, limit, purpose, scope);
             break;
           default:
-            results = await service.hybridSearch(args.query as string, limit, purpose, undefined, minSimilarity, undefined, scope);
+            results = await service.hybridSearch(knowledge, args.query as string, limit, purpose, undefined, minSimilarity, scope);
         }
 
         shadowRelevance(args.query as string, results);
@@ -229,9 +231,9 @@ export class KnowledgeTool extends BaseTool {
       createParameterSchema({
         id: { type: 'string', description: 'The knowledge entry ID from search results', required: true },
       }),
-      async (args) => {
+      async (args, context) => {
         const service = getEmbeddingService();
-        const entry = await service.readById(args.id as string);
+        const entry = await service.readById(agentKnowledgeScope(context), args.id as string);
 
         if (!entry) {
           return { error: 'Knowledge entry not found.' };
@@ -262,7 +264,7 @@ export class KnowledgeTool extends BaseTool {
         if (isCodeFile(safePath)) {
           return { indexed: false, error: CODE_NOT_INDEXED_MESSAGE };
         }
-        const chunks = await indexer.indexFile(safePath, 'document');
+        const chunks = await indexer.indexFile(agentKnowledgeOwner(context), safePath, 'document');
         return { indexed: true, chunks, path: safePath };
       },
       { permissionAction: 'index' },
@@ -280,7 +282,7 @@ export class KnowledgeTool extends BaseTool {
         const patterns = ((args.patterns as string) || '**/*.md,**/*.txt').split(',').map(p => p.trim());
         const fs = workspaceFor(context);
         const safePath = resolveInWorkspace(fs, args.path as string);
-        const result = await indexer.indexDirectory(safePath, patterns, {
+        const result = await indexer.indexDirectory(agentKnowledgeOwner(context), safePath, patterns, {
           isAllowed: (p) => fs.resolveOptional(p) !== null,
         });
         return result;
@@ -296,9 +298,10 @@ export class KnowledgeTool extends BaseTool {
         min_content_length: { type: 'number', description: 'Minimum content length to keep (default: 50)', default: 50 },
         dry_run: { type: 'boolean', description: 'Preview only, do not delete (default: false)', default: false },
       }),
-      async (args) => {
+      async (args, context) => {
         const service = getEmbeddingService();
-        const result = await service.cleanup({
+        // The user's own rows only: an agent never cleans install-wide.
+        const result = await service.cleanup(agentKnowledgeScope(context), {
           maxAgeDays: (args.max_age_days as number) || 30,
           minContentLength: (args.min_content_length as number) || 50,
           dryRun: (args.dry_run as boolean) ?? false,
@@ -319,10 +322,10 @@ export class KnowledgeTool extends BaseTool {
       createParameterSchema({
         ids: { type: 'array', description: 'Entry ids from search results', required: true, items: { type: 'string' } },
       }),
-      async (args) => {
+      async (args, context) => {
         const ids = Array.isArray(args.ids) ? (args.ids as unknown[]).map(String) : [];
         if (ids.length === 0) return { error: 'Pass the ids of the entries you confirmed.' };
-        const verified = await getEmbeddingService().markVerified(ids);
+        const verified = await getEmbeddingService().markVerified(agentKnowledgeScope(context), ids);
         return {
           verified,
           missing: ids.length - verified,

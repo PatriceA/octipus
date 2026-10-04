@@ -151,7 +151,7 @@ async function maybeCleanupKnowledge(): Promise<void> {
 
   try {
     const service = getEmbeddingService();
-    const result = await service.cleanup({ maxAgeDays: 30, minContentLength: 50, triggeredBy: 'scheduled' });
+    const result = await service.cleanup({ kind: 'install' }, { maxAgeDays: 30, minContentLength: 50, triggeredBy: 'scheduled' });
     if (result.total > 0) {
       coreLogger.info(result, 'Knowledge cleanup: removed stale entries');
     }

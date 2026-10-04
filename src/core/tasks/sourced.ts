@@ -115,7 +115,7 @@ export function researchFollowUpTask(
 
 /**
  * A non-admin principal for a background job that has a user id but no
- * request. Mirrors `TasksTool.principalFor`: own rows only, workspace-stamped.
+ * request. Mirrors `agentPrincipal`: own rows only, workspace-stamped.
  */
 export function backgroundUserPrincipal(userId: string, workspaceId: string | null = null): Principal {
   return {

@@ -31,17 +31,19 @@ export const embeddings = pgTable('embeddings', {
   id: uuid('id').primaryKey().defaultRandom(),
   sourceId: text('source_id').notNull(),
   /**
-   * Owner of the indexed content. Multi-user is default-on
-   * (commit 8877d5e); new rows are required to carry a user_id at
-   * write time and retrieval scopes by it. Column remains nullable
-   * for now because old rows pre-date multi-user and a few service-
-   * level probes (rag/health.ts) intentionally write null.
+   * Owner of the indexed content. Every write names an owner
+   * (`KnowledgeOwner`, src/core/rag/knowledge-scope.ts) and every read
+   * goes through a `KnowledgeScope`. NULL only for the product docs
+   * (`metadata.source = 'octipus-docs'`), the health probe, and legacy
+   * rows migration 0125 could not attribute (install rows: admins,
+   * audited, and system jobs only).
    */
   userId: uuid('user_id'),
   /**
    * Optional workspace scope. NULL = user-level (or workspace
-   * feature off). Threaded from `AgentContext.workspaceId` so chunks
-   * land in the same workspace as the agent that produced them.
+   * feature off). Threaded from `AgentContext.workspaceId` (or the
+   * request principal's workspace) so chunks land in the same
+   * workspace as whoever produced them.
    */
   workspaceId: uuid('workspace_id'),
   content: text('content').notNull(),
@@ -144,7 +146,10 @@ export const embeddings = pgTable('embeddings', {
   parentChunkIdx: index('embeddings_parent_chunk_idx').on(table.parentChunkId),
   docIdIdx: index('embeddings_doc_id_idx').on(table.docId),
   repoIdIdx: index('embeddings_repo_id_idx').on(table.repoId),
-  dedupIdx: uniqueIndex('embeddings_dedup_idx').on(table.purpose, table.sourceId, table.contentSha256),
+  // Per-owner dedup. Migration 0125 creates it NULLS NOT DISTINCT (drizzle's
+  // index builder has no such option), so the product corpus (NULL user and
+  // workspace) dedups too, and two owners of the same path keep separate rows.
+  dedupIdx: uniqueIndex('embeddings_dedup_idx').on(table.purpose, table.sourceId, table.contentSha256, table.userId, table.workspaceId),
 }));
 
 export interface EmbeddingMetadata {

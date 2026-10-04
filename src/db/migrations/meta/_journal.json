@@ -883,6 +883,13 @@
       "when": 1789601114572,
       "tag": "0124_group_channel_modes",
       "breakpoints": true
+    },
+    {
+      "idx": 126,
+      "version": "7",
+      "when": 1789601114573,
+      "tag": "0125_knowledge_scope",
+      "breakpoints": true
     }
   ]
 }

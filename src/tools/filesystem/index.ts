@@ -2,6 +2,7 @@ import { existsSync } from 'fs';
 import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'fs/promises';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'path';
 import { getConfig } from '@/config';
+import { agentKnowledgeOwner, type KnowledgeOwner } from '@/core/rag/knowledge-scope';
 import type { AgentContext, ToolManifest } from '@/core/types';
 import { isInside, WorkspaceFS, WorkspaceFsError } from '@/security/workspace-fs';
 import { computeLineDiff } from '@/shared/diff';
@@ -148,7 +149,7 @@ async function getSessionOutputDir(context: AgentContext | undefined, root: stri
  * tool's `index_directory` / `index_file` — useful for repos the agent can't
  * read off the local filesystem.
  */
-function autoIndexFile(filePath: string): void {
+function autoIndexFile(filePath: string, context: AgentContext): void {
   try {
     const config = getConfig();
     if (!config.workspace.autoIndexFiles) return;
@@ -156,9 +157,20 @@ function autoIndexFile(filePath: string): void {
     const purpose = autoIndexPurpose(filePath);
     if (!purpose) return;
 
+    // The chunks belong to the user the agent works for, in the agent's
+    // workspace. A system agent has no knowledge base of its own, so its
+    // writes are not indexed.
+    let owner: KnowledgeOwner;
+    try {
+      owner = agentKnowledgeOwner(context);
+    } catch (err) {
+      coreLogger.debug({ err, filePath, userId: context.userId }, 'Auto-index skipped: no user owns this write');
+      return;
+    }
+
     // Fire-and-forget — don't block the write operation
     import('@/core/rag/indexer').then(({ getFileIndexer }) => {
-      getFileIndexer().indexFile(filePath, purpose).then((chunks) => {
+      getFileIndexer().indexFile(owner, filePath, purpose).then((chunks) => {
         coreLogger.debug({ filePath, chunks }, 'Auto-indexed file into knowledge base');
       }).catch((err) => {
         coreLogger.debug({ err, filePath }, 'Auto-index skipped (embedding service may be unavailable)');
@@ -327,7 +339,7 @@ export class FilesystemTool extends BaseTool {
           await writeFile(filePath, content, 'utf-8');
 
           // Auto-index into RAG knowledge base
-          autoIndexFile(filePath);
+          autoIndexFile(filePath, context);
 
           const result: Record<string, unknown> = { success: true, path: filePath, bytesWritten: content.length };
           // Say so when the write did NOT land where the model asked. A bare
@@ -402,7 +414,7 @@ export class FilesystemTool extends BaseTool {
           }
           const content = args.replace_all === true ? before.split(oldString).join(newString) : before.replace(oldString, () => newString);
           await writeFile(filePath, content, 'utf-8');
-          autoIndexFile(filePath);
+          autoIndexFile(filePath, context);
           // Show the edited region back so the model need not re-read the file
           // to trust the edit (measured: it re-read after every edit_file).
           // Anchor on where old_string WAS: the prefix before it is identical
@@ -446,7 +458,7 @@ export class FilesystemTool extends BaseTool {
           await writeFile(filePath, next, 'utf-8');
 
           // Auto-index into RAG
-          autoIndexFile(filePath);
+          autoIndexFile(filePath, context);
 
           const result: Record<string, unknown> = { success: true, path: filePath };
           // UI-only diff (see write_file) — stripped before the model sees it.

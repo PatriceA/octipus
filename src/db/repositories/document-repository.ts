@@ -37,7 +37,13 @@ export class DocumentRepository {
     }).where(eq(documents.id, id));
   }
 
-  async findById(id: string): Promise<DocumentRecord | null> {
+  /**
+   * Unscoped read by id, for system callers only: job recovery, the document
+   * queue and processor, and channel delivery (which checks the owner itself).
+   * Anything acting for a user goes through `scopedRepos(principal).documents`.
+   * The leaks isolation suite fails when a caller outside that list appears.
+   */
+  async findByIdSystem(id: string): Promise<DocumentRecord | null> {
     const result = await this.db.select().from(documents).where(eq(documents.id, id)).limit(1);
     return result[0] ?? null;
   }
@@ -47,15 +53,6 @@ export class DocumentRepository {
       .select()
       .from(documents)
       .where(eq(documents.userId, userId))
-      .orderBy(desc(documents.createdAt))
-      .limit(limit);
-  }
-
-  async findByCategory(category: string, limit = 50): Promise<DocumentRecord[]> {
-    return this.db
-      .select()
-      .from(documents)
-      .where(eq(documents.category, category))
       .orderBy(desc(documents.createdAt))
       .limit(limit);
   }
@@ -72,14 +69,6 @@ export class DocumentRepository {
   async delete(id: string): Promise<boolean> {
     const result = await this.db.delete(documents).where(eq(documents.id, id)).returning();
     return result.length > 0;
-  }
-
-  async listRecent(limit = 50): Promise<DocumentRecord[]> {
-    return this.db
-      .select()
-      .from(documents)
-      .orderBy(desc(documents.createdAt))
-      .limit(limit);
   }
 }
 

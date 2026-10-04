@@ -60,7 +60,7 @@ export class DocumentQueue extends EventEmitter {
     let title = hint.title;
     let workspaceId = hint.workspaceId;
     if (title === undefined || workspaceId === undefined) {
-      const doc = await documentRepository.findById(documentId);
+      const doc = await documentRepository.findByIdSystem(documentId);
       title ??= doc?.originalName;
       workspaceId ??= doc?.workspaceId;
     }
@@ -164,7 +164,7 @@ export class DocumentQueue extends EventEmitter {
       // The processor records its own outcome on the document and does not
       // throw; read it back so a failed extraction is a failed job, not a
       // completed one with a red document behind it.
-      const doc = await documentRepository.findById(documentId);
+      const doc = await documentRepository.findByIdSystem(documentId);
       if (!doc) {
         // Deleted while it ran: the user's doing, not a failure to report.
         await backgroundJobRepository.finish(job.id, { status: 'cancelled', error: 'Document deleted during processing' });

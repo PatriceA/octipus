@@ -25,7 +25,7 @@ vi.mock('@/core/documents/processor', () => ({
     process: async (documentId: string) => {
       processed.push(documentId);
       const { documentRepository } = await import('@/db/repositories/document-repository');
-      const doc = await documentRepository.findById(documentId);
+      const doc = await documentRepository.findByIdSystem(documentId);
       if (doc?.originalName === 'bad.pdf') {
         await documentRepository.updateStatus(documentId, 'failed', 'OCR model unavailable');
       } else if (doc?.originalName === 'vanish.pdf') {
@@ -162,7 +162,7 @@ describe('BackgroundJobRepository', () => {
     await repo.create({ kind: 'document', userId: alice, title: 'cut-off.pdf', payload: { documentId }, status: 'running' });
     const { recoverBackgroundJobs } = await import('./recover');
     await recoverBackgroundJobs();
-    const doc = await docs.findById(documentId);
+    const doc = await docs.findByIdSystem(documentId);
     expect(doc?.status).toBe('failed');
     expect((doc?.metadata as { error?: string })?.error).toBe('Interrupted by a restart');
   });
@@ -224,6 +224,6 @@ describe('DocumentQueue', () => {
     queue.resume();
     await waitFor(async () => processed.includes(documentId));
     await waitFor(async () => (await repo.countByStatus('document')).running === 0);
-    expect((await docs.findById(documentId))?.status).toBe('completed');
+    expect((await docs.findByIdSystem(documentId))?.status).toBe('completed');
   });
 });
