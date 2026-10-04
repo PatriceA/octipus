@@ -40,6 +40,7 @@ import {
 } from './swarm/errors';
 import type { ChildResult, PendingChild } from './swarm/types';
 import { getPermissionManager } from '@/security/permissions';
+import { isRealUserId } from '@/security/principal';
 import { ToolExecutor } from './tool-executor';
 import { DetachedChildManager } from './agent-worker/detached-child-manager';
 import { DriftDetector } from './agent-worker/drift-detector';
@@ -1087,14 +1088,10 @@ export class AgentWorker extends BaseAgentWorker {
       // Aggregate across this user's running + completed agents for the
       // current UTC day. Distinct from the per-agent maxTokenBudget
       // above: throws QuotaExceededError so callers can distinguish a
-      // user-cap hit from an agent-cap hit. Only fires for a real userId
-      // (not the 'system'/'local' sentinel).
+      // user-cap hit from an agent-cap hit. Only fires for a real user, not
+      // a system job.
       try {
-        if (
-          this.context.userId
-          && this.context.userId !== 'system'
-          && this.context.userId !== 'local'
-        ) {
+        if (isRealUserId(this.context.userId)) {
           const { getQuotaManager } = await import('@/security/quotas');
           // Pre-call check uses delta=0 — we're asking "would we
           // already be over before this LLM call?" The next call's

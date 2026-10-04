@@ -266,7 +266,7 @@ export function qaVerdictCorrectionInput(report: string, reason: string, handsOf
  * the auditor's input — it is a fact about the run — and is not worth failing
  * the stage over before anyone has looked at the work.
  */
-async function runStageVerifyCommand(
+export async function runStageVerifyCommand(
   command: string,
   ctx: { userId?: string; sessionId: string; role: string; toolIds?: string[] },
 ): Promise<string> {
@@ -278,7 +278,14 @@ async function runStageVerifyCommand(
     const { runScorers } = await import('@/core/swarm/scorers');
     const { sessionRepository } = await import('@/db/repositories/session-repository');
     const session = await sessionRepository.findById(ctx.sessionId);
-    const sessionCtx = session?.context as { devMode?: boolean; projectPath?: string } | undefined;
+    if (!session) throw new Error(`session ${ctx.sessionId} not found`);
+    const sessionCtx = session.context as { devMode?: boolean; projectPath?: string } | undefined;
+    // The command runs where the stage's agents work: the session's
+    // workspace (loaded into the file-root map by `turnWorkspaceId`), or
+    // its dev-mode project.
+    const { turnWorkspaceId } = await import('./session-resolver');
+    const { WorkspaceFS } = await import('@/security/workspace-fs');
+    const workspaceId = await turnWorkspaceId(session.userId, session.workspaceId);
     const outcome = await runScorers(
       [{ kind: 'command_exit_zero', command }],
       { output: '', notes: '' },
@@ -287,6 +294,7 @@ async function runStageVerifyCommand(
         role: ctx.role,
         canRunCommands: true,
         projectPath: sessionCtx?.devMode === true ? sessionCtx.projectPath : undefined,
+        workspaceRoot: WorkspaceFS.forSession({ ...session, workspaceId }).root,
       },
     );
     const failure = outcome.failures[0];

@@ -62,8 +62,8 @@ beforeAll(async () => {
   const { seedSession, seedUsers } = await import('@/test-helpers/multiuser-fixtures');
   await seedUsers([{ id: aliceId, username: 'alice' }, { id: bobId, username: 'bob' }]);
   aliceSession = (await seedSession({ userId: aliceId, title: 'alice private' })).id;
-  await executeRaw(`INSERT INTO workspaces (id, user_id, slug, name) VALUES ('${aliceWorkWs}', '${aliceId}', 'work', 'Work')`);
-  await executeRaw(`INSERT INTO workspaces (id, user_id, slug, name) VALUES ('${bobWs}', '${bobId}', 'bob-work', 'Bob work')`);
+  await executeRaw(`INSERT INTO workspaces (id, user_id, slug, name, files_dir) VALUES ('${aliceWorkWs}', '${aliceId}', 'work', 'Work', '${aliceWorkWs}')`);
+  await executeRaw(`INSERT INTO workspaces (id, user_id, slug, name, files_dir) VALUES ('${bobWs}', '${bobId}', 'bob-work', 'Bob work', '${bobWs}')`);
 
   const { getSessionManager } = await import('@/security/auth/session');
   for (const id of [aliceId, bobId]) tokens[id] = (await getSessionManager().create(id)).token;

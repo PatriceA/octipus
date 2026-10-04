@@ -246,7 +246,7 @@ export class NotesTool extends BaseTool {
         limit: { type: 'number', description: 'Max suggestions (default 5)', default: 5 },
       }),
       async (args, context) => {
-        const suggestions = await getSuggestionService().suggestForNote(context.userId, args.note_id as string, (args.limit as number) || 5);
+        const suggestions = await getSuggestionService().suggestForNote(context.userId, args.note_id as string, context.workspaceId ?? null, (args.limit as number) || 5);
         return { suggestions, hint: suggestions.length === 0 ? 'No suggestions (either nothing related, or no embedding model configured).' : 'Accept a suggestion with knowledge.link_knowledge.' };
       },
       { permissionAction: 'read' },

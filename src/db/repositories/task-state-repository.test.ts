@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto';
 import { sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { users } from '@/db/schema/users';
-import { workspaces } from '@/db/schema/organizations';
+import { newWorkspaceRow, workspaces } from '@/db/schema/organizations';
 import {
   isIntegration,
   setupIntegrationDb,
@@ -38,7 +38,7 @@ describe.skipIf(!isIntegration)('TaskStateRepository (Integration)', () => {
     userId = u[0].id;
     const w = await db
       .insert(workspaces)
-      .values({ userId, slug: 'default', name: 'Default' })
+      .values(newWorkspaceRow({ userId, slug: 'default', name: 'Default' }))
       .returning();
     workspaceId = w[0].id;
   });

@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto';
 import { eq } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { memories } from '@/db/schema/memories';
-import { workspaces } from '@/db/schema/organizations';
+import { newWorkspaceRow, workspaces } from '@/db/schema/organizations';
 import { users } from '@/db/schema/users';
 import {
   isIntegration,
@@ -46,7 +46,7 @@ describe.skipIf(!isIntegration)('MemoryRepository (Integration)', () => {
     userId = u[0].id;
     const u2 = await db.insert(users).values({ username: `u_${randomUUID().slice(0, 8)}` }).returning();
     otherUserId = u2[0].id;
-    const w = await db.insert(workspaces).values({ userId, slug: 'default', name: 'Default' }).returning();
+    const w = await db.insert(workspaces).values(newWorkspaceRow({ userId, slug: 'default', name: 'Default' })).returning();
     workspaceId = w[0].id;
   });
 
@@ -199,7 +199,7 @@ describe.skipIf(!isIntegration)('MemoryRepository (Integration)', () => {
 
   test('retrieveTop with a workspace sees that workspace + user-level rows, not another workspace', async () => {
     const db = getDb();
-    const other = await db.insert(workspaces).values({ userId, slug: 'client-b', name: 'Client B' }).returning();
+    const other = await db.insert(workspaces).values(newWorkspaceRow({ userId, slug: 'client-b', name: 'Client B' })).returning();
     const otherWorkspaceId = other[0].id;
     await repo.addNew({
       userId, workspaceId, agentScope: null, factType: 'profile',
@@ -227,7 +227,7 @@ describe.skipIf(!isIntegration)('MemoryRepository (Integration)', () => {
 
   test('searchSimilar with a workspace never returns another workspace\'s fact', async () => {
     const db = getDb();
-    const other = await db.insert(workspaces).values({ userId, slug: 'client-b', name: 'Client B' }).returning();
+    const other = await db.insert(workspaces).values(newWorkspaceRow({ userId, slug: 'client-b', name: 'Client B' })).returning();
     await repo.addNew({
       userId, workspaceId: other[0].id, agentScope: null, factType: 'profile',
       content: 'client B secret', embedding: VEC(0.5), embeddingVersion: 'test/8', sourceMessageId: null, confidence: 1,

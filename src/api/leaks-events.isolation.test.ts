@@ -148,8 +148,8 @@ beforeAll(async () => {
   ]);
   // Alice's default workspace is created first, so "the first workspace of
   // the user" — the old fallback — would pick it, not the one she works in.
-  await executeRaw(`INSERT INTO workspaces (id, user_id, slug, name, is_default) VALUES ('${aliceDefaultWs}', '${aliceId}', 'default', 'Default', true)`);
-  await executeRaw(`INSERT INTO workspaces (id, user_id, slug, name) VALUES ('${aliceWorkWs}', '${aliceId}', 'work', 'Work')`);
+  await executeRaw(`INSERT INTO workspaces (id, user_id, slug, name, is_default, files_dir) VALUES ('${aliceDefaultWs}', '${aliceId}', 'default', 'Default', true, '${aliceDefaultWs}')`);
+  await executeRaw(`INSERT INTO workspaces (id, user_id, slug, name, files_dir) VALUES ('${aliceWorkWs}', '${aliceId}', 'work', 'Work', '${aliceWorkWs}')`);
   // The real bridge, over the stand-in runtime: turn events reach the hub
   // through it, as in production.
   const { getGatewayHub } = await import('@/core/gateway/hub');

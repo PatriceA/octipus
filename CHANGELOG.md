@@ -160,7 +160,10 @@ now use `adminOnly: true`; an extension that still passes `minTrustLevel:
   secrets are re-encrypted under the recipient's key; before, a transferred
   secret could no longer be decrypted. The table list lives in
   `src/db/workspace-tables.ts`, and `scripts/backfill-workspace-id.ts` uses
-  it too (it now also stamps notes, tasks, memories and links).
+  it too (it now also stamps notes, tasks, memories and links). The
+  workspace's files directory moves to the recipient too (see "Files per
+  workspace"); a transfer onto an existing directory is refused with 409
+  `files_conflict` and changes nothing.
 - **Workspace secrets resolve by name.** `getByName` with a workspace now
   returns that workspace's secret (it was selected, then never decrypted). A
   `scope='workspace'` secret bound to no workspace is no longer shown or
@@ -180,9 +183,13 @@ now use `adminOnly: true`; an extension that still passes `minTrustLevel:
   `workspaceId`, and new sessions are created in it, else in the connection's
   workspace. An existing session keeps its own.
 - **Files per workspace.** Each workspace has its own file root,
-  `users/<id>/workspaces/<workspace id>/files`; the user's default workspace
-  keeps the `default` directory. Making another workspace the default swaps
-  the two directories so files stay with their workspace. The file browser,
+  `users/<id>/workspaces/<files_dir>/files`. `workspaces.files_dir` is stored
+  (migration 0127): the workspace that is each user's default at upgrade
+  keeps `default`, every other workspace (and every new one) uses its id.
+  Changing the default, or creating a workspace as the default, moves no
+  file. A transfer renames the directory to
+  `users/<recipient>/workspaces/<workspace id>`; deleting a workspace removes
+  its directory. The file browser,
   the Changes tab, `/changes`, uploads, the repo registry and the shell all
   follow the session's or the request's workspace. A user's agent never
   resolves to the flat `workspace.rootPath`: an agent without a real user is
@@ -191,6 +198,16 @@ now use `adminOnly: true`; an extension that still passes `minTrustLevel:
   workspace root, an allowed extra path or the dev-mode project; a relative
   one is taken from the workspace (or project). This keeps the work where the
   evidence gate and Changes tab look; it is not a sandbox.
+- **A pipeline stage's verify command runs in the session's workspace.** It
+  had no workspace outside dev mode and was reported to the auditor as not
+  run.
+- **Hooks and link suggestions follow the workspace.** A directly spawned
+  (non-orchestrated) hook agent runs in the hook session's workspace, and
+  note link suggestions offer only notes of the note's workspace and
+  user-level notes.
+- **A new user's first requests no longer race.** Parallel first requests
+  each creating the default workspace could collide and answer 503; the
+  insert now tolerates the race and reads the winner's row.
 
 **Behaviour changes for users of several workspaces:** files created from a
 non-default workspace before this release sit in the `default` directory and

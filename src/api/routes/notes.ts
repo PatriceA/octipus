@@ -222,7 +222,7 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
         set.status = 404; return { error: 'Note not found' };
       }
       try {
-        const suggestions = await getSuggestionService().suggestForNote(user.id, params.id);
+        const suggestions = await getSuggestionService().suggestForNote(user.id, params.id, noteWorkspace(principal));
         return { suggestions };
       } catch (err) {
         if (err instanceof Error && /not found/.test(err.message)) { set.status = 404; return { error: 'Note not found' }; }

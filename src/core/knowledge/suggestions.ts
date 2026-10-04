@@ -34,12 +34,19 @@ export class SuggestionService {
     private readonly embeddings: EmbeddingService = getEmbeddingService(),
   ) {}
 
-  async suggestForNote(userId: string, noteId: string, limit = 5): Promise<LinkSuggestion[]> {
-    const note = await this.notes.getById(userId, noteId);
+  /**
+   * Suggestions for a note of `workspaceId` (with `null`, the user level):
+   * candidates are the notes of that workspace and user-level notes, the
+   * same rule every personal note read applies, never notes of the user's
+   * other workspaces.
+   */
+  async suggestForNote(userId: string, noteId: string, workspaceId: string | null, limit = 5): Promise<LinkSuggestion[]> {
+    const ws = workspaceId ?? undefined;
+    const note = await this.notes.getById(userId, noteId, ws);
     if (!note) throw new Error(`Note ${noteId} not found for this user`);
 
     // Already-linked targets (by resolved id) to exclude.
-    const existing = await this.links.getOutgoing(userId, 'note', noteId);
+    const existing = await this.links.getOutgoing(userId, 'note', noteId, ws);
     const linkedIds = new Set(existing.filter((e) => e.toId).map((e) => e.toId as string));
     linkedIds.add(noteId); // never suggest self
 
@@ -48,17 +55,22 @@ export class SuggestionService {
     try {
       // Pull a buffer beyond `limit` because we filter self/linked below.
       // Tenant-scoped: only this user's note embeddings are candidates.
-      hits = await this.embeddings.hybridSearch({ kind: 'personal', userId, workspaceId: null }, query, limit * 4, 'note', undefined, 0.3);
+      hits = await this.embeddings.hybridSearch({ kind: 'personal', userId, workspaceId }, query, limit * 4, 'note', undefined, 0.3);
     } catch (err) {
       coreLogger.warn({ err, component: 'suggestions', noteId }, 'Link suggestions unavailable (no embedding model?)');
       return [];
     }
 
+    // An embedding's own workspace stamp is not what decides: the note's
+    // row is. Keep only notes readable in this workspace.
+    const refs = hits.map((hit) => ({ hit, ref: entityRefFromSourceId(hit.sourceId) }));
+    const noteIds = refs.flatMap(({ ref }) => (ref?.type === 'note' ? [ref.id] : []));
+    const visible = new Set((await this.notes.getByIds(userId, noteIds, ws)).map((n) => n.id));
+
     const out: LinkSuggestion[] = [];
     const seen = new Set<string>();
-    for (const hit of hits) {
-      const ref = entityRefFromSourceId(hit.sourceId);
-      if (!ref) continue;
+    for (const { hit, ref } of refs) {
+      if (!ref || ref.type !== 'note' || !visible.has(ref.id)) continue;
       if (linkedIds.has(ref.id) || seen.has(ref.id)) continue;
       seen.add(ref.id);
       out.push({ type: ref.type, id: ref.id, title: hit.metadata.title, similarity: Number(hit.similarity.toFixed(3)) });

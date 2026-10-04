@@ -35,7 +35,7 @@ class TestableFilesystemTool extends FilesystemTool {
   }
 }
 
-const USER = 'alice-uuid';
+const USER = 'aaaaaaaa-0000-4000-8000-00000000a11c';
 
 /**
  * Build an AgentContext. `role: 'writing'` makes it an autonomous worker so
@@ -322,7 +322,7 @@ describe('real users — nested per-user root', () => {
 
   test('one user cannot reach another user\'s root by traversal', async () => {
     const tool = await makeTool();
-    const escape = `../../../bob-uuid/workspaces/default/files/secret.txt`;
+    const escape = `../../../bbbbbbbb-0000-4000-8000-0000000000b0/workspaces/default/files/secret.txt`;
     await expect(
       tool.handler('read_file').execute({ path: escape }, ctx()),
     ).rejects.toThrow(/outside allowed workspace directories/);
