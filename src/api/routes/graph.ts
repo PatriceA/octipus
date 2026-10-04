@@ -1,4 +1,5 @@
 import { and, eq, inArray, isNotNull, isNull } from 'drizzle-orm';
+import { notInSharedWorkspace } from '@/db/repositories/scoped';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getCanvasBuilder } from '@/core/knowledge/canvas';
@@ -44,14 +45,14 @@ export const graphRoutes = new Elysia({ prefix: '/graph' })
       const noteRows = await db
         .select({ id: notes.id, slug: notes.slug, title: notes.title, kind: notes.noteKind })
         .from(notes)
-        .where(and(eq(notes.userId, user.id), isNull(notes.archivedAt)))
+        .where(and(eq(notes.userId, user.id), notInSharedWorkspace(notes.workspaceId), isNull(notes.archivedAt)))
         .limit(2000);
       const edgeRows = await db
         .select()
         .from(knowledgeLinks)
         // Only resolved edges are renderable as node→node lines; ghost
         // edges (unresolved wikilinks) have no target to draw to.
-        .where(and(eq(knowledgeLinks.userId, user.id), isNotNull(knowledgeLinks.toId)))
+        .where(and(eq(knowledgeLinks.userId, user.id), notInSharedWorkspace(knowledgeLinks.workspaceId), isNotNull(knowledgeLinks.toId)))
         .limit(5000);
       return {
         nodes: noteRows.map((n) => ({ type: 'note', id: n.id, slug: n.slug, label: n.title, kind: n.kind })),
@@ -101,6 +102,6 @@ async function loadNoteNodes(userId: string, ids: string[]) {
   const rows = await db
     .select({ id: notes.id, slug: notes.slug, title: notes.title, kind: notes.noteKind })
     .from(notes)
-    .where(and(eq(notes.userId, userId), inArray(notes.id, ids), isNull(notes.archivedAt)));
+    .where(and(eq(notes.userId, userId), notInSharedWorkspace(notes.workspaceId), inArray(notes.id, ids), isNull(notes.archivedAt)));
   return rows.map((n) => ({ type: 'note', id: n.id, slug: n.slug, label: n.title, kind: n.kind }));
 }

@@ -1,4 +1,5 @@
 import { and, desc, eq, isNull } from 'drizzle-orm';
+import { notInSharedWorkspace } from '@/db/repositories/scoped';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getDb } from '@/db/postgres';
@@ -51,7 +52,7 @@ export const memoryRoutes = new Elysia({ prefix: '/memory' })
           updatedAt: memories.updatedAt,
         })
         .from(memories)
-        .where(and(...filters))
+        .where(and(...filters, notInSharedWorkspace(memories.workspaceId)))
         .orderBy(desc(memories.updatedAt))
         .limit(limit);
 
@@ -82,7 +83,7 @@ export const memoryRoutes = new Elysia({ prefix: '/memory' })
       const rows = await db
         .select()
         .from(memories)
-        .where(and(eq(memories.id, params.id), eq(memories.userId, user.id)))
+        .where(and(eq(memories.id, params.id), eq(memories.userId, user.id), notInSharedWorkspace(memories.workspaceId)))
         .limit(1);
       if (rows.length === 0) {
         set.status = 404;
@@ -108,7 +109,7 @@ export const memoryRoutes = new Elysia({ prefix: '/memory' })
       const result = await db
         .update(memories)
         .set({ validUntil: new Date(), updatedAt: new Date() })
-        .where(and(eq(memories.id, params.id), eq(memories.userId, user.id)))
+        .where(and(eq(memories.id, params.id), eq(memories.userId, user.id), notInSharedWorkspace(memories.workspaceId)))
         .returning({ id: memories.id });
       if (result.length === 0) {
         set.status = 404;
@@ -137,7 +138,7 @@ export const memoryRoutes = new Elysia({ prefix: '/memory' })
         const rows = await db
           .select()
           .from(memories)
-          .where(and(eq(memories.id, currentId), eq(memories.userId, user.id)))
+          .where(and(eq(memories.id, currentId), eq(memories.userId, user.id), notInSharedWorkspace(memories.workspaceId)))
           .limit(1);
         if (rows.length === 0) break;
         out.push(rows[0]);
@@ -145,7 +146,7 @@ export const memoryRoutes = new Elysia({ prefix: '/memory' })
         const ancestor = await db
           .select()
           .from(memories)
-          .where(and(eq(memories.supersededBy, currentId), eq(memories.userId, user.id)))
+          .where(and(eq(memories.supersededBy, currentId), eq(memories.userId, user.id), notInSharedWorkspace(memories.workspaceId)))
           .limit(1);
         currentId = ancestor.length > 0 ? ancestor[0].id : null;
       }

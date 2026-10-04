@@ -15,6 +15,7 @@
  * retroactively connects every meeting they were in.
  */
 import { getKnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
+import { personalNoteScope } from '@/db/repositories/note-repository';
 import { profileRepository } from '@/db/repositories/profile-repository';
 import { coreLogger } from '@/utils/logger';
 import { getNoteService } from './notes';
@@ -143,8 +144,7 @@ export async function ingestMeeting(input: MeetingInput): Promise<MeetingResult>
   if (input.source) tags.push(`source/${slugify(input.source)}`);
 
   const saved = await getNoteService().save({
-    userId: input.userId,
-    workspaceId: input.workspaceId ?? null,
+    scope: personalNoteScope(input.userId, input.workspaceId ?? null),
     slug,
     title: input.title,
     body: renderMeetingNote({ ...input, at }, names),
@@ -216,7 +216,7 @@ export async function resolveAttendeeLinks(
   const ref = slugify(name);
   if (!ref) return 0;
   return getKnowledgeLinkRepository().resolveTo({
-    userId,
+    scope: userId,
     toRef: ref,
     toType: 'profile',
     toId: profileId,

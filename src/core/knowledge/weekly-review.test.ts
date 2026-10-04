@@ -1,3 +1,4 @@
+import { personalNoteScope } from '@/db/repositories/note-repository';
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
@@ -56,8 +57,8 @@ describe('weekly review', () => {
   test('assembleReviewContext includes only in-window daily notes', async () => {
     const today = new Date().toISOString().slice(0, 10);
     const old = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
-    await svc.getOrCreateDaily(userId, null, today);
-    await svc.getOrCreateDaily(userId, null, old);
+    await svc.getOrCreateDaily(personalNoteScope(userId), today);
+    await svc.getOrCreateDaily(personalNoteScope(userId), old);
     const ctx = await assembleReviewContext(userId, new Date());
     expect(ctx.dailyNotes.map((n) => n.slug)).toContain(`daily/${today}`);
     expect(ctx.dailyNotes.map((n) => n.slug)).not.toContain(`daily/${old}`);
@@ -70,7 +71,7 @@ describe('weekly review', () => {
 
   test('generateWeeklyReview writes a linked review note via a fake model', async () => {
     const today = new Date().toISOString().slice(0, 10);
-    await svc.capture(userId, null, 'shipped the [[Knowledge Graph]] feature', today);
+    await svc.capture(personalNoteScope(userId), 'shipped the [[Knowledge Graph]] feature', today);
 
     const result = await generateWeeklyReview(userId, null, {
       notes: svc,
@@ -82,7 +83,7 @@ describe('weekly review', () => {
       },
     });
 
-    const note = await svc.getById(userId, result.noteId);
+    const note = await svc.getById(personalNoteScope(userId), result.noteId);
     expect(note?.noteKind).toBe('moc');
     expect(note?.slug).toMatch(/^reviews\/week-of-/);
     // The review's [[Knowledge Graph]] wikilink is wired into the graph.

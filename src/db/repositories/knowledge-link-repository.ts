@@ -2,17 +2,33 @@ import { and, eq, inArray, isNull, lt, or, type SQL, sql } from 'drizzle-orm';
 import type { WikiLink } from '@/core/knowledge/wikilink';
 import { coreLogger } from '@/utils/logger';
 import { getDb } from '../postgres';
+import type { NoteScope } from './note-repository';
+import { notInSharedWorkspace } from './scoped';
 import {
   type KnowledgeLink,
   knowledgeLinks,
   type NewKnowledgeLink,
 } from '../schema/knowledge-links';
 
-/** The personal workspace rule, or no condition when no workspace is given. */
-function linksInWorkspace(workspaceId: string | undefined): SQL | undefined {
+/** The personal workspace rule, or no condition when no workspace is given (or in a space). */
+function linksInWorkspace(scope: NoteScope | string, workspaceId: string | undefined): SQL | undefined {
+  if (typeof scope !== 'string' && scope.kind === 'space') return undefined;
   return workspaceId === undefined
     ? undefined
     : sql`(${knowledgeLinks.workspaceId} = ${workspaceId} OR ${knowledgeLinks.workspaceId} IS NULL)`;
+}
+
+/**
+ * The scope condition on `knowledge_links` (docs/plans/coworking-spec.md
+ * §5.5): a bare user id is that user's personal edges — never a space's
+ * (I2) — and a space scope is the space's edges, whoever wrote them. Link
+ * resolution runs inside one scope, so a personal link never binds to a
+ * space note and the reverse.
+ */
+function linkScope(scope: NoteScope | string): SQL[] {
+  if (typeof scope !== 'string' && scope.kind === 'space') return [eq(knowledgeLinks.workspaceId, scope.workspaceId)];
+  const userId = typeof scope === 'string' ? scope : scope.userId;
+  return [eq(knowledgeLinks.userId, userId), notInSharedWorkspace(knowledgeLinks.workspaceId)];
 }
 
 /**
@@ -83,11 +99,11 @@ export class KnowledgeLinkRepository {
    * Outgoing edges from an entity ("what does X link to"), tenant-scoped.
    * With `workspaceId`, only edges of that workspace or user-level ones.
    */
-  async getOutgoing(userId: string, fromType: string, fromId: string, workspaceId?: string): Promise<KnowledgeLink[]> {
+  async getOutgoing(scope: NoteScope | string, fromType: string, fromId: string, workspaceId?: string): Promise<KnowledgeLink[]> {
     return this.db
       .select()
       .from(knowledgeLinks)
-      .where(and(eq(knowledgeLinks.userId, userId), eq(knowledgeLinks.fromType, fromType), eq(knowledgeLinks.fromId, fromId), linksInWorkspace(workspaceId)));
+      .where(and(...linkScope(scope), eq(knowledgeLinks.fromType, fromType), eq(knowledgeLinks.fromId, fromId), linksInWorkspace(scope, workspaceId)));
   }
 
   /**
@@ -95,11 +111,11 @@ export class KnowledgeLinkRepository {
    * tenant-scoped. With `workspaceId`, only edges of that workspace or
    * user-level ones.
    */
-  async getBacklinks(userId: string, toType: string, toId: string, workspaceId?: string): Promise<KnowledgeLink[]> {
+  async getBacklinks(scope: NoteScope | string, toType: string, toId: string, workspaceId?: string): Promise<KnowledgeLink[]> {
     return this.db
       .select()
       .from(knowledgeLinks)
-      .where(and(eq(knowledgeLinks.userId, userId), eq(knowledgeLinks.toType, toType), eq(knowledgeLinks.toId, toId), linksInWorkspace(workspaceId)));
+      .where(and(...linkScope(scope), eq(knowledgeLinks.toType, toType), eq(knowledgeLinks.toId, toId), linksInWorkspace(scope, workspaceId)));
   }
 
   /**
@@ -107,29 +123,29 @@ export class KnowledgeLinkRepository {
    * (ghost) edges. Used to render a note's backlinks by slug, and to
    * list every entity carrying a given tag (`toRef = tag`).
    */
-  async getBacklinksByRef(userId: string, toRef: string): Promise<KnowledgeLink[]> {
+  async getBacklinksByRef(scope: NoteScope | string, toRef: string): Promise<KnowledgeLink[]> {
     return this.db
       .select()
       .from(knowledgeLinks)
-      .where(and(eq(knowledgeLinks.userId, userId), eq(knowledgeLinks.toRef, toRef)));
+      .where(and(...linkScope(scope), eq(knowledgeLinks.toRef, toRef)));
   }
 
   /** Resolved outgoing edges for a batch of source ids — the BFS step. Tenant-scoped. */
-  async outgoingForIds(userId: string, fromType: string, fromIds: string[]): Promise<KnowledgeLink[]> {
+  async outgoingForIds(scope: NoteScope | string, fromType: string, fromIds: string[]): Promise<KnowledgeLink[]> {
     if (fromIds.length === 0) return [];
     return this.db
       .select()
       .from(knowledgeLinks)
-      .where(and(eq(knowledgeLinks.userId, userId), eq(knowledgeLinks.fromType, fromType), inArray(knowledgeLinks.fromId, fromIds)));
+      .where(and(...linkScope(scope), eq(knowledgeLinks.fromType, fromType), inArray(knowledgeLinks.fromId, fromIds)));
   }
 
   /** Resolved backlink edges for a batch of target ids — the reverse BFS step. Tenant-scoped. */
-  async backlinksForIds(userId: string, toType: string, toIds: string[]): Promise<KnowledgeLink[]> {
+  async backlinksForIds(scope: NoteScope | string, toType: string, toIds: string[]): Promise<KnowledgeLink[]> {
     if (toIds.length === 0) return [];
     return this.db
       .select()
       .from(knowledgeLinks)
-      .where(and(eq(knowledgeLinks.userId, userId), eq(knowledgeLinks.toType, toType), inArray(knowledgeLinks.toId, toIds)));
+      .where(and(...linkScope(scope), eq(knowledgeLinks.toType, toType), inArray(knowledgeLinks.toId, toIds)));
   }
 
   /**
@@ -229,14 +245,15 @@ export class KnowledgeLinkRepository {
    * clears any prior guess score, and is never overwritten by another one.
    */
   async resolveTo(params: {
-    userId: string;
+    /** The scope whose ghost edges may bind: a user id (personal) or a `NoteScope`. */
+    scope: NoteScope | string;
     toRef: string;
     toType: string;
     toId: string;
     /** Retrieval score when the binding is a similarity guess; omit for exact. */
     confidence?: number;
   }): Promise<number> {
-    const { userId, toRef, toType, toId, confidence } = params;
+    const { scope, toRef, toType, toId, confidence } = params;
     const isGuess = confidence !== undefined;
     const result = await this.db
       .update(knowledgeLinks)
@@ -252,7 +269,7 @@ export class KnowledgeLinkRepository {
       })
       .where(
         and(
-          eq(knowledgeLinks.userId, userId),
+          ...linkScope(scope),
           eq(knowledgeLinks.toRef, toRef),
           isGuess
             // A guess only ever fills an empty slot on an authored wikilink;
@@ -331,13 +348,13 @@ export class KnowledgeLinkRepository {
    * backstop for rows deleted out-of-band. Scoped to the entity types we
    * can check cheaply (note, document, artifact, memory).
    */
-  async countUnresolved(userId: string): Promise<number> {
+  async countUnresolved(scope: NoteScope | string): Promise<number> {
     const rows = await this.db
       .select({ c: sql<number>`count(*)::int` })
       .from(knowledgeLinks)
       .where(
         and(
-          eq(knowledgeLinks.userId, userId),
+          ...linkScope(scope),
           isNull(knowledgeLinks.toId),
           or(eq(knowledgeLinks.linkType, 'references'), eq(knowledgeLinks.linkType, 'derived_from')),
         ),

@@ -61,7 +61,7 @@ import { tasks } from '@/db/schema/tasks';
 import { users } from '@/db/schema/users';
 import { ACTIVE_TASK_STATUSES } from '@/core/tasks/status';
 import { onTaskWakeup, type TaskWakeupEvent } from '@/core/tasks/wakeups';
-import { taskLeaseFree, taskNotWaiting } from '@/db/repositories/scoped';
+import { notInSharedWorkspace, taskLeaseFree, taskNotWaiting } from '@/db/repositories/scoped';
 import { coreLogger } from '@/utils/logger';
 import {
   type CalendarProbeDeps,
@@ -196,12 +196,12 @@ async function probePendingWork(
     db
       .select({ title: tasks.title, dueAt: tasks.dueAt })
       .from(tasks)
-      .where(and(eq(tasks.userId, userId), eq(tasks.status, 'open'), isNotNull(tasks.dueAt), lte(tasks.dueAt, now)))
+      .where(and(eq(tasks.userId, userId), notInSharedWorkspace(tasks.workspaceId), eq(tasks.status, 'open'), isNotNull(tasks.dueAt), lte(tasks.dueAt, now)))
       .limit(50),
     db
       .select({ title: notifications.title, type: notifications.type })
       .from(notifications)
-      .where(and(eq(notifications.userId, userId), eq(notifications.read, false)))
+      .where(and(eq(notifications.userId, userId), notInSharedWorkspace(notifications.workspaceId), eq(notifications.read, false)))
       .limit(50),
     config.probeGithub
       ? deps.githubAllowed(userId).then((ok) => (ok ? probeFailingPullRequests(deps.github) : []))
@@ -308,11 +308,13 @@ export async function probeRoleWork(userId: string, role: string): Promise<RoleT
     .from(tasks)
     .where(and(
       eq(tasks.userId, userId),
+      // Role agents are personal automation: a space task is never theirs.
+      notInSharedWorkspace(tasks.workspaceId),
       eq(tasks.assigneeKind, 'role'),
       eq(tasks.assigneeRef, role),
       inArray(tasks.status, [...ACTIVE_TASK_STATUSES]),
       taskLeaseFree(),
-      ...taskNotWaiting((t) => [eq(t.userId, userId)]),
+      ...taskNotWaiting((t) => [eq(t.userId, userId), notInSharedWorkspace(t.workspaceId)]),
     ))
     .orderBy(desc(tasks.priority), asc(tasks.createdAt), asc(tasks.id))
     .limit(ROLE_PROBE_LIMIT);
@@ -945,7 +947,10 @@ export async function disableRoleHeartbeatHook(userId: string, role: string, now
  */
 export async function markRoleHeartbeatDue(userId: string, taskId: string, now: Date = new Date()): Promise<string[]> {
   const db = getDb();
-  const assignedRole = sql`(SELECT t.assignee_ref FROM tasks t WHERE t.id = ${taskId}::uuid AND t.user_id = ${userId}::uuid AND t.assignee_kind = 'role')`;
+  // A task in a shared workspace (a space) never wakes a role heartbeat:
+  // role agents are personal automation (docs/plans/coworking-spec.md §5.5).
+  const assignedRole = sql`(SELECT t.assignee_ref FROM tasks t WHERE t.id = ${taskId}::uuid AND t.user_id = ${userId}::uuid AND t.assignee_kind = 'role'
+    AND (t.workspace_id IS NULL OR NOT EXISTS (SELECT 1 FROM workspaces sw WHERE sw.id = t.workspace_id AND sw.kind = 'shared')))`;
   const marked = await db
     .update(hooks)
     .set({ nextRunAt: now, updatedAt: now })

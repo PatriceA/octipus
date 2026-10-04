@@ -7,6 +7,8 @@ interface NotificationHandler {
   (notification: { userId: string; type: string; title: string; body?: string; metadata?: Record<string, unknown> }): void;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export class NotificationService {
   private get db() { return getDb(); }
   private wsHandlers: Set<NotificationHandler> = new Set();
@@ -26,6 +28,9 @@ export class NotificationService {
     try {
       await this.db.insert(notifications).values({
         userId,
+        // Filed under the workspace it came from (a space's notifications
+        // list in the space; docs/plans/coworking-spec.md §5.1).
+        workspaceId: typeof metadata?.workspaceId === 'string' && UUID_RE.test(metadata.workspaceId) ? metadata.workspaceId : null,
         type,
         title,
         body,

@@ -1,3 +1,4 @@
+import { personalNoteScope } from '@/db/repositories/note-repository';
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, readFileSync } from 'node:fs';
@@ -76,7 +77,7 @@ describe('VaultSync (embedded)', () => {
   });
 
   test('export writes a .md per note with frontmatter', async () => {
-    await svc.save({ userId, title: 'Alpha', body: 'links [[Beta]]' });
+    await svc.save({ scope: personalNoteScope(userId), title: 'Alpha', body: 'links [[Beta]]' });
     const res = await vault.exportVault(userId, dir);
     expect(res.exported).toBe(1);
     const content = readFileSync(join(dir, 'alpha.md'), 'utf8');
@@ -88,13 +89,13 @@ describe('VaultSync (embedded)', () => {
     await writeFile(join(dir, 'imported.md'), '---\ntitle: Imported\nslug: imported\n---\nbody with [[Link]]\n');
     const res = await vault.importVault(importer, dir);
     expect(res.imported).toBe(1);
-    const note = await svc.getBySlug(importer, null, 'imported');
+    const note = await svc.getBySlug(personalNoteScope(importer), 'imported');
     expect(note?.title).toBe('Imported');
   });
 
   test('import is idempotent (unchanged) and surfaces conflicts (DB authoritative)', async () => {
     // Seed a note in the DB.
-    await svc.save({ userId, slug: 'doc', title: 'Doc', body: 'original body' });
+    await svc.save({ scope: personalNoteScope(userId), slug: 'doc', title: 'Doc', body: 'original body' });
     await vault.exportVault(userId, dir);
 
     // Re-import the exported file unchanged → no churn.
@@ -108,22 +109,22 @@ describe('VaultSync (embedded)', () => {
     // Default: DB wins, conflict reported, DB unchanged.
     const conflict = await vault.importVault(userId, dir);
     expect(conflict.conflicts).toEqual(['doc']);
-    expect((await svc.getBySlug(userId, null, 'doc'))?.body.trim()).toBe('original body');
+    expect((await svc.getBySlug(personalNoteScope(userId), 'doc'))?.body.trim()).toBe('original body');
 
     // force=true: the file wins.
     const forced = await vault.importVault(userId, dir, { force: true });
     expect(forced.updated).toBe(1);
-    expect((await svc.getBySlug(userId, null, 'doc'))?.body.trim()).toBe('EDITED in the vault');
+    expect((await svc.getBySlug(personalNoteScope(userId), 'doc'))?.body.trim()).toBe('EDITED in the vault');
   });
 
   test('metadata-only vault edits (tags) sync without a conflict', async () => {
-    await svc.save({ userId, slug: 'meta', title: 'Meta', body: 'stable body' });
+    await svc.save({ scope: personalNoteScope(userId), slug: 'meta', title: 'Meta', body: 'stable body' });
     await vault.exportVault(userId, dir);
     // Change only the tags in the frontmatter; body untouched.
     await writeFile(join(dir, 'meta.md'), '---\ntitle: Meta\nslug: meta\nkind: note\ntags: [added]\n---\nstable body\n');
     const res = await vault.importVault(userId, dir);
     expect(res.conflicts).toEqual([]);
     expect(res.updated).toBe(1);
-    expect((await svc.getBySlug(userId, null, 'meta'))?.tags).toEqual(['added']);
+    expect((await svc.getBySlug(personalNoteScope(userId), 'meta'))?.tags).toEqual(['added']);
   });
 });

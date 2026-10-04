@@ -1,8 +1,9 @@
 import { getKnowledgeLinkRepository, type KnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
-import { getNoteRepository, type NoteRepository } from '@/db/repositories/note-repository';
+import { assertNoteAccess, getNoteRepository, type NoteRepository, type NoteScope, noteStoreFor, type NoteStore } from '@/db/repositories/note-repository';
 import type { Note } from '@/db/schema/notes';
 import { coreLogger } from '@/utils/logger';
 import { type EmbeddingService, getEmbeddingService, sha256Hex } from '@/core/rag/embeddings';
+import { type KnowledgeOwner, noteKnowledgeScope } from '@/core/rag/knowledge-scope';
 import { getLinkResolverService, type LinkResolverService } from './link-resolver';
 import { parseLinks, slugify } from './wikilink';
 
@@ -19,6 +20,12 @@ import { parseLinks, slugify } from './wikilink';
  *      the leftovers one similarity guess (`link-resolver.ts`);
  *   3. re-index — chunk the body into `embeddings` (`purpose='note'`).
  *
+ * Every method takes a `NoteScope` (docs/plans/coworking-spec.md §5.5): a
+ * user's personal notes, or one space's notes. Lookups, link resolution and
+ * the index all stay inside that scope: a personal `[[link]]` never binds to
+ * a space note and the reverse, and a space note's chunks are indexed with
+ * the space's workspace id.
+ *
  * Re-index degradation: indexing needs an embedding model. If none is
  * configured the note + its links are still saved (they don't depend on
  * embeddings); the failure is logged loudly and surfaced as
@@ -29,13 +36,14 @@ const SOURCE_PREFIX = 'note';
 const sourceIdFor = (id: string) => `${SOURCE_PREFIX}:${id}`;
 
 export interface SaveNoteInput {
-  userId: string;
   /**
-   * The caller's workspace. A new note is created there (`null` =
-   * user-level); an existing note is looked up under the personal rule
-   * (this workspace or user-level) and keeps its own scope.
+   * Where the note lives. Personal: a new note is created in
+   * `scope.workspaceId` (`null` = user-level); an existing note is looked up
+   * under the personal rule (this workspace or user-level) and keeps its own
+   * workspace. Space: the space's notes; a new note's author is
+   * `scope.userId`.
    */
-  workspaceId?: string | null;
+  scope: NoteScope;
   /** Update target. Omit to create (slug derived from `slug` or `title`). */
   id?: string;
   slug?: string;
@@ -57,6 +65,11 @@ export interface SaveNoteResult {
   links: { added: number; removed: number };
 }
 
+/** Who a note's embedding chunks belong to: its author, in its workspace (a space's, for a space note). */
+function noteOwner(note: Note): KnowledgeOwner {
+  return { ownerUserId: note.userId, workspaceId: note.workspaceId ?? null };
+}
+
 /** Strip a leading `--- ... ---` YAML frontmatter block so it isn't parsed for links. */
 function stripFrontmatter(body: string): string {
   const m = /^﻿?---\n[\s\S]*?\n---\n?/.exec(body);
@@ -71,9 +84,15 @@ export class NoteService {
     private readonly resolver: LinkResolverService = getLinkResolverService(),
   ) {}
 
+  /** The bound store of a scope (`PersonalNoteRepo` / `SpaceNoteRepo`). */
+  store(scope: NoteScope): NoteStore {
+    return noteStoreFor(scope, this.notes);
+  }
+
   async save(input: SaveNoteInput): Promise<SaveNoteResult> {
-    const { userId, title } = input;
-    const workspaceId = input.workspaceId ?? null;
+    const { scope, title } = input;
+    assertNoteAccess(scope, 'write');
+    const store = this.store(scope);
     const body = input.body ?? '';
     const bodySha = sha256Hex(body);
 
@@ -82,10 +101,10 @@ export class NoteService {
     const desiredSlug = input.slug ? slugify(input.slug) : input.id ? null : slugify(title);
     let existing: Note | null = null;
     if (input.id) {
-      existing = await this.notes.getById(userId, input.id, workspaceId ?? undefined);
+      existing = await store.getById(input.id);
       if (!existing) throw new Error(`Note ${input.id} not found for this user`);
     } else if (desiredSlug) {
-      existing = await this.notes.getBySlug(userId, workspaceId, desiredSlug);
+      existing = await store.getBySlug(desiredSlug);
     }
 
     const parsed = parseLinks(stripFrontmatter(body));
@@ -96,7 +115,7 @@ export class NoteService {
     let created: boolean;
     if (existing) {
       const bodyUnchanged = existing.bodySha256 === bodySha;
-      const updated = await this.notes.update(userId, existing.id, {
+      const updated = await store.update(existing.id, {
         title,
         body,
         bodySha256: bodySha,
@@ -114,13 +133,11 @@ export class NoteService {
       // index when no embedding model was configured) rather than assuming
       // success — otherwise `indexed:true` would lie about searchability.
       if (bodyUnchanged) {
-        const indexed = body.trim().length === 0 || (await this.embeddings.countBySource({ kind: 'personal', userId: note.userId, workspaceId: null }, 'note', sourceIdFor(note.id))) > 0;
+        const indexed = body.trim().length === 0 || (await this.embeddings.countBySource(noteKnowledgeScope(scope), 'note', sourceIdFor(note.id))) > 0;
         return { note, created, indexed, links: { added: 0, removed: 0 } };
       }
     } else {
-      note = await this.notes.create({
-        userId,
-        workspaceId,
+      note = await store.create({
         slug: desiredSlug ?? slugify(title),
         title,
         body,
@@ -136,9 +153,11 @@ export class NoteService {
 
     // 2. Re-link.
     // Edges carry the note's own scope: updating a user-level note from a
-    // workspace must not file its links under that workspace.
+    // workspace must not file its links under that workspace. They belong to
+    // the note's author, so another member editing a space note keeps
+    // one edge set.
     const linkCounts = await this.links.syncWikilinks({
-      userId,
+      userId: note.userId,
       workspaceId: note.workspaceId ?? null,
       fromType: SOURCE_PREFIX,
       fromId: note.id,
@@ -148,7 +167,7 @@ export class NoteService {
     });
     // Resolve ghost edges that referenced this note's slug (INCOMING: other
     // notes that linked to this one before it existed).
-    await this.links.resolveTo({ userId, toRef: note.slug, toType: SOURCE_PREFIX, toId: note.id });
+    await this.links.resolveTo({ scope, toRef: note.slug, toType: SOURCE_PREFIX, toId: note.id });
 
     // Resolve THIS note's OUTGOING wikilinks against notes that ALREADY exist.
     // syncWikilinks always inserts edges as ghosts (to_id NULL) and the
@@ -160,9 +179,9 @@ export class NoteService {
     const outgoingRefs = [...new Set(parsed.wikilinks.map((w) => w.ref))];
     for (const ref of outgoingRefs) {
       if (ref === note.slug) continue; // a self-link has nothing to bind
-      const target = await this.notes.getBySlug(userId, workspaceId, ref);
+      const target = await store.getBySlug(ref);
       if (target) {
-        await this.links.resolveTo({ userId, toRef: ref, toType: SOURCE_PREFIX, toId: target.id });
+        await this.links.resolveTo({ scope, toRef: ref, toType: SOURCE_PREFIX, toId: target.id });
       }
     }
 
@@ -171,8 +190,7 @@ export class NoteService {
     // a failed save is a lost note.
     try {
       await this.resolver.resolveGhostRefs({
-        userId,
-        workspaceId,
+        scope,
         noteId: note.id,
         wikilinks: parsed.wikilinks.filter((w) => w.ref !== note.slug),
       });
@@ -189,7 +207,7 @@ export class NoteService {
   /** Refresh the note's embedding chunks. Returns false (logged) on failure. */
   private async reindex(note: Note): Promise<boolean> {
     try {
-      const owner = { ownerUserId: note.userId, workspaceId: note.workspaceId ?? null };
+      const owner = noteOwner(note);
       await this.embeddings.deleteBySource(owner, 'note', sourceIdFor(note.id));
       if (note.body.trim().length === 0) return true;
       await this.embeddings.indexText(owner, 'note', sourceIdFor(note.id), note.body, {
@@ -205,21 +223,21 @@ export class NoteService {
     }
   }
 
-  async getById(userId: string, id: string, workspaceId?: string): Promise<Note | null> {
-    return this.notes.getById(userId, id, workspaceId);
+  async getById(scope: NoteScope, id: string): Promise<Note | null> {
+    return this.store(scope).getById(id);
   }
 
-  async getBySlug(userId: string, workspaceId: string | null, slug: string): Promise<Note | null> {
-    return this.notes.getBySlug(userId, workspaceId, slugify(slug));
+  async getBySlug(scope: NoteScope, slug: string): Promise<Note | null> {
+    return this.store(scope).getBySlug(slugify(slug));
   }
 
-  async list(userId: string, opts?: Parameters<NoteRepository['list']>[1]): Promise<Note[]> {
-    return this.notes.list(userId, opts);
+  async list(scope: NoteScope, opts?: Parameters<NoteStore['list']>[0]): Promise<Note[]> {
+    return this.store(scope).list(opts);
   }
 
   /** Backlinks for a note (resolved + ghost), by its slug. */
-  async backlinks(userId: string, noteId: string): Promise<Awaited<ReturnType<KnowledgeLinkRepository['getBacklinks']>>> {
-    return this.links.getBacklinks(userId, SOURCE_PREFIX, noteId);
+  async backlinks(scope: NoteScope, noteId: string): Promise<Awaited<ReturnType<KnowledgeLinkRepository['getBacklinks']>>> {
+    return this.links.getBacklinks(scope, SOURCE_PREFIX, noteId);
   }
 
   /**
@@ -227,16 +245,15 @@ export class NoteService {
    * `daily/YYYY-MM-DD`; created from a minimal template on first access.
    * With a workspace, the workspace's daily note is used, else an
    * existing user-level one (`getBySlug`'s fallback) — a new one is only
-   * created when neither exists.
+   * created when neither exists. In a space, the space's daily note.
    */
-  async getOrCreateDaily(userId: string, workspaceId: string | null, day: string): Promise<Note> {
+  async getOrCreateDaily(scope: NoteScope, day: string): Promise<Note> {
     const date = normalizeDay(day);
     const slug = `daily/${date}`;
-    const existing = await this.notes.getBySlug(userId, workspaceId, slug);
+    const existing = await this.store(scope).getBySlug(slug);
     if (existing) return existing;
     const result = await this.save({
-      userId,
-      workspaceId,
+      scope,
       slug,
       title: date,
       body: `# ${date}\n\n## Notes\n\n## Tasks\n`,
@@ -251,12 +268,12 @@ export class NoteService {
    * The capture/journal surface; goes through the same save pipeline so
    * links/tags in the captured text are wired immediately.
    */
-  async capture(userId: string, workspaceId: string | null, text: string, day?: string): Promise<Note> {
+  async capture(scope: NoteScope, text: string, day?: string): Promise<Note> {
     const date = normalizeDay(day ?? new Date().toISOString());
-    const daily = await this.getOrCreateDaily(userId, workspaceId, date);
+    const daily = await this.getOrCreateDaily(scope, date);
     const time = new Date().toISOString().slice(11, 16);
     const body = `${daily.body.replace(/\s+$/, '')}\n- ${time} ${text}\n`;
-    const result = await this.save({ userId, workspaceId, id: daily.id, title: daily.title, body, noteKind: 'daily', noteDate: date });
+    const result = await this.save({ scope, id: daily.id, title: daily.title, body, noteKind: 'daily', noteDate: date });
     return result.note;
   }
 
@@ -265,16 +282,18 @@ export class NoteService {
    * (polymorphic, so no FK cascade), then drop the row. For soft delete
    * use `archive`.
    */
-  async remove(userId: string, id: string, workspaceId?: string): Promise<boolean> {
-    const note = await this.notes.getById(userId, id, workspaceId);
+  async remove(scope: NoteScope, id: string): Promise<boolean> {
+    assertNoteAccess(scope, 'write');
+    const store = this.store(scope);
+    const note = await store.getById(id);
     if (!note) return false;
-    await this.embeddings.deleteBySource({ ownerUserId: userId, workspaceId: null }, 'note', sourceIdFor(id));
+    await this.embeddings.deleteBySource(noteOwner(note), 'note', sourceIdFor(id));
     await this.links.deleteForEntity(SOURCE_PREFIX, id);
-    return this.notes.delete(userId, id);
+    return store.delete(id);
   }
 
-  async archive(userId: string, id: string, workspaceId?: string): Promise<boolean> {
-    return this.notes.archive(userId, id, workspaceId);
+  async archive(scope: NoteScope, id: string): Promise<boolean> {
+    return this.store(scope).archive(id);
   }
 }
 

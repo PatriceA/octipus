@@ -18,7 +18,7 @@ import { auditTaskMutation } from '@/core/tasks/audit';
 import { backgroundUserPrincipal, normalizeTaskTitle } from '@/core/tasks/sourced';
 import { ACTIVE_TASK_STATUSES } from '@/core/tasks/status';
 import { getDb } from '@/db/postgres';
-import { isUuid, scopedRepos } from '@/db/repositories/scoped';
+import { isUuid, notInSharedWorkspace, scopedRepos } from '@/db/repositories/scoped';
 import { type Task, tasks } from '@/db/schema/tasks';
 
 /** A request to take work on, as the channel adapter read it. */
@@ -108,6 +108,7 @@ export async function openTakenTasks(userId: string, sessionId: string): Promise
   if (!isUuid(userId) || !isUuid(sessionId)) return [];
   return getDb().select().from(tasks).where(and(
     eq(tasks.userId, userId),
+    notInSharedWorkspace(tasks.workspaceId),
     eq(tasks.source, 'channel'),
     inArray(tasks.status, [...ACTIVE_TASK_STATUSES]),
     sql`${tasks.sourceRef}->>'sessionId' = ${sessionId}`,

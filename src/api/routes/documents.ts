@@ -2,11 +2,11 @@ import { randomUUID } from 'crypto';
 import { Elysia, t } from '@/api/http';
 import { existsSync } from 'fs';
 import { mkdir, unlink } from 'fs/promises';
-import { extname, join, resolve } from 'path';
+import { extname, join } from 'path';
 import { apiContext } from '@/api/context';
 import { getConfig } from '@/config';
 import { getDocumentQueue } from '@/core/documents/queue';
-import { scopedRepos } from '@/db/repositories/scoped';
+import { contentRepos } from '@/db/repositories/content';
 import { isAuthenticated } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
 import { fileAt, writeFileAt } from '@/utils/fs-file';
@@ -16,7 +16,7 @@ const logger = apiLogger.child({ component: 'documents-route' });
 /**
  * Documents — Phase 1a multi-user conversion.
  *
- * Reads/writes go through `scopedRepos(principal).documents`. Cross-tenant
+ * Reads/writes go through `contentRepos(principal).documents`. Cross-tenant
  * access is silently surfaced as 404 instead of the previous 403, which
  * stops UUID enumeration: an attacker can no longer tell whether a
  * document exists by probing IDs they don't own.
@@ -33,19 +33,13 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
 
     const config = getConfig();
     const maxSize = config.workspace.maxUploadSize || 52428800;
-    const documentsRoot = resolve(config.workspace.documentsPath || './workspace/documents');
-    // Scope storage on disk by principal so document uploads land in the
+    const repos = contentRepos(principal);
+    // In a space, uploading is a write; refuse before anything reaches disk.
+    repos.can('write');
+    // Scope storage on disk by workspace so document uploads land in the
     // active workspace's folder, matching the per-user nested layout used by
-    // WorkspaceFS. Without this, every user shares a single
-    // `./workspace/documents/uncategorized` tree and the upload appears to
-    // "go to the main workspace" — which is what the QA run flagged.
-    const workspaceSegment = principal.workspaceId ?? 'default';
-    const uncategorizedDir = join(
-      documentsRoot,
-      'users', principal.userId,
-      'workspaces', workspaceSegment,
-      'uncategorized',
-    );
+    // WorkspaceFS — or, in a space, under `<documentsPath>/spaces/<id>/`.
+    const uncategorizedDir = repos.documents.uploadDirectory();
 
     // Ensure upload directory exists
     if (!existsSync(uncategorizedDir)) {
@@ -54,7 +48,7 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
 
     const files = Array.isArray(body.files) ? body.files : [body.files];
     const results: Array<{ id: string; filename: string; status: string; error?: string }> = [];
-    const docs = scopedRepos(principal).documents;
+    const docs = repos.documents;
 
     for (const file of files) {
       if (!file || !(file instanceof Blob)) {
@@ -122,7 +116,7 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
     const limit = query.limit ? parseInt(query.limit, 10) : 50;
     const category = query.category;
     const status = query.status;
-    const docs = scopedRepos(principal).documents;
+    const docs = contentRepos(principal).documents;
 
     let rows = category
       ? await docs.listOwnByCategory(category, limit)
@@ -163,7 +157,7 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
       return { error: 'Authentication required' };
     }
 
-    const doc = await scopedRepos(principal).documents.findById(params.id);
+    const doc = await contentRepos(principal).documents.findById(params.id);
     if (!doc) {
       set.status = 404;
       return { error: 'Document not found' };
@@ -198,7 +192,7 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
       return { error: 'Authentication required' };
     }
 
-    const doc = await scopedRepos(principal).documents.findById(params.id);
+    const doc = await contentRepos(principal).documents.findById(params.id);
     if (!doc) {
       set.status = 404;
       return { error: 'Document not found' };
@@ -230,7 +224,7 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
       return { error: 'Authentication required' };
     }
 
-    const repo = scopedRepos(principal).documents;
+    const repo = contentRepos(principal).documents;
     const doc = await repo.findById(params.id);
     if (!doc) {
       set.status = 404;
@@ -266,7 +260,7 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
       return { error: 'Authentication required' };
     }
 
-    const repo = scopedRepos(principal).documents;
+    const repo = contentRepos(principal).documents;
     const doc = await repo.findById(params.id);
     if (!doc) {
       set.status = 404;

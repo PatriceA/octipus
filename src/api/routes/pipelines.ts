@@ -18,7 +18,7 @@ import {
 } from '@/core/agent/templates';
 import { getDb } from '@/db/postgres';
 import { pipelineRepository } from '@/db/repositories/pipeline-repository';
-import { scopedRepos } from '@/db/repositories/scoped';
+import { contentRepos } from '@/db/repositories/content';
 import { pipelineTemplates } from '@/db/schema/pipeline-templates';
 import { isAuthenticated } from '@/security/principal';
 import { coreLogger } from '@/utils/logger';
@@ -71,7 +71,7 @@ const recipeParamBodySchema = t.Object({
  * read-only; private templates belong to one user. The previous
  * PUT/DELETE on templates had NO auth check at all — any authenticated
  * caller could mutate any template. Phase 1a routes the writes through
- * `scopedRepos(principal).pipelines.findOwnedTemplateById` first; presets
+ * `contentRepos(principal).pipelines.findOwnedTemplateById` first; presets
  * (read-only) and other users' templates are rejected as "not found".
  */
 /**
@@ -145,7 +145,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         };
       }
 
-      const repos = scopedRepos(principal);
+      const repos = contentRepos(principal);
       let sessionId = body.sessionId;
       if (sessionId) {
         const existing = await repos.sessions.findById(sessionId);
@@ -254,7 +254,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         return { error: 'Not authenticated' };
       }
 
-      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      const pipeline = await contentRepos(principal).pipelines.findById(params.id);
       if (!pipeline) {
         return { error: 'Pipeline not found' };
       }
@@ -277,7 +277,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         return { error: 'Not authenticated' };
       }
 
-      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      const pipeline = await contentRepos(principal).pipelines.findById(params.id);
       if (!pipeline) {
         return { error: 'Pipeline not found' };
       }
@@ -314,7 +314,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
     '/:id/plan',
     async ({ user, principal, params }) => {
       if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
-      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      const pipeline = await contentRepos(principal).pipelines.findById(params.id);
       if (!pipeline) return { error: 'Pipeline not found' };
       return { plan: await pipelineRepository.getPlanItems(params.id) };
     },
@@ -325,7 +325,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
     '/:id/plan',
     async ({ user, principal, params, body }) => {
       if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
-      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      const pipeline = await contentRepos(principal).pipelines.findById(params.id);
       if (!pipeline) return { error: 'Pipeline not found' };
 
       const start = await pipelineRepository.nextPlanOrdinal(params.id);
@@ -358,7 +358,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
     '/:id/plan/:itemId',
     async ({ user, principal, params, body }) => {
       if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
-      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      const pipeline = await contentRepos(principal).pipelines.findById(params.id);
       if (!pipeline) return { error: 'Pipeline not found' };
 
       // Scope the item to the pipeline the caller was authorized for — an id
@@ -392,7 +392,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
     '/:id/plan/:itemId',
     async ({ user, principal, params }) => {
       if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
-      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      const pipeline = await contentRepos(principal).pipelines.findById(params.id);
       if (!pipeline) return { error: 'Pipeline not found' };
 
       const items = await pipelineRepository.getPlanItems(params.id);
@@ -421,7 +421,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         set.status = 401;
         return { error: 'Not authenticated' };
       }
-      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      const pipeline = await contentRepos(principal).pipelines.findById(params.id);
       if (!pipeline) {
         set.status = 404;
         return { error: 'Pipeline not found' };
@@ -441,7 +441,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         set.status = 401;
         return { error: 'Not authenticated' };
       }
-      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      const pipeline = await contentRepos(principal).pipelines.findById(params.id);
       if (!pipeline) {
         set.status = 404;
         return { error: 'Pipeline not found' };
@@ -486,7 +486,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         set.status = 401;
         return { error: 'Not authenticated' };
       }
-      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      const pipeline = await contentRepos(principal).pipelines.findById(params.id);
       if (!pipeline) {
         set.status = 404;
         return { error: 'Pipeline not found' };
@@ -506,7 +506,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         set.status = 401;
         return { error: 'Not authenticated' };
       }
-      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      const pipeline = await contentRepos(principal).pipelines.findById(params.id);
       if (!pipeline) {
         set.status = 404;
         return { error: 'Pipeline not found' };
@@ -552,7 +552,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         return { error: 'Not authenticated' };
       }
 
-      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      const pipeline = await contentRepos(principal).pipelines.findById(params.id);
       if (!pipeline) {
         return { error: 'Pipeline not found' };
       }
@@ -669,7 +669,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
       // user could mutate any template, including system presets. Now the
       // scoped lookup rejects presets (they don't carry a userId match)
       // and other users' templates as "not found".
-      const owned = await scopedRepos(principal).pipelines.findOwnedTemplateById(params.id);
+      const owned = await contentRepos(principal).pipelines.findOwnedTemplateById(params.id);
       if (!owned) return { error: 'Template not found' };
 
       const db = getDb();
@@ -730,7 +730,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
       if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
 
       // Same gap as PUT — pre-Phase-1a had no auth check.
-      const owned = await scopedRepos(principal).pipelines.findOwnedTemplateById(params.id);
+      const owned = await contentRepos(principal).pipelines.findOwnedTemplateById(params.id);
       if (!owned) return { error: 'Template not found' };
 
       const db = getDb();

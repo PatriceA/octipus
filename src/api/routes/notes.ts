@@ -2,28 +2,31 @@ import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getNoteService } from '@/core/knowledge/notes';
 import { getSuggestionService } from '@/core/knowledge/suggestions';
-import { getKnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
-import { getNoteRepository } from '@/db/repositories/note-repository';
+import { type ContentRepos, contentRepos } from '@/db/repositories/content';
 import type { Principal } from '@/security/principal';
+import { SpaceError } from '@/security/space-access';
 import { apiLogger } from '@/utils/logger';
 
 const logger = apiLogger.child({ component: 'notes-route' });
 
 /**
- * The request's workspace. Every authenticated request carries one (the
- * server derive resolves it, creating the default lazily); reaching a
- * note route without it is a wiring bug, not a reason to read unscoped.
+ * The request's content scope: the personal workspace rule, or the space
+ * the member acts in (a space route, docs/plans/coworking-spec.md §5.4).
+ * Every authenticated request carries a workspace (the server derive
+ * resolves it, creating the default lazily); reaching a note route without
+ * it is a wiring bug, not a reason to read unscoped.
  */
-function noteWorkspace(principal: Principal): string {
+function noteRepos(principal: Principal): ContentRepos {
   if (!principal.workspaceId) throw new Error('notes route reached without a resolved workspace');
-  return principal.workspaceId;
+  return contentRepos(principal);
 }
 
 /**
  * Knowledge-graph Tier 2 — notes authoring API. All reads/writes are
  * scoped to the authenticated user and to the request's workspace under
  * the personal rule: that workspace's notes plus user-level ones
- * (`workspace_id IS NULL`). New notes land in the request's workspace;
+ * (`workspace_id IS NULL`). In a space, every member's notes of the space,
+ * written by the roles that may write (a viewer's write is a 403). New notes land in the request's workspace;
  * the workspace never comes from the body. Cross-tenant and
  * other-workspace access surfaces as 404 (not 403) to avoid id
  * enumeration, matching the documents route.
@@ -35,8 +38,7 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
     '/',
     async ({ user, principal, query, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
-      const notes = await getNoteService().list(user.id, {
-        workspaceId: noteWorkspace(principal),
+      const notes = await noteRepos(principal).notes.list({
         kind: query.kind,
         tag: query.tag,
         includeArchived: query.includeArchived === 'true',
@@ -61,8 +63,7 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
         const result = await getNoteService().save({
-          userId: user.id,
-          workspaceId: noteWorkspace(principal),
+          scope: noteRepos(principal).noteScope,
           id: body.id,
           slug: body.slug,
           title: body.title,
@@ -73,6 +74,7 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
         });
         return result;
       } catch (err) {
+        if (err instanceof SpaceError) throw err;
         // Update of a non-existent / non-owned note → 404 (no enumeration).
         if (err instanceof Error && /not found/.test(err.message)) { set.status = 404; return { error: 'Note not found' }; }
         // Concurrent create racing the same slug → 409, not a 500.
@@ -99,8 +101,7 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
     '/query',
     async ({ user, principal, body, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
-      const rows = await getNoteRepository().query(user.id, {
-        workspaceId: noteWorkspace(principal),
+      const rows = await noteRepos(principal).notes.query({
         kind: body.kind,
         tag: body.tag,
         frontmatter: body.frontmatter,
@@ -128,7 +129,7 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
     '/index',
     async ({ user, principal, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
-      const notes = await getNoteRepository().listIndex(user.id, noteWorkspace(principal));
+      const notes = await noteRepos(principal).notes.listIndex();
       return { notes };
     },
     { detail: { tags: ['notes'] } },
@@ -139,7 +140,7 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
     '/tags',
     async ({ user, principal, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
-      const tags = await getNoteRepository().tagCounts(user.id, noteWorkspace(principal));
+      const tags = await noteRepos(principal).notes.tagCounts();
       return { tags };
     },
     { detail: { tags: ['notes'] } },
@@ -150,7 +151,7 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
     async ({ user, principal, body, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
-        const note = await getNoteService().capture(user.id, noteWorkspace(principal), body.text, body.date);
+        const note = await getNoteService().capture(noteRepos(principal).noteScope, body.text, body.date);
         return { id: note.id, slug: note.slug };
       } catch (err) {
         if (err instanceof Error && /invalid date/i.test(err.message)) { set.status = 400; return { error: err.message }; }
@@ -164,20 +165,19 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
     '/:id',
     async ({ user, principal, params, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
-      const workspaceId = noteWorkspace(principal);
-      const note = await getNoteService().getById(user.id, params.id, workspaceId);
+      const repos = noteRepos(principal);
+      const note = await repos.notes.getById(params.id);
       if (!note) { set.status = 404; return { error: 'Note not found' }; }
-      const links = getKnowledgeLinkRepository();
-      const backlinks = await links.getBacklinks(user.id, 'note', note.id, workspaceId);
+      const backlinks = await repos.links.getBacklinks('note', note.id);
       // `tagged` edges are shown via the tag list, not the outgoing-links list.
-      const outgoing = (await links.getOutgoing(user.id, 'note', note.id, workspaceId)).filter((e) => e.linkType !== 'tagged');
+      const outgoing = (await repos.links.getOutgoing('note', note.id)).filter((e) => e.linkType !== 'tagged');
 
       // Resolve note endpoints to real titles/slugs in one batch so the UI
       // renders "← Roadmap" (clickable) instead of "← note:1a2b3c4".
       const noteIds = new Set<string>();
       for (const e of backlinks) if (e.fromType === 'note') noteIds.add(e.fromId);
       for (const e of outgoing) if (e.toType === 'note' && e.toId) noteIds.add(e.toId);
-      const titleRows = await getNoteRepository().getByIds(user.id, [...noteIds], workspaceId);
+      const titleRows = await repos.notes.getByIds([...noteIds]);
       const titleMap = new Map(titleRows.map((r) => [r.id, { title: r.title, slug: r.slug }]));
 
       // `resolved` means "a note we loaded a title for" (i.e. clickable). A
@@ -218,11 +218,12 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
     '/:id/suggestions',
     async ({ user, principal, params, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
-      if (!(await getNoteService().getById(user.id, params.id, noteWorkspace(principal)))) {
+      const repos = noteRepos(principal);
+      if (!(await repos.notes.getById(params.id))) {
         set.status = 404; return { error: 'Note not found' };
       }
       try {
-        const suggestions = await getSuggestionService().suggestForNote(user.id, params.id);
+        const suggestions = await getSuggestionService().suggestForNote(repos.noteScope, params.id);
         return { suggestions };
       } catch (err) {
         if (err instanceof Error && /not found/.test(err.message)) { set.status = 404; return { error: 'Note not found' }; }
@@ -236,7 +237,7 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
     '/:id/pin',
     async ({ user, principal, params, body, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
-      const updated = await getNoteRepository().setPinned(user.id, params.id, body.pinned, noteWorkspace(principal));
+      const updated = await noteRepos(principal).notes.setPinned(params.id, body.pinned);
       if (!updated) { set.status = 404; return { error: 'Note not found' }; }
       return { id: updated.id, pinned: updated.pinned };
     },
@@ -248,10 +249,10 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
     async ({ user, principal, params, query, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
       const hard = query.hard === 'true';
-      const workspaceId = noteWorkspace(principal);
+      const { noteScope } = noteRepos(principal);
       const ok = hard
-        ? await getNoteService().remove(user.id, params.id, workspaceId)
-        : await getNoteService().archive(user.id, params.id, workspaceId);
+        ? await getNoteService().remove(noteScope, params.id)
+        : await getNoteService().archive(noteScope, params.id);
       if (!ok) { set.status = 404; return { error: 'Note not found' }; }
       logger.info({ noteId: params.id, userId: user.id, hard }, hard ? 'note removed via API' : 'note archived via API');
       return { deleted: true, hard };

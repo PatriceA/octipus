@@ -54,10 +54,14 @@ export interface WakeupTransport {
   listen(channel: string, onPayload: (payload: string) => void): Promise<() => Promise<void>>;
 }
 
-/** A woken task as a remote payload names it. */
-export interface TaskRef { taskId: string; userId: string }
+/**
+ * A woken task as a remote payload names it. `workspaceId` is the scope it
+ * is looked up in: a space's task by the space, a personal one by its owner
+ * (docs/plans/coworking-spec.md §5.5).
+ */
+export interface TaskRef { taskId: string; userId: string; workspaceId?: string | null }
 
-/** `titleKey(ref)` → title, for the refs whose task exists AND belongs to that user. */
+/** `titleKey(ref)` → title, for the refs whose task exists in its scope (the space, or that user's personal tasks). */
 export type TitleResolver = (refs: TaskRef[]) => Promise<Map<string, string>>;
 
 export const titleKey = (ref: TaskRef): string => `${ref.userId}/${ref.taskId}`;
@@ -156,7 +160,7 @@ export async function receiveWakeups(payload: string, origin: string, resolveTit
   }
   if (decoded.origin === origin || decoded.events.length === 0) return [];
   const refs = new Map<string, TaskRef>();
-  for (const e of decoded.events) refs.set(titleKey(e), { taskId: e.taskId, userId: e.userId });
+  for (const e of decoded.events) refs.set(titleKey(e), { taskId: e.taskId, userId: e.userId, workspaceId: e.workspaceId });
   let titles: Map<string, string>;
   try {
     titles = await resolveTitles([...refs.values()]);
@@ -192,20 +196,44 @@ async function postgresTransport(): Promise<WakeupTransport> {
   };
 }
 
-/** One query per owner: `id IN (…) AND user_id = owner`. */
+/**
+ * One query per scope: a space's tasks by `workspace_id = space` (any
+ * member's), a personal task by `user_id = owner` and never one of a space.
+ * A ref resolves only when its task is in the scope it names.
+ */
 async function defaultResolveTitles(refs: TaskRef[]): Promise<Map<string, string>> {
   const { getDb } = await import('@/db/postgres');
   const { and, eq, inArray } = await import('drizzle-orm');
   const { tasks } = await import('@/db/schema/tasks');
-  const byUser = new Map<string, string[]>();
-  for (const r of refs) byUser.set(r.userId, [...(byUser.get(r.userId) ?? []), r.taskId]);
+  const { workspaces } = await import('@/db/schema/organizations');
+  const { notInSharedWorkspace } = await import('@/db/repositories/scoped');
   const out = new Map<string, string>();
-  for (const [userId, ids] of byUser) {
+  const named = [...new Set(refs.map((r) => r.workspaceId).filter((w): w is string => !!w))];
+  const spaces = new Set(named.length === 0 ? [] : (await getDb()
+    .select({ id: workspaces.id })
+    .from(workspaces)
+    .where(and(inArray(workspaces.id, named), eq(workspaces.kind, 'shared')))).map((w) => w.id));
+  const groups = new Map<string, { space: string | null; userId: string; refs: TaskRef[] }>();
+  for (const r of refs) {
+    const space = r.workspaceId && spaces.has(r.workspaceId) ? r.workspaceId : null;
+    const key = space ? `space:${space}` : `user:${r.userId}`;
+    const group = groups.get(key) ?? { space, userId: r.userId, refs: [] };
+    group.refs.push(r);
+    groups.set(key, group);
+  }
+  for (const group of groups.values()) {
+    const ids = group.refs.map((r) => r.taskId);
+    const scope = group.space ? eq(tasks.workspaceId, group.space) : and(eq(tasks.userId, group.userId), notInSharedWorkspace(tasks.workspaceId));
     const rows = await getDb()
-      .select({ id: tasks.id, title: tasks.title })
+      .select({ id: tasks.id, title: tasks.title, userId: tasks.userId })
       .from(tasks)
-      .where(and(inArray(tasks.id, ids), eq(tasks.userId, userId)));
-    for (const r of rows) out.set(titleKey({ taskId: r.id, userId }), r.title);
+      .where(and(inArray(tasks.id, ids), scope));
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    for (const ref of group.refs) {
+      const row = byId.get(ref.taskId);
+      // The event names the woken task's owner; a row of someone else is not it.
+      if (row && row.userId === ref.userId) out.set(titleKey(ref), row.title);
+    }
   }
   return out;
 }

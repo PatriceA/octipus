@@ -202,6 +202,18 @@ export class ArtifactsRepository {
     return row !== undefined;
   }
 
+  /** The shared workspace (space) the source's artifact belongs to; null for a personal artifact. */
+  async spaceOfSource(sourceId: string): Promise<string | null> {
+    const [row] = await this.db
+      .select({ id: workspaces.id })
+      .from(artifactDataSources)
+      .innerJoin(artifacts, eq(artifacts.id, artifactDataSources.artifactId))
+      .innerJoin(workspaces, eq(workspaces.id, artifacts.workspaceId))
+      .where(and(eq(artifactDataSources.id, sourceId), eq(workspaces.kind, 'shared')))
+      .limit(1);
+    return row?.id ?? null;
+  }
+
   async deleteSource(id: string): Promise<void> {
     await this.db.delete(artifactDataSources).where(eq(artifactDataSources.id, id));
   }

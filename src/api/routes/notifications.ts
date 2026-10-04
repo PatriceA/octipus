@@ -1,6 +1,6 @@
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
-import { scopedRepos } from '@/db/repositories/scoped';
+import { contentRepos } from '@/db/repositories/content';
 import { isAuthenticated } from '@/security/principal';
 
 /**
@@ -21,7 +21,7 @@ export const notificationRoutes = new Elysia({ prefix: '/notifications' })
     async ({ user, principal, query }) => {
       if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
 
-      const repo = scopedRepos(principal).notifications;
+      const repo = contentRepos(principal).notifications;
       const limit = Math.max(1, Math.min(200, parseInt(query.limit ?? '', 10) || 50));
       const offset = Math.max(0, parseInt(query.offset ?? '', 10) || 0);
       // `type` is a prefix (`agent`, `pipeline`, `approval`); anything outside
@@ -51,7 +51,7 @@ export const notificationRoutes = new Elysia({ prefix: '/notifications' })
     async ({ user, principal, params }) => {
       if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
 
-      const ok = await scopedRepos(principal).notifications.markRead(params.id);
+      const ok = await contentRepos(principal).notifications.markRead(params.id);
       // Silent no-op for cross-tenant — same response shape so attackers
       // can't enumerate notification ids by probing markRead.
       return { success: ok };
@@ -67,7 +67,7 @@ export const notificationRoutes = new Elysia({ prefix: '/notifications' })
     async ({ user, principal }) => {
       if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
 
-      await scopedRepos(principal).notifications.markAllRead();
+      await contentRepos(principal).notifications.markAllRead();
       return { success: true };
     },
     { detail: { tags: ['notifications'] } }

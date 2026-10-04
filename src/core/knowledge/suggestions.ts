@@ -1,5 +1,6 @@
 import { getKnowledgeLinkRepository, type KnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
-import { getNoteRepository, type NoteRepository } from '@/db/repositories/note-repository';
+import { getNoteRepository, type NoteRepository, type NoteScope, noteStoreFor } from '@/db/repositories/note-repository';
+import { noteKnowledgeScope } from '@/core/rag/knowledge-scope';
 import { type EmbeddingService, getEmbeddingService } from '@/core/rag/embeddings';
 import { coreLogger } from '@/utils/logger';
 import { entityRefFromSourceId } from './graph';
@@ -34,12 +35,13 @@ export class SuggestionService {
     private readonly embeddings: EmbeddingService = getEmbeddingService(),
   ) {}
 
-  async suggestForNote(userId: string, noteId: string, limit = 5): Promise<LinkSuggestion[]> {
-    const note = await this.notes.getById(userId, noteId);
+  /** Suggestions stay inside the note's scope: a personal note is never offered a space note, nor the reverse. */
+  async suggestForNote(scope: NoteScope, noteId: string, limit = 5): Promise<LinkSuggestion[]> {
+    const note = await noteStoreFor(scope, this.notes).getById(noteId);
     if (!note) throw new Error(`Note ${noteId} not found for this user`);
 
     // Already-linked targets (by resolved id) to exclude.
-    const existing = await this.links.getOutgoing(userId, 'note', noteId);
+    const existing = await this.links.getOutgoing(scope, 'note', noteId);
     const linkedIds = new Set(existing.filter((e) => e.toId).map((e) => e.toId as string));
     linkedIds.add(noteId); // never suggest self
 
@@ -47,8 +49,8 @@ export class SuggestionService {
     let hits: Awaited<ReturnType<EmbeddingService['hybridSearch']>>;
     try {
       // Pull a buffer beyond `limit` because we filter self/linked below.
-      // Tenant-scoped: only this user's note embeddings are candidates.
-      hits = await this.embeddings.hybridSearch({ kind: 'personal', userId, workspaceId: null }, query, limit * 4, 'note', undefined, 0.3);
+      // Scoped: only the scope's note embeddings are candidates.
+      hits = await this.embeddings.hybridSearch(noteKnowledgeScope(scope), query, limit * 4, 'note', undefined, 0.3);
     } catch (err) {
       coreLogger.warn({ err, component: 'suggestions', noteId }, 'Link suggestions unavailable (no embedding model?)');
       return [];
