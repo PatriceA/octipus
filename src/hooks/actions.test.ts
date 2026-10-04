@@ -14,6 +14,16 @@ vi.mock('@/core/agent', () => ({
     },
   }),
 }));
+// The direct (non-orchestrated) spawn: the options are observed, nothing runs.
+const direct = vi.hoisted(() => ({ spawns: [] as Array<Record<string, unknown>> }));
+vi.mock('@/core/agent-manager', () => ({
+  getAgentManager: () => ({
+    spawn: async (options: Record<string, unknown>) => {
+      direct.spawns.push(options);
+      return { run: async () => '', getContext: () => ({ id: 'agent-1' }) };
+    },
+  }),
+}));
 vi.mock('@/core/agent/roles', () => ({ ROLE_CONFIGS: { coding: {}, general: {} } }));
 vi.mock('@/security/orgs', () => ({ getOrgWorkspaceManager: () => ({ ensureDefaultWorkspace: async () => ({ id: 'ws-1' }) }) }));
 // The hook session does not exist yet: the heartbeat runs in the default workspace.
@@ -113,5 +123,18 @@ describe('executeSpawnAgent: role heartbeat', () => {
       expect(r.success).toBe(false);
     }
     expect(spawned.calls).toHaveLength(0);
+  });
+});
+
+describe('executeSpawnAgent: direct spawn', () => {
+  test("spawns in the hook session's workspace (the default when the session does not exist yet)", async () => {
+    direct.spawns.length = 0;
+    const r = await executeAction(hook({
+      userId: '77777777-7777-4777-8777-777777777777', trigger: 'schedule', action: 'spawn_agent', sessionId: 'hook-sess',
+      actionConfig: { orchestrated: false, agentPrompt: 'tidy up' },
+    } as Partial<Hook>), ctx());
+    expect(r.success).toBe(true);
+    expect(direct.spawns).toHaveLength(1);
+    expect(direct.spawns[0]).toMatchObject({ sessionId: 'hook-sess', workspaceId: 'ws-1' });
   });
 });

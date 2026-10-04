@@ -427,9 +427,20 @@ async function executeSpawnAgent(
   const agentConfig = getConfig().agent;
   const hookTimeout = Math.max(agentConfig.defaultTimeout * 2, 1800000); // At least 30 min for hooks
 
+  // The hook session's workspace (the user's default when the session has
+  // none or does not exist yet), as the orchestrated and heartbeat paths do.
+  // A hook with no user behind it (`'system'`) has no workspace.
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const { turnWorkspaceId } = await import('@/core/agent/session-resolver');
+  const { isRealUserId } = await import('@/security/principal');
+  const workspaceId = isRealUserId(userId)
+    ? await turnWorkspaceId(userId, (await sessionRepository.findById(sessionId))?.workspaceId)
+    : undefined;
+
   const agent = await agentManager.spawn({
     sessionId,
     userId,
+    workspaceId,
     topic: config.agentTopic,
     model: config.agentModel,
     systemPrompt: prompt,

@@ -14,6 +14,7 @@ import type { AgentContext } from '@/core/types';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import type { ProfileFact } from '@/db/schema/profiles';
 import { getModelRegistry } from '@/models/model-registry';
+import { isRealUserId } from '@/security/principal';
 import { QuotaExceededError } from '@/security/quota-error';
 import { isProviderQuotaError } from '@/core/errors/classification';
 import { SpendBudgetExceededError } from '@/security/spend-budget-error';
@@ -264,7 +265,7 @@ export async function spawnWorker(
     }
   }
 
-  if (context.userId && context.userId !== 'system' && context.userId !== 'local') {
+  if (isRealUserId(context.userId)) {
     try {
       const { getConnectorRegistry } = await import('@/connectors');
       // Role↔connector binding: if the role binds specific connectors

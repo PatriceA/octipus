@@ -1,37 +1,38 @@
 /**
  * WorkspaceFS — per-user filesystem sandbox.
  *
- * Phase 1b-3 multi-user foundation. Today every filesystem tool resolves
- * paths against a single `config.workspace.rootPath` shared by every
- * user — agent X for user A can read agent Y's files for user B if it
- * guesses the path. WorkspaceFS replaces that with a per-(user,
- * workspace) root and a strict path resolver that rejects any input
- * resolving outside it.
+ * Every filesystem tool of a user's agent resolves paths against a
+ * per-(user, workspace) root, through a strict path resolver that rejects
+ * any input resolving outside it. A system job (no user) names its root
+ * explicitly; nothing falls back to a root shared by every user.
  *
  * Layout:
  *
  *   $DATA_ROOT/
  *     users/{user_id}/
- *       workspaces/{workspace_id | default}/
+ *       workspaces/{files_dir}/
  *         files/      ← root for this WorkspaceFS instance
- *         documents/  ← uploads (managed by /api/documents)
- *         cache/      ← future
  *     system/
  *       skills/       ← read-only seeds
  *
- * The user's default workspace (and the user level, no workspace) keeps
- * the literal `default` segment, which every file written before
- * per-workspace roots lives under; any other workspace uses its id.
+ * (Uploads live elsewhere: `config.workspace.documentsPath`, keyed by
+ * workspace id, see `api/routes/documents.ts`.)
  *
- * The class never throws on construction; it lazily creates the root
- * directory on the first `mkdirRoot()` or `resolve()` call. That keeps
- * unit tests fast and avoids surprising filesystem side-effects from
- * just constructing a Principal.
+ * `files_dir` is stored on the workspace row: `default` for the workspace
+ * that was its owner's default when per-workspace roots arrived (every file
+ * written before them lives there, so none moved), the workspace id for
+ * every other. Changing the default moves no file; a transfer moves the
+ * directory to the recipient's tree. The user level (no workspace) keeps
+ * the literal `default` segment.
+ *
+ * Construction does not touch the filesystem (the root is created by
+ * `ensureRoot()`), but it throws for an anonymous principal and for a
+ * workspace this process has not loaded or that another user owns.
  *
  * Path resolution rules:
  *   - Empty / relative paths resolve relative to the workspace root.
  *   - Absolute paths must be within the workspace root or a configured
- *     extra-allow list (e.g. `/tmp/octipus-…` for transient files).
+ *     extra-allow list (e.g. `/tmp/assistant-…` for transient files).
  *   - `..` segments that would escape the root are rejected after
  *     resolution. We don't try to filter `..` lexically — `path.resolve`
  *     normalizes it and we check the result; the old approach of
@@ -46,14 +47,14 @@
  * disjoint trees. Even with identical user-supplied paths the actual
  * filesystem locations never collide.
  */
-import { existsSync, mkdirSync, realpathSync, renameSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync, renameSync, rmSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path, { basename, dirname, isAbsolute, join, resolve as pathResolve } from 'node:path';
 import { getConfig } from '@/config';
 import type { AgentContext } from '@/core/types';
 import type { Principal } from './principal';
-import { ANONYMOUS_PRINCIPAL, agentPrincipal, isAuthenticated } from './principal';
+import { ANONYMOUS_PRINCIPAL, agentPrincipal, isAuthenticated, isRealUserId } from './principal';
 
 /**
  * Whether `child` is `parent` or inside it, by path segments (`/a/foo` is not
@@ -98,30 +99,20 @@ export interface SystemFsJob {
   root: string;
 }
 
-/** The directory a user's default workspace keeps, so no file that predates per-workspace roots moves. */
+/** The directory of the user level (no workspace) and of a pre-workspace default. */
 export const DEFAULT_WORKSPACE_SEGMENT = 'default';
 
 /**
- * Owner and default flag of every workspace row the `OrgWorkspaceManager`
- * has read or written in this process (loaded at boot, refreshed by each
- * workspace lookup). The file root of a workspace depends on whether it is
- * its owner's default, and the many synchronous callers of `forAgent` /
- * `forSession` cannot ask the database.
+ * Owner and files directory of every workspace row the
+ * `OrgWorkspaceManager` has read or written in this process (loaded at
+ * boot, refreshed by each workspace lookup): the many synchronous callers
+ * of `forAgent` / `forSession` cannot ask the database.
  */
-const workspaceRows = new Map<string, { userId: string; isDefault: boolean }>();
+const workspaceRows = new Map<string, { userId: string; filesDir: string }>();
 
 /** Record workspace rows as read from or written to the database. */
-export function noteWorkspaceRows(rows: ReadonlyArray<{ id: string; userId: string; isDefault: boolean }>): void {
-  for (const row of rows) {
-    if (row.isDefault) {
-      // One default per user (partial unique index): a newly seen default
-      // demotes whichever row this process still takes for the default.
-      for (const [id, known] of workspaceRows) {
-        if (known.userId === row.userId && known.isDefault && id !== row.id) known.isDefault = false;
-      }
-    }
-    workspaceRows.set(row.id, { userId: row.userId, isDefault: row.isDefault });
-  }
+export function noteWorkspaceRows(rows: ReadonlyArray<{ id: string; userId: string; filesDir: string }>): void {
+  for (const row of rows) workspaceRows.set(row.id, { userId: row.userId, filesDir: row.filesDir });
 }
 
 /** Drop a deleted workspace row. */
@@ -135,10 +126,10 @@ export function _resetWorkspaceRowsForTests(): void {
 }
 
 /**
- * The directory segment of a user's workspace: the workspace id, except the
- * user's default workspace (and the user level, `null`), which keep
- * `default`. A workspace this process has not seen, or one owned by someone
- * else, throws: guessing would put files in the wrong workspace.
+ * The directory segment of a user's workspace: its stored `files_dir`, or
+ * `default` for the user level (`null`). A workspace this process has not
+ * seen, or one owned by someone else, throws: guessing would put files in
+ * the wrong workspace.
  */
 export function workspaceSegment(userId: string, workspaceId: string | null | undefined): string {
   if (!workspaceId) return DEFAULT_WORKSPACE_SEGMENT;
@@ -147,7 +138,7 @@ export function workspaceSegment(userId: string, workspaceId: string | null | un
     throw new WorkspaceFsError('INVALID_INPUT',
       `workspace ${workspaceId} of user ${userId} is not loaded; resolve it through the workspace manager first`);
   }
-  return row.isDefault ? DEFAULT_WORKSPACE_SEGMENT : workspaceId;
+  return row.filesDir;
 }
 
 /**
@@ -163,33 +154,36 @@ function configuredDataRoot(): string {
   }
 }
 
+/** `<dataRoot>/users/<userId>/workspaces/<filesDir>`: everything a workspace keeps on disk. */
+export function workspaceDir(userId: string, filesDir: string, dataRoot: string = configuredDataRoot()): string {
+  if (!isRealUserId(userId)) throw new WorkspaceFsError('INVALID_INPUT', `not a user id: ${JSON.stringify(userId)}`);
+  if (!/^[A-Za-z0-9-]+$/.test(filesDir)) {
+    throw new WorkspaceFsError('INVALID_INPUT', `not a workspace directory name: ${JSON.stringify(filesDir)}`);
+  }
+  return pathResolve(dataRoot, 'users', userId, 'workspaces', filesDir);
+}
+
 /**
- * Move a user's workspace directories when the default changes, so each
- * workspace keeps its files: the old default's `default` directory becomes
- * `<previousDefaultId>`, and `<newDefaultId>` becomes `default`. Renames
- * within one directory; a missing source has nothing to move. Throws when a
- * target already exists rather than merging two trees. (A null id on either
- * side is "no such workspace", which undoing a swap from no default needs.)
+ * Move a workspace's directory, for a transfer: one rename. A missing source
+ * has nothing to move (the workspace never wrote a file). Throws when the
+ * target exists rather than merging two trees.
  */
-export function swapDefaultWorkspaceFiles(
-  userId: string,
-  previousDefaultId: string | null,
-  newDefaultId: string | null,
+export function moveWorkspaceFiles(
+  from: { userId: string; filesDir: string },
+  to: { userId: string; filesDir: string },
   dataRoot: string = configuredDataRoot(),
 ): void {
-  const base = pathResolve(dataRoot, 'users', userId, 'workspaces');
-  const defaultDir = join(base, DEFAULT_WORKSPACE_SEGMENT);
-  const newDir = newDefaultId ? join(base, newDefaultId) : null;
-  const parked = join(base, `.default-swap-${newDefaultId ?? 'none'}`);
-  if (existsSync(parked)) throw new Error(`workspace swap already in progress: ${parked} exists`);
-  const oldDir = previousDefaultId ? join(base, previousDefaultId) : null;
-  if (existsSync(defaultDir)) {
-    if (!oldDir) throw new Error(`user ${userId} has a ${DEFAULT_WORKSPACE_SEGMENT} workspace directory but no previous default workspace to give it to`);
-    if (existsSync(oldDir)) throw new Error(`cannot move the previous default workspace's files: ${oldDir} already exists`);
-    renameSync(defaultDir, parked);
-  }
-  if (newDir && existsSync(newDir)) renameSync(newDir, defaultDir);
-  if (oldDir && existsSync(parked)) renameSync(parked, oldDir);
+  const source = workspaceDir(from.userId, from.filesDir, dataRoot);
+  const target = workspaceDir(to.userId, to.filesDir, dataRoot);
+  if (!existsSync(source)) return;
+  if (existsSync(target)) throw new WorkspaceFsError('INVALID_INPUT', `cannot move workspace files: ${target} already exists`);
+  mkdirSync(dirname(target), { recursive: true });
+  renameSync(source, target);
+}
+
+/** Remove a deleted workspace's directory and everything in it. */
+export function removeWorkspaceFiles(userId: string, filesDir: string, dataRoot: string = configuredDataRoot()): void {
+  rmSync(workspaceDir(userId, filesDir, dataRoot), { recursive: true, force: true });
 }
 
 /**
@@ -289,9 +283,9 @@ export class WorkspaceFS {
       return WorkspaceFS.withRoot(context.root, { ...options, extraAllowedPrefixes: agentExtraPrefixes(options) });
     }
 
-    // `'system'`/`'local'` were the old flat-root sentinels: a user path
-    // never resolves to the shared root, so they are refused here.
-    if (!context.userId || context.userId === 'system' || context.userId === 'local') {
+    // Anything but a real user id (a `'system'` sentinel, a username) is
+    // refused: a user path never resolves to a shared root.
+    if (!isRealUserId(context.userId)) {
       throw new WorkspaceFsError('UNAUTHENTICATED',
         `agent context has no real user (${context.userId || 'none'}); a system job passes { system: true, root }`);
     }

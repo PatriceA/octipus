@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto';
 import { eq } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { users } from '@/db/schema/users';
-import { workspaces } from '@/db/schema/organizations';
+import { newWorkspaceRow, workspaces } from '@/db/schema/organizations';
 import { artifactDataSnapshots } from '@/db/schema/artifact-data-snapshots';
 import { artifactDataSources } from '@/db/schema/artifact-data-sources';
 import { artifactShareLinks } from '@/db/schema/artifact-share-links';
@@ -50,7 +50,7 @@ describe.skipIf(!isIntegration)('ArtifactsRepository (Integration)', () => {
     userId = u[0].id;
     const w = await db
       .insert(workspaces)
-      .values({ userId, slug: 'default', name: 'Default' })
+      .values(newWorkspaceRow({ userId, slug: 'default', name: 'Default' }))
       .returning();
     workspaceId = w[0].id;
   });
@@ -80,7 +80,7 @@ describe.skipIf(!isIntegration)('ArtifactsRepository (Integration)', () => {
     const db = getDb();
     const w2 = await db
       .insert(workspaces)
-      .values({ userId, slug: 'other', name: 'Other' })
+      .values(newWorkspaceRow({ userId, slug: 'other', name: 'Other' }))
       .returning();
     await repo.create({
       slug: 'shared',

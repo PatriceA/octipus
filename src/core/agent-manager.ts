@@ -14,6 +14,7 @@ import { type AgentEvent, AgentWorker, type AgentWorkerConfig, type ToolHandler 
 import { getCLIToolConfig, isCLIProvider, isResumableCliModel } from './cli-agent-factory';
 import { CLIAgentWorker } from './cli-agent-worker';
 import { getPermissionManager } from '@/security/permissions';
+import { isRealUserId } from '@/security/principal';
 import { getRouter } from './router';
 import type { AgentContext, AgentStatus } from './types';
 
@@ -128,14 +129,10 @@ export class AgentManager {
       throw new Error(`Maximum concurrent agents (${maxConcurrent}) reached`);
     }
 
-    // Per-user concurrency quota for real users (system/local jobs rely on
-    // the global cap above). Throws QuotaExceededError (distinct from the
+    // Per-user concurrency quota for real users (system jobs rely on the
+    // global cap above). Throws QuotaExceededError (distinct from the
     // global cap's plain Error) so callers can distinguish.
-    if (
-      options.userId
-      && options.userId !== 'system'
-      && options.userId !== 'local'
-    ) {
+    if (isRealUserId(options.userId)) {
       const { getQuotaManager } = await import('@/security/quotas');
       const check = await getQuotaManager().willExceed(options.userId, 'concurrentAgents', 1);
       if (!check.allowed) {

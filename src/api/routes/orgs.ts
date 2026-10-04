@@ -61,6 +61,7 @@ function errorStatus(err: OrgWorkspaceError): number {
     case 'cannot_transfer_to_self':
       return 400;
     case 'slug_conflict':
+    case 'files_conflict':
       return 409;
     case 'not_admin':
       return 403;

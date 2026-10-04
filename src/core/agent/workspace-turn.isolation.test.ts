@@ -10,8 +10,9 @@
  *
  * The model is the only stand-in: `runRootAgent` is replaced by an "agent"
  * that calls the real tasks, artifacts and filesystem tools with the context
- * the turn hands it. Memory extraction needs a model too, so the memory
- * module is observed rather than run.
+ * the turn hands it, and the compaction summary is a fixed text. Memory
+ * extraction needs a model too, so the memory module is observed rather
+ * than run. Session compaction itself is real.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -30,7 +31,7 @@ process.env.LOG_LEVEL ??= 'error';
 const fx = vi.hoisted(() => ({
   turns: [] as Array<{ workspaceId: string | null; filePath?: string; taskId?: string; artifactId?: string }>,
   retrieve: [] as Array<{ workspaceId?: string | null }>,
-  update: [] as Array<{ workspaceId?: string | null }>,
+  update: [] as Array<{ workspaceId?: string | null; userMessage?: string }>,
 }));
 
 vi.mock('@/models/model-registry', () => ({
@@ -40,11 +41,21 @@ vi.mock('@/core/trajectories/recorder', () => ({ TrajectoryRecorder: class { set
 vi.mock('@/core/memory', () => ({
   retrieveForContext: async (scope: { workspaceId?: string | null }) => { fx.retrieve.push(scope); return []; },
   renderMemoriesBlock: () => '',
-  updateMemoriesAfterTurn: async (input: { workspaceId?: string | null }) => { fx.update.push(input); return []; },
+  updateMemoriesAfterTurn: async (input: { workspaceId?: string | null; userMessage?: string }) => { fx.update.push(input); return []; },
 }));
 vi.mock('@/core/learning/queue', () => ({ enqueueTurnLearning: async () => {} }));
-vi.mock('@/core/cli-session-store', () => ({ acknowledgeProviderTurn: async () => {} }));
-vi.mock('./session-compaction', () => ({ maybeCompactSession: async () => {} }));
+vi.mock('@/core/cli-session-store', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/core/cli-session-store')>()),
+  acknowledgeProviderTurn: async () => {},
+}));
+vi.mock('@/utils/context-compaction', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/utils/context-compaction')>()),
+  createLLMSummary: async () => ({
+    summaryText: 'The launch moved to May.',
+    message: { role: 'user', content: 'The launch moved to May.', timestamp: new Date() },
+    fileOps: { read: [], written: [], edited: [] },
+  }),
+}));
 vi.mock('./root-runner', () => ({
   // The "agent": the real tools, run with the context the turn built.
   runRootAgent: async (...args: unknown[]) => {
@@ -210,6 +221,33 @@ describe('a turn in a non-default workspace', () => {
     await vi.waitFor(() => expect(fx.update.length).toBeGreaterThan(0));
     expect(fx.retrieve.every((s) => s.workspaceId === projectWs)).toBe(true);
     expect(fx.update.every((s) => s.workspaceId === projectWs)).toBe(true);
+  });
+
+  test("a compaction's memories are learned into the session's workspace", async () => {
+    // A session of the project workspace with two exchanges to summarize.
+    const { seedSession } = await import('@/test-helpers/multiuser-fixtures');
+    const { executeRaw, queryRaw } = await import('@/db/postgres');
+    const { id: sessionId } = await seedSession({ userId: aliceId, channelType: 'tui', channelId: rand(4) });
+    await executeRaw(`UPDATE sessions SET workspace_id = '${projectWs}' WHERE id = '${sessionId}'`);
+    const lines = [['user', 'Plan the launch.'], ['assistant', 'Planned for April.'], ['user', 'Move it to May.'], ['assistant', 'Moved to May.']];
+    for (const [i, [role, content]] of lines.entries()) {
+      await queryRaw(
+        `INSERT INTO messages (session_id, role, content, created_at) VALUES ($1, $2, $3, now() - make_interval(secs => $4))`,
+        [sessionId, role, content, 60 - i],
+      );
+    }
+
+    const { refreshConfigKey } = await import('@/config');
+    refreshConfigKey('memory.extractionCadence', 'on_compaction');
+    try {
+      const { maybeCompactSession } = await import('./session-compaction');
+      expect(await maybeCompactSession(sessionId, { force: true })).toBe(true);
+      await vi.waitFor(() => expect(fx.update.some((u) => u.userMessage === 'The launch moved to May.')).toBe(true));
+      const fromCompaction = fx.update.filter((u) => u.userMessage === 'The launch moved to May.');
+      expect(fromCompaction.every((u) => u.workspaceId === projectWs)).toBe(true);
+    } finally {
+      refreshConfigKey('memory.extractionCadence', 'per_turn');
+    }
   });
 
   test('an existing session keeps its workspace whatever the connection says', async () => {

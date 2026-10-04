@@ -145,7 +145,9 @@ test('real ShellTool middleware preserves preflight and exit evidence through ex
   const { ShellTool } = await import('@/tools/shell');
   const { sessionRepository } = await import('@/db/repositories/session-repository');
   const tool = new ShellTool(); await getToolRegistry().register(tool);
-  const ctx = context(); const manager = getPermissionManager();
+  // `directory` is outside the user's workspace: it is this run's dev-mode
+  // project, the only other place a shell `cwd` may name.
+  const ctx = { ...context(), metadata: { projectPath: directory } }; const manager = getPermissionManager();
   await sessionRepository.create({ id: ctx.sessionId, userId, channelType: 'webchat', channelId: 'shell-recovery' });
   await manager.setPermission(userId, 'shell', 'execute', 'ALLOW');
   const executor = new ToolExecutor(ctx, () => {}); executor.registerTools(tool.getToolHandlers());

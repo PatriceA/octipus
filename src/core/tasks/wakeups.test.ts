@@ -140,8 +140,8 @@ describe('wakeups via /api/tasks (embedded PGlite)', () => {
        ON CONFLICT DO NOTHING`,
     );
     await db.executeRaw(
-      `INSERT INTO workspaces (id, user_id, slug, name) VALUES
-         ('${ws1}', '${aliceId}', 'one', 'One'), ('${ws2}', '${aliceId}', 'two', 'Two')`,
+      `INSERT INTO workspaces (id, user_id, slug, name, files_dir) VALUES
+         ('${ws1}', '${aliceId}', 'one', 'One', '${ws1}'), ('${ws2}', '${aliceId}', 'two', 'Two', '${ws2}')`,
     );
 
     const { taskRoutes } = await import('@/api/routes/tasks');

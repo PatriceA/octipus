@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   boolean,
   index,
@@ -77,12 +78,20 @@ export const workspaces = pgTable('workspaces', {
   slug: text('slug').notNull(),
   name: text('name').notNull(),
   isDefault: boolean('is_default').default(false).notNull(),
+  /**
+   * Directory segment of the workspace's files under
+   * `users/<user_id>/workspaces/` (workspace-fs.ts): `default` for the
+   * workspace that was its owner's default at upgrade (migration 0127),
+   * the workspace id for every other. Set once; only a transfer changes it.
+   */
+  filesDir: text('files_dir').notNull(),
   metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   userIdIdx: index('workspaces_user_id_idx').on(table.userId),
   userSlugUq: uniqueIndex('workspaces_user_id_slug_uq').on(table.userId, table.slug),
+  userFilesDirUq: uniqueIndex('workspaces_user_id_files_dir_uq').on(table.userId, table.filesDir),
 }));
 
 export type Organization = typeof organizations.$inferSelect;
@@ -91,3 +100,12 @@ export type OrgMember = typeof orgMembers.$inferSelect;
 export type NewOrgMember = typeof orgMembers.$inferInsert;
 export type Workspace = typeof workspaces.$inferSelect;
 export type NewWorkspace = typeof workspaces.$inferInsert;
+
+/**
+ * A new workspace row with its id chosen here, so its files directory
+ * (`files_dir`) can be that id: a column default cannot name another column.
+ */
+export function newWorkspaceRow(values: Omit<NewWorkspace, 'id' | 'filesDir'>): NewWorkspace {
+  const id = randomUUID();
+  return { ...values, id, filesDir: id };
+}

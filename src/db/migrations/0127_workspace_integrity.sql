@@ -80,3 +80,17 @@ ALTER TABLE workspace_repos ADD CONSTRAINT workspace_repos_workspace_id_fkey FOR
 ALTER TABLE background_jobs DROP CONSTRAINT IF EXISTS background_jobs_workspace_id_fkey;
 --> statement-breakpoint
 ALTER TABLE background_jobs ADD CONSTRAINT background_jobs_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE SET NULL;
+--> statement-breakpoint
+-- 5. The directory a workspace keeps its files in (workspace-fs.ts), stored so
+--    it never depends on which workspace is the default. The workspace that is
+--    its owner's default now keeps `default` (where every file written before
+--    per-workspace roots lives, so no file moves on upgrade); every other
+--    workspace keeps its id. New rows get their id from application code.
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS files_dir text;
+--> statement-breakpoint
+UPDATE workspaces SET files_dir = CASE WHEN is_default THEN 'default' ELSE id::text END
+WHERE files_dir IS NULL;
+--> statement-breakpoint
+ALTER TABLE workspaces ALTER COLUMN files_dir SET NOT NULL;
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS workspaces_user_id_files_dir_uq ON workspaces (user_id, files_dir);

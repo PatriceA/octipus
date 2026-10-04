@@ -57,10 +57,10 @@ beforeAll(async () => {
   aliceDefaultWs = randomUUID();
   aliceOtherWs = randomUUID();
   await queryRaw(
-    `INSERT INTO workspaces (id, user_id, slug, name, is_default) VALUES
-       ($1, $3, 'default', 'Default', true),
-       ($2, $3, 'side', 'Side', false)`,
-    [aliceDefaultWs, aliceOtherWs, alice],
+    `INSERT INTO workspaces (id, user_id, slug, name, is_default, files_dir) VALUES
+       ($1, $3, 'default', 'Default', true, 'default'),
+       ($2, $3, 'side', 'Side', false, $4)`,
+    [aliceDefaultWs, aliceOtherWs, alice, aliceOtherWs],
   );
   docViaDocId = (await seedDocument({ userId: alice, originalName: 'a.pdf' })).id;
   docViaSourceId = (await seedDocument({ userId: bob, originalName: 'b.pdf' })).id;
