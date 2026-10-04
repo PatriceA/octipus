@@ -30,9 +30,14 @@ curl -H "Authorization: Bearer $OCTIPUS_API_TOKEN" http://localhost:3005/api/aut
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| POST | `/api/auth/register` | No | Register new user |
-| POST | `/api/auth/login` | No | Login with credentials (+ optional TOTP) |
+| POST | `/api/auth/register` | No | Register new user (audited as `user_created`) |
+| POST | `/api/auth/login` | No | Login with credentials; a TOTP account without `totpCode` gets `401 { requiresTOTP: true }` (audited as `login` / `login_failed`) |
 | POST | `/api/auth/login-mobile` | No | Login returning bearer token in response body (for native clients) |
+
+Login, login-mobile and register take an optional `returnTo`: a same-origin
+path (one leading `/`, no `//`, no backslash, no whitespace or control
+characters). Anything else is refused with 400; a valid one is echoed back as
+`returnTo` in the response (`/` when none was sent).
 | POST | `/api/auth/logout` | Yes | Logout and invalidate session |
 | GET | `/api/auth/me` | Yes | Get current user info |
 | GET | `/api/auth/ws-ticket` | Yes | Get short-lived token for WebSocket authentication |
@@ -483,7 +488,8 @@ Authored markdown notes — the knowledge graph's Tier 2 surface. Full model in
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/devices` | List devices |
-| POST | `/api/devices/pair/generate` | Generate device pairing code |
+| POST | `/api/devices/pair/generate` | Generate device pairing code (valid 5 minutes; stored only as its SHA-256) |
+| POST | `/api/devices/pair/redeem` | Redeem a pairing code for a mobile session (unauthenticated; each code redeems once) |
 | DELETE | `/api/devices/:sessionId` | Revoke device session |
 
 ## API Tokens

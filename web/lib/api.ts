@@ -57,7 +57,16 @@ const RETRY_BACKOFF_MS = [300, 600, 1200];
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number, readonly retryAfterMs = 0) {
+  /**
+   * `body` is the parsed error response, for callers that act on more than the
+   * message (the login page reads `requiresTOTP` from a 401).
+   */
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly retryAfterMs = 0,
+    readonly body: Record<string, unknown> = {},
+  ) {
     super(message);
     this.name = 'ApiError';
   }
@@ -160,7 +169,7 @@ class ApiClient {
             : retryHeader && Number.isFinite(Date.parse(retryHeader)) ? Math.max(1000, Date.parse(retryHeader) - Date.now()) : 30_000)
           : 0;
         if (response.status === 429) this.readPauseUntil = Date.now() + retryAfterMs;
-        throw new ApiError(error.error || `HTTP ${response.status}`, response.status, retryAfterMs);
+        throw new ApiError(error.error || `HTTP ${response.status}`, response.status, retryAfterMs, error);
       }
 
       return response.json();
