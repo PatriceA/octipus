@@ -5,10 +5,10 @@ import { getEmbeddingService } from '@/core/rag/embeddings';
 import { principalKnowledgeScope } from '@/core/rag/knowledge-scope';
 import { loadRepoGraph } from '@/core/repos/registry-service';
 import { getDb } from '@/db/postgres';
+import { skillRepository } from '@/db/repositories/skill-repository';
 import { hooks } from '@/db/schema/hooks';
 import { modelConfig } from '@/db/schema/models';
 import { sessions } from '@/db/schema/sessions';
-import { skills } from '@/db/schema/skills';
 import { getToolRegistry } from '@/tools/registry';
 
 interface SearchResult {
@@ -71,12 +71,9 @@ export const searchRoutes = new Elysia({ prefix: '/search' })
           .where(ilike(modelConfig.name, pattern))
           .limit(limit),
 
-        // Skills — search by name or description
-        db
-          .select({ id: skills.id, name: skills.name, description: skills.description, category: skills.category })
-          .from(skills)
-          .where(or(ilike(skills.name, pattern), ilike(skills.description, pattern)))
-          .limit(limit),
+        // Skills — search by name or description, among the ones the caller
+        // can see (system, own, their orgs'), as the skills list does.
+        skillRepository.searchVisible(principal.userId, pattern, limit),
 
         // Knowledge — full-text search
         (async () => {

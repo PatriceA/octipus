@@ -95,6 +95,33 @@ describe('Extension API (factory + dispose)', () => {
     expect(result?.text).toContain('Unknown command');
   });
 
+  test("a legacy minTrustLevel 'local' or 'system' registers the command admin-only", async () => {
+    const { api, loaded } = buildExtensionContext('legacy-ext', '/fake/path.ts', bus);
+    const cmdRegistry = getCommandRegistry();
+    for (const level of ['local', 'system'] as const) {
+      api.registerCommand({
+        name: `legacy${level}`,
+        description: 'restricted the old way',
+        minTrustLevel: level,
+        handler: async () => ({ text: 'ran' }),
+      });
+      const result = await cmdRegistry.execute(`/legacy${level}`, {
+        userId: 'u', sessionId: 's', clientType: 'tui', trustLevel: 'user',
+      });
+      expect(result?.text).toContain('Insufficient permissions');
+    }
+    // 'user' keeps the command open; an unknown level is refused outright.
+    api.registerCommand({ name: 'legacyuser', description: 'open', minTrustLevel: 'user', handler: async () => ({ text: 'ran' }) });
+    expect((await cmdRegistry.execute('/legacyuser', { userId: 'u', sessionId: 's', clientType: 'tui', trustLevel: 'user' }))?.text).toBe('ran');
+    expect(() => api.registerCommand({
+      name: 'legacybogus',
+      description: 'bad',
+      minTrustLevel: 'root' as never,
+      handler: async () => ({ text: 'ran' }),
+    })).toThrow(/unknown minTrustLevel/);
+    await loaded.dispose();
+  });
+
   test('registerCommand catches handler exceptions and surfaces a friendly error', async () => {
     const { api, loaded } = buildExtensionContext('throwy-ext', '/fake/path.ts', bus);
 

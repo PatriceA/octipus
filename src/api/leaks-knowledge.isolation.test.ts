@@ -114,6 +114,12 @@ beforeAll(async () => {
        VALUES ('${owner}', '${name}', 'message_received', '{}', 'notify', '{}')`,
     );
   }
+  await executeRaw(
+    `INSERT INTO skills (id, name, description, is_system, user_id) VALUES
+       ('zephyr-alice', 'zephyr deploy alice', 'alice private skill', false, '${alice}'),
+       ('zephyr-bob', 'zephyr deploy bob', 'bob private skill', false, '${bob}'),
+       ('zephyr-system', 'zephyr deploy system', 'built-in skill', true, NULL)`,
+  );
 
   const { getEmbeddingService } = await import('@/core/rag/embeddings');
   const svc = getEmbeddingService();
@@ -336,6 +342,21 @@ describe('L3 — global search', () => {
     const ids = kb.body.results.filter((h: Json) => h.type === 'knowledge').map((h: Json) => h.id);
     expect(ids).toContain(aliceChunkId);
     expect(ids).not.toContain(bobChunkId);
+  });
+
+  test('returns system skills and the caller’s own, never another user’s private skill', async () => {
+    const { searchRoutes } = await import('@/api/routes/search');
+    const r = await request(appFor(alice, false, searchRoutes), 'GET', '/api/search?q=zephyr%20deploy&limit=20');
+    const skillIds = r.body.results.filter((h: Json) => h.type === 'skill').map((h: Json) => h.id).sort();
+    expect(skillIds).toEqual(['zephyr-alice', 'zephyr-system']);
+
+    // Description matches go through the same gate.
+    const byDescription = await request(appFor(alice, false, searchRoutes), 'GET', '/api/search?q=bob%20private&limit=20');
+    expect(byDescription.body.results.filter((h: Json) => h.type === 'skill')).toEqual([]);
+
+    // An admin is no exception.
+    const asAdmin = await request(appFor(admin, true, searchRoutes), 'GET', '/api/search?q=zephyr%20deploy&limit=20');
+    expect(asAdmin.body.results.filter((h: Json) => h.type === 'skill').map((h: Json) => h.id)).toEqual(['zephyr-system']);
   });
 
   test('an admin’s search is not install-wide either', async () => {

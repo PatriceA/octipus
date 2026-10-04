@@ -10,6 +10,7 @@ import { getAgentService } from '@/core/agent';
 import { getApiTokenManager } from '@/security/api-tokens';
 import { getSessionManager } from '@/security/auth/session';
 import { getPermissionManager, type PermissionRequestEvent } from '@/security/permissions';
+import { userChangeMark } from '@/security/user-change-marks';
 import { secureCompare } from '@/utils/crypto';
 import { apiLogger } from '@/utils/logger';
 import { narrate } from '@/voice/narrator';
@@ -60,6 +61,7 @@ export function setupWebSocket(app: Elysia): void {
       }
 
       const sessionManager = getSessionManager();
+      const mark = userChangeMark();
       const session = await sessionManager.validate(token);
 
       if (!session) {
@@ -207,7 +209,9 @@ export function setupWebSocket(app: Elysia): void {
         webChatChannel.unregisterConnection(connectionId);
       };
       activeConnections.set(session.userId, { ws, cleanup });
-      wsData(ws).untrack = trackUserSocket(session.userId, ws);
+      const untrack = trackUserSocket(session.userId, ws, mark);
+      if (!untrack) return;
+      wsData(ws).untrack = untrack;
 
       // Send connection confirmation
       ws.send(JSON.stringify({
@@ -471,6 +475,7 @@ export function setupWebSocket(app: Elysia): void {
       }
 
       const sessionManager = getSessionManager();
+      const mark = userChangeMark();
       const session = await sessionManager.validate(token);
 
       if (!session) {
@@ -516,7 +521,9 @@ export function setupWebSocket(app: Elysia): void {
         return;
       }
 
-      wsData(ws).untrack = trackUserSocket(session.userId, ws);
+      const untrack = trackUserSocket(session.userId, ws, mark);
+      if (!untrack) return;
+      wsData(ws).untrack = untrack;
       apiLogger.info({ userId: session.userId }, 'Permission WS connected');
     },
 
@@ -574,6 +581,7 @@ export function setupWebSocket(app: Elysia): void {
       // per-user; create one in Settings → API Tokens). The master key is
       // still accepted as a legacy fallback so existing setups keep working.
       let userId: string | undefined;
+      const mark = userChangeMark();
       const apiAuth = await getApiTokenManager().validate(token);
       if (apiAuth) {
         userId = apiAuth.userId;
@@ -587,7 +595,11 @@ export function setupWebSocket(app: Elysia): void {
 
       wsData(ws)._bridgeAuthed = true;
       wsData(ws).userId = userId;
-      if (userId) wsData(ws).untrack = trackUserSocket(userId, ws);
+      if (userId) {
+        const untrack = trackUserSocket(userId, ws, mark);
+        if (!untrack) return;
+        wsData(ws).untrack = untrack;
+      }
       apiLogger.info({ userId }, 'Browser bridge: WebSocket connected, awaiting handshake');
       ws.send(JSON.stringify({ type: 'ready' }));
     },

@@ -54,8 +54,12 @@ export default function AdminUsersPage() {
 
   const patchMutation = useMutation({
     mutationFn: ({ id, body }: { id: string; body: Record<string, unknown> }) =>
-      api.patch<AdminUser>(`/admin/users/${id}`, body),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'users'] }),
+      api.patch<AdminUser & { warnings?: string[] }>(`/admin/users/${id}`, body),
+    onSuccess: (res) => {
+      // The change was saved; some consequences of a deactivation failed.
+      if (res.warnings?.length) setError(res.warnings.join('; '));
+      queryClient.invalidateQueries({ queryKey: ['admin', 'users'] });
+    },
     onError: (err: Error) => setError(err.message),
   });
 

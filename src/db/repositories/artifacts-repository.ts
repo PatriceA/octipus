@@ -1,4 +1,5 @@
 import { and, desc, eq, inArray, isNull, lt } from 'drizzle-orm';
+import { revokeArtifactViewers } from '@/core/artifacts/viewer-access';
 import { getDb } from '../postgres';
 import {
   type Artifact,
@@ -85,11 +86,19 @@ export class ArtifactsRepository {
       .limit(limit);
   }
 
+  /**
+   * A visibility change ends the live embed viewers of the artifact
+   * (`revokeArtifactViewers`): their tokens were minted under the old one.
+   */
   async update(id: string, patch: Partial<NewArtifact>): Promise<void> {
+    const before = patch.visibility !== undefined ? await this.getById(id) : null;
     await this.db
       .update(artifacts)
       .set({ ...patch, updatedAt: new Date() })
       .where(eq(artifacts.id, id));
+    if (before && before.visibility !== patch.visibility) {
+      await revokeArtifactViewers(id, 'Artifact visibility changed');
+    }
   }
 
   async setCurrentVersion(id: string, versionId: string): Promise<void> {
@@ -99,11 +108,13 @@ export class ArtifactsRepository {
       .where(eq(artifacts.id, id));
   }
 
+  /** Also ends the artifact's live embed viewers. */
   async softDelete(id: string): Promise<void> {
     await this.db
       .update(artifacts)
       .set({ deletedAt: new Date() })
       .where(eq(artifacts.id, id));
+    await revokeArtifactViewers(id, 'Artifact deleted');
   }
 
   // ── versions ─────────────────────────────────────────────────

@@ -18,13 +18,19 @@ import { getDb } from '@/db/postgres';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { userRepository } from '@/db/repositories/user-repository';
 import { type User, users } from '@/db/schema/users';
+import { markUserChanged } from '@/security/user-change-marks';
 import { securityLogger } from '@/utils/logger';
 
 /** Who changed an account's active flag: an admin, or one org's SCIM token. */
 export type ActiveSource = 'admin' | `scim:${string}`;
 
 export type SetUserActiveOutcome =
-  | { status: 'changed'; user: User }
+  /**
+   * `failedSteps` names the consequences of a deactivation that threw (each is
+   * logged). The flag itself is off and every request re-reads it, so the
+   * caller reports them rather than failing the whole change.
+   */
+  | { status: 'changed'; user: User; failedSteps: string[] }
   | { status: 'unchanged'; user: User }
   /** A SCIM re-activation of an account an admin (or another org) switched off. */
   | { status: 'refused'; user: User }
@@ -52,7 +58,28 @@ export async function setUserActive(
 ): Promise<SetUserActiveOutcome> {
   const user = await userRepository.findById(userId);
   if (!user) return { status: 'not_found' };
-  if (user.isActive === active) return { status: 'unchanged', user };
+  if (user.isActive === active) {
+    // An admin's deactivation of an account SCIM already switched off is
+    // recorded all the same, so that org's later `active: true` cannot undo it.
+    if (!active && source === 'admin' && user.deactivatedBy !== 'admin') {
+      const [claimed] = await getDb()
+        .update(users)
+        .set({ deactivatedBy: 'admin', updatedAt: new Date() })
+        .where(and(eq(users.id, userId), eq(users.isActive, false)))
+        .returning();
+      if (claimed) {
+        await auditRepository.log({
+          userId: actor ?? userId,
+          action: 'user_updated',
+          resourceType: 'user',
+          resourceId: userId,
+          details: { isActive: false, source, previousDeactivatedBy: user.deactivatedBy, ...(actor ? { byAdmin: actor } : {}), targetUser: claimed.username },
+        });
+        return { status: 'unchanged', user: claimed };
+      }
+    }
+    return { status: 'unchanged', user };
+  }
   if (active && source !== 'admin' && user.deactivatedBy !== source) {
     securityLogger.warn({ userId, source, deactivatedBy: user.deactivatedBy }, 'Re-activation refused: deactivated by someone else');
     return { status: 'refused', user };
@@ -80,16 +107,16 @@ export async function setUserActive(
   securityLogger.warn({ userId, active, source, actor }, active ? 'User re-activated' : 'User deactivated');
 
   await onUserChanged(userId);
-  if (!active) await applyDeactivation(userId);
-  return { status: 'changed', user: updated };
+  const failedSteps = active ? [] : await applyDeactivation(userId);
+  return { status: 'changed', user: updated, failedSteps };
 }
 
 /**
- * Everything a deactivation ends. Each step runs even when another fails; any
- * failure is logged and rethrown once all have run (the flag itself is already
- * off, and every request re-reads it).
+ * Everything a deactivation ends. Each step runs even when another fails; each
+ * failure is logged and its name returned (the flag itself is already off, and
+ * every request re-reads it).
  */
-async function applyDeactivation(userId: string): Promise<void> {
+async function applyDeactivation(userId: string): Promise<string[]> {
   const { getSessionManager } = await import('@/security/auth/session');
   const { closeUserSockets } = await import('@/api/user-sockets');
   const { getAgentManager } = await import('@/core/agent-manager');
@@ -105,16 +132,16 @@ async function applyDeactivation(userId: string): Promise<void> {
     ['expire approvals', () => getAgentService().expireApprovalsForUser(userId, DEACTIVATED_MESSAGE)],
     ['end impersonations', () => getImpersonationManager().endForTarget(userId)],
   ];
-  const failures: unknown[] = [];
+  const failed: string[] = [];
   for (const [name, run] of steps) {
     try {
       await run();
     } catch (err) {
       securityLogger.error({ err, userId, step: name }, 'Deactivation step failed');
-      failures.push(err);
+      failed.push(name);
     }
   }
-  if (failures.length > 0) throw new AggregateError(failures, `Deactivation of ${userId} left ${failures.length} step(s) undone`);
+  return failed;
 }
 
 /**
@@ -124,6 +151,9 @@ async function applyDeactivation(userId: string): Promise<void> {
  * row (or refused).
  */
 export async function onUserChanged(userId: string): Promise<void> {
+  // First, so a socket that is still authenticating with the old row closes
+  // itself when it registers after the sweeps below.
+  markUserChanged(userId);
   // Lazy: the hub module pulls the gateway in, which this module's callers
   // (routes) must not have to load at import time.
   const { getGatewayHub } = await import('@/core/gateway/hub');

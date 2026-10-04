@@ -183,6 +183,16 @@ header is read right to left, skipping trusted proxies, and the first other
 hop is the client. An entry that is not an address or CIDR range is rejected
 when the configuration loads.
 
+The bundled web server (`web/serve.mjs`: port 3007 in the image, published as
+3017 by `docker-compose.yml`) proxies `/api`, `/a` and `/__artifacts__` to the
+backend over loopback and appends its peer address to `X-Forwarded-For`. In
+that setup, set `TRUSTED_PROXIES=127.0.0.1,::1` so the backend sees each
+browser's address instead of one shared one; a client that forges the header
+only adds hops left of the real one, which are ignored. If nginx or a load
+balancer sits in front of port 3017, list it too, and have it set or append
+`X-Forwarded-For` as above (a front proxy that sends only `X-Real-IP` is not
+enough here, because the bundled server always sends `X-Forwarded-For`).
+
 ## Docker Services
 
 Embedded mode requires no external database service. For external mode, provide PostgreSQL with pgvector. The following is an example for operators who maintain a separate `~/docker-services` Compose project; that directory is not shipped by Octipus:

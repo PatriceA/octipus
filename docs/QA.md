@@ -751,7 +751,9 @@ Multi-user → Org/Workspaces). At least one admin user available.
    the response is a 302 to `/` with a `session_token` cookie set.
 6. Reload `/`. You're signed in as the SAML user. The user is
    created on first login if it didn't exist; subsequent logins
-   re-use the row.
+   re-use the row. A username that already belongs to an account
+   outside this org is refused with 403 (the IdP cannot take over
+   another org's or the admin's account).
 7. SQL check:
    ```sql
    SELECT u.username, om.role FROM users u
