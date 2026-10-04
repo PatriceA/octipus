@@ -53,7 +53,7 @@ interface TurnEventHandler {
 export interface TurnEvent {
   type: 'chat_response' | 'status_update' | 'approval_required' | 'worker_spawned' | 'worker_completed' | 'pipeline_event';
   sessionId: string;
-  userId?: string;
+  userId: string;
   data: unknown;
   timestamp: Date;
 }

@@ -483,9 +483,13 @@ export interface EventUse {
  * subscriber that was never supposed to exist.
  */
 const PUBLISH_RE =
-  /\b(?:(?:hub|getGatewayHub\(\))\.publishEvent|(?:this\.)?eventBus\.publish)\(\s*\{/g;
-/** The method name, so the payload's own paren can be found past any getter. */
-const PUBLISH_FN_RE = /publishEvent|publish/;
+  /\b(?:(?:hub|getGatewayHub\(\))\.publishEvent|(?:this\.)?eventBus\.publish)\(\s*\{|\bpublishToArtifact\(\s*\w+,\s*\{/g;
+/**
+ * The method name, so the payload's own paren can be found past any getter.
+ * `publishToArtifact` (`core/artifacts/events.ts`) sends `artifact.*` events to
+ * the resource `artifact:<id>` through `hub.publishToResource`, not the bus.
+ */
+const PUBLISH_FN_RE = /publishToArtifact|publishEvent|publish/;
 /** The `type:` entry of a publish payload, capturing the whole value expression. */
 const TYPE_KEY_RE = /(?:^|[\s,{])type:\s*([^\n,]+)/;
 /** A same-file helper the `type:` value delegates to, e.g. `mapXType(event.type)`. */

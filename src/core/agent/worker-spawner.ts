@@ -758,6 +758,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     stageNode = {
       id: '__pending__',
       rootSessionId: overrides.swarmParent.rootSessionId,
+      userId: context.userId,
       parentNodeId: overrides.swarmParent.id,
       kind: 'agent',
       depth: 1,
@@ -951,7 +952,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     getGatewayHub().publishEvent({
       type: 'swarm.node_spawned',
       source: `swarm:${overrides.swarmParent.id}`,
-      userId: undefined,
+      userId: context.userId,
       sessionId: overrides.swarmParent.rootSessionId,
       payload: {
         rootSessionId: overrides.swarmParent.rootSessionId,
@@ -1080,7 +1081,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
         getGatewayHub().publishEvent({
           type: 'swarm.node_completed',
           source: `swarm:${overrides.swarmParent.id}`,
-          userId: undefined,
+          userId: context.userId,
           sessionId: overrides.swarmParent.rootSessionId,
           payload: {
             rootSessionId: overrides.swarmParent.rootSessionId,
@@ -1136,7 +1137,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
         getGatewayHub().publishEvent({
           type: 'swarm.node_completed',
           source: `swarm:${overrides.swarmParent.id}`,
-          userId: undefined,
+          userId: context.userId,
           sessionId: overrides.swarmParent.rootSessionId,
           payload: {
             rootSessionId: overrides.swarmParent.rootSessionId,

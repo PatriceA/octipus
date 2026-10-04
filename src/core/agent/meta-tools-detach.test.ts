@@ -19,6 +19,7 @@ function makeRootNode(): AgentNode {
   return {
     id: 'rootAgent-1',
     rootSessionId: '00000000-0000-0000-0000-000000000000',
+    userId: 'user-1',
     parentNodeId: null,
     kind: 'root',
     depth: 0,

@@ -227,10 +227,11 @@ describe('GatewayEventBus', () => {
       id: Math.random().toString(36),
       type: 'test.event',
       source: 'test',
+      userId: 'user-1',
       timestamp: Date.now(),
       payload: {},
       ...overrides,
-    };
+    } as GatewayEvent;
   }
 
   test('delivers events to subscribers', () => {

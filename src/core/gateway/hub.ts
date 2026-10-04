@@ -3,9 +3,10 @@ import { coreLogger } from '@/utils/logger';
 import { ConnectionManager } from './connection-manager';
 import { GatewayEventBus } from './event-bus';
 import { ensureLocalToken } from './local-auth';
-import type { ClientMessage, ConnectionContext, GatewayEvent } from './protocol';
+import type { ClientMessage, ConnectionContext, GatewayMessage, UserGatewayEvent } from './protocol';
 import { PROTOCOL_VERSION } from './protocol';
 import { GatewayRateLimiter } from './rate-limiter';
+import { canSubscribeToResource } from './resource-access';
 
 /**
  * GatewayHub — central WebSocket hub that all clients connect to.
@@ -83,10 +84,13 @@ export class GatewayHub {
   }
 
   /**
-   * Publish a gateway event to all subscribed connections.
+   * Publish a user's event: to the internal bus, and to that user's
+   * connections whose patterns match. Delivery is by user id alone — trust
+   * level, admin rights and client type widen nothing. Events that belong to
+   * no user are `GLOBAL_EVENT_TYPES` and never come through here.
    */
-  publishEvent(event: Omit<GatewayEvent, 'id' | 'timestamp'>): void {
-    const fullEvent: GatewayEvent = {
+  publishEvent(event: Omit<UserGatewayEvent, 'id' | 'timestamp'>): void {
+    const fullEvent: UserGatewayEvent = {
       ...event,
       id: randomBytes(12).toString('hex'),
       timestamp: Date.now(),
@@ -99,10 +103,7 @@ export class GatewayHub {
     this.connectionManager.broadcast(
       { type: 'event', event: fullEvent },
       (ctx) => {
-        // Security: only deliver events the connection is allowed to see
-        if (fullEvent.userId && fullEvent.userId !== ctx.userId && ctx.trustLevel !== 'system' && ctx.trustLevel !== 'local') {
-          return false;
-        }
+        if (fullEvent.userId !== ctx.userId) return false;
         // Check subscription patterns
         for (const pattern of ctx.eventSubscriptions) {
           if (matchesPatternImport(fullEvent.type, pattern)) return true;
@@ -110,6 +111,15 @@ export class GatewayHub {
         return false;
       },
     );
+  }
+
+  /**
+   * Send a message to every connection subscribed to `resource`
+   * (`artifact:<id>`, …). Outside the event bus and outside the user rule:
+   * a connection is in a resource only after `canSubscribeToResource` let it in.
+   */
+  publishToResource(resource: string, message: GatewayMessage): void {
+    this.connectionManager.broadcast(message, (ctx) => ctx.resources.has(resource));
   }
 
   /**
@@ -127,6 +137,16 @@ export class GatewayHub {
 
   private async routeMessage(connectionId: string, context: ConnectionContext, message: ClientMessage): Promise<void> {
     try {
+      // An artifact-token connection is a viewer of one artifact, not a user:
+      // it pings and (un)subscribes, nothing else reaches a handler.
+      if (context.artifactId !== undefined && message.type !== 'ping' && message.type !== 'subscribe' && message.type !== 'unsubscribe') {
+        this.connectionManager.sendToConnection(connectionId, {
+          type: 'error',
+          code: 'FORBIDDEN',
+          message: `An artifact connection cannot send ${message.type}`,
+        });
+        return;
+      }
       switch (message.type) {
         case 'ping':
           this.connectionManager.sendToConnection(connectionId, {
@@ -136,15 +156,19 @@ export class GatewayHub {
           break;
 
         case 'subscribe': {
-          for (const pattern of message.patterns) {
+          for (const pattern of message.patterns ?? []) {
             context.eventSubscriptions.add(pattern);
           }
+          await this.subscribeResources(connectionId, context, message.resources ?? []);
           break;
         }
 
         case 'unsubscribe': {
-          for (const pattern of message.patterns) {
+          for (const pattern of message.patterns ?? []) {
             context.eventSubscriptions.delete(pattern);
+          }
+          for (const resource of message.resources ?? []) {
+            context.resources.delete(resource);
           }
           break;
         }
@@ -168,6 +192,27 @@ export class GatewayHub {
         code: 'INTERNAL_ERROR',
         message: 'Internal server error',
       });
+    }
+  }
+
+  private async subscribeResources(connectionId: string, context: ConnectionContext, resources: string[]): Promise<void> {
+    if (resources.length === 0) return;
+    const granted: string[] = [];
+    for (const resource of resources) {
+      if (!(await canSubscribeToResource(context, resource))) {
+        coreLogger.warn({ connectionId, userId: context.userId, resource }, 'Gateway resource subscribe denied');
+        this.connectionManager.sendToConnection(connectionId, {
+          type: 'error',
+          code: 'FORBIDDEN',
+          message: `Not allowed to subscribe to ${resource}`,
+        });
+        continue;
+      }
+      context.resources.add(resource);
+      granted.push(resource);
+    }
+    if (granted.length > 0) {
+      this.connectionManager.sendToConnection(connectionId, { type: 'subscribed', resources: granted });
     }
   }
 

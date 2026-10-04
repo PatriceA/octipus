@@ -259,6 +259,7 @@ export class SwarmSpawner {
       this.hub.publishEvent({
         type: 'swarm.budget_warning',
         source: `swarm:${node.id}`,
+        userId: node.userId,
         sessionId: node.rootSessionId,
         payload: {
           nodeId: node.id,
@@ -474,7 +475,7 @@ export class SwarmSpawner {
           this.hub.publishEvent({
             type: 'swarm.call_graph_cycle_blocked',
             source: `swarm:${parent.id}`,
-            userId: undefined,
+            userId: parent.userId,
             sessionId: parent.rootSessionId,
             payload: {
               rootSessionId: parent.rootSessionId,
@@ -1527,6 +1528,7 @@ export class SwarmSpawner {
       childNode = {
         id: '__pending__',
         rootSessionId: opts.parent.rootSessionId,
+        userId: opts.parent.userId,
         parentNodeId: opts.parent.id,
         kind: 'agent',
         depth: 1,
@@ -2072,6 +2074,7 @@ export class SwarmSpawner {
   static makeSwarmRoot(opts: {
     id: string;
     rootSessionId: string;
+    userId: string;
     role: AgentRole;
     model: string;
     topicPath?: string;
@@ -2081,6 +2084,7 @@ export class SwarmSpawner {
     return {
       id: opts.id,
       rootSessionId: opts.rootSessionId,
+      userId: opts.userId,
       parentNodeId: null,
       kind: 'root',
       depth: 0,
@@ -2408,7 +2412,7 @@ export class SwarmSpawner {
     this.hub.publishEvent({
       type: 'swarm.node_spawned',
       source: `swarm:${parent.id}`,
-      userId: undefined,
+      userId: parent.userId,
       sessionId: parent.rootSessionId,
       payload: { rootSessionId: parent.rootSessionId, ...payload },
     });
@@ -2418,7 +2422,7 @@ export class SwarmSpawner {
     this.hub.publishEvent({
       type: 'swarm.node_completed',
       source: `swarm:${parent.id}`,
-      userId: undefined,
+      userId: parent.userId,
       sessionId: parent.rootSessionId,
       payload: { rootSessionId: parent.rootSessionId, ...payload },
     });

@@ -446,6 +446,7 @@ function makeNode(over: Partial<AgentNode> = {}): AgentNode {
   return {
     id: 'node-1',
     rootSessionId: '00000000-0000-0000-0000-0000000000aa',
+    userId: 'user-1',
     parentNodeId: null,
     kind: 'root',
     depth: 0,

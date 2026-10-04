@@ -1,10 +1,12 @@
 /**
- * Live-artifacts agent-authoring tools. Each handler resolves the user's
- * default workspace; explicit cross-workspace creation is rejected. Permission
+ * Live-artifacts agent-authoring tools. Each handler works in the agent's
+ * workspace (`context.workspaceId`) and fails when there is none; artifacts of
+ * another workspace are rejected. Permission
  * tier is ASK by default (write actions); read-only ops are ALLOW.
  */
 
-import type { ToolManifest } from '@/core/types';
+import { ToolNotExecutedError } from '@/core/tool-execution-error';
+import type { AgentContext, ToolManifest } from '@/core/types';
 import { artifactsRepository } from '@/db/repositories/artifacts-repository';
 import type { ArtifactSourceKind } from '@/db/schema/artifact-data-sources';
 import type { ArtifactType, ArtifactVisibility } from '@/db/schema/artifacts';
@@ -137,22 +139,18 @@ const UPDATE_DESCRIPTION =
   'Use this tool when you genuinely need a new HTML template version. ' +
   'Same template/source coupling applies as `create_live_artifact` — if you reference a new `{{data.<name>.…}}`, attach the source first via `add_artifact_data_source`.';
 
-async function resolveDefaultWorkspaceId(userId: string): Promise<string> {
-  const { getOrgWorkspaceManager } = await import('@/services/org-membership').catch(
-    () => ({ getOrgWorkspaceManager: null as never }),
-  ) as { getOrgWorkspaceManager: ((() => unknown)) | null };
-  if (getOrgWorkspaceManager) {
-    const mgr = (getOrgWorkspaceManager as () => { ensureDefaultWorkspace: (uid: string) => Promise<{ id: string }> })();
-    const ws = await mgr.ensureDefaultWorkspace(userId);
-    return ws.id;
+/**
+ * The workspace the agent works in, from its context — resolved once at the
+ * turn's entry point and inherited by every worker. No fallback: guessing "a
+ * workspace of the user" would put an artifact somewhere the user never chose
+ * (house rule 1).
+ */
+function requireWorkspaceId(context: AgentContext): string {
+  if (!context.workspaceId) {
+    // Thrown before any write: a definite no-op, not an uncertain mutation.
+    throw new ToolNotExecutedError('artifacts', 'Live artifacts need a workspace, and this agent has none (context.workspaceId is unset). Run it from a signed-in session in a workspace.');
   }
-  // Fallback: direct DB lookup of any workspace owned by the user.
-  const { getDb } = await import('@/db/postgres');
-  const { workspaces } = await import('@/db/schema/organizations');
-  const { eq } = await import('drizzle-orm');
-  const rows = await getDb().select().from(workspaces).where(eq(workspaces.userId, userId)).limit(1);
-  if (rows.length === 0) throw new Error('no workspace found for user — create one first');
-  return rows[0].id;
+  return context.workspaceId;
 }
 
 export class ArtifactsTool extends BaseTool {
@@ -212,7 +210,7 @@ export class ArtifactsTool extends BaseTool {
         if (!SLUG_RE.test(args.slug as string)) {
           return { error: 'invalid slug (lowercase/digits/dashes, 1-64 chars)' };
         }
-        const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        const workspaceId = requireWorkspaceId(context);
         const visibility = ((args.visibility as ArtifactVisibility | undefined) ?? 'workspace');
         const a = await artifactsRepository.create({
           slug: args.slug as string,
@@ -335,7 +333,7 @@ export class ArtifactsTool extends BaseTool {
       async (args, context) => {
         const a = await artifactsRepository.getById(args.id as string);
         if (!a) return { error: 'not found' };
-        const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        const workspaceId = requireWorkspaceId(context);
         if (a.workspaceId !== workspaceId) return { error: 'not authorized' };
 
         if (args.title || args.visibility) {
@@ -409,7 +407,7 @@ export class ArtifactsTool extends BaseTool {
       async (args, context) => {
         const a = await artifactsRepository.getById(args.artifact_id as string);
         if (!a) return { error: 'not found' };
-        const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        const workspaceId = requireWorkspaceId(context);
         if (a.workspaceId !== workspaceId) return { error: 'not authorized' };
 
         const kind = args.kind as ArtifactSourceKind;
@@ -462,7 +460,7 @@ export class ArtifactsTool extends BaseTool {
       async (args, context) => {
         const a = await artifactsRepository.getById(args.artifact_id as string);
         if (!a) return { error: 'not found' };
-        const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        const workspaceId = requireWorkspaceId(context);
         if (a.workspaceId !== workspaceId) return { error: 'not authorized' };
         const s = await artifactsRepository.getSource(args.source_id as string);
         if (!s || s.artifactId !== a.id) return { error: 'source not found' };
@@ -482,7 +480,7 @@ export class ArtifactsTool extends BaseTool {
       async (args, context) => {
         const a = await artifactsRepository.getById(args.id as string);
         if (!a) return { error: 'not found' };
-        const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        const workspaceId = requireWorkspaceId(context);
         if (a.workspaceId !== workspaceId) return { error: 'not authorized' };
         if (args.purge_now) {
           const { getDb } = await import('@/db/postgres');
@@ -504,7 +502,7 @@ export class ArtifactsTool extends BaseTool {
       'List all live artifacts in the current workspace.',
       createParameterSchema({}),
       async (_args, context) => {
-        const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        const workspaceId = requireWorkspaceId(context);
         const items = await artifactsRepository.listByWorkspace(workspaceId);
         return {
           artifacts: items.map((a) => ({
@@ -539,7 +537,7 @@ export class ArtifactsTool extends BaseTool {
         const slug = (args.slug as string | undefined)?.trim();
         const id = (args.id as string | undefined)?.trim();
         if (!slug && !id) return { error: 'slug or id is required' };
-        const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        const workspaceId = requireWorkspaceId(context);
         const a = id
           ? await artifactsRepository.getById(id)
           : await artifactsRepository.getBySlug(workspaceId, slug as string);
@@ -625,7 +623,7 @@ export class ArtifactsTool extends BaseTool {
       async (args, context) => {
         const a = await artifactsRepository.getById(args.id as string);
         if (!a) return { error: 'not found' };
-        const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        const workspaceId = requireWorkspaceId(context);
         if (a.workspaceId !== workspaceId) return { error: 'not authorized' };
         const sources = await artifactsRepository.listSources(a.id);
         const results = await Promise.all(sources.map((s) => refreshSource(s.id)));
@@ -649,7 +647,7 @@ export class ArtifactsTool extends BaseTool {
       async (args, context) => {
         const a = await artifactsRepository.getById(args.artifact_id as string);
         if (!a) return { error: 'not found' };
-        const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        const workspaceId = requireWorkspaceId(context);
         if (a.workspaceId !== workspaceId) return { error: 'not authorized' };
         const created = await artifactsRepository.createTransform({
           artifactId: a.id,
@@ -674,7 +672,7 @@ export class ArtifactsTool extends BaseTool {
       async (args, context) => {
         const a = await artifactsRepository.getById(args.artifact_id as string);
         if (!a) return { error: 'not found' };
-        const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        const workspaceId = requireWorkspaceId(context);
         if (a.workspaceId !== workspaceId) return { error: 'not authorized' };
         await artifactsRepository.deleteTransformByName(a.id, args.name as string);
         return { ok: true, message: 'Transform removed' };
@@ -697,7 +695,7 @@ export class ArtifactsTool extends BaseTool {
       async (args, context) => {
         const a = await artifactsRepository.getById(args.artifact_id as string);
         if (!a) return { error: 'not found' };
-        const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        const workspaceId = requireWorkspaceId(context);
         if (a.workspaceId !== workspaceId) return { error: 'not authorized' };
         const created = await artifactsRepository.createWidget({
           artifactId: a.id,
@@ -722,7 +720,7 @@ export class ArtifactsTool extends BaseTool {
       async (args, context) => {
         const a = await artifactsRepository.getById(args.artifact_id as string);
         if (!a) return { error: 'not found' };
-        const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        const workspaceId = requireWorkspaceId(context);
         if (a.workspaceId !== workspaceId) return { error: 'not authorized' };
         await artifactsRepository.deleteWidgetBySlot(a.id, args.slot as string);
         return { ok: true, message: 'Widget removed' };
@@ -758,7 +756,7 @@ export class ArtifactsTool extends BaseTool {
       async (args, context) => {
         const a = await artifactsRepository.getById(args.artifact_id as string);
         if (!a) return { error: 'not found' };
-        const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        const workspaceId = requireWorkspaceId(context);
         if (a.workspaceId !== workspaceId) return { error: 'not authorized' };
         if (!/^[a-zA-Z0-9_-]+$/.test(args.export_id as string)) {
           return { error: 'export_id must match [a-zA-Z0-9_-]+' };
@@ -790,7 +788,7 @@ export class ArtifactsTool extends BaseTool {
       async (args, context) => {
         const a = await artifactsRepository.getById(args.artifact_id as string);
         if (!a) return { error: 'not found' };
-        const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        const workspaceId = requireWorkspaceId(context);
         if (a.workspaceId !== workspaceId) return { error: 'not authorized' };
         await artifactsRepository.deleteExportByPublicId(a.id, args.export_id as string);
         return { ok: true, message: 'Export removed' };

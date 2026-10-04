@@ -1,8 +1,10 @@
 /**
  * Live Artifacts browser SDK — runs inside the sandboxed embed iframe.
  * Reads the artifact id + scoped JWT from <meta> tags injected at render
- * time. Subscribes via the gateway WS, fetches updated snapshots via REST,
- * patches DOM via `[data-bind="<sourceName>"]` swap.
+ * time. Signs in to the gateway WS with that token (`artifact_token`), then
+ * subscribes to the resource `artifact:<id>` — the only one the token opens.
+ * Fetches updated snapshots via REST, patches DOM via
+ * `[data-bind="<sourceName>"]` swap.
  *
  * Keep this file dependency-free and ES2017-clean. Bundling: copy verbatim
  * to /octipus-artifact-client.js, compute sha256 at build, pin in CSP.
@@ -60,10 +62,7 @@
     }
     socket.onopen = () => {
       backoff = 500;
-      socket.send(JSON.stringify({
-        type: 'subscribe',
-        patterns: ['artifact.data_updated', 'artifact.version_updated', 'artifact.source_error'],
-      }));
+      // Auth must be the first frame; subscribe only once it is accepted.
       socket.send(JSON.stringify({
         type: 'auth', method: 'artifact_token',
         credentials: { artifactId: ARTIFACT_ID, token: TOKEN },
@@ -75,6 +74,10 @@
       lastEventAt = Date.now();
       let env;
       try { env = JSON.parse(msg.data); } catch { return; }
+      if (env && env.type === 'auth_ok') {
+        socket.send(JSON.stringify({ type: 'subscribe', resources: ['artifact:' + ARTIFACT_ID] }));
+        return;
+      }
       const ev = env && env.event;
       if (!ev || !ev.payload || ev.payload.artifactId !== ARTIFACT_ID) return;
       if (ev.type === 'artifact.data_updated') applyUpdate(ev.payload.sourceName).catch(console.error);

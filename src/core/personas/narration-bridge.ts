@@ -57,7 +57,7 @@ async function handleSpawn(event: GatewayEvent): Promise<void> {
       count: 1,
     });
     if (!text) return;
-    publishNarration(event, text);
+    publishNarration(event, userId, text);
   } catch (err) {
     coreLogger.debug({ err }, 'narration-bridge: spawn handler failed');
   }
@@ -82,7 +82,7 @@ async function handleCompleted(event: GatewayEvent): Promise<void> {
       },
     );
     if (!text) return;
-    publishNarration(event, text);
+    publishNarration(event, userId, text);
   } catch (err) {
     coreLogger.debug({ err }, 'narration-bridge: completion handler failed');
   }
@@ -97,17 +97,18 @@ async function handleBudget(event: GatewayEvent): Promise<void> {
     if (persona.narration === 'off') return;
     const text = renderNarration(persona, 'budget_warning', {});
     if (!text) return;
-    publishNarration(event, text);
+    publishNarration(event, userId, text);
   } catch (err) {
     coreLogger.debug({ err }, 'narration-bridge: budget handler failed');
   }
 }
 
-function publishNarration(source: GatewayEvent, text: string): void {
+/** `userId` is the session's owner — narration goes to them only. */
+function publishNarration(source: GatewayEvent, userId: string, text: string): void {
   getGatewayHub().publishEvent({
     type: 'swarm.narration',
     source: source.source,
-    userId: source.userId,
+    userId,
     sessionId: source.sessionId,
     payload: {
       text,

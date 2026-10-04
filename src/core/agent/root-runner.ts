@@ -224,6 +224,7 @@ export async function runRootAgent(
   const parentNode: AgentNode = {
     id: '__pending__',
     rootSessionId: sessionId,
+    userId,
     parentNodeId: null,
     kind: 'root',
     depth: 0,
