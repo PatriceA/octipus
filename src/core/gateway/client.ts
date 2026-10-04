@@ -50,6 +50,8 @@ export class GatewayClient {
   private maxReconnectAttempts = 10;
   /** Who the last connect authenticated as, or null when signed out. */
   private authenticatedAs: { username: string; userId: string } | null = null;
+  /** The server's frame cap from `auth_ok` (`gateway.maxFrameBytes`). */
+  private maxFrameBytes: number | null = null;
 
   constructor(options: GatewayClientOptions) {
     this.options = options;
@@ -157,13 +159,23 @@ export class GatewayClient {
    * Send a chat message.
    */
   sendChat(sessionId: string, content: string, projectPath?: string, attachments?: ChatAttachment[]): void {
-    this.send({
+    const message: ClientMessage = {
       type: 'chat.send',
       sessionId,
       content,
       ...(projectPath ? { projectPath } : {}),
       ...(attachments?.length ? { attachments } : {}),
-    });
+    };
+    // A frame over the server's cap would close the socket mid-send; say so
+    // instead, with the setting that governs it.
+    const size = Buffer.byteLength(JSON.stringify(message));
+    if (this.maxFrameBytes !== null && size > this.maxFrameBytes) {
+      this.options.onError?.(
+        `Message not sent: it is ${Math.ceil(size / 1024)} KiB and the server accepts at most ${Math.floor(this.maxFrameBytes / 1024)} KiB per message (gateway.maxFrameBytes). Attach a smaller image, or raise the setting.`,
+      );
+      return;
+    }
+    this.send(message);
   }
 
   /**
@@ -242,12 +254,19 @@ export class GatewayClient {
       case 'auth_ok':
         this.setStatus('connected');
         this.reconnectAttempts = 0;
+        this.maxFrameBytes = msg.maxFrameBytes ?? null;
         // Subscribe to all events
         this.subscribe(['*']);
         break;
 
       case 'auth_error':
         this.setStatus('error');
+        // Over the per-user connection cap: the login is fine, too many
+        // clients are open. Keep it and say so.
+        if (msg.reason === 'Too many connections') {
+          this.options.onError?.('Too many open connections for this account (gateway.maxConnectionsPerUser) — close a tab or terminal and reconnect.');
+          break;
+        }
         // The stored login is dead (expired, revoked, the account was
         // deactivated, or the server was reset). Drop it rather than
         // reconnect-looping against it, and ask for a new one.

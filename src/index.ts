@@ -367,7 +367,7 @@ async function main() {
 
     // Wire gateway message handler and bridge root agent/agent events
     wireMessageHandler(gatewayHub);
-    const disconnectBridge = connectEventBridge(gatewayHub);
+    const disconnectBridge = await connectEventBridge(gatewayHub);
 
     // Start API server. The returned Elysia app MUST stay referenced for the
     // lifetime of the process: Bun finalizes the underlying server when its JS

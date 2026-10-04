@@ -46,6 +46,19 @@ export interface ConnectionContext {
    * Unset only on an artifact-viewer connection.
    */
   workspaceId?: string;
+  /**
+   * The session this connection put into voice mode (`voice.set`): turn
+   * events of that session are narrated to this connection as `voice.speak`.
+   * Cleared on `voice.set {on:false}` and when the connection closes.
+   */
+  voiceSessionId?: string;
+  /**
+   * Set while the `permission.pending` snapshot for this connection is being
+   * read: live `permission.*`, `agent.approval_required` and
+   * `approval.resolved` events are held here and sent after the snapshot, so
+   * a resolution during hydration cannot resurrect a request.
+   */
+  hydrationQueue?: UserGatewayEvent[];
   metadata: Record<string, unknown>;
 }
 
@@ -105,14 +118,33 @@ export type GatewayEventType =
   | 'swarm.narration'
   // Chat
   | 'chat.response'
+  // A user-stamped chat line that is not a turn's reply: a steered message
+  // (`injected: true`), a side question's answer (`sideChannel: true`), or an
+  // in-app proactive delivery (`proactive: true`, `webChatChannel.sendToUser`).
   | 'chat.message'
   // Streamed slice of the root agent's reply text; the full text follows as chat.response.
   | 'chat.delta'
+  // A chat.send turn that failed: every tab of the user showing the session
+  // stops its spinner and shows the error.
+  | 'chat.error'
   // Approval / permission flows
   | 'agent.approval_required'
+  // A root-agent approval left the pending list (answered, timed out,
+  // expired); every tab drops its prompt.
+  | 'approval.resolved'
   | 'rootAgent.status'
   | 'permission.request'
   | 'permission.resolved'
+  // Document processing (the documents queue), stamped with the uploader.
+  | 'document.enqueued'
+  | 'document.processing'
+  | 'document.completed'
+  | 'document.failed'
+  // A local model install's progress (hwfit), stamped with who started it.
+  | 'model.install_progress'
+  // A spoken narration line for the connection(s) that put the session into
+  // voice mode (`voice.set`) — never the user's other connections.
+  | 'voice.speak'
   // Session. `session.cleared` was declared here with no producer and no
   // consumer, and is retired for the same reason as `swarm.node_status` above.
   | 'session.compaction_stalled'
@@ -325,6 +357,29 @@ export const PingSchema = z.object({
   type: z.literal('ping'),
 });
 
+/**
+ * `voice.set` — put a session into (or out of) voice mode for this
+ * connection: the root agent's propose-then-confirm gate applies to the
+ * user's turns in it, and its lifecycle is narrated to this connection as
+ * `voice.speak`. Owner-checked like `chat.send`.
+ */
+export const VoiceSetSchema = z.object({
+  type: z.literal('voice.set'),
+  sessionId: z.string().uuid(),
+  on: z.boolean(),
+});
+
+/**
+ * `replay` — a reconnecting client asks for the events of one of its own
+ * sessions published after `afterEventId` (all buffered ones without it).
+ * Answered with a `replay` message.
+ */
+export const ReplaySchema = z.object({
+  type: z.literal('replay'),
+  sessionId: z.string().uuid(),
+  afterEventId: z.string().min(1).max(64).optional(),
+});
+
 // Union of all client messages
 export const ClientMessageSchema = z.discriminatedUnion('type', [
   AuthMessageSchema,
@@ -338,6 +393,8 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   ApprovalRespondSchema,
   AgentStopSchema,
   PingSchema,
+  VoiceSetSchema,
+  ReplaySchema,
 ]);
 
 export type AuthMessage = z.infer<typeof AuthMessageSchema>;
@@ -355,6 +412,8 @@ export interface AuthOkMessage {
   capabilities: string[];
   serverTime: string;
   serverTimezone: string;
+  /** The largest frame the server accepts (`gateway.maxFrameBytes`). */
+  maxFrameBytes?: number;
 }
 
 export interface AuthErrorMessage {
@@ -399,6 +458,49 @@ export interface EventsDroppedMessage {
   reason: string;
 }
 
+/** An open permission request, as `permission.request` carries it. */
+export interface PendingPermission {
+  requestId: string;
+  toolId: string;
+  action: string;
+  toolName: string;
+  args: Record<string, unknown>;
+  sessionId?: string;
+}
+
+/** An open root-agent approval, as `agent.approval_required` carries it. */
+export interface PendingApproval {
+  requestId: string;
+  sessionId: string;
+  summary: string;
+  question: string;
+  options?: string[];
+}
+
+/**
+ * The connection's user's open permission requests and root-agent approvals.
+ * Sent after every `subscribe` of a user connection (live events raised while
+ * it was read follow it), and again after a `permission.respond` that found
+ * the request already answered. Authoritative: a client replaces its list.
+ */
+export interface PermissionPendingMessage {
+  type: 'permission.pending';
+  requests: PendingPermission[];
+  approvals: PendingApproval[];
+}
+
+/**
+ * Answer to `replay`. `gap` is true when `afterEventId` is no longer in the
+ * buffer (the session was evicted, or more events passed than are kept): the
+ * client cannot catch up from `events` alone and reloads from REST.
+ */
+export interface ReplayMessage {
+  type: 'replay';
+  sessionId: string;
+  events: GatewayEvent[];
+  gap: boolean;
+}
+
 export type GatewayMessage =
   | AuthOkMessage
   | AuthErrorMessage
@@ -407,7 +509,9 @@ export type GatewayMessage =
   | ErrorMessage
   | PongMessage
   | SubscribedMessage
-  | EventsDroppedMessage;
+  | EventsDroppedMessage
+  | PermissionPendingMessage
+  | ReplayMessage;
 
 // ── Protocol Version ──────────────────────────────────────────────
 

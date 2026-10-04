@@ -47,8 +47,8 @@ beforeAll(async () => {
      ON CONFLICT DO NOTHING`,
   );
   await executeRaw(
-    `INSERT INTO workspaces (id, user_id, slug, name, is_default)
-     VALUES ('${aliceWs}', '${aliceId}', 'client-a', 'Client A', false)`,
+    `INSERT INTO workspaces (id, user_id, slug, name, is_default, files_dir)
+     VALUES ('${aliceWs}', '${aliceId}', 'client-a', 'Client A', false, '${aliceWs}')`,
   );
 
   const { upsertBudget, _resetSpendBudgetsForTests } = await import('@/security/spend-budgets');

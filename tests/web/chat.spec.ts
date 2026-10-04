@@ -1,6 +1,7 @@
-import type { Route, WebSocketRoute } from '@playwright/test';
+import type { Route } from '@playwright/test';
 import { json, selectChatSession } from './fixtures/api-stubs';
 import { expect, test } from './fixtures/auth';
+import { stubGateway } from './fixtures/gateway';
 
 test.describe('chat page', () => {
   test.beforeEach(async ({ authenticatedPage: page }) => {
@@ -124,7 +125,6 @@ test.describe('chat page', () => {
     const requestedCursors: number[] = [];
     const pendingFirstPages: Route[] = [];
     let releaseHistory = false;
-    let socket: WebSocketRoute | undefined;
 
     await page.route('**/api/agents?sessionId=**', (route) =>
       json(route, 200, {
@@ -163,27 +163,19 @@ test.describe('chat page', () => {
       }
       return fulfillEventPage(route, after);
     });
-    await page.routeWebSocket(/\/ws\?/, (ws) => { socket = ws; });
+    const gateway = await stubGateway(page);
 
     await page.clock.install();
     await page.goto('/chat');
 
     await selectChatSession(page, 'sess-1');
 
-    await expect.poll(() => Boolean(socket && pendingFirstPages.length > 0)).toBe(true);
-    socket!.send(JSON.stringify({
-      type: 'turn_event',
-      sessionId: 'sess-1',
-      event: 'worker_spawned',
-      data: { workerId: 'history-agent', role: 'general', model: 'gemini-general' },
-    }));
-    socket!.send(JSON.stringify({
-      type: 'agent_event',
-      sessionId: 'sess-1',
-      event: 'action',
-      agentId: 'history-agent',
-      data: { toolCalls: toolStarts.slice(-44).flatMap((event) => event.data.toolCalls) },
-    }));
+    await expect.poll(() => gateway.subscribed() > 0 && pendingFirstPages.length > 0).toBe(true);
+    gateway.event('agent.spawned', { workerId: 'history-agent', role: 'general', model: 'gemini-general' }, 'sess-1');
+    gateway.event('agent.action', {
+      agentId: 'history-agent', agentEvent: 'action',
+      toolCalls: toolStarts.slice(-44).flatMap((event) => event.data.toolCalls),
+    }, 'sess-1');
     await expect(page.getByTitle('44 tool calls')).toBeVisible();
 
     releaseHistory = true;

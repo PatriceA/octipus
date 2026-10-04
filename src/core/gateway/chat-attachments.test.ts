@@ -14,7 +14,7 @@ beforeEach(() => { vi.clearAllMocks(); });
 test('gateway decodes image bytes and forwards persisted refs to the general agent', async () => {
   let handler!: (id: string, context: ConnectionContext, message: ClientMessage) => Promise<void>;
   const send = vi.fn();
-  wireMessageHandler({ setMessageHandler: (fn: typeof handler) => { handler = fn; }, publishEvent: vi.fn(), connectionManager: { sendToConnection: send } } as unknown as GatewayHub);
+  wireMessageHandler({ setMessageHandler: (fn: typeof handler) => { handler = fn; }, setPendingSnapshotProvider: vi.fn(), setConnectionClosedHandler: vi.fn(), publishEvent: vi.fn(), connectionManager: { sendToConnection: send } } as unknown as GatewayHub);
   await handler('connection', { userId: 'user', trustLevel: 'user', clientType: 'tui' } as ConnectionContext,
     { type: 'chat.send', sessionId: sid, content: 'Describe [image1]', attachments: [{ name: 'paste.png', mimeType: 'image/png', data: 'aW1hZ2U=' }] });
   expect(mock.store).toHaveBeenCalledTimes(1);

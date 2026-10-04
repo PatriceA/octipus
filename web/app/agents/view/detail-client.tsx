@@ -12,6 +12,7 @@ import { VerificationEvidence } from '@/components/verification-evidence';
 import { useAgentEvents } from '@/hooks/useAgentEvents';
 import { api } from '@/lib/api';
 import { agentCompletionLabel, type AgentCompletionReason } from '../../../../src/shared/agent-completion';
+import { useWorkspaceId } from '@/lib/workspace-context';
 
 interface AgentDetail {
   id: string;
@@ -56,6 +57,7 @@ interface PipelineDetail {
 }
 
 export default function AgentDetailPage() {
+  const workspaceId = useWorkspaceId();
   const router = useRouter();
   const agentId = useSearchParams().get('id') ?? '';
 
@@ -65,7 +67,7 @@ export default function AgentDetailPage() {
 
   // Fetch agent details
   const { data: agent, isLoading } = useQuery({
-    queryKey: ['agent', agentId],
+    queryKey: ['agent', agentId, workspaceId],
     queryFn: async () => {
       try {
         return await api.get<AgentDetail>(`/agents/${agentId}`);
@@ -78,7 +80,7 @@ export default function AgentDetailPage() {
 
   // Fetch pipeline if this agent is a root agent for one
   const { data: pipelineData } = useQuery({
-    queryKey: ['agent-pipeline', agentId],
+    queryKey: ['agent-pipeline', agentId, workspaceId],
     queryFn: async () => {
       try {
         const pipelines = await api.get<{ pipelines: Array<{ id: string; rootAgentId: string }> }>('/pipelines');

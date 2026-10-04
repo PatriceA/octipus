@@ -154,15 +154,17 @@ decided by wording, because the classifier tags both "yes" and "no" as
 `approval`. The gate is **read-only over the root agent** — it can't spawn
 anything itself, so there's no runaway; the only thing that starts work is your
 spoken confirmation. Typed chat is unaffected (gated on a per-session voice
-flag set by the mic toggle over `/ws`).
+flag set by the mic toggle with the gateway's `voice.set` message; the flag is
+cleared when that tab's connection closes).
 
-**Backend narrator** (`src/voice/narrator.ts`, wired in `src/api/websocket.ts`).
-Long agent turns are narrated as they happen instead of read back stale:
-root agent lifecycle events (`worker_spawned`, `worker_completed`) become
-`{type:"speak"}` frames over the persistent `/ws` socket ("On it — I've started
-the researcher…"), scoped to the voice-mode session. The actual reply is spoken
-from the `chat_response` message, **fresh per turn** — so voice is decoupled from
-turn timing and attempts to discard stale speech events.
+**Backend narrator** (`src/voice/narrator.ts`, wired in
+`src/core/gateway/event-bridge.ts`). Long agent turns are narrated as they
+happen instead of read back stale: root agent lifecycle events
+(`worker_spawned`, `worker_completed`) become `voice.speak` gateway events
+("On it — I've started the researcher…") sent only to the connection that put
+that session into voice mode. The actual reply is spoken from the
+`chat.response` event, **fresh per turn** — so voice is decoupled from turn
+timing and attempts to discard stale speech events.
 
 **Fast voice model.** Interactive planning turns run on whatever model is mapped
 to the **`voice` topic** (e.g. a flash-tier model) so they stay snappy; the heavy

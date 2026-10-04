@@ -19,7 +19,7 @@ import { getConfig } from '@/config';
 import { getDb, queryRaw } from '@/db/postgres';
 import { isUuid } from '@/db/repositories/scoped';
 import { type AuditDetails, auditLog } from '@/db/schema/audit';
-import { type SpaceRole, type Workspace, workspaceMembers, workspaces } from '@/db/schema/organizations';
+import { newWorkspaceRow, type SpaceRole, type Workspace, workspaceMembers, workspaces } from '@/db/schema/organizations';
 import { users } from '@/db/schema/users';
 import { requireRealUserId } from '@/security/principal';
 import { noteSharedWorkspace } from '@/security/workspace-fs';
@@ -204,7 +204,7 @@ export async function createSpace(actor: SpaceActor, input: { name: string }): P
   const space = await db.transaction(async (tx) => {
     const [created] = await tx
       .insert(workspaces)
-      .values({
+      .values(newWorkspaceRow({
         kind: 'shared',
         userId: null,
         createdBy: actor.userId,
@@ -212,7 +212,7 @@ export async function createSpace(actor: SpaceActor, input: { name: string }): P
         slug: `space-${generateToken(6)}`,
         name,
         isDefault: false,
-      })
+      }))
       .returning();
     await tx.insert(workspaceMembers).values({ workspaceId: created.id, userId: actor.userId, role: 'owner' });
     await writeSpaceAudit(tx, { actorId: actor.userId, action: 'space_created', workspaceId: created.id, details: { name } });

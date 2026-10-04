@@ -5,7 +5,7 @@ import { coreLogger } from '@/utils/logger';
 export { SlackChannel, slackChannel } from './slack';
 export { TeamsChannel, teamsChannel } from './teams';
 export { TelegramChannel, telegramChannel } from './telegram';
-export { WebChatChannel, type WebChatConnection, type WebChatMessage, webChatChannel } from './webchat';
+export { WebChatChannel, webChatChannel } from './webchat';
 export { WhatsAppChannel, whatsappChannel } from './whatsapp';
 
 import { getConfig } from '@/config';

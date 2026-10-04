@@ -160,7 +160,10 @@ now use `adminOnly: true`; an extension that still passes `minTrustLevel:
   secrets are re-encrypted under the recipient's key; before, a transferred
   secret could no longer be decrypted. The table list lives in
   `src/db/workspace-tables.ts`, and `scripts/backfill-workspace-id.ts` uses
-  it too (it now also stamps notes, tasks, memories and links).
+  it too (it now also stamps notes, tasks, memories and links). The
+  workspace's files directory moves to the recipient too (see "Files per
+  workspace"); a transfer onto an existing directory is refused with 409
+  `files_conflict` and changes nothing.
 - **Workspace secrets resolve by name.** `getByName` with a workspace now
   returns that workspace's secret (it was selected, then never decrypted). A
   `scope='workspace'` secret bound to no workspace is no longer shown or
@@ -180,9 +183,13 @@ now use `adminOnly: true`; an extension that still passes `minTrustLevel:
   `workspaceId`, and new sessions are created in it, else in the connection's
   workspace. An existing session keeps its own.
 - **Files per workspace.** Each workspace has its own file root,
-  `users/<id>/workspaces/<workspace id>/files`; the user's default workspace
-  keeps the `default` directory. Making another workspace the default swaps
-  the two directories so files stay with their workspace. The file browser,
+  `users/<id>/workspaces/<files_dir>/files`. `workspaces.files_dir` is stored
+  (migration 0127): the workspace that is each user's default at upgrade
+  keeps `default`, every other workspace (and every new one) uses its id.
+  Changing the default, or creating a workspace as the default, moves no
+  file. A transfer renames the directory to
+  `users/<recipient>/workspaces/<workspace id>`; deleting a workspace removes
+  its directory. The file browser,
   the Changes tab, `/changes`, uploads, the repo registry and the shell all
   follow the session's or the request's workspace. A user's agent never
   resolves to the flat `workspace.rootPath`: an agent without a real user is
@@ -191,6 +198,16 @@ now use `adminOnly: true`; an extension that still passes `minTrustLevel:
   workspace root, an allowed extra path or the dev-mode project; a relative
   one is taken from the workspace (or project). This keeps the work where the
   evidence gate and Changes tab look; it is not a sandbox.
+- **A pipeline stage's verify command runs in the session's workspace.** It
+  had no workspace outside dev mode and was reported to the auditor as not
+  run.
+- **Hooks and link suggestions follow the workspace.** A directly spawned
+  (non-orchestrated) hook agent runs in the hook session's workspace, and
+  note link suggestions offer only notes of the note's workspace and
+  user-level notes.
+- **A new user's first requests no longer race.** Parallel first requests
+  each creating the default workspace could collide and answer 503; the
+  insert now tolerates the race and reads the winner's row.
 
 **Behaviour changes for users of several workspaces:** files created from a
 non-default workspace before this release sit in the `default` directory and
@@ -230,6 +247,39 @@ mixed into it. Existing memories are not migrated.
   `workspace_members`, `workspace_invites`, `workspace_id` on `audit_log`,
   `permission_requests` and `cost_log`, `funding` on `cost_log` and `agents`,
   paused flags on artifact data sources, and a per-workspace unique note slug.
+### The web is on the gateway (coworking S0d)
+
+- **One gateway connection per tab.** The web app's chat page, permission
+  prompts, recommended-models panel and documents page share one `/gateway`
+  connection per browser tab (`/auth/ws-ticket` → `auth`). Every tab of a user
+  receives that user's events, so a reply, an error, a steered message or an
+  answered prompt shows in all of them. **The legacy `/ws` and
+  `/ws/permissions` sockets are removed** — integrations still on them must
+  move to `/gateway` (frame mapping in `docs/architecture/gateway.md`). The
+  browser extension's `/ws/browser-bridge` and `/voice` are unchanged.
+- **New gateway messages:** `chat.error`, `approval.resolved`, `document.*`,
+  `model.install_progress` and `voice.speak` events; the `permission.pending`
+  snapshot after `subscribe` (a tab opened after a prompt was raised shows
+  it); client `voice.set` and `replay { sessionId, afterEventId }` (own
+  sessions only). In-app deliveries to `webchat:<you>` arrive as a
+  user-stamped `chat.message`. `approval.respond` for an unknown or foreign
+  request now answers `APPROVAL_NOT_FOUND` instead of nothing.
+- **Limits are settings:** `gateway.maxConnectionsPerUser` (default 20, was a
+  fixed 10; a tab over it shows "Too many open tabs"),
+  `gateway.maxFrameBytes` (default 256 KiB, the gateway socket's
+  `maxPayload` — it was the `ws` default of 100 MiB) and
+  `gateway.replayMaxSessions` (default 500; replay buffers are now capped,
+  least recently active first, and dropped when a session is deleted or
+  archived). Env: `GATEWAY_MAX_CONNECTIONS_PER_USER`,
+  `GATEWAY_MAX_FRAME_BYTES`, `GATEWAY_REPLAY_MAX_SESSIONS`.
+- **Workspace switches are clean.** The API client's workspace header (now
+  the workspace id) changes synchronously on a switch and the query cache is
+  cleared; workspace-scoped queries key on the workspace id.
+
+**Behaviour changes:** the TUI refuses to send a message (e.g. a pasted image)
+larger than `gateway.maxFrameBytes` and says so; raise the setting for larger
+attachments. Approval answers from the web go over the gateway instead of
+`POST /chat/approve` (the route stays for REST clients).
 
 ## v0.6.0 — Shared work, budgets, and stronger review (2026-10-01)
 

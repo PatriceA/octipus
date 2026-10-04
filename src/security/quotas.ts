@@ -110,8 +110,8 @@ export class QuotaManager {
   async getUsage(userId: string): Promise<QuotaUsage> {
     const db = getDb();
 
-    // Concurrent: agents.user_id is `text` and may be either a UUID or
-    // the legacy 'system'/'local' sentinel. Compare as text.
+    // Concurrent: agents.user_id is `text` (a system job's agents carry a
+    // non-user id). Compare as text.
     const concurrentRows = await db
       .select({ c: sql<number>`count(*)::int` })
       .from(agents)

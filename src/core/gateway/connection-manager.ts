@@ -54,12 +54,16 @@ export type ConnectionWorkspaceResolver = (userId: string, hint: string | undefi
  * have not authenticated yet; once signed in, the per-user cap applies.
  */
 interface ConnectionBudget {
-  maxPerUser: number;
+  /**
+   * Authenticated connections per user (`gateway.maxConnectionsPerUser`). A
+   * function so a settings change applies to the next sign-in.
+   */
+  maxPerUser: number | (() => number);
   maxPreAuth: number;
 }
 
 const DEFAULT_BUDGET: ConnectionBudget = {
-  maxPerUser: 10,
+  maxPerUser: 20,
   maxPreAuth: 20,
 };
 
@@ -89,9 +93,21 @@ export class ConnectionManager {
   // Event callback for audit logging
   onAuditEvent?: (event: string, data: Record<string, unknown>) => void;
 
-  constructor(options?: { budget?: Partial<ConnectionBudget>; rateLimiter?: GatewayRateLimiter }) {
+  /** Called once for every authenticated connection that ends, with its context. */
+  onConnectionClosed?: (context: ConnectionContext) => void;
+
+  /** Told to clients in `auth_ok` (`gateway.maxFrameBytes`), so they can refuse a frame the server would. */
+  private readonly maxFrameBytes?: () => number;
+
+  constructor(options?: { budget?: Partial<ConnectionBudget>; rateLimiter?: GatewayRateLimiter; maxFrameBytes?: () => number }) {
     this.budget = { ...DEFAULT_BUDGET, ...options?.budget };
     this.rateLimiter = options?.rateLimiter || new GatewayRateLimiter();
+    this.maxFrameBytes = options?.maxFrameBytes;
+  }
+
+  private maxPerUser(): number {
+    const max = this.budget.maxPerUser;
+    return typeof max === 'function' ? max() : max;
   }
 
   setSessionValidator(validator: (token: string) => Promise<{ userId: string; username: string; isAdmin: boolean } | null>): void {
@@ -225,6 +241,11 @@ export class ConnectionManager {
         duration: Date.now() - conn.context.connectedAt,
         reason: reason || `code:${code}`,
       });
+      try {
+        this.onConnectionClosed?.(conn.context);
+      } catch (err) {
+        coreLogger.error({ err, connectionId, userId }, 'Gateway connection close handler failed');
+      }
     }
 
     // A connection that never authenticated still holds its pre-auth slot.
@@ -356,7 +377,7 @@ export class ConnectionManager {
       // Check per-user budget. Artifact viewers share one id per artifact and
       // are not a user: they have a cap per artifact instead.
       const userConns = this.byUser.get(userId);
-      const cap = artifactId === undefined ? this.budget.maxPerUser : MAX_VIEWERS_PER_ARTIFACT;
+      const cap = artifactId === undefined ? this.maxPerUser() : MAX_VIEWERS_PER_ARTIFACT;
       if (userConns && userConns.size >= cap) {
         this.sendAuthError(conn, 'Too many connections');
         this.onAuditEvent?.('gateway.connection.rejected', { userId, reason: artifactId === undefined ? 'user_budget' : 'artifact_viewer_budget' });
@@ -433,6 +454,7 @@ export class ConnectionManager {
         capabilities: artifactId !== undefined ? ['subscribe', 'ping'] : this.getCapabilities(isAdmin),
         serverTime: new Date().toISOString(),
         serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        ...(this.maxFrameBytes ? { maxFrameBytes: this.maxFrameBytes() } : {}),
       });
 
       this.onAuditEvent?.('gateway.auth.success', {

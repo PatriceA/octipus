@@ -222,15 +222,13 @@ describe('a deactivated user loses every door at once', () => {
     expect((await call('GET', '/api/auth/me', { bearer: apiToken })).status).toBe(200);
 
     const sockets = {
-      ws: await openSocket('/ws', `token=${session}`),
-      permissions: await openSocket('/ws/permissions', `token=${session}`),
       bridge: await openSocket('/ws/browser-bridge', `token=${apiToken}`),
       voice: await openSocket('/voice', `token=${session}&engine=fasterwhisper`),
     };
     for (const ws of Object.values(sockets)) expect(ws.close).not.toHaveBeenCalled();
     const gateway = await openGateway(session);
     expect(gateway.frames.at(-1)).toMatchObject({ type: 'auth_ok', userId: ALICE });
-    expect(userSocketCount(ALICE)).toBe(4);
+    expect(userSocketCount(ALICE)).toBe(2);
 
     // A pending permission prompt, and an admin acting as alice.
     await executeRaw(
@@ -268,8 +266,6 @@ describe('a deactivated user loses every door at once', () => {
     const passkey = await call('POST', '/api/auth/passkey/auth/verify', { body: { userId: ALICE, response: {} } });
     expect(passkey.status).toBe(401);
     expect(await passkey.json()).toEqual({ error: 'Account is disabled' });
-    const again = await openSocket('/ws', `token=${session}`);
-    expect(again.close).toHaveBeenCalledWith(4001, 'Invalid or expired token');
     const bridgeAgain = await openSocket('/ws/browser-bridge', `token=${apiToken}`);
     expect(bridgeAgain.close).toHaveBeenCalledWith(4001, 'Invalid authentication token');
     const voiceAgain = await openSocket('/voice', `token=${session}&engine=fasterwhisper`);
@@ -332,13 +328,13 @@ describe('a socket that authenticates across a deactivation', () => {
     });
   }
 
-  test('a /ws socket registered after the sweep is closed', async () => {
+  test('a /voice socket registered after the sweep is closed', async () => {
     const { userSocketCount } = await import('./user-sockets');
     const session = await login(KATE);
     await duringValidation(async () => {
       expect((await call('PATCH', `/api/admin/users/${KATE}`, { bearer: adminToken, body: { isActive: false } })).status).toBe(200);
     });
-    const ws = await openSocket('/ws', `token=${session}`);
+    const ws = await openSocket('/voice', `token=${session}&engine=fasterwhisper`);
     expect(ws.close).toHaveBeenCalledWith(4004, 'Account changed');
     expect(userSocketCount(KATE)).toBe(0);
   });

@@ -68,9 +68,12 @@ describe('workspaces are always on', () => {
 });
 
 describe('no pseudo-user ids', () => {
-  test('a non-uuid user id at a uuid column throws', async () => {
-    const { userRepository } = await import('@/db/repositories/user-repository');
-    await expect(userRepository.findById('system')).rejects.toThrow();
+  test('the guard every former pseudo-user caller goes through refuses anything but a uuid', async () => {
+    const { requireRealUserId } = await import('@/security/principal');
+    for (const id of ['system', 'local', 'admin', '', undefined, null]) {
+      expect(() => requireRealUserId(id)).toThrow('Expected a user id (uuid)');
+    }
+    expect(requireRealUserId(aliceId)).toBe(aliceId);
   });
 
   test('the profiles tool refuses a turn without a real user instead of picking one', async () => {
@@ -79,8 +82,9 @@ describe('no pseudo-user ids', () => {
     await tool.initialize();
     const list = tool.getTool('list_profiles')!;
     const as = (userId: string | undefined) => ({ id: 'agent-1', userId, sessionId: 's' }) as unknown as AgentContext;
-    // The old fallback answered with the first user's profiles. Now the id
-    // throws at the first uuid column it reaches (here the permission rows).
+    // The old fallback answered with the first user's profiles. Now no
+    // profile is read: the tool's permission check (a uuid column) refuses
+    // the id first, and the tool's own `requireRealUserId` stands behind it.
     await expect(list.execute({}, as('system'))).rejects.toThrow();
     await expect(list.execute({}, as(undefined))).rejects.toThrow();
     await expect(list.execute({}, as(aliceId))).resolves.toMatchObject({ profiles: [] });

@@ -3,6 +3,8 @@
  * rows whose workspace_id names a missing workspace or another user's
  * workspace fall back to user-level without breaking note slug uniqueness,
  * and the five tables get `REFERENCES workspaces(id) ON DELETE SET NULL`.
+ * `workspaces.files_dir` is backfilled: `default` for each user's default
+ * workspace (where its files already are), the id for every other.
  *
  * The database is migrated to head, the foreign keys 0127 adds are dropped
  * so the fixture can hold the rows older code wrote, then 0127 is replayed —
@@ -18,6 +20,7 @@ const alice = randomUUID();
 const bob = randomUUID();
 const aliceWs = randomUUID();
 const bobWs = randomUUID();
+const aliceSideWs = randomUUID();
 const goneWs = randomUUID(); // a workspace id that no longer exists
 const TABLES = ['notes', 'tasks', 'knowledge_links', 'workspace_repos', 'background_jobs'];
 
@@ -51,15 +54,19 @@ beforeAll(async () => {
   process.env.STORAGE_MODE = 'embedded';
   process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'octipus-ws-0127-'));
   process.env.LOG_LEVEL ??= 'error';
+  process.env.WORKSPACE_PATH = mkdtempSync(join(tmpdir(), 'octipus-ws-0127-files-'));
   const { initializeDb, executeRaw } = await import('@/db/postgres');
   await initializeDb();
   const { runMigrations } = await import('@/db/migrate');
   await runMigrations();
   const { seedUsers } = await import('@/test-helpers/multiuser-fixtures');
   await seedUsers([{ id: alice, username: 'alice' }, { id: bob, username: 'bob' }]);
+  // Workspace rows as older code wrote them: no files_dir.
+  await executeRaw(`DROP INDEX IF EXISTS workspaces_user_id_files_dir_uq`);
+  await executeRaw(`ALTER TABLE workspaces ALTER COLUMN files_dir DROP NOT NULL`);
   await q(
-    `INSERT INTO workspaces (id, user_id, slug, name, is_default) VALUES ($1, $2, 'default', 'Default', true), ($3, $4, 'default', 'Default', true)`,
-    [aliceWs, alice, bobWs, bob],
+    `INSERT INTO workspaces (id, user_id, slug, name, is_default) VALUES ($1, $2, 'default', 'Default', true), ($3, $4, 'default', 'Default', true), ($5, $2, 'side-old', 'Side', false)`,
+    [aliceWs, alice, bobWs, bob, aliceSideWs],
   );
   for (const t of TABLES) await executeRaw(`ALTER TABLE ${t} DROP CONSTRAINT IF EXISTS ${t}_workspace_id_fkey`);
   // 0128 (spaces) makes a slug unique per workspace, which 0127's step 3
@@ -109,6 +116,15 @@ async function noteRow(id: string): Promise<Row> {
 }
 
 describe('0127 workspace integrity', () => {
+  test("files_dir: 'default' for the default workspace, the id for the others, then NOT NULL", async () => {
+    const rows = await q(`SELECT id, files_dir FROM workspaces WHERE id = ANY($1::uuid[]) ORDER BY id`, [[aliceWs, bobWs, aliceSideWs]]);
+    expect(Object.fromEntries(rows.map((r: Row) => [r.id, r.files_dir]))).toEqual({
+      [aliceWs]: 'default', [bobWs]: 'default', [aliceSideWs]: aliceSideWs,
+    });
+    await expect(q(`INSERT INTO workspaces (user_id, slug, name) VALUES ($1, 'nodir', 'x')`, [alice])).rejects.toThrow();
+    await expect(q(`UPDATE workspaces SET files_dir = 'default' WHERE id = $1`, [aliceSideWs])).rejects.toThrow();
+  });
+
   test('foreign-stamped notes become user-level; the user-level note keeps its slug', async () => {
     expect(await noteRow(ids.planUser)).toEqual({ slug: 'plan', workspace_id: null });
     expect(await noteRow(ids.planGone)).toEqual({ slug: `plan-${ids.planGone.slice(0, 8)}`, workspace_id: null });

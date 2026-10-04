@@ -41,6 +41,7 @@ import { ACTIVE_TASK_STATUSES, isActiveStatus, isTaskStatus } from '@/core/tasks
 import { toLookup, type WaitingOn, waitingOn } from '@/core/tasks/structure';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import { getConfig } from '@/config';
+import { sessionsRemoved } from './session-lifecycle';
 import { getDb } from '../postgres';
 import { type AgentRecord, agents, type NewAgentRecord } from '../schema/agents';
 import { type BackgroundJob, backgroundJobs } from '../schema/background-jobs';
@@ -284,6 +285,8 @@ export class ScopedSessionRepo {
       .set({ ...safe, updatedAt: new Date() })
       .where(and(eq(sessions.id, id), ...this.scope.own(sessions, { byId: true })))
       .returning();
+    // Archived: its live state (the gateway replay buffer) goes.
+    if (result[0] && safe.status === 'completed') sessionsRemoved([id]);
     return result[0] ?? null;
   }
 
@@ -294,6 +297,7 @@ export class ScopedSessionRepo {
       .delete(sessions)
       .where(and(eq(sessions.id, id), ...this.scope.own(sessions, { byId: true })))
       .returning();
+    sessionsRemoved(result.map((row) => row.id));
     return result.length > 0;
   }
 }

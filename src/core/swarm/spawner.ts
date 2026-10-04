@@ -22,6 +22,7 @@ import { verificationEvidenceRepository } from '@/db/repositories/verification-e
 import { getModelRegistry } from '@/models/model-registry';
 import { getTopicConfig } from '@/models/topic-config';
 import { premiseNoteFor } from '@/core/premise';
+import { isRealUserId } from '@/security/principal';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { randomUUID } from 'node:crypto';
 import { getCLIToolConfig, isCLIProvider, resolveCliModelEntry } from '@/core/cli-agent-factory';
@@ -586,7 +587,7 @@ export class SwarmSpawner {
     // ── Permission intersection ─────────────────────────────────────
     const roleTools = getToolsForRole(childRole);
 
-    if (parentContext.userId && parentContext.userId !== 'system' && parentContext.userId !== 'local') {
+    if (isRealUserId(parentContext.userId)) {
       try {
         const { getConnectorRegistry } = await import('@/connectors');
         const connectorHandlers = await getConnectorRegistry().getUserToolHandlers(parentContext.userId);

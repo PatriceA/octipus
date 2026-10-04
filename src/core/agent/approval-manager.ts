@@ -65,6 +65,14 @@ export type ApprovalResolveOutcome =
   | { status: 'timed_out'; message: string }
   | { status: 'orphaned'; message: string };
 
+/** An approval that left the pending list, and why. */
+export interface ApprovalResolvedEvent {
+  requestId: string;
+  userId: string;
+  sessionId: string;
+  status: 'approved' | 'denied' | 'expired';
+}
+
 export interface ApprovalRequest {
   id: string;
   /**
@@ -144,7 +152,22 @@ export class ApprovalManager {
    */
   private unpersisted: Map<string, { userId: string; status: 'approved' | 'denied' }> = new Map();
 
+  /**
+   * `onResolved` hears every approval that leaves the pending list —
+   * answered, timed out, or expired with its account — so every surface
+   * showing the prompt can drop it.
+   */
+  constructor(private readonly onResolved?: (event: ApprovalResolvedEvent) => void) {}
+
   private get db() { return getDb(); }
+
+  private announce(approval: ApprovalRequest, status: ApprovalResolvedEvent['status']): void {
+    try {
+      this.onResolved?.({ requestId: approval.id, userId: approval.userId, sessionId: approval.sessionId, status });
+    } catch (err) {
+      coreLogger.error({ err, requestId: approval.id }, 'Approval resolution listener failed');
+    }
+  }
 
   /**
    * Request user approval. Returns a promise that resolves when the user responds.
@@ -205,6 +228,7 @@ export class ApprovalManager {
       const timeout = setTimeout(() => {
         const claimed = this.claim(requestId);
         if (!claimed) return;
+        this.announce(claimed.approval, 'expired');
         resolve({ approved: false, reason: 'Approval timed out', requestId });
         // An answer landing before this write finds the row pending with our
         // boot id and is told it timed out. If the write fails, the next
@@ -293,6 +317,7 @@ export class ApprovalManager {
         if (updated === false) {
           // The row left `pending` under us: honour the DB.
           approval.reject('Approval expired');
+          this.announce(approval, 'expired');
           return { status: 'already_resolved' };
         }
         if (updated === null) {
@@ -306,6 +331,7 @@ export class ApprovalManager {
       } else {
         approval.reject(text);
       }
+      this.announce(approval, approved ? 'approved' : 'denied');
       return { status: 'resolved' };
     } finally {
       this.settling.delete(requestId);
@@ -351,7 +377,10 @@ export class ApprovalManager {
       .filter((approval) => !inSessions || inSessions.has(approval.sessionId))
       .map((approval) => this.claim(approval.id))
       .filter((c): c is NonNullable<typeof c> => c !== null);
-    for (const { approval } of claimed) approval.reject(why);
+    for (const { approval } of claimed) {
+      approval.reject(why);
+      this.announce(approval, 'expired');
+    }
     // A waiter's row may still be in flight; expire it only once written.
     await Promise.all(claimed.map((c) => c.written));
     const expired = await this.db

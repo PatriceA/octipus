@@ -481,32 +481,32 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `skills` | 1 |
 | `(root)` | `tools` | 4 |
 | `(root)` | `utils` | 1 |
-| `api` | `capabilities` | 2 |
-| `api` | `channels` | 21 |
-| `api` | `config` | 19 |
+| `api` | `capabilities` | 1 |
+| `api` | `channels` | 20 |
+| `api` | `config` | 20 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 95 |
-| `api` | `db` | 106 |
+| `api` | `core` | 89 |
+| `api` | `db` | 102 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 3 |
 | `api` | `models` | 31 |
 | `api` | `plugins` | 1 |
-| `api` | `security` | 103 |
+| `api` | `security` | 101 |
 | `api` | `services` | 4 |
 | `api` | `shared` | 3 |
 | `api` | `skills` | 6 |
 | `api` | `tools` | 4 |
-| `api` | `utils` | 63 |
-| `api` | `voice` | 24 |
+| `api` | `utils` | 62 |
+| `api` | `voice` | 23 |
 | `capabilities` | `db` | 2 |
 | `capabilities` | `models` | 1 |
 | `capabilities` | `setup` | 1 |
 | `capabilities` | `tools` | 1 |
 | `capabilities` | `utils` | 7 |
 | `channels` | `config` | 7 |
-| `channels` | `core` | 23 |
-| `channels` | `db` | 33 |
+| `channels` | `core` | 24 |
+| `channels` | `db` | 32 |
 | `channels` | `models` | 5 |
 | `channels` | `security` | 22 |
 | `channels` | `utils` | 23 |
@@ -524,28 +524,29 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `connectors` | `security` | 4 |
 | `connectors` | `shared` | 1 |
 | `connectors` | `utils` | 5 |
-| `core` | `capabilities` | 1 |
+| `core` | `capabilities` | 2 |
 | `core` | `channels` | 7 |
-| `core` | `config` | 37 |
+| `core` | `config` | 38 |
 | `core` | `connectors` | 2 |
-| `core` | `db` | 232 |
+| `core` | `db` | 234 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 5 |
 | `core` | `models` | 90 |
-| `core` | `security` | 78 |
+| `core` | `security` | 84 |
 | `core` | `services` | 2 |
 | `core` | `shared` | 13 |
 | `core` | `skills` | 10 |
 | `core` | `tools` | 16 |
 | `core` | `utils` | 158 |
+| `core` | `voice` | 1 |
 | `db` | `config` | 3 |
 | `db` | `core` | 12 |
 | `db` | `models` | 1 |
 | `db` | `security` | 3 |
 | `db` | `services` | 1 |
 | `db` | `shared` | 3 |
-| `db` | `utils` | 18 |
+| `db` | `utils` | 19 |
 | `eval` | `config` | 3 |
 | `eval` | `core` | 6 |
 | `eval` | `db` | 8 |
@@ -556,9 +557,9 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `extensions` | `utils` | 4 |
 | `hooks` | `channels` | 2 |
 | `hooks` | `config` | 2 |
-| `hooks` | `core` | 10 |
-| `hooks` | `db` | 11 |
-| `hooks` | `security` | 1 |
+| `hooks` | `core` | 11 |
+| `hooks` | `db` | 12 |
+| `hooks` | `security` | 2 |
 | `hooks` | `tools` | 1 |
 | `hooks` | `utils` | 7 |
 | `mcp` | `config` | 2 |
@@ -659,6 +660,7 @@ Two modules that import each other. Not fatal, but it is what blocks an extracti
 - core <-> skills
 - core <-> tools
 - core <-> utils
+- core <-> voice
 - db <-> models
 - db <-> security
 - db <-> services
@@ -686,28 +688,36 @@ Every member of the `GatewayEventType` union in `src/core/gateway/protocol.ts`, 
 | `agent.iteration` | yes | `src/core/gateway/event-bridge.ts` | `*` |
 | `agent.spawned` | yes | — | `*` |
 | `agent.stopped` | yes | `src/core/gateway/message-handler.ts` | `*` |
+| `approval.resolved` | yes | — | `*` |
 | `artifact.data_updated` | yes | `src/core/artifacts/events.ts` | `*` |
 | `artifact.source_error` | yes | `src/core/artifacts/events.ts` | `*` |
 | `artifact.version_updated` | yes | `src/core/artifacts/events.ts` | `*` |
 | `audit` | yes | `src/core/gateway/hub.ts` | `*` |
 | `chat.delta` | yes | `src/core/gateway/event-bridge.ts` | `*` |
-| `chat.message` | yes | `src/core/gateway/message-handler.ts` | `*` |
+| `chat.error` | yes | `src/core/gateway/message-handler.ts` | `*` |
+| `chat.message` | yes | `src/channels/webchat/index.ts`, `src/core/gateway/message-handler.ts` | `*` |
 | `chat.response` | yes | `src/core/gateway/message-handler.ts` | `*` |
+| `document.completed` | yes | `src/core/gateway/event-bridge.ts` | `*` |
+| `document.enqueued` | yes | `src/core/gateway/event-bridge.ts` | `*` |
+| `document.failed` | yes | `src/core/gateway/event-bridge.ts` | `*` |
+| `document.processing` | yes | `src/core/gateway/event-bridge.ts` | `*` |
 | `extension.notify` | yes | `src/extensions/api.ts` | `*` |
+| `model.install_progress` | yes | `src/core/gateway/event-bridge.ts` | `*` |
 | `permission.request` | yes | `src/core/gateway/event-bridge.ts` | `*` |
 | `permission.resolved` | yes | `src/core/gateway/event-bridge.ts` | `*` |
 | `pipeline.event` | yes | — | `*` |
 | `rootAgent.status` | yes | — | `*` |
 | `session.compaction_stalled` | yes | `src/core/agent/session-compaction.ts` | `*` |
 | `session.stats` | yes | `src/core/gateway/message-handler.ts` | `*` |
-| `swarm.budget_warning` | yes | `src/core/swarm/spawner.ts` | `*`, `swarm.*`, `swarm.budget_warning` |
-| `swarm.call_graph_cycle_blocked` | yes | `src/core/swarm/spawner.ts` | `*`, `swarm.*` |
-| `swarm.narration` | yes | `src/core/personas/narration-bridge.ts` | `*`, `swarm.*` |
-| `swarm.node_completed` | yes | `src/core/agent/root-runner.ts`, `src/core/agent/worker-spawner.ts`, `src/core/swarm/spawner.ts` | `*`, `swarm.*`, `swarm.node_completed` |
-| `swarm.node_spawned` | yes | `src/core/agent/root-runner.ts`, `src/core/agent/worker-spawner.ts`, `src/core/swarm/spawner.ts` | `*`, `swarm.*`, `swarm.node_spawned` |
+| `swarm.budget_warning` | yes | `src/core/swarm/spawner.ts` | `*`, `swarm.budget_warning` |
+| `swarm.call_graph_cycle_blocked` | yes | `src/core/swarm/spawner.ts` | `*` |
+| `swarm.narration` | yes | `src/core/personas/narration-bridge.ts` | `*` |
+| `swarm.node_completed` | yes | `src/core/agent/root-runner.ts`, `src/core/agent/worker-spawner.ts`, `src/core/swarm/spawner.ts` | `*`, `swarm.node_completed` |
+| `swarm.node_spawned` | yes | `src/core/agent/root-runner.ts`, `src/core/agent/worker-spawner.ts`, `src/core/swarm/spawner.ts` | `*`, `swarm.node_spawned` |
 | `team.completed` | yes | — | `*` |
 | `team.started` | yes | — | `*` |
 | `test.event` | yes | — | `*` |
+| `voice.speak` | yes | `src/core/gateway/event-bridge.ts` | `*` |
 
 ### Declared but never published
 
@@ -719,6 +729,7 @@ The contract promises these and no code emits them. Each is either a type to ret
 - `team.started` — subscribed by `src/core/monitors/service.ts`
 - `team.completed` — subscribed by `src/core/monitors/service.ts`
 - `agent.approval_required` — subscribed by `src/core/monitors/service.ts`
+- `approval.resolved` — subscribed by `src/core/monitors/service.ts`
 - `rootAgent.status` — subscribed by `src/core/monitors/service.ts`
 - `test.event` — subscribed by `src/core/monitors/service.ts`
 

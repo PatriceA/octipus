@@ -1,5 +1,6 @@
 'use client';
 
+import { useQueryClient } from '@tanstack/react-query';
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import { api } from './api';
 import { useAuth } from './auth-context';
@@ -52,8 +53,18 @@ export function useWorkspace() {
   return useContext(WorkspaceContext);
 }
 
+/**
+ * The active workspace's id, for query keys of workspace-scoped data
+ * (`['notes', workspaceId]`): data read under one workspace is never served
+ * from the cache under another.
+ */
+export function useWorkspaceId(): string | null {
+  return useContext(WorkspaceContext).activeWorkspace?.id ?? null;
+}
+
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const { isAuthenticated, isLoading: authLoading } = useAuth();
+  const queryClient = useQueryClient();
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [orgs, setOrgs] = useState<Org[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -62,6 +73,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   const refresh = useCallback(async () => {
     if (!isAuthenticated) {
+      api.setWorkspaceId(null);
       setWorkspaces([]);
       setOrgs([]);
       setActiveId(null);
@@ -90,6 +102,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         wsRes.workspaces.find((w) => w.isDefault) ??
         wsRes.workspaces[0] ??
         null;
+      // The header follows at once, before any request of the new render.
+      api.setWorkspaceId(next?.id ?? null);
       setActiveId(next?.id ?? null);
       if (next && typeof window !== 'undefined') {
         localStorage.setItem(STORAGE_KEY, next.id);
@@ -107,12 +121,19 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     return () => clearTimeout(t);
   }, [authLoading, refresh]);
 
+  /**
+   * Switch synchronously: the API client's workspace header changes before
+   * anything re-renders, then every cached query is dropped — so no request
+   * leaves with the old header and no page shows the old workspace's data.
+   */
   const switchWorkspace = useCallback((id: string) => {
+    api.setWorkspaceId(id);
+    queryClient.clear();
     setActiveId(id);
     if (typeof window !== 'undefined') {
       localStorage.setItem(STORAGE_KEY, id);
     }
-  }, []);
+  }, [queryClient]);
 
   const createWorkspace = useCallback(
     async (input: { slug: string; name: string; isDefault?: boolean }) => {
@@ -125,11 +146,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   );
 
   const activeWorkspace = workspaces.find((w) => w.id === activeId) ?? null;
-
-  // Expose the active slug to the API client for header injection.
-  useEffect(() => {
-    api.setWorkspaceSlug(activeWorkspace?.slug ?? null);
-  }, [activeWorkspace]);
 
   return (
     <WorkspaceContext.Provider

@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { api } from '@/lib/api';
+import { useWorkspaceId } from '@/lib/workspace-context';
 
 interface AgentBrief { id: string; role: string; status: string; error?: string | null; durationMs?: number | null }
 interface PipelineBrief { id: string; title: string; status: string; summary?: string | null; waitingOnYou: boolean }
@@ -89,13 +90,14 @@ function More({ n }: { n: number }) {
  * remembers when the user last caught up and asks from there.
  */
 export function AwayDigestCard() {
+  const workspaceId = useWorkspaceId();
   const [seenAt, setSeenAt] = useState<string | null>(() => (typeof window === 'undefined' ? null : readSeenAt()));
 
   // A failed poll THROWS so react-query keeps the last good digest on screen
   // and only flags `error`; returning null would unmount the card for a
   // minute on every blip. No retries: the 60s poll is the retry.
   const { data } = useQuery({
-    queryKey: ['digest', 'away', seenAt],
+    queryKey: ['digest', 'away', seenAt, workspaceId],
     queryFn: async () => {
       const q = seenAt ? `?since=${encodeURIComponent(seenAt)}` : '';
       const res = await api.get<unknown>(`/digest/away${q}`);
