@@ -49,13 +49,13 @@ import {
  * missing and to stop. Mirrors `premiseRoots` in `worker-spawner.ts`.
  * Best-effort: a resolution failure means no check, never a failed spawn.
  */
-export async function premiseRootsFor(userId: string | undefined, sessionId?: string): Promise<string[]> {
+export async function premiseRootsFor(context: AgentContext): Promise<string[]> {
   const roots: string[] = [];
-  const projectPath = await devProjectPathForSession(sessionId);
+  const projectPath = await devProjectPathForSession(context.sessionId);
   if (projectPath) roots.push(projectPath);
-  if (!userId) return roots;
+  if (!context.userId) return roots;
   try {
-    roots.push(WorkspaceFS.forAgent({ userId }).root);
+    roots.push(WorkspaceFS.forAgent(context).root);
   } catch {
     /* no sandbox root resolvable — the project path (if any) still counts */
   }
@@ -770,7 +770,7 @@ export class SwarmSpawner {
     const childMessage = composeChildMessage(brief, {
       availableToolNames,
       canSpawnChildren,
-      workspaceRoots: await premiseRootsFor(parentContext.userId, parentContext.sessionId),
+      workspaceRoots: await premiseRootsFor(parentContext),
       // Tell the agent it has a cheap executor to plan for — only when its lane
       // actually binds one (getTopicConfig on the child's resolved lane).
       executorModel: canSpawnChildren ? getTopicConfig(childLane).executorModel ?? undefined : undefined,
@@ -1932,6 +1932,7 @@ export class SwarmSpawner {
         { output: result.output, notes: result.notes, receipt: result.receipt },
         buildScorerContext({
           userId: opts.parentContext.userId,
+          workspaceRoot: WorkspaceFS.forAgent(opts.parentContext).root,
           filesTouched,
           childTools: opts.childTools,
           childRole: opts.childRole,
@@ -2584,7 +2585,7 @@ async function devProjectPathForSession(sessionId?: string): Promise<string | un
 async function sharedTreeRoot(ctx: AgentContext): Promise<{ root: string; devProject: boolean }> {
   const project = await devProjectPathForSession(ctx.sessionId);
   if (project) return { root: project, devProject: true };
-  return { root: WorkspaceFS.forAgent({ userId: ctx.userId }).root, devProject: false };
+  return { root: WorkspaceFS.forAgent(ctx).root, devProject: false };
 }
 
 /**
@@ -2607,6 +2608,8 @@ async function isCliModel(model: string): Promise<boolean> {
 
 export function buildScorerContext(args: {
   userId?: string;
+  /** The child's workspace root (`WorkspaceFS.forAgent` of the spawning context). */
+  workspaceRoot?: string;
   filesTouched: number | null;
   childTools: ToolHandler[];
   childRole: AgentRole;
@@ -2616,6 +2619,7 @@ export function buildScorerContext(args: {
 }): ScorerContext {
   return {
     userId: args.userId,
+    workspaceRoot: args.workspaceRoot,
     filesTouched: args.filesTouched,
     // A gate must check the tree the child changed. See `ScorerContext.projectPath`.
     projectPath: args.projectPath,

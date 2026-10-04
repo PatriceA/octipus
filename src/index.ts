@@ -103,6 +103,12 @@ async function main() {
     // CHANGE events, so the initial load needs an explicit reset.
     resetLiteLLMClient();
 
+    // Each workspace's files live under its own directory, the user's
+    // default under `default`; load which is which before any turn runs.
+    const { getOrgWorkspaceManager } = await import('@/security/orgs');
+    const workspaceCount = await getOrgWorkspaceManager().loadFileRoots();
+    logger.info({ workspaces: workspaceCount }, 'Workspace file roots loaded');
+
     // Initialize permission rule engine (deny→allow→ask patterns)
     const { initPermissionRules } = await import('@/security/permission-rules');
     await initPermissionRules();

@@ -36,7 +36,16 @@ export interface GatewayConnection {
   /** `artifact_token` viewers only: closes the connection when the token expires. */
   expiryTimer?: NodeJS.Timeout;
   createdAt: number;
+  /** The socket URL's `?workspace=` (id or slug), resolved for the user at auth. */
+  workspaceHint?: string;
 }
+
+/**
+ * Resolves the workspace a connection works in for its user: the `hint`
+ * (a workspace id or slug the user owns) or, without one, the user's
+ * default. Returns null when the hint names no workspace of the user's.
+ */
+export type ConnectionWorkspaceResolver = (userId: string, hint: string | undefined) => Promise<string | null>;
 
 /**
  * There is no cap per address on authenticated connections: behind a reverse
@@ -75,6 +84,7 @@ export class ConnectionManager {
 
   // External auth handler — set by the gateway server
   private sessionValidator: ((token: string) => Promise<{ userId: string; username: string; isAdmin: boolean } | null>) | null = null;
+  private workspaceResolver: ConnectionWorkspaceResolver | null = null;
 
   // Event callback for audit logging
   onAuditEvent?: (event: string, data: Record<string, unknown>) => void;
@@ -88,6 +98,10 @@ export class ConnectionManager {
     this.sessionValidator = validator;
   }
 
+  setWorkspaceResolver(resolver: ConnectionWorkspaceResolver): void {
+    this.workspaceResolver = resolver;
+  }
+
   getRateLimiter(): GatewayRateLimiter {
     return this.rateLimiter;
   }
@@ -96,9 +110,10 @@ export class ConnectionManager {
 
   /**
    * Register a new WebSocket connection (pre-auth). `ip` must come from
-   * `clientIp`, never from a forwarded header read directly.
+   * `clientIp`, never from a forwarded header read directly. `workspace` is
+   * the socket URL's `?workspace=`, resolved once the user is known.
    */
-  handleOpen(ws: ServerWebSocket<any>, ip: string): string | null {
+  handleOpen(ws: ServerWebSocket<any>, ip: string, workspace?: string): string | null {
     // The only per-address cap: connections that have not authenticated yet.
     const preAuthCount = this.preAuthByIp.get(ip) || 0;
     if (preAuthCount >= this.budget.maxPreAuth) {
@@ -117,6 +132,7 @@ export class ConnectionManager {
       authTimer: setTimeout(() => {
         this.handleAuthTimeout(connectionId);
       }, AUTH_TIMEOUT_MS),
+      ...(workspace ? { workspaceHint: workspace } : {}),
     };
 
     this.connections.set(connectionId, conn);
@@ -347,6 +363,24 @@ export class ConnectionManager {
         return;
       }
 
+      // The workspace this connection works in (user connections only; an
+      // artifact viewer is not a user). A `?workspace=` that names none of
+      // the user's workspaces fails the sign-in rather than quietly
+      // switching the client to another workspace.
+      let workspaceId: string | undefined;
+      if (artifactId === undefined) {
+        if (!this.workspaceResolver) {
+          this.sendAuthError(conn, 'Workspace resolution not configured');
+          return;
+        }
+        const resolved = await this.workspaceResolver(userId, conn.workspaceHint);
+        if (!resolved) {
+          this.sendAuthError(conn, 'Unknown workspace');
+          return;
+        }
+        workspaceId = resolved;
+      }
+
       // Auth success — clear timer, upgrade connection
       if (conn.authTimer) {
         clearTimeout(conn.authTimer);
@@ -367,6 +401,7 @@ export class ConnectionManager {
         eventSubscriptions: new Set(['*']), // Default: all of this user's own events
         resources: new Set(),
         ...(artifactId !== undefined ? { artifactId } : {}),
+        ...(workspaceId !== undefined ? { workspaceId } : {}),
         metadata: { isAdmin, clientVersion: msg.clientVersion },
       };
 

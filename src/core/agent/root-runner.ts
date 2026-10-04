@@ -9,6 +9,7 @@ import { taskFingerprint } from '@/core/swarm/spawner';
 import type { AgentWorker } from '@/core/agent-worker';
 import type { ToolHandler } from '@/core/agent-base';
 import { type AgentNode, getLevelDefault, LEVEL_DEFAULT, type PendingChild } from '@/core/swarm/types';
+import { agentPrincipal } from '@/security/principal';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { sessionGeneration } from '@/db/schema/sessions';
@@ -503,12 +504,12 @@ export async function runRootAgent(
     staticParts.push(wsContext);
   } else {
     // Normal mode: generic workspace awareness.
-    // Advertise the per-user sandbox root (the same one the filesystem tool
-    // enforces via WorkspaceFS.forAgent), not the flat config.workspace.rootPath —
+    // Advertise the turn workspace's sandbox root (the same one the filesystem
+    // tool enforces via WorkspaceFS.forAgent), not the flat config.workspace.rootPath —
     // otherwise the root agent hands workers absolute paths that fall outside
     // their own sandbox.
     const wsConfig = getConfig();
-    const wsRoot = WorkspaceFS.forAgent({ userId }).root;
+    const wsRoot = WorkspaceFS.forPrincipal(agentPrincipal({ userId, workspaceId })).root;
     const wsAdditional = wsConfig.workspace.additionalPaths?.map((p: string) => resolve(p)).filter(Boolean) || [];
 
     // Multi-repo: when the repo registry has been scanned, inject the map of
@@ -517,7 +518,7 @@ export async function runRootAgent(
     let injectedSuite = false;
     try {
       const { loadRepoGraph } = await import('@/core/repos/registry-service');
-      const { repos, edges, ambiguousPackages } = await loadRepoGraph(userId);
+      const { repos, edges, ambiguousPackages } = await loadRepoGraph({ userId, workspaceId });
       if (repos.length > 0) {
         const repoLines = repos.slice(0, 40).map((r) => {
           const deps = edges

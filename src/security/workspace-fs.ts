@@ -12,12 +12,16 @@
  *
  *   $DATA_ROOT/
  *     users/{user_id}/
- *       workspaces/{workspace_id}/
+ *       workspaces/{workspace_id | default}/
  *         files/      ← root for this WorkspaceFS instance
  *         documents/  ← uploads (managed by /api/documents)
  *         cache/      ← future
  *     system/
  *       skills/       ← read-only seeds
+ *
+ * The user's default workspace (and the user level, no workspace) keeps
+ * the literal `default` segment, which every file written before
+ * per-workspace roots lives under; any other workspace uses its id.
  *
  * The class never throws on construction; it lazily creates the root
  * directory on the first `mkdirRoot()` or `resolve()` call. That keeps
@@ -42,13 +46,14 @@
  * disjoint trees. Even with identical user-supplied paths the actual
  * filesystem locations never collide.
  */
-import { existsSync, mkdirSync, realpathSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync, renameSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path, { basename, dirname, isAbsolute, join, resolve as pathResolve } from 'node:path';
 import { getConfig } from '@/config';
+import type { AgentContext } from '@/core/types';
 import type { Principal } from './principal';
-import { ANONYMOUS_PRINCIPAL, isAuthenticated, principalFromUser } from './principal';
+import { ANONYMOUS_PRINCIPAL, agentPrincipal, isAuthenticated } from './principal';
 
 /**
  * Whether `child` is `parent` or inside it, by path segments (`/a/foo` is not
@@ -74,8 +79,6 @@ export class WorkspaceFsError extends Error {
 export interface WorkspaceFsOptions {
   /** Override the data root (otherwise read from config). Useful for tests. */
   dataRoot?: string;
-  /** Workspace id within the user. Defaults to "default". */
-  workspaceId?: string;
   /**
    * Absolute paths matching one of these prefixes are accepted in
    * addition to the workspace root. Used for transient files in
@@ -86,9 +89,70 @@ export interface WorkspaceFsOptions {
 }
 
 /**
+ * A system job (no user behind it) working on files. It names its root
+ * explicitly: a system job never inherits the shared `workspace.rootPath`
+ * by omission, and a user's agent never lands there.
+ */
+export interface SystemFsJob {
+  system: true;
+  root: string;
+}
+
+/** The directory a user's default workspace keeps, so no file that predates per-workspace roots moves. */
+export const DEFAULT_WORKSPACE_SEGMENT = 'default';
+
+/**
+ * Owner and default flag of every workspace row the `OrgWorkspaceManager`
+ * has read or written in this process (loaded at boot, refreshed by each
+ * workspace lookup). The file root of a workspace depends on whether it is
+ * its owner's default, and the many synchronous callers of `forAgent` /
+ * `forSession` cannot ask the database.
+ */
+const workspaceRows = new Map<string, { userId: string; isDefault: boolean }>();
+
+/** Record workspace rows as read from or written to the database. */
+export function noteWorkspaceRows(rows: ReadonlyArray<{ id: string; userId: string; isDefault: boolean }>): void {
+  for (const row of rows) {
+    if (row.isDefault) {
+      // One default per user (partial unique index): a newly seen default
+      // demotes whichever row this process still takes for the default.
+      for (const [id, known] of workspaceRows) {
+        if (known.userId === row.userId && known.isDefault && id !== row.id) known.isDefault = false;
+      }
+    }
+    workspaceRows.set(row.id, { userId: row.userId, isDefault: row.isDefault });
+  }
+}
+
+/** Drop a deleted workspace row. */
+export function forgetWorkspaceRow(id: string): void {
+  workspaceRows.delete(id);
+}
+
+/** Test hook: clear the known workspace rows. */
+export function _resetWorkspaceRowsForTests(): void {
+  workspaceRows.clear();
+}
+
+/**
+ * The directory segment of a user's workspace: the workspace id, except the
+ * user's default workspace (and the user level, `null`), which keep
+ * `default`. A workspace this process has not seen, or one owned by someone
+ * else, throws: guessing would put files in the wrong workspace.
+ */
+export function workspaceSegment(userId: string, workspaceId: string | null | undefined): string {
+  if (!workspaceId) return DEFAULT_WORKSPACE_SEGMENT;
+  const row = workspaceRows.get(workspaceId);
+  if (!row || row.userId !== userId) {
+    throw new WorkspaceFsError('INVALID_INPUT',
+      `workspace ${workspaceId} of user ${userId} is not loaded; resolve it through the workspace manager first`);
+  }
+  return row.isDefault ? DEFAULT_WORKSPACE_SEGMENT : workspaceId;
+}
+
+/**
  * Compute the per-user data-root path. Pulled from config so the
- * deployment can override; defaults to `<workspace.rootPath>` so a
- * single-user install needs no migration to opt in.
+ * deployment can override; defaults to `<workspace.rootPath>`.
  */
 function configuredDataRoot(): string {
   try {
@@ -99,20 +163,65 @@ function configuredDataRoot(): string {
   }
 }
 
+/**
+ * Move a user's workspace directories when the default changes, so each
+ * workspace keeps its files: the old default's `default` directory becomes
+ * `<previousDefaultId>`, and `<newDefaultId>` becomes `default`. Renames
+ * within one directory; a missing source has nothing to move. Throws when a
+ * target already exists rather than merging two trees. (A null id on either
+ * side is "no such workspace", which undoing a swap from no default needs.)
+ */
+export function swapDefaultWorkspaceFiles(
+  userId: string,
+  previousDefaultId: string | null,
+  newDefaultId: string | null,
+  dataRoot: string = configuredDataRoot(),
+): void {
+  const base = pathResolve(dataRoot, 'users', userId, 'workspaces');
+  const defaultDir = join(base, DEFAULT_WORKSPACE_SEGMENT);
+  const newDir = newDefaultId ? join(base, newDefaultId) : null;
+  const parked = join(base, `.default-swap-${newDefaultId ?? 'none'}`);
+  if (existsSync(parked)) throw new Error(`workspace swap already in progress: ${parked} exists`);
+  const oldDir = previousDefaultId ? join(base, previousDefaultId) : null;
+  if (existsSync(defaultDir)) {
+    if (!oldDir) throw new Error(`user ${userId} has a ${DEFAULT_WORKSPACE_SEGMENT} workspace directory but no previous default workspace to give it to`);
+    if (existsSync(oldDir)) throw new Error(`cannot move the previous default workspace's files: ${oldDir} already exists`);
+    renameSync(defaultDir, parked);
+  }
+  if (newDir && existsSync(newDir)) renameSync(newDir, defaultDir);
+  if (oldDir && existsSync(parked)) renameSync(parked, oldDir);
+}
+
+/**
+ * Extra prefixes an agent may use beside its root:
+ * `config.workspace.additionalPaths` (lets a deployment expose multiple
+ * repos), the legacy `/tmp/assistant-` prefix for transient files, and the
+ * caller's own extras.
+ */
+function agentExtraPrefixes(options: WorkspaceFsOptions): string[] {
+  let cfg: ReturnType<typeof getConfig> | undefined;
+  try { cfg = getConfig(); } catch { /* config may not be loaded */ }
+  const additional = (cfg?.workspace.additionalPaths ?? []).map((p) => pathResolve(p));
+  return [
+    ...additional,
+    '/tmp/assistant-',
+    // `/tmp` never matches on Windows (and `$TMPDIR` may differ on posix).
+    join(tmpdir(), 'assistant-'),
+    ...(options.extraAllowedPrefixes ?? []),
+  ];
+}
+
 export class WorkspaceFS {
   /** Absolute path to this principal's workspace files dir. */
   readonly root: string;
   /** Owning principal. */
   readonly principal: Principal;
-  /** Configured workspace id (defaults to "default"). */
-  readonly workspaceId: string;
   private readonly extraAllowedPrefixes: readonly string[];
   /** `root` with junctions/symlinks resolved; cached once the root exists. */
   private realRootCache: string | undefined;
 
   private constructor(principal: Principal, root: string, options: WorkspaceFsOptions) {
     this.principal = principal;
-    this.workspaceId = options.workspaceId ?? 'default';
     this.root = root;
     this.extraAllowedPrefixes = (options.extraAllowedPrefixes ?? [])
       .map((p) => pathResolve(p));
@@ -120,8 +229,9 @@ export class WorkspaceFS {
 
   /**
    * Build a `WorkspaceFS` for the given principal under the per-user
-   * nested layout. Throws synchronously for anonymous principals —
-   * callers should already have rejected those via the auth guard.
+   * nested layout, in the principal's workspace (`workspaceSegment`).
+   * Throws synchronously for anonymous principals — callers should
+   * already have rejected those via the auth guard.
    */
   static forPrincipal(principal: Principal, options: WorkspaceFsOptions = {}): WorkspaceFS {
     if (!isAuthenticated(principal)) {
@@ -129,13 +239,12 @@ export class WorkspaceFS {
         'WorkspaceFS requires an authenticated principal');
     }
     const dataRoot = options.dataRoot ?? configuredDataRoot();
-    const workspaceId = options.workspaceId ?? 'default';
     const root = pathResolve(
       dataRoot,
       'users',
       principal.userId,
       'workspaces',
-      workspaceId,
+      workspaceSegment(principal.userId, principal.workspaceId),
       'files',
     );
     return new WorkspaceFS(principal, root, options);
@@ -143,9 +252,8 @@ export class WorkspaceFS {
 
   /**
    * Build a `WorkspaceFS` rooted at an explicit absolute path, with no
-   * per-user nesting. Used by single-user installs to keep the existing
-   * `<config.workspace.rootPath>` layout — Phase 1b only nests when
-   * `multiuser.enabled` is true.
+   * per-user nesting: a dev-mode project, a skill directory, a system
+   * job's named root.
    */
   static withRoot(root: string, options: WorkspaceFsOptions = {}): WorkspaceFS {
     return new WorkspaceFS(
@@ -158,10 +266,12 @@ export class WorkspaceFS {
   /**
    * Build a `WorkspaceFS` for an in-flight agent.
    *
-   *   - A real userId (not the `'system'`/`'local'` sentinels) gets the
-   *     per-user nested layout under `<dataRoot>/users/<id>/…`.
-   *   - System/single jobs (`userId === 'system'`/`'local'` or absent) get a
-   *     flat `withRoot` instance pinned to `config.workspace.rootPath`.
+   *   - An agent works for a real user: the root is that user's workspace
+   *     (`context.workspaceId`; none means the default workspace) under
+   *     `<dataRoot>/users/<id>/workspaces/<segment>/files`.
+   *   - A system job passes `{ system: true, root }` and gets exactly that
+   *     root. There is no implicit flat root: an agent context without a
+   *     real user throws.
    *
    * In both cases:
    *   - `config.workspace.additionalPaths` are added as extra allowed
@@ -169,45 +279,34 @@ export class WorkspaceFS {
    *   - The legacy `/tmp/assistant-` prefix is allowed for transient files.
    */
   static forAgent(
-    context?: { userId?: string },
+    context: AgentContext | SystemFsJob,
     options: WorkspaceFsOptions = {},
   ): WorkspaceFS {
-    let cfg: ReturnType<typeof getConfig> | undefined;
-    try { cfg = getConfig(); } catch { /* config may not be loaded */ }
-
-    const dataRoot = options.dataRoot
-      ?? pathResolve(cfg?.workspace.rootPath || './workspace');
-    const additional = (cfg?.workspace.additionalPaths ?? []).map((p) => pathResolve(p));
-    // Keep legacy tmp prefix so transient artifacts created by the
-    // existing tool stack stay readable.
-    const extra = [
-      ...additional,
-      '/tmp/assistant-',
-      // `/tmp` never matches on Windows (and `$TMPDIR` may differ on posix).
-      join(tmpdir(), 'assistant-'),
-      ...(options.extraAllowedPrefixes ?? []),
-    ];
-
-    // `'system'` and `'local'` are both single/system sentinels (mirrors the
-    // matching guards in worker-spawner.ts, agent-manager.ts, agent-worker.ts).
-    // They get the flat root; only a real user id gets a per-user nested root.
-    if (context?.userId && context.userId !== 'system' && context.userId !== 'local') {
-      const principal = principalFromUser({
-        id: context.userId,
-        username: context.userId,
-        isAdmin: false,
-      });
-      return WorkspaceFS.forPrincipal(principal, {
-        ...options,
-        dataRoot,
-        extraAllowedPrefixes: extra,
-      });
+    if ('system' in context) {
+      if (context.system !== true || !context.root) {
+        throw new WorkspaceFsError('INVALID_INPUT', 'a system job must name its root');
+      }
+      return WorkspaceFS.withRoot(context.root, { ...options, extraAllowedPrefixes: agentExtraPrefixes(options) });
     }
 
-    return WorkspaceFS.withRoot(dataRoot, {
+    // `'system'`/`'local'` were the old flat-root sentinels: a user path
+    // never resolves to the shared root, so they are refused here.
+    if (!context.userId || context.userId === 'system' || context.userId === 'local') {
+      throw new WorkspaceFsError('UNAUTHENTICATED',
+        `agent context has no real user (${context.userId || 'none'}); a system job passes { system: true, root }`);
+    }
+    return WorkspaceFS.forRequest(agentPrincipal(context), options);
+  }
+
+  /**
+   * The root an agent of the principal's workspace works in, with the same
+   * extras as `forAgent`: for REST surfaces that must accept exactly the
+   * paths such an agent may use (knowledge indexing).
+   */
+  static forRequest(principal: Principal, options: WorkspaceFsOptions = {}): WorkspaceFS {
+    return WorkspaceFS.forPrincipal(principal, {
       ...options,
-      dataRoot,
-      extraAllowedPrefixes: extra,
+      extraAllowedPrefixes: agentExtraPrefixes(options),
     });
   }
 
@@ -218,14 +317,15 @@ export class WorkspaceFS {
    * with a `projectPath` runs the agent inside the project directory, so
    * read-back must target that same root — pinning it to the per-user
    * workspace 404s the file browser and blinds the Changes tab. Non-dev
-   * sessions keep the `forAgent` per-user workspace.
+   * sessions get the session's own workspace (`session.workspaceId`), the
+   * root `forAgent` gives the agents of the session's turns.
    *
    * Trust note: `projectPath` is only honored together with `devMode` —
    * the same (pre-existing) trust decision that lets the CLI agent run
    * with that directory as cwd; this helper adds no new reach.
    */
   static forSession(
-    session: { userId?: string | null; context?: unknown },
+    session: { userId: string; workspaceId?: string | null; context?: unknown },
     options: WorkspaceFsOptions = {},
   ): WorkspaceFS {
     const ctx = session.context as
@@ -235,7 +335,10 @@ export class WorkspaceFS {
     if (ctx?.devMode && ctx.projectPath) {
       return WorkspaceFS.withRoot(pathResolve(ctx.projectPath), options);
     }
-    return WorkspaceFS.forAgent({ userId: session.userId ?? undefined }, options);
+    return WorkspaceFS.forPrincipal(
+      agentPrincipal({ userId: session.userId, workspaceId: session.workspaceId ?? null }),
+      options,
+    );
   }
 
   /**

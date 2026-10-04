@@ -16,7 +16,7 @@ const fx = vi.hoisted(() => ({
   taken: [] as Array<{ id: string; title: string }>,
 }));
 vi.mock('@/models/model-registry', () => ({ getModelRegistry: () => ({ getDefaultModel: async () => ({ modelId: 'test-model' }) }) }));
-vi.mock('./session-resolver', () => ({ resolveSession: async (id: string) => id }));
+vi.mock('./session-resolver', () => ({ resolveSession: async (id: string) => id, turnWorkspaceId: async () => 'workspace' }));
 vi.mock('@/security/orgs', () => ({ getOrgWorkspaceManager: () => ({ ensureDefaultWorkspace: async () => ({ id: 'workspace' }) }) }));
 vi.mock('@/core/commands', () => ({ handleCommand: async () => null }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: {

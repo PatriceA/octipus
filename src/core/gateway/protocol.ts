@@ -39,6 +39,13 @@ export interface ConnectionContext {
    * only ping and (un)subscribe that artifact's resource.
    */
   artifactId?: string;
+  /**
+   * The workspace this connection works in: the one named by the socket's
+   * `?workspace=` (id or slug, owned by the user), else the user's default.
+   * Resolved at auth; new sessions from `chat.send` are created in it.
+   * Unset only on an artifact-viewer connection.
+   */
+  workspaceId?: string;
   metadata: Record<string, unknown>;
 }
 
@@ -209,6 +216,11 @@ export const ChatSendSchema = z.object({
   type: z.literal('chat.send'),
   sessionId: z.string().uuid(),
   content: z.string().min(1).max(100_000),
+  /**
+   * Workspace a NEW session is created in (one the user owns); defaults to
+   * the connection's workspace. An existing session keeps its own.
+   */
+  workspaceId: z.string().uuid().optional(),
   projectPath: z.string().optional(),
   attachments: z.array(z.object({
     name: z.string().min(1).max(255),

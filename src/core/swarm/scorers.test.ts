@@ -60,7 +60,7 @@ async function allowedToRun(over: Record<string, unknown> = {}) {
     check: async () => ({ allowed: true, level: 'ALLOW', requiresApproval: false }),
   } as never);
   return {
-    ctx: { canRunCommands: true, userId: 'system', role: 'coding', ...over },
+    ctx: { canRunCommands: true, userId: 'system', workspaceRoot, role: 'coding', ...over },
     restore: () => spy.mockRestore(),
   };
 }
@@ -68,7 +68,7 @@ async function allowedToRun(over: Record<string, unknown> = {}) {
 const ctx = { userId: 'system' as const };
 
 async function run(scorers: Scorer[], output: unknown, notes?: string) {
-  return runScorers(scorers, { output, notes }, ctx);
+  return runScorers(scorers, { output, notes }, { ...ctx, workspaceRoot });
 }
 
 describe('deriveSchemaScorer (Phase B1)', () => {
@@ -330,7 +330,7 @@ describe('side_effect scorer (receipt-vs-claim)', () => {
   });
 
   it('does NOT fail when there is no receipt at all', async () => {
-    const out = await runScorers([{ kind: 'side_effect', minFilesChanged: 1 }], { output: 'done' }, ctx);
+    const out = await runScorers([{ kind: 'side_effect', minFilesChanged: 1 }], { output: 'done' }, { ...ctx, workspaceRoot });
     expect(out.passed).toBe(true);
   });
 
@@ -660,7 +660,7 @@ describe('command_exit_zero — who may run one', () => {
     const out = await runScorers(
       [{ kind: 'command_exit_zero', command: 'true' }],
       { output: 'x' },
-      { userId: 'system' },
+      { userId: 'system', workspaceRoot },
     );
     expect(out.passed).toBe(false);
   });
@@ -750,7 +750,7 @@ describe('command_exit_zero — environment faults are not the child’s defect'
     const out = await runScorers(
       [{ kind: 'command_exit_zero', command: 'true' }],
       { output: 'x' },
-      { canRunCommands: true, userId: 'no-such-user-workspace', role: 'coding' },
+      { canRunCommands: true, userId: 'system', workspaceRoot: join(workspaceRoot, 'no-such-workspace'), role: 'coding' },
     );
     spy.mockRestore();
 
@@ -769,7 +769,7 @@ describe('command_exit_zero — environment faults are not the child’s defect'
     const started = runScorers(
       [{ kind: 'command_exit_zero', command: 'sleep 30', timeoutMs: 20_000 }],
       { output: 'x' },
-      { canRunCommands: true, userId: 'system', role: 'coding', signal: controller.signal },
+      { canRunCommands: true, userId: 'system', workspaceRoot, role: 'coding', signal: controller.signal },
     );
     setTimeout(() => controller.abort(), 200);
     const out = await started;
@@ -797,7 +797,7 @@ describe('command_exit_zero — the operator’s permission decision', () => {
     const out = await runScorers(
       [{ kind: 'command_exit_zero', command: 'true' }],
       { output: 'x' },
-      { canRunCommands: true, userId: 'system', role: 'coding' },
+      { canRunCommands: true, userId: 'system', workspaceRoot, role: 'coding' },
     );
     spy.mockRestore();
     expect(out.passed).toBe(false);
@@ -815,7 +815,7 @@ describe('command_exit_zero — the operator’s permission decision', () => {
     const out = await runScorers(
       [{ kind: 'command_exit_zero', command: 'true' }],
       { output: 'x' },
-      { canRunCommands: true, userId: 'system', role: 'coding' },
+      { canRunCommands: true, userId: 'system', workspaceRoot, role: 'coding' },
     );
     spy.mockRestore();
 
@@ -834,7 +834,7 @@ describe('command_exit_zero — the operator’s permission decision', () => {
     const out = await runScorers(
       [{ kind: 'command_exit_zero', command: 'true' }],
       { output: 'x' },
-      { canRunCommands: true, userId: 'system', role: 'coding' },
+      { canRunCommands: true, userId: 'system', workspaceRoot, role: 'coding' },
     );
     spy.mockRestore();
     expect(out.failures[0].retryable).toBe(false);
@@ -849,7 +849,7 @@ describe('command_exit_zero — the operator’s permission decision', () => {
     const out = await runScorers(
       [{ kind: 'command_exit_zero', command: 'true' }],
       { output: 'x' },
-      { canRunCommands: true, userId: 'system', role: 'coding' },
+      { canRunCommands: true, userId: 'system', workspaceRoot, role: 'coding' },
     );
     spy.mockRestore();
     expect(out.passed).toBe(false);
@@ -865,7 +865,7 @@ describe('command_exit_zero — the operator’s permission decision', () => {
     const out = await runScorers(
       [{ kind: 'command_exit_zero', command: 'true' }],
       { output: 'x' },
-      { canRunCommands: true, userId: 'system' },
+      { canRunCommands: true, userId: 'system', workspaceRoot },
     );
     spy.mockRestore();
     expect(out.failures[0]?.reason ?? '').not.toMatch(/permission|DENY/);
@@ -912,7 +912,7 @@ describe('command_exit_zero — the permission action is the one that was read',
     const out = await runScorers(
       [{ kind: 'command_exit_zero', command: 'true' }],
       { output: 'x' },
-      { canRunCommands: true, userId: 'system', role: 'coding' },
+      { canRunCommands: true, userId: 'system', workspaceRoot, role: 'coding' },
     );
     permSpy.mockRestore();
     cfgSpy.mockRestore();
@@ -970,7 +970,7 @@ describe('runScorers — a cancelled run is not a failed contract', () => {
     const out = await runScorers(
       [{ kind: 'command_exit_zero', command: 'true' }],
       { output: 'x' },
-      { canRunCommands: true, userId: 'system', role: 'coding', signal: controller.signal },
+      { canRunCommands: true, userId: 'system', workspaceRoot, role: 'coding', signal: controller.signal },
     );
     spy.mockRestore();
 

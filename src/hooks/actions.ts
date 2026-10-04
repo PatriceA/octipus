@@ -482,13 +482,12 @@ async function runRoleHeartbeat(
 ): Promise<ActionResult> {
   const { ROLE_CONFIGS } = await import('@/core/agent/roles');
   if (!Object.hasOwn(ROLE_CONFIGS, role)) return { success: false, error: `Unknown role "${role}" on heartbeat hook` };
-  let workspaceId: string | null = null;
-  try {
-    const { getOrgWorkspaceManager } = await import('@/security/orgs');
-    workspaceId = (await getOrgWorkspaceManager().ensureDefaultWorkspace(userId)).id;
-  } catch (err) {
-    coreLogger.debug({ err, userId }, 'role heartbeat: workspace resolve failed, proceeding with null');
-  }
+  // The hook session's workspace (the user's default when the session has
+  // none or does not exist yet), owned by the user; never unscoped.
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const { turnWorkspaceId } = await import('@/core/agent/session-resolver');
+  const session = await sessionRepository.findById(sessionId);
+  const workspaceId = await turnWorkspaceId(userId, session?.workspaceId);
   const now = new Date();
   const parent: import('@/core/types').AgentContext = {
     id: `heartbeat:${role}:${sessionId}`,

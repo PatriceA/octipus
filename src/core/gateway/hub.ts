@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 import { coreLogger } from '@/utils/logger';
-import { ConnectionManager } from './connection-manager';
+import { type ConnectionWorkspaceResolver, ConnectionManager } from './connection-manager';
 import { GatewayEventBus } from './event-bus';
 import type { ClientMessage, ConnectionContext, GatewayMessage, UserGatewayEvent } from './protocol';
 import { PROTOCOL_VERSION } from './protocol';
@@ -63,6 +63,11 @@ export class GatewayHub {
    */
   setSessionValidator(validator: (token: string) => Promise<{ userId: string; username: string; isAdmin: boolean } | null>): void {
     this.connectionManager.setSessionValidator(validator);
+  }
+
+  /** Set how a user connection's workspace is resolved at auth (`?workspace=`). */
+  setWorkspaceResolver(resolver: ConnectionWorkspaceResolver): void {
+    this.connectionManager.setWorkspaceResolver(resolver);
   }
 
   /**

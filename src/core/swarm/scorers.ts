@@ -430,6 +430,13 @@ export interface ScorableResult {
 export interface ScorerContext {
   userId?: string;
   /**
+   * The child's workspace root (`WorkspaceFS.forAgent` of the spawning
+   * context): where `file_exists` looks and `command_exit_zero` runs when
+   * there is no dev-mode project. Absent means there is no workspace, and
+   * those checks refuse rather than fall back to a shared root.
+   */
+  workspaceRoot?: string;
+  /**
    * Whether the child holds the shell tool. Gates `command_exit_zero`: a scorer
    * that ran commands for a role without shell access would be a way around the
    * role's toolset rather than a check on its output. Absent (`undefined`) reads
@@ -474,6 +481,15 @@ export interface ScorerContext {
    * child that writes through `shell__run` reads as having changed nothing.
    */
   filesTouched?: number | null;
+}
+
+/**
+ * The child's workspace as the filesystem tool sees it (same extras), or
+ * null when the context names none. The scorer is a check the system runs
+ * over a root the spawner resolved, hence the explicit system-job form.
+ */
+function scorerWorkspace(ctx: ScorerContext): WorkspaceFS | null {
+  return ctx.workspaceRoot ? WorkspaceFS.forAgent({ system: true, root: ctx.workspaceRoot }) : null;
 }
 
 /**
@@ -709,7 +725,10 @@ async function evaluate(
       // `ScorerContext.projectPath`), so a relative path is its project's.
       const fs = ctx.projectPath && existsSync(ctx.projectPath)
         ? WorkspaceFS.withRoot(ctx.projectPath)
-        : WorkspaceFS.forAgent({ userId: ctx.userId });
+        : scorerWorkspace(ctx);
+      if (!fs) {
+        return { scorer: 'file_exists', reason: 'the child has no workspace to look in', retryable: false };
+      }
       const resolved = fs.resolveOptional(scorer.path);
       if (!resolved) {
         return { scorer: 'file_exists', reason: `path "${truncate(scorer.path)}" is outside the workspace` };
@@ -924,10 +943,10 @@ async function evaluate(
       // it on the child context and the child's shell duly runs in the project.
       // So the gate verified a different tree from the one the work happened
       // in, and failed every time.
-      const fs = WorkspaceFS.forAgent({ userId: ctx.userId });
+      const fs = scorerWorkspace(ctx);
       const cwd = ctx.projectPath && existsSync(ctx.projectPath)
         ? ctx.projectPath
-        : fs.resolveOptional('.');
+        : fs?.resolveOptional('.');
       if (!cwd) {
         return {
           scorer: label,

@@ -8,6 +8,7 @@ import * as yaml from 'js-yaml';
 import { getConfig } from '@/config';
 import type { MCPServer } from '@/core/types';
 import { getMCPBridge, type MCPServerConnection } from '@/mcp/bridge';
+import type { Principal } from '@/security/principal';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { buildChildEnv } from '@/security/child-env';
 import {
@@ -205,7 +206,7 @@ function isUnder(child: string, parent: string): boolean {
 }
 
 /** Resolve an admin-selected folder and constrain it to configured filesystem roots. */
-export async function resolveCocoIndexWorkspacePath(input: string, userId: string): Promise<string> {
+export async function resolveCocoIndexWorkspacePath(input: string, principal: Principal): Promise<string> {
   const trimmed = input.trim();
   if (!trimmed) throw new Error('Workspace path is required');
   if (trimmed.includes('\0')) throw new Error('Workspace path contains a null byte');
@@ -220,7 +221,8 @@ export async function resolveCocoIndexWorkspacePath(input: string, userId: strin
     throw new Error(`Workspace path does not exist or is not a directory: ${lexical}`);
   }
 
-  const userRoot = WorkspaceFS.forAgent({ userId }).root;
+  // The admin's current workspace root (the request's workspace).
+  const userRoot = WorkspaceFS.forPrincipal(principal).root;
   const roots = [config.workspace.rootPath, userRoot, ...config.workspace.additionalPaths];
   const realRoots = await Promise.all(roots.map(async (root) => {
     try { return await realpath(resolve(root)); }

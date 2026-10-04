@@ -144,7 +144,7 @@ function premiseRoots(context: AgentContext, devProjectPath?: string): string[] 
   const roots: string[] = [];
   if (devProjectPath) roots.push(devProjectPath);
   try {
-    roots.push(WorkspaceFS.forAgent({ userId: context.userId }).root);
+    roots.push(WorkspaceFS.forAgent(context).root);
   } catch {
     /* no sandbox root resolvable — the dev path (if any) still counts */
   }
@@ -663,12 +663,12 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   } else {
     // Normal mode: global workspace.
     // Advertise the SAME root the filesystem sandbox enforces. `WorkspaceFS.forAgent`
-    // nests every real user under `<rootPath>/users/<uid>/workspaces/default/files`;
+    // nests every workspace under `<rootPath>/users/<uid>/workspaces/<workspace>/files`;
     // advertising the flat `config.workspace.rootPath` here pointed agents at a path
     // outside their own sandbox ("outside allowed workspace directories" on absolute
     // calls). `.root` is a pure path computation — no filesystem side effects.
     const config = getConfig();
-    const workspaceRoot = WorkspaceFS.forAgent({ userId: context.userId }).root;
+    const workspaceRoot = WorkspaceFS.forAgent(context).root;
     const additionalPaths = config.workspace.additionalPaths?.map((p: string) => resolve(p)).filter(Boolean) || [];
     let workspaceHint = `\n\nWORKSPACE CONSTRAINT: You are working in the project at ${workspaceRoot}.`;
     if (additionalPaths.length > 0) {

@@ -178,7 +178,7 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
       : mode === 'semantic' ? 0.35 : mode === 'keyword' ? 0 : 0.3;
 
     try {
-      const { repos } = await loadRepoGraph(user.id);
+      const { repos } = await loadRepoGraph({ userId: user.id, workspaceId: principal.workspaceId ?? null });
       const allowedRepoIds = repos.map(repo => repo.id);
       if (repoIds?.some((id: string) => !allowedRepoIds.includes(id))) {
         set.status = 400;
@@ -364,10 +364,9 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
     // Without this, `indexer.indexFile` does `fileAt(path).text()` on ANY
     // absolute path the request names — an authenticated user could index
     // `/etc/passwd`, app secrets, or another tenant's workspace into their
-    // own KB and read it back via search. `WorkspaceFS.forAgent` pins
-    // resolution to the caller's workspace root (per-user under multiuser;
-    // flat single-user root otherwise) plus the operator-configured
-    // `additionalPaths` escape hatch. Mirrors the session-file routes and the
+    // own KB and read it back via search. `WorkspaceFS.forRequest` pins
+    // resolution to the root of the caller's workspace, as an agent there
+    // sees it, plus the operator-configured `additionalPaths` escape hatch. Mirrors the session-file routes and the
     // filesystem tool. Runs before the KB-readiness gate so a hostile path is
     // rejected regardless of embedding-service state.
     //
@@ -379,7 +378,7 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
     // Indexed rows belong to the caller, in the caller's workspace — the same
     // personal scope every read of this route uses.
     const owner = principalKnowledgeOwner(principal);
-    const fs = WorkspaceFS.forAgent({ userId: user.id });
+    const fs = WorkspaceFS.forRequest(principal);
     try {
       safePath = fs.resolve(path);
     } catch (err) {

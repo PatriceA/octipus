@@ -76,7 +76,7 @@ describe('POST /api/knowledge/search repository visibility', () => {
     const response = await search({ mode });
 
     expect(response.status).toBe(200);
-    expect(fixture.loadRepoGraph).toHaveBeenCalledWith(fixture.user.id);
+    expect(fixture.loadRepoGraph).toHaveBeenCalledWith({ userId: fixture.user.id, workspaceId: null });
     expect(searchMethod).toHaveBeenCalledOnce();
     expect(searchMethod.mock.calls[0].at(-1)).toEqual({ allowedRepoIds: ['repo-a', 'repo-b'] });
     // The caller's own knowledge, never the install's.

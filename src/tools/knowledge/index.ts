@@ -12,13 +12,14 @@ import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-
 
 /**
  * Sandbox for the indexing tools. Like the filesystem tool's `workspaceFor`,
- * it pins reads to the caller's workspace root (per-user under multiuser; flat
- * otherwise) plus `additionalPaths` and a devMode `projectPath`. Without this
- * the index tools fed `fileAt(path).text()` any absolute path the agent
- * named — arbitrary host-file read into the KB.
+ * it pins reads to the agent's workspace root plus `additionalPaths` and a
+ * devMode `projectPath`. Without this the index tools fed
+ * `fileAt(path).text()` any absolute path the agent named — arbitrary
+ * host-file read into the KB.
  */
 function workspaceFor(context?: AgentContext): WorkspaceFS {
-  const projectPath = (context?.metadata as Record<string, unknown> | undefined)
+  if (!context) throw new Error('knowledge indexing works for an agent: no agent context was given');
+  const projectPath = (context.metadata as Record<string, unknown> | undefined)
     ?.projectPath as string | undefined;
   const fs = WorkspaceFS.forAgent(context, {
     extraAllowedPrefixes: projectPath ? [projectPath] : [],
@@ -45,6 +46,7 @@ function resolveInWorkspace(fs: WorkspaceFS, path: string): string {
 export async function resolveRepoScope(
   reposArg: string | undefined,
   userId: string | undefined,
+  workspaceId: string | null = null,
 ): Promise<SearchScope> {
   const refs = (reposArg ?? '').split(',').map(s => s.trim()).filter(Boolean);
   if (!userId) {
@@ -52,7 +54,7 @@ export async function resolveRepoScope(
     return { allowedRepoIds: [] };
   }
   const { loadRepoGraph, resolveRepo } = await import('@/core/repos/registry-service');
-  const { repos } = await loadRepoGraph(userId);
+  const { repos } = await loadRepoGraph({ userId, workspaceId });
   const ids = refs.map(ref => {
     const repo = resolveRepo(repos, ref);
     if (!repo) throw new Error(`Unknown or unavailable repository "${ref}". Call list_repos and use its id or path.`);
@@ -157,7 +159,7 @@ export class KnowledgeTool extends BaseTool {
         // Whose knowledge: the user the agent works for (plus product docs).
         const knowledge = agentKnowledgeScope(context);
         // Optional multi-repo scope: resolve repo names/ids to registry ids.
-        const scope = await resolveRepoScope(args.repos as string | undefined, context.userId);
+        const scope = await resolveRepoScope(args.repos as string | undefined, context.userId, context.workspaceId ?? null);
 
         let results;
         switch (searchMode) {
