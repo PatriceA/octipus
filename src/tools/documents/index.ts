@@ -1,6 +1,8 @@
 import { getEmbeddingService } from '@/core/rag/embeddings';
+import { agentKnowledgeScope } from '@/core/rag/knowledge-scope';
 import type { ToolManifest } from '@/core/types';
-import { documentRepository } from '@/db/repositories/document-repository';
+import { scopedRepos } from '@/db/repositories/scoped';
+import { agentPrincipal } from '@/security/principal';
 import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 
 export class DocumentsTool extends BaseTool {
@@ -54,17 +56,17 @@ export class DocumentsTool extends BaseTool {
         status: { type: 'string', description: 'Filter by status (queued, processing, completed, failed)' },
         limit: { type: 'number', description: 'Max results (default: 20)', default: 20 },
       }),
-      async (args) => {
+      async (args, context) => {
         const limit = (args.limit as number) || 20;
         const category = args.category as string | undefined;
         const status = args.status as string | undefined;
 
-        let docs;
-        if (category) {
-          docs = await documentRepository.findByCategory(category, limit);
-        } else {
-          docs = await documentRepository.listRecent(limit);
-        }
+        // The user's own documents only, never another user's — even when the
+        // user is an admin (agentPrincipal is never an admin principal).
+        const repo = scopedRepos(agentPrincipal(context)).documents;
+        let docs = category
+          ? await repo.listOwnByCategory(category, limit)
+          : await repo.listOwn(limit);
 
         if (status) {
           docs = docs.filter(d => d.status === status);
@@ -96,8 +98,8 @@ export class DocumentsTool extends BaseTool {
       createParameterSchema({
         id: { type: 'string', description: 'The document ID', required: true },
       }),
-      async (args) => {
-        const doc = await documentRepository.findById(args.id as string);
+      async (args, context) => {
+        const doc = await scopedRepos(agentPrincipal(context)).documents.findById(args.id as string);
         if (!doc) {
           return { error: 'Document not found.' };
         }
@@ -127,10 +129,10 @@ export class DocumentsTool extends BaseTool {
         query: { type: 'string', description: 'The search query', required: true },
         limit: { type: 'number', description: 'Max results (default: 5)', default: 5 },
       }),
-      async (args) => {
+      async (args, context) => {
         const service = getEmbeddingService();
         const limit = (args.limit as number) || 5;
-        const results = await service.hybridSearch(args.query as string, limit, 'document');
+        const results = await service.hybridSearch(agentKnowledgeScope(context), args.query as string, limit, 'document');
 
         // Filter to only document-sourced entries (sourceId starts with "doc:")
         const docResults = results.filter(r => r.sourceId?.startsWith('doc:'));

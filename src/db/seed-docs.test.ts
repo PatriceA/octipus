@@ -1,6 +1,7 @@
 import { join, sep } from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
 import { type EmbeddingPurpose, sha256Hex } from '@/core/rag/embeddings';
+import type { KnowledgeOwner } from '@/core/rag/knowledge-scope';
 import { type IndexProductDocsDeps, indexProductDocs } from './seed-docs';
 
 /**
@@ -10,6 +11,7 @@ import { type IndexProductDocsDeps, indexProductDocs } from './seed-docs';
  */
 
 interface IndexCall {
+  owner: KnowledgeOwner;
   purpose: EmbeddingPurpose;
   sourceId: string;
   content: string;
@@ -28,22 +30,23 @@ function makeFakeService(opts: { alreadyIndexed?: Set<string> } = {}) {
     // Mirror the real EmbeddingService.isFileIndexed: a row is "indexed" only
     // when the stored fileSha matches the current file content's sha. A
     // content change therefore returns false (must re-index).
-    async isFileIndexed(_purpose: EmbeddingPurpose, sourceId: string, fileContent: string): Promise<boolean> {
+    async isFileIndexed(_owner: KnowledgeOwner, _purpose: EmbeddingPurpose, sourceId: string, fileContent: string): Promise<boolean> {
       if (seeded?.has(sourceId)) return true;
       const have = stored.get(sourceId);
       return have !== undefined && have === sha256Hex(fileContent);
     },
-    async deleteBySource(_purpose: EmbeddingPurpose, sourceId: string): Promise<number> {
+    async deleteBySource(_owner: KnowledgeOwner, _purpose: EmbeddingPurpose, sourceId: string): Promise<number> {
       deleteCalls.push(sourceId);
       return stored.delete(sourceId) ? 1 : 0;
     },
     async indexText(
+      owner: KnowledgeOwner,
       purpose: EmbeddingPurpose,
       sourceId: string,
       content: string,
       metadata?: Record<string, unknown>,
     ): Promise<number> {
-      indexCalls.push({ purpose, sourceId, content, metadata });
+      indexCalls.push({ owner, purpose, sourceId, content, metadata });
       stored.set(sourceId, (metadata?.fileSha as string) ?? sha256Hex(content));
       return 3; // pretend 3 chunks
     },
@@ -104,6 +107,7 @@ describe('indexProductDocs', () => {
     ]);
 
     for (const call of indexCalls) {
+      expect(call.owner).toEqual({ product: true });
       expect(call.purpose).toBe('document');
       expect(call.metadata?.source).toBe('octipus-docs');
       expect(call.metadata?.language).toBe('markdown');

@@ -13,6 +13,7 @@
  *   - `anonymous`    — no credentials present; only public routes accept it
  */
 
+import type { AgentContext } from '@/core/types';
 import { scopesSatisfy } from './scopes';
 
 export type PrincipalKind = 'user' | 'service' | 'system' | 'anonymous';
@@ -104,6 +105,28 @@ export function principalFromUser(
     isAdmin: user.isAdmin,
     sessionToken,
     roles: user.isAdmin ? ['system_admin', 'user'] : ['user'],
+  };
+}
+
+/**
+ * The one builder of a principal from an agent context. Always a non-admin
+ * `user` principal for the user the agent works for, stamped with the
+ * agent's workspace: an admin's agent never inherits the repositories'
+ * admin bypass (`scopedRepos` skips the owner filter on by-id reads for
+ * admins), so a tool reads and writes exactly what its user owns.
+ */
+export function agentPrincipal(context: Pick<AgentContext, 'userId' | 'workspaceId'>): Principal {
+  if (!context.userId) {
+    throw new Error('Agent context has no userId: a tool reading user data needs the user it works for');
+  }
+  return {
+    kind: 'user',
+    userId: context.userId,
+    username: context.userId,
+    isAdmin: false,
+    sessionToken: null,
+    roles: ['user'],
+    workspaceId: context.workspaceId ?? null,
   };
 }
 

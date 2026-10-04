@@ -1,7 +1,8 @@
-import { ilike, or, } from 'drizzle-orm';
+import { and, eq, ilike, or } from 'drizzle-orm';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getEmbeddingService } from '@/core/rag/embeddings';
+import { principalKnowledgeScope } from '@/core/rag/knowledge-scope';
 import { loadRepoGraph } from '@/core/repos/registry-service';
 import { getDb } from '@/db/postgres';
 import { hooks } from '@/db/schema/hooks';
@@ -23,7 +24,7 @@ export const searchRoutes = new Elysia({ prefix: '/search' })
 
   .get(
     '/',
-    async ({ user, query: { q, limit: limitStr } }) => {
+    async ({ user, principal, query: { q, limit: limitStr } }) => {
       if (!user) {
         return { error: 'Not authenticated' };
       }
@@ -48,18 +49,19 @@ export const searchRoutes = new Elysia({ prefix: '/search' })
         knowledgeResults,
         toolResults,
       ] = await Promise.allSettled([
-        // Sessions — search by title
+        // Sessions — search by title, the caller's own only (admins too: the
+        // global view is the admin pages, not search).
         db
           .select({ id: sessions.id, title: sessions.title, channelType: sessions.channelType, status: sessions.status })
           .from(sessions)
-          .where(ilike(sessions.title, pattern))
+          .where(and(eq(sessions.userId, principal.userId), ilike(sessions.title, pattern)))
           .limit(limit),
 
-        // Hooks — search by name or description
+        // Hooks — search by name or description, the caller's own only
         db
           .select({ id: hooks.id, name: hooks.name, description: hooks.description, trigger: hooks.trigger })
           .from(hooks)
-          .where(or(ilike(hooks.name, pattern), ilike(hooks.description, pattern)))
+          .where(and(eq(hooks.userId, principal.userId), or(ilike(hooks.name, pattern), ilike(hooks.description, pattern))))
           .limit(limit),
 
         // Models — search by name
@@ -83,7 +85,7 @@ export const searchRoutes = new Elysia({ prefix: '/search' })
             // Repo-scoped knowledge (AGENTS.md, repo maps) is per user: same
             // visibility gate as /api/knowledge and the knowledge tool.
             const { repos } = await loadRepoGraph(user.id);
-            return await service.ftsSearch(searchTerm, limit, undefined, undefined, { allowedRepoIds: repos.map(repo => repo.id) });
+            return await service.ftsSearch(principalKnowledgeScope(principal), searchTerm, limit, undefined, { allowedRepoIds: repos.map(repo => repo.id) });
           } catch {
             return [];
           }

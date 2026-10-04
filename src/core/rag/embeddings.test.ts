@@ -28,7 +28,7 @@ describe.skipIf(!isIntegration)('EmbeddingService — fail-loud indexing', () =>
 
     let thrown: unknown = null;
     try {
-      await service.indexText('document', 'test-src-id', content, { filePath: '/tmp/x.md' });
+      await service.indexText({ product: true }, 'document', 'test-src-id', content, { filePath: '/tmp/x.md' });
     } catch (err) {
       thrown = err;
     }
@@ -52,7 +52,7 @@ describe.skipIf(!isIntegration)('EmbeddingService — fail-loud indexing', () =>
 
     let thrown: unknown = null;
     try {
-      await service.indexText('ephemeral', 'agent:abc123', content);
+      await service.indexText({ product: true }, 'ephemeral', 'agent:abc123', content);
     } catch (err) {
       thrown = err;
     }

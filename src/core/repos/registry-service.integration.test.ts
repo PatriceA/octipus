@@ -16,9 +16,9 @@ vi.mock('@/core/rag/embeddings', () => ({
   getEmbeddingService: () => {
     if (knowledge.unavailable) throw new Error('No embedding model configured');
     return {
-      isFileIndexed: async (purpose: string, id: string, content: string) => knowledge.records.get(`${purpose}:${id}`) === content,
-      deleteBySource: async (purpose: string, id: string) => Number(knowledge.records.delete(`${purpose}:${id}`)),
-      indexText: async (purpose: string, id: string, content: string) => { knowledge.records.set(`${purpose}:${id}`, content); },
+      isFileIndexed: async (_owner: unknown, purpose: string, id: string, content: string) => knowledge.records.get(`${purpose}:${id}`) === content,
+      deleteBySource: async (_owner: unknown, purpose: string, id: string) => Number(knowledge.records.delete(`${purpose}:${id}`)),
+      indexText: async (_owner: unknown, purpose: string, id: string, content: string) => { knowledge.records.set(`${purpose}:${id}`, content); },
     };
   },
 }));

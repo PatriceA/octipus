@@ -165,6 +165,8 @@ function cleanOcrOutput(text: string): string {
     .trim();
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export class DocumentProcessor {
   private logger = coreLogger.child({ component: 'document-processor' });
 
@@ -172,7 +174,7 @@ export class DocumentProcessor {
    * Process a single document through the OCR/categorization/indexing pipeline.
    */
   async process(documentId: string): Promise<void> {
-    const doc = await documentRepository.findById(documentId);
+    const doc = await documentRepository.findByIdSystem(documentId);
     if (!doc) {
       this.logger.error({ documentId }, 'Document not found');
       return;
@@ -238,6 +240,7 @@ export class DocumentProcessor {
       // from regular document text.
       const isImageDerived = strategy === 'ocr' && doc.mimeType !== 'application/pdf' && !usedNativeOcr;
       await this.indexDocument(
+        { userId: doc.userId, workspaceId: doc.workspaceId ?? null },
         documentId,
         extractedText,
         doc.originalName,
@@ -929,6 +932,7 @@ export class DocumentProcessor {
    * nothing in the knowledge base.
    */
   private async indexDocument(
+    owner: { userId: string; workspaceId: string | null },
     documentId: string,
     text: string,
     filename: string,
@@ -936,6 +940,12 @@ export class DocumentProcessor {
     purpose?: 'image_description',
   ): Promise<void> {
     const service = getEmbeddingService();
+    // The chunks belong to the document's owner, in its workspace. A document
+    // filed under a non-user id cannot be attributed, so it is not indexed
+    // into anyone's knowledge base: the document is marked failed instead.
+    if (!UUID_RE.test(owner.userId)) {
+      throw new Error(`Document ${documentId} is owned by "${owner.userId}", not a user — cannot index it into a personal knowledge base`);
+    }
     const embeddingModel = (await getModelRegistry().getModelForTopic('embedding'))?.modelId ?? null;
     this.logger.info({ documentId, filename, model: embeddingModel, purpose: purpose ?? 'document' }, 'Indexing document into knowledge base');
     try {
@@ -945,6 +955,7 @@ export class DocumentProcessor {
       // structural chunker can populate embeddings.doc_id for
       // hierarchy walks and per-document scoping.
       const stored = await service.indexText(
+        { ownerUserId: owner.userId, workspaceId: owner.workspaceId },
         purpose ?? 'document',
         `doc:${documentId}`,
         text,

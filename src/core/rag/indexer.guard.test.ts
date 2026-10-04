@@ -17,10 +17,12 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FileIndexer } from './indexer';
+import type { KnowledgeOwner } from './knowledge-scope';
 import { fileAt } from '@/utils/fs-file';
 
 let dir: string;
 const indexer = new FileIndexer();
+const OWNER: KnowledgeOwner = { ownerUserId: '00000000-0000-4000-8000-000000000001', workspaceId: null };
 
 beforeAll(() => {
   dir = mkdtempSync(join(tmpdir(), 'octipus-indexer-guard-'));
@@ -34,7 +36,7 @@ afterAll(() => { /* tmpdir reaped by OS */ });
 describe('indexFile guard', () => {
   test('rejects a disallowed path before reading it', async () => {
     await expect(
-      indexer.indexFile('/etc/passwd', 'document', { isAllowed: () => false }),
+      indexer.indexFile(OWNER, '/etc/passwd', 'document', { isAllowed: () => false }),
     ).rejects.toThrow(/outside the allowed workspace/);
   });
 });
@@ -42,7 +44,7 @@ describe('indexFile guard', () => {
 describe('indexDirectory guard', () => {
   test('skips files the guard rejects, indexes the rest, and records why', async () => {
     const blocked = join(dir, 'b.md');
-    const result = await indexer.indexDirectory(dir, ['*.md'], {
+    const result = await indexer.indexDirectory(OWNER, dir, ['*.md'], {
       isAllowed: (p) => p !== blocked,
     });
 
@@ -53,7 +55,7 @@ describe('indexDirectory guard', () => {
   });
 
   test('with no guard, all matching files are processed (back-compat)', async () => {
-    const result = await indexer.indexDirectory(dir, ['*.md']);
+    const result = await indexer.indexDirectory(OWNER, dir, ['*.md']);
     expect(result.filesIndexed).toBe(2);
     expect(result.errors).toHaveLength(0);
   });

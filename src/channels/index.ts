@@ -288,7 +288,7 @@ export function subscribeToDocumentResults(
 
     try {
       const { documentRepository } = await import('@/db/repositories/document-repository');
-      const doc = await documentRepository.findById(documentId);
+      const doc = await documentRepository.findByIdSystem(documentId);
       if (doc && doc.userId === message.userId) {
         const name = doc.originalName || 'Document';
         const summary = doc.summary || doc.ocrText?.slice(0, 500) || 'No content extracted';
@@ -336,7 +336,7 @@ export function subscribeToDocumentResults(
     if (ids.length > 0) {
       const { documentRepository } = await import('@/db/repositories/document-repository');
       for (const id of ids) {
-        const doc = await documentRepository.findById(id).catch(() => null);
+        const doc = await documentRepository.findByIdSystem(id).catch(() => null);
         if (doc?.status === 'completed') await onCompleted(id, message.userId);
         else if (doc?.status === 'failed') await onFailed(id, 'processing failed', message.userId);
       }

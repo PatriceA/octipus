@@ -364,6 +364,12 @@ inert and stays in the array.
 | GET | `/api/knowledge/cleanup-history` | Recent cleanup runs. |
 | POST | `/api/knowledge/index` | Index a file or directory. 503 if KB not ready. |
 
+Every knowledge route works on the caller's own entries plus the product docs
+(another user's entry is a 404). An admin adds `?scope=install` to list, read,
+search, delete, clean up or count across the whole install, or to see every
+cleanup run; each such request writes a `knowledge_install_access` audit row.
+`?scope=install` from a non-admin is a 403.
+
 `mode='graph'` is available to agents through the `knowledge` tool, not on
 this route — see [KNOWLEDGE-GRAPH.md](KNOWLEDGE-GRAPH.md).
 
@@ -444,7 +450,7 @@ Authored markdown notes — the knowledge graph's Tier 2 surface. Full model in
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/search` | Global search across all knowledge |
+| GET | `/api/search` | Global search: the caller's own sessions and hooks, models, skills, tools, and the caller's knowledge |
 
 ## Workspace
 

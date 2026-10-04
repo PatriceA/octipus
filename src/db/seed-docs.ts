@@ -1,6 +1,7 @@
 import { join } from 'path';
 import { type EmbeddingPurpose, getEmbeddingService, sha256Hex } from '@/core/rag/embeddings';
 import { isKBReady } from '@/core/rag/health';
+import { type KnowledgeOwner, PRODUCT_DOCS_SOURCE } from '@/core/rag/knowledge-scope';
 import { logger } from '@/utils/logger';
 import { fileAt, globFiles } from '@/utils/fs-file';
 
@@ -9,8 +10,8 @@ import { fileAt, globFiles } from '@/utils/fs-file';
  * end users can ask the assistant "how do I set up Telegram / a model provider
  * / X?" and get an answer grounded in the shipped docs instead of a guess.
  *
- * Rows are written GLOBAL (`user_id = NULL`, via the default `indexText`
- * scope) and tagged `metadata.source = 'octipus-docs'` so the `/docs` command
+ * Rows are written GLOBAL (`user_id = NULL`, the `{ product: true }` owner)
+ * and tagged `metadata.source = 'octipus-docs'` so the `/docs` command
  * and the `search_knowledge` tool can scope to / recognise the corpus. The
  * docs are the same for every tenant, so a single global copy is correct and
  * avoids re-embedding the manual once per user.
@@ -22,7 +23,9 @@ import { fileAt, globFiles } from '@/utils/fs-file';
 
 const log = logger.child({ component: 'seed-docs' });
 
-const DOCS_SOURCE = 'octipus-docs';
+const DOCS_SOURCE = PRODUCT_DOCS_SOURCE;
+/** Product docs are the one owner-less corpus, readable under every knowledge scope. */
+const PRODUCT_OWNER: KnowledgeOwner = { product: true };
 const DOC_PURPOSE: EmbeddingPurpose = 'document';
 
 /**
@@ -52,9 +55,10 @@ export interface IndexProductDocsDeps {
   isReady?: () => boolean;
   /** Defaults to the real EmbeddingService singleton. */
   service?: {
-    isFileIndexed(purpose: EmbeddingPurpose, sourceId: string, fileContent: string, globalOnly?: boolean): Promise<boolean>;
-    deleteBySource(purpose: EmbeddingPurpose, sourceId: string, globalOnly?: boolean): Promise<number>;
+    isFileIndexed(owner: KnowledgeOwner, purpose: EmbeddingPurpose, sourceId: string, fileContent: string): Promise<boolean>;
+    deleteBySource(owner: KnowledgeOwner, purpose: EmbeddingPurpose, sourceId: string): Promise<number>;
     indexText(
+      owner: KnowledgeOwner,
       purpose: EmbeddingPurpose,
       sourceId: string,
       content: string,
@@ -148,20 +152,20 @@ export async function indexProductDocs(deps: IndexProductDocsDeps = {}): Promise
         const fileSha = sha256Hex(content);
 
         // Skip the expensive re-embed when the file is byte-for-byte unchanged
-        // since the last index (fileSha stamped on its chunks). `globalOnly`
-        // restricts the check to GLOBAL rows so a per-user document at the same
-        // path can't mask the global file as already-indexed.
-        if (await service.isFileIndexed(DOC_PURPOSE, absPath, content, true)) {
+        // since the last index (fileSha stamped on its chunks). The product
+        // owner restricts the check to product rows so a per-user document at
+        // the same path can't mask the global file as already-indexed.
+        if (await service.isFileIndexed(PRODUCT_OWNER, DOC_PURPOSE, absPath, content)) {
           result.filesSkipped++;
           continue;
         }
 
         // Content changed (or first index) — drop stale chunks for this file
         // so an edit that shrinks the doc doesn't leave orphan chunks, then
-        // re-index. Rows are GLOBAL (indexText default ownerUserId = null), and
-        // `globalOnly` keeps this purge from touching any per-user row.
-        await service.deleteBySource(DOC_PURPOSE, absPath, true);
-        const chunks = await service.indexText(DOC_PURPOSE, absPath, content, {
+        // re-index. Rows are product rows (no user), and the product owner
+        // keeps this purge from touching any per-user row.
+        await service.deleteBySource(PRODUCT_OWNER, DOC_PURPOSE, absPath);
+        const chunks = await service.indexText(PRODUCT_OWNER, DOC_PURPOSE, absPath, content, {
           filePath: absPath,
           language: 'markdown',
           source: DOCS_SOURCE,

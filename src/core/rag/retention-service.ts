@@ -20,7 +20,13 @@
  *      expectation: 0.
  *   4. Very short / low-quality entries.
  *
- * Writes a `cleanup_audit_log` row at the end describing the run.
+ * Every pass runs inside a `KnowledgeScope` (write access): a user's cleanup
+ * touches only that user's rows and never the product docs; an install-wide
+ * run (`{ kind: 'install' }`) is for the scheduled job and audited admin
+ * routes only.
+ *
+ * Writes a `cleanup_audit_log` row at the end describing the run, stamped
+ * with the scope's user or workspace (NULL for an install run).
  */
 import { inArray, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
@@ -28,6 +34,7 @@ import { cleanupAuditLog } from '@/db/schema/cleanup-log';
 import { embeddings } from '@/db/schema/embeddings';
 import { type RetentionPolicy, retentionPolicies } from '@/db/schema/retention-policies';
 import { coreLogger } from '@/utils/logger';
+import { type KnowledgeScope, scopePredicate } from './knowledge-scope';
 
 export interface CleanupOptions {
   maxAgeDays?: number;
@@ -72,7 +79,7 @@ async function deleteIdsInBatches(ids: string[]): Promise<void> {
  * be NULL — a row with both NULL is a documentation-only policy
  * (e.g. `document`, which cascade-deletes with its parent).
  */
-export async function applyRetentionPolicy(policy: RetentionPolicy, dryRun: boolean): Promise<number> {
+export async function applyRetentionPolicy(scope: KnowledgeScope, policy: RetentionPolicy, dryRun: boolean): Promise<number> {
   const db = getDb();
   const conditions: ReturnType<typeof sql>[] = [];
 
@@ -102,6 +109,7 @@ export async function applyRetentionPolicy(policy: RetentionPolicy, dryRun: bool
     SELECT id FROM embeddings
     WHERE purpose = ${policy.purpose}
       AND (${where})
+      AND ${scopePredicate(scope, 'write')}
   `);
   const ids = unwrapRows<{ id: string }>(found).map((r) => r.id);
   if (ids.length === 0) return 0;
@@ -110,15 +118,17 @@ export async function applyRetentionPolicy(policy: RetentionPolicy, dryRun: bool
   return ids.length;
 }
 
-export async function runCleanup(options: CleanupOptions = {}): Promise<CleanupResult> {
+export async function runCleanup(scope: KnowledgeScope, options: CleanupOptions = {}): Promise<CleanupResult> {
   const maxAgeDays = options.maxAgeDays ?? 30;
   const minContentLength = options.minContentLength ?? 50;
   const dryRun = options.dryRun ?? false;
   const triggeredBy = options.triggeredBy ?? 'manual';
   const startTime = Date.now();
   const db = getDb();
+  const owned = scopePredicate(scope, 'write');
+  const ownedE = scopePredicate(scope, 'write', 'e');
 
-  const beforeRes = await db.execute(sql`SELECT count(*)::int AS count FROM embeddings`);
+  const beforeRes = await db.execute(sql`SELECT count(*)::int AS count FROM embeddings WHERE ${owned}`);
   const totalBefore = (unwrapRows<{ count: number }>(beforeRes)[0]?.count) || 0;
 
   const results: CleanupResult = {
@@ -134,7 +144,7 @@ export async function runCleanup(options: CleanupOptions = {}): Promise<CleanupR
   // fewer rows.
   const policies = await db.select().from(retentionPolicies);
   for (const p of policies) {
-    const removed = await applyRetentionPolicy(p, dryRun);
+    const removed = await applyRetentionPolicy(scope, p, dryRun);
     if (removed > 0) results.byPurpose[p.purpose] = removed;
   }
 
@@ -156,6 +166,7 @@ export async function runCleanup(options: CleanupOptions = {}): Promise<CleanupR
     WHERE e.purpose = 'document'
       AND e.source_id ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
       AND NOT EXISTS (SELECT 1 FROM documents d WHERE CAST(d.id AS text) = e.source_id)
+      AND ${ownedE}
   `);
   const orphaned = unwrapRows<{ id: string }>(orphanedRes);
   results.orphanedDocuments = orphaned.length;
@@ -172,6 +183,7 @@ export async function runCleanup(options: CleanupOptions = {}): Promise<CleanupR
     SELECT id FROM embeddings
     WHERE purpose = 'ephemeral'
       AND created_at < ${cutoffDate.toISOString()}
+      AND ${owned}
   `);
   const stale = unwrapRows<{ id: string }>(staleRes);
   results.staleAgentOutputs = stale.length;
@@ -189,6 +201,7 @@ export async function runCleanup(options: CleanupOptions = {}): Promise<CleanupR
     WHERE length(content) < ${minContentLength}
       AND content NOT LIKE '[%'
       AND (metadata->>'source') IS DISTINCT FROM 'octipus-docs'
+      AND ${owned}
   `);
   const short = unwrapRows<{ id: string }>(shortRes);
   results.shortEntries = short.length;
@@ -209,12 +222,14 @@ export async function runCleanup(options: CleanupOptions = {}): Promise<CleanupR
     results.duplicates +
     byPurposeTotal;
 
-  const afterRes = await db.execute(sql`SELECT count(*)::int AS count FROM embeddings`);
+  const afterRes = await db.execute(sql`SELECT count(*)::int AS count FROM embeddings WHERE ${owned}`);
   const totalAfter = (unwrapRows<{ count: number }>(afterRes)[0]?.count) || 0;
   const durationMs = Date.now() - startTime;
 
   try {
     await db.insert(cleanupAuditLog).values({
+      userId: scope.kind === 'personal' ? scope.userId : null,
+      workspaceId: scope.kind === 'install' ? null : scope.workspaceId,
       triggeredBy,
       dryRun,
       maxAgeDays,
@@ -235,6 +250,7 @@ export async function runCleanup(options: CleanupOptions = {}): Promise<CleanupR
   coreLogger.info(
     {
       ...results,
+      scope: scope.kind,
       dryRun,
       maxAgeDays,
       minContentLength,
