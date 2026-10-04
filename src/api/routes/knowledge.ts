@@ -187,7 +187,11 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
       : mode === 'semantic' ? 0.35 : mode === 'keyword' ? 0 : 0.3;
 
     try {
-      const { repos } = await loadRepoGraph({ userId: user.id, workspaceId: principal.workspaceId ?? null });
+      // A member's repositories are personal: a space search reaches none
+      // of them (§5.5, no personal prefixes in space contexts).
+      const repos = principal.workspaceKind === 'shared'
+        ? []
+        : (await loadRepoGraph({ userId: user.id, workspaceId: principal.workspaceId ?? null })).repos;
       const allowedRepoIds = repos.map(repo => repo.id);
       if (repoIds?.some((id: string) => !allowedRepoIds.includes(id))) {
         set.status = 400;

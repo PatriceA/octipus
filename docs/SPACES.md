@@ -9,11 +9,9 @@ This page describes what is built. The full design, including the parts
 still to come (rooms, live documents, sponsored agents, guests), is
 [docs/plans/coworking-spec.md](plans/coworking-spec.md).
 
-> **Status (coworking S1, backend foundation).** Spaces, members, roles,
-> invites, archive and purge are in place, with their REST routes. Content
-> routes acting on a space (notes, tasks, documents, artifacts, files in a
-> space), the agent inside a space and the web screens land in the next
-> slices; until then a space holds members and their activity log.
+> **Status (coworking S1).** Spaces, members, roles, invites, archive and
+> purge are in place, with their REST routes, the content routes acting on a
+> space (see "Working in a space") and the web screens (see "In the web").
 
 ## The model
 
@@ -44,9 +42,12 @@ Roles are code (`src/security/space-access.ts`, `can(role, action)`):
 
 - The **last owner** cannot be removed, demoted or leave. Make another member
   an owner first.
-- A user who is the last owner of a space **cannot be deleted**
-  (`assertDeletable`, `src/security/user-deletion.ts`); the refusal names the
-  spaces.
+- A user who is the last owner of a space, or who authored content in one
+  (tasks, task comments, notes, documents, links, artifacts), **cannot be
+  deleted** (`assertDeletable`, `src/security/user-deletion.ts`): the account
+  cascade would take that content with it. The refusal names the spaces. A
+  user who may be deleted first leaves each space they belong to, with its
+  audit row and the consequences below.
 - Guests see only their own membership until rooms exist.
 
 Someone who is not a member gets **404** for every space id — the same answer
@@ -83,6 +84,10 @@ POST /api/spaces/<id>/invites
   `POST /api/invites/<token>/accept` (signed in) joins. Both are rate-limited
   per IP like a login attempt.
 - Someone who already is a member keeps their role; the use is not consumed.
+- An invite is good only while its creator may still invite: removing an
+  owner, demoting them or their leaving revokes the links they made (one
+  `space_invite_revoked` row each), and the accept itself refuses a link
+  whose creator is no longer an owner.
 - A space is limited to `spaces.maxMembers` members (default 50); an accept
   into a full space answers 409 `space_full`.
 - Revoking (`DELETE /api/spaces/<id>/invites/<inviteId>`) works only through
@@ -94,22 +99,36 @@ Removing a member, downgrading their role or changing a guest's scope takes
 effect at once (`onMembershipChanged`, `src/core/spaces/membership.ts`):
 
 - their running agents in the space stop;
+- their queued background jobs there (learning checks, document processing)
+  are cancelled;
 - their pending permission and approval prompts raised there expire;
+- the invite links they made are revoked (see above);
 - the data sources they own on the space's artifacts pause (they resume when
   the person is again a member who may write);
 - an in-process membership version is bumped, for paths that check
   membership at keystroke rate.
 
+The change itself is committed first. If one of these follow-up steps fails,
+the failure is logged and the response still succeeds, with a `warning`
+naming the failed step (`DELETE …/members/<userId>` → `{"success": true,
+"warning": "…"}`), rather than a 500 a client would retry against a member
+who is already gone. An owner's own membership is read locked for the length
+of the operation, so an owner demoted or removed meanwhile cannot finish a
+removal, an invite or a purge.
+
 ## Archive and delete
 
 - **Archive** (`POST /api/spaces/<id>/archive`, owner): the space becomes
-  read-only — reads work; no writes, no new invites, no agent runs. Every agent
-  running in it stops. **Unarchive** undoes it.
+  read-only — reads work; no writes, no new invites, no new chats, no agent
+  runs. Every agent running in it stops, its queued background jobs are
+  cancelled, and every pending permission and approval prompt raised in it
+  expires. **Unarchive** undoes it.
 - **Delete for good** (`DELETE /api/spaces/<id>`, owner) only for a space
   archived at least `spaces.purgeAfterArchiveDays` days (default 7). In one
   transaction it deletes every row of the space — every table listed as
   `delete` in `WORKSPACE_TABLES` (`src/db/workspace-tables.ts`), plus rows
-  keyed by the space's sessions — checks that none is left, writes a
+  keyed by the space's sessions — checks that none is left (and aborts,
+  changing nothing, if one is), writes a
   `space_purged` audit row and deletes the space. Its directories
   (`<workspace.rootPath>/spaces/<id>` and `<workspace.documentsPath>/spaces/<id>`)
   are removed afterwards; an hourly sweep retries any that could not be.
@@ -122,7 +141,8 @@ effect at once (`onMembershipChanged`, `src/core/spaces/membership.ts`):
 
 Every change — creation, rename, archive, membership, role, invite created,
 revoked or accepted, purge — writes one audit row carrying the space's
-`workspace_id`. Members read them, newest first, at
+`workspace_id`. When an admin acts while impersonating a member, the row's
+`details.impersonatedBy` names the admin. Members read them, newest first, at
 `GET /api/spaces/<id>/activity?limit=50&before=<timestamp>`.
 
 ## Working in a space
@@ -140,27 +160,46 @@ for that request.
   runs in the caller's default personal workspace, so a personal route never
   acts on space rows. Agents and pipelines addressed by id
   (`/api/agents/:id`, `/api/pipelines/:id`, `?sessionId=`) follow their
-  session's workspace, so a member's chat in a space still lists and stops
-  its agents. `src/api/space-routes.test.ts` classifies every mounted route.
+  session's workspace for reads and stops only (`GET`, agent stop and
+  removal, pipeline stop and pause), so a member's chat in a space still
+  lists and stops its agents. Anything that runs the model — starting an
+  agent or a pipeline, a follow-up message, resuming or approving a pipeline
+  — runs personal, where a space's session is not found; a space principal
+  is refused there outright. `src/api/space-routes.test.ts` classifies every
+  mounted route by method and path.
 - **Not a member.** A header naming a space you are not a member of (or no
   longer are) answers 404 on every `/api` and `/v1` route, except
   `/api/auth/*`, `/api/health`, `/api/me/workspaces` and `GET /api/spaces`,
-  so a removed member's client can recover.
+  so a removed member's client can recover. The body is
+  `{"error": "Space not found", "code": "workspace_denied"}`; the code tells
+  a client its selected workspace went away, not a missing resource.
 - **The access layer.** Space routes go through `contentRepos(principal)`
   (`src/db/repositories/content.ts`): the personal repositories for a
   personal principal, `spaceRepos` (`src/db/repositories/space.ts`) for a
   shared one, with the same methods. In a space every query filters
   `workspace_id = <space>`; writes stamp the space and the member as author
   (`user_id`, attribution only) and check the role: viewers read, commenters
-  also comment on tasks, editors and owners write. A refused write is 403; an
-  archived space is read-only (409). A member's sessions, agents, pipelines
-  and notifications stay theirs inside the space.
+  also comment on tasks, editors and owners write. Opening a chat, posting
+  to it, asking for a learning check, sending a monitor event or plan
+  feedback is an agent run: commenters and up. A refused write is 403; an
+  archived space is read-only (409), the member's own chats included. A
+  member's sessions, agents, pipelines and notifications stay theirs inside
+  the space.
+- **The personal door never writes into a space.** A personal-scope create
+  (sessions, agents, documents, tasks, notes, artifacts) given a space's id —
+  from an agent context in the space, or a caller's `workspaceId` — throws:
+  space writes go through `contentRepos` with the space principal.
 - **Personal paths never return space rows**, for their author or an admin:
-  the personal repositories carry the predicate `notInSharedWorkspace`, and
-  so do the raw readers outside them (notes graph, global search, memory
-  routes, role-agent and heartbeat probes, the weekly review, channel tasks).
-  `src/db/repositories/space.isolation.test.ts` fails on a new raw read of a
-  content table outside its allowlist.
+  the personal repositories carry the predicate `notInSharedWorkspace` (a
+  row is personal when it has no workspace or a personal one — a row naming a
+  workspace that no longer exists is nobody's), and so do the raw readers
+  outside them (notes graph, global search, memory routes, role-agent and
+  heartbeat probes, the weekly review, channel tasks). The admin lists of
+  sessions, agents and pipelines, and live agents, never include a space's.
+  `src/db/repositories/space.isolation.test.ts` fails on a new raw read of
+  any table of `WORKSPACE_TABLES` (any case, aliased imports included)
+  outside its allowlist; reads in the unscoped stores each carry an `i2:`
+  comment saying why they cannot reach a personal caller.
 - **Notes and links.** `NoteService` takes a `NoteScope` (personal, or a
   space). Links resolve inside one scope: a `[[link]]` in a space binds only
   to the space's notes, a personal one only to personal notes. Vault sync is
@@ -171,14 +210,22 @@ for that request.
   `<workspace.documentsPath>/spaces/<id>/`. Both go with a purge.
 - **Knowledge.** Space notes, documents and files are indexed with the
   space's workspace id; the knowledge routes search the space's rows in a
-  space and personal rows elsewhere.
+  space and personal rows elsewhere. A search in a space reaches none of the
+  member's personal repositories, and repository scans of a space never
+  include `workspace.additionalPaths`.
 - **Artifacts.** In a space `private` means the creator only. Hosted pages
-  look an artifact up among the viewer's personal workspaces and the spaces
-  they belong to. A data source of a space artifact refreshes only while its
+  look an artifact up among the viewer's personal workspaces first, then the
+  spaces they belong to (not as a guest), so a personal page link never opens
+  a space's page of the same slug. Live updates (`artifact:<id>` on the
+  gateway) reach members of the artifact's space the same way. A data source of a space artifact refreshes only while its
   owner may write in the space, and pauses otherwise.
 - **Tasks.** Closing a blocker wakes the dependent task's author and user
-  assignee, whoever closed it. Role agents are personal automation: a space
-  task is never assigned to a role heartbeat and never wakes one.
+  assignee, whoever closed it — each only while still a member, checked when
+  the notification is sent. A space task's user assignee must be a member;
+  a personal task can be assigned only to its owner, and a personal task's
+  notifications go to its owner alone. Role agents are personal automation:
+  a space task is never assigned to a role or a node (400) and never wakes a
+  role heartbeat.
 - **Guests** have no content access yet: guest scopes arrive with S6.
 
 ### The agent in a space
@@ -221,6 +268,33 @@ A member's private chat in a space runs the agent in the space.
 - **Approvals.** Permission requests carry `workspace_id`; the admin queue
   and its resolve routes never show or answer a request of a space the admin
   is not a member of.
+
+## In the web
+
+- **Picker** (the header's workspace button): "my workspaces" (your own,
+  with transfer) and "shared spaces" (with your role as a badge, the member
+  count, and a gear to the space's settings); "new shared space…" creates one
+  and switches to it. Switching sends the space's id in `X-Octipus-Workspace`.
+- **Space settings** `/spaces/<id>/settings`: name, members (role, remove;
+  "leave" for yourself), invites (role, expiry, uses; the link is shown once,
+  with a copy button; revoke), activity, archive / unarchive and delete for
+  good. Every member can open it; only owners see the controls that change
+  the space.
+- **Join page** `/join/<token>`: anyone with the link sees the preview; a
+  signed-in user joins with one click, anyone else signs in or registers and
+  comes back to the page (`returnTo`).
+- **Role-aware pages.** Commenters and viewers (and everyone in an archived
+  space) get a read-only notes reader, a task list and board without create,
+  edit, drag or delete, and no document upload or delete; commenters still
+  comment on tasks. A banner says the role, or that the space is archived.
+  The role is read again (`GET /api/spaces/<id>`) on every switch and when
+  the window regains focus.
+- **Removed.** When the server answers `workspace_denied` for the selected
+  space, the web switches to the default workspace and says "You no longer
+  have access to <space>" — also at the next load, if the removal happened
+  while away.
+- Personal-only pages keep working with a space selected; the secrets page
+  scopes to the default personal workspace, as the server does.
 
 ## Settings
 

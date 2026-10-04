@@ -3,6 +3,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { loginPathReturningTo } from '../../src/shared/return-to';
+import { isPublicPath } from './public-routes';
 import { api } from './api';
 
 interface User {
@@ -57,12 +58,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Listen for auth:expired events from API client. On the sign-in page itself
   // a 401 is a wrong password or a TOTP prompt, and navigating would drop the
-  // page's `returnTo`; anywhere else, sign in again and come back here.
+  // page's `returnTo`; on another public page (an invite) it is a visitor not
+  // signed in yet; anywhere else, sign in again and come back here.
   useEffect(() => {
     const handleExpired = () => {
       clearSession();
       const { pathname, search } = window.location;
-      if (pathname === '/login') return;
+      if (isPublicPath(pathname)) return;
       router.push(loginPathReturningTo(pathname + search));
     };
     window.addEventListener('auth:expired', handleExpired);

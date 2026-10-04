@@ -12,7 +12,8 @@
  * One exception: a route that addresses a session, agent or pipeline by id
  * (`?sessionId=`, `/:id`) takes its workspace from that row, so a member's
  * private chat in a space still lists and stops its own agents and
- * pipelines (`spaceTargetOf`). Access then follows the space rules.
+ * pipelines (`spaceTargetOf`, reads and stops only — never a run). Access
+ * then follows the space rules.
  *
  * `src/api/space-routes.test.ts` classifies every mounted route: a new
  * route prefix fails it until it is listed here or among the personal
@@ -71,11 +72,32 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const AGENT_STATIC = new Set(['route']);
 
 /**
+ * What a member may do to their own agent or pipeline in a space from a
+ * personal route: read it (GET), and stop it. Nothing that runs the model
+ * (`POST /api/agents/:id/message`, starting, resuming or approving a
+ * pipeline) keeps the space principal — those run personal, where the
+ * space row is not found; agent runs in a space go through §5.6.
+ */
+const STOP_ACTIONS: ReadonlyArray<{ method: string; pattern: RegExp }> = [
+  { method: 'POST', pattern: /^\/api\/agents\/[^/]+\/stop$/ },
+  { method: 'DELETE', pattern: /^\/api\/agents\/[^/]+$/ },
+  { method: 'POST', pattern: /^\/api\/pipelines\/[^/]+\/(?:stop|pause)$/ },
+];
+
+function keepsSpace(method: string, pathname: string): boolean {
+  const m = method.toUpperCase();
+  if (m === 'GET' || m === 'HEAD') return true;
+  return STOP_ACTIONS.some((a) => a.method === m && a.pattern.test(pathname));
+}
+
+/**
  * The row a personal route addresses by id, whose workspace decides the
  * request's: `/api/agents/:id…`, `/api/pipelines/:id…`, and `?sessionId=`
- * on the agent and pipeline lists. Null for anything else.
+ * on the agent and pipeline lists — for reads and stops only
+ * (`keepsSpace`). Null for anything else, which then runs personal.
  */
-export function spaceTargetOf(pathname: string, searchParams: URLSearchParams): SpaceTarget | null {
+export function spaceTargetOf(method: string, pathname: string, searchParams: URLSearchParams): SpaceTarget | null {
+  if (!keepsSpace(method, pathname)) return null;
   const agent = /^\/api\/agents\/([^/]+)(?:\/|$)/.exec(pathname);
   if (agent && !AGENT_STATIC.has(agent[1])) return { kind: 'agent', id: decodeURIComponent(agent[1]) };
   const pipeline = /^\/api\/pipelines\/([^/]+)(?:\/|$)/.exec(pathname);

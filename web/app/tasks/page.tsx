@@ -17,6 +17,7 @@ import {
 } from '@/components/tasks/work-board';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
+import { useWorkspaceAccess, useWorkspaceId } from '@/lib/workspace-context';
 import { NEXT_BUCKET_ORDER, NEXT_BUCKET_TITLE, type NextBucket } from '../../../src/core/tasks/rank';
 import { isActiveStatus, TASK_STATUS_TITLE, type TaskStatus } from '../../../src/core/tasks/status';
 import { type Nested, nestTasks, toLookup, waitingOn, waitingReason } from '../../../src/core/tasks/structure';
@@ -181,6 +182,10 @@ function groupOpenTasks(tasks: Task[], by: GroupBy): { key: string; title: strin
 }
 
 export default function TasksPage() {
+  const workspaceId = useWorkspaceId();
+  // Commenters and viewers in a space (and everyone in an archived one)
+  // see the board without create, edit or drag; commenters still comment.
+  const { canWrite, canComment } = useWorkspaceAccess();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -259,7 +264,9 @@ export default function TasksPage() {
       }
     };
     return load();
-  }, [groupBy]);
+    // A workspace switch re-creates the loader: the list is another workspace's.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- not read inside; its change re-creates the loader
+  }, [groupBy, workspaceId]);
 
   useEffect(() => {
     // Load once on mount (and when the grouping changes the query).
@@ -423,6 +430,8 @@ export default function TasksPage() {
     onUpdateNotes: updateNotes,
     onUpdateFields: updateFields,
     onRelease: releaseClaim,
+    canWrite,
+    canComment,
   };
 
   return (
@@ -445,7 +454,7 @@ export default function TasksPage() {
       <datalist id="task-categories">
         {categories.map((c) => <option key={c} value={c} />)}
       </datalist>
-      <div className="flex flex-wrap gap-2">
+      {canWrite && <div className="flex flex-wrap gap-2" data-testid="task-quick-add">
         <input
           type="text"
           value={newTitle}
@@ -498,7 +507,7 @@ export default function TasksPage() {
         >
           <Plus className="w-4 h-4" /> Add
         </button>
-      </div>
+      </div>}
 
       {/* View + grouping controls */}
       <div className="flex flex-wrap items-center gap-2 text-sm text-on-surface-variant">
@@ -529,7 +538,11 @@ export default function TasksPage() {
             ))}
           </>
         )}
-        {view === 'board' && <span className="ml-2 text-xs">columns by status, lanes by category — drag a card, or use its arrows</span>}
+        {view === 'board' && (
+          <span className="ml-2 text-xs">
+            {canWrite ? 'columns by status, lanes by category — drag a card, or use its arrows' : 'columns by status, lanes by category'}
+          </span>
+        )}
         <label className="ml-auto inline-flex items-center gap-1 text-xs">
           Assignee
           <select
@@ -558,6 +571,8 @@ export default function TasksPage() {
           onSetStatus={setStatus}
           onDelete={deleteTask}
           onRelease={releaseClaim}
+          canWrite={canWrite}
+          canComment={canComment}
         />
       ) : openTasks.length === 0 ? (
         <div className="py-10 text-center font-mono animate-enter">
@@ -578,7 +593,7 @@ export default function TasksPage() {
             // When grouping by category, a group "+ add" files the new task
             // straight into that category (the QA: "in the groups the user can
             // create todos"). `c:` key prefix → the category text after it.
-            onAddToCategory={groupBy === 'category' && g.key.startsWith('c:') ? (title) => addTask({ title, category: g.key.slice(2) }) : undefined}
+            onAddToCategory={canWrite && groupBy === 'category' && g.key.startsWith('c:') ? (title) => addTask({ title, category: g.key.slice(2) }) : undefined}
           />
         ))
       )}
@@ -598,6 +613,9 @@ interface RowActions {
   onUpdateNotes: (t: Task, notes: string) => void;
   onUpdateFields: (t: Task, patch: TaskPatch) => void;
   onRelease: (t: Task) => void;
+  /** Edit, move, delete (owner and editor in a space). */
+  canWrite: boolean;
+  canComment: boolean;
 }
 
 function TaskGroup({
@@ -686,6 +704,8 @@ function TaskRow({
   onUpdateNotes,
   onUpdateFields,
   onRelease,
+  canWrite,
+  canComment,
 }: {
   task: Task;
   depth?: number;
@@ -717,14 +737,23 @@ function TaskRow({
   return (
     <div className="px-3 py-2.5 rounded-xs border border-outline-variant/10 bg-surface" data-testid="task-row" data-depth={depth}>
       <div className="flex items-center gap-3">
-        <button
-          onClick={() => onToggle(task)}
-          aria-label={task.status === 'done' ? 'Mark open' : 'Mark done'}
-          title={task.status === 'in_progress' ? 'In progress — click to mark done' : undefined}
-          className={`shrink-0 font-mono text-sm leading-none select-none ${task.status === 'done' ? 'text-tertiary' : task.status === 'in_progress' ? 'text-primary hover:text-tertiary' : 'text-on-surface-variant/70 hover:text-primary'}`}
-        >
-          {task.status === 'done' ? '[x]' : task.status === 'in_progress' ? '[>]' : '[ ]'}
-        </button>
+        {canWrite ? (
+          <button
+            onClick={() => onToggle(task)}
+            aria-label={task.status === 'done' ? 'Mark open' : 'Mark done'}
+            title={task.status === 'in_progress' ? 'In progress — click to mark done' : undefined}
+            className={`shrink-0 font-mono text-sm leading-none select-none ${task.status === 'done' ? 'text-tertiary' : task.status === 'in_progress' ? 'text-primary hover:text-tertiary' : 'text-on-surface-variant/70 hover:text-primary'}`}
+          >
+            {task.status === 'done' ? '[x]' : task.status === 'in_progress' ? '[>]' : '[ ]'}
+          </button>
+        ) : (
+          <span
+            title={TASK_STATUS_TITLE[task.status]}
+            className={`shrink-0 font-mono text-sm leading-none select-none ${task.status === 'done' ? 'text-tertiary' : task.status === 'in_progress' ? 'text-primary' : 'text-on-surface-variant/70'}`}
+          >
+            {task.status === 'done' ? '[x]' : task.status === 'in_progress' ? '[>]' : '[ ]'}
+          </span>
+        )}
         <div className="min-w-0 flex-1">
           <p className={`text-sm flex items-center gap-1.5 ${task.status === 'done' ? 'line-through text-on-surface-variant' : 'text-on-surface'}`}>
             {depth > 0 && <CornerDownRight className="w-3 h-3 shrink-0 text-on-surface-variant/50" aria-hidden />}
@@ -771,35 +800,41 @@ function TaskRow({
             {task.reason && task.status !== 'done' && (
               <span className="text-[10px] text-on-surface-variant/70" title="why it ranks here">{task.reason}</span>
             )}
-            <button
-              onClick={() => { setDraft(task.notes ?? ''); setEditingNotes((v) => !v); }}
-              className={`text-[10px] inline-flex items-center gap-0.5 ${task.notes ? 'text-primary' : 'text-on-surface-variant/70'} hover:text-on-surface`}
-              title={task.notes ? 'Edit notes' : 'Add notes'}
-            >
-              <NotebookPen className="w-2.5 h-2.5" /> {task.notes ? 'notes' : 'add notes'}
-            </button>
+            {canWrite && (
+              <button
+                onClick={() => { setDraft(task.notes ?? ''); setEditingNotes((v) => !v); }}
+                className={`text-[10px] inline-flex items-center gap-0.5 ${task.notes ? 'text-primary' : 'text-on-surface-variant/70'} hover:text-on-surface`}
+                title={task.notes ? 'Edit notes' : 'Add notes'}
+              >
+                <NotebookPen className="w-2.5 h-2.5" /> {task.notes ? 'notes' : 'add notes'}
+              </button>
+            )}
             <CommentsToggle open={showComments} onToggle={() => setShowComments((v) => !v)} />
-            <button
-              onClick={() => setEditingMeta((v) => !v)}
-              className="text-[10px] inline-flex items-center gap-0.5 text-on-surface-variant/70 hover:text-on-surface"
-              title="Set due date, category, priority, assignee"
-            >
-              <Pencil className="w-2.5 h-2.5" /> edit
-            </button>
-            <ReleaseClaimButton task={task} onRelease={() => onRelease(task)} />
+            {canWrite && (
+              <button
+                onClick={() => setEditingMeta((v) => !v)}
+                className="text-[10px] inline-flex items-center gap-0.5 text-on-surface-variant/70 hover:text-on-surface"
+                title="Set due date, category, priority, assignee"
+              >
+                <Pencil className="w-2.5 h-2.5" /> edit
+              </button>
+            )}
+            {canWrite && <ReleaseClaimButton task={task} onRelease={() => onRelease(task)} />}
           </div>
         </div>
-        <button
-          onClick={() => onDelete(task.id)}
-          aria-label="Delete task"
-          className="shrink-0 text-on-surface-variant hover:text-error self-start"
-        >
-          <Trash2 className="w-4 h-4" />
-        </button>
+        {canWrite && (
+          <button
+            onClick={() => onDelete(task.id)}
+            aria-label="Delete task"
+            className="shrink-0 text-on-surface-variant hover:text-error self-start"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
       {/* Notes — a place to store more about the task (the QA ask). */}
-      {editingNotes ? (
+      {editingNotes && canWrite ? (
         <div className="mt-2 pl-8">
           <textarea
             value={draft}
@@ -822,11 +857,11 @@ function TaskRow({
       ) : null}
 
       {/* Comments — the agents' progress and hand-off log; fetched when opened. */}
-      {showComments && <CommentsThread taskId={task.id} />}
+      {showComments && <CommentsThread taskId={task.id} canComment={canComment} />}
 
       {/* Meta editor — set/clear due date, category, priority (the QA: users
           couldn't set due dates and wanted custom categories). */}
-      {editingMeta && (
+      {editingMeta && canWrite && (
         <div className="mt-2 pl-8 flex flex-wrap items-center gap-2">
           <label className="text-[11px] text-on-surface-variant inline-flex items-center gap-1">
             Due
@@ -898,12 +933,17 @@ function TaskBoard({
   onSetStatus,
   onDelete,
   onRelease,
+  canWrite,
+  canComment,
 }: {
   tasks: Task[];
   lookup: ReadonlyMap<string, Task>;
   onSetStatus: (t: Task, status: TaskStatus) => void;
   onDelete: (id: string) => void;
   onRelease: (t: Task) => void;
+  /** Without it the board is read-only: no drag, no moves, no delete. */
+  canWrite: boolean;
+  canComment: boolean;
 }) {
   const [dragging, setDragging] = useState<string | null>(null);
   const [over, setOver] = useState<TaskStatus | null>(null);
@@ -985,6 +1025,8 @@ function TaskBoard({
                             onMove={(st) => onSetStatus(task, st)}
                             onDelete={() => onDelete(task.id)}
                             onRelease={() => onRelease(task)}
+                            canWrite={canWrite}
+                            canComment={canComment}
                           />
                         ))}
                       </div>
@@ -1013,6 +1055,8 @@ function BoardCard({
   onMove,
   onDelete,
   onRelease,
+  canWrite,
+  canComment,
 }: {
   task: Task;
   waiting: string | null;
@@ -1026,6 +1070,8 @@ function BoardCard({
   onMove: (status: TaskStatus) => void;
   onDelete: () => void;
   onRelease: () => void;
+  canWrite: boolean;
+  canComment: boolean;
 }) {
   const due = dueLabel(task.dueAt);
   const [showComments, setShowComments] = useState(false);
@@ -1034,11 +1080,11 @@ function BoardCard({
   const [typing, setTyping] = useState(false);
   return (
     <div
-      draggable={!typing}
-      onDragStart={onDragStart}
-      onDragEnd={onDragEnd}
+      draggable={canWrite && !typing}
+      onDragStart={canWrite ? onDragStart : undefined}
+      onDragEnd={canWrite ? onDragEnd : undefined}
       data-testid="board-card"
-      className={`group rounded-xs border border-outline-variant/15 bg-surface px-2.5 py-2 cursor-grab active:cursor-grabbing ${dragging ? 'opacity-40' : ''}`}
+      className={`group rounded-xs border border-outline-variant/15 bg-surface px-2.5 py-2 ${canWrite ? 'cursor-grab active:cursor-grabbing' : ''} ${dragging ? 'opacity-40' : ''}`}
     >
       <p className={`text-sm leading-snug ${task.status === 'done' ? 'line-through text-on-surface-variant' : 'text-on-surface'}`}>{task.title}</p>
       {parentTitle && (
@@ -1079,32 +1125,38 @@ function BoardCard({
         )}
       </div>
       <div className="flex items-center gap-1 mt-1.5 opacity-60 group-hover:opacity-100 group-focus-within:opacity-100">
-        <button
-          onClick={() => prev && onMove(prev)}
-          disabled={!prev}
-          aria-label={prev ? `Move to ${TASK_STATUS_TITLE[prev]}` : 'Already in the first column'}
-          className="text-on-surface-variant hover:text-primary disabled:opacity-30"
-        >
-          <ArrowLeft className="w-3.5 h-3.5" />
-        </button>
-        <button
-          onClick={() => next && onMove(next)}
-          disabled={!next}
-          aria-label={next ? `Move to ${TASK_STATUS_TITLE[next]}` : 'Already in the last column'}
-          className="text-on-surface-variant hover:text-primary disabled:opacity-30"
-        >
-          <ArrowRight className="w-3.5 h-3.5" />
-        </button>
+        {canWrite && (
+          <>
+            <button
+              onClick={() => prev && onMove(prev)}
+              disabled={!prev}
+              aria-label={prev ? `Move to ${TASK_STATUS_TITLE[prev]}` : 'Already in the first column'}
+              className="text-on-surface-variant hover:text-primary disabled:opacity-30"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => next && onMove(next)}
+              disabled={!next}
+              aria-label={next ? `Move to ${TASK_STATUS_TITLE[next]}` : 'Already in the last column'}
+              className="text-on-surface-variant hover:text-primary disabled:opacity-30"
+            >
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          </>
+        )}
         <span className="flex-1" />
         <CommentsToggle open={showComments} onToggle={() => setShowComments((v) => !v)} />
-        <ReleaseClaimButton task={task} onRelease={onRelease} compact />
-        <button onClick={onDelete} aria-label="Delete task" className="text-on-surface-variant hover:text-error">
-          <Trash2 className="w-3.5 h-3.5" />
-        </button>
+        {canWrite && <ReleaseClaimButton task={task} onRelease={onRelease} compact />}
+        {canWrite && (
+          <button onClick={onDelete} aria-label="Delete task" className="text-on-surface-variant hover:text-error">
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        )}
       </div>
       {showComments && (
         <div onFocus={() => setTyping(true)} onBlur={() => setTyping(false)}>
-          <CommentsThread taskId={task.id} indent={false} />
+          <CommentsThread taskId={task.id} indent={false} canComment={canComment} />
         </div>
       )}
     </div>

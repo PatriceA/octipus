@@ -171,7 +171,12 @@ beforeAll(async () => {
   spaceId = await spaceWith(ownerId, [[editorId, 'editor'], [commenterId, 'commenter'], [viewerId, 'viewer']], 'Launch room');
   editorSession = await spaceSession(editorId);
   commenterSession = await spaceSession(commenterId);
-  viewerSession = await spaceSession(viewerId);
+  // A viewer cannot open a chat in the space; this one stands for a session
+  // kept from before a downgrade.
+  const { queryRaw } = await import('@/db/postgres');
+  viewerSession = randomUUID();
+  await queryRaw("INSERT INTO sessions (id, user_id, workspace_id, channel_type, channel_id, title, status) VALUES ($1, $2, $3, 'webchat', $4, 'Old chat', 'active')",
+    [viewerSession, viewerId, spaceId, `v-${rand(4)}`]);
   const { getOrgWorkspaceManager } = await import('@/security/orgs');
   const personalWs = (await getOrgWorkspaceManager().ensureDefaultWorkspace(editorId)).id;
   const { sessionRepository } = await import('@/db/repositories/session-repository');
@@ -293,6 +298,11 @@ describe('a private session in a space', () => {
     expect(viewer.status).toBe(403);
     const stranger = await call('admin', 'POST', '/api/agents', { sessionId: editorSession, model: 'test-model' });
     expect(stranger.status).toBe(404);
+    // A pipeline's stages write: a commenter cannot start one in the space.
+    const { getPipelineManager } = await import('./pipeline-manager');
+    const commenterCtx = await spaceContext(commenterId, commenterSession, 'commenter');
+    await expect(getPipelineManager().createAndRun(commenterCtx.id, commenterSession, commenterId, 'Launch', 'any', 'Plan it', commenterCtx))
+      .rejects.toThrow(/commenter.*cannot start a pipeline/);
     const { resolveAgentScope } = await import('./context');
     const { sessionRepository } = await import('@/db/repositories/session-repository');
     await expect(resolveAgentScope({ session: await sessionRepository.findById(editorSession), userId: editorId, trigger: 'schedule' }))

@@ -7,7 +7,45 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### Added
+
+- **Shared spaces in the web.** The workspace picker lists "my workspaces"
+  and "shared spaces" (with role badges) and creates a space; a space has a
+  settings page (`/spaces/<id>/settings`: name, members, invites with a
+  copyable link, activity, archive, delete) and invite links open a join page
+  (`/join/<token>`) that signs in or registers and comes back. Notes, tasks
+  and documents follow the member's role (read-only for commenters and
+  viewers, and in an archived space). A removed member is switched back to
+  the default workspace and told so; the server's 404 for a denied workspace
+  now carries `code: "workspace_denied"`. See docs/SPACES.md.
+
 ### Security
+
+- **Shared spaces: review fixes to the access layer** (coworking S1).
+  Admins no longer list, read or stream another user's agents in a space
+  (history list, live list, live details, events, stop). Starting an agent or
+  a pipeline, or messaging an agent, never keeps a space principal from a
+  `?sessionId=`, so a viewer or a member of an archived space cannot start a
+  run there; such routes keep the space for reads and stops only. The
+  personal repositories refuse to write into a space (an agent context in
+  a space, or a caller's `workspaceId`). Viewers cannot open chats in a space;
+  an archived space refuses new chats, chat edits, learning checks, monitor
+  events and plan feedback. Removing, demoting or the leaving of an owner
+  revokes the invite links they made, and an accept refuses a link whose
+  creator is no longer an owner. Task wakeup notifications go only to people
+  with access at send time: a personal task's owner, a space task's author
+  and assignee while members; space assignees must be members and personal
+  ones the owner, and space tasks are never assigned to roles or nodes.
+  Archive also cancels the space's queued jobs and expires its pending
+  prompts; a removal cancels the member's queued jobs there. A failed
+  follow-up after a committed membership change is reported in a `warning`
+  instead of a 500. Impersonated space changes name the admin in the audit
+  row. A user who authored space content cannot be deleted; a deletable one
+  leaves their spaces with audit rows first. The personal predicate is now
+  positive (no workspace, or a personal one), the gateway lets members follow
+  a space artifact, a page slug prefers the viewer's personal artifact and
+  never opens a space page to a guest, and a space search uses no personal
+  repositories or extra scan paths.
 
 - **Events reach their own user only.** Every gateway and turn event now names
   its user, including swarm, pipeline and agent-stream events that used to go
@@ -280,7 +318,8 @@ mixed into it. Existing memories are not migrated.
   viewer, a removed member, an archived space, and schedules or monitors in a
   space; children inherit the space, what started the run (`trigger`) and
   who pays (`funding`, `own` for now). `POST /api/agents` follows the session
-  it names: 403 for a viewer, 404 for a non-member, 409 for an archived space.
+  it names: 403 for a viewer, 404 for a non-member, 409 for an archived space;
+  `POST /api/pipelines` likewise, for roles that may write (editors, owners).
 - **One decision for every tool call.** `routeApprovalFor` re-reads the
   membership on every call, on all six dispatch paths (agent loop, tool
   middleware, CLI permission relay, MCP, verification gate, action recovery):

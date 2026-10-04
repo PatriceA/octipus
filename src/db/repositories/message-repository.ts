@@ -29,12 +29,14 @@ export class MessageRepository {
       filters.push(sql`(${messages.metadata}->>'sessionGeneration' = ${generation} OR (${messages.metadata}->>'sessionGeneration' IS NULL AND ${legacy}))`);
     } else if (since) filters.push(gte(messages.createdAt, new Date(since)));
     if (after) filters.push(sql`(${messages.createdAt}, ${messages.id}) > (${after.createdAt}::timestamptz, ${after.id}::uuid)`);
+    // i2: by session id, for the agent runtime that owns the session; user routes use ScopedMessageRepo
     const newestFirst = await this.db.select().from(messages).where(and(...filters))
       .orderBy(desc(messages.createdAt), desc(messages.id)).limit(limit);
     return newestFirst.reverse();
   }
 
   async findById(id: string): Promise<Message | null> {
+    // i2: by session id, for the agent runtime that owns the session; user routes use ScopedMessageRepo
     const result = await this.db.select().from(messages).where(eq(messages.id, id)).limit(1);
     return result[0] ?? null;
   }
@@ -46,6 +48,7 @@ export class MessageRepository {
 
     return this.db
       .select()
+      // i2: by session id, for the agent runtime that owns the session; user routes use ScopedMessageRepo
       .from(messages)
       .where(conditions)
       .orderBy(asc(messages.createdAt))
@@ -74,6 +77,7 @@ export class MessageRepository {
 
     const recent = await this.db
       .select()
+      // i2: by session id, for the agent runtime that owns the session; user routes use ScopedMessageRepo
       .from(messages)
       .where(conditions)
       .orderBy(desc(messages.createdAt))
@@ -102,6 +106,7 @@ export class MessageRepository {
 
     return this.db
       .select()
+      // i2: by session id, for the agent runtime that owns the session; user routes use ScopedMessageRepo
       .from(messages)
       .where(conditions)
       .orderBy(asc(messages.createdAt))
@@ -113,6 +118,7 @@ export class MessageRepository {
     if (sessionIds.length === 0) return 0;
     const result = await this.db
       .select({ count: sql<number>`count(*)::int` })
+      // i2: by session id, for the agent runtime that owns the session; user routes use ScopedMessageRepo
       .from(messages)
       .where(inArray(messages.sessionId, sessionIds));
     return result[0]?.count ?? 0;
@@ -121,6 +127,7 @@ export class MessageRepository {
   async findByAgent(agentId: string, limit: number = 100): Promise<Message[]> {
     return this.db
       .select()
+      // i2: by session id, for the agent runtime that owns the session; user routes use ScopedMessageRepo
       .from(messages)
       .where(eq(messages.agentId, agentId))
       .orderBy(asc(messages.createdAt))
@@ -130,6 +137,7 @@ export class MessageRepository {
   /** Insert a completed turn only if no clear invalidated the originating run. */
   async createForGeneration(data: NewMessage, generation: string): Promise<Message | null> {
     return this.db.transaction(async tx => {
+      // i2: by session id, for the agent runtime that owns the session; user routes use ScopedMessageRepo
       const [session] = await tx.select({ context: sessions.context }).from(sessions)
         .where(eq(sessions.id, data.sessionId)).for('update');
       if (!session || sessionGeneration(session.context) !== generation) return null;
@@ -178,6 +186,7 @@ export class MessageRepository {
   async countBySession(sessionId: string): Promise<number> {
     const result = await this.db
       .select({ count: sql<number>`count(*)::int` })
+      // i2: by session id, for the agent runtime that owns the session; user routes use ScopedMessageRepo
       .from(messages)
       .where(eq(messages.sessionId, sessionId));
 
@@ -187,6 +196,7 @@ export class MessageRepository {
   async getLastMessages(sessionId: string, count: number): Promise<Message[]> {
     return this.db
       .select()
+      // i2: by session id, for the agent runtime that owns the session; user routes use ScopedMessageRepo
       .from(messages)
       .where(eq(messages.sessionId, sessionId))
       .orderBy(desc(messages.createdAt))
@@ -196,6 +206,7 @@ export class MessageRepository {
   async getMessagesBetween(sessionId: string, startTime: Date, endTime: Date): Promise<Message[]> {
     return this.db
       .select()
+      // i2: by session id, for the agent runtime that owns the session; user routes use ScopedMessageRepo
       .from(messages)
       .where(
         and(
@@ -210,6 +221,7 @@ export class MessageRepository {
   async getToolCallMessages(sessionId: string): Promise<Message[]> {
     return this.db
       .select()
+      // i2: by session id, for the agent runtime that owns the session; user routes use ScopedMessageRepo
       .from(messages)
       .where(and(eq(messages.sessionId, sessionId), sql`${messages.toolCalls} IS NOT NULL`))
       .orderBy(asc(messages.createdAt));
@@ -219,6 +231,7 @@ export class MessageRepository {
     // Get messages in reverse order and estimate tokens
     const allMessages = await this.db
       .select()
+      // i2: by session id, for the agent runtime that owns the session; user routes use ScopedMessageRepo
       .from(messages)
       .where(eq(messages.sessionId, sessionId))
       .orderBy(desc(messages.createdAt));

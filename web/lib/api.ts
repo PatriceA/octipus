@@ -56,6 +56,13 @@ const RETRY_BACKOFF_MS = [300, 600, 1200];
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Window event: the server refused the selected workspace (`code: 'workspace_denied'`). */
+export const WORKSPACE_DENIED_EVENT = 'workspace:denied';
+export interface WorkspaceDeniedDetail {
+  /** The workspace header the refused request carried. */
+  workspaceId: string;
+}
+
 export class ApiError extends Error {
   /**
    * `body` is the parsed error response, for callers that act on more than the
@@ -167,6 +174,14 @@ class ApiClient {
           }
         }
         const error = await response.json().catch(() => ({ error: 'Request failed' }));
+        // The selected workspace is a space the caller is no longer a member
+        // of (the server answers every request so). The workspace context
+        // switches to the default workspace and says why.
+        if (response.status === 404 && error.code === 'workspace_denied' && headers['X-Octipus-Workspace'] && typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent<WorkspaceDeniedDetail>(WORKSPACE_DENIED_EVENT, {
+            detail: { workspaceId: headers['X-Octipus-Workspace'] },
+          }));
+        }
         const retryHeader = response.headers.get('Retry-After');
         const seconds = Number(retryHeader ?? error.retryAfter);
         const retryAfterMs = response.status === 429

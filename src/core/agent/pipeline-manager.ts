@@ -1,4 +1,5 @@
 import { withExecutionSignal } from '@/core/execution-scope';
+import { can, SpaceError } from '@/security/space-access';
 import { buildAgentContext, resolveAgentScope, withAgentUsage } from './context';
 import type { AgentTrigger } from '@/core/types';
 import { actionRecovery } from '@/core/action-recovery';
@@ -793,8 +794,11 @@ export class PipelineManager {
       onCreated?: (pipelineId: string) => void;
     },
   ): Promise<{ pipelineId: string; result: string }> {
-    // Pipelines are personal automation: never in a space (§5.6).
-    if (context.space) throw new Error('Pipelines are personal automation and do not run in a shared space');
+    // In a space a pipeline's stages write: the role must allow it (§5.6).
+    // Its stages inherit the space, trigger and funding from `context`.
+    if (context.space && !can(context.space.role, 'run_agent_write')) {
+      throw new SpaceError('forbidden_role', `Your role (${context.space.role}) cannot start a pipeline in this space`);
+    }
     // Scoped to the caller: a bare template NAME must resolve to the same row
     // the caller was authorized against (see `getPipelineTemplate`).
     const template = await getPipelineTemplate(type, userId);
@@ -828,6 +832,8 @@ export class PipelineManager {
       rootAgentId,
       sessionId,
       userId,
+      // The run's workspace (a space's in a space), read back on resume.
+      workspaceId: context.workspaceId ?? null,
       title,
       type,
       description,

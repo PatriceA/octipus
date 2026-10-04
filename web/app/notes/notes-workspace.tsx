@@ -14,7 +14,7 @@ import { NotesNavigator } from './notes-navigator';
 import type {
   NoteDetail, NoteFilter, NoteIndexEntry, NoteListResponse, NoteRow, Suggestion, TagCount,
 } from './types';
-import { useWorkspaceId } from '@/lib/workspace-context';
+import { useWorkspaceAccess, useWorkspaceId } from '@/lib/workspace-context';
 
 function sameTags(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
@@ -30,6 +30,8 @@ function hasLink(body: string, title: string): boolean {
 
 export function NotesWorkspace() {
   const workspaceId = useWorkspaceId();
+  // Commenters and viewers in a space (and everyone in an archived one) read.
+  const { canWrite } = useWorkspaceAccess();
   const qc = useQueryClient();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -292,7 +294,7 @@ export function NotesWorkspace() {
               activeTag={activeTag}
               setActiveTag={setActiveTag}
               onOpen={(n) => selectNote(n.id)}
-              onNew={openNew}
+              onNew={canWrite ? openNew : undefined}
             />
           </aside>
           <div onPointerDown={startResize('nav')} className={resizerClass} role="separator" aria-orientation="vertical" />
@@ -324,6 +326,7 @@ export function NotesWorkspace() {
               tags={tags}
               onOpenSlug={openSlug}
               onTagClick={(t) => { setActiveTag(t); setFilter('all'); }}
+              readOnly={!canWrite}
             />
           </main>
 
@@ -337,7 +340,7 @@ export function NotesWorkspace() {
                   suggestionsLoading={suggestions.isLoading}
                   bodyHasLink={(title) => hasLink(draftBody, title)}
                   onOpenNote={(id) => selectNote(id)}
-                  onAddLink={addLink}
+                  onAddLink={canWrite ? addLink : undefined}
                   onTagClick={(t) => { setActiveTag(t); setFilter('all'); }}
                   onCollapse={toggleCtx}
                 />

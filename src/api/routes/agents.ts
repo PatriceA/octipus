@@ -1,4 +1,6 @@
 import { Elysia, t } from '@/api/http';
+import { recheckSpace } from '@/core/agent/context';
+import type { AgentSpace } from '@/core/types';
 import { type AgentScope, resolveAgentScope, withAgentUsage } from '@/core/agent/context';
 import { SpaceError, spaceErrorStatus } from '@/security/space-access';
 import { apiContext } from '@/api/context';
@@ -9,6 +11,41 @@ import { contentRepos } from '@/db/repositories/content';
 import { isAuthenticated } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
 import { readAgentCompletionReason } from '@/shared/agent-completion';
+import { getMembership, isSharedWorkspace } from '@/core/spaces/service';
+
+type LiveContext = { userId?: string | null; workspaceId?: string | null };
+
+/**
+ * May `user` reach a live agent (its details, events, stop, removal)? Its
+ * owner may — in a space only while still a member (I5). An admin reaches
+ * another user's live agent only outside spaces: admins reach spaces through
+ * membership or audited impersonation, and a space agent's tool output is
+ * space content (I2).
+ */
+async function mayReachLive(user: { id: string; isAdmin: boolean }, context: LiveContext): Promise<boolean> {
+  const inSpace = !!context.workspaceId && (await isSharedWorkspace(context.workspaceId));
+  if (context.userId === user.id) return !inSpace || (await getMembership(user.id, context.workspaceId as string)) !== null;
+  return user.isAdmin && !inSpace;
+}
+
+/**
+ * May `user` run their live agent again (`/:id/message`)? Outside spaces,
+ * yes. In a space, the membership is re-read the way every spawn re-reads
+ * it (`recheckSpace`, §5.6): only while their role may run the agent and
+ * the space is not archived. A space agent built without its scope never runs.
+ */
+async function mayRunLive(userId: string, context: LiveContext & { space?: AgentSpace | null }): Promise<boolean> {
+  if (context.space) {
+    try {
+      await recheckSpace(userId, context.space);
+      return true;
+    } catch (err) {
+      if (err instanceof SpaceError) return false;
+      throw err;
+    }
+  }
+  return !context.workspaceId || !(await isSharedWorkspace(context.workspaceId));
+}
 
 /**
  * Agents — Phase 1a multi-user conversion.
@@ -34,12 +71,14 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       }
 
       const agentManager = getAgentManager();
-      let liveAgents = agentManager.list();
-
-      // Non-admin users can only see their own live agents
-      if (!user.isAdmin) {
-        liveAgents = liveAgents.filter((a) => a.userId === user.id);
-      }
+      // Each user sees their own live agents; an admin also sees other
+      // users' agents outside spaces (never a space's, I2).
+      const listed = agentManager.list();
+      const reachable = await Promise.all(listed.map((a) => mayReachLive(user, {
+        userId: a.userId,
+        workspaceId: agentManager.get(a.id)?.getContext().workspaceId ?? null,
+      })));
+      let liveAgents = listed.filter((_, i) => reachable[i]);
 
       const repos = contentRepos(principal);
 
@@ -101,12 +140,11 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
             repos.agents.findBySessions(ids, limit, offset),
             repos.agents.countBySessions(ids),
           ]);
-        } else if (user.isAdmin) {
-          // Admin sees everything
-          const { agentRepository } = await import('@/db/repositories/agent-repository');
+        } else if (user.isAdmin && repos.kind === 'personal') {
+          // Admin sees every user's history — outside spaces (I2).
           [dbAgents, total] = await Promise.all([
-            agentRepository.listRecent(limit, offset),
-            agentRepository.countAll(),
+            repos.agents.listAllAdmin(limit, offset),
+            repos.agents.countAllAdmin(),
           ]);
         } else {
           [dbAgents, total] = await Promise.all([
@@ -172,7 +210,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
 
       if (agent) {
         const context = agent.getContext();
-        if (!user.isAdmin && context.userId !== user.id) {
+        if (!(await mayReachLive(user, context))) {
           return { error: 'Agent not found' };
         }
         // Same duration logic as `list()` — freeze at completedAt for finished
@@ -309,7 +347,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
   // Send message to agent
   .post(
     '/:id/message',
-    async ({ user, principal, params, body }) => {
+    async ({ user, principal, params, body, set }) => {
       if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
@@ -322,8 +360,14 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       }
 
       const context = agent.getContext();
-      if (!user.isAdmin && context.userId !== user.id) {
+      if (!(await mayReachLive(user, context))) {
         return { error: 'Agent not found' };
+      }
+      // A run, not a read: in a space the role must allow it, and an
+      // archived space runs nothing.
+      if (!(await mayRunLive(user.id, context))) {
+        set.status = 403;
+        return { error: 'Your role in this space cannot run the agent, or the space is archived' };
       }
 
       if (agent.getStatus() !== 'idle' && agent.getStatus() !== 'completed') {
@@ -364,7 +408,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       }
 
       const context = agent.getContext();
-      if (!user.isAdmin && context.userId !== user.id) {
+      if (!(await mayReachLive(user, context))) {
         return { error: 'Agent not found' };
       }
 
@@ -398,7 +442,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       }
 
       const context = agent.getContext();
-      if (!user.isAdmin && context.userId !== user.id) {
+      if (!(await mayReachLive(user, context))) {
         return { error: 'Agent not found' };
       }
 
@@ -434,7 +478,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       // events, so preferring memory there silently truncates its history.
       if (agent && !persisted) {
         const context = agent.getContext();
-        if (!user.isAdmin && context.userId !== user.id) {
+        if (!(await mayReachLive(user, context))) {
           return { error: 'Agent not found' };
         }
 

@@ -8,13 +8,16 @@
  *   hot to read the database on every event (document updates, S3) compare
  *   against; every change bumps it.
  * - `onMembershipChanged` runs for a removal, a downgrade or a guest scope
- *   change: stops the member's agents in the space, expires their pending
- *   permission and approval requests there, and pauses the data sources
- *   they own on the space's artifacts. (Room, document and presence
- *   subscriptions join it in S2/S3.)
+ *   change: stops the member's agents in the space, cancels their queued
+ *   background jobs there (learning checks, document processing), expires
+ *   their pending permission and approval requests there, and pauses the
+ *   data sources they own on the space's artifacts. (Room, document and
+ *   presence subscriptions join it in S2/S3.)
  * - `onMembershipGranted` runs for a join or an upgrade: bumps the version
  *   and resumes the member's data sources if they may write again.
- * - `stopSpaceAgents` stops every agent of a space (archive).
+ * - `freezeSpace` runs for an archive: every agent of the space stops, its
+ *   queued jobs are cancelled and every pending request in it expires, so
+ *   nothing writes into a read-only space (or races its purge).
  *
  * Each step runs even when another fails; failures are logged and thrown
  * together at the end, so the caller (and the person) hears about them.
@@ -23,7 +26,9 @@ import { and, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { artifactDataSources } from '@/db/schema/artifact-data-sources';
 import { artifacts } from '@/db/schema/artifacts';
+import { backgroundJobs } from '@/db/schema/background-jobs';
 import { sessions } from '@/db/schema/sessions';
+import { workspaceMembers } from '@/db/schema/organizations';
 import { can } from '@/security/space-access';
 import { coreLogger } from '@/utils/logger';
 import { getMembership } from './service';
@@ -61,6 +66,26 @@ async function runSteps(
     }
   }
   if (failed.length > 0) throw new Error(`${what}: ${failed.join(', ')} failed`);
+}
+
+/**
+ * Cancel the space's queued background jobs — `userId`'s only, when given.
+ * A queued job has not begun, so cancelling it loses nothing; a running one
+ * is past this point and finishes (its writes go through the space door,
+ * which refuses a removed member or an archived space). Returns how many.
+ */
+export async function cancelQueuedJobs(workspaceId: string, userId?: string): Promise<number> {
+  const cancelled = await getDb()
+    .update(backgroundJobs)
+    .set({ status: 'cancelled', error: 'Space access changed before the job started', finishedAt: new Date(), updatedAt: new Date() })
+    .where(and(
+      eq(backgroundJobs.workspaceId, workspaceId),
+      eq(backgroundJobs.status, 'queued'),
+      userId === undefined ? undefined : eq(backgroundJobs.userId, userId),
+    ))
+    .returning({ id: backgroundJobs.id });
+  if (cancelled.length > 0) coreLogger.info({ workspaceId, userId, count: cancelled.length }, 'Queued space jobs cancelled');
+  return cancelled.length;
 }
 
 /** Session ids of `userId` in `workspaceId` (their private chats there). */
@@ -113,6 +138,7 @@ export async function onMembershipChanged(workspaceId: string, userId: string): 
   const { getAgentService } = await import('@/core/agent');
   await runSteps('Membership change', { workspaceId, userId }, [
     ['stop agents', () => getAgentManager().stopWorkspace(workspaceId, userId)],
+    ['cancel queued jobs', () => cancelQueuedJobs(workspaceId, userId)],
     ['expire permission requests', () => getPermissionManager().expireForUserInWorkspace(userId, workspaceId)],
     ['expire approvals', async () => getAgentService().expireApprovalsForUser(userId, REMOVED_MESSAGE, await sessionIdsIn(workspaceId, userId))],
     ['pause data sources', () => syncDataSources(workspaceId, userId)],
@@ -125,12 +151,57 @@ export async function onMembershipGranted(workspaceId: string, userId: string): 
   await syncDataSources(workspaceId, userId);
 }
 
-/** Stop every agent running in the space (archive). Returns how many were stopped. */
+/** Stop every agent running in the space. Returns how many were stopped. */
 export async function stopSpaceAgents(workspaceId: string): Promise<number> {
   const { getAgentManager } = await import('@/core/agent-manager');
   const stopped = getAgentManager().stopWorkspace(workspaceId);
   if (stopped > 0) coreLogger.info({ workspaceId, stopped }, 'Space agents stopped');
   return stopped;
+}
+
+const ARCHIVED_MESSAGE = 'This space was archived.';
+
+/**
+ * The space was archived (§5.3): stop its agents, cancel its queued jobs,
+ * and expire every pending permission and approval request raised in it —
+ * by any member, or anyone who had a chat there. Throws (after running every
+ * step) when a step failed.
+ */
+export async function freezeSpace(workspaceId: string): Promise<void> {
+  const { getPermissionManager } = await import('@/security/permissions');
+  const { getAgentService } = await import('@/core/agent');
+  const people = async (): Promise<string[]> => {
+    const db = getDb();
+    const members = await db.select({ id: workspaceMembers.userId }).from(workspaceMembers).where(eq(workspaceMembers.workspaceId, workspaceId));
+    const chatters = await db.selectDistinct({ id: sessions.userId }).from(sessions).where(eq(sessions.workspaceId, workspaceId));
+    return [...new Set([...members, ...chatters].map((r) => r.id))];
+  };
+  await runSteps('Space archive', { workspaceId }, [
+    ['stop agents', () => stopSpaceAgents(workspaceId)],
+    ['cancel queued jobs', () => cancelQueuedJobs(workspaceId)],
+    ['expire requests', async () => {
+      for (const userId of await people()) {
+        await getPermissionManager().expireForUserInWorkspace(userId, workspaceId);
+        await getAgentService().expireApprovalsForUser(userId, ARCHIVED_MESSAGE, await sessionIdsIn(workspaceId, userId));
+      }
+    }],
+  ]);
+}
+
+/**
+ * Run the follow-up of a committed membership or archive change. The change
+ * itself stands whatever happens here, so a failure is logged and returned
+ * (the route reports it in a 200) instead of turning the committed change
+ * into a 500 the client would retry against a member who is already gone.
+ */
+export async function settleFollowUp(what: string, context: Record<string, unknown>, run: () => Promise<unknown>): Promise<string | null> {
+  try {
+    await run();
+    return null;
+  } catch (err) {
+    coreLogger.error({ err, ...context }, `${what}: follow-up failed; the change itself is committed`);
+    return err instanceof Error ? err.message : String(err);
+  }
 }
 
 /** Test hook. */

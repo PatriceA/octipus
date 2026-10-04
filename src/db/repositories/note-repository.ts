@@ -2,7 +2,8 @@ import { and, desc, eq, inArray, isNull, type SQL, sql } from 'drizzle-orm';
 import { getDb } from '../postgres';
 import { type NewNote, type Note, notes } from '../schema/notes';
 import { requireCan, SpaceError, type SpaceAction, type SpaceRole } from '@/security/space-access';
-import { notInSharedWorkspace } from './scoped';
+import { isKnownSharedWorkspace } from '@/security/workspace-fs';
+import { assertPersonalWorkspace, notInSharedWorkspace } from './scoped';
 
 /**
  * Where a note (and its links) lives — the knowledge graph's scope
@@ -35,8 +36,17 @@ export function assertNoteAccess(scope: NoteScope, action: SpaceAction): void {
   requireCan({ workspaceId: scope.workspaceId, userId: scope.userId, role: scope.role, scope: null }, action);
 }
 
-/** The personal scope of a user with no workspace narrowing (user-level creates). */
+/**
+ * The personal scope of a user with no workspace narrowing (user-level
+ * creates), or in one of their personal workspaces. Refuses a space's id:
+ * a personal scope never writes into a space (D3) — space notes go through
+ * `contentRepos` with the space principal. (A space this process has not
+ * seen yet is caught at the write, `PersonalNoteRepo.create`.)
+ */
 export function personalNoteScope(userId: string, workspaceId: string | null = null): NoteScope {
+  if (isKnownSharedWorkspace(workspaceId)) {
+    throw new Error('A personal note scope cannot name a shared workspace; use contentRepos(principal) with the space principal');
+  }
   return { kind: 'personal', userId, workspaceId };
 }
 
@@ -302,7 +312,8 @@ export class PersonalNoteRepo implements NoteStore {
     return this.scope.workspaceId ?? undefined;
   }
 
-  create(record: Omit<NewNote, 'id' | 'createdAt' | 'updatedAt' | 'userId' | 'workspaceId'>): Promise<Note> {
+  async create(record: Omit<NewNote, 'id' | 'createdAt' | 'updatedAt' | 'userId' | 'workspaceId'>): Promise<Note> {
+    await assertPersonalWorkspace(this.scope.workspaceId);
     return this.repo.create({ ...record, userId: this.scope.userId, workspaceId: this.scope.workspaceId });
   }
   update(id: string, patch: Partial<Omit<NewNote, 'id' | 'userId' | 'workspaceId' | 'createdAt'>>) { return this.repo.update(this.scope, id, patch); }

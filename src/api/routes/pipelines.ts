@@ -1,5 +1,6 @@
 import { desc, eq, or } from 'drizzle-orm';
-import { buildAgentContext, resolveAgentScope, withAgentUsage } from '@/core/agent/context';
+import { type AgentScope, buildAgentContext, resolveAgentScope, withAgentUsage } from '@/core/agent/context';
+import { can, SpaceError, spaceErrorStatus } from '@/security/space-access';
 import { normalizeAcceptance } from '@/tools/plan';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
@@ -18,6 +19,7 @@ import {
 } from '@/core/agent/templates';
 import { getDb } from '@/db/postgres';
 import { pipelineRepository } from '@/db/repositories/pipeline-repository';
+import { withoutSpaceRows } from '@/core/spaces/service';
 import { contentRepos } from '@/db/repositories/content';
 import { pipelineTemplates } from '@/db/schema/pipeline-templates';
 import { isAuthenticated } from '@/security/principal';
@@ -102,11 +104,13 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
       // Admins see everything (operational triage); regular users see
       // only their own. The 'system' pseudo-id is used by in-process
       // system jobs.
+      // A personal route: never a space's pipelines, for their owner or an
+      // admin (I2).
       if (user.isAdmin || user.id === 'system') {
-        return { pipelines: await pipelineManager.listAll() };
+        return { pipelines: await withoutSpaceRows(await pipelineManager.listAll()) };
       }
 
-      const list = await pipelineManager.listByUser(user.id);
+      const list = await withoutSpaceRows(await pipelineManager.listByUser(user.id));
       return { pipelines: list };
     },
     { detail: { tags: ['pipelines'] } },
@@ -164,11 +168,22 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         sessionId = session.id;
         pipelineSession = session;
       }
-      // Pipelines are personal automation: a space session refuses (§5.6).
-      const scope = await resolveAgentScope({ session: pipelineSession, userId: user.id, trigger: 'user' });
-      if (scope.space) {
-        set.status = 403;
-        return { error: 'Pipelines are personal automation and do not run in a shared space' };
+      // The session decides the scope (§5.6): in a space the member's role
+      // must run the agent with writes (a pipeline's stages write), and the
+      // stages inherit the space, the trigger and the funding. A viewer or
+      // commenter is 403, a removed member 404, an archived space 409.
+      let scope: AgentScope;
+      try {
+        scope = await resolveAgentScope({ session: pipelineSession, userId: user.id, trigger: 'user' });
+        if (scope.space && !can(scope.space.role, 'run_agent_write')) {
+          throw new SpaceError('forbidden_role', `Your role (${scope.space.role}) cannot start a pipeline in this space`);
+        }
+      } catch (err) {
+        if (err instanceof SpaceError) {
+          set.status = spaceErrorStatus(err);
+          return { error: err.message, code: err.code };
+        }
+        throw err;
       }
 
       const registry = getModelRegistry();

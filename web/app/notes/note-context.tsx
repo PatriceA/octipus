@@ -10,7 +10,8 @@ interface ContextProps {
   suggestionsLoading: boolean;
   bodyHasLink: (title: string) => boolean;
   onOpenNote: (id: string) => void;
-  onAddLink: (s: Suggestion) => void;
+  /** Absent when the note is read-only. */
+  onAddLink?: (s: Suggestion) => void;
   onTagClick: (tag: string) => void;
   onCollapse: () => void;
 }
@@ -101,15 +102,17 @@ export function NoteContext({
                 const linked = bodyHasLink(s.title ?? s.id);
                 return (
                   <li key={s.id} className="group flex items-center gap-1.5 px-1.5 py-1 rounded-xs hover:bg-surface-container-high">
-                    <button
-                      type="button"
-                      disabled={linked}
-                      onClick={() => onAddLink(s)}
-                      title={linked ? 'Already linked' : 'Add as a [[link]]'}
-                      className="shrink-0 p-0.5 rounded text-accent hover:bg-surface-container-highest disabled:opacity-30"
-                    >
-                      <Plus size={13} />
-                    </button>
+                    {onAddLink && (
+                      <button
+                        type="button"
+                        disabled={linked}
+                        onClick={() => onAddLink(s)}
+                        title={linked ? 'Already linked' : 'Add as a [[link]]'}
+                        className="shrink-0 p-0.5 rounded text-accent hover:bg-surface-container-highest disabled:opacity-30"
+                      >
+                        <Plus size={13} />
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => s.type === 'note' && onOpenNote(s.id)}

@@ -54,8 +54,12 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   .post('/:id/learning', async ({ user, principal, params, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
     if (!requireScope(principal, API_SCOPES.CHAT)) { set.status = 403; return { error: 'Chat scope required' }; }
-    const session = await contentRepos(principal).sessions.findById(params.id);
+    const repos = contentRepos(principal);
+    const session = await repos.sessions.findById(params.id);
     if (!session) { set.status = 404; return { error: 'Session not found' }; }
+    // A learning check is a model run: in a space the role must allow it and
+    // the space must not be archived.
+    repos.can('run_agent');
     const job = await getDb().transaction(async tx => {
       await tx.select({ id: sessionRows.id }).from(sessionRows).where(eq(sessionRows.id, session.id)).for('update');
       const [pending] = await tx.select().from(backgroundJobs).where(and(eq(backgroundJobs.kind, 'learning'),
@@ -73,8 +77,11 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   })
   .post('/:id/monitors/events', async ({ user, principal, params, body, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
-    const session = await contentRepos(principal).sessions.findById(params.id);
+    const repos = contentRepos(principal);
+    const session = await repos.sessions.findById(params.id);
     if (!session) { set.status = 404; return { error: 'Session not found' }; }
+    // An event can wake a monitor's agent run.
+    repos.can('run_agent');
     if (JSON.stringify(body.payload ?? null).length > 16_000) { set.status = 400; return { error: 'Event payload is too large' }; }
     await monitorService.event(session.userId, body.type, { payload: body.payload, sessionId: session.id, source: 'api' }, session.id);
     return { accepted: true };
@@ -87,8 +94,11 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   })
   .post('/:id/monitors/:monitorId/control', async ({ user, principal, params, body, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
-    const session = await contentRepos(principal).sessions.findById(params.id);
+    const repos = contentRepos(principal);
+    const session = await repos.sessions.findById(params.id);
     if (!session) { set.status = 404; return { error: 'Session not found' }; }
+    // Resuming restarts its runs; pausing and cancelling only stop them.
+    if (body.action === 'resume') repos.can('run_agent');
     try { return await monitorService.control(params.monitorId, session.userId, session.id, body.action); }
     catch (err) { set.status = 409; return { error: (err as Error).message }; }
   }, { body: t.Object({ action: t.Union([t.Literal('pause'), t.Literal('resume'), t.Literal('cancel')]) }) })
@@ -166,8 +176,11 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   }, { params: t.Object({ id: t.String() }), detail: { tags: ['sessions'] } })
   .post('/:id/plan/feedback', async ({ user, principal, params, body, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
-    const session = await contentRepos(principal).sessions.findById(params.id);
+    const repos = contentRepos(principal);
+    const session = await repos.sessions.findById(params.id);
     if (!session) { set.status = 404; return { error: 'Session not found' }; }
+    // Feedback steers the agent's plan: a run, not a read.
+    repos.can('run_agent');
     const text = body.text.trim();
     if (!text) { set.status = 400; return { error: 'Feedback cannot be empty' }; }
     const state = await workPlanRepository.read(session.id, session.userId);
@@ -286,11 +299,14 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
       // the unscoped sessionRepository.delete to fan out the cascade
       // cleanup of messages/pipelines/agents — but only after confirming
       // the principal owns the row.
-      const owned = await contentRepos(principal).sessions.findById(params.id);
+      const repos = contentRepos(principal);
+      const owned = await repos.sessions.findById(params.id);
       if (!owned) {
         set.status = 404;
         return { error: 'Session not found' };
       }
+      // An archived space reads only, the member's own chats included.
+      repos.assertOpen();
       const deleted = await sessionRepository.delete(params.id);
       if (deleted && owned.groupChannelId && owned.threadId) {
         const { forgetGroupThread } = await import('@/channels/group-channels');
