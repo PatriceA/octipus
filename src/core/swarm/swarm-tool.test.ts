@@ -165,8 +165,8 @@ describe('validateSpawnChildArgs', () => {
     expect('error' in r).toBe(true);
   });
 
-  test('rejects taskBrief over 4000 chars', () => {
-    const r = validateSpawnChildArgs({ ...valid, taskBrief: 'x'.repeat(4001) });
+  test('rejects taskBrief over 16000 chars', () => {
+    const r = validateSpawnChildArgs({ ...valid, taskBrief: 'x'.repeat(16001) });
     expect('error' in r).toBe(true);
   });
 
@@ -1029,9 +1029,14 @@ describe('bounded delegation handoff validation', () => {
   test.each([null, [], 'already looked', {}, { ...handoff, reason: ' ' }, { ...handoff, verification: 3 }, { ...handoff, files: 'x'.repeat(2001) }, { ...handoff, extra: 'ignored?' }])('rejects malformed handoff: %j', value => {
     expect(validateSpawnChildArgs({ role: 'coding', taskBrief: 'Fix parser.', handoff: value })).toHaveProperty('error');
   });
-  test('enforces the combined brief limit without truncating findings', () => {
-    const result = validateSpawnChildArgs({ role: 'coding', taskBrief: 'x'.repeat(3500), handoff });
-    expect(result).toHaveProperty('error', expect.stringContaining('plus handoff exceeds'));
+  test('preserves a maximum-length brief and independently bounded handoff', () => {
+    const fullHandoff = Object.fromEntries(Object.keys(handoff).map(key => [key, key.padEnd(2000, 'x')]));
+    const result = validateSpawnChildArgs({ role: 'review', taskBrief: 'b'.repeat(16000), handoff: fullHandoff });
+    expect(result).toHaveProperty('params');
+    if ('params' in result) {
+      expect(result.params.taskBrief).toContain('b'.repeat(16000));
+      for (const value of Object.values(fullHandoff)) expect(result.params.taskBrief).toContain(value);
+    }
   });
 });
 

@@ -30,6 +30,8 @@ Reference `docs/ARTIFACTS-COOKBOOK.md` before guessing.
 
 ## Path B — Test Suite QA
 
+Use `run_test_container` for Python/Node checks that need a container, another runtime, or dependency installation. Call it through the Octipus tool interface (discover its schema with `describe_tool` if needed). Start with it when container tests are requested: sandboxed `shell` cannot reach the host Docker daemon, so `docker version` there is not a capability check. The repository is read-only at `/workspace`; install dependencies and create temporary build copies under `/tmp`. This is allowed read-only verification: disposable test files do not modify the repository. Use `python -m pytest -p no:cacheprovider` after installing the project's test requirements (including pytest-cov when required). Record the actual exit code. The runner supports the listed Python/Node images, not arbitrary Docker services or existing containers; state those limits when a check needs them.
+
 **Browser tools:** `browser-ext` = user's real browser (cookies/login), prefer for authenticated pages. `browser` (Playwright) = isolated, no login.
 
 **Discover the runner** before writing tests:

@@ -5,6 +5,7 @@
 import { describe, expect, test } from 'vitest';
 import type { AgentContext } from '@/core/types';
 import type { ToolHandler } from '@/core/agent-base';
+import { splitRoleTools } from '@/core/agent/tool-split';
 import { buildToolDiscoveryHandlers } from './tool-discovery';
 
 const ctx = {} as AgentContext;
@@ -28,6 +29,22 @@ const longTail: ToolHandler[] = [
 ];
 
 describe('buildToolDiscoveryHandlers', () => {
+  test('core Git, file and shell tools remain discoverable without exposing ungranted tools', async () => {
+    const core = ['git__diff', 'filesystem__read_file', 'shell__run'].map(name => ({
+      name, toolId: name.split('__')[0], description: name, parameters: fileSchema, execute: async () => null,
+    }));
+    const available = [...core, ...longTail];
+    const { longTail: hidden } = splitRoleTools(available, ['git', 'filesystem', 'shell']);
+    expect(hidden.map(tool => tool.name)).not.toContain('git__diff');
+    const [list, describe] = buildToolDiscoveryHandlers(available);
+    const listed = await list.execute({}, ctx) as Array<{ name: string }>;
+    for (const tool of core) {
+      expect(listed.some(entry => entry.name === tool.name)).toBe(true);
+      expect(await describe.execute({ name: tool.name }, ctx)).toMatchObject({ name: tool.name, parameters: fileSchema });
+    }
+    await expect(describe.execute({ name: 'docker__exec_command' }, ctx)).rejects.toThrow('Unknown tool');
+  });
+
   test('empty long tail → no meta-tools advertised', () => {
     expect(buildToolDiscoveryHandlers([])).toHaveLength(0);
   });

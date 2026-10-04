@@ -45,6 +45,18 @@ describe('visible work plans', () => {
     const next = reviseWorkPlan(state, { ...v, revision: 1, steps: [{ ...v.steps[0], title: 'Inspected the code', evidence: 'Tests passed' }] });
     expect(next.current!.steps[0]).toMatchObject({ title: 'Inspect code', evidence: 'Read retry.ts', status: 'done' });
   });
+  it('appends explicit evidence patches to completed steps and deduplicates retries', () => {
+    const initial = input(); initial.steps[0].status = 'done'; initial.steps[0].evidence = 'Tests passed';
+    const state = reviseWorkPlan(emptyWorkPlan(), initial);
+    const patch = (revision: number) => planPatchSchema.parse({ revision, summary: 'Review complete', stepUpdates: [{ id: 'inspect', evidence: 'Independent review passed' }] });
+    const next = reviseWorkPlan(state, expandWorkPlanPatch(state, patch(1)));
+    expect(next.current!.steps[0].evidence).toBe('Tests passed\n\nIndependent review passed');
+    expect(next.current!.steps[0].status).toBe('done');
+    expect(state.current!.steps[0].evidence).toBe('Tests passed');
+    const retry = reviseWorkPlan(next, expandWorkPlanPatch(next, patch(2)));
+    expect(retry.current!.steps[0].evidence).toBe(next.current!.steps[0].evidence);
+  });
+
   it('requires explicit responses and keeps unresolved feedback on the current plan', () => {
     const state = reviseWorkPlan(emptyWorkPlan(), input());
     state.current!.feedback.push({ id: 'f', text: 'Keep API', status: 'pending', createdAt: new Date().toISOString() });

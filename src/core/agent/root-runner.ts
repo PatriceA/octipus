@@ -342,7 +342,7 @@ export async function runRootAgent(
       // pipeline family) lands in the tail and `list_tools` can find it. The
       // rest have no toolId and no flag, so they stay core exactly as before.
       const { longTail } = splitRoleTools([...rootTools, ...metaTools], rootCoreToolIds);
-      const discoveryHandlers = buildToolDiscoveryHandlers(longTail);
+      const discoveryHandlers = buildToolDiscoveryHandlers([...rootTools, ...metaTools]);
       if (discoveryHandlers.length > 0) {
         // Everything stays REGISTERED (dispatch must keep working); only what is
         // advertised shrinks. The meta-tools are never in the long tail — the

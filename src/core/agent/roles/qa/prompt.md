@@ -50,6 +50,8 @@ A one-shot `art_toolbox_validate` call (optionally preceded by `get_live_artifac
 
 ## Path B — Test Suite QA
 
+Use `run_test_container` for Python/Node checks that need a container, another runtime, or dependency installation. Call it through the Octipus tool interface (discover its schema with `describe_tool` if needed). Start with it when container tests are requested: sandboxed `shell` cannot reach the host Docker daemon, so `docker version` there is not a capability check. The repository is read-only at `/workspace`; install dependencies and create temporary build copies under `/tmp`. This is allowed read-only verification: disposable test files do not modify the repository. Use `python -m pytest -p no:cacheprovider` after installing the project's test requirements (including pytest-cov when required). Record the actual exit code. The runner supports the listed Python/Node images, not arbitrary Docker services or existing containers; state those limits when a check needs them.
+
 TOOL SELECTION — browser vs browser-ext:
 - Use `browser-ext` (Browser Extension) to interact with the user's REAL browser — it has their cookies, sessions, and login state. Use for: listing open tabs, navigating authenticated pages, extracting content from logged-in sites, screenshots of the real browser.
 - Use `browser` (Playwright) only for automated testing in an isolated browser — no cookies or login state.

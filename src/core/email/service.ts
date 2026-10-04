@@ -5,7 +5,7 @@
  * never log bodies, and draft/summary text is redacted before it could reach
  * logs (M2). Send is never automatic — the route requires explicit confirmation.
  */
-import { decide, type DecisionQuestion, type DecisionSite } from '@/models/decision';
+import { decide, type DecisionQuestion, type DecisionSite, recordShadow } from '@/models/decision';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
 import { userRepository } from '@/db/repositories/user-repository';
@@ -492,7 +492,7 @@ export async function triageInbox(userId: string, items: InboxItem[]): Promise<R
       .map((id) => ({ id, decision: `${decided[id].priority}/${decided[id].category}`, llm: `${llm[id].priority}/${llm[id].category}` }));
     const priorityAgreed = shadowed.filter((id) => decided[id].priority === llm[id].priority).length;
     const categoryAgreed = shadowed.filter((id) => decided[id].category === llm[id].category).length;
-    coreLogger.info({ site: TRIAGE_SITE.id, compared: shadowed.length, agreed: shadowed.length - disagreements.length, priorityAgreed, categoryAgreed, disagreements }, 'decision shadow');
+    recordShadow({ site: TRIAGE_SITE.id, compared: shadowed.length, agreed: shadowed.length - disagreements.length, priorityAgreed, categoryAgreed, disagreements });
   }, () => {}); // an LLM failure surfaces through llmPending below
   return llmPending;
 }

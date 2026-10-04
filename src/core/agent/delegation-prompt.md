@@ -17,7 +17,8 @@
   spawn of ANY role requires `handoff`: `reason`, `completedWork` (including findings),
   `remainingWork` (acceptance criteria), `files` (absolute paths and ownership),
   and `verification` (actual checks/results and what remains untested). Keep the
-  combined brief and handoff within 4000 characters; pass conclusions, not logs.
+  brief within 16000 characters. Each handoff field has a separate 2000-character
+  limit; handoff formatting does not consume the brief budget. Pass conclusions, not logs.
 - Independent review is different: a reviewer may deliberately inspect the same
   code to verify it. Label that assignment as verification, not implementation.
 

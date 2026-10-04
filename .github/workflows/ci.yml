@@ -65,6 +65,9 @@ jobs:
         run: npm ci && npm run build
         working-directory: mcp-server
 
+      - name: Install browser for page extraction tests
+        run: npx playwright install --with-deps chromium
+
       - name: Test
         run: npm run test -- --coverage
         env:

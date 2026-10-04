@@ -466,6 +466,14 @@ export class CocoIndexService {
         signal,
       });
     }
+    // Record the model before indexing: a timed-out or cancelled index is
+    // still built with this model, so the next setup must not reset it.
+    await this.deps.writeFile(metadataPath, JSON.stringify({
+      workspacePath,
+      embeddingProvider: embedding.provider,
+      embeddingModel: model,
+    }, null, 2));
+    this.deps.restrictFile(metadataPath);
     this.state.progress = {
       phase: 'initialize',
       message: sharedSettings ? 'Building the code index with the Octipus embedding model' : 'Downloading the local model and building the initial code index',
@@ -476,12 +484,6 @@ export class CocoIndexService {
       timeoutMs: INDEX_TIMEOUT_MS,
       signal,
     });
-    await this.deps.writeFile(metadataPath, JSON.stringify({
-      workspacePath,
-      embeddingProvider: embedding.provider,
-      embeddingModel: model,
-    }, null, 2));
-    this.deps.restrictFile(metadataPath);
     if (generation !== this.generation) return;
 
     this.state.status = 'connecting';

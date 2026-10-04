@@ -7,6 +7,9 @@
  * the caller runs its existing LLM path. See docs/plans/decision-models.md.
  */
 import type { ModelConfigEntry } from '@/db/schema/models';
+import { appendFile, mkdir } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { modelLogger } from '@/utils/logger';
 
 export type DecisionQuestion =
@@ -270,8 +273,25 @@ async function decideUnguarded(site: DecisionSite, state: unknown, questions: Re
 
   const minConfidence = Math.min(...Object.values(answers).map((a) => a.confidence));
   const confident = minConfidence >= site.minConfidence;
-  modelLogger.info({ site: site.id, model: model.name, latencyMs: Date.now() - start, minConfidence, confident, zdr: verdict.zeroDataRetention }, 'Decision');
+  const outcome = { site: site.id, model: model.name, latencyMs: Date.now() - start, minConfidence, confident, zdr: verdict.zeroDataRetention };
+  modelLogger.info(outcome, 'Decision');
+  recordShadow(outcome, 'decision'); // coverage: how often a site would get a usable answer
   return confident ? answers : null;
+}
+
+/**
+ * backend.log is truncated on every restart, so shadow results logged only
+ * there could never justify flipping a site live. Append them to a JSONL file
+ * as well. ponytail: unbounded file, a few hundred bytes per entry; rotate if
+ * it ever gets big. Tests (NODE_ENV=test) must not write to the real home.
+ */
+const SHADOW_FILE = join(homedir(), '.octipus', 'decision-shadow.jsonl');
+export function recordShadow(entry: { site: string } & Record<string, unknown>, kind: 'shadow' | 'decision' = 'shadow'): void {
+  if (kind === 'shadow') modelLogger.info(entry, 'decision shadow');
+  if (process.env.NODE_ENV === 'test') return;
+  void mkdir(dirname(SHADOW_FILE), { recursive: true })
+    .then(() => appendFile(SHADOW_FILE, JSON.stringify({ at: new Date().toISOString(), kind, ...entry }) + '\n'))
+    .catch((err) => { if (firstThisHour('shadow-file')) modelLogger.warn({ err, file: SHADOW_FILE }, 'Could not write decision shadow file'); });
 }
 
 /**
@@ -286,7 +306,7 @@ export async function preferDecision<T extends string>(site: DecisionSite, live:
   const pending = decision();
   const fromLlm = await llm();
   void pending.then((decided) => {
-    if (decided !== null) modelLogger.info({ site: site.id, agreed: decided === fromLlm, decision: decided, llm: fromLlm }, 'decision shadow');
+    if (decided !== null) recordShadow({ site: site.id, agreed: decided === fromLlm, decision: decided, llm: fromLlm });
   }, () => {});
   return fromLlm;
 }

@@ -125,7 +125,14 @@ test('embedding endpoint preserves document/query mode and applies backpressure'
   expect(fixture.embed).toHaveBeenCalledWith(['find code'], 'configured', 'query', 'admin');
   const busy = await request('POST', '/document/embeddings', { model: 'configured', input: ['code'] });
   expect(busy.status).toBe(429);
-  const oversized = await request('POST', '/document/embeddings', { model: 'configured', input: Array(5).fill('x'.repeat(64_000)) });
+});
+
+test('an unsplittable blob chunk is truncated, not rejected', async () => {
+  fixture.embed.mockResolvedValue({ object: 'list', data: [{ embedding: [1, 2], index: 0 }] });
+  const response = await request('POST', '/document/embeddings', { model: 'configured', input: ['x'.repeat(661_727)] });
+  expect(response.status).toBe(200);
+  expect(fixture.embed).toHaveBeenCalledWith(['x'.repeat(4_000)], 'configured', 'document', 'admin');
+  const oversized = await request('POST', '/document/embeddings', { model: 'configured', input: Array(3).fill('x'.repeat(3_000_000)) });
   expect(oversized.status).toBe(413);
 });
 

@@ -75,8 +75,8 @@ const MUTATE_TIMEOUT_MS = 15 * 60_000;
 
 /**
  * Prepended to EVERY git call made here. `-c` rather than repo config so
- * nothing about the user's repo changes, and a repo with no `user.name` still
- * commits. `core.hooksPath=/dev/null` disables every hook (there is no file
+ * nothing about the user's repo changes. Missing identity values are supplied
+ * only for commit/merge operations; configured identity is preserved. `core.hooksPath=/dev/null` disables every hook (there is no file
  * under /dev/null); `core.fsmonitor=false` stops a configured fsmonitor daemon
  * command from being executed.
  */
@@ -84,12 +84,21 @@ export const SERVER_GIT_CONFIG = [
   '-c', 'core.hooksPath=/dev/null',
   '-c', 'core.fsmonitor=false',
   '-c', 'commit.gpgsign=false',
-  '-c', 'user.name=Octipus agent',
-  '-c', 'user.email=octipus-agent@localhost',
 ];
 
-function git(cwd: string, args: string[], mode: 'read' | 'mutate' = 'read'): Promise<GitResult> {
-  return runGit(cwd, [...SERVER_GIT_CONFIG, ...args], {
+async function git(cwd: string, args: string[], mode: 'read' | 'mutate' = 'read'): Promise<GitResult> {
+  const config = [...SERVER_GIT_CONFIG];
+  if (mode === 'mutate' && ['commit', 'merge'].includes(args[0]) && !args.includes('--abort')) {
+    // Honor local/global identity; synthesize only values absent from Git config.
+    const identities = await Promise.all(['user.name', 'user.email'].map(key =>
+      runGit(cwd, [...SERVER_GIT_CONFIG, 'config', '--default', '', '--get', key], { timeoutMs: READ_TIMEOUT_MS })));
+    for (const [index, key] of ['user.name', 'user.email'].entries()) {
+      const identity = identities[index];
+      if (!identity.ok) throw new Error(`Cannot read Git identity: ${identity.stderr}`);
+      if (!identity.stdout.trim()) config.push('-c', `${key}=${index === 0 ? 'Octipus agent' : 'octipus-agent@localhost'}`);
+    }
+  }
+  return runGit(cwd, [...config, ...args], {
     timeoutMs: mode === 'mutate' ? MUTATE_TIMEOUT_MS : READ_TIMEOUT_MS,
   });
 }

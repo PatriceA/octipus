@@ -516,7 +516,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `shared` | 13 |
 | `core` | `skills` | 10 |
 | `core` | `tools` | 16 |
-| `core` | `utils` | 155 |
+| `core` | `utils` | 154 |
 | `db` | `config` | 3 |
 | `db` | `core` | 10 |
 | `db` | `models` | 1 |
@@ -591,7 +591,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `services` | 2 |
 | `tools` | `shared` | 2 |
 | `tools` | `skills` | 5 |
-| `tools` | `utils` | 36 |
+| `tools` | `utils` | 35 |
 | `tools` | `visual` | 2 |
 | `tools` | `voice` | 3 |
 | `tui-editor` | `mcp` | 2 |

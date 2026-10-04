@@ -20,7 +20,7 @@
  * one fact, and the copy is the one that goes stale.
  */
 
-import { choiceOf, decide, type DecisionSite } from '@/models/decision';
+import { choiceOf, decide, type DecisionSite, recordShadow } from '@/models/decision';
 import { canonicalTopic } from '@/models/topics';
 import { coreLogger } from '@/utils/logger';
 import type { MessageClassification } from './types';
@@ -112,7 +112,7 @@ export function shadowLaneDecision(message: string, classification: MessageClass
     lane: { type: 'choice', instructions: 'Which kind of work does this request ask for?', criteria: LANE_CRITERIA },
   }).then((answer) => {
     const decided = choiceOf(answer, 'lane');
-    if (decided) coreLogger.info({ site: LANE_SITE.id, agreed: decided === heuristic.lane, decision: decided, heuristic: heuristic.lane }, 'decision shadow');
+    if (decided) recordShadow({ site: LANE_SITE.id, agreed: decided === heuristic.lane, decision: decided, heuristic: heuristic.lane });
   });
 }
 

@@ -5,7 +5,7 @@ import { type EmbeddingPurpose, type SearchScope, getEmbeddingService } from '@/
 import { getFileIndexer } from '@/core/rag/indexer';
 import type { AgentContext, ToolManifest } from '@/core/types';
 import { getKnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
-import { decide, type DecisionSite } from '@/models/decision';
+import { decide, type DecisionSite, recordShadow } from '@/models/decision';
 import { coreLogger } from '@/utils/logger';
 import { WorkspaceFS, WorkspaceFsError } from '@/security/workspace-fs';
 import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
@@ -452,6 +452,6 @@ function shadowRelevance(query: string, results: Array<{ abstract?: string | nul
   void decide(RELEVANCE_SITE, { query, passages }, questions).then((answers) => {
     if (!answers) return;
     const drop = Object.values(answers).filter((a) => a.type === 'noul' && a.p < DROP_BELOW).length;
-    coreLogger.info({ site: RELEVANCE_SITE.id, hits: results.length, wouldDrop: drop }, 'decision shadow');
+    recordShadow({ site: RELEVANCE_SITE.id, hits: results.length, wouldDrop: drop });
   });
 }

@@ -49,7 +49,7 @@ describe('disposable test container boundaries', () => {
 });
 
 describe.skipIf(process.env.OCTIPUS_TEST_DOCKER !== '1')('real local Docker lifecycle', () => {
-  it('reads the repo, cannot write it or reach host paths, enforces limits and removes the container', async () => {
+  it.each(['qa', 'review'] as const)('%s reads the repo, enforces isolation and limits, and removes the container', async role => {
     writeFileSync(join(fixture.root, 'input.txt'), 'fixture');
     const command = ['python', '-c', `import os,pathlib,json
 print(pathlib.Path('/workspace/input.txt').read_text())
@@ -66,7 +66,7 @@ print(pathlib.Path('/sys/fs/cgroup/memory.max').read_text().strip())
 print(pathlib.Path('/sys/fs/cgroup/pids.max').read_text().strip())
 print(pathlib.Path('/sys/fs/cgroup/cpu.max').read_text().strip())
 pathlib.Path('/tmp/ok').write_text('ok')`];
-    const result = await runTestContainer({ ...args, command, timeout_seconds: 20 }, context) as any;
+    const result = await runTestContainer({ ...args, command, timeout_seconds: 20 }, { ...context, role }) as any;
     expect(result.exitCode, result.stderr).toBe(0);
     expect(result.stdout).toContain('fixture'); expect(result.stdout).toContain('4294967296');
     expect(result.stdout).toContain('256'); expect(result.stdout).toContain('200000 100000');
