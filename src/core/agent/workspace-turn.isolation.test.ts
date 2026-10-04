@@ -14,6 +14,7 @@
  * extraction needs a model too, so the memory module is observed rather
  * than run. Session compaction itself is real.
  */
+import { type AgentScope, buildAgentContext } from './context';
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
@@ -59,12 +60,12 @@ vi.mock('@/utils/context-compaction', async (importOriginal) => ({
 vi.mock('./root-runner', () => ({
   // The "agent": the real tools, run with the context the turn built.
   runRootAgent: async (...args: unknown[]) => {
-    const [, , sessionId, userId, , , , , , workspaceId] = args as [unknown, unknown, string, string, unknown, unknown, unknown, unknown, unknown, string | null];
-    const now = new Date();
-    const context: AgentContext = {
-      id: `agent-${randomUUID()}`, sessionId, userId, workspaceId, topic: 'general', model: 'test-model',
-      role: 'general', root: true, status: 'running', createdAt: now, updatedAt: now, metadata: {},
-    };
+    const [, , sessionId, userId, , , , , , scope] = args as [unknown, unknown, string, string, unknown, unknown, unknown, unknown, unknown, AgentScope];
+    const workspaceId = scope.workspaceId;
+    const context: AgentContext = buildAgentContext({
+      id: `agent-${randomUUID()}`, sessionId, userId, scope, topic: 'general', model: 'test-model',
+      role: 'general', root: true, status: 'running',
+    });
     const tool = async (id: string) => {
       const mod = id === 'tasks' ? await import('@/tools/tasks') : id === 'artifacts' ? await import('@/tools/artifacts') : await import('@/tools/filesystem');
       const instance = 'TasksTool' in mod ? new mod.TasksTool() : 'ArtifactsTool' in mod ? new mod.ArtifactsTool() : new (mod as typeof import('@/tools/filesystem')).FilesystemTool();

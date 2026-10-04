@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { toolActionRepository, type ToolActionRepository } from '@/db/repositories/tool-action-repository';
 import type { ToolAction } from '@/db/schema/tool-actions';
 import { getPermissionManager } from '@/security/permissions';
-import { routeApproval } from '@/security/approval-policy';
+import { routeApprovalFor } from '@/security/approval-route';
 import { coreLogger } from '@/utils/logger';
 import { assertExecutionActive, getExecutionSignal } from './execution-scope';
 import type { AgentContext } from './types';
@@ -73,15 +73,14 @@ export class ActionRecovery {
       assertExecutionActive(context);
       const pending = (await this.repository.pending(context.userId, context.sessionId)).filter(row => !this.active.has(row.id)).slice(0, 20);
       if (!pending.length) return;
-      const decision = routeApproval({ level: 'ASK', role: context.role, root: context.root,
-        attended: context.attended, toolId: 'action_recovery', action: 'retry' });
+      const decision = await routeApprovalFor(context, { toolId: 'action_recovery', action: 'retry' }, { level: 'ASK' });
       if (decision.route !== 'ask_human') throw new RecoveryReviewRequiredError(
         `Previous tool actions have uncertain outcomes. Check external state and obtain recovery approval before another mutation. ${describeActions(pending)}`);
       const manager = getPermissionManager();
       const id = await manager.requestApproval(context.userId, context.id, 'action_recovery', 'retry', {
         warning: `The earlier actions listed below have no confirmed outcome. This is separate from permission to run ${toolName}. Check their external state: changes may already exist. Approving permits further changes and may repeat earlier effects; rejecting leaves read-only checks available.`,
         previousActions: describeActions(pending), nextTool: toolName,
-      }, context.sessionId, `Check earlier ${pending[0].toolName} outcome before continuing`, getExecutionSignal(context));
+      }, context.sessionId, `Check earlier ${pending[0].toolName} outcome before continuing`, getExecutionSignal(context), context.workspaceId);
       const approved = await manager.waitForApproval(id, { agentId: context.id });
       assertExecutionActive(context);
       if (!approved) throw new RecoveryReviewRequiredError('Recovery approval was not granted. Do not repeat the uncertain actions. Read-only checks remain available.');
@@ -156,7 +155,7 @@ export class ActionRecovery {
         const requestReview = ask ?? (async (summary: string) => {
           const manager = getPermissionManager();
           const reviewId = await manager.requestApproval(context.userId, context.id, 'action_recovery', 'replay_pipeline',
-            { warning: summary, pipelineId }, context.sessionId, 'Review pipeline replay', getExecutionSignal(context));
+            { warning: summary, pipelineId }, context.sessionId, 'Review pipeline replay', getExecutionSignal(context), context.workspaceId);
           return { approved: await manager.waitForApproval(reviewId, { agentId: context.id }), reviewId };
         });
         const result = await requestReview(

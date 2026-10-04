@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, type SQL, sql } from 'drizzle-orm';
 import type { AgentContext, PermissionLevel } from '@/core/types';
 import { getDb } from '@/db/postgres';
 import { auditRepository } from '@/db/repositories/audit-repository';
@@ -56,6 +56,20 @@ export interface PermissionResolvedEvent {
   agentId: string;
   sessionId?: string;
   status: 'approved' | 'denied' | 'expired';
+}
+
+/**
+ * A request an admin may answer for its requester: not one raised in a space
+ * (its stamped `workspace_id`, or its session's workspace) the admin is not a
+ * member of (D9).
+ */
+function adminMayAnswer(adminUserId: string): SQL {
+  return sql`NOT EXISTS (
+    SELECT 1 FROM workspaces w
+    WHERE w.kind = 'shared'
+      AND w.id = COALESCE(${permissionRequests.workspaceId},
+        (SELECT s.workspace_id FROM sessions s WHERE s.id = ${permissionRequests.sessionId}))
+      AND NOT EXISTS (SELECT 1 FROM workspace_members m WHERE m.workspace_id = w.id AND m.user_id = ${adminUserId}))`;
 }
 
 export class PermissionManager {
@@ -322,6 +336,12 @@ export class PermissionManager {
     sessionId?: string,
     callerToolName?: string,
     signal?: AbortSignal,
+    /**
+     * The requesting agent's `context.workspaceId`, stamped on the row: a
+     * space's requests are told apart (membership changes expire them, and
+     * an admin who is not a member cannot answer them, D9).
+     */
+    workspaceId?: string | null,
   ): Promise<string> {
     if (signal?.aborted) throw new Error('Agent stopped before approval request');
     const requestId = randomUUID();
@@ -331,6 +351,7 @@ export class PermissionManager {
       userId,
       agentId,
       sessionId,
+      workspaceId: workspaceId ?? null,
       toolId,
       action,
       context: {
@@ -596,7 +617,7 @@ export class PermissionManager {
     adminUserId: string,
     reason: string,
   ): Promise<PermissionRequest | null> {
-    return this.settle(requestId, approved ? 'approved' : 'denied', adminUserId, reason, null);
+    return this.settle(requestId, approved ? 'approved' : 'denied', adminUserId, reason, null, adminUserId);
   }
 
   /** `owner` null skips the owner check — only `resolveAsAdmin` passes it. */
@@ -606,11 +627,14 @@ export class PermissionManager {
     resolvedBy: string,
     resolution: string | undefined,
     owner: string | null,
+    /** An admin answering someone else's request: never one of a space they are not a member of (D9). */
+    admin?: string,
   ): Promise<PermissionRequest | null> {
     const filters = [
       eq(permissionRequests.id, requestId),
       eq(permissionRequests.status, 'pending'),
     ];
+    if (admin !== undefined) filters.push(adminMayAnswer(admin));
     // An approval must not land on a request that has already timed out.
     if (status === 'approved') {
       filters.push(sql`(${permissionRequests.expiresAt} IS NULL OR ${permissionRequests.expiresAt} > NOW())`);
@@ -663,14 +687,19 @@ export class PermissionManager {
    * Every pending request on the install, for the admin console's triage
    * list. Answering one still goes through `resolveAsAdmin`.
    */
-  async getAllPendingRequests(): Promise<PermissionRequest[]> {
+  /**
+   * Every pending request, for the admin queue. With `forAdmin`, requests of
+   * a space the admin is not a member of are left out (D9, I3).
+   */
+  async getAllPendingRequests(forAdmin?: string): Promise<PermissionRequest[]> {
     return this.db
       .select()
       .from(permissionRequests)
       .where(
         and(
           eq(permissionRequests.status, 'pending'),
-          sql`(${permissionRequests.expiresAt} IS NULL OR ${permissionRequests.expiresAt} > NOW())`
+          sql`(${permissionRequests.expiresAt} IS NULL OR ${permissionRequests.expiresAt} > NOW())`,
+          forAdmin !== undefined ? adminMayAnswer(forAdmin) : undefined,
         )
       );
   }

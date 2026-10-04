@@ -1,10 +1,10 @@
 import { desc, eq, or } from 'drizzle-orm';
+import { buildAgentContext, resolveAgentScope, withAgentUsage } from '@/core/agent/context';
 import { normalizeAcceptance } from '@/tools/plan';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getAgentService, getPipelineManager } from '@/core/agent';
 import { ROOT_ROLE } from '@/core/agent/types';
-import type { AgentContext } from '@/core/types';
 import { getModelRegistry } from '@/models/model-registry';
 import { channelCanPrompt } from '@/security/approval-policy';
 import { generateId } from '@/utils/crypto';
@@ -147,12 +147,14 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
 
       const repos = contentRepos(principal);
       let sessionId = body.sessionId;
+      let pipelineSession: { userId: string; workspaceId: string | null };
       if (sessionId) {
         const existing = await repos.sessions.findById(sessionId);
         if (!existing) {
           set.status = 404;
           return { error: 'Session not found' };
         }
+        pipelineSession = existing;
       } else {
         const session = await repos.sessions.create({
           channelType: 'api',
@@ -160,6 +162,13 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
           title: (body.title || description).slice(0, 100),
         });
         sessionId = session.id;
+        pipelineSession = session;
+      }
+      // Pipelines are personal automation: a space session refuses (§5.6).
+      const scope = await resolveAgentScope({ session: pipelineSession, userId: user.id, trigger: 'user' });
+      if (scope.space) {
+        set.status = 403;
+        return { error: 'Pipelines are personal automation and do not run in a shared space' };
       }
 
       const registry = getModelRegistry();
@@ -169,11 +178,11 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         return { error: 'No default model configured — bind one on the Models page first' };
       }
 
-      const context: AgentContext = {
+      const context = buildAgentContext({
         id: `pipeline-api-${generateId().slice(0, 12)}`,
         sessionId,
         userId: user.id,
-        workspaceId: principal.workspaceId ?? null,
+        scope,
         topic: 'general',
         model: defaultModel.modelId,
         role: ROOT_ROLE,
@@ -182,22 +191,20 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         // rather than waiting for a prompt nobody receives (`channelCanPrompt`).
         attended: channelCanPrompt('api'),
         status: 'running',
-        createdAt: new Date(),
-        updatedAt: new Date(),
         // A STAGE-level approval is different: it is answerable out of band via
         // `POST /pipelines/:id/approve/:stageId`, and it raises a notification.
         // So it still blocks — but not for the interactive default of an hour,
         // which for an unattended REST run just means a stage sitting idle and
         // then aborting. Callers who are watching can pass their own value.
         metadata: { approvalTimeoutMs: body.approvalTimeoutMs ?? API_APPROVAL_TIMEOUT_MS },
-      };
+      });
 
       const rootAgent = getAgentService();
 
       // Resolve on the id, not the result: the caller gets an answer in
       // milliseconds and the run keeps going.
       const started = new Promise<string>((resolve, reject) => {
-        rootAgent
+        withAgentUsage(user.id, scope, () => rootAgent
           // `match.name` is safe now that `getPipelineTemplate` resolves a name
           // within the caller's own visible set — the same set this route
           // authorized against. Keeping the name (not the id) is what leaves a
@@ -206,7 +213,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
             maxRetries: body.maxRetries,
             params: body.params,
             onCreated: resolve,
-          })
+          }))
           .then((result) => {
             coreLogger.info({ sessionId, template: match.name }, 'API-started pipeline finished');
             return result;

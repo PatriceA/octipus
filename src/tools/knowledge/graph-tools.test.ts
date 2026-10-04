@@ -17,7 +17,7 @@ describe('KnowledgeTool graph tools', () => {
   let handlers: Map<string, ToolHandler>;
   let embeddingSpy: Mock<(text: string) => Promise<number[]>> | undefined;
 
-  const ctx = (): AgentContext => ({
+  const ctx = (): AgentContext => ({ space: null, trigger: 'user', funding: 'own', 
     id: randomUUID(),
     sessionId: randomUUID(),
     userId,

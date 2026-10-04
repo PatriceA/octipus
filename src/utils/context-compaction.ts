@@ -475,6 +475,8 @@ export async function createLLMSummary(
     const result = await client.complete({
       model: summaryModel,
       userId: options?.userId,
+      // An install-topic call: stamped `install` in cost_log (D13).
+      requestType: 'compaction',
       messages: [
         {
           role: 'system',

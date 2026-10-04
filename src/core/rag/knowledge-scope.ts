@@ -132,7 +132,10 @@ export function noteKnowledgeScope(scope: NoteScope): KnowledgeScope {
 }
 
 /** The personal scope of the user an agent works for. */
-export function agentKnowledgeScope(context: Pick<AgentContext, 'userId' | 'workspaceId'>): KnowledgeScope {
+export function agentKnowledgeScope(context: Pick<AgentContext, 'userId' | 'workspaceId'> & { space?: AgentContext['space'] }): KnowledgeScope {
+  // An agent in a space searches the space's knowledge (§5.6), the member's
+  // role having been read for the turn.
+  if (context.space) return { kind: 'space', workspaceId: context.space.workspaceId };
   return {
     kind: 'personal',
     userId: requireUserId(context.userId, 'Knowledge access'),
@@ -140,11 +143,11 @@ export function agentKnowledgeScope(context: Pick<AgentContext, 'userId' | 'work
   };
 }
 
-/** The owner of rows an agent writes. */
-export function agentKnowledgeOwner(context: Pick<AgentContext, 'userId' | 'workspaceId'>): KnowledgeOwner {
+/** The owner of rows an agent writes (in a space: the member, with the space's id). */
+export function agentKnowledgeOwner(context: Pick<AgentContext, 'userId' | 'workspaceId'> & { space?: AgentContext['space'] }): KnowledgeOwner {
   return {
     ownerUserId: requireUserId(context.userId, 'Knowledge indexing'),
-    workspaceId: context.workspaceId ?? null,
+    workspaceId: context.space ? context.space.workspaceId : context.workspaceId ?? null,
   };
 }
 

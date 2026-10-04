@@ -1,4 +1,6 @@
 import { withExecutionSignal } from '@/core/execution-scope';
+import { buildAgentContext, resolveAgentScope, withAgentUsage } from './context';
+import type { AgentTrigger } from '@/core/types';
 import { actionRecovery } from '@/core/action-recovery';
 import { channelCanPrompt } from '@/security/approval-policy';
 import { getConfig } from '@/config';
@@ -791,6 +793,8 @@ export class PipelineManager {
       onCreated?: (pipelineId: string) => void;
     },
   ): Promise<{ pipelineId: string; result: string }> {
+    // Pipelines are personal automation: never in a space (§5.6).
+    if (context.space) throw new Error('Pipelines are personal automation and do not run in a shared space');
     // Scoped to the caller: a bare template NAME must resolve to the same row
     // the caller was authorized against (see `getPipelineTemplate`).
     const template = await getPipelineTemplate(type, userId);
@@ -832,6 +836,8 @@ export class PipelineManager {
       // Kept so a resume in another process can rebuild the same prompts. The
       // template is re-read by `type`; the params were only ever in memory.
       metadata: {
+        // What started the run, so a resume re-resolves the same scope.
+        trigger: context.trigger,
         params: options?.params ?? {},
         ...(options?.maxRetries != null ? { maxRetries: options.maxRetries } : {}),
       },
@@ -1778,21 +1784,34 @@ export class PipelineManager {
     // which holds the agent context the original run was started with, and
     // everything downstream needs from it is on the row.
     const originSession = await sessionRepository.findById(pipeline.sessionId);
-    const context: AgentContext = {
+    // The scope is re-resolved, membership included (D5): a pipeline resumes
+    // with the trigger of the session that started it, recorded at creation.
+    const startedBy = (pipeline.metadata as { trigger?: AgentTrigger } | null)?.trigger ?? 'user';
+    const scope = await resolveAgentScope({ session: originSession, userId: pipeline.userId, trigger: startedBy });
+    const context = buildAgentContext({
       attended: channelCanPrompt(originSession?.channelType),
       id: pipeline.rootAgentId,
       sessionId: pipeline.sessionId,
       userId: pipeline.userId,
-      workspaceId: pipeline.workspaceId,
+      scope,
       topic: 'general',
       role: ROOT_ROLE,
       root: true,
       model: '',
       status: 'running',
-      createdAt: new Date(),
-      updatedAt: new Date(),
       metadata: { pipelineId, resumed: true },
-    };
+    });
+    return withAgentUsage(pipeline.userId, scope, () => this.resumeWalk(pipeline, pipelineId, opts, checkpoint, resumeState, context));
+  }
+
+  private async resumeWalk(
+    pipeline: Pipeline,
+    pipelineId: string,
+    opts: { fromSeq?: number },
+    checkpoint: NonNullable<Awaited<ReturnType<typeof pipelineRepository.getCheckpoint>>>,
+    resumeState: NonNullable<ReturnType<typeof hydrateWalk>>,
+    context: AgentContext,
+  ): Promise<{ pipelineId: string; result: string }> {
 
     const priorNodes = await pipelineRepository.getNodes(pipelineId);
     await withExecutionSignal(context, this.resuming.get(pipelineId)?.signal,

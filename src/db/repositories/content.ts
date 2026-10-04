@@ -11,7 +11,8 @@
  * API's error handler).
  */
 import type { KnowledgeOwner, KnowledgeScope } from '@/core/rag/knowledge-scope';
-import type { Principal } from '@/security/principal';
+import type { AgentContext } from '@/core/types';
+import { agentPrincipal, type Principal } from '@/security/principal';
 import type { SpaceAction, SpaceRole } from '@/security/space-access';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { type NoteScope, type NoteStore, PersonalNoteRepo } from './note-repository';
@@ -86,4 +87,13 @@ export function contentRepos(principal: Principal): ContentRepos {
 function personalArtifacts(principal: Principal): ArtifactStore {
   if (!principal.workspaceId) throw new Error('Artifacts need a resolved workspace');
   return new ArtifactStore(principal.workspaceId, principal.userId, () => undefined);
+}
+
+/**
+ * The content repositories of an agent's tools: `contentRepos` of the
+ * agent's principal, so an agent in a space reads and writes the space's
+ * rows by the member's role and a personal agent its own (§5.6).
+ */
+export function reposFor(context: Pick<AgentContext, 'userId' | 'workspaceId' | 'space'>): ContentRepos {
+  return contentRepos(agentPrincipal(context));
 }

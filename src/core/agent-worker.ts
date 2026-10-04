@@ -1,4 +1,5 @@
 import { withProviderUsageContext } from '@/models/providers/instrumented';
+import { usageContextOf } from '@/core/agent/context';
 import { limitKindOf } from '@/core/errors/limit-refusal';
 import type { AgentCompletionReason } from '@/shared/agent-completion';
 import { formatWorkPlanContext } from './agent/work-plan-context';
@@ -615,12 +616,14 @@ export class AgentWorker extends BaseAgentWorker {
     this.activeRuns++;
     this.subscribePermissionWait();
     try {
-      return await (isRootAgent(this.context) ? withSessionConversation(this.context.sessionId, async () => {
+      // Every model call of the run is attributed to the agent's user,
+      // workspace and funding, whoever started it (§5.6).
+      return await withProviderUsageContext(usageContextOf(this.context), () => (isRootAgent(this.context) ? withSessionConversation(this.context.sessionId, async () => {
         const system = this.messages.filter(m => m.role === 'system');
         await this.loadHistory();
         this.messages = [...system, ...this.messages];
         return this.runInternal(userMessage);
-      }) : this.runInternal(userMessage));
+      }) : this.runInternal(userMessage)));
     } finally {
       this.activeRuns--;
       this.permissionWaitCleanup?.();
@@ -1514,18 +1517,18 @@ export class AgentWorker extends BaseAgentWorker {
         const toolMessages: AgentMessage[] = await this.whileBlocked(blockedReason(toolCalls, isFinal, isCollect), () => {
           if (isFinal) {
             // Legitimately long (may await human approval) — no wall race.
-            return withProviderUsageContext({ userId: this.context.userId, sessionId: this.context.sessionId, agentId: this.context.id }, () => this.toolExecutor.handleToolCalls(toolCalls));
+            return withProviderUsageContext(usageContextOf(this.context), () => this.toolExecutor.handleToolCalls(toolCalls));
           }
           if (isCollect) {
             // Self-bounds (~child wall); keep a generous absolute backstop.
             return this.raceAbsolute(
-              withProviderUsageContext({ userId: this.context.userId, sessionId: this.context.sessionId, agentId: this.context.id }, () => this.toolExecutor.handleToolCalls(toolCalls)),
+              withProviderUsageContext(usageContextOf(this.context), () => this.toolExecutor.handleToolCalls(toolCalls)),
               'handleToolCalls:collect_children',
               this.config.selfTimedToolCeilingMs ?? DEFAULT_SELF_TIMED_TOOL_CEILING_MS,
             );
           }
           return this.raceTimeout(
-            withProviderUsageContext({ userId: this.context.userId, sessionId: this.context.sessionId, agentId: this.context.id }, () => this.toolExecutor.handleToolCalls(toolCalls)),
+            withProviderUsageContext(usageContextOf(this.context), () => this.toolExecutor.handleToolCalls(toolCalls)),
             'handleToolCalls',
           );
         });
@@ -2145,8 +2148,8 @@ export class AgentWorker extends BaseAgentWorker {
       blockedReason(toolCalls, this.toolExecutor.hasFinalToolCall(toolCalls), toolCalls.some((tc) => tc.name === 'collect_children')),
       () =>
         isSelfTimedTool
-          ? withProviderUsageContext({ userId: this.context.userId, sessionId: this.context.sessionId, agentId: this.context.id }, () => this.toolExecutor.handleToolCalls(toolCalls))
-          : this.raceTimeout(withProviderUsageContext({ userId: this.context.userId, sessionId: this.context.sessionId, agentId: this.context.id }, () => this.toolExecutor.handleToolCalls(toolCalls)), 'handleToolCalls'),
+          ? withProviderUsageContext(usageContextOf(this.context), () => this.toolExecutor.handleToolCalls(toolCalls))
+          : this.raceTimeout(withProviderUsageContext(usageContextOf(this.context), () => this.toolExecutor.handleToolCalls(toolCalls)), 'handleToolCalls'),
     );
     this.messages.push(...toolMessages);
     this.appendToolReportingReminder();

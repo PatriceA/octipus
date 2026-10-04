@@ -31,7 +31,7 @@ const ALICE_OTHER_WS = '11111111-0000-4000-8000-000000000002';
 
 function agentCtx(userId: string, workspaceId: string | null = null): AgentContext {
   const now = new Date();
-  return {
+  return { space: null, trigger: 'user', funding: 'own', 
     id: 'agent-1', sessionId: 'session-1', userId, workspaceId, topic: 'general', model: '', role: 'general',
     status: 'running', createdAt: now, updatedAt: now, metadata: {},
   };

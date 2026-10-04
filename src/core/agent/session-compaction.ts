@@ -1,4 +1,5 @@
 import { getConfig } from '@/config';
+import { type SessionAudience, sessionAudience } from './audience';
 import { capNativeSnapshot, readSessionHistory, toContextMessage, withSessionConversation } from '@/core/session-history';
 import { getModelRegistry } from '@/models/model-registry';
 import { getGatewayHub } from '@/core/gateway/hub';
@@ -185,7 +186,7 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
       nativeConversation: native && nativeTail ? { ...native, checkpointId: entry.id,
         messages: capNativeSnapshot([{ role: 'user', content: `[Conversation checkpoint]\n${summary}`, timestamp: last.createdAt.toISOString() }, ...nativeTail]) } : null,
     }, { keepCliSessionPrefixes: CHILD_CLI_SESSION_KEY_PREFIXES });
-    if (published && extractsMemoryOnCompaction(getConfig().memory?.extractionCadence, history.session)) {
+    if (published && extractsMemoryOnCompaction(getConfig().memory?.extractionCadence, await sessionAudience(history.session))) {
       const { updateMemoriesAfterTurn } = await import('@/core/memory');
       const { turnWorkspaceId } = await import('./session-resolver');
       const { userId, workspaceId } = history.session;
@@ -201,14 +202,15 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
 
 /**
  * Whether a published checkpoint feeds memory extraction. Never for a
- * group-channel thread: its summary carries other members' words, which must
- * not become the requester's personal memories.
+ * group-channel thread or a room (the summary carries other members' words,
+ * which must not become the requester's personal memories), nor for a space
+ * session (personal memories never touch a space, I7): `sessionAudience`.
  */
 export function extractsMemoryOnCompaction(
   cadence: string | undefined,
-  session: { groupChannelId?: string | null },
+  audience: Pick<SessionAudience, 'personalMemoryOff'>,
 ): boolean {
-  return cadence === 'on_compaction' && !session.groupChannelId;
+  return cadence === 'on_compaction' && !audience.personalMemoryOff;
 }
 
 /** Shared manual command for gateway and chat clients. */

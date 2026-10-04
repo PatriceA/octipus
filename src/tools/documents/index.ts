@@ -1,8 +1,7 @@
 import { getEmbeddingService } from '@/core/rag/embeddings';
 import { agentKnowledgeScope } from '@/core/rag/knowledge-scope';
 import type { ToolManifest } from '@/core/types';
-import { scopedRepos } from '@/db/repositories/scoped';
-import { agentPrincipal } from '@/security/principal';
+import { reposFor } from '@/db/repositories/content';
 import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 
 export class DocumentsTool extends BaseTool {
@@ -61,9 +60,10 @@ export class DocumentsTool extends BaseTool {
         const category = args.category as string | undefined;
         const status = args.status as string | undefined;
 
-        // The user's own documents only, never another user's — even when the
-        // user is an admin (agentPrincipal is never an admin principal).
-        const repo = scopedRepos(agentPrincipal(context)).documents;
+        // The agent's scope: the user's own documents, never another user's —
+        // even when the user is an admin (agentPrincipal is never an admin
+        // principal) — or, in a space, the space's (§5.6).
+        const repo = reposFor(context).documents;
         let docs = category
           ? await repo.listOwnByCategory(category, limit)
           : await repo.listOwn(limit);
@@ -99,7 +99,7 @@ export class DocumentsTool extends BaseTool {
         id: { type: 'string', description: 'The document ID', required: true },
       }),
       async (args, context) => {
-        const doc = await scopedRepos(agentPrincipal(context)).documents.findById(args.id as string);
+        const doc = await reposFor(context).documents.findById(args.id as string);
         if (!doc) {
           return { error: 'Document not found.' };
         }
@@ -202,6 +202,7 @@ export class DocumentsTool extends BaseTool {
             mimeType: format === 'docx' ? DOCX_MIME : XLSX_MIME,
             content,
             summary: typeof args.summary === 'string' ? args.summary : undefined,
+            ...(context.space ? { store: (() => { const repos = reposFor(context); repos.can('write'); return repos.documents; })() } : {}),
           });
           return { ...saved, format };
         } catch (error) {

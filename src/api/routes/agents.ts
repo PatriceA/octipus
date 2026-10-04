@@ -1,4 +1,6 @@
 import { Elysia, t } from '@/api/http';
+import { type AgentScope, resolveAgentScope, withAgentUsage } from '@/core/agent/context';
+import { SpaceError, spaceErrorStatus } from '@/security/space-access';
 import { apiContext } from '@/api/context';
 import { getAgentManager } from '@/core/agent-manager';
 import { getRouter } from '@/core/router';
@@ -229,18 +231,33 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
   // Spawn a new agent
   .post(
     '/',
-    async ({ user, principal, body }) => {
+    async ({ user, principal, body, set }) => {
       if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
 
       const { sessionId, topic, model, systemPrompt, message } = body;
 
-      // Verify session ownership through the scoped repo — cross-tenant
-      // requests come back null and surface as "Session not found".
-      const session = await contentRepos(principal).sessions.findById(sessionId);
-      if (!session) {
+      // The body names the session, so the session decides the workspace —
+      // a member's private chat in a space included (the header does not
+      // make this route act on a space). Another user's session is "Session
+      // not found"; in a space, the agent runs only for a role that may run
+      // it (a viewer gets 403, a removed member 404, an archived space 409),
+      // through the one scope resolver every spawner uses (§5.6).
+      const session = await sessionRepository.findById(sessionId);
+      if (!session || session.userId !== user.id) {
+        set.status = 404;
         return { error: 'Session not found' };
+      }
+      let scope: AgentScope;
+      try {
+        scope = await resolveAgentScope({ session, userId: user.id, trigger: 'user' });
+      } catch (err) {
+        if (err instanceof SpaceError) {
+          set.status = spaceErrorStatus(err);
+          return { error: err.message, code: err.code };
+        }
+        throw err;
       }
 
       const agentManager = getAgentManager();
@@ -249,14 +266,17 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
         const agent = await agentManager.spawn({
           sessionId,
           userId: user.id,
+          ...scope,
           topic,
           model,
           systemPrompt,
+          // REST has no approval relay (`channelCanPrompt('api')`).
+          attended: false,
         });
 
         // Start the agent with initial message if provided
         if (message) {
-          agent.run(message).catch((error) => {
+          withAgentUsage(user.id, scope, () => agent.run(message)).catch((error) => {
             apiLogger.error({ error, agentId: agent.getContext().id }, 'Agent run failed');
           });
         }

@@ -54,7 +54,7 @@ import { estimateTokens } from '@/utils/token-count';
 
 beforeEach(() => { fixture.context = {}; fixture.rows = []; fixture.failSummary = false; fixture.failInsert = false; fixture.noSavings = false; fixture.clearInSummary = false; fixture.summaries = []; });
 function worker(turn: number, model = 'anthropic/claude-sonnet-4-6', root = true) {
-  return new AgentWorker({ id: `agent-${turn}`, sessionId: 'session', userId: 'user', model, role: 'general', topic: 'test',
+  return new AgentWorker({ space: null, trigger: 'user', funding: 'own',  id: `agent-${turn}`, sessionId: 'session', userId: 'user', model, role: 'general', topic: 'test',
     status: 'idle', createdAt: new Date(), updatedAt: new Date(), root, metadata: {} },
     { maxIterations: 3, maxTokenBudget: 1_000_000, contextWindowSize: 200_000, timeout: 30_000, toolOutputSoftCap: 100 });
 }

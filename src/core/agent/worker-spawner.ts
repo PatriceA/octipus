@@ -34,6 +34,10 @@ import type { TurnEvent } from './service';
 import { applyToolCap, isSmallModel } from './small-model';
 import { selectCoreToolIds } from './tool-intent';
 import type { AgentRole, WorkerResult } from './types';
+import { inheritScope } from './context';
+import { sessionAudience } from './audience';
+import { withoutPersonalOnlyTools } from '@/security/space-tools';
+import { can } from '@/security/space-access';
 
 // Per-section token budget for the injected AGENTS.md guide (Phase 5 item 2).
 // ≈ the existing 8000-char cap in loadAgentsMd, so a normal guide isn't trimmed
@@ -300,6 +304,13 @@ export async function spawnWorker(
       );
     }
   }
+  // A space worker: personal-only tools are withheld, and a commenter's
+  // children hold no file-changing tools either (§5.6). Applied here for the
+  // same reason as plan mode: the set is final only now.
+  if (context.space) {
+    roleTools = withoutPersonalOnlyTools(roleTools);
+    if (!can(context.space.role, 'run_agent_write')) roleTools = stripMutatingTools(roleTools);
+  }
 
   coreLogger.info({ role: agentRole, toolCount: roleTools.length, toolNames: roleTools.map(t => t.name) }, 'Worker tools resolved');
 
@@ -519,7 +530,11 @@ export async function spawnWorker(
   // Determine if this is a dev mode session
   const session = await sessionRepository.findById(context.sessionId);
   const sessionCtx = session?.context as import('@/db/schema/sessions').SessionContext | undefined;
-  const isDevMode = sessionCtx?.devMode === true && !!sessionCtx.projectPath;
+  // Personal memories and profile facts never reach a worker of a space,
+  // room or group session (D10, I7): the same audience the root turn reads.
+  const audience = await sessionAudience(session);
+  // No dev-mode project root in a space: its workers work in the space's files.
+  const isDevMode = !context.space && sessionCtx?.devMode === true && !!sessionCtx.projectPath;
   const devProjectPath = isDevMode ? sessionCtx!.projectPath! : undefined;
 
   // Inject the curated AGENTS.md guide and maintenance instruction.
@@ -567,7 +582,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   }
 
   // Inject user profile context + related profiles for people-related queries
-  if (context.userId) {
+  if (context.userId && !audience.personalProfileOff) {
     try {
       const { ProfileRepository } = await import('@/db/repositories/profile-repository');
       const profileRepo = new ProfileRepository();
@@ -670,7 +685,8 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     // calls). `.root` is a pure path computation — no filesystem side effects.
     const config = getConfig();
     const workspaceRoot = WorkspaceFS.forAgent(context).root;
-    const additionalPaths = config.workspace.additionalPaths?.map((p: string) => resolve(p)).filter(Boolean) || [];
+    // A space allows no extra paths (`WorkspaceFS.forSpace`).
+    const additionalPaths = context.space ? [] : config.workspace.additionalPaths?.map((p: string) => resolve(p)).filter(Boolean) || [];
     let workspaceHint = `\n\nWORKSPACE CONSTRAINT: You are working in the project at ${workspaceRoot}.`;
     if (additionalPaths.length > 0) {
       workspaceHint += ` Additional allowed paths: ${additionalPaths.join(', ')}.`;
@@ -690,8 +706,9 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   // Memory-redesign Phase D — surface role-scoped long-term memory.
   // Filter is OR(NULL, role) so this also picks up globally-scoped
   // facts. Auto-no-op when the memories table is empty or memory
-  // extraction has not been wired by the operator.
-  if (context.userId) {
+  // extraction has not been wired by the operator. Never in a space, room or
+  // group session (`sessionAudience`).
+  if (context.userId && !audience.personalMemoryOff) {
     try {
       const { retrieveForContext, renderMemoriesBlock } = await import('@/core/memory');
       const memRows = await retrieveForContext({
@@ -860,7 +877,8 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     attended: context.attended ?? false,
     sessionId: context.sessionId,
     userId: context.userId,
-    workspaceId: context.workspaceId ?? null,
+    // Workspace, space, trigger and funding: the parent's, unchanged.
+    ...inheritScope(context),
     topic: lane,
     model: finalModel,
     role: agentRole,
@@ -1291,7 +1309,7 @@ async function handleWorkerFailure(
     const retryWorker = await agentManager.spawn({
       sessionId: context.sessionId,
       userId: context.userId,
-      workspaceId: context.workspaceId ?? null,
+      ...inheritScope(context),
       topic: lane,
       model,
       role: agentRole,

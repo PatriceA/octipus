@@ -27,7 +27,7 @@ class WriteTool extends BaseTool {
 }
 const writer = new WriteTool();
 function context(attended = false): AgentContext {
-  return { id: randomUUID(), sessionId, userId, workspaceId: null, attended,
+  return { space: null, trigger: 'user', funding: 'own',  id: randomUUID(), sessionId, userId, workspaceId: null, attended,
     role: 'coding', model: 'fixture', topic: 'coding', status: 'running',
     createdAt: new Date(), updatedAt: new Date(), metadata: {} };
 }

@@ -28,7 +28,7 @@ class MemoryJournal extends ToolActionRepository {
     }
   }
 }
-const ctx = (): AgentContext => ({ id: 'worker', userId: 'u', sessionId: 's', status: 'running', root: true,
+const ctx = (): AgentContext => ({ space: null, trigger: 'user', funding: 'own',  id: 'worker', userId: 'u', sessionId: 's', status: 'running', root: true,
   attended: true, role: 'general', model: 'fake', topic: '', createdAt: new Date(), updatedAt: new Date(), metadata: { pipelineId: 'p', nodeKey: 'step' } });
 let repo: MemoryJournal;
 let recovery: ActionRecovery;

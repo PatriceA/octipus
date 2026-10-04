@@ -16,7 +16,7 @@ import type { AgentContext, ToolManifest } from './types';
 
 const userId = randomUUID();
 let directory: string;
-const context = (): AgentContext => ({ id: randomUUID(), userId, sessionId: randomUUID(), attended: true,
+const context = (): AgentContext => ({ space: null, trigger: 'user', funding: 'own',  id: randomUUID(), userId, sessionId: randomUUID(), attended: true,
   root: true, role: 'general', model: 'fixture', topic: '', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} });
 beforeAll(async () => {
   directory = mkdtempSync(join(tmpdir(), 'octipus-action-recovery-'));

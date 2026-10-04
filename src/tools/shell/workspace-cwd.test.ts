@@ -18,7 +18,7 @@ const USER = '11111111-2222-3333-4444-555555555555';
 
 function agentCtx(metadata: Record<string, unknown> = {}): AgentContext {
   const now = new Date();
-  return {
+  return { space: null, trigger: 'user', funding: 'own', 
     id: 'a1', sessionId: 's1', userId: USER, workspaceId: null, topic: 'general', model: '', role: 'general',
     status: 'running', createdAt: now, updatedAt: now, metadata,
   };
