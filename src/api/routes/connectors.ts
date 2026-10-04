@@ -101,7 +101,7 @@ export const connectorRoutes = new Elysia({ prefix: '/connectors' })
     }
   }, { detail: { tags: ['connectors'] } })
 
-  .post('/cocoindex/install', async ({ user, body, set }) => {
+  .post('/cocoindex/install', async ({ user, principal, body, set }) => {
     if (!user) {
       set.status = 401;
       return { error: 'Not authenticated' };
@@ -111,7 +111,7 @@ export const connectorRoutes = new Elysia({ prefix: '/connectors' })
       return { error: 'Admin access required' };
     }
     try {
-      const path = await resolveCocoIndexWorkspacePath(body.workspacePath, user.id);
+      const path = await resolveCocoIndexWorkspacePath(body.workspacePath, principal);
       const status = await getCocoIndexService().install(path, body.embeddingModel, body.embeddingSource);
       set.status = 202;
       return status;

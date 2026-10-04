@@ -18,6 +18,7 @@ const AUTH = JSON.stringify({ type: 'auth', method: 'session_token', credentials
 function makeHub(): GatewayHub {
   const hub = new GatewayHub();
   hub.setSessionValidator(async (token) => (token === 'good' ? { userId: 'u1', username: 'u', isAdmin: false } : null));
+  hub.setWorkspaceResolver(async () => 'ws-u1');
   return hub;
 }
 

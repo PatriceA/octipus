@@ -2,7 +2,7 @@ import { beforeEach, expect, test, vi } from 'vitest';
 import { AgentService, type TurnResult } from './service';
 const fixture = vi.hoisted(() => ({ command: vi.fn(), userId: 'user' }));
 vi.mock('@/core/commands', () => ({ handleCommand: fixture.command }));
-vi.mock('./session-resolver', () => ({ resolveSession: async (id: string) => id }));
+vi.mock('./session-resolver', () => ({ resolveSession: async (id: string) => id, turnWorkspaceId: async () => 'workspace' }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: { findById: async (id: string) => ({ id, userId: fixture.userId, context: {} }) } }));
 beforeEach(() => { fixture.userId = 'user'; fixture.command.mockReset().mockResolvedValue('Control handled'); });
 

@@ -81,6 +81,39 @@ the proxy's address, or every client shares the proxy's address for rate
 limits. Extensions that registered commands with `minTrustLevel: 'local'`
 now use `adminOnly: true`.
 
+### Workspaces become real (coworking S0c)
+
+- **A turn runs in its session's workspace.** The root agent, role heartbeats
+  and gateway `chat.send` used the user's default workspace whatever session
+  they ran in, and went on without one when it could not be resolved. A turn
+  now uses `session.workspaceId` (the default only when the session has none),
+  checks the user owns it, and fails rather than run unscoped. Tasks,
+  artifacts, files and memories a turn produces land in that workspace.
+- **The TUI's workspace is honoured.** The gateway reads `?workspace=` (id or
+  slug) at sign-in and stores it on the connection; a name that matches none
+  of the user's workspaces fails the sign-in. `chat.send` accepts a
+  `workspaceId`, and new sessions are created in it, else in the connection's
+  workspace. An existing session keeps its own.
+- **Files per workspace.** Each workspace has its own file root,
+  `users/<id>/workspaces/<workspace id>/files`; the user's default workspace
+  keeps the `default` directory. Making another workspace the default swaps
+  the two directories so files stay with their workspace. The file browser,
+  the Changes tab, `/changes`, uploads, the repo registry and the shell all
+  follow the session's or the request's workspace. A user's agent never
+  resolves to the flat `workspace.rootPath`: an agent without a real user is
+  refused, and a system job names its root.
+- **Shell `cwd` is checked.** A named working directory must lie inside the
+  workspace root, an allowed extra path or the dev-mode project; a relative
+  one is taken from the workspace (or project). This keeps the work where the
+  evidence gate and Changes tab look; it is not a sandbox.
+
+**Behaviour changes for users of several workspaces:** files created from a
+non-default workspace before this release sit in the `default` directory and
+stay there (nothing is moved); new files from that workspace go to its own
+directory. Memories now follow the session's workspace: facts learned in a
+non-default workspace, which were filed under the default one, are no longer
+mixed into it. Existing memories are not migrated.
+
 ## v0.6.0 — Shared work, budgets, and stronger review (2026-10-01)
 
 Octipus 0.6.0 brings a shared task board for people and role agents, dollar

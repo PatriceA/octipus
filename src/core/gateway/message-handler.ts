@@ -1,6 +1,6 @@
 import { decodeChatAttachment, storeChatUploads } from '@/core/chat-uploads';
 import { WorkspaceFS } from '@/security/workspace-fs';
-import { resolveSession } from '@/core/agent/session-resolver';
+import { resolveSession, turnWorkspaceId } from '@/core/agent/session-resolver';
 import { isSessionControlMessage } from '@/core/session-controls';
 import { coreLogger } from '@/utils/logger';
 import { getCommandRegistry } from './commands';
@@ -154,6 +154,12 @@ async function handleChatSend(
       return;
     }
 
+    // A new session is created in the send's workspace: the one the message
+    // names, else the connection's (the TUI's `?workspace=`, resolved at
+    // auth). Either must be the user's own (`turnWorkspaceId` checks); an
+    // existing session keeps the workspace it was created in.
+    const sendWorkspace = message.workspaceId ?? context.workspaceId;
+
     // Set project context on the session if provided (enables dev mode).
     //
     // The TUI generates a fresh sessionId per launch — so when the very
@@ -207,24 +213,14 @@ async function handleChatSend(
         }
       } else {
         // Pre-create with dev-mode context baked in. resolveSession will
-        // see the row exists and skip its own create. Also tag with the
-        // user's default workspace_id so the session shows up only in
-        // that workspace's session list — TUI sessions were previously
-        // created with workspace_id=NULL which made them visible from
-        // every workspace via the legacy "NULL = visible everywhere"
-        // fallback in scopedRepos.workspaceFilter.
-        let workspaceId: string | null = null;
-        try {
-          const { getOrgWorkspaceManager } = await import('@/security/orgs');
-          const def = await getOrgWorkspaceManager().ensureDefaultWorkspace(userId);
-          workspaceId = def?.id ?? null;
-        } catch (err) {
-          coreLogger.debug({ err, userId }, 'No default workspace available for session tagging');
-        }
+        // see the row exists and skip its own create. Created in the
+        // send's workspace so the session shows up only in that
+        // workspace's session list.
+        const workspaceId = await turnWorkspaceId(userId, sendWorkspace);
         await sessionRepository.create({
           id: message.sessionId,
           userId,
-          workspaceId: workspaceId ?? undefined,
+          workspaceId,
           channelType: context.clientType,
           channelId: message.sessionId,
           title: `${context.clientType} conversation`,
@@ -239,10 +235,11 @@ async function handleChatSend(
       }
     }
 
+    await resolveSession(message.sessionId, userId, context.clientType, sendWorkspace);
+
     if (message.attachments?.length) {
       if (message.attachments.length + (message.fileRefs?.length ?? 0) > 10) throw new Error('Attach at most 10 files per message.');
       const { sessionRepository } = await import('@/db/repositories/session-repository');
-      await resolveSession(message.sessionId, userId, context.clientType);
       const session = await sessionRepository.findById(message.sessionId);
       if (!session || session.userId !== userId) throw new Error('Session not found');
       const uploaded = await storeChatUploads(WorkspaceFS.forSession(session), message.attachments.map(decodeChatAttachment));
@@ -433,6 +430,7 @@ async function handleCommand(
   const result = await registry.execute(input, {
     userId: context.userId,
     sessionId: context.sessionId,
+    ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
     clientType: context.clientType,
     trustLevel: context.trustLevel,
     metadata: context.metadata,

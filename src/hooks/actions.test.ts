@@ -16,6 +16,8 @@ vi.mock('@/core/agent', () => ({
 }));
 vi.mock('@/core/agent/roles', () => ({ ROLE_CONFIGS: { coding: {}, general: {} } }));
 vi.mock('@/security/orgs', () => ({ getOrgWorkspaceManager: () => ({ ensureDefaultWorkspace: async () => ({ id: 'ws-1' }) }) }));
+// The hook session does not exist yet: the heartbeat runs in the default workspace.
+vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: { findById: async () => null } }));
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

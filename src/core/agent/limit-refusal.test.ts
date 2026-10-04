@@ -11,7 +11,7 @@ import { SpendBudgetExceededError } from '@/security/spend-budget-error';
 
 const fixture = vi.hoisted(() => ({ root: vi.fn(), persisted: [] as any[], created: [] as any[], context: {} as Record<string, unknown> }));
 vi.mock('@/models/model-registry', () => ({ getModelRegistry: () => ({ getDefaultModel: async () => ({ modelId: 'test-model' }) }) }));
-vi.mock('./session-resolver', () => ({ resolveSession: async (id: string) => (id === 'new' ? 'resolved-session' : id) }));
+vi.mock('./session-resolver', () => ({ resolveSession: async (id: string) => (id === 'new' ? 'resolved-session' : id), turnWorkspaceId: async () => 'workspace' }));
 vi.mock('@/security/orgs', () => ({ getOrgWorkspaceManager: () => ({ ensureDefaultWorkspace: async () => ({ id: 'workspace' }) }) }));
 vi.mock('@/core/commands', () => ({ handleCommand: async () => null }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: {

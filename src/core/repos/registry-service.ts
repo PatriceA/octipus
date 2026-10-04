@@ -3,6 +3,7 @@ import { existsSync, readFileSync, realpathSync, lstatSync } from 'fs';
 import { join, resolve } from 'path';
 import { getConfig } from '@/config';
 import { repoRegistryRepository } from '@/db/repositories/repo-registry-repository';
+import { agentPrincipal } from '@/security/principal';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
 import { buildRepoEdges, findAmbiguousPackages, type RepoEdge, type RepoGraphNode } from './graph';
@@ -15,17 +16,27 @@ import { indexRepoSymbols } from './symbols';
  * scan/scope logic lives in one place. See `.octipus/multi-repo-design.md`.
  */
 
-/** The workspace roots a user's repos can live under. */
-export function userScanRoots(userId: string): string[] {
-  const fs = WorkspaceFS.forAgent({ userId });
+/**
+ * Whose repos, in which workspace: the user, and the workspace whose file
+ * root is scanned (`null` is the user's default workspace).
+ */
+export interface RepoOwner {
+  userId: string;
+  workspaceId: string | null;
+}
+
+/** The workspace roots a user's repos in one workspace can live under. */
+export function userScanRoots(owner: RepoOwner): string[] {
+  const fs = WorkspaceFS.forPrincipal(agentPrincipal(owner));
   const additional = getConfig().workspace.additionalPaths?.map((p) => resolve(p)) ?? [];
   return [fs.root, ...additional];
 }
 
-/** Scan every repo under the user's workspace roots and upsert the registry. */
-export async function scanUserRepos(userId: string, workspaceId?: string | null): Promise<WorkspaceRepo[]> {
-  WorkspaceFS.forAgent({ userId }).ensureRootSync();
-  const roots = userScanRoots(userId);
+/** Scan every repo under the workspace's roots and upsert the registry. */
+export async function scanUserRepos(owner: RepoOwner): Promise<WorkspaceRepo[]> {
+  const { userId, workspaceId } = owner;
+  WorkspaceFS.forPrincipal(agentPrincipal(owner)).ensureRootSync();
+  const roots = userScanRoots(owner);
   const scanned = scanRoots(roots);
   for (const r of scanned) {
     // The symbol index is the slow part of a scan (tree-sitter over every
@@ -60,7 +71,7 @@ export async function scanUserRepos(userId: string, workspaceId?: string | null)
     );
   }
   coreLogger.info({ userId, scanned: scanned.length, roots: roots.length }, 'repo registry scan complete');
-  return (await loadRepoGraph(userId)).repos;
+  return (await loadRepoGraph(owner)).repos;
 }
 
 /**
@@ -165,12 +176,13 @@ export function repoToGraphNode(repo: WorkspaceRepo): RepoGraphNode {
   };
 }
 
-/** Load the user's registry as graph nodes + derived edges. */
-export async function loadRepoGraph(userId: string): Promise<{ repos: WorkspaceRepo[]; nodes: RepoGraphNode[]; edges: RepoEdge[]; ambiguousPackages: string[] }> {
-  // Stored snapshots do not grant filesystem access. Hide removed repositories
-  // and roots no longer exposed by configuration before returning maps/symbols.
-  const discoverable = new Set(findRepoRoots(userScanRoots(userId)));
-  const stored = await repoRegistryRepository.listByUser(userId);
+/** Load the user's registry, as seen from one workspace, as graph nodes + derived edges. */
+export async function loadRepoGraph(owner: RepoOwner): Promise<{ repos: WorkspaceRepo[]; nodes: RepoGraphNode[]; edges: RepoEdge[]; ambiguousPackages: string[] }> {
+  // Stored snapshots do not grant filesystem access. Hide removed repositories,
+  // roots no longer exposed by configuration and repos under another
+  // workspace's root before returning maps/symbols.
+  const discoverable = new Set(findRepoRoots(userScanRoots(owner)));
+  const stored = await repoRegistryRepository.listByUser(owner.userId);
   const repos = stored.filter(repo => {
     try { return discoverable.has(realpathSync(repo.rootPath)); }
     catch { return false; }

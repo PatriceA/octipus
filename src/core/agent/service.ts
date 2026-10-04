@@ -30,7 +30,7 @@ import { guardOutput, stripSwarmScaffolding } from './output-guard';
 import { saveProgressMessage } from './progress-message';
 import { filterPII } from './pii-filter';
 import { maybeCompactSession } from './session-compaction';
-import { resolveSession } from './session-resolver';
+import { resolveSession, turnWorkspaceId } from './session-resolver';
 import { appendSources, type MessageClassification, type ResponseMetadata } from './types';
 import { spawnWorker } from './worker-spawner';
 
@@ -298,19 +298,14 @@ export class AgentService {
       const resolvedSessionId = await resolveSession(sessionId, userId, channel || 'api');
       turnSessionId = resolvedSessionId;
 
-      // Resolve the principal's default workspace once and thread it
-      // through every spawn / memory call below. Memory-redesign Phase B
-      // needs the workspace_id on task_state rows and memories rows; the
-      // agent worker carries it via `AgentContext.workspaceId` so the
-      // recorder/extractor can read it without re-resolving per turn.
-      let workspaceId: string | null = null;
-      try {
-        const { getOrgWorkspaceManager } = await import('@/security/orgs');
-        const ws = await getOrgWorkspaceManager().ensureDefaultWorkspace(userId);
-        workspaceId = ws.id;
-      } catch (err) {
-        coreLogger.debug({ err, userId }, 'workspace resolve failed — proceeding with null');
-      }
+      // Auto-title sessions with generic names
+      const session = await sessionRepository.findById(resolvedSessionId);
+      // The turn runs in the session's workspace (the user's default when the
+      // session has none), resolved once and threaded through every spawn,
+      // task, artifact, file and memory call below via
+      // `AgentContext.workspaceId`. A workspace the user does not own, or a
+      // failed resolution, fails the turn: it never runs unscoped.
+      const workspaceId = await turnWorkspaceId(userId, session?.workspaceId);
 
       trajectory = new TrajectoryRecorder({
         rootSessionId: resolvedSessionId,
@@ -319,8 +314,6 @@ export class AgentService {
         channel,
       });
 
-      // Auto-title sessions with generic names
-      const session = await sessionRepository.findById(resolvedSessionId);
       // A group-channel thread: the reply is posted where every member can
       // read it, so the requester's personal memories are neither injected
       // nor learned from (docs/plans/group-chat-bot.md §4).

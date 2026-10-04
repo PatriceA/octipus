@@ -6,14 +6,15 @@ import { join, resolve } from 'path';
 import { apiContext } from '@/api/context';
 import { getConfig } from '@/config';
 import { dependenciesOf, dependentsOf } from '@/core/repos/graph';
-import { loadRepoGraph, repoToGraphNode, scanUserRepos, toRepoSummary } from '@/core/repos/registry-service';
+import { loadRepoGraph, type RepoOwner, repoToGraphNode, scanUserRepos, toRepoSummary } from '@/core/repos/registry-service';
 import { repoRegistryRepository } from '@/db/repositories/repo-registry-repository';
+import type { Principal } from '@/security/principal';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
 
 /**
- * The per-user workspace files root for `userId` — the SAME root the
- * filesystem tool sandboxes an agent to (`WorkspaceFS.forAgent`). REST
+ * The files root of the request's workspace — the SAME root the filesystem
+ * tool sandboxes an agent of that workspace to (`WorkspaceFS.forAgent`). REST
  * routes that surface or mutate a user's project files must anchor here, not
  * on the flat `config.workspace.rootPath`: under multiuser those differ, so a
  * repo created under the flat root is invisible to (and rejected by) the
@@ -23,10 +24,15 @@ import { coreLogger } from '@/utils/logger';
  * `ensureRootSync` materializes the dir so a first-time user gets an empty
  * list instead of ENOENT.
  */
-function userWorkspaceRoot(userId: string): string {
-  const fs = WorkspaceFS.forAgent({ userId });
+function userWorkspaceRoot(principal: Principal): string {
+  const fs = WorkspaceFS.forPrincipal(principal);
   fs.ensureRootSync();
   return fs.root;
+}
+
+/** The request's user and workspace, for the repo registry. */
+function repoOwner(userId: string, principal: Principal): RepoOwner {
+  return { userId, workspaceId: principal.workspaceId ?? null };
 }
 
 // System directories that must never be added as workspace paths
@@ -50,7 +56,7 @@ function isPathDenied(resolvedPath: string): boolean {
 
 export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
   .use(apiContext)
-  .get('/', async ({ user, set }) => {
+  .get('/', async ({ user, principal, set }) => {
     if (!user) {
       set.status = 401;
       return { error: 'Authentication required' };
@@ -60,7 +66,7 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
       // Per-user nested root — the one the agent's filesystem sandbox uses —
       // so "Projects are subfolders of your workspace root" matches what the
       // agent can actually read/write.
-      rootPath: userWorkspaceRoot(user.id),
+      rootPath: userWorkspaceRoot(principal),
       additionalPaths: config.workspace.additionalPaths.map(p => resolve(p)),
     };
   }, { detail: { tags: ['workspace'] } })
@@ -173,12 +179,12 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
     detail: { tags: ['workspace'] },
   })
 
-  .get('/repositories', async ({ user, set }) => {
+  .get('/repositories', async ({ user, principal, set }) => {
     if (!user) {
       set.status = 401;
       return { error: 'Authentication required' };
     }
-    const rootPath = userWorkspaceRoot(user.id);
+    const rootPath = userWorkspaceRoot(principal);
 
     if (!existsSync(rootPath)) {
       return { repositories: [] };
@@ -204,7 +210,7 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
     return { repositories };
   }, { detail: { tags: ['workspace'] } })
 
-  .post('/repositories', async ({ user, body, set }) => {
+  .post('/repositories', async ({ user, principal, body, set }) => {
     if (!user) {
       set.status = 401;
       return { error: 'Authentication required' };
@@ -214,7 +220,7 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
     // user's sandbox (and name-validated below), so it no longer requires
     // admin — every authenticated user may scaffold repos in their own space.
     const config = getConfig();
-    const rootPath = userWorkspaceRoot(user.id);
+    const rootPath = userWorkspaceRoot(principal);
 
     // Resolve the parent directory the repo lands in. Defaults to the
     // workspace root; an explicit `parentPath` lets the user choose where the
@@ -307,12 +313,12 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
 
   // ── Repo registry (multi-repo) — see .octipus/multi-repo-design.md ──
 
-  .get('/repos', async ({ user, set }) => {
+  .get('/repos', async ({ user, principal, set }) => {
     if (!user) {
       set.status = 401;
       return { error: 'Authentication required' };
     }
-    const { repos, edges, ambiguousPackages } = await loadRepoGraph(user.id);
+    const { repos, edges, ambiguousPackages } = await loadRepoGraph(repoOwner(user.id, principal));
     return {
       repos: repos.map((r) => ({ ...toRepoSummary(r, edges), lastScannedAt: r.lastScannedAt })),
       ambiguousPackages,
@@ -320,21 +326,21 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
     };
   }, { detail: { tags: ['workspace'] } })
 
-  .post('/repos/scan', async ({ user, set }) => {
+  .post('/repos/scan', async ({ user, principal, set }) => {
     if (!user) {
       set.status = 401;
       return { error: 'Authentication required' };
     }
-    const repos = await scanUserRepos(user.id);
+    const repos = await scanUserRepos(repoOwner(user.id, principal));
     return { scanned: repos.length, repos: repos.map((r) => ({ id: r.id, name: r.name, kind: r.kind })) };
   }, { detail: { tags: ['workspace'] } })
 
-  .get('/repos/:id', async ({ user, params, set }) => {
+  .get('/repos/:id', async ({ user, principal, params, set }) => {
     if (!user) {
       set.status = 401;
       return { error: 'Authentication required' };
     }
-    const { repos, edges, ambiguousPackages } = await loadRepoGraph(user.id);
+    const { repos, edges, ambiguousPackages } = await loadRepoGraph(repoOwner(user.id, principal));
     const repo = repos.find(candidate => candidate.id === params.id);
     if (!repo) {
       set.status = 404;

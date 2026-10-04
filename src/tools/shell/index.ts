@@ -1,10 +1,9 @@
 import { getExecutionSignal } from '@/core/execution-scope';
 import { isToolNotExecutedResult, ToolNotExecutedError } from '@/core/tool-execution-error';
-import { resolve } from 'path';
-import { getConfig } from '@/config';
-import { WorkspaceFS } from '@/security/workspace-fs';
+import { isAbsolute, resolve } from 'path';
+import { WorkspaceFS, WorkspaceFsError } from '@/security/workspace-fs';
 import { isSensitiveEnvName } from '@/security/child-env';
-import type { ToolManifest } from '@/core/types';
+import type { AgentContext, ToolManifest } from '@/core/types';
 import { toolLogger } from '@/utils/logger';
 import { BaseTool, createParameterSchema } from '../base-tool';
 import { interpretExit } from './exit-code-semantics';
@@ -71,8 +70,7 @@ export class ShellTool extends BaseTool {
           throw new ToolNotExecutedError('shell', 'Missing required parameter "command". The tool call arguments may have been truncated or malformed.');
         }
         const command = args.command;
-        const projectPath = (context?.metadata as Record<string, unknown>)?.projectPath as string | undefined;
-        const cwd = (args.cwd as string) || projectPath || this.getWorkspaceRoot(context);
+        const cwd = this.resolveCwd(args.cwd, context);
         const timeout = (args.timeout as number) || DEFAULT_TIMEOUT;
         const env = args.env as Record<string, string> | undefined;
         const unsafe = args.useShell === true;
@@ -148,7 +146,7 @@ export class ShellTool extends BaseTool {
           throw new Error('Missing required parameter "command". The tool call arguments may have been truncated or malformed.');
         }
         const command = args.command;
-        const cwd = (args.cwd as string) || this.getWorkspaceRoot(context);
+        const cwd = this.resolveCwd(args.cwd, context);
         const env = args.env as Record<string, string> | undefined;
         const unsafe = args.useShell === true;
         const allowNetwork = args.network === true;
@@ -214,11 +212,12 @@ export class ShellTool extends BaseTool {
   }
 
   /**
-   * The directory a command runs in when the caller names none.
+   * The directory a command runs in when the caller names none: the
+   * dev-mode project when the agent has one, else its workspace root.
    *
    * MUST be the same root the filesystem sandbox enforces —
-   * `WorkspaceFS.forAgent` nests every real user under
-   * `<rootPath>/users/<uid>/workspaces/default/files`, while the flat
+   * `WorkspaceFS.forAgent` nests every user's workspace under
+   * `<rootPath>/users/<uid>/workspaces/<workspace>/files`, while the flat
    * `config.workspace.rootPath` is two levels above it. Defaulting to the flat
    * path meant `shell__run` started in a different directory than every
    * `filesystem__*` call, so a relative `python3 test_ipv4.py` could not find
@@ -235,15 +234,42 @@ export class ShellTool extends BaseTool {
    * `.root` is a pure path computation with no filesystem side effects. Same
    * fix, same reason as the workspace hint in `worker-spawner.ts`.
    */
-  private getWorkspaceRoot(context?: { userId?: string }): string {
+  private getWorkspaceRoot(context: AgentContext): string {
+    return this.projectPath(context) ?? WorkspaceFS.forAgent(context).root;
+  }
+
+  private projectPath(context: AgentContext): string | undefined {
+    const projectPath = (context.metadata as Record<string, unknown> | undefined)?.projectPath;
+    return typeof projectPath === 'string' && projectPath ? resolve(projectPath) : undefined;
+  }
+
+  /**
+   * The directory a command runs in. A named `cwd` must lie inside the
+   * agent's workspace root, an allowed extra (`workspace.additionalPaths`,
+   * the transient-file prefix) or the dev-mode `projectPath`; a relative one
+   * is taken from the project, else the workspace root. This keeps commands
+   * where the agent's files are, so the evidence gate and the Changes tab see
+   * the work — correctness, not a sandbox: a command can still `cd` wherever
+   * the process may.
+   */
+  private resolveCwd(requested: unknown, context: AgentContext | undefined): string {
+    if (!context) {
+      throw new ToolNotExecutedError('shell', 'shell commands run for an agent: no agent context was given');
+    }
+    const base = this.getWorkspaceRoot(context);
+    if (requested === undefined || requested === null || requested === '') return base;
+    if (typeof requested !== 'string') {
+      throw new ToolNotExecutedError('shell', 'cwd must be a string');
+    }
+    const projectPath = this.projectPath(context);
+    const fs = WorkspaceFS.forAgent(context, { extraAllowedPrefixes: projectPath ? [projectPath] : [] });
     try {
-      return WorkspaceFS.forAgent({ userId: context?.userId }).root;
-    } catch {
-      try {
-        return resolve(getConfig().workspace.rootPath);
-      } catch {
-        return process.cwd();
+      return fs.resolve(isAbsolute(requested) ? requested : resolve(base, requested));
+    } catch (err) {
+      if (err instanceof WorkspaceFsError) {
+        throw new ToolNotExecutedError('shell', `cwd '${requested}' is outside the workspace; run the command from the workspace or the project`);
       }
+      throw err;
     }
   }
 

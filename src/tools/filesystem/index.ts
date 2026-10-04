@@ -665,11 +665,10 @@ export class FilesystemTool extends BaseTool {
    * Build the path sandbox for this call — the single source of truth for
    * BOTH resolution and validation.
    *
-   * `WorkspaceFS.forAgent(context)` picks the layout by userId:
-   *   - a real user → per-user nested root under
-   *     `<workspace.rootPath>/users/{userId}/workspaces/default/files`.
-   *   - system jobs (`userId === 'system'`/absent) → flat root at
-   *     `config.workspace.rootPath`.
+   * `WorkspaceFS.forAgent(context)` roots it in the agent's workspace:
+   * `<workspace.rootPath>/users/{userId}/workspaces/{workspace}/files`
+   * (`default` for the user's default workspace). An agent without a real
+   * user has no workspace and is refused.
    *
    * `additionalPaths` and the legacy `/tmp/assistant-` prefix are allowed
    * extras; both modes block traversal, absolute-path escape, and symlink
@@ -686,7 +685,10 @@ export class FilesystemTool extends BaseTool {
    * drifting again.
    */
   private workspaceFor(context?: AgentContext): WorkspaceFS {
-    const projectPath = (context?.metadata as Record<string, unknown> | undefined)
+    if (!context) {
+      throw new ToolNotExecutedError(this.id, 'filesystem tools work for an agent: no agent context was given');
+    }
+    const projectPath = (context.metadata as Record<string, unknown> | undefined)
       ?.projectPath as string | undefined;
     const fs = WorkspaceFS.forAgent(context, {
       extraAllowedPrefixes: projectPath ? [resolve(projectPath)] : [],

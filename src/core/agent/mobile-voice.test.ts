@@ -2,7 +2,7 @@ import { beforeEach, expect, test, vi } from 'vitest';
 const fixture = vi.hoisted(() => ({ direct: vi.fn(), root: vi.fn(), messages: [] as any[] }));
 vi.mock('@/models/model-registry', () => ({ getModelRegistry: () => ({ getDefaultModel: async () => ({ modelId: 'test-model' }) }) }));
 vi.mock('./model-selector', () => ({ ModelSelector: class { async selectForWorker() { return { model: 'voice-model' }; } } }));
-vi.mock('./session-resolver', () => ({ resolveSession: async (id: string) => id }));
+vi.mock('./session-resolver', () => ({ resolveSession: async (id: string) => id, turnWorkspaceId: async () => 'workspace' }));
 vi.mock('@/security/orgs', () => ({ getOrgWorkspaceManager: () => ({ ensureDefaultWorkspace: async () => ({ id: 'workspace' }) }) }));
 vi.mock('@/core/commands', () => ({ handleCommand: async () => null }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: {

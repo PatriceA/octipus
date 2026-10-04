@@ -999,7 +999,7 @@ export class ToolExecutor {
       const spilled = raw
         ? await spillToolOutput(raw, {
             toolCallId: result.toolCallId,
-            userId: this.context.userId,
+            context: this.context,
             threshold: DEFAULT_MAX_LENGTH,
           })
         : null;

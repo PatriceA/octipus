@@ -21,6 +21,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { restrictToOwnerAsync } from '@/utils/file-acl';
 import { dirname } from 'node:path';
 import { WorkspaceFS } from '@/security/workspace-fs';
+import type { AgentContext } from '@/core/types';
 import { DEFAULT_MAX_LENGTH } from '@/utils/sanitize';
 import { coreLogger } from '@/utils/logger';
 
@@ -83,7 +84,8 @@ export async function spillToolOutput(
   opts: {
     toolCallId: string;
     toolName?: string;
-    userId?: string;
+    /** The agent whose tool produced the output: the file goes to its workspace. */
+    context?: AgentContext;
     threshold: number;
     /** Injected in tests; production resolves the agent's own workspace. */
     fs?: WorkspaceFS;
@@ -97,7 +99,8 @@ export async function spillToolOutput(
   // workspace grows uncomfortable, keyed on age like the other reapers.
   const relPath = `${SPILL_DIR}/${safeId(opts.toolCallId)}.txt`;
   try {
-    const fs = opts.fs ?? WorkspaceFS.forAgent({ userId: opts.userId });
+    const fs = opts.fs ?? (opts.context ? WorkspaceFS.forAgent(opts.context) : undefined);
+    if (!fs) throw new Error('no agent context to save the output for');
     // `resolve` is the sandbox boundary: it rejects traversal and refuses to
     // follow a symlink out of the workspace, so a planted link cannot redirect
     // this write.

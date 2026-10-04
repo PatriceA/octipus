@@ -53,6 +53,7 @@ import {
 import { sessions } from '@/db/schema/sessions';
 import { users } from '@/db/schema/users';
 import { vault } from '@/db/schema/vault';
+import { forgetWorkspaceRow, noteWorkspaceRows, swapDefaultWorkspaceFiles } from '@/security/workspace-fs';
 import { securityLogger } from '@/utils/logger';
 
 /**
@@ -339,6 +340,7 @@ export class OrgWorkspaceManager {
       isDefault: input.isDefault ?? false,
     };
     const [ws] = await this.db.insert(workspaces).values(values).returning();
+    noteWorkspaceRows([ws]);
     return ws;
   }
 
@@ -355,7 +357,10 @@ export class OrgWorkspaceManager {
       .from(workspaces)
       .where(and(eq(workspaces.userId, userId), eq(workspaces.isDefault, true)))
       .limit(1);
-    if (existing) return existing;
+    if (existing) {
+      noteWorkspaceRows([existing]);
+      return existing;
+    }
 
     // No default yet — create one. Use the canonical slug `default`
     // unless the user already has a workspace by that slug, in which
@@ -371,6 +376,7 @@ export class OrgWorkspaceManager {
         .set({ isDefault: true, updatedAt: new Date() })
         .where(eq(workspaces.id, bySlug.id))
         .returning();
+      noteWorkspaceRows([updated]);
       return updated;
     }
     return this.createWorkspace(userId, {
@@ -391,6 +397,7 @@ export class OrgWorkspaceManager {
       .from(workspaces)
       .where(and(eq(workspaces.id, id), eq(workspaces.userId, userId)))
       .limit(1);
+    if (row) noteWorkspaceRows([row]);
     return row ?? null;
   }
 
@@ -400,14 +407,30 @@ export class OrgWorkspaceManager {
       .from(workspaces)
       .where(and(eq(workspaces.userId, userId), eq(workspaces.slug, slug)))
       .limit(1);
+    if (row) noteWorkspaceRows([row]);
     return row ?? null;
   }
 
   async listOwn(userId: string): Promise<Workspace[]> {
-    return this.db
+    const rows = await this.db
       .select()
       .from(workspaces)
       .where(eq(workspaces.userId, userId));
+    noteWorkspaceRows(rows);
+    return rows;
+  }
+
+  /**
+   * Load every workspace's owner and default flag into the file-root map
+   * (`workspace-fs.ts`) at boot, so a session's files resolve before any
+   * request has looked its workspace up.
+   */
+  async loadFileRoots(): Promise<number> {
+    const rows = await this.db
+      .select({ id: workspaces.id, userId: workspaces.userId, isDefault: workspaces.isDefault })
+      .from(workspaces);
+    noteWorkspaceRows(rows);
+    return rows.length;
   }
 
   /**
@@ -444,6 +467,7 @@ export class OrgWorkspaceManager {
       .delete(workspaces)
       .where(and(eq(workspaces.id, id), eq(workspaces.userId, userId)))
       .returning({ id: workspaces.id });
+    if (result.length > 0) forgetWorkspaceRow(id);
     return result.length > 0;
   }
 
@@ -457,18 +481,35 @@ export class OrgWorkspaceManager {
     if (!target) return null;
     if (target.isDefault) return target;
 
-    return this.db.transaction(async (tx) => {
-      await tx
-        .update(workspaces)
-        .set({ isDefault: false, updatedAt: new Date() })
-        .where(and(eq(workspaces.userId, userId), eq(workspaces.isDefault, true)));
-      const [updated] = await tx
-        .update(workspaces)
-        .set({ isDefault: true, updatedAt: new Date() })
-        .where(and(eq(workspaces.id, id), eq(workspaces.userId, userId)))
-        .returning();
-      return updated;
-    });
+    // The default workspace's files live under the `default` directory
+    // (workspace-fs.ts). Swap the directories first so each workspace keeps
+    // its files, and swap them back when the database update fails.
+    const [previous] = await this.db
+      .select({ id: workspaces.id })
+      .from(workspaces)
+      .where(and(eq(workspaces.userId, userId), eq(workspaces.isDefault, true)))
+      .limit(1);
+    swapDefaultWorkspaceFiles(userId, previous?.id ?? null, id);
+    let updated: Workspace;
+    try {
+      updated = await this.db.transaction(async (tx) => {
+        await tx
+          .update(workspaces)
+          .set({ isDefault: false, updatedAt: new Date() })
+          .where(and(eq(workspaces.userId, userId), eq(workspaces.isDefault, true)));
+        const [row] = await tx
+          .update(workspaces)
+          .set({ isDefault: true, updatedAt: new Date() })
+          .where(and(eq(workspaces.id, id), eq(workspaces.userId, userId)))
+          .returning();
+        return row;
+      });
+    } catch (err) {
+      swapDefaultWorkspaceFiles(userId, id, previous?.id ?? null);
+      throw err;
+    }
+    noteWorkspaceRows([updated]);
+    return updated;
   }
 
   /**

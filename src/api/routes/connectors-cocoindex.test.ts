@@ -8,7 +8,7 @@ const fixture = vi.hoisted(() => ({
 }));
 vi.mock('@/api/context', async () => {
   const { App } = await import('@/api/http');
-  return { apiContext: new App().derive(() => ({ user: fixture.user })) };
+  return { apiContext: new App().derive(() => ({ user: fixture.user, principal: fixture.user ? { userId: fixture.user.id } : null })) };
 });
 vi.mock('@/connectors/cocoindex', async importOriginal => {
   const original = await importOriginal<typeof import('@/connectors/cocoindex')>();
@@ -71,7 +71,7 @@ test('member status does not disclose backend paths or install diagnostics', asy
 test('admin installation starts asynchronously using a validated backend path', async () => {
   const response = await request('POST', '/install', { workspacePath: '/repo', embeddingModel: 'test/local-model' });
   expect(response.status).toBe(202);
-  expect(fixture.resolvePath).toHaveBeenCalledWith('/repo', 'admin');
+  expect(fixture.resolvePath).toHaveBeenCalledWith('/repo', expect.objectContaining({ userId: 'admin' }));
   expect(fixture.install).toHaveBeenCalledWith('/workspace/repo', 'test/local-model', undefined);
   expect(await response.json()).toMatchObject({ status: 'installing' });
 });

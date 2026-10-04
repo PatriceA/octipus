@@ -156,6 +156,12 @@ Three commits, each independently shippable:
 - New `WorkspaceFS.forPrincipal(p)` in `src/security/workspace-fs.ts`.
   Per-user filesystem root at
   `$DATA_ROOT/users/{user_id}/workspaces/{workspace_id}/files/`.
+  (Coworking S0c: the segment is the principal's workspace id, except the
+  user's default workspace, which keeps `default`. `forAgent` takes the
+  agent's `AgentContext`, or `{ system: true, root }` for a system job, and
+  never falls back to the flat root; `forSession` uses
+  `session.workspaceId`; `forRequest(principal)` gives REST routes the
+  agent's view with the same extras.)
 - `resolve(userPath)` enforces:
   - relative paths land under root
   - absolute paths must be under root (or an extra-allowed prefix)

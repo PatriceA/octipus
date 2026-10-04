@@ -24,6 +24,8 @@ export interface CommandDef {
 export interface CommandContext {
   userId: string;
   sessionId?: string;
+  /** The connection's workspace (resolved at auth); new sessions are created in it. */
+  workspaceId?: string;
   clientType: string;
   trustLevel: TrustLevel;
   args: Record<string, string>;
@@ -143,7 +145,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
       // so a skill can be selected before any model starts working.
       if (ctx.sessionId && /^[0-9a-f-]{36}$/i.test(ctx.sessionId)) {
         const { resolveSession } = await import('@/core/agent/session-resolver');
-        await resolveSession(ctx.sessionId, userId, ctx.clientType);
+        await resolveSession(ctx.sessionId, userId, ctx.clientType, ctx.workspaceId);
       }
       return { text: await handleSkillSelectionCommand(userId, ctx.sessionId, ctx.rawArgs) };
     },
@@ -522,7 +524,15 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     handler: async (ctx) => {
       try {
         const { WorkspaceFS } = await import('@/security/workspace-fs');
-        const fs = WorkspaceFS.forAgent({ userId: ctx.userId });
+        const { agentPrincipal } = await import('@/security/principal');
+        const { sessionRepository } = await import('@/db/repositories/session-repository');
+        // The session's own root (its workspace, or its dev-mode project) —
+        // what the agent wrote to; the connection's workspace before the
+        // session exists.
+        const session = ctx.sessionId ? await sessionRepository.findById(ctx.sessionId) : null;
+        const fs = session && session.userId === ctx.userId
+          ? WorkspaceFS.forSession(session)
+          : WorkspaceFS.forPrincipal(agentPrincipal({ userId: ctx.userId, workspaceId: ctx.workspaceId ?? null }));
         // Use rawArgs, not ctx.args.path: the registry splits input on
         // whitespace, so a path containing a space would only populate the
         // first token in args.path. rawArgs preserves the whole path.

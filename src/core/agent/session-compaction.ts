@@ -187,7 +187,11 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
     }, { keepCliSessionPrefixes: CHILD_CLI_SESSION_KEY_PREFIXES });
     if (published && extractsMemoryOnCompaction(getConfig().memory?.extractionCadence, history.session)) {
       const { updateMemoriesAfterTurn } = await import('@/core/memory');
-      void updateMemoriesAfterTurn({ userId: history.session.userId, workspaceId: null, agentScope: null, userMessage: result.summaryText })
+      const { turnWorkspaceId } = await import('./session-resolver');
+      const { userId, workspaceId } = history.session;
+      // Memories follow the session's workspace, as on every turn.
+      void turnWorkspaceId(userId, workspaceId)
+        .then(ws => updateMemoriesAfterTurn({ userId, workspaceId: ws, agentScope: null, userMessage: result.summaryText }))
         .catch(err => coreLogger.warn({ err, sessionId }, 'on-compaction memory update failed'));
     }
     if (published) coreLogger.info({ sessionId, tokensBefore, tokensAfter, savingsRatio }, 'Session checkpoint committed; vendor conversations rotated');

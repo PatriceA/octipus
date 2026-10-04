@@ -9,7 +9,7 @@
  * workspace into their own knowledge base and read it back through search —
  * arbitrary file read + cross-tenant exfiltration.
  *
- * The fix resolves `path` through `WorkspaceFS.forAgent({ userId })` and
+ * The fix resolves `path` through `WorkspaceFS.forRequest(principal)` and
  * rejects anything outside the workspace with 400, BEFORE the KB-readiness
  * gate. These tests need no DB and no embedding stack: a hostile path is
  * rejected at the sandbox; a legitimate in-workspace path falls through to the

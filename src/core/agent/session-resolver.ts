@@ -1,34 +1,41 @@
 import { sessionRepository } from '@/db/repositories/session-repository';
+import { getOrgWorkspaceManager } from '@/security/orgs';
 import { coreLogger } from '@/utils/logger';
 
 /**
- * Look up the user's default workspace id so freshly-created sessions
- * get tagged with it. Without this, sessions land with workspace_id=NULL
- * and the legacy "NULL → visible to every workspace" rule in
- * `scopedRepos.workspaceFilter` made TUI/webchat sessions show up in
- * the picker regardless of which workspace was active.
+ * The workspace a turn (or a new session) works in: `workspaceId` when given,
+ * else the user's default workspace. A given workspace must be the user's own
+ * (S1 adds space membership); anything else throws, and resolution errors
+ * propagate: a turn never runs without a workspace, which would drop every
+ * workspace filter and file its rows and files in the wrong place.
  */
-async function defaultWorkspaceId(userId: string): Promise<string | null> {
-  try {
-    const { getOrgWorkspaceManager } = await import('@/security/orgs');
-    const def = await getOrgWorkspaceManager().ensureDefaultWorkspace(userId);
-    return def?.id ?? null;
-  } catch (err) {
-    coreLogger.debug({ err, userId }, 'No default workspace available for session tagging');
-    return null;
-  }
+export async function turnWorkspaceId(userId: string, workspaceId: string | null | undefined): Promise<string> {
+  const mgr = getOrgWorkspaceManager();
+  if (!workspaceId) return (await mgr.ensureDefaultWorkspace(userId)).id;
+  const ws = await mgr.findOwnedById(userId, workspaceId);
+  if (!ws) throw new Error('Workspace not found');
+  return ws.id;
 }
 
 /**
  * Resolve a session ID to an existing session or create a new one.
  * Handles both UUID-based and channel-based session identifiers.
  *
+ * A new session is created in `workspaceId` (checked by `turnWorkspaceId`),
+ * or in the user's default workspace when none is given. An existing
+ * session keeps the workspace it was created in.
+ *
  * An existing UUID session owned by a different user is refused ("Session
  * not found", the same answer as a missing row, so ownership is not
  * disclosed): every caller passes the acting user, and sessions.user_id is
  * NOT NULL, so there is no legitimate cross-user resolution.
  */
-export async function resolveSession(sessionId: string, userId: string, channel: string): Promise<string> {
+export async function resolveSession(
+  sessionId: string,
+  userId: string,
+  channel: string,
+  workspaceId?: string | null,
+): Promise<string> {
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (uuidRegex.test(sessionId)) {
     const existing = await sessionRepository.findById(sessionId);
@@ -37,17 +44,17 @@ export async function resolveSession(sessionId: string, userId: string, channel:
       return sessionId;
     }
 
-    const workspaceId = await defaultWorkspaceId(userId);
+    const wsId = await turnWorkspaceId(userId, workspaceId);
     const session = await sessionRepository.create({
       id: sessionId,
       userId,
-      workspaceId: workspaceId ?? undefined,
+      workspaceId: wsId,
       channelType: channel,
       channelId: sessionId,
       title: `${channel} conversation`,
       status: 'active',
     });
-    coreLogger.info({ sessionId: session.id, channel, workspaceId }, 'Created session for UUID');
+    coreLogger.info({ sessionId: session.id, channel, workspaceId: wsId }, 'Created session for UUID');
     return session.id;
   }
 
@@ -58,16 +65,16 @@ export async function resolveSession(sessionId: string, userId: string, channel:
   const existing = await sessionRepository.findByUserAndChannel(userId, channelType, channelId);
   if (existing) return existing.id;
 
-  const workspaceId = await defaultWorkspaceId(userId);
+  const wsId = await turnWorkspaceId(userId, workspaceId);
   const session = await sessionRepository.create({
     userId,
-    workspaceId: workspaceId ?? undefined,
+    workspaceId: wsId,
     channelType,
     channelId,
     title: `${channelType} conversation`,
     status: 'active',
   });
 
-  coreLogger.info({ sessionId: session.id, channelType, channelId, workspaceId }, 'Created new session for channel');
+  coreLogger.info({ sessionId: session.id, channelType, channelId, workspaceId: wsId }, 'Created new session for channel');
   return session.id;
 }

@@ -11,11 +11,12 @@
  * `tmpdir`. No DB, no Docker.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
-import { mkdtempSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import pathMod, { join } from 'node:path';
 import { ANONYMOUS_PRINCIPAL, principalFromUser } from './principal';
-import { isInside, WorkspaceFS, WorkspaceFsError } from './workspace-fs';
+import type { AgentContext } from '@/core/types';
+import { isInside, noteWorkspaceRows, swapDefaultWorkspaceFiles, WorkspaceFS, WorkspaceFsError } from './workspace-fs';
 
 let dataRoot: string;
 let aliceFs: WorkspaceFS;
@@ -23,6 +24,16 @@ let bobFs: WorkspaceFS;
 
 const aliceP = principalFromUser({ id: 'alice-uuid', username: 'alice', isAdmin: false });
 const bobP = principalFromUser({ id: 'bob-uuid', username: 'bob', isAdmin: false });
+const ALICE_DEFAULT_WS = '11111111-0000-4000-8000-000000000001';
+const ALICE_OTHER_WS = '11111111-0000-4000-8000-000000000002';
+
+function agentCtx(userId: string, workspaceId: string | null = null): AgentContext {
+  const now = new Date();
+  return {
+    id: 'agent-1', sessionId: 'session-1', userId, workspaceId, topic: 'general', model: '', role: 'general',
+    status: 'running', createdAt: now, updatedAt: now, metadata: {},
+  };
+}
 
 beforeAll(async () => {
   dataRoot = mkdtempSync(join(tmpdir(), 'octipus-wfs-'));
@@ -47,10 +58,23 @@ describe('WorkspaceFS construction', () => {
     expect(bobFs.root).toContain('bob-uuid');
   });
 
-  test('roots respect the workspaceId option', () => {
-    const f1 = WorkspaceFS.forPrincipal(aliceP, { dataRoot, workspaceId: 'project-x' });
-    expect(f1.root).toContain('project-x');
-    expect(f1.root).not.toBe(aliceFs.root);
+  test("a non-default workspace gets its id as the segment; the default keeps 'default'", () => {
+    noteWorkspaceRows([
+      { id: ALICE_DEFAULT_WS, userId: 'alice-uuid', isDefault: true },
+      { id: ALICE_OTHER_WS, userId: 'alice-uuid', isDefault: false },
+    ]);
+    const other = WorkspaceFS.forPrincipal({ ...aliceP, workspaceId: ALICE_OTHER_WS }, { dataRoot });
+    expect(other.root).toBe(join(dataRoot, 'users', 'alice-uuid', 'workspaces', ALICE_OTHER_WS, 'files'));
+    const def = WorkspaceFS.forPrincipal({ ...aliceP, workspaceId: ALICE_DEFAULT_WS }, { dataRoot });
+    expect(def.root).toBe(aliceFs.root);
+    expect(aliceFs.root).toBe(join(dataRoot, 'users', 'alice-uuid', 'workspaces', 'default', 'files'));
+  });
+
+  test("an unknown workspace, or another user's, throws instead of guessing", () => {
+    expect(() => WorkspaceFS.forPrincipal({ ...aliceP, workspaceId: '99999999-0000-4000-8000-000000000000' }, { dataRoot }))
+      .toThrow(WorkspaceFsError);
+    expect(() => WorkspaceFS.forPrincipal({ ...bobP, workspaceId: ALICE_OTHER_WS }, { dataRoot }))
+      .toThrow(WorkspaceFsError);
   });
 });
 
@@ -214,26 +238,54 @@ describe('WorkspaceFS.withRoot — flat single-user mode', () => {
   });
 });
 
-describe('WorkspaceFS.forAgent — sentinel vs real user layout', () => {
-  test("'system' userId gets the flat root", () => {
-    expect(WorkspaceFS.forAgent({ userId: 'system' }, { dataRoot }).root).toBe(dataRoot);
+describe('WorkspaceFS.forAgent — user workspaces and system jobs', () => {
+  test('a user path never gets the flat root: sentinel or missing users throw', () => {
+    for (const userId of ['system', 'local', '']) {
+      expect(() => WorkspaceFS.forAgent(agentCtx(userId), { dataRoot })).toThrow(WorkspaceFsError);
+    }
   });
 
-  test("'local' userId gets the flat root (single-user sentinel, matches the guards in worker-spawner/agent-manager/agent-worker)", () => {
-    expect(WorkspaceFS.forAgent({ userId: 'local' }, { dataRoot }).root).toBe(dataRoot);
+  test('a system job gets exactly the root it names, and must name one', () => {
+    expect(WorkspaceFS.forAgent({ system: true, root: dataRoot }).root).toBe(dataRoot);
+    expect(() => WorkspaceFS.forAgent({ system: true, root: '' })).toThrow(WorkspaceFsError);
   });
 
-  test('absent userId gets the flat root', () => {
-    expect(WorkspaceFS.forAgent(undefined, { dataRoot }).root).toBe(dataRoot);
-  });
-
-  test('a real userId gets the per-user nested root', () => {
-    expect(WorkspaceFS.forAgent({ userId: 'alice-uuid' }, { dataRoot }).root)
+  test("an agent without a workspace gets the user's default root", () => {
+    expect(WorkspaceFS.forAgent(agentCtx('alice-uuid'), { dataRoot }).root)
       .toBe(join(dataRoot, 'users', 'alice-uuid', 'workspaces', 'default', 'files'));
+  });
+
+  test("an agent in a non-default workspace gets that workspace's root", () => {
+    noteWorkspaceRows([{ id: ALICE_OTHER_WS, userId: 'alice-uuid', isDefault: false }]);
+    expect(WorkspaceFS.forAgent(agentCtx('alice-uuid', ALICE_OTHER_WS), { dataRoot }).root)
+      .toBe(join(dataRoot, 'users', 'alice-uuid', 'workspaces', ALICE_OTHER_WS, 'files'));
+  });
+});
+
+describe('swapDefaultWorkspaceFiles — files follow their workspace when the default moves', () => {
+  test("the old default's files move to its id, the new default's to 'default'", () => {
+    const root = mkdtempSync(join(tmpdir(), 'octipus-wfs-swap-'));
+    const base = join(root, 'users', 'carol', 'workspaces');
+    mkdirSync(join(base, 'default', 'files'), { recursive: true });
+    writeFileSync(join(base, 'default', 'files', 'old.txt'), 'old default');
+    mkdirSync(join(base, ALICE_OTHER_WS, 'files'), { recursive: true });
+    writeFileSync(join(base, ALICE_OTHER_WS, 'files', 'new.txt'), 'new default');
+
+    swapDefaultWorkspaceFiles('carol', ALICE_DEFAULT_WS, ALICE_OTHER_WS, root);
+
+    expect(readFileSync(join(base, ALICE_DEFAULT_WS, 'files', 'old.txt'), 'utf8')).toBe('old default');
+    expect(readFileSync(join(base, 'default', 'files', 'new.txt'), 'utf8')).toBe('new default');
+    expect(existsSync(join(base, ALICE_OTHER_WS))).toBe(false);
   });
 });
 
 describe('WorkspaceFS.forSession — read-back root matches the agent cwd (P1.8)', () => {
+  test("a session in a non-default workspace reads back that workspace's root", () => {
+    noteWorkspaceRows([{ id: ALICE_OTHER_WS, userId: 'alice-uuid', isDefault: false }]);
+    const fs = WorkspaceFS.forSession({ userId: 'alice-uuid', workspaceId: ALICE_OTHER_WS, context: {} }, { dataRoot });
+    expect(fs.root).toBe(join(dataRoot, 'users', 'alice-uuid', 'workspaces', ALICE_OTHER_WS, 'files'));
+  });
+
   test('dev-mode session with projectPath roots at the project dir', () => {
     const fs = WorkspaceFS.forSession({
       userId: 'alice-uuid',
@@ -309,5 +361,29 @@ describe('WorkspaceFS with a linked root', () => {
     expect(() => fs.resolve(join(outside, 'a.txt'))).toThrow(/outside workspace/);
     expect(() => fs.resolve('escape/a.txt')).toThrow(/outside workspace via symlink/);
     expect(() => fs.resolve(join(realpathSync(target), 'escape/a.txt'))).toThrow(/outside workspace via symlink/);
+  });
+});
+
+describe('every forAgent caller passes the agent context', () => {
+  // Building it from a bare user id dropped the agent's workspace and filed its files
+  // in the default one. Pass the AgentContext (or `{ system: true, root }`);
+  // a surface without an agent uses `forPrincipal` / `forRequest` /
+  // `forSession`. Built from parts so this file does not match itself.
+  test('no source file builds a WorkspaceFS from a bare user id', () => {
+    const pattern = new RegExp(['forAgent', '\\(\\s*\\{\\s*userId'].join(''));
+    const srcRoot = pathMod.resolve(__dirname, '..');
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name !== 'node_modules') walk(full);
+        } else if (/\.(ts|tsx)$/.test(entry.name) && pattern.test(readFileSync(full, 'utf8'))) {
+          offenders.push(pathMod.relative(srcRoot, full));
+        }
+      }
+    };
+    walk(srcRoot);
+    expect(offenders).toEqual([]);
   });
 });

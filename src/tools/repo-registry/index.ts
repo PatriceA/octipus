@@ -1,5 +1,5 @@
 import { buildRepoEdges, dependenciesOf, dependentsOf } from '@/core/repos/graph';
-import { loadRepoGraph, repoToGraphNode, resolveRepo, scanUserRepos, toRepoSummary } from '@/core/repos/registry-service';
+import { loadRepoGraph, type RepoOwner, repoToGraphNode, resolveRepo, scanUserRepos, toRepoSummary } from '@/core/repos/registry-service';
 import { findSymbols, outlineSymbols, type SymbolKind } from '@/core/repos/symbols';
 import type { ToolManifest } from '@/core/types';
 import { BaseTool, createParameterSchema } from '../base-tool';
@@ -45,8 +45,8 @@ export class RepoRegistryTool extends BaseTool {
       'List the repositories in this workspace — the map of the suite. Use this FIRST in a multi-repo workspace to learn what exists before reading any files. Each entry shows kind (product/library/app/infra), languages, whether it has a curated AGENTS.md, and how many in-suite dependents/dependencies it has. Returns [] if nothing has been scanned yet — call scan_repos then.',
       createParameterSchema({}),
       async (_args, context) => {
-        const userId = requireUserId(context);
-        const { repos, edges, ambiguousPackages } = await loadRepoGraph(userId);
+        const owner = repoOwner(context);
+        const { repos, edges, ambiguousPackages } = await loadRepoGraph(owner);
         return { count: repos.length, ambiguousPackages, dependencyScope: 'Declared direct package dependencies; ambiguous providers are omitted.', repos: repos.map((r) => toRepoSummary(r, edges)) };
       },
       { permissionAction: 'read' },
@@ -57,8 +57,8 @@ export class RepoRegistryTool extends BaseTool {
       'Read one repository: its structural digest (top-level dirs, entry points, build/test/lint commands), a symbol outline (the files with the most declarations and what they define), languages, and its in-suite dependency neighbours. This is the cheap "mental model" — read it before the files, then find_symbol to open the right one.',
       createParameterSchema({ repo: { type: 'string', description: 'Unique repo name, id, or absolute path', required: true } }),
       async (args, context) => {
-        const userId = requireUserId(context);
-        const { repos, nodes, edges, ambiguousPackages } = await loadRepoGraph(userId);
+        const owner = repoOwner(context);
+        const { repos, nodes, edges, ambiguousPackages } = await loadRepoGraph(owner);
         const repo = resolveRepo(repos, String(args.repo));
         if (!repo) return { error: `No repo matching "${args.repo}". Call list_repos.` };
         return {
@@ -104,8 +104,8 @@ export class RepoRegistryTool extends BaseTool {
         limit: { type: 'number', description: 'Max results (default 50, max 200)' },
       }),
       async (args, context) => {
-        const userId = requireUserId(context);
-        const { repos } = await loadRepoGraph(userId);
+        const owner = repoOwner(context);
+        const { repos } = await loadRepoGraph(owner);
         const repo = resolveRepo(repos, String(args.repo));
         if (!repo) return { error: `No repo matching "${args.repo}". Call list_repos.` };
         if (!repo.symbolIndex) return { repo: repo.name, count: 0, symbols: [], note: 'No symbol index yet — call scan_repos.' };
@@ -129,8 +129,8 @@ export class RepoRegistryTool extends BaseTool {
       'List the repositories that depend on the given repo — i.e. what may break if you change it. Use before editing a shared library.',
       createParameterSchema({ repo: { type: 'string', description: 'Unique repo name, id, or absolute path', required: true } }),
       async (args, context) => {
-        const userId = requireUserId(context);
-        const { repos, nodes, edges, ambiguousPackages } = await loadRepoGraph(userId);
+        const owner = repoOwner(context);
+        const { repos, nodes, edges, ambiguousPackages } = await loadRepoGraph(owner);
         const repo = resolveRepo(repos, String(args.repo));
         if (!repo) return { error: `No repo matching "${args.repo}". Call list_repos.` };
         const dependents = dependentsOf(repo.id, nodes, edges);
@@ -144,8 +144,8 @@ export class RepoRegistryTool extends BaseTool {
       'List the in-suite repositories the given repo depends on (only repos present in the registry, not external packages).',
       createParameterSchema({ repo: { type: 'string', description: 'Unique repo name, id, or absolute path', required: true } }),
       async (args, context) => {
-        const userId = requireUserId(context);
-        const { repos, nodes, edges, ambiguousPackages } = await loadRepoGraph(userId);
+        const owner = repoOwner(context);
+        const { repos, nodes, edges, ambiguousPackages } = await loadRepoGraph(owner);
         const repo = resolveRepo(repos, String(args.repo));
         if (!repo) return { error: `No repo matching "${args.repo}". Call list_repos.` };
         const deps = dependenciesOf(repo.id, nodes, edges);
@@ -159,9 +159,7 @@ export class RepoRegistryTool extends BaseTool {
       'Scan the workspace to (re)build the repo registry — detects repositories, their manifests, languages, AGENTS.md, and dependency edges. Run this once at the start of multi-repo work, or after repos are added.',
       createParameterSchema({}),
       async (_args, context) => {
-        const userId = requireUserId(context);
-        const workspaceId = (context as { workspaceId?: string }).workspaceId;
-        const repos = await scanUserRepos(userId, workspaceId ?? null);
+        const repos = await scanUserRepos(repoOwner(context));
         const edges = buildRepoEdges(repos.map(repoToGraphNode));
         return {
           scanned: repos.length,
@@ -174,9 +172,10 @@ export class RepoRegistryTool extends BaseTool {
   }
 }
 
-function requireUserId(context: { userId?: string }): string {
+/** The agent's user and workspace: the registry is read and scanned as seen from that workspace. */
+function repoOwner(context: { userId?: string; workspaceId?: string | null }): RepoOwner {
   if (!context.userId) throw new Error('repo_registry requires an authenticated user context');
-  return context.userId;
+  return { userId: context.userId, workspaceId: context.workspaceId ?? null };
 }
 
 export const repoRegistryTool = new RepoRegistryTool();
