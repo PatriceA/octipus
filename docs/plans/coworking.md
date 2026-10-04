@@ -9,6 +9,11 @@
 > several *models* working one problem, and several *instances* lending each
 > other models). This plan is about several *people*, and it reuses the
 > instance-to-instance transport of that plan rather than inventing a second one.
+>
+> **Decided since the first draft:** who pays (each member's own agent by
+> default, an optional sponsored space agent; see [Who pays](#who-pays-whose-agent-thinks))
+> and that a hosted space is live, like a cloud service, with no local copies
+> on other installs (see [Live, not synced](#live-not-synced)).
 
 ## Goal
 
@@ -105,6 +110,8 @@ workspaces                       -- existing
   + kind enum ('personal','shared') default 'personal'
   + org_id uuid?                 -- optional org attachment
   + host_instance_id text?       -- C5: null = hosted here
+  + agent_funding enum ('own','unattended','sponsored') default 'unattended'
+  + sponsor_user_id uuid?        -- owner whose models fund sponsored work
 
 workspace_members
   workspace_id · user_id · role · invited_by · joined_at · removed_at?
@@ -184,6 +191,69 @@ labels group sessions use. Anything a member shares into the room is space
 content from then on. Anything labelled `secret` is never shared, even on
 request. Federated spaces (C5) add a `federated` audience label: content
 crossing to another install is checked once more (see below).
+
+## Who pays: whose agent thinks
+
+Two questions are easy to blur, and this plan answers them separately:
+
+- **who thinks**: the model, the subscription or API key, the cost;
+- **what it may touch**: the space's rules (the two hats above).
+
+**Default: every member brings their own agent.** A request runs on the
+requester's own setup (their models, their subscription or keys, their spend
+budget and quota). The work lands in the space under the space's rules. So:
+
+- paying never buys rights: a commenter with a large subscription is still a
+  commenter;
+- the space never pays for a member's thinking unless its owner chose to;
+- a personal subscription only ever answers its owner's own requests.
+  Consumer plans (Claude, ChatGPT, …) are generally licensed to one person, so
+  the design never routes another member's request through someone's
+  personal login.
+
+In a company install the admin already provides models to every user
+(install or org models). Those count as the member's own setup: the company
+pays, as it does today.
+
+**Optional: a sponsored space agent.** The owner can attach models (API keys
+or org models, never a personal subscription) and a space budget. The sponsor
+pays for:
+
+1. **Unattended work**, where nobody asked right then: `listen` / `proactive`
+   replies, schedules, monitors, the agent working an unassigned board task,
+   and execution on the host on behalf of a visiting member (C5). This work
+   always needs a sponsor; without one, these features are off for the space.
+2. **Members without their own setup** (guests, a client), if the owner opts
+   in, with a cap per member.
+
+One space setting, `agent_funding`:
+
+| Value | A member's request | Unattended work |
+|---|---|---|
+| `own` | Requester's setup; members without one cannot run the agent | Off |
+| `unattended` (default) | Requester's setup | Sponsor |
+| `sponsored` | Sponsor, with a per-member cap | Sponsor |
+
+**Visible and accountable.**
+
+- Every agent reply says who paid, e.g. "Anna's agent · Sonnet" or "Space agent".
+- Each `cost_log` row carries the requester, the `workspace_id` and `funding` (`own` / `sponsor`).
+- Own-funded turns count only against the requester's budget and quota.
+- Sponsored turns count against the space budget and show in the owner's per-member breakdown.
+- When the space budget runs out, sponsored work pauses while own-funded work carries on.
+
+**What it needs.** Today models are configured for the install or an org
+(`model_config.org_id`); only cost is per user (`cost_log.user_id`). Bringing
+your own agent needs per-user model setup:
+
+- user-scoped model entries, with keys in the vault at `scope=user`;
+- CLI subscription logins (`src/models/providers/cli-provider.ts`) bound to
+  the user who logged in;
+- a turn resolves the requester's models first, then the install or org
+  models the admin allows.
+
+**Across installs** this needs nothing extra: a visiting member's requests
+run on their own install with their own setup (see C).
 
 ## B. Coworking inside one Octipus
 
@@ -273,9 +343,10 @@ kind, author and on-behalf-of. Restore is a new revision, never a rewrite.
   release branch is `release/1.4`"); they are written to `space_memory` with
   provenance and shown in a Space memory panel where any editor can retract
   them. Personal memories never flow into it automatically.
-- **Budget.** A `space` spend-budget scope, like `group_channel`: every turn
-  in the space counts against it and against the requester's own budget. The
-  owner sees spend per member and per room.
+- **Budget.** A `space` spend-budget scope, like `group_channel`, for the
+  sponsored agent only (see [Who pays](#who-pays-whose-agent-thinks)).
+  Own-funded turns stay on the requester's budget. The owner sees sponsored
+  spend per member and per room.
 - **Activity feed.** One stream per space: who edited what, what the agent did
   for whom, which tasks moved. Built on `audit_log` and `run_events` with the
   space id, filtered for members.
@@ -309,16 +380,32 @@ other's install. Both want their own agent in the room.
   install*. On the host they appear as `anna@<instance-fingerprint>` with a
   role, backed by a `peer:<id>`-scoped principal (the swarm plan's service
   principal pattern), never as a local user with a password.
-- **Their own client.** The visitor uses their own Octipus web app. Their
-  install keeps a local, read-mostly mirror of the space (rooms, notes,
-  board, file list) and relays their edits to the host. Their sidebar shows
-  the space with a "hosted by …" badge.
+- **Their own client.** The visitor uses their own Octipus web app. The
+  space shows in their sidebar with a "hosted by …" badge and opens a live
+  view of the host; nothing is copied to their install (see below).
 - **Bring your own agent.** Each visitor's own Octipus agent can join the room
-  as `octipus@<their-instance>`. It works with *their* tools, keys and
-  memories, on *their* hardware, at *their* cost. The host's agent remains the
-  space's agent (hat 1). The visitor's agent can only do what a member of its
-  role can do on the host: post messages, comment, propose suggestions and
-  tasks, and read what the space shows. It never runs a tool on the host.
+  as `octipus@<their-instance>`. It thinks with *their* models, keys and
+  memories, on *their* hardware, at *their* cost. It reaches the space only
+  through **space operations** (read a file or note, edit within the role,
+  suggest, post, task operations), the same ones the web UI uses, each
+  checked by the host against the member's role. It never runs a host tool
+  (shell, builds, space connectors); those run only on the host's sponsored
+  space agent (hat 1), for a member whose role allows it.
+
+### Live, not synced
+
+A hosted space works like a cloud service: one copy, on the host.
+
+- Visitors and their agents read **on demand** through space operations. An
+  agent fetches the file it needs for this turn; it does not hold a copy of
+  the space.
+- **Co-editing is the only stream**: while someone has a note open, its Yjs
+  updates flow live. That is live editing of one copy, not syncing two.
+- **No sync engine, no conflicts between copies, no offline mode.** If the
+  host is offline, the space is offline, as with any cloud tool.
+- Revocation is clean: there is nothing left on the visitor's install to
+  delete, except what their agent already read into its own session history.
+  The revoke dialog says so.
 
 ### What this enables
 
@@ -341,34 +428,38 @@ Add a typed, small `space.*` family:
 |---|---|---|
 | host → guest | `space.invite` | space id, name, role, rooms/folders in scope, expiry |
 | guest → host | `space.join` / `space.leave` | member handle, agent handle? |
-| host → guest | `space.snapshot` / `space.event` | ordered space events since a cursor (messages, task changes, file list, note revisions) |
+| guest → host | `space.watch` / `space.unwatch` | the room or document a member has open now |
+| host → guest | `space.event` | live events for what is watched (messages, presence, task changes); nothing is replayed beyond the open view |
+| guest → host | `space.read` | read a file, note, task or room page on demand, under the member's role |
 | guest → host | `space.post` | room message from a visiting member or agent |
-| both | `space.doc.sync` | Yjs update for an open note (scoped to that note) |
-| guest → host | `space.suggest` | suggested change to a note or file, as a diff with base version |
+| both | `space.doc.sync` | Yjs update for a note open for co-editing (scoped to that note) |
+| guest → host | `space.suggest` / `space.write` | suggested change as a diff with base version; or a direct write where the role and a held lease allow it |
 | guest → host | `space.task.op` | propose / claim / comment / report on a space task |
-| host → guest | `space.revoked` | membership ended; stop syncing |
+| host → guest | `space.revoked` | membership ended; live access closed |
 
 Hard rules, added to the peer constitution:
 
 1. **The host decides.** Every `space.*` message is checked on the host
    against the member's role and the space's scope. A visitor's install cannot
    grant itself more than the invite says.
-2. **No remote tools.** Visiting members and agents never cause a tool run on
-   the host. Only the host's own agent acts as hat 1, and only for a request it
-   accepts from a member whose role allows it.
+2. **Space operations only, never host tools.** Visiting members and their
+   agents act only through the `space.*` operations above. They never cause a
+   host tool run. Execution (shell, builds, space connectors) is done only by
+   the host's sponsored space agent, for a member whose role allows it; with
+   no sponsor, it is not available to visitors.
 3. **Content from another install is untrusted input.** Messages, suggestions
    and task reports from visitors go through the input guard and are fenced as
    member content in the host agent's context, as group transcripts are today.
 4. **What leaves the host is space content only.** Personal data of host
-   members never syncs unless shared into the room; anything labelled `secret`
-   never syncs. The host's agent treats a federated room as a wider audience
+   members never leaves the host unless shared into the room; anything labelled `secret`
+   never leaves it. The host's agent treats a federated room as a wider audience
    than a local one.
 5. **Agent turn-taking is code.** Agents do not answer agents unless a human
    addressed them, and a room has a per-hour cap on agent-to-agent turns.
    Two agents cannot talk each other into a loop or a cost spiral.
-6. **Revocation is honest.** Removing an install stops all syncing at once. The
-   UI says plainly that what was already synced stays on the visitor's install;
-   a space can be marked "no offline mirror" so guests only see a live view.
+6. **Revocation closes live access at once.** There is no mirror to wipe; the
+   UI says plainly that what a visitor's agent already read stays in that
+   agent's own session history.
 7. **Audit both ends.** Every federated event carries the member handle and
    the instance id on both installs.
 
@@ -386,11 +477,11 @@ the room.
 | Phase | Builds | Ship check |
 |---|---|---|
 | **C0 — Shared workspaces** | `workspaces.kind`, `workspace_members`, invites (link + accept), roles in `space-access.ts`, `SpaceRepos`, RLS membership policy, resolver change, space `WorkspaceFS` root, space files / notes / tasks / artifacts visible to members, members page, activity feed (read side) | Two users in one space: both see and edit the same note and task; a third user gets 404 on every space route; a removed member loses access at once; DB tests through the real repos and routes |
-| **C1 — Rooms** | `room_members`, `messages.author_user_id`, attributed transcript, addressing modes, turn queue, two hats with personal-read ASK to the requester, Share into room, space memory, private side panel, role-aware approvals, unread / mentions, space-scoped gateway events | A room with two members: Ben's request runs as Ben, Anna's personal-mail read prompt reaches only Anna and nothing appears in the room until she shares it; a commenter cannot trigger a write tool |
+| **C1 — Rooms** | `room_members`, `messages.author_user_id`, attributed transcript, addressing modes, turn queue, two hats with personal-read ASK to the requester, Share into room, space memory, private side panel, role-aware approvals, unread / mentions, space-scoped gateway events; own-agent funding: per-user models and keys, CLI logins bound to their user, "paid by" label, `cost_log` funding | A room with two members: Ben's request runs as Ben on Ben's models and is billed to Ben; Anna's personal-mail read prompt reaches only Anna and nothing appears in the room until she shares it; a commenter cannot trigger a write tool |
 | **C2 — Live documents** | Yjs co-editing for notes and Markdown docs, presence and cursors, revisions with author and on-behalf-of, agent suggestion mode, file soft leases for humans and agents | Two browsers type in one note at once with no lost characters; the agent's edit appears as a suggestion attributed to its requester; an agent write into a file Ben holds is refused and reported |
-| **C3 — Team surface** | Space board with member assignment and "My work", space budget scope, bridge to a group channel (mirror + taken tasks on the space board), notifications | A Slack thread and its web room show the same conversation; 🐙 in Slack lands on the space board; the space budget pauses turns in both |
+| **C3 — Team surface** | Space board with member assignment and "My work", sponsored space agent (`agent_funding`, sponsor models, space budget scope, per-member caps), bridge to a group channel (mirror + taken tasks on the space board), notifications | A Slack thread and its web room show the same conversation; 🐙 in Slack lands on the space board; an exhausted space budget pauses sponsored work in both while own-funded requests carry on |
 | **C4 — Guests** | Guest role, external invite by email with passkey sign-up, scoped rooms / folders, guest-visible member list | A guest sees only the invited room and folder; every other route returns 404 |
-| **C5 — Federated spaces** | Requires swarm F0–F1 (identity, pairing, transport). `space.*` protocol, host checks, visitor mirror, visiting agents, revocation, audit on both ends | Two installs in docker-compose: a visitor posts, co-edits a note, claims a task worked by their own agent; the host refuses a role escalation and a tool request; revocation stops sync within one heartbeat |
+| **C5 — Federated spaces** | Requires swarm F0–F1 (identity, pairing, transport). `space.*` protocol, host checks, live access (watch, read on demand, co-editing), visiting agents through space operations, revocation, audit on both ends | Two installs in docker-compose: a visitor posts, co-edits a note, claims a task worked by their own agent on their own models; nothing of the space is stored on the visitor's install; the host refuses a role escalation and a tool request; revocation closes live access within one heartbeat |
 
 C0 and C1 are the core; each later phase stands on its own. C5 waits for the
 federation transport and should not start before C0–C2 have been used by a
@@ -406,6 +497,8 @@ real team.
   either as the space or as the requester, never as "everyone".
 - **Real-time co-editing of code files.** Leases and suggestions instead.
 - **Multi-process real time** in the first cut.
+- **Offline copies of a hosted space.** One copy, on the host.
+- **Answering other members through someone's personal subscription.**
 
 ## Open questions
 
@@ -413,21 +506,19 @@ real team.
    `room_members`, or move rooms to their own table? Proposal: keep the
    session (it brings streaming, compaction, retention, the whole agent
    loop) and add membership.
-2. **Who pays for a room turn.** Requester's budget and the space budget both
-   count. Should the space owner be able to waive the requester's personal
-   budget for space work? Proposal: yes, per space, owner-only, audited.
-3. **Space connectors.** Which connectors may be space-scoped in C1
+2. **Space connectors.** Which connectors may be space-scoped in C1
    (proposal: GitHub, a Drive / OneDrive folder, Jira) and which stay
    personal only (mail, calendar, chat).
-4. **Yjs persistence.** Store Yjs updates and compact into the note body
+3. **Yjs persistence.** Store Yjs updates and compact into the note body
    (proposal), or keep the Y.Doc binary as the source of truth?
-5. **Org relationship.** Must a space belong to an org in multi-user installs?
+4. **Org relationship.** Must a space belong to an org in multi-user installs?
    Proposal: optional; an org can list and adopt spaces, but personal spaces
    can be shared without one.
-6. **Workroom inside a space.** A workroom (several models on one problem)
+5. **Workroom inside a space.** A workroom (several models on one problem)
    could run inside a space room, with members watching and approving its
    task list. Proposal: yes, once both exist; the workroom's user gate becomes
    "any editor".
-7. **Visitor mirror size.** Full mirror (offline, fast) or live view only
-   (safer)? Proposal: owner chooses per space, live view by default for spaces
-   with external guests.
+6. **Members without their own setup under `unattended`.** Block them with a
+   "set up your models" hint, or let them ask the owner to sponsor them for
+   the space? Proposal: the hint, plus a one-click request the owner can
+   accept (which sets a per-member cap).
