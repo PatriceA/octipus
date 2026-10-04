@@ -310,6 +310,37 @@ mixed into it. Existing memories are not migrated.
 - **Notifications carry their workspace.** A notification filed with a
   `workspaceId` lists in that workspace's inbox (and user-level ones
   everywhere).
+- **The agent works inside a space.** A member's private chat in a space
+  runs the agent there: its tools read and write the space's notes, tasks,
+  documents, artifacts, knowledge and files by the member's role. Every
+  agent context is built in one place (`buildAgentContext`,
+  `src/core/agent/context.ts`), which reads the membership and refuses a
+  viewer, a removed member, an archived space, and schedules or monitors in a
+  space; children inherit the space, what started the run (`trigger`) and
+  who pays (`funding`, `own` for now). `POST /api/agents` follows the session
+  it names: 403 for a viewer, 404 for a non-member, 409 for an archived space;
+  `POST /api/pipelines` likewise, for roles that may write (editors, owners).
+- **One decision for every tool call.** `routeApprovalFor` re-reads the
+  membership on every call, on all six dispatch paths (agent loop, tool
+  middleware, CLI permission relay, MCP, verification gate, action recovery):
+  a commenter's agent runs only read and comment tools, nobody runs a
+  personal-only tool in a space (scheduling, monitors, pipelines and recipes,
+  memory and profile tools, vault sync, indexing, meeting notes, writes
+  through personal connectors — the agent is told why), and once a session
+  has read your private data, writing into the space asks first even with
+  the flow guard off.
+- **Personal memories and profile stay out of spaces**, child workers
+  included, and space sessions are never learned from (`sessionAudience`).
+- **CLI models in spaces** run only in a mode where their own tools stay
+  behind Octipus's checks (Claude: permission mode `default` with the
+  permission tool; Codex: read-only; Antigravity: plan); Mistral Vibe is
+  refused, commenters use API models only, and an install CLI login serves
+  spaces only when its model is marked `metadata.cliAgent.sharedUse: true`.
+- **Cost rows name the space.** Every model call of a space turn writes
+  `cost_log.workspace_id` and `funding`; compaction, embeddings, memory
+  extraction, toolshim, decision, vision and OCR calls are stamped `install`.
+  Permission requests carry their workspace, and an admin who is not a member
+  of a space can neither list nor answer its requests and approvals.
 ### The web is on the gateway (coworking S0d)
 
 - **One gateway connection per tab.** The web app's chat page, permission

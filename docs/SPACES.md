@@ -228,6 +228,47 @@ for that request.
   role heartbeat.
 - **Guests** have no content access yet: guest scopes arrive with S6.
 
+### The agent in a space
+
+A member's private chat in a space runs the agent in the space.
+
+- **Contexts.** `buildAgentContext` (`src/core/agent/context.ts`) is the only
+  place an agent context is built; `resolveAgentScope` reads the session's
+  workspace and the requester's membership and fails closed: a viewer (role
+  without `run_agent`), a removed member and an archived space are refused,
+  and `schedule` / `monitor` runs never start in a space. Every context
+  carries `space`, `trigger` (`user`, `room`, `schedule`, `monitor`,
+  `listen`, `remote`) and `funding` (`own` until sponsors arrive); children
+  inherit all three, and every spawn re-reads the membership.
+- **Tools.** Content tools use `reposFor(context)` — `contentRepos` of the
+  agent's principal, which carries the space and the role — so the agent
+  reads and writes exactly what the member may. Personal-only tools
+  (scheduling, monitors, pipelines and recipes, memory and profile tools,
+  `sync_vault`, `index_file`/`index_directory`, meeting notes, writes through
+  personal connectors) are not offered and are refused; the prompt says why.
+- **Decisions.** `routeApprovalFor` (`src/security/approval-route.ts`) is the
+  one decision for every tool call: it re-reads the membership, applies the
+  role cap first (commenters and guests run only `COMMENTER_TOOLS`,
+  `src/security/space-tools.ts`), then the I6 rule — after a private read
+  (the session's flow label holds `private`), any call that is not a read
+  asks, whatever `agent.flowGuard` says — then the stored ALLOW/ASK/DENY.
+- **Memories and profile.** `sessionAudience`
+  (`src/core/agent/audience.ts`) switches the requester's personal memories,
+  learning and profile facts off in a space session, child workers included.
+- **CLI models.** Each adapter declares the mode it runs in inside a space
+  (`CLI_SPACE_MODES`): Claude-binary tools use `--permission-mode default`
+  with the stdio permission tool (pre-approved `allowedTools` are dropped),
+  Codex the `read-only` sandbox, Antigravity `--mode plan`; Mistral Vibe has
+  none and is refused. Commenters' turns use API models only, and an install
+  CLI model serves spaces only when marked `metadata.cliAgent.sharedUse: true`.
+- **Cost.** Each turn runs inside one usage context: every `cost_log` row of
+  a space turn carries the space's `workspace_id` and the turn's `funding`;
+  install-topic calls (compaction, embeddings, memory extraction, toolshim,
+  decision, vision, OCR) are stamped `install`.
+- **Approvals.** Permission requests carry `workspace_id`; the admin queue
+  and its resolve routes never show or answer a request of a space the admin
+  is not a member of.
+
 ## In the web
 
 - **Picker** (the header's workspace button): "my workspaces" (your own,

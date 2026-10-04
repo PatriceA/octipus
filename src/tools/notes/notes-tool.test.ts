@@ -11,7 +11,7 @@ describe('NotesTool', () => {
   let handlers: Map<string, ToolHandler>;
   let embeddingSpy: Mock<(text: string) => Promise<number[]>> | undefined;
 
-  const ctx = (): AgentContext => ({
+  const ctx = (): AgentContext => ({ space: null, trigger: 'user', funding: 'own', 
     id: randomUUID(), sessionId: randomUUID(), userId, workspaceId: null,
     topic: 'test', model: 'test', role: 'research', status: 'running',
     createdAt: new Date(), updatedAt: new Date(), metadata: {},

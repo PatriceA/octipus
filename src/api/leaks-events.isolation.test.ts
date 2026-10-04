@@ -255,7 +255,7 @@ describe('artifacts', () => {
     return new Map(tool.getToolHandlers().map(h => [h.name.replace('artifacts__', ''), h]));
   }
 
-  const ctx = (workspaceId: string | null): AgentContext => ({
+  const ctx = (workspaceId: string | null): AgentContext => ({ space: null, trigger: 'user', funding: 'own', 
     id: randomUUID(), sessionId: aliceSession, userId: aliceId, workspaceId,
     topic: 'test', model: 'test', role: 'general', status: 'running',
     createdAt: new Date(), updatedAt: new Date(), metadata: {},

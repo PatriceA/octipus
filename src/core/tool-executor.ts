@@ -9,7 +9,7 @@ import { auditRepository } from '@/db/repositories/audit-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { getConfig } from '@/config';
 import { withDispatchAuthorization } from '@/security/dispatch-authorization';
-import { routeApproval } from '@/security/approval-policy';
+import { routeApprovalFor } from '@/security/approval-route';
 import { applyFlowGuard, ensureSharedAudienceKnown, isVaultAuthenticated, observeFlow } from '@/security/flow-guard';
 import { getPermissionManager } from '@/security/permissions';
 import { agentLogger, coreLogger } from '@/utils/logger';
@@ -677,22 +677,20 @@ export class ToolExecutor {
         agentLogger.info({ agentId: this.context.id, tool: toolCall.name, reason: permResult.reason }, 'Flow guard escalated tool call to approval');
       }
 
-      // ONE policy decision, shared with `base-tool.ts` — see
-      // `security/approval-policy.ts`. It answers what to do with the stored
-      // level given who is calling; the two dispatch paths used to answer that
-      // separately, in two copies asking each other to be kept in sync.
-      const decision = routeApproval({
-        level: permResult.level,
-        role: this.context.role,
-        root: this.context.root,
-        attended: this.context.attended,
-        toolId,
-        action: permAction,
-        unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions,
-      });
+      // ONE policy decision, shared with every dispatch path — see
+      // `security/approval-route.ts`. It answers what to do with the stored
+      // level given who is calling, the space role cap and the I6 rule
+      // included; the paths used to answer that separately, in copies asking
+      // each other to be kept in sync.
+      const decision = await routeApprovalFor(
+        this.context,
+        { toolId, action: permAction, toolName: bareName },
+        permResult,
+        { unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions },
+      );
 
       if (decision.route === 'deny' || decision.route === 'blocked') {
-        const reason = permResult.reason || decision.reason;
+        const reason = decision.reason;
         agentLogger.info(
           { agentId: this.context.id, tool: toolCall.name, reason },
           'Tool call denied by permission policy'
@@ -716,8 +714,8 @@ export class ToolExecutor {
         continue;
       }
 
-      let authorizationSource = permResult.source ?? 'policy';
-      if (permResult.level === 'ASK') {
+      let authorizationSource = decision.source ?? 'policy';
+      if (decision.level === 'ASK') {
         if (decision.route === 'ask_human') {
           this.counters.approvalsRequired++;
           const requestId = await permissionManager.requestApproval(
@@ -729,6 +727,7 @@ export class ToolExecutor {
             this.context.sessionId,
             toolCall.name,
             this.signal,
+            this.context.workspaceId,
           );
 
           if (this.signal?.aborted || this.context.status === 'stopped' || this.context.status === 'failed') {
@@ -742,7 +741,7 @@ export class ToolExecutor {
             toolName: toolCall.name,
             args: toolCall.arguments,
             toolId,
-            ...(permResult.source === 'flow-guard' ? { reason: permResult.reason } : {}),
+            ...(decision.source === 'flow-guard' || decision.source === 'space-flow' ? { reason: decision.reason } : {}),
           });
 
           const approved = await permissionManager.waitForApproval(requestId, { agentId: this.context.id });

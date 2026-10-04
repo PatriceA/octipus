@@ -97,7 +97,7 @@ describe.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('CLI worker with actual subproce
       console.log(JSON.stringify({type:'assistant',message:{id:'two',content:[{type:'text',text:'Fixed.'}]}}));
       console.log(JSON.stringify({type:'result',subtype:'success',result:'Fixed.',num_turns:2}));
     `);
-    const context: AgentContext = { id: 'a', sessionId: 's', userId: 'u', root,
+    const context: AgentContext = { space: null, trigger: 'user', funding: 'own',  id: 'a', sessionId: 's', userId: 'u', root,
       model: 'cli/claude-code', role: 'general', topic: 'general', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} };
     const worker = new CLIAgentWorker(context, { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
     expect(await worker.run('Check it')).toBe('Fixed.');
@@ -105,7 +105,7 @@ describe.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('CLI worker with actual subproce
     if (root) expect(commentary).toHaveBeenCalledWith('Found the cause.', context, 'commentary', undefined, '');
   });
   it('uses original identity, updates plans, delivers feedback/guidance, and enforces denial', async () => {
-    const context: AgentContext = { id: 'a', sessionId: 's', userId: 'u', workspaceId: 'w', root: true,
+    const context: AgentContext = { space: null, trigger: 'user', funding: 'own',  id: 'a', sessionId: 's', userId: 'u', workspaceId: 'w', root: true,
       model: 'cli/claude-code', role: 'general', topic: 'general', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} };
     const worker = new CLIAgentWorker(context, { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
     worker.registerTools(createWorkPlanTools());
@@ -142,7 +142,7 @@ describe.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('CLI worker with actual subproce
 
 it.runIf(!!process.env.OCTIPUS_LIVE_CLI)('live CLI login can use scoped tools and publish a completed plan', async () => {
   const provider = process.env.OCTIPUS_LIVE_CLI!;
-  const worker = new CLIAgentWorker({ id: 'live-cli-check', sessionId: 's', userId: 'u', workspaceId: 'w', root: true,
+  const worker = new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own',  id: 'live-cli-check', sessionId: 's', userId: 'u', workspaceId: 'w', root: true,
     model: `cli/${provider}`, role: 'general', topic: 'general', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     { maxIterations: 12, maxTokenBudget: 500000, timeout: 180000, contextWindowSize: 100000 });
   worker.registerTools(createWorkPlanTools());
@@ -159,7 +159,7 @@ it.runIf(!!process.env.OCTIPUS_LIVE_CLI)('live CLI login can use scoped tools an
 
 it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('cancellation ends the subprocess and emits one stopped terminal', async () => {
   writeFileSync(fixture.script, `console.log(JSON.stringify({type:'system',subtype:'init'})); setInterval(()=>{},1000);`);
-  const worker = new CLIAgentWorker({ id: 'a', sessionId: 's', userId: 'u', root: true, model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+  const worker = new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own',  id: 'a', sessionId: 's', userId: 'u', root: true, model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
   const terminal: string[] = [];
   worker.onEvent(event => {
@@ -176,14 +176,14 @@ it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('cancellation ends the subprocess and 
 it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('already-cancelled parent prevents any CLI execution', async () => {
   const controller = new AbortController(); controller.abort();
   fixture.script = '/does/not/exist';
-  const worker = new CLIAgentWorker({ id: 'a', sessionId: 's', userId: 'u', model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+  const worker = new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own',  id: 'a', sessionId: 's', userId: 'u', model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 }, { parentSignal: controller.signal });
   await expect(worker.run('sample')).rejects.toThrow('aborted before starting');
   expect(fixture.status).toHaveBeenCalledWith('a', expect.objectContaining({ status: 'stopped' }));
 });
 
 function sampleWorker(): CLIAgentWorker {
-  return new CLIAgentWorker({ id: 'a', sessionId: 's', userId: 'u', model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+  return new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own',  id: 'a', sessionId: 's', userId: 'u', model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
 }
 
@@ -266,7 +266,7 @@ it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('guidance after the last bridge call g
 
 it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('late guidance with no turn budget keeps the result and reports what was not applied', async () => {
   writeFileSync(fixture.script, lateGuidanceScript);
-  const worker = new CLIAgentWorker({ id: 'a', sessionId: 's', userId: 'u', model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+  const worker = new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own',  id: 'a', sessionId: 's', userId: 'u', model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     { maxIterations: 1, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
   const thoughts: unknown[] = [];
   worker.onEvent(event => { if (event.type === 'thought') thoughts.push(event.data); });

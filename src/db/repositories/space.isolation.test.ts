@@ -451,7 +451,10 @@ describe('admin bypasses on agents (I2, review finding 2)', () => {
     const app = createServer();
     const adminToken = (await getSessionManager().create(admin)).token;
     const aliceToken = (await getSessionManager().create(alice)).token;
-    const live = await getAgentManager().spawn({ sessionId: ids.sessions, userId: alice, workspaceId: spaceId, topic: 'general', model: 'test-model', role: 'general' });
+    const { resolveAgentScope } = await import('@/core/agent/context');
+    const { sessionRepository } = await import('@/db/repositories/session-repository');
+    const scope = await resolveAgentScope({ session: await sessionRepository.findById(ids.sessions), userId: alice, trigger: 'user' });
+    const live = await getAgentManager().spawn({ sessionId: ids.sessions, userId: alice, ...scope, topic: 'general', model: 'test-model', role: 'general' });
     const liveId = live.getContext().id;
     const call = async (token: string, method: string, path: string, header?: string) => {
       const headers: Record<string, string> = { authorization: `Bearer ${token}` };

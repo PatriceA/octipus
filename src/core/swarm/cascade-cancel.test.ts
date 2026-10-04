@@ -107,7 +107,7 @@ describe('parent AbortSignal wiring — construction path', () => {
     const { AgentWorker } = await import('@/core/agent-worker');
     const parent = new AbortController();
     const worker = new AgentWorker(
-      {
+      { space: null, trigger: 'user', funding: 'own', 
         id: 'w-x',
         sessionId: '00000000-0000-0000-0000-000000000000',
         userId: 'u',
@@ -136,7 +136,7 @@ describe('parent AbortSignal wiring — construction path', () => {
     const parent = new AbortController();
     parent.abort('pre-aborted');
     const worker = new AgentWorker(
-      {
+      { space: null, trigger: 'user', funding: 'own', 
         id: 'w-y',
         sessionId: '00000000-0000-0000-0000-000000000000',
         userId: 'u',
@@ -161,7 +161,7 @@ describe('CLIAgentWorker — parent AbortSignal wiring (Phase 3 polish)', () => 
     const { CLIAgentWorker } = await import('@/core/cli-agent-worker');
     const parent = new AbortController();
     const worker = new CLIAgentWorker(
-      {
+      { space: null, trigger: 'user', funding: 'own', 
         id: 'cli-x',
         sessionId: '00000000-0000-0000-0000-000000000000',
         userId: 'u',
@@ -190,7 +190,7 @@ describe('CLIAgentWorker — parent AbortSignal wiring (Phase 3 polish)', () => 
     const parent = new AbortController();
     parent.abort('pre-aborted');
     const worker = new CLIAgentWorker(
-      {
+      { space: null, trigger: 'user', funding: 'own', 
         id: 'cli-y',
         sessionId: '00000000-0000-0000-0000-000000000000',
         userId: 'u',

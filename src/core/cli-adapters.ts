@@ -46,6 +46,40 @@ export interface CliRunConnection {
   codexMcpServers?: Array<{ name: string }>;
   /** Install the network-shell guard hook (`agent.cliShellGuard`). */
   shellGuard?: boolean;
+  /**
+   * The run is in a shared space (§5.6): the adapter runs in its declared
+   * space mode (`CLI_SPACE_MODES`), where its native tools cannot act
+   * outside Octipus's decision path; an adapter without one is refused.
+   */
+  space?: boolean;
+}
+
+/**
+ * The mode each CLI adapter runs in inside a space (docs/plans/coworking-spec.md
+ * §5.6), or null when it has none and is refused there:
+ *
+ * - Claude-binary tools (Claude Code, GLM, Kimi): `--permission-mode default`
+ *   with the stdio permission tool — every native tool use that is not a read
+ *   comes back through `answerCliPermissionRequest` → `routeApprovalFor`; the
+ *   operator's `allowedTools` pre-approvals are dropped.
+ * - Codex: the `read-only` sandbox; its writes happen only through Octipus tools.
+ * - Antigravity: `--mode plan`; likewise.
+ * - Mistral Vibe (default `auto-approve`): none yet.
+ */
+export const CLI_SPACE_MODES: Readonly<Record<string, string | null>> = {
+  'Claude Code': 'permission mode default with the stdio permission tool',
+  'Codex CLI': 'read-only sandbox',
+  Antigravity: 'plan mode',
+  'Mistral Vibe': null,
+};
+
+/** Throws unless `adapter` declares a space mode. */
+export function assertCliSpaceMode(adapter: string): string {
+  const mode = CLI_SPACE_MODES[adapter];
+  if (!mode) {
+    throw new Error(`${adapter} cannot run in a shared space: it has no mode in which its own tools stay behind Octipus's permission checks. Pick an API model or a CLI model that has one.`);
+  }
+  return mode;
 }
 
 /**
@@ -507,6 +541,7 @@ export class CLIArgumentBuilder {
     resume?: { id: string; isFirstRun: boolean },
   ): { binary: string; args: string[]; stdinPrompt?: string; keepStdinOpen?: boolean; useShell?: boolean; env?: Record<string, string> } {
     if (connection) validateScopedExtraArgs(toolName, settings.extraArgs ?? []);
+    if (connection?.space) assertCliSpaceMode(toolName);
     // `toolName` is the CLIToolConfig.adapter key (defaults to name). Vendors
     // that reuse the Claude binary (z.ai GLM, Moonshot Kimi) pass 'Claude Code'.
     switch (toolName) {
@@ -635,7 +670,9 @@ export class CLIArgumentBuilder {
 
     // Shared 'safe'|'workspace'|'full' levels translate per adapter (C14);
     // native Claude modes pass through, codex-style values throw.
-    args.push('--permission-mode', connection?.planMode ? 'plan' : resolveClaudePermissionMode(settings.permissionMode));
+    // In a space: `default`, so every non-read native tool use asks Octipus
+    // through the stdio permission tool (CLI_SPACE_MODES).
+    args.push('--permission-mode', connection?.planMode ? 'plan' : connection?.space ? 'default' : resolveClaudePermissionMode(settings.permissionMode));
 
     // Model override: env var > settings > vendor default. Vendor accepts an
     // alias ('sonnet', 'opus') or a full model id ('claude-sonnet-4-6').
@@ -677,7 +714,8 @@ export class CLIArgumentBuilder {
       args.push('--mcp-config', mcpConfig);
     }
 
-    if (settings.allowedTools?.length) {
+    // Pre-approved tools skip the permission tool: none in a space.
+    if (settings.allowedTools?.length && !connection?.space) {
       args.push('--allowedTools', ...settings.allowedTools);
     }
 
@@ -715,7 +753,7 @@ export class CLIArgumentBuilder {
     // --dangerously-skip-permissions auto-approves tool calls (the agy
     // equivalent of gemini's --approval-mode yolo).
     const args: string[] = [];
-    if (connection?.planMode || settings.permissionMode === 'safe' || settings.permissionMode === 'plan') args.push('--mode', 'plan');
+    if (connection?.planMode || connection?.space || settings.permissionMode === 'safe' || settings.permissionMode === 'plan') args.push('--mode', 'plan');
     else if (['workspace', 'accept-edits', 'auto_edit', 'auto'].includes(settings.permissionMode ?? '')) args.push('--mode', 'accept-edits', '--sandbox');
     else if (!settings.permissionMode || settings.permissionMode === 'full' || settings.permissionMode === 'yolo') args.push('--dangerously-skip-permissions');
     else throw new Error(`Unsupported Antigravity permission mode: ${settings.permissionMode}`);
@@ -792,7 +830,8 @@ export class CLIArgumentBuilder {
     // produce — see Claude (`bypassPermissions`) and Gemini (`yolo`)
     // adapters above for the write-enabled equivalents. Operators can
     // dial back per-model via `permissionMode` on the model row.
-    const codexPermMode = connection?.planMode ? 'read-only' : resolveCodexSandboxMode(settings?.permissionMode);
+    // A space runs read-only (CLI_SPACE_MODES): writes go through Octipus tools.
+    const codexPermMode = connection?.planMode || connection?.space ? 'read-only' : resolveCodexSandboxMode(settings?.permissionMode);
     // resume.id present with isFirstRun false: continue that thread via
     // `codex exec resume <id>`. Otherwise (including the first run, which has
     // no id yet) --ephemeral is dropped whenever `resume` participates in

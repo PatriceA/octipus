@@ -474,6 +474,9 @@ function makeCtx() {
     model: 'test-model',
     role: 'general' as const,
     status: 'running' as const,
+    space: null,
+    trigger: 'user' as const,
+    funding: 'own' as const,
     createdAt: new Date(),
     updatedAt: new Date(),
     metadata: {},
@@ -689,7 +692,7 @@ describe('Escalate tool — one per lifetime cap', () => {
     expect(spawnCalls).toBe(1);
 
     const out2 = await tool.execute(
-      {
+      { space: null, trigger: 'user', funding: 'own', 
         topic: 'security',
         subtopic: 'different-expert-2',
         taskBrief: 'and again',

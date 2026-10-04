@@ -5,7 +5,7 @@ import { saveProgressMessage } from './progress-message';
 const f = vi.hoisted(() => ({ session: vi.fn(), create: vi.fn() }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: { findById: f.session } }));
 vi.mock('@/db/repositories/message-repository', () => ({ messageRepository: { createForGeneration: f.create } }));
-const context = (): AgentContext => ({ id: 'a', sessionId: 's', userId: 'u', topic: 'general', model: 'cli/claude',
+const context = (): AgentContext => ({ space: null, trigger: 'user', funding: 'own',  id: 'a', sessionId: 's', userId: 'u', topic: 'general', model: 'cli/claude',
   role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: { sessionGeneration: 'before-clear' } });
 
 beforeEach(() => {
