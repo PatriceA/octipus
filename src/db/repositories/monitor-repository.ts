@@ -1,6 +1,7 @@
 import { and, eq, inArray, isNull, lte, or } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { monitors, type Monitor } from '@/db/schema/monitors';
+import { users } from '@/db/schema/users';
 import type { MonitorStatus, Observation } from '@/core/monitors/types';
 
 export class MonitorRepository {
@@ -12,10 +13,12 @@ export class MonitorRepository {
     return this.db().select().from(monitors).where(and(eq(monitors.userId, userId), eq(monitors.sessionId, sessionId))).orderBy(monitors.createdAt);
   }
   async get(id: string) { return (await this.db().select().from(monitors).where(eq(monitors.id, id)))[0]; }
+  /** Owners whose monitors may run: a deactivated user's are skipped at fire time. */
+  private activeOwners() { return inArray(monitors.userId, this.db().select({ id: users.id }).from(users).where(eq(users.isActive, true))); }
   async due(now: Date) {
-    return this.db().select().from(monitors).where(and(eq(monitors.status, 'armed'), lte(monitors.nextCheckAt, now), or(isNull(monitors.leaseUntil), lte(monitors.leaseUntil, now)))).orderBy(monitors.nextCheckAt).limit(50);
+    return this.db().select().from(monitors).where(and(eq(monitors.status, 'armed'), lte(monitors.nextCheckAt, now), or(isNull(monitors.leaseUntil), lte(monitors.leaseUntil, now)), this.activeOwners())).orderBy(monitors.nextCheckAt).limit(50);
   }
-  async pending() { return this.db().select().from(monitors).where(eq(monitors.status, 'ready')).orderBy(monitors.createdAt).limit(50); }
+  async pending() { return this.db().select().from(monitors).where(and(eq(monitors.status, 'ready'), this.activeOwners())).orderBy(monitors.createdAt).limit(50); }
   async eventSources() {
     return this.db().select({ source: monitors.source }).from(monitors).where(eq(monitors.status, 'armed'));
   }

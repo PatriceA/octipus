@@ -58,6 +58,7 @@ import { getDb } from '@/db/postgres';
 import { type Hook, hooks, SERVER_TRIGGER_CONFIG_KEYS } from '@/db/schema/hooks';
 import { notifications } from '@/db/schema/notifications';
 import { tasks } from '@/db/schema/tasks';
+import { users } from '@/db/schema/users';
 import { ACTIVE_TASK_STATUSES } from '@/core/tasks/status';
 import { onTaskWakeup, type TaskWakeupEvent } from '@/core/tasks/wakeups';
 import { taskLeaseFree, taskNotWaiting } from '@/db/repositories/scoped';
@@ -1016,7 +1017,12 @@ export async function maybeRunHeartbeats(
   const candidates = await db
     .select()
     .from(hooks)
-    .where(and(eq(hooks.trigger, 'heartbeat'), eq(hooks.isEnabled, true)));
+    .where(and(
+      eq(hooks.trigger, 'heartbeat'),
+      eq(hooks.isEnabled, true),
+      // A deactivated owner gets no probe and no turn.
+      inArray(hooks.userId, db.select({ id: users.id }).from(users).where(eq(users.isActive, true))),
+    ));
 
   const due = candidates.filter((h) => isDue(h, now));
   if (due.length === 0) return;

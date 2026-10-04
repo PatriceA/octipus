@@ -6,7 +6,7 @@ import { getConfig } from '@/config';
 import { getSettingsService } from '@/config/settings-service';
 import { rawStore } from '@/db/cache';
 import { getPushService } from '@/core/push/fcm';
-import { getSessionManager } from '@/security/auth/session';
+import { getSessionManager, InactiveUserError } from '@/security/auth/session';
 import { apiLogger } from '@/utils/logger';
 
 /** Get the first non-internal IPv4 address */
@@ -92,11 +92,19 @@ export const deviceRoutes = new Elysia({ prefix: '/devices' })
       const ipAddress = request.headers.get('x-forwarded-for') || undefined;
       const userAgent = deviceName || request.headers.get('user-agent') || 'Mobile App';
 
-      const { token, session } = await sessionManager.create(pairingData.userId, {
-        ipAddress,
-        userAgent: `Mobile: ${userAgent}`,
-        ttlMs: getConfig().security.mobileSessionMaxAge,
-      });
+      let created: Awaited<ReturnType<typeof sessionManager.create>>;
+      try {
+        created = await sessionManager.create(pairingData.userId, {
+          ipAddress,
+          userAgent: `Mobile: ${userAgent}`,
+          ttlMs: getConfig().security.mobileSessionMaxAge,
+        });
+      } catch (err) {
+        if (!(err instanceof InactiveUserError)) throw err;
+        set.status = 401;
+        return { error: 'Account is disabled' };
+      }
+      const { token, session } = created;
 
       apiLogger.info(
         { userId: pairingData.userId, deviceName },

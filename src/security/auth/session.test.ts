@@ -17,7 +17,7 @@ process.env.JWT_SECRET ??= `test-jwt-${rand(24)}`;
 process.env.SESSION_SECRET ??= `test-session-${rand(24)}`;
 
 // ── In-memory user store ────────────────────────────────────────────────────
-interface StoredUser { id: string; username: string; isAdmin: boolean }
+interface StoredUser { id: string; username: string; isAdmin: boolean; isActive: boolean }
 const users = new Map<string, StoredUser>();
 const auditCalls: string[] = [];
 
@@ -26,7 +26,10 @@ const auditCalls: string[] = [];
 
 vi.mock('@/db/repositories/user-repository', async () => ({
   ...(await vi.importActual<typeof import('@/db/repositories/user-repository')>('@/db/repositories/user-repository')),
-  userRepository: { findById: async (id: string) => users.get(id) ?? null },
+  userRepository: {
+    findById: async (id: string) => users.get(id) ?? null,
+    findAuthState: async (id: string) => users.get(id) ?? null,
+  },
 }));
 vi.mock('@/db/repositories/audit-repository', async () => ({
   ...(await vi.importActual<typeof import('@/db/repositories/audit-repository')>('@/db/repositories/audit-repository')),
@@ -51,7 +54,7 @@ afterAll(async () => {
 // needing to flush shared storage.
 function seedUser(isAdmin = false): string {
   const id = randomUUID();
-  users.set(id, { id, username: `user-${id}`, isAdmin });
+  users.set(id, { id, username: `user-${id}`, isAdmin, isActive: true });
   return id;
 }
 
@@ -127,6 +130,27 @@ describe('SessionManager.validate / get', () => {
     const { token } = await mgr.create(id, { ttlMs: 60 });
     await new Promise((r) => setTimeout(r, 90));
     expect(await mgr.validate(token)).toBeNull();
+  });
+
+  test('a deactivated user cannot get a session, and an existing one is revoked at validate', async () => {
+    const mgr = new SessionManager();
+    const id = seedUser();
+    const { token } = await mgr.create(id);
+    users.get(id)!.isActive = false;
+    expect(await mgr.validate(token)).toBeNull();
+    expect(await mgr.get(token)).toBeNull();
+    await expect(mgr.create(id)).rejects.toThrow('Account is disabled');
+  });
+
+  test('validate reads isAdmin and username from the user row, not the login snapshot', async () => {
+    const mgr = new SessionManager();
+    const id = seedUser(true);
+    const { token } = await mgr.create(id);
+    users.get(id)!.isAdmin = false;
+    users.get(id)!.username = 'renamed';
+    const session = await mgr.validate(token);
+    expect(session?.isAdmin).toBe(false);
+    expect(session?.username).toBe('renamed');
   });
 });
 

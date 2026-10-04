@@ -8,6 +8,12 @@ export const users = pgTable('users', {
   isAdmin: boolean('is_admin').default(false).notNull(),
   isActive: boolean('is_active').default(true).notNull(),
   /**
+   * Who switched `isActive` off: 'admin' or 'scim:<orgId>'. Null while active.
+   * A SCIM `active: true` never re-enables an admin's deactivation. Written only
+   * by `setUserActive` (src/security/user-lifecycle.ts).
+   */
+  deactivatedBy: text('deactivated_by'),
+  /**
    * Optional organization grouping. Phase 0 ships the column nullable so
    * single-user installs don't have to fabricate an org. Phase 3 layers
    * an `organizations` table on top and starts populating this column.

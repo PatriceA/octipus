@@ -252,9 +252,13 @@ export function createServer() {
           if (active) {
             const db = getDb();
             const [target] = await db.select({
-              id: users.id, username: users.username, isAdmin: users.isAdmin,
+              id: users.id, username: users.username, isAdmin: users.isAdmin, isActive: users.isActive,
             }).from(users).where(eq(users.id, active.targetUserId)).limit(1);
-            if (target) {
+            // A deactivated (or deleted) target ends the impersonation: the
+            // admin carries on as themselves.
+            if (!target?.isActive) {
+              await getImpersonationManager().stop(token, 'target_inactive');
+            } else {
               const targetObj = { id: target.id, username: target.username, isAdmin: target.isAdmin };
               const principal = {
                 ...principalFromUser(targetObj, token),

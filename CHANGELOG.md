@@ -7,6 +7,22 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### Security
+
+- **Deactivation takes effect at once.** Deactivating a user (admin console or
+  SCIM) revokes their sessions, refuses their API tokens, passkey, SAML and
+  device-pairing logins, closes every socket they hold, stops their agents,
+  expires their pending permission and approval prompts and ends any
+  impersonation of them. Sessions now read `is_active` and `is_admin` from the
+  database on every request, so a demoted admin loses admin rights immediately
+  (their gateway connections are closed and reconnect without them). Hooks,
+  heartbeats and monitors of an inactive user no longer fire. Migration
+  `0126_user_deactivation` adds `users.deactivated_by`.
+- **SCIM is scoped to its org.** A SCIM token's DELETE and PATCH answer 404 for
+  users outside its org, deactivate an account only when no other org holds it,
+  and can no longer re-activate an account an admin deactivated (409). SCIM
+  DELETE now answers a proper empty 204.
+
 ## v0.6.0 — Shared work, budgets, and stronger review (2026-10-01)
 
 Octipus 0.6.0 brings a shared task board for people and role agents, dollar

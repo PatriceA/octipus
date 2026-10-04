@@ -38,6 +38,9 @@ beforeAll(async () => {
   await initializeDb();
   const { runMigrations } = await import('@/db/migrate');
   await runMigrations();
+  // Deactivation revokes the user's sessions, which live in the KV store.
+  const { initializeStorage } = await import('@/db/storage');
+  initializeStorage({ mode: 'embedded' });
 
   const { seedUsers } = await import('@/test-helpers/multiuser-fixtures');
   await seedUsers([

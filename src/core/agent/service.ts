@@ -940,6 +940,11 @@ export class AgentService {
     return this.approvalManager.getPendingApprovals(forUserId);
   }
 
+  /** Expire every pending approval of a user (account deactivated). */
+  expireApprovalsForUser(userId: string, why: string): Promise<number> {
+    return this.approvalManager.expireForUser(userId, why);
+  }
+
   // ── Steering ────────────────────────────────────────────────────
 
   /**

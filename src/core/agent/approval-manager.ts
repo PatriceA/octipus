@@ -307,6 +307,27 @@ export class ApprovalManager {
     return all.filter((a) => a.userId === forUserId);
   }
 
+  /**
+   * Expire every pending approval of `userId` — the live waiters (their agents
+   * resume with a denial) and any row left pending without one. Used when the
+   * account is deactivated: nobody may answer those prompts any more. Returns
+   * how many rows were expired.
+   */
+  async expireForUser(userId: string, why: string): Promise<number> {
+    const claimed = this.getPendingApprovals(userId)
+      .map((approval) => this.claim(approval.id))
+      .filter((c): c is NonNullable<typeof c> => c !== null);
+    for (const { approval } of claimed) approval.reject(why);
+    // A waiter's row may still be in flight; expire it only once written.
+    await Promise.all(claimed.map((c) => c.written));
+    const expired = await this.db
+      .update(agentApprovals)
+      .set({ status: 'expired', response: why, resolvedAt: new Date() })
+      .where(and(eq(agentApprovals.status, 'pending'), eq(agentApprovals.userId, userId)))
+      .returning({ id: agentApprovals.id });
+    return expired.length;
+  }
+
   /** Remove a waiter from the registry, returning it with its write status. */
   private claim(requestId: string): { approval: ApprovalRequest; written: Promise<boolean> } | null {
     const approval = this.pendingApprovals.get(requestId);

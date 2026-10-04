@@ -305,6 +305,17 @@ locking themselves out.
   (argon2id-hashed); `isAdmin / isActive` flags; audit row written.
 - `PATCH /api/admin/users/:id` — update one user (email, password,
   isAdmin, isActive); audit row written; unknown id → 404.
+
+Deactivation has one writer, `setUserActive` (`src/security/user-lifecycle.ts`),
+which records who did it in `users.deactivated_by` (`admin` or
+`scim:<orgId>`) and takes effect at once: the user's sessions are revoked,
+every socket (gateway, `/ws`, `/ws/permissions`, browser bridge, `/voice`) is
+closed, their agents stop, pending permission and approval prompts expire, and
+any admin impersonation of them ends. Session and API-token validation re-read
+`is_active` / `is_admin` on every request; hooks, heartbeats and monitors skip
+an inactive owner at fire time. A change of `isActive` or `isAdmin` closes the
+user's gateway connections (`onUserChanged`), so rights are recomputed on
+reconnect.
 - `GET /api/admin/audit` — filterable audit-log viewer (`action`,
   `userId`, `limit ≤ 1000`).
 
@@ -2078,8 +2089,10 @@ The auth-guard exempts `/api/scim/*`.
 | Operation | Effect on Octipus state |
 |---|---|
 | `POST /Users` | Upsert by `userName`; ensure `org_members` row |
-| `PATCH /Users/:id` | Update `is_active` / `username` / `email` |
-| `DELETE /Users/:id` | Drop org membership; mark user inactive (soft) |
+| `PATCH /Users/:id` | Update `username` / `email`; `active: false` deactivates only when no other org holds the user (else drops this org's membership); `active: true` re-activates only an account this org deactivated (409 otherwise) |
+| `DELETE /Users/:id` | Drop org membership; deactivate the user when no other org membership remains |
+
+PATCH and DELETE answer 404 for a user who is not a member of the token's org.
 | `GET /Groups` | Returns the `org_admin` group with current admins |
 
 ### Admin surface

@@ -472,12 +472,12 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `mcp` | 3 |
 | `api` | `models` | 31 |
 | `api` | `plugins` | 1 |
-| `api` | `security` | 83 |
+| `api` | `security` | 85 |
 | `api` | `services` | 4 |
 | `api` | `shared` | 2 |
 | `api` | `skills` | 6 |
 | `api` | `tools` | 4 |
-| `api` | `utils` | 62 |
+| `api` | `utils` | 63 |
 | `api` | `voice` | 24 |
 | `capabilities` | `db` | 2 |
 | `capabilities` | `models` | 1 |
@@ -508,7 +508,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `channels` | 7 |
 | `core` | `config` | 34 |
 | `core` | `connectors` | 2 |
-| `core` | `db` | 210 |
+| `core` | `db` | 211 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 5 |
@@ -537,7 +537,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `hooks` | `channels` | 2 |
 | `hooks` | `config` | 2 |
 | `hooks` | `core` | 9 |
-| `hooks` | `db` | 9 |
+| `hooks` | `db` | 10 |
 | `hooks` | `security` | 2 |
 | `hooks` | `tools` | 1 |
 | `hooks` | `utils` | 7 |
@@ -554,12 +554,13 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `plugins` | `security` | 1 |
 | `plugins` | `tools` | 1 |
 | `plugins` | `utils` | 3 |
+| `security` | `api` | 1 |
 | `security` | `config` | 12 |
 | `security` | `connectors` | 3 |
-| `security` | `core` | 2 |
-| `security` | `db` | 58 |
+| `security` | `core` | 5 |
+| `security` | `db` | 63 |
 | `security` | `tools` | 1 |
-| `security` | `utils` | 21 |
+| `security` | `utils` | 22 |
 | `services` | `capabilities` | 5 |
 | `services` | `config` | 3 |
 | `services` | `core` | 2 |
@@ -619,6 +620,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 
 Two modules that import each other. Not fatal, but it is what blocks an extraction.
 
+- api <-> security
 - api <-> tools
 - channels <-> config
 - channels <-> core

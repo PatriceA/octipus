@@ -245,6 +245,12 @@ export const samlRoutes = new Elysia({ prefix: '/saml' })
             .returning();
           user = created;
         }
+        if (!user.isActive) {
+          // A disabled account gets no session and no new org membership.
+          coreLogger.warn({ userId: user.id, orgSlug: params.orgSlug }, 'SAML login refused: account is disabled');
+          set.status = 403;
+          return { error: 'Account is disabled' };
+        }
 
         await db
           .insert(orgMembers)
