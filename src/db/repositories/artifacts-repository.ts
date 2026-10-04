@@ -57,6 +57,7 @@ export class ArtifactsRepository {
   async getById(id: string): Promise<Artifact | null> {
     const result = await this.db
       .select()
+      // i2: by id, for the artifact runtime that already resolved access (ArtifactStore / share link)
       .from(artifacts)
       .where(and(eq(artifacts.id, id), isNull(artifacts.deletedAt)))
       .limit(1);
@@ -66,6 +67,7 @@ export class ArtifactsRepository {
   async getBySlug(workspaceId: string, slug: string): Promise<Artifact | null> {
     const result = await this.db
       .select()
+      // i2: by workspace id and slug, the caller names the workspace it resolved
       .from(artifacts)
       .where(
         and(
@@ -81,6 +83,7 @@ export class ArtifactsRepository {
   async listByWorkspace(workspaceId: string, limit = 200): Promise<Artifact[]> {
     return this.db
       .select()
+      // i2: by workspace id the caller resolved
       .from(artifacts)
       .where(and(eq(artifacts.workspaceId, workspaceId), isNull(artifacts.deletedAt)))
       .orderBy(desc(artifacts.updatedAt))
@@ -195,6 +198,7 @@ export class ArtifactsRepository {
     const [row] = await this.db
       .select({ id: artifactDataSources.id })
       .from(artifactDataSources)
+      // i2: a data source's space, for the refresh scheduler
       .innerJoin(artifacts, eq(artifacts.id, artifactDataSources.artifactId))
       .innerJoin(workspaces, eq(workspaces.id, artifacts.workspaceId))
       .where(and(eq(artifactDataSources.id, sourceId), eq(workspaces.kind, 'shared'), isNotNull(workspaces.archivedAt)))
@@ -207,6 +211,7 @@ export class ArtifactsRepository {
     const [row] = await this.db
       .select({ id: workspaces.id })
       .from(artifactDataSources)
+      // i2: a data source's space, for the refresh scheduler
       .innerJoin(artifacts, eq(artifacts.id, artifactDataSources.artifactId))
       .innerJoin(workspaces, eq(workspaces.id, artifacts.workspaceId))
       .where(and(eq(artifactDataSources.id, sourceId), eq(workspaces.kind, 'shared')))

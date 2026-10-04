@@ -1,13 +1,18 @@
 /**
  * Space purge (docs/plans/coworking-spec.md §5.8, D15, I9).
  *
- *   - Purge leaves no row with the space's id in any `delete` table of
- *     WORKSPACE_TABLES, nor any row keyed by the space's sessions; the `keep`
- *     tables (audit, cost, cleanup history) keep theirs.
+ *   - Purge, after a real agent turn in the space (only the model call is a
+ *     stand-in: the worker, its persistence, events, audit and cost
+ *     accounting are real), leaves no row with the space's id in any
+ *     `delete` table of WORKSPACE_TABLES, nor any row keyed by the space's
+ *     sessions; the `keep` tables (audit, cost, cleanup history) keep theirs.
+ *   - When a row survives the deletes, purge aborts and rolls back: the
+ *     space and every row of it are still there, and no purge is audited.
  *   - Only an owner, only after `spaces.purgeAfterArchiveDays` of archive.
  *   - The space's directories are removed; the sweep removes leftovers.
  *   - A personal workspace delete still sets NULL, and never deletes a space.
- *   - `assertDeletable` refuses the last owner of a space.
+ *   - `assertDeletable` refuses the last owner of a space and the author of
+ *     space content; a deletable user leaves their spaces with audit rows.
  *   - Purged sessions (and a deleted user's) are reported to
  *     `sessionsRemoved`, so the gateway drops their replay buffers.
  *
@@ -17,7 +22,8 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
+import type { CompletionResult } from '@/models/litellm-client';
 
 const rand = (n: number) => randomBytes(n).toString('hex');
 process.env.MASTER_KEY ??= `test-master-${rand(24)}`;
@@ -57,13 +63,17 @@ afterAll(async () => {
   await closeDb();
 });
 
-/** An archived space with an editor, archived `daysAgo` days ago. */
-async function archivedSpace(daysAgo: number): Promise<string> {
+/**
+ * An archived space with an editor, archived `daysAgo` days ago. `before`
+ * runs while the space is still live (an agent turn, say).
+ */
+async function archivedSpace(daysAgo: number, before?: (id: string) => Promise<void>): Promise<string> {
   const { createSpace, archiveSpace } = await import('./service');
   const { createInvite, acceptInvite } = await import('./invites');
   const space = await createSpace({ userId: owner }, { name: `Space ${rand(3)}` });
   const invite = await createInvite({ userId: owner }, space.id, { role: 'editor' });
   await acceptInvite({ userId: editor }, invite.token);
+  if (before) await before(space.id);
   await archiveSpace({ userId: owner }, space.id);
   await q(`UPDATE workspaces SET archived_at = now() - make_interval(days => $2) WHERE id = $1`, [space.id, daysAgo]);
   return space.id;
@@ -125,12 +135,56 @@ async function seedSpaceRows(ws: string, author: string): Promise<{ sessionId: s
   return { sessionId: session.id, tables: [...seeded].sort() };
 }
 
+/**
+ * A real agent turn of `userId` in a private chat of the space: the chat is
+ * created through the space door, the agent spawned by the agent manager and
+ * run by the real worker. Only the model is a stand-in — it answers, and its
+ * usage goes through the real provider accounting into `cost_log`.
+ */
+async function agentTurnIn(ws: string, userId: string): Promise<{ sessionId: string; agentId: string }> {
+  const { contentRepos } = await import('@/db/repositories/content');
+  const { resolvedPrincipal } = await import('@/test-helpers/space-fixtures');
+  const session = await contentRepos(await resolvedPrincipal(userId, ws)).sessions.create({ channelType: 'web', channelId: `space-chat-${rand(4)}` });
+  const { getAgentManager } = await import('@/core/agent-manager');
+  const worker = await getAgentManager().spawn({ sessionId: session.id, userId, workspaceId: ws, topic: 'general', model: 'test-model', role: 'general' });
+  const agentId = worker.getContext().id;
+  const answer: CompletionResult = {
+    content: 'The launch plan is drafted.',
+    toolCalls: [],
+    finishReason: 'stop',
+    usage: { inputTokens: 12, outputTokens: 7, totalTokens: 19 },
+    model: 'test-model',
+    latencyMs: 1,
+  };
+  const { recordProviderUsage } = await import('@/models/providers/instrumented');
+  vi.spyOn(worker as unknown as { getCompletion(): Promise<CompletionResult> }, 'getCompletion').mockImplementation(async () => {
+    await recordProviderUsage({ model: 'test-model', messages: [], userId, sessionId: session.id, agentId }, 'stub', answer);
+    return answer;
+  });
+  await worker.run('Draft the launch plan');
+  // The worker's completion bookkeeping is fire-and-forget; wait for its row.
+  await vi.waitFor(async () => {
+    const [row] = await q(`SELECT status FROM agents WHERE id = $1`, [agentId]);
+    expect(row?.status).toBe('completed');
+  });
+  return { sessionId: session.id, agentId };
+}
+
 describe('purgeSpace', () => {
   test('deletes every delete-table row and session-keyed row, keeps history, removes files', async () => {
     const { purgeSpace } = await import('./purge');
     const { WORKSPACE_TABLES } = await import('@/db/workspace-tables');
     const { spaceDirectories } = await import('@/security/workspace-fs');
-    const id = await archivedSpace(30);
+    let turn: { sessionId: string; agentId: string } | undefined;
+    const id = await archivedSpace(30, async (ws) => { turn = await agentTurnIn(ws, editor); });
+    if (!turn) throw new Error('no agent turn');
+    // What the turn left in the space: its chat, agent, events, audit and cost.
+    expect(await q(`SELECT 1 FROM agents WHERE id = $1 AND workspace_id = $2`, [turn.agentId, id])).toHaveLength(1);
+    expect((await q(`SELECT 1 FROM agent_events WHERE agent_id = $1`, [turn.agentId])).length).toBeGreaterThan(0);
+    const [turnCost] = await q(`SELECT count(*)::int AS n FROM cost_log WHERE agent_id = $1`, [turn.agentId]);
+    expect(turnCost.n).toBeGreaterThan(0);
+    const [turnAudit] = await q(`SELECT count(*)::int AS n FROM audit_log WHERE resource_id = $1`, [turn.agentId]);
+    expect(turnAudit.n).toBeGreaterThan(0);
     const { sessionId, tables } = await seedSpaceRows(id, editor);
     expect(tables).toEqual(WORKSPACE_TABLES.filter((t) => t.purge === 'delete').map((t) => t.table).sort());
 
@@ -178,6 +232,45 @@ describe('purgeSpace', () => {
 
     expect(existsSync(dirs.root)).toBe(false);
     expect(existsSync(dirs.documents)).toBe(false);
+
+    // The turn's rows went with the space; its cost and audit history stay.
+    for (const [table, column, value] of [
+      ['agents', 'id', turn.agentId], ['agent_events', 'agent_id', turn.agentId],
+      ['sessions', 'id', turn.sessionId],
+    ]) {
+      expect(await q(`SELECT 1 FROM ${table} WHERE ${column}::text = $1`, [value]), `${table} of the turn`).toEqual([]);
+    }
+    const [costAfter] = await q(`SELECT count(*)::int AS n FROM cost_log WHERE agent_id = $1`, [turn.agentId]);
+    expect(costAfter.n).toBe(turnCost.n);
+    const [auditAfter] = await q(`SELECT count(*)::int AS n FROM audit_log WHERE resource_id = $1`, [turn.agentId]);
+    expect(auditAfter.n).toBe(turnAudit.n);
+  });
+
+  test('a row that survives the deletes aborts the purge and rolls everything back', async () => {
+    const { purgeSpace } = await import('./purge');
+    const id = await archivedSpace(30);
+    await seedSpaceRows(id, editor);
+    const [before] = await q(`SELECT count(*)::int AS n FROM notes WHERE workspace_id = $1`, [id]);
+    // A row the delete cannot remove (as one written by something racing the purge would be).
+    await q(`CREATE OR REPLACE FUNCTION keep_purge_test_notes() RETURNS trigger AS $fn$
+      BEGIN IF OLD.workspace_id = '${id}'::uuid THEN RETURN NULL; END IF; RETURN OLD; END $fn$ LANGUAGE plpgsql`);
+    await q(`CREATE TRIGGER keep_purge_test_notes BEFORE DELETE ON notes FOR EACH ROW EXECUTE FUNCTION keep_purge_test_notes()`);
+    try {
+      await expect(purgeSpace({ userId: owner }, id)).rejects.toThrow(/notes still name space .*aborting/);
+    } finally {
+      await q(`DROP TRIGGER keep_purge_test_notes ON notes`);
+      await q(`DROP FUNCTION keep_purge_test_notes()`);
+    }
+    // Rolled back: the space, its members and every row are still there, and no purge is on record.
+    expect(await q(`SELECT 1 FROM workspaces WHERE id = $1`, [id])).toHaveLength(1);
+    expect((await q(`SELECT 1 FROM workspace_members WHERE workspace_id = $1`, [id])).length).toBe(2);
+    const [after] = await q(`SELECT count(*)::int AS n FROM notes WHERE workspace_id = $1`, [id]);
+    expect(after.n).toBe(before.n);
+    for (const table of ['sessions', 'tasks', 'documents', 'agents']) {
+      const [row] = await q(`SELECT count(*)::int AS n FROM ${table} WHERE workspace_id = $1`, [id]);
+      expect(row.n, table).toBeGreaterThan(0);
+    }
+    expect(await q(`SELECT 1 FROM audit_log WHERE workspace_id = $1 AND action = 'space_purged'`, [id])).toEqual([]);
   });
 
   test('only an owner, only an archived space, only after the waiting period', async () => {
@@ -225,13 +318,33 @@ describe('personal workspaces and user deletion', () => {
     expect(await q(`SELECT 1 FROM workspaces WHERE id = $1`, [space])).toHaveLength(1);
   });
 
-  test('assertDeletable refuses the last owner of a space', async () => {
+  test('assertDeletable refuses the last owner of a space, and the author of space content', async () => {
     const { assertDeletable } = await import('@/security/user-deletion');
     const { userRepository } = await import('@/db/repositories/user-repository');
     await expect(assertDeletable(owner)).rejects.toMatchObject({ code: 'last_space_owner' });
     await expect(userRepository.delete(owner)).rejects.toMatchObject({ code: 'last_space_owner' });
-    // The editor owns no space alone.
-    await expect(assertDeletable(editor)).resolves.toBeUndefined();
+    // The editor owns no space alone, but authored space tasks and notes:
+    // the account cascade would destroy them (and others' comments on them).
+    await expect(assertDeletable(editor)).rejects.toMatchObject({ code: 'space_author' });
+    expect(await q(`SELECT 1 FROM users WHERE id = $1`, [editor])).toHaveLength(1);
+  });
+
+  test('a deletable member leaves their spaces with audit rows before the account goes', async () => {
+    const { userRepository } = await import('@/db/repositories/user-repository');
+    const { seedUsers } = await import('@/test-helpers/multiuser-fixtures');
+    const { createInvite, acceptInvite } = await import('./invites');
+    const { createSpace, setRole } = await import('./service');
+    const member = randomUUID();
+    await seedUsers([{ id: member, username: `m-${rand(3)}` }]);
+    const space = await createSpace({ userId: owner }, { name: `Leavers ${rand(3)}` });
+    const invite = await createInvite({ userId: owner }, space.id, { role: 'editor' });
+    await acceptInvite({ userId: member }, invite.token);
+    // A co-owner (not the last one): leaving is allowed.
+    await setRole({ userId: owner }, space.id, member, { role: 'owner' });
+
+    expect(await userRepository.delete(member)).toBe(true);
+    const [left] = await q(`SELECT user_id, details FROM audit_log WHERE workspace_id = $1 AND action = 'space_member_removed' AND resource_id = $2`, [space.id, member]);
+    expect(left.details).toMatchObject({ left: true, accountDeleted: true, previousValue: 'owner' });
   });
 
   test('a user deletion reports only sessions that are actually gone', async () => {

@@ -9,6 +9,32 @@ labels reflect blast radius, not contract guarantees.
 
 ### Security
 
+- **Shared spaces: review fixes to the access layer** (coworking S1).
+  Admins no longer list, read or stream another user's agents in a space
+  (history list, live list, live details, events, stop). Starting an agent or
+  a pipeline, or messaging an agent, never keeps a space principal from a
+  `?sessionId=`, so a viewer or a member of an archived space cannot start a
+  run there; such routes keep the space for reads and stops only. The
+  personal repositories refuse to write into a space (an agent context in
+  a space, or a caller's `workspaceId`). Viewers cannot open chats in a space;
+  an archived space refuses new chats, chat edits, learning checks, monitor
+  events and plan feedback. Removing, demoting or the leaving of an owner
+  revokes the invite links they made, and an accept refuses a link whose
+  creator is no longer an owner. Task wakeup notifications go only to people
+  with access at send time: a personal task's owner, a space task's author
+  and assignee while members; space assignees must be members and personal
+  ones the owner, and space tasks are never assigned to roles or nodes.
+  Archive also cancels the space's queued jobs and expires its pending
+  prompts; a removal cancels the member's queued jobs there. A failed
+  follow-up after a committed membership change is reported in a `warning`
+  instead of a 500. Impersonated space changes name the admin in the audit
+  row. A user who authored space content cannot be deleted; a deletable one
+  leaves their spaces with audit rows first. The personal predicate is now
+  positive (no workspace, or a personal one), the gateway lets members follow
+  a space artifact, a page slug prefers the viewer's personal artifact and
+  never opens a space page to a guest, and a space search uses no personal
+  repositories or extra scan paths.
+
 - **Events reach their own user only.** Every gateway and turn event now names
   its user, including swarm, pipeline and agent-stream events that used to go
   out user-less to every signed-in browser. `/ws` and `/gateway` deliver an

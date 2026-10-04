@@ -114,6 +114,70 @@ describe('invites', () => {
     expect(row.use_count).toBe(1);
   });
 
+  test('the use guard is the conditional UPDATE itself: the last use goes to exactly one accept', async () => {
+    // PGlite runs one connection, so two accepts cannot interleave here; what
+    // this pins is that the WHERE clause, not a read before it, holds the
+    // line: a counter already at the limit refuses, and at limit - 1 exactly
+    // one of two accepts gets in. The interleaved race runs on Postgres in
+    // concurrency.integration.test.ts.
+    const { createInvite, acceptInvite } = await import('./invites');
+    const { getMembership } = await import('./service');
+    const id = await newSpace();
+    const full = await createInvite({ userId: owner }, id, { role: 'viewer', maxUses: 5 });
+    await q(`UPDATE workspace_invites SET use_count = max_uses WHERE id = $1`, [full.id]);
+    await expect(acceptInvite({ userId: alice }, full.token)).rejects.toMatchObject({ code: 'not_found' });
+    expect(await getMembership(alice, id)).toBeNull();
+
+    const last = await createInvite({ userId: owner }, id, { role: 'viewer', maxUses: 5 });
+    await q(`UPDATE workspace_invites SET use_count = max_uses - 1 WHERE id = $1`, [last.id]);
+    const results = await Promise.allSettled([acceptInvite({ userId: alice }, last.token), acceptInvite({ userId: bob }, last.token)]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const [row] = await q(`SELECT use_count, max_uses FROM workspace_invites WHERE id = $1`, [last.id]);
+    expect(row.use_count).toBe(row.max_uses);
+  });
+
+  test('an owner who is removed, leaves or is demoted takes their invite links with them (I5)', async () => {
+    const { createInvite, acceptInvite, previewInvite } = await import('./invites');
+    const { removeMember, setRole, leaveSpace, getMembership } = await import('./service');
+    const id = await newSpace();
+    // Alice becomes a co-owner and hands out a 100-use editor link.
+    const joinLink = await createInvite({ userId: owner }, id, { role: 'editor' });
+    await acceptInvite({ userId: alice }, joinLink.token);
+    await setRole({ userId: owner }, id, alice, { role: 'owner' });
+    const hers = await createInvite({ userId: alice }, id, { role: 'editor', maxUses: 100 });
+
+    await removeMember({ userId: owner }, id, alice);
+    const [row] = await q(`SELECT revoked_at FROM workspace_invites WHERE id = $1`, [hers.id]);
+    expect(row.revoked_at).not.toBeNull();
+    const audit = await q(`SELECT user_id, details FROM audit_log WHERE workspace_id = $1 AND action = 'space_invite_revoked' AND resource_id = $2`, [id, hers.id]);
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({ user_id: owner, details: { reason: 'creator_lost_access', createdBy: alice } });
+    // She cannot rejoin through her own link, nor can anyone she shared it with.
+    await expect(acceptInvite({ userId: alice }, hers.token)).rejects.toMatchObject({ code: 'not_found' });
+    await expect(acceptInvite({ userId: bob }, hers.token)).rejects.toMatchObject({ code: 'not_found' });
+    expect(await getMembership(alice, id)).toBeNull();
+
+    // Demotion: the link dies with the role, even if nothing revoked it.
+    const again = await createInvite({ userId: owner }, id, { role: 'editor' });
+    await acceptInvite({ userId: alice }, again.token);
+    await setRole({ userId: owner }, id, alice, { role: 'owner' });
+    const second = await createInvite({ userId: alice }, id, { role: 'viewer', maxUses: 10 });
+    await setRole({ userId: owner }, id, alice, { role: 'editor' });
+    expect((await q(`SELECT revoked_at FROM workspace_invites WHERE id = $1`, [second.id]))[0].revoked_at).not.toBeNull();
+    // The accept guard itself: un-revoke the row by hand, it still refuses.
+    await q(`UPDATE workspace_invites SET revoked_at = NULL WHERE id = $1`, [second.id]);
+    expect(await previewInvite(second.token)).toBeNull();
+    await expect(acceptInvite({ userId: bob }, second.token)).rejects.toMatchObject({ code: 'not_found' });
+
+    // Leaving: the same.
+    await setRole({ userId: owner }, id, alice, { role: 'owner' });
+    const third = await createInvite({ userId: alice }, id, { role: 'viewer' });
+    await leaveSpace({ userId: alice }, id);
+    expect((await q(`SELECT revoked_at FROM workspace_invites WHERE id = $1`, [third.id]))[0].revoked_at).not.toBeNull();
+    // The remaining owner's links are untouched.
+    expect((await q(`SELECT revoked_at FROM workspace_invites WHERE id = $1`, [again.id]))[0].revoked_at).toBeNull();
+  });
+
   test('an existing member keeps their role and the use is refunded', async () => {
     const { createInvite, acceptInvite } = await import('./invites');
     const id = await newSpace();

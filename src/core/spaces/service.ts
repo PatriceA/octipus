@@ -14,12 +14,12 @@
  * Non-members get `SpaceError('not_found')` for every space id, existing or
  * not (I3); members whose role lacks the action get `forbidden_role`.
  */
-import { and, count, desc, eq, lt, sql } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { getDb, queryRaw } from '@/db/postgres';
 import { isUuid } from '@/db/repositories/scoped';
 import { type AuditDetails, auditLog } from '@/db/schema/audit';
-import { newWorkspaceRow, type SpaceRole, type Workspace, workspaceMembers, workspaces } from '@/db/schema/organizations';
+import { newWorkspaceRow, type SpaceRole, type Workspace, workspaceInvites, workspaceMembers, workspaces } from '@/db/schema/organizations';
 import { users } from '@/db/schema/users';
 import { requireRealUserId } from '@/security/principal';
 import { noteSharedWorkspace } from '@/security/workspace-fs';
@@ -32,7 +32,7 @@ import {
 } from '@/security/space-access';
 import { generateToken } from '@/utils/crypto';
 import { securityLogger } from '@/utils/logger';
-import { onMembershipChanged, onMembershipGranted, stopSpaceAgents } from './membership';
+import { freezeSpace, onMembershipChanged, onMembershipGranted, settleFollowUp } from './membership';
 
 export { can, SpaceError, type SpaceMembership } from '@/security/space-access';
 
@@ -43,6 +43,16 @@ export type Executor = Db | Tx;
 /** Whoever performs a space operation. Rights are read from the database, never from here. */
 export interface SpaceActor {
   readonly userId: string;
+  /**
+   * The admin acting as `userId` (audited impersonation, §5.5): rights are
+   * still `userId`'s, and every audit row names the admin too (I10).
+   */
+  readonly impersonatedBy?: string | null;
+}
+
+/** The audit columns of an actor: who acted, and the admin behind them when impersonating. */
+export function auditActor(actor: SpaceActor): { actorId: string; impersonatedBy: string | null } {
+  return { actorId: actor.userId, impersonatedBy: actor.impersonatedBy ?? null };
 }
 
 export type SpaceAuditAction =
@@ -63,6 +73,8 @@ export async function writeSpaceAudit(
   db: Executor,
   entry: {
     actorId: string;
+    /** The admin impersonating `actorId`, recorded in `details.impersonatedBy`. */
+    impersonatedBy?: string | null;
     action: SpaceAuditAction;
     workspaceId: string;
     resourceType?: string;
@@ -76,7 +88,7 @@ export async function writeSpaceAudit(
     workspaceId: entry.workspaceId,
     resourceType: entry.resourceType ?? 'space',
     resourceId: entry.resourceId ?? entry.workspaceId,
-    details: entry.details ?? {},
+    details: { ...(entry.details ?? {}), ...(entry.impersonatedBy ? { impersonatedBy: entry.impersonatedBy } : {}) },
   });
 }
 
@@ -92,14 +104,19 @@ function assertName(name: string): string {
  * `userId`'s membership of the shared workspace `workspaceId`, or null when
  * they are not a member, the workspace is not shared, or either id is not a
  * uuid. The only read of `workspace_members`.
+ *
+ * `lock` (inside a transaction) locks the membership row: `share` for an
+ * actor's own rights, so a demotion or removal committing meanwhile waits
+ * for the operation instead of racing it; `update` for a row about to change.
  */
 export async function getMembership(
   userId: string,
   workspaceId: string,
   db: Executor = getDb(),
+  opts: { lock?: 'share' | 'update' } = {},
 ): Promise<SpaceMembership | null> {
   if (!isUuid(userId) || !isUuid(workspaceId)) return null;
-  const [row] = await db
+  const query = db
     .select({ role: workspaceMembers.role, scope: workspaceMembers.scope })
     .from(workspaceMembers)
     .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
@@ -109,11 +126,33 @@ export async function getMembership(
       eq(workspaces.kind, 'shared'),
     ))
     .limit(1);
+  const [row] = opts.lock ? await query.for(opts.lock, { of: workspaceMembers }) : await query;
   if (!row) return null;
   // The synchronous file-root lookups (`WorkspaceFS.forAgent` / `forSession`)
   // learn the space from here: every path into a space reads a membership.
   noteSharedWorkspace(workspaceId);
   return { workspaceId, userId, role: row.role, scope: row.scope ?? null };
+}
+
+/** Whether `workspaceId` names a shared workspace (read from the database). */
+export async function isSharedWorkspace(workspaceId: string, db: Executor = getDb()): Promise<boolean> {
+  return (await loadSpace(workspaceId, db)) !== null;
+}
+
+/**
+ * Drop the rows of shared workspaces from `rows` — for a personal list built
+ * by code outside the repositories (I2: personal paths never return a
+ * space's rows).
+ */
+export async function withoutSpaceRows<T extends { workspaceId: string | null }>(rows: T[]): Promise<T[]> {
+  const ids = [...new Set(rows.map((r) => r.workspaceId).filter((id): id is string => !!id && isUuid(id)))];
+  if (ids.length === 0) return rows;
+  const shared = await getDb()
+    .select({ id: workspaces.id })
+    .from(workspaces)
+    .where(and(inArray(workspaces.id, ids), eq(workspaces.kind, 'shared')));
+  const drop = new Set(shared.map((r) => r.id));
+  return drop.size === 0 ? rows : rows.filter((r) => !r.workspaceId || !drop.has(r.workspaceId));
 }
 
 /** The space row, or null when `workspaceId` names no shared workspace. */
@@ -127,14 +166,20 @@ async function loadSpace(workspaceId: string, db: Executor = getDb()): Promise<W
   return row ?? null;
 }
 
-/** The actor's membership with the action allowed, and the space row. */
+/**
+ * The actor's membership with the action allowed, and the space row. Given a
+ * transaction, the actor's membership row is locked `FOR SHARE` until it
+ * ends: an owner demoted or removed concurrently cannot still finish a
+ * removal, an invite or a purge they no longer have the right to.
+ */
 async function authorize(
   actor: SpaceActor,
   workspaceId: string,
   action: Parameters<typeof can>[1],
   db: Executor = getDb(),
 ): Promise<{ membership: SpaceMembership; space: Workspace }> {
-  const membership = requireCan(await getMembership(actor.userId, workspaceId, db), action);
+  const lock = db === getDb() ? {} : { lock: 'share' as const };
+  const membership = requireCan(await getMembership(actor.userId, workspaceId, db, lock), action);
   const space = await loadSpace(workspaceId, db);
   if (!space) throw new SpaceError('not_found', 'Space not found');
   return { membership, space };
@@ -167,6 +212,8 @@ export interface SpaceSummary {
    * (`own`). A space-sponsored agent arrives in S5.
    */
   funding: 'own';
+  /** Set when the change committed but its follow-up (stopping agents, expiring requests) failed; logged. */
+  warning?: string;
 }
 
 function summarize(space: Workspace, role: SpaceRole, members: number): SpaceSummary {
@@ -215,7 +262,7 @@ export async function createSpace(actor: SpaceActor, input: { name: string }): P
       }))
       .returning();
     await tx.insert(workspaceMembers).values({ workspaceId: created.id, userId: actor.userId, role: 'owner' });
-    await writeSpaceAudit(tx, { actorId: actor.userId, action: 'space_created', workspaceId: created.id, details: { name } });
+    await writeSpaceAudit(tx, { ...auditActor(actor), action: 'space_created', workspaceId: created.id, details: { name } });
     return created;
   });
   securityLogger.info({ workspaceId: space.id, by: actor.userId }, 'Space created');
@@ -255,7 +302,7 @@ export async function renameSpace(actor: SpaceActor, workspaceId: string, name: 
       .where(eq(workspaces.id, workspaceId))
       .returning();
     await writeSpaceAudit(tx, {
-      actorId: actor.userId,
+      ...auditActor(actor),
       action: 'space_updated',
       workspaceId,
       details: { previousValue: space.name, newValue: trimmed },
@@ -278,11 +325,12 @@ export async function archiveSpace(actor: SpaceActor, workspaceId: string): Prom
       .set({ archivedAt: new Date(), updatedAt: new Date() })
       .where(eq(workspaces.id, workspaceId))
       .returning();
-    await writeSpaceAudit(tx, { actorId: actor.userId, action: 'space_archived', workspaceId, details: { archived: true } });
+    await writeSpaceAudit(tx, { ...auditActor(actor), action: 'space_archived', workspaceId, details: { archived: true } });
     return { summary: summarize(updated, membership.role, await memberCount(workspaceId, tx)), changed: true };
   });
-  if (result.changed) await stopSpaceAgents(workspaceId);
-  return result.summary;
+  if (!result.changed) return result.summary;
+  const warning = await settleFollowUp('Space archive', { workspaceId }, () => freezeSpace(workspaceId));
+  return warning ? { ...result.summary, warning } : result.summary;
 }
 
 export async function unarchiveSpace(actor: SpaceActor, workspaceId: string): Promise<SpaceSummary> {
@@ -294,7 +342,7 @@ export async function unarchiveSpace(actor: SpaceActor, workspaceId: string): Pr
       .set({ archivedAt: null, updatedAt: new Date() })
       .where(eq(workspaces.id, workspaceId))
       .returning();
-    await writeSpaceAudit(tx, { actorId: actor.userId, action: 'space_updated', workspaceId, details: { archived: false } });
+    await writeSpaceAudit(tx, { ...auditActor(actor), action: 'space_updated', workspaceId, details: { archived: false } });
     return summarize(updated, membership.role, await memberCount(workspaceId, tx));
   });
 }
@@ -314,6 +362,40 @@ export interface SpaceMemberView {
   username: string;
   role: SpaceRole;
   joinedAt: Date;
+}
+
+/** What a committed membership change reports: a failed follow-up (§5.9), logged. */
+export interface MembershipChangeResult {
+  warning?: string;
+}
+
+/**
+ * Revoke the open invites `creatorId` made in the space, in the caller's
+ * transaction, one audit row each (I10). Runs when an owner is removed,
+ * leaves or loses `manage_invites`: their links must not let them, or
+ * whomever they shared them with, back in (I5).
+ */
+async function revokeInvitesBy(tx: Tx, actor: SpaceActor, workspaceId: string, creatorId: string): Promise<number> {
+  const revoked = await tx
+    .update(workspaceInvites)
+    .set({ revokedAt: new Date() })
+    .where(and(
+      eq(workspaceInvites.workspaceId, workspaceId),
+      eq(workspaceInvites.createdBy, creatorId),
+      isNull(workspaceInvites.revokedAt),
+    ))
+    .returning({ id: workspaceInvites.id });
+  for (const row of revoked) {
+    await writeSpaceAudit(tx, {
+      ...auditActor(actor),
+      action: 'space_invite_revoked',
+      workspaceId,
+      resourceType: 'space_invite',
+      resourceId: row.id,
+      details: { reason: 'creator_lost_access', createdBy: creatorId },
+    });
+  }
+  return revoked.length;
 }
 
 /**
@@ -367,7 +449,7 @@ export async function setRole(
   workspaceId: string,
   targetUserId: string,
   input: { role: string; scope?: Record<string, unknown> | null },
-): Promise<SpaceMemberView> {
+): Promise<SpaceMemberView & MembershipChangeResult> {
   if (!isSpaceRole(input.role)) throw new SpaceError('invalid_role', `Unknown role: ${input.role}`);
   const role = input.role;
   if (input.scope != null && role !== 'guest') {
@@ -377,7 +459,8 @@ export async function setRole(
 
   const outcome = await getDb().transaction(async (tx) => {
     await authorize(actor, workspaceId, 'manage_members', tx);
-    const target = await getMembership(targetUserId, workspaceId, tx);
+    // Locked: a target leaving meanwhile waits, or is already gone here.
+    const target = await getMembership(targetUserId, workspaceId, tx, { lock: 'update' });
     if (!target) throw new SpaceError('not_found', 'Member not found');
     if (target.role === 'owner' && role !== 'owner') await assertNotLastOwner(tx, workspaceId, targetUserId);
     const [updated] = await tx
@@ -385,10 +468,14 @@ export async function setRole(
       .set({ role, scope })
       .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, targetUserId)))
       .returning();
+    if (!updated) throw new SpaceError('not_found', 'Member not found');
+    if (can(target.role, 'manage_invites') && !can(role, 'manage_invites')) {
+      await revokeInvitesBy(tx, actor, workspaceId, targetUserId);
+    }
     const scopeChanged = JSON.stringify(target.scope ?? null) !== JSON.stringify(scope);
     if (target.role !== role || scopeChanged) {
       await writeSpaceAudit(tx, {
-        actorId: actor.userId,
+        ...auditActor(actor),
         action: 'space_member_role_changed',
         workspaceId,
         resourceType: 'space_member',
@@ -403,27 +490,32 @@ export async function setRole(
       granted: target.role !== role && !losesGrant(target.role, role),
     };
   });
-  if (outcome.revoked) await onMembershipChanged(workspaceId, targetUserId);
-  else if (outcome.granted) await onMembershipGranted(workspaceId, targetUserId);
-  return outcome.view;
+  const context = { workspaceId, userId: targetUserId };
+  const warning = outcome.revoked
+    ? await settleFollowUp('Space role change', context, () => onMembershipChanged(workspaceId, targetUserId))
+    : outcome.granted
+      ? await settleFollowUp('Space role change', context, () => onMembershipGranted(workspaceId, targetUserId))
+      : null;
+  return warning ? { ...outcome.view, warning } : outcome.view;
 }
 
 /**
  * Remove a member (owner only). Removing oneself is leaving. The last owner
  * can do neither.
  */
-export async function removeMember(actor: SpaceActor, workspaceId: string, targetUserId: string): Promise<void> {
+export async function removeMember(actor: SpaceActor, workspaceId: string, targetUserId: string): Promise<MembershipChangeResult> {
   if (targetUserId === actor.userId) return leaveSpace(actor, workspaceId);
   await getDb().transaction(async (tx) => {
     await authorize(actor, workspaceId, 'manage_members', tx);
-    const target = await getMembership(targetUserId, workspaceId, tx);
+    const target = await getMembership(targetUserId, workspaceId, tx, { lock: 'update' });
     if (!target) throw new SpaceError('not_found', 'Member not found');
     if (target.role === 'owner') await assertNotLastOwner(tx, workspaceId, targetUserId);
     await tx
       .delete(workspaceMembers)
       .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, targetUserId)));
+    await revokeInvitesBy(tx, actor, workspaceId, targetUserId);
     await writeSpaceAudit(tx, {
-      actorId: actor.userId,
+      ...auditActor(actor),
       action: 'space_member_removed',
       workspaceId,
       resourceType: 'space_member',
@@ -432,28 +524,48 @@ export async function removeMember(actor: SpaceActor, workspaceId: string, targe
     });
   });
   securityLogger.info({ workspaceId, userId: targetUserId, by: actor.userId }, 'Space member removed');
-  await onMembershipChanged(workspaceId, targetUserId);
+  const warning = await settleFollowUp('Space member removal', { workspaceId, userId: targetUserId }, () => onMembershipChanged(workspaceId, targetUserId));
+  return warning ? { warning } : {};
 }
 
 /** Leave a space. The last owner cannot. */
-export async function leaveSpace(actor: SpaceActor, workspaceId: string): Promise<void> {
+export async function leaveSpace(actor: SpaceActor, workspaceId: string, details: Record<string, unknown> = {}): Promise<MembershipChangeResult> {
   await getDb().transaction(async (tx) => {
-    const membership = await getMembership(actor.userId, workspaceId, tx);
+    const membership = await getMembership(actor.userId, workspaceId, tx, { lock: 'update' });
     if (!membership) throw new SpaceError('not_found', 'Space not found');
     if (membership.role === 'owner') await assertNotLastOwner(tx, workspaceId, actor.userId);
     await tx
       .delete(workspaceMembers)
       .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, actor.userId)));
+    await revokeInvitesBy(tx, actor, workspaceId, actor.userId);
     await writeSpaceAudit(tx, {
-      actorId: actor.userId,
+      ...auditActor(actor),
       action: 'space_member_removed',
       workspaceId,
       resourceType: 'space_member',
       resourceId: actor.userId,
-      details: { previousValue: membership.role, left: true },
+      details: { previousValue: membership.role, left: true, ...details },
     });
   });
-  await onMembershipChanged(workspaceId, actor.userId);
+  const warning = await settleFollowUp('Leaving a space', { workspaceId, userId: actor.userId }, () => onMembershipChanged(workspaceId, actor.userId));
+  return warning ? { warning } : {};
+}
+
+/**
+ * Before a user account is deleted: leave every space it belongs to, each
+ * with its audit row and `onMembershipChanged` (I5, I10), instead of the
+ * membership rows vanishing in the account's cascade. The caller has
+ * already refused the last owner (`assertDeletable`).
+ */
+export async function leaveAllSpaces(userId: string): Promise<void> {
+  if (!isUuid(userId)) return;
+  const rows = await getDb()
+    .select({ workspaceId: workspaceMembers.workspaceId })
+    .from(workspaceMembers)
+    .where(eq(workspaceMembers.userId, userId));
+  for (const row of rows) {
+    await leaveSpace({ userId }, row.workspaceId, { accountDeleted: true });
+  }
 }
 
 /**

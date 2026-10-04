@@ -18,6 +18,7 @@ import {
 } from '@/core/agent/templates';
 import { getDb } from '@/db/postgres';
 import { pipelineRepository } from '@/db/repositories/pipeline-repository';
+import { withoutSpaceRows } from '@/core/spaces/service';
 import { contentRepos } from '@/db/repositories/content';
 import { pipelineTemplates } from '@/db/schema/pipeline-templates';
 import { isAuthenticated } from '@/security/principal';
@@ -102,11 +103,13 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
       // Admins see everything (operational triage); regular users see
       // only their own. The 'system' pseudo-id is used by in-process
       // system jobs.
+      // A personal route: never a space's pipelines, for their owner or an
+      // admin (I2).
       if (user.isAdmin || user.id === 'system') {
-        return { pipelines: await pipelineManager.listAll() };
+        return { pipelines: await withoutSpaceRows(await pipelineManager.listAll()) };
       }
 
-      const list = await pipelineManager.listByUser(user.id);
+      const list = await withoutSpaceRows(await pipelineManager.listByUser(user.id));
       return { pipelines: list };
     },
     { detail: { tags: ['pipelines'] } },
@@ -127,6 +130,13 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
       if (!user || !isAuthenticated(principal)) {
         set.status = 401;
         return { error: 'Not authenticated' };
+      }
+
+      // A pipeline in a space waits for §5.6's context builder (role cap,
+      // archive, funding): a space principal never starts one here.
+      if (principal.workspaceKind === 'shared') {
+        set.status = 403;
+        return { error: 'Pipelines cannot be started in a shared space' };
       }
 
       const { templateName, description } = body;

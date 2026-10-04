@@ -52,10 +52,14 @@ function column(alias: string | undefined, name: string): SQL {
   return sql.raw(alias ? `${alias}.${name}` : name);
 }
 
-/** Not a row of a shared workspace (I2): every personal predicate carries it. */
+/**
+ * In no workspace or a personal one (I2): every personal predicate carries
+ * it. Positive, like `notInSharedWorkspace`: a chunk still naming a purged
+ * space is nobody's personal chunk.
+ */
 function notInSpaceSql(alias?: string): SQL {
   const ws = column(alias, 'workspace_id');
-  return sql`(${ws} IS NULL OR NOT EXISTS (SELECT 1 FROM workspaces sw WHERE sw.id = ${ws} AND sw.kind = 'shared'))`;
+  return sql`(${ws} IS NULL OR EXISTS (SELECT 1 FROM workspaces pw WHERE pw.id = ${ws} AND pw.kind = 'personal'))`;
 }
 
 function productDocsSql(alias?: string): SQL {

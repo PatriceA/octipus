@@ -22,7 +22,7 @@
  * until guest scopes land, and an unscoped guest would read the whole space.
  */
 import { join } from 'node:path';
-import { and, desc, eq, inArray, isNull, or, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, ne, or, type SQL } from 'drizzle-orm';
 import type { KnowledgeOwner, KnowledgeScope } from '@/core/rag/knowledge-scope';
 import { type Principal, isAuthenticated } from '@/security/principal';
 import { requireCan, SpaceError, type SpaceAction, type SpaceRole } from '@/security/space-access';
@@ -90,6 +90,10 @@ export function spaceScope(principal: Principal): RepoScope {
     own: (t: ScopeColumns): SQL[] => [eq(t.workspaceId, space.workspaceId), eq(t.userId, space.userId)],
     stamp: () => ({ userId: space.userId, workspaceId: space.workspaceId }),
     can: (action) => assertSpaceCan(space, action),
+    assertOpen: () => {
+      if (space.archived) throw new SpaceError('archived', 'This space is archived');
+    },
+    writeWorkspace: async () => space.workspaceId,
   };
 }
 
@@ -145,16 +149,25 @@ export function linkStoreFor(scope: NoteScope, repo: KnowledgeLinkRepository = g
 /**
  * Artifacts of one workspace. `private` means the creator only — in a space
  * the other members do not see it (enforced here, so on every REST route).
- * Writes check `can('write')`.
+ * Writes check `can('write')`. `door` runs once before the first query: the
+ * personal store checks there that its workspace is not a space (D3).
  */
 export class ArtifactStore {
+  private entered: Promise<void> | null = null;
+
   constructor(
     private readonly workspaceId: string,
     private readonly userId: string,
     private readonly can: (action: SpaceAction) => void,
+    private readonly door: () => Promise<void> = async () => undefined,
   ) {}
 
   private get db() { return getDb(); }
+
+  private enter(): Promise<void> {
+    this.entered ??= this.door();
+    return this.entered;
+  }
 
   /** Live (not deleted) rows of this workspace the caller may see. */
   private visible(): SQL[] {
@@ -166,6 +179,7 @@ export class ArtifactStore {
   }
 
   async list(limit = 200): Promise<Artifact[]> {
+    await this.enter();
     return this.db
       .select()
       .from(artifacts)
@@ -176,11 +190,13 @@ export class ArtifactStore {
 
   async findById(id: string): Promise<Artifact | null> {
     if (!UUID_RE.test(id)) return null;
+    await this.enter();
     const [row] = await this.db.select().from(artifacts).where(and(eq(artifacts.id, id), ...this.visible())).limit(1);
     return row ?? null;
   }
 
   async findBySlug(slug: string): Promise<Artifact | null> {
+    await this.enter();
     const [row] = await this.db.select().from(artifacts).where(and(eq(artifacts.slug, slug), ...this.visible())).limit(1);
     return row ?? null;
   }
@@ -197,6 +213,7 @@ export class ArtifactStore {
   /** Create in this workspace, by the caller. */
   async create(record: Omit<NewArtifact, 'workspaceId' | 'createdByUserId'>): Promise<Artifact> {
     this.can('write');
+    await this.enter();
     const [row] = await this.db
       .insert(artifacts)
       .values({ ...record, workspaceId: this.workspaceId, createdByUserId: this.userId })
@@ -213,31 +230,42 @@ export class ArtifactStore {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * The artifact of `slug` a signed-in viewer may open as a page: one in a
- * personal workspace of theirs, or in a space they are a member of (any
- * role reads). `private` is the creator's only.
+ * The artifact of `slug` a signed-in viewer may open as a page: the one in
+ * a personal workspace of theirs first, then one in a space they are a
+ * member of (any role reads; guests not until their scopes exist, as in
+ * `spaceContextOf`). Slugs are unique per workspace only, so the personal
+ * row always wins: a personal page link never opens a space's page.
+ * `private` is the creator's only. Membership is `getMembership` (D5).
  */
 export async function findViewableArtifactBySlug(userId: string, slug: string): Promise<Artifact | null> {
   if (!UUID_RE.test(userId)) return null;
   const db = getDb();
-  const reachable = or(
-    inArray(artifacts.workspaceId, db.select({ id: workspaces.id }).from(workspaces)
-      .where(and(eq(workspaces.userId, userId), eq(workspaces.kind, 'personal')))),
-    inArray(artifacts.workspaceId, db.select({ id: workspaceMembers.workspaceId }).from(workspaceMembers)
-      .where(eq(workspaceMembers.userId, userId))),
-  ) as SQL;
-  const [row] = await db
+  const viewable = [
+    eq(artifacts.slug, slug),
+    isNull(artifacts.deletedAt),
+    or(eq(artifacts.visibility, 'workspace'), eq(artifacts.visibility, 'signed'), eq(artifacts.visibility, 'public'), eq(artifacts.createdByUserId, userId)) as SQL,
+  ];
+  const [personal] = await db
     .select()
     .from(artifacts)
-    .where(and(
-      eq(artifacts.slug, slug),
-      isNull(artifacts.deletedAt),
-      reachable,
-      or(eq(artifacts.visibility, 'workspace'), eq(artifacts.visibility, 'signed'), eq(artifacts.visibility, 'public'), eq(artifacts.createdByUserId, userId)) as SQL,
-    ))
+    .where(and(...viewable, inArray(artifacts.workspaceId, db.select({ id: workspaces.id }).from(workspaces)
+      .where(and(eq(workspaces.userId, userId), eq(workspaces.kind, 'personal'))))))
     .orderBy(desc(artifacts.updatedAt))
     .limit(1);
-  return row ?? null;
+  if (personal) return personal;
+  // Candidates: spaces where the viewer holds a non-guest role; the winner's
+  // membership is then confirmed through `getMembership`.
+  const [inSpace] = await db
+    .select()
+    .from(artifacts)
+    .where(and(...viewable, inArray(artifacts.workspaceId, db.select({ id: workspaceMembers.workspaceId }).from(workspaceMembers)
+      .where(and(eq(workspaceMembers.userId, userId), ne(workspaceMembers.role, 'guest'))))))
+    .orderBy(desc(artifacts.updatedAt))
+    .limit(1);
+  if (!inSpace) return null;
+  const { getMembership } = await import('@/core/spaces/service');
+  const membership = await getMembership(userId, inSpace.workspaceId);
+  return membership && membership.role !== 'guest' ? inSpace : null;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -251,6 +279,8 @@ export interface SpaceRepos {
   readonly role: SpaceRole;
   /** Throws `SpaceError` unless the member may `action` here. */
   can(action: SpaceAction): void;
+  /** Throws `SpaceError('archived')` when the space is archived. */
+  assertOpen(): void;
   sessions: ScopedSessionRepo;
   messages: ScopedMessageRepo;
   agents: ScopedAgentRepo;
@@ -283,6 +313,7 @@ export function spaceRepos(principal: Principal): SpaceRepos {
     workspaceId: space.workspaceId,
     role: space.role,
     can: scope.can,
+    assertOpen: scope.assertOpen,
     sessions: new ScopedSessionRepo(principal, scope),
     messages: new ScopedMessageRepo(principal, scope),
     agents: new ScopedAgentRepo(principal, scope),

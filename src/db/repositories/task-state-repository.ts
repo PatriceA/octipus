@@ -75,6 +75,7 @@ export class TaskStateRepository {
   }
 
   async getById(id: string): Promise<TaskState | null> {
+    // i2: session task state by id or session, for the runtime that owns the session
     const rows = await this.db.select().from(taskState).where(eq(taskState.id, id)).limit(1);
     return rows[0] ?? null;
   }
@@ -86,6 +87,7 @@ export class TaskStateRepository {
   async listSessionRecent(sessionId: string, limit = 50): Promise<TaskState[]> {
     return this.db
       .select()
+      // i2: session task state by id or session, for the runtime that owns the session
       .from(taskState)
       .where(eq(taskState.sessionId, sessionId))
       .orderBy(desc(taskState.createdAt))
@@ -95,6 +97,7 @@ export class TaskStateRepository {
   async listByOwnerStatus(ownerAgent: string, status: TaskStateStatus, limit = 50): Promise<TaskState[]> {
     return this.db
       .select()
+      // i2: session task state by id or session, for the runtime that owns the session
       .from(taskState)
       .where(and(eq(taskState.ownerAgent, ownerAgent), eq(taskState.status, status)))
       .orderBy(desc(taskState.createdAt))
@@ -125,9 +128,11 @@ export class TaskStateRepository {
    */
   async reapOrphans(): Promise<number> {
     const result = await this.db.execute(sql`
+      -- i2: orphan cleanup, no rows returned
       DELETE FROM task_state
       WHERE status IN ('done', 'failed', 'cancelled')
         AND NOT EXISTS (
+          -- i2: orphan cleanup, no rows returned
           SELECT 1 FROM sessions s WHERE s.id = task_state.session_id
         )
       RETURNING id

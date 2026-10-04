@@ -1,4 +1,4 @@
-import { and, desc, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { getDb } from '../postgres';
 import { type DocumentRecord, documents, type NewDocumentRecord } from '../schema/documents';
 
@@ -44,26 +44,9 @@ export class DocumentRepository {
    * The leaks isolation suite fails when a caller outside that list appears.
    */
   async findByIdSystem(id: string): Promise<DocumentRecord | null> {
+    // i2: by id for system callers only (queue, processor, recovery)
     const result = await this.db.select().from(documents).where(eq(documents.id, id)).limit(1);
     return result[0] ?? null;
-  }
-
-  async findByUser(userId: string, limit = 50): Promise<DocumentRecord[]> {
-    return this.db
-      .select()
-      .from(documents)
-      .where(eq(documents.userId, userId))
-      .orderBy(desc(documents.createdAt))
-      .limit(limit);
-  }
-
-  async findByUserAndCategory(userId: string, category: string, limit = 50): Promise<DocumentRecord[]> {
-    return this.db
-      .select()
-      .from(documents)
-      .where(and(eq(documents.userId, userId), eq(documents.category, category)))
-      .orderBy(desc(documents.createdAt))
-      .limit(limit);
   }
 
   async delete(id: string): Promise<boolean> {

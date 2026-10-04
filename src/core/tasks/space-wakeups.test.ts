@@ -119,12 +119,19 @@ describe('space task wakeups', () => {
     expect(events).toEqual([]);
   });
 
-  test('a space task assigned to a role never marks a role heartbeat due', async () => {
+  test('a space task is never assigned to a role or a node, and a legacy one never marks a role heartbeat due', async () => {
     const { markRoleHeartbeatDue } = await import('@/core/heartbeat');
     const { contentRepos } = await import('@/db/repositories/content');
     const { resolvedPrincipal } = await import('@/test-helpers/space-fixtures');
     const space = contentRepos(await resolvedPrincipal(bob, spaceId));
-    const task = await space.tasks.create({ title: 'Role work', source: 'user', assigneeKind: 'role', assigneeRef: 'research' });
+    await expect(space.tasks.create({ title: 'Role work', source: 'user', assigneeKind: 'role', assigneeRef: 'research' }))
+      .rejects.toMatchObject({ code: 'invalid_input' });
+    await expect(space.tasks.create({ title: 'Node work', source: 'user', assigneeKind: 'node', assigneeRef: 'node-1' }))
+      .rejects.toMatchObject({ code: 'invalid_input' });
+    const plain = await space.tasks.create({ title: 'Plain', source: 'user' });
+    await expect(space.tasks.update(plain.id, { assigneeKind: 'role', assigneeRef: 'research' })).rejects.toMatchObject({ code: 'invalid_input' });
+    // A row written before the rule (raw SQL) still never wakes a heartbeat.
+    const [task] = await q(`INSERT INTO tasks (user_id, title, workspace_id, assignee_kind, assignee_ref, source, status) VALUES ($1, 'Role work', $2, 'role', 'research', 'user', 'open') RETURNING id`, [bob, spaceId]);
     const { ensureRoleHeartbeatHook } = await import('@/core/heartbeat');
     const hookId = await ensureRoleHeartbeatHook(bob, 'research');
     // Not due now, so a mark would show.
@@ -149,5 +156,56 @@ describe('space task wakeups', () => {
     // The same id named as someone else's personal task does not resolve.
     const [forged] = encodeWakeups('other-process', [{ ...event, workspaceId: null }]);
     expect(await receiveWakeups(forged, 'this-process', defaultResolveTitles)).toEqual([]);
+  });
+
+  test('a space assignee must be a member; a personal assignee only the owner', async () => {
+    const { contentRepos } = await import('@/db/repositories/content');
+    const { resolvedPrincipal } = await import('@/test-helpers/space-fixtures');
+    const outsider = randomUUID();
+    const { seedUsers } = await import('@/test-helpers/multiuser-fixtures');
+    await seedUsers([{ id: outsider, username: `w-out-${rand(3)}` }]);
+    const space = contentRepos(await resolvedPrincipal(alice, spaceId));
+    await expect(space.tasks.create({ title: 'To an outsider', source: 'user', assigneeKind: 'user', assigneeRef: outsider }))
+      .rejects.toMatchObject({ code: 'invalid_input' });
+    await expect(space.tasks.create({ title: 'To nobody', source: 'user', assigneeKind: 'user', assigneeRef: 'not-a-user' }))
+      .rejects.toMatchObject({ code: 'invalid_input' });
+    const ok = await space.tasks.create({ title: 'To Bob', source: 'user', assigneeKind: 'user', assigneeRef: bob });
+    await expect(space.tasks.update(ok.id, { assigneeRef: outsider })).rejects.toMatchObject({ code: 'invalid_input' });
+
+    const personal = contentRepos(await resolvedPrincipal(alice, null));
+    await expect(personal.tasks.create({ title: 'To the victim', source: 'user', assigneeKind: 'user', assigneeRef: outsider }))
+      .rejects.toThrow(/only to its owner/);
+    expect((await personal.tasks.create({ title: 'Mine', source: 'user', assigneeKind: 'user', assigneeRef: alice })).assigneeRef).toBe(alice);
+  });
+
+  test('notifications go to people with access at send time: never a stored foreign ref, never a removed member', async () => {
+    const { contentRepos } = await import('@/db/repositories/content');
+    const { resolvedPrincipal } = await import('@/test-helpers/space-fixtures');
+    const { flushWakeups } = await import('./wakeups');
+    const victim = randomUUID();
+    const { seedUsers } = await import('@/test-helpers/multiuser-fixtures');
+    await seedUsers([{ id: victim, username: `w-victim-${rand(3)}` }]);
+
+    // Personal: a dependent whose stored assignee names another user (as a
+    // row written before the rule would) — only its owner hears of it.
+    const personal = contentRepos(await resolvedPrincipal(alice, null));
+    const blocker = await personal.tasks.create({ title: 'Personal blocker', source: 'user' });
+    const dependent = await personal.tasks.create({ title: 'Click this link', source: 'user', blockedBy: [blocker.id] });
+    await q(`UPDATE tasks SET assignee_kind = 'user', assignee_ref = $2 WHERE id = $1`, [dependent.id, victim]);
+    await personal.tasks.update(blocker.id, { status: 'done' });
+    await flushWakeups();
+    const personalNotes = await q(`SELECT user_id FROM notifications WHERE metadata->>'taskId' = $1`, [dependent.id]);
+    expect(personalNotes.map((n) => n.user_id)).toEqual([alice]);
+
+    // Space: Carol is the assignee, then is removed; Bob, the author, still hears.
+    const space = contentRepos(await resolvedPrincipal(bob, spaceId));
+    const spaceBlocker = await space.tasks.create({ title: 'Space blocker 2', source: 'user' });
+    const spaceDependent = await space.tasks.create({ title: 'For Carol', source: 'user', blockedBy: [spaceBlocker.id], assigneeKind: 'user', assigneeRef: carol });
+    const { removeMember } = await import('@/core/spaces/service');
+    await removeMember({ userId: alice }, spaceId, carol);
+    await space.tasks.update(spaceBlocker.id, { status: 'done' });
+    await flushWakeups();
+    const spaceNotes = await q(`SELECT user_id FROM notifications WHERE metadata->>'taskId' = $1`, [spaceDependent.id]);
+    expect(spaceNotes.map((n) => n.user_id)).toEqual([bob]);
   });
 });

@@ -306,20 +306,36 @@ export async function dispatchWakeups(input: WakeupInput): Promise<TaskWakeupEve
 }
 
 /**
- * The people a woken task's notification goes to: its owner (in a space, its
- * author) and, when it is assigned to another user, that assignee. Role
- * assignees are personal automation and get nothing here.
+ * The people a woken task's notification goes to, decided at send time.
+ *
+ * - A personal task: its owner, and nobody else. A 'user' assignee there can
+ *   only be the owner (`TaskRepo` refuses anyone else), and a stored ref is
+ *   never trusted as a recipient: it would let a user send notifications of
+ *   their choosing to anyone.
+ * - A space task: its author and, when assigned to another user, that
+ *   assignee — each only while they are still a member (not a guest), read
+ *   from the database now (I1, I5): a removed author or assignee hears
+ *   nothing more of the space.
+ *
+ * Role assignees are personal automation and get nothing here.
  */
-function recipientsOf(task: Pick<Task, 'userId' | 'assigneeKind' | 'assigneeRef'> | undefined, fallback: string): string[] {
-  if (!task) return [fallback];
-  const out = [task.userId];
-  if (task.assigneeKind === 'user' && task.assigneeRef && task.assigneeRef !== task.userId && UUID_RE.test(task.assigneeRef)) {
-    out.push(task.assigneeRef);
+async function recipientsOf(
+  task: Pick<Task, 'userId' | 'workspaceId' | 'assigneeKind' | 'assigneeRef'> | undefined,
+  fallback: { userId: string; workspaceId: string | null },
+): Promise<string[]> {
+  const owner = task?.userId ?? fallback.userId;
+  const workspaceId = task ? task.workspaceId ?? null : fallback.workspaceId;
+  const { getMembership, isSharedWorkspace } = await import('@/core/spaces/service');
+  if (!workspaceId || !(await isSharedWorkspace(workspaceId))) return [owner];
+  const candidates = [owner];
+  if (task?.assigneeKind === 'user' && task.assigneeRef && task.assigneeRef !== owner) candidates.push(task.assigneeRef);
+  const out: string[] = [];
+  for (const userId of candidates) {
+    const member = await getMembership(userId, workspaceId);
+    if (member && member.role !== 'guest') out.push(userId);
   }
   return out;
 }
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * One notification per woken task and recipient (a task woken both ways gets
@@ -341,7 +357,7 @@ async function notifyWoken(closed: Task, cause: WakeupCause, events: TaskWakeupE
         ? `“${title}” is unblocked`
         : `All sub-tasks of “${title}” are done`;
     const task = woken.find((t) => t.id === taskId);
-    for (const recipient of recipientsOf(task, taskEvents[0].userId)) {
+    for (const recipient of await recipientsOf(task, { userId: taskEvents[0].userId, workspaceId })) {
       await notifications.notify(
         recipient,
         unblockedToo ? 'task_unblocked' : 'task_children_completed',

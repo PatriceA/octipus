@@ -68,16 +68,44 @@ describe('SPACE_ROUTES classification', () => {
     }
   });
 
-  test('agents and pipelines addressed by id take the row’s workspace', () => {
+  test('agents and pipelines addressed by id keep the space for reads and stops only', () => {
     const id = '0f0e0d0c-0b0a-4908-8706-050403020100';
     const q = (s: string) => new URLSearchParams(s);
-    expect(spaceTargetOf('/api/agents/agent-1/stop', q(''))).toEqual({ kind: 'agent', id: 'agent-1' });
-    expect(spaceTargetOf('/api/agents/route', q(''))).toBeNull();
-    expect(spaceTargetOf(`/api/pipelines/${id}/pause`, q(''))).toEqual({ kind: 'pipeline', id });
-    expect(spaceTargetOf('/api/pipelines/templates', q(''))).toBeNull();
-    expect(spaceTargetOf('/api/agents', q(`sessionId=${id}`))).toEqual({ kind: 'session', id });
-    expect(spaceTargetOf('/api/models', q(`sessionId=${id}`))).toBeNull();
+    expect(spaceTargetOf('POST', '/api/agents/agent-1/stop', q(''))).toEqual({ kind: 'agent', id: 'agent-1' });
+    expect(spaceTargetOf('GET', '/api/agents/agent-1', q(''))).toEqual({ kind: 'agent', id: 'agent-1' });
+    expect(spaceTargetOf('DELETE', '/api/agents/agent-1', q(''))).toEqual({ kind: 'agent', id: 'agent-1' });
+    expect(spaceTargetOf('GET', '/api/agents/route', q(''))).toBeNull();
+    expect(spaceTargetOf('POST', `/api/pipelines/${id}/pause`, q(''))).toEqual({ kind: 'pipeline', id });
+    expect(spaceTargetOf('GET', '/api/pipelines/templates', q(''))).toBeNull();
+    expect(spaceTargetOf('GET', '/api/agents', q(`sessionId=${id}`))).toEqual({ kind: 'session', id });
+    expect(spaceTargetOf('GET', '/api/models', q(`sessionId=${id}`))).toBeNull();
+    // Anything that runs the model runs personal (finding: a viewer started a space pipeline).
+    expect(spaceTargetOf('POST', '/api/pipelines', q(`sessionId=${id}`))).toBeNull();
+    expect(spaceTargetOf('POST', '/api/agents', q(`sessionId=${id}`))).toBeNull();
+    expect(spaceTargetOf('POST', '/api/agents/agent-1/message', q(''))).toBeNull();
+    expect(spaceTargetOf('POST', `/api/pipelines/${id}/resume`, q(''))).toBeNull();
+    expect(spaceTargetOf('POST', `/api/pipelines/${id}/approve/s1`, q(''))).toBeNull();
+    expect(spaceTargetOf('POST', `/api/pipelines/${id}/plan`, q(''))).toBeNull();
+    expect(spaceTargetOf('PATCH', `/api/pipelines/${id}/checkpoints/1`, q(''))).toBeNull();
   });
+
+  test('every mounted method and path that acts on a space is reviewed (method + path, not prefix)', async () => {
+    const { createServer } = await import('./server');
+    const routes = createServer().routeTable();
+    const id = '0f0e0d0c-0b0a-4908-8706-050403020100';
+    const acting: string[] = [];
+    for (const { method, path } of routes) {
+      if (isSpaceRoute(path)) {
+        acting.push(`${method} ${path}`);
+        continue;
+      }
+      // Personal routes that keep the space when they address a row by id.
+      const concrete = path.replace(/:[A-Za-z]+/g, id);
+      const query = new URLSearchParams(`sessionId=${id}`);
+      if (spaceTargetOf(method, concrete, query)) acting.push(`${method} ${path} (by target)`);
+    }
+    expect(acting.sort(), 'a new handler acting on a space: review its access, then list it here').toEqual([...SPACE_ACTING].sort());
+  }, 60_000);
 
   test('a denied workspace still reaches auth, health, the workspace list and the space list', () => {
     expect(isDeniedWorkspaceExempt('GET', '/api/auth/me')).toBe(true);
@@ -88,3 +116,46 @@ describe('SPACE_ROUTES classification', () => {
     expect(isDeniedWorkspaceExempt('GET', '/api/notes')).toBe(false);
   });
 });
+
+/**
+ * Every handler that runs with the space principal when the header names a
+ * space. Adding a handler under a space prefix (or one a target keeps in the
+ * space) fails the classification test until its access is reviewed and it
+ * is listed here.
+ */
+const SPACE_ACTING = [
+  'GET /api/spaces', 'POST /api/spaces', 'GET /api/spaces/:id', 'PATCH /api/spaces/:id', 'POST /api/spaces/:id/archive',
+  'POST /api/spaces/:id/unarchive', 'DELETE /api/spaces/:id', 'GET /api/spaces/:id/members', 'PATCH /api/spaces/:id/members/:userId',
+  'DELETE /api/spaces/:id/members/:userId', 'GET /api/spaces/:id/invites', 'POST /api/spaces/:id/invites',
+  'DELETE /api/spaces/:id/invites/:inviteId', 'GET /api/spaces/:id/activity',
+  'GET /api/sessions/:id/learning', 'POST /api/sessions/:id/learning', 'POST /api/sessions/:id/monitors/events',
+  'GET /api/sessions/:id/monitors', 'POST /api/sessions/:id/monitors/:monitorId/control', 'GET /api/sessions', 'GET /api/sessions/:id',
+  'GET /api/sessions/:id/plan', 'POST /api/sessions/:id/plan/feedback', 'POST /api/sessions', 'PATCH /api/sessions/:id',
+  'DELETE /api/sessions/:id', 'GET /api/sessions/:id/messages', 'POST /api/sessions/:id/attachments', 'GET /api/sessions/:id/files',
+  'PUT /api/sessions/:id/files', 'GET /api/sessions/:id/changes', 'GET /api/sessions/:id/changes/diff', 'POST /api/sessions/:id/complete',
+  'GET /api/sessions/stats/active',
+  'GET /api/tasks', 'GET /api/tasks/role-agents', 'PUT /api/tasks/role-agents', 'GET /api/tasks/:id', 'POST /api/tasks',
+  'PATCH /api/tasks/:id', 'POST /api/tasks/:id/checkout', 'POST /api/tasks/:id/release', 'GET /api/tasks/:id/comments',
+  'POST /api/tasks/:id/comments', 'DELETE /api/tasks/:id',
+  'GET /api/notifications', 'POST /api/notifications/:id/read', 'POST /api/notifications/read-all',
+  'GET /api/artifacts/_meta', 'GET /api/artifacts', 'POST /api/artifacts', 'GET /api/artifacts/spec/:slugOrId', 'GET /api/artifacts/:id',
+  'PUT /api/artifacts/:id', 'DELETE /api/artifacts/:id', 'GET /api/artifacts/:id/versions',
+  'POST /api/artifacts/:id/versions/:versionId/restore', 'GET /api/artifacts/:id/data-sources', 'POST /api/artifacts/:id/data-sources',
+  'DELETE /api/artifacts/:id/data-sources/:sourceId', 'POST /api/artifacts/:id/refresh', 'GET /api/artifacts/:id/data/:sourceName',
+  'POST /api/artifacts/:id/share-links', 'GET /api/artifacts/:id/share-links', 'DELETE /api/artifacts/:id/share-links/:linkId',
+  'GET /api/artifacts/:id/feed.rss',
+  'POST /api/documents/upload', 'GET /api/documents', 'GET /api/documents/:id', 'GET /api/documents/:id/raw', 'DELETE /api/documents/:id',
+  'POST /api/documents/:id/cancel',
+  'GET /api/knowledge/readiness', 'GET /api/knowledge', 'GET /api/knowledge/stats', 'POST /api/knowledge/search', 'GET /api/knowledge/:id',
+  'DELETE /api/knowledge/:id', 'POST /api/knowledge/cleanup', 'GET /api/knowledge/cleanup-history', 'POST /api/knowledge/index',
+  'GET /api/notes', 'POST /api/notes', 'POST /api/notes/query', 'GET /api/notes/index', 'GET /api/notes/tags', 'POST /api/notes/capture',
+  'GET /api/notes/:id', 'GET /api/notes/:id/suggestions', 'PATCH /api/notes/:id/pin', 'DELETE /api/notes/:id',
+  'GET /a/:slug', 'GET /a/:slug/embed', 'GET /a/:slug/bundle.js', 'GET /a/:slug/export/:exportId',
+  'GET /__artifacts__/a/:slug', 'GET /__artifacts__/a/:slug/embed', 'GET /__artifacts__/a/:slug/bundle.js',
+  'GET /__artifacts__/a/:slug/export/:exportId',
+  // Personal routes kept in the space by the row they address: reads and stops only.
+  'GET /api/agents (by target)', 'GET /api/agents/:id (by target)', 'POST /api/agents/:id/stop (by target)',
+  'DELETE /api/agents/:id (by target)', 'GET /api/agents/:id/events (by target)',
+  'GET /api/pipelines (by target)', 'GET /api/pipelines/:id (by target)', 'GET /api/pipelines/:id/plan (by target)',
+  'GET /api/pipelines/:id/checkpoints (by target)', 'POST /api/pipelines/:id/pause (by target)', 'POST /api/pipelines/:id/stop (by target)',
+];

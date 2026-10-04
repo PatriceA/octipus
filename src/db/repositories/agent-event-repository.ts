@@ -29,6 +29,7 @@ export class AgentEventRepository {
 
     return this.db
       .select()
+      // i2: by agent id; the route reads the agent through the scoped repo first
       .from(agentEvents)
       .where(conditions)
       .orderBy(agentEvents.id)
@@ -38,6 +39,7 @@ export class AgentEventRepository {
   async findBySession(sessionId: string): Promise<AgentEventRecord[]> {
     return this.db
       .select()
+      // i2: by session id, for a system caller that already holds the session
       .from(agentEvents)
       .where(eq(agentEvents.sessionId, sessionId))
       .orderBy(agentEvents.id)

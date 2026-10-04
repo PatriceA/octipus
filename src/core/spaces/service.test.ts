@@ -353,3 +353,89 @@ describe('membership changes (§5.9)', () => {
     }
   });
 });
+
+describe('review fixes: audit actor, committed changes, archive, locks', () => {
+  test('an impersonated change names the admin in its audit row (I10)', async () => {
+    const { setRole } = await import('./service');
+    const { createInvite } = await import('./invites');
+    const id = await spaceWith([[editor, 'editor']]);
+    await setRole({ userId: owner, impersonatedBy: admin }, id, editor, { role: 'viewer' });
+    const invite = await createInvite({ userId: owner, impersonatedBy: admin }, id, { role: 'viewer' });
+    const rows = await q(
+      `SELECT action::text AS action, user_id, details FROM audit_log WHERE workspace_id = $1 AND action IN ('space_member_role_changed', 'space_invite_created') AND (resource_id = $2 OR resource_id = $3)`,
+      [id, editor, invite.id],
+    );
+    expect(rows).toHaveLength(2);
+    for (const row of rows) expect(row).toMatchObject({ user_id: owner, details: { impersonatedBy: admin } });
+  });
+
+  test('a removal whose follow-up fails still stands, and says so instead of failing', async () => {
+    const { removeMember, getMembership } = await import('./service');
+    const { getAgentManager } = await import('@/core/agent-manager');
+    const id = await spaceWith([[editor, 'editor']]);
+    const stop = vi.spyOn(getAgentManager(), 'stopWorkspace').mockImplementation(() => { throw new Error('agent manager down'); });
+    try {
+      const result = await removeMember({ userId: owner }, id, editor);
+      expect(result.warning).toMatch(/stop agents/);
+    } finally {
+      stop.mockRestore();
+    }
+    expect(await getMembership(editor, id)).toBeNull();
+    // A retry is a plain not_found, not a second failure mode.
+    await expect(removeMember({ userId: owner }, id, editor)).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  test('archive stops the space: queued jobs cancelled, pending requests expired', async () => {
+    const { archiveSpace } = await import('./service');
+    const id = await spaceWith([[editor, 'editor']]);
+    const [session] = await q(`INSERT INTO sessions (user_id, channel_type, channel_id, workspace_id) VALUES ($1, 'web', $2, $3) RETURNING id`, [editor, `c-${rand(4)}`, id]);
+    const [queued] = await q(`INSERT INTO background_jobs (kind, user_id, title, workspace_id, payload) VALUES ('learning', $1, 'check', $2, $3::jsonb) RETURNING id`, [editor, id, JSON.stringify({ sessionId: session.id })]);
+    const [personalJob] = await q(`INSERT INTO background_jobs (kind, user_id, title) VALUES ('learning', $1, 'mine') RETURNING id`, [editor]);
+    const [request] = await q(
+      `INSERT INTO permission_requests (user_id, agent_id, session_id, skill_id, action, context) VALUES ($1, 'a1', $2, 't', 'write', '{"toolName":"t","toolArguments":{}}') RETURNING id`,
+      [editor, session.id],
+    );
+    const summary = await archiveSpace({ userId: owner }, id);
+    expect(summary.archivedAt).not.toBeNull();
+    expect(summary.warning).toBeUndefined();
+    expect((await q(`SELECT status FROM background_jobs WHERE id = $1`, [queued.id]))[0].status).toBe('cancelled');
+    expect((await q(`SELECT status FROM background_jobs WHERE id = $1`, [personalJob.id]))[0].status).toBe('queued');
+    expect((await q(`SELECT status FROM permission_requests WHERE id = $1`, [request.id]))[0].status).toBe('expired');
+  });
+
+  test('a removed member’s queued jobs in the space are cancelled, nobody else’s', async () => {
+    const { removeMember } = await import('./service');
+    const id = await spaceWith([[editor, 'editor'], [viewer, 'viewer']]);
+    const [theirs] = await q(`INSERT INTO background_jobs (kind, user_id, title, workspace_id) VALUES ('document', $1, 'doc', $2) RETURNING id`, [editor, id]);
+    const [others] = await q(`INSERT INTO background_jobs (kind, user_id, title, workspace_id) VALUES ('document', $1, 'doc', $2) RETURNING id`, [viewer, id]);
+    await removeMember({ userId: owner }, id, editor);
+    expect((await q(`SELECT status FROM background_jobs WHERE id = $1`, [theirs.id]))[0].status).toBe('cancelled');
+    expect((await q(`SELECT status FROM background_jobs WHERE id = $1`, [others.id]))[0].status).toBe('queued');
+  });
+
+  test('an operation reads the actor’s membership FOR SHARE, and the target’s FOR UPDATE', async () => {
+    // PGlite cannot interleave two transactions, so this pins the SQL the
+    // lock relies on: a demotion or removal of the actor committing during
+    // the operation waits on the actor's row instead of racing it
+    // (concurrency.integration.test.ts runs the race on Postgres).
+    const { PgSelectQueryBuilderBase } = await import('drizzle-orm/pg-core');
+    const { removeMember } = await import('./service');
+    const id = await spaceWith([[editor, 'editor']]);
+    const proto = PgSelectQueryBuilderBase.prototype as unknown as { for: (...args: unknown[]) => { toSQL(): { sql: string } } };
+    const original = proto.for;
+    const locked: string[] = [];
+    const spy = vi.spyOn(proto, 'for').mockImplementation(function (this: unknown, ...args: unknown[]) {
+      const query = original.apply(this, args);
+      locked.push(query.toSQL().sql);
+      return query;
+    });
+    try {
+      await removeMember({ userId: owner }, id, editor);
+    } finally {
+      spy.mockRestore();
+    }
+    const membershipLocks = locked.filter((sql) => sql.includes('from "workspace_members"'));
+    expect(membershipLocks.some((sql) => /for share of "workspace_members"/i.test(sql) && sql.includes('"workspace_members"."user_id" = $'))).toBe(true);
+    expect(membershipLocks.some((sql) => /for update of "workspace_members"/i.test(sql))).toBe(true);
+  });
+});

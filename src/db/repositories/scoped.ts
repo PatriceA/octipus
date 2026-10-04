@@ -35,7 +35,7 @@ import { and, arrayContains, asc, count, desc, eq, getTableColumns, gte, inArray
 import { alias, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { dispatchWakeups, notifyTaskClosed, scheduleWakeup, type WakeupCause } from '@/core/tasks/wakeups';
 import { isAdmin, isAuthenticated, type Principal } from '@/security/principal';
-import type { SpaceAction } from '@/security/space-access';
+import { type SpaceAction, SpaceError } from '@/security/space-access';
 import { TASK_CHECKOUT_TTL_MS } from '@/core/tasks/checkout';
 import { ACTIVE_TASK_STATUSES, isActiveStatus, isTaskStatus } from '@/core/tasks/status';
 import { toLookup, type WaitingOn, waitingOn } from '@/core/tasks/structure';
@@ -54,6 +54,7 @@ import { type Pipeline, pipelines } from '../schema/pipelines';
 import { type NewSession, type Session, sessions } from '../schema/sessions';
 import { type TaskComment, taskComments } from '../schema/task-comments';
 import { type NewTask, type Task, tasks } from '../schema/tasks';
+import { workspaces } from '../schema/organizations';
 import { type TrajectoryRunRecord, trajectoryRuns } from '../schema/trajectory-runs';
 
 /**
@@ -92,14 +93,38 @@ export function isUuid(id: string): boolean {
 
 /**
  * The personal predicate (docs/plans/coworking-spec.md §5.5, I2): the row is
- * not in a shared workspace. Every personal read carries it — through
- * `workspaceFilter` here, and on its own in the raw readers outside the
- * repositories — so a personal path never returns a space's rows, for their
- * author and for an admin alike. `column` is a `workspace_id` column (or an
- * aliased one); a NULL workspace is personal.
+ * in no workspace, or in a personal one. Every personal read carries it —
+ * through `workspaceFilter` here, and on its own in the raw readers outside
+ * the repositories — so a personal path never returns a space's rows, for
+ * their author and for an admin alike. `column` is a `workspace_id` column
+ * (or an aliased one); a NULL workspace is personal.
+ *
+ * Positive on purpose: a row still naming a workspace that no longer exists
+ * (a purged space's row on a table without a foreign key) is nobody's
+ * personal row. "Not in a shared workspace" would hand it to its author.
  */
 export function notInSharedWorkspace(column: AnyPgColumn | SQL): SQL {
-  return sql`(${column} IS NULL OR NOT EXISTS (SELECT 1 FROM workspaces sw WHERE sw.id = ${column} AND sw.kind = 'shared'))`;
+  return sql`(${column} IS NULL OR EXISTS (SELECT 1 FROM workspaces pw WHERE pw.id = ${column} AND pw.kind = 'personal'))`;
+}
+
+/**
+ * Throws unless `workspaceId` may take a personal write: none (user-level)
+ * or a personal workspace. A personal scope handed a space's id — an agent
+ * context in a space, a caller's `data.workspaceId` — would otherwise insert
+ * into the space with no membership, role or archive check (D3): space
+ * writes go through `contentRepos` with the space principal.
+ */
+export async function assertPersonalWorkspace(workspaceId: string | null | undefined): Promise<void> {
+  if (!workspaceId) return;
+  if (!isUuid(workspaceId)) throw new Error(`Not a workspace id: ${workspaceId}`);
+  const [row] = await getDb()
+    .select({ kind: workspaces.kind })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+  if (row?.kind === 'shared') {
+    throw new Error('Personal repositories cannot write into a shared workspace; use contentRepos(principal) with the space principal');
+  }
 }
 
 /**
@@ -155,6 +180,14 @@ export interface RepoScope {
   stamp(): { userId: string; workspaceId: string | null };
   /** Throws `SpaceError` when the principal may not `action` here; the personal scope allows everything. */
   can(action: SpaceAction): void;
+  /** Throws `SpaceError('archived')` when the scope reads only (an archived space); the personal scope never does. */
+  assertOpen(): void;
+  /**
+   * The workspace a new row is stamped with. In a space, always the space
+   * (`requested` is ignored); personally, `requested` or the principal's
+   * workspace, refused when it names a shared workspace (D3).
+   */
+  writeWorkspace(requested?: string | null): Promise<string | null>;
 }
 
 /** The personal scope of `principal`: the personal door (D3). */
@@ -179,6 +212,12 @@ export function personalScope(principal: Principal): RepoScope {
     own: owner,
     stamp: () => ({ userId: principal.userId, workspaceId: principal.workspaceId ?? null }),
     can: () => undefined,
+    assertOpen: () => undefined,
+    writeWorkspace: async (requested) => {
+      const workspaceId = requested ?? principal.workspaceId ?? null;
+      await assertPersonalWorkspace(workspaceId);
+      return workspaceId;
+    },
   };
 }
 
@@ -257,17 +296,17 @@ export class ScopedSessionRepo {
    * `data`. Phase 4: when the principal carries a workspace context,
    * the new row is stamped with it (unless `data` explicitly sets a
    * workspaceId — useful for admin tools that need to seed rows in a
-   * specific workspace). In a space the workspace is always the space's.
+   * specific workspace). In a space the workspace is always the space's,
+   * and a chat there is an agent run: the role must allow `run_agent` and
+   * the space must not be archived. A personal create never lands in a space.
    */
   async create(data: Omit<NewSession, 'userId'>): Promise<Session> {
+    this.scope.can('run_agent');
     const stamp = this.scope.stamp();
+    const workspaceId = await this.scope.writeWorkspace(data.workspaceId);
     const result = await this.db
       .insert(sessions)
-      .values({
-        ...data,
-        userId: stamp.userId,
-        workspaceId: this.scope.kind === 'space' ? stamp.workspaceId : data.workspaceId ?? stamp.workspaceId,
-      })
+      .values({ ...data, userId: stamp.userId, workspaceId })
       .returning();
     return result[0];
   }
@@ -275,6 +314,8 @@ export class ScopedSessionRepo {
   /** Update only if the principal owns the row (or is an admin). */
   async update(id: string, patch: Partial<NewSession>): Promise<Session | null> {
     if (!isUuid(id)) return null;
+    // An archived space reads only, the member's own chats included.
+    this.scope.assertOpen();
     // Strip user_id (re-owning a row is never legitimate) and workspace_id
     // (moving a chat into or out of a space is not an edit).
     const { userId: _drop, workspaceId: _ws, ...safe } = patch;
@@ -293,6 +334,7 @@ export class ScopedSessionRepo {
   /** Delete only if owned. Returns false on miss / cross-tenant. */
   async delete(id: string): Promise<boolean> {
     if (!isUuid(id)) return false;
+    this.scope.assertOpen();
     const result = await this.db
       .delete(sessions)
       .where(and(eq(sessions.id, id), ...this.scope.own(sessions, { byId: true })))
@@ -396,9 +438,11 @@ export class ScopedMessageRepo {
   /**
    * Insert a message. The caller must already have proven session
    * ownership by loading the session via the scoped session repo;
-   * we re-check here so the layer is independently safe.
+   * we re-check here so the layer is independently safe. In a space a
+   * message is a turn of the member's chat: `run_agent`, not archived.
    */
   async create(data: NewMessage): Promise<Message | null> {
+    this.scope.can('run_agent');
     const owns = await this.db
       .select({ id: sessions.id })
       .from(sessions)
@@ -466,6 +510,28 @@ export class ScopedAgentRepo {
       .limit(limit);
   }
 
+  /**
+   * Admin-only global list and its count. Throws if the principal is not an
+   * admin. Never lists an agent of a space (I2): admins reach spaces through
+   * membership or audited impersonation (§5.5).
+   */
+  async listAllAdmin(limit = 200, offset = 0): Promise<AgentRecord[]> {
+    if (!isAdmin(this.principal) || this.scope.kind !== 'personal') throw new UnauthenticatedAccessError();
+    return this.db
+      .select()
+      .from(agents)
+      .where(notInSharedWorkspace(agents.workspaceId))
+      .orderBy(desc(agents.createdAt))
+      .limit(limit)
+      .offset(offset);
+  }
+
+  async countAllAdmin(): Promise<number> {
+    if (!isAdmin(this.principal) || this.scope.kind !== 'personal') throw new UnauthenticatedAccessError();
+    const [row] = await this.db.select({ c: count() }).from(agents).where(notInSharedWorkspace(agents.workspaceId));
+    return row?.c ?? 0;
+  }
+
   /** Count agents owned by the principal — for pagination totals. */
   async countOwn(): Promise<number> {
     const [row] = await this.db
@@ -513,14 +579,12 @@ export class ScopedAgentRepo {
 
   /** Create an agent pinned to the principal. Phase 4 — stamps workspace_id when set; in a space, always the space's. */
   async create(data: Omit<NewAgentRecord, 'userId'>): Promise<AgentRecord> {
+    this.scope.can('run_agent');
     const stamp = this.scope.stamp();
+    const workspaceId = await this.scope.writeWorkspace(data.workspaceId);
     const result = await this.db
       .insert(agents)
-      .values({
-        ...data,
-        userId: stamp.userId,
-        workspaceId: this.scope.kind === 'space' ? stamp.workspaceId : data.workspaceId ?? stamp.workspaceId,
-      })
+      .values({ ...data, userId: stamp.userId, workspaceId })
       .returning();
     return result[0];
   }
@@ -587,13 +651,10 @@ export class ScopedDocumentRepo {
   async create(data: Omit<NewDocumentRecord, 'userId'>): Promise<DocumentRecord> {
     this.scope.can('write');
     const stamp = this.scope.stamp();
+    const workspaceId = await this.scope.writeWorkspace(data.workspaceId);
     const result = await this.db
       .insert(documents)
-      .values({
-        ...data,
-        userId: stamp.userId,
-        workspaceId: this.scope.kind === 'space' ? stamp.workspaceId : data.workspaceId ?? stamp.workspaceId,
-      })
+      .values({ ...data, userId: stamp.userId, workspaceId })
       .returning();
     return result[0];
   }
@@ -1135,15 +1196,42 @@ export class TaskRepo {
   }
 
   /**
+   * Check the assignee of a write (§5.5). A user assignee is told when the
+   * task wakes (core/tasks/wakeups.ts), so it must be someone the task is
+   * theirs to see: in a space a member (not a guest; a role or a node never
+   * — role agents and heartbeats are personal automation and never run a
+   * space task), personally the task's owner. Throws with a message fit for
+   * the API's 400 / the tool's `error` field.
+   */
+  private async checkAssignee(kind: string | null | undefined, ref: string | null | undefined, owner: string): Promise<void> {
+    if (!kind) return;
+    if (this.taskScope.kind === 'space') {
+      if (kind !== 'user') throw new SpaceError('invalid_input', 'A space task is assigned to a member, never to a role or a node');
+      const { getMembership } = await import('@/core/spaces/service');
+      const member = ref ? await getMembership(ref, this.taskScope.spaceId as string) : null;
+      if (!member || member.role === 'guest') throw new SpaceError('invalid_input', 'The assignee is not a member of this space');
+      return;
+    }
+    if (kind === 'user' && ref !== owner) throw new Error('A personal task can be assigned only to its owner');
+  }
+
+  /** The row a task write stamps: the scope's author, in the scope's workspace (never a space from the personal door). */
+  private async stampRow(): Promise<{ userId: string; workspaceId: string | null }> {
+    return { userId: this.taskScope.stamp().userId, workspaceId: await this.taskScope.writeWorkspace() };
+  }
+
+  /**
    * Create a task in the scope. Ignores any user_id and workspace_id in
    * `data`: the row is the scope's author's, in the scope's workspace.
    */
   async create(data: Omit<NewTask, 'userId'>): Promise<Task> {
     this.taskScope.can('write');
     await this.checkStructure(data);
+    const stamp = await this.stampRow();
+    await this.checkAssignee(data.assigneeKind, data.assigneeRef, stamp.userId);
     const result = await this.db
       .insert(tasks)
-      .values({ ...data, ...this.taskScope.stamp() })
+      .values({ ...data, ...stamp })
       .returning();
     return result[0];
   }
@@ -1156,7 +1244,9 @@ export class TaskRepo {
   async createOnce(data: Omit<NewTask, 'userId'> & { id: string }): Promise<{ task: Task; created: boolean }> {
     this.taskScope.can('write');
     await this.checkStructure(data);
-    const [created] = await this.db.insert(tasks).values({ ...data, ...this.taskScope.stamp() })
+    const stamp = await this.stampRow();
+    await this.checkAssignee(data.assigneeKind, data.assigneeRef, stamp.userId);
+    const [created] = await this.db.insert(tasks).values({ ...data, ...stamp })
       .onConflictDoNothing({ target: tasks.id }).returning();
     if (created) return { task: created, created: true };
     const existing = await this.findById(data.id);
@@ -1200,6 +1290,15 @@ export class TaskRepo {
     void _drop;
     void _ws;
     if (safe.parentId !== undefined || safe.blockedBy !== undefined) await this.checkStructure(safe, id);
+    if (safe.assigneeKind !== undefined || safe.assigneeRef !== undefined) {
+      const current = await this.findById(id);
+      if (!current) return null;
+      await this.checkAssignee(
+        safe.assigneeKind !== undefined ? safe.assigneeKind : current.assigneeKind,
+        safe.assigneeRef !== undefined ? safe.assigneeRef : current.assigneeRef,
+        current.userId,
+      );
+    }
     // Leaving the active lanes (done, archived) or going back to open ends the
     // work, so it ends the checkout too.
     const release = safe.status !== undefined && (safe.status === 'open' || !isActiveStatus(safe.status))

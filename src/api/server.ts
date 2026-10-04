@@ -121,14 +121,14 @@ function withWorkspace(principal: Principal, resolution: Resolution): Principal 
  * A header naming a space reaches the space only on `SPACE_ROUTES`
  * (docs/plans/coworking-spec.md §5.4). Every other route runs in the
  * caller's default personal workspace — except one that addresses a
- * session, agent or pipeline by id: that one runs in the row's workspace
- * when it is this space.
+ * session, agent or pipeline by id to read or stop it: that one runs in
+ * the row's workspace when it is this space.
  */
-async function routeWorkspace(userId: string, resolution: Resolution, url: URL): Promise<Resolution> {
+async function routeWorkspace(userId: string, resolution: Resolution, method: string, url: URL): Promise<Resolution> {
   const { isSpaceRoute, spaceTargetOf } = await import('./space-routes');
   if (isSpaceRoute(url.pathname)) return resolution;
   const { defaultWorkspaceResolution, workspaceOfTarget } = await import('@/security/workspace-resolver');
-  const target = spaceTargetOf(url.pathname, url.searchParams);
+  const target = spaceTargetOf(method, url.pathname, url.searchParams);
   if (target && (await workspaceOfTarget(userId, target)) === resolution.workspaceId) return resolution;
   return defaultWorkspaceResolution(userId);
 }
@@ -360,7 +360,7 @@ export function createServer() {
           if (!isDeniedWorkspaceExempt(request.method, url.pathname)) return { workspaceDenied: true };
           resolution = await defaultWorkspaceResolution(principal.userId);
         } else if (resolution.workspaceKind === 'shared') {
-          resolution = await routeWorkspace(principal.userId, resolution, url);
+          resolution = await routeWorkspace(principal.userId, resolution, request.method, url);
         }
         if (resolution.workspaceId === null) return {};
         return { principal: withWorkspace(principal, resolution) };
