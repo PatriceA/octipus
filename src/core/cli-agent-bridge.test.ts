@@ -8,7 +8,8 @@ import type { AgentContext } from './types';
 import { addPlanFeedback, type WorkPlanState } from '@/shared/work-plan';
 
 const fixture = vi.hoisted(() => ({ script: '', dir: '', plan: { revision: 0, current: null, previous: [] } as WorkPlanState,
-  check: vi.fn(), execute: vi.fn(), cancel: vi.fn(), readFailure: false, audit: vi.fn(), status: vi.fn(), requestApproval: vi.fn() }));
+  check: vi.fn(), execute: vi.fn(), cancel: vi.fn(), readFailure: false, audit: vi.fn(), status: vi.fn(), requestApproval: vi.fn(),
+  sessionWorkspaceId: null as string | null }));
 const commentary = vi.hoisted(() => vi.fn().mockResolvedValue({ sent: true }));
 vi.mock('./agent/service', () => ({ getAgentService: () => ({ sendStatusUpdate: commentary }) }));
 // These process/bridge fixtures have no database; accounting is tested separately.
@@ -33,7 +34,7 @@ vi.mock('@/models/model-registry', () => ({ getModelRegistry: () => ({ getModel:
 vi.mock('@/models/quota-tracker', () => ({ cliQuotaKey: (provider: string) => provider, getQuotaTracker: () => ({ getStatus: async () => ({ exhausted: false }) }) }));
 vi.mock('@/core/agent-task-recorder', () => ({ recordAgentCompletion: async () => {} }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: {
-  findById: async () => ({ id: 's', userId: 'u', context: { devMode: true, projectPath: fixture.dir, planMode: false } }),
+  findById: async () => ({ id: 's', userId: 'u', workspaceId: fixture.sessionWorkspaceId, context: { devMode: true, projectPath: fixture.dir, planMode: false } }),
   incrementMessageCount: async () => {},
   patchContextIfGeneration: async () => true,
   setContextKeyIfGeneration: async () => true,
@@ -202,7 +203,9 @@ it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('a run in a space passes the space mod
     workspaceId: spaceId, root: true, model: 'cli/claude-code', role: 'general', topic: 'general', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
   usage.mockClear();
-  const { argv, settings } = JSON.parse(await worker.run('Check it')) as { argv: string[]; settings: { permissions: unknown; hooks: Record<string, unknown> } };
+  // The session is the space's: `forSession` refuses space access naming another workspace.
+  fixture.sessionWorkspaceId = spaceId;
+  const { argv, settings } = JSON.parse(await worker.run('Check it').finally(() => { fixture.sessionWorkspaceId = null; })) as { argv: string[]; settings: { permissions: unknown; hooks: Record<string, unknown> } };
   expect(argv[argv.indexOf('--permission-mode') + 1]).toBe('default');
   expect(argv[argv.indexOf('--permission-prompt-tool') + 1]).toBe('stdio');
   expect(argv).toContain('--setting-sources=');

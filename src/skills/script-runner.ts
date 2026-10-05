@@ -30,7 +30,7 @@ export async function runSkillScript(
   const session = await sessionRepository.findById(context.sessionId);
   if (!session || !(await canActInSession(session, context.userId, 'requester'))) throw new Error('Session not found.');
   if (session.context?.planMode) throw new Error('Skill script execution is unavailable in plan mode.');
-  const workspace = WorkspaceFS.forSession(session);
+  const workspace = WorkspaceFS.forSession(session, { space: context.space ?? null });
   await workspace.ensureRoot();
   const workspaceRoot = await realpath(workspace.root);
   const workdir = cwd ? workspace.resolve(cwd) : workspaceRoot;

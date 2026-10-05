@@ -14,7 +14,7 @@ import { readSessionFile, SessionFileError, writeSessionFile } from '@/core/sess
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { contentRepos } from '@/db/repositories/content';
 import { isAuthenticated } from '@/security/principal';
-import { WorkspaceFS } from '@/security/workspace-fs';
+import { spaceAccessOf, WorkspaceFS } from '@/security/workspace-fs';
 import { storeChatUploads } from '@/core/chat-uploads';
 import { EXTERNAL_CHANNELS, loadNotifyScope, resolveTarget } from '@/channels/ownership';
 
@@ -408,7 +408,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
     // In a space the files are the space's: writing them needs `write`.
     repos.can('write');
     try {
-      return { uploaded: await storeChatUploads(WorkspaceFS.forSession(session), Array.isArray(body.files) ? body.files : [body.files]) };
+      return { uploaded: await storeChatUploads(WorkspaceFS.forSession(session, spaceAccessOf(principal)), Array.isArray(body.files) ? body.files : [body.files]) };
     } catch (error) {
       if (error instanceof SessionFileError) { set.status = error.status; return { error: error.message }; }
       throw error;
@@ -439,7 +439,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
       try {
         // forSession: dev-mode sessions resolve against the project dir the
         // agent actually ran in, not the per-user workspace (P1.8).
-        const fs = WorkspaceFS.forSession(session);
+        const fs = WorkspaceFS.forSession(session, spaceAccessOf(principal));
         const result = await readSessionFile(fs, query.path);
         if ('version' in result) set.headers.ETag = `"${result.version}"`;
         return result;
@@ -482,7 +482,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         return { error: 'Missing required param: path' };
       }
       try {
-        const fs = WorkspaceFS.forSession(session);
+        const fs = WorkspaceFS.forSession(session, spaceAccessOf(principal));
         const result = await writeSessionFile(fs, path, body.content, body.baseVersion);
         set.headers.ETag = `"${result.version}"`;
         return result;
@@ -525,7 +525,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         set.status = 404;
         return { error: 'Session not found' };
       }
-      const fs = WorkspaceFS.forSession(session);
+      const fs = WorkspaceFS.forSession(session, spaceAccessOf(principal));
       const { getWorkspaceChanges } = await import('@/core/session-changes');
       return getWorkspaceChanges(fs.root);
     },
@@ -553,7 +553,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         set.status = 400;
         return { error: 'Missing required query param: path' };
       }
-      const fs = WorkspaceFS.forSession(session);
+      const fs = WorkspaceFS.forSession(session, spaceAccessOf(principal));
       let absPath: string;
       try {
         absPath = fs.resolve(query.path);

@@ -53,6 +53,7 @@ import { tmpdir } from 'node:os';
 import path, { basename, dirname, isAbsolute, join, relative, resolve as pathResolve } from 'node:path';
 import { getConfig } from '@/config';
 import type { AgentContext } from '@/core/types';
+import type { GuestScope, SpaceRole } from '@/db/schema/organizations';
 import type { Principal } from './principal';
 import { ANONYMOUS_PRINCIPAL, agentPrincipal, isAuthenticated, isRealUserId } from './principal';
 import { agentConfigRefusal, isAgentConfigPath } from './space-tools';
@@ -153,6 +154,33 @@ export function noteSharedWorkspace(id: string): void {
 /** Whether `id` is a shared workspace this process has seen. */
 export function isKnownSharedWorkspace(id: string | null | undefined): boolean {
   return !!id && sharedWorkspaceIds.has(id);
+}
+
+/**
+ * The requester's access to a session's space, which `WorkspaceFS.forSession`
+ * requires: their membership of the session's workspace (role and, for a
+ * guest, scope), or null when they hold none (a personal session).
+ */
+export interface SessionFsAccess {
+  readonly space: { readonly workspaceId: string; readonly role: SpaceRole; readonly scope: GuestScope | null } | null;
+}
+
+/** A request principal's access (see `SessionFsAccess`): its space role and scope, if any. */
+export function spaceAccessOf(principal: Principal): SessionFsAccess {
+  if (!principal.spaceRole || !principal.workspaceId) return { space: null };
+  return { space: { workspaceId: principal.workspaceId, role: principal.spaceRole, scope: principal.spaceScope ?? null } };
+}
+
+/**
+ * A user's access to a session (see `SessionFsAccess`) where only the
+ * session and the user are at hand: their membership of the session's space
+ * read now, or null in a personal workspace. A non-member gets null, which
+ * `forSession` refuses for a space session.
+ */
+export async function sessionFsAccess(session: { workspaceId?: string | null }, userId: string): Promise<SessionFsAccess> {
+  if (!(await isSharedWorkspaceId(session.workspaceId))) return { space: null };
+  const { getMembership } = await import('@/core/spaces/service');
+  return { space: await getMembership(userId, session.workspaceId as string) };
 }
 
 /**
@@ -443,17 +471,38 @@ export class WorkspaceFS {
    * sessions get the session's own workspace (`session.workspaceId`), the
    * root `forAgent` gives the agents of the session's turns.
    *
+   * `access` is the requester's access to the session's space, always
+   * passed: a space session's files are reached through it (a guest only
+   * within their folders), and a space session opened without it throws
+   * rather than handing out the whole space. Callers derive it from the
+   * turn's `AgentContext.space`, the request's principal (`spaceAccessOf`)
+   * or the requester's membership (`sessionFsAccess`).
+   *
    * Trust note: `projectPath` is only honored together with `devMode` —
    * the same (pre-existing) trust decision that lets the CLI agent run
    * with that directory as cwd; this helper adds no new reach.
    */
   static forSession(
     session: { userId: string; workspaceId?: string | null; context?: unknown },
+    access: SessionFsAccess,
     options: WorkspaceFsOptions = {},
   ): WorkspaceFS {
+    const space = access.space;
+    if (space && space.workspaceId !== session.workspaceId) {
+      throw new WorkspaceFsError('INVALID_INPUT',
+        `space access for ${space.workspaceId} does not open a session of workspace ${session.workspaceId ?? 'default'}`);
+    }
     // A space session reads back the space's files, whatever its context
     // says: no dev-mode project root in a space.
-    if (isKnownSharedWorkspace(session.workspaceId)) return WorkspaceFS.forSpace(session.workspaceId as string);
+    if (isKnownSharedWorkspace(session.workspaceId)) {
+      if (!space) {
+        throw new WorkspaceFsError('UNAUTHENTICATED',
+          `session of space ${session.workspaceId} opened without the requester's space access`);
+      }
+      // A guest reaches their folders only; a guest without a scope reaches none.
+      const guestFolders = space.role === 'guest' ? (space.scope?.folders ?? []) : null;
+      return WorkspaceFS.forSpace(session.workspaceId as string, { dataRoot: options.dataRoot, guestFolders });
+    }
     const ctx = session.context as
       | { devMode?: boolean; projectPath?: string }
       | null

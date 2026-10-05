@@ -306,7 +306,7 @@ export async function runStageVerifyCommand(
         workspaceId: ctx.workspaceId ?? workspaceId,
         space: ctx.space ?? null,
         projectPath: !inSpace && sessionCtx?.devMode === true ? sessionCtx.projectPath : undefined,
-        workspaceRoot: WorkspaceFS.forSession({ ...session, workspaceId }).root,
+        workspaceRoot: WorkspaceFS.forSession({ ...session, workspaceId }, { space: ctx.space ?? null }).root,
       },
     );
     const failure = outcome.failures[0];
@@ -1033,7 +1033,7 @@ export class PipelineManager {
     const registry = getModelRegistry();
     const nodes = new Map((await pipelineRepository.getNodes(pipeline.id)).map((r) => [r.nodeKey, r]));
     const byKey = new Map(graph.nodes.map((n) => [n.key, n]));
-    const workspaceRoot = await this.resolveWorkspaceRoot(sessionId);
+    const workspaceRoot = await this.resolveWorkspaceRoot(sessionId, context);
 
     let previousOutput = '';
     // The last stage's reply with its ```handoff fence still in it. Kept beside
@@ -2127,11 +2127,11 @@ export class PipelineManager {
    * Resolved once per pipeline run: it cannot change mid-run, and the session
    * lookup is a DB round-trip we do not need per stage.
    */
-  private async resolveWorkspaceRoot(sessionId: string): Promise<string | null> {
+  private async resolveWorkspaceRoot(sessionId: string, context: Pick<AgentContext, 'space'>): Promise<string | null> {
     try {
       const session = await sessionRepository.findById(sessionId);
       if (!session) return null;
-      return WorkspaceFS.forSession(session).root;
+      return WorkspaceFS.forSession(session, { space: context.space ?? null }).root;
     } catch (err) {
       coreLogger.warn({ err: (err as Error).message, sessionId }, 'Could not resolve workspace root for the evidence gate');
       return null;
