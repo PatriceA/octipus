@@ -5,7 +5,7 @@
  *
  *   - the CHECK: a local username never starts with `~`, a remote row is
  *     `~`-named, e-mail-less, password-less, never admin, with its instance;
- *   - migration `0134_guests_remote` renames an existing local `~` name;
+ *   - migration `0135_guests_remote` renames an existing local `~` name;
  *   - registration (see registration.isolation.test.ts), admin creation, SCIM
  *     (create and rename) and SAML JIT refuse a `~` username;
  *   - a remote row cannot sign in: sessions (create and validate), API
@@ -114,7 +114,7 @@ describe('the representation', () => {
     await q(`ALTER TABLE users DROP CONSTRAINT users_kind_chk`);
     const id = randomUUID();
     await q(`INSERT INTO users (id, username) VALUES ($1, '~legacy')`, [id]);
-    const sql = readFileSync(join(process.cwd(), 'src/db/migrations/0134_guests_remote.sql'), 'utf8');
+    const sql = readFileSync(join(process.cwd(), 'src/db/migrations/0135_guests_remote.sql'), 'utf8');
     for (const statement of sql.split('--> statement-breakpoint')) {
       if (statement.replace(/--.*$/gm, '').trim()) await q(statement);
     }

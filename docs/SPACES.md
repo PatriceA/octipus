@@ -313,7 +313,7 @@ is how such a member is represented on the host:
   `(remote_instance_id, remote_user_ref)` is unique.
 - **Local usernames may not start with `~`.** Registration, admin creation,
   SCIM (create and rename) and SAML JIT refuse one (`assertLocalUsername`,
-  `src/security/user-kinds.ts`); migration `0134_guests_remote` renamed any
+  `src/security/user-kinds.ts`); migration `0135_guests_remote` renamed any
   existing `~` username to `renamed-<id>-<name>` before adding the CHECK.
   `@` stays allowed (SAML NameIDs and SCIM userNames are e-mail addresses).
 - **Remote members never sign in here.** `SessionManager.create` refuses them

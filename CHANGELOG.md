@@ -71,7 +71,7 @@ labels reflect blast radius, not contract guarantees.
 - **Remote members (coworking S7 contract).** `users.kind` (`local` |
   `remote`), `remote_instance_id`, `remote_user_ref`; local usernames may no
   longer start with `~` (registration, admin creation, SCIM and SAML JIT
-  refuse it; migration `0134_guests_remote` renames existing ones before a
+  refuse it; migration `0135_guests_remote` renames existing ones before a
   CHECK). Remote rows never sign in (sessions, API tokens, impersonation,
   SAML, passkeys refuse them) and are left out of admin user lists and
   SCIM. See docs/SPACES.md → Across installs.
