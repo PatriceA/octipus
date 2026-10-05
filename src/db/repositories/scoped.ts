@@ -1288,9 +1288,9 @@ export class TaskRepo {
   }
 
   /** The event alone, for a write that cannot change the assignee (claim, comment, delete). */
-  private changed(taskId: string): void {
+  private changed(taskId: string, deleted?: Pick<Task, 'sourceRef'>): void {
     if (this.taskScope.kind !== 'space') return;
-    publishTaskChanged(this.taskScope.spaceId as string, taskId);
+    publishTaskChanged(this.taskScope.spaceId as string, taskId, deleted);
   }
 
   /**
@@ -1633,7 +1633,8 @@ export class TaskRepo {
     // A delete ranks at the moment it happened in the sibling order.
     if (gone) {
       this.wakeAfter({ ...gone, updatedAt: new Date() }, gone.status, 'deleted');
-      this.changed(gone.id);
+      // The row is gone: guests are matched on the deleted row's source.
+      this.changed(gone.id, { sourceRef: gone.sourceRef });
     }
     return result.length > 0;
   }
