@@ -139,6 +139,9 @@ export async function stubNotes(page: Page): Promise<void> {
     }
     if (path.startsWith('/tags')) return json(route, 200, { tags: [{ tag: 'demo', count: 1 }] });
     if (path.includes('/suggestions')) return json(route, 200, { suggestions: [] });
+    // The workspace counts a space note's pending agent proposals on its tab
+    // (§7.4); the route always answers `{ proposals }`.
+    if (path.startsWith('/proposals')) return json(route, 200, { proposals: [] });
     if (path.startsWith('/n1')) {
       return json(route, 200, {
         ...notes[0],
