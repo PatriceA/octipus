@@ -1,4 +1,5 @@
 import { getLiteLLMClient } from '@/models/litellm-client';
+import { withInstallUsage } from '@/models/providers/instrumented';
 import { getModelRegistry } from '@/models/model-registry';
 import type { EvalDataPoint, EvalScore, Evaluator } from './types';
 
@@ -54,13 +55,14 @@ async function llmJudge(prompt: string): Promise<{ score: number; reasoning: str
   const resolvedProvider = await router.resolveProvider(judgeModel.modelId);
   const client = getLiteLLMClient();
 
-  const callModel = async (opts: import('@/models/litellm-client').CompletionOptions) => {
+  // Evaluators are install work: stamped `install` (coworking spec §9.1).
+  const callModel = async (opts: import('@/models/litellm-client').CompletionOptions) => withInstallUsage(() => {
     // Route based on DB-configured provider — not heuristic name matching
     if (judgeModel.provider !== 'litellm') {
       return resolvedProvider.complete(opts);
     }
     return client.completeViaProxy(opts);
-  };
+  });
 
   const judgeMessages = [
     {

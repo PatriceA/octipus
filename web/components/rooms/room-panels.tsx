@@ -5,6 +5,7 @@ import { Plus, Trash2, UserMinus } from 'lucide-react';
 import { useState } from 'react';
 import { api } from '@/lib/api';
 import { initials, type Room, type RoomMember, roomsKey, type SpaceMemoryEntry, type RoomVisibility, useSpaceMembers } from '@/lib/rooms';
+import type { RoomModeName, RoomModeView } from '../../../src/shared/types';
 
 const inputClass = 'w-full px-2 py-1 bg-surface-container-low border border-outline-variant/60 rounded-xs text-[12px] text-on-surface focus:outline-none focus:border-primary';
 const buttonClass = 'inline-flex items-center gap-1.5 px-2 py-1 text-[11px] rounded-xs border border-outline-variant/60 text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high disabled:opacity-50 cursor-pointer';
@@ -188,8 +189,127 @@ export function MemoryPanel({ spaceId, canWrite }: { spaceId: string; canWrite: 
   );
 }
 
-/** The room's title and visibility: changed by its creator or a space owner, read by everyone. */
+/** The room's settings: title and visibility, and its mode (§9.3). */
 export function SettingsPanel({ spaceId, room, canManage }: { spaceId: string; room: Room; canManage: boolean }) {
+  return (
+    <div className="space-y-4">
+      <TitlePanel spaceId={spaceId} room={room} canManage={canManage} />
+      <ModePanel spaceId={spaceId} room={room} canManage={canManage} />
+    </div>
+  );
+}
+
+const MODE_HINTS: Record<RoomModeName, string> = {
+  mention: 'speaks only when someone asks it (@octipus)',
+  listen: 'offers help on a question nobody answered, without answering it',
+  proactive: 'answers a question nobody answered, as the member who asked',
+};
+
+export const roomModeKey = (roomId: string) => ['room', roomId, 'mode'] as const;
+
+/**
+ * The room's mode (coworking spec §9.3): `listen` and `proactive` use the
+ * group channels' gate — quiet hours, a daily cap, a minimum gap — and are
+ * paid by the space's sponsor, so they stay silent in a space without one.
+ */
+function ModePanel({ spaceId, room, canManage }: { spaceId: string; room: Room; canManage: boolean }) {
+  const qc = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+  const modeQ = useQuery({
+    queryKey: roomModeKey(room.id),
+    queryFn: () => api.get<RoomModeView>(`/spaces/${spaceId}/rooms/${room.id}/mode`),
+  });
+  const save = useMutation({
+    mutationFn: (body: Partial<Pick<RoomModeView, 'mode' | 'quietHoursStart' | 'quietHoursEnd' | 'maxUnpromptedPerDay' | 'minMinutesBetween' | 'timezone'>>) =>
+      api.put<RoomModeView>(`/spaces/${spaceId}/rooms/${room.id}/mode`, body),
+    onSuccess: (view) => {
+      setError(null);
+      qc.setQueryData(roomModeKey(room.id), view);
+    },
+    onError: (err: Error) => setError(err.message),
+  });
+  const view = modeQ.data;
+  if (!view) return null;
+  const hour = (v: string) => (v === '' ? null : Number(v));
+  return (
+    <div className="space-y-2 text-[12px]" data-testid="room-mode-panel">
+      <PanelError error={error} />
+      <label className="block space-y-1">
+        <span className="text-on-surface-variant">mode</span>
+        {canManage ? (
+          <select
+            value={view.mode}
+            disabled={save.isPending}
+            onChange={(e) => save.mutate({ mode: e.target.value as RoomModeName })}
+            className={inputClass}
+            aria-label="Room mode"
+          >
+            <option value="mention">mention</option>
+            <option value="listen">listen</option>
+            <option value="proactive">proactive</option>
+          </select>
+        ) : (
+          <span className="block text-on-surface">{view.mode}</span>
+        )}
+      </label>
+      <p className="text-[11px] text-on-surface-variant">{MODE_HINTS[view.mode]}</p>
+      {view.mode !== 'mention' && (
+        <>
+          {canManage && (
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block space-y-1">
+                <span className="text-on-surface-variant">quiet from (h)</span>
+                <input
+                  aria-label="Quiet hours start"
+                  inputMode="numeric"
+                  defaultValue={view.quietHoursStart ?? ''}
+                  onBlur={(e) => hour(e.target.value) !== view.quietHoursStart && save.mutate({ quietHoursStart: hour(e.target.value) })}
+                  className={inputClass}
+                />
+              </label>
+              <label className="block space-y-1">
+                <span className="text-on-surface-variant">quiet until (h)</span>
+                <input
+                  aria-label="Quiet hours end"
+                  inputMode="numeric"
+                  defaultValue={view.quietHoursEnd ?? ''}
+                  onBlur={(e) => hour(e.target.value) !== view.quietHoursEnd && save.mutate({ quietHoursEnd: hour(e.target.value) })}
+                  className={inputClass}
+                />
+              </label>
+              <label className="block space-y-1">
+                <span className="text-on-surface-variant">posts / day</span>
+                <input
+                  aria-label="Unprompted posts per day"
+                  inputMode="numeric"
+                  defaultValue={view.maxUnpromptedPerDay}
+                  onBlur={(e) => Number(e.target.value) !== view.maxUnpromptedPerDay && save.mutate({ maxUnpromptedPerDay: Number(e.target.value) })}
+                  className={inputClass}
+                />
+              </label>
+              <label className="block space-y-1">
+                <span className="text-on-surface-variant">min gap (min)</span>
+                <input
+                  aria-label="Minutes between unprompted posts"
+                  inputMode="numeric"
+                  defaultValue={view.minMinutesBetween}
+                  onBlur={(e) => Number(e.target.value) !== view.minMinutesBetween && save.mutate({ minMinutesBetween: Number(e.target.value) })}
+                  className={inputClass}
+                />
+              </label>
+            </div>
+          )}
+          <p className="text-[11px] text-on-surface-variant">
+            {view.timezone} · feedback on unprompted posts: 👍 {view.feedback.up} · 👎 {view.feedback.down}
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** The room's title and visibility: changed by its creator or a space owner, read by everyone. */
+function TitlePanel({ spaceId, room, canManage }: { spaceId: string; room: Room; canManage: boolean }) {
   const qc = useQueryClient();
   const [title, setTitle] = useState(room.title);
   const [visibility, setVisibility] = useState<RoomVisibility>(room.visibility);

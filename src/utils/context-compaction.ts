@@ -8,6 +8,7 @@ import type { AgentMessage } from '@/core/types';
 import type { CompletionOptions } from '@/models/litellm-client';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
+import { withInstallUsage } from '@/models/providers/instrumented';
 import { coreLogger } from '@/utils/logger';
 import { estimateTokens } from '@/utils/token-count';
 
@@ -459,6 +460,16 @@ export async function createLLMSummary(
   options: CreateLLMSummaryOptions,
 ): Promise<CreateLLMSummaryResult>;
 export async function createLLMSummary(
+  removedMessages: AgentMessage[],
+  summaryModel: string,
+  options?: CreateLLMSummaryOptions,
+): Promise<AgentMessage | CreateLLMSummaryResult> {
+  // Compaction and its chunk summaries are install work (coworking spec §9.1):
+  // stamped `install` whatever turn they run in.
+  return withInstallUsage(() => summarize(removedMessages, summaryModel, options));
+}
+
+async function summarize(
   removedMessages: AgentMessage[],
   summaryModel: string,
   options?: CreateLLMSummaryOptions,

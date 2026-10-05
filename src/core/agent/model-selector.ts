@@ -27,6 +27,8 @@ export interface ModelRequester {
   inSpace?: boolean;
   /** The requester's role there: a commenter's turns use API models only (§5.6). */
   spaceRole?: SpaceRole;
+  /** A sponsored turn: the sponsor's models replace the requester's own (§9.1). */
+  sponsor?: import('@/core/types').AgentSponsor | null;
 }
 
 /**
@@ -113,7 +115,7 @@ export class ModelSelector {
     if (sessionId && requester.userId) {
       const overrideName = getSessionModel(sessionId, requester.userId);
       if (overrideName) {
-        const override = await resolveModel({ userId: requester.userId, name: overrideName, inSpace: requester.inSpace, spaceRole: requester.spaceRole });
+        const override = await resolveModel({ userId: requester.userId, name: overrideName, inSpace: requester.inSpace, spaceRole: requester.spaceRole, sponsor: requester.sponsor });
         if (override) {
           coreLogger.info(
             { sessionId, model: override.modelId },
@@ -135,7 +137,7 @@ export class ModelSelector {
     // message rather than per install.
     const routed = routing ? selectLane(routing.message, routing.classification) : null;
     if (routed) {
-      const routedModel = await resolveModel({ userId: requester.userId, topic: routed.lane, inSpace: requester.inSpace, spaceRole: requester.spaceRole });
+      const routedModel = await resolveModel({ userId: requester.userId, topic: routed.lane, inSpace: requester.inSpace, spaceRole: requester.spaceRole, sponsor: requester.sponsor });
       if (routedModel) {
         coreLogger.info(
           { lane: routed.lane, reason: routed.reason, model: routedModel.modelId, turnType },
@@ -207,7 +209,7 @@ export class ModelSelector {
    * Select the best model for a worker role's topic, with fallback for tool support.
    */
   async selectForWorker(topic: string, needsTools: boolean, requester: ModelRequester = {}): Promise<ModelRouting> {
-    const topicModel = await resolveModel({ userId: requester.userId, topic, inSpace: requester.inSpace, spaceRole: requester.spaceRole });
+    const topicModel = await resolveModel({ userId: requester.userId, topic, inSpace: requester.inSpace, spaceRole: requester.spaceRole, sponsor: requester.sponsor });
 
     if (!topicModel) {
       coreLogger.warn(

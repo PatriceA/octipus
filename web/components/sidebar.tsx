@@ -3,6 +3,7 @@
 import {
   BookOpen,
   Bot,
+  ClipboardList,
   Brain,
   Cable,
   Cpu,
@@ -57,6 +58,7 @@ const navGroups: NavGroup[] = [
     { name: 'overview', href: '/', icon: LayoutDashboard },
     { name: 'chat', href: '/chat', icon: MessageSquare },
     { name: 'to-do', href: '/tasks', icon: ListTodo },
+    { name: 'my work', href: '/my-work', icon: ClipboardList },
     { name: 'inbox', href: '/notifications', icon: Bell },
     { name: 'research', href: '/research', icon: Telescope },
     { name: 'agent activity', href: '/agents', icon: Bot },

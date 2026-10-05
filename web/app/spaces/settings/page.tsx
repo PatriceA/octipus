@@ -5,6 +5,7 @@ import { Archive, ArchiveRestore, Check, Copy, Link2, LogOut, Trash2, UserMinus 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
+import { BudgetSection, FundingSection, fundingSummary } from '@/components/spaces/funding-budget';
 import { SpaceConnectors } from '@/components/spaces/space-connectors';
 import { RoleBadge } from '@/components/workspace-picker';
 import { PageHeader } from '@/components/ui/page-header';
@@ -67,8 +68,8 @@ function activityLabel(action: string): string {
 }
 
 /**
- * `/spaces/:id/settings`: a space's name, members, invites, connectors,
- * activity, archive and purge. Every member reads it; the controls that change the
+ * `/spaces/:id/settings`: a space's name, members, funding and budget
+ * (§9.1, §9.2), invites, connectors, activity, archive and purge. Every member reads it; the controls that change the
  * space (owner only, as the server enforces) are shown to owners only.
  */
 export default function SpaceSettingsPage() {
@@ -165,13 +166,14 @@ export default function SpaceSettingsPage() {
   }
 
   const members = membersQ.data?.members ?? [];
+  const sponsorName = members.find((m) => m.userId === space.sponsorUserId)?.username ?? null;
   const activity = activityQ.data?.pages.flatMap((p) => p.activity) ?? [];
 
   return (
     <div className="space-y-8 max-w-4xl font-mono">
       <PageHeader
         title={`spaces/${space.slug}`}
-        description={`a shared space · ${space.memberCount} ${space.memberCount === 1 ? 'member' : 'members'} · each member's agent runs are their own`}
+        description={`a shared space · ${space.memberCount} ${space.memberCount === 1 ? 'member' : 'members'} · ${fundingSummary(space, sponsorName)}`}
         badge={<RoleBadge role={space.role} />}
       />
 
@@ -243,6 +245,10 @@ export default function SpaceSettingsPage() {
           })}
         </div>
       </section>
+
+      <FundingSection space={space} userId={user?.id} sponsorName={sponsorName} onChanged={changed} onError={onError} />
+
+      <BudgetSection space={space} onError={onError} />
 
       {isOwner && !archived && (
         <section aria-label="Invites" className="space-y-2">

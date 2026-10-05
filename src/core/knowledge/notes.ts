@@ -122,7 +122,8 @@ type SpaceScope = NoteScope & { kind: 'space' };
 
 const byteLength = (text: string) => Buffer.byteLength(text, 'utf8');
 
-function assertSpaceNoteSize(body: string): void {
+/** Refuse (`NoteTooLargeError`) a space-note body over `spaces.noteMaxBytes`. */
+export function assertSpaceNoteSize(body: string): void {
   const max = getConfig().spaces.noteMaxBytes;
   if (byteLength(body) > max) throw new NoteTooLargeError(byteLength(body), max);
 }
@@ -550,7 +551,7 @@ export class NoteService {
  * the channel/browser; callers that need local-day behaviour should pass
  * an explicit `day` derived in the user's timezone. Tracked for Tier 3.
  */
-function normalizeDay(day: string): string {
+export function normalizeDay(day: string): string {
   const d = new Date(day);
   if (Number.isNaN(d.getTime())) throw new Error(`Invalid date for daily note: ${day}`);
   return d.toISOString().slice(0, 10);

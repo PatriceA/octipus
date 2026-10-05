@@ -286,6 +286,61 @@ describe('turns in a bound channel (§9.4 points 3–4)', () => {
   });
 });
 
+describe('budget and funding of a bound channel (§9.4 point 5, §9.1, §9.2)', () => {
+  test('the space budget pauses the channel; unprompted posts are the sponsor\'s, and off without one', async () => {
+    const { spaceWith } = await import('@/test-helpers/space-fixtures');
+    const budgetSpace = await spaceWith(ownerId, [[editorId, 'editor']], 'Budgeted');
+    const enrolled = await enrol(ownerId, 'C-BUDGET');
+    expect((await call('owner', 'POST', `/api/me/group-channels/${enrolled.id}/bind`, { workspaceId: budgetSpace, acknowledged: true })).status).toBe(200);
+    const { findGroupChannelById } = await import('@/channels/group-channels');
+    const group = await findGroupChannelById(enrolled.id);
+    if (!group?.workspaceId) throw new Error('not bound');
+    const { bridgeListenFunding, groupBudgetPause } = await import('@/channels/group-bridge');
+    const { setSpaceFunding } = await import('@/core/spaces/funding');
+
+    // Funding: `own` pays nothing unprompted; no sponsor is off; a sponsor pays.
+    await setSpaceFunding({ userId: ownerId }, budgetSpace, { mode: 'own' });
+    expect(await bridgeListenFunding(group)).toBeNull();
+    await setSpaceFunding({ userId: ownerId }, budgetSpace, { mode: 'unattended' });
+    expect(await bridgeListenFunding(group)).toBeNull();
+    await setSpaceFunding({ userId: ownerId }, budgetSpace, { sponsor: 'me' });
+    expect(await bridgeListenFunding(group)).toEqual({ sponsorUserId: ownerId });
+
+    // The unprompted post's model call is billed to the sponsor, in the space.
+    const { defaultListenDeps } = await import('@/channels/group-listen');
+    const { getLiteLLMClient } = await import('@/models/litellm-client');
+    const { recordProviderUsage } = await import('@/models/providers/instrumented');
+    const complete = vi.spyOn(getLiteLLMClient(), 'complete').mockImplementation(async (options) => {
+      const usage = { inputTokens: 5, outputTokens: 5, totalTokens: 10, available: true };
+      await recordProviderUsage({ ...options, model: 'probe-model', messages: [] }, 'test', { model: 'probe-model', usage });
+      return { content: 'I could look into it.', model: 'probe-model', usage, finishReason: 'stop' } as never;
+    });
+    const { getModelRegistry } = await import('@/models/model-registry');
+    const bound = vi.spyOn(getModelRegistry(), 'getModelForTopic').mockResolvedValue({ name: 'probe-row', modelId: 'probe-model' } as never);
+    const deps = defaultListenDeps();
+    try {
+      expect(await deps.session(group)).toBeNull();
+      expect(await deps.mayRun(group, null)).toBe(true);
+      expect(await deps.complete({ system: 's', user: 'u', ownerUserId: group.ownerUserId, sessionId: null, group })).toBe('I could look into it.');
+    } finally {
+      complete.mockRestore();
+      bound.mockRestore();
+    }
+    const { queryRaw } = await import('@/db/postgres');
+    const { rows } = await queryRaw(`SELECT user_id, funding, workspace_id FROM cost_log WHERE model_name = 'probe-row'`);
+    expect(rows).toEqual([{ user_id: ownerId, funding: 'sponsor', workspace_id: budgetSpace }]);
+
+    // The space's budget replaces the channel's: used up, the channel pauses.
+    expect(await groupBudgetPause(group)).toBeNull();
+    const { setSpaceBudget, _resetSpendBudgetsForTests } = await import('@/security/spend-budgets');
+    await setSpaceBudget({ workspaceId: budgetSpace, authorId: ownerId, kind: 'space', period: 'month', limitUsd: 0.5 });
+    await queryRaw(`INSERT INTO cost_log (user_id, model_name, input_tokens, output_tokens, total_cost, workspace_id, funding) VALUES ($1, 'm', 1, 1, 1, $2, 'sponsor')`, [editorId, budgetSpace]);
+    _resetSpendBudgetsForTests();
+    expect(await groupBudgetPause(group)).toEqual({ resetsAt: expect.any(String) });
+    expect(await deps.mayRun(group, null)).toBe(false);
+  });
+});
+
 describe('space secrets (§9.5)', () => {
   test('a space secret is unusable via {{secret:}}, never exempts a call, and never shows on a personal path', async () => {
     const { resolvedPrincipal } = await import('@/test-helpers/space-fixtures');

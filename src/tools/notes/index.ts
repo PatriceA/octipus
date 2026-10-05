@@ -1,3 +1,12 @@
+import {
+  type AgentProposer,
+  proposeAgentArchive,
+  proposeAgentCapture,
+  proposeAgentEdit,
+  sessionPendingProposal,
+} from '@/core/docs/edit-proposals';
+import { NoteTooLargeError, StaleWriteError } from '@/core/docs/hub';
+import { ToolNotExecutedError } from '@/core/tool-execution-error';
 import { getCanvasBuilder } from '@/core/knowledge/canvas';
 import { getNoteService } from '@/core/knowledge/notes';
 import { getSuggestionService } from '@/core/knowledge/suggestions';
@@ -21,6 +30,48 @@ function notesScope(context: AgentContext, narrow = true): NoteScope {
   const repos = reposFor(context);
   if (repos.kind === 'space' || narrow) return repos.noteScope;
   return personalNoteScope(context.userId);
+}
+import type { NoteEditProposal } from '@/db/schema/live-documents';
+
+/**
+ * Who proposes, when the agent works in a space whose
+ * `agent_edit_mode` is `suggest` (§7.4, the default): its changes to
+ * existing notes become this session's pending edit proposal. Null when it
+ * writes directly (personal notes, or a space in `direct` mode). Read at
+ * every write, so an owner's switch applies to a running agent.
+ */
+async function proposerIn(context: AgentContext): Promise<AgentProposer | null> {
+  if (!context.space) return null;
+  const { agentEditModeOf } = await import('@/core/spaces/service');
+  if ((await agentEditModeOf(context.space.workspaceId)) !== 'suggest') return null;
+  return { sessionId: context.sessionId, agentId: context.id };
+}
+
+/**
+ * A stale base or an oversized body refuses a note write before anything
+ * changed: say so (`ToolNotExecutedError`), or the action journal takes the
+ * failed call for an uncertain mutation and holds every later write of the
+ * session behind a recovery review.
+ */
+async function definiteRefusal<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof StaleWriteError || err instanceof NoteTooLargeError) throw new ToolNotExecutedError('notes', err.message, { cause: err });
+    throw err;
+  }
+}
+
+/** What a write in suggest mode returns: nothing changed yet, a member decides. */
+function proposed(proposal: NoteEditProposal) {
+  return {
+    proposed: true,
+    proposalId: proposal.id,
+    status: 'pending' as const,
+    baseSha256: proposal.baseSha256,
+    id: proposal.noteId,
+    hint: 'Nothing changed yet: this space takes the agent\'s note changes as proposals, which a member accepts or rejects. read_note shows your pending proposal; writing again updates it.',
+  };
 }
 import { BaseTool, createParameterSchema } from '../base-tool';
 
@@ -66,7 +117,7 @@ export class NotesTool extends BaseTool {
   protected async registerTools(): Promise<void> {
     this.registerTool(
       'write_note',
-      'Create or update a markdown note. Use [[Wikilinks]] to connect to other notes/entities and #tags to categorise — both are wired into the knowledge graph automatically. Pass id to edit an existing note; omit it to create (slug derives from slug or title).',
+      'Create or update a markdown note. Use [[Wikilinks]] to connect to other notes/entities and #tags to categorise — both are wired into the knowledge graph automatically. Pass id to edit an existing note; omit it to create (slug derives from slug or title). In a shared space that takes the agent\'s changes as suggestions (the default), a change to an existing note becomes your pending edit proposal for a member to accept; a new note is created.',
       createParameterSchema({
         title: { type: 'string', description: 'Note title', required: true },
         body: { type: 'string', description: 'Markdown body (may contain [[wikilinks]] and #tags)' },
@@ -76,9 +127,33 @@ export class NotesTool extends BaseTool {
         tags: { type: 'array', description: 'Explicit tags (unioned with #tags from the body)', items: { type: 'string' } },
         base_sha256: { type: 'string', description: 'Required to change the body of an existing shared-space note: the sha256 read_note returned (read_note first). Your change is merged with what others wrote since; a clash is refused — read the note again and reapply.' },
       }),
-      async (args, context) => {
+      async (args, context) => definiteRefusal(async () => {
+        const baseSha256 = typeof args.base_sha256 === 'string' && args.base_sha256 ? args.base_sha256 : undefined;
+        const proposer = await proposerIn(context);
+        if (proposer) {
+          // A new note is created (nobody's text changes); a change to an
+          // existing one is proposed.
+          const scope = notesScope(context);
+          const svc = getNoteService();
+          const existing = args.id
+            ? await svc.getById(scope, args.id as string)
+            : await svc.getBySlug(scope, (args.slug as string) || (args.title as string));
+          if (args.id && !existing) throw new Error(`Note ${args.id} not found for this user`);
+          if (existing) {
+            // Only the title changes: proposed from the current text.
+            const body = typeof args.body === 'string' ? args.body : existing.body;
+            const base = typeof args.body === 'string' ? baseSha256 : existing.bodySha256;
+            if (base === undefined) throw new StaleWriteError('missing_base', existing.bodySha256);
+            const proposal = await proposeAgentEdit(scope, proposer, { noteId: existing.id, baseSha256: base, body, title: args.title as string });
+            const ignored = [args.tags !== undefined && 'tags', args.note_kind !== undefined && 'note_kind'].filter(Boolean);
+            return {
+              ...proposed(proposal),
+              ...(ignored.length > 0 ? { notice: `A proposal changes the body and title only: ${ignored.join(' and ')} were not proposed (use #tags in the body).` } : {}),
+            };
+          }
+        }
         const result = await getNoteService().save({
-          baseSha256: typeof args.base_sha256 === 'string' && args.base_sha256 ? args.base_sha256 : undefined,
+          baseSha256,
           scope: notesScope(context),
           id: (args.id as string) || undefined,
           slug: (args.slug as string) || undefined,
@@ -98,7 +173,7 @@ export class NotesTool extends BaseTool {
           indexed: result.indexed,
           links: result.links,
         };
-      },
+      }),
       { permissionAction: 'write' },
     );
 
@@ -124,6 +199,8 @@ export class NotesTool extends BaseTool {
         const backlinks = repos.kind === 'space'
           ? await repos.links.getBacklinks('note', note.id)
           : await getKnowledgeLinkRepository().getBacklinks(context.userId, 'note', note.id);
+        // The change this session proposed and nobody decided yet (§7.4).
+        const pending = repos.kind === 'space' ? await sessionPendingProposal(repos.noteScope, note.id, context.sessionId) : null;
         return {
           id: note.id,
           slug: note.slug,
@@ -135,6 +212,18 @@ export class NotesTool extends BaseTool {
           // write_note's base_sha256 so the edit merges (§7.3).
           sha256: note.bodySha256,
           backlinks: backlinks.map((b) => ({ from: { type: b.fromType, id: b.fromId }, linkType: b.linkType, label: b.label })),
+          ...(pending ? {
+            pendingProposal: {
+              proposalId: pending.id,
+              status: pending.status,
+              action: pending.action,
+              title: pending.title,
+              body: pending.body,
+              baseSha256: pending.baseSha256,
+              updatedAt: pending.updatedAt,
+              hint: 'Your proposed change, not yet accepted: body above is the note as it is. Writing again updates this proposal.',
+            },
+          } : {}),
         };
       },
       { permissionAction: 'read' },
@@ -183,14 +272,20 @@ export class NotesTool extends BaseTool {
         text: { type: 'string', description: 'Text to capture', required: true },
         date: { type: 'string', description: 'Target day (YYYY-MM-DD); defaults to today' },
       }),
-      async (args, context) => {
+      async (args, context) => definiteRefusal(async () => {
+        const proposer = await proposerIn(context);
+        if (proposer) {
+          const result = await proposeAgentCapture(notesScope(context), proposer, args.text as string, (args.date as string) || undefined);
+          if (result.proposal) return proposed(result.proposal);
+          return { id: result.note.id, slug: result.note.slug, captured: true };
+        }
         const note = await getNoteService().capture(
           notesScope(context),
           args.text as string,
           (args.date as string) || undefined,
         );
         return { id: note.id, slug: note.slug, captured: true };
-      },
+      }),
       { permissionAction: 'write' },
     );
 
@@ -275,14 +370,16 @@ export class NotesTool extends BaseTool {
 
     this.registerTool(
       'archive_note',
-      'Archive (soft-delete) a note. It is hidden from default listings but not destroyed.',
+      'Archive (soft-delete) a note. It is hidden from default listings but not destroyed. In a shared space that takes the agent\'s changes as suggestions, it is proposed instead.',
       createParameterSchema({
         id: { type: 'string', description: 'Note id', required: true },
       }),
-      async (args, context) => {
+      async (args, context) => definiteRefusal(async () => {
+        const proposer = await proposerIn(context);
+        if (proposer) return proposed(await proposeAgentArchive(notesScope(context), proposer, args.id as string));
         const ok = await getNoteService().archive(notesScope(context, false), args.id as string);
         return { archived: ok };
-      },
+      }),
       { permissionAction: 'write' },
     );
 

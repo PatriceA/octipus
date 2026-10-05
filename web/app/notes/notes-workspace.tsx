@@ -5,6 +5,7 @@ import { Network, PanelRight, ScrollText } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
+import { useGatewayMessages } from '@/lib/gateway-context';
 import { CTX_MAX, CTX_MIN, NAV_MAX, NAV_MIN, useNotesUiStore } from '@/lib/notes-ui-store';
 import { cn } from '@/lib/utils';
 import { KnowledgeGraph } from './knowledge-graph';
@@ -85,6 +86,20 @@ export function NotesWorkspace() {
   const tagsQ = useQuery<{ tags: TagCount[] }>({
     queryKey: ['note-tags', workspaceId],
     queryFn: () => api.get<{ tags: TagCount[] }>('/notes/tags'),
+  });
+
+  // The agent's pending edit proposals for the open space note (§7.4):
+  // counted on the tab, refreshed when the server says they changed.
+  const proposalsQ = useQuery<{ proposals: unknown[] }>({
+    queryKey: ['note-proposals', selectedId],
+    queryFn: () => api.get(`/notes/proposals?noteId=${selectedId}&status=pending`),
+    enabled: isSpace && !!selectedId,
+  });
+  const pendingProposals = proposalsQ.data?.proposals.length ?? 0;
+  useGatewayMessages((message) => {
+    if (message.type === 'doc.proposals' && message.noteId === selectedId) {
+      qc.invalidateQueries({ queryKey: ['note-proposals', selectedId] });
+    }
   });
 
   const live = useLiveNote(selectedId, isSpace);
@@ -382,7 +397,9 @@ export function NotesWorkspace() {
                         onClick={() => setCtxTab(tab)}
                         className={cn('flex-1 px-2 py-1.5', ctxTab === tab ? 'text-primary border-b border-primary' : 'text-on-surface-variant hover:bg-surface-container-high')}
                       >
-                        {tab}
+                        {tab === 'proposals' && pendingProposals > 0 ? (
+                          <span data-testid="proposals-tab-count">proposals · {pendingProposals}</span>
+                        ) : tab}
                       </button>
                     ))}
                   </div>

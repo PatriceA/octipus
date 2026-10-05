@@ -336,14 +336,17 @@ inert and stays in the array.
 
 Shared workspaces ([SPACES.md](SPACES.md)). A caller who is not a member gets
 404 for every space id; a member whose role lacks the action gets 403
-(`forbidden_role`); `last_owner`, `space_full`, `archived` and
-`not_purgeable` answer 409. Bodies reject unknown fields (422).
+(`forbidden_role`); `last_owner`, `space_full`, `archived`,
+`not_purgeable` and `funding_off` answer 409. Bodies reject unknown fields (422).
 
 | Method | Endpoint | Who | Description |
 |--------|----------|-----|-------------|
 | GET | `/api/spaces` | any user | My spaces with my role |
 | POST | `/api/spaces` | per `spaces.creation` | Create a space `{name}`; the caller becomes its owner |
-| GET | `/api/spaces/:id` | member | Name, my role, member count, archived, funding |
+| GET | `/api/spaces/:id` | member | Name, my role, member count, archived, `funding`, `sponsorUserId`, `sponsorModels` |
+| PUT | `/api/spaces/:id/funding` | owner | `{mode?: "own" \| "unattended" \| "sponsored", sponsor?: "me" \| null, sponsorModels?}`; only the sponsor sets `sponsorModels` (their own model rows) |
+| GET | `/api/spaces/:id/budget` | member | The space's budgets with this period's spend; the member cap with my own share |
+| PUT | `/api/spaces/:id/budget` | owner | `{kind: "space" \| "space_member", period: "day" \| "month", limitUsd: number \| null, warnRatio?}`; `null` removes it |
 | PATCH | `/api/spaces/:id` | owner | Rename `{name}` |
 | POST | `/api/spaces/:id/archive` | owner | Make read-only and stop its agents |
 | POST | `/api/spaces/:id/unarchive` | owner | Undo archive |
@@ -368,11 +371,15 @@ Shared workspaces ([SPACES.md](SPACES.md)). A caller who is not a member gets
 | POST | `/api/spaces/:id/rooms/:roomId/messages` | commenter+ | `{content, addressed?, clientId?}`: REST fallback of `room.post` → `{messageId, queuedPosition?, notQueued?}`; `/…` → `{commandResult}` |
 | PATCH | `/api/spaces/:id/rooms/:roomId` | room creator, owner | `{title?, visibility?}` |
 | GET | `/api/spaces/:id/rooms/:roomId/members` | room access | A private room's members, or the space's for an open one |
+| GET | `/api/spaces/:id/rooms/:roomId/mode` | room access | `{mode, quietHoursStart, quietHoursEnd, timezone, maxUnpromptedPerDay, minMinutesBetween, feedback: {up, down}}` |
+| PUT | `/api/spaces/:id/rooms/:roomId/mode` | room creator, owner | `{mode?: "mention" \| "listen" \| "proactive", quietHoursStart?, quietHoursEnd?, timezone?, maxUnpromptedPerDay?, minMinutesBetween?}` |
+| PUT | `/api/spaces/:id/rooms/:roomId/messages/:messageId/feedback` | room access | `{value: 1 \| -1 \| null}` on the agent's unprompted post |
 | POST/DELETE | `/api/spaces/:id/rooms/:roomId/members/:userId` | room creator, owner | Private rooms only; removal ends the member's subscriptions and turns there |
 | PATCH | `/api/spaces/:id/rooms/:roomId/me` | room access | `{muted?, lastReadMessageId?}` |
 | GET | `/api/spaces/:id/memory` | member | Space memory entries, newest first |
 | POST | `/api/spaces/:id/memory` | editor, owner | `{body}` (≤ 500 characters) |
 | DELETE | `/api/spaces/:id/memory/:entryId` | editor, owner | Retract an entry |
+| GET | `/api/me/work` | signed in | My open tasks assigned to me, across my spaces and personal workspaces: `{groups: [{workspaceId, name, kind, tasks}]}` |
 | GET | `/api/invites/:token` | public | Preview `{spaceName, inviterName, role, expiresAt}`; rate-limited per IP |
 | POST | `/api/invites/:token/accept` | signed in | Join → `{workspaceId, role, alreadyMember}`; rate-limited per IP |
 

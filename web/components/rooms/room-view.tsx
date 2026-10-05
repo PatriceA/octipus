@@ -352,6 +352,9 @@ export function RoomView({ spaceId, room, myId, access, canManage, onRemoved }: 
     return [...stored, ...local, ...said];
   }, [messages, pending, notices, myId]);
 
+  // The agent's newest post, when it spoke unprompted (a listen room, §9.3): members rate it.
+  const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant' && m.metadata.kind !== 'progress');
+  const lastUnprompted = lastAssistant?.metadata.unprompted ? lastAssistant : null;
   const myTurnRunning = !!myId && queue.running?.requesterId === myId && !queue.running.waiting;
   const typers = Object.values(typing).map((t) => t.name);
   const memberNames = (members.data ?? []).map((m) => m.username);
@@ -435,6 +438,8 @@ export function RoomView({ spaceId, room, myId, access, canManage, onRemoved }: 
           </>
         )}
 
+        {lastUnprompted && <UnpromptedFeedback key={lastUnprompted.id} spaceId={spaceId} roomId={roomId} messageId={lastUnprompted.id} />}
+
         <div className="h-5 px-4 text-[11px] font-mono text-on-surface-variant" aria-live="polite" data-testid="room-typing">
           {typers.length > 0 && `${typers.join(', ')} ${typers.length === 1 ? 'is' : 'are'} typing…`}
         </div>
@@ -481,6 +486,30 @@ export function RoomView({ spaceId, room, myId, access, canManage, onRemoved }: 
           </div>
         </aside>
       )}
+    </div>
+  );
+}
+
+/** 👍 / 👎 on the agent's unprompted post (`room_feedback`): tells the room's owners whether listen mode helps. */
+function UnpromptedFeedback({ spaceId, roomId, messageId }: { spaceId: string; roomId: string; messageId: string }) {
+  const [mine, setMine] = useState<1 | -1 | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const rate = async (value: 1 | -1) => {
+    const next = mine === value ? null : value;
+    try {
+      await api.put(`/spaces/${spaceId}/rooms/${roomId}/messages/${messageId}/feedback`, { value: next });
+      setMine(next);
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+  return (
+    <div className="flex items-center gap-2 px-4 py-1 text-[11px] font-mono text-on-surface-variant" data-testid="unprompted-feedback">
+      <span>Octipus spoke up unprompted — was that useful?</span>
+      <button type="button" aria-pressed={mine === 1} onClick={() => void rate(1)} className={cn('px-1 rounded-xs cursor-pointer', mine === 1 && 'bg-primary/20')}>👍</button>
+      <button type="button" aria-pressed={mine === -1} onClick={() => void rate(-1)} className={cn('px-1 rounded-xs cursor-pointer', mine === -1 && 'bg-error/20')}>👎</button>
+      {error && <span role="alert" className="text-error">{error}</span>}
     </div>
   );
 }

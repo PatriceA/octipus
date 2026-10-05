@@ -1123,7 +1123,10 @@ export class AgentWorker extends BaseAgentWorker {
           // Dollar spend budgets (user / role / workspace / group channel): warns at the
           // soft ratio, throws SpendBudgetExceededError once paused.
           const { checkSpend } = await import('@/security/spend-budgets');
-          await checkSpend({ userId: this.context.userId, role: this.context.role, workspaceId: this.context.workspaceId, sessionId: this.context.sessionId });
+          await checkSpend({
+            userId: this.context.userId, role: this.context.role, workspaceId: this.context.workspaceId, sessionId: this.context.sessionId,
+            funding: this.context.funding, spaceId: this.context.space?.workspaceId ?? null,
+          });
         }
       } catch (err) {
         // Don't swallow QuotaExceededError / SpendBudgetExceededError — re-throw them.

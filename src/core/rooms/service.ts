@@ -209,6 +209,8 @@ export interface RoomMessageView {
     replyTo?: string;
     /** The member the answer was for. */
     requesterId?: string;
+    /** Posted by the agent unprompted, in a listen room (§9.3); members rate it. */
+    unprompted?: boolean;
   };
 }
 
@@ -229,6 +231,7 @@ export function messageView(row: Message, authorName: string | null): RoomMessag
       ...(typeof meta.addressed === 'boolean' ? { addressed: meta.addressed } : {}),
       ...(typeof meta.replyTo === 'string' ? { replyTo: meta.replyTo } : {}),
       ...(typeof meta.requesterId === 'string' ? { requesterId: meta.requesterId } : {}),
+      ...(meta.unprompted === true ? { unprompted: true } : {}),
     },
   };
 }

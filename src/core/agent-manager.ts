@@ -20,7 +20,7 @@ import { isRealUserId } from '@/security/principal';
 import { isSharedWorkspaceId } from '@/security/workspace-fs';
 import { withoutPersonalOnlyTools } from '@/security/space-tools';
 import { getRouter } from './router';
-import type { AgentFunding, AgentSpace, AgentStatus, AgentTrigger } from './types';
+import type { AgentFunding, AgentSpace, AgentSponsor, AgentStatus, AgentTrigger } from './types';
 import { buildAgentContext, recheckSpace } from './agent/context';
 import { stripMutatingTools } from './agent/plan-mode';
 
@@ -40,6 +40,8 @@ export interface SpawnOptions {
   space: AgentSpace | null;
   trigger: AgentTrigger;
   funding: AgentFunding;
+  /** Who pays when `funding` is `sponsor` (inherited like the rest of the scope). */
+  sponsor?: AgentSponsor | null;
   topic?: string;
   model?: string;
   /** Row identity of `model` (`model_config.name`) when the caller resolved one — see `AgentContext.modelName`. */
@@ -160,7 +162,10 @@ export class AgentManager {
       // of the check (DB hiccup, table not migrated yet) does not block.
       try {
         const { checkSpend } = await import('@/security/spend-budgets');
-        await checkSpend({ userId: options.userId, role: options.role || 'general', workspaceId: options.workspaceId, sessionId: options.sessionId });
+        await checkSpend({
+          userId: options.userId, role: options.role || 'general', workspaceId: options.workspaceId, sessionId: options.sessionId,
+          funding: options.funding, spaceId: options.space?.workspaceId ?? null,
+        });
       } catch (err) {
         if (err instanceof Error && err.name === 'SpendBudgetExceededError') throw err;
         agentLogger.warn({ err, userId: options.userId }, 'spend budget check unavailable (not blocking)');
@@ -191,7 +196,7 @@ export class AgentManager {
     if (!options.model) {
       // Only route if model isn't pre-determined
       const router = getRouter();
-      const routing = await router.route(options.topic || '', undefined, { userId: options.userId, inSpace: !!space, spaceRole: space?.role });
+      const routing = await router.route(options.topic || '', undefined, { userId: options.userId, inSpace: !!space, spaceRole: space?.role, sponsor: options.sponsor });
       routedTopic = routing.topic;
       routedModel = routing.model;
       routedModelName = routing.modelName;
@@ -210,8 +215,14 @@ export class AgentManager {
     if (routedModelName && modelEntry && modelEntry.modelId !== routedModel) {
       throw new Error(`Model row '${modelEntry.name}' runs '${modelEntry.modelId}', not '${routedModel}'`);
     }
-    if (modelEntry?.ownerUserId && modelEntry.ownerUserId !== options.userId) {
-      throw new Error(`Model '${modelEntry.name}' is another user's personal model`);
+    // A personal row runs only for its owner — or, in a sponsored agent, when
+    // it is one of the sponsor models (§9.1). A requester's own row never
+    // runs sponsored: its key is theirs, the bill the sponsor's.
+    if (modelEntry?.ownerUserId) {
+      const { personalRowAllowed } = await import('@/models/resolve-model');
+      if (!personalRowAllowed(modelEntry, options.userId, options.funding === 'sponsor' ? options.sponsor : null)) {
+        throw new Error(`Model '${modelEntry.name}' is another user's personal model`);
+      }
     }
 
     const agentId = generateId();
@@ -220,7 +231,7 @@ export class AgentManager {
       id: agentId,
       sessionId: options.sessionId,
       userId: options.userId,
-      scope: { workspaceId: options.workspaceId ?? null, space, trigger: options.trigger, funding: options.funding },
+      scope: { workspaceId: options.workspaceId ?? null, space, trigger: options.trigger, funding: options.funding, sponsor: options.sponsor ?? null },
       topic: routedTopic,
       model: routedModel,
       modelName: modelEntry?.name,
@@ -633,13 +644,15 @@ export class AgentManager {
    * Stop every agent running in a workspace — or, with `userId`, that user's
    * agents there only. A space archived (all of them) or a member removed or
    * downgraded (theirs) stops at once (docs/plans/coworking-spec.md §5.9).
+   * With `funding`, only agents funded that way (the sponsor left, §9.1).
    */
-  stopWorkspace(workspaceId: string, userId?: string): number {
+  stopWorkspace(workspaceId: string, userId?: string, opts: { funding?: AgentFunding } = {}): number {
     let count = 0;
     for (const agent of Array.from(this.agents.values())) {
       const context = agent.getContext();
       if (context.workspaceId !== workspaceId) continue;
       if (userId !== undefined && context.userId !== userId) continue;
+      if (opts.funding !== undefined && context.funding !== opts.funding) continue;
       if (this.stop(context.id)) count++;
     }
     return count;

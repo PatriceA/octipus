@@ -355,13 +355,13 @@ export function bridgeHint(access: Exclude<BridgeAccess, 'ok'>): string {
 // ── Budget and funding ──────────────────────────────────────────────────────
 
 /**
- * Seam to the space budget (§9.2, built in S5a): when the bound space's
- * sponsored budget is used up, when it resets. Until that lands, sponsored
- * spend has no space budget to exhaust and `checkSpend` still refuses each
- * run on the requester's own budgets.
+ * The space budget (§9.2): when the bound space's `space` budget is used up,
+ * when it resets (`spend-budgets.ts`). Member caps pause one member's
+ * sponsored turns at `checkSpend`, never the channel.
  */
 export type SpaceBudgetPause = (workspaceId: string) => Promise<{ resetsAt: string } | null>;
-export const spaceBudgetPause: SpaceBudgetPause = async () => null;
+export const spaceBudgetPause: SpaceBudgetPause = async (workspaceId) =>
+  (await import('@/security/spend-budgets')).spaceBudgetPause(workspaceId);
 
 /**
  * The budget pause of a channel: for a bound channel the space's budget
@@ -376,21 +376,30 @@ export async function groupBudgetPause(group: GroupChannel): Promise<{ resetsAt:
 
 /**
  * Who pays for a bound channel's unprompted posts: the space's sponsor, or
- * nobody — then they are off (§9.4 point 5). `fundingFor('listen', space)`
- * decides; the sponsor is read from the space (S5a's `sponsor_user_id`).
+ * nobody — then they are off (§9.4 point 5). `fundingFor('listen', space,
+ * settings)` decides from the space's `agent_funding` and sponsor: `own`
+ * funds nothing unprompted, and no sponsor means off.
  */
 export async function bridgeListenFunding(group: GroupChannel): Promise<{ sponsorUserId: string } | null> {
   if (!group.workspaceId) throw new Error('bridgeListenFunding: the channel is not bound to a space');
-  const { fundingFor } = await import('@/core/agent/context');
-  const funding = fundingFor('listen', { workspaceId: group.workspaceId, role: 'owner', scope: null });
+  const [{ fundingFor }, { spaceFunding }] = await Promise.all([import('@/core/agent/context'), import('@/core/spaces/funding')]);
+  const settings = await spaceFunding(group.workspaceId);
+  let funding: string;
+  try {
+    funding = fundingFor('listen', { workspaceId: group.workspaceId, role: 'owner', scope: null }, settings);
+  } catch (err) {
+    if (err instanceof SpaceError && err.code === 'funding_off') return null;
+    throw err;
+  }
   if (funding !== 'sponsor') return null;
   const sponsorUserId = await spaceSponsorOf(group.workspaceId);
   return sponsorUserId ? { sponsorUserId } : null;
 }
 
-/** Seam to S5a (§9.1): the space's sponsor, or null when it has none. */
+/** The space's sponsor (§9.1, `workspaces.sponsor_user_id`), or null when it has none. */
 export type SpaceSponsorOf = (workspaceId: string) => Promise<string | null>;
-export const spaceSponsorOf: SpaceSponsorOf = async () => null;
+export const spaceSponsorOf: SpaceSponsorOf = async (workspaceId) =>
+  (await (await import('@/core/spaces/funding')).spaceFunding(workspaceId)).sponsorUserId;
 
 // ── Turns from the platform ─────────────────────────────────────────────────
 

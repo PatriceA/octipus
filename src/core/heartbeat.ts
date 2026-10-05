@@ -723,7 +723,8 @@ export async function evaluateHeartbeatGate(
   // budgets are enforced when that turn spawns its agents (agent-manager).
   try {
     const { checkSpend } = await import('@/security/spend-budgets');
-    await checkSpend({ userId: hook.userId }, now);
+    // A heartbeat is personal automation: no producer in a space (§5.6).
+    await checkSpend({ userId: hook.userId, funding: 'own', spaceId: null }, now);
   } catch (err) {
     if (err instanceof Error && err.name === 'SpendBudgetExceededError') return skip('spend_budget');
     coreLogger.debug({ err }, 'heartbeat: spend budget check unavailable (not blocking)');

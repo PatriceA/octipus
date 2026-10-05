@@ -5,6 +5,7 @@ import { noteKnowledgeScope } from '@/core/rag/knowledge-scope';
 import { SECURITY_PREAMBLE } from '@/core/agent/roles';
 import { choiceOf, decide, preferDecision, type DecisionSite } from '@/models/decision';
 import { getLiteLLMClient } from '@/models/litellm-client';
+import { withInstallUsage } from '@/models/providers/instrumented';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
 import { entityRefFromSourceId } from './graph';
@@ -263,7 +264,8 @@ export class LinkResolverService {
   /** LLM pair resolver: a 1-based candidate number as a label, or 'none'. */
   private async llmResolve(target: string, candidates: ResolverCandidate[], modelId: string, userId: string): Promise<string> {
     const list = candidates.map((c, i) => `${i + 1}. ${c.title}`).join('\n');
-    const result = await getLiteLLMClient().complete({
+    // Install work: stamped `install` (coworking spec §9.1).
+    const result = await withInstallUsage(() => getLiteLLMClient().complete({
       model: modelId,
       messages: [
         { role: 'system', content: RESOLVER_SYSTEM_PROMPT, timestamp: new Date() },
@@ -273,7 +275,7 @@ export class LinkResolverService {
       maxTokens: 50,
       responseFormat: { type: 'json_object' },
       userId,
-    });
+    }));
     return String(parseResolverMatch(result.content ?? '', candidates.length) ?? 'none');
   }
 }

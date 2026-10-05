@@ -238,8 +238,9 @@ A member's private chat in a space runs the agent in the space.
   without `run_agent`), a removed member and an archived space are refused,
   and `schedule` / `monitor` runs never start in a space. Every context
   carries `space`, `trigger` (`user`, `room`, `schedule`, `monitor`,
-  `listen`, `remote`) and `funding` (`own` until sponsors arrive); children
-  inherit all three, and every spawn re-reads the membership.
+  `listen`, `remote`) and `funding` (`own` or `sponsor`, see "Funding and
+  budgets"); children inherit all three, and every spawn re-reads the
+  membership.
 - **Tools.** Content tools use `reposFor(context)` — `contentRepos` of the
   agent's principal, which carries the space and the role — so the agent
   reads and writes exactly what the member may. Writes go only through
@@ -284,8 +285,11 @@ A member's private chat in a space runs the agent in the space.
   data source (they run as the member's personal agent).
 - **Cost.** Each turn runs inside one usage context: every `cost_log` row of
   a space turn carries the space's `workspace_id` and the turn's `funding`;
-  install-topic calls (compaction, embeddings, memory extraction, toolshim,
-  decision, vision, OCR) are stamped `install`.
+  install-topic calls (compaction and its chunk summaries, embeddings,
+  memory extraction and judging, learning, toolshim, link resolver, weekly
+  review, evaluators, document processing, decision, vision, OCR, the listen
+  gate probe) are stamped `install` through `withInstallUsage`, whatever turn
+  they run in.
 - **Approvals.** Permission requests carry `workspace_id`; the admin queue
   and its resolve routes never show or answer a request of a space the admin
   is not a member of.
@@ -439,21 +443,47 @@ everyone in an archived space.
   agent wrote for). The notes page's right panel has a *history* tab: open a
   revision to read it, restore it as a new revision.
 - **Edit proposals.** In `suggest` mode (the default; owners switch with
-  `PUT /api/spaces/<id>/agent-edit-mode`), what the agent writes into a
-  space note becomes a proposal. The *proposals* tab shows each with a diff;
-  accept applies it through the same merge (if it collides with a newer
-  edit it turns stale and the three texts are shown), reject closes it.
-  (The agent's note tool switches to proposals in a later step; the
-  proposals table, the service and the accept/reject routes are in place.)
+  `PUT /api/spaces/<id>/agent-edit-mode`), the agent's changes to existing
+  space notes become proposals: `write_note` on an existing note,
+  `capture_note` into an existing daily note and `archive_note` create or
+  update the session's one pending proposal for that note and answer
+  `{ proposed: true, proposalId, status: 'pending', baseSha256 }` — the
+  note itself is unchanged. A new note (and a capture that starts the day's
+  note) is still created: nothing of anyone's is overwritten. `read_note`
+  shows the session's pending proposal beside the note's current text.
+  The mode is read at every write, so a switch applies to a running agent;
+  in `direct` mode the agent writes through the live document like any
+  other writer. The *proposals* tab shows each with a diff, and its count
+  updates live for members with the note open (`doc.proposals`); accept
+  applies it through the same merge (if it collides with a newer edit it
+  turns stale and the three texts are shown), reject closes it. Meeting
+  notes are not written by the agent in a space (they link the requester's
+  personal profiles and calendars), so there is nothing of them to propose.
 - **File leases.** A member editing a space file holds a lease on it
   (`POST /api/spaces/<id>/file-leases`, renewed while the editor is open,
   lapsing after `spaces.fileLeaseTtlSeconds`), so others see "Ben is
-  editing". A lease on a directory covers its files; a directory operation
-  conflicts with a lease anywhere under it. Changes are pushed as
-  `file.leases` to the space's gateway subscribers. Leases are the
-  human-facing signal; the guarantee for space files is a per-path
-  compare-and-write mutex. Shell, git, docker, skill scripts and CLI agents
-  do not check leases — they are advisory for them.
+  editing". Paths are relative to the space's files root. A lease on a
+  directory covers its files; a directory operation conflicts with a lease
+  anywhere under it. Changes are pushed as `file.leases` to the space's
+  gateway subscribers. The web has no space file editor yet: leases are
+  taken through the REST routes.
+- **The agent and leases.** Every filesystem tool that changes files
+  (`write_file`, `edit_file`, `append_file`, `delete_file`, `copy_file`,
+  `move_file`, `create_directory`) checks leases in a space: a write to a
+  path leased by someone else — a member, or another agent — or under a
+  leased directory is refused with who holds it and until when, before
+  anything touches the disk. A recursive delete or a move of a directory is
+  refused when a lease sits anywhere under it. The agent holds no lease of
+  its own: a lease taken by the member it works for refuses it too (they are
+  editing that file now). The check and the write run under one in-process
+  mutex per path, so they are a single compare-and-write for every writer
+  in the server; the lease is the human-facing signal, the mutex the
+  guarantee.
+- **Advisory for everything else.** Shell commands, git, docker, skill
+  scripts and CLI coding agents (Claude Code, Codex, …) write files
+  directly and do **not** check leases: for them a lease is only a sign
+  that someone is editing. Coordinate with the member, or use the
+  filesystem tools, when a file is leased.
 - **Limits.** A space note holds at most `spaces.noteMaxBytes`; a tab sends
   at most `spaces.docMaxUpdatesPerSecond` edits and 10 cursor updates per
   second. Live documents live in the server process (single process).
@@ -525,6 +555,73 @@ and `replay` answer 404 for a room — its creator included.
   `context.linkedRoomId` gets the room's recent transcript (fenced, marked
   `suspicious`) on every turn while the member may still enter the room; its
   answers stay private.
+
+## Funding and budgets
+
+Who pays for the agent in a space is the space's `agent_funding`, set by an
+owner under Space settings → Funding (`PUT /api/spaces/:id/funding`):
+
+| `agent_funding` | a member's turn, a room turn | a listen turn | a visitor (S7) |
+|---|---|---|---|
+| `own` | the member | off | off |
+| `unattended` (default) | the member | the sponsor | the sponsor |
+| `sponsored` | the sponsor, under the per-member cap | the sponsor | the sponsor |
+
+- **The sponsor** is an owner who named themselves ("sponsor this space");
+  nobody is made to pay by someone else. A cell that needs a sponsor when
+  there is none is off: the turn is refused (`funding_off`, 409), never
+  charged to the member instead.
+- **Sponsor models.** The sponsor picks which of their own models
+  (Settings → My models) sponsored turns may run on. A sponsored turn never
+  runs on the requester's own models (their key would pay while the space
+  is billed); without sponsor models it runs on the install's.
+- **Losing the sponsor.** When the sponsor is removed, leaves, is demoted
+  below owner, or another owner removes them as sponsor, `sponsor_user_id`
+  and `sponsor_models` are cleared in the same transaction, an audit row is
+  written and the space's sponsored agents stop. Sponsored work does not
+  start again until an owner sponsors the space.
+- **Budgets** (Space settings → Budget, `PUT /api/spaces/:id/budget`, owners;
+  `GET` for any member): `space` caps everything the sponsor pays in the
+  space per day or month; `space_member` caps each member's share of it.
+  Both count only the space's `sponsor` rows of `cost_log`. The space cap
+  pauses all sponsored work of the space; the member cap is computed per
+  member, so a member at their cap is paused alone, and their warning and
+  pause notices are stamped once per period in `space_member_notices`. The
+  sponsor (else the budget's author) is told when the space cap warns or
+  pauses; each member is told about their own share. A budget's `user_id` is
+  its author only and survives their account. Admins' budget lists never
+  show space budgets.
+- **Personal budgets and quotas** never count sponsored spend: `user`,
+  `role` and `workspace` budgets add `funding <> 'sponsor'`, and the daily
+  token quota sums only the user's own agents (the concurrency cap counts
+  all). Install work keeps counting for the user it is attributed to.
+- Sponsored agents are checked against the space's budgets at every spawn
+  and every iteration; own agents against the requester's.
+
+## The team surface
+
+- **My work** (`/my-work` in the web, `GET /api/me/work`): my open tasks
+  assigned to me, in every space I belong to (not as a guest) and in my
+  personal workspaces, grouped by space.
+- **Assignment notices.** Assigning a space task to a member sends them a
+  `task_assigned` notification in the space (their membership re-read
+  first; assigning yourself tells nobody).
+- **Live board.** Every write to a space task (create, edit, claim,
+  release, comment, delete) sends `task.changed { taskId, workspaceId }` to
+  the space's gateway subscribers (`space.subscribe`); the board refetches on
+  it instead of polling. A personal board still re-reads every 30 seconds.
+- **Room modes** (room settings, `GET/PUT /api/spaces/:id/rooms/:roomId/mode`,
+  the room's creator or an owner): `mention` (default) speaks only when
+  asked; `listen` offers help on a question nobody answered ("I could look
+  into … — mention @octipus to hand it to me"); `proactive` answers it, as a
+  `listen` turn run as the member who asked and paid by the sponsor. Both use
+  the group channels' gate (`src/channels/group-listen.ts`): quiet hours in
+  the room's zone, a daily cap, a minimum gap, a question unanswered for 10
+  minutes that came after the agent last spoke, and one cheap
+  `background`-topic probe stamped `install`. Rooms of a space that funds
+  nothing unprompted, or has no sponsor, are not probed, nor while the space
+  budget is used up. Members rate unprompted posts 👍 / 👎
+  (`PUT …/messages/:messageId/feedback`); the counts show in room settings.
 
 ## Space memory
 
