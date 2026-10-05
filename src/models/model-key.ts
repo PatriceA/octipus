@@ -42,12 +42,14 @@ export class PersonalModelOwnerError extends Error {
 /**
  * Throws unless `requesterId` may run on `row`: install rows serve anyone, a
  * personal row its owner — and, inside a sponsored turn (`withSponsor`,
- * coworking spec §9.1), the sponsor's rows named among the sponsor models.
+ * coworking spec §9.1), the sponsor's API rows named among the sponsor
+ * models. Never a CLI row: its credential would land in the environment of
+ * a child the member drives (`personalRowAllowed`).
  */
-export function assertModelRowOwner(row: Pick<ModelConfigEntry, 'name' | 'ownerUserId'>, requesterId: string | null | undefined): void {
+export function assertModelRowOwner(row: Pick<ModelConfigEntry, 'name' | 'ownerUserId' | 'provider'>, requesterId: string | null | undefined): void {
   if (!row.ownerUserId || row.ownerUserId === requesterId) return;
   const sponsor = currentSponsor();
-  if (sponsor && sponsor.userId === row.ownerUserId && sponsor.models.includes(row.name)) return;
+  if (sponsor && row.provider !== 'cli' && sponsor.userId === row.ownerUserId && sponsor.models.includes(row.name)) return;
   throw new PersonalModelOwnerError(row.name);
 }
 

@@ -188,16 +188,22 @@ export const spaceRoutes = new Elysia({ prefix: '/spaces' })
     const { auditActor, writeSpaceAudit } = await import('@/core/spaces/service');
     const { getDb } = await import('@/db/postgres');
     await getDb().transaction(async (tx) => {
-      const budget = await setSpaceBudget({
+      const { budget, previous, changed } = await setSpaceBudget({
         workspaceId: ctx.params.id, authorId: actor.userId, kind: ctx.body.kind, period: ctx.body.period, limitUsd, warnRatio,
       }, tx);
-        await writeSpaceAudit(tx, {
+      // The same values again change nothing, and are not audited.
+      if (!changed) return;
+      await writeSpaceAudit(tx, {
         ...auditActor(actor),
         action: 'space_updated',
         workspaceId: ctx.params.id,
         resourceType: 'spend_budget',
         resourceId: budget?.id ?? ctx.params.id,
-        details: { field: 'budget', kind: ctx.body.kind, period: ctx.body.period, newValue: limitUsd, ...(warnRatio !== undefined ? { warnRatio } : {}) },
+        details: {
+          field: 'budget', kind: ctx.body.kind, period: ctx.body.period,
+          previousValue: previous?.limitUsd ?? null, newValue: limitUsd,
+          ...(warnRatio !== undefined ? { previousWarnRatio: previous?.warnRatio ?? null, warnRatio } : {}),
+        },
       });
     });
     return { budgets: await spaceBudgetStatuses(ctx.params.id, actor.userId) };

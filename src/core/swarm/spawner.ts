@@ -26,7 +26,6 @@ import { getTopicConfig } from '@/models/topic-config';
 import { premiseNoteFor } from '@/core/premise';
 import { isRealUserId } from '@/security/principal';
 import { WorkspaceFS } from '@/security/workspace-fs';
-import { can } from '@/security/space-access';
 import { withoutPersonalOnlyTools } from '@/security/space-tools';
 import { randomUUID } from 'node:crypto';
 import { getCLIToolConfig, isCLIProvider, resolveCliModelEntry } from '@/core/cli-agent-factory';
@@ -112,7 +111,7 @@ import { asLane } from '@/core/agent/lane-intent';
 import type { ToolAdvertisement } from '@/core/agent-base';
 import { applyRoleFit, buildDelegationGuidance } from './swarm-tool';
 import { isProviderQuotaError } from '@/core/errors/classification';
-import { inheritScope } from '@/core/agent/context';
+import { inheritScope, writesWithheld } from '@/core/agent/context';
 import {
   type AgentNode,
   type ChildResult,
@@ -630,7 +629,7 @@ export class SwarmSpawner {
     // toolId, so a handler the root dropped would otherwise come back here.
     if (parentContext.space) {
       childTools = withoutPersonalOnlyTools(childTools);
-      if (!can(parentContext.space.role, 'run_agent_write')) childTools = stripMutatingTools(childTools);
+      if (writesWithheld(parentContext.space, parentContext.trigger)) childTools = stripMutatingTools(childTools);
     }
 
     // Phase 2: register swarm meta-tools on Agent (depth 1) children so they
@@ -1963,6 +1962,7 @@ export class SwarmSpawner {
           sessionId: opts.parentContext.sessionId,
           workspaceId: opts.parentContext.workspaceId ?? null,
           space: opts.parentContext.space,
+          trigger: opts.parentContext.trigger,
           workspaceRoot: WorkspaceFS.forAgent(opts.parentContext).root,
           filesTouched,
           childTools: opts.childTools,
@@ -2656,6 +2656,7 @@ export function buildScorerContext(args: {
   sessionId?: string;
   workspaceId?: string | null;
   space?: import('@/core/types').AgentSpace | null;
+  trigger?: import('@/core/types').AgentTrigger;
   /** The child's workspace root (`WorkspaceFS.forAgent` of the spawning context). */
   workspaceRoot?: string;
   filesTouched: number | null;
@@ -2678,6 +2679,7 @@ export function buildScorerContext(args: {
     sessionId: args.sessionId,
     workspaceId: args.workspaceId ?? null,
     space: args.space ?? null,
+    trigger: args.trigger,
     // So a command check dies with a cancelled run rather than outliving it
     // with the awaited spawn still pending.
     signal: args.signal,

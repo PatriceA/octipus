@@ -9,6 +9,30 @@ labels reflect blast radius, not contract guarantees.
 
 ### Fixed
 
+- **Sponsor, budgets and team surface (review of S5a).** A personal CLI
+  model can no longer be a sponsor model, nor run or release its
+  credential for anyone but its owner. Only the sponsor makes the space pay
+  for more (raising `own` → `unattended` → `sponsored`); an impersonating
+  admin can neither name the owner sponsor nor choose their models.
+  Sponsored work re-reads the space's funding at every spawn and every 30s
+  of a running worker, so it stops once the sponsor is gone, in any
+  process; a sponsor's account deletion is audited as such; `POST
+  /api/agents/:id/message` re-checks the funding and runs inside the
+  sponsor context. Room and bound-channel listen probes are install work
+  attributed to the space, gated by the space budget only (never the
+  sponsor's personal budget nor a member cap); a room's probe is claimed
+  in the database before it is paid (migration 0134), and a proactive
+  probe is skipped when the question's author may not ask the agent.
+  `listen` turns only read. Their answers take 👍 / 👎, and recent 👎 slow
+  the gate of rooms and channels down. Space spend sums use the
+  `cost_log` workspace index. `task.changed` reaches non-guest members
+  only, and the board debounces its refetch. A bound channel's turns pause
+  on the space budget only when the space sponsors them. A sponsor's own
+  install-type calls on a sponsor model are stamped `sponsor`. Writing the
+  same space budget again no longer resets its notices; budget audits carry
+  the previous value; a budget author who left is not told the space's
+  spend. My work leaves out archived spaces.
+
 - **Rooms (review of S2).** `remember_for_space` goes through
   `routeApprovalFor` as a space write (role cap, and an ASK after a private
   read in a private space session). The space memory and a side panel's

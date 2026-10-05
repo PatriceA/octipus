@@ -162,6 +162,8 @@ export class AgentWorker extends BaseAgentWorker {
    * reads it (via getActivity) to tell a hung worker from one still progressing.
    */
   private lastActivityAt: number = 0;
+  /** When a sponsored agent last re-read its space's funding (`recheckSponsor`, every 30s). */
+  private sponsorCheckedAt = 0;
   /**
    * Non-null while the worker is inside a legitimately-long blocking wait it
    * DOESN'T bump activity during — collect_children / detached auto-collect, or
@@ -1098,6 +1100,21 @@ export class AgentWorker extends BaseAgentWorker {
           used: this.billableTokensUsed,
           cap: this.config.maxTokenBudget,
         });
+      }
+
+      // ── Sponsored funding (coworking §9.1) ──────────────────────────
+      // The sponsor may have gone, or the mode may pay for less, since the
+      // agent started — in another process too, where `pauseSponsoredWork`
+      // cannot reach this worker. Re-read at the pace of the spend cache.
+      if (this.context.funding === 'sponsor' && Date.now() - this.sponsorCheckedAt >= 30_000) {
+        const { recheckSponsor } = await import('@/core/agent/context');
+        try {
+          await recheckSponsor(this.context);
+        } catch (err) {
+          this.abortController.abort('sponsor_gone');
+          throw err;
+        }
+        this.sponsorCheckedAt = Date.now();
       }
 
       // ── Per-user daily token quota (Phase 3c-2) ─────────────────────

@@ -34,7 +34,7 @@ import delegationPrompt from './delegation-prompt.md';
 import { applyToolCap, isSmallModel } from './small-model';
 import { channelCanPrompt } from '@/security/approval-policy';
 import { ROOT_ROLE } from './types';
-import type { AgentScope } from './context';
+import { type AgentScope, writesWithheld } from './context';
 import { spaceSessionNotice, withoutPersonalOnlyTools } from '@/security/space-tools';
 import { can } from '@/security/space-access';
 import type { TurnEvent, AgentService, TurnOutcome } from './service';
@@ -313,11 +313,12 @@ export async function runRootAgent(
   // role filter documents.
   if (isPlanMode(planSessionCtx)) rootTools = stripMutatingTools(rootTools);
   // In a space: personal-only tools are not offered (the prompt says why),
-  // and a commenter's turn holds no file-changing tools either — every other
-  // write is refused at call time by `routeApprovalFor`'s role cap.
+  // and a commenter's turn — or a listen turn nobody asked for (§9.3) —
+  // holds no file-changing tools either; every other write is refused at
+  // call time by `routeApprovalFor`.
   if (space) {
     rootTools = withoutPersonalOnlyTools(rootTools);
-    if (!can(space.role, 'run_agent_write')) rootTools = stripMutatingTools(rootTools);
+    if (writesWithheld(space, scope.trigger)) rootTools = stripMutatingTools(rootTools);
   }
   // The small-model answer to "what runs the loop now": the same loop, a reduced
   // tool set, and a hard iteration cap (below). Gated on `isSmallModel` — the

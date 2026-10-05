@@ -607,7 +607,7 @@ export async function leaveSpace(actor: SpaceActor, workspaceId: string, details
       details: { previousValue: membership.role, left: true, ...details },
     });
     const { clearLostSponsorInTx } = await import('./funding');
-    return clearLostSponsorInTx(tx, actor, workspaceId, actor.userId, null);
+    return clearLostSponsorInTx(tx, actor, workspaceId, actor.userId, null, details.accountDeleted ? 'sponsor_account_deleted' : undefined);
   });
   const warning = await settleFollowUp('Leaving a space', { workspaceId, userId: actor.userId }, () => onMembershipChanged(workspaceId, actor.userId));
   const sponsorWarning = sponsorLost ? await pauseSponsored(workspaceId) : null;

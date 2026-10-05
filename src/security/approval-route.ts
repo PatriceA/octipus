@@ -13,8 +13,9 @@
  *      member removed while still in the space);
  *   2. applies the role cap BEFORE anything else, because `routeApproval`
  *      executes any non-ASK level straight away: a commenter (or guest) runs
- *      only `COMMENTER_TOOLS`, nobody runs a personal-only tool or writes a
- *      coding agent's configuration (`.claude/`, …) in the space;
+ *      only `COMMENTER_TOOLS`, a `listen` turn only reads, nobody runs a
+ *      personal-only tool or writes a coding agent's configuration
+ *      (`.claude/`, …) in the space;
  *   3. applies the I6 rule: once the session has read the requester's
  *      private data (flow label `private`, loaded from the session row so a
  *      restart keeps it), any call that is not a read is ASK — whatever the
@@ -31,7 +32,7 @@
  * A lint test (`approval-route.test.ts`) fails on `routeApproval(` in any
  * other source file.
  */
-import type { AgentSpace, PermissionLevel } from '@/core/types';
+import type { AgentSpace, AgentTrigger, PermissionLevel } from '@/core/types';
 import { type ApprovalDecision, routeApproval } from './approval-policy';
 import { classifyFlow, getFlowLabel, isSharedAudience, loadFlowLabel, observeFlow } from './flow-guard';
 import { can } from './space-access';
@@ -47,6 +48,8 @@ export interface ApprovalCaller {
   attended?: boolean;
   workspaceId?: string | null;
   space?: AgentSpace | null;
+  /** What started the agent: a `listen` turn (nobody asked, §9.3) only reads. */
+  trigger?: AgentTrigger;
 }
 
 export interface ApprovalPermission {
@@ -96,6 +99,12 @@ export async function routeApprovalFor(
     }
     if (!can(membership.role, 'run_agent_write') && !commenterMayRun(call)) {
       return deny(`your role (${membership.role}) can only read and comment in this space; ${call.toolId}.${call.toolName ?? call.action} is not allowed`);
+    }
+    // A listen turn answers a question nobody handed to the agent, from a
+    // conversation of other members' untrusted text: it reads, never writes
+    // (§9.3) — whatever the requester's role.
+    if (context.trigger === 'listen' && !isReadCall(call)) {
+      return deny(`nobody asked for this turn, so it only reads; ${call.toolId}.${call.toolName ?? call.action} is not allowed`);
     }
     const personal = personalOnlyReason(call) ?? agentConfigWriteReason(call);
     if (personal) return deny(personal);

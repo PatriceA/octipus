@@ -348,6 +348,18 @@ export async function recordGroupFeedback(input: {
     });
 }
 
+/** The ✅ / ❌ on the channel's bot messages since `since`: what slows its listen gate (`feedbackSlowdown`). */
+export async function recentGroupFeedback(groupChannelId: string, since: Date): Promise<{ up: number; down: number }> {
+  const [row] = await getDb()
+    .select({
+      up: sql<number>`count(*) FILTER (WHERE ${groupChannelFeedback.value} = 1)::int`,
+      down: sql<number>`count(*) FILTER (WHERE ${groupChannelFeedback.value} = -1)::int`,
+    })
+    .from(groupChannelFeedback)
+    .where(and(eq(groupChannelFeedback.groupChannelId, groupChannelId), sql`${groupChannelFeedback.createdAt} >= ${since}`));
+  return { up: Number(row?.up ?? 0), down: Number(row?.down ?? 0) };
+}
+
 /** The member took their reaction back. Only the matching value is removed (✅ then ❌, then ✅ removed, keeps ❌). */
 export async function removeGroupFeedback(input: { groupChannelId: string; messageId: string; userId: string; value: 1 | -1 }): Promise<void> {
   await getDb().delete(groupChannelFeedback).where(and(

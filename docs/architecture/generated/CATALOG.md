@@ -544,7 +544,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `capabilities` | `tools` | 1 |
 | `capabilities` | `utils` | 7 |
 | `channels` | `config` | 7 |
-| `channels` | `core` | 36 |
+| `channels` | `core` | 37 |
 | `channels` | `db` | 40 |
 | `channels` | `models` | 6 |
 | `channels` | `security` | 22 |
@@ -574,7 +574,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 5 |
 | `core` | `models` | 112 |
-| `core` | `security` | 126 |
+| `core` | `security` | 127 |
 | `core` | `services` | 2 |
 | `core` | `shared` | 15 |
 | `core` | `skills` | 10 |
@@ -619,7 +619,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `security` | `api` | 1 |
 | `security` | `config` | 12 |
 | `security` | `connectors` | 3 |
-| `security` | `core` | 12 |
+| `security` | `core` | 13 |
 | `security` | `db` | 73 |
 | `security` | `tools` | 1 |
 | `security` | `utils` | 24 |

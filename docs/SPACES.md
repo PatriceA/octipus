@@ -570,16 +570,25 @@ owner under Space settings → Funding (`PUT /api/spaces/:id/funding`):
 - **The sponsor** is an owner who named themselves ("sponsor this space");
   nobody is made to pay by someone else. A cell that needs a sponsor when
   there is none is off: the turn is refused (`funding_off`, 409), never
-  charged to the member instead.
-- **Sponsor models.** The sponsor picks which of their own models
-  (Settings → My models) sponsored turns may run on. A sponsored turn never
-  runs on the requester's own models (their key would pay while the space
-  is billed); without sponsor models it runs on the install's.
+  charged to the member instead. While a sponsor is named, only the sponsor
+  raises the mode (`own` → `unattended` → `sponsored`); another owner may
+  lower it or clear the sponsor. An admin acting as an owner cannot name
+  them sponsor, choose their sponsor models or raise the mode for them.
+- **Sponsor models.** The sponsor picks which of their own API models
+  (Settings → My models) sponsored turns may run on. A personal CLI model
+  cannot be one: the CLI process holds its owner's credential in its
+  environment, where the member driving the turn could read it. A
+  sponsored turn never runs on the requester's own models (their key would
+  pay while the space is billed); without sponsor models it runs on the
+  install's.
 - **Losing the sponsor.** When the sponsor is removed, leaves, is demoted
-  below owner, or another owner removes them as sponsor, `sponsor_user_id`
-  and `sponsor_models` are cleared in the same transaction, an audit row is
-  written and the space's sponsored agents stop. Sponsored work does not
-  start again until an owner sponsors the space.
+  below owner, their account is deleted, or another owner removes them as
+  sponsor, `sponsor_user_id` and `sponsor_models` are cleared in the same
+  transaction, an audit row is written and the space's sponsored agents
+  stop. Sponsored work does not start again until an owner sponsors the
+  space: every sponsored spawn, and every running sponsored worker every 30
+  seconds, re-reads the funding and stops when the sponsor it started under
+  is gone or the mode no longer pays for it — in any process.
 - **Budgets** (Space settings → Budget, `PUT /api/spaces/:id/budget`, owners;
   `GET` for any member): `space` caps everything the sponsor pays in the
   space per day or month; `space_member` caps each member's share of it.
@@ -587,10 +596,12 @@ owner under Space settings → Funding (`PUT /api/spaces/:id/funding`):
   pauses all sponsored work of the space; the member cap is computed per
   member, so a member at their cap is paused alone, and their warning and
   pause notices are stamped once per period in `space_member_notices`. The
-  sponsor (else the budget's author) is told when the space cap warns or
-  pauses; each member is told about their own share. A budget's `user_id` is
-  its author only and survives their account. Admins' budget lists never
-  show space budgets.
+  sponsor (else the budget's author, while still an owner of the space) is
+  told when the space cap warns or pauses; each member is told about their
+  own share. A budget's `user_id` is its author only and survives their
+  account. Writing the same budget again changes nothing (no notice is sent
+  twice in a period); a change is audited with the previous value. Admins'
+  budget lists never show space budgets.
 - **Personal budgets and quotas** never count sponsored spend: `user`,
   `role` and `workspace` budgets add `funding <> 'sponsor'`, and the daily
   token quota sums only the user's own agents (the concurrency cap counts
@@ -601,27 +612,40 @@ owner under Space settings → Funding (`PUT /api/spaces/:id/funding`):
 ## The team surface
 
 - **My work** (`/my-work` in the web, `GET /api/me/work`): my open tasks
-  assigned to me, in every space I belong to (not as a guest) and in my
-  personal workspaces, grouped by space.
+  assigned to me, in every space I belong to (not as a guest, not archived)
+  and in my personal workspaces, grouped by space.
 - **Assignment notices.** Assigning a space task to a member sends them a
   `task_assigned` notification in the space (their membership re-read
   first; assigning yourself tells nobody).
 - **Live board.** Every write to a space task (create, edit, claim,
   release, comment, delete) sends `task.changed { taskId, workspaceId }` to
-  the space's gateway subscribers (`space.subscribe`); the board refetches on
-  it instead of polling. A personal board still re-reads every 30 seconds.
+  the space's gateway subscribers (`space.subscribe`) who are current
+  members other than guests (a guest's scope is not checked per task yet);
+  the board refetches on it, once per burst, instead of polling. A personal
+  board still re-reads every 30 seconds.
 - **Room modes** (room settings, `GET/PUT /api/spaces/:id/rooms/:roomId/mode`,
   the room's creator or an owner): `mention` (default) speaks only when
   asked; `listen` offers help on a question nobody answered ("I could look
   into … — mention @octipus to hand it to me"); `proactive` answers it, as a
-  `listen` turn run as the member who asked and paid by the sponsor. Both use
-  the group channels' gate (`src/channels/group-listen.ts`): quiet hours in
-  the room's zone, a daily cap, a minimum gap, a question unanswered for 10
-  minutes that came after the agent last spoke, and one cheap
-  `background`-topic probe stamped `install`. Rooms of a space that funds
-  nothing unprompted, or has no sponsor, are not probed, nor while the space
-  budget is used up. Members rate unprompted posts 👍 / 👎
-  (`PUT …/messages/:messageId/feedback`); the counts show in room settings.
+  `listen` turn run as the member who asked and paid by the sponsor. A
+  `listen` turn only reads: nobody asked for it and it answers other
+  members' text, so its writing tools are withheld and its writes refused.
+  Both use the group channels' gate (`src/channels/group-listen.ts`): quiet
+  hours in the room's zone, a daily cap, a minimum gap, a question
+  unanswered for 10 minutes that came after the agent last spoke, and one
+  cheap `background`-topic probe. The probe is install work attributed to
+  the space (user `system`): it moves no personal budget and no member cap.
+  Rooms of a space that funds nothing unprompted, or has no sponsor, are
+  not probed, nor while the space budget is used up; a proactive room's
+  question is not probed when its author may not ask the agent or is at
+  their member cap. With several instances running cron, a room's probe is
+  claimed on its row first, so only one instance pays for it. Members rate
+  unprompted posts — offers and proactive answers — 👍 / 👎
+  (`PUT …/messages/:messageId/feedback`); the counts show in room settings,
+  and when the 👎 of the last two weeks outnumber the 👍 the gate's minimum
+  gap (at least an hour) is multiplied and its daily cap divided by
+  2^(👎 − 👍), at most 16×. Group channels' ✅ / ❌ slow their gate the same
+  way.
 
 ## Space memory
 
@@ -664,9 +688,12 @@ one conversation.
 - **Taken tasks** (`take this`, 🐙) go on the space's board, linked to the
   thread's room — one task per message, whoever takes it. Editors and owners
   can take work on; a commenter is told privately.
-- **Budget.** The space's budget replaces the channel's. Unprompted posts
-  (listen / proactive modes) are funded by the space's sponsor and are off
-  while the space has none.
+- **Budget.** The space's budget replaces the channel's while the space
+  is `sponsored` (its room turns are the sponsor's); otherwise each
+  member's turn is their own and their own budgets apply. Unprompted posts
+  (listen / proactive modes) need the space to fund unprompted work and are
+  off while it has no sponsor; their probe is install work attributed to
+  the space, gated by the space budget, as a room's.
 
 ## Space connectors
 

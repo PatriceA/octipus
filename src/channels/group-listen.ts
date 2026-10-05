@@ -25,8 +25,27 @@
  * Rooms of a space reuse the same gate (coworking spec §9.3,
  * `src/core/rooms/listen.ts`): `probeGroup` and `runListenTick` take any
  * `ListenTarget` — a group channel or a room's mode row — and the room's
- * deps read its transcript from the database and pay through the space's
- * sponsor.
+ * deps read its transcript from the database.
+ *
+ * One rule for the probe of a room and of a channel bound to a space: it
+ * is install work attributed to the space — `cost_log.workspace_id` is the
+ * space, the user is `system`, funding `install` — so it moves neither the
+ * sponsor's personal budgets nor anyone's member cap. It runs only while
+ * the space funds unprompted work (a sponsor named, mode not `own`) and
+ * its `space` budget is not used up: that budget gates the probe without
+ * counting it (it counts sponsored rows).
+ *
+ * Feedback slows the gate down: when the 👎 on the bot's posts of the last
+ * `FEEDBACK_WINDOW_MS` outnumber the 👍, the minimum gap (at least an
+ * hour) is multiplied and the daily cap divided by 2^(👎 − 👍), at most
+ * 16× (`feedbackSlowdown`). A room or channel that keeps getting 👎 ends
+ * up at about one post a day; 👍, or the window passing, brings it back.
+ *
+ * A room's probe is claimed in the database before it is paid
+ * (`claimProbe`): one probe per room per `PROBE_INTERVAL_MS` and never
+ * twice for one question, across processes. A group channel's gate needs
+ * no such claim: its conversation is the receiving process's buffer
+ * (`group-buffer.ts`), so only that process ever sees the question.
  */
 import { randomBytes } from 'node:crypto';
 import { BUFFER_BOT_ID, type BufferedMessage, groupThreads } from '@/channels/group-buffer';
@@ -44,6 +63,10 @@ export const WAIT_MS = 10 * 60_000;
 export const MAX_AGE_MS = 3 * 60 * 60_000;
 /** At most one model call per channel this often, whatever it answers. */
 export const PROBE_INTERVAL_MS = 5 * 60_000;
+/** The feedback that slows the gate: the last two weeks'. */
+export const FEEDBACK_WINDOW_MS = 14 * 24 * 60 * 60_000;
+/** The slowest the feedback makes the gate. */
+const MAX_SLOWDOWN = 16;
 /** The session the owner's unprompted posts for a channel run in. */
 export const UNPROMPTED_THREAD = '__unprompted__';
 const MAX_POST_CHARS = 1_200;
@@ -120,6 +143,15 @@ export function parseDraft(text: string | undefined, mode: 'listen' | 'proactive
   return withoutPings(cut);
 }
 
+/**
+ * How much recent feedback slows the gate: 2^(👎 − 👍) when the 👎
+ * outnumber the 👍, at most `MAX_SLOWDOWN`; 1 otherwise.
+ */
+export function feedbackSlowdown(feedback: { up: number; down: number }): number {
+  const net = feedback.down - feedback.up;
+  return net > 0 ? Math.min(2 ** net, MAX_SLOWDOWN) : 1;
+}
+
 /** Whether the local hour is inside the channel's quiet hours (wrapping midnight). */
 export function inQuietHours(group: Pick<ListenTarget, 'quietHoursStart' | 'quietHoursEnd'>, hour: number): boolean {
   const { quietHoursStart: start, quietHoursEnd: end } = group;
@@ -193,10 +225,19 @@ export interface ListenDeps<T extends ListenTarget = GroupChannel> {
   threads(channelType: string, channelId: string, now: number): ReadonlyMap<string, readonly ChannelMessage[]> | Promise<ReadonlyMap<string, readonly ChannelMessage[]>>;
   /**
    * False while the channel's or the owner's spend budget is used up — for a
-   * channel bound to a space (§9.4): while the space has no sponsor, or its
-   * budget is used up.
+   * room or a channel bound to a space (§9.3, §9.4): while the space funds
+   * no unprompted work, or its `space` budget is used up. `candidate` is the
+   * question the probe would be about (a proactive room checks its author).
    */
-  mayRun(group: T, sessionId: string | null): Promise<boolean>;
+  mayRun(group: T, sessionId: string | null, candidate: ListenCandidate): Promise<boolean>;
+  /** The 👍 / 👎 on the bot's posts since `since` (`feedbackSlowdown`). None: feedback does not slow the gate. */
+  feedback?(group: T, since: Date): Promise<{ up: number; down: number }>;
+  /**
+   * Claim the probe of `candidate` across processes before it is paid
+   * (rooms): false when another process probed the target within
+   * `PROBE_INTERVAL_MS` or already probed this question.
+   */
+  claimProbe?(group: T, candidate: ListenCandidate, now: Date): Promise<boolean>;
   /** The owner's unprompted-posts session for the channel; null for a bound channel (no personal session). */
   session(group: T): Promise<string | null>;
   /** One `background` model call; the reply text, or undefined. */
@@ -252,10 +293,22 @@ export async function probeGroup<T extends ListenTarget>(group: T, deps: ListenD
   // Set before any await, so an overlapping tick cannot probe the channel too;
   // a used-up budget is re-checked at the same pace.
   lastProbe.set(group.id, t);
+  // Members' 👎 slow the gate down (`feedbackSlowdown`).
+  if (deps.feedback) {
+    const slowdown = feedbackSlowdown(await deps.feedback(group, new Date(t - FEEDBACK_WINDOW_MS)));
+    if (slowdown > 1) {
+      const cap = Math.max(1, Math.floor(group.maxUnpromptedPerDay / slowdown));
+      const gapMs = Math.max(group.minMinutesBetween, 60) * slowdown * 60_000;
+      if (group.unpromptedDay === day && group.unpromptedCount >= cap) return 'capped';
+      if (group.lastUnpromptedAt && t - group.lastUnpromptedAt.getTime() < gapMs) return 'capped';
+    }
+  }
   if (!(await deps.modelReady())) return 'no_model';
 
   const sessionId = await deps.session(group);
-  if (!(await deps.mayRun(group, sessionId))) return 'budget';
+  if (!(await deps.mayRun(group, sessionId, candidate))) return 'budget';
+  // One probe across processes, before it is paid (rooms).
+  if (deps.claimProbe && !(await deps.claimProbe(group, candidate, now))) return 'throttled';
   // Looked at once, whatever the model says: it is not asked about it again.
   consider(prefix + candidate.message.id, t);
 
@@ -340,24 +393,23 @@ export function defaultListenDeps(): ListenDeps {
     localTime: (now, tz) => ({ hour: localHour(now, tz), day: localDayKey(now, tz) }),
     threads: groupThreads,
     mayRun: async (group, sessionId) => {
-      const { checkSpend } = await import('@/security/spend-budgets');
+      const { checkSpend, spaceBudgetPause } = await import('@/security/spend-budgets');
       const { SpendBudgetExceededError } = await import('@/security/spend-budget-error');
       const { bridgeListenFunding, groupBudgetPause } = await import('@/channels/group-bridge');
+      // A bound channel's probe (the module comment): while the space funds
+      // unprompted work and its `space` budget is not used up — never the
+      // sponsor's personal budgets nor a member cap.
+      if (group.workspaceId) return !!(await bridgeListenFunding(group)) && !(await spaceBudgetPause(group.workspaceId));
       if (await groupBudgetPause(group)) return false;
-      // A bound channel's unprompted posts are the space's sponsor's, or off.
-      const payer = group.workspaceId ? (await bridgeListenFunding(group))?.sponsorUserId : group.ownerUserId;
-      if (!payer) return false;
       try {
-        // A bound channel's posts are the space's sponsor's: its budgets (§9.2).
-        await checkSpend(group.workspaceId
-          ? { userId: payer, sessionId, funding: 'sponsor', spaceId: group.workspaceId }
-          : { userId: payer, sessionId, funding: 'own', spaceId: null });
+        await checkSpend({ userId: group.ownerUserId, sessionId, funding: 'own', spaceId: null });
         return true;
       } catch (err) {
         if (err instanceof SpendBudgetExceededError) return false;
         throw err;
       }
     },
+    feedback: async (group, since) => (await import('@/channels/group-channels')).recentGroupFeedback(group.id, since),
     // A bound channel has no personal session: its posts are the space's, paid by the sponsor.
     session: async (group) => group.workspaceId ? null : (await import('@/channels/group-channels')).resolveGroupSession({
       userId: group.ownerUserId, group, threadId: UNPROMPTED_THREAD, title: `${group.label ?? group.channelId} — unprompted posts`,
@@ -368,18 +420,13 @@ export function defaultListenDeps(): ListenDeps {
       const { getModelRegistry } = await import('@/models/model-registry');
       const { getLiteLLMClient } = await import('@/models/litellm-client');
       const { withInstallUsage, withProviderUsageContext } = await import('@/models/providers/instrumented');
+      const { SYSTEM_USER_ID } = await import('@/security/principal');
       const model = await getModelRegistry().getModelForTopic('background');
       if (!model?.modelId) throw new Error('Unprompted group posts need a model bound to the "background" topic.');
-      let payer = ownerUserId;
-      if (group.workspaceId) {
-        const { bridgeListenFunding } = await import('@/channels/group-bridge');
-        const funding = await bridgeListenFunding(group);
-        if (!funding) throw new Error('A bound channel\'s unprompted posts need the space\'s sponsor');
-        payer = funding.sponsorUserId;
-      }
-      // A bound channel's unprompted post is the space's work, paid by its
-      // sponsor (§9.4). An enrolled channel's probe is install work (§8.2),
-      // stamped `install` and counted in its owner's session for the channel.
+      // The probe is install work (§8.2). An enrolled channel's is counted in
+      // its owner's session for the channel; a bound channel's is attributed
+      // to the space and to no person (the module comment).
+      const payer = group.workspaceId ? SYSTEM_USER_ID : ownerUserId;
       const call = () => getLiteLLMClient().complete({
         model: model.modelId,
         modelConfigName: model.name,
@@ -392,9 +439,7 @@ export function defaultListenDeps(): ListenDeps {
         userId: payer,
         ...(sessionId ? { sessionId } : {}),
       });
-      const result = group.workspaceId
-        ? await withProviderUsageContext({ userId: payer, workspaceId: group.workspaceId, funding: 'sponsor' }, call)
-        : await withProviderUsageContext({ userId: payer }, () => withInstallUsage(call));
+      const result = await withProviderUsageContext({ userId: payer, ...(group.workspaceId ? { workspaceId: group.workspaceId } : {}) }, () => withInstallUsage(call));
       return result.content ?? undefined;
     },
     claim: async (group, now, day) => (await import('@/channels/group-channels')).claimUnpromptedSlot(group, now, day),

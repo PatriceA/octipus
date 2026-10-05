@@ -21,7 +21,7 @@ import { isSharedWorkspaceId } from '@/security/workspace-fs';
 import { withoutPersonalOnlyTools } from '@/security/space-tools';
 import { getRouter } from './router';
 import type { AgentFunding, AgentSpace, AgentSponsor, AgentStatus, AgentTrigger } from './types';
-import { buildAgentContext, recheckSpace } from './agent/context';
+import { buildAgentContext, recheckSponsor, recheckSpace, writesWithheld } from './agent/context';
 import { stripMutatingTools } from './agent/plan-mode';
 
 /** Union type for all agent worker implementations */
@@ -180,6 +180,12 @@ export class AgentManager {
     if (!space && await isSharedWorkspaceId(options.workspaceId)) {
       throw new Error('An agent in a space needs its space scope (resolveAgentScope / inheritScope)');
     }
+    // A sponsored agent starts only while the space still pays for it, under
+    // the same sponsor (§9.1): the funding is re-read here, as the
+    // membership is, so a turn that resolved its scope before the sponsor
+    // left (routing, compaction, model choice in between) does not start —
+    // in this process or another. The sponsor models are the current list.
+    const sponsor = options.funding === 'sponsor' ? await recheckSponsor({ space, trigger: options.trigger, funding: options.funding, sponsor: options.sponsor }) : null;
 
     const config = getConfig();
 
@@ -196,7 +202,7 @@ export class AgentManager {
     if (!options.model) {
       // Only route if model isn't pre-determined
       const router = getRouter();
-      const routing = await router.route(options.topic || '', undefined, { userId: options.userId, inSpace: !!space, spaceRole: space?.role, sponsor: options.sponsor });
+      const routing = await router.route(options.topic || '', undefined, { userId: options.userId, inSpace: !!space, spaceRole: space?.role, sponsor });
       routedTopic = routing.topic;
       routedModel = routing.model;
       routedModelName = routing.modelName;
@@ -220,7 +226,7 @@ export class AgentManager {
     // runs sponsored: its key is theirs, the bill the sponsor's.
     if (modelEntry?.ownerUserId) {
       const { personalRowAllowed } = await import('@/models/resolve-model');
-      if (!personalRowAllowed(modelEntry, options.userId, options.funding === 'sponsor' ? options.sponsor : null)) {
+      if (!personalRowAllowed(modelEntry, options.userId, sponsor)) {
         throw new Error(`Model '${modelEntry.name}' is another user's personal model`);
       }
     }
@@ -231,7 +237,7 @@ export class AgentManager {
       id: agentId,
       sessionId: options.sessionId,
       userId: options.userId,
-      scope: { workspaceId: options.workspaceId ?? null, space, trigger: options.trigger, funding: options.funding, sponsor: options.sponsor ?? null },
+      scope: { workspaceId: options.workspaceId ?? null, space, trigger: options.trigger, funding: options.funding, sponsor },
       topic: routedTopic,
       model: routedModel,
       modelName: modelEntry?.name,
@@ -306,7 +312,7 @@ export class AgentManager {
     let globals = [...this.globalTools.values()];
     if (space) {
       globals = withoutPersonalOnlyTools(globals);
-      if (!can(space.role, 'run_agent_write')) globals = stripMutatingTools(globals);
+      if (writesWithheld(space, options.trigger)) globals = stripMutatingTools(globals);
     }
     for (const tool of globals) {
       worker.registerTool(tool);
