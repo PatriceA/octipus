@@ -369,6 +369,20 @@ channels shows the counts. Nothing else happens. Slack needs the
 😢 / 😠. Telegram reactions are not recorded (the bot would need to be an
 admin and request `message_reaction` updates).
 
+#### Binding a channel to a space
+
+An enrolled group channel (Slack, Teams, Telegram) can be bound to a shared
+space its owner also owns: Settings → Channels → *Bind to space room*, with
+an explicit acknowledgement that everyone in the channel can read what the
+room shows (`POST /api/me/group-channels/:id/bind`, [API.md → Group
+Channels](API.md#group-channels)). Each thread then becomes a room of the
+space: members' messages run as room turns as that member, the agent's
+answers and the web room's posts are relayed to the thread, taken tasks go on
+the space's board, and the space's funding applies (its budget replaces the
+channel's while the space sponsors its turns). Linked people who are not members get a private hint and no turn.
+The full rules are in [SPACES.md → Group channels bound to a
+space](SPACES.md#group-channels-bound-to-a-space).
+
 ---
 
 ## Microsoft Teams

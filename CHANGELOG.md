@@ -26,6 +26,19 @@ labels reflect blast radius, not contract guarantees.
   need `api:chat` too). The admin answer routes no longer list or answer
   requests raised in a space or a room, whatever the admin's membership:
   the requester answers them (an admin acts through audited impersonation).
+
+- **A live space note's reindex is billed to its space.** The reindex's
+  embedding cost rows now carry the space (`cost_log.workspace_id`) and
+  `funding: 'install'` as their own columns, not only in the row's metadata.
+  The docs now list every coworking route, setting and env var
+  (docs/API.md, docs/CONFIGURATION.md, `.env.example`), and the coworking
+  spec records where the build differs from it.
+
+- **Joining a space lands in it.** The web's workspace list is read again on
+  sign-in and on joining; when the read started at sign-in answered after the
+  join's own, its older list (without the space) switched the user back to
+  their default workspace. Only the latest read is applied now.
+
 - **Guests, registration and remote members (review of S6/S7).** A guest no
   longer sees the space's whole audit log: activity shows the rows about
   their rooms only, with actors they may see. `GET /api/spaces/:id` and the

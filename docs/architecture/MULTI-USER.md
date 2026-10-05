@@ -2106,7 +2106,48 @@ SSO URL, x509 cert, attribute map, SCIM toggle, vault-ref).
   `role='org_admin'`. Today new SCIM users land as `member`
   and the admin role is set manually.
 
-## 23. Workspace integrity (coworking S0c)
+## 23. Leaks closed (coworking S0a)
+
+Closes the cross-user leaks listed in the coworking spec (§1.1, L1–L10).
+
+- **Documents and knowledge are per user** (L1–L3). The documents tool goes
+  through the scoped repos (`agentPrincipal` never carries the admin bypass).
+  Every knowledge chunk has an owner and a `KnowledgeScope` (`personal`,
+  `space`, `install`); product docs are readable under every scope. Admins
+  reach the whole base only with `?scope=install`, which is audited.
+  Migration `0125_knowledge_scope` assigns owners to existing chunks.
+- **Events name their user** (L4). Every gateway event carries `userId` and
+  goes to that user's connections only; the user-less types are listed in
+  `GLOBAL_EVENT_TYPES` with a reason ([gateway.md](gateway.md), "Event Bus").
+- **One trust level** (L5, L6). The `local` and `system` trust levels are gone;
+  admin rights are read from the database. Client addresses come from the
+  socket, and forwarded headers count only from `security.trustedProxies`.
+- **Deactivation takes effect at once** (L7, L8). `setUserActive` is the one
+  writer of `is_active` and records `users.deactivated_by` (migration
+  `0126_user_deactivation`), so SCIM cannot re-enable an account an admin
+  switched off. It revokes sessions, refuses tokens, passkeys and SAML,
+  closes every socket, stops agents and expires pending prompts. A SCIM token
+  acts only on its org's users.
+- **Requests are answered by their requester** (L10). Admins answer someone
+  else's permission request or approval only through
+  `/api/admin/permission-requests/:id/resolve` and
+  `/api/admin/approvals/:id/resolve`, with an audited reason.
+
+Tests: `src/api/leaks-{knowledge,events,trust,deactivation}.isolation.test.ts`.
+
+## 24. One multi-user model (coworking S0b)
+
+- **Workspaces are always on.** The setting that switched them off is
+  removed; `/api/me/workspaces` and the workspace header always work.
+- **Resolution fails closed.** An authenticated request whose workspace cannot
+  be resolved answers 503 instead of running without a workspace filter.
+- **No stand-in users.** A user id that is not a real user is an error, never
+  "the first admin" or "the first user"; `'system'` is only a system job.
+- **Deletion is guarded** by one check, `assertDeletable`, which refuses the
+  last active admin (and, from S1, the last owner of a space or an author of
+  space content).
+
+## 25. Workspace integrity (coworking S0c)
 
 `src/db/workspace-tables.ts` holds `WORKSPACE_TABLES`: every table with a
 `workspace_id` column, its owner column, and its action on workspace transfer
@@ -2137,7 +2178,24 @@ table.
   of the same name. A workspace secret with no `workspace_id` belongs to no
   workspace and is not returned.
 
-## 24. Shared spaces (coworking S1)
+## 26. The web on the gateway (coworking S0d)
+
+- **One socket per tab.** The web app uses one `/gateway` connection per
+  browser tab (`/api/auth/ws-ticket`, then `auth`); the legacy `/ws` and
+  `/ws/permissions` sockets are removed. Every event goes to its user's
+  connections only, whatever the tab, and a tab ignores another session's
+  events.
+- **Bounded per user.** `gateway.maxConnectionsPerUser`,
+  `gateway.maxFrameBytes` and `gateway.replayMaxSessions` cap connections,
+  frame size and replay buffers. `replay` answers for the caller's own
+  sessions only.
+- **Workspace switches are clean.** The workspace header carries the
+  workspace id and changes synchronously; workspace-scoped queries key on
+  it.
+
+Frame mapping and limits: [gateway.md](gateway.md).
+
+## 27. Shared spaces (coworking S1)
 
 A space is a workspace with `kind = 'shared'` and `user_id` NULL (migration
 `0128_spaces`; operator and user guide: [docs/SPACES.md](../SPACES.md)).
@@ -2177,11 +2235,16 @@ Access to it is membership, never ownership:
   same transaction (actions `space_*`); `GET /api/spaces/:id/activity` lists
   them for members.
 
-Still to come (see `docs/plans/coworking-spec.md`): the resolver and principal
-for a space selected in the header (`SPACE_ROUTES`), the space access layer for
-content, the agent inside a space, and the web screens.
+- **The header names the space; the route decides.** `resolveWorkspace` turns
+  a space in the request header into `{ workspaceKind: 'shared', spaceRole }`
+  for a member and a 404 (`workspace_denied`) for anyone else. Only the routes
+  in `SPACE_ROUTES` (`src/api/space-routes.ts`) act on it, through the space
+  access layer (`spaceRepos`, `src/db/repositories/space.ts`); every other
+  route runs in the caller's default personal workspace. Agents and
+  pipelines addressed by id follow their session's space for reads and stops
+  only. See [docs/SPACES.md](../SPACES.md), "Working in a space".
 
-## 26. Rooms (coworking S2)
+## 28. Rooms (coworking S2)
 
 - **Rooms are sessions** with `kind = 'room'` in a shared workspace (D7).
   Every personal session path filters `kind = 'chat'` (`personalChat` in
@@ -2204,26 +2267,30 @@ content, the agent inside a space, and the web screens.
   there and ends their room and space subscriptions.
 - **Space memory** replaces personal memories in space sessions (D10, I7).
 
-## 27. Sponsor and team surface (coworking S5, §9.1–§9.3)
+## 29. Live documents (coworking S3)
 
-- **Funding is explicit** (D13). `fundingFor(trigger, space, settings)`
-  decides `own` or `sponsor` from the space's `agent_funding` (migration
-  `0132_space_funding`); a cell without a sponsor is refused
-  (`funding_off`), never charged to someone else. A sponsor names
-  themselves; losing owner rights (removal, demotion, leaving) clears the
-  sponsor in the same transaction, audits it and stops sponsored agents.
-- **Sponsored turns run on the sponsor's models** (`AgentSponsor`,
-  inherited by children), never on the requester's personal rows.
-- **Budgets per payer.** Sponsored work checks the space's `space` and
-  `space_member` budgets; own work the requester's. Personal scopes never
-  count sponsored rows; the token quota sums own agents only. Install-topic
-  calls are stamped `install` (`withInstallUsage`) in every turn.
-- **Space events** stay on the `space:<id>` resource: `task.changed`
-  carries ids only; assignment notices re-read the assignee's membership.
-- **Room modes** reuse the group channels' gate; the probe is install work,
-  the answering turn a `listen` turn run as the member who asked.
+Space notes are live documents (migration `0130_live_documents`; details in
+[docs/SPACES.md](../SPACES.md), "Live documents").
 
-## 25. Own models (coworking S4)
+- **One hub per process** (`src/core/docs/hub.ts`) holds a Yjs document per
+  open note and checks the member's role on every frame: commenters and
+  viewers read, editors and owners write. A membership change takes effect
+  on the next frame. Frames are capped by `spaces.noteMaxBytes` and
+  `spaces.docMaxUpdatesPerSecond`.
+- **Every writer merges or is refused.** Saves, captures, archive and meeting
+  imports go through the hub: a write names its base (`baseSha256`) and is
+  merged three-way, or refused as stale; it never reverts a member's edit.
+  Revisions record authors and on-behalf-of.
+- **The agent proposes.** In `suggest` mode (the default) the notes tool's
+  writes in a space become the session's pending edit proposal, which a
+  member accepts or rejects.
+- **File leases.** A member editing a space file holds a lease; every
+  file-changing tool checks it under per-path locks. Shell, git, docker,
+  skill scripts and CLI agents are advisory only.
+- **Reindex is install work** billed to the space's last editor, with the
+  space on the cost row (`funding: 'install'`, `workspace_id`).
+
+## 30. Own models (coworking S4)
 
 Users bring their own models: personal `model_config` rows
 (`owner_user_id`, named `u/<userId>/<slug>`, migration `0131_personal_models`)
@@ -2247,3 +2314,73 @@ models"); the multi-user invariants it keeps:
 - **CLI credentials per owner** (`cliEnvFor`): per-user CLI home, server auth
   stripped, the owner part of the session store key, resume fingerprint and
   quota key. Same-OS-user limits are documented in `docs/SPACES.md`.
+
+## 31. Sponsor and team surface (coworking S5, §9.1–§9.3)
+
+- **Funding is explicit** (D13). `fundingFor(trigger, space, settings)`
+  decides `own` or `sponsor` from the space's `agent_funding` (migration
+  `0132_space_funding`); a cell without a sponsor is refused
+  (`funding_off`), never charged to someone else. A sponsor names
+  themselves; losing owner rights (removal, demotion, leaving) clears the
+  sponsor in the same transaction, audits it and stops sponsored agents.
+- **Sponsored turns run on the sponsor's models** (`AgentSponsor`,
+  inherited by children), never on the requester's personal rows.
+- **Budgets per payer.** Sponsored work checks the space's `space` and
+  `space_member` budgets; own work the requester's. Personal scopes never
+  count sponsored rows; the token quota sums own agents only. Install-topic
+  calls are stamped `install` (`withInstallUsage`) in every turn.
+- **Space events** stay on the `space:<id>` resource: `task.changed`
+  carries ids only; assignment notices re-read the assignee's membership.
+- **Room modes** reuse the group channels' gate; the probe is install work,
+  the answering turn a `listen` turn run as the member who asked.
+
+## 32. Group-channel bridge and space connectors (coworking S5, §9.4–§9.5)
+
+Details: [docs/SPACES.md](../SPACES.md), "Group channels bound to a space"
+and "Space connectors" (migration `0133_space_bridge_connectors`).
+
+- **Binding needs both owners.** Only a member who owns both the group channel
+  and the space can bind them, with an explicit acknowledgement that everyone
+  in the channel can read what the room shows; it is audited. Losing space
+  ownership, a channel take-over or removal ends the binding.
+- **Turns run as the requester.** A bound thread is a room of the space; a
+  member's message runs as a room turn as that member, with their role and
+  funding. Linked people outside the space get a private hint and no turn;
+  unlinked people's posts are only fenced transcript context.
+- **Space secrets are their own vault scope** (`space`, keyed by the space
+  through `dekForRow`), read only by connector code after a membership
+  check, never through `{{secret:}}`, and never exempt from the flow guard.
+- **No host identity in a space.** Each run of the shell, the Git and GitHub
+  tools and CLI agents in a space gets a fresh temporary tool home (0700),
+  removed after the run; the host's credential variables and helpers are
+  stripped.
+
+## 33. Guests and registration modes (coworking S6)
+
+Details: [docs/SPACES.md](../SPACES.md), "Guests" and "Registration modes"
+(migration `0135_guests_remote`).
+
+- **Guests reach only their scope.** A guest's `{ rooms, folders }` scope lives
+  on the membership (a CHECK ties it to the `guest` role) and is applied by
+  every space repo and route: the named rooms and their members, files and
+  notes under the folders, tasks raised from those rooms and the matching
+  knowledge chunks. Documents, artifacts, space memory and private chats are
+  out of reach. A malformed stored scope reads as the empty scope.
+- **Registration modes.** `security.registration` (`open`, `invite_only`,
+  `closed`) gates `POST /api/auth/register`, which runs in one transaction
+  with first-account detection and the invite's redemption. SAML JIT, SCIM
+  and admin-created accounts are gated by the IdP or an admin instead.
+
+## 34. Remote members (coworking S7 contract)
+
+S7 itself is a contract on the unbuilt federation transport; only the member
+representation is built (migration `0135_guests_remote`; see
+[docs/SPACES.md](../SPACES.md), "Across installs (contract)").
+
+- **Remote users are rows that cannot sign in.** `users.kind = 'remote'` with
+  `remote_instance_id` and `remote_user_ref`; sessions, API tokens,
+  impersonation, SAML and passkeys refuse them, and admin user lists and SCIM
+  leave them out.
+- **Local usernames may not start with `~`.** Registration, admin creation,
+  SCIM and SAML JIT refuse it, and a CHECK enforces it after the migration
+  renamed existing ones; `~name@<instance>` is reserved for remote members.

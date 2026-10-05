@@ -141,4 +141,36 @@ describe('link resolution stays inside one scope', () => {
     const files = await readdir(dir);
     expect(files).toEqual(['vaulted.md']);
   });
+
+  test('a live note’s reindex is billed to the install, in the space, for its last editor', async () => {
+    const { NoteService } = await import('./notes');
+    const { recordProviderUsage } = await import('@/models/providers/instrumented');
+    const { getDocHub } = await import('@/core/docs');
+    const { getKnowledgeLinkRepository } = await import('@/db/repositories/knowledge-link-repository');
+    const { getNoteRepository } = await import('@/db/repositories/note-repository');
+    const { getLinkResolverService } = await import('./link-resolver');
+    // The embedding call records its usage the way an instrumented provider
+    // does: the ambient usage context fills in user, workspace and funding.
+    const embeddings = {
+      deleteBySource: async () => undefined,
+      indexText: async () => {
+        await recordProviderUsage({ model: 'reindex-test-embed', requestType: 'embedding', messages: [] }, 'test',
+          { usage: { inputTokens: 12, outputTokens: 0, totalTokens: 12 }, model: 'reindex-test-embed' });
+      },
+    } as unknown as import('@/core/rag/embeddings').EmbeddingService;
+    const svc = new NoteService(getNoteRepository(), getKnowledgeLinkRepository(), embeddings, getLinkResolverService(), getDocHub);
+    const note = await svc.save({ scope: space, title: 'Reindexed', body: 'live text' });
+    await svc.refreshSpaceNote(note.note.id, bob);
+
+    const { getDb } = await import('@/db/postgres');
+    const { costLog } = await import('@/db/schema/models');
+    const { eq } = await import('drizzle-orm');
+    const rows = await getDb().select().from(costLog).where(eq(costLog.modelName, 'reindex-test-embed'));
+    const reindex = rows.filter((r) => (r.metadata as Record<string, unknown>)?.purpose === 'live-note-reindex');
+    expect(reindex.length).toBeGreaterThan(0);
+    for (const row of reindex) {
+      expect(row).toMatchObject({ userId: bob, workspaceId: spaceId, funding: 'install' });
+      expect((row.metadata as Record<string, unknown>).noteId).toBe(note.note.id);
+    }
+  });
 });
