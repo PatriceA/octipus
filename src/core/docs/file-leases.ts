@@ -9,10 +9,19 @@
  * (recursive delete, move of a parent) conflicts with a lease anywhere
  * under it — prefix matching on whole segments.
  *
- * The lease is the human-facing signal. The guarantee for space files is
- * `withPathLock`: compare-and-write under an in-process per-path mutex
- * (single process, D16). Shell, git, docker, skill scripts and CLI agents
- * are advisory only — they do not check leases.
+ * Lease paths are canonical, like the agent's file paths: a lease taken
+ * through a symlinked directory names the real file (`canonicalLeasePath`),
+ * and an agent write is checked under both its spelling and its canonical
+ * path.
+ *
+ * The lease is the human-facing signal. The guarantee, for the agent's
+ * file tools against leases, is `withPathLocks`: the agent's check and
+ * write, and a lease acquisition, each hold the in-process mutex of their
+ * path and of every directory above it (single process, D16), so two
+ * paths where one contains the other always share a lock — a lease cannot
+ * be taken between an agent's check and its write. Shell, git, docker,
+ * skill scripts and CLI agents are advisory only — they do not check
+ * leases.
  */
 import { posix } from 'node:path';
 import { getConfig } from '@/config';
@@ -28,6 +37,7 @@ import {
 } from '@/db/repositories/live-documents';
 import type { FileLease } from '@/db/schema/live-documents';
 import type { FileLeaseView } from '@/core/gateway/protocol';
+import { WorkspaceFS, WorkspaceFsError } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
 import { KeyedMutex } from './keyed-mutex';
 
@@ -71,6 +81,29 @@ export function normalizeLeasePath(input: string, root?: string): string {
   return normalized;
 }
 
+/**
+ * `input` as a lease names it: `normalizeLeasePath`, then resolved through
+ * the space's files root like the agent's file tools resolve their paths
+ * (`WorkspaceFS.resolve`, symlinks followed) and made relative again. A
+ * lease taken on `shared/plan.md`, where `shared` links to `projects/x`,
+ * names `projects/x/plan.md`: the path the agent's write to either spelling
+ * resolves to. A link out of the space is refused.
+ */
+export function canonicalLeasePath(workspaceId: string, input: string): string {
+  const lexical = normalizeLeasePath(input);
+  const fs = WorkspaceFS.forSpace(workspaceId);
+  let real: string;
+  try {
+    real = fs.resolve(lexical);
+  } catch (err) {
+    if (err instanceof WorkspaceFsError) throw new InvalidLeasePathError('The path is outside the space');
+    throw err;
+  }
+  const relative = fs.spaceRelative(real);
+  if (relative === null) throw new InvalidLeasePathError('The path is outside the space');
+  return normalizeLeasePath(relative);
+}
+
 /** The directories above `path` (`a/b/c` → `a`, `a/b`). */
 export function ancestorsOf(path: string): string[] {
   const parts = path.split('/');
@@ -106,16 +139,20 @@ export async function assertNoLeaseConflict(workspaceId: string, path: string, h
 
 /**
  * What an agent is told when a lease refuses its write: who holds which
- * path, and until when (their editor renews it while open).
+ * path, and until when (their editor renews it while open). `forUserId`
+ * is the member the agent works for: their own lease is named as theirs.
  */
-export async function describeLeaseConflict(leases: FileLease[]): Promise<string> {
+export async function describeLeaseConflict(leases: FileLease[], forUserId?: string): Promise<string> {
   const names = await userNames(leases.map((l) => l.holderUserId));
   const held = leases.map((l) => {
     const who = names.get(l.holderUserId) ?? 'another member';
-    const how = l.holderKind === 'human' ? `${who} is editing it` : `an agent working for ${who} holds it`;
+    const own = l.holderUserId === forUserId;
+    const how = l.holderKind === 'human'
+      ? (own ? `${who} (the member you work for) is editing it` : `${who} is editing it`)
+      : (own ? `another agent working for ${who} (the member you work for) holds it` : `an agent working for ${who} holds it`);
     return `${l.path}: ${how} until ${l.expiresAt.toISOString()} (renewed while they work)`;
   });
-  return `Nothing was changed: this space file is leased by someone else. ${held.join('; ')}. `
+  return `Nothing was changed: this space file is leased. ${held.join('; ')}. `
     + 'Wait until the lease is released or expires and try again, or ask them in the space.';
 }
 
@@ -134,14 +171,20 @@ export async function assertTargetsFree(
 const spaceLocks = new KeyedMutex();
 const pathLocks = new KeyedMutex();
 
-/** Run `fn` holding the in-process mutex of one space file (compare-and-write). */
+/** Run `fn` holding the in-process mutex of exactly one space path key. */
 export function withPathLock<T>(workspaceId: string, path: string, fn: () => Promise<T>): Promise<T> {
   return pathLocks.run(`${workspaceId}:${path}`, fn);
 }
 
-/** `withPathLock` over several paths (a move's source and destination), taken in sorted order so two calls never wait on each other. */
+/**
+ * Run `fn` holding the mutex of each of `paths` (a move's source and
+ * destination) and of every directory above them: any two paths where one
+ * contains the other share a key, so a lease acquisition and an agent
+ * write that could cross never interleave. Taken in sorted order, so two
+ * calls never wait on each other.
+ */
 export function withPathLocks<T>(workspaceId: string, paths: readonly string[], fn: () => Promise<T>): Promise<T> {
-  const sorted = [...new Set(paths)].sort();
+  const sorted = [...new Set(paths.flatMap((p) => (p === '' ? [p] : [...ancestorsOf(p), p])))].sort();
   const take = (i: number): Promise<T> => (i === sorted.length ? fn() : withPathLock(workspaceId, sorted[i], () => take(i + 1)));
   return take(0);
 }
@@ -152,18 +195,21 @@ export type AcquireResult = { ok: true; lease: FileLease } | { ok: false; heldBy
  * Take the lease on `path` for `holder`, or renew it when the holder has it.
  * Refused while another holder has a live lease on the path, a directory
  * above it or a path under it. Serialized per space, so two overlapping
- * acquisitions cannot both pass the check.
+ * acquisitions cannot both pass the check; and under the path locks of
+ * `path` (and of the space root, which a recursive operation on the whole
+ * space takes), so an agent write that crosses it is either done before
+ * the lease is taken or checks after it.
  */
 export async function acquireLease(workspaceId: string, path: string, holder: LeaseHolder): Promise<AcquireResult> {
   const ttl = getConfig().spaces.fileLeaseTtlSeconds;
-  const result = await spaceLocks.run(workspaceId, async (): Promise<AcquireResult> => {
+  const result = await withPathLocks(workspaceId, ['', path], () => spaceLocks.run(workspaceId, async (): Promise<AcquireResult> => {
     await deleteExpiredLeases(workspaceId);
     const conflicts = await leaseConflicts(workspaceId, path, holder, { recursive: true });
     if (conflicts.length > 0) return { ok: false, heldBy: conflicts };
     const lease = await takeLease(workspaceId, path, holder, ttl);
     if (!lease) return { ok: false, heldBy: await liveLeases(workspaceId, [path]) };
     return { ok: true, lease };
-  });
+  }));
   if (result.ok) {
     ensureSweeper();
     leasesChanged(workspaceId);

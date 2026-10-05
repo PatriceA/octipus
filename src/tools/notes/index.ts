@@ -1,14 +1,16 @@
 import {
+  type AgentProposal,
   type AgentProposer,
   proposeAgentArchive,
   proposeAgentCapture,
   proposeAgentEdit,
+  rebaseOnto,
   sessionPendingProposal,
 } from '@/core/docs/edit-proposals';
 import { NoteTooLargeError, StaleWriteError } from '@/core/docs/hub';
 import { ToolNotExecutedError } from '@/core/tool-execution-error';
 import { getCanvasBuilder } from '@/core/knowledge/canvas';
-import { getNoteService } from '@/core/knowledge/notes';
+import { getNoteService, NoteExistsError } from '@/core/knowledge/notes';
 import { getSuggestionService } from '@/core/knowledge/suggestions';
 import { getVaultSync } from '@/core/knowledge/vault';
 import { getEmbeddingService } from '@/core/rag/embeddings';
@@ -18,7 +20,9 @@ import { isRootAgent } from '@/core/types';
 import { getKnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
 import { getNoteRepository, type NoteScope, personalNoteScope } from '@/db/repositories/note-repository';
 import { reposFor } from '@/db/repositories/content';
+import type { NoteEditProposal } from '@/db/schema/live-documents';
 import type { AgentContext } from '@/core/types';
+import { BaseTool, createParameterSchema } from '../base-tool';
 
 /**
  * The note scope of an agent's tools (§5.6): the space's notes in a space
@@ -31,7 +35,6 @@ function notesScope(context: AgentContext, narrow = true): NoteScope {
   if (repos.kind === 'space' || narrow) return repos.noteScope;
   return personalNoteScope(context.userId);
 }
-import type { NoteEditProposal } from '@/db/schema/live-documents';
 
 /**
  * Who proposes, when the agent works in a space whose
@@ -70,10 +73,76 @@ function proposed(proposal: NoteEditProposal) {
     status: 'pending' as const,
     baseSha256: proposal.baseSha256,
     id: proposal.noteId,
-    hint: 'Nothing changed yet: this space takes the agent\'s note changes as proposals, which a member accepts or rejects. read_note shows your pending proposal; writing again updates it.',
+    hint: 'Nothing changed yet: this space takes the agent\'s note changes as proposals, which a member accepts or rejects. '
+      + 'read_note shows your pending proposal rebased onto the note\'s current text; to change it, write from that proposal body with the base_sha256 shown beside it.',
   };
 }
-import { BaseTool, createParameterSchema } from '../base-tool';
+
+/** What a write that changes nothing returns in suggest mode: no proposal is made or updated. */
+function unchanged(noteId: string, pending: NoteEditProposal | null) {
+  return {
+    unchanged: true,
+    id: noteId,
+    ...(pending ? { proposalId: pending.id, hint: 'Your pending proposal for this note is left as it is.' } : {}),
+  };
+}
+
+/** What `read_note` tells the agent about its pending proposal. */
+function pendingHint(pending: NoteEditProposal, stale: boolean, suggesting: boolean): string {
+  const decided = 'Not yet accepted: body above is the note as it is; a member accepts or rejects this proposal.';
+  if (!suggesting) return `${decided} This space now applies the agent's writes directly: writing the note changes it and does not update this proposal.`;
+  if (pending.action === 'archive') return `${decided} You proposed archiving the note; an edit is refused until a member decides it.`;
+  if (stale) {
+    return `${decided} It collides with what members wrote since, so it would be refused as stale: write your change again from the note's current body above, `
+      + 'with sha256 as base_sha256, to replace it.';
+  }
+  return `${decided} pendingProposal.body is your change applied to the current text: to change the proposal, edit that body and write it with `
+    + 'pendingProposal.baseSha256 as base_sha256 (writing from the note body above with sha256 also keeps your proposed change).';
+}
+
+/**
+ * `write_note` in a space in suggest mode: a new note is created (nobody's
+ * text changes; created only while the slug is still free); a change to an
+ * existing one is proposed.
+ */
+async function suggestWrite(context: AgentContext, proposer: AgentProposer, args: Record<string, unknown>, baseSha256: string | undefined) {
+  const scope = notesScope(context);
+  const svc = getNoteService();
+  let existing = args.id
+    ? await svc.getById(scope, args.id as string)
+    : await svc.getBySlug(scope, (args.slug as string) || (args.title as string));
+  if (args.id && !existing) throw new Error(`Note ${args.id} not found for this user`);
+  if (!existing) {
+    try {
+      const result = await svc.save({
+        scope,
+        slug: (args.slug as string) || undefined,
+        title: args.title as string,
+        body: typeof args.body === 'string' ? args.body : undefined,
+        noteKind: (args.note_kind as string) || undefined,
+        tags: Array.isArray(args.tags) ? (args.tags as string[]) : undefined,
+        createdByAgentId: context.role && !isRootAgent(context) ? context.id : null,
+        createOnly: true,
+      });
+      return { id: result.note.id, slug: result.note.slug, created: result.created, indexed: result.indexed, links: result.links };
+    } catch (err) {
+      // A member created the note meanwhile: the write is a change to it.
+      if (!(err instanceof NoteExistsError)) throw err;
+      existing = await svc.getById(scope, err.noteId);
+      if (!existing) throw new Error(`Note ${err.slug} vanished while writing`);
+    }
+  }
+  // Only the title changes: proposed from the current text.
+  const body = typeof args.body === 'string' ? args.body : existing.body;
+  const base = typeof args.body === 'string' ? baseSha256 : existing.bodySha256;
+  if (base === undefined) throw new StaleWriteError('missing_base', existing.bodySha256);
+  const result: AgentProposal = await proposeAgentEdit(scope, proposer, { noteId: existing.id, baseSha256: base, body, title: args.title as string });
+  const ignored = [args.tags !== undefined && 'tags', args.note_kind !== undefined && 'note_kind'].filter(Boolean);
+  return {
+    ...(result.proposal ? proposed(result.proposal) : unchanged(existing.id, result.pending)),
+    ...(ignored.length > 0 ? { notice: `A proposal changes the body and title only: ${ignored.join(' and ')} were not proposed (use #tags in the body).` } : {}),
+  };
+}
 
 /**
  * Knowledge-graph Tier 2 — the notes authoring surface as agent tools.
@@ -130,28 +199,7 @@ export class NotesTool extends BaseTool {
       async (args, context) => definiteRefusal(async () => {
         const baseSha256 = typeof args.base_sha256 === 'string' && args.base_sha256 ? args.base_sha256 : undefined;
         const proposer = await proposerIn(context);
-        if (proposer) {
-          // A new note is created (nobody's text changes); a change to an
-          // existing one is proposed.
-          const scope = notesScope(context);
-          const svc = getNoteService();
-          const existing = args.id
-            ? await svc.getById(scope, args.id as string)
-            : await svc.getBySlug(scope, (args.slug as string) || (args.title as string));
-          if (args.id && !existing) throw new Error(`Note ${args.id} not found for this user`);
-          if (existing) {
-            // Only the title changes: proposed from the current text.
-            const body = typeof args.body === 'string' ? args.body : existing.body;
-            const base = typeof args.body === 'string' ? baseSha256 : existing.bodySha256;
-            if (base === undefined) throw new StaleWriteError('missing_base', existing.bodySha256);
-            const proposal = await proposeAgentEdit(scope, proposer, { noteId: existing.id, baseSha256: base, body, title: args.title as string });
-            const ignored = [args.tags !== undefined && 'tags', args.note_kind !== undefined && 'note_kind'].filter(Boolean);
-            return {
-              ...proposed(proposal),
-              ...(ignored.length > 0 ? { notice: `A proposal changes the body and title only: ${ignored.join(' and ')} were not proposed (use #tags in the body).` } : {}),
-            };
-          }
-        }
+        if (proposer) return suggestWrite(context, proposer, args, baseSha256);
         const result = await getNoteService().save({
           baseSha256,
           scope: notesScope(context),
@@ -199,8 +247,11 @@ export class NotesTool extends BaseTool {
         const backlinks = repos.kind === 'space'
           ? await repos.links.getBacklinks('note', note.id)
           : await getKnowledgeLinkRepository().getBacklinks(context.userId, 'note', note.id);
-        // The change this session proposed and nobody decided yet (§7.4).
+        // The change this session proposed and nobody decided yet (§7.4),
+        // rebased onto the note's current text.
         const pending = repos.kind === 'space' ? await sessionPendingProposal(repos.noteScope, note.id, context.sessionId) : null;
+        const rebased = pending ? rebaseOnto(pending, note) : null;
+        const suggesting = pending ? (await proposerIn(context)) !== null : false;
         return {
           id: note.id,
           slug: note.slug,
@@ -212,16 +263,17 @@ export class NotesTool extends BaseTool {
           // write_note's base_sha256 so the edit merges (§7.3).
           sha256: note.bodySha256,
           backlinks: backlinks.map((b) => ({ from: { type: b.fromType, id: b.fromId }, linkType: b.linkType, label: b.label })),
-          ...(pending ? {
+          ...(pending && rebased ? {
             pendingProposal: {
               proposalId: pending.id,
               status: pending.status,
               action: pending.action,
               title: pending.title,
-              body: pending.body,
-              baseSha256: pending.baseSha256,
+              ...(pending.action === 'archive' ? {} : { body: rebased.body }),
+              baseSha256: rebased.baseSha256,
+              ...(rebased.stale ? { stale: true } : {}),
               updatedAt: pending.updatedAt,
-              hint: 'Your proposed change, not yet accepted: body above is the note as it is. Writing again updates this proposal.',
+              hint: pendingHint(pending, rebased.stale, suggesting),
             },
           } : {}),
         };

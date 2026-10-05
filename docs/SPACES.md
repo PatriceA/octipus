@@ -449,20 +449,47 @@ everyone in an archived space.
   update the session's one pending proposal for that note and answer
   `{ proposed: true, proposalId, status: 'pending', baseSha256 }` — the
   note itself is unchanged. A new note (and a capture that starts the day's
-  note) is still created: nothing of anyone's is overwritten. `read_note`
-  shows the session's pending proposal beside the note's current text.
-  The mode is read at every write, so a switch applies to a running agent;
-  in `direct` mode the agent writes through the live document like any
-  other writer. The *proposals* tab shows each with a diff, and its count
-  updates live for members with the note open (`doc.proposals`); accept
-  applies it through the same merge (if it collides with a newer edit it
-  turns stale and the three texts are shown), reject closes it. Meeting
-  notes are not written by the agent in a space (they link the requester's
-  personal profiles and calendars), so there is nothing of them to propose.
+  note) is still created — only while its slug is free: a note a member
+  creates meanwhile is proposed to, never written over. `read_note` shows
+  the session's pending proposal beside the note's current text, *rebased*
+  onto it (merged with what members wrote since) with the base to name
+  when editing from it; a proposal that collides with a member's edit is
+  shown `stale: true` and can only be replaced (written again from the
+  current text). A write naming a newer base than the proposal's carries
+  the proposal forward (three-way merge of its base, the text the agent
+  read and its body), so an accepted proposal never reverts a member's
+  edit made between the agent's reads; a collision is refused. A write
+  that changes nothing proposes nothing (`{ unchanged: true }`). One
+  proposal holds one action: an archive while an edit is pending (or the
+  reverse) is refused until a member decides the pending one. Agents
+  sharing a session (swarm children, parallel workers) share its
+  proposal: a second agent's change is merged into it, or refused when it
+  touches the same text. The mode is read at every write, so a switch
+  applies to a running agent; in `direct` mode the agent writes through
+  the live document like any other writer (and `read_note` says that a
+  write no longer updates the old pending proposal). The *proposals* tab
+  shows each with a diff, and its count updates live for members with the
+  note open (`doc.proposals`); accept applies it through the same merge
+  (if it collides with a newer edit it turns stale and the three texts
+  are shown; an archive proposal turns stale when the note was edited
+  since), reject closes it. A decision is refused when the agent updated
+  the proposal after it was read ("review it again").
+- **Deviations from §7.4.** *Meeting notes* (`write_meeting_note`,
+  `import_calendar_meetings`) are not proposals in a space, unlike the
+  spec says: they link the requester's personal profiles and calendars,
+  so they stay personal-only and the space tool allowlist refuses them
+  there ("not available in a shared space"); the agent writes a space
+  meeting note with `write_note`. *Links* made with
+  `knowledge.link_knowledge` from or to a space note are written directly,
+  in suggest mode too: an edge does not change the note's text (what a
+  proposal reviews), the member's role is checked, and the edge is
+  attributed to the agent (`origin: 'agent'`).
 - **File leases.** A member editing a space file holds a lease on it
   (`POST /api/spaces/<id>/file-leases`, renewed while the editor is open,
   lapsing after `spaces.fileLeaseTtlSeconds`), so others see "Ben is
-  editing". Paths are relative to the space's files root. A lease on a
+  editing". Paths are relative to the space's files root and canonical: a
+  lease taken through a symlinked directory names the real file (the path
+  the agent's tools resolve to). A lease on a
   directory covers its files; a directory operation conflicts with a lease
   anywhere under it. Changes are pushed as `file.leases` to the space's
   gateway subscribers. The web has no space file editor yet: leases are
@@ -475,10 +502,14 @@ everyone in an archived space.
   anything touches the disk. A recursive delete or a move of a directory is
   refused when a lease sits anywhere under it. The agent holds no lease of
   its own: a lease taken by the member it works for refuses it too (they are
-  editing that file now). The check and the write run under one in-process
-  mutex per path, so they are a single compare-and-write for every writer
-  in the server; the lease is the human-facing signal, the mutex the
-  guarantee.
+  editing that file now). A write is checked by its canonical path and by
+  the spelling the agent used. The check and the write run under the
+  in-process locks of the path and of every directory above it, and taking
+  a lease takes the same locks: a lease is never taken between an agent
+  file tool's check and its write (single process). That holds for the
+  agent's filesystem tools only; the lease is the human-facing signal.
+  On a case-insensitive filesystem (macOS) two spellings of one file that
+  differ only in case are two lease paths.
 - **Advisory for everything else.** Shell commands, git, docker, skill
   scripts and CLI coding agents (Claude Code, Codex, …) write files
   directly and do **not** check leases: for them a lease is only a sign

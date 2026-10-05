@@ -2,10 +2,10 @@ import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import {
   acquireLease,
+  canonicalLeasePath,
   InvalidLeasePathError,
   leaseViews,
   listLeases,
-  normalizeLeasePath,
   releaseLease,
   renewLease,
 } from '@/core/docs/file-leases';
@@ -106,10 +106,13 @@ async function requireMember(actor: SpaceActor, workspaceId: string, action: Spa
   if (action !== 'read' && await isSpaceArchived(workspaceId)) throw new SpaceError('archived', 'This space is archived');
 }
 
-/** A lease path from the request, normalized relative to the space's files root. */
-function leasePath(raw: string): string {
+/**
+ * A lease path from the request, relative to the space's files root and
+ * canonical (symlinks resolved), as the agent's file tools see it.
+ */
+function leasePath(workspaceId: string, raw: string): string {
   try {
-    return normalizeLeasePath(raw);
+    return canonicalLeasePath(workspaceId, raw);
   } catch (err) {
     if (err instanceof InvalidLeasePathError) throw new SpaceError('invalid_input', err.message);
     throw err;
@@ -343,7 +346,7 @@ export const spaceRoutes = new Elysia({ prefix: '/spaces' })
   // Take the lease, or renew it (`renew: true` refuses when it was lost).
   .post('/:id/file-leases', (ctx) => handle(ctx, async (actor) => {
     await requireMember(actor, ctx.params.id, 'write');
-    const path = leasePath(ctx.body.path);
+    const path = leasePath(ctx.params.id, ctx.body.path);
     const holder = { userId: actor.userId, kind: 'human' as const };
     if (ctx.body.renew) {
       const lease = await renewLease(ctx.params.id, path, holder);
@@ -367,7 +370,7 @@ export const spaceRoutes = new Elysia({ prefix: '/spaces' })
 
   .delete('/:id/file-leases', (ctx) => handle(ctx, async (actor) => {
     await requireMember(actor, ctx.params.id, 'read');
-    const released = await releaseLease(ctx.params.id, leasePath(ctx.query.path), { userId: actor.userId, kind: 'human' });
+    const released = await releaseLease(ctx.params.id, leasePath(ctx.params.id, ctx.query.path), { userId: actor.userId, kind: 'human' });
     return { released };
   }), {
     params: t.Object({ id: t.String() }),
