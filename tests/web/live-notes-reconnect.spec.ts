@@ -61,6 +61,8 @@ class Server {
       insertRevision: async () => ({ id: `rev-${++store.revisions}` }),
       reindex: async () => store.body,
       userName: async (userId) => (userId === STUB_USER.id ? STUB_USER.username : null),
+      // Every peer here is a member: no guest audience to narrow.
+      audience: async () => null,
       membership: async () => 'editor',
       membershipVersion: () => 0,
       send: (connectionId, message) => this.sockets.get(connectionId)?.send(JSON.stringify(message)),
