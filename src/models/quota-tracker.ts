@@ -3,6 +3,16 @@ import { modelLogger } from '@/utils/logger';
 import type { QuotaStatus } from './providers/interface';
 
 const QUOTA_KEY_PREFIX = 'quota:';
+
+/**
+ * The quota key for a CLI run (coworking spec §8.5): the provider for the
+ * install's own login, the provider plus the credential owner for a personal
+ * CLI row — one user's exhausted subscription never blocks the install's or
+ * another user's, and theirs never blocks it.
+ */
+export function cliQuotaKey(provider: string, credentialOwner: { userId: string } | null): string {
+  return credentialOwner ? `${provider}:user:${credentialOwner.userId}` : provider;
+}
 const DAILY_USAGE_PREFIX = 'quota:daily:';
 const EXHAUSTION_TTL = 3600; // 1 hour before re-checking exhaustion
 const DAILY_TTL = 86400; // 24 hours

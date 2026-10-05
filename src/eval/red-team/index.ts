@@ -296,6 +296,7 @@ async function sendViaProvider(
 
     const completeOpts = {
       model: modelConfig?.modelId ?? modelId,
+      modelConfigName: modelConfig?.name,
       messages,
       temperature: 0.3,
       maxTokens: 1024,

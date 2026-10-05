@@ -82,6 +82,16 @@ SPACES_CREATION=any_user              # Who may create a space: any_user | admin
 SPACES_MAX_MEMBERS=50                 # Most members per space
 SPACES_INVITE_MAX_TTL_HOURS=720       # Longest invite-link lifetime (hours); longer requests are clamped
 SPACES_PURGE_AFTER_ARCHIVE_DAYS=7     # Days a space stays archived before its owner can delete it
+SPACES_NOTE_MAX_BYTES=114688          # Largest space note (bytes); at most half of GATEWAY_MAX_FRAME_BYTES or startup fails
+SPACES_DOC_MAX_UPDATES_PER_SECOND=30  # Live-note edits one tab may send per second
+SPACES_DOC_PERSIST_DEBOUNCE_MS=2000   # Idle time before a live note is saved (also saved when the last editor leaves)
+SPACES_DOC_REINDEX_MINUTES=10         # Most a live note's links/search index may lag its text
+SPACES_DOC_BASE_TTL_MINUTES=30        # How long a read of a live note stays a valid merge base for a write
+SPACES_FILE_LEASE_TTL_SECONDS=180     # "Someone is editing" lease on a space file, without renewal
+SPACES_MEMORY_MAX_ITEMS=50            # Space-memory entries given to one turn of a space session
+ROOMS_MAX_QUEUED_PER_MEMBER=3         # Requests one member may have waiting in a room
+ROOMS_APPROVAL_TIMEOUT_MINUTES=30     # A room turn waiting this long on an approval gives up
+ROOMS_TRANSCRIPT_WINDOW_CHARS=6000    # Room transcript after the summary before the room is compacted
 
 WORKSPACE_PATH=./workspace
 SEARXNG_URL=http://localhost:8888         # SearXNG meta-search (optional)

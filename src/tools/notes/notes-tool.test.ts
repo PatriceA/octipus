@@ -59,7 +59,7 @@ describe('NotesTool', () => {
 
   beforeEach(async () => {
     const { executeRaw } = await import('@/db/postgres');
-    await executeRaw('TRUNCATE TABLE notes');
+    await executeRaw('TRUNCATE TABLE notes CASCADE'); // note_revisions and note_edit_proposals reference notes
     await executeRaw('TRUNCATE TABLE knowledge_links');
   });
 

@@ -29,11 +29,22 @@ import { coreLogger } from '@/utils/logger';
 
 // ── List / read ──────────────────────────────────────────────────────
 
-/** List models visible to the user (all incl. disabled for admins). */
+/**
+ * Personal rows (coworking spec §8.1) belong to their owner: the admin model
+ * routes never read, edit, delete, default or test one — the owner manages it
+ * under `/api/me/models`.
+ */
+const PERSONAL_ROW_REFUSAL = 'This is a personal model; only its owner manages it (Settings → My models)';
+
+/**
+ * List models visible to the user: for an admin every install row (incl.
+ * disabled), for anyone else the install/org rows they may use — plus, for
+ * both, their own personal rows and never another user's.
+ */
 export async function listModels(userId: string, isAdmin: boolean) {
   const registry = getModelRegistry();
   const models = isAdmin
-    ? await registry.getAllModelsIncludeDisabled()
+    ? [...await registry.getAllModelsIncludeDisabled(), ...await registry.getPersonalModels(userId)]
     : await registry.getModelsForUser(userId);
 
   const anthropicNative = anthropicNativeMessagesEnabled(process.env.ANTHROPIC_NATIVE_MESSAGES);
@@ -76,10 +87,11 @@ function validateOutputLimits(maxTokens: unknown, defaultMaxTokens: unknown): st
 }
 
 /** Get one model by name, with derived capabilities. */
-export async function getModelByName(name: string) {
+export async function getModelByName(name: string, userId: string) {
   const registry = getModelRegistry();
-  const model = await registry.getModel(name);
-  if (!model) return { error: 'Model not found' as const };
+  // Only a row the caller may see: another user's personal row is "not found".
+  const model = await registry.getModelVisibleTo(name, userId);
+  if (!model?.isEnabled) return { error: 'Model not found' as const };
   return { ...model, capabilities: getCapabilitiesForModel(model) };
 }
 
@@ -141,6 +153,11 @@ export async function registerModel(body: Record<string, unknown>) {
   const provider = body.provider as string;
   const modelId = body.modelId as string;
   const name = body.name as string;
+
+  // The admin registry writes install rows only: no owner, and not in the
+  // `u/` namespace personal rows are named in.
+  if ('ownerUserId' in body) return { error: 'ownerUserId cannot be set here; personal models are added under /api/me/models' };
+  if (name.startsWith('u/')) return { error: 'Model names starting with "u/" are reserved for personal models' };
 
   // Validate OpenRouter model IDs must contain a slash (provider/model format)
   if (provider === 'openrouter' && !modelId.includes('/')) {
@@ -208,6 +225,8 @@ export async function updateModel(name: string, body: Record<string, unknown>) {
     const registry = getModelRegistry();
     const existing = await registry.getModel(name);
     if (!existing) return { status: 404 as const, error: 'Model not found' };
+    if (existing.ownerUserId) return { status: 403 as const, error: PERSONAL_ROW_REFUSAL };
+    if ('ownerUserId' in safeUpdate) return { status: 400 as const, error: 'ownerUserId cannot be changed' };
     const validationError = validateCliMetadata(
       typeof safeUpdate.modelId === 'string' ? safeUpdate.modelId : existing.modelId,
       safeUpdate.metadata === undefined ? existing.metadata : safeUpdate.metadata,
@@ -233,13 +252,20 @@ export async function updateModel(name: string, body: Record<string, unknown>) {
   }
 }
 
+/** Whether `name` is a personal row (admin routes refuse those). */
+async function isPersonalRow(name: string): Promise<boolean> {
+  return getModelRegistry().isPersonalModelName(name);
+}
+
 export async function deleteModel(name: string) {
+  if (await isPersonalRow(name)) return { deleted: false, error: PERSONAL_ROW_REFUSAL };
   const registry = getModelRegistry();
   const deleted = await registry.deleteModel(name);
   return { deleted };
 }
 
 export async function setDefaultModel(name: string) {
+  if (await isPersonalRow(name)) return { success: false, error: PERSONAL_ROW_REFUSAL };
   const registry = getModelRegistry();
   const success = await registry.setDefaultModel(name);
   return { success };
@@ -255,6 +281,7 @@ export async function checkCapabilities(name: string, userId: string) {
   if (!model) {
     return { status: 404 as const, error: `Model "${name}" not found` };
   }
+  if (model.ownerUserId) return { status: 403 as const, error: PERSONAL_ROW_REFUSAL };
   try {
     const client = getLiteLLMClient();
     const providers = new Map(getProviderRouter().getAllProviders().map((p) => [p.name, p]));

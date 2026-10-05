@@ -6,6 +6,7 @@ import { SpaceError, spaceErrorStatus } from '@/security/space-access';
 import { apiContext } from '@/api/context';
 import { getAgentManager } from '@/core/agent-manager';
 import { getRouter } from '@/core/router';
+import { isRegisteredModel, resolveModel } from '@/models/resolve-model';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { contentRepos } from '@/db/repositories/content';
 import { isAuthenticated } from '@/security/principal';
@@ -299,6 +300,23 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
         throw err;
       }
 
+      // An explicit model resolves only to a row this user may use (coworking
+      // spec §8.2): an install/org row or their own personal row. A registered
+      // name they may not see — another user's personal model — is refused
+      // like an unknown one, never passed through.
+      let modelId = model;
+      let modelName: string | undefined;
+      if (model) {
+        const row = await resolveModel({ userId: user.id, name: model, inSpace: !!scope.space });
+        if (row) {
+          modelId = row.modelId;
+          modelName = row.name;
+        } else if (await isRegisteredModel(model)) {
+          set.status = 400;
+          return { error: `Model '${model}' is not available` };
+        }
+      }
+
       const agentManager = getAgentManager();
 
       try {
@@ -307,7 +325,8 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
           userId: user.id,
           ...scope,
           topic,
-          model,
+          model: modelId,
+          modelName,
           systemPrompt,
           // REST has no approval relay (`channelCanPrompt('api')`).
           attended: false,
@@ -546,9 +565,12 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       }
 
       const router = getRouter();
-      const decision = await router.route(body.message, body.preferredModel);
-
-      return decision;
+      try {
+        // `preferredModel` resolves with this user's visibility (§8.2).
+        return await router.route(body.message, body.preferredModel, { userId: user.id });
+      } catch (err) {
+        return { error: (err as Error).message };
+      }
     },
     {
       body: t.Object({

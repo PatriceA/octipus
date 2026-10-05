@@ -15,7 +15,7 @@
  * retroactively connects every meeting they were in.
  */
 import { getKnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
-import { personalNoteScope } from '@/db/repositories/note-repository';
+import { type NoteScope, personalNoteScope } from '@/db/repositories/note-repository';
 import { profileRepository } from '@/db/repositories/profile-repository';
 import { coreLogger } from '@/utils/logger';
 import { getNoteService } from './notes';
@@ -44,6 +44,15 @@ export interface MeetingInput {
   /** Stable id from the source calendar, so a re-import updates rather than duplicates. */
   externalId?: string;
   createdByAgentId?: string | null;
+  /**
+   * Where the note goes, when not the user's personal notes: a space's
+   * (`contentRepos(principal).noteScope`). A re-save of a space meeting note
+   * goes through the document hub like every space-note write (§7.3):
+   * merged with what members typed, or refused as stale.
+   */
+  scope?: NoteScope;
+  /** Space notes: the sha of the meeting note's body this write was made from. */
+  baseSha256?: string;
 }
 
 export interface MeetingResult {
@@ -144,8 +153,9 @@ export async function ingestMeeting(input: MeetingInput): Promise<MeetingResult>
   if (input.source) tags.push(`source/${slugify(input.source)}`);
 
   const saved = await getNoteService().save({
-    scope: personalNoteScope(input.userId, input.workspaceId ?? null),
+    scope: input.scope ?? personalNoteScope(input.userId, input.workspaceId ?? null),
     slug,
+    baseSha256: input.baseSha256,
     title: input.title,
     body: renderMeetingNote({ ...input, at }, names),
     noteKind: MEETING_NOTE_KIND,

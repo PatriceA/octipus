@@ -31,6 +31,8 @@ async function condenseForSummary(
   summaryModel: string,
   userId: string | undefined,
   requireSuccess = false,
+  /** Registry row of `summaryModel` (coworking spec §8.1) — a personal row carries its owner's key. */
+  summaryModelName?: string,
 ): Promise<string> {
   // Single-pass zone: a history at most ~2× the single-pass size loses little
   // to a plain head-slice, and map-reduce (N map calls + reduce) isn't worth
@@ -55,6 +57,7 @@ async function condenseForSummary(
 
   const mapOpts = (chunk: string): CompletionOptions => ({
     model: summaryModel,
+    modelConfigName: summaryModelName,
     userId,
     messages: [
       {
@@ -97,7 +100,7 @@ async function condenseForSummary(
   const reduced = partials.join('\n\n');
   if (requireSuccess && reduced.length > SUMMARY_INPUT_CHARS) {
     if (reduced.length >= serialized.length) throw new Error('Checkpoint reduction made no progress');
-    return condenseForSummary(reduced, summaryModel, userId, true);
+    return condenseForSummary(reduced, summaryModel, userId, true, summaryModelName);
   }
   return reduced;
 }
@@ -422,6 +425,12 @@ export interface CreateLLMSummaryOptions {
   userInstructions?: string;
   /** Calling user — threaded so providers can resolve user-scoped vault keys. */
   userId?: string;
+  /**
+   * Registry row of the summary model (`model_config.name`). The agent's own
+   * row summarizes its history; without the name a modelId lookup could land on
+   * a different row sharing the id (coworking spec §8.1).
+   */
+  summaryModelName?: string;
 }
 
 export interface CreateLLMSummaryResult {
@@ -466,7 +475,7 @@ export async function createLLMSummary(
     const serialized = serializeConversation(removedMessages);
     // Map-reduce condense so long histories keep fidelity instead of losing
     // everything past the first ~8 KB to a silent slice.
-    const condensed = await condenseForSummary(serialized, summaryModel, options?.userId, options?.requireSuccess);
+    const condensed = await condenseForSummary(serialized, summaryModel, options?.userId, options?.requireSuccess, options?.summaryModelName);
     const prompt = buildSummarizationPrompt(condensed, fileOps, {
       previousSummary: options?.previousSummary,
       userInstructions: options?.userInstructions,
@@ -474,6 +483,7 @@ export async function createLLMSummary(
 
     const result = await client.complete({
       model: summaryModel,
+      modelConfigName: options?.summaryModelName,
       userId: options?.userId,
       // An install-topic call: stamped `install` in cost_log (D13).
       requestType: 'compaction',
@@ -593,12 +603,15 @@ export async function compactMessagesWithSummary(
       previousFileOps: options.previousFileOps,
       userInstructions: options.userInstructions,
       userId: options.userId,
+      summaryModelName: options.summaryModelName,
     });
     summary = result.message;
     summaryText = result.summaryText;
     mergedFileOps = result.fileOps;
   } else {
-    summary = await createLLMSummary(nonSystemRemoved, model);
+    summary = options.summaryModelName
+      ? (await createLLMSummary(nonSystemRemoved, model, { userId: options.userId, summaryModelName: options.summaryModelName })).message
+      : await createLLMSummary(nonSystemRemoved, model);
   }
 
   // Insert summary after system messages

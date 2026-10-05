@@ -116,6 +116,13 @@ const ALLOWLIST: Record<string, string> = {
   'src/core/spaces/invites.ts': ACCESS_LAYER,
   'src/core/spaces/membership.ts': ACCESS_LAYER,
   'src/core/spaces/purge.ts': ACCESS_LAYER,
+  'src/db/repositories/live-documents.ts': ACCESS_LAYER,
+  // Rooms (S2): every read follows `roomAccess` / the membership read.
+  'src/core/rooms/access.ts': ACCESS_LAYER,
+  'src/core/rooms/service.ts': ACCESS_LAYER,
+  'src/core/rooms/membership.ts': 'pending requests of one room, for an access change',
+  'src/core/spaces/memory.ts': ACCESS_LAYER,
+  'src/db/repositories/session-kind.ts': 'the kind of one session by id (no content)',
   'src/security/workspace-resolver.ts': 'workspace of a session/agent/pipeline the caller owns, by id',
   // Unscoped stores keyed by an id the caller already holds (MARKED: per read).
   'src/db/repositories/session-repository.ts': 'system-side session store',

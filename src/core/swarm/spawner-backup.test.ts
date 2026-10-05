@@ -58,6 +58,8 @@ type RunOpts = {
   childLane: string;
   childModel: string;
   parent: { id: string };
+  /** The backup resolves for the requester (personal bindings have none, so it is the install's). */
+  parentContext: { userId: string };
   reason: string;
   budget: Budget;
 };
@@ -86,6 +88,7 @@ const baseOpts = (): RunOpts => ({
   childLane: 'agents',
   childModel: 'primary-id',
   parent: { id: 'p1' },
+  parentContext: { userId: 'system' },
   reason: 'normal',
   // A real budget, because the retry paths write to it. The fixture carried
   // none, so `runChildWithRetry` was being driven through a shape no caller can

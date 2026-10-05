@@ -33,6 +33,17 @@ const DEFAULT_LIMITS: Record<string, Record<TrustLevel, RateLimitConfig>> = {
     user: { limit: 20, windowMs: 60_000 },
     agent: { limit: 20, windowMs: 60_000 },
   },
+  // Live documents (S3): keystroke-rate frames. The document hub enforces
+  // `spaces.docMaxUpdatesPerSecond` and 10 awareness frames per second per
+  // connection; this is only a ceiling above the largest allowed setting.
+  'doc.update': {
+    user: { limit: 1000, windowMs: 1000 },
+    agent: { limit: 1000, windowMs: 1000 },
+  },
+  'doc.awareness': {
+    user: { limit: 1000, windowMs: 1000 },
+    agent: { limit: 1000, windowMs: 1000 },
+  },
   default: {
     user: { limit: 60, windowMs: 60_000 },
     agent: { limit: 60, windowMs: 60_000 },

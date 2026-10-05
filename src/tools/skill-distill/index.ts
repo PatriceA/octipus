@@ -100,6 +100,7 @@ export class SkillDistillTool extends BaseTool {
         // 3. Distil.
         const result = await getLiteLLMClient().complete({
           model: model.modelId,
+          modelConfigName: model.name,
           messages: [
             { role: 'system', content: SKILL_DISTILL_SYSTEM_PROMPT, timestamp: new Date() },
             { role: 'user', content: material, timestamp: new Date() },

@@ -81,7 +81,7 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
     '/:name',
     async ({ user, params }) => {
       if (!user) return { error: 'Not authenticated' };
-      return getModelByName(params.name);
+      return getModelByName(params.name, user.id);
     },
     {
       params: t.Object({ name: t.String() }),
@@ -193,9 +193,11 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
   // Delete model (admin only)
   .delete(
     '/:name',
-    async ({ user, params }) => {
+    async ({ user, params, set }) => {
       if (!user?.isAdmin) return { error: 'Admin access required' };
-      return deleteModel(params.name);
+      const result = await deleteModel(params.name);
+      if ('error' in result) set.status = 403;
+      return result;
     },
     {
       params: t.Object({ name: t.String() }),
@@ -206,9 +208,11 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
   // Set default model (admin only)
   .post(
     '/:name/default',
-    async ({ user, params }) => {
+    async ({ user, params, set }) => {
       if (!user?.isAdmin) return { error: 'Admin access required' };
-      return setDefaultModel(params.name);
+      const result = await setDefaultModel(params.name);
+      if ('error' in result) set.status = 403;
+      return result;
     },
     {
       params: t.Object({ name: t.String() }),

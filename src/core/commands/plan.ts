@@ -1,7 +1,7 @@
 import { sessionRepository } from '@/db/repositories/session-repository';
 import type { PlanningState, SessionContext } from '@/db/schema/sessions';
 import { getLiteLLMClient } from '@/models/litellm-client';
-import { getModelRegistry } from '@/models/model-registry';
+import { resolveModel } from '@/models/resolve-model';
 import { coreLogger } from '@/utils/logger';
 import { registerCommand } from './registry';
 
@@ -264,8 +264,9 @@ async function compileBrief(state: PlanningState, userId: string): Promise<strin
 
   // Try to use LLM to compile a structured brief
   try {
-    const registry = getModelRegistry();
-    const defaultModel = await registry.getDefaultModel();
+    // The user's own `everyday` binding first, then the install's, then the
+    // install default (coworking spec §8.2).
+    const defaultModel = await resolveModel({ userId, topic: 'everyday', fallbackToDefault: true });
     if (!defaultModel) {
       return fallbackBrief(state, qa);
     }
@@ -273,6 +274,7 @@ async function compileBrief(state: PlanningState, userId: string): Promise<strin
     const client = getLiteLLMClient();
     const result = await client.complete({
       model: defaultModel.modelId,
+      modelConfigName: defaultModel.name,
       messages: [
         {
           role: 'system',

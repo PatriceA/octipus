@@ -24,7 +24,7 @@ import { classifyMessage } from './classifier';
 import { directResponse } from './direct-response';
 import { VoicePlanGate } from './voice-plan-gate';
 import { guardInput } from './input-guard';
-import { ModelSelector } from './model-selector';
+import { ModelSelector, type SelectedModel } from './model-selector';
 import { type RootRunExtras, runRootAgent } from './root-runner';
 import { type LimitRefusal, limitRefusalOf } from '@/core/errors/limit-refusal';
 import { guardOutput, stripSwarmScaffolding } from './output-guard';
@@ -152,11 +152,11 @@ export class AgentService {
     }
   }
 
-  /** The fast model mapped to the `voice` topic, or undefined if none is mapped. */
-  private async resolveVoiceModel(): Promise<string | undefined> {
+  /** The fast model mapped to the `voice` topic for this user, or undefined if none is mapped. */
+  private async resolveVoiceModel(userId: string): Promise<SelectedModel | undefined> {
     try {
-      const routing = await this.modelSelector.selectForWorker('voice', false);
-      return routing.model || undefined; // '' ⇒ topic unmapped ⇒ fall back to complexity routing
+      const routing = await this.modelSelector.selectForWorker('voice', false, { userId });
+      return routing.model ? { modelId: routing.model, name: routing.name } : undefined; // '' ⇒ topic unmapped ⇒ fall back to complexity routing
     } catch {
       return undefined;
     }
@@ -808,7 +808,7 @@ export class AgentService {
         if (action.kind === 'propose') {
           // Plan out loud on the fast voice model; the user's actual utterance is
           // persisted, the accumulated task rides in the planning directive.
-          const voiceModel = await this.resolveVoiceModel();
+          const voiceModel = await this.resolveVoiceModel(userId);
           const { response, metadata } = await directResponse(
             message, resolvedSessionId, userId, this.modelSelector,
             classification.complexity ?? 'moderate', inputGuard.flags,
@@ -1114,6 +1114,8 @@ export class AgentService {
     overrides?: {
       systemPrompt?: string;
       model?: string;
+      /** Row identity of `model` — see `AgentContext.modelName`. */
+      modelName?: string;
       swarmParent?: import('./worker-spawner').WorkerSwarmParent;
       onCounters?: (counters: import('@/core/swarm/receipt').SideEffectCounters | null) => void;
       /** Stage-declared tool ids, narrowing the role's set. See spawnWorker. */

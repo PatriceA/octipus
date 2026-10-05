@@ -14,6 +14,7 @@ import type { AgentContext } from '@/core/types';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import type { ProfileFact } from '@/db/schema/profiles';
 import { getModelRegistry } from '@/models/model-registry';
+import { resolveModel } from '@/models/resolve-model';
 import { isRealUserId } from '@/security/principal';
 import { QuotaExceededError } from '@/security/quota-error';
 import { isProviderQuotaError } from '@/core/errors/classification';
@@ -165,6 +166,8 @@ export async function spawnWorker(
   overrides?: {
     systemPrompt?: string;
     model?: string;
+    /** Row identity of `model` (`model_config.name`) — required with a personal row (spec §8.1). */
+    modelName?: string;
     topic?: string;
     swarmParent?: WorkerSwarmParent;
     /**
@@ -342,15 +345,18 @@ export async function spawnWorker(
   // can't drive. Smallness is derived from the *lane* model (what runs in the
   // single-model / router case); an explicit expert modelPreference is a rare
   // override and still benefits from a leaner prompt.
+  // The requester's personal lane binding first, then the install's (§8.2).
+  const inSpace = !!context.space;
   const routing = await deps.modelSelector.selectForWorker(
     lane,
     roleTools.length > 0,
+    { userId: context.userId, inSpace },
   );
   const agentCfg = getConfig().agent;
   let isSmall = false;
   if (routing.model) {
     try {
-      const topicMeta = await getModelRegistry().getModelByModelId(routing.model);
+      const topicMeta = await getModelRegistry().getModel(routing.name);
       isSmall = isSmallModel({ modelId: routing.model, metadata: topicMeta?.metadata }, agentCfg.smallModelMaxParams);
     } catch (err) {
       coreLogger.debug({ err, model: routing.model }, 'small-model tier check skipped (non-fatal)');
@@ -410,13 +416,16 @@ export async function spawnWorker(
   if (!finalModel) {
     return { error: 'No model configured. Please add one in the Models page.' };
   }
+  const finalModelName = overrides?.model ? overrides.modelName : routing.name;
 
   // `isSmall` above was derived from the topic model (routing.model), but the
   // worker actually runs on finalModel — an override or expert modelPreference
   // can pin a different-sized model. Re-derive smallness against finalModel so
   // the lite prompt (Phase C) and tool-discovery path both key off the model
   // that will actually run. Reused by the tool block below (avoids a 2nd lookup).
-  const finalModelEntry = await getModelRegistry().getModelByModelId(finalModel);
+  const finalModelEntry = finalModelName
+    ? await getModelRegistry().getModel(finalModelName)
+    : await getModelRegistry().getModelByModelId(finalModel, { userId: context.userId });
   const finalIsSmall = isSmallModel(
     { modelId: finalModel, metadata: finalModelEntry?.metadata },
     agentCfg.smallModelMaxParams,
@@ -881,6 +890,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     ...inheritScope(context),
     topic: lane,
     model: finalModel,
+    modelName: finalModelEntry?.name,
     role: agentRole,
     systemPrompt,
     tools: workerTools,
@@ -1181,6 +1191,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
       }
     }
     return handleWorkerFailure(error as Error, worker, workerId, finalModel, agentRole, roleConfig, lane, task, input, context, startTime, deps, {
+      modelName: finalModelEntry?.name,
       systemPrompt,
       tools: workerTools,
       toolAdvertisement,
@@ -1198,6 +1209,8 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
  * this, retried/fallback workers silently ran as a different, weaker persona.
  */
 interface WorkerRespawnContext {
+  /** Row identity of the failed model — the transient retry reruns that exact row. */
+  modelName?: string;
   systemPrompt: string;
   tools: import('@/core/agent-base').ToolHandler[];
   toolAdvertisement: import('@/core/agent-base').ToolAdvertisement;
@@ -1304,7 +1317,7 @@ async function handleWorkerFailure(
   // Respawn the ORIGINAL worker (same assembled prompt + tool surface) on a
   // given model and run the task. Shared by the transient retry and explicit
   // topic backup below.
-  const respawnAndRun = async (model: string): Promise<string> => {
+  const respawnAndRun = async (model: string, modelName: string | undefined): Promise<string> => {
     const agentManager = getAgentManager();
     const retryWorker = await agentManager.spawn({
       sessionId: context.sessionId,
@@ -1312,6 +1325,7 @@ async function handleWorkerFailure(
       ...inheritScope(context),
       topic: lane,
       model,
+      modelName,
       role: agentRole,
       systemPrompt: respawnCtx.systemPrompt,
       tools: respawnCtx.tools,
@@ -1355,7 +1369,7 @@ async function handleWorkerFailure(
   if (isTransient && !isProviderQuotaError(error)) {
     coreLogger.info({ workerId, role: agentRole, error: errorMsg }, 'Worker failed with transient error, retrying once');
     try {
-      const retryResult = await respawnAndRun(failedModel);
+      const retryResult = await respawnAndRun(failedModel, respawnCtx.modelName);
       deps.setLastWorkerResult(retryResult);
       return retryResult;
     } catch (retryError) {
@@ -1366,15 +1380,16 @@ async function handleWorkerFailure(
   // Topic backup model — the "Backup" binding from the Topics page. One
   // attempt on the configured fallback. Skipped when unbound or when it
   // would rerun the failed model.
-  const registry = getModelRegistry();
   try {
-    const backup = await registry.getBackupModelForTopic(lane);
+    // Personal bindings have no backup: this is the install lane's (§8.2).
+    const inSpace = !!context.space;
+    const backup = await resolveModel({ userId: context.userId, topic: lane, backup: true, inSpace });
     if (backup && backup.modelId !== failedModel) {
       coreLogger.info(
         { failedModel, backupModel: backup.modelId, topic: lane, role: agentRole },
         'Worker failed on primary model, retrying with topic backup model',
       );
-      const backupResult = await respawnAndRun(backup.modelId);
+      const backupResult = await respawnAndRun(backup.modelId, backup.name);
       deps.setLastWorkerResult(backupResult);
       return backupResult;
     }

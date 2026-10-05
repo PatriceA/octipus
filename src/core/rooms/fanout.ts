@@ -10,7 +10,8 @@
  * room post, the turn's final answer, a progress update, a command's
  * answer, a refusal — members see it, and only rows that were stored.
  *
- * It also follows the running room turn for the turn strip: its model once
+ * It also keeps space presence current as members open and leave notes
+ * (the document hub's peers listener), and follows the running room turn for the turn strip: its model once
  * the root agent spawned, and "waiting for X to approve" while the requester
  * has an open approval or permission request in the room.
  *
@@ -89,6 +90,11 @@ export async function startRoomFanout(): Promise<() => void> {
   cleanups.push(permissions.onResolved((event) => {
     if (event.sessionId) markRoomTurnWaiting(event.sessionId, event.userId, false);
   }));
+
+  // Space presence follows the notes members open (S3 document hub).
+  const [{ setDocPeersListener }, { publishSpacePresence }] = await Promise.all([import('@/core/docs'), import('./presence')]);
+  setDocPeersListener((workspaceId) => { void publishSpacePresence(workspaceId); });
+  cleanups.push(() => setDocPeersListener(() => undefined));
 
   started = () => {
     for (const cleanup of cleanups) cleanup();

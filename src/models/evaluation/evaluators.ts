@@ -55,7 +55,6 @@ async function llmJudge(prompt: string): Promise<{ score: number; reasoning: str
   const client = getLiteLLMClient();
 
   const callModel = async (opts: import('@/models/litellm-client').CompletionOptions) => {
-    opts = { ...opts, modelConfigName: judgeModel.name };
     // Route based on DB-configured provider — not heuristic name matching
     if (judgeModel.provider !== 'litellm') {
       return resolvedProvider.complete(opts);
@@ -83,6 +82,7 @@ async function llmJudge(prompt: string): Promise<{ score: number; reasoning: str
     // First attempt with thinking enabled
     result = await callModel({
       model: judgeModel.modelId,
+      modelConfigName: judgeModel.name,
       temperature: 0.1,
       maxTokens: 1024,
       extraBody: { ...judgeModel.metadata?.extraBody, think: true },
@@ -93,6 +93,7 @@ async function llmJudge(prompt: string): Promise<{ score: number; reasoning: str
     if (!result.content?.trim()) {
       result = await callModel({
         model: judgeModel.modelId,
+        modelConfigName: judgeModel.name,
         temperature: 0.1,
         maxTokens: 256,
         extraBody: { ...judgeModel.metadata?.extraBody, think: false },

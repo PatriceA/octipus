@@ -105,7 +105,11 @@ async function seedSpaceRows(ws: string, author: string): Promise<{ sessionId: s
   await one('hooks', `INSERT INTO hooks (user_id, name, trigger, trigger_config, action, action_config, workspace_id) VALUES ($1, 'h', 'message_received', '{}', 'notify', '{}', $2)`, [author, ws]);
   await one('knowledge_links', `INSERT INTO knowledge_links (user_id, from_type, from_id, to_ref, link_type, origin, workspace_id) VALUES ($1, 'note', $2, 'x', 'references', 'wikilink', $3)`, [author, randomUUID(), ws]);
   await one('memories', `INSERT INTO memories (user_id, fact_type, content, embedding, embedding_version, workspace_id) VALUES ($1, 'fact', 'c', '[0.1,0.2,0.3]', 'm/3', $2)`, [author, ws]);
-  await one('notes', `INSERT INTO notes (user_id, slug, title, body_sha256, workspace_id) VALUES ($1, $2, 't', 'sha', $3)`, [author, `n-${randomUUID()}`, ws]);
+  const [note] = await q(`INSERT INTO notes (user_id, slug, title, body_sha256, workspace_id) VALUES ($1, $2, 't', 'sha', $3) RETURNING id`, [author, `n-${randomUUID()}`, ws]);
+  seeded.add('notes');
+  await one('note_revisions', `INSERT INTO note_revisions (note_id, workspace_id, body, body_sha256, authors, origin) VALUES ($1, $2, '', 'sha', ARRAY[$3::uuid], 'live')`, [note.id, ws, author]);
+  await one('note_edit_proposals', `INSERT INTO note_edit_proposals (note_id, workspace_id, user_id, base_body, base_sha256, body) VALUES ($1, $2, $3, '', 'sha', 'x')`, [note.id, ws, author]);
+  await one('file_leases', `INSERT INTO file_leases (workspace_id, path, holder_user_id, holder_kind, expires_at) VALUES ($1, 'a.md', $2, 'human', now() + interval '1 hour')`, [ws, author]);
   await one('notifications', `INSERT INTO notifications (user_id, type, title, workspace_id) VALUES ($1, 'info', 'n', $2)`, [author, ws]);
   await one('permission_requests', `INSERT INTO permission_requests (user_id, agent_id, skill_id, action, context, workspace_id) VALUES ($1, 'a1', 't', 'write', '{"toolName":"t","toolArguments":{}}', $2)`, [author, ws]);
   await one('pipelines', `INSERT INTO pipelines (root_agent_id, session_id, user_id, title, type, workspace_id) VALUES ('a1', $1, $2, 'p', 'plan', $3)`, [session.id, author, ws]);

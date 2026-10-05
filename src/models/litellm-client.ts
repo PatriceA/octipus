@@ -389,7 +389,7 @@ export class LiteLLMClient {
 
     const { getProviderRouter } = await import('@/models/providers');
     const router = getProviderRouter();
-    const provider = await router.resolveProvider(resolvedModel);
+    const provider = await router.resolveProvider(resolvedModel, options);
 
     if (provider.name === 'litellm') {
       modelLogger.debug(
@@ -450,31 +450,32 @@ export class LiteLLMClient {
    * Merge per-model `endpoint` and `apiKey` from the registry into the
    * caller's options. Caller-supplied values win. Returns options unchanged
    * if the model isn't in the registry, or already has both fields set.
+   *
+   * The row is the one the caller named (`modelConfigName`), else the modelId
+   * lookup (install rows first, then the requester's own). The key resolves
+   * under the ROW's owner (`resolveModelKey`), never the requester's vault.
    */
   private async applyModelOverrides(options: CompletionOptions): Promise<CompletionOptions> {
     if (options.endpoint && options.apiKey) return options;
+    const { getModelRegistry } = await import('@/models/model-registry');
+    const { resolveModelKey, PersonalModelKeyMissingError } = await import('@/models/model-key');
     try {
-      const { getModelRegistry } = await import('@/models/model-registry');
-      const entry = await getModelRegistry().getModelByModelId(options.model);
+      const registry = getModelRegistry();
+      const entry = options.modelConfigName
+        ? await registry.getModel(options.modelConfigName)
+        : await registry.getModelByModelId(options.model, { userId: options.userId });
       if (!entry) return options;
 
-      const next: CompletionOptions = { ...options };
+      const next: CompletionOptions = entry.ownerUserId ? { ...options, modelConfigName: entry.name } : { ...options };
       if (!next.endpoint && entry.endpoint) next.endpoint = entry.endpoint;
-
-      if (!next.apiKey && entry.apiKeyRef) {
-        const { getVault } = await import('@/security/vault');
-        const vault = getVault();
-        // Prefer the user's vault namespace when a userId is in scope, then
-        // fall back to the system namespace. This matches the resolution
-        // order used by the vision path.
-        const key = (options.userId
-          ? await vault.getByName(options.userId, entry.apiKeyRef).catch(() => null)
-          : null)
-          || await vault.getByName('system', entry.apiKeyRef).catch(() => null);
+      if (!next.apiKey) {
+        const key = await resolveModelKey(entry);
         if (key) next.apiKey = key;
       }
       return next;
     } catch (err) {
+      // A personal row without its key must not run on the install's env key.
+      if (err instanceof PersonalModelKeyMissingError) throw err;
       modelLogger.warn({ err, model: options.model }, 'Failed to resolve per-model overrides; using caller options as-is');
       return options;
     }
@@ -643,7 +644,7 @@ export class LiteLLMClient {
     try {
       const { getProviderRouter } = await import('@/models/providers');
       router = getProviderRouter();
-      provider = await router.resolveProvider(resolvedModel);
+      provider = await router.resolveProvider(resolvedModel, options);
     } catch {
       provider = undefined;
     }

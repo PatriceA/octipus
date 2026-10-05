@@ -138,6 +138,11 @@ export function wireMessageHandler(hub: GatewayHub): void {
   hub.setConnectionClosedHandler((context) => {
     // Rooms and spaces it was in show it gone (coworking §6.6).
     presenceAfterClose(context);
+    // Live documents the connection had open: it leaves them (the last one
+    // out persists the note).
+    import('@/core/docs')
+      .then(({ getDocHub }) => getDocHub().connectionClosed(context.connectionId))
+      .catch((err: unknown) => coreLogger.error({ err, connectionId: context.connectionId }, 'Could not leave the documents of a closed connection'));
     const sessionId = context.voiceSessionId;
     if (!sessionId) return;
     context.voiceSessionId = undefined;
@@ -184,6 +189,33 @@ export function wireMessageHandler(hub: GatewayHub): void {
       case 'replay':
         await handleReplay(hub, connectionId, context, message);
         break;
+
+      // Live documents (docs/plans/coworking-spec.md §7.3). `doc.join` reads
+      // the membership from the database; updates and awareness check the
+      // in-process membership version (D5).
+      case 'doc.join': {
+        const { getDocHub } = await import('@/core/docs');
+        await getDocHub().join(context, message.noteId, { epoch: message.epoch, stateVector: message.stateVector });
+        break;
+      }
+
+      case 'doc.update': {
+        const { getDocHub } = await import('@/core/docs');
+        await getDocHub().update(context, message.noteId, message.epoch, message.update);
+        break;
+      }
+
+      case 'doc.awareness': {
+        const { getDocHub } = await import('@/core/docs');
+        await getDocHub().awareness(context, message.noteId, message.update);
+        break;
+      }
+
+      case 'doc.leave': {
+        const { getDocHub } = await import('@/core/docs');
+        await getDocHub().leave(context.connectionId, message.noteId);
+        break;
+      }
 
       default:
         // Spaces and rooms (coworking §6.6): access-checked per frame.

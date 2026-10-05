@@ -347,14 +347,15 @@ describe('posting and turns', () => {
     // The writers that add a user row elsewhere skip it in a room.
     const { handleCommand } = await import('@/core/commands');
     await handleCommand('/nonexistent', generalId, editorId);
-    const ctx = await roomContext(editorId, generalId);
+    // The root of a room turn (it carries `metadata.room`), as `runRootAgent` spawns it.
+    const ctx = await roomContext(editorId, generalId, randomUUID());
     const { AgentWorker } = await import('@/core/agent-worker');
     await new AgentWorker(ctx, { maxIterations: 1, timeout: 1000 } as never).addUserMessage('from the worker');
     const { CLIAgentWorker } = await import('@/core/cli-agent-worker');
     await new CLIAgentWorker(ctx, { maxIterations: 1, timeout: 1000 } as never).addUserMessage('from the cli');
     const { directResponse } = await import('@/core/agent/direct-response');
     const { ModelSelector } = await import('@/core/agent/model-selector');
-    await directResponse('quick one', generalId, editorId, new ModelSelector(), 'simple', [], '', 'test-model');
+    await directResponse('quick one', generalId, editorId, new ModelSelector(), 'simple', [], '', { modelId: 'test-model', name: 'test-model' });
     const after = await roomRows(generalId);
     expect(after.slice(before).filter((r) => r.role === 'user')).toEqual([]);
   });
@@ -583,7 +584,7 @@ describe('room history', () => {
   test('direct responses fence the room and append the request once', async () => {
     const { directResponse } = await import('@/core/agent/direct-response');
     const { ModelSelector } = await import('@/core/agent/model-selector');
-    await directResponse('Summarize the room please', room, editorId, new ModelSelector(), 'simple', [], '', 'test-model');
+    await directResponse('Summarize the room please', room, editorId, new ModelSelector(), 'simple', [], '', { modelId: 'test-model', name: 'test-model' });
     const sent = fx.completions.at(-1)!.map((m) => String(m.content)).join('\n');
     fenced(sent);
     expect(sent.split('Summarize the room please').length - 1).toBe(1);

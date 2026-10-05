@@ -99,7 +99,7 @@ export class OpenAIProvider implements ModelProvider {
   }
 
   async complete(options: CompletionOptions): Promise<CompletionResult> {
-    const client = await this.createClient();
+    const client = await this.createClient(options.apiKey);
     const startTime = Date.now();
 
     const params: ChatCompletionCreateParams = { ...this.buildParams(options), stream: false };
@@ -160,7 +160,7 @@ export class OpenAIProvider implements ModelProvider {
   }
 
   async *stream(options: CompletionOptions): AsyncGenerator<StreamChunk> {
-    const client = await this.createClient();
+    const client = await this.createClient(options.apiKey);
 
     const params: ChatCompletionCreateParams = { ...this.buildParams(options), stream: true, stream_options: { include_usage: true } };
 
@@ -265,8 +265,10 @@ export class OpenAIProvider implements ModelProvider {
     }
   }
 
-  private async createClient(): Promise<OpenAI> {
-    const apiKey = await this.getApiKey();
+  private async createClient(apiKeyOverride?: string): Promise<OpenAI> {
+    // A personal model row (coworking spec §8.3) carries its owner's key in
+    // `options.apiKey`; it wins over the install's env/vault key.
+    const apiKey = apiKeyOverride || await this.getApiKey();
     if (!apiKey) {
       throw classifyError(new Error('OpenAI API key not available. Set OPENAI_API_KEY or store it in the vault.'), 'openai');
     }

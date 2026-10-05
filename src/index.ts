@@ -367,6 +367,8 @@ async function main() {
 
     // Wire gateway message handler and bridge root agent/agent events
     wireMessageHandler(gatewayHub);
+    const { wireDocumentHub } = await import('@/core/docs');
+    wireDocumentHub();
     const disconnectBridge = await connectEventBridge(gatewayHub);
     // Rooms (coworking §6.4): every stored room message reaches the room's
     // members, and the turn strip follows the running turn.

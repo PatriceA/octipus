@@ -83,6 +83,12 @@ export const workspaces = pgTable('workspaces', {
   kind: text('kind').$type<WorkspaceKind>().default('personal').notNull(),
   createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
   archivedAt: timestamp('archived_at', { withTimezone: true }),
+  /**
+   * How the agent edits a space's notes (docs/plans/coworking-spec.md §7.4):
+   * `suggest` turns its writes into edit proposals, `direct` applies them
+   * through the document hub. Personal workspaces ignore it.
+   */
+  agentEditMode: text('agent_edit_mode').$type<AgentEditMode>().default('suggest').notNull(),
   slug: text('slug').notNull(),
   name: text('name').notNull(),
   isDefault: boolean('is_default').default(false).notNull(),
@@ -103,6 +109,9 @@ export const workspaces = pgTable('workspaces', {
 }));
 
 export type WorkspaceKind = 'personal' | 'shared';
+
+/** How the agent edits a space's notes (`workspaces.agent_edit_mode`). */
+export type AgentEditMode = 'suggest' | 'direct';
 
 /** A member's role in a space (`src/security/space-access.ts`). */
 export type SpaceRole = 'owner' | 'editor' | 'commenter' | 'viewer' | 'guest';

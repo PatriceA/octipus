@@ -11,10 +11,12 @@
  *   change: stops the member's agents in the space, cancels their queued
  *   background jobs there (learning checks, document processing), expires
  *   their pending permission and approval requests there, and pauses the
- *   data sources they own on the space's artifacts; in rooms (S2) it drops
- *   their queued and running room turns, prunes their room and space
- *   subscriptions and expires their requests there (`onRoomsMembershipChanged`).
- *   (Document subscriptions join it in S3.)
+ *   data sources they own on the space's artifacts; their live documents
+ *   follow the new role (dropped when they may no longer read, read-only
+ *   when they may no longer write) and their file leases go when they may
+ *   no longer write (S3); in rooms (S2) it drops their queued and running
+ *   room turns, prunes their room and space subscriptions and expires their
+ *   requests there (`onRoomsMembershipChanged`).
  * - `onMembershipGranted` runs for a join or an upgrade: bumps the version
  *   and resumes the member's data sources if they may write again.
  * - `freezeSpace` runs for an archive: every agent of the space stops, its
@@ -152,6 +154,16 @@ export async function onMembershipChanged(workspaceId: string, userId: string): 
       const { onRoomsMembershipChanged } = await import('@/core/rooms/membership');
       await onRoomsMembershipChanged(workspaceId, userId);
     }],
+    ['live documents', async () => {
+      const { getDocHub } = await import('@/core/docs');
+      await getDocHub().membershipChanged(workspaceId, userId);
+    }],
+    ['file leases', async () => {
+      const membership = await getMembership(userId, workspaceId);
+      if (can(membership?.role, 'write')) return;
+      const { dropMemberLeases } = await import('@/core/docs/file-leases');
+      await dropMemberLeases(workspaceId, userId);
+    }],
   ]);
 }
 
@@ -159,6 +171,8 @@ export async function onMembershipChanged(workspaceId: string, userId: string): 
 export async function onMembershipGranted(workspaceId: string, userId: string): Promise<void> {
   bumpVersion(workspaceId, userId);
   await syncDataSources(workspaceId, userId);
+  const { getDocHub } = await import('@/core/docs');
+  await getDocHub().membershipChanged(workspaceId, userId);
 }
 
 /** Stop every agent running in the space. Returns how many were stopped. */
@@ -193,6 +207,10 @@ export async function freezeSpace(workspaceId: string): Promise<void> {
     }],
     ['stop agents', () => stopSpaceAgents(workspaceId)],
     ['cancel queued jobs', () => cancelQueuedJobs(workspaceId)],
+    ['live documents read only', async () => {
+      const { getDocHub } = await import('@/core/docs');
+      await getDocHub().setSpaceArchived(workspaceId, true);
+    }],
     ['expire requests', async () => {
       for (const userId of await people()) {
         await getPermissionManager().expireForUserInWorkspace(userId, workspaceId);

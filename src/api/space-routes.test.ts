@@ -129,6 +129,9 @@ const SPACE_ACTING = [
   'POST /api/spaces/:id/unarchive', 'DELETE /api/spaces/:id', 'GET /api/spaces/:id/members', 'PATCH /api/spaces/:id/members/:userId',
   'DELETE /api/spaces/:id/members/:userId', 'GET /api/spaces/:id/invites', 'POST /api/spaces/:id/invites',
   'DELETE /api/spaces/:id/invites/:inviteId', 'GET /api/spaces/:id/activity',
+  // Live documents (S3): the agent's edit mode (owner), file leases (members, by role).
+  'PUT /api/spaces/:id/agent-edit-mode', 'GET /api/spaces/:id/file-leases', 'POST /api/spaces/:id/file-leases',
+  'DELETE /api/spaces/:id/file-leases',
   // Rooms and space memory (S2): every handler checks `roomAccess` / the membership itself.
   'GET /api/spaces/:id/rooms', 'POST /api/spaces/:id/rooms', 'GET /api/spaces/:id/rooms/:roomId/messages',
   'POST /api/spaces/:id/rooms/:roomId/messages', 'PATCH /api/spaces/:id/rooms/:roomId', 'GET /api/spaces/:id/rooms/:roomId/members',
@@ -157,6 +160,9 @@ const SPACE_ACTING = [
   'DELETE /api/knowledge/:id', 'POST /api/knowledge/cleanup', 'GET /api/knowledge/cleanup-history', 'POST /api/knowledge/index',
   'GET /api/notes', 'POST /api/notes', 'POST /api/notes/query', 'GET /api/notes/index', 'GET /api/notes/tags', 'POST /api/notes/capture',
   'GET /api/notes/:id', 'GET /api/notes/:id/suggestions', 'PATCH /api/notes/:id/pin', 'DELETE /api/notes/:id',
+  // Space notes (S3): revisions and the agent's edit proposals; 404 in a personal workspace.
+  'GET /api/notes/proposals', 'POST /api/notes/proposals/:proposalId/accept', 'POST /api/notes/proposals/:proposalId/reject',
+  'GET /api/notes/:id/revisions', 'GET /api/notes/:id/revisions/:revisionId', 'POST /api/notes/:id/revisions/:revisionId/restore',
   'GET /a/:slug', 'GET /a/:slug/embed', 'GET /a/:slug/bundle.js', 'GET /a/:slug/export/:exportId',
   'GET /__artifacts__/a/:slug', 'GET /__artifacts__/a/:slug/embed', 'GET /__artifacts__/a/:slug/bundle.js',
   'GET /__artifacts__/a/:slug/export/:exportId',

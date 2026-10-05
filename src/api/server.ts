@@ -26,6 +26,7 @@ import { artifactRoutes } from './routes/artifacts';
 import { authRoutes } from './routes/auth';
 import { channelBindingRoutes } from './routes/channel-bindings';
 import { groupChannelRoutes } from './routes/group-channels';
+import { meModelRoutes } from './routes/me-models';
 import { chatRoutes } from './routes/chat';
 import { openaiCompatRoutes } from './routes/openai-compat';
 import { deviceRoutes } from './routes/devices';
@@ -407,6 +408,7 @@ export function createServer() {
         .use(apiTokenRoutes)
         .use(channelBindingRoutes)
         .use(groupChannelRoutes)
+        .use(meModelRoutes)
         .use(adminRoutes)
         .use(adminApprovalRoutes)
         .use(orgAdminRoutes)

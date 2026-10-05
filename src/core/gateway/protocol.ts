@@ -472,6 +472,45 @@ export const ReplaySchema = z.object({
   afterEventId: z.string().min(1).max(64).optional(),
 });
 
+// ── Live documents (docs/plans/coworking-spec.md §7.3, S3) ─────────
+
+/** A base64 Yjs update, state vector or awareness update. The frame cap bounds its size. */
+const Base64Schema = z.string().max(64 * 1024 * 1024).regex(/^[A-Za-z0-9+/]*={0,2}$/, 'must be base64');
+
+/**
+ * `doc.join` — open a space note for live editing. A client that already
+ * holds the note's document passes the `epoch` it was synced at and its
+ * `stateVector`: with a matching epoch the answer is only what it lacks;
+ * otherwise it is the whole document and the client discards its own.
+ */
+export const DocJoinSchema = z.object({
+  type: z.literal('doc.join'),
+  noteId: z.string().uuid(),
+  epoch: z.string().min(1).max(64).optional(),
+  stateVector: Base64Schema.optional(),
+});
+
+/** `doc.update` — a Yjs update to the note's document, made at `epoch`. */
+export const DocUpdateSchema = z.object({
+  type: z.literal('doc.update'),
+  noteId: z.string().uuid(),
+  epoch: z.string().min(1).max(64),
+  update: Base64Schema.min(1),
+});
+
+/** `doc.awareness` — cursors and selections (a y-protocols awareness update). */
+export const DocAwarenessSchema = z.object({
+  type: z.literal('doc.awareness'),
+  noteId: z.string().uuid(),
+  update: Base64Schema.min(1),
+});
+
+/** `doc.leave` — stop editing the note. */
+export const DocLeaveSchema = z.object({
+  type: z.literal('doc.leave'),
+  noteId: z.string().uuid(),
+});
+
 // Union of all client messages
 export const ClientMessageSchema = z.discriminatedUnion('type', [
   AuthMessageSchema,
@@ -494,6 +533,10 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   RoomReadSchema,
   RoomTypingSchema,
   RoomCancelQueuedSchema,
+  DocJoinSchema,
+  DocUpdateSchema,
+  DocAwarenessSchema,
+  DocLeaveSchema,
 ]);
 
 export type AuthMessage = z.infer<typeof AuthMessageSchema>;
@@ -624,6 +667,98 @@ export interface RoomPostedMessage {
   commandResult?: string;
 }
 
+// ── Live documents (S3) ──────────────────────────────────────────
+
+/**
+ * The note's document: everything (`state` is a full Yjs update) when the
+ * client's epoch differs, else what its state vector lacks. `epoch` changes
+ * whenever the server rebuilds the document from `notes.body`; a client
+ * holding another epoch discards its document and re-seeds from `state`.
+ */
+export interface DocSyncMessage {
+  type: 'doc.sync';
+  noteId: string;
+  epoch: string;
+  state: string;
+  /** The server's state vector: the client sends back what it has beyond it. */
+  stateVector: string;
+  /** The member may read but not edit (commenter, viewer, archived space). */
+  readOnly: boolean;
+  /** sha256 of the text as synced. */
+  sha256: string;
+  /** `spaces.noteMaxBytes`. */
+  maxBytes: number;
+}
+
+export interface DocUpdateMessage {
+  type: 'doc.update';
+  noteId: string;
+  epoch: string;
+  update: string;
+}
+
+export interface DocAwarenessMessage {
+  type: 'doc.awareness';
+  noteId: string;
+  update: string;
+}
+
+/** The note was saved (the "Saved" indicator). */
+export interface DocSavedMessage {
+  type: 'doc.saved';
+  noteId: string;
+  sha256: string;
+  revisionId: string;
+  savedAt: string;
+}
+
+/** The member's edit right changed (role change, space archived or unarchived). */
+export interface DocStatusMessage {
+  type: 'doc.status';
+  noteId: string;
+  readOnly: boolean;
+}
+
+/** The connection is no longer in the note's document. */
+export interface DocClosedMessage {
+  type: 'doc.closed';
+  noteId: string;
+  reason: 'access' | 'archived' | 'deleted';
+}
+
+export type DocErrorCode =
+  | 'NOT_FOUND'
+  | 'NOT_JOINED'
+  | 'FORBIDDEN'
+  | 'ARCHIVED'
+  | 'RATE_LIMITED'
+  | 'TOO_LARGE'
+  | 'STALE_EPOCH'
+  | 'INVALID_UPDATE';
+
+/** A refused `doc.*` frame. Nothing of it was applied. */
+export interface DocErrorMessage {
+  type: 'doc.error';
+  noteId: string;
+  code: DocErrorCode;
+  message: string;
+}
+
+export interface FileLeaseView {
+  path: string;
+  holderUserId: string;
+  holderName: string | null;
+  holderKind: 'human' | 'agent';
+  expiresAt: string;
+}
+
+/** The space's live file leases ("Ben is editing"), after every change, to the `space:<id>` resource. */
+export interface FileLeasesMessage {
+  type: 'file.leases';
+  spaceId: string;
+  leases: FileLeaseView[];
+}
+
 export type GatewayMessage =
   | AuthOkMessage
   | AuthErrorMessage
@@ -636,7 +771,15 @@ export type GatewayMessage =
   | PermissionPendingMessage
   | ReplayMessage
   | RoomCatchupMessage
-  | RoomPostedMessage;
+  | RoomPostedMessage
+  | DocSyncMessage
+  | DocUpdateMessage
+  | DocAwarenessMessage
+  | DocSavedMessage
+  | DocStatusMessage
+  | DocClosedMessage
+  | DocErrorMessage
+  | FileLeasesMessage;
 
 // ── Protocol Version ──────────────────────────────────────────────
 

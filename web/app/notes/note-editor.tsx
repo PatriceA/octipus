@@ -1,15 +1,18 @@
 'use client';
 
 import {
-  Bold, Code, Columns2, ExternalLink, Eye, Hash, Heading1, Heading2, Image as ImageIcon,
+  Bold, Check, CloudOff, Code, Columns2, ExternalLink, Eye, Hash, Heading1, Heading2, Image as ImageIcon,
   Italic, Link2, List, Loader2, Pencil, Quote, Save, Star, Trash2, X,
 } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import type { Awareness } from 'y-protocols/awareness';
+import type { LiveNoteState } from '@/lib/live-note';
 import { Markdown } from '@/components/ui/markdown-renderer';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import NotesMarkdownEditor, { type MarkdownEditorHandle } from './markdown-codemirror';
 import type { NoteIndexEntry, TagCount } from './types';
+import type { LiveNote } from './use-live-note';
 
 export type EditorMode = 'edit' | 'preview' | 'split';
 
@@ -46,6 +49,14 @@ interface EditorProps {
    * archived space): the note shows as a preview with no editing controls.
    */
   readOnly?: boolean;
+  /**
+   * A space note being edited live (§7.6): the editor binds to the shared
+   * document, the body saves itself ("Saved"), and Save stores only the
+   * title, tags and kind.
+   */
+  live?: LiveNote | null;
+  /** A space note whose live session has not synced yet: no editor until it has. */
+  liveLoading?: boolean;
 }
 
 const KINDS = ['note', 'daily', 'moc', 'literature'];
@@ -62,6 +73,90 @@ function ToolBtn({ title, onClick, children }: { title: string; onClick: () => v
       {children}
     </button>
   );
+}
+
+interface Peer {
+  clientId: number;
+  name: string;
+  color: string;
+}
+
+const NO_PEERS: Peer[] = [];
+const peerCache = new WeakMap<Awareness, Peer[]>();
+
+function readPeers(awareness: Awareness): Peer[] {
+  const seen = new Set<string>();
+  const out: Peer[] = [];
+  for (const [clientId, state] of awareness.getStates()) {
+    const user = (state as { user?: { id?: string; name?: string; color?: string } }).user;
+    if (clientId === awareness.clientID || !user?.name) continue;
+    const key = user.id ?? String(clientId);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ clientId, name: user.name, color: user.color ?? '#8CACFF' });
+  }
+  return out;
+}
+
+/** Who else has this note open, from the document's awareness (cursors carry the same names and colors). */
+function usePeers(live: LiveNote | null | undefined): Peer[] {
+  const awareness = live?.session.awareness ?? null;
+  const subscribe = useCallback((onChange: () => void) => {
+    if (!awareness) return () => undefined;
+    const update = () => {
+      peerCache.set(awareness, readPeers(awareness));
+      onChange();
+    };
+    awareness.on('change', update);
+    return () => awareness.off('change', update);
+  }, [awareness]);
+  return useSyncExternalStore(
+    subscribe,
+    () => {
+      if (!awareness) return NO_PEERS;
+      let peers = peerCache.get(awareness);
+      if (!peers) {
+        peers = readPeers(awareness);
+        peerCache.set(awareness, peers);
+      }
+      return peers;
+    },
+    () => NO_PEERS,
+  );
+}
+
+function PresenceStack({ peers }: { peers: Peer[] }) {
+  if (peers.length === 0) return null;
+  return (
+    <div data-testid="note-presence" className="flex -space-x-1.5" aria-label={`Also here: ${peers.map((p) => p.name).join(', ')}`}>
+      {peers.slice(0, 5).map((p) => (
+        <span
+          key={p.clientId}
+          title={`${p.name} is editing`}
+          className="inline-flex h-6 w-6 items-center justify-center rounded-full border-2 border-background text-[10px] font-semibold text-black"
+          style={{ backgroundColor: p.color }}
+        >
+          {p.name.slice(0, 1).toUpperCase()}
+        </span>
+      ))}
+      {peers.length > 5 && <span className="pl-2 text-[11px] text-on-surface-variant">+{peers.length - 5}</span>}
+    </div>
+  );
+}
+
+function liveLabel(state: LiveNoteState): { text: string; icon: React.ReactNode } {
+  switch (state.status) {
+    case 'saved':
+      return { text: 'Saved', icon: <Check size={12} /> };
+    case 'unsaved':
+      return { text: 'Saving…', icon: <Loader2 size={12} className="animate-spin" /> };
+    case 'offline':
+      return { text: 'Offline — reconnecting', icon: <CloudOff size={12} /> };
+    case 'closed':
+      return { text: state.notice ?? 'Closed', icon: <CloudOff size={12} /> };
+    default:
+      return { text: 'Connecting…', icon: <Loader2 size={12} className="animate-spin" /> };
+  }
 }
 
 function ModeBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
@@ -83,9 +178,18 @@ export function NoteEditor(props: EditorProps) {
   const {
     selectedId, draftTitle, setDraftTitle, draftBody, setDraftBody, draftTags, setDraftTags,
     draftKind, setDraftKind, draftFolder, setDraftFolder, slug, noteDate, pinned, onTogglePin,
-    mode: requestedMode, setMode, dirty, saving, onSave, onArchive, noteIndex, tags, onOpenSlug, onTagClick, readOnly = false,
+    mode: requestedMode, setMode, dirty, saving, onSave, onArchive, noteIndex, tags, onOpenSlug, onTagClick, live,
   } = props;
+  const readOnly = (props.readOnly ?? false) || (live?.synced === true && live.state.readOnly);
   const mode: EditorMode = readOnly ? 'preview' : requestedMode;
+  const peers = usePeers(live);
+  const collab = useMemo(
+    () => (live?.synced ? { text: live.session.text, awareness: live.session.awareness } : undefined),
+    // A new epoch replaces the document: rebind.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [live?.session, live?.version, live?.synced],
+  );
+  const status = live ? liveLabel(live.state) : null;
 
   const editorRef = useRef<MarkdownEditorHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -136,9 +240,13 @@ export function NoteEditor(props: EditorProps) {
     setTagInput('');
   }
 
-  const editor = (
+  const editor = (live && !collab) || props.liveLoading ? (
+    <div className="p-4 text-[12px] text-on-surface-variant inline-flex items-center gap-2"><Loader2 size={12} className="animate-spin" /> Opening the note…</div>
+  ) : (
     <NotesMarkdownEditor
+      key={collab ? `${live?.session.noteId}:${live?.version}` : 'plain'}
       ref={editorRef}
+      collab={collab}
       value={draftBody}
       onChange={setDraftBody}
       onSave={onSave}
@@ -161,6 +269,8 @@ export function NoteEditor(props: EditorProps) {
       <div className="h-full flex flex-col min-w-0" data-testid="note-reader">
         <div className="flex items-center gap-2 px-5 pt-4 shrink-0">
           <h2 className="flex-1 min-w-0 text-xl font-semibold truncate">{draftTitle || (isNew ? 'Notes' : '')}</h2>
+          <PresenceStack peers={peers} />
+          {live?.state.notice && <span className="text-[11px] text-error">{live.state.notice}</span>}
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-xs border border-outline-variant/40 text-[11px] text-on-surface-variant">
             <Eye size={12} /> read-only
           </span>
@@ -195,6 +305,12 @@ export function NoteEditor(props: EditorProps) {
           placeholder="Untitled note"
           className="flex-1 min-w-0 text-xl font-semibold bg-transparent outline-none placeholder:text-on-surface-variant/40"
         />
+        <PresenceStack peers={peers} />
+        {status && (
+          <span data-testid="live-status" className="inline-flex items-center gap-1 text-[11px] text-on-surface-variant" title={live?.state.savedAt ? `Saved ${new Date(live.state.savedAt).toLocaleTimeString()}` : undefined}>
+            {status.icon} {status.text}
+          </span>
+        )}
         {!isNew && (
           <button
             type="button"
@@ -209,10 +325,13 @@ export function NoteEditor(props: EditorProps) {
           type="button"
           disabled={!draftTitle || !dirty || saving}
           onClick={onSave}
-          title={!draftTitle ? 'Add a title first' : !dirty ? 'No changes' : 'Save (⌘S)'}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xs bg-primary text-on-primary text-[13px] font-medium disabled:opacity-40"
+          title={!draftTitle ? 'Add a title first' : !dirty ? 'No changes' : live ? 'Save title, tags and kind (the text saves itself)' : 'Save (⌘S)'}
+          className={cn(
+            'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xs text-[13px] font-medium disabled:opacity-40',
+            live ? 'border border-outline-variant/40 text-on-surface' : 'bg-primary text-on-primary',
+          )}
         >
-          {saving ? <Loader2 className="animate-spin" size={14} /> : <Save size={14} />} Save
+          {saving ? <Loader2 className="animate-spin" size={14} /> : <Save size={14} />} {live ? 'Save details' : 'Save'}
         </button>
         {!isNew && (
           <button

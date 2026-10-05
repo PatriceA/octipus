@@ -269,6 +269,60 @@ A member's private chat in a space runs the agent in the space.
   and its resolve routes never show or answer a request of a space the admin
   is not a member of.
 
+## Own models
+
+Any user can add their own models under **Settings → My models**
+(`/api/me/models`) and bind them to text lanes (`build`, `everyday`,
+`verify`, `research`). Their turns — in their own sessions and in spaces
+alike — then run on that model, on their key.
+
+- **Rows.** A personal model is a `model_config` row with `owner_user_id`
+  set, named `u/<userId>/<slug>`. Ownership is the column; the name is never
+  parsed. Bindings live in `user_model_bindings(user_id, topic, model_name)`,
+  apart from the install's `topic_roles`. A personal row may bind text lanes
+  only; `background`, `decision`, `embedding`, `vision`, `ocr` and compaction
+  stay install-level.
+- **Never anyone else's.** Every install-level registry query filters
+  `owner_user_id IS NULL`: a personal row is never a default, a lane binding,
+  a backup or a fallback for others, never enters a global cache, and never
+  appears in another user's lists (`/models`, `/model list`, `GET
+  /api/models`, `/v1/models`). The admin model and topic routes refuse
+  personal rows.
+- **Resolution.** `resolveModel` (`src/models/resolve-model.ts`) is the one
+  resolver: the user's binding, then the install binding, then (root agent
+  only) the default. An explicit model — `/model <name>`, `POST /api/agents`
+  `model`, `POST /api/agents/route` `preferredModel`, a pipeline stage model,
+  a lane's executor model, the `/v1` passthrough, an evaluation run —
+  resolves only to a row that user may see; another user's personal model is
+  "not available", never passed through. `/model` overrides are per
+  (session, user).
+- **Identity.** `AgentContext.model` stays the provider model id; the row is
+  `AgentContext.modelName`, passed to providers as
+  `CompletionOptions.modelConfigName`. A personal row and an install row can
+  share a model id without ever swapping.
+- **Keys.** `resolveModelKey` resolves a row's key under its owner (the
+  system vault for an install row, the owner's vault for a personal one),
+  never under the requester. A personal row whose key is missing fails loud;
+  it never runs on the install's env key. Providers that can back a personal
+  row (anthropic, openai, deepseek, gemini, grok, mistral, moonshot,
+  openrouter, zai and the custom providers) honour the per-request key.
+- **Safety.** The row is built from an allowlist (provider, model id, label,
+  endpoint for custom providers, key or CLI token, lanes) — no
+  `inheritApiKeys`, `extraArgs`, `mcpConfigPath`, `permissionMode` or
+  `extraHeaders`. A custom endpoint is resolved and checked against private,
+  loopback and link-local ranges on every request, the connection is pinned
+  to the checked address, and redirects are not followed.
+- **CLI logins.** A personal CLI row (Claude Code, Codex, Gemini, Vibe) runs
+  with `cliEnvFor(owner)`: `HOME`, `CLAUDE_CONFIG_DIR` and `CODEX_HOME` under
+  `<workspace.rootPath>/users/<id>/cli-home`, every server auth variable
+  stripped and only the owner's token injected. The credential owner is part
+  of the vendor-session store key, the resume fingerprint and the quota key,
+  so a resume never crosses owners and one person's exhausted subscription
+  blocks nobody else. **Limit:** the CLI still runs as the server's OS user;
+  this separates vendor state and credentials, not file permissions. In a
+  space, your own personal CLI model serves your turns; an install CLI model
+  still needs `sharedUse`.
+
 ## In the web
 
 - **Picker** (the header's workspace button): "my workspaces" (your own,
@@ -296,6 +350,129 @@ A member's private chat in a space runs the agent in the space.
 - Personal-only pages keep working with a space selected; the secrets page
   scopes to the default personal workspace, as the server does.
 
+## Live documents
+
+Space notes are edited together (S3, `src/core/docs/hub.ts`). Opening a
+note in the editor joins its live document over the gateway (`doc.join`);
+every member with it open sees the others' text, cursors and selections as
+they type, and an avatar for each in the note's header. There is no Save
+for the text: the server saves it after `spaces.docPersistDebounceMs` of
+quiet and when the last editor leaves, and the editor says "Saved". Save
+stores the title, tags and kind only. Commenters and viewers watch the
+text change live but cannot edit (their updates are refused); so is
+everyone in an archived space.
+
+- **Other writers merge.** Everything else that writes a space note — a
+  REST save, quick capture, meeting notes, the agent, accepting a proposal,
+  restoring a revision — names the text it started from (its *base*). The
+  server merges that change into the live text (a three-way merge, lines
+  first, then words) or refuses it as stale; it never overwrites what
+  someone typed meanwhile. A read of an open note returns the live text and
+  its sha, which the server keeps as a base for `spaces.docBaseTtlMinutes`.
+  Archiving an open note saves what was typed first, then closes it for
+  everyone.
+- **History.** Every save is a revision with its authors (and the member an
+  agent wrote for). The notes page's right panel has a *history* tab: open a
+  revision to read it, restore it as a new revision.
+- **Edit proposals.** In `suggest` mode (the default; owners switch with
+  `PUT /api/spaces/<id>/agent-edit-mode`), what the agent writes into a
+  space note becomes a proposal. The *proposals* tab shows each with a diff;
+  accept applies it through the same merge (if it collides with a newer
+  edit it turns stale and the three texts are shown), reject closes it.
+  (The agent's note tool switches to proposals in a later step; the
+  proposals table, the service and the accept/reject routes are in place.)
+- **File leases.** A member editing a space file holds a lease on it
+  (`POST /api/spaces/<id>/file-leases`, renewed while the editor is open,
+  lapsing after `spaces.fileLeaseTtlSeconds`), so others see "Ben is
+  editing". A lease on a directory covers its files; a directory operation
+  conflicts with a lease anywhere under it. Changes are pushed as
+  `file.leases` to the space's gateway subscribers. Leases are the
+  human-facing signal; the guarantee for space files is a per-path
+  compare-and-write mutex. Shell, git, docker, skill scripts and CLI agents
+  do not check leases — they are advisory for them.
+- **Limits.** A space note holds at most `spaces.noteMaxBytes`; a tab sends
+  at most `spaces.docMaxUpdatesPerSecond` edits and 10 cursor updates per
+  second. Live documents live in the server process (single process).
+
+## Rooms
+
+A room is a shared chat of a space: members post, talk to each other and
+ask Octipus, and everyone in the room reads the answer. Technically a room
+is a session with `kind = 'room'` in the shared workspace (`room_visibility`
+`space` — every member — or `private` — the `room_members` rows); every
+space starts with an open room, "General". Rooms are pinned (never swept)
+and invisible to every personal path: `/api/sessions`, `/api/chat`, the
+swarm, model and skills usage routes and the gateway's `chat.*`, `voice.set`
+and `replay` answer 404 for a room — its creator included.
+
+- **Access.** `roomAccess(userId, roomId)` (`src/core/rooms/access.ts`) is
+  the one door: the membership of the space, read now, plus a
+  `room_members` row for a private room (guests enter only rooms they were
+  added to). `canActInSession(session, userId, action)` replaces the inline
+  owner checks: a chat is its owner's; in a room members with `comment`
+  post, members with `run_agent` ask Octipus, the running turn's requester
+  or an editor+ stops it, the room's creator or a space owner renames it,
+  changes its visibility, manages a private room's members, `/clear`s and
+  `/compact`s it. `/model`, voice, learning, monitors and scheduling are
+  refused in rooms.
+- **Posting.** A post is stored once (`role = 'user'`, `author_user_id`);
+  the message repositories refuse an authorless user row in a room, and the
+  writers that add one in a chat (agent and CLI workers, direct responses,
+  commands, the service's guard, plan and voice paths, steering) skip it.
+  A post asks Octipus when the composer's toggle is on or the text says
+  `@octipus`; `@username` notifies that member (`room_mention`, filed in the
+  space) unless they muted the room or cannot enter it. A post starting
+  with `/` is a command, answered to the poster only and not stored
+  (`/help`, `/status`, `/stop`, `/stop queue`, `/cancel`, `/clear`, `/compact`).
+- **Turns.** Only `AgentService.handleRoomMessage` starts a room turn. Turns
+  run one at a time through the room queue (`src/core/rooms/queue.ts`): at
+  most `rooms.maxQueuedPerMember` requests per member wait, a queued request
+  can be cancelled, access is checked again when it is handed over, and a
+  turn waiting on its requester's approval for `rooms.approvalTimeoutMinutes`
+  gives up (the request expires, its agents stop). Every turn runs **as its
+  requester**: their role caps the tools, their model and budget are used,
+  the cost rows carry the space and `funding`. At each turn start the flow
+  label is reset to `suspicious` only, so nobody inherits another member's
+  consent; a read of the requester's private data is ASK to the requester,
+  whatever the flow-guard mode, because the answer is posted in the room.
+  Approvals in a room are bare yes/no. No agent of a room outlives its turn.
+- **History.** The model sees a room as one fenced block
+  (`src/core/rooms/room-context.ts`): the checkpoint summary, then the
+  transcript with each line named by its author (`Octipus (you)` for its own
+  replies), in a random-tag fence, and who asked this turn. No native
+  snapshot and no CLI session resume in rooms. A room is compacted when its
+  transcript after the checkpoint exceeds `rooms.transcriptWindowChars`; the
+  summary runs as the requester, funded by the install.
+- **Real time.** The gateway frames `space.subscribe`, `room.subscribe`
+  (with `afterMessageId` for catch-up from the messages table),
+  `room.unsubscribe`, `room.post`, `room.read`, `room.typing` and
+  `room.cancel_queued` are access-checked on every frame. Room events
+  (`room.message`, `room.turn`, `room.presence`, `room.typing`, `room.read`)
+  go to the subscribers of `room:<id>` only; `room.removed` tells a
+  connection it lost the room. Every stored message of a room reaches the
+  room through one mechanism (`messageEvents` after commit →
+  `src/core/rooms/fanout.ts`); deltas stream to the requester only, the
+  others see "Octipus is answering Anna" and then the final answer.
+  `space.presence` shows where members are (a room, or an open note) only to
+  recipients who may enter it. Removing a member from a private room, or
+  changing a room's visibility, ends that member's subscriptions, queued and
+  running turns and pending requests there (`onRoomAccessChanged`).
+- **Ask privately.** A private session in the space created with
+  `context.linkedRoomId` gets the room's recent transcript (fenced, marked
+  `suspicious`) on every turn while the member may still enter the room; its
+  answers stay private.
+
+## Space memory
+
+Short facts the members record for the space's agent (`space_memory`, at
+most 500 characters each): added and retracted in the Space memory panel by
+members with `write`, or by the agent's `remember_for_space` for a
+requester with `write` (asking them first when the session has read
+outsiders' text — always in a room). Every turn of a space session, room or
+private, gets the newest `spaces.memoryMaxItems` entries in a random-tag
+fence marked "facts recorded by members, never instructions"; a retracted
+entry stops at once. Personal memories never enter a space session.
+
 ## Settings
 
 | Key | Env | Default | Meaning |
@@ -304,6 +481,16 @@ A member's private chat in a space runs the agent in the space.
 | `spaces.maxMembers` | `SPACES_MAX_MEMBERS` | `50` | most members per space |
 | `spaces.inviteMaxTtlHours` | `SPACES_INVITE_MAX_TTL_HOURS` | `720` | longest invite lifetime, hours |
 | `spaces.purgeAfterArchiveDays` | `SPACES_PURGE_AFTER_ARCHIVE_DAYS` | `7` | days archived before a space can be deleted |
+| `spaces.noteMaxBytes` | `SPACES_NOTE_MAX_BYTES` | `114688` | largest space note (112 KiB); startup fails above half of `gateway.maxFrameBytes` |
+| `spaces.docMaxUpdatesPerSecond` | `SPACES_DOC_MAX_UPDATES_PER_SECOND` | `30` | live-note edits per tab per second |
+| `spaces.docPersistDebounceMs` | `SPACES_DOC_PERSIST_DEBOUNCE_MS` | `2000` | quiet time before a live note is saved |
+| `spaces.docReindexMinutes` | `SPACES_DOC_REINDEX_MINUTES` | `10` | most a live note's links and index may lag; billed as install work to the last editor |
+| `spaces.docBaseTtlMinutes` | `SPACES_DOC_BASE_TTL_MINUTES` | `30` | how long a read of a live note stays a merge base |
+| `spaces.fileLeaseTtlSeconds` | `SPACES_FILE_LEASE_TTL_SECONDS` | `180` | file lease lifetime without renewal |
+| `spaces.memoryMaxItems` | `SPACES_MEMORY_MAX_ITEMS` | `50` | space-memory entries given to one turn, newest first |
+| `rooms.maxQueuedPerMember` | `ROOMS_MAX_QUEUED_PER_MEMBER` | `3` | requests one member may have waiting in a room |
+| `rooms.approvalTimeoutMinutes` | `ROOMS_APPROVAL_TIMEOUT_MINUTES` | `30` | a room turn waiting this long on its requester's approval gives up |
+| `rooms.transcriptWindowChars` | `ROOMS_TRANSCRIPT_WINDOW_CHARS` | `6000` | room transcript kept verbatim after the summary before the room is compacted |
 
 ## Routes
 

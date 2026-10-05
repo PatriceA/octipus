@@ -40,6 +40,8 @@ export interface SpawnOptions {
   funding: AgentFunding;
   topic?: string;
   model?: string;
+  /** Row identity of `model` (`model_config.name`) when the caller resolved one — see `AgentContext.modelName`. */
+  modelName?: string;
   role?: string;
   /** Mark this agent as the turn's root (see `AgentContext.root`). */
   root?: boolean;
@@ -182,13 +184,32 @@ export class AgentManager {
     // (the caller has already routed, e.g. SwarmSpawner or internal spawnWorker)
     let routedTopic = options.topic || 'general';
     let routedModel = options.model || '';
+    let routedModelName = options.modelName;
 
     if (!options.model) {
       // Only route if model isn't pre-determined
       const router = getRouter();
-      const routing = await router.route(options.topic || '');
+      const routing = await router.route(options.topic || '', undefined, { userId: options.userId, inSpace: !!space });
       routedTopic = routing.topic;
       routedModel = routing.model;
+      routedModelName = routing.modelName;
+    }
+
+    // The row this agent runs on. A caller that resolved a row passes its name;
+    // otherwise the modelId resolves to an install row first, then the
+    // requester's own — never another user's personal row (§8.1).
+    const registry = getModelRegistry();
+    const modelEntry = routedModelName
+      ? await registry.getModel(routedModelName)
+      : await registry.getModelByModelId(routedModel, { userId: options.userId });
+    if (routedModelName && !modelEntry) {
+      throw new Error(`Model '${routedModelName}' is not registered or is disabled`);
+    }
+    if (routedModelName && modelEntry && modelEntry.modelId !== routedModel) {
+      throw new Error(`Model row '${modelEntry.name}' runs '${modelEntry.modelId}', not '${routedModel}'`);
+    }
+    if (modelEntry?.ownerUserId && modelEntry.ownerUserId !== options.userId) {
+      throw new Error(`Model '${modelEntry.name}' is another user's personal model`);
     }
 
     const agentId = generateId();
@@ -200,15 +221,12 @@ export class AgentManager {
       scope: { workspaceId: options.workspaceId ?? null, space, trigger: options.trigger, funding: options.funding },
       topic: routedTopic,
       model: routedModel,
+      modelName: modelEntry?.name,
       role: options.role || 'general',
       root: options.root === true,
       attended: options.attended,
       metadata: options.contextMetadata,
     });
-
-    // Determine if this is a CLI model (autonomous sub-agent)
-    const registry = getModelRegistry();
-    const modelEntry = await registry.getModelByModelId(routedModel);
 
     // The window belongs to the MODEL, not to the install. `agent.contextWindowSize`
     // is one number for every agent (32k by default), and every compaction
@@ -235,7 +253,10 @@ export class AgentManager {
       if (!can(space.role, 'run_agent_write')) {
         throw new SpaceError('forbidden_role', `Your role (${space.role}) runs the agent in this space with API models only; ${routedModel} is a CLI model`);
       }
-      if (modelEntry?.metadata?.cliAgent?.sharedUse !== true) {
+      // The requester's own personal CLI row is their subscription, used for
+      // their own turn (§8.5): D14 governs install rows only.
+      const ownRow = !!modelEntry?.ownerUserId && modelEntry.ownerUserId === options.userId;
+      if (!ownRow && modelEntry?.metadata?.cliAgent?.sharedUse !== true) {
         throw new SpaceError('forbidden_role', `${routedModel} is a personal CLI subscription and is not available in a shared space (an operator can mark it for shared use)`);
       }
       const tool = getCLIToolConfig(routedModel);

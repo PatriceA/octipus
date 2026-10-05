@@ -11,10 +11,14 @@
  *   they may access it themselves (I3): a private room they are not in is
  *   left out. Each recipient gets its own view.
  *
- * A connection's `where` is `ctx.metadata.presenceWhere`, set by the frame
- * that put it there (`room.subscribe`; `doc.join` in S3) through
- * `setPresenceWhere`. Kinds other than `room` are shown only through a check
- * registered with `registerPresenceWhereCheck` (S3 registers `note`).
+ * A member's `where` is the newest of: the room their connection subscribed
+ * to (`ctx.metadata.presenceWhere`, set by `room.subscribe` through
+ * `setPresenceWhere`), and the note they opened in the document hub (S3,
+ * `openDocsFor`). A room is shown to recipients who may enter it, a note to
+ * members who may read the space's notes (not guests, whose scope arrives
+ * in S6). Other kinds are shown only through a check registered with
+ * `registerPresenceWhereCheck`. Online members are the space's subscribers
+ * and the document hub's peers in the space (`peersIn`).
  */
 import { getGatewayHub } from '@/core/gateway/hub';
 import type { ConnectionContext } from '@/core/gateway/protocol';
@@ -34,6 +38,11 @@ const whereChecks = new Map<string, WhereCheck>([
     const room = await loadRoom(where.id);
     return !!room && room.workspaceId === spaceId && (await accessToRoom(userId, room)) !== null;
   }],
+  ['note', async (userId, spaceId) => {
+    const { getMembership } = await import('@/core/spaces/service');
+    const membership = await getMembership(userId, spaceId);
+    return !!membership && membership.role !== 'guest';
+  }],
 ]);
 
 /** Let another kind of `where` (S3: `note`) be shown, under its own access check. */
@@ -45,13 +54,13 @@ const WHERE_KEY = 'presenceWhere';
 
 /** Record where the connection is; null clears it. Republishes the space's presence. */
 export function setPresenceWhere(ctx: ConnectionContext, spaceId: string | null, where: PresenceWhere | null): void {
-  if (where) ctx.metadata[WHERE_KEY] = { ...where, spaceId };
+  if (where) ctx.metadata[WHERE_KEY] = { ...where, spaceId, at: Date.now() };
   else delete ctx.metadata[WHERE_KEY];
   if (spaceId) void publishSpacePresence(spaceId);
 }
 
-function whereOf(ctx: ConnectionContext): (PresenceWhere & { spaceId: string | null }) | null {
-  const w = ctx.metadata[WHERE_KEY] as (PresenceWhere & { spaceId: string | null }) | undefined;
+function whereOf(ctx: ConnectionContext): (PresenceWhere & { spaceId: string | null; at: number }) | null {
+  const w = ctx.metadata[WHERE_KEY] as (PresenceWhere & { spaceId: string | null; at: number }) | undefined;
   return w && typeof w.kind === 'string' && typeof w.id === 'string' ? w : null;
 }
 
@@ -82,11 +91,22 @@ export async function publishSpacePresence(spaceId: string): Promise<void> {
   try {
     const conns = connectionsIn(spaceResource(spaceId));
     if (conns.length === 0) return;
-    const online = new Map<string, PresenceWhere | null>();
+    // Per member: the newest place among their connections' rooms and open notes.
+    const online = new Map<string, (PresenceWhere & { at: number }) | null>();
+    const consider = (userId: string, where: (PresenceWhere & { at: number }) | null) => {
+      const current = online.get(userId) ?? null;
+      if (!online.has(userId) || (where && (!current || where.at > current.at))) online.set(userId, where ?? current);
+    };
     for (const ctx of conns) {
       const where = whereOf(ctx);
-      const mine = where && where.spaceId === spaceId ? { kind: where.kind, id: where.id } : null;
-      if (!online.has(ctx.userId) || mine) online.set(ctx.userId, mine ?? online.get(ctx.userId) ?? null);
+      consider(ctx.userId, where && where.spaceId === spaceId ? { kind: where.kind, id: where.id, at: where.at } : null);
+    }
+    const { getDocHub } = await import('@/core/docs');
+    const docs = getDocHub();
+    for (const peer of docs.peersIn(spaceId)) consider(peer.userId, null);
+    for (const userId of [...online.keys()]) {
+      const [note] = docs.openDocsFor(userId, spaceId);
+      if (note) consider(userId, { kind: 'note', id: note.noteId, at: note.joinedAt });
     }
     const usernames = await names([...online.keys()]);
     const visible = new Map<string, boolean>();
@@ -101,7 +121,7 @@ export async function publishSpacePresence(spaceId: string): Promise<void> {
             const check = whereChecks.get(where.kind);
             visible.set(key, check ? await check(recipient.userId, spaceId, where) : false);
           }
-          if (visible.get(key)) shown = where;
+          if (visible.get(key)) shown = { kind: where.kind, id: where.id };
         }
         members.push({ userId, username: usernames.get(userId) ?? null, ...(shown ? { where: shown } : {}) });
       }

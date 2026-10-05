@@ -124,6 +124,12 @@ export const defaultConfig: Partial<Config> = {
     maxMembers: 50,
     inviteMaxTtlHours: 720,
     purgeAfterArchiveDays: 7,
+    noteMaxBytes: 114_688,
+    docMaxUpdatesPerSecond: 30,
+    docPersistDebounceMs: 2000,
+    docReindexMinutes: 10,
+    docBaseTtlMinutes: 30,
+    fileLeaseTtlSeconds: 180,
     memoryMaxItems: 50,
   },
   rooms: {

@@ -167,6 +167,7 @@ async function analyzeImageAttachments(
 
         const result = await client.completeVision({
           model: visionModel.modelId,
+          modelConfigName: visionModel.name,
           prompt: 'Describe this image in detail. If it contains text, extract and include all text content. If it is a document, receipt, or form, describe its structure and content.',
           imageBase64: base64,
           mimeType: finalMime,
