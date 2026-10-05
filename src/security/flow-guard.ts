@@ -408,7 +408,9 @@ export function flowBlockReason(label: FlowLabel, contract: FlowContract): strin
  * unresolved placeholder as plain text, so a made-up one must not buy an
  * exemption. Vendor-native CLI tools never resolve placeholders, so never
  * qualify. Only consulted when the guard would otherwise ask: no DB read on
- * the common path, and no secret is decrypted.
+ * the common path, and no secret is decrypted. Only `user` and `system` rows
+ * count (`canAccessByName`): a space connector's secret (scope `space`,
+ * coworking §9.5) is never injected, so it never buys an exemption either.
  */
 export async function isVaultAuthenticated(userId: string, call: FlowCall): Promise<boolean> {
   if (call.toolId.startsWith('cli-native:')) return false;

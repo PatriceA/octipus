@@ -36,6 +36,7 @@ import { type AgentScope, resolveAgentScope, triggerForChannel } from './context
 import { sessionAudience } from './audience';
 import { canActInSession } from '@/core/rooms/access';
 import { bindProviderUsageContext, withProviderUsageContext, withSponsor } from '@/models/providers/instrumented';
+import { agentPrincipal, type Principal } from '@/security/principal';
 import { appendSources, type MessageClassification, type ResponseMetadata } from './types';
 import { spawnWorker } from './worker-spawner';
 
@@ -117,11 +118,16 @@ function approvalReplyFor(message: string, groupThread: boolean): string | null 
  * The open tasks taken on in a group thread, and their turn-context block.
  * A failed read costs the context, never the turn.
  */
-async function loadTakenTasks(userId: string, sessionId: string): Promise<{ tasks: Array<{ id: string; title: string }>; block: string }> {
+async function loadTakenTasks(
+  userId: string,
+  sessionId: string,
+  /** A room: the requester's principal in its space (tasks taken into the room are the space's, §9.4). */
+  space?: Principal,
+): Promise<{ tasks: Array<{ id: string; title: string }>; block: string }> {
   try {
     const { openTakenTasks, takenTasksContext } = await import('@/core/channels/taken-tasks');
-    const open = await openTakenTasks(userId, sessionId);
-    return { tasks: open.map((t) => ({ id: t.id, title: t.title })), block: await takenTasksContext(open) };
+    const open = await openTakenTasks(userId, sessionId, space);
+    return { tasks: open.map((t) => ({ id: t.id, title: t.title })), block: await takenTasksContext(open, undefined, space) };
   } catch (err) {
     coreLogger.warn({ err, sessionId }, 'Could not read the tasks taken on in this thread');
     return { tasks: [], block: '' };
@@ -291,7 +297,13 @@ export class AgentService {
    * requester while their own turn waits on an approval in the room answers
    * that approval instead.
    */
-  async handleRoomMessage(roomId: string, requesterId: string, postedMessageId: string): Promise<RoomMessageOutcome> {
+  async handleRoomMessage(
+    roomId: string,
+    requesterId: string,
+    postedMessageId: string,
+    /** A post bridged from a bound group channel (§9.4): the platform thread's transcript, and the take. */
+    bridged?: GroupTurn,
+  ): Promise<RoomMessageOutcome> {
     const [{ roomAccess }, { can, SpaceError }] = await Promise.all([
       import('@/core/rooms/access'), import('@/security/space-access'),
     ]);
@@ -319,7 +331,7 @@ export class AgentService {
       roomId,
       access.room.workspaceId,
       { requesterId, requesterName, messageId: postedMessageId, enqueuedAt: new Date() },
-      (request, signal) => this.runRoomTurn(roomId, request.requesterId, request.requesterName, request.messageId, signal),
+      (request, signal) => this.runRoomTurn(roomId, request.requesterId, request.requesterName, request.messageId, signal, bridged),
     );
     return { kind: 'queued', position };
   }
@@ -345,7 +357,7 @@ export class AgentService {
       roomId,
       access.room.workspaceId,
       { requesterId, requesterName, messageId: questionMessageId, enqueuedAt: new Date() },
-      (request, signal) => this.runRoomTurn(roomId, request.requesterId, request.requesterName, request.messageId, signal, 'listen'),
+      (request, signal) => this.runRoomTurn(roomId, request.requesterId, request.requesterName, request.messageId, signal, undefined, 'listen'),
     );
     return { kind: 'queued', position };
   }
@@ -361,7 +373,10 @@ export class AgentService {
    * when the turn failed, so the queue reports it to the room; the error's
    * details go to the requester only.
    */
-  private async runRoomTurn(roomId: string, requesterId: string, requesterName: string, postedMessageId: string, signal: AbortSignal, trigger: 'room' | 'listen' = 'room'): Promise<void> {
+  private async runRoomTurn(
+    roomId: string, requesterId: string, requesterName: string, postedMessageId: string, signal: AbortSignal, bridged?: GroupTurn,
+    trigger: 'room' | 'listen' = 'room',
+  ): Promise<void> {
     const [{ roomAccess }, { can }, { RoomTurnDropped }] = await Promise.all([
       import('@/core/rooms/access'), import('@/security/space-access'), import('@/core/rooms/queue'),
     ]);
@@ -383,7 +398,7 @@ export class AgentService {
             if (noModel) throw new Error(noModel.response);
             await maybeCompactSession(roomId, { requesterId, before: { id: posted.id, createdAt: posted.createdAt.toISOString() } });
             signal.throwIfAborted();
-            return this.runTurn({ session, requesterId, message: posted.content, channel: 'room', trigger, postedMessageId, signal });
+            return this.runTurn({ session, requesterId, message: posted.content, channel: 'room', trigger, postedMessageId, signal, groupTurn: bridged });
           }),
         );
         if (result.outcome === 'failed' && !result.metadata?.limit) throw new RoomTurnFailed(result.response);
@@ -603,10 +618,19 @@ export class AgentService {
       // Work taken on in this thread (docs/plans/group-chat-bot.md §5): the
       // open tasks and the requester's newest board notes ride along, and the root
       // agent gets `complete_taken_task` for them.
-      const takenTasks = groupThread ? await loadTakenTasks(userId, resolvedSessionId) : { tasks: [], block: '' };
+      const takenTasks = groupThread
+        ? await loadTakenTasks(userId, resolvedSessionId)
+        : isRoom && scope.space
+          ? await loadTakenTasks(userId, resolvedSessionId, agentPrincipal({ userId, workspaceId, space: scope.space }))
+          : { tasks: [], block: '' };
+      // A room turn asked from a bound group channel (§9.4) gets the platform
+      // thread's transcript the same way: it holds the posts of people who are
+      // not in the space (unlinked members), which never enter the room.
       const groupContextBlock = groupThread
         ? groupTurnContext({ requester: groupTurn?.requester, context: groupTurn?.context, take: groupTurn?.take }) + takenTasks.block
-        : '';
+        : isRoom
+          ? (groupTurn ? groupTurnContext({ requester: groupTurn.requester, context: groupTurn.context, take: groupTurn.take }) : '') + takenTasks.block
+          : '';
       // Auto-title sessions with generic names (never a room: its title is the room's).
       if (!isRoom) {
         const genericTitles = ['new chat', 'untitled', 'webchat conversation', 'telegram conversation', 'api conversation', 'slack conversation', 'teams conversation'];

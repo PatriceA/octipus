@@ -68,7 +68,7 @@ export interface SlackGroupDeps {
   /** A link to a message, for the task notes; undefined when Slack gives none. */
   permalink(channelId: string, ts: string): Promise<string | undefined>;
   /** When the channel's spend budget is used up: when it resets. Null while it may run. */
-  budgetPause(group: GroupChannel, scope: import('@/channels/group-handler').GroupSpendScope): Promise<{ resetsAt: string } | null>;
+  budgetPause(group: GroupChannel): Promise<{ resetsAt: string } | null>;
   shouldSendHint(key: string): boolean;
   /** Store or withdraw a member's ✅ / ❌ on a bot reply. */
   feedback?: GroupDeps['feedback'];

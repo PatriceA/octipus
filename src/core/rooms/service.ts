@@ -298,7 +298,13 @@ export function mentionsOctipus(content: string): boolean {
 export async function postRoomMessage(
   actor: RoomActor,
   roomId: string,
-  input: { content: string; addressed?: boolean; clientId?: string },
+  input: {
+    content: string;
+    addressed?: boolean;
+    clientId?: string;
+    /** Posted in the bound group channel (§9.4): the bridge does not post it back there. */
+    bridged?: { channelType: string; messageId: string };
+  },
   opts: { workspaceId?: string } = {},
 ): Promise<{ message: RoomMessageView; access: RoomAccess; addressed: boolean }> {
   const access = opts.workspaceId ? await requireRoom(actor, opts.workspaceId, roomId) : await roomAccess(actor.userId, roomId);
@@ -317,6 +323,7 @@ export async function postRoomMessage(
     authorUserId: actor.userId,
     metadata: {
       ...(input.clientId ? { clientId: input.clientId } : {}),
+      ...(input.bridged ? { bridged: input.bridged } : {}),
       addressed,
     },
   });

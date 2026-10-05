@@ -208,6 +208,14 @@ describe('purgeSpace', () => {
     mkdirSync(dirs.documents, { recursive: true });
     writeFileSync(join(dirs.documents, 'upload.pdf'), 'pdf');
 
+    // A group channel bound to the space (§9.4): it stays enrolled, unbound.
+    const [bound] = await q(
+      `INSERT INTO group_channels (channel_type, channel_id, owner_user_id, workspace_id) VALUES ('slack', $1, $2, $3) RETURNING id`,
+      [`C-${id.slice(0, 8)}`, owner, id],
+    );
+    await q(`INSERT INTO group_channels (channel_type, channel_id, owner_user_id, workspace_id) VALUES ('slack', $1, $2, $3)`,
+      [`C-${control.slice(0, 8)}`, owner, control]);
+
     // The gateway hears which sessions went, to drop their replay buffers.
     const { onSessionsRemoved } = await import('@/db/repositories/session-lifecycle');
     const removed: string[] = [];
@@ -218,9 +226,12 @@ describe('purgeSpace', () => {
     expect(removed).not.toContain(controlRows.sessionId);
     expect(removed).toHaveLength(result.deleted.sessions);
 
+    const [channel] = await q('SELECT workspace_id FROM group_channels WHERE id = $1', [bound.id]);
+    expect(channel).toEqual({ workspace_id: null });
     for (const t of WORKSPACE_TABLES) {
       const [row] = await q(`SELECT count(*)::int AS n FROM ${t.table} WHERE workspace_id = $1`, [id]);
-      if (t.purge === 'delete') expect(row.n, `${t.table} rows of the purged space`).toBe(0);
+      // `detach` rows (a bound group channel) outlive the space without naming it.
+      if (t.purge === 'delete' || t.purge === 'detach') expect(row.n, `${t.table} rows of the purged space`).toBe(0);
       else expect(row.n, `${t.table} history of the purged space`).toBeGreaterThan(0);
       const [kept] = await q(`SELECT count(*)::int AS n FROM ${t.table} WHERE workspace_id = $1`, [control]);
       expect(kept.n, `${t.table} rows of another space`).toBeGreaterThan(0);

@@ -44,6 +44,25 @@ labels reflect blast radius, not contract guarantees.
   instead of polling. Rooms get `listen` and `proactive` modes with the
   group channels' gate (quiet hours, caps, 👍/👎 feedback), paid by the
   sponsor. Migration `0132_space_funding`.
+- **Group channels bound to a space** (coworking §9.4). A group channel's
+  owner who also owns a space can bind the channel to it (Settings →
+  Channels → *Bind to space room*, with the acknowledgement that everyone
+  in the channel can read what the room shows; audited). Each thread is then
+  a room of the space: members' requests run as room turns as themselves,
+  linked people outside the space get a private hint and no turn, the room
+  is posted back in the thread, taken tasks land on the space's board (one
+  per message) and the space's budget replaces the channel's. Binding closes
+  the members' own thread sessions of that channel. Migration
+  `0133_space_bridge_connectors`.
+- **Space connectors** (coworking §9.5). Space settings get *Connectors*:
+  owners connect GitHub (a token) and Atlassian / Linear (OAuth, with their
+  own connect, callback and refresh flows) for the whole space. Their
+  credentials are a new vault scope, `space`, keyed by the space
+  (`dekForRow`, also used by both rotation scripts), readable only through
+  the space access layer and never through `{{secret:}}`. In a space the
+  shell, the GitHub tool and CLI agents run with an empty per-space
+  `GH_CONFIG_DIR` (CLI agents also an empty `HOME`), so a space session
+  never acts with the host's GitHub login.
 
 - **Rooms in the web.** With a shared space selected, the sidebar gets
   *rooms* (with the unread count) and `/rooms` lists the space's rooms with

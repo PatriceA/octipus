@@ -12,7 +12,9 @@
  *   the recipient. `'n/a'` — the row does not follow (it has no owner
  *   column, or it belongs to its user rather than to the workspace).
  * - `purge: 'delete'` — a purged space deletes the rows. `'keep'` —
- *   history that outlives the space.
+ *   history that outlives the space. `'detach'` — the row outlives the
+ *   space and only forgets it (`workspace_id` set to NULL): a group channel
+ *   bound to the space stays enrolled.
  * - `ownerColumn` — the column naming the row's owner (or, in a space,
  *   its author). Its SQL type varies (text on some older tables), so
  *   callers compare it to a bound string parameter, never a cast.
@@ -24,7 +26,7 @@
  */
 
 export type WorkspaceTransferAction = 'move' | 'n/a';
-export type WorkspacePurgeAction = 'delete' | 'keep';
+export type WorkspacePurgeAction = 'delete' | 'keep' | 'detach';
 
 export interface WorkspaceTable {
   readonly table: string;
@@ -51,6 +53,9 @@ export const WORKSPACE_TABLES: readonly WorkspaceTable[] = [
   { table: 'cost_log', ownerColumn: 'user_id', transfer: 'n/a', purge: 'keep' },
   { table: 'documents', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   // A space file's "Ben is editing" lease (S3); spaces are never transferred.
+  // A group channel bound to a space (§9.4): the enrolment is its owner's and
+  // outlives the space; spaces are never transferred.
+  { table: 'group_channels', ownerColumn: 'owner_user_id', transfer: 'n/a', purge: 'detach' },
   { table: 'file_leases', ownerColumn: 'holder_user_id', transfer: 'n/a', purge: 'delete' },
   { table: 'embeddings', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'hooks', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },

@@ -221,7 +221,7 @@ export class AgentManager {
     if (modelEntry?.ownerUserId) {
       const { personalRowAllowed } = await import('@/models/resolve-model');
       if (!personalRowAllowed(modelEntry, options.userId, options.funding === 'sponsor' ? options.sponsor : null)) {
-        throw new Error(`Model '${modelEntry.name}' is not one this agent may run on`);
+        throw new Error(`Model '${modelEntry.name}' is another user's personal model`);
       }
     }
 

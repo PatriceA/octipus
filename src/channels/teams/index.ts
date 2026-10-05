@@ -534,9 +534,10 @@ export class TeamsChannel extends BaseChannel {
         };
       },
       permalink: async () => undefined,
-      budgetPause: async (group, scope) => {
-        const { groupChannelPause } = await import('@/security/spend-budgets');
-        return groupChannelPause(group.id, scope).catch((err: unknown) => {
+      budgetPause: async (group) => {
+        // A bound channel's budget is its space's (§9.4).
+        const { groupBudgetPause } = await import('@/channels/group-bridge');
+        return groupBudgetPause(group).catch((err: unknown) => {
           channelLogger.warn({ err, groupId: group.id }, 'Group channel budget check failed — not pausing');
           return null;
         });

@@ -191,12 +191,16 @@ export interface ListenDeps<T extends ListenTarget = GroupChannel> {
   localTime(now: Date, tz: string): { hour: number; day: string };
   /** The recorded threads of a chat (`group-buffer.ts`), or a room's recent transcript. */
   threads(channelType: string, channelId: string, now: number): ReadonlyMap<string, readonly ChannelMessage[]> | Promise<ReadonlyMap<string, readonly ChannelMessage[]>>;
-  /** False while the channel's or the owner's spend budget is used up. */
-  mayRun(group: T, sessionId: string): Promise<boolean>;
-  /** The owner's unprompted-posts session for the channel. */
-  session(group: T): Promise<string>;
+  /**
+   * False while the channel's or the owner's spend budget is used up — for a
+   * channel bound to a space (§9.4): while the space has no sponsor, or its
+   * budget is used up.
+   */
+  mayRun(group: T, sessionId: string | null): Promise<boolean>;
+  /** The owner's unprompted-posts session for the channel; null for a bound channel (no personal session). */
+  session(group: T): Promise<string | null>;
   /** One `background` model call; the reply text, or undefined. */
-  complete(input: { system: string; user: string; ownerUserId: string; sessionId: string }): Promise<string | undefined>;
+  complete(input: { system: string; user: string; ownerUserId: string; sessionId: string | null; group: T }): Promise<string | undefined>;
   claim(group: T, now: Date, day: string): Promise<boolean>;
   post(group: T, candidate: ListenCandidate, text: string): Promise<void>;
   /** The probe's instructions for `mode`, when the target words them its own way (rooms). */
@@ -262,6 +266,7 @@ export async function probeGroup<T extends ListenTarget>(group: T, deps: ListenD
     user: renderProbe(candidate, conversation, group.label),
     ownerUserId: group.ownerUserId,
     sessionId,
+    group,
   });
   const draft = parseDraft(reply, mode);
   if (!draft) return 'none';
@@ -335,30 +340,47 @@ export function defaultListenDeps(): ListenDeps {
     localTime: (now, tz) => ({ hour: localHour(now, tz), day: localDayKey(now, tz) }),
     threads: groupThreads,
     mayRun: async (group, sessionId) => {
-      const { checkSpend, groupChannelPause } = await import('@/security/spend-budgets');
+      const { checkSpend } = await import('@/security/spend-budgets');
       const { SpendBudgetExceededError } = await import('@/security/spend-budget-error');
-      if (await groupChannelPause(group.id)) return false;
+      const { bridgeListenFunding, groupBudgetPause } = await import('@/channels/group-bridge');
+      if (await groupBudgetPause(group)) return false;
+      // A bound channel's unprompted posts are the space's sponsor's, or off.
+      const payer = group.workspaceId ? (await bridgeListenFunding(group))?.sponsorUserId : group.ownerUserId;
+      if (!payer) return false;
       try {
-        await checkSpend({ userId: group.ownerUserId, sessionId, funding: 'own', spaceId: null });
+        // A bound channel's posts are the space's sponsor's: its budgets (§9.2).
+        await checkSpend(group.workspaceId
+          ? { userId: payer, sessionId, funding: 'sponsor', spaceId: group.workspaceId }
+          : { userId: payer, sessionId, funding: 'own', spaceId: null });
         return true;
       } catch (err) {
         if (err instanceof SpendBudgetExceededError) return false;
         throw err;
       }
     },
-    session: async (group) => (await import('@/channels/group-channels')).resolveGroupSession({
+    // A bound channel has no personal session: its posts are the space's, paid by the sponsor.
+    session: async (group) => group.workspaceId ? null : (await import('@/channels/group-channels')).resolveGroupSession({
       userId: group.ownerUserId, group, threadId: UNPROMPTED_THREAD, title: `${group.label ?? group.channelId} — unprompted posts`,
       // Never swept by retention: its cost rows count against the channel's budget through it.
       pinned: true,
     }),
-    complete: async ({ system, user, ownerUserId, sessionId }) => {
+    complete: async ({ system, user, ownerUserId, sessionId, group }) => {
       const { getModelRegistry } = await import('@/models/model-registry');
       const { getLiteLLMClient } = await import('@/models/litellm-client');
-      const { withInstallUsage } = await import('@/models/providers/instrumented');
+      const { withInstallUsage, withProviderUsageContext } = await import('@/models/providers/instrumented');
       const model = await getModelRegistry().getModelForTopic('background');
       if (!model?.modelId) throw new Error('Unprompted group posts need a model bound to the "background" topic.');
-      // The gate probe is install work (coworking spec §8.2), stamped `install`.
-      const result = await withInstallUsage(() => getLiteLLMClient().complete({
+      let payer = ownerUserId;
+      if (group.workspaceId) {
+        const { bridgeListenFunding } = await import('@/channels/group-bridge');
+        const funding = await bridgeListenFunding(group);
+        if (!funding) throw new Error('A bound channel\'s unprompted posts need the space\'s sponsor');
+        payer = funding.sponsorUserId;
+      }
+      // A bound channel's unprompted post is the space's work, paid by its
+      // sponsor (§9.4). An enrolled channel's probe is install work (§8.2),
+      // stamped `install` and counted in its owner's session for the channel.
+      const call = () => getLiteLLMClient().complete({
         model: model.modelId,
         modelConfigName: model.name,
         messages: [
@@ -367,9 +389,12 @@ export function defaultListenDeps(): ListenDeps {
         ],
         temperature: 0.2,
         maxTokens: 400,
-        userId: ownerUserId,
-        sessionId,
-      }));
+        userId: payer,
+        ...(sessionId ? { sessionId } : {}),
+      });
+      const result = group.workspaceId
+        ? await withProviderUsageContext({ userId: payer, workspaceId: group.workspaceId, funding: 'sponsor' }, call)
+        : await withProviderUsageContext({ userId: payer }, () => withInstallUsage(call));
       return result.content ?? undefined;
     },
     claim: async (group, now, day) => (await import('@/channels/group-channels')).claimUnpromptedSlot(group, now, day),

@@ -298,15 +298,15 @@ export function roomListenDeps(): ListenDeps<RoomListenTarget> {
       }
     },
     session: async (target) => target.id,
-    complete: async ({ system, user, ownerUserId, sessionId }) => {
+    complete: async ({ system, user, ownerUserId, group: target }) => {
+      const sessionId = target.id;
       const [{ getModelRegistry }, { getLiteLLMClient }, { withInstallUsage, withProviderUsageContext }] = await Promise.all([
         import('@/models/model-registry'), import('@/models/litellm-client'), import('@/models/providers/instrumented'),
       ]);
       const model = await getModelRegistry().getModelForTopic('background');
       if (!model?.modelId) throw new Error('Unprompted room posts need a model bound to the "background" topic.');
-      const [room] = await getDb().select({ workspaceId: sessions.workspaceId }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
       // The gate probe is install work (§8.2): stamped `install`, in the room's space.
-      const result = await withProviderUsageContext({ userId: ownerUserId, sessionId, workspaceId: room?.workspaceId ?? null }, () =>
+      const result = await withProviderUsageContext({ userId: ownerUserId, sessionId, workspaceId: target.workspaceId }, () =>
         withInstallUsage(() => getLiteLLMClient().complete({
           model: model.modelId,
           modelConfigName: model.name,
