@@ -2,6 +2,7 @@ import { sessionRepository } from '@/db/repositories/session-repository';
 import { skillSelectionRepository, type SkillMode } from '@/db/repositories/skill-selection-repository';
 import { getSkillRegistry } from './registry';
 import { getSkillModes } from './selection';
+import { canActInSession } from '@/core/rooms/access';
 
 const HELP = 'Skills: /skills [list] | /skills <id or name> always|session|auto | /skills <id or name> auto --global\nAlways is your default for all chats. Session and auto override it only in this chat. Changes apply to new turns and agents.';
 
@@ -18,7 +19,7 @@ export async function handleSkillSelectionCommand(userId: string, sessionId: str
   // Never allow a command to write another user's session, even with a guessed id.
   if (sessionId) {
     const session = await sessionRepository.findById(sessionId);
-    if (!session || session.userId !== userId) return 'Session not found. Start or select a chat first.';
+    if (!(await canActInSession(session, userId, 'settings'))) return 'Session not found. Start or select a chat first.';
   }
   const available = await getSkillRegistry().getAll(userId);
   const modes = await getSkillModes(userId, global ? undefined : sessionId);

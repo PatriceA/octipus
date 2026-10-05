@@ -20,6 +20,7 @@ import {
   skillToMarkdown,
   toPortableSkill,
 } from '@/skills/markdown';
+import { canActInSession } from '@/core/rooms/access';
 
 export const skillRoutes = new Elysia({ prefix: '/skills' })
   .use(apiContext)
@@ -66,7 +67,7 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
       const session = await scopedRepos(principal).sessions.findById(body.sessionId);
       if (!session) { set.status = 404; return { error: 'Session not found' }; }
       // Admins may read another user's chat, but never change that user's skill defaults.
-      if (session.userId !== ownerId) { set.status = 403; return { error: 'Only the chat owner can change its skills' }; }
+      if (!(await canActInSession(session, ownerId, 'settings'))) { set.status = 403; return { error: 'Only the chat owner can change its skills' }; }
     }
     if (body.mode === 'session' && !body.sessionId) { set.status = 400; return { error: 'A session is required' }; }
     const registry = getSkillRegistry();

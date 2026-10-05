@@ -23,6 +23,16 @@ const DEFAULT_LIMITS: Record<string, Record<TrustLevel, RateLimitConfig>> = {
     user: { limit: 30, windowMs: 60_000 },
     agent: { limit: 30, windowMs: 60_000 },
   },
+  // Rooms (coworking §6.6): posts as fast as chat, typing pings far slower
+  // than keystrokes (clients send at most one per 3 s).
+  'room.post': {
+    user: { limit: 30, windowMs: 60_000 },
+    agent: { limit: 30, windowMs: 60_000 },
+  },
+  'room.typing': {
+    user: { limit: 20, windowMs: 60_000 },
+    agent: { limit: 20, windowMs: 60_000 },
+  },
   // Live documents (S3): keystroke-rate frames. The document hub enforces
   // `spaces.docMaxUpdatesPerSecond` and 10 awareness frames per second per
   // connection; this is only a ceiling above the largest allowed setting.

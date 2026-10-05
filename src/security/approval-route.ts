@@ -16,7 +16,9 @@
  *   3. applies the I6 rule: once the session has read the requester's
  *      private data (flow label `private`), any call that is not a read is
  *      ASK — whatever the flow-guard mode — because it writes personal data
- *      into the space;
+ *      into the space; and in a room (a shared audience, D8) a call that
+ *      reads the requester's private data is ASK to the requester, because
+ *      the answer is posted where every member of the room reads it;
  *   4. calls the pure `routeApproval`.
  *
  * A lint test (`approval-route.test.ts`) fails on `routeApproval(` in any
@@ -24,7 +26,7 @@
  */
 import type { AgentSpace, PermissionLevel } from '@/core/types';
 import { type ApprovalDecision, routeApproval } from './approval-policy';
-import { getFlowLabel } from './flow-guard';
+import { classifyFlow, getFlowLabel, isSharedAudience } from './flow-guard';
 import { can } from './space-access';
 import { commenterMayRun, isReadCall, personalOnlyReason, type SpaceToolCall } from './space-tools';
 import { isKnownSharedWorkspace } from './workspace-fs';
@@ -83,6 +85,12 @@ export async function routeApprovalFor(
     }
     const personal = personalOnlyReason(call);
     if (personal) return deny(personal);
+    if (level !== 'DENY' && isSharedAudience(context.sessionId) && classifyFlow({ toolId: call.toolId, action: call.action }).taints.includes('private')) {
+      level = 'ASK';
+      source = 'space-room';
+      reason = `${call.toolId}.${call.toolName ?? call.action} reads your private data, and the answer is posted in this room `
+        + 'where every member reads it: approving shares it with them';
+    }
     if (level !== 'DENY' && !isReadCall(call) && getFlowLabel(context.sessionId).private) {
       const { getSpace } = await import('@/core/spaces/service');
       const { name } = await getSpace({ userId: context.userId }, space.workspaceId);

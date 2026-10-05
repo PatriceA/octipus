@@ -11,6 +11,7 @@ import { WorkspaceFS } from '@/security/workspace-fs';
 import { worktreeCwdOverride } from '@/core/swarm/worktree';
 import { killProcessTree, whichSync } from '@/utils/proc';
 import { BaseTool } from './base-tool';
+import { canActInSession } from '@/core/rooms/access';
 
 export const TEST_IMAGES = ['python:3.12-slim', 'python:3.13-slim', 'node:22-bookworm-slim', 'node:24-bookworm-slim'] as const;
 const parameters = { type: 'object', additionalProperties: false, properties: {
@@ -64,7 +65,7 @@ export async function runTestContainer(args: Record<string, unknown>, context: A
   if (!['qa', 'review'].includes(context.role)) throw new Error('Test containers are available only to QA and review roles.');
   if (Object.keys(args).some(key => !['image', 'command', 'timeout_seconds'].includes(key))) throw new Error('Unsupported test-container option.');
   const session = await sessionRepository.findById(context.sessionId);
-  if (!session || session.userId !== context.userId) throw new Error('Session not found.');
+  if (!session || !(await canActInSession(session, context.userId, 'requester'))) throw new Error('Session not found.');
   if (session.context?.planMode) throw new Error('Test containers are unavailable in plan mode.');
   if (process.platform !== 'linux') throw new Error('Test containers currently require Linux and a local Docker daemon.');
   const root = await realpath(worktreeCwdOverride(context.metadata) ?? WorkspaceFS.forSession(session).root);

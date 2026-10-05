@@ -49,6 +49,9 @@ export async function handleCommand(
   // Check if there's an active multi-step command
   const session = await sessionRepository.findById(sessionId);
   const ctx = (session?.context as SessionContext) || {};
+  // In a room the member's post is already the one user row (§6.3): only
+  // the answer is stored.
+  const inRoom = session?.kind === 'room';
 
   if (ctx.activeCommand) {
     // Cancel takes priority
@@ -57,7 +60,7 @@ export async function handleCommand(
         context: { ...ctx, activeCommand: undefined, planningState: undefined },
       });
       const response = 'Command cancelled.';
-      await persistCommandExchange(sessionId, userId, content, response);
+      await persistCommandExchange(sessionId, userId, content, response, inRoom);
       return response;
     }
 
@@ -71,13 +74,13 @@ export async function handleCommand(
       } else if (slashName !== ctx.activeCommand) {
         // Unknown slash command during active command — don't feed it to the questionnaire
         const response = `Unknown command: \`${slashCmd}\`. Type \`/help\` to see available commands.\n\n_Note: \`/${ctx.activeCommand}\` is still active. Send \`/cancel\` to abort it._`;
-        await persistCommandExchange(sessionId, userId, content, response);
+        await persistCommandExchange(sessionId, userId, content, response, inRoom);
         return response;
       } else {
         // Re-entering the same active command — route to handler
         const handler = getCommand(ctx.activeCommand);
         if (handler) {
-          await messageRepository.create({ sessionId, role: 'user', content });
+          if (!inRoom) await messageRepository.create({ sessionId, role: 'user', content });
           const result = await handler.execute({ sessionId, userId, args: content, notify });
           if (!result.continueCommand) {
             const freshSession = await sessionRepository.findById(sessionId);
@@ -94,7 +97,7 @@ export async function handleCommand(
       // Non-slash message — route to active command handler
       const handler = getCommand(ctx.activeCommand);
       if (handler) {
-        await messageRepository.create({ sessionId, role: 'user', content });
+        if (!inRoom) await messageRepository.create({ sessionId, role: 'user', content });
         const result = await handler.execute({ sessionId, userId, args: content, notify });
         if (!result.continueCommand) {
           // Re-read session to avoid overwriting state saved by the command handler
@@ -120,18 +123,18 @@ export async function handleCommand(
   // /cancel outside an active command — acknowledge gracefully
   if (commandName === 'cancel') {
     const response = 'Nothing to cancel.';
-    await persistCommandExchange(sessionId, userId, content, response);
+    await persistCommandExchange(sessionId, userId, content, response, inRoom);
     return response;
   }
 
   if (!handler) {
     // Unknown command
     const response = `Unknown command: \`${cmd}\`. Type \`/help\` to see available commands.`;
-    await persistCommandExchange(sessionId, userId, content, response);
+    await persistCommandExchange(sessionId, userId, content, response, inRoom);
     return response;
   }
 
-  await messageRepository.create({ sessionId, role: 'user', content });
+  if (!inRoom) await messageRepository.create({ sessionId, role: 'user', content });
   const result = await handler.execute({
     sessionId,
     userId,
@@ -157,7 +160,8 @@ async function persistCommandExchange(
   userId: string,
   userMessage: string,
   response: string,
+  inRoom: boolean,
 ): Promise<void> {
-  await messageRepository.create({ sessionId, role: 'user', content: userMessage });
+  if (!inRoom) await messageRepository.create({ sessionId, role: 'user', content: userMessage });
   await messageRepository.create({ sessionId, role: 'assistant', content: response });
 }

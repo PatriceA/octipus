@@ -545,6 +545,30 @@ export class PermissionManager {
   }
 
   /**
+   * Expire `userId`'s pending requests raised in one session — a room turn
+   * that waited too long on its requester, or a member who lost access to
+   * the room (docs/plans/coworking-spec.md §6.4, §6.6). Their agents resume
+   * unapproved. Returns how many rows were expired.
+   */
+  async expireForUserInSession(userId: string, sessionId: string): Promise<number> {
+    const expired = await this.db
+      .update(permissionRequests)
+      .set({ status: 'expired' })
+      .where(and(
+        eq(permissionRequests.userId, userId),
+        eq(permissionRequests.status, 'pending'),
+        eq(permissionRequests.sessionId, sessionId),
+      ))
+      .returning();
+    for (const request of expired) {
+      this.emitResolved(request, 'expired');
+      this.pendingRequests.get(request.id)?.(false);
+    }
+    if (expired.length > 0) securityLogger.info({ userId, sessionId, count: expired.length }, 'Permission requests expired in a session');
+    return expired.length;
+  }
+
+  /**
    * Subscribe to "this agent is blocked on a human" transitions. The worker
    * uses it to stop its wall clock: with no TTL, a turn would otherwise die of
    * its own timeout while the prompt sat on screen. Returns an unsubscribe.

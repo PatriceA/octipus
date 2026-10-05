@@ -3,6 +3,7 @@ import { dbLogger } from '@/utils/logger';
 import { getDb } from '../postgres';
 import { sessions, sessionGeneration } from '../schema/sessions';
 import { type Message, messages, type NewMessage } from '../schema/messages';
+import { assertRoomAuthor, messageEvents } from './message-events';
 
 /**
  * Backstop for {@link MessageRepository.findContextMessages}. High enough that
@@ -134,9 +135,14 @@ export class MessageRepository {
       .limit(limit);
   }
 
-  /** Insert a completed turn only if no clear invalidated the originating run. */
+  /**
+   * Insert a completed turn only if no clear invalidated the originating run.
+   * Every insert path refuses a room's `user` row without its author (§6.3)
+   * and announces the committed row on `messageEvents` (§6.4).
+   */
   async createForGeneration(data: NewMessage, generation: string): Promise<Message | null> {
-    return this.db.transaction(async tx => {
+    await assertRoomAuthor([data]);
+    const row = await this.db.transaction(async tx => {
       // i2: by session id, for the agent runtime that owns the session; user routes use ScopedMessageRepo
       const [session] = await tx.select({ context: sessions.context }).from(sessions)
         .where(eq(sessions.id, data.sessionId)).for('update');
@@ -144,6 +150,9 @@ export class MessageRepository {
       const [row] = await tx.insert(messages).values({ ...data, metadata: { ...data.metadata, sessionGeneration: generation }, createdAt: data.createdAt ?? new Date() }).returning();
       return row;
     });
+    // After commit: a rolled-back ("conversation cleared") insert never broadcasts.
+    if (row) messageEvents.announce([row]);
+    return row;
   }
 
   async create(data: NewMessage, generation?: string): Promise<Message> {
@@ -158,16 +167,20 @@ export class MessageRepository {
     // which can disagree with the API process by minutes — or by the local
     // TZ offset when one side runs on a `timestamp without time zone`
     // column. Callers that pass an explicit createdAt win.
+    await assertRoomAuthor([data]);
     const row = data.createdAt ? data : { ...data, createdAt: new Date() };
     const result = await this.db.insert(messages).values(row).returning();
+    messageEvents.announce(result);
     return result[0];
   }
 
   async createMany(data: NewMessage[]): Promise<Message[]> {
     if (data.length === 0) return [];
+    await assertRoomAuthor(data);
     const now = new Date();
     const rows = data.map(d => (d.createdAt ? d : { ...d, createdAt: now }));
     const result = await this.db.insert(messages).values(rows).returning();
+    messageEvents.announce(result);
     dbLogger.debug({ count: result.length }, 'Messages created');
     return result;
   }

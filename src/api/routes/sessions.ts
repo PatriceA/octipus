@@ -218,6 +218,22 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
       // has no outbound chat address and is accepted as before.
       const channelType = body.channelType || 'api';
       const channelId = body.channelId || 'api';
+      // Rooms are created in a space (POST /api/spaces/:id/rooms), never as a chat (§6.1).
+      if (channelType === 'room') {
+        set.status = 400;
+        return { error: 'Rooms are created in a space, not as a chat' };
+      }
+      // The private side panel of a room (§6.7): a private chat in the same
+      // space, linked to a room the caller may enter. Re-checked every turn.
+      const linkedRoomId = (body.context as Record<string, unknown> | undefined)?.linkedRoomId;
+      if (linkedRoomId !== undefined) {
+        const { roomAccess } = await import('@/core/rooms/access');
+        const access = typeof linkedRoomId === 'string' ? await roomAccess(user.id, linkedRoomId) : null;
+        if (!access || principal.workspaceKind !== 'shared' || access.room.workspaceId !== principal.workspaceId) {
+          set.status = 404;
+          return { error: 'Room not found' };
+        }
+      }
       if (EXTERNAL_CHANNELS.has(channelType)) {
         const resolved = await resolveTarget(await loadNotifyScope(user.id), channelType, channelId);
         if (!resolved.allowed) {

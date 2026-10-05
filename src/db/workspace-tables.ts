@@ -66,6 +66,9 @@ export const WORKSPACE_TABLES: readonly WorkspaceTable[] = [
   { table: 'permission_requests', ownerColumn: 'user_id', transfer: 'n/a', purge: 'delete' },
   { table: 'pipelines', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'sessions', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
+  // Space memory (S2): only shared workspaces have it, and they are never
+  // transferred; its RESTRICT key makes the purge delete it first.
+  { table: 'space_memory', ownerColumn: 'author_user_id', transfer: 'n/a', purge: 'delete' },
   { table: 'swarm_nodes', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'task_state', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'tasks', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
