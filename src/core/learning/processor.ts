@@ -6,6 +6,7 @@ import { sessionRepository } from '@/db/repositories/session-repository';
 import { backgroundJobRepository } from '@/db/repositories/background-job-repository';
 import { getModelRegistry } from '@/models/model-registry';
 import { getLiteLLMClient } from '@/models/litellm-client';
+import { withInstallUsage } from '@/models/providers/instrumented';
 import { SECURITY_PREAMBLE } from '@/core/agent/roles';
 import { filterPII } from '@/core/agent/pii-filter';
 import { judgeAndApply } from '@/core/memory/judge';
@@ -62,14 +63,15 @@ export async function processLearningJob(job: Pick<BackgroundJob, 'id' | 'userId
     const ceiling = Math.min(model.maxTokens ?? model.defaultMaxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS, contextRoom);
     if (ceiling < 1024) throw new Error('Background model context is too small for this learning review. Configure a model with a larger context window.');
     const initialBudget = Math.min(model.defaultMaxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS, ceiling);
-    const completeReview = (maxTokens: number) => getLiteLLMClient().complete({
+    // Learning is install work: stamped `install` (coworking spec §9.1).
+    const completeReview = (maxTokens: number) => withInstallUsage(() => getLiteLLMClient().complete({
       model: model.modelId, modelConfigName: model.name, userId: job.userId,
       sessionId: session.id, requestType: 'learning-review', temperature: 0, maxTokens,
       responseFormat: { type: 'json_object' }, messages: [
         { role: 'system', content: systemText, timestamp: new Date() },
         { role: 'user', content: evidenceText, timestamp: new Date() },
       ],
-    });
+    }));
     let budget = initialBudget;
     let response = await completeReview(budget);
     // Reasoning shares the output budget. Retry once, before any writes, and

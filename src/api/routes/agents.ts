@@ -307,7 +307,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       let modelId = model;
       let modelName: string | undefined;
       if (model) {
-        const row = await resolveModel({ userId: user.id, name: model, inSpace: !!scope.space });
+        const row = await resolveModel({ userId: user.id, name: model, inSpace: !!scope.space, sponsor: scope.sponsor });
         if (row) {
           modelId = row.modelId;
           modelName = row.name;

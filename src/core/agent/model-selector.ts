@@ -24,6 +24,8 @@ export interface ModelRequester {
   userId?: string;
   /** The session runs in a shared space (D14 applies to install CLI rows). */
   inSpace?: boolean;
+  /** A sponsored turn: the sponsor's models replace the requester's own (§9.1). */
+  sponsor?: import('@/core/types').AgentSponsor | null;
 }
 
 /**
@@ -110,7 +112,7 @@ export class ModelSelector {
     if (sessionId && requester.userId) {
       const overrideName = getSessionModel(sessionId, requester.userId);
       if (overrideName) {
-        const override = await resolveModel({ userId: requester.userId, name: overrideName, inSpace: requester.inSpace });
+        const override = await resolveModel({ userId: requester.userId, name: overrideName, inSpace: requester.inSpace, sponsor: requester.sponsor });
         if (override) {
           coreLogger.info(
             { sessionId, model: override.modelId },
@@ -132,7 +134,7 @@ export class ModelSelector {
     // message rather than per install.
     const routed = routing ? selectLane(routing.message, routing.classification) : null;
     if (routed) {
-      const routedModel = await resolveModel({ userId: requester.userId, topic: routed.lane, inSpace: requester.inSpace });
+      const routedModel = await resolveModel({ userId: requester.userId, topic: routed.lane, inSpace: requester.inSpace, sponsor: requester.sponsor });
       if (routedModel) {
         coreLogger.info(
           { lane: routed.lane, reason: routed.reason, model: routedModel.modelId, turnType },
@@ -204,7 +206,7 @@ export class ModelSelector {
    * Select the best model for a worker role's topic, with fallback for tool support.
    */
   async selectForWorker(topic: string, needsTools: boolean, requester: ModelRequester = {}): Promise<ModelRouting> {
-    const topicModel = await resolveModel({ userId: requester.userId, topic, inSpace: requester.inSpace });
+    const topicModel = await resolveModel({ userId: requester.userId, topic, inSpace: requester.inSpace, sponsor: requester.sponsor });
 
     if (!topicModel) {
       coreLogger.warn(

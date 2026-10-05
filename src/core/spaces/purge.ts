@@ -117,6 +117,12 @@ export async function purgeSpace(actor: SpaceActor, workspaceId: string): Promis
       deleted[t.table] = (deleted[t.table] ?? 0) + rows(result).length;
     }
 
+    // The space's budgets (S5) are keyed by scope_ref, not workspace_id.
+    const budgets = await tx.execute(sql`
+      DELETE FROM spend_budgets WHERE scope_kind IN ('space','space_member') AND scope_ref = ${workspaceId} RETURNING 1
+    `);
+    deleted.spend_budgets = rows(budgets).length;
+
     for (const t of purged) {
       const left = await tx.execute(sql`SELECT count(*)::int AS n FROM ${sql.identifier(t.table)} WHERE workspace_id = ${workspaceId}`);
       const n = Number(rows<{ n: number }>(left)[0]?.n ?? 0);

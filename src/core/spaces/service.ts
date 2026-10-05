@@ -19,7 +19,7 @@ import { getConfig } from '@/config';
 import { getDb, queryRaw } from '@/db/postgres';
 import { isUuid } from '@/db/repositories/scoped';
 import { type AuditDetails, auditLog } from '@/db/schema/audit';
-import { type AgentEditMode, newWorkspaceRow, type SpaceRole, type Workspace, workspaceInvites, workspaceMembers, workspaces } from '@/db/schema/organizations';
+import { type AgentEditMode, type AgentFundingMode, newWorkspaceRow, type SpaceRole, type Workspace, workspaceInvites, workspaceMembers, workspaces } from '@/db/schema/organizations';
 import { users } from '@/db/schema/users';
 import { requireRealUserId } from '@/security/principal';
 import { noteSharedWorkspace } from '@/security/workspace-fs';
@@ -207,11 +207,12 @@ export interface SpaceSummary {
   archivedAt: Date | null;
   createdBy: string | null;
   createdAt: Date;
-  /**
-   * Who pays for agent runs in the space: each member for their own
-   * (`own`). A space-sponsored agent arrives in S5.
-   */
-  funding: 'own';
+  /** Who pays for agent runs in the space (§9.1, `fundingFor`). */
+  funding: AgentFundingMode;
+  /** The owner who pays for sponsored work, or null. */
+  sponsorUserId: string | null;
+  /** The sponsor's own model rows sponsored turns may run on. */
+  sponsorModels: string[];
   /** How the agent edits the space's notes (§7.4). */
   agentEditMode: AgentEditMode;
   /** Set when the change committed but its follow-up (stopping agents, expiring requests) failed; logged. */
@@ -228,7 +229,9 @@ function summarize(space: Workspace, role: SpaceRole, members: number): SpaceSum
     archivedAt: space.archivedAt,
     createdBy: space.createdBy,
     createdAt: space.createdAt,
-    funding: 'own',
+    funding: space.agentFunding,
+    sponsorUserId: space.sponsorUserId,
+    sponsorModels: space.sponsorModels ?? [],
     agentEditMode: space.agentEditMode,
   };
 }
@@ -509,6 +512,8 @@ export async function setRole(
     if (can(target.role, 'manage_invites') && !can(role, 'manage_invites')) {
       await revokeInvitesBy(tx, actor, workspaceId, targetUserId);
     }
+    const { clearLostSponsorInTx } = await import('./funding');
+    const sponsorLost = await clearLostSponsorInTx(tx, actor, workspaceId, targetUserId, role);
     const scopeChanged = JSON.stringify(target.scope ?? null) !== JSON.stringify(scope);
     if (target.role !== role || scopeChanged) {
       await writeSpaceAudit(tx, {
@@ -525,6 +530,7 @@ export async function setRole(
       view: { userId: targetUserId, username: user?.username ?? '', role: updated.role, joinedAt: updated.joinedAt },
       revoked: losesGrant(target.role, role) || (role === 'guest' && scopeChanged),
       granted: target.role !== role && !losesGrant(target.role, role),
+      sponsorLost,
     };
   });
   const context = { workspaceId, userId: targetUserId };
@@ -533,7 +539,9 @@ export async function setRole(
     : outcome.granted
       ? await settleFollowUp('Space role change', context, () => onMembershipGranted(workspaceId, targetUserId))
       : null;
-  return warning ? { ...outcome.view, warning } : outcome.view;
+  const sponsorWarning = outcome.sponsorLost ? await pauseSponsored(workspaceId) : null;
+  const warnings = [warning, sponsorWarning].filter(Boolean).join('; ');
+  return warnings ? { ...outcome.view, warning: warnings } : outcome.view;
 }
 
 /**
@@ -542,7 +550,7 @@ export async function setRole(
  */
 export async function removeMember(actor: SpaceActor, workspaceId: string, targetUserId: string): Promise<MembershipChangeResult> {
   if (targetUserId === actor.userId) return leaveSpace(actor, workspaceId);
-  await getDb().transaction(async (tx) => {
+  const sponsorLost = await getDb().transaction(async (tx) => {
     await authorize(actor, workspaceId, 'manage_members', tx);
     const target = await getMembership(targetUserId, workspaceId, tx, { lock: 'update' });
     if (!target) throw new SpaceError('not_found', 'Member not found');
@@ -559,15 +567,19 @@ export async function removeMember(actor: SpaceActor, workspaceId: string, targe
       resourceId: targetUserId,
       details: { previousValue: target.role },
     });
+    const { clearLostSponsorInTx } = await import('./funding');
+    return clearLostSponsorInTx(tx, actor, workspaceId, targetUserId, null);
   });
   securityLogger.info({ workspaceId, userId: targetUserId, by: actor.userId }, 'Space member removed');
   const warning = await settleFollowUp('Space member removal', { workspaceId, userId: targetUserId }, () => onMembershipChanged(workspaceId, targetUserId));
-  return warning ? { warning } : {};
+  const sponsorWarning = sponsorLost ? await pauseSponsored(workspaceId) : null;
+  const warnings = [warning, sponsorWarning].filter(Boolean).join('; ');
+  return warnings ? { warning: warnings } : {};
 }
 
 /** Leave a space. The last owner cannot. */
 export async function leaveSpace(actor: SpaceActor, workspaceId: string, details: Record<string, unknown> = {}): Promise<MembershipChangeResult> {
-  await getDb().transaction(async (tx) => {
+  const sponsorLost = await getDb().transaction(async (tx) => {
     const membership = await getMembership(actor.userId, workspaceId, tx, { lock: 'update' });
     if (!membership) throw new SpaceError('not_found', 'Space not found');
     if (membership.role === 'owner') await assertNotLastOwner(tx, workspaceId, actor.userId);
@@ -583,9 +595,19 @@ export async function leaveSpace(actor: SpaceActor, workspaceId: string, details
       resourceId: actor.userId,
       details: { previousValue: membership.role, left: true, ...details },
     });
+    const { clearLostSponsorInTx } = await import('./funding');
+    return clearLostSponsorInTx(tx, actor, workspaceId, actor.userId, null);
   });
   const warning = await settleFollowUp('Leaving a space', { workspaceId, userId: actor.userId }, () => onMembershipChanged(workspaceId, actor.userId));
-  return warning ? { warning } : {};
+  const sponsorWarning = sponsorLost ? await pauseSponsored(workspaceId) : null;
+  const warnings = [warning, sponsorWarning].filter(Boolean).join('; ');
+  return warnings ? { warning: warnings } : {};
+}
+
+/** The sponsor left or was downgraded: their sponsored work stops (§9.1). A failure is logged and returned. */
+async function pauseSponsored(workspaceId: string): Promise<string | null> {
+  const { settle } = await import('./funding');
+  return settle(workspaceId, 'Sponsor removal');
 }
 
 /**

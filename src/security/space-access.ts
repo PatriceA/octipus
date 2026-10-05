@@ -69,7 +69,9 @@ export type SpaceErrorCode =
   | 'space_full'
   | 'archived'
   /** Purge asked before the space has been archived long enough. */
-  | 'not_purgeable';
+  | 'not_purgeable'
+  /** Work the space's funding does not pay for: unprompted work without a sponsor (§9.1). */
+  | 'funding_off';
 
 export class SpaceError extends Error {
   constructor(readonly code: SpaceErrorCode, message: string) {
@@ -92,6 +94,7 @@ export function spaceErrorStatus(err: SpaceError): number {
     case 'space_full':
     case 'archived':
     case 'not_purgeable':
+    case 'funding_off':
       return 409;
   }
 }

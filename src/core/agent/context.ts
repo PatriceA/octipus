@@ -16,7 +16,8 @@
  *   to every model call of the turn, so each `cost_log` row of a space turn
  *   names the space and who paid.
  */
-import type { AgentContext, AgentFunding, AgentSpace, AgentStatus, AgentTrigger } from '@/core/types';
+import type { AgentContext, AgentFunding, AgentSpace, AgentSponsor, AgentStatus, AgentTrigger } from '@/core/types';
+import type { AgentFundingMode } from '@/db/schema/organizations';
 import { type ProviderUsageContext, withProviderUsageContext } from '@/models/providers/instrumented';
 import { isRealUserId } from '@/security/principal';
 import { can, SpaceError } from '@/security/space-access';
@@ -28,18 +29,60 @@ export interface AgentScope {
   readonly space: AgentSpace | null;
   readonly trigger: AgentTrigger;
   readonly funding: AgentFunding;
+  /** Who pays when `funding` is `sponsor` (§9.1); null or absent otherwise. */
+  readonly sponsor?: AgentSponsor | null;
 }
 
 /** Triggers that have a producer inside a space (S1: private sessions; rooms and listen from S2/S5). */
 const SPACE_TRIGGERS: ReadonlySet<AgentTrigger> = new Set(['user', 'room', 'listen', 'remote']);
 
+/** A space's funding settings (`workspaces.agent_funding`, `sponsor_user_id`, `sponsor_models`). */
+export interface SpaceFundingSettings {
+  readonly mode: AgentFundingMode;
+  readonly sponsorUserId: string | null;
+  readonly sponsorModels: readonly string[];
+}
+
+/** Triggers a person starts — a turn they asked for. */
+const ASKED_TRIGGERS: ReadonlySet<AgentTrigger> = new Set(['user', 'room']);
+
 /**
- * Who pays for an agent started by `trigger` (D13). Every trigger is funded
- * by the requester (`own`) until S5 adds sponsors (§9.1); never derived from
- * `attended`.
+ * Who pays for an agent started by `trigger` (D13, §9.1). Never derived from
+ * `attended`. Outside a space it is always `own`. In a space, by the space's
+ * `agent_funding`:
+ *
+ *   | mode         | user, room            | listen  | remote  |
+ *   |--------------|-----------------------|---------|---------|
+ *   | `own`        | own                   | off     | off     |
+ *   | `unattended` | own                   | sponsor | sponsor |
+ *   | `sponsored`  | sponsor (member cap)  | sponsor | sponsor |
+ *
+ * "off", a sponsored cell without a sponsor (removed or never named), and
+ * a trigger with no producer in a space throw `SpaceError('funding_off')`:
+ * the work does not run rather than fall back to someone else's money.
  */
-export function fundingFor(_trigger: AgentTrigger, _space: AgentSpace | null): AgentFunding {
-  return 'own';
+export function fundingFor(trigger: AgentTrigger, space: AgentSpace | null, settings: SpaceFundingSettings | null = null): AgentFunding {
+  if (!space) return 'own';
+  if (!settings) throw new Error('fundingFor: a space turn needs the space\'s funding settings');
+  if (!SPACE_TRIGGERS.has(trigger)) throw new SpaceError('funding_off', `A ${trigger} run has no funding in a space`);
+  if (ASKED_TRIGGERS.has(trigger) && settings.mode !== 'sponsored') return 'own';
+  if (settings.mode === 'own') {
+    throw new SpaceError('funding_off', 'This space pays for nothing unprompted: an owner can name a sponsor in the space settings');
+  }
+  if (!settings.sponsorUserId) {
+    throw new SpaceError('funding_off', 'This space has no sponsor: an owner can name one in the space settings');
+  }
+  return 'sponsor';
+}
+
+/** The scope of a turn in `space` (or none): its funding and, when sponsored, the sponsor. */
+async function scopeIn(workspaceId: string | null, space: AgentSpace | null, trigger: AgentTrigger): Promise<AgentScope> {
+  if (!space) return { workspaceId, space: null, trigger, funding: fundingFor(trigger, null), sponsor: null };
+  const { spaceFunding } = await import('@/core/spaces/funding');
+  const settings = await spaceFunding(space.workspaceId);
+  const funding = fundingFor(trigger, space, settings);
+  const sponsor = funding === 'sponsor' ? { userId: settings.sponsorUserId as string, models: [...settings.sponsorModels] } : null;
+  return { workspaceId, space, trigger, funding, sponsor };
 }
 
 /** Channels whose turns a schedule starts (hooks, heartbeats, recurring tasks). */
@@ -114,13 +157,13 @@ export async function resolveAgentScope(input: {
   if (session?.kind === 'room') return resolveRoomScope(session, userId, trigger);
   if (session && session.userId !== userId) throw new Error('Session not found');
   if (!isRealUserId(userId)) {
-    return { workspaceId: null, space: null, trigger, funding: fundingFor(trigger, null) };
+    return { workspaceId: null, space: null, trigger, funding: fundingFor(trigger, null), sponsor: null };
   }
   const resolved = await resolveTurnWorkspace(userId, session ? session.workspaceId : input.workspaceId);
   if (resolved.space && !SPACE_TRIGGERS.has(trigger)) {
     throw new SpaceError('forbidden_role', `A ${trigger} run cannot start in a space`);
   }
-  return { workspaceId: resolved.workspaceId, space: resolved.space, trigger, funding: fundingFor(trigger, resolved.space) };
+  return scopeIn(resolved.workspaceId, resolved.space, trigger);
 }
 
 async function resolveRoomScope(
@@ -128,19 +171,20 @@ async function resolveRoomScope(
   userId: string,
   trigger: AgentTrigger,
 ): Promise<AgentScope> {
-  if (trigger !== 'room') throw new Error('Session not found');
+  // A room turn someone asked for, or the turn after a positive listen probe (§9.3).
+  if (trigger !== 'room' && trigger !== 'listen') throw new Error('Session not found');
   if (!session.id || !isRealUserId(userId)) throw new Error('Session not found');
   const { roomAccess } = await import('@/core/rooms/access');
   const access = await roomAccess(userId, session.id);
   if (!access) throw new SpaceError('not_found', 'Room not found');
   const resolved = await resolveTurnWorkspace(userId, access.room.workspaceId);
   if (!resolved.space) throw new Error('A room lives in a space');
-  return { workspaceId: resolved.workspaceId, space: resolved.space, trigger, funding: fundingFor(trigger, resolved.space) };
+  return scopeIn(resolved.workspaceId, resolved.space, trigger);
 }
 
-/** A child's scope: its parent's workspace, space, trigger and funding, unchanged. */
-export function inheritScope(parent: Pick<AgentContext, 'workspaceId' | 'space' | 'trigger' | 'funding'>): AgentScope {
-  return { workspaceId: parent.workspaceId ?? null, space: parent.space, trigger: parent.trigger, funding: parent.funding };
+/** A child's scope: its parent's workspace, space, trigger, funding and sponsor, unchanged. */
+export function inheritScope(parent: Pick<AgentContext, 'workspaceId' | 'space' | 'trigger' | 'funding' | 'sponsor'>): AgentScope {
+  return { workspaceId: parent.workspaceId ?? null, space: parent.space, trigger: parent.trigger, funding: parent.funding, sponsor: parent.sponsor ?? null };
 }
 
 /**
@@ -184,6 +228,7 @@ export function buildAgentContext(input: AgentContextInput): AgentContext {
     space: input.scope.space,
     trigger: input.scope.trigger,
     funding: input.scope.funding,
+    sponsor: input.scope.funding === 'sponsor' ? requireSponsor(input.scope) : null,
     topic: input.topic,
     model: input.model,
     modelName: input.modelName,
@@ -195,6 +240,11 @@ export function buildAgentContext(input: AgentContextInput): AgentContext {
     updatedAt: now,
     metadata: { ...(input.metadata ?? {}) },
   };
+}
+
+function requireSponsor(scope: AgentScope): AgentSponsor {
+  if (!scope.sponsor) throw new Error('A sponsored agent needs its sponsor (resolveAgentScope / inheritScope)');
+  return scope.sponsor;
 }
 
 /** The usage context of one agent's model calls. */

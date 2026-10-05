@@ -127,12 +127,15 @@ export class QuotaManager {
     // `billable_tokens` (fresh input + output, cache reads excluded), the same
     // figure the per-agent budget gate compares. Legacy rows predate the column
     // and fall back to `total_tokens` rather than counting as free.
+    // Only the user's own agents: a sponsor paid for sponsored ones (coworking
+    // spec §9.2), so they count against the space's budgets, not this cap.
+    // Concurrency (above) counts every running agent.
     const startOfDay = new Date();
     startOfDay.setUTCHours(0, 0, 0, 0);
     const tokenRows = await db
       .select({ s: sql<number>`COALESCE(SUM(COALESCE(${agents.billableTokens}, ${agents.totalTokens})), 0)::int` })
       .from(agents)
-      .where(and(eq(agents.userId, userId), gte(agents.createdAt, startOfDay)));
+      .where(and(eq(agents.userId, userId), gte(agents.createdAt, startOfDay), eq(agents.funding, 'own')));
 
     // API calls last minute: audit_log row with action='api_request'.
     // userId there is `text` and stores 'system' for unauth so the

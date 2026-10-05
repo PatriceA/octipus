@@ -21,6 +21,12 @@
  * A slot is claimed with a conditional UPDATE after the draft (`claimUnpromptedSlot`),
  * so two processes never both post, and a post always follows a member's
  * message — the bot never posts twice in a row.
+ *
+ * Rooms of a space reuse the same gate (coworking spec §9.3,
+ * `src/core/rooms/listen.ts`): `probeGroup` and `runListenTick` take any
+ * `ListenTarget` — a group channel or a room's mode row — and the room's
+ * deps read its transcript from the database and pay through the space's
+ * sponsor.
  */
 import { randomBytes } from 'node:crypto';
 import { BUFFER_BOT_ID, type BufferedMessage, groupThreads } from '@/channels/group-buffer';
@@ -42,6 +48,16 @@ export const PROBE_INTERVAL_MS = 5 * 60_000;
 export const UNPROMPTED_THREAD = '__unprompted__';
 const MAX_POST_CHARS = 1_200;
 const CONTEXT_MESSAGES = 30;
+
+/**
+ * What the gate reads of a channel or a room: its mode, quiet hours, caps
+ * and last unprompted post, where it is (`channelType`, `channelId`, the
+ * label shown to the model) and who the probe is attributed to
+ * (`ownerUserId`: the channel's owner, a room's sponsor).
+ */
+export type ListenTarget = Pick<GroupChannel,
+  | 'id' | 'mode' | 'channelType' | 'channelId' | 'label' | 'ownerUserId' | 'timezone' | 'quietHoursStart' | 'quietHoursEnd'
+  | 'maxUnpromptedPerDay' | 'minMinutesBetween' | 'lastUnpromptedAt' | 'unpromptedDay' | 'unpromptedCount'>;
 
 /** A question nobody answered, and where it is. */
 export interface ListenCandidate {
@@ -105,7 +121,7 @@ export function parseDraft(text: string | undefined, mode: 'listen' | 'proactive
 }
 
 /** Whether the local hour is inside the channel's quiet hours (wrapping midnight). */
-export function inQuietHours(group: Pick<GroupChannel, 'quietHoursStart' | 'quietHoursEnd'>, hour: number): boolean {
+export function inQuietHours(group: Pick<ListenTarget, 'quietHoursStart' | 'quietHoursEnd'>, hour: number): boolean {
   const { quietHoursStart: start, quietHoursEnd: end } = group;
   if (start === null || end === null || start === end) return false;
   return start < end ? hour >= start && hour < end : hour >= start || hour < end;
@@ -156,6 +172,7 @@ export function renderProbe(
 
 /** How a member hands the question over after an offer, per platform. */
 export function handover(channelType: string): string {
+  if (channelType === 'room') return 'Mention @octipus to hand it to me.';
   return channelType === 'slack'
     ? 'Mention me, or add :octopus: to the question, to hand it to me.'
     : 'Mention me to hand it to me.';
@@ -163,25 +180,29 @@ export function handover(channelType: string): string {
 
 const PROACTIVE_FOOTER = '_Nobody asked me — mention me to go further._';
 
-export interface ListenDeps {
+export interface ListenDeps<T extends ListenTarget = GroupChannel> {
   enabled(): boolean;
   /** Whether a model is bound to the `background` topic; checked before anything else costs. */
   modelReady(): Promise<boolean>;
   now(): Date;
-  listGroups(): Promise<GroupChannel[]>;
-  isGroupActive(group: GroupChannel): Promise<boolean>;
+  listGroups(): Promise<T[]>;
+  isGroupActive(group: T): Promise<boolean>;
   /** Local hour and day key (`YYYY-MM-DD`) in the channel's zone. */
   localTime(now: Date, tz: string): { hour: number; day: string };
-  /** The recorded threads of a chat (`group-buffer.ts`). */
-  threads(channelType: string, channelId: string, now: number): ReadonlyMap<string, readonly ChannelMessage[]>;
+  /** The recorded threads of a chat (`group-buffer.ts`), or a room's recent transcript. */
+  threads(channelType: string, channelId: string, now: number): ReadonlyMap<string, readonly ChannelMessage[]> | Promise<ReadonlyMap<string, readonly ChannelMessage[]>>;
   /** False while the channel's or the owner's spend budget is used up. */
-  mayRun(group: GroupChannel, sessionId: string): Promise<boolean>;
+  mayRun(group: T, sessionId: string): Promise<boolean>;
   /** The owner's unprompted-posts session for the channel. */
-  session(group: GroupChannel): Promise<string>;
+  session(group: T): Promise<string>;
   /** One `background` model call; the reply text, or undefined. */
   complete(input: { system: string; user: string; ownerUserId: string; sessionId: string }): Promise<string | undefined>;
-  claim(group: GroupChannel, now: Date, day: string): Promise<boolean>;
-  post(group: GroupChannel, candidate: ListenCandidate, text: string): Promise<void>;
+  claim(group: T, now: Date, day: string): Promise<boolean>;
+  post(group: T, candidate: ListenCandidate, text: string): Promise<void>;
+  /** The probe's instructions for `mode`, when the target words them its own way (rooms). */
+  system?(mode: 'listen' | 'proactive'): string;
+  /** The post for a positive draft (default: the offer plus the hand-over hint, or the answer plus a footer). */
+  compose?(group: T, draft: string): string;
 }
 
 const considered = new Map<string, number>();
@@ -198,15 +219,15 @@ function consider(key: string, now: number): void {
 export function resetListenState(): void {
   considered.clear();
   lastProbe.clear();
-  tickRunning = false;
+  ticksRunning.clear();
   warnedNoModel = false;
 }
 
 export type ListenOutcome =
   | 'disabled' | 'paused' | 'quiet' | 'capped' | 'no_candidate' | 'throttled' | 'no_model' | 'budget' | 'none' | 'lost_claim' | 'posted';
 
-/** One channel through the gate; what happened. */
-export async function probeGroup(group: GroupChannel, deps: ListenDeps): Promise<ListenOutcome> {
+/** One channel (or room) through the gate; what happened. */
+export async function probeGroup<T extends ListenTarget>(group: T, deps: ListenDeps<T>): Promise<ListenOutcome> {
   if (group.mode === 'mention') return 'disabled';
   const now = deps.now();
   const t = now.getTime();
@@ -216,7 +237,7 @@ export async function probeGroup(group: GroupChannel, deps: ListenDeps): Promise
   if (group.unpromptedDay === day && group.unpromptedCount >= group.maxUnpromptedPerDay) return 'capped';
   if (group.lastUnpromptedAt && t - group.lastUnpromptedAt.getTime() < group.minMinutesBetween * 60_000) return 'capped';
 
-  const threads = deps.threads(group.channelType, group.channelId, t);
+  const threads = await deps.threads(group.channelType, group.channelId, t);
   const prefix = `${group.id}:`;
   const candidate = findCandidate(threads, {
     now: t, lastUnpromptedAt: group.lastUnpromptedAt, considered: id => considered.has(prefix + id),
@@ -237,7 +258,7 @@ export async function probeGroup(group: GroupChannel, deps: ListenDeps): Promise
   const mode = group.mode;
   const conversation = [...threads.values()].flat();
   const reply = await deps.complete({
-    system: SYSTEM[mode],
+    system: deps.system ? deps.system(mode) : SYSTEM[mode],
     user: renderProbe(candidate, conversation, group.label),
     ownerUserId: group.ownerUserId,
     sessionId,
@@ -245,12 +266,14 @@ export async function probeGroup(group: GroupChannel, deps: ListenDeps): Promise
   const draft = parseDraft(reply, mode);
   if (!draft) return 'none';
   if (!(await deps.claim(group, now, day))) return 'lost_claim';
-  const text = mode === 'listen' ? `${draft} ${handover(group.channelType)}` : `${draft}\n${PROACTIVE_FOOTER}`;
+  const text = deps.compose ? deps.compose(group, draft)
+    : mode === 'listen' ? `${draft} ${handover(group.channelType)}` : `${draft}\n${PROACTIVE_FOOTER}`;
   await deps.post(group, candidate, text);
   return 'posted';
 }
 
-let tickRunning = false;
+// One tick at a time per deps (the group channels' and the rooms' run side by side).
+const ticksRunning = new Set<object>();
 let warnedNoModel = false;
 
 /**
@@ -258,11 +281,11 @@ let warnedNoModel = false;
  * tick still running (model calls) makes the next one a no-op, so the cron
  * loop can start it without waiting.
  */
-export async function runListenTick(deps: ListenDeps): Promise<void> {
-  if (tickRunning || !deps.enabled()) return;
-  tickRunning = true;
+export async function runListenTick<T extends ListenTarget>(deps: ListenDeps<T>): Promise<void> {
+  if (ticksRunning.has(deps) || !deps.enabled()) return;
+  ticksRunning.add(deps);
   try {
-    let groups: GroupChannel[];
+    let groups: T[];
     try {
       groups = await deps.listGroups();
     } catch (err) {
@@ -284,7 +307,7 @@ export async function runListenTick(deps: ListenDeps): Promise<void> {
       }
     }
   } finally {
-    tickRunning = false;
+    ticksRunning.delete(deps);
   }
 }
 
@@ -316,7 +339,7 @@ export function defaultListenDeps(): ListenDeps {
       const { SpendBudgetExceededError } = await import('@/security/spend-budget-error');
       if (await groupChannelPause(group.id)) return false;
       try {
-        await checkSpend({ userId: group.ownerUserId, sessionId });
+        await checkSpend({ userId: group.ownerUserId, sessionId, funding: 'own', spaceId: null });
         return true;
       } catch (err) {
         if (err instanceof SpendBudgetExceededError) return false;
@@ -331,9 +354,11 @@ export function defaultListenDeps(): ListenDeps {
     complete: async ({ system, user, ownerUserId, sessionId }) => {
       const { getModelRegistry } = await import('@/models/model-registry');
       const { getLiteLLMClient } = await import('@/models/litellm-client');
+      const { withInstallUsage } = await import('@/models/providers/instrumented');
       const model = await getModelRegistry().getModelForTopic('background');
       if (!model?.modelId) throw new Error('Unprompted group posts need a model bound to the "background" topic.');
-      const result = await getLiteLLMClient().complete({
+      // The gate probe is install work (coworking spec §8.2), stamped `install`.
+      const result = await withInstallUsage(() => getLiteLLMClient().complete({
         model: model.modelId,
         modelConfigName: model.name,
         messages: [
@@ -344,7 +369,7 @@ export function defaultListenDeps(): ListenDeps {
         maxTokens: 400,
         userId: ownerUserId,
         sessionId,
-      });
+      }));
       return result.content ?? undefined;
     },
     claim: async (group, now, day) => (await import('@/channels/group-channels')).claimUnpromptedSlot(group, now, day),

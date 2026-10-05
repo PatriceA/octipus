@@ -89,6 +89,19 @@ export const workspaces = pgTable('workspaces', {
    * through the document hub. Personal workspaces ignore it.
    */
   agentEditMode: text('agent_edit_mode').$type<AgentEditMode>().default('suggest').notNull(),
+  /**
+   * Who pays for the agent in a space (docs/plans/coworking-spec.md §9.1,
+   * `fundingFor`): `own` — each member for their own turns, nothing
+   * unprompted; `unattended` — members pay their own turns, the sponsor
+   * pays unprompted work (room listen, visitors); `sponsored` — the sponsor
+   * pays everything, members under the space's per-member cap. Personal
+   * workspaces ignore it.
+   */
+  agentFunding: text('agent_funding').$type<AgentFundingMode>().default('unattended').notNull(),
+  /** The owner who pays for sponsored work; cleared when they stop being an owner. */
+  sponsorUserId: uuid('sponsor_user_id').references(() => users.id, { onDelete: 'set null' }),
+  /** Names of the sponsor's own model rows that sponsored turns may run on. */
+  sponsorModels: jsonb('sponsor_models').$type<string[]>().default([]).notNull(),
   slug: text('slug').notNull(),
   name: text('name').notNull(),
   isDefault: boolean('is_default').default(false).notNull(),
@@ -109,6 +122,9 @@ export const workspaces = pgTable('workspaces', {
 }));
 
 export type WorkspaceKind = 'personal' | 'shared';
+
+/** Who pays for the agent in a space (`workspaces.agent_funding`). */
+export type AgentFundingMode = 'own' | 'unattended' | 'sponsored';
 
 /** How the agent edits a space's notes (`workspaces.agent_edit_mode`). */
 export type AgentEditMode = 'suggest' | 'direct';

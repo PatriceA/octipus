@@ -126,12 +126,12 @@ export class Router {
    * the explicit choice (only rows that user may see) and the topic route (the
    * user's personal binding first) — coworking spec §8.2.
    */
-  async route(message: string, preferredModel?: string, requester: { userId?: string; inSpace?: boolean } = {}): Promise<RoutingDecision> {
+  async route(message: string, preferredModel?: string, requester: { userId?: string; inSpace?: boolean; sponsor?: import('@/core/types').AgentSponsor | null } = {}): Promise<RoutingDecision> {
     // If a specific model is requested, use it
     if (preferredModel) {
       // By name first, then by modelId — only rows the requester may see.
       const model = requester.userId
-        ? await resolveModel({ userId: requester.userId, name: preferredModel, inSpace: requester.inSpace })
+        ? await resolveModel({ userId: requester.userId, name: preferredModel, inSpace: requester.inSpace, sponsor: requester.sponsor })
         : await installModelByNameOrId(preferredModel);
 
       if (model) {
@@ -164,7 +164,7 @@ export class Router {
     // Get the best model for this topic: the requester's personal binding
     // first, then the install binding (§8.2).
     const registry = getModelRegistry();
-    const model = await resolveModel({ userId: requester.userId, topic, inSpace: requester.inSpace });
+    const model = await resolveModel({ userId: requester.userId, topic, inSpace: requester.inSpace, sponsor: requester.sponsor });
 
     if (!model) {
       // Fall back to default

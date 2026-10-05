@@ -640,6 +640,7 @@ export class SwarmSpawner {
         params.topic,
         parentContext.userId,
         childInSpace,
+        parentContext.sponsor,
       ));
 
     // Small-tier child: cap the tool surface, mirroring the worker path. Role
@@ -1191,7 +1192,7 @@ export class SwarmSpawner {
     if (lastResult && (lastResult.status === 'provider_error' || lastResult.status === 'tool_error')) {
       try {
         // The install lane's backup — personal bindings have none (spec §8.2).
-        const backup = await resolveModel({ userId: opts.parentContext.userId, topic: opts.childLane, backup: true });
+        const backup = await resolveModel({ userId: opts.parentContext.userId, topic: opts.childLane, backup: true, inSpace: !!opts.parentContext.space, sponsor: opts.parentContext.sponsor });
         if (backup && backup.modelId !== opts.childModel) {
           coreLogger.warn(
             { parentNodeId: opts.parent.id, failedModel: opts.childModel, backupModel: backup.modelId, topic: opts.childLane },
@@ -2188,6 +2189,8 @@ export class SwarmSpawner {
     userId?: string,
     /** The parent runs in a shared space — D14 applies to install CLI rows. */
     inSpace = false,
+    /** The parent is sponsored: the sponsor's models replace the requester's (§9.1). */
+    sponsor: import('@/core/types').AgentSponsor | null = null,
   ): Promise<{ model: string; modelName: string; lane: string; systemPrompt?: string; stablePrompt?: string; skillContext: string; isSmall: boolean }> {
     const registry = getModelRegistry();
 
@@ -2306,7 +2309,7 @@ export class SwarmSpawner {
       if (executorName) {
         // An explicit name: only a row the requester may see (spec §8.2).
         const execModel = userId
-          ? await resolveModel({ userId, name: executorName, inSpace })
+          ? await resolveModel({ userId, name: executorName, inSpace, sponsor })
           : (await registry.getModel(executorName).then((m) => (m && !m.ownerUserId ? m : null)))
             || (await registry.getModelByModelId(executorName));
         if (!execModel) {
@@ -2336,7 +2339,7 @@ export class SwarmSpawner {
     }
     if (!candidate) {
       // The requester's personal binding for the lane first, then the install's.
-      const topicModel = await resolveModel({ userId, topic: lane, inSpace });
+      const topicModel = await resolveModel({ userId, topic: lane, inSpace, sponsor });
       candidate = topicModel?.modelId;
       candidateName = topicModel?.name ?? '';
     }

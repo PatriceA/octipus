@@ -17,7 +17,13 @@
  *
  * Install-level lanes (`background`, `decision`, `embedding`, `vision`, `ocr`)
  * never take a personal binding: they run install work funded `install`.
+ *
+ * A sponsored turn (`sponsor`, coworking spec §9.1) is paid by the space's
+ * sponsor, so the requester's own rows — billed to the requester's key — are
+ * out: step 1 is the sponsor's personal binding instead, when that row is one
+ * of the sponsor models, and an explicit choice may name a sponsor model.
  */
+import type { AgentSponsor } from '@/core/types';
 import type { ModelConfigEntry } from '@/db/schema/models';
 import { getModelRegistry } from '@/models/model-registry';
 import { canonicalTopic, TOPICS, type TopicKind } from '@/models/topics';
@@ -32,6 +38,8 @@ export interface ResolveByTopic {
   backup?: boolean;
   /** Fall back to the install default when the lane is unbound — root agent only. */
   fallbackToDefault?: boolean;
+  /** The turn is sponsored: the sponsor's models replace the requester's own. */
+  sponsor?: AgentSponsor | null;
 }
 
 export interface ResolveByName {
@@ -39,6 +47,17 @@ export interface ResolveByName {
   /** A row name, or a provider model id. */
   name: string;
   inSpace?: boolean;
+  sponsor?: AgentSponsor | null;
+}
+
+/**
+ * Whether a personal row (`ownerUserId` set) may run for `userId`: their
+ * own row on their own money, or a sponsor model of a sponsored turn.
+ */
+export function personalRowAllowed(row: Pick<ModelConfigEntry, 'name' | 'ownerUserId'>, userId: string | undefined, sponsor: AgentSponsor | null | undefined): boolean {
+  if (!row.ownerUserId) return true;
+  if (sponsor) return row.ownerUserId === sponsor.userId && sponsor.models.includes(row.name);
+  return row.ownerUserId === userId;
 }
 
 /** The kind of a (canonicalized) topic; unknown topics are treated as text lanes. */
@@ -79,17 +98,23 @@ export async function isRegisteredModel(nameOrId: string): Promise<boolean> {
 export async function resolveModel(req: ResolveByTopic | ResolveByName): Promise<ModelConfigEntry | null> {
   const registry = getModelRegistry();
   if ('name' in req) {
-    const row = (await registry.getModelVisibleTo(req.name, req.userId))
+    const sponsorRow = req.sponsor?.models.includes(req.name) ? await registry.getModel(req.name) : null;
+    const row = (sponsorRow && personalRowAllowed(sponsorRow, req.userId, req.sponsor) ? sponsorRow : null)
+      ?? (await registry.getModelVisibleTo(req.name, req.userId))
       ?? (await registry.getModelByModelIdVisibleTo(req.name, req.userId));
     if (!row || !row.isEnabled) return null;
+    if (!personalRowAllowed(row, req.userId, req.sponsor)) return null;
     if (req.inSpace && !usableInSpace(row)) return null;
     return row;
   }
 
   const { userId, topic } = req;
-  if (!req.backup && isRealUser(userId) && isPersonalBindableTopic(topic)) {
-    const personal = await registry.getUserBinding(userId, topic);
-    if (personal) return personal;
+  // Step 1: the payer's personal binding — the sponsor's (one of the sponsor
+  // models) in a sponsored turn, the requester's otherwise.
+  const payer = req.sponsor ? req.sponsor.userId : userId;
+  if (!req.backup && isRealUser(payer) && isPersonalBindableTopic(topic)) {
+    const personal = await registry.getUserBinding(payer, topic);
+    if (personal && personalRowAllowed(personal, userId, req.sponsor)) return personal;
   }
   const install = req.backup ? await registry.getBackupModelForTopic(topic) : await registry.getModelForTopic(topic);
   if (install && (!req.inSpace || usableInSpace(install))) return install;

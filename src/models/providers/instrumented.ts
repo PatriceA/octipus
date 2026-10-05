@@ -11,6 +11,18 @@ export function withProviderUsageContext<T>(context: ProviderUsageContext, run: 
 }
 
 /**
+ * Run an install-topic call (memory extraction and judging, learning,
+ * toolshim, link resolver, weekly review, chunk summaries, evaluators,
+ * embeddings, document processing, decision models, compaction, the listen
+ * gate probe): its `cost_log` rows say `install` whatever turn it runs in —
+ * a sponsored turn's helpers included (coworking spec §9.1, D13). The rest
+ * of the ambient context (user, session, workspace) is kept.
+ */
+export function withInstallUsage<T>(run: () => T): T {
+  return withProviderUsageContext({ funding: 'install' }, run);
+}
+
+/**
  * Fill in the current usage context once a turn has resolved its scope
  * (`AgentService.handleMessage` opens the context before it knows the
  * session's workspace). Only this turn's context object changes: each
