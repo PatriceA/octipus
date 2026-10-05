@@ -1,5 +1,7 @@
+import { existsSync, readdirSync, statSync } from 'fs';
 import { resolve } from 'path';
 import { getConfig } from '@/config';
+import type { WorkspaceFS } from '@/security/workspace-fs';
 import { fileAt } from '@/utils/fs-file';
 
 /**
@@ -56,4 +58,21 @@ export function hasAgentsMd(repoRoot: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * The project folders of a workspace root, as the root agent's prompt lists
+ * them (`  - name/`, flagged when they carry an AGENTS.md): the root's
+ * non-hidden directories, or for a guest's root in a space (S6) the folders
+ * of their scope only — never the names of the rest of the space.
+ */
+export function projectListing(fs: WorkspaceFS): string[] {
+  const entries = fs.guestFolders
+    ? fs.guestFolders
+      .map(name => ({ name, path: fs.resolveOptional(name) }))
+      .filter((e): e is { name: string; path: string } => !!e.path && existsSync(e.path) && statSync(e.path).isDirectory())
+    : readdirSync(fs.root)
+      .filter(name => !name.startsWith('.') && statSync(resolve(fs.root, name)).isDirectory())
+      .map(name => ({ name, path: resolve(fs.root, name) }));
+  return entries.map(({ name, path }) => (hasAgentsMd(path) ? `  - ${name}/ (has AGENTS.md)` : `  - ${name}/`));
 }

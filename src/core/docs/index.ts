@@ -5,14 +5,15 @@
 import { getConfig } from '@/config';
 import { getGatewayHub } from '@/core/gateway/hub';
 import { membershipVersion } from '@/core/spaces/membership';
-import { getMembership } from '@/core/spaces/service';
+import { getMembership, membersVisibleToGuest } from '@/core/spaces/service';
 import { insertRevision, loadSpaceNote, loadSpaceNoteSlug, writeBodyIfUnchanged } from '@/db/repositories/live-documents';
 import { userRepository } from '@/db/repositories/user-repository';
-import { noteInGuestScope, pathInGuestFolders } from '@/security/space-access';
+import type { FileLeaseView } from '@/core/gateway/protocol';
+import { noteInGuestScope } from '@/security/space-access';
 import { coreLogger } from '@/utils/logger';
 import { DocumentHub } from './hub';
 import { setProposalChangeListener } from './edit-proposals';
-import { leaseViews, listLeases, setLeaseChangeListener } from './file-leases';
+import { leasesForMember, listLeases, setLeaseChangeListener } from './file-leases';
 
 let instance: DocumentHub | null = null;
 
@@ -43,6 +44,10 @@ export function getDocHub(): DocumentHub {
       // A guest reads a note of their folders only (S6).
       const note = await loadSpaceNoteSlug(noteId);
       return note && note.workspaceId === workspaceId && noteInGuestScope(note.slug, membership.scope) ? membership.role : null;
+    },
+    audience: async (userId, workspaceId) => {
+      const membership = await getMembership(userId, workspaceId);
+      return membership?.scope ? membersVisibleToGuest(workspaceId, userId, membership.scope) : null;
     },
     membershipVersion,
     send: (connectionId, message) => gateway().connectionManager.sendToConnection(connectionId, message),
@@ -83,18 +88,20 @@ export function wireDocumentHub(): void {
 
 async function publishLeases(workspaceId: string): Promise<void> {
   try {
-    const leases = await leaseViews(await listLeases(workspaceId));
+    const leases = await listLeases(workspaceId);
     const hub = getGatewayHub();
     const resource = `space:${workspaceId}`;
     // Each subscriber gets its own view: a guest the leases of their folders
-    // only (S6); a connection whose membership is gone, nothing.
-    const memberships = new Map<string, Awaited<ReturnType<typeof getMembership>>>();
+    // only, holders among the members of their rooms (S6); a connection
+    // whose membership is gone, nothing.
+    const views = new Map<string, FileLeaseView[] | null>();
     for (const ctx of hub.connectionManager.getActiveConnections().filter((c) => c.resources.has(resource))) {
-      if (!memberships.has(ctx.userId)) memberships.set(ctx.userId, await getMembership(ctx.userId, workspaceId));
-      const membership = memberships.get(ctx.userId);
-      if (!membership) continue;
-      const scope = membership.scope;
-      const visible = scope ? leases.filter((l) => pathInGuestFolders(l.path, scope.folders)) : leases;
+      if (!views.has(ctx.userId)) {
+        const membership = await getMembership(ctx.userId, workspaceId);
+        views.set(ctx.userId, membership ? await leasesForMember(workspaceId, membership, leases) : null);
+      }
+      const visible = views.get(ctx.userId);
+      if (!visible) continue;
       hub.connectionManager.sendToConnection(ctx.connectionId, { type: 'file.leases', spaceId: workspaceId, leases: visible });
     }
   } catch (err) {

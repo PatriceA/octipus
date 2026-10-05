@@ -250,8 +250,19 @@ one starts with the empty scope, which reaches nothing). It is validated on
 write (`parseGuestScope`, `src/security/space-access.ts`): at most 100 rooms
 and 100 folders, every room a room of this space, every folder a relative
 path without `.`/`..`/empty segments or backslashes, stored in one spelling
-(`/client/` is `client`). A changed scope takes effect at once like a
-downgrade (`onMembershipChanged`).
+(`/client/` is `client`). A folder must also keep its own note-slug form
+segment by segment: `日本/acme` (whose slug would be `acme`, reaching the notes
+of an unrelated top-level folder), `€/x` or `a/-b` are refused. A changed
+scope takes effect at once like a downgrade (`onMembershipChanged`): the
+guest's room subscriptions, queued and running turns, open notes, file
+leases and presence follow at once.
+
+A stored scope is read back leniently: one that does not parse (a hand edit,
+a later rule) reads as the **empty** scope for that guest — the least access
+— and is logged; it does not break the lists that walk every guest. Migration
+`0135` reset the malformed scopes written before guests had a shape, and
+carried each existing guest's rooms (their `room_members` rows, in their own
+space) into their scope.
 
 What a guest reaches — one rule per kind of content, applied by the access
 layer (`spaceRepos`) and every surface beside it:
@@ -266,12 +277,27 @@ layer (`spaceRepos`) and every surface beside it:
 | Knowledge | the chunks of those notes and files |
 | Documents, artifacts, space memory, space connectors and secrets | nothing: they have no room and no path |
 | Private chats, agents, pipelines | none: a guest asks Octipus in their rooms only |
+| The space itself (`GET /api/spaces/<id>`, the space list) | its name and settings; `memberCount` counts the members they see, `createdBy` and `sponsorUserId` are named only when among them, no sponsor models |
+| Activity (`GET /api/spaces/<id>/activity`) | the rows about their rooms only (room created, renamed, mode changes); the actor is named only when they see that member, a room's member list is cut to those members, an impersonating admin is never named; nothing else (members, invites, funding) |
+| Budgets (`GET /api/spaces/<id>/budget`) | nothing (403): the spend is everyone's work |
+| Cursors in a live note, file lease holders | those of the members they see; a lease held by anyone else shows no holder |
+| Agent work in their rooms (`task_state` tools) | the worker outputs of their own turns only; a member's turn reads every turn's of the room |
+| The root agent's prompt | the folders of their scope as the projects, never the rest of the space's folder names |
 
 A guest never writes (the role table), so their turns run the commenter tool
 list, never a CLI model, and never see space memory. Rooms list only their
 rooms; a private room's member list cannot hold a guest (their rooms are
 their scope). Guests are never a task's assignee and never get a space
 notification for one.
+
+Repositories: `/api/workspace` (the repository list, creating a repository,
+the repo registry) is not a space route — with a space selected it acts in
+the caller's own workspace. In a space, the repo registry (the `repo_registry`
+tool) needs the member's role: scanning writes the space's knowledge, so it
+needs `write` (editor or owner), and a guest's registry shows only the
+repositories under their folders. A repository's remote URL is never shown or
+stored with credentials (`https://user:token@host/…` becomes
+`https://host/…`), whoever asks.
 
 ### Registration modes
 
@@ -281,13 +307,23 @@ account through `POST /api/auth/register` (the sign-in page's register tab):
 | Mode | Who may register |
 |---|---|
 | `open` (default) | anyone |
-| `invite_only` | only with a valid space invite token (`inviteToken` in the body; the invite page's "register" link carries it) |
+| `invite_only` | only with a valid space invite token (`inviteToken` in the body; the invite page's "register" link hands it over) |
 | `closed` | nobody; the register tab is hidden |
 
 - An invite token given at registration (in any mode) is redeemed **in the
   same transaction** that creates the account: the account and its
   membership commit together, or neither does. A used-up, revoked or expired
-  token creates no account; a failed registration spends no use.
+  token creates no account (400 `invite_invalid`, in `open` mode too: the
+  visitor came for the membership, so they register again without the link
+  or ask for a new one rather than get an account without it); a failed
+  registration spends no use.
+- Checks run in this order: the mode, then the invite, then whether the
+  username or email is taken. A refused registration on a closed or
+  invite-only install therefore tells nothing about which accounts exist. An
+  account created meanwhile by SAML JIT, SCIM or an admin (which do not take
+  the registration lock) makes the registration a 409, not a 500.
+- The invite page hands its token to the sign-in page in the browser's
+  history state, never in a URL (`/login?mode=register` carries no token).
 - The install's **first account** may always register and becomes its
   admin. Which registration is the first is decided inside the transaction,
   under a lock that serialises registrations, so two racing first sign-ups
@@ -314,13 +350,18 @@ is how such a member is represented on the host:
 - **Local usernames may not start with `~`.** Registration, admin creation,
   SCIM (create and rename) and SAML JIT refuse one (`assertLocalUsername`,
   `src/security/user-kinds.ts`); migration `0135_guests_remote` renamed any
-  existing `~` username to `renamed-<id>-<name>` before adding the CHECK.
+  existing `~` username to `renamed-<8 hex of the id>-<name>` (with a counter
+  when that is taken) before adding the CHECK, and audited each rename
+  (`user_updated`, `details.event = 'username_renamed'`, old and new name) so
+  an admin can tell the user their new login name.
   `@` stays allowed (SAML NameIDs and SCIM userNames are e-mail addresses).
 - **Remote members never sign in here.** `SessionManager.create` refuses them
   (so do password, passkey, SAML, device pairing and ws-ticket logins, which
   all mint their session there), session validation and API tokens refuse
-  them, admins cannot impersonate them, SAML JIT refuses a `~` account and
-  passkeys refuse them.
+  them, admins cannot impersonate them (an impersonation whose target became
+  remote ends on its next request), SAML JIT refuses a `~` account and
+  passkeys refuse them. A channel binding never resolves to them, they join
+  no organization and no workspace is transferred to them.
 - **They are not the install's accounts:** the admin user and quota lists,
   `PATCH /api/admin/users/<id>` and SCIM leave them out.
 - Each holds a normal `workspace_members` row and role. Work they cause on

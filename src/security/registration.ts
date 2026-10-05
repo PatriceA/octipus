@@ -12,6 +12,14 @@
  *     account that then fails);
  *   - `closed` — nobody.
  *
+ * The mode is checked before anything else (then the invite, then the
+ * uniqueness of the username and email), so a refused caller learns nothing
+ * about the accounts here. An invite token given in `open` mode is redeemed
+ * too, and one that cannot be (unknown, expired, used up, revoked) fails the
+ * registration with 400 `invite_invalid` rather than creating an account
+ * without the membership the visitor came for: they register again without
+ * it, or ask for a new link.
+ *
  * The install's first account may always register (and becomes its admin):
  * an install with no account yet has no space, so no invite, and nobody to
  * create accounts. Which registration is the first is decided inside the
@@ -23,7 +31,7 @@
  */
 import { count, eq, sql } from 'drizzle-orm';
 import { getConfig } from '@/config';
-import { type AcceptedInvite, acceptInviteInTx } from '@/core/spaces/invites';
+import { type AcceptedInvite, acceptInviteInTx, previewInvite } from '@/core/spaces/invites';
 import { getDb } from '@/db/postgres';
 import { type User, users } from '@/db/schema/users';
 import { SpaceError, spaceErrorStatus } from '@/security/space-access';
@@ -86,13 +94,8 @@ export async function registerUser(input: {
 
   return getDb().transaction(async (tx) => {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(${REGISTER_LOCK})`);
-    const [existing] = await tx.select({ id: users.id }).from(users).where(eq(users.username, input.username)).limit(1);
-    if (existing) throw new RegistrationError('username_taken', 409, 'Username already exists');
-    if (input.email) {
-      const [byEmail] = await tx.select({ id: users.id }).from(users).where(eq(users.email, input.email)).limit(1);
-      if (byEmail) throw new RegistrationError('email_taken', 409, 'Email already exists');
-    }
-
+    // The mode first: a refused registration learns nothing about which
+    // usernames or emails exist here (no enumeration on a closed install).
     const [{ n }] = await tx.select({ n: count() }).from(users).where(eq(users.kind, 'local'));
     const isFirstUser = Number(n) === 0;
     if (!isFirstUser && mode === 'closed') {
@@ -101,11 +104,31 @@ export async function registerUser(input: {
     if (!isFirstUser && mode === 'invite_only' && !input.inviteToken) {
       throw new RegistrationError('invite_required', 403, 'Registration needs an invite link on this install');
     }
+    // Then the invite, whatever the mode: a token that cannot be redeemed
+    // fails the registration (400) before the uniqueness checks, so a made-up
+    // token is no way past the mode either. Redeeming it below checks again.
+    if (input.inviteToken && !(await previewInvite(input.inviteToken, tx))) throw inviteInvalid();
 
+    const [existing] = await tx.select({ id: users.id }).from(users).where(eq(users.username, input.username)).limit(1);
+    if (existing) throw new RegistrationError('username_taken', 409, 'Username already exists');
+    if (input.email) {
+      const [byEmail] = await tx.select({ id: users.id }).from(users).where(eq(users.email, input.email)).limit(1);
+      if (byEmail) throw new RegistrationError('email_taken', 409, 'Email already exists');
+    }
+
+    // SAML JIT, SCIM and admins create accounts without this lock: one of
+    // them taking the name meanwhile is a 409, not a 500.
     const [user] = await tx
       .insert(users)
       .values({ username: input.username, email: input.email, passwordHash, isAdmin: isFirstUser })
-      .returning();
+      .returning()
+      .catch((err: unknown) => {
+        const constraint = uniqueViolation(err);
+        if (constraint === null) throw err;
+        throw constraint.includes('email')
+          ? new RegistrationError('email_taken', 409, 'Email already exists')
+          : new RegistrationError('username_taken', 409, 'Username already exists');
+      });
 
     let joined: AcceptedInvite | null = null;
     if (input.inviteToken) {
@@ -114,7 +137,8 @@ export async function registerUser(input: {
       } catch (err) {
         // The account rolls back with the refused invite.
         if (err instanceof SpaceError) {
-          throw new RegistrationError('invite_invalid', spaceErrorStatus(err), err.code === 'not_found' ? 'This invite link is not valid any more' : err.message);
+          if (err.code === 'not_found') throw inviteInvalid();
+          throw new RegistrationError('invite_invalid', spaceErrorStatus(err), err.message);
         }
         throw err;
       }
@@ -122,4 +146,17 @@ export async function registerUser(input: {
     dbLogger.info({ userId: user.id, firstUser: isFirstUser, joined: joined?.workspaceId ?? null }, 'User registered');
     return { user, joined };
   });
+}
+
+function inviteInvalid(): RegistrationError {
+  return new RegistrationError('invite_invalid', 400, 'This invite link is not valid any more (expired, used up or revoked); register without it, or ask for a new link');
+}
+
+/** The constraint a unique violation (`23505`) names (`''` when unnamed); null for any other error. */
+function uniqueViolation(err: unknown): string | null {
+  for (let e: unknown = err, depth = 0; e && typeof e === 'object' && depth < 3; e = (e as { cause?: unknown }).cause, depth++) {
+    const pg = e as { code?: unknown; constraint?: unknown };
+    if (pg.code === '23505') return typeof pg.constraint === 'string' ? pg.constraint : '';
+  }
+  return null;
 }

@@ -81,8 +81,11 @@ export const searchRoutes = new Elysia({ prefix: '/search' })
           try {
             const service = getEmbeddingService();
             // Repo-scoped knowledge (AGENTS.md, repo maps) is per user: same
-            // visibility gate as /api/knowledge and the knowledge tool.
-            const { repos } = await loadRepoGraph({ userId: user.id, workspaceId: principal.workspaceId ?? null });
+            // visibility gate as /api/knowledge and the knowledge tool — in a
+            // space, none (§5.5).
+            const { repos } = principal.workspaceKind === 'shared'
+              ? { repos: [] }
+              : await loadRepoGraph({ userId: user.id, workspaceId: principal.workspaceId ?? null });
             return await service.ftsSearch(principalKnowledgeScope(principal), searchTerm, limit, undefined, { allowedRepoIds: repos.map(repo => repo.id) });
           } catch {
             return [];

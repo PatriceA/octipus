@@ -412,7 +412,9 @@ export class WorkspaceFS {
         `agent context has no real user (${context.userId || 'none'}); a system job passes { system: true, root }`);
     }
     if (context.space) return WorkspaceFS.forSpace(context.space.workspaceId, { guestFolders: context.space.scope?.folders });
-    if (isKnownSharedWorkspace(context.workspaceId)) return WorkspaceFS.forSpace(context.workspaceId as string);
+    // A space without the turn's membership: no folder at all (fail closed;
+    // the approval path refuses such a turn's tools anyway).
+    if (isKnownSharedWorkspace(context.workspaceId)) return WorkspaceFS.forSpace(context.workspaceId as string, { guestFolders: [] });
     return WorkspaceFS.forRequest(agentPrincipal(context), options);
   }
 

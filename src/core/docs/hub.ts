@@ -150,6 +150,11 @@ export interface DocHubDeps {
    * not a member, or a guest whose scope does not reach the note (S6).
    */
   membership(userId: string, workspaceId: string, noteId: string): Promise<SpaceRole | null>;
+  /**
+   * The members whose cursors `userId` may see in the space's notes: null for
+   * every member, the members of their rooms for a guest (S6).
+   */
+  audience(userId: string, workspaceId: string): Promise<Set<string> | null>;
   /** The in-process membership version (D5). */
   membershipVersion(workspaceId: string, userId: string): number;
   send(connectionId: string, message: GatewayMessage): void;
@@ -169,6 +174,8 @@ interface Peer {
   /** The display name awareness states are stamped with. */
   name: string;
   role: SpaceRole;
+  /** Whose awareness states this peer is sent (`deps.audience`): null for all. */
+  audience: Set<string> | null;
   version: number;
   /** Awareness client ids this connection owns, oldest first. */
   awarenessClients: Set<number>;
@@ -299,6 +306,7 @@ export class DocumentHub {
       return;
     }
     const name = (await this.deps.userName(conn.userId)) ?? 'member';
+    const audience = await this.deps.audience(conn.userId, note.workspaceId);
     let doc = await this.open(noteId);
     // The document may have expired between `open` and here: open it again.
     for (let attempt = 0; doc && this.docs.get(noteId) !== doc && attempt < 3; attempt++) doc = await this.open(noteId);
@@ -313,6 +321,7 @@ export class DocumentHub {
       userId: conn.userId,
       name,
       role,
+      audience,
       version,
       awarenessClients: existing?.awarenessClients ?? new Set(),
       joinedAt: this.deps.now(),
@@ -331,7 +340,7 @@ export class DocumentHub {
       state = Y.encodeStateAsUpdate(doc.ydoc);
     }
     this.sendSync(doc, conn.connectionId, state);
-    const others = [...doc.awareness.getStates().keys()];
+    const others = this.awarenessFor(doc, doc.peers.get(conn.connectionId)!, [...doc.awareness.getStates().keys()]);
     if (others.length > 0) {
       this.deps.send(conn.connectionId, { type: 'doc.awareness', noteId, update: toBase64(encodeAwarenessUpdate(doc.awareness, others)) });
     }
@@ -622,6 +631,7 @@ export class DocumentHub {
         }
         const wasWriter = can(peer.role, 'write');
         peer.role = role;
+        peer.audience = await this.deps.audience(userId, workspaceId);
         peer.version = version;
         if (wasWriter !== can(role, 'write')) {
           this.deps.send(peer.connectionId, { type: 'doc.status', noteId: doc.noteId, readOnly: this.readOnly(doc, peer) });
@@ -770,11 +780,37 @@ export class DocumentHub {
     });
     // Which connection owns which client id is kept by `awareness()`.
     doc.awareness.on('update', ({ added, updated, removed }: { added: number[]; updated: number[]; removed: number[] }, origin: unknown) => {
-      const changed = [...added, ...updated, ...removed];
-      const message: GatewayMessage = { type: 'doc.awareness', noteId: doc.noteId, update: toBase64(encodeAwarenessUpdate(doc.awareness, changed)) };
+      const changed = [...added, ...updated];
+      const message: GatewayMessage = { type: 'doc.awareness', noteId: doc.noteId, update: toBase64(encodeAwarenessUpdate(doc.awareness, [...changed, ...removed])) };
       for (const peer of doc.peers.values()) {
-        if (peer.connectionId !== origin) this.deps.send(peer.connectionId, message);
+        if (peer.connectionId === origin) continue;
+        if (!peer.audience) {
+          this.deps.send(peer.connectionId, message);
+          continue;
+        }
+        // A guest: the states of the members they may see; removals carry
+        // no state, so they all go (a left cursor must disappear).
+        const shown = [...this.awarenessFor(doc, peer, changed), ...removed];
+        if (shown.length > 0) {
+          this.deps.send(peer.connectionId, { type: 'doc.awareness', noteId: doc.noteId, update: toBase64(encodeAwarenessUpdate(doc.awareness, shown)) });
+        }
       }
+    });
+  }
+
+  /**
+   * The awareness client ids among `ids` whose state `recipient` may be
+   * sent: every one, or for a guest those owned by a peer whose member is in
+   * their audience (S6) — a state of no known peer is not sent to a guest.
+   */
+  private awarenessFor(doc: LiveDoc, recipient: Peer, ids: number[]): number[] {
+    const audience = recipient.audience;
+    if (!audience) return ids;
+    return ids.filter((id) => {
+      for (const peer of doc.peers.values()) {
+        if (peer.awarenessClients.has(id)) return audience.has(peer.userId);
+      }
+      return false;
     });
   }
 
@@ -805,6 +841,7 @@ export class DocumentHub {
         return null;
       }
       peer.role = role;
+      peer.audience = await this.deps.audience(conn.userId, doc.workspaceId);
       peer.version = version;
     }
     return { doc, peer };

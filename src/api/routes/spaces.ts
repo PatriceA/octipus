@@ -4,6 +4,7 @@ import {
   acquireLease,
   canonicalLeasePath,
   InvalidLeasePathError,
+  leasesForMember,
   leaseViews,
   listLeases,
   releaseLease,
@@ -31,7 +32,7 @@ import {
   unarchiveSpace,
 } from '@/core/spaces/service';
 import { isAuthenticated, type Principal } from '@/security/principal';
-import { pathInGuestFolders, requireCan, type SpaceAction, SpaceError, spaceErrorStatus } from '@/security/space-access';
+import { requireCan, type SpaceAction, SpaceError, spaceErrorStatus } from '@/security/space-access';
 
 /**
  * Shared spaces (docs/plans/coworking-spec.md §5.7).
@@ -174,9 +175,11 @@ export const spaceRoutes = new Elysia({ prefix: '/spaces' })
   })
 
   // The space's budgets (§9.2) with their spend this period; the member cap
-  // shows the caller's own share. Any member reads them.
+  // shows the caller's own share. Any member but a guest reads them: the
+  // space's spend is the work of members outside a guest's rooms (S6).
   .get('/:id/budget', (ctx) => handle(ctx, async (actor) => {
-    await requireMember(actor, ctx.params.id, 'read');
+    const membership = requireCan(await getMembership(actor.userId, ctx.params.id), 'read');
+    if (membership.scope) throw new SpaceError('forbidden_role', 'Guests do not see the space\'s budgets');
     const { spaceBudgetStatuses } = await import('@/security/spend-budgets');
     return { budgets: await spaceBudgetStatuses(ctx.params.id, actor.userId) };
   }), {
@@ -348,9 +351,9 @@ export const spaceRoutes = new Elysia({ prefix: '/spaces' })
   .get('/:id/file-leases', (ctx) => handle(ctx, async (actor) => {
     const membership = requireCan(await getMembership(actor.userId, ctx.params.id), 'read');
     const leases = await listLeases(ctx.params.id);
-    // A guest sees the leases of their folders only (S6).
-    const scope = membership.scope;
-    return { leases: await leaseViews(scope ? leases.filter((l) => pathInGuestFolders(l.path, scope.folders)) : leases) };
+    // A guest sees the leases of their folders only, holders named only when
+    // among the members of their rooms (S6).
+    return { leases: await leasesForMember(ctx.params.id, membership, leases) };
   }), {
     params: t.Object({ id: t.String() }),
     detail: { tags: ['spaces'] },

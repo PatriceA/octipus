@@ -2,11 +2,10 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { Loader2, UsersRound } from 'lucide-react';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { useParams } from 'react-router-dom';
-import { loginPathReturningTo } from '../../../src/shared/return-to';
+import { Link as RouterLink, useParams } from 'react-router-dom';
+import type { LoginNavigationState } from '../login/page';
 import { ApiError, api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { type SpaceRole, useWorkspace } from '@/lib/workspace-context';
@@ -46,10 +45,12 @@ export default function JoinPage() {
   });
 
   const here = `/join/${token}`;
-  const signInHref = loginPathReturningTo(here);
-  // Registering from here redeems the invite with the new account (S6): on an
-  // invite-only install it is the way in.
-  const registerHref = `/login?mode=register&invite=${encodeURIComponent(token)}&returnTo=${encodeURIComponent(here)}`;
+  // The token is a bearer secret: it goes to the login page in the history
+  // state (`LoginNavigationState`), never in a second URL that could reach
+  // history listings or a Referer. Registering from here redeems the invite
+  // with the new account (S6): on an invite-only install it is the way in.
+  const signInState: LoginNavigationState = { returnTo: here };
+  const registerState: LoginNavigationState = { returnTo: here, invite: token };
 
   const join = async () => {
     setJoining(true);
@@ -136,18 +137,20 @@ export default function JoinPage() {
                 </div>
               ) : (
                 <div className="grid grid-cols-2 gap-2">
-                  <Link
-                    href={signInHref}
+                  <RouterLink
+                    to="/login"
+                    state={signInState}
                     className="py-2 text-center bg-primary text-on-primary rounded-xs hover:bg-primary-dim text-[13px]"
                   >
                     sign in to join
-                  </Link>
-                  <Link
-                    href={registerHref}
+                  </RouterLink>
+                  <RouterLink
+                    to="/login?mode=register"
+                    state={registerState}
                     className="py-2 text-center border border-outline-variant/60 text-on-surface rounded-xs hover:bg-surface-container-high text-[13px]"
                   >
                     register
-                  </Link>
+                  </RouterLink>
                 </div>
               )}
             </>

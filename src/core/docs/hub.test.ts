@@ -88,6 +88,7 @@ beforeAll(async () => {
       await hooks.afterMembershipRead?.();
       return role;
     },
+    audience: async () => null,
     membershipVersion,
     send: (connectionId, message) => {
       inbox.get(connectionId)?.push(message);

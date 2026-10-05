@@ -551,9 +551,10 @@ export async function runRootAgent(
     const wsConfig = getConfig();
     // A space's agents work in the space's files only: no extra paths and
     // no personal repo registry.
-    const wsRoot = space
-      ? WorkspaceFS.forSpace(space.workspaceId).root
-      : WorkspaceFS.forPrincipal(agentPrincipal({ userId, workspaceId })).root;
+    const wsFs = space
+      ? WorkspaceFS.forSpace(space.workspaceId, { guestFolders: space.scope?.folders })
+      : WorkspaceFS.forPrincipal(agentPrincipal({ userId, workspaceId }));
+    const wsRoot = wsFs.root;
     const wsAdditional = space ? [] : wsConfig.workspace.additionalPaths?.map((p: string) => resolve(p)).filter(Boolean) || [];
 
     // Multi-repo: when the repo registry has been scanned, inject the map of
@@ -591,16 +592,11 @@ export async function runRootAgent(
     // Registry is authoritative when present — otherwise fall back to a raw
     // directory listing of the workspace root.
     if (!injectedSuite) try {
-      const { readdirSync, statSync: statS } = await import('fs');
-      const { hasAgentsMd } = await import('./agents-md');
+      const { projectListing } = await import('./agents-md');
       // List sibling repos and flag which carry a curated AGENTS.md guide, so
-      // the root agent can point workers at it when entering a repo.
-      const dirs = readdirSync(wsRoot)
-        .filter(name => !name.startsWith('.') && statS(resolve(wsRoot, name)).isDirectory())
-        .map(name => {
-          const repoRoot = resolve(wsRoot, name);
-          return hasAgentsMd(repoRoot) ? `  - ${name}/ (has AGENTS.md)` : `  - ${name}/`;
-        });
+      // the root agent can point workers at it when entering a repo. A guest
+      // (S6) is shown the folders of their scope only.
+      const dirs = projectListing(wsFs);
       let wsContext = `\nWORKSPACE: Root is ${wsRoot}`;
       if (dirs.length > 0 && dirs.length <= 30) {
         wsContext += `\nProjects:\n${dirs.join('\n')}`;

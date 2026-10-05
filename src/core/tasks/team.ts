@@ -46,7 +46,7 @@ export async function taskChanged(workspaceId: string, taskId: string): Promise<
   const told = new Set(rows
     .filter((r) => {
       if (r.role !== 'guest') return true;
-      const scope = storedGuestScope(r.role, r.scope);
+      const scope = storedGuestScope(r.role, r.scope, { workspaceId, userId: r.userId });
       return !!task && !!scope && taskInGuestScope(task.sourceRef, scope);
     })
     .map((r) => r.userId));

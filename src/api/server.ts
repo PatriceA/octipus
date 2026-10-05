@@ -300,11 +300,12 @@ export function createServer() {
           if (active) {
             const db = getDb();
             const [target] = await db.select({
-              id: users.id, username: users.username, isAdmin: users.isAdmin, isActive: users.isActive,
+              id: users.id, username: users.username, isAdmin: users.isAdmin, isActive: users.isActive, kind: users.kind,
             }).from(users).where(eq(users.id, active.targetUserId)).limit(1);
             // A deactivated (or deleted) target ends the impersonation: the
-            // admin carries on as themselves.
-            if (!target?.isActive) {
+            // admin carries on as themselves. So does a remote member's row
+            // (S7): it never signs in here, so nobody acts as it.
+            if (!target?.isActive || target.kind !== 'local') {
               await getImpersonationManager().stop(token, 'target_inactive');
             } else {
               const targetObj = { id: target.id, username: target.username, isAdmin: target.isAdmin };

@@ -20,7 +20,7 @@ import { can, type GuestScope, isInvitableRole, requireCan, SPACE_ROLES, SpaceEr
 import { generateToken, sha256 } from '@/utils/crypto';
 import { securityLogger } from '@/utils/logger';
 import { onMembershipGranted } from './membership';
-import { addMemberInTx, auditActor, getMembership, guestScopeForWrite, type SpaceActor, type Tx, writeSpaceAudit } from './service';
+import { addMemberInTx, auditActor, type Executor, getMembership, guestScopeForWrite, type SpaceActor, type Tx, writeSpaceAudit } from './service';
 
 /** The roles that may hand out invites: an invite is good only while its creator still holds one. */
 const INVITING_ROLES = SPACE_ROLES.filter((r) => can(r, 'manage_invites'));
@@ -118,9 +118,9 @@ export interface InvitePreview {
  * What a token invites to — no member list, no content — or null when it is
  * unknown, revoked, expired, used up, or its space is archived.
  */
-export async function previewInvite(token: string): Promise<InvitePreview | null> {
+export async function previewInvite(token: string, db: Executor = getDb()): Promise<InvitePreview | null> {
   if (!TOKEN_PATTERN.test(token)) return null;
-  const [row] = await getDb()
+  const [row] = await db
     .select({
       spaceName: workspaces.name,
       inviterName: users.username,

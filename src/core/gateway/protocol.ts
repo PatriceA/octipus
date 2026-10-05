@@ -762,7 +762,8 @@ export interface DocProposalsMessage {
 
 export interface FileLeaseView {
   path: string;
-  holderUserId: string;
+  /** Null (with `holderName`) for a guest when the holder is not among the members of their rooms (S6). */
+  holderUserId: string | null;
   holderName: string | null;
   holderKind: 'human' | 'agent';
   expiresAt: string;

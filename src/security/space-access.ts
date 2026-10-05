@@ -13,6 +13,7 @@
 import { z } from 'zod';
 import type { GuestScope, InvitableSpaceRole, SpaceRole } from '@/db/schema/organizations';
 import { slugify } from '@/core/knowledge/wikilink';
+import { securityLogger } from '@/utils/logger';
 
 export type { GuestScope, InvitableSpaceRole, SpaceRole } from '@/db/schema/organizations';
 
@@ -140,6 +141,12 @@ export function normalizeGuestFolder(raw: string): string | null {
   if (raw.includes('\\') || raw.includes('\0')) return null;
   const segments = raw.trim().split('/').filter((s) => s.length > 0);
   if (segments.length === 0 || segments.some((s) => s === '.' || s === '..' || s.trim() !== s)) return null;
+  // Notes are matched on the folder's slug form (`guestNoteFolders`): every
+  // segment must keep a slug of its own, and the folder's slug must be those
+  // slugs joined. Otherwise `日本/acme` would slug to `acme` and reach the
+  // notes of an unrelated top-level folder.
+  const slugs = segments.map((s) => slugify(s));
+  if (slugs.some((s) => s.length === 0 || s.includes('/')) || slugify(segments.join('/')) !== slugs.join('/')) return null;
   const folder = segments.join('/');
   return folder.length <= FOLDER_MAX_LENGTH ? folder : null;
 }
@@ -174,12 +181,23 @@ export function parseGuestScope(input: unknown): GuestScope {
 }
 
 /**
- * The scope a membership row stores, read back: a guest's (malformed rows
- * throw — they were validated on write, so one that is not is a bug or a
- * hand edit, never silently widened or narrowed), null for every other role.
+ * The scope a membership or invite row stores, read back: a guest's, null
+ * for every other role. Rows are validated on write, and migration 0135
+ * reset the malformed ones written before S6; one that still does not parse
+ * (a hand edit, a later rule such as the slug check on folders) reads as the
+ * empty scope — the least access, never a wider one — and is logged. It does
+ * not throw: one bad row must not break every caller that walks the space's
+ * guests (room member lists, presence, `task.changed`).
  */
-export function storedGuestScope(role: SpaceRole, stored: unknown): GuestScope | null {
-  return role === 'guest' ? parseGuestScope(stored) : null;
+export function storedGuestScope(role: SpaceRole, stored: unknown, row: { workspaceId?: string; userId?: string; inviteId?: string } = {}): GuestScope | null {
+  if (role !== 'guest') return null;
+  try {
+    return parseGuestScope(stored);
+  } catch (err) {
+    if (!(err instanceof SpaceError)) throw err;
+    securityLogger.error({ ...row, reason: err.message }, 'Stored guest scope is malformed; treating it as the empty scope');
+    return { rooms: [], folders: [] };
+  }
 }
 
 /**
