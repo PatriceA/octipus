@@ -352,8 +352,18 @@ test.describe('with a space selected (§5.4)', () => {
     await inSpace(page, 'editor');
     await page.route('**/api/memory**', (route) => json(route, 200, { memories: [], total: 0, includeHistory: false }));
     const headers = recordHeaders(page);
+    // Each page's own data call is awaited before moving on: a page left
+    // before its first fetch would make the assertions below race the router.
+    const dataCall: Record<string, RegExp> = {
+      '/models': /\/api\/models/,
+      '/settings': /\/api\//,
+      '/secrets': /\/api\/vault\?/,
+      '/memory': /\/api\/memory/,
+    };
     for (const path of ['/models', '/settings', '/secrets', '/memory']) {
+      const called = page.waitForRequest((r) => dataCall[path].test(r.url()));
       await page.goto(path);
+      await called;
       await expect(page.getByRole('main', { name: 'Page content' })).toBeVisible();
       await expect(page.getByText(/Unexpected Application Error|something went wrong/i)).toHaveCount(0);
     }
