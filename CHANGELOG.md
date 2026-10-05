@@ -9,6 +9,12 @@ labels reflect blast radius, not contract guarantees.
 
 ### Fixed
 
+- **A space session's files open only through the requester's access.**
+  `WorkspaceFS.forSession` now takes the requester's space access (role and
+  guest scope, from the turn's `AgentContext.space`, the request principal or
+  a membership read) and throws when a shared-workspace session is opened
+  without it, or with access naming another workspace; a guest gets their
+  folders only. Every call site passes it, and a test checks that they do.
 - **Coworking seams (final security review).** A deactivated account (and,
   until federation exists, a remote one) passes no space door: its queued
   and running room turns are dropped at once, its queued space jobs

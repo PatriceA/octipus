@@ -1,5 +1,5 @@
 import { decodeChatAttachment, storeChatUploads } from '@/core/chat-uploads';
-import { WorkspaceFS } from '@/security/workspace-fs';
+import { sessionFsAccess, WorkspaceFS } from '@/security/workspace-fs';
 import { resolveSession, turnWorkspaceId } from '@/core/agent/session-resolver';
 import { isSessionControlMessage } from '@/core/session-controls';
 import { canActInSession } from '@/core/rooms/access';
@@ -381,7 +381,7 @@ async function handleChatSend(
       const { sessionRepository } = await import('@/db/repositories/session-repository');
       const session = await sessionRepository.findById(message.sessionId);
       if (!session || !(await canActInSession(session, userId, 'chat'))) throw new Error('Session not found');
-      const uploaded = await storeChatUploads(WorkspaceFS.forSession(session), message.attachments.map(decodeChatAttachment));
+      const uploaded = await storeChatUploads(WorkspaceFS.forSession(session, await sessionFsAccess(session, userId)), message.attachments.map(decodeChatAttachment));
       message.fileRefs = [...(message.fileRefs ?? []), ...uploaded.map(file => ({ path: file.path }))];
       message.content += '\n\n' + uploaded.map(file => `Attached file: ${file.path}`).join('\n');
     }

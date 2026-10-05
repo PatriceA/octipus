@@ -68,7 +68,7 @@ export async function runTestContainer(args: Record<string, unknown>, context: A
   if (!session || !(await canActInSession(session, context.userId, 'requester'))) throw new Error('Session not found.');
   if (session.context?.planMode) throw new Error('Test containers are unavailable in plan mode.');
   if (process.platform !== 'linux') throw new Error('Test containers currently require Linux and a local Docker daemon.');
-  const root = await realpath(worktreeCwdOverride(context.metadata) ?? WorkspaceFS.forSession(session).root);
+  const root = await realpath(worktreeCwdOverride(context.metadata) ?? WorkspaceFS.forSession(session, { space: context.space ?? null }).root);
   const seconds = args.timeout_seconds === undefined ? 300 : args.timeout_seconds as number;
   const name = `octipus-test-${randomUUID()}`;
   const command = testContainerArgs(name, root, args.image as string, args.command as string[], seconds);

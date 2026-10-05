@@ -813,7 +813,7 @@ When a task matches one of these skills, load it with get_skill before starting 
       if (!session) {
         throw new Error(`CLI agent cwd resolution failed: no session ${this.context.sessionId}`);
       }
-      workspaceCwd = resolvePath(WorkspaceFS.forSession(session).root);
+      workspaceCwd = resolvePath(WorkspaceFS.forSession(session, { space: this.context.space ?? null }).root);
 
       if (!existsSync(workspaceCwd)) {
         // Whether a missing directory is routine or alarming depends on WHOSE

@@ -14,9 +14,10 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import pathMod, { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ANONYMOUS_PRINCIPAL, principalFromUser } from './principal';
 import type { AgentContext } from '@/core/types';
-import { isInside, moveWorkspaceFiles, noteWorkspaceRows, removeWorkspaceFiles, WorkspaceFS, WorkspaceFsError } from './workspace-fs';
+import { isInside, moveWorkspaceFiles, noteSharedWorkspace, noteWorkspaceRows, removeWorkspaceFiles, WorkspaceFS, WorkspaceFsError } from './workspace-fs';
 
 let dataRoot: string;
 let aliceFs: WorkspaceFS;
@@ -304,10 +305,12 @@ describe('moveWorkspaceFiles / removeWorkspaceFiles — transfer and delete', ()
   });
 });
 
+const PERSONAL = { space: null } as const;
+
 describe('WorkspaceFS.forSession — read-back root matches the agent cwd (P1.8)', () => {
   test("a session in a non-default workspace reads back that workspace's root", () => {
     noteWorkspaceRows([{ id: ALICE_OTHER_WS, userId: ALICE, filesDir: ALICE_OTHER_WS }]);
-    const fs = WorkspaceFS.forSession({ userId: ALICE, workspaceId: ALICE_OTHER_WS, context: {} }, { dataRoot });
+    const fs = WorkspaceFS.forSession({ userId: ALICE, workspaceId: ALICE_OTHER_WS, context: {} }, PERSONAL, { dataRoot });
     expect(fs.root).toBe(join(dataRoot, 'users', ALICE, 'workspaces', ALICE_OTHER_WS, 'files'));
   });
 
@@ -315,13 +318,14 @@ describe('WorkspaceFS.forSession — read-back root matches the agent cwd (P1.8)
     const fs = WorkspaceFS.forSession({
       userId: ALICE,
       context: { devMode: true, projectPath: dataRoot },
-    });
+    }, PERSONAL);
     expect(fs.root).toBe(dataRoot);
   });
 
   test('devMode without projectPath falls back to the user workspace', () => {
     const fs = WorkspaceFS.forSession(
       { userId: ALICE, context: { devMode: true } },
+      PERSONAL,
       { dataRoot },
     );
     expect(fs.root)
@@ -331,6 +335,7 @@ describe('WorkspaceFS.forSession — read-back root matches the agent cwd (P1.8)
   test('projectPath without devMode is ignored (mirrors cli-agent-worker)', () => {
     const fs = WorkspaceFS.forSession(
       { userId: ALICE, context: { projectPath: '/somewhere/else' } },
+      PERSONAL,
       { dataRoot },
     );
     expect(fs.root)
@@ -340,10 +345,73 @@ describe('WorkspaceFS.forSession — read-back root matches the agent cwd (P1.8)
   test('non-dev session gets the per-user nested root', () => {
     const fs = WorkspaceFS.forSession(
       { userId: ALICE, context: {} },
+      PERSONAL,
       { dataRoot },
     );
     expect(fs.root)
       .toBe(join(dataRoot, 'users', ALICE, 'workspaces', 'default', 'files'));
+  });
+});
+
+describe('WorkspaceFS.forSession — a space session needs the requester\'s access', () => {
+  const SPACE = '33333333-0000-4000-8000-000000000003';
+  const OTHER_SPACE = '33333333-0000-4000-8000-000000000004';
+  const spaceSession = { userId: ALICE, workspaceId: SPACE, context: { devMode: true, projectPath: '/elsewhere' } };
+  beforeAll(() => { noteSharedWorkspace(SPACE); noteSharedWorkspace(OTHER_SPACE); });
+
+  test('opened without space access, a space session throws', () => {
+    expect(() => WorkspaceFS.forSession(spaceSession, { space: null }, { dataRoot })).toThrow(WorkspaceFsError);
+  });
+
+  test('access for another workspace is refused, personal sessions included', () => {
+    const editor = { space: { workspaceId: OTHER_SPACE, role: 'editor' as const, scope: null } };
+    expect(() => WorkspaceFS.forSession(spaceSession, editor, { dataRoot })).toThrow(/does not open a session/);
+    expect(() => WorkspaceFS.forSession({ userId: ALICE, context: {} }, editor, { dataRoot })).toThrow(/does not open a session/);
+  });
+
+  test('a member reaches the whole space; a guest only their folders', () => {
+    const member = WorkspaceFS.forSession(spaceSession, { space: { workspaceId: SPACE, role: 'editor', scope: null } }, { dataRoot });
+    expect(member.root).toBe(join(dataRoot, 'spaces', SPACE, 'files'));
+    expect(member.guestFolders).toBeNull();
+
+    const guest = WorkspaceFS.forSession(spaceSession,
+      { space: { workspaceId: SPACE, role: 'guest', scope: { rooms: [], folders: ['shared'] } } }, { dataRoot });
+    expect(guest.root).toBe(member.root);
+    expect(guest.guestFolders).toEqual(['shared']);
+    expect(guest.resolve('shared/a.md')).toBe(join(guest.root, 'shared', 'a.md'));
+    expect(() => guest.resolve('private/a.md')).toThrow(expect.objectContaining({ code: 'OUTSIDE_SCOPE' }));
+  });
+
+  test('a guest without a scope reaches no folder', () => {
+    const guest = WorkspaceFS.forSession(spaceSession, { space: { workspaceId: SPACE, role: 'guest', scope: null } }, { dataRoot });
+    expect(guest.guestFolders).toEqual([]);
+  });
+
+  test('every forSession call site passes the requester\'s access', () => {
+    const src = join(fileURLToPath(new URL('.', import.meta.url)), '..');
+    const files = (readdirSync(src, { recursive: true }) as string[])
+      .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'));
+    const calls: string[] = [];
+    for (const file of files) {
+      const text = readFileSync(join(src, file), 'utf8');
+      for (const match of text.matchAll(/WorkspaceFS\.forSession\(/g)) {
+        // The call's arguments, up to its closing parenthesis.
+        let depth = 1;
+        let i = match.index + match[0].length;
+        const start = i;
+        let topLevelCommas = 0;
+        for (; i < text.length && depth > 0; i++) {
+          const c = text[i];
+          if ('([{'.includes(c)) depth++;
+          else if (')]}'.includes(c)) depth--;
+          else if (c === ',' && depth === 1) topLevelCommas++;
+        }
+        const args = text.slice(start, i - 1).trim().replace(/,$/, '');
+        calls.push(`${file}: ${args}`);
+        expect(topLevelCommas, `${file}: forSession(${args}) must pass the requester's access`).toBeGreaterThanOrEqual(1);
+      }
+    }
+    expect(calls.length).toBeGreaterThanOrEqual(13);
   });
 });
 

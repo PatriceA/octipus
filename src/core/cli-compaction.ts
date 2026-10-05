@@ -6,7 +6,7 @@ import { agentRepository } from '@/db/repositories/agent-repository';
 import { getCLIToolConfig, resolveCliModelEntry } from './cli-agent-factory';
 import { cliSessionKeyAdapter, isChildCliSessionKey } from './cli-session-store';
 import { cliCredentialOwnerFor, cliEnvFor } from './cli-child-env';
-import { WorkspaceFS } from '@/security/workspace-fs';
+import { sessionFsAccess, WorkspaceFS } from '@/security/workspace-fs';
 import { acquireCliSlot, execCli, windowsShellQuote, windowsShellQuoter } from '@/models/providers/cli-provider';
 import { discoverCodexMcpServers } from './cli-adapters';
 import { killProcessTree } from '@/utils/proc';
@@ -48,7 +48,7 @@ export async function compactCliConversation(session: Session, instructions: str
   const credentialOwner = await cliCredentialOwnerFor(model, requesterId);
   if ((credentialOwner?.userId ?? undefined) !== record.credentialOwner) throw new Error('CLI session credentials no longer match its model.');
   const env = cliEnvFor(credentialOwner, tool, await tool.buildEnv?.(), model?.metadata?.cliAgent?.inheritApiKeys === true);
-  const cwd = resolve(WorkspaceFS.forSession(session).root);
+  const cwd = resolve(WorkspaceFS.forSession(session, await sessionFsAccess(session, requesterId)).root);
   const release = await acquireCliSlot();
   let usage: CompletionResult['usage'] = { inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false };
   let completed = false;

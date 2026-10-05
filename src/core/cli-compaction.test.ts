@@ -11,7 +11,7 @@ vi.mock('@/db/repositories/agent-repository', () => ({ agentRepository: { findBy
 vi.mock('./cli-agent-factory', () => ({ getCLIToolConfig: mock.tool, resolveCliModelEntry: mock.row }));
 vi.mock('./cli-adapters', () => ({ discoverCodexMcpServers: async () => [] }));
 vi.mock('./cli-session-store', () => ({ isChildCliSessionKey: (key: string) => key.includes('::'), cliSessionKeyAdapter: (key: string) => key.split('@@')[0] }));
-vi.mock('@/security/workspace-fs', () => ({ WorkspaceFS: { forSession: () => ({ root: '/session-workspace' }) } }));
+vi.mock('@/security/workspace-fs', () => ({ WorkspaceFS: { forSession: () => ({ root: '/session-workspace' }) }, sessionFsAccess: async () => ({ space: null }) }));
 import { compactCliConversation, compactCodexThread, rootCliConversation } from './cli-compaction';
 const record = { id: 'vendor-id', fingerprint: 'keep-this', generation: 'g', ownerAgentId: 'root', lastUsedAt: '2026-09-28' };
 const session = () => ({ id: 'session', userId: 'user', context: { conversationGeneration: 'g', cliSessions: { 'Claude Code': { ...record } } } }) as unknown as Session;

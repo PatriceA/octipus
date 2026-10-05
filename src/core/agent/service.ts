@@ -837,7 +837,7 @@ export class AgentService {
       let attachedFilesBlock = '';
       if (attachedFiles.length > 0) {
         try {
-          const fs = WorkspaceFS.forSession(session!);
+          const fs = WorkspaceFS.forSession(session!, { space: scope.space });
           attachedFilesBlock = await buildAttachedFilesContext(fs, attachedFiles, async (dataUrl, mimeType) => {
             const { getModelRegistry } = await import('@/models/model-registry');
             const { getLiteLLMClient } = await import('@/models/litellm-client');

@@ -524,7 +524,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     args: [{ name: 'path', required: false, description: 'File to show a before/after diff for' }],
     handler: async (ctx) => {
       try {
-        const { WorkspaceFS } = await import('@/security/workspace-fs');
+        const { sessionFsAccess, WorkspaceFS } = await import('@/security/workspace-fs');
         const { agentPrincipal } = await import('@/security/principal');
         const { sessionRepository } = await import('@/db/repositories/session-repository');
         // The session's own root (its workspace, or its dev-mode project) —
@@ -532,7 +532,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
         // session exists.
         const session = ctx.sessionId ? await sessionRepository.findById(ctx.sessionId) : null;
         const fs = session && await canActInSession(session, ctx.userId, 'chat')
-          ? WorkspaceFS.forSession(session)
+          ? WorkspaceFS.forSession(session, await sessionFsAccess(session, ctx.userId))
           : WorkspaceFS.forPrincipal(agentPrincipal({ userId: ctx.userId, workspaceId: ctx.workspaceId ?? null }));
         // Use rawArgs, not ctx.args.path: the registry splits input on
         // whitespace, so a path containing a space would only populate the
