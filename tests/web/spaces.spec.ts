@@ -176,11 +176,21 @@ test.describe('join page', () => {
     const page = await ctx.newPage();
     installConsoleWatchdog(page, consoleErrors);
     let member = false;
+    let signedIn = false;
     const accepts: string[] = [];
+    // The space list read on sign-in (before joining) answers only after the
+    // join's own read: an older answer arriving last must not switch out of
+    // the joined space.
+    let releaseStaleList: () => void = () => {};
+    const staleListHeld = new Promise<void>((resolve) => { releaseStaleList = resolve; });
+    let staleListAnswered = false;
     const logins: Array<Record<string, unknown>> = [];
     await page.route('**/api/**', (route) => json(route, 200, {}));
     await stubAllDefaults(page);
-    await page.route('**/api/auth/me', (route) => json(route, 401, { error: 'Not authenticated' }));
+    // Signed out until the sign-in below, then signed in, as the server
+    // answers: the shell's own `/auth/me` reads after sign-in must not 401.
+    await page.route('**/api/auth/me', (route) =>
+      signedIn ? json(route, 200, STUB_USER) : json(route, 401, { error: 'Not authenticated' }));
     await page.route(`**/api/invites/${TOKEN}`, (route) => json(route, 200, {
       spaceName: 'Launch', inviterName: 'olga', role: 'editor', expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
     }));
@@ -189,11 +199,22 @@ test.describe('join page', () => {
       member = true;
       return json(route, 200, { workspaceId: SPACE_ID, role: 'editor', alreadyMember: false });
     });
-    await page.route('**/api/spaces', (route) => json(route, 200, { spaces: member ? [space('editor')] : [] }));
+    await page.route('**/api/spaces', async (route) => {
+      if (member) {
+        await json(route, 200, { spaces: [space('editor')] });
+        releaseStaleList();
+        return;
+      }
+      if (!signedIn) return json(route, 200, { spaces: [] });
+      await staleListHeld;
+      await json(route, 200, { spaces: [] });
+      staleListAnswered = true;
+    });
     await page.route(`**/api/spaces/${SPACE_ID}`, (route) => json(route, 200, space('editor')));
     await page.route('**/api/auth/login', (route) => {
       const body = route.request().postDataJSON() as Record<string, unknown>;
       logins.push(body);
+      signedIn = true;
       return json(route, 200, { token: 'joined-token', user: STUB_USER, returnTo: body.returnTo });
     });
     const headers = recordHeaders(page);
@@ -221,6 +242,11 @@ test.describe('join page', () => {
     await expect(page).toHaveURL(/\/$/);
     await expect(page.getByRole('button', { name: 'Switch workspace' })).toContainText('Launch');
     await expect.poll(() => headers.some((h) => h.workspace === SPACE_ID)).toBe(true);
+    // The sign-in's list, read before the join, answers now: once the page
+    // has handled it (two frames), the joined space is still selected.
+    await expect.poll(() => staleListAnswered).toBe(true);
+    await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+    await expect(page.getByRole('button', { name: 'Switch workspace' })).toContainText('Launch');
     await ctx.close();
     expectNoConsoleErrors(consoleErrors);
   });

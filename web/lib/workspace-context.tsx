@@ -177,6 +177,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [notice, setNotice] = useState<string | null>(null);
   /** The selection as of the last change, for callbacks that outlive a render. */
   const activeIdRef = useRef<string | null>(null);
+  /**
+   * The latest `refresh` call. Only its answers are applied: a read started
+   * earlier (the one signing in fires) can answer after a later one (the one
+   * joining a space fires), and applying its older list would drop the
+   * just-joined space and switch away from it.
+   */
+  const refreshSeq = useRef(0);
 
   const select = useCallback((id: string | null) => {
     // The header follows at once, before any request of the new render.
@@ -190,6 +197,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refresh = useCallback(async () => {
+    const seq = ++refreshSeq.current;
     if (!isAuthenticated) {
       api.setWorkspaceId(null);
       activeIdRef.current = null;
@@ -215,6 +223,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         api.get<{ orgs: Org[] }>('/me/orgs').catch(() => ({ orgs: [] })),
         api.get<{ spaces: Space[] }>('/spaces'),
       ]);
+      if (seq !== refreshSeq.current) return;
       setWorkspaces(wsRes.workspaces);
       setSpaces(spaceRes.spaces);
       setOrgs(orgRes.orgs);
@@ -239,7 +248,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       select(next?.id ?? null);
       if (changed) queryClient.clear();
     } finally {
-      setIsLoading(false);
+      if (seq === refreshSeq.current) setIsLoading(false);
     }
   }, [isAuthenticated, queryClient, select]);
 
