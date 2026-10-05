@@ -34,6 +34,9 @@ API_HOST=0.0.0.0
 LOG_LEVEL=info
 LOG_STDERR=0                           # 1 = write logs to stderr instead of stdout
 GATEWAY_STDIO=0                        # 1 = also serve the gateway protocol over this process's stdin/stdout as JSON lines (same as `--stdio`); logs move to stderr
+GATEWAY_MAX_CONNECTIONS_PER_USER=20    # signed-in /gateway connections per user; see "Gateway Config" below
+GATEWAY_MAX_FRAME_BYTES=262144         # largest frame a gateway client may send, bytes
+GATEWAY_REPLAY_MAX_SESSIONS=500        # sessions whose recent events are kept for replay
 CORS_ORIGINS=http://localhost:3007   # your web origin; code default is http://localhost:3001
 TRUSTED_PROXIES=                       # reverse proxies whose X-Forwarded-For is believed; see "Reverse proxy" below
 REGISTRATION_MODE=open                 # who may register: open | invite_only (with a space invite link) | closed; the first account always may (docs/SPACES.md → Guests)
@@ -179,6 +182,29 @@ Both this `tokens` cap and `AGENT_MAX_TOKEN_BUDGET` (`agent.maxTokenBudget`, per
 | `gateway.maxConnectionsPerUser` | 20 | Signed-in `/gateway` connections one user may hold (each browser tab holds one, each TUI one). The one over the cap is refused; the web shows "Too many open tabs". Env: `GATEWAY_MAX_CONNECTIONS_PER_USER`. |
 | `gateway.maxFrameBytes` | 262144 | Largest frame a gateway client may send, in bytes — the socket's `maxPayload`, read at server start. A bigger frame closes the connection (1009). Raise it for large TUI image attachments. Env: `GATEWAY_MAX_FRAME_BYTES`. |
 | `gateway.replayMaxSessions` | 500 | Sessions whose recent events stay in memory so a reconnecting tab can `replay` what it missed; the least recently active is dropped first. Env: `GATEWAY_REPLAY_MAX_SESSIONS`. |
+
+## Spaces, Rooms and Registration Config
+
+Shared spaces are always on; these keys bound them. What each one governs is
+described in [SPACES.md → Settings](SPACES.md#settings).
+
+| Key | Default | Purpose |
+|---|---|---|
+| `security.registration` | `open` | Who may create an account: `open`, `invite_only` (only with a valid space invite, redeemed with the account) or `closed`. The install's first account may always register; SAML, SCIM and admin-created accounts are not affected. Env: `REGISTRATION_MODE`. |
+| `spaces.creation` | `any_user` | Who may create a space: `any_user` or `admins`. Env: `SPACES_CREATION`. |
+| `spaces.maxMembers` | 50 | Most members per space. Env: `SPACES_MAX_MEMBERS`. |
+| `spaces.inviteMaxTtlHours` | 720 | Longest invite lifetime, hours; longer requests are clamped. Env: `SPACES_INVITE_MAX_TTL_HOURS`. |
+| `spaces.purgeAfterArchiveDays` | 7 | Days a space stays archived before its owner can delete it. Env: `SPACES_PURGE_AFTER_ARCHIVE_DAYS`. |
+| `spaces.noteMaxBytes` | 114688 | Largest space note (112 KiB). Startup fails above half of `gateway.maxFrameBytes`. Env: `SPACES_NOTE_MAX_BYTES`. |
+| `spaces.docMaxUpdatesPerSecond` | 30 | Live-note edits one tab may send per second. Env: `SPACES_DOC_MAX_UPDATES_PER_SECOND`. |
+| `spaces.docPersistDebounceMs` | 2000 | Quiet time before a live note is saved (it is also saved when the last editor leaves). Env: `SPACES_DOC_PERSIST_DEBOUNCE_MS`. |
+| `spaces.docReindexMinutes` | 10 | Most a live note's links and search index may lag its text; billed as install work to the last editor. Env: `SPACES_DOC_REINDEX_MINUTES`. |
+| `spaces.docBaseTtlMinutes` | 30 | How long a read of a live note stays a valid merge base for a write. Env: `SPACES_DOC_BASE_TTL_MINUTES`. |
+| `spaces.fileLeaseTtlSeconds` | 180 | Lifetime of a lease on a space file without renewal. Env: `SPACES_FILE_LEASE_TTL_SECONDS`. |
+| `spaces.memoryMaxItems` | 50 | Space-memory entries given to one turn, newest first. Env: `SPACES_MEMORY_MAX_ITEMS`. |
+| `rooms.maxQueuedPerMember` | 3 | Requests one member may have waiting in a room. Env: `ROOMS_MAX_QUEUED_PER_MEMBER`. |
+| `rooms.approvalTimeoutMinutes` | 30 | A room turn waiting this long on its requester's approval gives up. Env: `ROOMS_APPROVAL_TIMEOUT_MINUTES`. |
+| `rooms.transcriptWindowChars` | 6000 | Room transcript kept verbatim after the summary before the room is compacted. Env: `ROOMS_TRANSCRIPT_WINDOW_CHARS`. |
 
 ## Reverse proxy
 

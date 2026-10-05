@@ -17,6 +17,12 @@
 > S0–S6 are specified to the level of tables, functions, call sites and tests.
 > S7 (several installs) is a contract on top of the unbuilt federation
 > transport of [workroom-and-swarm-federation.md](workroom-and-swarm-federation.md).
+>
+> **Status, 2026-10-05: S0–S6 are built** (PR #395, migrations
+> `0125`–`0135`, §12.2). **S7 stays a contract**; only its member
+> representation (remote `users` rows, the `~` username rule) is built.
+> Where the build differs from this text, an *As built* note in the section
+> says how and why; [docs/SPACES.md](../SPACES.md) describes what is built.
 
 ## Contents
 
@@ -440,7 +446,11 @@ type KnowledgeScope =
 events are named in `GLOBAL_EVENT_TYPES` with a reason: gateway connection
 audit events before authentication (`hub.ts:174-185`) go to no client;
 `extension.notify` (`src/extensions/api.ts:86-94`) is stamped with the
-extension's installing user. `AgentNode` gains `userId`
+extension's installing user. *As built:* host extensions are files the
+operator installs (`~/.octipus/extensions`, `<cwd>/.octipus/extensions`), so
+there is no installing user: `extension.notify` stays user-less, is listed in
+`GLOBAL_EVENT_TYPES` and travels on the internal bus only, never to a client
+(`protocol.ts`, docs/architecture/gateway.md). `AgentNode` gains `userId`
 (`src/core/swarm/types.ts:246-264`), set where nodes are built. Every emitter in
 L4 is stamped, including all ten `pipeline_event` sites and
 `swarm.call_graph_cycle_blocked`. Delivery on `/ws` (until S0d removes it) and
@@ -504,9 +514,10 @@ plan gate is keyed by `(sessionId, userId)` (`service.ts:567-575`).
 - `ApiTokenManager.validate` (`src/security/api-tokens.ts:170-200`) joins
   `users` and requires `is_active`.
 - One `setUserActive(userId, active, actor, source)` helper is the only writer
-  of `is_active`. It records `users.deactivated_by` (`admin | scim:<orgId>`)
-  so SCIM `active:true` never re-enables a user an admin deactivated. Callers:
-  admin PATCH (`admin.ts:121-172`), SCIM PATCH (`scim.ts:264`), SCIM DELETE.
+  of `is_active`. It records `users.deactivated_by` (`admin | scim:<orgId>`,
+  migration `0126_user_deactivation.sql`) so SCIM `active:true` never
+  re-enables a user an admin deactivated. Callers: admin PATCH
+  (`admin.ts:121-172`), SCIM PATCH (`scim.ts:264`), SCIM DELETE.
 - Deactivation revokes sessions (`revokeAllForUser`), closes every socket of
   the user (gateway, `/voice`, browser bridge), stops their agents, expires
   their pending permission and approval requests, and is audited.
@@ -544,7 +555,9 @@ session, API token, passkey, SAML login and every socket fail; a demoted
 admin's socket is closed and reconnects without admin rights; a SCIM token
 cannot deactivate another org's user; a hook of a deactivated user does not
 fire; product docs stay searchable for a non-admin after 0125; the TUI signs in
-through the CLI login with that user's identity.
+through the CLI login with that user's identity. *As built:* the file is split
+by topic, `src/api/leaks-{knowledge,events,trust,deactivation}.isolation.test.ts`,
+with the same coverage.
 
 ### 4.2 S0b — One multi-user model
 
@@ -612,6 +625,9 @@ throws; a resolver failure answers 503; TOTP sign-in works in the web
   `tools/knowledge/index.ts:23`. A test fails on any remaining
   `forAgent({ userId`. Files that today sit in `default` but were created from a
   non-default workspace stay in `default`; the CHANGELOG says so.
+  *As built:* the segment is a stored column, `workspaces.files_dir`
+  (migration 0127): the default workspace at upgrade keeps `default`, every
+  other workspace uses its id, and a transfer renames the directory.
 - **Shell cwd** must lie inside the workspace root, an allowed extra, or the
   dev-mode `projectPath`. Documented as correctness, not a sandbox.
 - **Memories follow the session's workspace**, including memories written after
@@ -624,7 +640,7 @@ throws; a resolver failure answers 503; TOTP sign-in works in the web
   `(workspace_id = $ws OR workspace_id IS NULL)`; `getBySlug` and
   `getOrCreateDaily` try `$ws` first, then `NULL`, so an existing user-level
   daily note is found. `workspaceId` leaves the request bodies.
-- **Repair and foreign keys** (migration `0126_workspace_integrity.sql`), in
+- **Repair and foreign keys** (migration `0127_workspace_integrity.sql`), in
   order, in one file:
   1. For notes whose `workspace_id` names a missing workspace or a workspace
      owned by another user: within each `(user_id, slug)` group of {existing
@@ -653,7 +669,7 @@ throws; a resolver failure answers 503; TOTP sign-in works in the web
 
 **Tests:** a turn in a non-default workspace writes its task, artifact, files
 and memories there; the TUI's workspace is honoured; daily capture does not
-duplicate a user-level daily note; 0126 runs on a fixture with colliding and
+duplicate a user-level daily note; 0127 runs on a fixture with colliding and
 foreign-stamped notes; transfer moves every `move` table; a transferred
 workspace secret decrypts.
 
@@ -725,7 +741,7 @@ Members create spaces, invite people and work on the same notes, tasks,
 documents, artifacts and files — with the agent in their own private sessions
 inside the space. No shared chat yet.
 
-### 5.1 Schema (migration `0127_spaces.sql`)
+### 5.1 Schema (migration `0128_spaces.sql`)
 
 Hand-written, idempotent (`DROP CONSTRAINT IF EXISTS` before each `ADD`),
 statements separated by `--> statement-breakpoint`. New enum values are added
@@ -767,7 +783,7 @@ CREATE TABLE IF NOT EXISTS workspace_invites (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
--- One slug per workspace; 0126 (S0c) renamed legacy duplicates.
+-- One slug per workspace; 0127 (S0c) renamed legacy duplicates.
 CREATE UNIQUE INDEX IF NOT EXISTS notes_ws_slug_uidx ON notes(workspace_id, slug) WHERE workspace_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS knowledge_links_ws_to_idx ON knowledge_links(workspace_id, to_type, to_id);
 CREATE INDEX IF NOT EXISTS embeddings_ws_idx ON embeddings(workspace_id) WHERE workspace_id IS NOT NULL;
@@ -882,10 +898,16 @@ Room posts and space memory in the table apply from S2.
   act on space rows, and the web needs no per-call header logic. A test
   classifies every mounted route, and a web test drives the app's own calls
   with a space selected, including a space chat with a running agent.
+  *As built:* routes that address an agent or pipeline by id follow the
+  session's space for reads and stops only (`GET`, agent stop and removal,
+  pipeline stop and pause). Anything that runs the model (starting an agent
+  or pipeline, a follow-up message, resume, approve) runs personal, where a
+  space's session is not found, and refuses a space principal outright
+  (`src/api/space-routes.ts`; docs/SPACES.md, "Working in a space").
 
 ### 5.5 Access layer (`src/db/repositories/space.ts`)
 
-`spaceRepos(principal)` throws `SpaceAccessError('not_found')` unless the
+`spaceRepos(principal)` throws `SpaceError('not_found')` unless the
 principal is shared with a role. Every query filters `workspace_id = $space`
 (plus the guest scope); writes stamp `workspace_id` authoritatively (ignoring
 any `data.workspaceId`) and `user_id = author`, and check `can()`.
@@ -965,7 +987,7 @@ any `data.workspaceId`) and `user_id = author`, and check `can()`.
   `ProviderUsageContext` and `logUsageWithCost` gain `workspaceId` and
   `funding` (`instrumented.ts:7-36`, `cost-tracker.ts:107-120`), so every cost
   row of a space turn — private session or room — carries the space and its
-  funding (the columns arrive in 0127). A test asserts it for a private space
+  funding (the columns arrive in 0128). A test asserts it for a private space
   session. In a space,
   `schedule` and `monitor` have no producer (the tools are personal-only, below);
   `listen` arrives with room modes in S5.
@@ -1134,7 +1156,7 @@ requests and pauses data sources.)
 
 Two PRs: rooms backend, rooms web.
 
-### 6.1 Schema (migration `0128_rooms.sql`)
+### 6.1 Schema (migration `0129_rooms.sql`)
 
 ```sql
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'chat';
@@ -1388,7 +1410,7 @@ row has `workspace_id` and `funding`.
 `yjs`, `y-protocols`, `y-codemirror.next`, and a three-way text merge
 (`node-diff3`) — justified in the PR (a CRDT and diff3 are not 20 lines).
 
-### 7.2 Schema (migration `0129_live_documents.sql`)
+### 7.2 Schema (migration `0130_live_documents.sql`)
 
 `note_revisions` with `authors uuid[]` (all members whose updates are in the
 revision) and `on_behalf_of_user_id`; `note_edit_proposals` (named so it does not
@@ -1477,6 +1499,11 @@ takes the same locks, and lease paths are canonical (symlinks resolved).
   agent refused); Playwright `tests/web/live-notes.spec.ts` (two contexts
   converge).
 
+*As built:* the web has no space file editor, so it shows no file leases and
+no "Ben is editing" on files. Leases exist through REST
+(`/api/spaces/:id/file-leases`) and the `file.leases` gateway frame, and the
+agent's file tools honour them (§7.5). Presence on live notes is built.
+
 ---
 
 ## 8. S4 — Own models
@@ -1500,7 +1527,7 @@ takes the same locks, and lease paths are canonical (symlinks resolved).
   callers (research, telephony, compaction, memory, link resolver, evaluators)
   pass `modelConfigName` from the row they resolved; a test greps for registry
   rows used without it.
-- Migration `0130_personal_models.sql`: `model_config.owner_user_id` (FK users,
+- Migration `0131_personal_models.sql`: `model_config.owner_user_id` (FK users,
   cascade); `user_model_bindings(user_id, topic, model_name)` for personal topic
   bindings (not `topicRoles`, which the admin topics route rewrites,
   `topics.ts:160-180`).
@@ -1582,10 +1609,11 @@ refusal.
 
 ### 9.1 Funding
 
-- Migration `0131_space_funding.sql`: `workspaces.agent_funding`
+- Migration `0132_space_funding.sql`: `workspaces.agent_funding`
   (`own|unattended|sponsored`, default `unattended`), `sponsor_user_id`
   (`ON DELETE SET NULL`), `sponsor_models jsonb`; spend scopes `space`,
-  `space_member`.
+  `space_member`. The same file creates `space_member_notices` (§9.2) and
+  `room_modes` and `room_feedback` (§9.3).
 - `fundingFor({ space, trigger, requesterId })` (introduced in S1, §5.6) now
   returns `sponsor` where the table says so. Outside a space it is always `own`.
 
@@ -1682,8 +1710,9 @@ refusal.
 ### 9.4 Group-channel bridge
 
 1. `group_channels.workspace_id` (nullable, shared spaces only) and
-   `group_channel_rooms(group_channel_id, thread_id, session_id)`. Room sessions
-   do not carry `group_channel_id`; the per-member unique index stays as it is.
+   `group_channel_rooms(group_channel_id, thread_id, session_id)` (migration
+   `0133_space_bridge_connectors.sql`). Room sessions do not carry
+   `group_channel_id`; the per-member unique index stays as it is.
    Binding closes the members' existing per-thread sessions for that channel.
 2. Binding requires a space owner who is also the channel owner, and an explicit
    acknowledgement that everyone in the channel can read what the room shows;
@@ -1702,7 +1731,8 @@ refusal.
 ### 9.5 Space connectors
 
 - Space secrets get their own vault scope: a new `vault_scope` value `'space'`
-  (migration in S5, not used in the same batch), `workspace_id` required,
+  (migration `0133_space_bridge_connectors.sql`, not used in the same batch),
+  `workspace_id` required,
   `user_id` = the storing owner as author only. One derivation
   `dekForRow(row)` replaces the `(scope, userId)` calls in every decrypt path and
   in rotation (`vault.ts:126-127,296,304,318`, `scripts/rotate-master-key.ts:134`,
@@ -1714,13 +1744,21 @@ refusal.
   route them into a shell or HTTP call; `isVaultAuthenticated` never exempts
   them.
 - Each space connector has its own connect, callback and refresh flow storing
-  under the space (`oauth.ts:728-760`).
+  under the space (`oauth.ts:728-760`). *As built:* Atlassian and Linear use
+  OAuth this way; GitHub takes a token an owner pastes (a fine-grained token
+  limited to the team's repositories), stored the same way.
 - Space sessions never act with the host's GitHub identity. The shell already
   strips `GH_TOKEN`/`GITHUB_TOKEN` (`src/security/child-env.ts:56-66`); the
   remaining exposure is the host's `gh` config under `HOME`
   (`~/.config/gh/hosts.yml`). In space sessions the shell, `runGh` and CLI tools
   run with `GH_CONFIG_DIR` (and, for CLI tools, `HOME`) pointing at an empty
-  per-space directory.
+  per-space directory. *As built:* stricter — every run in a space gets a
+  fresh temporary tool home (0700) for `HOME`, `XDG_CONFIG_HOME`,
+  `GH_CONFIG_DIR` and the global VCS config, holding only what the space's
+  GitHub connector provides and removed when the run ends, so nothing one
+  member's run writes reaches another's. CLI agents keep their vendor login
+  directories (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`). See docs/SPACES.md, "Space
+  connectors".
 
 ### 9.6 Tests
 
@@ -1740,6 +1778,10 @@ refused; bridge acknowledgement and non-member hint; space secret unusable via
   admin-gated and exempt; the docs say so.
 - Guest scope `{ rooms: uuid[], folders: string[] }` on the membership; every
   space repo and route applies it; guests see only members of their rooms.
+- Migration `0135_guests_remote.sql` (shared with S7): resets guest scopes
+  that are not the accepted shape to the empty scope and adds the scope
+  CHECKs; for S7, the `users.kind` and remote columns, the rename of
+  `~`-prefixed local usernames and the CHECK that forbids them.
 
 ---
 
@@ -1768,8 +1810,8 @@ in: `SessionManager.create`, `ApiTokenManager`, impersonation, SAML JIT and
 passkeys refuse them; admin user lists and SCIM exclude them; quotas and
 budgets apply to the host-side work they trigger, which is always sponsored
 (`trigger:'remote'`, §9.1). Each holds a normal `workspace_members` row and
-role. The peer principal `peer:<id>` authenticates
-the install; the host maps each `space.*` message to that visitor's user row.
+role (migration `0135_guests_remote.sql`). The peer principal `peer:<id>`
+authenticates the install; the host maps each `space.*` message to that visitor's user row.
 `space.*` operations map to the federation's capability enum; file writes from
 visitors are proposals only.
 
@@ -1797,10 +1839,12 @@ agree with the schema (a test asserts it).
 
 ### 12.2 Migrations
 
-`0125_knowledge_scope` (S0a), `0126_workspace_integrity` (S0c), `0127_spaces`
-(S1), `0128_rooms` (S2), `0129_live_documents` (S3), `0130_personal_models` (S4),
-`0131_space_funding` (S5), `0132_guests` (S6). Journal idx continues at 126 with
-increasing `when`. Idempotent; constraints dropped before added; new enum values
+Eleven files, as built: `0125_knowledge_scope` (S0a), `0126_user_deactivation`
+(S0a), `0127_workspace_integrity` (S0c), `0128_spaces` (S1), `0129_rooms` (S2),
+`0130_live_documents` (S3), `0131_personal_models` (S4), `0132_space_funding`
+(S5), `0133_space_bridge_connectors` (S5), `0134_room_probe_claim` (S5),
+`0135_guests_remote` (S6, and S7's member representation). Journal idx
+continues at 126 with increasing `when`. Idempotent; constraints dropped before added; new enum values
 unused within the same release.
 
 ### 12.3 CI per PR

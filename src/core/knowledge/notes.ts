@@ -419,7 +419,7 @@ export class NoteService {
     const tags = [...new Set([...note.tags.filter((tag) => !previousBodyTags.has(tag)), ...parsed.tags])];
     const current = (await this.notes.update(scope, noteId, { tags })) ?? note;
     await withProviderUsageContext(
-      { userId: editorUserId, accountingMetadata: { funding: 'install', workspaceId: row.workspaceId, noteId, purpose: 'live-note-reindex' } },
+      { userId: editorUserId, workspaceId: row.workspaceId, funding: 'install', accountingMetadata: { noteId, purpose: 'live-note-reindex' } },
       async () => {
         await this.relink(scope, current, parsed, tags, null);
         await this.reindex(current);
