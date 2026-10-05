@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 import { and, eq } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { rawStore } from '@/db/cache';
@@ -38,6 +38,21 @@ interface OAuthState {
    * the space is read again.
    */
   spaceId?: string;
+  /**
+   * The hash of the nonce the starting browser holds in a cookie
+   * (`src/api/oauth-browser.ts`): the callback must come from that browser,
+   * so an authorization URL handed to someone else cannot connect their
+   * account as the user's, or as a space's.
+   */
+  browserBinding: string;
+}
+
+/** Same binding, in constant time. */
+function sameBrowser(expected: string, actual: string | null): boolean {
+  if (!actual) return false;
+  const a = Buffer.from(expected, 'hex');
+  const b = Buffer.from(actual, 'hex');
+  return a.length > 0 && a.length === b.length && timingSafeEqual(a, b);
 }
 
 export interface ConnectionStatus {
@@ -199,7 +214,8 @@ export class OAuthManager {
    * Generate an authorization URL for the given provider.
    * Returns { url, state } — the frontend should redirect or open the URL.
    */
-  async generateAuthorizationUrl(userId: string, provider: string, opts: { spaceId?: string } = {}): Promise<{ url: string }> {
+  async generateAuthorizationUrl(userId: string, provider: string, opts: { spaceId?: string; browserBinding: string }): Promise<{ url: string }> {
+    if (!/^[0-9a-f]{64}$/.test(opts.browserBinding)) throw new Error('OAuth: the flow must be bound to the browser that starts it');
     const providerConfig = await getProviderConfig(provider);
     if (!providerConfig) {
       throw new Error(`OAuth credentials not configured for ${provider}. Add your Client ID and Client Secret under Settings > General.`);
@@ -217,6 +233,7 @@ export class OAuthManager {
       codeVerifier,
       createdAt: Date.now(),
       ...(opts.spaceId ? { spaceId: opts.spaceId } : {}),
+      browserBinding: opts.browserBinding,
     };
 
     // Store state in Redis with 10-minute TTL
@@ -244,7 +261,7 @@ export class OAuthManager {
    * Exchange an authorization code for tokens.
    * Called by the callback endpoint after the provider redirects back.
    */
-  async exchangeCode(provider: string, code: string, state: string): Promise<{ userId: string; spaceId?: string }> {
+  async exchangeCode(provider: string, code: string, state: string, browserBinding: string | null): Promise<{ userId: string; spaceId?: string }> {
     // Validate state
     const stateJson = await this.store.get(`oauth:state:${state}`);
     if (!stateJson) {
@@ -258,6 +275,12 @@ export class OAuthManager {
 
     // Delete state (one-time use)
     await this.store.del(`oauth:state:${state}`);
+    // Completed in another browser than the one that started it: refused
+    // before the code is redeemed (a state from before the binding has none).
+    if (!stateData.browserBinding || !sameBrowser(stateData.browserBinding, browserBinding)) {
+      securityLogger.warn({ provider, userId: stateData.userId, spaceId: stateData.spaceId }, 'OAuth callback from another browser than the one that started the flow');
+      throw new Error('This sign-in was finished in a different browser than the one that started it. Start the connection again from Octipus, in this browser.');
+    }
 
     const providerConfig = await getProviderConfig(provider);
     if (!providerConfig) {

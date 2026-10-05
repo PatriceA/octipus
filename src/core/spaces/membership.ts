@@ -16,7 +16,9 @@
  *   when they may no longer write) and their file leases go when they may
  *   no longer write (S3); in rooms (S2) it drops their queued and running
  *   room turns, prunes their room and space subscriptions and expires their
- *   requests there (`onRoomsMembershipChanged`).
+ *   requests there (`onRoomsMembershipChanged`); a group channel they bound
+ *   to the space is unbound when they are no longer one of its owners
+ *   (`endBindingsOfFormerOwner`, §9.4).
  * - `onMembershipGranted` runs for a join or an upgrade: bumps the version
  *   and resumes the member's data sources if they may write again.
  * - `freezeSpace` runs for an archive: every agent of the space stops, its
@@ -157,6 +159,10 @@ export async function onMembershipChanged(workspaceId: string, userId: string): 
     ['live documents', async () => {
       const { getDocHub } = await import('@/core/docs');
       await getDocHub().membershipChanged(workspaceId, userId);
+    }],
+    ['group channels', async () => {
+      const { endBindingsOfFormerOwner } = await import('@/channels/group-bridge');
+      await endBindingsOfFormerOwner(workspaceId, userId);
     }],
     ['file leases', async () => {
       const membership = await getMembership(userId, workspaceId);

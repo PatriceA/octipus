@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { getConfig } from '@/config';
 import type { ModelConfigEntry } from '@/db/schema/models';
 import type { CLIToolConfig } from '@/models/providers/cli-provider';
-import { spaceToolEnv } from '@/security/space-tool-env';
+import { type SpaceToolHome, withToolHome } from '@/security/space-tool-env';
 
 export function buildChildEnv(tool: CLIToolConfig, toolEnv?: Record<string, string>, inheritApiKeys = false): Record<string, string> {
   const base: Record<string, string> = {};
@@ -152,17 +152,19 @@ export function cliEnvFor(
 
 /**
  * A CLI agent's environment inside a space (coworking §9.5): `HOME`,
- * `XDG_CONFIG_HOME` and `GH_CONFIG_DIR` move to the space's empty tool home,
- * so the CLI's native tools (shell, gh, version control) find none of the
- * host's — or the credential owner's — logins kept under `HOME`. The
- * vendor's own config directory stays where `env` had it
- * (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`), so the CLI itself is still signed in.
+ * `XDG_CONFIG_HOME`, `GH_CONFIG_DIR` and the version-control config move to
+ * the run's own tool home (`space-tool-env.ts`: fresh, removed after the run,
+ * holding only the space connector's GitHub login), and the host's agent and
+ * helper variables go, so the CLI's native tools (shell, gh, version
+ * control) find none of the host's — or the credential owner's, or another
+ * member's — logins. The vendor's own config directory stays where `env` had
+ * it (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`), so the CLI itself is still signed in.
  */
-export function cliSpaceEnv(env: Record<string, string>, workspaceId: string): Record<string, string> {
+export function cliSpaceEnv(env: Record<string, string>, home: SpaceToolHome): Record<string, string> {
   const out = { ...env };
   if (out.HOME) {
     out.CLAUDE_CONFIG_DIR ??= join(out.HOME, '.claude');
     out.CODEX_HOME ??= join(out.HOME, '.codex');
   }
-  return { ...out, ...spaceToolEnv(workspaceId, { home: true }) };
+  return withToolHome(out, home);
 }

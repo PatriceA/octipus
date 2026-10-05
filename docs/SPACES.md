@@ -674,15 +674,26 @@ one conversation.
   activity (`space_updated`, `resourceType: group_channel`); the channel's
   owner or a space owner can unbind. A take-over of the channel
   (`@octipus join` after the owner was deactivated) or its removal ends the
-  binding; a purged space detaches it (the enrolment stays).
+  binding, and so does its owner no longer owning the space (demoted,
+  removed or left: reason `owner_left`); a purged space detaches it (the
+  enrolment stays). A room already bound to another channel cannot be bound.
+- **Rooms stay open while bound.** A bridged room cannot be made private
+  until the channel is unbound, and only an open room of the space the
+  channel is bound to *now* is relayed or resolved for a thread: a mapping
+  left by an earlier binding never points the channel at another space's
+  room (binding clears them; a message read under a binding that changed
+  meanwhile is refused privately).
 - **Turns.** A message addressed to the bot from a member of the space is
   posted in the thread's room and runs as a room turn as that member
   (`handleRoomMessage`, their role and funding). A linked member who is not
-  in the space — or whose role cannot ask the agent — gets a private hint
-  and no turn. Unlinked people's posts never enter the room: they reach the
-  turn as the thread's fenced transcript. Permission prompts of a bridged
-  room turn go to the requester privately in the thread, as in an unbound
-  channel.
+  in the space — or whose role cannot ask the agent, a guest included (a
+  guest reads only the rooms they are added to) — gets a private hint and
+  no turn. Unlinked people's posts never enter the room: they reach the
+  turn as the thread's fenced transcript. Permission prompts of a turn asked
+  from the platform go to the requester privately in the thread, as in an
+  unbound channel; a turn asked in the web room asks in the web app, and a
+  room's prompt is never denied because the channel is paused or
+  unreachable — it stays pending for the web app.
 - **Relay.** Every answer of the agent in a bridged room, and every post
   made in the web room, is posted in the channel's thread.
 - **Taken tasks** (`take this`, 🐙) go on the space's board, linked to the
@@ -704,23 +715,47 @@ member sees which are connected.
 - **GitHub**: a token an owner pastes (a fine-grained token limited to the
   team's repositories). The GitHub tool uses it in the space's sessions.
 - **Atlassian, Linear**: OAuth, each with its own connect, callback and
-  refresh flow storing the tokens under the space.
+  refresh flow storing the tokens under the space. The callback must come
+  from the browser that started the connect (an HttpOnly `SameSite=Lax`
+  cookie whose hash the OAuth state keeps), so an authorization link handed
+  to someone else cannot connect their account to the space; the same holds
+  for personal connectors and Google / Microsoft sign-in.
 
 The credentials are space secrets (vault scope `space`, keyed by the space;
 the owner who stored one is its author). They are read only by connector
 code, through the space access layer after a membership check — never
 through `{{secret:NAME}}`, and they never exempt a call from the flow guard.
 Inside a space the agent uses the space's connectors, never the member's
-personal ones.
+personal ones. They are space tools there: their writes follow the
+member's role (editors and owners, after the usual approval) and their
+reads do not mark the session as holding private data. A reconnect
+replaces the stored secret and a disconnect deletes it: no superseded
+ciphertext is kept.
 
-**The host's GitHub identity is never used in a space.** The shell, the
-GitHub tool and CLI agents run with `GH_CONFIG_DIR` (and, for CLI agents,
-`HOME` and `XDG_CONFIG_HOME`) at an empty per-space directory
-(`<workspace root>/spaces/<id>/tool-home`); the host's GH token variables are
-not passed on. A space without a GitHub connector has no GitHub access from
-the GitHub tool. CLI agents keep their own vendor login (`CLAUDE_CONFIG_DIR`,
+**The host's GitHub identity is never used in a space.** Every run of the
+shell, the Git tool, the GitHub tool and CLI agents in a space gets a tool
+home of its own: a fresh temporary directory (0700) that `HOME`,
+`XDG_CONFIG_HOME`, `GH_CONFIG_DIR` and git's global config point at, removed
+when the run ends. It holds only what the space's GitHub connector
+provides, for a member whose role may have the agent write: a `gh` login
+and a git credential helper for github.com with the space's token, plus the
+member's name as commit author. The host's identity variables are removed
+(`SSH_AUTH_SOCK`, `GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_SSH_COMMAND`,
+`GIT_CONFIG_*`, the GH token variables), git reads no system config and
+never prompts, every credential helper the host or the repository
+configured is reset (`credential.helper=`), and SSH remotes are reached
+without the host's keys or agent. Nothing in the home outlives the run, so
+one member's run cannot plant a login, hook or alias another member's run
+picks up. A space without a GitHub connector has no GitHub access from the
+GitHub tool. CLI agents keep their own vendor login (`CLAUDE_CONFIG_DIR`,
 `CODEX_HOME` stay where they were); a vendor CLI that keeps its login only
 under `HOME` must use a token-based login to run in a space.
+
+Residual risk: without the process sandbox (`security.shellSandbox`), a
+command still runs as the server's OS user and can read the host's files by
+absolute path (`~/.ssh`, the host's `gh` config); the sandbox is what hides
+them, and it binds the run's tool home in. A member whose role runs the
+shell in a space can read the space's GitHub token from the tool home.
 
 ## Settings
 

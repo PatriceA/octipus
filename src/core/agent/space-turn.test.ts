@@ -638,12 +638,14 @@ describe('personal connections and agent configuration in a space', () => {
     const ctx = await spaceContext(editorId, sessionId, 'editor', { attended: true });
     const decide = (toolId: string, action: string, toolName?: string, args?: Record<string, unknown>) =>
       routeApprovalFor(ctx, { toolId, action, toolName, args }, { level: 'ALLOW' });
+    // (The space's own connectors — GitHub, Atlassian, `connector_*` — are
+    // not personal in a space: space-connectors.isolation.test.ts.)
     const writes: Array<[string, string, string, Record<string, unknown>?]> = [
-      ['connector', 'connector_call_tool', 'connector_call_tool', { connector_id: 'atlassian', tool_name: 'createJiraIssue' }],
       ['browser-ext', 'navigate', 'navigate'],
       ['browser-ext', 'cookies', 'cookies'],
       ['mcp', 'tracker.create_issue', 'tracker.create_issue'],
-      ['github', 'write', 'create_issue'],
+      ['gitlab', 'write', 'create_issue'],
+      ['google-workspace', 'email_send', 'email_send'],
     ];
     for (const [toolId, action, toolName, args] of writes) {
       expect(await decide(toolId, action, toolName, args), `${toolId}.${action}`)
@@ -656,10 +658,9 @@ describe('personal connections and agent configuration in a space', () => {
     expect(await decide('acme_plugin', 'publish', 'publish')).toMatchObject({ route: 'deny', reason: expect.stringMatching(/not known to act only on the space/) });
     expect(getFlowLabel(sessionId).private).toBe(false);
     // A read through a personal connection runs, and the session now holds private data.
-    expect(await decide('connector', 'connector_call_tool', 'connector_call_tool', { connector_id: 'atlassian', tool_name: 'searchJiraIssuesUsingJql' }))
-      .toMatchObject({ route: 'execute' });
-    expect(getFlowLabel(sessionId)).toMatchObject({ private: true, sources: { private: 'connector:connector_call_tool' } });
-    for (const [toolId, action] of [['browser-ext', 'extract'], ['mcp', 'tracker.search_issues'], ['acme_plugin', 'read']] as const) {
+    expect(await decide('mcp', 'tracker.search_issues', 'tracker.search_issues')).toMatchObject({ route: 'execute' });
+    expect(getFlowLabel(sessionId)).toMatchObject({ private: true, sources: { private: 'mcp:tracker.search_issues' } });
+    for (const [toolId, action] of [['browser-ext', 'extract'], ['google-workspace', 'email_read'], ['acme_plugin', 'read']] as const) {
       const fresh = await spaceSession(editorId);
       expect(await routeApprovalFor({ ...ctx, sessionId: fresh }, { toolId, action, toolName: action }, { level: 'ALLOW' })).toMatchObject({ route: 'execute' });
       expect(getFlowLabel(fresh).private, `${toolId}.${action}`).toBe(true);
@@ -717,7 +718,7 @@ describe('personal connections and agent configuration in a space', () => {
 // ── I6 on every path, from a real read, across a restart ──────────────
 
 describe('I6 from a real read, on the tool-executor and CLI relay paths', () => {
-  test('a connector read marks the session; the next space write asks on every path; a restart keeps the label', async () => {
+  test('a personal MCP read marks the session; the next space write asks on every path; a restart keeps the label', async () => {
     const { refreshConfigKey } = await import('@/config');
     refreshConfigKey('agent.flowGuard', 'off');
     try {
@@ -726,7 +727,10 @@ describe('I6 from a real read, on the tool-executor and CLI relay paths', () => 
       const { ToolExecutor } = await import('@/core/tool-executor');
       const exec = new ToolExecutor(ctx, () => {});
       const remote = vi.fn(async (args: Record<string, unknown>) => ({ called: args.tool_name, issues: [{ key: 'PRIV-1', summary: 'salary review' }] }));
-      exec.registerTool({ name: 'connector_call_tool', toolId: 'connector', description: '', parameters: { type: 'object' }, execute: remote });
+      exec.registerTool({
+        name: 'mcp_call_tool', toolId: 'mcp', description: '', parameters: { type: 'object' }, execute: remote,
+        permissionAction: (a) => `${a.server_id}.${a.tool_name}`,
+      });
       exec.registerTool((await notesHandlers()).get('write_note')!);
       const { answerCliPermissionRequest } = await import('@/core/cli-permissions');
       const cli = (sid: string) => answerCliPermissionRequest(
@@ -735,16 +739,16 @@ describe('I6 from a real read, on the tool-executor and CLI relay paths', () => 
 
       // Before any personal read: the CLI write goes ahead.
       expect((await cli(sessionId)).response.response.behavior).toBe('allow');
-      // The connector's write is refused; its read runs.
-      const [write] = await exec.handleToolCalls([{ id: 'c1', name: 'connector_call_tool', arguments: { connector_id: 'atlassian', tool_name: 'createJiraIssue' } }]);
+      // The personal server's write is refused; its read runs.
+      const [write] = await exec.handleToolCalls([{ id: 'c1', name: 'mcp_call_tool', arguments: { server_id: 'tracker', tool_name: 'create_issue' } }]);
       expect(String(write.content)).toMatch(/writes through your personal connection/);
-      const [read] = await exec.handleToolCalls([{ id: 'c2', name: 'connector_call_tool', arguments: { connector_id: 'atlassian', tool_name: 'searchJiraIssuesUsingJql' } }]);
+      const [read] = await exec.handleToolCalls([{ id: 'c2', name: 'mcp_call_tool', arguments: { server_id: 'tracker', tool_name: 'search_issues' } }]);
       expect(String(read.content)).toContain('PRIV-1');
       expect(remote).toHaveBeenCalledTimes(1);
 
       // Tool executor: the space write now needs a human, and this run cannot ask one.
       const [note] = await exec.handleToolCalls([{ id: 'c3', name: 'notes__write_note', arguments: { title: 'Jira summary' } }]);
-      expect(String(note.content)).toMatch(/Approval required: notes\.write_note writes data from your personal sources \(connector:connector_call_tool\) into Launch room/);
+      expect(String(note.content)).toMatch(/Approval required: notes\.write_note writes data from your personal sources \(mcp:tracker\.search_issues\) into Launch room/);
       // CLI relay: the native write is refused with the same reason.
       expect((await cli(sessionId)).response.response).toMatchObject({ behavior: 'deny', message: expect.stringMatching(/writes data from your personal sources/) });
 
@@ -752,7 +756,7 @@ describe('I6 from a real read, on the tool-executor and CLI relay paths', () => 
       const { queryRaw } = await import('@/db/postgres');
       await vi.waitFor(async () => {
         const { rows } = await queryRaw('SELECT flow_label FROM sessions WHERE id = $1', [sessionId]);
-        expect(rows[0].flow_label).toMatchObject({ private: 'connector:connector_call_tool' });
+        expect(rows[0].flow_label).toMatchObject({ private: 'mcp:tracker.search_issues' });
       });
       const { resetFlowLabels, getFlowLabel } = await import('@/security/flow-guard');
       resetFlowLabels();

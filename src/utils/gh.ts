@@ -5,12 +5,14 @@
  * (`buildChildEnv`). An optional timeout kills a hung `gh` — the tool runs
  * without one (an interactive turn can wait), a background probe cannot.
  *
- * Inside a space (coworking §9.5) the caller passes `configDir` (an empty
- * per-space `GH_CONFIG_DIR`) and the space's own `token`, if it has one: the
- * host's gh login and GH tokens are then never used.
+ * Inside a space (coworking §9.5) the caller passes the run's `toolHome` (a
+ * fresh directory holding only the space connector's login) and the space's
+ * own `token`: the host's gh login, GH tokens, SSH agent and git helpers are
+ * then never used.
  */
 import { spawn } from 'node:child_process';
 import { buildChildEnv } from '@/security/child-env';
+import { type SpaceToolHome, withToolHome } from '@/security/space-tool-env';
 
 const GH_KEEP_ENV = ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'];
 
@@ -27,17 +29,16 @@ export interface RunGhOptions {
    * the host's GH token variables are not passed on.
    */
   token?: string;
-  /** `GH_CONFIG_DIR` for this run (a space's empty one), instead of the host's. */
-  configDir?: string;
+  /** A space run's tool home (`space-tool-env.ts`): `HOME`, `GH_CONFIG_DIR` and git's config there, the host's identity removed. */
+  toolHome?: SpaceToolHome;
 }
 
 /** The environment of one `gh` run. Exported for the tests. */
-export function ghEnv(opts: Pick<RunGhOptions, 'token' | 'configDir'> = {}): Record<string, string> {
-  const own = opts.token !== undefined || opts.configDir !== undefined;
-  return buildChildEnv({
-    ...(opts.configDir ? { GH_CONFIG_DIR: opts.configDir } : {}),
-    ...(opts.token ? { GH_TOKEN: opts.token } : {}),
-  }, { keep: own ? [] : GH_KEEP_ENV });
+export function ghEnv(opts: Pick<RunGhOptions, 'token' | 'toolHome'> = {}): Record<string, string> {
+  const own = opts.token !== undefined || opts.toolHome !== undefined;
+  const env = buildChildEnv({}, { keep: own ? [] : GH_KEEP_ENV });
+  const out = opts.toolHome ? withToolHome(env, opts.toolHome) : env;
+  return opts.token ? { ...out, GH_TOKEN: opts.token } : out;
 }
 
 export function runGh(args: string[], opts: RunGhOptions = {}): Promise<string> {

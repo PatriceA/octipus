@@ -234,8 +234,6 @@ let registryInstance: ConnectorRegistry | null = null;
 
 export function getConnectorRegistry(): ConnectorRegistry {
   if (!registryInstance) {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { getConnectorAccessToken } = require('@/security/oauth') as typeof import('@/security/oauth');
     registryInstance = new ConnectorRegistry(
       async (connectorId, owner) => {
         // An unknown id must not reach the vault: `connector_<id>_access_token`
@@ -245,6 +243,8 @@ export function getConnectorRegistry(): ConnectorRegistry {
           const { spaceConnectorAccessToken } = await import('@/core/spaces/connectors');
           return spaceConnectorAccessToken(owner.space, connectorId);
         }
+        // Loaded on use, not at module load: `@/security/oauth` imports back into the connectors.
+        const { getConnectorAccessToken } = await import('@/security/oauth');
         return getConnectorAccessToken(connectorId, owner);
       },
     );
