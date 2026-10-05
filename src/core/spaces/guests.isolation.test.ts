@@ -477,7 +477,7 @@ describe('presence', () => {
       // The owner takes Client and the folder away.
       await json(await patchGina({ rooms: [], folders: [] }));
       await waitFor(() => gina.frames.find((f) => f.type === 'event' && f.event.type === 'room.removed' && f.event.payload.roomId === clientId), 'room.removed');
-      expect(hub.connectionManager.getConnection(gina.id)?.context.resources.has(`room:${clientId}`)).toBe(false);
+      expect(hub.connectionManager.getConnection(gina.id)?.context?.resources.has(`room:${clientId}`)).toBe(false);
       await waitFor(() => gina.frames.find((f) => f.type === 'doc.closed' && f.noteId === briefId), 'doc.closed');
       expect(getDocHub().openDocsFor(ids.gina, spaceId)).toEqual([]);
       expect(stopped).toHaveBeenCalledWith(spaceId, ids.gina);
