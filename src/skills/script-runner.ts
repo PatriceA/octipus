@@ -11,6 +11,7 @@ import { killProcessTree, whichSync } from '@/utils/proc';
 import { fetchActiveSkillIdsForTopic } from './discovery';
 import { getSkillRegistry } from './registry';
 import { resolveSkillResource, skillResourceRoot } from './resources';
+import { canActInSession } from '@/core/rooms/access';
 
 /** Assigned scripts get an offline OS sandbox, not the role's general shell capability. */
 export async function runSkillScript(
@@ -27,9 +28,9 @@ export async function runSkillScript(
   const runtime = whichSync(interpreter, { PATH: '/usr/local/bin:/usr/bin:/bin' });
   if (!runtime) throw new Error(`Skill runtime ${interpreter} is not installed.`);
   const session = await sessionRepository.findById(context.sessionId);
-  if (!session || session.userId !== context.userId) throw new Error('Session not found.');
+  if (!session || !(await canActInSession(session, context.userId, 'requester'))) throw new Error('Session not found.');
   if (session.context?.planMode) throw new Error('Skill script execution is unavailable in plan mode.');
-  const workspace = WorkspaceFS.forSession(session);
+  const workspace = WorkspaceFS.forSession(session, { space: context.space ?? null });
   await workspace.ensureRoot();
   const workspaceRoot = await realpath(workspace.root);
   const workdir = cwd ? workspace.resolve(cwd) : workspaceRoot;

@@ -65,6 +65,14 @@ export type ApprovalResolveOutcome =
   | { status: 'timed_out'; message: string }
   | { status: 'orphaned'; message: string };
 
+/** An approval that left the pending list, and why. */
+export interface ApprovalResolvedEvent {
+  requestId: string;
+  userId: string;
+  sessionId: string;
+  status: 'approved' | 'denied' | 'expired';
+}
+
 export interface ApprovalRequest {
   id: string;
   /**
@@ -144,7 +152,22 @@ export class ApprovalManager {
    */
   private unpersisted: Map<string, { userId: string; status: 'approved' | 'denied' }> = new Map();
 
+  /**
+   * `onResolved` hears every approval that leaves the pending list —
+   * answered, timed out, or expired with its account — so every surface
+   * showing the prompt can drop it.
+   */
+  constructor(private readonly onResolved?: (event: ApprovalResolvedEvent) => void) {}
+
   private get db() { return getDb(); }
+
+  private announce(approval: ApprovalRequest, status: ApprovalResolvedEvent['status']): void {
+    try {
+      this.onResolved?.({ requestId: approval.id, userId: approval.userId, sessionId: approval.sessionId, status });
+    } catch (err) {
+      coreLogger.error({ err, requestId: approval.id }, 'Approval resolution listener failed');
+    }
+  }
 
   /**
    * Request user approval. Returns a promise that resolves when the user responds.
@@ -205,6 +228,7 @@ export class ApprovalManager {
       const timeout = setTimeout(() => {
         const claimed = this.claim(requestId);
         if (!claimed) return;
+        this.announce(claimed.approval, 'expired');
         resolve({ approved: false, reason: 'Approval timed out', requestId });
         // An answer landing before this write finds the row pending with our
         // boot id and is told it timed out. If the write fails, the next
@@ -229,13 +253,14 @@ export class ApprovalManager {
 
   /**
    * Resolve a pending approval request (called from WebSocket or API).
-   * `forUserId` scopes the lookup to one owner; `resolvedBy` is recorded.
+   * Only the requester answers: `forUserId` must own the request, or the
+   * answer is refused as `not_found`. `resolvedBy` is recorded.
    */
   async resolveApproval(
     requestId: string,
     approved: boolean,
-    response?: string,
-    by?: { forUserId?: string; resolvedBy?: string },
+    response: string | undefined,
+    by: { forUserId: string; resolvedBy?: string },
   ): Promise<boolean> {
     return (await this.resolveApprovalDetailed(requestId, approved, response, by)).status === 'resolved';
   }
@@ -244,15 +269,43 @@ export class ApprovalManager {
   async resolveApprovalDetailed(
     requestId: string,
     approved: boolean,
-    response?: string,
-    by?: { forUserId?: string; resolvedBy?: string },
+    response: string | undefined,
+    by: { forUserId: string; resolvedBy?: string },
+  ): Promise<ApprovalResolveOutcome> {
+    return this.settle(requestId, approved, response, by.forUserId, by.resolvedBy ?? by.forUserId);
+  }
+
+  /**
+   * An admin answering another user's request. The one caller is the audited
+   * `POST /api/admin/approvals/:id/resolve`, which records who answered for
+   * whom and why; no other path skips the owner check. Returns the request's
+   * owner and session (when a waiter was found) for that audit row.
+   */
+  async resolveApprovalAsAdmin(
+    requestId: string,
+    approved: boolean,
+    response: string | undefined,
+    adminUserId: string,
+  ): Promise<{ outcome: ApprovalResolveOutcome; request?: { userId: string; sessionId: string } }> {
+    const approval = this.pendingApprovals.get(requestId);
+    const outcome = await this.settle(requestId, approved, response, null, adminUserId);
+    return { outcome, request: approval ? { userId: approval.userId, sessionId: approval.sessionId } : undefined };
+  }
+
+  /** `owner` null skips the owner check — only `resolveApprovalAsAdmin` passes it. */
+  private async settle(
+    requestId: string,
+    approved: boolean,
+    response: string | undefined,
+    owner: string | null,
+    resolvedBy: string,
   ): Promise<ApprovalResolveOutcome> {
     const approval = this.pendingApprovals.get(requestId);
     if (!approval) {
       if (this.settling.has(requestId)) return { status: 'already_resolved' };
-      return this.resolveWithoutWaiter(requestId, by?.forUserId);
+      return this.resolveWithoutWaiter(requestId, owner);
     }
-    if (by?.forUserId && approval.userId !== by.forUserId) return { status: 'not_found' };
+    if (owner !== null && approval.userId !== owner) return { status: 'not_found' };
 
     // Claimed synchronously, so a second answer racing this one finds no waiter.
     const { written } = this.claim(requestId)!;
@@ -260,10 +313,11 @@ export class ApprovalManager {
     try {
       const text = response || (approved ? 'approved' : 'denied');
       if (await written) {
-        const updated = await this.markResolved(requestId, approved, text, by?.resolvedBy);
+        const updated = await this.markResolved(requestId, approved, text, resolvedBy);
         if (updated === false) {
           // The row left `pending` under us: honour the DB.
           approval.reject('Approval expired');
+          this.announce(approval, 'expired');
           return { status: 'already_resolved' };
         }
         if (updated === null) {
@@ -277,6 +331,7 @@ export class ApprovalManager {
       } else {
         approval.reject(text);
       }
+      this.announce(approval, approved ? 'approved' : 'denied');
       return { status: 'resolved' };
     } finally {
       this.settling.delete(requestId);
@@ -286,7 +341,7 @@ export class ApprovalManager {
   /**
    * Try to resolve a pending approval from a chat message (e.g. "yes", "approve").
    */
-  async tryResolveFromMessage(message: string, forUserId?: string): Promise<boolean> {
+  async tryResolveFromMessage(message: string, forUserId: string): Promise<boolean> {
     const approvals = this.getPendingApprovals(forUserId);
     if (approvals.length !== 1) return false;
 
@@ -305,6 +360,39 @@ export class ApprovalManager {
     const all = [...this.pendingApprovals.values()];
     if (!forUserId) return all;
     return all.filter((a) => a.userId === forUserId);
+  }
+
+  /**
+   * Expire every pending approval of `userId` — the live waiters (their agents
+   * resume with a denial) and any row left pending without one. Used when the
+   * account is deactivated: nobody may answer those prompts any more. Returns
+   * how many rows were expired.
+   *
+   * `inSessions` narrows it to approvals raised in those sessions (a member
+   * removed from a space loses the prompts of their sessions there only).
+   */
+  async expireForUser(userId: string, why: string, inSessions?: ReadonlySet<string>): Promise<number> {
+    if (inSessions && inSessions.size === 0) return 0;
+    const claimed = this.getPendingApprovals(userId)
+      .filter((approval) => !inSessions || inSessions.has(approval.sessionId))
+      .map((approval) => this.claim(approval.id))
+      .filter((c): c is NonNullable<typeof c> => c !== null);
+    for (const { approval } of claimed) {
+      approval.reject(why);
+      this.announce(approval, 'expired');
+    }
+    // A waiter's row may still be in flight; expire it only once written.
+    await Promise.all(claimed.map((c) => c.written));
+    const expired = await this.db
+      .update(agentApprovals)
+      .set({ status: 'expired', response: why, resolvedAt: new Date() })
+      .where(and(
+        eq(agentApprovals.status, 'pending'),
+        eq(agentApprovals.userId, userId),
+        inSessions ? inArray(agentApprovals.sessionId, [...inSessions]) : undefined,
+      ))
+      .returning({ id: agentApprovals.id });
+    return expired.length;
   }
 
   /** Remove a waiter from the registry, returning it with its write status. */
@@ -368,13 +456,13 @@ export class ApprovalManager {
    * not landed yet; one from another boot lost it to a restart. Either way
    * expire it and say which, rather than the misleading "not found".
    */
-  private async resolveWithoutWaiter(requestId: string, forUserId?: string): Promise<ApprovalResolveOutcome> {
+  private async resolveWithoutWaiter(requestId: string, forUserId: string | null): Promise<ApprovalResolveOutcome> {
     if (!isUuid(requestId)) return { status: 'not_found' };
     const answered = this.unpersisted.get(requestId);
-    if (answered) return forUserId && answered.userId !== forUserId ? { status: 'not_found' } : { status: 'already_resolved' };
+    if (answered) return forUserId !== null && answered.userId !== forUserId ? { status: 'not_found' } : { status: 'already_resolved' };
     try {
       const [row] = await this.db.select().from(agentApprovals).where(eq(agentApprovals.id, requestId)).limit(1);
-      if (!row || (forUserId && row.userId !== forUserId)) {
+      if (!row || (forUserId !== null && row.userId !== forUserId)) {
         coreLogger.warn({ requestId }, 'Approval request not found');
         return { status: 'not_found' };
       }

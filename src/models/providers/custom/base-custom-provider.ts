@@ -2,6 +2,22 @@ import { classifyError } from '@/core/errors/classification';
 import type { CustomProviderConfig, ModelConfigEntry, ModelMetadata } from '@/db/schema/models';
 import type { CompletionOptions } from '../../litellm-client';
 import { modelLogger } from '@/utils/logger';
+import { fetchGuarded } from '@/utils/sanitize';
+import { providerUsageUserId } from '../instrumented';
+
+/**
+ * The fetch a personal row's endpoint is reached with (coworking spec §8.4).
+ * The endpoint is user-supplied, so every request re-resolves the host and
+ * checks every address against private, loopback and link-local ranges, the
+ * socket is pinned to the checked address (no second resolution to rebind),
+ * and a redirect is returned, never followed — the provider then fails on the
+ * 3xx like any other non-2xx answer. Only https: the owner's key rides along.
+ */
+export const personalEndpointFetch: typeof fetch = async (input, init) => {
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+  if (new URL(url).protocol !== 'https:') throw new Error('URL blocked (SSRF guard): a personal endpoint must use https');
+  return fetchGuarded(url, { ...init, redirect: 'manual' }, 0);
+};
 
 /**
  * Resolved per-call configuration for a custom-provider model row.
@@ -47,7 +63,11 @@ export abstract class BaseCustomProvider {
 
     const { getModelRegistry } = await import('@/models/model-registry');
     const registry = getModelRegistry();
-    const model = await registry.getModelByModelId(modelId) || await registry.getModel(modelId);
+    // The row the caller resolved (`modelConfigName`), else install rows by
+    // modelId, then the requester's own personal rows — never another user's.
+    const model = options?.modelConfigName
+      ? await registry.getModel(options.modelConfigName)
+      : await registry.getModelByModelId(modelId, { userId: providerUsageUserId(options ?? {}) }) || await registry.getModel(modelId);
 
     if (!model) {
       throw classifyError(
@@ -63,6 +83,10 @@ export abstract class BaseCustomProvider {
       );
     }
 
+    // A personal row serves its owner only, even with a caller-supplied key.
+    const { assertModelRowOwner } = await import('@/models/model-key');
+    assertModelRowOwner(model, providerUsageUserId(options ?? {}));
+
     const metadata = (model.metadata || {}) as ModelMetadata;
     const custom = metadata.customProvider;
     if (!custom) {
@@ -72,7 +96,12 @@ export abstract class BaseCustomProvider {
       );
     }
 
-    const apiKey = await this.resolveApiKey(model.apiKeyRef, options?.userId);
+    // The caller's key wins (a key already resolved for this row); otherwise
+    // the key resolves under the ROW's owner — the system vault for an install
+    // row, the owner's vault for a personal one — never under the requester.
+    const apiKey = options?.apiKey || (model.ownerUserId
+      ? await this.resolvePersonalApiKey(model, providerUsageUserId(options ?? {}))
+      : await this.resolveApiKey(model.apiKeyRef));
 
     return {
       baseUrl: model.endpoint.replace(/\/+$/, ''),
@@ -82,15 +111,28 @@ export abstract class BaseCustomProvider {
     };
   }
 
+  /** A personal row's key: its owner's vault only — no `env:` reference, no env fallback. */
+  private async resolvePersonalApiKey(model: ModelConfigEntry, requesterId: string | undefined): Promise<string> {
+    const { resolveModelKey } = await import('@/models/model-key');
+    const key = await resolveModelKey(model, requesterId);
+    if (!key) throw classifyError(new Error(`Custom provider: personal model '${model.name}' has no API key`), this.providerName);
+    return key;
+  }
+
+  /** The fetch for this row's endpoint: SSRF-guarded for a personal row, plain otherwise. */
+  protected fetchFor(cfg: ResolvedCustomConfig): typeof fetch {
+    return cfg.model?.ownerUserId ? personalEndpointFetch : fetch;
+  }
+
   /**
-   * Resolve the API key from vault (by reference) or fall back to env var.
-   * The apiKeyRef column is a vault entry name; if absent, we try
-   * a conventional env var <PROVIDERNAME>_API_KEY.
+   * Resolve an install row's API key from the system vault (by reference) or
+   * fall back to env var. The apiKeyRef column is a vault entry name; if
+   * absent, we try a conventional env var <PROVIDERNAME>_API_KEY.
    *
-   * Lookup order: env: prefix → user-scoped vault → system-scoped vault
-   * → conventional env var fallback.
+   * Lookup order: env: prefix → system-scoped vault → conventional env var
+   * fallback. Never the requester's vault (coworking spec §8.3).
    */
-  protected async resolveApiKey(apiKeyRef: string | null, userId?: string): Promise<string> {
+  protected async resolveApiKey(apiKeyRef: string | null): Promise<string> {
     if (apiKeyRef) {
       // Env-var override: apiKeyRef = 'env:VAR_NAME' bypasses the vault entirely
       if (apiKeyRef.startsWith('env:')) {
@@ -106,10 +148,6 @@ export abstract class BaseCustomProvider {
       try {
         const { getVault } = await import('@/security/vault');
         const vault = getVault();
-        if (userId && userId !== 'system') {
-          const v = await vault.getByName(userId, apiKeyRef);
-          if (v) return v;
-        }
         const v = await vault.getByName('system', apiKeyRef);
         if (v) return v;
       } catch (err) {

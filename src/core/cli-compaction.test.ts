@@ -2,16 +2,16 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { beforeEach, expect, test, vi } from 'vitest';
 import type { Session } from '@/db/schema/sessions';
-const mock = vi.hoisted(() => ({ exec: vi.fn(), spawn: vi.fn(), owner: vi.fn(), tool: vi.fn(), kill: vi.fn() }));
+const mock = vi.hoisted(() => ({ exec: vi.fn(), spawn: vi.fn(), owner: vi.fn(), tool: vi.fn(), kill: vi.fn(), row: vi.fn() }));
 vi.mock('node:child_process', () => ({ spawn: mock.spawn }));
 vi.mock('@/utils/proc', () => ({ killProcessTree: mock.kill }));
 vi.mock('@/models/providers/instrumented', () => ({ recordProviderUsage: vi.fn() }));
 vi.mock('@/models/providers/cli-provider', () => ({ acquireCliSlot: async () => () => {}, execCli: mock.exec, windowsShellQuote: (s: string) => s, windowsShellQuoter: () => (s: string) => s }));
 vi.mock('@/db/repositories/agent-repository', () => ({ agentRepository: { findById: mock.owner } }));
-vi.mock('./cli-agent-factory', () => ({ getCLIToolConfig: mock.tool, resolveCliModelEntry: async () => ({ metadata: {} }) }));
+vi.mock('./cli-agent-factory', () => ({ getCLIToolConfig: mock.tool, resolveCliModelEntry: mock.row }));
 vi.mock('./cli-adapters', () => ({ discoverCodexMcpServers: async () => [] }));
-vi.mock('./cli-session-store', () => ({ isChildCliSessionKey: (key: string) => key.includes('::') }));
-vi.mock('@/security/workspace-fs', () => ({ WorkspaceFS: { forSession: () => ({ root: '/session-workspace' }) } }));
+vi.mock('./cli-session-store', () => ({ isChildCliSessionKey: (key: string) => key.includes('::'), cliSessionKeyAdapter: (key: string) => key.split('@@')[0] }));
+vi.mock('@/security/workspace-fs', () => ({ WorkspaceFS: { forSession: () => ({ root: '/session-workspace' }) }, sessionFsAccess: async () => ({ space: null }) }));
 import { compactCliConversation, compactCodexThread, rootCliConversation } from './cli-compaction';
 const record = { id: 'vendor-id', fingerprint: 'keep-this', generation: 'g', ownerAgentId: 'root', lastUsedAt: '2026-09-28' };
 const session = () => ({ id: 'session', userId: 'user', context: { conversationGeneration: 'g', cliSessions: { 'Claude Code': { ...record } } } }) as unknown as Session;
@@ -19,12 +19,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   mock.owner.mockResolvedValue({ sessionId: 'session', userId: 'user', model: 'claude-model' });
   mock.tool.mockReturnValue({ name: 'Claude Code', binaryPath: 'claude', modelProvider: 'anthropic' });
+  mock.row.mockResolvedValue({ metadata: {} });
 });
 test('Claude compact resumes exact vendor ID and never mutates its record', async () => {
   const state = session();
   const before = JSON.stringify(state);
   mock.exec.mockResolvedValue(JSON.stringify({ type: 'system', subtype: 'compact_boundary', session_id: record.id }));
-  expect(await compactCliConversation(state, 'keep tests')).toContain('same CLI session');
+  expect(await compactCliConversation(state, 'keep tests', 'user')).toContain('same CLI session');
   const [, args, options] = mock.exec.mock.calls[0];
   expect(args).toContain('--resume');
   expect(args[args.indexOf('--resume') + 1]).toBe(record.id);
@@ -34,7 +35,12 @@ test('Claude compact resumes exact vendor ID and never mutates its record', asyn
 });
 test('ordinary CLI text or success without compaction is not accepted', async () => {
   mock.exec.mockResolvedValue(JSON.stringify({ type: 'result', result: 'Done', session_id: record.id }));
-  await expect(compactCliConversation(session(), '')).rejects.toThrow('did not confirm');
+  await expect(compactCliConversation(session(), '', 'user')).rejects.toThrow('did not confirm');
+});
+test("a conversation on another member's personal model is never compacted with their login", async () => {
+  mock.row.mockResolvedValue({ name: 'u/creator/sub', ownerUserId: 'creator', provider: 'cli', metadata: {} });
+  await expect(compactCliConversation(session(), '', 'member')).rejects.toThrow("another member's personal model");
+  expect(mock.exec).not.toHaveBeenCalled();
 });
 test('child and cleared vendor conversations are not compacted', () => {
   const state = session();

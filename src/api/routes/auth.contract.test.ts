@@ -16,6 +16,11 @@ const mocks = vi.hoisted(() => ({
   createSession: vi.fn(),
   verifyTotp: vi.fn(),
   clearLoginAttempts: vi.fn(),
+  auditLog: vi.fn(),
+}));
+
+vi.mock('@/db/repositories/audit-repository', () => ({
+  auditRepository: { log: mocks.auditLog },
 }));
 
 vi.mock('@/db/repositories/user-repository', () => ({
@@ -87,6 +92,22 @@ describe('authentication login contracts', () => {
     expect(response.headers.get('set-cookie')).toContain('HttpOnly');
     expect(body).not.toHaveProperty('token');
     expect(body.expiresAt).toBe('2026-09-11T12:00:00.000Z');
+    expect(body.returnTo).toBe('/');
+    expect(mocks.auditLog).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 'user-1',
+      action: 'login',
+      channelType: 'web',
+    }));
+  });
+
+  test('web login echoes a same-origin returnTo and refuses any other', async () => {
+    const ok = await login('/auth/login', { username: 'patrice', password: 'correct-password', returnTo: '/notes' });
+    expect(ok.response.status).toBe(200);
+    expect(ok.body.returnTo).toBe('/notes');
+
+    const bad = await login('/auth/login', { username: 'patrice', password: 'correct-password', returnTo: '//evil.test' });
+    expect(bad.response.status).toBe(400);
+    expect(mocks.findByUsername).toHaveBeenCalledTimes(1);
   });
 
   test('mobile login returns a bearer token and expiry without setting a cookie', async () => {
@@ -118,6 +139,23 @@ describe('authentication login contracts', () => {
       expect(response.status).toBe(401);
       expect(body).toEqual({ error: 'TOTP code required', requiresTOTP: true });
       expect(mocks.createSession).not.toHaveBeenCalled();
+    },
+  );
+
+  test.each(['/auth/login', '/auth/login-mobile'] as const)(
+    '%s audits a wrong TOTP code as login_failed',
+    async (path) => {
+      mocks.user.totpEnabled = true;
+      mocks.verifyTotp.mockResolvedValue(false);
+
+      const { response } = await login(path, { username: 'patrice', password: 'correct-password', totpCode: '000000' });
+
+      expect(response.status).toBe(401);
+      expect(mocks.auditLog).toHaveBeenCalledWith(expect.objectContaining({
+        userId: 'user-1',
+        action: 'login_failed',
+        details: { username: 'patrice', reason: 'bad_totp' },
+      }));
     },
   );
 });

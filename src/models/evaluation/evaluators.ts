@@ -1,4 +1,5 @@
 import { getLiteLLMClient } from '@/models/litellm-client';
+import { withInstallUsage } from '@/models/providers/instrumented';
 import { getModelRegistry } from '@/models/model-registry';
 import type { EvalDataPoint, EvalScore, Evaluator } from './types';
 
@@ -54,14 +55,14 @@ async function llmJudge(prompt: string): Promise<{ score: number; reasoning: str
   const resolvedProvider = await router.resolveProvider(judgeModel.modelId);
   const client = getLiteLLMClient();
 
-  const callModel = async (opts: import('@/models/litellm-client').CompletionOptions) => {
-    opts = { ...opts, modelConfigName: judgeModel.name };
+  // Evaluators are install work: stamped `install` (coworking spec §9.1).
+  const callModel = async (opts: import('@/models/litellm-client').CompletionOptions) => withInstallUsage(() => {
     // Route based on DB-configured provider — not heuristic name matching
     if (judgeModel.provider !== 'litellm') {
       return resolvedProvider.complete(opts);
     }
     return client.completeViaProxy(opts);
-  };
+  });
 
   const judgeMessages = [
     {
@@ -83,6 +84,7 @@ async function llmJudge(prompt: string): Promise<{ score: number; reasoning: str
     // First attempt with thinking enabled
     result = await callModel({
       model: judgeModel.modelId,
+      modelConfigName: judgeModel.name,
       temperature: 0.1,
       maxTokens: 1024,
       extraBody: { ...judgeModel.metadata?.extraBody, think: true },
@@ -93,6 +95,7 @@ async function llmJudge(prompt: string): Promise<{ score: number; reasoning: str
     if (!result.content?.trim()) {
       result = await callModel({
         model: judgeModel.modelId,
+        modelConfigName: judgeModel.name,
         temperature: 0.1,
         maxTokens: 256,
         extraBody: { ...judgeModel.metadata?.extraBody, think: false },

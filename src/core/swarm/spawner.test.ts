@@ -446,6 +446,7 @@ function makeNode(over: Partial<AgentNode> = {}): AgentNode {
   return {
     id: 'node-1',
     rootSessionId: '00000000-0000-0000-0000-0000000000aa',
+    userId: 'user-1',
     parentNodeId: null,
     kind: 'root',
     depth: 0,
@@ -473,6 +474,9 @@ function makeCtx() {
     model: 'test-model',
     role: 'general' as const,
     status: 'running' as const,
+    space: null,
+    trigger: 'user' as const,
+    funding: 'own' as const,
     createdAt: new Date(),
     updatedAt: new Date(),
     metadata: {},
@@ -688,7 +692,7 @@ describe('Escalate tool — one per lifetime cap', () => {
     expect(spawnCalls).toBe(1);
 
     const out2 = await tool.execute(
-      {
+      { space: null, trigger: 'user', funding: 'own', 
         topic: 'security',
         subtopic: 'different-expert-2',
         taskBrief: 'and again',

@@ -8,7 +8,7 @@ import { EventEmitter } from 'node:events';
 import { describe, expect, test, vi } from 'vitest';
 
 vi.mock('@/db/repositories/document-repository', () => ({ documentRepository: {
-  findById: async (id: string) => ({ id, userId: 'u-anna', originalName: 'contract.pdf', summary: 'Two-year term.', category: 'legal' }),
+  findByIdSystem: async (id: string) => ({ id, userId: 'u-anna', originalName: 'contract.pdf', summary: 'Two-year term.', category: 'legal' }),
 } }));
 import { subscribeToDocumentResults } from './index';
 

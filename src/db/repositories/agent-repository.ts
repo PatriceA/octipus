@@ -1,4 +1,4 @@
-import { count, desc, eq, inArray, lt, sql } from 'drizzle-orm';
+import { eq, inArray, lt, sql } from 'drizzle-orm';
 import type { AgentCompletionReason } from '@/shared/agent-completion';
 import { getDb } from '../postgres';
 import { type AgentRecord, agents, type NewAgentRecord } from '../schema/agents';
@@ -47,51 +47,9 @@ export class AgentRepository {
   }
 
   async findById(id: string): Promise<AgentRecord | null> {
+    // i2: by agent id, for the worker that runs it and system callers; user routes use ScopedAgentRepo
     const result = await this.db.select().from(agents).where(eq(agents.id, id)).limit(1);
     return result[0] ?? null;
-  }
-
-  async findBySession(sessionId: string, limit = 50): Promise<AgentRecord[]> {
-    return this.db
-      .select()
-      .from(agents)
-      .where(eq(agents.sessionId, sessionId))
-      .orderBy(desc(agents.createdAt))
-      .limit(limit);
-  }
-
-  async findBySessions(sessionIds: string[], limit = 200): Promise<AgentRecord[]> {
-    if (sessionIds.length === 0) return [];
-    return this.db
-      .select()
-      .from(agents)
-      .where(inArray(agents.sessionId, sessionIds))
-      .orderBy(desc(agents.createdAt))
-      .limit(limit);
-  }
-
-  async findByUser(userId: string, limit = 200): Promise<AgentRecord[]> {
-    return this.db
-      .select()
-      .from(agents)
-      .where(eq(agents.userId, userId))
-      .orderBy(desc(agents.createdAt))
-      .limit(limit);
-  }
-
-  async listRecent(limit = 200, offset = 0): Promise<AgentRecord[]> {
-    return this.db
-      .select()
-      .from(agents)
-      .orderBy(desc(agents.createdAt))
-      .limit(limit)
-      .offset(offset);
-  }
-
-  /** Total agent rows — admin pagination. */
-  async countAll(): Promise<number> {
-    const [row] = await this.db.select({ c: count() }).from(agents);
-    return row?.c ?? 0;
   }
 
   /**
@@ -104,6 +62,7 @@ export class AgentRepository {
   async deleteCompletedBefore(cutoff: Date): Promise<number> {
     const stale = await this.db
       .select({ id: agents.id })
+      // i2: retention sweep, ids only
       .from(agents)
       .where(lt(agents.completedAt, cutoff));
     if (stale.length === 0) return 0;

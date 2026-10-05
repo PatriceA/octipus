@@ -19,6 +19,7 @@ function makeRootNode(): AgentNode {
   return {
     id: 'rootAgent-1',
     rootSessionId: '00000000-0000-0000-0000-000000000000',
+    userId: 'user-1',
     parentNodeId: null,
     kind: 'root',
     depth: 0,
@@ -116,7 +117,7 @@ describe('createMetaTools — rootAgent swarm wiring', () => {
     const context = {
       id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000',
       userId: 'u', model: '', topic: '', role: 'general' as const,
-      status: 'running' as const, createdAt: new Date(), updatedAt: new Date(), metadata: {},
+      status: 'running' as const, space: null, trigger: 'user' as const, funding: 'own' as const, createdAt: new Date(), updatedAt: new Date(), metadata: {},
     };
 
     try {
@@ -154,7 +155,7 @@ describe('createMetaTools — rootAgent swarm wiring', () => {
     const collect = tools.find((t) => t.name === 'collect_children');
     expect(collect).toBeDefined();
     // Worker not wired yet — the tool surfaces a clear error, not a crash.
-    const out = await collect!.execute({}, {
+    const out = await collect!.execute({}, { space: null, trigger: 'user', funding: 'own', 
       id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000',
       userId: 'u', model: '', topic: '', role: 'general',
       status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {},
@@ -165,7 +166,7 @@ describe('createMetaTools — rootAgent swarm wiring', () => {
     refs.workerRef.current = {
       listPendingDetached: () => [],
     } as unknown as AgentWorker;
-    const out2 = await collect!.execute({}, {
+    const out2 = await collect!.execute({}, { space: null, trigger: 'user', funding: 'own', 
       id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000',
       userId: 'u', model: '', topic: '', role: 'general',
       status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {},

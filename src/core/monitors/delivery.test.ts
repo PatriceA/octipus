@@ -1,6 +1,5 @@
 import { beforeEach, expect, test, vi } from 'vitest';
 import { deliverMonitorResponse } from './delivery';
-import { turnEventMessage } from '@/api/turn-event-message';
 import { turnEventToGateway } from '@/core/gateway/event-bridge';
 import type { Monitor } from '@/db/schema/monitors';
 import type { TurnEvent, TurnResult } from '@/core/agent/service';
@@ -43,11 +42,10 @@ test('an unresolvable Teams conversation is reported as such, not as "not linked
   await expect(deliverMonitorResponse(row, result)).rejects.toThrow('must message the bot');
   expect(fixture.send).not.toHaveBeenCalled();
 });
-test('background reply reaches both legacy webchat and gateway wire formats', async () => {
+test('background reply reaches the gateway wire format', async () => {
   await deliverMonitorResponse(row, result);
   expect(fixture.publish).toHaveBeenCalledWith('session', 'owner', result);
   const event: TurnEvent = { type: 'chat_response', sessionId: 'session', userId: 'owner', data: result, timestamp: new Date() };
-  expect(turnEventMessage(event)).toMatchObject({ type: 'chat_response', response: result.response, sessionId: 'session' });
   expect(turnEventToGateway(event)).toMatchObject({ type: 'chat.response', userId: 'owner', sessionId: 'session', payload: { response: result } });
   expect(fixture.send).not.toHaveBeenCalled();
 });

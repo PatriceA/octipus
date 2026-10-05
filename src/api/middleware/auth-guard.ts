@@ -13,9 +13,27 @@ const PUBLIC_PATH_PREFIXES = [
   '/api/settings/setup-status',
 ];
 
+/**
+ * Public routes matched by method AND exact shape — unlike the path-prefix
+ * list above, which ignores the method. `GET /api/invites/<token>` previews an
+ * invite before sign-in; `POST /api/invites/<token>/accept` is NOT public.
+ */
+const PUBLIC_ROUTES: ReadonlyArray<{ method: string; pattern: RegExp }> = [
+  { method: 'GET', pattern: /^\/api\/invites\/[^/]+$/ },
+  // The registration mode (`security.registration`): the sign-in page reads it before anyone signs in.
+  { method: 'GET', pattern: /^\/api\/auth\/registration$/ },
+];
+
+export function isPublicRoute(method: string, path: string): boolean {
+  return PUBLIC_ROUTES.some((route) => route.method === method && route.pattern.test(path));
+}
+
 export function isPublicPath(path: string): boolean {
-  // OAuth callbacks are public (state-based auth)
+  // OAuth callbacks are public (state-based auth, bound to the starting
+  // browser's cookie): the provider's redirect is a cross-site navigation,
+  // which the SameSite=Strict session cookie does not survive.
   if (path.match(/^\/api\/auth\/oauth\/\w+\/callback/)) return true;
+  if (/^\/api\/connectors\/[a-z0-9-]+\/callback$/.test(path)) return true;
   // All health endpoints are public (used by monitoring, load balancers, k8s probes)
   if (path.startsWith('/api/health')) return true;
   // Webhook endpoints use HMAC signature verification instead of bearer auth
@@ -56,7 +74,12 @@ export const authGuard = new Elysia({ name: 'auth-guard' })
     const isGuarded = url.pathname.startsWith('/api/') || url.pathname.startsWith('/v1/');
 
     // Skip guard for CORS preflight, non-guarded routes, and public paths.
-    if (ctx.request.method === 'OPTIONS' || !isGuarded || isPublicPath(url.pathname)) {
+    if (
+      ctx.request.method === 'OPTIONS' ||
+      !isGuarded ||
+      isPublicPath(url.pathname) ||
+      isPublicRoute(ctx.request.method, url.pathname)
+    ) {
       return;
     }
 

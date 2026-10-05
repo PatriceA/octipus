@@ -1,73 +1,81 @@
 import { sessionRepository } from '@/db/repositories/session-repository';
+import { resolveTurnWorkspace } from './context';
 import { coreLogger } from '@/utils/logger';
 
 /**
- * Look up the user's default workspace id so freshly-created sessions
- * get tagged with it. Without this, sessions land with workspace_id=NULL
- * and the legacy "NULL → visible to every workspace" rule in
- * `scopedRepos.workspaceFilter` made TUI/webchat sessions show up in
- * the picker regardless of which workspace was active.
+ * The workspace a turn (or a new session) works in: `workspaceId` when given,
+ * else the user's default workspace. A given workspace must be the user's
+ * own, or a space where they may run the agent (not archived); anything else
+ * throws, and resolution errors propagate: a turn never runs without a
+ * workspace, which would drop every workspace filter and file its rows and
+ * files in the wrong place. See `resolveTurnWorkspace` (context.ts).
  */
-async function defaultWorkspaceId(userId: string): Promise<string | null> {
-  try {
-    const { getOrgWorkspaceManager } = await import('@/security/orgs');
-    const def = await getOrgWorkspaceManager().ensureDefaultWorkspace(userId);
-    return def?.id ?? null;
-  } catch (err) {
-    coreLogger.debug({ err, userId }, 'No default workspace available for session tagging');
-    return null;
-  }
+export async function turnWorkspaceId(userId: string, workspaceId: string | null | undefined): Promise<string> {
+  return (await resolveTurnWorkspace(userId, workspaceId)).workspaceId;
 }
 
 /**
  * Resolve a session ID to an existing session or create a new one.
  * Handles both UUID-based and channel-based session identifiers.
  *
- * An existing UUID session owned by a different user is refused ("Session
- * not found", the same answer as a missing row, so ownership is not
- * disclosed): every caller passes the acting user, and sessions.user_id is
+ * A new session is created in `workspaceId` (checked by `turnWorkspaceId`),
+ * or in the user's default workspace when none is given. An existing
+ * session keeps the workspace it was created in.
+ *
+ * An existing UUID session owned by a different user, or a room, is refused
+ * ("Session not found", the same answer as a missing row, so ownership is
+ * not disclosed): every caller passes the acting user, and sessions.user_id is
  * NOT NULL, so there is no legitimate cross-user resolution.
  */
-export async function resolveSession(sessionId: string, userId: string, channel: string): Promise<string> {
+export async function resolveSession(
+  sessionId: string,
+  userId: string,
+  channel: string,
+  workspaceId?: string | null,
+): Promise<string> {
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (uuidRegex.test(sessionId)) {
     const existing = await sessionRepository.findById(sessionId);
     if (existing) {
-      if (existing.userId !== userId) throw new Error('Session not found');
+      // A room is never resolved as a personal chat — its creator included
+      // (§6.2): room turns enter only through `handleRoomMessage`.
+      if (existing.kind === 'room' || existing.userId !== userId) throw new Error('Session not found');
       return sessionId;
     }
 
-    const workspaceId = await defaultWorkspaceId(userId);
+    const wsId = await turnWorkspaceId(userId, workspaceId);
     const session = await sessionRepository.create({
       id: sessionId,
       userId,
-      workspaceId: workspaceId ?? undefined,
+      workspaceId: wsId,
       channelType: channel,
       channelId: sessionId,
       title: `${channel} conversation`,
       status: 'active',
     });
-    coreLogger.info({ sessionId: session.id, channel, workspaceId }, 'Created session for UUID');
+    coreLogger.info({ sessionId: session.id, channel, workspaceId: wsId }, 'Created session for UUID');
     return session.id;
   }
 
   const parts = sessionId.split('-');
   const channelType = parts[0] || channel;
   const channelId = parts.slice(1).join('-') || sessionId;
+  // `room` is not a channel a personal chat can live on (§6.1).
+  if (channelType === 'room' || channel === 'room') throw new Error('Session not found');
 
   const existing = await sessionRepository.findByUserAndChannel(userId, channelType, channelId);
   if (existing) return existing.id;
 
-  const workspaceId = await defaultWorkspaceId(userId);
+  const wsId = await turnWorkspaceId(userId, workspaceId);
   const session = await sessionRepository.create({
     userId,
-    workspaceId: workspaceId ?? undefined,
+    workspaceId: wsId,
     channelType,
     channelId,
     title: `${channelType} conversation`,
     status: 'active',
   });
 
-  coreLogger.info({ sessionId: session.id, channelType, channelId, workspaceId }, 'Created new session for channel');
+  coreLogger.info({ sessionId: session.id, channelType, channelId, workspaceId: wsId }, 'Created new session for channel');
   return session.id;
 }

@@ -224,6 +224,8 @@ export class CustomOpenAICompatProvider extends BaseCustomProvider implements Mo
       timeout: 120_000,
       maxRetries: 2,
       defaultHeaders: headers,
+      // A personal row's user-supplied endpoint: SSRF-checked on every request.
+      fetch: this.fetchFor(cfg),
     });
   }
 

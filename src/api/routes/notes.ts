@@ -1,26 +1,94 @@
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
+import { acceptProposal, listNoteProposals, rejectProposal } from '@/core/docs/edit-proposals';
+import { getConfig } from '@/config';
+import { NoteTooLargeError, StaleWriteError, sha256Hex } from '@/core/docs/hub';
 import { getNoteService } from '@/core/knowledge/notes';
 import { getSuggestionService } from '@/core/knowledge/suggestions';
-import { getKnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
-import { getNoteRepository } from '@/db/repositories/note-repository';
+import { type ContentRepos, contentRepos } from '@/db/repositories/content';
+import { getRevision, listRevisions } from '@/db/repositories/live-documents';
+import type { Principal } from '@/security/principal';
+import { SpaceError } from '@/security/space-access';
 import { apiLogger } from '@/utils/logger';
 
 const logger = apiLogger.child({ component: 'notes-route' });
 
 /**
+ * The request's content scope: the personal workspace rule, or the space
+ * the member acts in (a space route, docs/plans/coworking-spec.md §5.4).
+ * Every authenticated request carries a workspace (the server derive
+ * resolves it, creating the default lazily); reaching a note route without
+ * it is a wiring bug, not a reason to read unscoped.
+ */
+function noteRepos(principal: Principal): ContentRepos {
+  if (!principal.workspaceId) throw new Error('notes route reached without a resolved workspace');
+  return contentRepos(principal);
+}
+
+type StatusSetter = { status?: number | string };
+
+/**
+ * A space-note write refused by the document hub: 409 when the note changed
+ * in a way the write cannot merge with (read it again), 400 when a body
+ * write to an existing space note names no base, 413 when it would exceed
+ * `spaces.noteMaxBytes`. Null for any other error (rethrown).
+ */
+function liveWriteError(err: unknown, set: StatusSetter): { error: string; code: string; currentSha256?: string } | null {
+  if (err instanceof StaleWriteError && err.reason === 'missing_base') {
+    set.status = 400;
+    return { error: err.message, code: 'base_required', currentSha256: err.currentSha256 };
+  }
+  if (err instanceof StaleWriteError) {
+    set.status = 409;
+    return { error: err.message, code: 'stale', currentSha256: err.currentSha256 };
+  }
+  if (err instanceof NoteTooLargeError) {
+    set.status = 413;
+    return { error: err.message, code: 'too_large' };
+  }
+  return null;
+}
+
+/**
+ * The space scope of the request, or a 404 (revisions and proposals exist
+ * in spaces only). A guest's scope carries their folders (S6): they reach
+ * the revisions and proposals of the notes those folders hold, as the
+ * document hub does.
+ */
+function spaceNoteScope(principal: Principal, set: StatusSetter) {
+  const { noteScope } = noteRepos(principal);
+  if (noteScope.kind !== 'space') {
+    set.status = 404;
+    return null;
+  }
+  return noteScope;
+}
+
+/**
  * Knowledge-graph Tier 2 — notes authoring API. All reads/writes are
- * scoped to the authenticated user. Cross-tenant access surfaces as 404
- * (not 403) to avoid id enumeration, matching the documents route.
+ * scoped to the authenticated user and to the request's workspace under
+ * the personal rule: that workspace's notes plus user-level ones
+ * (`workspace_id IS NULL`). In a space, every member's notes of the space,
+ * written by the roles that may write (a viewer's write is a 403). New notes land in the request's workspace;
+ * the workspace never comes from the body. Cross-tenant and
+ * other-workspace access surfaces as 404 (not 403) to avoid id
+ * enumeration, matching the documents route.
+ *
+ * Space notes are live documents (docs/plans/coworking-spec.md §7.3): a
+ * save names the `baseSha256` it read (`GET /:id` returns the live text and
+ * its sha while the note is open in an editor) and is merged with what
+ * others typed meanwhile, or refused with 409 `stale`. Their revisions
+ * (history, restore) and the agent's edit proposals (accept, reject) are
+ * here too.
  */
 export const noteRoutes = new Elysia({ prefix: '/notes' })
   .use(apiContext)
 
   .get(
     '/',
-    async ({ user, query, set }) => {
+    async ({ user, principal, query, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
-      const notes = await getNoteService().list(user.id, {
+      const notes = await noteRepos(principal).notes.list({
         kind: query.kind,
         tag: query.tag,
         includeArchived: query.includeArchived === 'true',
@@ -41,22 +109,26 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
 
   .post(
     '/',
-    async ({ user, body, set }) => {
+    async ({ user, principal, body, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
         const result = await getNoteService().save({
-          userId: user.id,
-          workspaceId: body.workspaceId ?? null,
+          scope: noteRepos(principal).noteScope,
           id: body.id,
           slug: body.slug,
           title: body.title,
-          body: body.body ?? '',
+          // Omitted on an existing space note: a metadata-only save.
+          body: body.body,
           noteKind: body.noteKind,
           tags: body.tags,
           frontmatter: body.frontmatter,
+          baseSha256: body.baseSha256,
         });
         return result;
       } catch (err) {
+        if (err instanceof SpaceError) throw err;
+        const refused = liveWriteError(err, set);
+        if (refused) return refused;
         // Update of a non-existent / non-owned note → 404 (no enumeration).
         if (err instanceof Error && /not found/.test(err.message)) { set.status = 404; return { error: 'Note not found' }; }
         // Concurrent create racing the same slug → 409, not a 500.
@@ -73,7 +145,8 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
         noteKind: t.Optional(t.String()),
         tags: t.Optional(t.Array(t.String())),
         frontmatter: t.Optional(t.Record(t.String(), t.Unknown())),
-        workspaceId: t.Optional(t.String()),
+        /** Space notes: the sha of the body this edit was made from. */
+        baseSha256: t.Optional(t.String({ pattern: '^[0-9a-f]{64}$' })),
       }),
       detail: { tags: ['notes'] },
     },
@@ -82,9 +155,9 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
   // Bases-style property query — table/card/list views are built on this.
   .post(
     '/query',
-    async ({ user, body, set }) => {
+    async ({ user, principal, body, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
-      const rows = await getNoteRepository().query(user.id, {
+      const rows = await noteRepos(principal).notes.query({
         kind: body.kind,
         tag: body.tag,
         frontmatter: body.frontmatter,
@@ -110,9 +183,9 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
   // Lightweight {id,title,slug,kind} index — the source for `[[` autocomplete.
   .get(
     '/index',
-    async ({ user, set }) => {
+    async ({ user, principal, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
-      const notes = await getNoteRepository().listIndex(user.id);
+      const notes = await noteRepos(principal).notes.listIndex();
       return { notes };
     },
     { detail: { tags: ['notes'] } },
@@ -121,9 +194,9 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
   // Tag → count across active notes — powers the tag tree + `#tag` autocomplete.
   .get(
     '/tags',
-    async ({ user, set }) => {
+    async ({ user, principal, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
-      const tags = await getNoteRepository().tagCounts(user.id);
+      const tags = await noteRepos(principal).notes.tagCounts();
       return { tags };
     },
     { detail: { tags: ['notes'] } },
@@ -131,36 +204,90 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
 
   .post(
     '/capture',
-    async ({ user, body, set }) => {
+    async ({ user, principal, body, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
-        const note = await getNoteService().capture(user.id, body.workspaceId ?? null, body.text, body.date);
+        const note = await getNoteService().capture(noteRepos(principal).noteScope, body.text, body.date);
         return { id: note.id, slug: note.slug };
       } catch (err) {
+        const refused = liveWriteError(err, set);
+        if (refused) return refused;
         if (err instanceof Error && /invalid date/i.test(err.message)) { set.status = 400; return { error: err.message }; }
         throw err;
       }
     },
-    { body: t.Object({ text: t.String(), date: t.Optional(t.String()), workspaceId: t.Optional(t.String()) }), detail: { tags: ['notes'] } },
+    { body: t.Object({ text: t.String(), date: t.Optional(t.String()) }), detail: { tags: ['notes'] } },
+  )
+
+  // ── Edit proposals (space notes, §7.4) ────────────────────────────
+
+  .get(
+    '/proposals',
+    async ({ user, principal, query, set }) => {
+      if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+      const scope = spaceNoteScope(principal, set);
+      if (!scope) return { error: 'Not found' };
+      const proposals = await listNoteProposals(scope, { noteId: query.noteId, status: query.status });
+      return { proposals };
+    },
+    {
+      query: t.Object({
+        noteId: t.Optional(t.String({ format: 'uuid' })),
+        status: t.Optional(t.Union([t.Literal('pending'), t.Literal('accepted'), t.Literal('rejected'), t.Literal('stale')])),
+      }),
+      detail: { tags: ['notes'] },
+    },
+  )
+
+  .post(
+    '/proposals/:proposalId/accept',
+    async ({ user, principal, params, set }) => {
+      if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+      const scope = spaceNoteScope(principal, set);
+      if (!scope) return { error: 'Not found' };
+      try {
+        const result = await acceptProposal(scope, params.proposalId);
+        // A stale proposal is an answer, not a failure: the client shows the three texts.
+        if (result.status === 'stale') set.status = 409;
+        return result;
+      } catch (err) {
+        const refused = liveWriteError(err, set);
+        if (refused) return refused;
+        throw err;
+      }
+    },
+    { detail: { tags: ['notes'] } },
+  )
+
+  .post(
+    '/proposals/:proposalId/reject',
+    async ({ user, principal, params, set }) => {
+      if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+      const scope = spaceNoteScope(principal, set);
+      if (!scope) return { error: 'Not found' };
+      return { proposal: await rejectProposal(scope, params.proposalId) };
+    },
+    { detail: { tags: ['notes'] } },
   )
 
   .get(
     '/:id',
-    async ({ user, params, set }) => {
+    async ({ user, principal, params, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
-      const note = await getNoteService().getById(user.id, params.id);
+      const repos = noteRepos(principal);
+      // A space note open in an editor reads as its live text and sha (§7.3).
+      const note = await getNoteService().getById(repos.noteScope, params.id);
       if (!note) { set.status = 404; return { error: 'Note not found' }; }
-      const links = getKnowledgeLinkRepository();
-      const backlinks = await links.getBacklinks(user.id, 'note', note.id);
+      const backlinks = await repos.links.getBacklinks('note', note.id);
       // `tagged` edges are shown via the tag list, not the outgoing-links list.
-      const outgoing = (await links.getOutgoing(user.id, 'note', note.id)).filter((e) => e.linkType !== 'tagged');
+      const outgoing = (await repos.links.getOutgoing('note', note.id)).filter((e) => e.linkType !== 'tagged');
 
       // Resolve note endpoints to real titles/slugs in one batch so the UI
       // renders "← Roadmap" (clickable) instead of "← note:1a2b3c4".
       const noteIds = new Set<string>();
       for (const e of backlinks) if (e.fromType === 'note') noteIds.add(e.fromId);
       for (const e of outgoing) if (e.toType === 'note' && e.toId) noteIds.add(e.toId);
-      const titleRows = await getNoteRepository().getByIds(user.id, [...noteIds]);
+      const titleRows = await repos.notes.getByIds([...noteIds]);
       const titleMap = new Map(titleRows.map((r) => [r.id, { title: r.title, slug: r.slug }]));
 
       // `resolved` means "a note we loaded a title for" (i.e. clickable). A
@@ -197,12 +324,124 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
     { detail: { tags: ['notes'] } },
   )
 
+  // ── Revisions (space notes, §7.6) ─────────────────────────────────
+
+  .get(
+    '/:id/revisions',
+    async ({ user, principal, params, set }) => {
+      if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+      const scope = spaceNoteScope(principal, set);
+      if (!scope) return { error: 'Not found' };
+      if (!(await noteRepos(principal).notes.getById(params.id))) { set.status = 404; return { error: 'Note not found' }; }
+      return { revisions: await listRevisions(scope.workspaceId, params.id) };
+    },
+    { detail: { tags: ['notes'] } },
+  )
+
+  .get(
+    '/:id/revisions/:revisionId',
+    async ({ user, principal, params, set }) => {
+      if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+      const scope = spaceNoteScope(principal, set);
+      if (!scope) return { error: 'Not found' };
+      if (!(await noteRepos(principal).notes.getById(params.id))) { set.status = 404; return { error: 'Note not found' }; }
+      const revision = await getRevision(scope.workspaceId, params.id, params.revisionId);
+      if (!revision) { set.status = 404; return { error: 'Revision not found' }; }
+      return { revision };
+    },
+    { detail: { tags: ['notes'] } },
+  )
+
+  // Restore an older revision: written as a new revision over the current
+  // text (the live one, when the note is open), never by rewinding history.
+  .post(
+    '/:id/revisions/:revisionId/restore',
+    async ({ user, principal, params, set }) => {
+      if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+      const scope = spaceNoteScope(principal, set);
+      if (!scope) return { error: 'Not found' };
+      const revision = await getRevision(scope.workspaceId, params.id, params.revisionId);
+      if (!revision) { set.status = 404; return { error: 'Revision not found' }; }
+      const notes = getNoteService();
+      try {
+        // Restoring replaces the text: the base is whatever it is now.
+        for (let attempt = 0; ; attempt++) {
+          const current = await notes.getById(scope, params.id);
+          if (!current) { set.status = 404; return { error: 'Note not found' }; }
+          try {
+            const write = await notes.writeSpaceBody(scope, params.id, {
+              base: { sha256: current.bodySha256, text: current.body },
+              next: revision.body,
+              origin: { kind: 'restore', userId: scope.userId, restoredFrom: revision.id },
+            });
+            return { revisionId: write.revisionId, changed: write.changed, sha256: write.note.bodySha256 };
+          } catch (err) {
+            // Someone typed into the same lines between the read and the
+            // write: read again (a restore always means "this text").
+            if (err instanceof StaleWriteError && attempt < 2) continue;
+            throw err;
+          }
+        }
+      } catch (err) {
+        const refused = liveWriteError(err, set);
+        if (refused) return refused;
+        throw err;
+      }
+    },
+    { detail: { tags: ['notes'] } },
+  )
+
+  // A live editor's text the server never got (typed offline, or unsent
+  // when the document was rebuilt under a new epoch): merged into the note
+  // through the document hub like any writer's change (diff3 of the last
+  // server text the editor synced, the current text and the editor's), as
+  // the member's own typing. 409 `stale` when it clashes with a change made
+  // meanwhile: nothing is applied and the editor keeps its text to copy.
+  .post(
+    '/:id/merge',
+    async ({ user, principal, params, body, set }) => {
+      if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+      const scope = spaceNoteScope(principal, set);
+      if (!scope) return { error: 'Not found' };
+      if (!(await noteRepos(principal).notes.getById(params.id))) { set.status = 404; return { error: 'Note not found' }; }
+      if (Buffer.byteLength(body.base, 'utf8') > getConfig().spaces.noteMaxBytes) {
+        set.status = 413;
+        return { error: 'The base text is larger than a space note can be', code: 'too_large' };
+      }
+      try {
+        const write = await getNoteService().writeSpaceBody(scope, params.id, {
+          base: { sha256: sha256Hex(body.base), text: body.base },
+          next: body.text,
+          origin: { kind: 'peer', userId: scope.userId },
+        });
+        return { changed: write.changed, merged: write.merged, sha256: write.note.bodySha256, revisionId: write.revisionId };
+      } catch (err) {
+        const refused = liveWriteError(err, set);
+        if (refused) return refused;
+        throw err;
+      }
+    },
+    {
+      body: t.Object({
+        /** The last server text the editor synced. */
+        base: t.String(),
+        /** The editor's text. */
+        text: t.String(),
+      }),
+      detail: { tags: ['notes'] },
+    },
+  )
+
   .get(
     '/:id/suggestions',
-    async ({ user, params, set }) => {
+    async ({ user, principal, params, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+      const repos = noteRepos(principal);
+      if (!(await repos.notes.getById(params.id))) {
+        set.status = 404; return { error: 'Note not found' };
+      }
       try {
-        const suggestions = await getSuggestionService().suggestForNote(user.id, params.id);
+        const suggestions = await getSuggestionService().suggestForNote(repos.noteScope, params.id);
         return { suggestions };
       } catch (err) {
         if (err instanceof Error && /not found/.test(err.message)) { set.status = 404; return { error: 'Note not found' }; }
@@ -214,9 +453,9 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
 
   .patch(
     '/:id/pin',
-    async ({ user, params, body, set }) => {
+    async ({ user, principal, params, body, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
-      const updated = await getNoteRepository().setPinned(user.id, params.id, body.pinned);
+      const updated = await noteRepos(principal).notes.setPinned(params.id, body.pinned);
       if (!updated) { set.status = 404; return { error: 'Note not found' }; }
       return { id: updated.id, pinned: updated.pinned };
     },
@@ -225,12 +464,13 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
 
   .delete(
     '/:id',
-    async ({ user, params, query, set }) => {
+    async ({ user, principal, params, query, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
       const hard = query.hard === 'true';
+      const { noteScope } = noteRepos(principal);
       const ok = hard
-        ? await getNoteService().remove(user.id, params.id)
-        : await getNoteService().archive(user.id, params.id);
+        ? await getNoteService().remove(noteScope, params.id)
+        : await getNoteService().archive(noteScope, params.id);
       if (!ok) { set.status = 404; return { error: 'Note not found' }; }
       logger.info({ noteId: params.id, userId: user.id, hard }, hard ? 'note removed via API' : 'note archived via API');
       return { deleted: true, hard };

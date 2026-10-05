@@ -182,4 +182,29 @@ describe('rotateVaultRowMasterKey', () => {
       ciphertext: after!.ciphertext, iv: after!.iv, authTag: after!.authTag,
     }, sysNewDek)).toBe('sys-val');
   });
+
+  test('a space secret is keyed by its space, before and after rotation (§9.5)', async () => {
+    const { spaceWith } = await import('@/test-helpers/space-fixtures');
+    const spaceId = await spaceWith(aliceId, []);
+    const { deriveDek, decrypt, encrypt } = await import('@/utils/crypto');
+    const enc = encrypt('space-val', deriveDek(OLD_MASTER, 'space', spaceId));
+    const { getDb } = await import('@/db/postgres');
+    const { vault } = await import('@/db/schema/vault');
+    // Stored by alice (the author); the key is the space's, not alice's.
+    const [row] = await getDb().insert(vault).values({
+      userId: aliceId, scope: 'space', workspaceId: spaceId, name: 'rotate-test-space', credentialType: 'api_key',
+      encryptedValue: enc.ciphertext, encryptionIv: enc.iv, encryptionAuthTag: enc.authTag, keyVersion: 2,
+    }).returning();
+
+    const { rotateVaultRowMasterKey, dekForRow } = await import('@/security/vault');
+    expect(await rotateVaultRowMasterKey(row.id, OLD_MASTER, NEW_MASTER)).toBe('rotated');
+    const after = await readEncryptedShape(row.id);
+    const sealed = { ciphertext: after!.ciphertext, iv: after!.iv, authTag: after!.authTag };
+    expect(decrypt(sealed, deriveDek(NEW_MASTER, 'space', spaceId))).toBe('space-val');
+    expect(decrypt(sealed, dekForRow({ scope: 'space', userId: bobId, workspaceId: spaceId }, NEW_MASTER))).toBe('space-val');
+    // Neither its author's user key nor a space key of the old master opens it.
+    expect(() => decrypt(sealed, deriveDek(NEW_MASTER, 'space', aliceId))).toThrow();
+    expect(() => decrypt(sealed, deriveDek(NEW_MASTER, 'user', aliceId))).toThrow();
+    expect(await rotateVaultRowMasterKey(row.id, OLD_MASTER, NEW_MASTER)).toBe('skipped');
+  });
 });

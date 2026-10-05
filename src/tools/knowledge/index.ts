@@ -1,24 +1,26 @@
 import { type EntityRef, entityRefFromSourceId, getKnowledgeGraph, type TraversalDirection } from '@/core/knowledge/graph';
+import { reposFor } from '@/db/repositories/content';
 import { slugify } from '@/core/knowledge/wikilink';
 import { CODE_NOT_INDEXED_MESSAGE, isCodeFile } from '@/core/rag/code-detection';
 import { type EmbeddingPurpose, type SearchScope, getEmbeddingService } from '@/core/rag/embeddings';
 import { getFileIndexer } from '@/core/rag/indexer';
+import { agentKnowledgeOwner, agentKnowledgeScope } from '@/core/rag/knowledge-scope';
 import type { AgentContext, ToolManifest } from '@/core/types';
 import { getKnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
 import { decide, type DecisionSite, recordShadow } from '@/models/decision';
-import { coreLogger } from '@/utils/logger';
 import { WorkspaceFS, WorkspaceFsError } from '@/security/workspace-fs';
 import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 
 /**
  * Sandbox for the indexing tools. Like the filesystem tool's `workspaceFor`,
- * it pins reads to the caller's workspace root (per-user under multiuser; flat
- * otherwise) plus `additionalPaths` and a devMode `projectPath`. Without this
- * the index tools fed `fileAt(path).text()` any absolute path the agent
- * named — arbitrary host-file read into the KB.
+ * it pins reads to the agent's workspace root plus `additionalPaths` and a
+ * devMode `projectPath`. Without this the index tools fed
+ * `fileAt(path).text()` any absolute path the agent named — arbitrary
+ * host-file read into the KB.
  */
 function workspaceFor(context?: AgentContext): WorkspaceFS {
-  const projectPath = (context?.metadata as Record<string, unknown> | undefined)
+  if (!context) throw new Error('knowledge indexing works for an agent: no agent context was given');
+  const projectPath = (context.metadata as Record<string, unknown> | undefined)
     ?.projectPath as string | undefined;
   const fs = WorkspaceFS.forAgent(context, {
     extraAllowedPrefixes: projectPath ? [projectPath] : [],
@@ -45,6 +47,7 @@ function resolveInWorkspace(fs: WorkspaceFS, path: string): string {
 export async function resolveRepoScope(
   reposArg: string | undefined,
   userId: string | undefined,
+  workspaceId: string | null = null,
 ): Promise<SearchScope> {
   const refs = (reposArg ?? '').split(',').map(s => s.trim()).filter(Boolean);
   if (!userId) {
@@ -52,7 +55,7 @@ export async function resolveRepoScope(
     return { allowedRepoIds: [] };
   }
   const { loadRepoGraph, resolveRepo } = await import('@/core/repos/registry-service');
-  const { repos } = await loadRepoGraph(userId);
+  const { repos } = await loadRepoGraph({ userId, workspaceId });
   const ids = refs.map(ref => {
     const repo = resolveRepo(repos, ref);
     if (!repo) throw new Error(`Unknown or unavailable repository "${ref}". Call list_repos and use its id or path.`);
@@ -116,9 +119,9 @@ export class KnowledgeTool extends BaseTool {
       'knowledge_stats',
       'Get detailed knowledge base statistics including entry counts by source type, age distribution, content metrics, and abstract coverage.',
       createParameterSchema({}),
-      async () => {
+      async (_args, context) => {
         const service = getEmbeddingService();
-        const stats = await service.getStats();
+        const stats = await service.getStats(agentKnowledgeScope(context));
         return {
           ...stats,
           summary: `${stats.total} entries across ${Object.keys(stats.byPurpose).length} purposes. Avg content length: ${stats.avgContentLength} chars. Abstract coverage: ${stats.abstractCoverage.withAbstract}/${stats.total}.`,
@@ -154,19 +157,22 @@ export class KnowledgeTool extends BaseTool {
         // bunch". Tune per-deployment via min_similarity if needed.
         const minSimilarity = userMin ?? (searchMode === 'semantic' ? 0.35 : searchMode === 'keyword' ? 0 : 0.3);
 
+        // Whose knowledge: the user the agent works for (plus product docs).
+        const knowledge = agentKnowledgeScope(context);
         // Optional multi-repo scope: resolve repo names/ids to registry ids.
-        const scope = await resolveRepoScope(args.repos as string | undefined, context.userId);
+        // The repo registry is personal: no repo scope in a space.
+        const scope: SearchScope = context.space ? { allowedRepoIds: [] } : await resolveRepoScope(args.repos as string | undefined, context.userId, context.workspaceId ?? null);
 
         let results;
         switch (searchMode) {
           case 'semantic':
-            results = await service.search(args.query as string, limit, purpose, minSimilarity, undefined, scope);
+            results = await service.search(knowledge, args.query as string, limit, purpose, minSimilarity, scope);
             break;
           case 'keyword':
-            results = await service.ftsSearch(args.query as string, limit, purpose, undefined, scope);
+            results = await service.ftsSearch(knowledge, args.query as string, limit, purpose, scope);
             break;
           default:
-            results = await service.hybridSearch(args.query as string, limit, purpose, undefined, minSimilarity, undefined, scope);
+            results = await service.hybridSearch(knowledge, args.query as string, limit, purpose, undefined, minSimilarity, scope);
         }
 
         shadowRelevance(args.query as string, results);
@@ -213,6 +219,9 @@ export class KnowledgeTool extends BaseTool {
         if (entries.length === 0) {
           return { ...base, linked: [], note: 'No graph entry points among the hits (their source ids do not address knowledge entities).' };
         }
+        // The graph walk is per user; in a space it would reach the member's
+        // personal edges, so it is not offered there.
+        if (context.space) return { ...base, linked: [], note: 'Graph traversal is not available in a shared space; use read_knowledge on the hits.' };
         const traversal = await getKnowledgeGraph().traverse(context.userId, entries, { hops: 1, direction: 'both', maxNodes: 25 });
         return {
           ...base,
@@ -229,9 +238,9 @@ export class KnowledgeTool extends BaseTool {
       createParameterSchema({
         id: { type: 'string', description: 'The knowledge entry ID from search results', required: true },
       }),
-      async (args) => {
+      async (args, context) => {
         const service = getEmbeddingService();
-        const entry = await service.readById(args.id as string);
+        const entry = await service.readById(agentKnowledgeScope(context), args.id as string);
 
         if (!entry) {
           return { error: 'Knowledge entry not found.' };
@@ -262,7 +271,7 @@ export class KnowledgeTool extends BaseTool {
         if (isCodeFile(safePath)) {
           return { indexed: false, error: CODE_NOT_INDEXED_MESSAGE };
         }
-        const chunks = await indexer.indexFile(safePath, 'document');
+        const chunks = await indexer.indexFile(agentKnowledgeOwner(context), safePath, 'document');
         return { indexed: true, chunks, path: safePath };
       },
       { permissionAction: 'index' },
@@ -280,7 +289,7 @@ export class KnowledgeTool extends BaseTool {
         const patterns = ((args.patterns as string) || '**/*.md,**/*.txt').split(',').map(p => p.trim());
         const fs = workspaceFor(context);
         const safePath = resolveInWorkspace(fs, args.path as string);
-        const result = await indexer.indexDirectory(safePath, patterns, {
+        const result = await indexer.indexDirectory(agentKnowledgeOwner(context), safePath, patterns, {
           isAllowed: (p) => fs.resolveOptional(p) !== null,
         });
         return result;
@@ -296,9 +305,10 @@ export class KnowledgeTool extends BaseTool {
         min_content_length: { type: 'number', description: 'Minimum content length to keep (default: 50)', default: 50 },
         dry_run: { type: 'boolean', description: 'Preview only, do not delete (default: false)', default: false },
       }),
-      async (args) => {
+      async (args, context) => {
         const service = getEmbeddingService();
-        const result = await service.cleanup({
+        // The user's own rows only: an agent never cleans install-wide.
+        const result = await service.cleanup(agentKnowledgeScope(context), {
           maxAgeDays: (args.max_age_days as number) || 30,
           minContentLength: (args.min_content_length as number) || 50,
           dryRun: (args.dry_run as boolean) ?? false,
@@ -319,10 +329,10 @@ export class KnowledgeTool extends BaseTool {
       createParameterSchema({
         ids: { type: 'array', description: 'Entry ids from search results', required: true, items: { type: 'string' } },
       }),
-      async (args) => {
+      async (args, context) => {
         const ids = Array.isArray(args.ids) ? (args.ids as unknown[]).map(String) : [];
         if (ids.length === 0) return { error: 'Pass the ids of the entries you confirmed.' };
-        const verified = await getEmbeddingService().markVerified(ids);
+        const verified = await getEmbeddingService().markVerified(agentKnowledgeScope(context), ids);
         return {
           verified,
           missing: ids.length - verified,
@@ -352,6 +362,9 @@ export class KnowledgeTool extends BaseTool {
         if (!toRef) {
           throw new Error('link_knowledge requires either to_id or to_ref to identify the target.');
         }
+        // In a space the edge is the space's (by its workspace), authored by
+        // the member; the role was checked by `routeApprovalFor`.
+        reposFor(context).can('write');
         const link = await getKnowledgeLinkRepository().create({
           userId: context.userId,
           workspaceId: context.workspaceId ?? null,
@@ -379,12 +392,18 @@ export class KnowledgeTool extends BaseTool {
         ref: { type: 'string', description: 'Canonical slug/tag to find backlinks by reference (catches ghosts + tags)' },
       }),
       async (args, context) => {
+        // The agent's scope: the space's links in a space, the user's own otherwise.
+        const repos = reposFor(context);
         const repo = getKnowledgeLinkRepository();
         let links;
         if (args.ref) {
-          links = await repo.getBacklinksByRef(context.userId, slugify(args.ref as string));
+          links = repos.kind === 'space'
+            ? await repos.links.getBacklinksByRef(slugify(args.ref as string))
+            : await repo.getBacklinksByRef(context.userId, slugify(args.ref as string));
         } else if (args.entity_type && args.entity_id) {
-          links = await repo.getBacklinks(context.userId, args.entity_type as string, args.entity_id as string);
+          links = repos.kind === 'space'
+            ? await repos.links.getBacklinks(args.entity_type as string, args.entity_id as string)
+            : await repo.getBacklinks(context.userId, args.entity_type as string, args.entity_id as string);
         } else {
           throw new Error('get_backlinks requires either ref, or both entity_type and entity_id.');
         }
@@ -406,6 +425,7 @@ export class KnowledgeTool extends BaseTool {
         link_types: { type: 'string', description: 'Optional comma-separated link types to follow (e.g. "references,derived_from")' },
       }),
       async (args, context) => {
+        if (context.space) throw new Error('traverse_knowledge is not available in a shared space: the graph walk is per user. Use get_backlinks instead.');
         const linkTypes = typeof args.link_types === 'string' && args.link_types
           ? (args.link_types as string).split(',').map((s) => s.trim()).filter(Boolean)
           : undefined;

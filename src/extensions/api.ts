@@ -57,13 +57,25 @@ export function buildExtensionContext(
         logger.warn(`registerCommand(${def.name}) ignored — extension already disposed`);
         return;
       }
+      // Extensions are runtime JS: a command still restricted the old way
+      // (`minTrustLevel: 'local'`) must not register unrestricted.
+      let adminOnly = def.adminOnly ?? false;
+      const legacy: unknown = def.minTrustLevel;
+      if (legacy !== undefined) {
+        if (legacy === 'local' || legacy === 'system') {
+          adminOnly = true;
+          logger.warn(`registerCommand(${def.name}): minTrustLevel '${legacy}' is deprecated; registered as adminOnly: true`);
+        } else if (legacy !== 'user' && legacy !== 'agent') {
+          throw new Error(`registerCommand(${def.name}): unknown minTrustLevel ${JSON.stringify(legacy)}; use adminOnly`);
+        }
+      }
       const registry = getCommandRegistry();
       registry.register({
         name: def.name,
         aliases: def.aliases ?? [],
         description: def.description,
         args: def.args,
-        minTrustLevel: def.minTrustLevel ?? 'user',
+        adminOnly,
         handler: async (ctx) => {
           try {
             return await def.handler({

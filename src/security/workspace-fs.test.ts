@@ -11,18 +11,32 @@
  * `tmpdir`. No DB, no Docker.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
-import { mkdtempSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import pathMod, { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ANONYMOUS_PRINCIPAL, principalFromUser } from './principal';
-import { isInside, WorkspaceFS, WorkspaceFsError } from './workspace-fs';
+import type { AgentContext } from '@/core/types';
+import { isInside, moveWorkspaceFiles, noteSharedWorkspace, noteWorkspaceRows, removeWorkspaceFiles, WorkspaceFS, WorkspaceFsError } from './workspace-fs';
 
 let dataRoot: string;
 let aliceFs: WorkspaceFS;
 let bobFs: WorkspaceFS;
 
-const aliceP = principalFromUser({ id: 'alice-uuid', username: 'alice', isAdmin: false });
-const bobP = principalFromUser({ id: 'bob-uuid', username: 'bob', isAdmin: false });
+const ALICE = 'aaaaaaaa-0000-4000-8000-00000000a11c';
+const BOB = 'bbbbbbbb-0000-4000-8000-0000000000b0';
+const aliceP = principalFromUser({ id: ALICE, username: 'alice', isAdmin: false });
+const bobP = principalFromUser({ id: BOB, username: 'bob', isAdmin: false });
+const ALICE_DEFAULT_WS = '11111111-0000-4000-8000-000000000001';
+const ALICE_OTHER_WS = '11111111-0000-4000-8000-000000000002';
+
+function agentCtx(userId: string, workspaceId: string | null = null): AgentContext {
+  const now = new Date();
+  return { space: null, trigger: 'user', funding: 'own', 
+    id: 'agent-1', sessionId: 'session-1', userId, workspaceId, topic: 'general', model: '', role: 'general',
+    status: 'running', createdAt: now, updatedAt: now, metadata: {},
+  };
+}
 
 beforeAll(async () => {
   dataRoot = mkdtempSync(join(tmpdir(), 'octipus-wfs-'));
@@ -43,14 +57,27 @@ describe('WorkspaceFS construction', () => {
 
   test('roots are deterministic and disjoint per user', () => {
     expect(aliceFs.root).not.toBe(bobFs.root);
-    expect(aliceFs.root).toContain('alice-uuid');
-    expect(bobFs.root).toContain('bob-uuid');
+    expect(aliceFs.root).toContain(ALICE);
+    expect(bobFs.root).toContain(BOB);
   });
 
-  test('roots respect the workspaceId option', () => {
-    const f1 = WorkspaceFS.forPrincipal(aliceP, { dataRoot, workspaceId: 'project-x' });
-    expect(f1.root).toContain('project-x');
-    expect(f1.root).not.toBe(aliceFs.root);
+  test("a workspace's segment is its stored files_dir, whichever is the default", () => {
+    noteWorkspaceRows([
+      { id: ALICE_DEFAULT_WS, userId: ALICE, filesDir: 'default' },
+      { id: ALICE_OTHER_WS, userId: ALICE, filesDir: ALICE_OTHER_WS },
+    ]);
+    const other = WorkspaceFS.forPrincipal({ ...aliceP, workspaceId: ALICE_OTHER_WS }, { dataRoot });
+    expect(other.root).toBe(join(dataRoot, 'users', ALICE, 'workspaces', ALICE_OTHER_WS, 'files'));
+    const def = WorkspaceFS.forPrincipal({ ...aliceP, workspaceId: ALICE_DEFAULT_WS }, { dataRoot });
+    expect(def.root).toBe(aliceFs.root);
+    expect(aliceFs.root).toBe(join(dataRoot, 'users', ALICE, 'workspaces', 'default', 'files'));
+  });
+
+  test("an unknown workspace, or another user's, throws instead of guessing", () => {
+    expect(() => WorkspaceFS.forPrincipal({ ...aliceP, workspaceId: '99999999-0000-4000-8000-000000000000' }, { dataRoot }))
+      .toThrow(WorkspaceFsError);
+    expect(() => WorkspaceFS.forPrincipal({ ...bobP, workspaceId: ALICE_OTHER_WS }, { dataRoot }))
+      .toThrow(WorkspaceFsError);
   });
 });
 
@@ -147,9 +174,9 @@ describe('WorkspaceFS — cross-tenant disjoint paths', () => {
   });
 
   test('alice cannot reach into bob’s root by traversal', () => {
-    // bobFs.root is something like .../users/bob-uuid/workspaces/default/files
+    // bobFs.root is something like .../users/<bob>/workspaces/default/files
     // The relative path from alice.root to bob.root is many `..` ups.
-    const traversal = '../../../../bob-uuid/workspaces/default/files/secret';
+    const traversal = `../../../../${BOB}/workspaces/default/files/secret`;
     expect(() => aliceFs.resolve(traversal)).toThrow(WorkspaceFsError);
   });
 });
@@ -214,59 +241,177 @@ describe('WorkspaceFS.withRoot — flat single-user mode', () => {
   });
 });
 
-describe('WorkspaceFS.forAgent — sentinel vs real user layout', () => {
-  test("'system' userId gets the flat root", () => {
-    expect(WorkspaceFS.forAgent({ userId: 'system' }, { dataRoot }).root).toBe(dataRoot);
+describe('WorkspaceFS.forAgent — user workspaces and system jobs', () => {
+  test('a user path never gets the flat root: anything but a user id throws', () => {
+    for (const userId of ['system', 'local', '', 'admin', 'alice-uuid']) {
+      expect(() => WorkspaceFS.forAgent(agentCtx(userId), { dataRoot })).toThrow(WorkspaceFsError);
+    }
   });
 
-  test("'local' userId gets the flat root (single-user sentinel, matches the guards in worker-spawner/agent-manager/agent-worker)", () => {
-    expect(WorkspaceFS.forAgent({ userId: 'local' }, { dataRoot }).root).toBe(dataRoot);
+  test('a system job gets exactly the root it names, and must name one', () => {
+    expect(WorkspaceFS.forAgent({ system: true, root: dataRoot }).root).toBe(dataRoot);
+    expect(() => WorkspaceFS.forAgent({ system: true, root: '' })).toThrow(WorkspaceFsError);
   });
 
-  test('absent userId gets the flat root', () => {
-    expect(WorkspaceFS.forAgent(undefined, { dataRoot }).root).toBe(dataRoot);
+  test("an agent without a workspace gets the user's default root", () => {
+    expect(WorkspaceFS.forAgent(agentCtx(ALICE), { dataRoot }).root)
+      .toBe(join(dataRoot, 'users', ALICE, 'workspaces', 'default', 'files'));
   });
 
-  test('a real userId gets the per-user nested root', () => {
-    expect(WorkspaceFS.forAgent({ userId: 'alice-uuid' }, { dataRoot }).root)
-      .toBe(join(dataRoot, 'users', 'alice-uuid', 'workspaces', 'default', 'files'));
+  test("an agent in a non-default workspace gets that workspace's root", () => {
+    noteWorkspaceRows([{ id: ALICE_OTHER_WS, userId: ALICE, filesDir: ALICE_OTHER_WS }]);
+    expect(WorkspaceFS.forAgent(agentCtx(ALICE, ALICE_OTHER_WS), { dataRoot }).root)
+      .toBe(join(dataRoot, 'users', ALICE, 'workspaces', ALICE_OTHER_WS, 'files'));
   });
 });
 
+describe('moveWorkspaceFiles / removeWorkspaceFiles — transfer and delete', () => {
+  test("a transfer renames the owner's directory into the recipient's tree", () => {
+    const root = mkdtempSync(join(tmpdir(), 'octipus-wfs-move-'));
+    const from = join(root, 'users', ALICE, 'workspaces', 'default');
+    mkdirSync(join(from, 'files'), { recursive: true });
+    writeFileSync(join(from, 'files', 'a.txt'), 'alice');
+
+    moveWorkspaceFiles({ userId: ALICE, filesDir: 'default' }, { userId: BOB, filesDir: ALICE_DEFAULT_WS }, root);
+
+    expect(readFileSync(join(root, 'users', BOB, 'workspaces', ALICE_DEFAULT_WS, 'files', 'a.txt'), 'utf8')).toBe('alice');
+    expect(existsSync(from)).toBe(false);
+  });
+
+  test('a missing source moves nothing; an existing target is refused', () => {
+    const root = mkdtempSync(join(tmpdir(), 'octipus-wfs-move-'));
+    expect(() => moveWorkspaceFiles({ userId: ALICE, filesDir: ALICE_OTHER_WS }, { userId: BOB, filesDir: ALICE_OTHER_WS }, root)).not.toThrow();
+    mkdirSync(join(root, 'users', ALICE, 'workspaces', ALICE_OTHER_WS, 'files'), { recursive: true });
+    mkdirSync(join(root, 'users', BOB, 'workspaces', ALICE_OTHER_WS), { recursive: true });
+    expect(() => moveWorkspaceFiles({ userId: ALICE, filesDir: ALICE_OTHER_WS }, { userId: BOB, filesDir: ALICE_OTHER_WS }, root))
+      .toThrow(/already exists/);
+    expect(existsSync(join(root, 'users', ALICE, 'workspaces', ALICE_OTHER_WS, 'files'))).toBe(true);
+  });
+
+  test('a directory name or user id that could leave the tree is refused', () => {
+    const root = mkdtempSync(join(tmpdir(), 'octipus-wfs-move-'));
+    expect(() => removeWorkspaceFiles(ALICE, '..', root)).toThrow(WorkspaceFsError);
+    expect(() => removeWorkspaceFiles(ALICE, 'a/b', root)).toThrow(WorkspaceFsError);
+    expect(() => removeWorkspaceFiles('../x', 'default', root)).toThrow(WorkspaceFsError);
+  });
+
+  test('delete removes the directory', () => {
+    const root = mkdtempSync(join(tmpdir(), 'octipus-wfs-rm-'));
+    const dir = join(root, 'users', ALICE, 'workspaces', ALICE_OTHER_WS);
+    mkdirSync(join(dir, 'files'), { recursive: true });
+    writeFileSync(join(dir, 'files', 'a.txt'), 'x');
+    removeWorkspaceFiles(ALICE, ALICE_OTHER_WS, root);
+    expect(existsSync(dir)).toBe(false);
+  });
+});
+
+const PERSONAL = { space: null } as const;
+
 describe('WorkspaceFS.forSession — read-back root matches the agent cwd (P1.8)', () => {
+  test("a session in a non-default workspace reads back that workspace's root", () => {
+    noteWorkspaceRows([{ id: ALICE_OTHER_WS, userId: ALICE, filesDir: ALICE_OTHER_WS }]);
+    const fs = WorkspaceFS.forSession({ userId: ALICE, workspaceId: ALICE_OTHER_WS, context: {} }, PERSONAL, { dataRoot });
+    expect(fs.root).toBe(join(dataRoot, 'users', ALICE, 'workspaces', ALICE_OTHER_WS, 'files'));
+  });
+
   test('dev-mode session with projectPath roots at the project dir', () => {
     const fs = WorkspaceFS.forSession({
-      userId: 'alice-uuid',
+      userId: ALICE,
       context: { devMode: true, projectPath: dataRoot },
-    });
+    }, PERSONAL);
     expect(fs.root).toBe(dataRoot);
   });
 
   test('devMode without projectPath falls back to the user workspace', () => {
     const fs = WorkspaceFS.forSession(
-      { userId: 'alice-uuid', context: { devMode: true } },
+      { userId: ALICE, context: { devMode: true } },
+      PERSONAL,
       { dataRoot },
     );
     expect(fs.root)
-      .toBe(join(dataRoot, 'users', 'alice-uuid', 'workspaces', 'default', 'files'));
+      .toBe(join(dataRoot, 'users', ALICE, 'workspaces', 'default', 'files'));
   });
 
   test('projectPath without devMode is ignored (mirrors cli-agent-worker)', () => {
     const fs = WorkspaceFS.forSession(
-      { userId: 'alice-uuid', context: { projectPath: '/somewhere/else' } },
+      { userId: ALICE, context: { projectPath: '/somewhere/else' } },
+      PERSONAL,
       { dataRoot },
     );
     expect(fs.root)
-      .toBe(join(dataRoot, 'users', 'alice-uuid', 'workspaces', 'default', 'files'));
+      .toBe(join(dataRoot, 'users', ALICE, 'workspaces', 'default', 'files'));
   });
 
   test('non-dev session gets the per-user nested root', () => {
     const fs = WorkspaceFS.forSession(
-      { userId: 'alice-uuid', context: {} },
+      { userId: ALICE, context: {} },
+      PERSONAL,
       { dataRoot },
     );
     expect(fs.root)
-      .toBe(join(dataRoot, 'users', 'alice-uuid', 'workspaces', 'default', 'files'));
+      .toBe(join(dataRoot, 'users', ALICE, 'workspaces', 'default', 'files'));
+  });
+});
+
+describe('WorkspaceFS.forSession — a space session needs the requester\'s access', () => {
+  const SPACE = '33333333-0000-4000-8000-000000000003';
+  const OTHER_SPACE = '33333333-0000-4000-8000-000000000004';
+  const spaceSession = { userId: ALICE, workspaceId: SPACE, context: { devMode: true, projectPath: '/elsewhere' } };
+  beforeAll(() => { noteSharedWorkspace(SPACE); noteSharedWorkspace(OTHER_SPACE); });
+
+  test('opened without space access, a space session throws', () => {
+    expect(() => WorkspaceFS.forSession(spaceSession, { space: null }, { dataRoot })).toThrow(WorkspaceFsError);
+  });
+
+  test('access for another workspace is refused, personal sessions included', () => {
+    const editor = { space: { workspaceId: OTHER_SPACE, role: 'editor' as const, scope: null } };
+    expect(() => WorkspaceFS.forSession(spaceSession, editor, { dataRoot })).toThrow(/does not open a session/);
+    expect(() => WorkspaceFS.forSession({ userId: ALICE, context: {} }, editor, { dataRoot })).toThrow(/does not open a session/);
+  });
+
+  test('a member reaches the whole space; a guest only their folders', () => {
+    const member = WorkspaceFS.forSession(spaceSession, { space: { workspaceId: SPACE, role: 'editor', scope: null } }, { dataRoot });
+    expect(member.root).toBe(join(dataRoot, 'spaces', SPACE, 'files'));
+    expect(member.guestFolders).toBeNull();
+
+    const guest = WorkspaceFS.forSession(spaceSession,
+      { space: { workspaceId: SPACE, role: 'guest', scope: { rooms: [], folders: ['shared'] } } }, { dataRoot });
+    expect(guest.root).toBe(member.root);
+    expect(guest.guestFolders).toEqual(['shared']);
+    expect(guest.resolve('shared/a.md')).toBe(join(guest.root, 'shared', 'a.md'));
+    expect(() => guest.resolve('private/a.md')).toThrow(expect.objectContaining({ code: 'OUTSIDE_SCOPE' }));
+  });
+
+  test('a guest without a scope reaches no folder', () => {
+    const guest = WorkspaceFS.forSession(spaceSession, { space: { workspaceId: SPACE, role: 'guest', scope: null } }, { dataRoot });
+    expect(guest.guestFolders).toEqual([]);
+  });
+
+  test('every forSession call site passes the requester\'s access', () => {
+    const src = join(fileURLToPath(new URL('.', import.meta.url)), '..');
+    const files = (readdirSync(src, { recursive: true }) as string[])
+      .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'));
+    const calls: string[] = [];
+    for (const file of files) {
+      const text = readFileSync(join(src, file), 'utf8');
+      for (const match of text.matchAll(/WorkspaceFS\.forSession\(/g)) {
+        // The call's arguments, up to its closing parenthesis.
+        let depth = 1;
+        let i = match.index + match[0].length;
+        const start = i;
+        let topLevelCommas = 0;
+        for (; i < text.length && depth > 0; i++) {
+          const c = text[i];
+          if ('([{'.includes(c)) depth++;
+          else if (')]}'.includes(c)) depth--;
+          else if (c === ',' && depth === 1) topLevelCommas++;
+        }
+        const args = text.slice(start, i - 1).trim().replace(/,$/, '');
+        calls.push(`${file}: ${args}`);
+        expect(topLevelCommas, `${file}: forSession(${args}) must pass the requester's access`).toBeGreaterThanOrEqual(1);
+      }
+    }
+    expect(calls.length).toBeGreaterThanOrEqual(13);
   });
 });
 
@@ -309,5 +454,31 @@ describe('WorkspaceFS with a linked root', () => {
     expect(() => fs.resolve(join(outside, 'a.txt'))).toThrow(/outside workspace/);
     expect(() => fs.resolve('escape/a.txt')).toThrow(/outside workspace via symlink/);
     expect(() => fs.resolve(join(realpathSync(target), 'escape/a.txt'))).toThrow(/outside workspace via symlink/);
+  });
+});
+
+describe('every forAgent caller passes the agent context', () => {
+  // Building it from a bare user id dropped the agent's workspace and filed its files
+  // in the default one. Pass the AgentContext (or `{ system: true, root }`);
+  // a surface without an agent uses `forPrincipal` / `forRequest` /
+  // `forSession`. Built from parts so this file does not match itself.
+  test('no source file builds a WorkspaceFS from a bare user id', () => {
+    const pattern = new RegExp(['forAgent', '\\(\\s*\\{\\s*userId'].join(''));
+    const repoRoot = pathMod.resolve(__dirname, '..', '..');
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name !== 'node_modules') walk(full);
+        } else if (/\.(ts|tsx)$/.test(entry.name) && pattern.test(readFileSync(full, 'utf8'))) {
+          offenders.push(pathMod.relative(repoRoot, full));
+        }
+      }
+    };
+    for (const dir of ['src', 'scripts', 'mcp-server/src', 'mcp-server/test']) {
+      if (existsSync(join(repoRoot, dir))) walk(join(repoRoot, dir));
+    }
+    expect(offenders).toEqual([]);
   });
 });

@@ -4,6 +4,7 @@ import { SSE_HEADERS, chunkText, sseData, sseDone } from '@/api/sse';
 import { getAgentService } from '@/core/agent';
 import type { AgentMessage } from '@/core/types';
 import { getModelRegistry } from '@/models/model-registry';
+import { isRegisteredModel, resolveModel } from '@/models/resolve-model';
 import { getProviderRouter } from '@/models/providers';
 import { isAuthenticated, requireScope } from '@/security/principal';
 import { API_SCOPES } from '@/security/scopes';
@@ -147,7 +148,9 @@ export const openaiCompatRoutes = new Elysia()
       { id: AGENT_MODEL, object: 'model', created, owned_by: 'octipus' },
     ];
     try {
-      const models = await getModelRegistry().getAllModels();
+      // The caller's models: install/org rows they may use plus their own
+      // personal rows (coworking spec §8.1).
+      const models = (await getModelRegistry().getModelsForUser(user.id)).filter((m) => m.isEnabled);
       for (const m of models) {
         data.push({ id: m.name, object: 'model', created, owned_by: m.provider });
       }
@@ -232,8 +235,17 @@ export const openaiCompatRoutes = new Elysia()
           timestamp: now,
         }));
 
+        // An explicit model resolves only to a row this caller may use
+        // (§8.2); a registered row they may not see is "not found", never a
+        // raw id passed through.
+        const row = await resolveModel({ userId: user.id, name: model });
+        if (!row && await isRegisteredModel(model, user.id)) {
+          set.status = 400;
+          return oaiError(`Unknown model "${model}"`, 'invalid_request_error', 'model_not_found');
+        }
         const result = await getProviderRouter().complete({
-          model,
+          model: row?.modelId ?? model,
+          modelConfigName: row?.name,
           messages: agentMessages,
           temperature: body.temperature,
           maxTokens: body.max_tokens,

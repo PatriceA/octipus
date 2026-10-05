@@ -1,7 +1,6 @@
 import { and, eq, gte, sql } from 'drizzle-orm';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
-import { getConfig } from '@/config';
 import { getDb } from '@/db/postgres';
 import { costLog, modelConfig } from '@/db/schema/models';
 import { orgMembers } from '@/db/schema/organizations';
@@ -13,16 +12,12 @@ import { isAdmin, isAuthenticated, type Principal } from '@/security/principal';
 /**
  * Organizations + workspaces — Phase 3g multi-user.
  *
- * Two surfaces, both gated on `multiuser.orgWorkspaces`:
+ * Workspaces are always on: no setting switches these routes off.
  *
  *   /api/me/workspaces  — caller manages their own workspaces.
  *                         Authenticated users only.
  *   /api/admin/orgs     — system admin creates orgs and manages
  *                         membership. Admins only.
- *
- * When the flag is off, every endpoint returns 404 — callers cannot
- * tell whether the table is empty or whether the feature has been
- * shut off, which keeps fingerprinting at bay.
  *
  * Cross-tenant safety: `findOwnedById`/`findOwnedBySlug` return null
  * for both "doesn't exist" and "exists but belongs to someone else".
@@ -35,15 +30,6 @@ type RouteCtx = {
   user: { isAdmin?: boolean } | null;
   principal: Principal;
 };
-
-function requireFlag(ctx: RouteCtx): { ok: true } | { ok: false; body: { error: string } } {
-  const cfg = getConfig();
-  if (!cfg.multiuser?.orgWorkspaces) {
-    ctx.set.status = 404;
-    return { ok: false, body: { error: 'Not found' } };
-  }
-  return { ok: true };
-}
 
 function requireAuth(ctx: RouteCtx): { ok: true } | { ok: false; body: { error: string } } {
   if (!ctx.user || !isAuthenticated(ctx.principal)) {
@@ -75,6 +61,7 @@ function errorStatus(err: OrgWorkspaceError): number {
     case 'cannot_transfer_to_self':
       return 400;
     case 'slug_conflict':
+    case 'files_conflict':
       return 409;
     case 'not_admin':
       return 403;
@@ -95,10 +82,8 @@ export const workspaceMeRoutes = new Elysia({ prefix: '/me/workspaces' })
   .get(
     '/',
     async (ctx) => {
-      // List is available regardless of the `orgWorkspaces` flag — every
-      // real user always has a default workspace (artifacts and other
-      // workspace-scoped features need one). The flag only gates
-      // creating / renaming / deleting additional workspaces below.
+      // Every real user always has a default workspace (artifacts and
+      // other workspace-scoped features need one).
       const auth = requireAuth(ctx);
       if (!auth.ok) return auth.body;
       const mgr = getOrgWorkspaceManager();
@@ -114,8 +99,6 @@ export const workspaceMeRoutes = new Elysia({ prefix: '/me/workspaces' })
   .post(
     '/',
     async (ctx) => {
-      const flag = requireFlag(ctx);
-      if (!flag.ok) return flag.body;
       const auth = requireAuth(ctx);
       if (!auth.ok) return auth.body;
       try {
@@ -147,8 +130,6 @@ export const workspaceMeRoutes = new Elysia({ prefix: '/me/workspaces' })
   .patch(
     '/:id',
     async (ctx) => {
-      const flag = requireFlag(ctx);
-      if (!flag.ok) return flag.body;
       const auth = requireAuth(ctx);
       if (!auth.ok) return auth.body;
       try {
@@ -180,8 +161,6 @@ export const workspaceMeRoutes = new Elysia({ prefix: '/me/workspaces' })
   .post(
     '/:id/default',
     async (ctx) => {
-      const flag = requireFlag(ctx);
-      if (!flag.ok) return flag.body;
       const auth = requireAuth(ctx);
       if (!auth.ok) return auth.body;
       const updated = await getOrgWorkspaceManager().setDefault(ctx.principal.userId, ctx.params.id);
@@ -200,8 +179,6 @@ export const workspaceMeRoutes = new Elysia({ prefix: '/me/workspaces' })
   .delete(
     '/:id',
     async (ctx) => {
-      const flag = requireFlag(ctx);
-      if (!flag.ok) return flag.body;
       const auth = requireAuth(ctx);
       if (!auth.ok) return auth.body;
       try {
@@ -236,8 +213,6 @@ export const workspaceMeRoutes = new Elysia({ prefix: '/me/workspaces' })
   .post(
     '/:id/transfer',
     async (ctx) => {
-      const flag = requireFlag(ctx);
-      if (!flag.ok) return flag.body;
       const auth = requireAuth(ctx);
       if (!auth.ok) return auth.body;
       try {
@@ -295,8 +270,6 @@ export const orgMeRoutes = new Elysia({ prefix: '/me/orgs' })
   .get(
     '/',
     async (ctx) => {
-      const flag = requireFlag(ctx);
-      if (!flag.ok) return flag.body;
       const auth = requireAuth(ctx);
       if (!auth.ok) return auth.body;
       const orgs = await getOrgWorkspaceManager().listForUser(ctx.principal.userId);
@@ -312,8 +285,6 @@ export const orgAdminRoutes = new Elysia({ prefix: '/admin/orgs' })
   .get(
     '/',
     async (ctx) => {
-      const flag = requireFlag(ctx);
-      if (!flag.ok) return flag.body;
       const guard = requireAdminGuard(ctx);
       if (!guard.ok) return guard.body;
       const orgs = await getOrgWorkspaceManager().listAllAdmin({
@@ -329,8 +300,6 @@ export const orgAdminRoutes = new Elysia({ prefix: '/admin/orgs' })
   .post(
     '/',
     async (ctx) => {
-      const flag = requireFlag(ctx);
-      if (!flag.ok) return flag.body;
       const guard = requireAdminGuard(ctx);
       if (!guard.ok) return guard.body;
       try {
@@ -364,8 +333,6 @@ export const orgAdminRoutes = new Elysia({ prefix: '/admin/orgs' })
   .get(
     '/:id/members',
     async (ctx) => {
-      const flag = requireFlag(ctx);
-      if (!flag.ok) return flag.body;
       const guard = requireAdminGuard(ctx);
       if (!guard.ok) return guard.body;
       const members = await getOrgWorkspaceManager().listMembers(
@@ -387,8 +354,6 @@ export const orgAdminRoutes = new Elysia({ prefix: '/admin/orgs' })
   .post(
     '/:id/members',
     async (ctx) => {
-      const flag = requireFlag(ctx);
-      if (!flag.ok) return flag.body;
       const guard = requireAdminGuard(ctx);
       if (!guard.ok) return guard.body;
       try {
@@ -425,8 +390,6 @@ export const orgAdminRoutes = new Elysia({ prefix: '/admin/orgs' })
   .post(
     '/:id/models',
     async (ctx) => {
-      const flag = requireFlag(ctx);
-      if (!flag.ok) return flag.body;
       const guard = requireAdminGuard(ctx);
       if (!guard.ok) return guard.body;
       const updated = await getDb()
@@ -450,8 +413,6 @@ export const orgAdminRoutes = new Elysia({ prefix: '/admin/orgs' })
   .delete(
     '/:id/models/:modelId',
     async (ctx) => {
-      const flag = requireFlag(ctx);
-      if (!flag.ok) return flag.body;
       const guard = requireAdminGuard(ctx);
       if (!guard.ok) return guard.body;
       const updated = await getDb()
@@ -474,8 +435,6 @@ export const orgAdminRoutes = new Elysia({ prefix: '/admin/orgs' })
   .post(
     '/:id/skills',
     async (ctx) => {
-      const flag = requireFlag(ctx);
-      if (!flag.ok) return flag.body;
       const guard = requireAdminGuard(ctx);
       if (!guard.ok) return guard.body;
       const updated = await getDb()
@@ -499,8 +458,6 @@ export const orgAdminRoutes = new Elysia({ prefix: '/admin/orgs' })
   .delete(
     '/:id/skills/:skillId',
     async (ctx) => {
-      const flag = requireFlag(ctx);
-      if (!flag.ok) return flag.body;
       const guard = requireAdminGuard(ctx);
       if (!guard.ok) return guard.body;
       const updated = await getDb()
@@ -523,8 +480,6 @@ export const orgAdminRoutes = new Elysia({ prefix: '/admin/orgs' })
   .get(
     '/:id/sso',
     async (ctx) => {
-      const flag = requireFlag(ctx);
-      if (!flag.ok) return flag.body;
       const guard = requireAdminGuard(ctx);
       if (!guard.ok) return guard.body;
       const [row] = await getDb()
@@ -555,8 +510,6 @@ export const orgAdminRoutes = new Elysia({ prefix: '/admin/orgs' })
   .patch(
     '/:id/sso',
     async (ctx) => {
-      const flag = requireFlag(ctx);
-      if (!flag.ok) return flag.body;
       const guard = requireAdminGuard(ctx);
       if (!guard.ok) return guard.body;
       const db = getDb();
@@ -596,8 +549,6 @@ export const orgAdminRoutes = new Elysia({ prefix: '/admin/orgs' })
   .get(
     '/:id/usage',
     async (ctx) => {
-      const flag = requireFlag(ctx);
-      if (!flag.ok) return flag.body;
       const guard = requireAdminGuard(ctx);
       if (!guard.ok) return guard.body;
 
@@ -641,8 +592,6 @@ export const orgAdminRoutes = new Elysia({ prefix: '/admin/orgs' })
   .delete(
     '/:id/members/:userId',
     async (ctx) => {
-      const flag = requireFlag(ctx);
-      if (!flag.ok) return flag.body;
       const guard = requireAdminGuard(ctx);
       if (!guard.ok) return guard.body;
       const ok = await getOrgWorkspaceManager().removeMember(

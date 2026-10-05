@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { index, pgTable, real, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { workspaces } from './organizations';
 
 /**
  * Knowledge-graph Tier 1 — explicit directed edges between knowledge
@@ -44,7 +45,7 @@ export const knowledgeLinks = pgTable('knowledge_links', {
   /** Owner. Every query filters on this. */
   userId: uuid('user_id').notNull(),
   /** Optional workspace scope. NULL = user-level. */
-  workspaceId: uuid('workspace_id'),
+  workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'set null' }),
   /** Source endpoint kind: note | document | memory | artifact (free text). */
   fromType: text('from_type').notNull(),
   fromId: uuid('from_id').notNull(),

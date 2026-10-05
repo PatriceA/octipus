@@ -138,7 +138,10 @@ describe('receiveWakeups', () => {
       expect(got).toEqual([]);
 
       const emitted = await receiveWakeups(payload, 'proc-a', ownedByUser);
-      expect(ownedByUser).toHaveBeenCalledWith([{ taskId: uuid(101), userId: USER }, { taskId: uuid(102), userId: USER }]);
+      expect(ownedByUser).toHaveBeenCalledWith([
+        { taskId: uuid(101), userId: USER, workspaceId: event(1).workspaceId },
+        { taskId: uuid(102), userId: USER, workspaceId: event(2).workspaceId },
+      ]);
       expect(emitted).toHaveLength(2);
       expect(got).toEqual([
         { ...event(1), title: 'fresh 101', remote: true },

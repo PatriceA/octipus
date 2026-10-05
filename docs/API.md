@@ -30,12 +30,18 @@ curl -H "Authorization: Bearer $OCTIPUS_API_TOKEN" http://localhost:3005/api/aut
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| POST | `/api/auth/register` | No | Register new user |
-| POST | `/api/auth/login` | No | Login with credentials (+ optional TOTP) |
+| POST | `/api/auth/register` | No | Register new user (audited as `user_created`); `security.registration` applies, `inviteToken?` is redeemed with the account (SPACES.md → Registration modes) |
+| GET | `/api/auth/registration` | No | `{mode, firstAccount}`: the registration mode |
+| POST | `/api/auth/login` | No | Login with credentials; a TOTP account without `totpCode` gets `401 { requiresTOTP: true }` (audited as `login` / `login_failed`) |
 | POST | `/api/auth/login-mobile` | No | Login returning bearer token in response body (for native clients) |
+
+Login, login-mobile and register take an optional `returnTo`: a same-origin
+path (one leading `/`, no `//`, no backslash, no whitespace or control
+characters). Anything else is refused with 400; a valid one is echoed back as
+`returnTo` in the response (`/` when none was sent).
 | POST | `/api/auth/logout` | Yes | Logout and invalidate session |
 | GET | `/api/auth/me` | Yes | Get current user info |
-| GET | `/api/auth/ws-ticket` | Yes | Get short-lived token for WebSocket authentication |
+| GET | `/api/auth/ws-ticket` | Yes | Get a short-lived (60 s) token to sign a socket in: the gateway `auth` frame, or the `/voice` URL |
 | POST | `/api/auth/passkey/register/options` | Yes | Generate WebAuthn registration options |
 | POST | `/api/auth/passkey/register/verify` | Yes | Verify WebAuthn registration response |
 | POST | `/api/auth/passkey/auth/options` | No | Generate WebAuthn authentication options |
@@ -87,6 +93,19 @@ curl -H "Authorization: Bearer $OCTIPUS_API_TOKEN" http://localhost:3005/api/aut
 | GET | `/api/models/providers/ollama/models` | List available Ollama models |
 | GET | `/api/models/providers/litellm/models` | List LiteLLM models |
 | GET | `/api/models/providers/:provider/known` | Known models for a provider |
+
+### Own models (`/api/me/models`)
+
+A user's own model rows, run with their own key ([SPACES.md → Own
+models](SPACES.md#own-models)). Owner-only, admins included; another user's
+model answers 404. Bodies are validated against an allowlist (400 otherwise).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/me/models` | My models, with the allowed `providers` and the `topics` I may bind |
+| POST | `/api/me/models` | Add a model (201) |
+| PATCH | `/api/me/models/:slug` | Update one of my models |
+| DELETE | `/api/me/models/:slug` | Delete one of my models |
 
 ## Roles
 
@@ -303,10 +322,10 @@ inert and stays in the array.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/scim/v2/Users` | List users |
-| POST | `/api/scim/v2/Users` | Create user |
+| POST | `/api/scim/v2/Users` | Create user in the token's org (a member with that `userName` is returned as-is; one held outside the org is 409 `uniqueness`) |
 | GET | `/api/scim/v2/Users/:id` | Get user |
-| PATCH | `/api/scim/v2/Users/:id` | Apply supported SCIM user updates |
-| DELETE | `/api/scim/v2/Users/:id` | Delete user |
+| PATCH | `/api/scim/v2/Users/:id` | Apply supported SCIM user updates; `userName`/`emails` only on an account the org alone holds (no other org, not an install admin, no own password), else 403 |
+| DELETE | `/api/scim/v2/Users/:id` | Remove the user from the token's org; deactivate when no other org holds them |
 | GET | `/api/scim/v2/Groups` | List groups |
 
 ## Organizations & Admin
@@ -326,6 +345,103 @@ inert and stays in the array.
 | POST | `/api/admin/impersonate/stop` | Stop impersonation session |
 | GET | `/api/admin/impersonate` | List recent impersonation sessions (admin) |
 | GET | `/api/admin/audit` | Audit log (admin) |
+| GET | `/api/admin/permission-requests` | Pending tool permission requests of every user (admin); a space's requests only for its members |
+| POST | `/api/admin/permission-requests/:id/resolve` | Answer someone else's permission request: `{approved, reason}` (reason required, audited) |
+| GET | `/api/admin/approvals` | Pending root-agent approvals of every user (admin); a space's only for its members |
+| POST | `/api/admin/approvals/:id/resolve` | Answer someone else's approval: `{approved, reason, response?}` (reason required, audited) |
+| GET | `/api/admin/group-channels` | Every group-channel enrolment (admin) |
+| PATCH | `/api/admin/group-channels/:id` | Change an enrolment's mode, quiet hours or rate limit (admin, audited) |
+| DELETE | `/api/admin/group-channels/:id` | Remove an enrolment (admin, audited) |
+
+Requests and approvals are answered by their requester on every other path
+(REST and the gateway); these two routes are the admin's only way to answer
+for someone else.
+
+### My workspaces and organizations
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/me/workspaces` | My personal workspaces (the default one is created on first access); spaces are listed under `/api/spaces` |
+| POST | `/api/me/workspaces` | Create one: `{slug, name, isDefault?}` (201) |
+| PATCH | `/api/me/workspaces/:id` | Rename: `{name}` |
+| POST | `/api/me/workspaces/:id/default` | Make it my default workspace |
+| DELETE | `/api/me/workspaces/:id` | Delete one of my workspaces |
+| POST | `/api/me/workspaces/:id/transfer` | Give it to another user: `{recipientUserId}` or `{recipientUsername}`; its content moves with it |
+| GET | `/api/me/orgs` | My organization memberships |
+
+## Spaces
+
+Shared workspaces ([SPACES.md](SPACES.md)). A caller who is not a member gets
+404 for every space id; a member whose role lacks the action gets 403
+(`forbidden_role`); `last_owner`, `space_full`, `archived`,
+`not_purgeable` and `funding_off` answer 409. Bodies reject unknown fields (422).
+
+| Method | Endpoint | Who | Description |
+|--------|----------|-----|-------------|
+| GET | `/api/spaces` | any user | My spaces with my role |
+| POST | `/api/spaces` | per `spaces.creation` | Create a space `{name}`; the caller becomes its owner |
+| GET | `/api/spaces/:id` | member | Name, my role, member count, archived, `funding`, `sponsorUserId`, `sponsorModels` |
+| PUT | `/api/spaces/:id/funding` | owner | `{mode?: "own" \| "unattended" \| "sponsored", sponsor?: "me" \| null, sponsorModels?}`; only the sponsor sets `sponsorModels` (their own model rows) |
+| GET | `/api/spaces/:id/budget` | member | The space's budgets with this period's spend; the member cap with my own share |
+| PUT | `/api/spaces/:id/budget` | owner | `{kind: "space" \| "space_member", period: "day" \| "month", limitUsd: number \| null, warnRatio?}`; `null` removes it |
+| PATCH | `/api/spaces/:id` | owner | Rename `{name}` |
+| POST | `/api/spaces/:id/archive` | owner | Make read-only and stop its agents |
+| POST | `/api/spaces/:id/unarchive` | owner | Undo archive |
+| DELETE | `/api/spaces/:id` | owner | Delete for good; only archived for `spaces.purgeAfterArchiveDays` |
+| GET | `/api/spaces/:id/members` | member | `{userId, username, role, joinedAt}` |
+| PATCH | `/api/spaces/:id/members/:userId` | owner | Change role `{role, scope?}`; `scope` = `{rooms, folders}` for guests (SPACES.md → Guests) |
+| DELETE | `/api/spaces/:id/members/:userId` | owner, or self | Remove a member, or leave |
+| GET | `/api/spaces/:id/invites` | owner | Invites (never the token) |
+| POST | `/api/spaces/:id/invites` | owner | `{role, scope?, expiresInHours?, maxUses?}` → `{id, token, role, expiresAt, maxUses}`; the token is shown once |
+| DELETE | `/api/spaces/:id/invites/:inviteId` | owner | Revoke an invite of this space |
+| GET | `/api/spaces/:id/activity` | member | Audit rows of the space, newest first; `?limit=&before=` |
+| PUT | `/api/spaces/:id/agent-edit-mode` | owner | `{mode: "suggest" \| "direct"}`: whether the agent's note writes become edit proposals |
+| GET | `/api/spaces/:id/file-leases` | member | Live file leases ("Ben is editing"): `{path, holderUserId, holderName, holderKind, expiresAt}` |
+| POST | `/api/spaces/:id/file-leases` | editor, owner | `{path, renew?}` take (or renew) the lease on a space file; 409 `lease_held` with `heldBy` when someone else has it (or a directory above it, or a file under it) |
+| DELETE | `/api/spaces/:id/file-leases?path=` | member | Release your lease |
+| GET | `/api/spaces/:id/connectors` | member | The space's connectors (GitHub, Atlassian, Linear): `{id, name, kind, connected, connectedBy, connectedAt}`; never a value |
+| POST | `/api/spaces/:id/connectors/:connectorId` | owner | Connect: `{token}` for GitHub; an OAuth connector returns `{url}` for the popup, whose callback stores the tokens under the space |
+| DELETE | `/api/spaces/:id/connectors/:connectorId` | owner | Disconnect (the space's secrets of that connector are deactivated) |
+| GET | `/api/spaces/:id/rooms` | member | Rooms I can enter, with `unreadCount` and `muted` |
+| POST | `/api/spaces/:id/rooms` | editor, owner | `{title, visibility: "space" \| "private", memberIds?}` |
+| GET | `/api/spaces/:id/rooms/:roomId/messages` | room access | `?before=&after=&limit=` (message ids); posts and replies with `authorUserId`, `authorName` |
+| POST | `/api/spaces/:id/rooms/:roomId/messages` | commenter+ | `{content, addressed?, clientId?}`: REST fallback of `room.post` → `{messageId, queuedPosition?, notQueued?}`; `/…` → `{commandResult}` |
+| PATCH | `/api/spaces/:id/rooms/:roomId` | room creator, owner | `{title?, visibility?}` |
+| GET | `/api/spaces/:id/rooms/:roomId/members` | room access | A private room's members, or the space's for an open one |
+| GET | `/api/spaces/:id/rooms/:roomId/mode` | room access | `{mode, quietHoursStart, quietHoursEnd, timezone, maxUnpromptedPerDay, minMinutesBetween, feedback: {up, down}}` |
+| PUT | `/api/spaces/:id/rooms/:roomId/mode` | room creator, owner | `{mode?: "mention" \| "listen" \| "proactive", quietHoursStart?, quietHoursEnd?, timezone?, maxUnpromptedPerDay?, minMinutesBetween?}` |
+| PUT | `/api/spaces/:id/rooms/:roomId/messages/:messageId/feedback` | room access | `{value: 1 \| -1 \| null}` on the agent's unprompted post |
+| POST/DELETE | `/api/spaces/:id/rooms/:roomId/members/:userId` | room creator, owner | Private rooms only; removal ends the member's subscriptions and turns there |
+| PATCH | `/api/spaces/:id/rooms/:roomId/me` | room access | `{muted?, lastReadMessageId?}` |
+| GET | `/api/spaces/:id/memory` | member | Space memory entries, newest first |
+| POST | `/api/spaces/:id/memory` | editor, owner | `{body}` (≤ 500 characters) |
+| DELETE | `/api/spaces/:id/memory/:entryId` | editor, owner | Retract an entry |
+| GET | `/api/me/work` | signed in | My open tasks assigned to me, across my spaces and personal workspaces: `{groups: [{workspaceId, name, kind, tasks}]}` |
+| GET | `/api/invites/:token` | public | Preview `{spaceName, inviterName, role, expiresAt}`; rate-limited per IP |
+| POST | `/api/invites/:token/accept` | signed in | Join → `{workspaceId, role, alreadyMember}`; rate-limited per IP |
+
+### Live space notes
+
+In a space, `POST /api/notes` takes `baseSha256` (the sha of the body the
+edit was made from — `GET /api/notes/:id` returns the live text and its sha
+as `bodySha256` while the note is open in an editor). The edit is merged with
+what others wrote since, or refused with 409 `{code: "stale",
+currentSha256}`; a note over `spaces.noteMaxBytes` is a 413. A body write
+to an existing space note without `baseSha256` is a 400 `{code:
+"base_required"}`: read the note first. Omitting `body` on an existing space
+note saves only its title, tags and kind. Line endings are stored as `\n`.
+
+| Method | Endpoint | Who | Description |
+|--------|----------|-----|-------------|
+| GET | `/api/notes/:id/revisions` | member | Revisions, newest first: `{id, createdAt, origin, size, authors[], onBehalfOf}` |
+| GET | `/api/notes/:id/revisions/:revisionId` | member | One revision with its body |
+| POST | `/api/notes/:id/revisions/:revisionId/restore` | editor, owner | Write that revision's text as a new revision |
+| POST | `/api/notes/:id/merge` | editor, owner | `{base, text}`: merge a live editor's text the server never got (typed offline, or unsent when the document was rebuilt) from `base`, the last server text it synced, as the member's typing → `{changed, merged, sha256, revisionId}`; 409 `stale` on a clash (nothing applied) |
+| GET | `/api/notes/proposals?noteId=&status=` | member | The agent's edit proposals |
+| POST | `/api/notes/proposals/:proposalId/accept` | editor, owner | Apply it (merged through the live document); 409 `{status: "stale", base, current, proposed}` when it collides with a newer edit |
+| POST | `/api/notes/proposals/:proposalId/reject` | editor, owner | Close it |
+
+In a personal workspace these routes answer 404.
 
 ## Swarm
 
@@ -364,13 +480,22 @@ inert and stays in the array.
 | GET | `/api/knowledge/cleanup-history` | Recent cleanup runs. |
 | POST | `/api/knowledge/index` | Index a file or directory. 503 if KB not ready. |
 
+Every knowledge route works on the caller's own entries plus the product docs
+(another user's entry is a 404). An admin adds `?scope=install` to list, read,
+search, delete, clean up or count across the whole install, or to see every
+cleanup run; each such request writes a `knowledge_install_access` audit row.
+`?scope=install` from a non-admin is a 403.
+
 `mode='graph'` is available to agents through the `knowledge` tool, not on
 this route — see [KNOWLEDGE-GRAPH.md](KNOWLEDGE-GRAPH.md).
 
 ## Notes
 
 Authored markdown notes — the knowledge graph's Tier 2 surface. Full model in
-[KNOWLEDGE-GRAPH.md](KNOWLEDGE-GRAPH.md).
+[KNOWLEDGE-GRAPH.md](KNOWLEDGE-GRAPH.md). Every route works in the request's
+workspace (`X-Octipus-Workspace`): it sees that workspace's notes plus
+user-level ones, and creates new notes in it. No route takes a `workspaceId`
+in its body.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -379,7 +504,7 @@ Authored markdown notes — the knowledge graph's Tier 2 surface. Full model in
 | POST | `/api/notes/query` | Property query: `{ kind?, tag?, frontmatter?, sort?, order?, limit? }`. |
 | GET | `/api/notes/index` | Lightweight `{id,title,slug,kind}` list — the source for `[[` autocomplete. |
 | GET | `/api/notes/tags` | Tag → count across active notes. |
-| POST | `/api/notes/capture` | Append `{ text, date?, workspaceId? }` to a daily note. |
+| POST | `/api/notes/capture` | Append `{ text, date? }` to the day's daily note (the workspace's, else an existing user-level one). |
 | GET | `/api/notes/:id` | Read a note with its backlinks. |
 | GET | `/api/notes/:id/suggestions` | Semantically related, not-yet-linked entities (computed, not persisted). |
 | PATCH | `/api/notes/:id/pin` | `{ pinned: boolean }`. |
@@ -444,7 +569,7 @@ Authored markdown notes — the knowledge graph's Tier 2 surface. Full model in
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/search` | Global search across all knowledge |
+| GET | `/api/search` | Global search: the caller's own sessions and hooks, models, skills, tools, and the caller's knowledge |
 
 ## Workspace
 
@@ -464,6 +589,20 @@ Authored markdown notes — the knowledge graph's Tier 2 surface. Full model in
 | PUT | `/api/settings/batch` | Update several settings |
 | POST | `/api/settings/:key/reset` | Reset one setting to its default |
 
+## Group Channels
+
+Group chats enrolled from inside the channel ([CHANNELS.md](CHANNELS.md)).
+Owner-only, admins included (the admin routes above are the audited
+override); another user's enrolment answers 404.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/me/group-channels` | My enrolled group channels |
+| PATCH | `/api/me/group-channels/:id` | Set mode (`mention`/`listen`/`proactive`), quiet hours, timezone and rate limits |
+| DELETE | `/api/me/group-channels/:id` | Remove the enrolment |
+| POST | `/api/me/group-channels/:id/bind` | Bind the channel to a space I own: `{workspaceId, acknowledged: true, roomId?}`. `roomId` becomes the main thread; other threads get a room on first use. Audited ([SPACES.md → Group channels bound to a space](SPACES.md#group-channels-bound-to-a-space)) |
+| DELETE | `/api/me/group-channels/:id/bind` | Unbind it (the channel's owner, or an owner of the space) |
+
 ## Channel Bindings
 
 | Method | Endpoint | Description |
@@ -477,7 +616,8 @@ Authored markdown notes — the knowledge graph's Tier 2 surface. Full model in
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/devices` | List devices |
-| POST | `/api/devices/pair/generate` | Generate device pairing code |
+| POST | `/api/devices/pair/generate` | Generate device pairing code (valid 5 minutes; stored only as its SHA-256) |
+| POST | `/api/devices/pair/redeem` | Redeem a pairing code for a mobile session (unauthenticated; each code redeems once) |
 | DELETE | `/api/devices/:sessionId` | Revoke device session |
 
 ## API Tokens
@@ -625,32 +765,70 @@ First message must be `auth` within 5 seconds:
 }
 ```
 
-Auth methods: `session_token`, `local` (TUI), `hmac` (adapters), `api_key`.
+Auth methods:
+
+- `session_token` — `credentials.token`: a login session token (web, TUI after
+  `/login`).
+- `api_key` — `credentials.key`: a personal API token (`octi_…`, Settings →
+  API Tokens).
+- `artifact_token` — `credentials.artifactId` and `credentials.token`: the
+  short-lived token an artifact embed page is served with. The connection is a
+  viewer of that one artifact, not a user: it may only `ping` and
+  (un)subscribe `artifact:<id>`. At most 50 viewer connections per artifact;
+  each closes when its token expires (code 4001), and all close when the
+  artifact is deleted or its visibility changes (code 4003; reload the page
+  for a new token).
+
+A user holds at most `gateway.maxConnectionsPerUser` (default 20) signed-in
+connections; the one over the cap gets `auth_error` `Too many connections`.
+A client frame larger than `gateway.maxFrameBytes` (default 262144 bytes,
+echoed in `auth_ok.maxFrameBytes`) closes the socket with code 1009.
+
+Every authenticated connection has `user` trust; there is no `local` trust and
+no loopback exemption. Admin rights come from the user's `isAdmin` flag in the
+database. A connection whose user is deactivated or whose admin flag changes is
+closed (codes 4001 and 4004) and must re-authenticate.
 
 ### Client → Gateway Messages
 
 | Type | Description |
 |------|-------------|
 | `auth` | Authentication handshake |
-| `chat.send` | Send chat message (requires `sessionId`, `content`) |
+| `chat.send` | Send chat message (requires `sessionId`, `content`; optional `workspaceId` — one of yours — for a session the server has not seen yet, `fileRefs`, `outputMode`, `attachments`). A message sent while a turn of that session runs steers it (`chat.message` with `injected: true`) |
+| `chat.steer` | Inject a message into the running turn of one of your sessions (a normal `chat.send` when none runs) |
+| `chat.interject` | A side question answered alongside a running turn |
 | `command` | Execute gateway command (`name`, optional `args`) |
-| `subscribe` | Subscribe to event patterns (e.g., `["agent.*"]`) |
-| `unsubscribe` | Remove event subscriptions |
+| `subscribe` | `patterns`: event-type patterns over the connection's own events (e.g., `["agent.*"]`); `resources`: resources to receive events of (e.g., `["artifact:<id>"]`), each access-checked and answered with `subscribed` or a `FORBIDDEN` error |
+| `unsubscribe` | Remove event patterns and/or resources |
 | `permission.respond` | Approve/deny permission request |
 | `approval.respond` | Approve/deny pipeline approval |
-| `agent.stop` | Stop a running agent (admin/local only) |
+| `agent.stop` | Stop one of the connection's own user's running agents (an admin included; another user's agent is `AGENT_NOT_FOUND`) |
+| `voice.set` | `{ sessionId, on }` — voice mode for one of your sessions on this connection: lifecycle narration arrives as `voice.speak` events; cleared when the connection closes. Another user's session is `SESSION_NOT_FOUND` |
+| `replay` | `{ sessionId, afterEventId? }` — the buffered events of one of your existing sessions after `afterEventId`. Another user's or an unknown session is `SESSION_NOT_FOUND` |
 | `ping` | Heartbeat |
 
 ### Gateway → Client Messages
 
 | Type | Description |
 |------|-------------|
-| `auth_ok` | Auth success (includes `connectionId`, `capabilities`, `serverTime`) |
+| `auth_ok` | Auth success (includes `connectionId`, `capabilities`, `serverTime`, `maxFrameBytes`) |
 | `auth_error` | Auth failure |
-| `event` | Gateway event (agent lifecycle, chat response, etc.) |
+| `event` | Gateway event (agent lifecycle, chat response, etc.); only the connection's own user's events, plus those of subscribed resources |
+| `subscribed` | Resources of a `subscribe` that passed the access check |
 | `command.result` | Result of a command |
 | `error` | Error with `code` and `message` |
 | `pong` | Heartbeat response with server time |
+| `permission.pending` | `{ requests, approvals }`: your open permission requests and root-agent approvals, after every `subscribe` with patterns (events raised while it is read follow it) and after a `permission.respond` that found the request already answered |
+| `replay` | `{ sessionId, events, gap }`: answer to `replay`; `gap` means the events cannot bridge what was missed — reload from REST |
+
+Events of note for clients (`event.type`): `chat.response`, `chat.delta`,
+`chat.error` (a failed turn, to every connection of the user),
+`chat.message` (`injected` steer, `sideChannel` answer, or `proactive` in-app
+delivery to `webchat:<your id>`), `permission.request` / `permission.resolved`,
+`agent.approval_required` / `approval.resolved`, `document.*`,
+`model.install_progress`, `voice.speak`, `swarm.*`, `agent.*`. A refused
+`approval.respond` answers `error` `APPROVAL_NOT_FOUND` (unknown, someone
+else's, or already answered) or `APPROVAL_EXPIRED`.
 
 ### Gateway Commands
 
@@ -694,9 +872,11 @@ shuts down.
 | GET | `/api/gateway/adapters` | Channel adapter status |
 | GET | `/api/health/time` | Server time and timezone |
 
-### Legacy WebSocket (deprecated)
+### Retired sockets
 
-The old `/ws?token=<jwt>` endpoint still works during migration but will be removed. Use `/gateway` for new integrations.
+`/ws` and `/ws/permissions` were removed (coworking S0d); the web app uses
+`/gateway`. The browser extension's `/ws/browser-bridge` and the voice
+sockets (`/voice`, `/voice/media/:provider`) remain.
 
 ## OpenAI-compatible API (`/v1`)
 

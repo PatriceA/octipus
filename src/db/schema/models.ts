@@ -1,5 +1,6 @@
-import { boolean, index, integer, jsonb, pgTable, real, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { organizations } from './organizations';
+import { users } from './users';
 
 /** Output-token default for both the ceiling and the per-request limit. They are
  *  validated against each other, so they move together: 0101 raised one and left
@@ -15,6 +16,12 @@ export const modelConfig = pgTable('model_config', {
   apiKeyRef: text('api_key_ref'), // Reference to vault entry
   /** Org-shared registry. NULL = system-wide. Members of the org see this row in their list. */
   orgId: uuid('org_id').references(() => organizations.id, { onDelete: 'cascade' }),
+  /**
+   * Personal row (coworking spec §8.1): set ⇒ the row belongs to this user only
+   * and is named `u/<userId>/<slug>`. NULL = install/org row. Ownership is this
+   * column; the name is never parsed.
+   */
+  ownerUserId: uuid('owner_user_id').references(() => users.id, { onDelete: 'cascade' }),
   // Capabilities
   maxTokens: integer('max_tokens').default(DEFAULT_MAX_OUTPUT_TOKENS).notNull(),
   contextWindow: integer('context_window').default(128000).notNull(),
@@ -45,11 +52,32 @@ export const modelConfig = pgTable('model_config', {
   providerIdx: index('model_config_provider_idx').on(table.provider),
   topicsIdx: index('model_config_topics_idx').on(table.topics),
   orgIdIdx: index('model_config_org_id_idx').on(table.orgId),
+  ownerUserIdIdx: index('model_config_owner_user_id_idx').on(table.ownerUserId),
+}));
+
+/**
+ * A user's own topic bindings (§8.1): which personal row runs a text topic for
+ * them. Separate from `modelConfig.topicRoles`, which the admin topics route
+ * rewrites. One primary per (user, topic).
+ */
+export const userModelBindings = pgTable('user_model_bindings', {
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  topic: text('topic').notNull(),
+  modelName: text('model_name').notNull().references(() => modelConfig.name, { onDelete: 'cascade', onUpdate: 'cascade' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.userId, table.topic] }),
+  modelIdx: index('user_model_bindings_model_idx').on(table.modelName),
 }));
 
 export interface CLIAgentConfig {
   /** Explicitly allow server API-key environment variables into the CLI. Default: use CLI login/config. */
   inheritApiKeys?: boolean;
+  /**
+   * The install's CLI login may serve agents in shared spaces (D14). Install
+   * CLI models are personal subscriptions unless an operator marks them.
+   */
+  sharedUse?: boolean;
   /** Permission mode: 'bypassPermissions' (Claude), 'yolo' (Gemini) */
   permissionMode?: string;
   /** Allowed tools whitelist (Claude only) */
@@ -146,6 +174,10 @@ export const costLog = pgTable('cost_log', {
   totalCost: real('total_cost').notNull(),
   requestType: text('request_type'), // chat, completion, embedding
   metadata: jsonb('metadata').$type<CostLogMetadata>().default({}),
+  /** The workspace the call ran in. No foreign key: billing outlives a purged space. */
+  workspaceId: uuid('workspace_id'),
+  /** Who pays: the requester (`own`), a space sponsor (`sponsor`, S5), or the install (`install`-topic calls). */
+  funding: text('funding').$type<CostFunding>().default('own').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   userIdIdx: index('cost_log_user_id_idx').on(table.userId),
@@ -153,6 +185,8 @@ export const costLog = pgTable('cost_log', {
   modelNameIdx: index('cost_log_model_name_idx').on(table.modelName),
   createdAtIdx: index('cost_log_created_at_idx').on(table.createdAt),
 }));
+
+export type CostFunding = 'own' | 'sponsor' | 'install';
 
 export interface CostLogMetadata {
   [key: string]: unknown;
@@ -168,6 +202,7 @@ export interface CostLogMetadata {
 }
 
 export type ModelConfigEntry = typeof modelConfig.$inferSelect;
+export type UserModelBinding = typeof userModelBindings.$inferSelect;
 export type NewModelConfigEntry = typeof modelConfig.$inferInsert;
 export type CostLogEntry = typeof costLog.$inferSelect;
 export type NewCostLogEntry = typeof costLog.$inferInsert;

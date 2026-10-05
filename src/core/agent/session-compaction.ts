@@ -1,4 +1,5 @@
 import { getConfig } from '@/config';
+import { type SessionAudience, sessionAudience } from './audience';
 import { capNativeSnapshot, readSessionHistory, toContextMessage, withSessionConversation } from '@/core/session-history';
 import { getModelRegistry } from '@/models/model-registry';
 import { getGatewayHub } from '@/core/gateway/hub';
@@ -73,6 +74,17 @@ export interface MaybeCompactSessionOptions {
   userInstructions?: string;
   /** Bypass the anti-thrashing stall guard. Used by manual `/compact`. */
   force?: boolean;
+  /**
+   * A room (§6.4): the requester of the turn that triggered the pass, or
+   * the caller of `/compact`. The summary call is attributed to them, funded
+   * by the install. Required for a room.
+   */
+  requesterId?: string;
+  /**
+   * A room: compact only the rows before this post — the request of the
+   * turn about to run, which is never summarized before it is answered.
+   */
+  before?: { id: string; createdAt: string };
 }
 
 /**
@@ -86,6 +98,7 @@ export interface MaybeCompactSessionOptions {
 export async function maybeCompactSession(sessionId: string, options: MaybeCompactSessionOptions = {}): Promise<boolean> {
   return withSessionConversation(sessionId, async () => {
     const session = await sessionRepository.findById(sessionId);
+    if (session?.kind === 'room') return compactRoom(sessionId, options);
     // Vendor histories are richer than the Octipus transcript. Automatic
     // maintenance must never rotate them onto a lossy Octipus checkpoint.
     if (session && rootCliConversation(session)) return false;
@@ -163,6 +176,9 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
       return false;
     }
     const last = prefix[prefix.length - 1];
+    // Read before anything is written: a failed read must fail the pass,
+    // not reject after the checkpoint is already published.
+    const audience = await sessionAudience(history.session);
     // Persist the audit entry before publishing its checkpoint. A failed insert
     // cannot invalidate a vendor thread. A clear invalidates the CAS below.
     const entry = await compactionEntryRepository.insert({
@@ -185,9 +201,13 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
       nativeConversation: native && nativeTail ? { ...native, checkpointId: entry.id,
         messages: capNativeSnapshot([{ role: 'user', content: `[Conversation checkpoint]\n${summary}`, timestamp: last.createdAt.toISOString() }, ...nativeTail]) } : null,
     }, { keepCliSessionPrefixes: CHILD_CLI_SESSION_KEY_PREFIXES });
-    if (published && extractsMemoryOnCompaction(getConfig().memory?.extractionCadence, history.session)) {
+    if (published && extractsMemoryOnCompaction(getConfig().memory?.extractionCadence, audience)) {
       const { updateMemoriesAfterTurn } = await import('@/core/memory');
-      void updateMemoriesAfterTurn({ userId: history.session.userId, workspaceId: null, agentScope: null, userMessage: result.summaryText })
+      const { turnWorkspaceId } = await import('./session-resolver');
+      const { userId, workspaceId } = history.session;
+      // Memories follow the session's workspace, as on every turn.
+      void turnWorkspaceId(userId, workspaceId)
+        .then(ws => updateMemoriesAfterTurn({ userId, workspaceId: ws, agentScope: null, userMessage: result.summaryText }))
         .catch(err => coreLogger.warn({ err, sessionId }, 'on-compaction memory update failed'));
     }
     if (published) coreLogger.info({ sessionId, tokensBefore, tokensAfter, savingsRatio }, 'Session checkpoint committed; vendor conversations rotated');
@@ -196,25 +216,140 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
 }
 
 /**
+ * Compaction of a room (§6.4), inside the caller's conversation lock. A
+ * room has no native snapshot and no vendor session; its history is the
+ * attributed transcript after the checkpoint, so the pass is triggered by
+ * that transcript's size (`rooms.transcriptWindowChars`) rather than by row
+ * count, and the summary is made from the attributed rows themselves — the
+ * checkpoint then covers exactly the rows it summarized, and the window
+ * starts where it ends (no gap, no overlap). The summary call runs as the
+ * requester, funded by the install; it never feeds memory extraction (a
+ * room's words are not anyone's personal memories).
+ *
+ * The history holds every row after the checkpoint (paged, no row cap), and
+ * the summary is made in chunks of at most `ROOM_SUMMARY_CHUNK_CHARS`, each
+ * folding into the previous one's summary: however many posts piled up
+ * since the last pass, all of them are summarized, none skipped.
+ */
+async function compactRoom(sessionId: string, options: MaybeCompactSessionOptions): Promise<boolean> {
+  if (!options.requesterId) throw new Error('Room compaction needs the requester of the turn that triggered it');
+  const history = await readSessionHistory(sessionId);
+  if (!history.session) return false;
+  const { isBefore } = await import('@/core/session-history');
+  const before = options.before;
+  const rows = before ? history.rows.filter((row) => isBefore(row, before)) : history.rows;
+  if (rows.length < 2) return false;
+  const { transcriptChars, renderRoomTranscript } = await import('@/core/rooms/room-context');
+  const window = getConfig().rooms.transcriptWindowChars;
+  const manual = Boolean(options.force || options.userInstructions);
+  const chars = transcriptChars(rows);
+  if (!manual && chars <= window) return false;
+  // Keep the newest rows that fit in half the window verbatim (at least one),
+  // summarize everything before them (at least one).
+  let boundary = rows.length - 1;
+  for (let kept = transcriptChars([rows[boundary]]); boundary > 1; boundary--) {
+    kept += transcriptChars([rows[boundary - 1]]);
+    if (kept > window / 2) break;
+  }
+  const prefix = rows.slice(0, boundary);
+  if (prefix.length === 0) return false;
+  const model = await getModelRegistry().getDefaultModel();
+  if (!model) throw new Error('No model configured for session compaction');
+  const { withProviderUsageContext } = await import('@/models/providers/instrumented');
+  let previousSummary = history.checkpoint?.summary;
+  let previousFileOps = history.checkpoint?.fileOps;
+  let result: Awaited<ReturnType<typeof createLLMSummary>> | undefined;
+  for (const chunk of roomSummaryChunks(prefix, transcriptChars)) {
+    const transcript = renderRoomTranscript({ roomTitle: history.session.title ?? 'Room', rows: chunk });
+    result = await withProviderUsageContext(
+      { userId: options.requesterId, sessionId, workspaceId: history.session.workspaceId, funding: 'install' },
+      () => createLLMSummary([{ role: 'user', content: transcript, timestamp: new Date() }], model.modelId, {
+        previousSummary,
+        previousFileOps,
+        userInstructions: options.userInstructions,
+        userId: options.requesterId,
+        requireSuccess: true,
+      }),
+    );
+    if (!result.summaryText.trim()) return false;
+    previousSummary = result.message.content;
+    previousFileOps = result.fileOps;
+  }
+  if (!result) return false;
+  const summary = result.message.content;
+  const tokensBefore = Math.ceil(chars / 4);
+  const tokensAfter = Math.ceil((summary.length + transcriptChars(rows.slice(boundary))) / 4);
+  const savingsRatio = tokensBefore > 0 ? (tokensBefore - tokensAfter) / tokensBefore : 0;
+  const last = prefix[prefix.length - 1];
+  const entry = await compactionEntryRepository.insert({
+    sessionId, parentEntryId: history.checkpoint?.entryId ?? null,
+    summary: result.summaryText, fileOps: result.fileOps,
+    userInstructions: options.userInstructions ?? null,
+    tokensBefore, tokensAfter, savingsRatio, messagesSummarized: prefix.length,
+    triggerReason: manual ? 'force' : 'room-window',
+  });
+  const published = await sessionRepository.patchContextIfGeneration(sessionId, history.generation, {
+    checkpoint: { generation: history.generation, through: { id: last.id, createdAt: last.createdAt.toISOString() },
+      summary, fileOps: result.fileOps, entryId: entry.id },
+    compactionState: { lastCompactedAt: new Date().toISOString(), lastCompactTokens: tokensBefore,
+      lastSavingsRatio: savingsRatio, ineffectivePasses: 0, compactionIneffective: false },
+  });
+  if (published) coreLogger.info({ sessionId, chars, summarized: prefix.length }, 'Room checkpoint committed');
+  return Boolean(published);
+}
+
+/** The most transcript one room summary call reads; a longer prefix is summarized in several. */
+export const ROOM_SUMMARY_CHUNK_CHARS = 48_000;
+
+/**
+ * `rows` cut into consecutive chunks of at most `ROOM_SUMMARY_CHUNK_CHARS`
+ * of transcript; a single longer post is cut to that size in its chunk.
+ */
+function roomSummaryChunks<T extends { content: string; role: string; createdAt: Date; authorName: string | null }>(
+  rows: readonly T[],
+  charsOf: (rows: readonly T[]) => number,
+): T[][] {
+  const chunks: T[][] = [];
+  let chunk: T[] = [];
+  let size = 0;
+  for (const original of rows) {
+    const row = original.content.length > ROOM_SUMMARY_CHUNK_CHARS
+      ? { ...original, content: `${original.content.slice(0, ROOM_SUMMARY_CHUNK_CHARS - 200)} …[cut]` }
+      : original;
+    const chars = charsOf([row]);
+    if (chunk.length > 0 && size + chars > ROOM_SUMMARY_CHUNK_CHARS) {
+      chunks.push(chunk);
+      chunk = [];
+      size = 0;
+    }
+    chunk.push(row);
+    size += chars;
+  }
+  if (chunk.length > 0) chunks.push(chunk);
+  return chunks;
+}
+
+/**
  * Whether a published checkpoint feeds memory extraction. Never for a
- * group-channel thread: its summary carries other members' words, which must
- * not become the requester's personal memories.
+ * group-channel thread or a room (the summary carries other members' words,
+ * which must not become the requester's personal memories), nor for a space
+ * session (personal memories never touch a space, I7): `sessionAudience`.
  */
 export function extractsMemoryOnCompaction(
   cadence: string | undefined,
-  session: { groupChannelId?: string | null },
+  audience: Pick<SessionAudience, 'personalMemoryOff'>,
 ): boolean {
-  return cadence === 'on_compaction' && !session.groupChannelId;
+  return cadence === 'on_compaction' && !audience.personalMemoryOff;
 }
 
-/** Shared manual command for gateway and chat clients. */
-export async function compactSessionCommand(sessionId: string | undefined, args: string): Promise<string> {
+/** Shared manual command for gateway and chat clients. `requesterId` is who typed `/compact`. */
+export async function compactSessionCommand(sessionId: string | undefined, args: string, requesterId: string): Promise<string> {
   if (!sessionId) return 'No active session to compact.';
   try {
     const instructions = args.trim();
     const cliResult = await withSessionConversation(sessionId, async () => {
       const session = await sessionRepository.findById(sessionId);
-      return session ? compactCliConversation(session, instructions) : null;
+      return session ? compactCliConversation(session, instructions, requesterId) : null;
     });
     if (cliResult) return cliResult;
     const compacted = await maybeCompactSession(sessionId, {

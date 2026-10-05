@@ -23,6 +23,8 @@ import { Markdown } from '@/components/ui/markdown-renderer';
 import { Portal } from '@/components/ui/portal';
 import { api, getApiUrl } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { useGatewayMessages } from '@/lib/gateway-context';
+import { useWorkspaceAccess, useWorkspaceId } from '@/lib/workspace-context';
 
 interface Document {
   id: string;
@@ -384,9 +386,11 @@ function DocumentPreview({ documentId, mimeType, originalName }: { documentId: s
 }
 
 // --- Detail Dialog ---
-function DetailDialog({ documentId, onClose, onDelete, onCancel }: { documentId: string; onClose: () => void; onDelete: (id: string) => void; onCancel: (id: string) => void }) {
+/** `onDelete`/`onCancel` are absent for a role that cannot write in the space. */
+function DetailDialog({ documentId, onClose, onDelete, onCancel }: { documentId: string; onClose: () => void; onDelete?: (id: string) => void; onCancel?: (id: string) => void }) {
+  const workspaceId = useWorkspaceId();
   const { data, isLoading } = useQuery({
-    queryKey: ['document', documentId],
+    queryKey: ['document', documentId, workspaceId],
     queryFn: async () => {
       return await api.get<Document>(`/documents/${documentId}`);
     },
@@ -402,7 +406,7 @@ function DetailDialog({ documentId, onClose, onDelete, onCancel }: { documentId:
         <div className="flex items-center justify-between p-4 border-b border-outline-variant/10">
           <h2 className="text-lg font-semibold text-on-surface">Document Details</h2>
           <div className="flex items-center gap-2">
-            {data && (data.status === 'queued' || data.status === 'processing') && (
+            {onCancel && data && (data.status === 'queued' || data.status === 'processing') && (
               <button
                 onClick={() => { onCancel(documentId); onClose(); }}
                 className="px-3 py-1.5 text-xs font-medium text-warning bg-warning-container/60 rounded-lg hover:bg-warning-container/60 cursor-pointer flex items-center gap-1"
@@ -411,13 +415,15 @@ function DetailDialog({ documentId, onClose, onDelete, onCancel }: { documentId:
                 Cancel
               </button>
             )}
-            <button
-              onClick={() => { onDelete(documentId); onClose(); }}
-              className="px-3 py-1.5 text-xs font-medium text-error bg-error-container/60 rounded-lg hover:bg-error-container/60 cursor-pointer flex items-center gap-1"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              Delete
-            </button>
+            {onDelete && (
+              <button
+                onClick={() => { onDelete(documentId); onClose(); }}
+                className="px-3 py-1.5 text-xs font-medium text-error bg-error-container/60 rounded-lg hover:bg-error-container/60 cursor-pointer flex items-center gap-1"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Delete
+              </button>
+            )}
             <button onClick={onClose} className="text-on-surface-variant hover:text-on-surface cursor-pointer">
               <X className="w-5 h-5" />
             </button>
@@ -532,8 +538,8 @@ function DocumentCard({
 }: {
   document: Document;
   onViewDetail: (id: string) => void;
-  onDelete: (id: string) => void;
-  onCancel: (id: string) => void;
+  onDelete?: (id: string) => void;
+  onCancel?: (id: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -580,7 +586,7 @@ function DocumentCard({
           <span className={cn('px-2 py-0.5 text-xs rounded-full font-medium', getStatusColor(document.status))}>
             {document.status}
           </span>
-          {(document.status === 'queued' || document.status === 'processing') && (
+          {onCancel && (document.status === 'queued' || document.status === 'processing') && (
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -602,16 +608,18 @@ function DocumentCard({
           >
             <Eye className="w-4 h-4" />
           </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete(document.id);
-            }}
-            className="p-1 text-on-surface-variant hover:text-error cursor-pointer"
-            title="Delete document"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
+          {onDelete && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete(document.id);
+              }}
+              className="p-1 text-on-surface-variant hover:text-error cursor-pointer"
+              title="Delete document"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -660,12 +668,24 @@ function DocumentCard({
 }
 
 export default function DocumentsPage() {
+  const workspaceId = useWorkspaceId();
+  // Commenters and viewers in a space (and everyone in an archived one) read
+  // documents; they do not upload, delete or cancel.
+  const { canWrite } = useWorkspaceAccess();
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [showUpload, setShowUpload] = useState(false);
   const [viewingDocId, setViewingDocId] = useState<string | null>(null);
   const queryClient = useQueryClient();
+  // Processing progress is pushed (`document.*` on the tab's gateway
+  // connection); the 10 s refetch below stays as the fallback.
+  useGatewayMessages((message) => {
+    if (message.type === 'event' && message.event.type.startsWith('document.')) {
+      void queryClient.invalidateQueries({ queryKey: ['documents'] });
+      void queryClient.invalidateQueries({ queryKey: ['document'] });
+    }
+  });
 
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to delete this document?')) return;
@@ -687,7 +707,7 @@ export default function DocumentsPage() {
   };
 
   const { data, isLoading } = useQuery({
-    queryKey: ['documents'],
+    queryKey: ['documents', workspaceId],
     queryFn: async () => {
       try {
         return await api.get<DocumentsResponse>('/documents');
@@ -723,13 +743,15 @@ export default function DocumentsPage() {
             {documents.length} document{documents.length !== 1 ? 's' : ''}
           </p>
         </div>
-        <button
-          onClick={() => setShowUpload(true)}
-          className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary text-on-primary rounded-xs hover:bg-primary-dim cursor-pointer"
-        >
-          <Plus className="w-4 h-4" />
-          Upload
-        </button>
+        {canWrite && (
+          <button
+            onClick={() => setShowUpload(true)}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary text-on-primary rounded-xs hover:bg-primary-dim cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            Upload
+          </button>
+        )}
       </div>
 
       {/* Queue status banner */}
@@ -813,16 +835,23 @@ export default function DocumentsPage() {
               key={doc.id}
               document={doc}
               onViewDetail={setViewingDocId}
-              onDelete={handleDelete}
-              onCancel={handleCancel}
+              onDelete={canWrite ? handleDelete : undefined}
+              onCancel={canWrite ? handleCancel : undefined}
             />
           ))}
         </div>
       )}
 
       {/* Dialogs */}
-      {showUpload && <UploadDialog onClose={() => setShowUpload(false)} />}
-      {viewingDocId && <DetailDialog documentId={viewingDocId} onClose={() => setViewingDocId(null)} onDelete={handleDelete} onCancel={handleCancel} />}
+      {showUpload && canWrite && <UploadDialog onClose={() => setShowUpload(false)} />}
+      {viewingDocId && (
+        <DetailDialog
+          documentId={viewingDocId}
+          onClose={() => setViewingDocId(null)}
+          onDelete={canWrite ? handleDelete : undefined}
+          onCancel={canWrite ? handleCancel : undefined}
+        />
+      )}
     </div>
   );
 }

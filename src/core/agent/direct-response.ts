@@ -4,15 +4,17 @@ import { VOLATILE_MARKER } from '@/models/providers/prompt-cache';
 import { getResponseCache } from '@/core/response-cache';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
+import type { SpaceRole } from '@/db/schema/organizations';
 import type { SessionContext } from '@/db/schema/sessions';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
 import { formatDateTimeContext } from '@/utils/date-context';
 import { coreLogger } from '@/utils/logger';
 import { buildSecurityReminder } from './input-guard';
-import type { ModelSelector } from './model-selector';
+import type { ModelSelector, SelectedModel } from './model-selector';
 import { SECURITY_PREAMBLE } from './roles';
 import { appendSources, type ResponseMetadata } from './types';
+import { omitSpaceTurnContext } from '@/core/spaces/turn-context';
 
 /**
  * Assemble a direct-response system prompt from its components.
@@ -61,13 +63,22 @@ async function directResponseInternal(
    * Skip complexity-based routing and use this exact model. The voice plan gate
    * passes the fast `voice`-topic model here so spoken planning turns stay snappy.
    */
-  modelOverride?: string,
+  modelOverride?: SelectedModel,
+  /**
+   * The turn's space, when it runs in one: the model honours the space rules
+   * (a commenter gets API models only, a CLI row only with a space mode).
+   */
+  space?: { role: SpaceRole } | null,
 ): Promise<{ response: string; metadata: ResponseMetadata }> {
   const startTime = Date.now();
   const client = getLiteLLMClient();
-  const modelName = modelOverride || (await modelSelector.selectByComplexity(complexity));
+  const selected = modelOverride ?? (await modelSelector.selectByComplexity(complexity, { userId, inSpace: !!space, spaceRole: space?.role }));
+  const modelName = selected.modelId;
 
-  const history = await readSessionHistory(sessionId);
+  // In a room the request is the member's post, already stored: the
+  // history (the fenced transcript) leaves it out and no user row is added.
+  const history = await readSessionHistory(sessionId, { room: { requesterId: userId, content: message } });
+  const inRoom = history.session?.kind === 'room';
   const sessionForBoundary = history.session;
   const session = history.session;
   const selectedSkills = await buildSelectedSkillPrompt(userId, sessionId);
@@ -117,9 +128,11 @@ async function directResponseInternal(
     }
     if (summary) sources.push('session summary');
 
-    // Inject user profile context for personalized responses
+    // Inject user profile context for personalized responses — never in a
+    // space or room session, whose answers land in shared content (§5.6).
     let userProfileStr = '';
-    if (userId) {
+    const { sessionAudience } = await import('./audience');
+    if (userId && !(await sessionAudience(session)).personalProfileOff) {
       try {
         const { ProfileRepository } = await import('@/db/repositories/profile-repository');
         const profileRepo = new ProfileRepository();
@@ -148,11 +161,16 @@ async function directResponseInternal(
     const boundary = systemContent.match(VOLATILE_MARKER)?.index ?? systemContent.length;
     const stableSystem = systemContent.slice(0, boundary);
     const promptContext = systemContent.slice(boundary).trim();
-    const userRow = await messageRepository.createForGeneration({ sessionId, role: 'user', content: message,
-      metadata: { promptContext } }, history.generation);
-    if (!userRow) return { response: 'Conversation was cleared while this turn was running.', metadata: { model: modelName } };
-    await sessionRepository.incrementMessageCount(sessionId);
-    historyMessages.push({ role: 'user', content: [promptContext, message].filter(Boolean).join('\n\n'), timestamp: userRow.createdAt });
+    let requestAt = new Date();
+    if (!inRoom) {
+      // The space turn context is this turn's only, never stored (§6.5, §6.7).
+      const userRow = await messageRepository.createForGeneration({ sessionId, role: 'user', content: message,
+        metadata: { promptContext: omitSpaceTurnContext(promptContext).trim() } }, history.generation);
+      if (!userRow) return { response: 'Conversation was cleared while this turn was running.', metadata: { model: modelName } };
+      await sessionRepository.incrementMessageCount(sessionId);
+      requestAt = userRow.createdAt;
+    }
+    historyMessages.push({ role: 'user', content: [promptContext, message].filter(Boolean).join('\n\n'), timestamp: requestAt });
     // Response reuse requires the whole effective context, model and clear generation.
     const recentContext = JSON.stringify([history.generation, modelName, stableSystem, historyMessages.map(m => [m.role, m.content])]);
     const cached = await cache.get(sessionId, message, recentContext);
@@ -160,7 +178,7 @@ async function directResponseInternal(
       metadata: { model: cached.model, tokens: 0, latencyMs: Date.now() - startTime, cached: true } };
 
     const registry = getModelRegistry();
-    const resolvedModel = await registry.getModelByModelId(modelName);
+    const resolvedModel = await registry.getModel(selected.name);
     const modelMeta = resolvedModel?.metadata as import('@/db/schema/models').ModelMetadata | null;
 
     // Casual replies should be short, but thinking models (Gemini 3, o1, etc.)

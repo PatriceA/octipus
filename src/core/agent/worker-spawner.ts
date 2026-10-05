@@ -14,6 +14,8 @@ import type { AgentContext } from '@/core/types';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import type { ProfileFact } from '@/db/schema/profiles';
 import { getModelRegistry } from '@/models/model-registry';
+import { resolveModel } from '@/models/resolve-model';
+import { isRealUserId } from '@/security/principal';
 import { QuotaExceededError } from '@/security/quota-error';
 import { isProviderQuotaError } from '@/core/errors/classification';
 import { SpendBudgetExceededError } from '@/security/spend-budget-error';
@@ -33,6 +35,9 @@ import type { TurnEvent } from './service';
 import { applyToolCap, isSmallModel } from './small-model';
 import { selectCoreToolIds } from './tool-intent';
 import type { AgentRole, WorkerResult } from './types';
+import { inheritScope, writesWithheld } from './context';
+import { sessionAudience } from './audience';
+import { withoutPersonalOnlyTools } from '@/security/space-tools';
 
 // Per-section token budget for the injected AGENTS.md guide (Phase 5 item 2).
 // ≈ the existing 8000-char cap in loadAgentsMd, so a normal guide isn't trimmed
@@ -144,7 +149,7 @@ function premiseRoots(context: AgentContext, devProjectPath?: string): string[] 
   const roots: string[] = [];
   if (devProjectPath) roots.push(devProjectPath);
   try {
-    roots.push(WorkspaceFS.forAgent({ userId: context.userId }).root);
+    roots.push(WorkspaceFS.forAgent(context).root);
   } catch {
     /* no sandbox root resolvable — the dev path (if any) still counts */
   }
@@ -160,6 +165,8 @@ export async function spawnWorker(
   overrides?: {
     systemPrompt?: string;
     model?: string;
+    /** Row identity of `model` (`model_config.name`) — required with a personal row (spec §8.1). */
+    modelName?: string;
     topic?: string;
     swarmParent?: WorkerSwarmParent;
     /**
@@ -264,15 +271,16 @@ export async function spawnWorker(
     }
   }
 
-  if (context.userId && context.userId !== 'system' && context.userId !== 'local') {
+  if (isRealUserId(context.userId)) {
     try {
-      const { getConnectorRegistry } = await import('@/connectors');
+      const { connectorOwnerOf, getConnectorRegistry } = await import('@/connectors');
       // Role↔connector binding: if the role binds specific connectors
       // (`connector:<id>` in its toolIds), expose only those; otherwise expose
       // all of the user's active connectors (backward-compatible default).
+      // In a space, the space's connectors instead of the member's (§9.5).
       const boundConnectorIds = getBoundConnectorIds(agentRole);
       const allowed = boundConnectorIds.length > 0 ? new Set(boundConnectorIds) : undefined;
-      const connectorHandlers = await getConnectorRegistry().getUserToolHandlers(context.userId, allowed);
+      const connectorHandlers = await getConnectorRegistry().getUserToolHandlers(connectorOwnerOf(context), allowed);
       roleTools.push(...connectorHandlers);
     } catch (err) {
       coreLogger.warn({ err, userId: context.userId }, 'Failed to load connector tool handlers');
@@ -298,6 +306,13 @@ export async function spawnWorker(
         'Plan mode: file-mutating tools withheld from worker',
       );
     }
+  }
+  // A space worker: personal-only tools are withheld, and a commenter's
+  // children hold no file-changing tools either (§5.6). Applied here for the
+  // same reason as plan mode: the set is final only now.
+  if (context.space) {
+    roleTools = withoutPersonalOnlyTools(roleTools);
+    if (writesWithheld(context.space, context.trigger)) roleTools = stripMutatingTools(roleTools);
   }
 
   coreLogger.info({ role: agentRole, toolCount: roleTools.length, toolNames: roleTools.map(t => t.name) }, 'Worker tools resolved');
@@ -330,15 +345,18 @@ export async function spawnWorker(
   // can't drive. Smallness is derived from the *lane* model (what runs in the
   // single-model / router case); an explicit expert modelPreference is a rare
   // override and still benefits from a leaner prompt.
+  // The requester's personal lane binding first, then the install's (§8.2).
+  const inSpace = !!context.space;
   const routing = await deps.modelSelector.selectForWorker(
     lane,
     roleTools.length > 0,
+    { userId: context.userId, inSpace, spaceRole: context.space?.role, sponsor: context.sponsor },
   );
   const agentCfg = getConfig().agent;
   let isSmall = false;
   if (routing.model) {
     try {
-      const topicMeta = await getModelRegistry().getModelByModelId(routing.model);
+      const topicMeta = await getModelRegistry().getModel(routing.name);
       isSmall = isSmallModel({ modelId: routing.model, metadata: topicMeta?.metadata }, agentCfg.smallModelMaxParams);
     } catch (err) {
       coreLogger.debug({ err, model: routing.model }, 'small-model tier check skipped (non-fatal)');
@@ -398,13 +416,16 @@ export async function spawnWorker(
   if (!finalModel) {
     return { error: 'No model configured. Please add one in the Models page.' };
   }
+  const finalModelName = overrides?.model ? overrides.modelName : routing.name;
 
   // `isSmall` above was derived from the topic model (routing.model), but the
   // worker actually runs on finalModel — an override or expert modelPreference
   // can pin a different-sized model. Re-derive smallness against finalModel so
   // the lite prompt (Phase C) and tool-discovery path both key off the model
   // that will actually run. Reused by the tool block below (avoids a 2nd lookup).
-  const finalModelEntry = await getModelRegistry().getModelByModelId(finalModel);
+  const finalModelEntry = finalModelName
+    ? await getModelRegistry().getModel(finalModelName)
+    : await getModelRegistry().getModelByModelId(finalModel, { userId: context.userId });
   const finalIsSmall = isSmallModel(
     { modelId: finalModel, metadata: finalModelEntry?.metadata },
     agentCfg.smallModelMaxParams,
@@ -518,7 +539,11 @@ export async function spawnWorker(
   // Determine if this is a dev mode session
   const session = await sessionRepository.findById(context.sessionId);
   const sessionCtx = session?.context as import('@/db/schema/sessions').SessionContext | undefined;
-  const isDevMode = sessionCtx?.devMode === true && !!sessionCtx.projectPath;
+  // Personal memories and profile facts never reach a worker of a space,
+  // room or group session (D10, I7): the same audience the root turn reads.
+  const audience = await sessionAudience(session);
+  // No dev-mode project root in a space: its workers work in the space's files.
+  const isDevMode = !context.space && sessionCtx?.devMode === true && !!sessionCtx.projectPath;
   const devProjectPath = isDevMode ? sessionCtx!.projectPath! : undefined;
 
   // Inject the curated AGENTS.md guide and maintenance instruction.
@@ -566,7 +591,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   }
 
   // Inject user profile context + related profiles for people-related queries
-  if (context.userId) {
+  if (context.userId && !audience.personalProfileOff) {
     try {
       const { ProfileRepository } = await import('@/db/repositories/profile-repository');
       const profileRepo = new ProfileRepository();
@@ -663,13 +688,14 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   } else {
     // Normal mode: global workspace.
     // Advertise the SAME root the filesystem sandbox enforces. `WorkspaceFS.forAgent`
-    // nests every real user under `<rootPath>/users/<uid>/workspaces/default/files`;
+    // nests every workspace under `<rootPath>/users/<uid>/workspaces/<workspace>/files`;
     // advertising the flat `config.workspace.rootPath` here pointed agents at a path
     // outside their own sandbox ("outside allowed workspace directories" on absolute
     // calls). `.root` is a pure path computation — no filesystem side effects.
     const config = getConfig();
-    const workspaceRoot = WorkspaceFS.forAgent({ userId: context.userId }).root;
-    const additionalPaths = config.workspace.additionalPaths?.map((p: string) => resolve(p)).filter(Boolean) || [];
+    const workspaceRoot = WorkspaceFS.forAgent(context).root;
+    // A space allows no extra paths (`WorkspaceFS.forSpace`).
+    const additionalPaths = context.space ? [] : config.workspace.additionalPaths?.map((p: string) => resolve(p)).filter(Boolean) || [];
     let workspaceHint = `\n\nWORKSPACE CONSTRAINT: You are working in the project at ${workspaceRoot}.`;
     if (additionalPaths.length > 0) {
       workspaceHint += ` Additional allowed paths: ${additionalPaths.join(', ')}.`;
@@ -689,8 +715,9 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   // Memory-redesign Phase D — surface role-scoped long-term memory.
   // Filter is OR(NULL, role) so this also picks up globally-scoped
   // facts. Auto-no-op when the memories table is empty or memory
-  // extraction has not been wired by the operator.
-  if (context.userId) {
+  // extraction has not been wired by the operator. Never in a space, room or
+  // group session (`sessionAudience`).
+  if (context.userId && !audience.personalMemoryOff) {
     try {
       const { retrieveForContext, renderMemoriesBlock } = await import('@/core/memory');
       const memRows = await retrieveForContext({
@@ -758,6 +785,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     stageNode = {
       id: '__pending__',
       rootSessionId: overrides.swarmParent.rootSessionId,
+      userId: context.userId,
       parentNodeId: overrides.swarmParent.id,
       kind: 'agent',
       depth: 1,
@@ -858,9 +886,11 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     attended: context.attended ?? false,
     sessionId: context.sessionId,
     userId: context.userId,
-    workspaceId: context.workspaceId ?? null,
+    // Workspace, space, trigger and funding: the parent's, unchanged.
+    ...inheritScope(context),
     topic: lane,
     model: finalModel,
+    modelName: finalModelEntry?.name,
     role: agentRole,
     systemPrompt,
     tools: workerTools,
@@ -951,7 +981,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     getGatewayHub().publishEvent({
       type: 'swarm.node_spawned',
       source: `swarm:${overrides.swarmParent.id}`,
-      userId: undefined,
+      userId: context.userId,
       sessionId: overrides.swarmParent.rootSessionId,
       payload: {
         rootSessionId: overrides.swarmParent.rootSessionId,
@@ -1080,7 +1110,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
         getGatewayHub().publishEvent({
           type: 'swarm.node_completed',
           source: `swarm:${overrides.swarmParent.id}`,
-          userId: undefined,
+          userId: context.userId,
           sessionId: overrides.swarmParent.rootSessionId,
           payload: {
             rootSessionId: overrides.swarmParent.rootSessionId,
@@ -1136,7 +1166,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
         getGatewayHub().publishEvent({
           type: 'swarm.node_completed',
           source: `swarm:${overrides.swarmParent.id}`,
-          userId: undefined,
+          userId: context.userId,
           sessionId: overrides.swarmParent.rootSessionId,
           payload: {
             rootSessionId: overrides.swarmParent.rootSessionId,
@@ -1161,6 +1191,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
       }
     }
     return handleWorkerFailure(error as Error, worker, workerId, finalModel, agentRole, roleConfig, lane, task, input, context, startTime, deps, {
+      modelName: finalModelEntry?.name,
       systemPrompt,
       tools: workerTools,
       toolAdvertisement,
@@ -1178,6 +1209,8 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
  * this, retried/fallback workers silently ran as a different, weaker persona.
  */
 interface WorkerRespawnContext {
+  /** Row identity of the failed model — the transient retry reruns that exact row. */
+  modelName?: string;
   systemPrompt: string;
   tools: import('@/core/agent-base').ToolHandler[];
   toolAdvertisement: import('@/core/agent-base').ToolAdvertisement;
@@ -1284,14 +1317,15 @@ async function handleWorkerFailure(
   // Respawn the ORIGINAL worker (same assembled prompt + tool surface) on a
   // given model and run the task. Shared by the transient retry and explicit
   // topic backup below.
-  const respawnAndRun = async (model: string): Promise<string> => {
+  const respawnAndRun = async (model: string, modelName: string | undefined): Promise<string> => {
     const agentManager = getAgentManager();
     const retryWorker = await agentManager.spawn({
       sessionId: context.sessionId,
       userId: context.userId,
-      workspaceId: context.workspaceId ?? null,
+      ...inheritScope(context),
       topic: lane,
       model,
+      modelName,
       role: agentRole,
       systemPrompt: respawnCtx.systemPrompt,
       tools: respawnCtx.tools,
@@ -1335,7 +1369,7 @@ async function handleWorkerFailure(
   if (isTransient && !isProviderQuotaError(error)) {
     coreLogger.info({ workerId, role: agentRole, error: errorMsg }, 'Worker failed with transient error, retrying once');
     try {
-      const retryResult = await respawnAndRun(failedModel);
+      const retryResult = await respawnAndRun(failedModel, respawnCtx.modelName);
       deps.setLastWorkerResult(retryResult);
       return retryResult;
     } catch (retryError) {
@@ -1346,15 +1380,16 @@ async function handleWorkerFailure(
   // Topic backup model — the "Backup" binding from the Topics page. One
   // attempt on the configured fallback. Skipped when unbound or when it
   // would rerun the failed model.
-  const registry = getModelRegistry();
   try {
-    const backup = await registry.getBackupModelForTopic(lane);
+    // Personal bindings have no backup: this is the install lane's (§8.2).
+    const inSpace = !!context.space;
+    const backup = await resolveModel({ userId: context.userId, topic: lane, backup: true, inSpace, spaceRole: context.space?.role, sponsor: context.sponsor });
     if (backup && backup.modelId !== failedModel) {
       coreLogger.info(
         { failedModel, backupModel: backup.modelId, topic: lane, role: agentRole },
         'Worker failed on primary model, retrying with topic backup model',
       );
-      const backupResult = await respawnAndRun(backup.modelId);
+      const backupResult = await respawnAndRun(backup.modelId, backup.name);
       deps.setLastWorkerResult(backupResult);
       return backupResult;
     }

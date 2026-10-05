@@ -7,6 +7,7 @@ import { sessionRepository } from '@/db/repositories/session-repository';
 import { coreLogger } from '@/utils/logger';
 import { isSubstantialTurn } from './triggers';
 import { processLearningJob } from './processor';
+import { canActInSession } from '@/core/rooms/access';
 
 /** Milestones are queued transactionally by workPlanRepository; this covers unplanned work. */
 export async function enqueueTurnLearning(sessionId: string, userId: string, agentId: string, startedAt: Date): Promise<void> {
@@ -26,7 +27,7 @@ export async function enqueueTurnLearning(sessionId: string, userId: string, age
   ));
   if (!isSubstantialTurn(Number(count.n), Date.now() - since.getTime())) return;
   const session = await sessionRepository.findById(sessionId);
-  if (!session || session.userId !== userId) throw new Error('Learning session not found');
+  if (!session || !(await canActInSession(session, userId, 'learning'))) throw new Error('Learning session not found');
   await backgroundJobRepository.create({ kind: 'learning', userId, workspaceId: session.workspaceId,
     title: 'Learning check: completed work', payload: { sessionId, trigger: 'substantial_turn',
       triggerKey: `turn:${agentId}`, through: new Date().toISOString() } });

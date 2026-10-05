@@ -883,6 +883,83 @@
       "when": 1789601114572,
       "tag": "0124_group_channel_modes",
       "breakpoints": true
+    },
+    {
+      "idx": 126,
+      "version": "7",
+      "when": 1789601114573,
+      "tag": "0125_knowledge_scope",
+      "breakpoints": true
+    },
+    {
+      "idx": 127,
+      "version": "7",
+      "when": 1789603114572,
+      "tag": "0126_user_deactivation",
+      "breakpoints": true
+    },
+    {
+      "idx": 128,
+      "version": "7",
+      "when": 1789605114572,
+      "tag": "0127_workspace_integrity",
+      "breakpoints": true
+    },
+    {
+      "idx": 129,
+      "version": "7",
+      "when": 1789607114572,
+      "tag": "0128_spaces",
+      "breakpoints": true
+    },
+    {
+      "idx": 130,
+      "version": "7",
+      "when": 1789609114572,
+      "tag": "0129_rooms",
+      "breakpoints": true
+    },
+    {
+      "idx": 131,
+      "version": "7",
+      "when": 1789611114572,
+      "tag": "0130_live_documents",
+      "breakpoints": true
+    },
+    {
+      "idx": 132,
+      "version": "7",
+      "when": 1789613114572,
+      "tag": "0131_personal_models",
+      "breakpoints": true
+    },
+    {
+      "idx": 133,
+      "version": "7",
+      "when": 1789615114572,
+      "tag": "0132_space_funding",
+      "breakpoints": true
+    },
+    {
+      "idx": 134,
+      "version": "7",
+      "when": 1789617114572,
+      "tag": "0133_space_bridge_connectors",
+      "breakpoints": true
+    },
+    {
+      "idx": 135,
+      "version": "7",
+      "when": 1789619114572,
+      "tag": "0134_room_probe_claim",
+      "breakpoints": true
+    },
+    {
+      "idx": 136,
+      "version": "7",
+      "when": 1789621114572,
+      "tag": "0135_guests_remote",
+      "breakpoints": true
     }
   ]
 }

@@ -4,32 +4,74 @@ import { apiContext } from '@/api/context';
 import { clearSessionCookie, sessionCookie } from '@/api/session-cookie';
 import { redeemLinkCode } from '@/channels/linking';
 import { ensureDailyBriefingHook } from '@/core/briefing';
+import { auditRepository } from '@/db/repositories/audit-repository';
 import { userRepository } from '@/db/repositories/user-repository';
 import { getPasskeyAuth } from '@/security/auth/passkey';
-import { getSessionManager } from '@/security/auth/session';
+import { getSessionManager, InactiveUserError } from '@/security/auth/session';
 import { getTOTPAuth } from '@/security/auth/totp';
 import { isAuthenticated } from '@/security/principal';
+import { clientIp, recordedClientIp } from '@/security/client-ip';
 import { getRateLimiter } from '@/security/rate-limiter';
-import { hashPassword, verifyPassword } from '@/utils/crypto';
+import { isSafeReturnTo, RETURN_TO_MAX_LENGTH } from '@/shared/return-to';
+import { afterInviteAccepted } from '@/core/spaces/invites';
+import { hasLocalAccount, type RegisterOutcome, RegistrationError, registerUser } from '@/security/registration';
+import { verifyPassword } from '@/utils/crypto';
 import { apiLogger, securityLogger } from '@/utils/logger';
+
+/**
+ * The audit row for a password sign-in attempt. `userId` is null when the
+ * username matched no account; the attempted username is kept in the details
+ * either way.
+ */
+async function auditSignIn(args: {
+  outcome: 'login' | 'login_failed';
+  userId: string | null;
+  username: string;
+  channel: 'web' | 'mobile';
+  request: Request;
+  socketAddress: string | undefined;
+  reason?: string;
+}): Promise<void> {
+  await auditRepository.log({
+    userId: args.userId,
+    action: args.outcome,
+    resourceType: 'user',
+    resourceId: args.userId,
+    ipAddress: recordedClientIp(args.request, args.socketAddress),
+    userAgent: args.request.headers.get('user-agent') || undefined,
+    channelType: args.channel,
+    details: { username: args.username, ...(args.reason ? { reason: args.reason } : {}) },
+  });
+}
+
+/** `returnTo` as the sign-in and register bodies accept it; checked with `isSafeReturnTo`. */
+const returnToField = t.Optional(t.String({ maxLength: RETURN_TO_MAX_LENGTH }));
+const INVALID_RETURN_TO = { error: 'returnTo must be a same-origin path starting with a single "/"' };
 
 export const authRoutes = new Elysia({ prefix: '/auth' })
   .use(apiContext)
   // Login with username/password
   .post(
     '/login',
-    async ({ body, request, set }) => {
-      const { username, password, totpCode } = body;
+    async ({ body, request, set, socketAddress }) => {
+      const { username, password, totpCode, returnTo } = body;
+      if (returnTo !== undefined && !isSafeReturnTo(returnTo)) {
+        set.status = 400;
+        return INVALID_RETURN_TO;
+      }
       const rateLimiter = getRateLimiter();
-      const clientIp = request.headers.get('x-forwarded-for') || undefined;
+      const ip = clientIp(request, socketAddress);
+      const audit = (outcome: 'login' | 'login_failed', userId: string | null, reason?: string) =>
+        auditSignIn({ outcome, userId, username, channel: 'web', request, socketAddress, reason });
 
       // Check account lockout before anything else
       const lockoutCheck = await rateLimiter.checkLoginAttempts(username);
       if (!lockoutCheck.allowed) {
         securityLogger.warn(
-          { username, clientIp, channel: 'web' },
+          { username, clientIp: ip, channel: 'web' },
           'Login blocked — account locked out',
         );
+        await audit('login_failed', null, 'locked_out');
         set.status = 423;
         return {
           error: 'Account temporarily locked due to too many failed login attempts.',
@@ -42,18 +84,20 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
         // Record failed attempt even for non-existent users to prevent enumeration timing attacks
         await rateLimiter.recordFailedLogin(username);
         securityLogger.warn(
-          { username, clientIp, channel: 'web', reason: 'unknown_user' },
+          { username, clientIp: ip, channel: 'web', reason: 'unknown_user' },
           'Login failed',
         );
+        await audit('login_failed', null, 'unknown_user');
         set.status = 401;
         return { error: 'Invalid credentials' };
       }
 
       if (!user.isActive) {
         securityLogger.warn(
-          { userId: user.id, username, clientIp, channel: 'web', reason: 'account_disabled' },
+          { userId: user.id, username, clientIp: ip, channel: 'web', reason: 'account_disabled' },
           'Login failed',
         );
+        await audit('login_failed', user.id, 'account_disabled');
         set.status = 401;
         return { error: 'Account is disabled' };
       }
@@ -62,9 +106,10 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
       if (!validPassword) {
         await rateLimiter.recordFailedLogin(username);
         securityLogger.warn(
-          { userId: user.id, username, clientIp, channel: 'web', reason: 'bad_password' },
+          { userId: user.id, username, clientIp: ip, channel: 'web', reason: 'bad_password' },
           'Login failed',
         );
+        await audit('login_failed', user.id, 'bad_password');
         set.status = 401;
         return { error: 'Invalid credentials' };
       }
@@ -81,9 +126,10 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
         if (!validTOTP) {
           await rateLimiter.recordFailedLogin(username);
           securityLogger.warn(
-            { userId: user.id, username, clientIp, channel: 'web', reason: 'bad_totp' },
+            { userId: user.id, username, clientIp: ip, channel: 'web', reason: 'bad_totp' },
             'Login failed',
           );
+          await audit('login_failed', user.id, 'bad_totp');
           set.status = 401;
           return { error: 'Invalid TOTP code' };
         }
@@ -93,7 +139,7 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
       await rateLimiter.clearLoginAttempts(username);
 
       const sessionManager = getSessionManager();
-      const ipAddress = clientIp;
+      const ipAddress = recordedClientIp(request, socketAddress);
       const userAgent = request.headers.get('user-agent') || undefined;
 
       const { token, session } = await sessionManager.create(user.id, {
@@ -104,9 +150,10 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
       set.headers['Set-Cookie'] = sessionCookie(token, request);
 
       securityLogger.info(
-        { userId: user.id, username, clientIp, channel: 'web' },
+        { userId: user.id, username, clientIp: ip, channel: 'web' },
         'Login successful',
       );
+      await audit('login', user.id);
 
       // Token lives only in the HttpOnly cookie — do not echo it in the
       // response body where same-origin scripts could read it.
@@ -117,6 +164,7 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
           isAdmin: user.isAdmin,
         },
         expiresAt: session.expiresAt,
+        returnTo: returnTo ?? '/',
       };
     },
     {
@@ -124,6 +172,7 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
         username: t.String(),
         password: t.String(),
         totpCode: t.Optional(t.String()),
+        returnTo: returnToField,
       }),
       detail: { tags: ['auth'] },
     }
@@ -135,17 +184,24 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
   // HttpOnly cookie and need the token directly.
   .post(
     '/login-mobile',
-    async ({ body, request, set }) => {
-      const { username, password, totpCode, deviceName } = body;
+    async ({ body, request, set, socketAddress }) => {
+      const { username, password, totpCode, deviceName, returnTo } = body;
+      if (returnTo !== undefined && !isSafeReturnTo(returnTo)) {
+        set.status = 400;
+        return INVALID_RETURN_TO;
+      }
       const rateLimiter = getRateLimiter();
-      const clientIp = request.headers.get('x-forwarded-for') || undefined;
+      const ip = clientIp(request, socketAddress);
+      const audit = (outcome: 'login' | 'login_failed', userId: string | null, reason?: string) =>
+        auditSignIn({ outcome, userId, username, channel: 'mobile', request, socketAddress, reason });
 
       const lockoutCheck = await rateLimiter.checkLoginAttempts(username);
       if (!lockoutCheck.allowed) {
         securityLogger.warn(
-          { username, clientIp, channel: 'mobile' },
+          { username, clientIp: ip, channel: 'mobile' },
           'Login blocked — account locked out',
         );
+        await audit('login_failed', null, 'locked_out');
         set.status = 423;
         return {
           error: 'Account temporarily locked due to too many failed login attempts.',
@@ -157,18 +213,20 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
       if (!user || !user.passwordHash) {
         await rateLimiter.recordFailedLogin(username);
         securityLogger.warn(
-          { username, clientIp, channel: 'mobile', reason: 'unknown_user' },
+          { username, clientIp: ip, channel: 'mobile', reason: 'unknown_user' },
           'Login failed',
         );
+        await audit('login_failed', null, 'unknown_user');
         set.status = 401;
         return { error: 'Invalid credentials' };
       }
 
       if (!user.isActive) {
         securityLogger.warn(
-          { userId: user.id, username, clientIp, channel: 'mobile', reason: 'account_disabled' },
+          { userId: user.id, username, clientIp: ip, channel: 'mobile', reason: 'account_disabled' },
           'Login failed',
         );
+        await audit('login_failed', user.id, 'account_disabled');
         set.status = 401;
         return { error: 'Account is disabled' };
       }
@@ -177,9 +235,10 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
       if (!validPassword) {
         await rateLimiter.recordFailedLogin(username);
         securityLogger.warn(
-          { userId: user.id, username, clientIp, channel: 'mobile', reason: 'bad_password' },
+          { userId: user.id, username, clientIp: ip, channel: 'mobile', reason: 'bad_password' },
           'Login failed',
         );
+        await audit('login_failed', user.id, 'bad_password');
         set.status = 401;
         return { error: 'Invalid credentials' };
       }
@@ -194,9 +253,10 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
         if (!validTOTP) {
           await rateLimiter.recordFailedLogin(username);
           securityLogger.warn(
-            { userId: user.id, username, clientIp, channel: 'mobile', reason: 'bad_totp' },
+            { userId: user.id, username, clientIp: ip, channel: 'mobile', reason: 'bad_totp' },
             'Login failed',
           );
+          await audit('login_failed', user.id, 'bad_totp');
           set.status = 401;
           return { error: 'Invalid TOTP code' };
         }
@@ -205,7 +265,7 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
       await rateLimiter.clearLoginAttempts(username);
 
       const sessionManager = getSessionManager();
-      const ipAddress = clientIp;
+      const ipAddress = recordedClientIp(request, socketAddress);
       const ua = deviceName || request.headers.get('user-agent') || 'Mobile App';
 
       const { token, session } = await sessionManager.create(user.id, {
@@ -215,9 +275,10 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
       });
 
       securityLogger.info(
-        { userId: user.id, username, clientIp, deviceName, channel: 'mobile' },
+        { userId: user.id, username, clientIp: ip, deviceName, channel: 'mobile' },
         'Login successful',
       );
+      await audit('login', user.id);
 
       return {
         token,
@@ -227,6 +288,7 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
           isAdmin: user.isAdmin,
         },
         expiresAt: session.expiresAt,
+        returnTo: returnTo ?? '/',
       };
     },
     {
@@ -235,6 +297,7 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
         password: t.String(),
         totpCode: t.Optional(t.String()),
         deviceName: t.Optional(t.String()),
+        returnTo: returnToField,
       }),
       detail: { tags: ['auth'] },
     }
@@ -285,22 +348,6 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
       const actorUserId = principal?.actorUserId ?? null;
       const actorUsername = principal?.actorUsername ?? null;
 
-      // MASTER_KEY system user — not in DB
-      if (user.id === 'system') {
-        return {
-          id: 'system',
-          username: 'system',
-          email: null,
-          isAdmin: true,
-          totpEnabled: false,
-          preferences: {},
-          channelBindings: [],
-          createdAt: new Date().toISOString(),
-          actorUserId,
-          actorUsername,
-        };
-      }
-
       const fullUser = await userRepository.findById(user.id);
       if (!fullUser) {
         return { error: 'User not found' };
@@ -323,8 +370,9 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
   )
 
   // WebSocket auth ticket — exchange the HttpOnly session cookie for a
-  // short-lived (60s) bearer token usable in the WS handshake URL
-  // (`ws://.../ws?token=<ticket>`). The web client can't read the
+  // short-lived (60s) bearer token for a socket sign-in: the gateway's
+  // `auth` frame (`method: 'session_token'`), or the `/voice` handshake URL
+  // (`?token=<ticket>`). The web client can't read the
   // HttpOnly session cookie, and SameSite=Strict prevents the cookie from
   // travelling on cross-origin WS handshakes (web at :3007, backend WS at
   // :3005). Without this endpoint the WS never authenticates and chat
@@ -336,7 +384,7 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
   .get(
     '/ws-ticket',
     async (ctx: any) => {
-      const { user, principal, request, set } = ctx;
+      const { user, principal, request, set, socketAddress } = ctx;
       if (!user || !isAuthenticated(principal)) {
         set.status = 401;
         return { error: 'Not authenticated' };
@@ -345,7 +393,7 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
       const { token, session } = await sessionManager.create(user.id, {
         channelType: 'web',
         channelId: 'ws-ticket',
-        ipAddress: request.headers.get('x-forwarded-for') || undefined,
+        ipAddress: recordedClientIp(request, socketAddress),
         userAgent: request.headers.get('user-agent') || undefined,
         ttlMs: 60_000,
       });
@@ -357,12 +405,16 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
   // Register new user
   .post(
     '/register',
-    async ({ body, request, set }) => {
-      const { username, email, password } = body;
+    async ({ body, request, set, socketAddress }) => {
+      const { username, email, password, returnTo, inviteToken } = body;
+      if (returnTo !== undefined && !isSafeReturnTo(returnTo)) {
+        set.status = 400;
+        return INVALID_RETURN_TO;
+      }
 
       // Rate-limit registration attempts by IP
       const rateLimiter = getRateLimiter();
-      const ip = request.headers.get('x-forwarded-for') || 'unknown';
+      const ip = clientIp(request, socketAddress);
       const regCheck = await rateLimiter.check(`register:${ip}`, 5, 300000); // 5 attempts per 5 min
       if (!regCheck.allowed) {
         set.status = 429;
@@ -376,36 +428,42 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
         return { error: 'Password must contain at least one uppercase letter, one lowercase letter, and one digit' };
       }
 
-      // Check if username exists
-      const existing = await userRepository.findByUsername(username);
-      if (existing) {
-        set.status = 409;
-        return { error: 'Username already exists' };
-      }
-
-      if (email) {
-        const existingEmail = await userRepository.findByEmail(email);
-        if (existingEmail) {
-          set.status = 409;
-          return { error: 'Email already exists' };
+      let outcome: RegisterOutcome;
+      try {
+        outcome = await registerUser({ username, email: email ?? null, password, inviteToken });
+      } catch (err) {
+        if (err instanceof RegistrationError) {
+          set.status = err.status;
+          return { error: err.message, code: err.code };
         }
+        throw err;
+      }
+      const { user, joined } = outcome;
+
+      if (user.isAdmin) {
+        apiLogger.info({ username }, 'First user registered — granted admin privileges');
       }
 
-      // First user becomes admin automatically
-      const allUsers = await userRepository.listAll();
-      const isFirstUser = allUsers.length === 0;
-
-      const passwordHash = await hashPassword(password);
-
-      const user = await userRepository.create({
-        username,
-        email,
-        passwordHash,
-        isAdmin: isFirstUser,
+      // Self-registration: the new user is both the actor and the resource.
+      await auditRepository.log({
+        userId: user.id,
+        action: 'user_created',
+        resourceType: 'user',
+        resourceId: user.id,
+        ipAddress: recordedClientIp(request, socketAddress),
+        userAgent: request.headers.get('user-agent') || undefined,
+        channelType: 'web',
+        details: { username: user.username, isAdmin: user.isAdmin, selfRegistered: true, ...(joined ? { joinedSpace: joined.workspaceId } : {}) },
       });
-
-      if (isFirstUser) {
-        apiLogger.info({ username }, 'First user registered — granted admin privileges');
+      // The invite was redeemed with the account: its membership follow-up
+      // (§5.9). The account and membership have committed; a failed
+      // follow-up is logged and the registration stands.
+      if (joined) {
+        try {
+          await afterInviteAccepted({ userId: user.id }, joined);
+        } catch (err) {
+          apiLogger.error({ err, userId: user.id, workspaceId: joined.workspaceId }, 'Membership follow-up after registering with an invite failed');
+        }
       }
 
       // Every user starts with one proactive turn a day: the weekday-morning
@@ -419,7 +477,7 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
 
       // Auto-login after registration
       const sessionManager = getSessionManager();
-      const ipAddress = request.headers.get('x-forwarded-for') || undefined;
+      const ipAddress = recordedClientIp(request, socketAddress);
       const userAgent = request.headers.get('user-agent') || undefined;
 
       const { token, session } = await sessionManager.create(user.id, {
@@ -441,6 +499,9 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
           isAdmin: user.isAdmin,
         },
         expiresAt: session.expiresAt,
+        returnTo: returnTo ?? '/',
+        // The space the invite token joined, with the account (S6).
+        ...(joined ? { joinedSpaceId: joined.workspaceId } : {}),
       };
     },
     {
@@ -452,9 +513,22 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
         // natively; the real check is the unique constraint on the column.
         email: t.Optional(t.String({ pattern: '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$' })),
         password: t.String({ minLength: 8 }),
+        returnTo: returnToField,
+        /** A space invite token (`/join/<token>`): redeemed in the same transaction as the account. */
+        inviteToken: t.Optional(t.String({ maxLength: 128 })),
       }),
       detail: { tags: ['auth'] },
     }
+  )
+
+  // Which registration mode the install runs (`security.registration`, S6):
+  // the sign-in page shows or hides registering by it. `firstAccount`: no
+  // account exists yet, so the first registration is open whatever the
+  // mode. Public.
+  .get(
+    '/registration',
+    async () => ({ mode: getConfig().security.registration, firstAccount: !(await hasLocalAccount()) }),
+    { detail: { tags: ['auth'] } },
   )
 
   // Passkey registration options
@@ -515,10 +589,10 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
   // Passkey authentication verification
   .post(
     '/passkey/auth/verify',
-    async ({ body, request, set }) => {
+    async ({ body, request, set, socketAddress }) => {
       // Rate-limit passkey auth attempts by IP
       const rateLimiter = getRateLimiter();
-      const ip = request.headers.get('x-forwarded-for') || 'unknown';
+      const ip = clientIp(request, socketAddress);
       const passkeyCheck = await rateLimiter.check(`passkey:${ip}`, 10, 300000); // 10 attempts per 5 min
       if (!passkeyCheck.allowed) {
         set.status = 429;
@@ -526,7 +600,7 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
       }
 
       const passkeyAuth = getPasskeyAuth();
-      const ipAddress = request.headers.get('x-forwarded-for') || undefined;
+      const ipAddress = recordedClientIp(request, socketAddress);
 
       const verification = await passkeyAuth.verifyAuthentication(body.userId, body.response, ipAddress);
 
@@ -535,10 +609,18 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
       }
 
       const sessionManager = getSessionManager();
-      const { token, session } = await sessionManager.create(body.userId, {
-        ipAddress,
-        userAgent: request.headers.get('user-agent') || undefined,
-      });
+      let created: Awaited<ReturnType<typeof sessionManager.create>>;
+      try {
+        created = await sessionManager.create(body.userId, {
+          ipAddress,
+          userAgent: request.headers.get('user-agent') || undefined,
+        });
+      } catch (err) {
+        if (!(err instanceof InactiveUserError)) throw err;
+        set.status = 401;
+        return { error: 'Account is disabled' };
+      }
+      const { token, session } = created;
 
       const user = await userRepository.findById(body.userId);
 

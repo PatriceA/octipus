@@ -12,16 +12,16 @@ import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { readSessionFile, SessionFileError, writeSessionFile } from '@/core/session-files';
 import { sessionRepository } from '@/db/repositories/session-repository';
-import { scopedRepos } from '@/db/repositories/scoped';
+import { contentRepos } from '@/db/repositories/content';
 import { isAuthenticated } from '@/security/principal';
-import { WorkspaceFS } from '@/security/workspace-fs';
+import { spaceAccessOf, WorkspaceFS } from '@/security/workspace-fs';
 import { storeChatUploads } from '@/core/chat-uploads';
 import { EXTERNAL_CHANNELS, loadNotifyScope, resolveTarget } from '@/channels/ownership';
 
 /**
  * Session routes — Phase 1a multi-user conversion.
  *
- * Each handler now routes reads and writes through `scopedRepos(principal)`,
+ * Each handler now routes reads and writes through `contentRepos(principal)`,
  * which makes "user A reads user B's session" structurally impossible at
  * the repository layer. The hand-rolled `if (!user.isAdmin && session.userId
  * !== user.id)` checks that lived in every handler before are gone — the
@@ -41,7 +41,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   .use(apiContext)
   .get('/:id/learning', async ({ user, principal, params, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
-    const session = await scopedRepos(principal).sessions.findById(params.id);
+    const session = await contentRepos(principal).sessions.findById(params.id);
     if (!session) { set.status = 404; return { error: 'Session not found' }; }
     const checks = await getDb().select({ id: backgroundJobs.id, title: backgroundJobs.title,
       status: backgroundJobs.status, stage: backgroundJobs.stage, error: backgroundJobs.error,
@@ -54,8 +54,12 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   .post('/:id/learning', async ({ user, principal, params, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
     if (!requireScope(principal, API_SCOPES.CHAT)) { set.status = 403; return { error: 'Chat scope required' }; }
-    const session = await scopedRepos(principal).sessions.findById(params.id);
+    const repos = contentRepos(principal);
+    const session = await repos.sessions.findById(params.id);
     if (!session) { set.status = 404; return { error: 'Session not found' }; }
+    // A learning check is a model run: in a space the role must allow it and
+    // the space must not be archived.
+    repos.can('run_agent');
     const job = await getDb().transaction(async tx => {
       await tx.select({ id: sessionRows.id }).from(sessionRows).where(eq(sessionRows.id, session.id)).for('update');
       const [pending] = await tx.select().from(backgroundJobs).where(and(eq(backgroundJobs.kind, 'learning'),
@@ -73,22 +77,28 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   })
   .post('/:id/monitors/events', async ({ user, principal, params, body, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
-    const session = await scopedRepos(principal).sessions.findById(params.id);
+    const repos = contentRepos(principal);
+    const session = await repos.sessions.findById(params.id);
     if (!session) { set.status = 404; return { error: 'Session not found' }; }
+    // An event can wake a monitor's agent run.
+    repos.can('run_agent');
     if (JSON.stringify(body.payload ?? null).length > 16_000) { set.status = 400; return { error: 'Event payload is too large' }; }
     await monitorService.event(session.userId, body.type, { payload: body.payload, sessionId: session.id, source: 'api' }, session.id);
     return { accepted: true };
   }, { body: t.Object({ type: t.String({ minLength: 1, maxLength: 100 }), payload: t.Unknown() }) })
   .get('/:id/monitors', async ({ user, principal, params, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
-    const session = await scopedRepos(principal).sessions.findById(params.id);
+    const session = await contentRepos(principal).sessions.findById(params.id);
     if (!session) { set.status = 404; return { error: 'Session not found' }; }
     return { monitors: await monitorRepository.list(session.userId, session.id) };
   })
   .post('/:id/monitors/:monitorId/control', async ({ user, principal, params, body, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
-    const session = await scopedRepos(principal).sessions.findById(params.id);
+    const repos = contentRepos(principal);
+    const session = await repos.sessions.findById(params.id);
     if (!session) { set.status = 404; return { error: 'Session not found' }; }
+    // Resuming restarts its runs; pausing and cancelling only stop them.
+    if (body.action === 'resume') repos.can('run_agent');
     try { return await monitorService.control(params.monitorId, session.userId, session.id, body.action); }
     catch (err) { set.status = 409; return { error: (err as Error).message }; }
   }, { body: t.Object({ action: t.Union([t.Literal('pause'), t.Literal('resume'), t.Literal('cancel')]) }) })
@@ -102,9 +112,10 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
       }
 
       const limit = query.limit ? parseInt(query.limit, 10) : 50;
-      const repos = scopedRepos(principal);
+      const repos = contentRepos(principal);
 
-      const isAdminAll = user.isAdmin && query.all === 'true';
+      // The global list is personal-door only: it never lists a space's chats.
+      const isAdminAll = user.isAdmin && query.all === 'true' && repos.kind === 'personal';
       const sessions = isAdminAll
         ? await repos.sessions.listAllAdmin(limit)
         : await repos.sessions.listOwn(limit);
@@ -141,7 +152,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         return { error: 'Not authenticated' };
       }
 
-      const session = await scopedRepos(principal).sessions.findById(params.id);
+      const session = await contentRepos(principal).sessions.findById(params.id);
       if (!session) {
         set.status = 404;
         return { error: 'Session not found' };
@@ -159,14 +170,17 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   // Plans share the session's ownership rules and remain available after reload.
   .get('/:id/plan', async ({ user, principal, params, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
-    const session = await scopedRepos(principal).sessions.findById(params.id);
+    const session = await contentRepos(principal).sessions.findById(params.id);
     if (!session) { set.status = 404; return { error: 'Session not found' }; }
     return { ...await workPlanRepository.read(session.id, session.userId), planMode: session.context?.planMode === true };
   }, { params: t.Object({ id: t.String() }), detail: { tags: ['sessions'] } })
   .post('/:id/plan/feedback', async ({ user, principal, params, body, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
-    const session = await scopedRepos(principal).sessions.findById(params.id);
+    const repos = contentRepos(principal);
+    const session = await repos.sessions.findById(params.id);
     if (!session) { set.status = 404; return { error: 'Session not found' }; }
+    // Feedback steers the agent's plan: a run, not a read.
+    repos.can('run_agent');
     const text = body.text.trim();
     if (!text) { set.status = 400; return { error: 'Feedback cannot be empty' }; }
     const state = await workPlanRepository.read(session.id, session.userId);
@@ -204,6 +218,22 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
       // has no outbound chat address and is accepted as before.
       const channelType = body.channelType || 'api';
       const channelId = body.channelId || 'api';
+      // Rooms are created in a space (POST /api/spaces/:id/rooms), never as a chat (§6.1).
+      if (channelType === 'room') {
+        set.status = 400;
+        return { error: 'Rooms are created in a space, not as a chat' };
+      }
+      // The private side panel of a room (§6.7): a private chat in the same
+      // space, linked to a room the caller may enter. Re-checked every turn.
+      const linkedRoomId = (body.context as Record<string, unknown> | undefined)?.linkedRoomId;
+      if (linkedRoomId !== undefined) {
+        const { roomAccess } = await import('@/core/rooms/access');
+        const access = typeof linkedRoomId === 'string' ? await roomAccess(user.id, linkedRoomId) : null;
+        if (!access || principal.workspaceKind !== 'shared' || access.room.workspaceId !== principal.workspaceId) {
+          set.status = 404;
+          return { error: 'Room not found' };
+        }
+      }
       if (EXTERNAL_CHANNELS.has(channelType)) {
         const resolved = await resolveTarget(await loadNotifyScope(user.id), channelType, channelId);
         if (!resolved.allowed) {
@@ -212,7 +242,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         }
       }
 
-      const session = await scopedRepos(principal).sessions.create({
+      const session = await contentRepos(principal).sessions.create({
         channelType,
         channelId,
         title: body.title,
@@ -250,7 +280,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
       const patch = Object.fromEntries(
         Object.entries({ title, status, context, metadata, pinned }).filter(([, v]) => v !== undefined),
       ) as Partial<import('@/db/schema/sessions').NewSession>;
-      const updated = await scopedRepos(principal).sessions.update(params.id, patch);
+      const updated = await contentRepos(principal).sessions.update(params.id, patch);
       if (!updated) {
         set.status = 404;
         return { error: 'Session not found' };
@@ -285,11 +315,14 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
       // the unscoped sessionRepository.delete to fan out the cascade
       // cleanup of messages/pipelines/agents — but only after confirming
       // the principal owns the row.
-      const owned = await scopedRepos(principal).sessions.findById(params.id);
+      const repos = contentRepos(principal);
+      const owned = await repos.sessions.findById(params.id);
       if (!owned) {
         set.status = 404;
         return { error: 'Session not found' };
       }
+      // An archived space reads only, the member's own chats included.
+      repos.assertOpen();
       const deleted = await sessionRepository.delete(params.id);
       if (deleted && owned.groupChannelId && owned.threadId) {
         const { forgetGroupThread } = await import('@/channels/group-channels');
@@ -314,7 +347,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         return { error: 'Not authenticated' };
       }
 
-      const repos = scopedRepos(principal);
+      const repos = contentRepos(principal);
       const session = await repos.sessions.findById(params.id);
       if (!session) {
         set.status = 404;
@@ -369,10 +402,13 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
 
   .post('/:id/attachments', async ({ user, principal, params, body, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
-    const session = await scopedRepos(principal).sessions.findById(params.id);
+    const repos = contentRepos(principal);
+    const session = await repos.sessions.findById(params.id);
     if (!session) { set.status = 404; return { error: 'Session not found' }; }
+    // In a space the files are the space's: writing them needs `write`.
+    repos.can('write');
     try {
-      return { uploaded: await storeChatUploads(WorkspaceFS.forSession(session), Array.isArray(body.files) ? body.files : [body.files]) };
+      return { uploaded: await storeChatUploads(WorkspaceFS.forSession(session, spaceAccessOf(principal)), Array.isArray(body.files) ? body.files : [body.files]) };
     } catch (error) {
       if (error instanceof SessionFileError) { set.status = error.status; return { error: error.message }; }
       throw error;
@@ -391,7 +427,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         set.status = 401;
         return { error: 'Not authenticated' };
       }
-      const session = await scopedRepos(principal).sessions.findById(params.id);
+      const session = await contentRepos(principal).sessions.findById(params.id);
       if (!session) {
         set.status = 404;
         return { error: 'Session not found' };
@@ -403,7 +439,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
       try {
         // forSession: dev-mode sessions resolve against the project dir the
         // agent actually ran in, not the per-user workspace (P1.8).
-        const fs = WorkspaceFS.forSession(session);
+        const fs = WorkspaceFS.forSession(session, spaceAccessOf(principal));
         const result = await readSessionFile(fs, query.path);
         if ('version' in result) set.headers.ETag = `"${result.version}"`;
         return result;
@@ -432,18 +468,21 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         set.status = 401;
         return { error: 'Not authenticated' };
       }
-      const session = await scopedRepos(principal).sessions.findById(params.id);
+      const repos = contentRepos(principal);
+      const session = await repos.sessions.findById(params.id);
       if (!session) {
         set.status = 404;
         return { error: 'Session not found' };
       }
+      // In a space the files are the space's: writing them needs `write`.
+      repos.can('write');
       const path = query.path ?? body.path;
       if (!path) {
         set.status = 400;
         return { error: 'Missing required param: path' };
       }
       try {
-        const fs = WorkspaceFS.forSession(session);
+        const fs = WorkspaceFS.forSession(session, spaceAccessOf(principal));
         const result = await writeSessionFile(fs, path, body.content, body.baseVersion);
         set.headers.ETag = `"${result.version}"`;
         return result;
@@ -481,12 +520,12 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         set.status = 401;
         return { error: 'Not authenticated' };
       }
-      const session = await scopedRepos(principal).sessions.findById(params.id);
+      const session = await contentRepos(principal).sessions.findById(params.id);
       if (!session) {
         set.status = 404;
         return { error: 'Session not found' };
       }
-      const fs = WorkspaceFS.forSession(session);
+      const fs = WorkspaceFS.forSession(session, spaceAccessOf(principal));
       const { getWorkspaceChanges } = await import('@/core/session-changes');
       return getWorkspaceChanges(fs.root);
     },
@@ -505,7 +544,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         set.status = 401;
         return { error: 'Not authenticated' };
       }
-      const session = await scopedRepos(principal).sessions.findById(params.id);
+      const session = await contentRepos(principal).sessions.findById(params.id);
       if (!session) {
         set.status = 404;
         return { error: 'Session not found' };
@@ -514,7 +553,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         set.status = 400;
         return { error: 'Missing required query param: path' };
       }
-      const fs = WorkspaceFS.forSession(session);
+      const fs = WorkspaceFS.forSession(session, spaceAccessOf(principal));
       let absPath: string;
       try {
         absPath = fs.resolve(query.path);
@@ -541,7 +580,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         return { error: 'Not authenticated' };
       }
 
-      const updated = await scopedRepos(principal).sessions.update(params.id, {
+      const updated = await contentRepos(principal).sessions.update(params.id, {
         status: 'completed',
         completedAt: new Date(),
       });

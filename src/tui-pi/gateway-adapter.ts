@@ -8,7 +8,7 @@
  * `AgentSessionEvent` so the rest of the app can pattern-match on
  * `kind` without re-parsing payload shapes.
  */
-import { type ConnectionStatus, GatewayClient, type GatewayClientOptions } from '@/core/gateway/client';
+import { type ConnectionStatus, type FileRef, GatewayClient, type GatewayClientOptions, type UploadedAttachment } from '@/core/gateway/client';
 import type { ChatAttachment } from '@/shared/chat-attachments';
 
 export type Role = 'user' | 'assistant' | 'system';
@@ -50,6 +50,8 @@ export type AgentSessionEvent =
   | { kind: 'agent.iteration'; agentId: string; iteration: number }
   | { kind: 'session.stats';  stats: SessionStats }
   | { kind: 'identity';       user: string | null }
+  /** No usable CLI login: the client will not connect until one is stored. */
+  | { kind: 'login_required'; reason: string }
   | { kind: 'tool';           tool: ToolEventState; agentId?: string }
   | { kind: 'command.result'; name: string; result: unknown; error?: string; data?: unknown }
   | { kind: 'agent.write';    path: string; newText: string }
@@ -99,6 +101,7 @@ export class GatewayAdapter {
       onError: (message) => this.emit({ kind: 'error', message }),
       onEvent: (event) => this.decode(event),
       onIdentityChange: (identity) => this.emit({ kind: 'identity', user: identity?.username ?? null }),
+      onLoginRequired: (reason) => this.emit({ kind: 'login_required', reason }),
     };
     this.client = new GatewayClient(clientOptions);
   }
@@ -131,7 +134,7 @@ export class GatewayAdapter {
    */
   reauthenticate(): Promise<void> { return this.client.reauthenticate(); }
 
-  /** The signed-in user, or null when running as the local machine account. */
+  /** The signed-in user, or null when signed out. */
   getIdentity(): { username: string; userId: string } | null { return this.client.getIdentity(); }
 
   // ── Subscription ────────────────────────────────────────────────
@@ -149,8 +152,13 @@ export class GatewayAdapter {
 
   // ── Outgoing messages ───────────────────────────────────────────
 
-  sendChat(sessionId: string, content: string, projectPath?: string, attachments?: ChatAttachment[]): void {
-    this.client.sendChat(sessionId, content, projectPath, attachments);
+  sendChat(sessionId: string, content: string, projectPath?: string, fileRefs?: FileRef[]): void {
+    this.client.sendChat(sessionId, content, projectPath, fileRefs);
+  }
+
+  /** Upload images for the next turn (REST); see `GatewayClient.uploadAttachments`. */
+  uploadAttachments(sessionId: string, attachments: ChatAttachment[], title: string): Promise<{ sessionId: string; uploaded: UploadedAttachment[] }> {
+    return this.client.uploadAttachments(sessionId, attachments, title);
   }
 
   sendCommand(name: string, args?: Record<string, string>): void {

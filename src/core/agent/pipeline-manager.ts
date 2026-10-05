@@ -1,4 +1,7 @@
 import { withExecutionSignal } from '@/core/execution-scope';
+import { can, SpaceError } from '@/security/space-access';
+import { buildAgentContext, resolveAgentScope, withAgentUsage } from './context';
+import type { AgentTrigger } from '@/core/types';
 import { actionRecovery } from '@/core/action-recovery';
 import { channelCanPrompt } from '@/security/approval-policy';
 import { getConfig } from '@/config';
@@ -22,7 +25,9 @@ import type {
 } from '@/db/schema/pipelines';
 import { pipelineNodes, pipelines } from '@/db/schema/pipelines';
 import { decide, type DecisionSite, recordShadow } from '@/models/decision';
+import type { ModelConfigEntry } from '@/db/schema/models';
 import { getModelRegistry, type ModelRegistry } from '@/models/model-registry';
+import { resolveModel } from '@/models/resolve-model';
 import { getTopicConfig } from '@/models/topic-config';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
@@ -266,9 +271,9 @@ export function qaVerdictCorrectionInput(report: string, reason: string, handsOf
  * the auditor's input — it is a fact about the run — and is not worth failing
  * the stage over before anyone has looked at the work.
  */
-async function runStageVerifyCommand(
+export async function runStageVerifyCommand(
   command: string,
-  ctx: { userId?: string; sessionId: string; role: string; toolIds?: string[] },
+  ctx: Pick<AgentContext, 'sessionId' | 'workspaceId' | 'space'> & { userId?: string; role: string; toolIds?: string[] },
 ): Promise<string> {
   const canRunCommands = (ctx.toolIds ?? []).includes('shell');
   if (!canRunCommands) {
@@ -278,7 +283,22 @@ async function runStageVerifyCommand(
     const { runScorers } = await import('@/core/swarm/scorers');
     const { sessionRepository } = await import('@/db/repositories/session-repository');
     const session = await sessionRepository.findById(ctx.sessionId);
-    const sessionCtx = session?.context as { devMode?: boolean; projectPath?: string } | undefined;
+    if (!session) throw new Error(`session ${ctx.sessionId} not found`);
+    const sessionCtx = session.context as { devMode?: boolean; projectPath?: string } | undefined;
+    // The command runs where the stage's agents work: the session's
+    // workspace (loaded into the file-root map by `turnWorkspaceId`), or
+    // its dev-mode project — never a project in a space, whose agents work
+    // in the space's files.
+    const { turnWorkspaceId } = await import('./session-resolver');
+    const { isSharedWorkspaceId, WorkspaceFS } = await import('@/security/workspace-fs');
+    const workspaceId = await turnWorkspaceId(session.userId, session.workspaceId);
+    const inSpace = !!ctx.space || await isSharedWorkspaceId(workspaceId);
+    // A stage naming a space without its scope is refused outright: never
+    // run as personal, and the auditor is told it failed rather than left to
+    // judge without it.
+    if (inSpace && !ctx.space) {
+      return `VERIFY COMMAND (run by the pipeline, not by you): \`${command}\`\nRESULT: FAILED.\nThe stage runs in a space but carries no space scope, so the command was refused.\n\nThat is the ground truth for this stage. Do not re-run it to check; explain it.`;
+    }
     const outcome = await runScorers(
       [{ kind: 'command_exit_zero', command }],
       { output: '', notes: '' },
@@ -286,7 +306,13 @@ async function runStageVerifyCommand(
         userId: ctx.userId,
         role: ctx.role,
         canRunCommands: true,
-        projectPath: sessionCtx?.devMode === true ? sessionCtx.projectPath : undefined,
+        // The stage's session, workspace and space: the space role cap and
+        // I6 apply to the verify command as to the stage's own shell.
+        sessionId: ctx.sessionId,
+        workspaceId: ctx.workspaceId ?? workspaceId,
+        space: ctx.space ?? null,
+        projectPath: !inSpace && sessionCtx?.devMode === true ? sessionCtx.projectPath : undefined,
+        workspaceRoot: WorkspaceFS.forSession({ ...session, workspaceId }, { space: ctx.space ?? null }).root,
       },
     );
     const failure = outcome.failures[0];
@@ -473,23 +499,48 @@ async function workspaceHead(root: string | null): Promise<string | undefined> {
 }
 
 /**
+ * Resolve a model NAME (a row name or a provider model id) the way an explicit
+ * choice resolves (coworking spec §8.2): only to a row the pipeline's owner may
+ * see — an install/org row or their own personal row. With no owner (a system
+ * pipeline), install rows only.
+ */
+async function resolveNamedModel(
+  name: string,
+  userId: string | undefined,
+  registry: ModelRegistry,
+): Promise<ModelConfigEntry | null> {
+  if (userId) return resolveModel({ userId, name });
+  const byName = await registry.getModel(name);
+  if (byName && !byName.ownerUserId) return byName;
+  return registry.getModelByModelId(name);
+}
+
+/**
  * Resolve a per-stage model override (a bound model name or id) to a concrete
- * modelId. Returns undefined when no override is set; throws (fail loud) when an
- * override names a model that isn't registered/enabled.
+ * row. Returns undefined when no override is set; throws (fail loud) when an
+ * override names a model that isn't registered/enabled — or that the
+ * pipeline's owner may not use (another user's personal model).
  */
 async function resolveStageModelId(
   stageModel: string | undefined,
+  userId: string | undefined,
   registry: ModelRegistry,
-): Promise<string | undefined> {
+): Promise<StageModel | undefined> {
   if (!stageModel) return undefined;
-  const model = (await registry.getModel(stageModel)) || (await registry.getModelByModelId(stageModel));
+  const model = await resolveNamedModel(stageModel, userId, registry);
   if (!model) {
     throw new Error(
       `Pipeline stage has model override '${stageModel}' but no such model is registered. ` +
         `Fix the recipe's stage model or clear it.`,
     );
   }
-  return model.modelId;
+  return { modelId: model.modelId, name: model.name };
+}
+
+/** A stage's model: provider id plus the row it came from (spec §8.1). */
+interface StageModel {
+  modelId: string;
+  name: string;
 }
 
 /**
@@ -500,7 +551,8 @@ async function resolveStageModelId(
  *      `mechanical` (the pipeline's planner→executor split — see
  *      `PipelineStepConfig.mechanical`). A plan-less stage skips this branch
  *      entirely, exactly as a plan-less swarm child does
- *   3. the topic's primary binding
+ *   3. the topic's primary binding — the owner's personal binding first, then
+ *      the install's (spec §8.2)
  *
  * Every spawn a stage can make — first pass, implementation retry, auditor
  * re-run — resolves through here, so a retry can never silently land on a
@@ -510,18 +562,18 @@ async function resolveStageModelId(
  * back to the primary: a typo that silently costs full price is the failure
  * this whole declaration exists to end.
  */
-async function resolveStageModel(
+export async function resolveStageModel(
   declared: { model?: string; mechanical?: boolean } | undefined,
   topic: string,
+  userId: string | undefined,
   registry: ModelRegistry,
-): Promise<string | undefined> {
-  const explicit = await resolveStageModelId(declared?.model, registry);
+): Promise<StageModel | undefined> {
+  const explicit = await resolveStageModelId(declared?.model, userId, registry);
   if (explicit) return explicit;
 
   const executorName = declared?.mechanical ? getTopicConfig(topic).executorModel : null;
   if (executorName) {
-    const executor =
-      (await registry.getModel(executorName)) || (await registry.getModelByModelId(executorName));
+    const executor = await resolveNamedModel(executorName, userId, registry);
     if (!executor) {
       throw new Error(
         `Topic '${topic}' has executorModel '${executorName}' but no such model is registered. ` +
@@ -532,10 +584,11 @@ async function resolveStageModel(
       { topic, executorModel: executor.modelId },
       'Mechanical pipeline stage routed to the lane executorModel (cheap executor path)',
     );
-    return executor.modelId;
+    return { modelId: executor.modelId, name: executor.name };
   }
 
-  return (await registry.getModelForTopic(topic))?.modelId || undefined;
+  const bound = await resolveModel({ userId, topic });
+  return bound ? { modelId: bound.modelId, name: bound.name } : undefined;
 }
 
 /**
@@ -783,6 +836,11 @@ export class PipelineManager {
       onCreated?: (pipelineId: string) => void;
     },
   ): Promise<{ pipelineId: string; result: string }> {
+    // In a space a pipeline's stages write: the role must allow it (§5.6).
+    // Its stages inherit the space, trigger and funding from `context`.
+    if (context.space && !can(context.space.role, 'run_agent_write')) {
+      throw new SpaceError('forbidden_role', `Your role (${context.space.role}) cannot start a pipeline in this space`);
+    }
     // Scoped to the caller: a bare template NAME must resolve to the same row
     // the caller was authorized against (see `getPipelineTemplate`).
     const template = await getPipelineTemplate(type, userId);
@@ -816,6 +874,8 @@ export class PipelineManager {
       rootAgentId,
       sessionId,
       userId,
+      // The run's workspace (a space's in a space), read back on resume.
+      workspaceId: context.workspaceId ?? null,
       title,
       type,
       description,
@@ -824,6 +884,8 @@ export class PipelineManager {
       // Kept so a resume in another process can rebuild the same prompts. The
       // template is re-read by `type`; the params were only ever in memory.
       metadata: {
+        // What started the run, so a resume re-resolves the same scope.
+        trigger: context.trigger,
         params: options?.params ?? {},
         ...(options?.maxRetries != null ? { maxRetries: options.maxRetries } : {}),
       },
@@ -891,6 +953,7 @@ export class PipelineManager {
     const rootAgent = getAgentService();
     rootAgent['emit']({
       type: 'pipeline_event',
+      userId,
       sessionId,
       data: {
         event: 'pipeline_created',
@@ -976,7 +1039,7 @@ export class PipelineManager {
     const registry = getModelRegistry();
     const nodes = new Map((await pipelineRepository.getNodes(pipeline.id)).map((r) => [r.nodeKey, r]));
     const byKey = new Map(graph.nodes.map((n) => [n.key, n]));
-    const workspaceRoot = await this.resolveWorkspaceRoot(sessionId);
+    const workspaceRoot = await this.resolveWorkspaceRoot(sessionId, context);
 
     let previousOutput = '';
     // The last stage's reply with its ```handoff fence still in it. Kept beside
@@ -1322,6 +1385,8 @@ export class PipelineManager {
             const evidence = await runStageVerifyCommand(command, {
               userId: context.userId,
               sessionId,
+              workspaceId: context.workspaceId,
+              space: context.space,
               role: b.role,
               toolIds: b.toolIds,
             });
@@ -1550,6 +1615,7 @@ export class PipelineManager {
 
     rootAgent['emit']({
       type: 'pipeline_event',
+      userId: pipeline.userId,
       sessionId,
       // The UI and the notification below say the same thing the row does — a
       // run that stopped short must not arrive as a completion anywhere.
@@ -1768,21 +1834,39 @@ export class PipelineManager {
     // which holds the agent context the original run was started with, and
     // everything downstream needs from it is on the row.
     const originSession = await sessionRepository.findById(pipeline.sessionId);
-    const context: AgentContext = {
+    // The scope is re-resolved, membership included (D5): a pipeline resumes
+    // with the trigger of the session that started it, recorded at creation.
+    const startedBy = (pipeline.metadata as { trigger?: AgentTrigger } | null)?.trigger ?? 'user';
+    const scope = await resolveAgentScope({ session: originSession, userId: pipeline.userId, trigger: startedBy });
+    // Its stages write, so the starter must still hold a write role: one
+    // downgraded since the pipeline started does not resume it (as `createAndRun`).
+    if (scope.space && !can(scope.space.role, 'run_agent_write')) {
+      throw new SpaceError('forbidden_role', `Your role (${scope.space.role}) cannot resume a pipeline in this space`);
+    }
+    const context = buildAgentContext({
       attended: channelCanPrompt(originSession?.channelType),
       id: pipeline.rootAgentId,
       sessionId: pipeline.sessionId,
       userId: pipeline.userId,
-      workspaceId: pipeline.workspaceId,
+      scope,
       topic: 'general',
       role: ROOT_ROLE,
       root: true,
       model: '',
       status: 'running',
-      createdAt: new Date(),
-      updatedAt: new Date(),
       metadata: { pipelineId, resumed: true },
-    };
+    });
+    return withAgentUsage(pipeline.userId, scope, () => this.resumeWalk(pipeline, pipelineId, opts, checkpoint, resumeState, context));
+  }
+
+  private async resumeWalk(
+    pipeline: Pipeline,
+    pipelineId: string,
+    opts: { fromSeq?: number },
+    checkpoint: NonNullable<Awaited<ReturnType<typeof pipelineRepository.getCheckpoint>>>,
+    resumeState: NonNullable<ReturnType<typeof hydrateWalk>>,
+    context: AgentContext,
+  ): Promise<{ pipelineId: string; result: string }> {
 
     const priorNodes = await pipelineRepository.getNodes(pipelineId);
     await withExecutionSignal(context, this.resuming.get(pipelineId)?.signal,
@@ -2049,11 +2133,11 @@ export class PipelineManager {
    * Resolved once per pipeline run: it cannot change mid-run, and the session
    * lookup is a DB round-trip we do not need per stage.
    */
-  private async resolveWorkspaceRoot(sessionId: string): Promise<string | null> {
+  private async resolveWorkspaceRoot(sessionId: string, context: Pick<AgentContext, 'space'>): Promise<string | null> {
     try {
       const session = await sessionRepository.findById(sessionId);
       if (!session) return null;
-      return WorkspaceFS.forSession(session).root;
+      return WorkspaceFS.forSession(session, { space: context.space ?? null }).root;
     } catch (err) {
       coreLogger.warn({ err: (err as Error).message, sessionId }, 'Could not resolve workspace root for the evidence gate');
       return null;
@@ -2414,6 +2498,7 @@ export class PipelineManager {
 
     rootAgent['emit']({
       type: 'pipeline_event',
+      userId: pipeline.userId,
       sessionId,
       data: { event: 'stage_started', pipelineId: pipeline.id, stageId: node.id, name: node.name, role: node.role, index: node.ordinal },
       timestamp: new Date(),
@@ -2430,7 +2515,8 @@ export class PipelineManager {
     try {
       // Resolve the model for this node's topic. Node override → a mechanical
       // node's lane executor → topic binding.
-      const modelOverride = await resolveStageModel(stageTemplate, node.role, registry);
+      const stageModel = await resolveStageModel(stageTemplate, node.role, pipeline.userId ?? undefined, registry);
+      const modelOverride = stageModel?.modelId;
       const sameModel = args.reviewModels
         ? noteReviewModel(args.reviewModels, modelOverride, { auditor: declared.stageType === 'qa_validation', builder: !!declared.producesArtifacts })
         : null;
@@ -2460,7 +2546,7 @@ export class PipelineManager {
           metadata: { ...(context.metadata ?? {}), pipelineId: pipeline.id, nodeKey: node.nodeKey },
         } as AgentContext,
         {
-          ...(modelOverride ? { model: modelOverride } : {}),
+          ...(stageModel ? { model: stageModel.modelId, modelName: stageModel.name } : {}),
           toolIds: node.toolIds ?? declared.toolIds,
           // Held to the same declaration the evidence gate judges afterwards —
           // but BEFORE the model runs, against the tools it will actually hold.
@@ -2542,6 +2628,7 @@ export class PipelineManager {
 
       rootAgent['emit']({
         type: 'pipeline_event',
+        userId: pipeline.userId,
         sessionId,
         data: {
           event: 'stage_completed',
@@ -2680,6 +2767,7 @@ export class PipelineManager {
 
       rootAgent['emit']({
         type: 'pipeline_event',
+        userId: pipeline.userId,
         sessionId: pipeline.sessionId,
         data: { event: 'plan_approval_required', pipelineId: pipeline.id, stageId: node.id, items: items.length },
         timestamp: new Date(),
@@ -2743,6 +2831,7 @@ export class PipelineManager {
 
     getAgentService()['emit']({
       type: 'pipeline_event',
+      userId: pipeline.userId,
       sessionId: pipeline.sessionId,
       data: {
         event: 'plan_item_started',
@@ -2814,6 +2903,7 @@ export class PipelineManager {
 
     rootAgent['emit']({
       type: 'pipeline_event',
+      userId: pipeline.userId,
       sessionId: pipeline.sessionId,
       // `fields` rides along so a client can draw a form. The answer comes back
       // as text either way — see `humanFields`, which is advisory by design.
@@ -2880,6 +2970,7 @@ export class PipelineManager {
 
     rootAgent['emit']({
       type: 'pipeline_event',
+      userId: pipeline.userId,
       sessionId: pipeline.sessionId,
       data: { event: 'stage_completed', pipelineId: pipeline.id, stageId: node.id, name: node.name },
       timestamp: new Date(),
@@ -2910,6 +3001,7 @@ export class PipelineManager {
 
     rootAgent['emit']({
       type: 'pipeline_event',
+      userId: pipeline.userId,
       sessionId: pipeline.sessionId,
       data: { event: 'approval_required', pipelineId: pipeline.id, stageId: node.id, name: node.name },
       timestamp: new Date(),
@@ -2957,6 +3049,7 @@ export class PipelineManager {
 
     rootAgent['emit']({
       type: 'pipeline_event',
+      userId: pipeline.userId,
       sessionId: pipeline.sessionId,
       data: {
         event: 'qa_escalation', pipelineId: pipeline.id, qaStageId: node.id, attempts, issues: qaResult.issues,

@@ -430,6 +430,13 @@ export interface ScorableResult {
 export interface ScorerContext {
   userId?: string;
   /**
+   * The child's workspace root (`WorkspaceFS.forAgent` of the spawning
+   * context): where `file_exists` looks and `command_exit_zero` runs when
+   * there is no dev-mode project. Absent means there is no workspace, and
+   * those checks refuse rather than fall back to a shared root.
+   */
+  workspaceRoot?: string;
+  /**
    * Whether the child holds the shell tool. Gates `command_exit_zero`: a scorer
    * that ran commands for a role without shell access would be a way around the
    * role's toolset rather than a check on its output. Absent (`undefined`) reads
@@ -438,6 +445,17 @@ export interface ScorerContext {
   canRunCommands?: boolean;
   /** The child's role, for the permission decision. */
   role?: string;
+  /**
+   * The child's session, workspace and space, for the space role cap and I6
+   * (`routeApprovalFor`). The workspace is passed on its own so a space
+   * workspace that arrives without its space scope is refused, not run as
+   * personal.
+   */
+  sessionId?: string;
+  workspaceId?: string | null;
+  space?: import('@/core/types').AgentSpace | null;
+  /** What started the run: a `listen` turn's gate commands are refused like its writes (§9.3). */
+  trigger?: import('@/core/types').AgentTrigger;
   /**
    * The dev-mode project directory the child's own tools operated in, when the
    * session has one. Absent for an ordinary session, where the workspace root
@@ -474,6 +492,15 @@ export interface ScorerContext {
    * child that writes through `shell__run` reads as having changed nothing.
    */
   filesTouched?: number | null;
+}
+
+/**
+ * The child's workspace as the filesystem tool sees it (same extras), or
+ * null when the context names none. The scorer is a check the system runs
+ * over a root the spawner resolved, hence the explicit system-job form.
+ */
+function scorerWorkspace(ctx: ScorerContext): WorkspaceFS | null {
+  return ctx.workspaceRoot ? WorkspaceFS.forAgent({ system: true, root: ctx.workspaceRoot }) : null;
 }
 
 /**
@@ -709,7 +736,10 @@ async function evaluate(
       // `ScorerContext.projectPath`), so a relative path is its project's.
       const fs = ctx.projectPath && existsSync(ctx.projectPath)
         ? WorkspaceFS.withRoot(ctx.projectPath)
-        : WorkspaceFS.forAgent({ userId: ctx.userId });
+        : scorerWorkspace(ctx);
+      if (!fs) {
+        return { scorer: 'file_exists', reason: 'the child has no workspace to look in', retryable: false };
+      }
       const resolved = fs.resolveOptional(scorer.path);
       if (!resolved) {
         return { scorer: 'file_exists', reason: `path "${truncate(scorer.path)}" is outside the workspace` };
@@ -872,28 +902,36 @@ async function evaluate(
       }
       {
         try {
-          const [{ getPermissionManager }, { routeApproval }] = await Promise.all([
+          const [{ getPermissionManager }, { routeApprovalFor }] = await Promise.all([
             import('@/security/permissions'),
-            import('@/security/approval-policy'),
+            import('@/security/approval-route'),
           ]);
           const permission = await getPermissionManager().check(ctx.userId, 'shell', 'execute', {
             command: scorer.command,
           });
           const { getConfig } = await import('@/config');
-          const decision = routeApproval({
-            level: permission.level,
-            role: ctx.role,
-            root: false,
-            attended: false,
-            toolId: 'shell',
+          // In a space the role cap and I6 apply here too (§5.6): the
+          // child's space scope rides on the scorer context.
+          const decision = await routeApprovalFor(
+            {
+              userId: ctx.userId,
+              sessionId: ctx.sessionId,
+              role: ctx.role,
+              root: false,
+              attended: false,
+              workspaceId: ctx.workspaceId ?? ctx.space?.workspaceId ?? null,
+              space: ctx.space ?? null,
+              trigger: ctx.trigger,
+            },
             // The SAME action the permission was read for. `matches()` builds
             // `${toolId}__${action}`, so passing `shell__run` here makes an
             // operator's `unattendedDenyActions: ['shell__execute']` compare
             // against `shell__shell__run` and never fire — while that same
             // entry does block the child's own shell tool.
-            action: 'execute',
-            unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions,
-          });
+            { toolId: 'shell', action: 'execute', toolName: 'run' },
+            permission,
+            { unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions },
+          );
           if (decision.route !== 'execute') {
             return {
               scorer: label,
@@ -924,10 +962,10 @@ async function evaluate(
       // it on the child context and the child's shell duly runs in the project.
       // So the gate verified a different tree from the one the work happened
       // in, and failed every time.
-      const fs = WorkspaceFS.forAgent({ userId: ctx.userId });
+      const fs = scorerWorkspace(ctx);
       const cwd = ctx.projectPath && existsSync(ctx.projectPath)
         ? ctx.projectPath
-        : fs.resolveOptional('.');
+        : fs?.resolveOptional('.');
       if (!cwd) {
         return {
           scorer: label,

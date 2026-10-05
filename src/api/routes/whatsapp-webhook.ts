@@ -1,4 +1,5 @@
 import { Elysia, t } from '@/api/http';
+import { clientIp } from '@/security/client-ip';
 import { apiLogger } from '@/utils/logger';
 
 /**
@@ -44,7 +45,7 @@ export const whatsappWebhookRoutes = new Elysia({ prefix: '/channels/whatsapp' }
   // Incoming messages from Meta
   .post(
     '/webhook',
-    async ({ body, request }) => {
+    async ({ body, request, socketAddress }) => {
       const { getUMI } = await import('@/channels');
       const umi = getUMI();
       const channel = umi.getChannel('whatsapp');
@@ -66,7 +67,7 @@ export const whatsappWebhookRoutes = new Elysia({ prefix: '/channels/whatsapp' }
       const rawBody = await request.text();
       const signatureHeader = request.headers.get('x-hub-signature-256');
       if (signatureHeader && !whatsapp.verifySignature(rawBody, signatureHeader)) {
-        apiLogger.warn({ ip: request.headers.get('x-forwarded-for') }, 'WhatsApp webhook signature mismatch — rejecting');
+        apiLogger.warn({ ip: clientIp(request, socketAddress) }, 'WhatsApp webhook signature mismatch — rejecting');
         return new Response('Forbidden', { status: 403 });
       }
 

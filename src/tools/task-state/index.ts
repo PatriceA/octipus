@@ -16,6 +16,11 @@ import { BaseTool, createParameterSchema } from '../base-tool';
  *
  * Permission: ALLOW by default. The data is session-scoped and lives
  * in the same DB the agents already share; no extra trust surface.
+ *
+ * A room is one session for every member's turns. A member's turn reads
+ * the room's rows; a guest's turn (S6) only those of the guest's own turns:
+ * another member's worker may have read and written down notes and files
+ * outside the guest's folders.
  */
 export class TaskStateTool extends BaseTool {
   readonly id = 'task_state';
@@ -68,7 +73,7 @@ export class TaskStateTool extends BaseTool {
         const repo = getTaskStateRepository();
         const requestedLimit = (args.limit as number) || 20;
         const limit = Math.min(Math.max(requestedLimit, 1), 100);
-        const rows = await repo.listSessionRecent(context.sessionId, limit);
+        const rows = await repo.listSessionRecent(context.sessionId, limit, ownTurnsOnly(context) ? { userId: context.userId } : {});
         const status = args.status as string | undefined;
         const ownerAgent = args.owner_agent as string | undefined;
         const filtered = rows.filter((r) =>
@@ -105,7 +110,9 @@ export class TaskStateTool extends BaseTool {
         if (!row) return { error: 'Task not found.' };
         // Session isolation: an agent must not read tasks from another
         // session. Cheap defence-in-depth alongside the role-level allow.
-        if (row.sessionId !== context.sessionId) {
+        // A guest's turn reads the rows of the guest's own turns only (the
+        // same answer: nothing tells them another member's row exists).
+        if (row.sessionId !== context.sessionId || (ownTurnsOnly(context) && row.userId !== context.userId)) {
           return { error: 'Task is not in the current session.' };
         }
         return {
@@ -123,6 +130,11 @@ export class TaskStateTool extends BaseTool {
       { permissionAction: 'read' },
     );
   }
+}
+
+/** A guest's turn in a space: the rows of their own turns only. */
+function ownTurnsOnly(context: { space?: { scope: unknown } | null }): boolean {
+  return !!context.space?.scope;
 }
 
 export const taskStateTool = new TaskStateTool();

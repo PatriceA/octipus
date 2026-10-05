@@ -3,6 +3,8 @@ import { and, desc, eq, isNull, lt, sql, type SQL } from 'drizzle-orm';
 import { dbLogger } from '@/utils/logger';
 import { getDb } from '../postgres';
 import { type NewSession, type Session, sessions } from '../schema/sessions';
+import { assertNotRoomCreate, notInSharedWorkspace, personalChat } from './scoped';
+import { sessionsRemoved } from './session-lifecycle';
 
 /** A jsonb path as a bound text[] — keys are parameters, never spliced into an array literal. */
 function jsonPath(path: string[]) {
@@ -64,6 +66,7 @@ export class SessionRepository {
   private get db() { return getDb(); }
 
   async findById(id: string): Promise<Session | null> {
+    // i2: by session id (or the caller's own channel key), for the runtime that owns the session; user routes use ScopedSessionRepo
     const result = await this.db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
     return result[0] ?? null;
   }
@@ -75,6 +78,7 @@ export class SessionRepository {
   ): Promise<Session | null> {
     const result = await this.db
       .select()
+      // i2: by session id (or the caller's own channel key), for the runtime that owns the session; user routes use ScopedSessionRepo
       .from(sessions)
       .where(
         and(
@@ -83,7 +87,9 @@ export class SessionRepository {
           eq(sessions.channelId, channelId),
           eq(sessions.status, 'active'),
           // Group-thread sessions share the chat id but are separate conversations.
-          isNull(sessions.groupChannelId)
+          isNull(sessions.groupChannelId),
+          // A room is never a personal chat, its creator's included (§6.2).
+          personalChat,
         )
       )
       .orderBy(desc(sessions.createdAt))
@@ -96,6 +102,7 @@ export class SessionRepository {
   async findGroupThreadSession(userId: string, groupChannelId: string, threadId: string): Promise<Session | null> {
     const result = await this.db
       .select()
+      // i2: by session id (or the caller's own channel key), for the runtime that owns the session; user routes use ScopedSessionRepo
       .from(sessions)
       .where(and(
         eq(sessions.userId, userId),
@@ -112,6 +119,7 @@ export class SessionRepository {
   async hasGroupThread(groupChannelId: string, threadId: string): Promise<boolean> {
     const result = await this.db
       .select({ id: sessions.id })
+      // i2: by session id (or the caller's own channel key), for the runtime that owns the session; user routes use ScopedSessionRepo
       .from(sessions)
       .where(and(eq(sessions.groupChannelId, groupChannelId), eq(sessions.threadId, threadId)))
       .limit(1);
@@ -130,27 +138,23 @@ export class SessionRepository {
   ): Promise<Session[]> {
     return this.db
       .select()
+      // i2: by session id (or the caller's own channel key), for the runtime that owns the session; user routes use ScopedSessionRepo
       .from(sessions)
       .where(
         and(
           eq(sessions.userId, userId),
           eq(sessions.channelType, channelType),
           eq(sessions.channelId, channelId),
-          isNull(sessions.groupChannelId)
+          isNull(sessions.groupChannelId),
+          personalChat,
         )
       )
       .orderBy(desc(sessions.createdAt));
   }
 
-  async findActiveByUser(userId: string): Promise<Session[]> {
-    return this.db
-      .select()
-      .from(sessions)
-      .where(and(eq(sessions.userId, userId), eq(sessions.status, 'active')))
-      .orderBy(desc(sessions.updatedAt));
-  }
-
+  /** Create a chat. Rooms are created by the rooms service only (§6.1). */
   async create(data: NewSession): Promise<Session> {
+    assertNotRoomCreate(data);
     const result = await this.db.insert(sessions).values(data).returning();
     dbLogger.info({ sessionId: result[0].id, userId: data.userId }, 'Session created');
     return result[0];
@@ -163,6 +167,8 @@ export class SessionRepository {
       .where(eq(sessions.id, id))
       .returning();
 
+    // Archived: its live state (the gateway replay buffer) goes.
+    if (result[0] && data.status === 'completed') sessionsRemoved([id]);
     return result[0] ?? null;
   }
 
@@ -207,6 +213,24 @@ export class SessionRepository {
       .where(and(eq(sessions.id, id), inGeneration(generation)))
       .returning({ id: sessions.id });
     return result.length > 0;
+  }
+
+  /**
+   * Add flags to the session's stored flow label (security/flow-guard.ts).
+   * The stored sources win, so the first source of a flag is kept across
+   * processes; labels only tighten. `updatedAt` is left alone: a label is
+   * not activity.
+   */
+  async addFlowLabel(id: string, flags: Partial<Record<'suspicious' | 'private' | 'secret', string>>): Promise<void> {
+    await this.db
+      .update(sessions)
+      .set({ flowLabel: sql`${JSON.stringify(flags)}::jsonb || coalesce(${sessions.flowLabel}, '{}'::jsonb)` as never })
+      .where(eq(sessions.id, id));
+  }
+
+  /** Drop the session's stored flow label. */
+  async clearFlowLabel(id: string): Promise<void> {
+    await this.db.update(sessions).set({ flowLabel: null }).where(eq(sessions.id, id));
   }
 
   async incrementMessageCount(id: string, tokenDelta: number = 0): Promise<void> {
@@ -280,6 +304,7 @@ export class SessionRepository {
       const { agents } = await import('../schema/agents');
 
       // Delete pipeline stages first (FK to pipelines)
+      // i2: by session id (or the caller's own channel key), for the runtime that owns the session; user routes use ScopedSessionRepo
       const pipelineRows = await this.db.select({ id: pipelines.id }).from(pipelines).where(eq(pipelines.sessionId, id));
       for (const p of pipelineRows) {
         await this.db.delete(pipelineNodes).where(eq(pipelineNodes.pipelineId, p.id));
@@ -294,22 +319,28 @@ export class SessionRepository {
     const result = await this.db.delete(sessions).where(eq(sessions.id, id)).returning();
     if (result.length > 0) {
       dbLogger.info({ sessionId: id }, 'Session deleted');
+      sessionsRemoved([id]);
       return true;
     }
     return false;
   }
 
+  /** A user's own chats for a personal listing (`/sessions`): never a space's (I2). */
   async listByUser(userId: string, limit: number = 50): Promise<Session[]> {
     return this.db
       .select()
+      // i2: a user's own chats, with the personal predicate
       .from(sessions)
-      .where(eq(sessions.userId, userId))
+      .where(and(eq(sessions.userId, userId), notInSharedWorkspace(sessions.workspaceId), personalChat))
       .orderBy(desc(sessions.updatedAt))
       .limit(limit);
   }
 
-  async listRecent(limit: number = 20): Promise<Session[]> {
-    return this.db.select().from(sessions).orderBy(desc(sessions.updatedAt)).limit(limit);
+  /** Ids of every session of a user, any workspace: the fan-out of an account deletion (ids only). */
+  async idsByUser(userId: string): Promise<string[]> {
+    // i2: ids only, for an account deletion's fan-out
+    const rows = await this.db.select({ id: sessions.id }).from(sessions).where(eq(sessions.userId, userId));
+    return rows.map((row) => row.id);
   }
 
   /**
@@ -333,6 +364,7 @@ export class SessionRepository {
 
     if (result.length > 0) {
       dbLogger.info({ count: result.length, days }, 'Archived old webchat sessions');
+      sessionsRemoved(result.map((row) => row.id));
     }
     return result.length;
   }
@@ -356,12 +388,15 @@ export class SessionRepository {
       id ? eq(sessions.id, id) : undefined,
       eq(sessions.pinned, false),
       lt(sessions.updatedAt, cutoff),
+      // i2: retention sweep, ids only
       sql`NOT EXISTS (SELECT 1 FROM ${agents} WHERE ${agents.sessionId} = ${sessions.id} AND ${agents.status} = 'running')`,
       sql`NOT EXISTS (SELECT 1 FROM ${monitors} WHERE ${monitors.sessionId} = ${sessions.id} AND ${monitors.status} IN ('armed', 'paused', 'ready', 'delivering'))`,
+      // i2: retention sweep, ids only
       sql`NOT EXISTS (SELECT 1 FROM ${tasks} WHERE ${tasks.source} = 'channel' AND ${tasks.status} IN ('open', 'in_progress') AND ${tasks.sourceRef}->>'sessionId' = ${sessions.id}::text)`,
     );
     const expired = await this.db
       .select({ id: sessions.id })
+      // i2: retention sweep, ids only
       .from(sessions)
       .where(expiredFilter())
       .orderBy(sessions.updatedAt)
@@ -372,6 +407,7 @@ export class SessionRepository {
       // Re-check right before deleting: the batch is selected up front and
       // deleted one by one, so a session pinned, resumed or given a running
       // agent meanwhile must not be swept with a stale verdict.
+      // i2: retention sweep, ids only
       const still = await this.db.select({ id: sessions.id }).from(sessions).where(expiredFilter(id)).limit(1);
       if (still.length === 0) continue;
       if (await this.delete(id)) deleted++;
@@ -382,6 +418,7 @@ export class SessionRepository {
   async countActive(): Promise<number> {
     const result = await this.db
       .select({ count: sql<number>`count(*)::int` })
+      // i2: a count only
       .from(sessions)
       .where(eq(sessions.status, 'active'));
 

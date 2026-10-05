@@ -16,6 +16,11 @@ import {
   setSessionModel,
 } from './session-model-override';
 
+/** The selected model's provider id (the selector also returns the row name). */
+async function selectId(selector: ModelSelector, ...args: Parameters<ModelSelector['selectForRootAgent']>): Promise<string> {
+  return (await selector.selectForRootAgent(...args)).modelId;
+}
+
 afterEach(() => {
   resetModelCapabilityStats();
   _resetSessionModelOverridesForTesting();
@@ -48,8 +53,8 @@ describe('model-capability stats', () => {
 });
 
 describe('validateRootModel — capability floor reroute', () => {
-  const bad = { modelId: 'flash-lite', supportsTools: true, provider: 'gemini' };
-  const good = { modelId: 'deepseek-default', supportsTools: true, provider: 'deepseek' };
+  const bad = { modelId: 'flash-lite', name: 'flash-lite', supportsTools: true, provider: 'gemini' };
+  const good = { modelId: 'deepseek-default', name: 'deepseek-default', supportsTools: true, provider: 'deepseek' };
 
   test('reroutes a recently-shimmed model to the tool-reliable default', async () => {
     // Spy the module factory so the selector's registry is fully controlled and
@@ -66,10 +71,10 @@ describe('validateRootModel — capability floor reroute', () => {
       // asserts the fallback and never exercises the floor at all.
       const routing = { message: 'hello', classification: classifyMessage('hello') };
       // Clean model is kept…
-      expect(await new ModelSelector().selectForRootAgent(undefined, 'casual', routing)).toBe('flash-lite');
+      expect(await selectId(new ModelSelector(), undefined, 'casual', routing)).toBe('flash-lite');
       // …but once it needs the shim, the floor reroutes to the default.
       recordModelToolCall('flash-lite', true);
-      expect(await new ModelSelector().selectForRootAgent(undefined, 'casual', routing)).toBe('deepseek-default');
+      expect(await selectId(new ModelSelector(), undefined, 'casual', routing)).toBe('deepseek-default');
     } finally {
       spy.mockRestore();
     }
@@ -77,11 +82,11 @@ describe('validateRootModel — capability floor reroute', () => {
 });
 
 describe('root model binding selection', () => {
-  const chatModel = { modelId: 'deepseek-chat', supportsTools: true, provider: 'deepseek' };
-  const buildLaneModel = { modelId: 'gemini-build', supportsTools: true, provider: 'gemini' };
-  const pinnedGeneralModel = { modelId: 'gemini-pinned', supportsTools: true, provider: 'gemini' };
-  const sessionModel = { modelId: 'claude-session', supportsTools: true, provider: 'anthropic' };
-  const defaultModel = { modelId: 'default-model', supportsTools: true, provider: 'openai' };
+  const chatModel = { modelId: 'deepseek-chat', name: 'deepseek-chat', supportsTools: true, provider: 'deepseek', isEnabled: true };
+  const buildLaneModel = { modelId: 'gemini-build', name: 'gemini-build', supportsTools: true, provider: 'gemini', isEnabled: true };
+  const pinnedGeneralModel = { modelId: 'gemini-pinned', name: 'gemini-pinned', supportsTools: true, provider: 'gemini', isEnabled: true };
+  const sessionModel = { modelId: 'claude-session', name: 'claude-session', supportsTools: true, provider: 'anthropic', isEnabled: true };
+  const defaultModel = { modelId: 'default-model', name: 'default-model', supportsTools: true, provider: 'openai', isEnabled: true };
 
   function installRegistry() {
     const models = [chatModel, buildLaneModel, pinnedGeneralModel, sessionModel, defaultModel];
@@ -92,6 +97,9 @@ describe('root model binding selection', () => {
         return null;
       },
       getModelByModelId: async (modelId: string) => models.find((model) => model.modelId === modelId) ?? null,
+      getModelVisibleTo: async (name: string) => models.find((model) => model.name === name) ?? null,
+      getModelByModelIdVisibleTo: async (modelId: string) => models.find((model) => model.modelId === modelId) ?? null,
+      getUserBinding: async () => null,
       getDefaultModel: async () => defaultModel,
       getAllModels: async () => models,
     } as never);
@@ -100,7 +108,7 @@ describe('root model binding selection', () => {
   test('a coding request routes to the build lane', async () => {
     installRegistry();
     const message = 'implement the retry logic in the client';
-    expect(await new ModelSelector().selectForRootAgent(undefined, 'task', {
+    expect(await selectId(new ModelSelector(), undefined, 'task', {
       message, classification: classifyMessage(message),
     })).toBe(buildLaneModel.modelId);
   });
@@ -109,7 +117,7 @@ describe('root model binding selection', () => {
     'a request with nothing dear about it stays on everyday: "%s"', async (message) => {
       installRegistry();
       const classification = classifyMessage(message);
-      expect(await new ModelSelector().selectForRootAgent(undefined, classification.type, {
+      expect(await selectId(new ModelSelector(), undefined, classification.type, {
         message, classification,
       })).toBe(chatModel.modelId);
     });
@@ -123,20 +131,20 @@ describe('root model binding selection', () => {
       getAllModels: async () => [defaultModel],
     } as never);
     const message = 'implement the retry logic';
-    expect(await new ModelSelector().selectForRootAgent(undefined, 'task', {
+    expect(await selectId(new ModelSelector(), undefined, 'task', {
       message, classification: classifyMessage(message),
     })).toBe(defaultModel.modelId);
   });
 
   test('with no request to route, the default model answers', async () => {
     installRegistry();
-    expect(await new ModelSelector().selectForRootAgent(undefined, 'task')).toBe(defaultModel.modelId);
+    expect(await selectId(new ModelSelector(), undefined, 'task')).toBe(defaultModel.modelId);
   });
 
   test('a casual turn lands on everyday, because that is what a casual message is', async () => {
     installRegistry();
     const message = 'hey, how are you?';
-    expect(await new ModelSelector().selectForRootAgent(undefined, 'casual', {
+    expect(await selectId(new ModelSelector(), undefined, 'casual', {
       message, classification: classifyMessage(message),
     })).toBe(chatModel.modelId);
   });
@@ -145,12 +153,16 @@ describe('root model binding selection', () => {
     // The one rule above routing: an explicit choice by the user wins. A
     // classification is a guess and must never override a decision.
     installRegistry();
-    setSessionModel('session-1', sessionModel.modelId);
+    setSessionModel('session-1', 'user-1', sessionModel.name);
     const selector = new ModelSelector();
 
     const message = 'implement the retry logic';
-    expect(await selector.selectForRootAgent('session-1', 'task', {
+    expect(await selectId(selector, 'session-1', 'task', {
       message, classification: classifyMessage(message),
-    })).toBe(sessionModel.modelId);
+    }, { userId: 'user-1' })).toBe(sessionModel.modelId);
+    // Another member of the same session does not get that override.
+    expect(await selectId(selector, 'session-1', 'task', {
+      message, classification: classifyMessage(message),
+    }, { userId: 'user-2' })).toBe(buildLaneModel.modelId);
   });
 });

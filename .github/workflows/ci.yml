@@ -37,7 +37,9 @@ jobs:
   backend:
     name: Backend (typecheck · lint · test)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The full suite (database lane runs one file at a time) now takes about
+    # 14 minutes; 15 cut a passing run off at the coverage step.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
         with:

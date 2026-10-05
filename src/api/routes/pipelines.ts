@@ -1,10 +1,11 @@
 import { desc, eq, or } from 'drizzle-orm';
+import { type AgentScope, buildAgentContext, resolveAgentScope, withAgentUsage } from '@/core/agent/context';
+import { can, SpaceError, spaceErrorStatus } from '@/security/space-access';
 import { normalizeAcceptance } from '@/tools/plan';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getAgentService, getPipelineManager } from '@/core/agent';
 import { ROOT_ROLE } from '@/core/agent/types';
-import type { AgentContext } from '@/core/types';
 import { getModelRegistry } from '@/models/model-registry';
 import { channelCanPrompt } from '@/security/approval-policy';
 import { generateId } from '@/utils/crypto';
@@ -18,7 +19,8 @@ import {
 } from '@/core/agent/templates';
 import { getDb } from '@/db/postgres';
 import { pipelineRepository } from '@/db/repositories/pipeline-repository';
-import { scopedRepos } from '@/db/repositories/scoped';
+import { withoutSpaceRows } from '@/core/spaces/service';
+import { contentRepos } from '@/db/repositories/content';
 import { pipelineTemplates } from '@/db/schema/pipeline-templates';
 import { isAuthenticated } from '@/security/principal';
 import { coreLogger } from '@/utils/logger';
@@ -71,7 +73,7 @@ const recipeParamBodySchema = t.Object({
  * read-only; private templates belong to one user. The previous
  * PUT/DELETE on templates had NO auth check at all — any authenticated
  * caller could mutate any template. Phase 1a routes the writes through
- * `scopedRepos(principal).pipelines.findOwnedTemplateById` first; presets
+ * `contentRepos(principal).pipelines.findOwnedTemplateById` first; presets
  * (read-only) and other users' templates are rejected as "not found".
  */
 /**
@@ -102,11 +104,13 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
       // Admins see everything (operational triage); regular users see
       // only their own. The 'system' pseudo-id is used by in-process
       // system jobs.
+      // A personal route: never a space's pipelines, for their owner or an
+      // admin (I2).
       if (user.isAdmin || user.id === 'system') {
-        return { pipelines: await pipelineManager.listAll() };
+        return { pipelines: await withoutSpaceRows(await pipelineManager.listAll()) };
       }
 
-      const list = await pipelineManager.listByUser(user.id);
+      const list = await withoutSpaceRows(await pipelineManager.listByUser(user.id));
       return { pipelines: list };
     },
     { detail: { tags: ['pipelines'] } },
@@ -145,14 +149,16 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         };
       }
 
-      const repos = scopedRepos(principal);
+      const repos = contentRepos(principal);
       let sessionId = body.sessionId;
+      let pipelineSession: { userId: string; workspaceId: string | null };
       if (sessionId) {
         const existing = await repos.sessions.findById(sessionId);
         if (!existing) {
           set.status = 404;
           return { error: 'Session not found' };
         }
+        pipelineSession = existing;
       } else {
         const session = await repos.sessions.create({
           channelType: 'api',
@@ -160,6 +166,24 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
           title: (body.title || description).slice(0, 100),
         });
         sessionId = session.id;
+        pipelineSession = session;
+      }
+      // The session decides the scope (§5.6): in a space the member's role
+      // must run the agent with writes (a pipeline's stages write), and the
+      // stages inherit the space, the trigger and the funding. A viewer or
+      // commenter is 403, a removed member 404, an archived space 409.
+      let scope: AgentScope;
+      try {
+        scope = await resolveAgentScope({ session: pipelineSession, userId: user.id, trigger: 'user' });
+        if (scope.space && !can(scope.space.role, 'run_agent_write')) {
+          throw new SpaceError('forbidden_role', `Your role (${scope.space.role}) cannot start a pipeline in this space`);
+        }
+      } catch (err) {
+        if (err instanceof SpaceError) {
+          set.status = spaceErrorStatus(err);
+          return { error: err.message, code: err.code };
+        }
+        throw err;
       }
 
       const registry = getModelRegistry();
@@ -169,11 +193,11 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         return { error: 'No default model configured — bind one on the Models page first' };
       }
 
-      const context: AgentContext = {
+      const context = buildAgentContext({
         id: `pipeline-api-${generateId().slice(0, 12)}`,
         sessionId,
         userId: user.id,
-        workspaceId: principal.workspaceId ?? null,
+        scope,
         topic: 'general',
         model: defaultModel.modelId,
         role: ROOT_ROLE,
@@ -182,22 +206,20 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         // rather than waiting for a prompt nobody receives (`channelCanPrompt`).
         attended: channelCanPrompt('api'),
         status: 'running',
-        createdAt: new Date(),
-        updatedAt: new Date(),
         // A STAGE-level approval is different: it is answerable out of band via
         // `POST /pipelines/:id/approve/:stageId`, and it raises a notification.
         // So it still blocks — but not for the interactive default of an hour,
         // which for an unattended REST run just means a stage sitting idle and
         // then aborting. Callers who are watching can pass their own value.
         metadata: { approvalTimeoutMs: body.approvalTimeoutMs ?? API_APPROVAL_TIMEOUT_MS },
-      };
+      });
 
       const rootAgent = getAgentService();
 
       // Resolve on the id, not the result: the caller gets an answer in
       // milliseconds and the run keeps going.
       const started = new Promise<string>((resolve, reject) => {
-        rootAgent
+        withAgentUsage(user.id, scope, () => rootAgent
           // `match.name` is safe now that `getPipelineTemplate` resolves a name
           // within the caller's own visible set — the same set this route
           // authorized against. Keeping the name (not the id) is what leaves a
@@ -206,7 +228,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
             maxRetries: body.maxRetries,
             params: body.params,
             onCreated: resolve,
-          })
+          }))
           .then((result) => {
             coreLogger.info({ sessionId, template: match.name }, 'API-started pipeline finished');
             return result;
@@ -254,7 +276,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         return { error: 'Not authenticated' };
       }
 
-      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      const pipeline = await contentRepos(principal).pipelines.findById(params.id);
       if (!pipeline) {
         return { error: 'Pipeline not found' };
       }
@@ -277,7 +299,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         return { error: 'Not authenticated' };
       }
 
-      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      const pipeline = await contentRepos(principal).pipelines.findById(params.id);
       if (!pipeline) {
         return { error: 'Pipeline not found' };
       }
@@ -314,7 +336,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
     '/:id/plan',
     async ({ user, principal, params }) => {
       if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
-      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      const pipeline = await contentRepos(principal).pipelines.findById(params.id);
       if (!pipeline) return { error: 'Pipeline not found' };
       return { plan: await pipelineRepository.getPlanItems(params.id) };
     },
@@ -325,7 +347,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
     '/:id/plan',
     async ({ user, principal, params, body }) => {
       if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
-      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      const pipeline = await contentRepos(principal).pipelines.findById(params.id);
       if (!pipeline) return { error: 'Pipeline not found' };
 
       const start = await pipelineRepository.nextPlanOrdinal(params.id);
@@ -358,7 +380,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
     '/:id/plan/:itemId',
     async ({ user, principal, params, body }) => {
       if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
-      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      const pipeline = await contentRepos(principal).pipelines.findById(params.id);
       if (!pipeline) return { error: 'Pipeline not found' };
 
       // Scope the item to the pipeline the caller was authorized for — an id
@@ -392,7 +414,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
     '/:id/plan/:itemId',
     async ({ user, principal, params }) => {
       if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
-      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      const pipeline = await contentRepos(principal).pipelines.findById(params.id);
       if (!pipeline) return { error: 'Pipeline not found' };
 
       const items = await pipelineRepository.getPlanItems(params.id);
@@ -421,7 +443,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         set.status = 401;
         return { error: 'Not authenticated' };
       }
-      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      const pipeline = await contentRepos(principal).pipelines.findById(params.id);
       if (!pipeline) {
         set.status = 404;
         return { error: 'Pipeline not found' };
@@ -441,7 +463,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         set.status = 401;
         return { error: 'Not authenticated' };
       }
-      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      const pipeline = await contentRepos(principal).pipelines.findById(params.id);
       if (!pipeline) {
         set.status = 404;
         return { error: 'Pipeline not found' };
@@ -486,7 +508,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         set.status = 401;
         return { error: 'Not authenticated' };
       }
-      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      const pipeline = await contentRepos(principal).pipelines.findById(params.id);
       if (!pipeline) {
         set.status = 404;
         return { error: 'Pipeline not found' };
@@ -506,7 +528,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         set.status = 401;
         return { error: 'Not authenticated' };
       }
-      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      const pipeline = await contentRepos(principal).pipelines.findById(params.id);
       if (!pipeline) {
         set.status = 404;
         return { error: 'Pipeline not found' };
@@ -552,7 +574,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         return { error: 'Not authenticated' };
       }
 
-      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      const pipeline = await contentRepos(principal).pipelines.findById(params.id);
       if (!pipeline) {
         return { error: 'Pipeline not found' };
       }
@@ -669,7 +691,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
       // user could mutate any template, including system presets. Now the
       // scoped lookup rejects presets (they don't carry a userId match)
       // and other users' templates as "not found".
-      const owned = await scopedRepos(principal).pipelines.findOwnedTemplateById(params.id);
+      const owned = await contentRepos(principal).pipelines.findOwnedTemplateById(params.id);
       if (!owned) return { error: 'Template not found' };
 
       const db = getDb();
@@ -730,7 +752,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
       if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
 
       // Same gap as PUT — pre-Phase-1a had no auth check.
-      const owned = await scopedRepos(principal).pipelines.findOwnedTemplateById(params.id);
+      const owned = await contentRepos(principal).pipelines.findOwnedTemplateById(params.id);
       if (!owned) return { error: 'Template not found' };
 
       const db = getDb();

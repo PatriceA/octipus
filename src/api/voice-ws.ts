@@ -1,9 +1,11 @@
 import type { Elysia } from '@/api/http';
 import { getConfig } from '@/config';
 import { getSessionManager } from '@/security/auth/session';
+import { userChangeMark } from '@/security/user-change-marks';
 import type { STTEngine } from '@/voice/stt';
 import { apiLogger } from '@/utils/logger';
 import { fileAt } from '@/utils/fs-file';
+import { trackUserSocket } from './user-sockets';
 
 /**
  * Realtime voice WebSocket — `/voice`.
@@ -36,6 +38,8 @@ interface VoiceWsState {
   /** Closes the PCM stream so streamTranscribe drains its tail and finishes. */
   end?: () => void;
   closed?: boolean;
+  /** Drops this socket from the user's socket list (user-sockets.ts). */
+  untrack?: () => void;
 }
 
 function stateOf(ws: { data: unknown }): VoiceWsState {
@@ -123,6 +127,7 @@ export function setupVoiceWebSocket(app: Elysia): void {
         ws.close(4001, 'Authentication required');
         return;
       }
+      const mark = userChangeMark();
       const session = await getSessionManager().validate(token);
       if (!session) {
         ws.close(4001, 'Invalid or expired token');
@@ -139,6 +144,9 @@ export function setupVoiceWebSocket(app: Elysia): void {
 
       const st = stateOf(ws);
       st.userId = session.userId;
+      const untrack = trackUserSocket(session.userId, ws, mark);
+      if (!untrack) return;
+      st.untrack = untrack;
 
       // A ReadableStream fed by inbound binary frames; the STT engine pulls from
       // it while `message` pushes into it.
@@ -236,6 +244,7 @@ export function setupVoiceWebSocket(app: Elysia): void {
     close(ws) {
       const st = stateOf(ws);
       st.closed = true;
+      st.untrack?.();
       st.end?.(); // unblock streamTranscribe so it drains and disposes
       apiLogger.debug({ userId: st.userId }, 'voice-ws closed');
     },

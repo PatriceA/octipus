@@ -18,8 +18,10 @@ import { auditTaskMutation } from '@/core/tasks/audit';
 import { backgroundUserPrincipal, normalizeTaskTitle } from '@/core/tasks/sourced';
 import { ACTIVE_TASK_STATUSES } from '@/core/tasks/status';
 import { getDb } from '@/db/postgres';
-import { isUuid, scopedRepos } from '@/db/repositories/scoped';
+import { isUuid, notInSharedWorkspace, scopedRepos } from '@/db/repositories/scoped';
+import { spaceRepos } from '@/db/repositories/space';
 import { type Task, tasks } from '@/db/schema/tasks';
+import type { Principal } from '@/security/principal';
 
 /** A request to take work on, as the channel adapter read it. */
 export interface TakeRequest {
@@ -51,10 +53,21 @@ export function takeTitle(text: string): string {
   return capped.charAt(0).toUpperCase() + capped.slice(1);
 }
 
-/** A stable task id per member and message, so a second take finds the first task. */
-function takeId(userId: string, messageKey: string): string {
-  const h = createHash('sha256').update(JSON.stringify([userId, 'channel', messageKey])).digest('hex');
+/**
+ * A stable task id, so a second take finds the first task: per member and
+ * message on a member's own board, per space and message on a space's board
+ * (coworking §9.4) — two members taking one message in a bound channel get
+ * the one space task.
+ */
+export function takeId(owner: { userId: string } | { spaceId: string }, messageKey: string): string {
+  const key = 'spaceId' in owner ? ['space', owner.spaceId] : [owner.userId];
+  const h = createHash('sha256').update(JSON.stringify([...key, 'channel', messageKey])).digest('hex');
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-a${h.slice(17, 20)}-${h.slice(20, 32)}`;
+}
+
+/** The task repository a take writes to and reads from: the space's, or the member's own. */
+function takenRepo(userId: string, workspaceId: string | null, space: Principal | undefined) {
+  return space ? spaceRepos(space).tasks : scopedRepos(backgroundUserPrincipal(userId, workspaceId)).tasks;
 }
 
 /**
@@ -62,11 +75,17 @@ function takeId(userId: string, messageKey: string): string {
  * thread session. The member typed the command, so this is their own write:
  * no ASK, as when they add a task in the web app. Taking the same message
  * twice returns the first task (`created: false`).
+ *
+ * In a channel bound to a space (`space`, the member's principal there, role
+ * read now) the task goes on the space's board through the space access
+ * layer, linked to the thread's room, and is the same task whoever takes the
+ * message.
  */
 export async function takeChannelTask(input: {
   userId: string;
   workspaceId: string | null;
   sessionId: string;
+  space?: Principal;
   /** Display name of the member who asked. */
   requester: string;
   /** Where: the channel's label, or its id. */
@@ -80,9 +99,9 @@ export async function takeChannelTask(input: {
     request.text.trim().slice(0, NOTES_MAX),
     ...(request.url ? ['', request.url] : []),
   ].join('\n');
-  const repo = scopedRepos(backgroundUserPrincipal(input.userId, input.workspaceId)).tasks;
+  const repo = takenRepo(input.userId, input.workspaceId, input.space);
   const once = await repo.createOnce({
-    id: takeId(input.userId, request.messageKey),
+    id: takeId(input.space?.workspaceId ? { spaceId: input.space.workspaceId } : { userId: input.userId }, request.messageKey),
     title: takeTitle(request.text) || 'Request from the channel',
     notes,
     status: 'in_progress',
@@ -103,11 +122,22 @@ export async function takeChannelTask(input: {
   return once;
 }
 
-/** The member's open tasks taken in this thread session, newest first. */
-export async function openTakenTasks(userId: string, sessionId: string): Promise<Task[]> {
+/**
+ * The member's open tasks taken in this thread session, newest first — or,
+ * with `space`, the space's open tasks taken into this room (§9.4).
+ */
+export async function openTakenTasks(userId: string, sessionId: string, space?: Principal): Promise<Task[]> {
   if (!isUuid(userId) || !isUuid(sessionId)) return [];
+  if (space) {
+    const open = await spaceRepos(space).tasks.listOwn({ statuses: [...ACTIVE_TASK_STATUSES], limit: 200 });
+    return open
+      .filter((t) => t.source === 'channel' && t.sourceRef?.sessionId === sessionId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, 10);
+  }
   return getDb().select().from(tasks).where(and(
     eq(tasks.userId, userId),
+    notInSharedWorkspace(tasks.workspaceId),
     eq(tasks.source, 'channel'),
     inArray(tasks.status, [...ACTIVE_TASK_STATUSES]),
     sql`${tasks.sourceRef}->>'sessionId' = ${sessionId}`,
@@ -123,7 +153,7 @@ export async function openTakenTasks(userId: string, sessionId: string): Promise
  * comments are left out: they come from runs that may have read anything of
  * the requester's. Empty when there are none.
  */
-export async function takenTasksContext(open: readonly Task[], fenceTag?: string): Promise<string> {
+export async function takenTasksContext(open: readonly Task[], fenceTag?: string, space?: Principal): Promise<string> {
   if (open.length === 0) return '';
   const tag = fenceTag ?? randomBytes(6).toString('hex');
   // The replay filter (omitGroupTranscripts) ends the block at the first
@@ -137,7 +167,7 @@ export async function takenTasksContext(open: readonly Task[], fenceTag?: string
   ];
   for (const task of open) {
     lines.push(`- ${task.id}: "${safe(task.title).replaceAll('"', "'")}" (${task.status.replace('_', ' ')})`);
-    const repo = scopedRepos(backgroundUserPrincipal(task.userId, task.workspaceId)).tasks;
+    const repo = takenRepo(task.userId, task.workspaceId, space);
     const thread = await repo.listComments(task.id, 3).catch(() => null);
     for (const c of thread?.comments ?? []) {
       if (c.authorKind !== 'user') continue;
@@ -165,10 +195,12 @@ export async function completeTakenTask(input: {
   result: string;
   /** The agent that finished it, for the audit row. */
   agentId: string;
+  /** In a room of a space: the requester's principal there (the space's board). */
+  space?: Principal;
 }): Promise<{ ok: true; title: string } | { ok: false; error: string }> {
-  const task = (await openTakenTasks(input.userId, input.sessionId)).find((t) => t.id === input.taskId);
+  const task = (await openTakenTasks(input.userId, input.sessionId, input.space)).find((t) => t.id === input.taskId);
   if (!task) return { ok: false, error: 'No open task with that id was taken on in this thread.' };
-  const repo = scopedRepos(backgroundUserPrincipal(task.userId, task.workspaceId)).tasks;
+  const repo = takenRepo(task.userId, task.workspaceId, input.space);
   const result = input.result.trim().slice(0, 10_000);
   if (result) {
     await repo.addComment(task.id, { authorKind: 'agent', authorRef: `octipus@${input.sessionId}`, body: result });

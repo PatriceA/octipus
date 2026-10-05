@@ -3,6 +3,45 @@
 // Agent Types
 export type AgentStatus = 'idle' | 'running' | 'paused' | 'stopped' | 'completed' | 'failed';
 
+/**
+ * What started an agent (docs/plans/coworking-spec.md §5.6, D13): a person
+ * (`user`), a room or group-channel mention (`room`), a schedule, hook,
+ * heartbeat, wake-up or background job (`schedule`), a monitor (`monitor`),
+ * the turn after a positive listen probe (`listen`), a visitor from another
+ * install (`remote`, S7). Children inherit their parent's.
+ */
+export type AgentTrigger = 'user' | 'room' | 'schedule' | 'monitor' | 'listen' | 'remote';
+
+/** Who pays for an agent's model calls (D13). Decided by `fundingFor`, never from `attended`. */
+export type AgentFunding = 'own' | 'sponsor';
+
+/**
+ * Who pays a sponsored agent (`funding: 'sponsor'`, coworking spec §9.1):
+ * the space's sponsor, and the names of their own model rows the agent may
+ * run on (`workspaces.sponsor_models`). Snapshot of the scope; inherited by
+ * children.
+ */
+export interface AgentSponsor {
+  readonly userId: string;
+  readonly models: readonly string[];
+}
+
+/**
+ * The space an agent works in: its session's workspace is shared and the
+ * requester's membership was read when the context was built. `role` is that
+ * snapshot; every tool decision re-reads it (`routeApprovalFor`, D5).
+ */
+export interface AgentSpace {
+  readonly workspaceId: string;
+  readonly role: import('@/db/schema/organizations').SpaceRole;
+  /** Guests only (S6): the rooms and folders they reach; null for every other role. */
+  readonly scope: import('@/db/schema/organizations').GuestScope | null;
+}
+
+/**
+ * Built only by `buildAgentContext` (src/core/agent/context.ts); a test fails
+ * on a hand-built literal anywhere else.
+ */
 export interface AgentContext {
   id: string;
   sessionId: string;
@@ -14,8 +53,28 @@ export interface AgentContext {
    * for anonymous / system principals that have no workspaces.
    */
   workspaceId?: string | null;
+  /** Set when `workspaceId` is a space (see `AgentSpace`); null in a personal workspace. Inherited by children. */
+  space: AgentSpace | null;
+  /** What started this agent. Inherited by children. */
+  trigger: AgentTrigger;
+  /** Who pays for its model calls. Inherited by children. */
+  funding: AgentFunding;
+  /** Set when `funding` is `sponsor`: who pays and on which of their models. Inherited by children. */
+  sponsor?: AgentSponsor | null;
   topic: string;
+  /**
+   * The provider-facing model id — what providers, CLI tool configs, toolshim
+   * statistics and clients read. Not unique across registry rows.
+   */
   model: string;
+  /**
+   * The registry row identity (`model_config.name`) the model was resolved
+   * from (coworking spec §8.1). Row re-lookups use this, never `model`: a
+   * personal row and an install row may share one modelId. Passed to providers
+   * as `CompletionOptions.modelConfigName`. Absent only for a model id with no
+   * registry row (an unregistered CLI tool).
+   */
+  modelName?: string;
   role: string;
   /**
    * This agent is the ROOT of the turn — the one the user is talking to, with

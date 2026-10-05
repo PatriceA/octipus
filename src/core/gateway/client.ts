@@ -1,7 +1,20 @@
+import { apiBaseFromGatewayUrl } from '@/core/gateway/cli-login';
 import { clearCliSession, readCliSession } from '@/core/gateway/cli-session';
-import { ensureLocalToken, readLocalToken } from '@/core/gateway/local-auth';
 import type { ClientMessage, GatewayMessage } from '@/core/gateway/protocol';
 import type { ChatAttachment } from '@/shared/chat-attachments';
+
+const DEFAULT_GATEWAY_URL = 'ws://localhost:3007/gateway';
+
+/** A session file a turn names (`chat.send` `fileRefs`). */
+export interface FileRef { path: string; version?: string }
+
+/** One file stored by `POST /sessions/:id/attachments`. */
+export interface UploadedAttachment { path: string; name: string }
+
+/** An attachment's base64 bytes as a file for a multipart upload. */
+function decodeAttachment(attachment: ChatAttachment): File {
+  return new File([Buffer.from(attachment.data, 'base64')], attachment.name, { type: attachment.mimeType });
+}
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'authenticating' | 'connected' | 'error';
 
@@ -12,11 +25,18 @@ export interface GatewayClientOptions {
   onStatusChange?: (status: ConnectionStatus) => void;
   onError?: (error: string) => void;
   /**
-   * Who this client is now acting as — null for the local machine account.
-   * Fires on every connect and when a rejected login is cleared, so a status
-   * bar can't keep showing a signed-in user whose session is already gone.
+   * Who this client is now acting as — null when signed out. Fires on every
+   * connect and when a rejected login is cleared, so a status bar can't keep
+   * showing a signed-in user whose session is already gone.
    */
   onIdentityChange?: (identity: { username: string; userId: string } | null) => void;
+  /**
+   * There is no usable CLI login: none stored, or the gateway rejected it.
+   * The client does not connect until one is stored (`loginWithPassword`)
+   * and `connect()` / `reauthenticate()` is called again. Without this
+   * handler the condition is reported through `onError`.
+   */
+  onLoginRequired?: (reason: string) => void;
   /**
    * Phase 4 workspace propagation. When set, the connect URL gets
    * a `?workspace=<slug-or-uuid>` query parameter that the backend
@@ -31,7 +51,9 @@ export interface GatewayClientOptions {
 
 /**
  * Gateway WebSocket client for the TUI.
- * Connects to ws://localhost:PORT/gateway with local-token auth.
+ * Connects to ws://localhost:PORT/gateway with the stored CLI login
+ * (`~/.octipus/session.json`, written by `loginWithPassword`). There is no
+ * machine account: a terminal acts as a signed-in user or not at all.
  */
 export class GatewayClient {
   private ws: WebSocket | null = null;
@@ -40,9 +62,10 @@ export class GatewayClient {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 10;
-  /** Who the last connect authenticated as, or null for the local sentinel. */
+  /** Who the last connect authenticated as, or null when signed out. */
   private authenticatedAs: { username: string; userId: string } | null = null;
-  private usedStoredSession = false;
+  /** The server's frame cap from `auth_ok` (`gateway.maxFrameBytes`). */
+  private maxFrameBytes: number | null = null;
 
   constructor(options: GatewayClientOptions) {
     this.options = options;
@@ -52,20 +75,24 @@ export class GatewayClient {
    * Connect to the gateway.
    */
   async connect(): Promise<void> {
-    const baseUrl = this.options.url || 'ws://localhost:3007/gateway';
+    const baseUrl = this.options.url || DEFAULT_GATEWAY_URL;
     const ws = this.options.getWorkspace?.();
     const url = ws
       ? `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}workspace=${encodeURIComponent(ws)}`
       : baseUrl;
-    // A stored login wins over the machine token: it makes this terminal the
+    // The stored login is the only credential: it makes this terminal the
     // same principal as the browser (own memories, own vault secrets, own
-    // settings) instead of the account-less 'local' sentinel.
+    // settings, and only that user's sessions and events).
     const session = readCliSession();
-    const auth = session
-      ? { method: 'session_token' as const, credentials: { token: session.token } }
-      : { method: 'local' as const, credentials: { token: readLocalToken() || ensureLocalToken() } };
-    this.authenticatedAs = session ? { username: session.username, userId: session.userId } : null;
-    this.usedStoredSession = session !== null;
+    if (!session) {
+      this.authenticatedAs = null;
+      this.options.onIdentityChange?.(null);
+      this.setStatus('disconnected');
+      this.requireLogin('Not signed in');
+      return;
+    }
+    const auth = { method: 'session_token' as const, credentials: { token: session.token } };
+    this.authenticatedAs = { username: session.username, userId: session.userId };
     this.options.onIdentityChange?.(this.authenticatedAs);
 
     this.setStatus('connecting');
@@ -131,7 +158,7 @@ export class GatewayClient {
     this.setStatus('disconnected');
   }
 
-  /** The signed-in user, or null when running as the local sentinel. */
+  /** The signed-in user, or null when signed out. */
   getIdentity(): { username: string; userId: string } | null {
     return this.authenticatedAs;
   }
@@ -143,16 +170,68 @@ export class GatewayClient {
   }
 
   /**
-   * Send a chat message.
+   * Send a chat message. Files go up first with `uploadAttachments`; the
+   * turn names them in `fileRefs`, so the frame carries no file bytes.
    */
-  sendChat(sessionId: string, content: string, projectPath?: string, attachments?: ChatAttachment[]): void {
-    this.send({
+  sendChat(sessionId: string, content: string, projectPath?: string, fileRefs?: FileRef[]): void {
+    const message: ClientMessage = {
       type: 'chat.send',
       sessionId,
       content,
       ...(projectPath ? { projectPath } : {}),
-      ...(attachments?.length ? { attachments } : {}),
-    });
+      ...(fileRefs?.length ? { fileRefs } : {}),
+    };
+    // A frame over the server's cap would close the socket mid-send; say so
+    // instead, with the setting that governs it.
+    const size = Buffer.byteLength(JSON.stringify(message));
+    if (this.maxFrameBytes !== null && size > this.maxFrameBytes) {
+      this.options.onError?.(
+        `Message not sent: it is ${Math.ceil(size / 1024)} KiB and the server accepts at most ${Math.floor(this.maxFrameBytes / 1024)} KiB per message (gateway.maxFrameBytes). Shorten it, or raise the setting.`,
+      );
+      return;
+    }
+    this.send(message);
+  }
+
+  /**
+   * Upload files for the next turn over REST (`POST /sessions/:id/attachments`,
+   * as the web does), so their size is bounded by the upload limit rather
+   * than by the gateway's frame cap. A session the server has not seen yet
+   * (the TUI picks its id before the first message) is created first, in
+   * this client's workspace, and its id returned: the caller continues in it.
+   * Throws with the server's reason when the upload fails.
+   */
+  async uploadAttachments(sessionId: string, attachments: ChatAttachment[], title: string): Promise<{ sessionId: string; uploaded: UploadedAttachment[] }> {
+    const session = readCliSession();
+    if (!session) throw new Error('Not signed in');
+    const base = apiBaseFromGatewayUrl(this.options.url || DEFAULT_GATEWAY_URL);
+    const workspace = this.options.getWorkspace?.();
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${session.token}`,
+      ...(workspace ? { 'X-Octipus-Workspace': workspace } : {}),
+    };
+    const upload = async (id: string): Promise<Response> => {
+      const form = new FormData();
+      for (const attachment of attachments) form.append('files', decodeAttachment(attachment));
+      return fetch(`${base}/sessions/${encodeURIComponent(id)}/attachments`, { method: 'POST', headers, body: form });
+    };
+
+    let target = sessionId;
+    let response = await upload(target);
+    if (response.status === 404) {
+      const created = await fetch(`${base}/sessions`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channelType: 'tui', channelId: `tui-${Date.now().toString(36)}`, title: title.slice(0, 100) || 'TUI conversation' }),
+      });
+      const body = (await created.json().catch(() => ({}))) as { id?: string; error?: string };
+      if (!created.ok || !body.id) throw new Error(body.error || `Could not start a session (HTTP ${created.status})`);
+      target = body.id;
+      response = await upload(target);
+    }
+    const body = (await response.json().catch(() => ({}))) as { uploaded?: UploadedAttachment[]; error?: string };
+    if (!response.ok || !body.uploaded) throw new Error(body.error || `Upload failed (HTTP ${response.status})`);
+    return { sessionId: target, uploaded: body.uploaded };
   }
 
   /**
@@ -231,30 +310,26 @@ export class GatewayClient {
       case 'auth_ok':
         this.setStatus('connected');
         this.reconnectAttempts = 0;
+        this.maxFrameBytes = msg.maxFrameBytes ?? null;
         // Subscribe to all events
         this.subscribe(['*']);
         break;
 
       case 'auth_error':
         this.setStatus('error');
-        if (this.usedStoredSession) {
-          // The stored login is dead (expired, revoked, or the server was
-          // reset). Drop it rather than reconnect-looping against it — the
-          // next connect falls back to the local token, so the TUI still
-          // works while the user re-runs /login.
-          clearCliSession();
-          this.authenticatedAs = null;
-          this.usedStoredSession = false;
-          this.options.onError?.(`Login expired (${msg.reason}). Signed out — use /login to sign in again.`);
-          this.options.onIdentityChange?.(null);
-          // Actually fall back. `onclose` only retries a connection that was
-          // live, and this one never authenticated, so without this the TUI
-          // sits disconnected until the user types a command — the session
-          // expires overnight and the morning's first message goes nowhere.
-          void this.connect();
-        } else {
-          this.options.onError?.(`Auth failed: ${msg.reason}`);
+        // Over the per-user connection cap: the login is fine, too many
+        // clients are open. Keep it and say so.
+        if (msg.reason === 'Too many connections') {
+          this.options.onError?.('Too many open connections for this account (gateway.maxConnectionsPerUser) — close a tab or terminal and reconnect.');
+          break;
         }
+        // The stored login is dead (expired, revoked, the account was
+        // deactivated, or the server was reset). Drop it rather than
+        // reconnect-looping against it, and ask for a new one.
+        clearCliSession();
+        this.authenticatedAs = null;
+        this.options.onIdentityChange?.(null);
+        this.requireLogin(`Login rejected (${msg.reason})`);
         break;
 
       case 'event':
@@ -281,6 +356,11 @@ export class GatewayClient {
         this.options.onError?.(`${msg.code}: ${msg.message}`);
         break;
     }
+  }
+
+  private requireLogin(reason: string): void {
+    if (this.options.onLoginRequired) this.options.onLoginRequired(reason);
+    else this.options.onError?.(`${reason} — sign in with /login in the TUI first.`);
   }
 
   private setStatus(status: ConnectionStatus): void {

@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, type SQL, sql } from 'drizzle-orm';
 import type { AgentContext, PermissionLevel } from '@/core/types';
 import { getDb } from '@/db/postgres';
 import { auditRepository } from '@/db/repositories/audit-repository';
@@ -56,6 +56,21 @@ export interface PermissionResolvedEvent {
   agentId: string;
   sessionId?: string;
   status: 'approved' | 'denied' | 'expired';
+}
+
+/**
+ * A request an admin may answer for its requester: never one raised in a
+ * space or a room (its stamped `workspace_id`, or its session's workspace),
+ * whatever the admin's own membership (D9: answered by the requester only —
+ * approving a member's private read in a room is that member's consent, D8).
+ * An admin who must act there impersonates the member, which is audited.
+ */
+function adminMayAnswer(): SQL {
+  return sql`NOT EXISTS (
+    SELECT 1 FROM workspaces w
+    WHERE w.kind = 'shared'
+      AND w.id = COALESCE(${permissionRequests.workspaceId},
+        (SELECT s.workspace_id FROM sessions s WHERE s.id = ${permissionRequests.sessionId})))`;
 }
 
 export class PermissionManager {
@@ -322,6 +337,12 @@ export class PermissionManager {
     sessionId?: string,
     callerToolName?: string,
     signal?: AbortSignal,
+    /**
+     * The requesting agent's `context.workspaceId`, stamped on the row: a
+     * space's requests are told apart (membership changes expire them, and
+     * an admin who is not a member cannot answer them, D9).
+     */
+    workspaceId?: string | null,
   ): Promise<string> {
     if (signal?.aborted) throw new Error('Agent stopped before approval request');
     const requestId = randomUUID();
@@ -331,6 +352,7 @@ export class PermissionManager {
       userId,
       agentId,
       sessionId,
+      workspaceId: workspaceId ?? null,
       toolId,
       action,
       context: {
@@ -479,6 +501,75 @@ export class PermissionManager {
   }
 
   /**
+   * Expire every pending request of `userId` and release the agents waiting
+   * on them, as unapproved. Called when the account is deactivated: its
+   * prompts can no longer be answered. Returns how many rows were expired.
+   */
+  async expireForUser(userId: string): Promise<number> {
+    const expired = await this.db
+      .update(permissionRequests)
+      .set({ status: 'expired' })
+      .where(and(eq(permissionRequests.userId, userId), eq(permissionRequests.status, 'pending')))
+      .returning();
+    for (const request of expired) {
+      this.emitResolved(request, 'expired');
+      // The `settle` closure untracks the wait and resolves the agent's await.
+      this.pendingRequests.get(request.id)?.(false);
+    }
+    if (expired.length > 0) securityLogger.info({ userId, count: expired.length }, 'Permission requests expired with the account');
+    return expired.length;
+  }
+
+  /**
+   * Expire `userId`'s pending requests raised in a workspace: stamped with it,
+   * or raised in one of its sessions (rows written before the stamp existed).
+   * A member removed from or downgraded in a space must not answer, or be
+   * left waiting on, a prompt there (docs/plans/coworking-spec.md §5.9).
+   */
+  async expireForUserInWorkspace(userId: string, workspaceId: string): Promise<number> {
+    const expired = await this.db
+      .update(permissionRequests)
+      .set({ status: 'expired' })
+      .where(and(
+        eq(permissionRequests.userId, userId),
+        eq(permissionRequests.status, 'pending'),
+        sql`(${permissionRequests.workspaceId} = ${workspaceId}
+          OR ${permissionRequests.sessionId} IN (SELECT id FROM sessions WHERE workspace_id = ${workspaceId}))`,
+      ))
+      .returning();
+    for (const request of expired) {
+      this.emitResolved(request, 'expired');
+      this.pendingRequests.get(request.id)?.(false);
+    }
+    if (expired.length > 0) securityLogger.info({ userId, workspaceId, count: expired.length }, 'Permission requests expired with the membership');
+    return expired.length;
+  }
+
+  /**
+   * Expire `userId`'s pending requests raised in one session — a room turn
+   * that waited too long on its requester, or a member who lost access to
+   * the room (docs/plans/coworking-spec.md §6.4, §6.6). Their agents resume
+   * unapproved. Returns how many rows were expired.
+   */
+  async expireForUserInSession(userId: string, sessionId: string): Promise<number> {
+    const expired = await this.db
+      .update(permissionRequests)
+      .set({ status: 'expired' })
+      .where(and(
+        eq(permissionRequests.userId, userId),
+        eq(permissionRequests.status, 'pending'),
+        eq(permissionRequests.sessionId, sessionId),
+      ))
+      .returning();
+    for (const request of expired) {
+      this.emitResolved(request, 'expired');
+      this.pendingRequests.get(request.id)?.(false);
+    }
+    if (expired.length > 0) securityLogger.info({ userId, sessionId, count: expired.length }, 'Permission requests expired in a session');
+    return expired.length;
+  }
+
+  /**
    * Subscribe to "this agent is blocked on a human" transitions. The worker
    * uses it to stop its wall clock: with no TTL, a turn would otherwise die of
    * its own timeout while the prompt sat on screen. Returns an unsubscribe.
@@ -521,89 +612,64 @@ export class PermissionManager {
   /**
    * Approve a permission request.
    *
-   * Phase 1c: cross-tenant resolution is now blocked. The WHERE clause
-   * requires the request's `user_id` to match the principal calling
-   * approve. Pre-Phase-1c the gateway handler called this with
-   * `context.userId` as `resolvedBy`, but the row update accepted any
-   * `requestId` with status='pending' — so any authenticated caller
-   * with a leaked requestId could approve another user's request.
-   * Now: alice approving bob's requestId is a silent no-op (returns
-   * false, same shape as "request id doesn't exist or already
-   * resolved"), so attackers can't enumerate live requests by probing.
-   *
-   * Admins (`{ admin: true }`) bypass the user filter — they may
-   * intervene from the admin console once Phase 2 ships.
+   * Only the requester answers: the WHERE clause requires the request's
+   * `user_id` to match `resolvedBy`. Alice approving bob's requestId is a
+   * silent no-op (returns false, same shape as "request id doesn't exist or
+   * already resolved"), so ids cannot be probed. There is no admin override
+   * here — an admin answering someone else's request goes through
+   * `resolveAsAdmin`, which only the audited admin route calls.
    */
-  async approve(
-    requestId: string,
-    resolvedBy: string,
-    resolution?: string,
-    opts?: { admin?: boolean },
-  ): Promise<boolean> {
-    const filters = [
-      eq(permissionRequests.id, requestId),
-      eq(permissionRequests.status, 'pending'),
-      sql`(${permissionRequests.expiresAt} IS NULL OR ${permissionRequests.expiresAt} > NOW())`,
-    ];
-    if (!opts?.admin) filters.push(eq(permissionRequests.userId, resolvedBy));
-
-    const result = await this.db
-      .update(permissionRequests)
-      .set({
-        status: 'approved',
-        resolvedBy,
-        resolvedAt: new Date(),
-        resolution,
-      })
-      .where(and(...filters))
-      .returning();
-
-    if (result.length > 0) {
-      const request = result[0];
-      this.emitResolved(request, 'approved');
-
-      await auditRepository.log({
-        userId: request.userId,
-        action: 'permission_granted',
-        resourceType: 'permission',
-        resourceId: requestId,
-        sessionId: request.sessionId || undefined,
-        details: { toolId: request.toolId, action: request.action, resolvedBy },
-      }).catch(err => coreLogger.error({ err, requestId }, 'Approval saved but audit logging failed'));
-
-      // Notify waiting code
-      const callback = this.pendingRequests.get(requestId);
-      if (callback) {
-        this.pendingRequests.delete(requestId);
-        callback(true, resolution);
-      }
-
-      securityLogger.info({ requestId, resolvedBy }, 'Permission approved');
-      return true;
-    }
-
-    return false;
+  async approve(requestId: string, resolvedBy: string, resolution?: string): Promise<boolean> {
+    return (await this.settle(requestId, 'approved', resolvedBy, resolution, resolvedBy)) !== null;
   }
 
   /**
-   * Deny a permission request. Same cross-tenant guard as `approve`.
+   * Deny a permission request. Same owner rule as `approve`.
    */
-  async deny(
+  async deny(requestId: string, resolvedBy: string, resolution?: string): Promise<boolean> {
+    return (await this.settle(requestId, 'denied', resolvedBy, resolution, resolvedBy)) !== null;
+  }
+
+  /**
+   * An admin answering another user's request. The one caller is the audited
+   * `POST /api/admin/permission-requests/:id/resolve`, which records the
+   * reason; no other path skips the owner check. Returns the resolved request,
+   * or null when it was not pending.
+   */
+  async resolveAsAdmin(
     requestId: string,
+    approved: boolean,
+    adminUserId: string,
+    reason: string,
+  ): Promise<PermissionRequest | null> {
+    return this.settle(requestId, approved ? 'approved' : 'denied', adminUserId, reason, null, adminUserId);
+  }
+
+  /** `owner` null skips the owner check — only `resolveAsAdmin` passes it. */
+  private async settle(
+    requestId: string,
+    status: 'approved' | 'denied',
     resolvedBy: string,
-    resolution?: string,
-    opts?: { admin?: boolean },
-  ): Promise<boolean> {
+    resolution: string | undefined,
+    owner: string | null,
+    /** An admin answering someone else's request: never one of a space or a room (D9). */
+    admin?: string,
+  ): Promise<PermissionRequest | null> {
     const filters = [
       eq(permissionRequests.id, requestId),
       eq(permissionRequests.status, 'pending'),
     ];
-    if (!opts?.admin) filters.push(eq(permissionRequests.userId, resolvedBy));
+    if (admin !== undefined) filters.push(adminMayAnswer());
+    // An approval must not land on a request that has already timed out.
+    if (status === 'approved') {
+      filters.push(sql`(${permissionRequests.expiresAt} IS NULL OR ${permissionRequests.expiresAt} > NOW())`);
+    }
+    if (owner !== null) filters.push(eq(permissionRequests.userId, owner));
 
     const result = await this.db
       .update(permissionRequests)
       .set({
-        status: 'denied',
+        status,
         resolvedBy,
         resolvedAt: new Date(),
         resolution,
@@ -611,31 +677,56 @@ export class PermissionManager {
       .where(and(...filters))
       .returning();
 
-    if (result.length > 0) {
-      const request = result[0];
-      this.emitResolved(request, 'denied');
+    const request = result[0];
+    if (!request) return null;
 
-      await auditRepository.log({
-        userId: request.userId,
-        action: 'permission_denied',
-        resourceType: 'permission',
-        resourceId: requestId,
-        sessionId: request.sessionId || undefined,
-        details: { toolId: request.toolId, action: request.action, resolvedBy, reason: resolution },
-      }).catch(err => coreLogger.error({ err, requestId }, 'Denial saved but audit logging failed'));
+    this.emitResolved(request, status);
 
-      // Notify waiting code
-      const callback = this.pendingRequests.get(requestId);
-      if (callback) {
-        this.pendingRequests.delete(requestId);
-        callback(false, resolution);
-      }
+    const approved = status === 'approved';
+    await auditRepository.log({
+      userId: request.userId,
+      action: approved ? 'permission_granted' : 'permission_denied',
+      resourceType: 'permission',
+      resourceId: requestId,
+      sessionId: request.sessionId || undefined,
+      details: approved
+        ? { toolId: request.toolId, action: request.action, resolvedBy }
+        : { toolId: request.toolId, action: request.action, resolvedBy, reason: resolution },
+    }).catch(err => coreLogger.error({ err, requestId }, approved
+      ? 'Approval saved but audit logging failed'
+      : 'Denial saved but audit logging failed'));
 
-      securityLogger.info({ requestId, resolvedBy, reason: resolution }, 'Permission denied');
-      return true;
+    // Notify waiting code
+    const callback = this.pendingRequests.get(requestId);
+    if (callback) {
+      this.pendingRequests.delete(requestId);
+      callback(approved, resolution);
     }
 
-    return false;
+    if (approved) securityLogger.info({ requestId, resolvedBy }, 'Permission approved');
+    else securityLogger.info({ requestId, resolvedBy, reason: resolution }, 'Permission denied');
+    return request;
+  }
+
+  /**
+   * Every pending request on the install, for the admin console's triage
+   * list. Answering one still goes through `resolveAsAdmin`.
+   */
+  /**
+   * Every pending request, for the admin queue. With `forAdmin`, requests of
+   * spaces and rooms are left out (D9, I3): their requesters answer them.
+   */
+  async getAllPendingRequests(forAdmin?: string): Promise<PermissionRequest[]> {
+    return this.db
+      .select()
+      .from(permissionRequests)
+      .where(
+        and(
+          eq(permissionRequests.status, 'pending'),
+          sql`(${permissionRequests.expiresAt} IS NULL OR ${permissionRequests.expiresAt} > NOW())`,
+          forAdmin !== undefined ? adminMayAnswer() : undefined,
+        )
+      );
   }
 
   /**

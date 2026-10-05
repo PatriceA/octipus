@@ -11,6 +11,7 @@ import type { AgentContext } from '@/core/types';
 
 const mocks = vi.hoisted(() => ({ session: vi.fn(), probe: vi.fn(), resumed: vi.fn(), published: vi.fn(), outcome: 'success' as 'success' | 'failed' | 'cancelled' }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: { findById: mocks.session } }));
+vi.mock('@/security/orgs', () => ({ getOrgWorkspaceManager: () => ({ ensureDefaultWorkspace: async () => ({ id: '44444444-4444-4444-8444-444444444444' }), findOwnedById: async () => null }) }));
 vi.mock('./probes', () => ({ probe: mocks.probe, readProbe: () => ({ toolId: 'filesystem' }) }));
 vi.mock('@/core/agent/service', () => ({ getAgentService: () => ({ publishResponse: mocks.published, handleMessage: async (sessionId: string, _user: string, message: string, _channel: string, _files: unknown, _mode: unknown, before: () => Promise<void>) => withSessionTurn(sessionId, async () => {
   await before(); mocks.resumed(message); return { agentId: 'agent', response: mocks.outcome === 'success' ? 'Done' : 'Continuation failed or was stopped', outcome: mocks.outcome };
@@ -18,7 +19,7 @@ vi.mock('@/core/agent/service', () => ({ getAgentService: () => ({ publishRespon
 
 const userId = '11111111-1111-4111-8111-111111111111';
 const sessionId = '22222222-2222-4222-8222-222222222222';
-const context: AgentContext = { id: '33333333-3333-4333-8333-333333333333', userId, sessionId, role: 'general', topic: 'general', model: '', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} };
+const context: AgentContext = { space: null, trigger: 'user', funding: 'own',  id: '33333333-3333-4333-8333-333333333333', userId, sessionId, role: 'general', topic: 'general', model: '', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} };
 let pg: PGlite;
 let repo: MonitorRepository;
 let service: MonitorService;
@@ -28,7 +29,7 @@ const observed = { reason: 'matched' as const, observedAt: new Date().toISOStrin
 
 beforeAll(async () => {
   pg = new PGlite();
-  await pg.exec('CREATE TABLE users(id uuid PRIMARY KEY); CREATE TABLE sessions(id uuid PRIMARY KEY);');
+  await pg.exec('CREATE TABLE users(id uuid PRIMARY KEY, is_active boolean NOT NULL DEFAULT true); CREATE TABLE sessions(id uuid PRIMARY KEY);');
   await pg.exec(readFileSync('src/db/migrations/0110_session_monitors.sql', 'utf8'));
   await pg.query('INSERT INTO users VALUES ($1)', [userId]);
   await pg.query('INSERT INTO sessions VALUES ($1)', [sessionId]);

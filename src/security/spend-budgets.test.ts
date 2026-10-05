@@ -25,6 +25,8 @@ process.env.JWT_SECRET ??= `test-jwt-${rand(24)}`;
 process.env.SESSION_SECRET ??= `test-session-${rand(24)}`;
 process.env.LOG_LEVEL ??= 'error';
 
+/** An own (personal) invocation: no space. */
+const OWN = { funding: 'own' as const, spaceId: null };
 const NOON = new Date('2026-07-12T12:00:00Z');
 const EARLIER = new Date('2026-07-12T09:00:00Z');
 
@@ -77,7 +79,7 @@ describe('checkSpend', () => {
     await upsertBudget({ userId, scopeKind: 'user', period: 'day', limitUsd: 10 });
     await logCost(userId, 3);
 
-    const [status] = await checkSpend({ userId }, NOON);
+    const [status] = await checkSpend({ userId, ...OWN }, NOON);
     expect(status.state).toBe('ok');
     expect(status.spentUsd).toBeCloseTo(3);
     expect(status.limitUsd).toBe(10);
@@ -90,9 +92,9 @@ describe('checkSpend', () => {
     await upsertBudget({ userId, scopeKind: 'user', period: 'day', limitUsd: 10 });
     await logCost(userId, 8);
 
-    expect((await checkSpend({ userId }, NOON))[0].state).toBe('warn');
+    expect((await checkSpend({ userId, ...OWN }, NOON))[0].state).toBe('warn');
     _resetSpendBudgetsForTests();
-    const [again] = await checkSpend({ userId }, NOON);
+    const [again] = await checkSpend({ userId, ...OWN }, NOON);
     expect(again.state).toBe('warn');
     expect(again.budget.warnedAt).not.toBeNull();
     expect(await notificationsOf(userId, 'spend_budget_warning')).toHaveLength(1);
@@ -105,7 +107,7 @@ describe('checkSpend', () => {
     await upsertBudget({ userId, scopeKind: 'user', period: 'month', limitUsd: 5 });
     await logCost(userId, 6);
 
-    const err = await checkSpend({ userId }, NOON).catch((e: unknown) => e);
+    const err = await checkSpend({ userId, ...OWN }, NOON).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(SpendBudgetExceededError);
     const reason = (err as InstanceType<typeof SpendBudgetExceededError>).reason;
     expect(reason.spentUsd).toBeCloseTo(6);
@@ -114,7 +116,7 @@ describe('checkSpend', () => {
 
     const [row] = await listBudgets(userId);
     expect(row.pausedAt).not.toBeNull();
-    await expect(checkSpend({ userId }, NOON)).rejects.toBeInstanceOf(SpendBudgetExceededError);
+    await expect(checkSpend({ userId, ...OWN }, NOON)).rejects.toBeInstanceOf(SpendBudgetExceededError);
     expect(await notificationsOf(userId, 'spend_budget_paused')).toHaveLength(1);
   });
 
@@ -123,10 +125,10 @@ describe('checkSpend', () => {
     const userId = await newUser();
     await upsertBudget({ userId, scopeKind: 'user', period: 'day', limitUsd: 5 });
     await logCost(userId, 6);
-    await expect(checkSpend({ userId }, NOON)).rejects.toThrow(/Spend budget exceeded/);
+    await expect(checkSpend({ userId, ...OWN }, NOON)).rejects.toThrow(/Spend budget exceeded/);
 
     const nextDay = new Date('2026-07-13T12:00:00Z');
-    const [status] = await checkSpend({ userId }, nextDay);
+    const [status] = await checkSpend({ userId, ...OWN }, nextDay);
     expect(status.state).toBe('ok');
     expect(status.spentUsd).toBe(0);
   });
@@ -150,15 +152,15 @@ describe('checkSpend', () => {
     await logCost(userId, 1, { agentId: coder });
 
     // Another role does not see the coder budget at all.
-    expect(await checkSpend({ userId, role: 'general' }, NOON)).toEqual([]);
-    const [status] = await checkSpend({ userId, role: 'coder' }, NOON);
+    expect(await checkSpend({ userId, role: 'general', ...OWN }, NOON)).toEqual([]);
+    const [status] = await checkSpend({ userId, role: 'coder', ...OWN }, NOON);
     expect(status.state).toBe('ok');
     expect(status.spentUsd).toBeCloseTo(1);
 
     await logCost(userId, 1.5, { agentId: coder });
     const { _resetSpendBudgetsForTests } = await import('@/security/spend-budgets');
     _resetSpendBudgetsForTests();
-    await expect(checkSpend({ userId, role: 'coder' }, NOON)).rejects.toBeInstanceOf(SpendBudgetExceededError);
+    await expect(checkSpend({ userId, role: 'coder', ...OWN }, NOON)).rejects.toBeInstanceOf(SpendBudgetExceededError);
   });
 
   test('raising the limit clears the pause', async () => {
@@ -166,12 +168,12 @@ describe('checkSpend', () => {
     const userId = await newUser();
     await upsertBudget({ userId, scopeKind: 'user', period: 'day', limitUsd: 5 });
     await logCost(userId, 6);
-    await expect(checkSpend({ userId }, NOON)).rejects.toThrow();
+    await expect(checkSpend({ userId, ...OWN }, NOON)).rejects.toThrow();
 
     const row = await upsertBudget({ userId, scopeKind: 'user', period: 'day', limitUsd: 100 });
     expect(row.pausedAt).toBeNull();
     _resetSpendBudgetsForTests();
-    expect((await checkSpend({ userId }, NOON))[0].state).toBe('ok');
+    expect((await checkSpend({ userId, ...OWN }, NOON))[0].state).toBe('ok');
   });
 
   test('workspace scope attributes via the agent’s workspace, else the session’s', async () => {
@@ -200,7 +202,7 @@ describe('checkSpend', () => {
       userId, sessionId: scoped.id, modelName: 'test', inputTokens: 1, outputTokens: 1, totalCost: 3, createdAt: EARLIER,
     });
 
-    const [status] = await checkSpend({ userId, workspaceId: ws.id }, NOON);
+    const [status] = await checkSpend({ userId, workspaceId: ws.id, ...OWN }, NOON);
     expect(status.budget.scopeRef).toBe(ws.id.toLowerCase());
     expect(status.spentUsd).toBeCloseTo(5);
   });
@@ -210,7 +212,7 @@ describe('checkSpend', () => {
     const userId = await newUser();
     await upsertBudget({ userId, scopeKind: 'user', period: 'day', limitUsd: 10 });
     for (const day of ['2026-07-12', '2026-07-13', '2026-07-14']) {
-      await checkSpend({ userId }, new Date(`${day}T12:00:00Z`));
+      await checkSpend({ userId, ...OWN }, new Date(`${day}T12:00:00Z`));
     }
     expect(_spendCacheSizeForTests()).toBe(1);
   });
@@ -219,7 +221,7 @@ describe('checkSpend', () => {
     const { checkSpend, _resetSpendBudgetsForTests } = await import('@/security/spend-budgets');
     const { SpendBudgetExceededError } = await import('@/security/spend-budget-error');
     const userId = await newUser();
-    expect(await checkSpend({ userId }, NOON)).toEqual([]);
+    expect(await checkSpend({ userId, ...OWN }, NOON)).toEqual([]);
 
     // Written behind the module's back: the cached empty list keeps answering
     // for the TTL, so the budget table is not re-read on each check.
@@ -227,10 +229,10 @@ describe('checkSpend', () => {
     const { spendBudgets } = await import('@/db/schema/spend-budgets');
     await getDb().insert(spendBudgets).values({ userId, scopeKind: 'user', period: 'day', limitUsd: '1' });
     await logCost(userId, 5);
-    for (let i = 0; i < 3; i++) expect(await checkSpend({ userId }, NOON)).toEqual([]);
+    for (let i = 0; i < 3; i++) expect(await checkSpend({ userId, ...OWN }, NOON)).toEqual([]);
 
     _resetSpendBudgetsForTests();
-    await expect(checkSpend({ userId }, NOON)).rejects.toBeInstanceOf(SpendBudgetExceededError);
+    await expect(checkSpend({ userId, ...OWN }, NOON)).rejects.toBeInstanceOf(SpendBudgetExceededError);
   });
 
   test('concurrent upserts of one scope leave one row; role names are trimmed', async () => {
@@ -247,7 +249,7 @@ describe('checkSpend', () => {
 
   test('system / local principals have no budgets', async () => {
     const { checkSpend } = await import('@/security/spend-budgets');
-    expect(await checkSpend({ userId: 'system' })).toEqual([]);
+    expect(await checkSpend({ userId: 'system', ...OWN })).toEqual([]);
   });
 });
 
@@ -292,21 +294,21 @@ describe('group channel budgets', () => {
     await logInSession(member, memberThread, 3);
     await logInSession(member, memberDm, 50); // the member's own chat is not the channel's
 
-    const [status] = await checkSpend({ userId: member, sessionId: memberThread }, NOON);
+    const [status] = await checkSpend({ userId: member, sessionId: memberThread, ...OWN }, NOON);
     expect(status.budget.scopeKind).toBe('group_channel');
     expect(status.spentUsd).toBeCloseTo(7);
-    expect(await checkSpend({ userId: member, sessionId: memberDm }, NOON)).toEqual([]);
-    expect(await groupChannelPause(g.id, NOON)).toBeNull();
+    expect(await checkSpend({ userId: member, sessionId: memberDm, ...OWN }, NOON)).toEqual([]);
+    expect(await groupChannelPause(g.id, OWN, NOON)).toBeNull();
 
     await logInSession(member, memberThread, 5);
     _resetSpendBudgetsForTests();
-    await expect(checkSpend({ userId: member, sessionId: memberThread }, NOON)).rejects.toBeInstanceOf(SpendBudgetExceededError);
+    await expect(checkSpend({ userId: member, sessionId: memberThread, ...OWN }, NOON)).rejects.toBeInstanceOf(SpendBudgetExceededError);
     // The owner is told, not the member whose run crossed it.
     expect(await notificationsOf(owner, 'spend_budget_paused')).toHaveLength(1);
     expect(await notificationsOf(member, 'spend_budget_paused')).toHaveLength(0);
-    expect(await groupChannelPause(g.id, NOON)).toEqual({ resetsAt: '2026-07-13T00:00:00.000Z' });
+    expect(await groupChannelPause(g.id, OWN, NOON)).toEqual({ resetsAt: '2026-07-13T00:00:00.000Z' });
     // The owner's own runs elsewhere are not capped by it.
-    expect(await checkSpend({ userId: owner }, NOON)).toEqual([]);
+    expect(await checkSpend({ userId: owner, ...OWN }, NOON)).toEqual([]);
   });
 
   test('one budget per channel and period; it follows the owner and goes with the enrolment', async () => {

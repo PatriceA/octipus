@@ -1,13 +1,148 @@
+import {
+  type AgentProposal,
+  type AgentProposer,
+  proposeAgentArchive,
+  proposeAgentCapture,
+  proposeAgentEdit,
+  rebaseOnto,
+  sessionPendingProposal,
+} from '@/core/docs/edit-proposals';
+import { NoteTooLargeError, StaleWriteError } from '@/core/docs/hub';
+import { ToolNotExecutedError } from '@/core/tool-execution-error';
 import { getCanvasBuilder } from '@/core/knowledge/canvas';
-import { getNoteService } from '@/core/knowledge/notes';
+import { getNoteService, NoteExistsError } from '@/core/knowledge/notes';
 import { getSuggestionService } from '@/core/knowledge/suggestions';
 import { getVaultSync } from '@/core/knowledge/vault';
 import { getEmbeddingService } from '@/core/rag/embeddings';
+import { agentKnowledgeScope } from '@/core/rag/knowledge-scope';
 import type { ToolManifest } from '@/core/types';
 import { isRootAgent } from '@/core/types';
 import { getKnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
-import { getNoteRepository } from '@/db/repositories/note-repository';
+import { getNoteRepository, type NoteScope, personalNoteScope } from '@/db/repositories/note-repository';
+import { reposFor } from '@/db/repositories/content';
+import type { NoteEditProposal } from '@/db/schema/live-documents';
+import type { AgentContext } from '@/core/types';
 import { BaseTool, createParameterSchema } from '../base-tool';
+
+/**
+ * The note scope of an agent's tools (§5.6): the space's notes in a space
+ * (through `reposFor`, by the member's role); otherwise the user's personal
+ * notes in the agent's workspace, or across their personal workspaces when
+ * `narrow` is false (by-id reads and the list, as before spaces).
+ */
+function notesScope(context: AgentContext, narrow = true): NoteScope {
+  const repos = reposFor(context);
+  if (repos.kind === 'space' || narrow) return repos.noteScope;
+  return personalNoteScope(context.userId);
+}
+
+/**
+ * Who proposes, when the agent works in a space whose
+ * `agent_edit_mode` is `suggest` (§7.4, the default): its changes to
+ * existing notes become this session's pending edit proposal. Null when it
+ * writes directly (personal notes, or a space in `direct` mode). Read at
+ * every write, so an owner's switch applies to a running agent.
+ */
+async function proposerIn(context: AgentContext): Promise<AgentProposer | null> {
+  if (!context.space) return null;
+  const { agentEditModeOf } = await import('@/core/spaces/service');
+  if ((await agentEditModeOf(context.space.workspaceId)) !== 'suggest') return null;
+  return { sessionId: context.sessionId, agentId: context.id };
+}
+
+/**
+ * A stale base or an oversized body refuses a note write before anything
+ * changed: say so (`ToolNotExecutedError`), or the action journal takes the
+ * failed call for an uncertain mutation and holds every later write of the
+ * session behind a recovery review.
+ */
+async function definiteRefusal<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof StaleWriteError || err instanceof NoteTooLargeError) throw new ToolNotExecutedError('notes', err.message, { cause: err });
+    throw err;
+  }
+}
+
+/** What a write in suggest mode returns: nothing changed yet, a member decides. */
+function proposed(proposal: NoteEditProposal) {
+  return {
+    proposed: true,
+    proposalId: proposal.id,
+    status: 'pending' as const,
+    baseSha256: proposal.baseSha256,
+    id: proposal.noteId,
+    hint: 'Nothing changed yet: this space takes the agent\'s note changes as proposals, which a member accepts or rejects. '
+      + 'read_note shows your pending proposal rebased onto the note\'s current text; to change it, write from that proposal body with the base_sha256 shown beside it.',
+  };
+}
+
+/** What a write that changes nothing returns in suggest mode: no proposal is made or updated. */
+function unchanged(noteId: string, pending: NoteEditProposal | null) {
+  return {
+    unchanged: true,
+    id: noteId,
+    ...(pending ? { proposalId: pending.id, hint: 'Your pending proposal for this note is left as it is.' } : {}),
+  };
+}
+
+/** What `read_note` tells the agent about its pending proposal. */
+function pendingHint(pending: NoteEditProposal, stale: boolean, suggesting: boolean): string {
+  const decided = 'Not yet accepted: body above is the note as it is; a member accepts or rejects this proposal.';
+  if (!suggesting) return `${decided} This space now applies the agent's writes directly: writing the note changes it and does not update this proposal.`;
+  if (pending.action === 'archive') return `${decided} You proposed archiving the note; an edit is refused until a member decides it.`;
+  if (stale) {
+    return `${decided} It collides with what members wrote since, so it would be refused as stale: write your change again from the note's current body above, `
+      + 'with sha256 as base_sha256, to replace it.';
+  }
+  return `${decided} pendingProposal.body is your change applied to the current text: to change the proposal, edit that body and write it with `
+    + 'pendingProposal.baseSha256 as base_sha256 (writing from the note body above with sha256 also keeps your proposed change).';
+}
+
+/**
+ * `write_note` in a space in suggest mode: a new note is created (nobody's
+ * text changes; created only while the slug is still free); a change to an
+ * existing one is proposed.
+ */
+async function suggestWrite(context: AgentContext, proposer: AgentProposer, args: Record<string, unknown>, baseSha256: string | undefined) {
+  const scope = notesScope(context);
+  const svc = getNoteService();
+  let existing = args.id
+    ? await svc.getById(scope, args.id as string)
+    : await svc.getBySlug(scope, (args.slug as string) || (args.title as string));
+  if (args.id && !existing) throw new Error(`Note ${args.id} not found for this user`);
+  if (!existing) {
+    try {
+      const result = await svc.save({
+        scope,
+        slug: (args.slug as string) || undefined,
+        title: args.title as string,
+        body: typeof args.body === 'string' ? args.body : undefined,
+        noteKind: (args.note_kind as string) || undefined,
+        tags: Array.isArray(args.tags) ? (args.tags as string[]) : undefined,
+        createdByAgentId: context.role && !isRootAgent(context) ? context.id : null,
+        createOnly: true,
+      });
+      return { id: result.note.id, slug: result.note.slug, created: result.created, indexed: result.indexed, links: result.links };
+    } catch (err) {
+      // A member created the note meanwhile: the write is a change to it.
+      if (!(err instanceof NoteExistsError)) throw err;
+      existing = await svc.getById(scope, err.noteId);
+      if (!existing) throw new Error(`Note ${err.slug} vanished while writing`);
+    }
+  }
+  // Only the title changes: proposed from the current text.
+  const body = typeof args.body === 'string' ? args.body : existing.body;
+  const base = typeof args.body === 'string' ? baseSha256 : existing.bodySha256;
+  if (base === undefined) throw new StaleWriteError('missing_base', existing.bodySha256);
+  const result: AgentProposal = await proposeAgentEdit(scope, proposer, { noteId: existing.id, baseSha256: base, body, title: args.title as string });
+  const ignored = [args.tags !== undefined && 'tags', args.note_kind !== undefined && 'note_kind'].filter(Boolean);
+  return {
+    ...(result.proposal ? proposed(result.proposal) : unchanged(existing.id, result.pending)),
+    ...(ignored.length > 0 ? { notice: `A proposal changes the body and title only: ${ignored.join(' and ')} were not proposed (use #tags in the body).` } : {}),
+  };
+}
 
 /**
  * Knowledge-graph Tier 2 — the notes authoring surface as agent tools.
@@ -51,7 +186,7 @@ export class NotesTool extends BaseTool {
   protected async registerTools(): Promise<void> {
     this.registerTool(
       'write_note',
-      'Create or update a markdown note. Use [[Wikilinks]] to connect to other notes/entities and #tags to categorise — both are wired into the knowledge graph automatically. Pass id to edit an existing note; omit it to create (slug derives from slug or title).',
+      'Create or update a markdown note. Use [[Wikilinks]] to connect to other notes/entities and #tags to categorise — both are wired into the knowledge graph automatically. Pass id to edit an existing note; omit it to create (slug derives from slug or title). In a shared space that takes the agent\'s changes as suggestions (the default), a change to an existing note becomes your pending edit proposal for a member to accept; a new note is created.',
       createParameterSchema({
         title: { type: 'string', description: 'Note title', required: true },
         body: { type: 'string', description: 'Markdown body (may contain [[wikilinks]] and #tags)' },
@@ -59,15 +194,20 @@ export class NotesTool extends BaseTool {
         slug: { type: 'string', description: 'Explicit slug (defaults to a slug of the title)' },
         note_kind: { type: 'string', description: 'note (default) | moc | literature | …' },
         tags: { type: 'array', description: 'Explicit tags (unioned with #tags from the body)', items: { type: 'string' } },
+        base_sha256: { type: 'string', description: 'Required to change the body of an existing shared-space note: the sha256 read_note returned (read_note first). Your change is merged with what others wrote since; a clash is refused — read the note again and reapply.' },
       }),
-      async (args, context) => {
+      async (args, context) => definiteRefusal(async () => {
+        const baseSha256 = typeof args.base_sha256 === 'string' && args.base_sha256 ? args.base_sha256 : undefined;
+        const proposer = await proposerIn(context);
+        if (proposer) return suggestWrite(context, proposer, args, baseSha256);
         const result = await getNoteService().save({
-          userId: context.userId,
-          workspaceId: context.workspaceId ?? null,
+          baseSha256,
+          scope: notesScope(context),
           id: (args.id as string) || undefined,
           slug: (args.slug as string) || undefined,
           title: args.title as string,
-          body: (args.body as string) ?? '',
+          // No body: a new note is empty; an existing space note keeps its text.
+          body: typeof args.body === 'string' ? args.body : undefined,
           noteKind: (args.note_kind as string) || undefined,
           tags: Array.isArray(args.tags) ? (args.tags as string[]) : undefined,
           // A note the user asked Octipus for directly is the USER's note, so
@@ -81,7 +221,7 @@ export class NotesTool extends BaseTool {
           indexed: result.indexed,
           links: result.links,
         };
-      },
+      }),
       { permissionAction: 'write' },
     );
 
@@ -95,15 +235,23 @@ export class NotesTool extends BaseTool {
       async (args, context) => {
         const svc = getNoteService();
         const note = args.id
-          ? await svc.getById(context.userId, args.id as string)
+          ? await svc.getById(notesScope(context, false), args.id as string)
           : args.slug
-            ? await svc.getBySlug(context.userId, context.workspaceId ?? null, args.slug as string)
+            ? await svc.getBySlug(notesScope(context), args.slug as string)
             : null;
         if (!note) {
           if (!args.id && !args.slug) throw new Error('read_note requires id or slug');
           return { error: 'Note not found.' };
         }
-        const backlinks = await getKnowledgeLinkRepository().getBacklinks(context.userId, 'note', note.id);
+        const repos = reposFor(context);
+        const backlinks = repos.kind === 'space'
+          ? await repos.links.getBacklinks('note', note.id)
+          : await getKnowledgeLinkRepository().getBacklinks(context.userId, 'note', note.id);
+        // The change this session proposed and nobody decided yet (§7.4),
+        // rebased onto the note's current text.
+        const pending = repos.kind === 'space' ? await sessionPendingProposal(repos.noteScope, note.id, context.sessionId) : null;
+        const rebased = pending ? rebaseOnto(pending, note) : null;
+        const suggesting = pending ? (await proposerIn(context)) !== null : false;
         return {
           id: note.id,
           slug: note.slug,
@@ -111,7 +259,23 @@ export class NotesTool extends BaseTool {
           body: note.body,
           tags: note.tags,
           noteKind: note.noteKind,
+          // A shared-space note's live text has this sha: pass it back as
+          // write_note's base_sha256 so the edit merges (§7.3).
+          sha256: note.bodySha256,
           backlinks: backlinks.map((b) => ({ from: { type: b.fromType, id: b.fromId }, linkType: b.linkType, label: b.label })),
+          ...(pending && rebased ? {
+            pendingProposal: {
+              proposalId: pending.id,
+              status: pending.status,
+              action: pending.action,
+              title: pending.title,
+              ...(pending.action === 'archive' ? {} : { body: rebased.body }),
+              baseSha256: rebased.baseSha256,
+              ...(rebased.stale ? { stale: true } : {}),
+              updatedAt: pending.updatedAt,
+              hint: pendingHint(pending, rebased.stale, suggesting),
+            },
+          } : {}),
         };
       },
       { permissionAction: 'read' },
@@ -126,7 +290,7 @@ export class NotesTool extends BaseTool {
         limit: { type: 'number', description: 'Max results (default 50)', default: 50 },
       }),
       async (args, context) => {
-        const list = await getNoteService().list(context.userId, {
+        const list = await getNoteService().list(notesScope(context, false), {
           kind: (args.kind as string) || undefined,
           tag: (args.tag as string) || undefined,
           limit: (args.limit as number) || 50,
@@ -144,7 +308,7 @@ export class NotesTool extends BaseTool {
         limit: { type: 'number', description: 'Max results (default 5)', default: 5 },
       }),
       async (args, context) => {
-        const results = await getEmbeddingService().hybridSearch(args.query as string, (args.limit as number) || 5, 'note', undefined, 0.3, context.userId);
+        const results = await getEmbeddingService().hybridSearch(agentKnowledgeScope(context), args.query as string, (args.limit as number) || 5, 'note', undefined, 0.3);
         return {
           results: results.map((r) => ({ id: r.id, sourceId: r.sourceId, title: r.metadata.title, abstract: r.abstract || r.content.slice(0, 200), similarity: r.similarity.toFixed(3) })),
           hint: 'sourceId is note:<noteId>. Use read_note to load the full note.',
@@ -160,15 +324,20 @@ export class NotesTool extends BaseTool {
         text: { type: 'string', description: 'Text to capture', required: true },
         date: { type: 'string', description: 'Target day (YYYY-MM-DD); defaults to today' },
       }),
-      async (args, context) => {
+      async (args, context) => definiteRefusal(async () => {
+        const proposer = await proposerIn(context);
+        if (proposer) {
+          const result = await proposeAgentCapture(notesScope(context), proposer, args.text as string, (args.date as string) || undefined);
+          if (result.proposal) return proposed(result.proposal);
+          return { id: result.note.id, slug: result.note.slug, captured: true };
+        }
         const note = await getNoteService().capture(
-          context.userId,
-          context.workspaceId ?? null,
+          notesScope(context),
           args.text as string,
           (args.date as string) || undefined,
         );
         return { id: note.id, slug: note.slug, captured: true };
-      },
+      }),
       { permissionAction: 'write' },
     );
 
@@ -245,7 +414,7 @@ export class NotesTool extends BaseTool {
         limit: { type: 'number', description: 'Max suggestions (default 5)', default: 5 },
       }),
       async (args, context) => {
-        const suggestions = await getSuggestionService().suggestForNote(context.userId, args.note_id as string, (args.limit as number) || 5);
+        const suggestions = await getSuggestionService().suggestForNote(notesScope(context), args.note_id as string, (args.limit as number) || 5);
         return { suggestions, hint: suggestions.length === 0 ? 'No suggestions (either nothing related, or no embedding model configured).' : 'Accept a suggestion with knowledge.link_knowledge.' };
       },
       { permissionAction: 'read' },
@@ -253,14 +422,16 @@ export class NotesTool extends BaseTool {
 
     this.registerTool(
       'archive_note',
-      'Archive (soft-delete) a note. It is hidden from default listings but not destroyed.',
+      'Archive (soft-delete) a note. It is hidden from default listings but not destroyed. In a shared space that takes the agent\'s changes as suggestions, it is proposed instead.',
       createParameterSchema({
         id: { type: 'string', description: 'Note id', required: true },
       }),
-      async (args, context) => {
-        const ok = await getNoteService().archive(context.userId, args.id as string);
+      async (args, context) => definiteRefusal(async () => {
+        const proposer = await proposerIn(context);
+        if (proposer) return proposed(await proposeAgentArchive(notesScope(context), proposer, args.id as string));
+        const ok = await getNoteService().archive(notesScope(context, false), args.id as string);
         return { archived: ok };
-      },
+      }),
       { permissionAction: 'write' },
     );
 
@@ -286,14 +457,16 @@ export class NotesTool extends BaseTool {
         if (order && !['asc', 'desc'].includes(order)) {
           throw new Error(`Unknown order "${order}" — use asc | desc.`);
         }
-        const rows = await getNoteRepository().query(context.userId, {
+        const repos = reposFor(context);
+        const query = {
           kind: (args.kind as string) || undefined,
           tag: (args.tag as string) || undefined,
           frontmatter: (args.frontmatter as Record<string, unknown>) || undefined,
           sort: sort as 'updated' | 'created' | 'title' | 'date' | undefined,
           order: order as 'asc' | 'desc' | undefined,
           limit: Math.min(1000, Math.max(1, (args.limit as number) || 100)),
-        });
+        };
+        const rows = repos.kind === 'space' ? await repos.notes.query(query) : await getNoteRepository().query(context.userId, query);
         return { notes: rows.map((n) => ({ id: n.id, slug: n.slug, title: n.title, kind: n.noteKind, tags: n.tags, noteDate: n.noteDate, frontmatter: n.frontmatter, updatedAt: n.updatedAt })) };
       },
       { permissionAction: 'read' },
@@ -308,6 +481,7 @@ export class NotesTool extends BaseTool {
         hops: { type: 'number', description: 'Neighbourhood radius (default 1)', default: 1 },
       }),
       async (args, context) => {
+        if (context.space) throw new Error('export_canvas is not available in a shared space: the graph walk is per user.');
         const canvas = await getCanvasBuilder().fromNeighbourhood(
           context.userId,
           { type: args.entry_type as string, id: args.entry_id as string },

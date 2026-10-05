@@ -199,7 +199,7 @@ export class MessagingTool extends BaseTool {
       createParameterSchema({}),
       async () => {
         const { userRepository } = await import('@/db/repositories/user-repository');
-        const users = await userRepository.listAll();
+        const users = await userRepository.listLocal();
 
         const contacts = users
           .filter(u => {

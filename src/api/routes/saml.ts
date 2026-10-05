@@ -19,7 +19,9 @@
  *     1. Verify + parse the assertion (samlify enforces signature).
  *     2. Map attributes via `samlAttributeMap` (e.g. NameID → username,
  *        `email` claim → users.email).
- *     3. Upsert the user, ensure org membership.
+ *     3. Find the user among the org's members, or create it with its
+ *        membership. A username held by an account outside the org is
+ *        refused (403): an IdP speaks for its own org only.
  *     4. Mint a session via the existing session manager and set
  *        the same `session_token` HttpOnly cookie that the password
  *        login uses, then redirect to `/` (or RelayState if present).
@@ -28,7 +30,7 @@
  * on every endpoint — the same "feature off" pattern as the rest of
  * the multi-user surface.
  */
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { sessionCookie } from '@/api/session-cookie';
@@ -38,7 +40,9 @@ import { organizations, orgMembers } from '@/db/schema/organizations';
 import { orgSsoConfig, type OrgSsoConfig } from '@/db/schema/org-sso';
 import { users } from '@/db/schema/users';
 import { getSessionManager } from '@/security/auth/session';
+import { recordedClientIp } from '@/security/client-ip';
 import { coreLogger } from '@/utils/logger';
+import { assertLocalUsername, InvalidUsernameError, isRemoteUser } from '@/security/user-kinds';
 
 type Samlify = typeof import('samlify');
 
@@ -225,34 +229,66 @@ export const samlRoutes = new Elysia({ prefix: '/saml' })
           set.status = 400;
           return { error: 'SAML response did not yield a username (set attributeMap.username)' };
         }
-
-        const db = getDb();
-        // Upsert by username — SAML installs treat NameID as the
-        // canonical identity. Existing rows from the password-login
-        // path get re-used.
-        const [existing] = await db.select().from(users).where(eq(users.username, username)).limit(1);
-        let user = existing;
-        if (!user) {
-          const [created] = await db
-            .insert(users)
-            .values({
-              username,
-              email,
-              isAdmin: false,
-              isActive: true,
-              passwordHash: null,
-            })
-            .returning();
-          user = created;
+        // A leading `~` marks members from other installs (S7): never an IdP's account.
+        try {
+          assertLocalUsername(username);
+        } catch (err) {
+          if (!(err instanceof InvalidUsernameError)) throw err;
+          set.status = 400;
+          return { error: err.message };
         }
 
-        await db
-          .insert(orgMembers)
-          .values({ orgId: cfg.orgId, userId: user.id, role: 'member' })
-          .onConflictDoNothing();
+        const db = getDb();
+        // NameID is the canonical identity, but an org's IdP speaks for that
+        // org only: it signs in the org's members, or creates a new account
+        // (with its membership). A username that already belongs to an account
+        // outside this org is refused; otherwise any org's IdP could assert
+        // the install admin's username and sign in as them.
+        const [existing] = await db.select().from(users).where(eq(users.username, username)).limit(1);
+        let user = existing;
+        if (user && isRemoteUser(user)) {
+          // A remote member (S7) never signs in here; the guard above refuses
+          // their `~` names, this refuses any row that still is one.
+          coreLogger.warn({ userId: user.id, orgSlug: params.orgSlug }, 'SAML login refused: remote member');
+          set.status = 403;
+          return { error: 'Members from other installs cannot sign in here' };
+        }
+        if (user) {
+          const [member] = await db
+            .select({ userId: orgMembers.userId })
+            .from(orgMembers)
+            .where(and(eq(orgMembers.orgId, cfg.orgId), eq(orgMembers.userId, user.id)))
+            .limit(1);
+          if (!member) {
+            coreLogger.warn({ userId: user.id, orgSlug: params.orgSlug }, 'SAML login refused: account is not a member of this organization');
+            set.status = 403;
+            return { error: 'Account is not a member of this organization' };
+          }
+        } else {
+          user = await db.transaction(async (tx) => {
+            const [created] = await tx
+              .insert(users)
+              .values({
+                username,
+                email,
+                isAdmin: false,
+                isActive: true,
+                passwordHash: null,
+              })
+              .returning();
+            await tx.insert(orgMembers).values({ orgId: cfg.orgId, userId: created.id, role: 'member' });
+            return created;
+          });
+        }
+        if (!user.isActive) {
+          // A disabled account gets no session.
+          coreLogger.warn({ userId: user.id, orgSlug: params.orgSlug }, 'SAML login refused: account is disabled');
+          set.status = 403;
+          return { error: 'Account is disabled' };
+        }
 
         const { token } = await getSessionManager().create(user.id, {
-          ipAddress: request.headers.get('x-forwarded-for') ?? undefined,
+          ipAddress: recordedClientIp(request, ctx.socketAddress),
           userAgent: request.headers.get('user-agent') ?? undefined,
         });
 

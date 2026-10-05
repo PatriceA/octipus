@@ -5,8 +5,8 @@ import { isAuthenticated } from '@/security/principal';
 
 /**
  * REST view of pending tool-permission requests for clients that cannot keep
- * the permission WebSocket open (a phone woken by a push notification).
- * Mirrors the `/ws/permissions` `pending_requests` / `respond` frames.
+ * the gateway socket open (a phone woken by a push notification). Mirrors the
+ * gateway's `permission.pending` snapshot and `permission.respond` message.
  */
 export const permissionRequestRoutes = new Elysia({ prefix: '/permission-requests' })
   .use(apiContext)

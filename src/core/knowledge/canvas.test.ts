@@ -1,3 +1,4 @@
+import { personalNoteScope } from '@/db/repositories/note-repository';
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
@@ -44,13 +45,13 @@ describe('CanvasBuilder', () => {
 
   beforeEach(async () => {
     const { executeRaw } = await import('@/db/postgres');
-    await executeRaw('TRUNCATE TABLE notes');
+    await executeRaw('TRUNCATE TABLE notes CASCADE'); // note_revisions and note_edit_proposals reference notes
     await executeRaw('TRUNCATE TABLE knowledge_links');
   });
 
   test('projects a note neighbourhood into valid JSON Canvas', async () => {
-    const a = await svc.save({ userId, title: 'Hub', body: 'links [[Spoke]]' });
-    const spoke = await svc.save({ userId, title: 'Spoke' });
+    const a = await svc.save({ scope: personalNoteScope(userId), title: 'Hub', body: 'links [[Spoke]]' });
+    const spoke = await svc.save({ scope: personalNoteScope(userId), title: 'Spoke' });
 
     const canvas = await builder.fromNeighbourhood(userId, { type: 'note', id: a.note.id }, 1);
 
@@ -72,7 +73,7 @@ describe('CanvasBuilder', () => {
   });
 
   test('entry-only canvas when the note has no links', async () => {
-    const lone = await svc.save({ userId, title: 'Lonely' });
+    const lone = await svc.save({ scope: personalNoteScope(userId), title: 'Lonely' });
     const canvas = await builder.fromNeighbourhood(userId, { type: 'note', id: lone.note.id }, 1);
     expect(canvas.nodes).toHaveLength(1);
     expect(canvas.edges).toHaveLength(0);

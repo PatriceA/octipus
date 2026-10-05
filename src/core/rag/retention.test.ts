@@ -61,7 +61,7 @@ describe.skipIf(!isIntegration)('RAG cleanup with retention_policies (Integratio
     const oldId = await insertRow({ purpose: 'ephemeral', ageDays: 14 });
     const freshId = await insertRow({ purpose: 'ephemeral', ageDays: 1 });
 
-    const result = await service.cleanup({ dryRun: false, triggeredBy: 'test' });
+    const result = await service.cleanup({ kind: 'install' }, { dryRun: false, triggeredBy: 'test' });
     expect(result.byPurpose.ephemeral).toBe(1);
 
     const remaining = await getDb().select().from(embeddings).where(eq(embeddings.id, oldId));
@@ -75,7 +75,7 @@ describe.skipIf(!isIntegration)('RAG cleanup with retention_policies (Integratio
     const warmOld = await insertRow({ purpose: 'knowledge_artifact', ageDays: 200, accessCount: 5 });
     const coldFresh = await insertRow({ purpose: 'knowledge_artifact', ageDays: 30, accessCount: 0 });
 
-    const result = await service.cleanup({ dryRun: false, triggeredBy: 'test' });
+    const result = await service.cleanup({ kind: 'install' }, { dryRun: false, triggeredBy: 'test' });
     expect(result.byPurpose.knowledge_artifact).toBe(1);
 
     const ids = (await getDb().select({ id: embeddings.id }).from(embeddings)).map((r) => r.id);
@@ -86,13 +86,13 @@ describe.skipIf(!isIntegration)('RAG cleanup with retention_policies (Integratio
 
   test('purpose with all-NULL policy is left alone', async () => {
     await insertRow({ purpose: 'document', ageDays: 5000 });
-    const result = await service.cleanup({ dryRun: false, triggeredBy: 'test' });
+    const result = await service.cleanup({ kind: 'install' }, { dryRun: false, triggeredBy: 'test' });
     expect(result.byPurpose.document ?? 0).toBe(0);
   });
 
   test('dryRun reports counts without deleting', async () => {
     await insertRow({ purpose: 'ephemeral', ageDays: 14 });
-    const result = await service.cleanup({ dryRun: true, triggeredBy: 'test' });
+    const result = await service.cleanup({ kind: 'install' }, { dryRun: true, triggeredBy: 'test' });
     expect(result.byPurpose.ephemeral).toBe(1);
     const surviving = await getDb().select().from(embeddings);
     expect(surviving.length).toBe(1);

@@ -9,6 +9,7 @@
  * than the agent it toggles actually works.
  */
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { notInSharedWorkspace } from '@/db/repositories/scoped';
 import { getConfig } from '@/config';
 import { boardWritesAllowed, heartbeatRole, isRoleName } from '@/core/heartbeat';
 import { ACTIVE_TASK_STATUSES } from '@/core/tasks/status';
@@ -46,7 +47,7 @@ async function roleTaskCounts(userId: string): Promise<{ role: string; total: nu
       active: sql<number>`(count(*) filter (where ${inArray(tasks.status, [...ACTIVE_TASK_STATUSES])}))::int`,
     })
     .from(tasks)
-    .where(and(eq(tasks.userId, userId), eq(tasks.assigneeKind, 'role')))
+    .where(and(eq(tasks.userId, userId), notInSharedWorkspace(tasks.workspaceId), eq(tasks.assigneeKind, 'role')))
     .groupBy(tasks.assigneeRef);
   return rows.filter((r): r is { role: string; total: number; active: number } => typeof r.role === 'string' && r.role !== '');
 }

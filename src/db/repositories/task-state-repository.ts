@@ -75,19 +75,22 @@ export class TaskStateRepository {
   }
 
   async getById(id: string): Promise<TaskState | null> {
+    // i2: session task state by id or session, for the runtime that owns the session
     const rows = await this.db.select().from(taskState).where(eq(taskState.id, id)).limit(1);
     return rows[0] ?? null;
   }
 
   /**
    * Recent tasks in a session, newest first. Sibling-discovery primary
-   * use case: an agent asks "what did my peers just finish?".
+   * use case: an agent asks "what did my peers just finish?". `userId`
+   * keeps the rows of that user's turns only.
    */
-  async listSessionRecent(sessionId: string, limit = 50): Promise<TaskState[]> {
+  async listSessionRecent(sessionId: string, limit = 50, opts: { userId?: string } = {}): Promise<TaskState[]> {
     return this.db
       .select()
+      // i2: session task state by id or session, for the runtime that owns the session
       .from(taskState)
-      .where(eq(taskState.sessionId, sessionId))
+      .where(and(eq(taskState.sessionId, sessionId), opts.userId ? eq(taskState.userId, opts.userId) : undefined))
       .orderBy(desc(taskState.createdAt))
       .limit(limit);
   }
@@ -95,6 +98,7 @@ export class TaskStateRepository {
   async listByOwnerStatus(ownerAgent: string, status: TaskStateStatus, limit = 50): Promise<TaskState[]> {
     return this.db
       .select()
+      // i2: session task state by id or session, for the runtime that owns the session
       .from(taskState)
       .where(and(eq(taskState.ownerAgent, ownerAgent), eq(taskState.status, status)))
       .orderBy(desc(taskState.createdAt))
@@ -125,9 +129,11 @@ export class TaskStateRepository {
    */
   async reapOrphans(): Promise<number> {
     const result = await this.db.execute(sql`
+      -- i2: orphan cleanup, no rows returned
       DELETE FROM task_state
       WHERE status IN ('done', 'failed', 'cancelled')
         AND NOT EXISTS (
+          -- i2: orphan cleanup, no rows returned
           SELECT 1 FROM sessions s WHERE s.id = task_state.session_id
         )
       RETURNING id

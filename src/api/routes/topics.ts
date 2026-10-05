@@ -76,6 +76,12 @@ export const topicRoutes = new Elysia({ prefix: '/topics' })
         set.status = 404;
         return { error: `Unknown topic: ${params.topic}` };
       }
+      // An install lane's executor is an install row: a personal model
+      // (coworking spec §8.1) belongs to its owner and is refused here.
+      if (body.executorModel && await getModelRegistry().isPersonalModelName(body.executorModel)) {
+        set.status = 400;
+        return { error: `Model "${body.executorModel}" is a personal model and cannot be an install topic executor` };
+      }
       // True PATCH semantics: only fields present in the body change; omitted
       // fields keep their current value (a present `null` clears the field).
       const current = getTopicConfig(topic);
@@ -119,7 +125,13 @@ export const topicRoutes = new Elysia({ prefix: '/topics' })
       const byName = new Map(models.map((m) => [m.name, m]));
 
       // Validate requested model names exist (null/undefined = clear the role).
+      // `byName` holds install rows only: a personal row (coworking spec §8.1)
+      // is never an install binding — its owner binds it under /api/me/models.
       for (const name of [body.primaryModel, body.backupModel]) {
+        if (name && !byName.has(name) && await registry.isPersonalModelName(name)) {
+          set.status = 403;
+          return { error: `Model "${name}" is a personal model and cannot be an install topic binding` };
+        }
         if (name && !byName.has(name)) {
           set.status = 400;
           return { error: `Unknown model: ${name}` };

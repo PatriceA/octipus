@@ -1,6 +1,7 @@
 import { and, eq, isNotNull, lte } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { getEmbeddingService } from '@/core/rag/embeddings';
+import { sweepPurgedSpaceFiles } from '@/core/spaces/purge';
 import { maybeRunHeartbeats } from '@/core/heartbeat';
 import { defaultListenDeps, runListenTick } from '@/channels/group-listen';
 import { getDb } from '@/db/postgres';
@@ -17,6 +18,7 @@ const KNOWLEDGE_CLEANUP_INTERVAL_MS = 7 * 24 * 3600_000; // Weekly
 const AGENT_CLEANUP_INTERVAL_MS = 7 * 24 * 3600_000; // Weekly
 const DOCS_REINDEX_INTERVAL_MS = 6 * 3600_000; // Every 6 hours
 const TRAJECTORY_COMPRESS_INTERVAL_MS = 24 * 3600_000; // Daily
+const SPACE_FILES_SWEEP_INTERVAL_MS = 3600_000; // Hourly
 
 /**
  * Default age cap for finished agent rows + their events. Nobody needs an
@@ -30,6 +32,7 @@ let cronTimer: NodeJS.Timeout | null = null;
 let lastSessionCleanup = 0;
 let lastKnowledgeCleanup = 0;
 let lastAgentCleanup = 0;
+let lastSpaceFilesSweep = 0;
 // Seed to boot time, NOT 0: the boot sequence already runs `indexProductDocs()`
 // (src/index.ts) before the cron loop starts, so the immediate first tick must
 // NOT re-run it. The first cron refresh fires one DOCS_REINDEX_INTERVAL_MS
@@ -144,6 +147,22 @@ async function maybeCleanupSessions(): Promise<void> {
   }
 }
 
+/**
+ * Retry for purged spaces whose directories could not be removed at purge
+ * time (src/core/spaces/purge.ts): removes every space directory whose
+ * workspace row is gone.
+ */
+async function maybeSweepPurgedSpaceFiles(): Promise<void> {
+  const now = Date.now();
+  if (now - lastSpaceFilesSweep < SPACE_FILES_SWEEP_INTERVAL_MS) return;
+  lastSpaceFilesSweep = now;
+  try {
+    await sweepPurgedSpaceFiles();
+  } catch (err) {
+    coreLogger.error({ err }, 'Purged space directory sweep failed');
+  }
+}
+
 async function maybeCleanupKnowledge(): Promise<void> {
   const now = Date.now();
   if (now - lastKnowledgeCleanup < KNOWLEDGE_CLEANUP_INTERVAL_MS) return;
@@ -151,7 +170,7 @@ async function maybeCleanupKnowledge(): Promise<void> {
 
   try {
     const service = getEmbeddingService();
-    const result = await service.cleanup({ maxAgeDays: 30, minContentLength: 50, triggeredBy: 'scheduled' });
+    const result = await service.cleanup({ kind: 'install' }, { maxAgeDays: 30, minContentLength: 50, triggeredBy: 'scheduled' });
     if (result.total > 0) {
       coreLogger.info(result, 'Knowledge cleanup: removed stale entries');
     }
@@ -231,12 +250,14 @@ async function maybeCompressTrajectories(): Promise<void> {
 }
 
 const listenDeps = defaultListenDeps();
+let roomListenDeps: import('@/channels/group-listen').ListenDeps<import('@/core/rooms/listen').RoomListenTarget> | null = null;
 
 async function processCronTick(): Promise<void> {
   try {
     await maybeCleanupSessions();
     await maybeCleanupKnowledge();
     await maybeCleanupAgents();
+    await maybeSweepPurgedSpaceFiles();
     await maybeReindexDocs();
     await maybeCompressTrajectories();
     const db = getDb();
@@ -251,6 +272,12 @@ async function processCronTick(): Promise<void> {
     // awaited: its model calls must not hold up scheduled hooks; a tick still
     // running makes the next one a no-op.
     void runListenTick(listenDeps);
+    // Rooms in listen / proactive mode (coworking §9.3): the same gate. Every
+    // instance runs it (room transcripts are in the database); the probe is
+    // claimed on the room's row before it is paid (`claimRoomProbe`), so one
+    // instance probes a room at a time and never the same question twice.
+    roomListenDeps ??= (await import('@/core/rooms/listen')).roomListenDeps();
+    void runListenTick(roomListenDeps);
 
     // Find schedule-triggered hooks that are due
     const dueHooks = await db

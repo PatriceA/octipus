@@ -6,8 +6,9 @@
  *   - alice cannot approve OR deny bob's pending request via
  *     PermissionManager.approve / deny (silent no-op, returns false,
  *     row stays pending).
- *   - admin override (`{ admin: true }`) lets the resolution succeed
- *     regardless of ownership.
+ *   - there is no admin override on approve / deny; an admin answers
+ *     another user's request only through `resolveAsAdmin` (the audited
+ *     admin route's one entry point).
  *   - getPendingRequests(userId) returns only that user's rows.
  *
  * Backed by ephemeral PGlite — no Docker.
@@ -99,13 +100,13 @@ describe('PermissionManager.approve cross-tenant', () => {
     expect(rows[0]?.resolved_by).toBe(bobId);
   });
 
-  test('admin override lets a non-owner approve', async () => {
+  test('resolveAsAdmin lets a non-owner approve', async () => {
     const { getPermissionManager } = await import('@/security/permissions');
     const pm = getPermissionManager();
 
     const reqId = await createPendingRequest(bobId);
-    const ok = await pm.approve(reqId, aliceId, undefined, { admin: true });
-    expect(ok).toBe(true);
+    const resolved = await pm.resolveAsAdmin(reqId, true, aliceId, 'unblocking a stuck run');
+    expect(resolved?.userId).toBe(bobId);
 
     const { queryRaw } = await import('@/db/postgres');
     const { rows } = await queryRaw(`SELECT status FROM permission_requests WHERE id='${reqId}'`);
@@ -127,13 +128,13 @@ describe('PermissionManager.deny cross-tenant', () => {
     expect(rows[0]?.status).toBe('pending');
   });
 
-  test('admin override lets a non-owner deny', async () => {
+  test('resolveAsAdmin lets a non-owner deny', async () => {
     const { getPermissionManager } = await import('@/security/permissions');
     const pm = getPermissionManager();
 
     const reqId = await createPendingRequest(bobId);
-    const ok = await pm.deny(reqId, aliceId, 'override', { admin: true });
-    expect(ok).toBe(true);
+    const resolved = await pm.resolveAsAdmin(reqId, false, aliceId, 'override');
+    expect(resolved?.status).toBe('denied');
   });
 });
 

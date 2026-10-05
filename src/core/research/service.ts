@@ -6,7 +6,7 @@
  * is enforced by the pure `resolveReport`.
  */
 import { getLiteLLMClient } from '@/models/litellm-client';
-import { getModelRegistry } from '@/models/model-registry';
+import { resolveModel } from '@/models/resolve-model';
 import { coreLogger } from '@/utils/logger';
 import { fetchSourceText, type SearchHit, searxngSearch } from './gather';
 import { buildSource, type RawSection, resolveReport } from './synthesis';
@@ -144,16 +144,17 @@ export function defaultResearchDeps(userId: string): ResearchDeps {
     fetchText: fetchSourceText,
     now: () => new Date().toISOString(),
     complete: async (system, user) => {
-      const registry = getModelRegistry();
       // Resolve via the 'research' role so deep research follows the same lane
       // as the research worker. 'research' is its own lane (it used to alias to
-      // 'writing', which made a model bound to it unreachable).
-      const model = await registry.getModelForTopic('research');
+      // 'writing', which made a model bound to it unreachable). The user's own
+      // binding first, then the install's (coworking spec §8.2).
+      const model = await resolveModel({ userId, topic: 'research' });
       if (!model) {
         throw new Error('No model is bound to the "research" topic — bind one on the Topics page.');
       }
       const result = await getLiteLLMClient().complete({
         model: model.modelId,
+        modelConfigName: model.name,
         messages: [
           { role: 'system', content: system, timestamp: new Date() },
           { role: 'user', content: user, timestamp: new Date() },

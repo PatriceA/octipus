@@ -16,7 +16,7 @@ import type { AgentContext, ToolManifest } from './types';
 
 const userId = randomUUID();
 let directory: string;
-const context = (): AgentContext => ({ id: randomUUID(), userId, sessionId: randomUUID(), attended: true,
+const context = (): AgentContext => ({ space: null, trigger: 'user', funding: 'own',  id: randomUUID(), userId, sessionId: randomUUID(), attended: true,
   root: true, role: 'general', model: 'fixture', topic: '', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} });
 beforeAll(async () => {
   directory = mkdtempSync(join(tmpdir(), 'octipus-action-recovery-'));
@@ -145,7 +145,9 @@ test('real ShellTool middleware preserves preflight and exit evidence through ex
   const { ShellTool } = await import('@/tools/shell');
   const { sessionRepository } = await import('@/db/repositories/session-repository');
   const tool = new ShellTool(); await getToolRegistry().register(tool);
-  const ctx = context(); const manager = getPermissionManager();
+  // `directory` is outside the user's workspace: it is this run's dev-mode
+  // project, the only other place a shell `cwd` may name.
+  const ctx = { ...context(), metadata: { projectPath: directory } }; const manager = getPermissionManager();
   await sessionRepository.create({ id: ctx.sessionId, userId, channelType: 'webchat', channelId: 'shell-recovery' });
   await manager.setPermission(userId, 'shell', 'execute', 'ALLOW');
   const executor = new ToolExecutor(ctx, () => {}); executor.registerTools(tool.getToolHandlers());

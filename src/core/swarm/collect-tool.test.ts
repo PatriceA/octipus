@@ -8,6 +8,7 @@ function makeAgentParent(): AgentNode {
   return {
     id: 'agent-1',
     rootSessionId: '00000000-0000-0000-0000-000000000000',
+    userId: 'user-1',
     parentNodeId: 'parent-0',
     kind: 'agent',
     depth: 1,
@@ -59,7 +60,7 @@ describe('collect_children', () => {
     const parent = makeAgentParent();
     const worker = makeWorkerStub([], {});
     const tool = createCollectChildrenTool(parent, { current: worker });
-    const out = await tool.execute({}, {
+    const out = await tool.execute({}, { space: null, trigger: 'user', funding: 'own', 
       id: 'ctx', sessionId: parent.rootSessionId, userId: 'u', model: '',
       topic: '', role: 'research', status: 'running',
       createdAt: new Date(), updatedAt: new Date(), metadata: {},
@@ -79,7 +80,7 @@ describe('collect_children', () => {
     };
     const worker = makeWorkerStub(pending, results);
     const tool = createCollectChildrenTool(parent, { current: worker });
-    const out = await tool.execute({}, {
+    const out = await tool.execute({}, { space: null, trigger: 'user', funding: 'own', 
       id: 'ctx', sessionId: parent.rootSessionId, userId: 'u', model: '',
       topic: '', role: 'research', status: 'running',
       createdAt: new Date(), updatedAt: new Date(), metadata: {},
@@ -103,7 +104,7 @@ describe('collect_children', () => {
       },
     } as unknown as AgentWorker;
     const tool = createCollectChildrenTool(parent, { current: worker });
-    await tool.execute({}, {
+    await tool.execute({}, { space: null, trigger: 'user', funding: 'own', 
       id: 'ctx', sessionId: parent.rootSessionId, userId: 'u', model: '',
       topic: '', role: 'research', status: 'running',
       createdAt: new Date(), updatedAt: new Date(), metadata: {},
@@ -150,7 +151,7 @@ describe('collect_children', () => {
       },
     } as unknown as AgentWorker;
     const tool = createCollectChildrenTool(parent, { current: worker });
-    await tool.execute({ timeoutMs: 30_000 }, {
+    await tool.execute({ timeoutMs: 30_000 }, { space: null, trigger: 'user', funding: 'own', 
       id: 'ctx', sessionId: parent.rootSessionId, userId: 'u', model: '',
       topic: '', role: 'research', status: 'running',
       createdAt: new Date(), updatedAt: new Date(), metadata: {},
@@ -161,7 +162,7 @@ describe('collect_children', () => {
   test('no worker ref → internal-error message, not a throw', async () => {
     const parent = makeAgentParent();
     const tool = createCollectChildrenTool(parent, { current: null });
-    const out = await tool.execute({}, {
+    const out = await tool.execute({}, { space: null, trigger: 'user', funding: 'own', 
       id: 'ctx', sessionId: parent.rootSessionId, userId: 'u', model: '',
       topic: '', role: 'research', status: 'running',
       createdAt: new Date(), updatedAt: new Date(), metadata: {},

@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+import { useWorkspaceId } from '@/lib/workspace-context';
 
 interface Session {
   id: string;
@@ -17,8 +18,9 @@ interface Session {
 }
 
 export function RecentSessions() {
+  const workspaceId = useWorkspaceId();
   const { data } = useQuery({
-    queryKey: ['sessions'],
+    queryKey: ['sessions', workspaceId],
     queryFn: async () => {
       try {
         return await api.get<Session[] | { sessions: Session[]; total?: number }>('/sessions?limit=10');

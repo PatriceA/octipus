@@ -3,7 +3,10 @@ import { existsSync, readFileSync, realpathSync, lstatSync } from 'fs';
 import { join, resolve } from 'path';
 import { getConfig } from '@/config';
 import { repoRegistryRepository } from '@/db/repositories/repo-registry-repository';
-import { WorkspaceFS } from '@/security/workspace-fs';
+import type { AgentSpace } from '@/core/types';
+import { agentPrincipal, type Principal } from '@/security/principal';
+import { can, SpaceError } from '@/security/space-access';
+import { isKnownSharedWorkspace, WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
 import { buildRepoEdges, findAmbiguousPackages, type RepoEdge, type RepoGraphNode } from './graph';
 import { findRepoRoots, scanRoots } from './scanner';
@@ -15,17 +18,83 @@ import { indexRepoSymbols } from './symbols';
  * scan/scope logic lives in one place. See `.octipus/multi-repo-design.md`.
  */
 
-/** The workspace roots a user's repos can live under. */
-export function userScanRoots(userId: string): string[] {
-  const fs = WorkspaceFS.forAgent({ userId });
+/**
+ * Whose repos, in which workspace: the user, and the workspace whose file
+ * root is scanned (`null` is the user's default workspace).
+ */
+export interface RepoOwner {
+  userId: string;
+  workspaceId: string | null;
+  /**
+   * The user's membership when `workspaceId` is a space (S6): their role, and
+   * a guest's scope. Required there — a space without it is refused, never
+   * read as the whole space.
+   */
+  space?: AgentSpace | null;
+}
+
+/** The repo owner of a request's principal: its user, workspace and, in a space, its membership. */
+export function repoOwnerOf(principal: Principal): RepoOwner {
+  const workspaceId = principal.workspaceId ?? null;
+  if (principal.workspaceKind !== 'shared') return { userId: principal.userId, workspaceId };
+  if (!workspaceId || !principal.spaceRole) throw new Error('A space principal without its space or role');
+  return { userId: principal.userId, workspaceId, space: { workspaceId, role: principal.spaceRole, scope: principal.spaceScope ?? null } };
+}
+
+/** The owner's space membership, or null in a personal workspace; throws for a space named without one. */
+function spaceOf(owner: RepoOwner): AgentSpace | null {
+  if (owner.space) {
+    if (owner.space.workspaceId !== owner.workspaceId) throw new Error('Repo registry: the membership names another workspace');
+    return owner.space;
+  }
+  if (isKnownSharedWorkspace(owner.workspaceId)) {
+    throw new SpaceError('forbidden_role', 'The repo registry of a space needs your membership of it');
+  }
+  return null;
+}
+
+/**
+ * The workspace roots a user's repos in one workspace can live under. A
+ * space has its own files root only: `workspace.additionalPaths` are the
+ * install's personal prefixes, not allowed in space contexts (§5.5). A
+ * guest's roots are the folders of their scope (S6), resolved like their
+ * file tools resolve them (a folder that links outside is left out).
+ */
+export function userScanRoots(owner: RepoOwner): string[] {
+  const space = spaceOf(owner);
+  if (space) {
+    const fs = WorkspaceFS.forSpace(space.workspaceId, { guestFolders: space.scope?.folders });
+    if (!space.scope) return [fs.root];
+    return space.scope.folders.map((f) => fs.resolveOptional(f)).filter((p): p is string => p !== null);
+  }
+  const fs = WorkspaceFS.forPrincipal(agentPrincipal(owner));
   const additional = getConfig().workspace.additionalPaths?.map((p) => resolve(p)) ?? [];
   return [fs.root, ...additional];
 }
 
-/** Scan every repo under the user's workspace roots and upsert the registry. */
-export async function scanUserRepos(userId: string, workspaceId?: string | null): Promise<WorkspaceRepo[]> {
-  WorkspaceFS.forAgent({ userId }).ensureRootSync();
-  const roots = userScanRoots(userId);
+/**
+ * A remote URL as it may be shown or stored: the userinfo of a URL
+ * (`https://user:token@host/...`) dropped, whoever asks. scp-like remotes
+ * (`user@host:path`) carry no secret and are kept.
+ */
+export function redactRemoteUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/]*@/i, '$1');
+}
+
+/**
+ * Scan every repo under the workspace's roots and upsert the registry. In a
+ * space it writes the space's knowledge (repo maps, AGENTS.md), so it needs
+ * the write right there (editor or owner).
+ */
+export async function scanUserRepos(owner: RepoOwner): Promise<WorkspaceRepo[]> {
+  const { userId, workspaceId } = owner;
+  const space = spaceOf(owner);
+  if (space && !can(space.role, 'write')) {
+    throw new SpaceError('forbidden_role', `Your role (${space.role}) cannot scan repositories in this space`);
+  }
+  (space ? WorkspaceFS.forSpace(space.workspaceId) : WorkspaceFS.forPrincipal(agentPrincipal(owner))).ensureRootSync();
+  const roots = userScanRoots(owner);
   const scanned = scanRoots(roots);
   for (const r of scanned) {
     // The symbol index is the slow part of a scan (tree-sitter over every
@@ -41,7 +110,7 @@ export async function scanUserRepos(userId: string, workspaceId?: string | null)
       workspaceId: workspaceId ?? null,
       name: r.name,
       rootPath: r.rootPath,
-      remoteUrl: r.remoteUrl,
+      remoteUrl: redactRemoteUrl(r.remoteUrl),
       defaultBranch: r.defaultBranch,
       kind: r.kind,
       languages: r.languages,
@@ -60,7 +129,7 @@ export async function scanUserRepos(userId: string, workspaceId?: string | null)
     );
   }
   coreLogger.info({ userId, scanned: scanned.length, roots: roots.length }, 'repo registry scan complete');
-  return (await loadRepoGraph(userId)).repos;
+  return (await loadRepoGraph(owner)).repos;
 }
 
 /**
@@ -72,6 +141,8 @@ export async function scanUserRepos(userId: string, workspaceId?: string | null)
 export async function indexRepoKnowledge(repo: WorkspaceRepo, userId: string): Promise<void> {
   const { getEmbeddingService, sha256Hex } = await import('@/core/rag/embeddings');
   const service = getEmbeddingService();
+  // The repo's knowledge belongs to the user who registered it, in its workspace.
+  const owner = { ownerUserId: userId, workspaceId: repo.workspaceId ?? null };
 
   // The generated/curated content to index — never raw code.
   const items: Array<{
@@ -107,21 +178,21 @@ export async function indexRepoKnowledge(repo: WorkspaceRepo, userId: string): P
     ['knowledge_artifact', `repo:${repo.id}:map`],
     ['document', `repo:${repo.id}:agents`],
   ] as const) {
-    if (!items.some(item => item.sourceId === sourceId)) await service.deleteBySource(purpose, sourceId);
+    if (!items.some(item => item.sourceId === sourceId)) await service.deleteBySource(owner, purpose, sourceId);
   }
 
   for (const item of items) {
     // Skip the expensive re-embed when the content is byte-for-byte unchanged
     // since the last scan (fileSha stamped on the chunks).
-    if (await service.isFileIndexed(item.purpose, item.sourceId, item.content)) continue;
-    await service.deleteBySource(item.purpose, item.sourceId);
+    if (await service.isFileIndexed(owner, item.purpose, item.sourceId, item.content)) continue;
+    await service.deleteBySource(owner, item.purpose, item.sourceId);
     await service.indexText(
+      owner,
       item.purpose,
       item.sourceId,
       item.content,
       { ...item.metadata, fileSha: sha256Hex(item.content) },
       undefined,
-      userId,
       repo.id,
     );
   }
@@ -163,12 +234,13 @@ export function repoToGraphNode(repo: WorkspaceRepo): RepoGraphNode {
   };
 }
 
-/** Load the user's registry as graph nodes + derived edges. */
-export async function loadRepoGraph(userId: string): Promise<{ repos: WorkspaceRepo[]; nodes: RepoGraphNode[]; edges: RepoEdge[]; ambiguousPackages: string[] }> {
-  // Stored snapshots do not grant filesystem access. Hide removed repositories
-  // and roots no longer exposed by configuration before returning maps/symbols.
-  const discoverable = new Set(findRepoRoots(userScanRoots(userId)));
-  const stored = await repoRegistryRepository.listByUser(userId);
+/** Load the user's registry, as seen from one workspace, as graph nodes + derived edges. */
+export async function loadRepoGraph(owner: RepoOwner): Promise<{ repos: WorkspaceRepo[]; nodes: RepoGraphNode[]; edges: RepoEdge[]; ambiguousPackages: string[] }> {
+  // Stored snapshots do not grant filesystem access. Hide removed repositories,
+  // roots no longer exposed by configuration and repos under another
+  // workspace's root before returning maps/symbols.
+  const discoverable = new Set(findRepoRoots(userScanRoots(owner)));
+  const stored = await repoRegistryRepository.listByUser(owner.userId);
   const repos = stored.filter(repo => {
     try { return discoverable.has(realpathSync(repo.rootPath)); }
     catch { return false; }

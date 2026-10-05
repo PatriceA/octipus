@@ -1,4 +1,6 @@
 import { getConfig } from '@/config';
+import { assertCliSpaceMode } from './cli-adapters';
+import { can, SpaceError } from '@/security/space-access';
 import { buildSelectedSkillPrompt } from '@/skills/selection';
 import { type AgentCompletionReason, readAgentCompletionReason } from '@/shared/agent-completion';
 import { agentEventRepository } from '@/db/repositories/agent-event-repository';
@@ -14,8 +16,13 @@ import { type AgentEvent, AgentWorker, type AgentWorkerConfig, type ToolHandler 
 import { getCLIToolConfig, isCLIProvider, isResumableCliModel } from './cli-agent-factory';
 import { CLIAgentWorker } from './cli-agent-worker';
 import { getPermissionManager } from '@/security/permissions';
+import { isRealUserId } from '@/security/principal';
+import { isSharedWorkspaceId } from '@/security/workspace-fs';
+import { withoutPersonalOnlyTools } from '@/security/space-tools';
 import { getRouter } from './router';
-import type { AgentContext, AgentStatus } from './types';
+import type { AgentFunding, AgentSpace, AgentSponsor, AgentStatus, AgentTrigger } from './types';
+import { buildAgentContext, recheckSponsor, recheckSpace, writesWithheld } from './agent/context';
+import { stripMutatingTools } from './agent/plan-mode';
 
 /** Union type for all agent worker implementations */
 export type AnyAgentWorker = AgentWorker | CLIAgentWorker;
@@ -24,9 +31,21 @@ export interface SpawnOptions {
   sessionId: string;
   userId: string;
   /** Workspace UUID for multi-tenant scoping (memory-redesign Phase B). */
-  workspaceId?: string | null;
+  workspaceId: string | null;
+  /**
+   * The space the agent works in, what started it and who pays
+   * (`resolveAgentScope` for a turn, `inheritScope(parent)` for a child —
+   * children inherit all three). See src/core/agent/context.ts.
+   */
+  space: AgentSpace | null;
+  trigger: AgentTrigger;
+  funding: AgentFunding;
+  /** Who pays when `funding` is `sponsor` (inherited like the rest of the scope). */
+  sponsor?: AgentSponsor | null;
   topic?: string;
   model?: string;
+  /** Row identity of `model` (`model_config.name`) when the caller resolved one — see `AgentContext.modelName`. */
+  modelName?: string;
   role?: string;
   /** Mark this agent as the turn's root (see `AgentContext.root`). */
   root?: boolean;
@@ -128,14 +147,10 @@ export class AgentManager {
       throw new Error(`Maximum concurrent agents (${maxConcurrent}) reached`);
     }
 
-    // Per-user concurrency quota for real users (system/local jobs rely on
-    // the global cap above). Throws QuotaExceededError (distinct from the
+    // Per-user concurrency quota for real users (system jobs rely on the
+    // global cap above). Throws QuotaExceededError (distinct from the
     // global cap's plain Error) so callers can distinguish.
-    if (
-      options.userId
-      && options.userId !== 'system'
-      && options.userId !== 'local'
-    ) {
+    if (isRealUserId(options.userId)) {
       const { getQuotaManager } = await import('@/security/quotas');
       const check = await getQuotaManager().willExceed(options.userId, 'concurrentAgents', 1);
       if (!check.allowed) {
@@ -147,12 +162,30 @@ export class AgentManager {
       // of the check (DB hiccup, table not migrated yet) does not block.
       try {
         const { checkSpend } = await import('@/security/spend-budgets');
-        await checkSpend({ userId: options.userId, role: options.role || 'general', workspaceId: options.workspaceId, sessionId: options.sessionId });
+        await checkSpend({
+          userId: options.userId, role: options.role || 'general', workspaceId: options.workspaceId, sessionId: options.sessionId,
+          funding: options.funding, spaceId: options.space?.workspaceId ?? null,
+        });
       } catch (err) {
         if (err instanceof Error && err.name === 'SpendBudgetExceededError') throw err;
         agentLogger.warn({ err, userId: options.userId }, 'spend budget check unavailable (not blocking)');
       }
     }
+
+    // A space agent starts only while its requester may still run the agent
+    // there (D5, I5): the membership is re-read at every spawn, children
+    // included, so a removed member's next turn fails and a running turn
+    // cannot grow new workers. The current role replaces the snapshot.
+    const space = options.space ? await recheckSpace(options.userId, options.space) : null;
+    if (!space && await isSharedWorkspaceId(options.workspaceId)) {
+      throw new Error('An agent in a space needs its space scope (resolveAgentScope / inheritScope)');
+    }
+    // A sponsored agent starts only while the space still pays for it, under
+    // the same sponsor (§9.1): the funding is re-read here, as the
+    // membership is, so a turn that resolved its scope before the sponsor
+    // left (routing, compaction, model choice in between) does not start —
+    // in this process or another. The sponsor models are the current list.
+    const sponsor = options.funding === 'sponsor' ? await recheckSponsor({ space, trigger: options.trigger, funding: options.funding, sponsor: options.sponsor }) : null;
 
     const config = getConfig();
 
@@ -164,36 +197,55 @@ export class AgentManager {
     // (the caller has already routed, e.g. SwarmSpawner or internal spawnWorker)
     let routedTopic = options.topic || 'general';
     let routedModel = options.model || '';
+    let routedModelName = options.modelName;
 
     if (!options.model) {
       // Only route if model isn't pre-determined
       const router = getRouter();
-      const routing = await router.route(options.topic || '');
+      const routing = await router.route(options.topic || '', undefined, { userId: options.userId, inSpace: !!space, spaceRole: space?.role, sponsor });
       routedTopic = routing.topic;
       routedModel = routing.model;
+      routedModelName = routing.modelName;
+    }
+
+    // The row this agent runs on. A caller that resolved a row passes its name;
+    // otherwise the modelId resolves to an install row first, then the
+    // requester's own — never another user's personal row (§8.1).
+    const registry = getModelRegistry();
+    const modelEntry = routedModelName
+      ? await registry.getModel(routedModelName)
+      : await registry.getModelByModelId(routedModel, { userId: options.userId });
+    if (routedModelName && !modelEntry) {
+      throw new Error(`Model '${routedModelName}' is not registered or is disabled`);
+    }
+    if (routedModelName && modelEntry && modelEntry.modelId !== routedModel) {
+      throw new Error(`Model row '${modelEntry.name}' runs '${modelEntry.modelId}', not '${routedModel}'`);
+    }
+    // A personal row runs only for its owner — or, in a sponsored agent, when
+    // it is one of the sponsor models (§9.1). A requester's own row never
+    // runs sponsored: its key is theirs, the bill the sponsor's.
+    if (modelEntry?.ownerUserId) {
+      const { personalRowAllowed } = await import('@/models/resolve-model');
+      if (!personalRowAllowed(modelEntry, options.userId, sponsor)) {
+        throw new Error(`Model '${modelEntry.name}' is another user's personal model`);
+      }
     }
 
     const agentId = generateId();
 
-    const context: AgentContext = {
+    const context = buildAgentContext({
       id: agentId,
       sessionId: options.sessionId,
       userId: options.userId,
-      workspaceId: options.workspaceId ?? null,
+      scope: { workspaceId: options.workspaceId ?? null, space, trigger: options.trigger, funding: options.funding, sponsor },
       topic: routedTopic,
       model: routedModel,
+      modelName: modelEntry?.name,
       role: options.role || 'general',
       root: options.root === true,
       attended: options.attended,
-      status: 'idle',
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      metadata: { ...(options.contextMetadata ?? {}) },
-    };
-
-    // Determine if this is a CLI model (autonomous sub-agent)
-    const registry = getModelRegistry();
-    const modelEntry = await registry.getModelByModelId(routedModel);
+      metadata: options.contextMetadata,
+    });
 
     // The window belongs to the MODEL, not to the install. `agent.contextWindowSize`
     // is one number for every agent (32k by default), and every compaction
@@ -212,6 +264,23 @@ export class AgentManager {
     // A `cli/...` model without a registry row used to fall through to the
     // native worker and hit the provider router with a nonsense model name.
     const isCLI = modelEntry ? isCLIProvider(modelEntry.provider) : !!getCLIToolConfig(routedModel);
+
+    // CLI models in a space (§5.6, D14): only an install CLI model marked
+    // `sharedUse`, only an adapter that declares a space mode, and never for
+    // a commenter's turn (commenters use API models only).
+    if (isCLI && space) {
+      if (!can(space.role, 'run_agent_write')) {
+        throw new SpaceError('forbidden_role', `Your role (${space.role}) runs the agent in this space with API models only; ${routedModel} is a CLI model`);
+      }
+      // The requester's own personal CLI row is their subscription, used for
+      // their own turn (§8.5): D14 governs install rows only.
+      const ownRow = !!modelEntry?.ownerUserId && modelEntry.ownerUserId === options.userId;
+      if (!ownRow && modelEntry?.metadata?.cliAgent?.sharedUse !== true) {
+        throw new SpaceError('forbidden_role', `${routedModel} is a personal CLI subscription and is not available in a shared space (an operator can mark it for shared use)`);
+      }
+      const tool = getCLIToolConfig(routedModel);
+      assertCliSpaceMode(tool?.adapter ?? tool?.name ?? routedModel);
+    }
 
     let worker: AnyAgentWorker;
 
@@ -236,8 +305,16 @@ export class AgentManager {
       set.add(agentId);
     }
 
-    // Register global tools for native and CLI workers
-    for (const tool of this.globalTools.values()) {
+    // Register global tools for native and CLI workers. They are added after
+    // every spawner's tool filter has run, so a space worker gets the same
+    // filter here: no personal-only tool (`update_skill`), and for a role
+    // that cannot write, no file-changing tool (§5.6).
+    let globals = [...this.globalTools.values()];
+    if (space) {
+      globals = withoutPersonalOnlyTools(globals);
+      if (writesWithheld(space, options.trigger)) globals = stripMutatingTools(globals);
+    }
+    for (const tool of globals) {
       worker.registerTool(tool);
     }
 
@@ -326,6 +403,7 @@ export class AgentManager {
         userId: options.userId,
         // Workspace spend budgets attribute cost_log rows through this column.
         workspaceId: options.workspaceId ?? null,
+        funding: options.funding,
         role: options.role || 'general',
         model: routedModel,
         topic: routedTopic,
@@ -564,6 +642,24 @@ export class AgentManager {
       if (this.stop(agent.getContext().id)) {
         count++;
       }
+    }
+    return count;
+  }
+
+  /**
+   * Stop every agent running in a workspace — or, with `userId`, that user's
+   * agents there only. A space archived (all of them) or a member removed or
+   * downgraded (theirs) stops at once (docs/plans/coworking-spec.md §5.9).
+   * With `funding`, only agents funded that way (the sponsor left, §9.1).
+   */
+  stopWorkspace(workspaceId: string, userId?: string, opts: { funding?: AgentFunding } = {}): number {
+    let count = 0;
+    for (const agent of Array.from(this.agents.values())) {
+      const context = agent.getContext();
+      if (context.workspaceId !== workspaceId) continue;
+      if (userId !== undefined && context.userId !== userId) continue;
+      if (opts.funding !== undefined && context.funding !== opts.funding) continue;
+      if (this.stop(context.id)) count++;
     }
     return count;
   }

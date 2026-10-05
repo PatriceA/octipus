@@ -8,11 +8,13 @@ import type { AgentContext } from './types';
 import { addPlanFeedback, type WorkPlanState } from '@/shared/work-plan';
 
 const fixture = vi.hoisted(() => ({ script: '', dir: '', plan: { revision: 0, current: null, previous: [] } as WorkPlanState,
-  check: vi.fn(), execute: vi.fn(), cancel: vi.fn(), readFailure: false, audit: vi.fn(), status: vi.fn(), requestApproval: vi.fn() }));
+  check: vi.fn(), execute: vi.fn(), cancel: vi.fn(), readFailure: false, audit: vi.fn(), status: vi.fn(), requestApproval: vi.fn(),
+  sessionWorkspaceId: null as string | null }));
 const commentary = vi.hoisted(() => vi.fn().mockResolvedValue({ sent: true }));
 vi.mock('./agent/service', () => ({ getAgentService: () => ({ sendStatusUpdate: commentary }) }));
 // These process/bridge fixtures have no database; accounting is tested separately.
-vi.mock('@/models/providers/instrumented', () => ({ recordProviderUsage: async () => {} }));
+const usage = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock('@/models/providers/instrumented', () => ({ recordProviderUsage: usage }));
 vi.mock('@/db/repositories/tool-action-repository', () => ({ toolActionRepository: { pending: async () => [], start: async () => {}, finish: async () => {} } }));
 vi.mock('child_process', async importOriginal => {
   const actual = await importOriginal<typeof import('child_process')>();
@@ -29,10 +31,10 @@ vi.mock('child_process', async importOriginal => {
 });
 vi.mock('@/models/model-registry', () => ({ getModelRegistry: () => ({ getModel: async () => ({ metadata: {} }),
   getModelByModelId: async () => ({ supportsVision: false }) }) }));
-vi.mock('@/models/quota-tracker', () => ({ getQuotaTracker: () => ({ getStatus: async () => ({ exhausted: false }) }) }));
+vi.mock('@/models/quota-tracker', () => ({ cliQuotaKey: (provider: string) => provider, getQuotaTracker: () => ({ getStatus: async () => ({ exhausted: false }) }) }));
 vi.mock('@/core/agent-task-recorder', () => ({ recordAgentCompletion: async () => {} }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: {
-  findById: async () => ({ id: 's', userId: 'u', context: { devMode: true, projectPath: fixture.dir, planMode: false } }),
+  findById: async () => ({ id: 's', userId: 'u', workspaceId: fixture.sessionWorkspaceId, context: { devMode: true, projectPath: fixture.dir, planMode: false } }),
   incrementMessageCount: async () => {},
   patchContextIfGeneration: async () => true,
   setContextKeyIfGeneration: async () => true,
@@ -54,6 +56,10 @@ vi.mock('@/db/repositories/audit-repository', () => ({ auditRepository: new Prox
 vi.mock('@/security/permissions', () => ({ getPermissionManager: () => ({ check: fixture.check, cancelWaits: fixture.cancel,
   requestApproval: fixture.requestApproval, waitForApproval: async () => false, onWaitStateChange: () => () => {} }) }));
 vi.mock('@/hooks/manager', () => ({ getHookManager: () => ({ triggerToolHooks: async () => ({ decision: 'allow' }) }) }));
+// A space run builds its tool home from the space's GitHub connection and the
+// member's name; this lane has no database, so both read as absent.
+vi.mock('@/core/spaces/connectors', () => ({ spaceGithubToken: async () => null }));
+vi.mock('@/db/repositories/user-repository', () => ({ userRepository: { findById: async () => null } }));
 
 beforeEach(() => {
   commentary.mockClear();
@@ -97,7 +103,7 @@ describe.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('CLI worker with actual subproce
       console.log(JSON.stringify({type:'assistant',message:{id:'two',content:[{type:'text',text:'Fixed.'}]}}));
       console.log(JSON.stringify({type:'result',subtype:'success',result:'Fixed.',num_turns:2}));
     `);
-    const context: AgentContext = { id: 'a', sessionId: 's', userId: 'u', root,
+    const context: AgentContext = { space: null, trigger: 'user', funding: 'own',  id: 'a', sessionId: 's', userId: 'u', root,
       model: 'cli/claude-code', role: 'general', topic: 'general', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} };
     const worker = new CLIAgentWorker(context, { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
     expect(await worker.run('Check it')).toBe('Fixed.');
@@ -105,7 +111,7 @@ describe.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('CLI worker with actual subproce
     if (root) expect(commentary).toHaveBeenCalledWith('Found the cause.', context, 'commentary', undefined, '');
   });
   it('uses original identity, updates plans, delivers feedback/guidance, and enforces denial', async () => {
-    const context: AgentContext = { id: 'a', sessionId: 's', userId: 'u', workspaceId: 'w', root: true,
+    const context: AgentContext = { space: null, trigger: 'user', funding: 'own',  id: 'a', sessionId: 's', userId: 'u', workspaceId: 'w', root: true,
       model: 'cli/claude-code', role: 'general', topic: 'general', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} };
     const worker = new CLIAgentWorker(context, { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
     worker.registerTools(createWorkPlanTools());
@@ -142,7 +148,7 @@ describe.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('CLI worker with actual subproce
 
 it.runIf(!!process.env.OCTIPUS_LIVE_CLI)('live CLI login can use scoped tools and publish a completed plan', async () => {
   const provider = process.env.OCTIPUS_LIVE_CLI!;
-  const worker = new CLIAgentWorker({ id: 'live-cli-check', sessionId: 's', userId: 'u', workspaceId: 'w', root: true,
+  const worker = new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own',  id: 'live-cli-check', sessionId: 's', userId: 'u', workspaceId: 'w', root: true,
     model: `cli/${provider}`, role: 'general', topic: 'general', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     { maxIterations: 12, maxTokenBudget: 500000, timeout: 180000, contextWindowSize: 100000 });
   worker.registerTools(createWorkPlanTools());
@@ -159,7 +165,7 @@ it.runIf(!!process.env.OCTIPUS_LIVE_CLI)('live CLI login can use scoped tools an
 
 it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('cancellation ends the subprocess and emits one stopped terminal', async () => {
   writeFileSync(fixture.script, `console.log(JSON.stringify({type:'system',subtype:'init'})); setInterval(()=>{},1000);`);
-  const worker = new CLIAgentWorker({ id: 'a', sessionId: 's', userId: 'u', root: true, model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+  const worker = new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own',  id: 'a', sessionId: 's', userId: 'u', root: true, model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
   const terminal: string[] = [];
   worker.onEvent(event => {
@@ -176,14 +182,40 @@ it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('cancellation ends the subprocess and 
 it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('already-cancelled parent prevents any CLI execution', async () => {
   const controller = new AbortController(); controller.abort();
   fixture.script = '/does/not/exist';
-  const worker = new CLIAgentWorker({ id: 'a', sessionId: 's', userId: 'u', model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+  const worker = new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own',  id: 'a', sessionId: 's', userId: 'u', model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 }, { parentSignal: controller.signal });
   await expect(worker.run('sample')).rejects.toThrow('aborted before starting');
   expect(fixture.status).toHaveBeenCalledWith('a', expect.objectContaining({ status: 'stopped' }));
 });
 
+// Coworking §5.6: a Claude-binary run in a space runs in its space mode —
+// permission mode default behind the stdio permission tool, no settings file
+// but Octipus's — and its usage is accounted to the space.
+it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('a run in a space passes the space mode to the CLI and accounts usage to the space', async () => {
+  writeFileSync(fixture.script, `
+    import { readFileSync } from 'node:fs';
+    const argv = process.argv.slice(2);
+    const settings = JSON.parse(readFileSync(argv[argv.indexOf('--settings') + 1], 'utf8'));
+    console.log(JSON.stringify({type:'result',subtype:'success',result:JSON.stringify({argv, settings}),num_turns:1,usage:{input_tokens:3,output_tokens:2}}));
+  `);
+  const spaceId = '0b7a2a4e-7c1e-4d4e-9a55-2f1d9c3e8a10';
+  const worker = new CLIAgentWorker({ space: { workspaceId: spaceId, role: 'editor', scope: null }, trigger: 'user', funding: 'own', id: 'a', sessionId: 's', userId: 'u',
+    workspaceId: spaceId, root: true, model: 'cli/claude-code', role: 'general', topic: 'general', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+    { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
+  usage.mockClear();
+  // The session is the space's: `forSession` refuses space access naming another workspace.
+  fixture.sessionWorkspaceId = spaceId;
+  const { argv, settings } = JSON.parse(await worker.run('Check it').finally(() => { fixture.sessionWorkspaceId = null; })) as { argv: string[]; settings: { permissions: unknown; hooks: Record<string, unknown> } };
+  expect(argv[argv.indexOf('--permission-mode') + 1]).toBe('default');
+  expect(argv[argv.indexOf('--permission-prompt-tool') + 1]).toBe('stdio');
+  expect(argv).toContain('--setting-sources=');
+  expect(argv).not.toContain('--allowedTools');
+  expect(settings.permissions).toEqual({ allow: [], defaultMode: 'default', disableBypassPermissionsMode: 'disable' });
+  expect(usage).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: spaceId, funding: 'own', requestType: 'cli' }), 'cli', expect.anything(), expect.anything());
+});
+
 function sampleWorker(): CLIAgentWorker {
-  return new CLIAgentWorker({ id: 'a', sessionId: 's', userId: 'u', model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+  return new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own',  id: 'a', sessionId: 's', userId: 'u', model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
 }
 
@@ -266,7 +298,7 @@ it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('guidance after the last bridge call g
 
 it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('late guidance with no turn budget keeps the result and reports what was not applied', async () => {
   writeFileSync(fixture.script, lateGuidanceScript);
-  const worker = new CLIAgentWorker({ id: 'a', sessionId: 's', userId: 'u', model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+  const worker = new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own',  id: 'a', sessionId: 's', userId: 'u', model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     { maxIterations: 1, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
   const thoughts: unknown[] = [];
   worker.onEvent(event => { if (event.type === 'thought') thoughts.push(event.data); });

@@ -1,6 +1,26 @@
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
-import { isAuthenticated } from '@/security/principal';
+import { isAuthenticated, type Principal } from '@/security/principal';
+import { SpaceError, spaceErrorStatus } from '@/security/space-access';
+
+/** A bridge operation as the caller, `SpaceError` mapped to its status. */
+async function bridge<T>(
+  ctx: { principal: Principal; set: { status?: number | string } },
+  run: (actor: { userId: string; impersonatedBy: string | null }) => Promise<T>,
+): Promise<T | { error: string; code?: string }> {
+  if (!isAuthenticated(ctx.principal)) {
+    ctx.set.status = 401;
+    return { error: 'Authentication required' };
+  }
+  const by = ctx.principal.actorUserId;
+  try {
+    return await run({ userId: ctx.principal.userId, impersonatedBy: by && by !== ctx.principal.userId ? by : null });
+  } catch (err) {
+    if (!(err instanceof SpaceError)) throw err;
+    ctx.set.status = spaceErrorStatus(err);
+    return { error: err.message, code: err.code };
+  }
+}
 
 const UUID_PATTERN = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$';
 
@@ -13,6 +33,11 @@ const UUID_PATTERN = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{
  * and remove it; admins see and change all of them under
  * `/api/admin/group-channels`.
  * Other users' rows answer 404, the same as missing ones.
+ *
+ * `POST /:id/bind` binds the channel to a space the caller owns (coworking
+ * §9.4) — with `acknowledged: true`, the owner's statement that everyone in
+ * the channel can read what the room shows; `DELETE /:id/bind` unbinds it
+ * (the channel's owner, or an owner of the space).
  */
 export const groupChannelRoutes = new Elysia({ prefix: '/me/group-channels' })
   .use(apiContext)
@@ -62,6 +87,35 @@ export const groupChannelRoutes = new Elysia({ prefix: '/me/group-channels' })
         maxUnpromptedPerDay: t.Optional(t.Integer({ minimum: 1, maximum: 48 })),
         minMinutesBetween: t.Optional(t.Integer({ minimum: 10, maximum: 1440 })),
       }, { additionalProperties: false }),
+      detail: { tags: ['channels'] },
+    },
+  )
+
+  .post(
+    '/:id/bind',
+    (ctx) => bridge(ctx, async (actor) => {
+      const { bindGroupChannel } = await import('@/channels/group-bridge');
+      return { groupChannel: await bindGroupChannel(actor, ctx.params.id, ctx.body) };
+    }),
+    {
+      params: t.Object({ id: t.String({ pattern: UUID_PATTERN }) }),
+      body: t.Object({
+        workspaceId: t.String({ pattern: UUID_PATTERN }),
+        acknowledged: t.Boolean(),
+        roomId: t.Optional(t.String({ pattern: UUID_PATTERN })),
+      }, { additionalProperties: false }),
+      detail: { tags: ['channels'] },
+    },
+  )
+
+  .delete(
+    '/:id/bind',
+    (ctx) => bridge(ctx, async (actor) => {
+      const { unbindGroupChannel } = await import('@/channels/group-bridge');
+      return { groupChannel: await unbindGroupChannel(actor, ctx.params.id) };
+    }),
+    {
+      params: t.Object({ id: t.String({ pattern: UUID_PATTERN }) }),
       detail: { tags: ['channels'] },
     },
   )

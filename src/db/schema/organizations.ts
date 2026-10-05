@@ -1,6 +1,9 @@
+import { randomUUID } from 'node:crypto';
+import type { GuestScope } from '@/shared/spaces';
 import {
   boolean,
   index,
+  integer,
   jsonb,
   pgTable,
   primaryKey,
@@ -23,9 +26,7 @@ import { users } from './users';
  * sessions/documents/etc. once the UI lets users actually switch
  * workspaces.
  *
- * Gated on `multiuser.orgWorkspaces`. Off by default; the REST
- * surface returns 404 when the flag is off so single-user installs
- * see no behavior change.
+ * Always on: every real user has at least a default workspace.
  */
 export const organizations = pgTable('organizations', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -64,27 +65,117 @@ export const orgMembers = pgTable('org_members', {
 }));
 
 /**
- * Per-user workspace — equivalent to a "project" in the product
- * mental model. A user can have many workspaces; one is marked
- * `is_default` (enforced by partial unique index in the migration).
+ * A workspace — equivalent to a "project" in the product mental model.
  *
- * `slug` is unique per user, not globally — two different users can
- * each have a workspace named `default`.
+ * - `kind = 'personal'`: owned by `user_id`. A user can have many; one is
+ *   marked `is_default` (enforced by partial unique index in the migration).
+ *   `slug` is unique per user, not globally — two different users can each
+ *   have a workspace named `default`.
+ * - `kind = 'shared'` (a space, docs/plans/coworking-spec.md §5): no owning
+ *   user row (`user_id` NULL, never default); access is `workspace_members`.
+ *   `created_by` is attribution only. `archived_at` makes it read-only.
+ *   The CHECK `workspaces_kind_chk` (migration 0128) ties `kind` to
+ *   `user_id`.
  */
 export const workspaces = pgTable('workspaces', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id')
-    .notNull()
     .references(() => users.id, { onDelete: 'cascade' }),
+  kind: text('kind').$type<WorkspaceKind>().default('personal').notNull(),
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+  archivedAt: timestamp('archived_at', { withTimezone: true }),
+  /**
+   * How the agent edits a space's notes (docs/plans/coworking-spec.md §7.4):
+   * `suggest` turns its writes into edit proposals, `direct` applies them
+   * through the document hub. Personal workspaces ignore it.
+   */
+  agentEditMode: text('agent_edit_mode').$type<AgentEditMode>().default('suggest').notNull(),
+  /**
+   * Who pays for the agent in a space (docs/plans/coworking-spec.md §9.1,
+   * `fundingFor`): `own` — each member for their own turns, nothing
+   * unprompted; `unattended` — members pay their own turns, the sponsor
+   * pays unprompted work (room listen, visitors); `sponsored` — the sponsor
+   * pays everything, members under the space's per-member cap. Personal
+   * workspaces ignore it.
+   */
+  agentFunding: text('agent_funding').$type<AgentFundingMode>().default('unattended').notNull(),
+  /** The owner who pays for sponsored work; cleared when they stop being an owner. */
+  sponsorUserId: uuid('sponsor_user_id').references(() => users.id, { onDelete: 'set null' }),
+  /** Names of the sponsor's own model rows that sponsored turns may run on. */
+  sponsorModels: jsonb('sponsor_models').$type<string[]>().default([]).notNull(),
   slug: text('slug').notNull(),
   name: text('name').notNull(),
   isDefault: boolean('is_default').default(false).notNull(),
+  /**
+   * Directory segment of the workspace's files under
+   * `users/<user_id>/workspaces/` (workspace-fs.ts): `default` for the
+   * workspace that was its owner's default at upgrade (migration 0127),
+   * the workspace id for every other. Set once; only a transfer changes it.
+   */
+  filesDir: text('files_dir').notNull(),
   metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   userIdIdx: index('workspaces_user_id_idx').on(table.userId),
   userSlugUq: uniqueIndex('workspaces_user_id_slug_uq').on(table.userId, table.slug),
+  userFilesDirUq: uniqueIndex('workspaces_user_id_files_dir_uq').on(table.userId, table.filesDir),
+}));
+
+export type WorkspaceKind = 'personal' | 'shared';
+
+/** Who pays for the agent in a space (`workspaces.agent_funding`). */
+export type AgentFundingMode = 'own' | 'unattended' | 'sponsored';
+
+/** How the agent edits a space's notes (`workspaces.agent_edit_mode`). */
+export type AgentEditMode = 'suggest' | 'direct';
+
+/** A member's role in a space (`src/security/space-access.ts`). */
+export type SpaceRole = 'owner' | 'editor' | 'commenter' | 'viewer' | 'guest';
+/** What an invite may grant: every role but `owner`. */
+export type InvitableSpaceRole = Exclude<SpaceRole, 'owner'>;
+
+/** What a guest reaches in a space (S6); validated on write by `parseGuestScope` (`src/security/space-access.ts`). */
+export type { GuestScope } from '@/shared/spaces';
+
+/** Membership of a shared workspace. The only source of access to a space. */
+export const workspaceMembers = pgTable('workspace_members', {
+  workspaceId: uuid('workspace_id')
+    .notNull()
+    .references(() => workspaces.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  role: text('role').$type<SpaceRole>().notNull(),
+  /** Guests only (S6): what part of the space they see. */
+  scope: jsonb('scope').$type<GuestScope>(),
+  invitedBy: uuid('invited_by').references(() => users.id, { onDelete: 'set null' }),
+  joinedAt: timestamp('joined_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.workspaceId, table.userId] }),
+  userIdx: index('workspace_members_user_idx').on(table.userId),
+}));
+
+/** An invite link to a space. Only `sha256(token)` is stored. */
+export const workspaceInvites = pgTable('workspace_invites', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id')
+    .notNull()
+    .references(() => workspaces.id, { onDelete: 'cascade' }),
+  role: text('role').$type<InvitableSpaceRole>().notNull(),
+  /** Guest invites only (S6): the scope the guest joins with. */
+  scope: jsonb('scope').$type<GuestScope>(),
+  tokenHash: text('token_hash').notNull().unique(),
+  createdBy: uuid('created_by')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  maxUses: integer('max_uses').default(1).notNull(),
+  useCount: integer('use_count').default(0).notNull(),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  workspaceIdx: index('workspace_invites_ws_idx').on(table.workspaceId),
 }));
 
 export type Organization = typeof organizations.$inferSelect;
@@ -93,3 +184,14 @@ export type OrgMember = typeof orgMembers.$inferSelect;
 export type NewOrgMember = typeof orgMembers.$inferInsert;
 export type Workspace = typeof workspaces.$inferSelect;
 export type NewWorkspace = typeof workspaces.$inferInsert;
+export type WorkspaceMember = typeof workspaceMembers.$inferSelect;
+export type WorkspaceInvite = typeof workspaceInvites.$inferSelect;
+
+/**
+ * A new workspace row with its id chosen here, so its files directory
+ * (`files_dir`) can be that id: a column default cannot name another column.
+ */
+export function newWorkspaceRow(values: Omit<NewWorkspace, 'id' | 'filesDir'>): NewWorkspace {
+  const id = randomUUID();
+  return { ...values, id, filesDir: id };
+}

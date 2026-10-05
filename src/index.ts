@@ -103,6 +103,12 @@ async function main() {
     // CHANGE events, so the initial load needs an explicit reset.
     resetLiteLLMClient();
 
+    // Each workspace's files live under its own directory, the user's
+    // default under `default`; load which is which before any turn runs.
+    const { getOrgWorkspaceManager } = await import('@/security/orgs');
+    const workspaceCount = await getOrgWorkspaceManager().loadFileRoots();
+    logger.info({ workspaces: workspaceCount }, 'Workspace file roots loaded');
+
     // Initialize permission rule engine (deny→allow→ask patterns)
     const { initPermissionRules } = await import('@/security/permission-rules');
     await initPermissionRules();
@@ -361,7 +367,13 @@ async function main() {
 
     // Wire gateway message handler and bridge root agent/agent events
     wireMessageHandler(gatewayHub);
-    const disconnectBridge = connectEventBridge(gatewayHub);
+    const { wireDocumentHub } = await import('@/core/docs');
+    wireDocumentHub();
+    const disconnectBridge = await connectEventBridge(gatewayHub);
+    // Rooms (coworking §6.4): every stored room message reaches the room's
+    // members, and the turn strip follows the running turn.
+    const { startRoomFanout } = await import('@/core/rooms/fanout');
+    const stopRoomFanout = await startRoomFanout();
 
     // Start API server. The returned Elysia app MUST stay referenced for the
     // lifetime of the process: Bun finalizes the underlying server when its JS
@@ -526,7 +538,16 @@ async function main() {
         // scheduler may not have been started
       }
       disconnectBridge();
+      stopRoomFanout();
       await gatewayHub.stop();
+      // No more document frames: save what members typed into open notes
+      // since the last debounced persist (§7.3), before the process goes.
+      try {
+        const { getDocHub } = await import('@/core/docs');
+        await getDocHub().flushAll();
+      } catch (err) {
+        logger.error({ err }, 'Saving open live notes at shutdown failed');
+      }
       await mcpBridge.disconnectAll();
       await gateway.stop();
       // Force-closes active connections (idle keep-alives, the permission WS)

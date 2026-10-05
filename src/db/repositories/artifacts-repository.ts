@@ -1,5 +1,7 @@
-import { and, desc, eq, inArray, isNull, lt } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, lt } from 'drizzle-orm';
+import { revokeArtifactViewers } from '@/core/artifacts/viewer-access';
 import { getDb } from '../postgres';
+import { workspaces } from '../schema/organizations';
 import {
   type Artifact,
   artifacts,
@@ -55,6 +57,7 @@ export class ArtifactsRepository {
   async getById(id: string): Promise<Artifact | null> {
     const result = await this.db
       .select()
+      // i2: by id, for the artifact runtime that already resolved access (ArtifactStore / share link)
       .from(artifacts)
       .where(and(eq(artifacts.id, id), isNull(artifacts.deletedAt)))
       .limit(1);
@@ -64,6 +67,7 @@ export class ArtifactsRepository {
   async getBySlug(workspaceId: string, slug: string): Promise<Artifact | null> {
     const result = await this.db
       .select()
+      // i2: by workspace id and slug, the caller names the workspace it resolved
       .from(artifacts)
       .where(
         and(
@@ -79,17 +83,26 @@ export class ArtifactsRepository {
   async listByWorkspace(workspaceId: string, limit = 200): Promise<Artifact[]> {
     return this.db
       .select()
+      // i2: by workspace id the caller resolved
       .from(artifacts)
       .where(and(eq(artifacts.workspaceId, workspaceId), isNull(artifacts.deletedAt)))
       .orderBy(desc(artifacts.updatedAt))
       .limit(limit);
   }
 
+  /**
+   * A visibility change ends the live embed viewers of the artifact
+   * (`revokeArtifactViewers`): their tokens were minted under the old one.
+   */
   async update(id: string, patch: Partial<NewArtifact>): Promise<void> {
+    const before = patch.visibility !== undefined ? await this.getById(id) : null;
     await this.db
       .update(artifacts)
       .set({ ...patch, updatedAt: new Date() })
       .where(eq(artifacts.id, id));
+    if (before && before.visibility !== patch.visibility) {
+      await revokeArtifactViewers(id, 'Artifact visibility changed');
+    }
   }
 
   async setCurrentVersion(id: string, versionId: string): Promise<void> {
@@ -99,11 +112,13 @@ export class ArtifactsRepository {
       .where(eq(artifacts.id, id));
   }
 
+  /** Also ends the artifact's live embed viewers. */
   async softDelete(id: string): Promise<void> {
     await this.db
       .update(artifacts)
       .set({ deletedAt: new Date() })
       .where(eq(artifacts.id, id));
+    await revokeArtifactViewers(id, 'Artifact deleted');
   }
 
   // ── versions ─────────────────────────────────────────────────
@@ -176,6 +191,32 @@ export class ArtifactsRepository {
         updatedAt: new Date(),
       })
       .where(eq(artifactDataSources.id, id));
+  }
+
+  /** Whether the source's artifact belongs to an archived shared workspace. */
+  async isSourceInArchivedSpace(sourceId: string): Promise<boolean> {
+    const [row] = await this.db
+      .select({ id: artifactDataSources.id })
+      .from(artifactDataSources)
+      // i2: a data source's space, for the refresh scheduler
+      .innerJoin(artifacts, eq(artifacts.id, artifactDataSources.artifactId))
+      .innerJoin(workspaces, eq(workspaces.id, artifacts.workspaceId))
+      .where(and(eq(artifactDataSources.id, sourceId), eq(workspaces.kind, 'shared'), isNotNull(workspaces.archivedAt)))
+      .limit(1);
+    return row !== undefined;
+  }
+
+  /** The shared workspace (space) the source's artifact belongs to; null for a personal artifact. */
+  async spaceOfSource(sourceId: string): Promise<string | null> {
+    const [row] = await this.db
+      .select({ id: workspaces.id })
+      .from(artifactDataSources)
+      // i2: a data source's space, for the refresh scheduler
+      .innerJoin(artifacts, eq(artifacts.id, artifactDataSources.artifactId))
+      .innerJoin(workspaces, eq(workspaces.id, artifacts.workspaceId))
+      .where(and(eq(artifactDataSources.id, sourceId), eq(workspaces.kind, 'shared')))
+      .limit(1);
+    return row?.id ?? null;
   }
 
   async deleteSource(id: string): Promise<void> {

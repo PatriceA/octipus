@@ -14,8 +14,20 @@ vi.mock('@/core/agent', () => ({
     },
   }),
 }));
+// The direct (non-orchestrated) spawn: the options are observed, nothing runs.
+const direct = vi.hoisted(() => ({ spawns: [] as Array<Record<string, unknown>> }));
+vi.mock('@/core/agent-manager', () => ({
+  getAgentManager: () => ({
+    spawn: async (options: Record<string, unknown>) => {
+      direct.spawns.push(options);
+      return { run: async () => '', getContext: () => ({ id: 'agent-1' }) };
+    },
+  }),
+}));
 vi.mock('@/core/agent/roles', () => ({ ROLE_CONFIGS: { coding: {}, general: {} } }));
 vi.mock('@/security/orgs', () => ({ getOrgWorkspaceManager: () => ({ ensureDefaultWorkspace: async () => ({ id: 'ws-1' }) }) }));
+// The hook session does not exist yet: the heartbeat runs in the default workspace.
+vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: { findById: async () => null } }));
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -23,7 +35,7 @@ function ctx(over: Partial<TriggerContext> = {}): TriggerContext {
   return over as TriggerContext;
 }
 function hook(over: Partial<Hook> = {}): Hook {
-  return { id: 'hook-1', userId: 'user-1', sessionId: null, ...over } as Hook;
+  return { id: 'hook-1', userId: '11111111-1111-4111-8111-111111111111', sessionId: null, ...over } as Hook;
 }
 
 describe('resolveHookSessionId', () => {
@@ -94,7 +106,7 @@ describe('executeSpawnAgent: role heartbeat', () => {
     expect(call.role).toBe('coding');
     expect(call.task).toBe('Role heartbeat: ready tasks…');
     expect(call.overrides).toEqual({ extraToolIds: ['tasks'] });
-    expect(call.context).toMatchObject({ sessionId: 'hook-sess', userId: 'user-1', workspaceId: 'ws-1', role: 'coding', attended: false, root: false });
+    expect(call.context).toMatchObject({ sessionId: 'hook-sess', userId: '11111111-1111-4111-8111-111111111111', workspaceId: 'ws-1', role: 'coding', attended: false, root: false });
   });
 
   test('refuses a role heartbeat that did not come through the gate (manual trigger, forged flags)', async () => {
@@ -111,5 +123,18 @@ describe('executeSpawnAgent: role heartbeat', () => {
       expect(r.success).toBe(false);
     }
     expect(spawned.calls).toHaveLength(0);
+  });
+});
+
+describe('executeSpawnAgent: direct spawn', () => {
+  test("spawns in the hook session's workspace (the default when the session does not exist yet)", async () => {
+    direct.spawns.length = 0;
+    const r = await executeAction(hook({
+      userId: '77777777-7777-4777-8777-777777777777', trigger: 'schedule', action: 'spawn_agent', sessionId: 'hook-sess',
+      actionConfig: { orchestrated: false, agentPrompt: 'tidy up' },
+    } as Partial<Hook>), ctx());
+    expect(r.success).toBe(true);
+    expect(direct.spawns).toHaveLength(1);
+    expect(direct.spawns[0]).toMatchObject({ sessionId: 'hook-sess', workspaceId: 'ws-1' });
   });
 });

@@ -3,7 +3,7 @@
  * tasks wide, resolve the user's day, rank, cap. The tasks tool and the
  * `/tasks?view=next` route both call this so they cannot drift.
  */
-import { scopedRepos } from '@/db/repositories/scoped';
+import { contentRepos } from '@/db/repositories/content';
 import type { Task } from '@/db/schema/tasks';
 import type { Principal } from '@/security/principal';
 import { type RankedTask, rankTasks } from './rank';
@@ -32,7 +32,7 @@ export async function nextActions(
   opts: NextActionsOptions,
 ): Promise<{ timezone: string; ranked: RankedTask<Task>[] }> {
   const [active, timezone] = await Promise.all([
-    scopedRepos(principal).tasks.listOwn({ statuses: [...ACTIVE_TASK_STATUSES], limit: SCAN_LIMIT }),
+    contentRepos(principal).tasks.listOwn({ statuses: [...ACTIVE_TASK_STATUSES], limit: SCAN_LIMIT }),
     resolveUserTimezone(principal.userId, opts.tz),
   ]);
   const ranked = rankTasks(active, new Date(), { timezone });

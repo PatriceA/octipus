@@ -24,7 +24,7 @@
 
 import type { ToolHandler } from '@/core/agent-worker';
 import { asLane } from '@/core/agent/lane-intent';
-import { getModelRegistry } from '@/models/model-registry';
+import { resolveModel } from '@/models/resolve-model';
 import { coreLogger } from '@/utils/logger';
 import { getCallGraph } from './call-graph';
 import { getSwarmSpawner, type SwarmSpawner } from './spawner';
@@ -102,7 +102,8 @@ export function createEscalateTool(
       // exists to stop a pointless retry, not to add a way for the retry to fail.
       let laneModel: { modelId: string } | null = null;
       try {
-        laneModel = await getModelRegistry().getModelForTopic(lane);
+        // What the child would run on: the requester's binding, else the install's (§8.2).
+        laneModel = await resolveModel({ userId: parent.userId, topic: lane, inSpace: !!context.space, spaceRole: context.space?.role });
       } catch (err) {
         coreLogger.warn({ err, lane }, 'Lane lookup failed during escalation — allowing the spawn');
       }

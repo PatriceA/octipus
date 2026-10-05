@@ -44,6 +44,13 @@ export type Ctx = Record<string, any> & {
   user: any;
   session: any;
   principal: any;
+  /**
+   * The TCP peer's address, from the Node socket. Undefined only for an
+   * in-process `handle()` call without one. Read the client address through
+   * `clientIp(request, socketAddress)` (security/client-ip.ts), never from the
+   * forwarded headers directly.
+   */
+  socketAddress: string | undefined;
 };
 
 /**
@@ -75,6 +82,11 @@ interface RouteDef {
 }
 
 export interface WebSocketHandlers {
+  /**
+   * Largest frame a client may send on this route, in bytes (the socket's
+   * `maxPayload`). Unset: the `ws` library default.
+   */
+  maxPayload?: number;
   open?: (ws: any) => unknown | Promise<unknown>;
   message?: (ws: any, message: any) => unknown | Promise<unknown>;
   close?: (ws: any, code?: number, reason?: string) => unknown | Promise<unknown>;
@@ -269,6 +281,7 @@ export class App {
         user: null,
         session: null,
         principal: null,
+        socketAddress: socketAddressOf(c.env),
         params: {},
         query: Object.fromEntries(url.searchParams),
         headers: Object.fromEntries(request.headers),
@@ -362,16 +375,35 @@ export class App {
     }
   }
 
-  /** The entry point every route test uses. */
-  handle(request: Request): Promise<Response> {
-    return Promise.resolve(this.build().fetch(request));
+  /**
+   * The entry point every route test uses. `socketAddress` stands in for the
+   * TCP peer a real server would see.
+   */
+  handle(request: Request, options?: { socketAddress?: string }): Promise<Response> {
+    const env: NodeEnv | undefined = options?.socketAddress
+      ? { incoming: { socket: { remoteAddress: options.socketAddress } } }
+      : undefined;
+    return Promise.resolve(this.build().fetch(request, env));
   }
 
-  /** Hono's own name for the same thing, for `@hono/node-server`. */
+  /**
+   * Hono's own name for the same thing, for `@hono/node-server`, which passes
+   * `{ incoming, outgoing }` as the environment: the socket address is read
+   * from it and forwarded into the request context.
+   */
   get fetch() {
-    return (request: Request): Promise<Response> =>
-      Promise.resolve(this.build().fetch(request));
+    return (request: Request, env?: unknown): Promise<Response> =>
+      Promise.resolve(this.build().fetch(request, env));
   }
+}
+
+/** The part of `@hono/node-server`'s environment this layer reads. */
+interface NodeEnv {
+  incoming?: { socket?: { remoteAddress?: string } };
+}
+
+function socketAddressOf(env: unknown): string | undefined {
+  return (env as NodeEnv | undefined)?.incoming?.socket?.remoteAddress;
 }
 
 function validateRoute(options: RouteOptions | undefined, ctx: Ctx): void {

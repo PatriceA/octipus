@@ -1,7 +1,7 @@
 
 import { randomBytes } from 'crypto';
+import { userChangedSince, userChangeMark } from '@/security/user-change-marks';
 import { coreLogger } from '@/utils/logger';
-import { validateLocalAuth } from './local-auth';
 import {
   type AuthMessage,
   type ConnectionContext,
@@ -28,54 +28,103 @@ export interface ServerWebSocket<T = unknown> {
 
 export interface GatewayConnection {
   ws: ServerWebSocket<any>;
+  /** Client address from `clientIp` (security/client-ip.ts), fixed at open. */
+  ip: string;
   state: ConnectionState;
   context: ConnectionContext | null;
   authTimer: NodeJS.Timeout | null;
+  /** `artifact_token` viewers only: closes the connection when the token expires. */
+  expiryTimer?: NodeJS.Timeout;
   createdAt: number;
+  /** The socket URL's `?workspace=` (id or slug), resolved for the user at auth. */
+  workspaceHint?: string;
 }
 
+/**
+ * Resolves the workspace a connection works in for its user: the `hint`
+ * (a workspace id or slug the user owns) or, without one, the user's
+ * default. Returns null when the hint names no workspace of the user's.
+ */
+export type ConnectionWorkspaceResolver = (userId: string, hint: string | undefined) => Promise<string | null>;
+
+/**
+ * There is no cap per address on authenticated connections: behind a reverse
+ * proxy every client shares one address, and such a cap would become an
+ * install-wide one. An address is capped only while it holds connections that
+ * have not authenticated yet; once signed in, the per-user cap applies.
+ */
 interface ConnectionBudget {
-  maxPerUser: number;
-  maxPerIp: number;
+  /**
+   * Authenticated connections per user (`gateway.maxConnectionsPerUser`). A
+   * function so a settings change applies to the next sign-in.
+   */
+  maxPerUser: number | (() => number);
   maxPreAuth: number;
 }
 
 const DEFAULT_BUDGET: ConnectionBudget = {
-  maxPerUser: 10,
-  maxPerIp: 50,
+  maxPerUser: 20,
   maxPreAuth: 20,
 };
 
 const AUTH_TIMEOUT_MS = 5_000;
+/**
+ * Live `artifact_token` viewers of one artifact. They are not a user, so the
+ * per-user cap does not apply; this bounds what one embed token (or a page
+ * opened in many tabs) can hold open.
+ */
+export const MAX_VIEWERS_PER_ARTIFACT = 50;
+/** Same as user-lifecycle's USER_CHANGED_CLOSE_CODE: reconnect to pick up the new rights. */
+const USER_CHANGED_CLOSE_CODE = 4004;
 
 // ── Connection Manager ────────────────────────────────────────────
 
 export class ConnectionManager {
   private connections: Map<string, GatewayConnection> = new Map();
   private byUser: Map<string, Set<string>> = new Map();
-  private byIp: Map<string, Set<string>> = new Map();
   private preAuthByIp: Map<string, number> = new Map();
   private rateLimiter: GatewayRateLimiter;
   private budget: ConnectionBudget;
 
   // External auth handler — set by the gateway server
   private sessionValidator: ((token: string) => Promise<{ userId: string; username: string; isAdmin: boolean } | null>) | null = null;
-  private hmacValidator: ((key: string, channelType: string) => Promise<boolean>) | null = null;
+  private workspaceResolver: ConnectionWorkspaceResolver | null = null;
 
   // Event callback for audit logging
   onAuditEvent?: (event: string, data: Record<string, unknown>) => void;
+
+  /** Called once for every authenticated connection that ends, with its context. */
+  onConnectionClosed?: (context: ConnectionContext) => void;
+
+  /**
+   * Told to clients in `auth_ok` (`gateway.maxFrameBytes`), so they can refuse
+   * a frame the server would. The socket's own limit is fixed when it is set
+   * up, so this is the number it was set up with (`setMaxFrameBytes`), never
+   * a later config value the socket does not enforce.
+   */
+  private maxFrameBytes?: number;
 
   constructor(options?: { budget?: Partial<ConnectionBudget>; rateLimiter?: GatewayRateLimiter }) {
     this.budget = { ...DEFAULT_BUDGET, ...options?.budget };
     this.rateLimiter = options?.rateLimiter || new GatewayRateLimiter();
   }
 
+  /** The frame cap the socket enforces (its `maxPayload`). */
+  setMaxFrameBytes(bytes: number): void {
+    this.maxFrameBytes = bytes;
+  }
+
+  private maxPerUser(): number {
+    const max = this.budget.maxPerUser;
+    return typeof max === 'function' ? max() : max;
+  }
+
   setSessionValidator(validator: (token: string) => Promise<{ userId: string; username: string; isAdmin: boolean } | null>): void {
     this.sessionValidator = validator;
   }
 
-  setHmacValidator(validator: (key: string, channelType: string) => Promise<boolean>): void {
-    this.hmacValidator = validator;
+  setWorkspaceResolver(resolver: ConnectionWorkspaceResolver): void {
+    this.workspaceResolver = resolver;
   }
 
   getRateLimiter(): GatewayRateLimiter {
@@ -85,10 +134,12 @@ export class ConnectionManager {
   // ── Connection Lifecycle ──────────────────────────────────────
 
   /**
-   * Register a new WebSocket connection (pre-auth).
+   * Register a new WebSocket connection (pre-auth). `ip` must come from
+   * `clientIp`, never from a forwarded header read directly. `workspace` is
+   * the socket URL's `?workspace=`, resolved once the user is known.
    */
-  handleOpen(ws: ServerWebSocket<any>, ip: string): string | null {
-    // Check pre-auth budget per IP
+  handleOpen(ws: ServerWebSocket<any>, ip: string, workspace?: string): string | null {
+    // The only per-address cap: connections that have not authenticated yet.
     const preAuthCount = this.preAuthByIp.get(ip) || 0;
     if (preAuthCount >= this.budget.maxPreAuth) {
       coreLogger.warn({ ip, preAuthCount }, 'Pre-auth connection budget exceeded');
@@ -96,31 +147,21 @@ export class ConnectionManager {
       return null;
     }
 
-    // Check per-IP budget
-    const ipConns = this.byIp.get(ip);
-    if (ipConns && ipConns.size >= this.budget.maxPerIp) {
-      coreLogger.warn({ ip, count: ipConns.size }, 'Per-IP connection budget exceeded');
-      this.onAuditEvent?.('gateway.connection.rejected', { ip, reason: 'ip_budget' });
-      return null;
-    }
-
     const connectionId = randomBytes(16).toString('hex');
     const conn: GatewayConnection = {
       ws,
+      ip,
       state: 'authenticating',
       context: null,
       createdAt: Date.now(),
       authTimer: setTimeout(() => {
         this.handleAuthTimeout(connectionId);
       }, AUTH_TIMEOUT_MS),
+      ...(workspace ? { workspaceHint: workspace } : {}),
     };
 
     this.connections.set(connectionId, conn);
     this.preAuthByIp.set(ip, preAuthCount + 1);
-
-    // Track by IP
-    if (!this.byIp.has(ip)) this.byIp.set(ip, new Set());
-    this.byIp.get(ip)!.add(connectionId);
 
     return connectionId;
   }
@@ -194,6 +235,7 @@ export class ConnectionManager {
       clearTimeout(conn.authTimer);
       conn.authTimer = null;
     }
+    if (conn.expiryTimer) clearTimeout(conn.expiryTimer);
 
     // Clean up tracking
     if (conn.context) {
@@ -208,20 +250,15 @@ export class ConnectionManager {
         duration: Date.now() - conn.context.connectedAt,
         reason: reason || `code:${code}`,
       });
-    }
-
-    // Clean up IP tracking
-    const ip = conn.context?.ip;
-    if (ip) {
-      this.byIp.get(ip)?.delete(connectionId);
-      if (this.byIp.get(ip)?.size === 0) this.byIp.delete(ip);
-
-      // Decrement pre-auth count if was still pre-auth
-      if (!conn.context) {
-        const count = this.preAuthByIp.get(ip) || 0;
-        if (count > 0) this.preAuthByIp.set(ip, count - 1);
+      try {
+        this.onConnectionClosed?.(conn.context);
+      } catch (err) {
+        coreLogger.error({ err, connectionId, userId }, 'Gateway connection close handler failed');
       }
     }
+
+    // A connection that never authenticated still holds its pre-auth slot.
+    if (conn.state === 'authenticating') this.releasePreAuth(conn.ip);
 
     this.rateLimiter.removeConnection(connectionId);
     this.connections.delete(connectionId);
@@ -230,10 +267,20 @@ export class ConnectionManager {
   // ── Auth ────────────────────────────────────────────────────────
 
   private async handleAuth(connectionId: string, conn: GatewayConnection, msg: AuthMessage): Promise<void> {
-    const ip = this.getConnectionIp(connectionId);
+    const ip = conn.ip;
     let userId: string | undefined;
-    let trustLevel: TrustLevel = 'user';
+    // Every authenticated connection is `user` trust: trust never widens what
+    // a connection may see or touch. Admin rights come from the database
+    // (`isAdmin` below, re-read where a command needs it), not from where the
+    // connection comes from or which credential it used.
+    const trustLevel: TrustLevel = 'user';
     let isAdmin = false;
+    let scopes: readonly string[] | undefined;
+    let artifactId: string | undefined;
+    let artifactTokenExp: number | undefined;
+    // Taken before the credential is checked: see the re-check after
+    // registration below.
+    const mark = userChangeMark();
 
     try {
       switch (msg.method) {
@@ -253,56 +300,8 @@ export class ConnectionManager {
             return;
           }
           userId = session.userId;
+          // The validator reads `is_admin` from the users row at auth time.
           isAdmin = session.isAdmin;
-          // An admin signing in ON THIS MACHINE keeps the reach the machine
-          // token already gave them — otherwise logging in to the TUI would be
-          // a downgrade: no /reload, for the same person at the same keyboard.
-          // The loopback test is not decoration: `local` also means "may see
-          // every user's events" (hub.ts), and unlike the `local` method below
-          // — which `validateLocalAuth` refuses off-loopback — a session token
-          // travels, so a remote admin console would silently start receiving
-          // other users' replies and permission prompts.
-          const { isLoopbackIp } = await import('./local-auth');
-          trustLevel = session.isAdmin && isLoopbackIp(ip) ? 'local' : 'user';
-          break;
-        }
-
-        case 'local': {
-          const token = msg.credentials.token as string;
-          if (!token) {
-            this.sendAuthError(conn, 'Missing local token');
-            return;
-          }
-          const result = validateLocalAuth(token, ip);
-          if (!result.valid) {
-            this.sendAuthError(conn, result.reason || 'Local auth failed');
-            return;
-          }
-          // Local auth gets a synthetic "local" user ID
-          userId = 'local';
-          trustLevel = 'local';
-          isAdmin = true;
-          break;
-        }
-
-        case 'hmac': {
-          if (!this.hmacValidator) {
-            this.sendAuthError(conn, 'HMAC auth not configured');
-            return;
-          }
-          const key = msg.credentials.key as string;
-          const channelType = msg.credentials.channelType as string;
-          if (!key || !channelType) {
-            this.sendAuthError(conn, 'Missing HMAC key or channel type');
-            return;
-          }
-          const valid = await this.hmacValidator(key, channelType);
-          if (!valid) {
-            this.sendAuthError(conn, 'Invalid HMAC credentials');
-            return;
-          }
-          userId = `adapter:${channelType}`;
-          trustLevel = 'system';
           break;
         }
 
@@ -330,8 +329,9 @@ export class ConnectionManager {
                 .limit(1);
               if (u) {
                 userId = u.id;
-                trustLevel = u.isAdmin ? 'system' : 'user';
                 isAdmin = u.isAdmin;
+                // The token's scopes travel with the connection, as on REST.
+                scopes = validated.scopes;
                 break;
               }
             }
@@ -344,6 +344,38 @@ export class ConnectionManager {
           return;
         }
 
+        case 'artifact_token': {
+          // The live-artifact SDK inside an embed page. The token is the one
+          // minted for that page (artifact-pages.ts); the connection is a
+          // viewer of that one artifact, not a user — the hub lets it ping
+          // and subscribe to `artifact:<id>` only.
+          const aid = msg.credentials.artifactId;
+          const token = msg.credentials.token;
+          if (typeof aid !== 'string' || !aid || typeof token !== 'string' || !token) {
+            this.sendAuthError(conn, 'Missing artifact id or token');
+            return;
+          }
+          const { verifyArtifactToken } = await import('@/core/artifacts/token');
+          const payload = verifyArtifactToken(token, { aid });
+          const { isArtifactTokenRevoked } = await import('@/core/artifacts/viewer-access');
+          // A token issued before the artifact's visibility changed (or before
+          // it was deleted) no longer stands for the access it was minted under.
+          if (!payload || isArtifactTokenRevoked(aid, payload.iat)) {
+            this.sendAuthError(conn, 'Invalid or expired artifact token');
+            return;
+          }
+          const { artifactsRepository } = await import('@/db/repositories/artifacts-repository');
+          const artifact = await artifactsRepository.getById(aid);
+          if (!artifact || artifact.workspaceId !== payload.wid) {
+            this.sendAuthError(conn, 'Artifact not found');
+            return;
+          }
+          artifactId = aid;
+          artifactTokenExp = payload.exp;
+          userId = `artifact:${aid}`;
+          break;
+        }
+
         default:
           this.sendAuthError(conn, `Unknown auth method: ${msg.method}`);
           return;
@@ -354,12 +386,32 @@ export class ConnectionManager {
         return;
       }
 
-      // Check per-user budget
+      // Check per-user budget. Artifact viewers share one id per artifact and
+      // are not a user: they have a cap per artifact instead.
       const userConns = this.byUser.get(userId);
-      if (userConns && userConns.size >= this.budget.maxPerUser) {
+      const cap = artifactId === undefined ? this.maxPerUser() : MAX_VIEWERS_PER_ARTIFACT;
+      if (userConns && userConns.size >= cap) {
         this.sendAuthError(conn, 'Too many connections');
-        this.onAuditEvent?.('gateway.connection.rejected', { userId, reason: 'user_budget' });
+        this.onAuditEvent?.('gateway.connection.rejected', { userId, reason: artifactId === undefined ? 'user_budget' : 'artifact_viewer_budget' });
         return;
+      }
+
+      // The workspace this connection works in (user connections only; an
+      // artifact viewer is not a user). A `?workspace=` that names none of
+      // the user's workspaces fails the sign-in rather than quietly
+      // switching the client to another workspace.
+      let workspaceId: string | undefined;
+      if (artifactId === undefined) {
+        if (!this.workspaceResolver) {
+          this.sendAuthError(conn, 'Workspace resolution not configured');
+          return;
+        }
+        const resolved = await this.workspaceResolver(userId, conn.workspaceHint);
+        if (!resolved) {
+          this.sendAuthError(conn, 'Unknown workspace');
+          return;
+        }
+        workspaceId = resolved;
       }
 
       // Auth success — clear timer, upgrade connection
@@ -368,9 +420,7 @@ export class ConnectionManager {
         conn.authTimer = null;
       }
 
-      // Decrement pre-auth counter
-      const preAuth = this.preAuthByIp.get(ip) || 0;
-      if (preAuth > 0) this.preAuthByIp.set(ip, preAuth - 1);
+      this.releasePreAuth(ip);
 
       conn.state = 'active';
       conn.context = {
@@ -381,7 +431,11 @@ export class ConnectionManager {
         ip,
         connectedAt: Date.now(),
         lastActivityAt: Date.now(),
-        eventSubscriptions: new Set(['*']), // Default: receive all events
+        eventSubscriptions: new Set(['*']), // Default: all of this user's own events
+        resources: new Set(),
+        ...(artifactId !== undefined ? { artifactId } : {}),
+        ...(workspaceId !== undefined ? { workspaceId } : {}),
+        ...(scopes && scopes.length > 0 ? { scopes } : {}),
         metadata: { isAdmin, clientVersion: msg.clientVersion },
       };
 
@@ -389,14 +443,31 @@ export class ConnectionManager {
       if (!this.byUser.has(userId)) this.byUser.set(userId, new Set());
       this.byUser.get(userId)!.add(connectionId);
 
+      // The user was deactivated or their admin flag changed while this
+      // connection was authenticating: the sweep (closeUserConnections) may
+      // have run before it was registered. Close it; the client reconnects
+      // against the current row.
+      if (userChangedSince(userId, mark)) {
+        this.closeUserConnection(connectionId, USER_CHANGED_CLOSE_CODE, 'Account changed');
+        return;
+      }
+
+      // The token was checked once, above; the connection ends when it expires.
+      if (artifactTokenExp !== undefined) {
+        conn.expiryTimer = setTimeout(() => {
+          this.closeUserConnection(connectionId, 4001, 'Artifact token expired');
+        }, Math.max(0, artifactTokenExp * 1000 - Date.now()));
+      }
+
       // Send auth_ok
       this.send(conn, {
         type: 'auth_ok',
         connectionId,
         userId,
-        capabilities: this.getCapabilities(trustLevel, isAdmin),
+        capabilities: artifactId !== undefined ? ['subscribe', 'ping'] : this.getCapabilities(isAdmin),
         serverTime: new Date().toISOString(),
         serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        ...(this.maxFrameBytes !== undefined ? { maxFrameBytes: this.maxFrameBytes } : {}),
       });
 
       this.onAuditEvent?.('gateway.auth.success', {
@@ -431,8 +502,7 @@ export class ConnectionManager {
 
   private sendAuthError(conn: GatewayConnection, reason: string): void {
     this.send(conn, { type: 'auth_error', reason });
-    const ip = conn.context?.ip || 'unknown';
-    this.onAuditEvent?.('gateway.auth.failure', { ip, reason });
+    this.onAuditEvent?.('gateway.auth.failure', { ip: conn.ip, reason });
 
     try {
       conn.ws.close(4001, reason);
@@ -449,6 +519,42 @@ export class ConnectionManager {
     const ids = this.byUser.get(userId);
     if (!ids) return [];
     return [...ids].map(id => this.connections.get(id)).filter(Boolean) as GatewayConnection[];
+  }
+
+  /**
+   * Close every connection of `userId`. A connection's identity, trust and
+   * admin rights are fixed at auth, so a deactivation or an admin change ends
+   * them; the client reconnects and authenticates afresh (or is refused).
+   * Returns how many were closed.
+   */
+  closeUserConnections(userId: string, code: number, reason: string): number {
+    const conns = [...(this.byUser.get(userId) ?? [])];
+    for (const connectionId of conns) this.closeUserConnection(connectionId, code, reason);
+    if (conns.length > 0) coreLogger.info({ userId, count: conns.length, reason }, 'Closed user gateway connections');
+    return conns.length;
+  }
+
+  /**
+   * Close every `artifact_token` viewer of `artifactId` (the artifact was
+   * deleted or its visibility changed). Returns how many were closed.
+   */
+  closeArtifactViewers(artifactId: string, code: number, reason: string): number {
+    return this.closeUserConnections(`artifact:${artifactId}`, code, reason);
+  }
+
+  /** Close one authenticated connection and drop its bookkeeping at once. */
+  private closeUserConnection(connectionId: string, code: number, reason: string): void {
+    const conn = this.connections.get(connectionId);
+    if (!conn) return;
+    conn.state = 'draining';
+    try {
+      conn.ws.close(code, reason);
+    } catch (err) {
+      coreLogger.warn({ err, connectionId, userId: conn.context?.userId }, 'Could not close a gateway connection');
+    }
+    // The transport's close callback lands later (or never, for a socket
+    // already gone); drop the bookkeeping now so nothing more is sent to it.
+    this.handleClose(connectionId, code, reason);
   }
 
   getActiveConnections(): ConnectionContext[] {
@@ -500,22 +606,16 @@ export class ConnectionManager {
 
   // ── Helpers ─────────────────────────────────────────────────────
 
-  private getConnectionIp(connectionId: string): string {
-    // Scan byIp to find which IP owns this connection
-    for (const [ip, ids] of this.byIp) {
-      if (ids.has(connectionId)) return ip;
-    }
-    return 'unknown';
+  private releasePreAuth(ip: string): void {
+    const count = this.preAuthByIp.get(ip) || 0;
+    if (count > 1) this.preAuthByIp.set(ip, count - 1);
+    else this.preAuthByIp.delete(ip);
   }
 
-  private getCapabilities(trustLevel: TrustLevel, isAdmin: boolean): string[] {
-    const caps = ['chat', 'subscribe', 'commands', 'ping'];
-    if (trustLevel === 'local' || trustLevel === 'system' || isAdmin) {
-      caps.push('admin', 'agent.stop');
-    }
-    if (trustLevel === 'system') {
-      caps.push('channel.send', 'channel.status');
-    }
+  private getCapabilities(isAdmin: boolean): string[] {
+    // `agent.stop` stops the caller's own agents, so every user has it.
+    const caps = ['chat', 'subscribe', 'commands', 'ping', 'agent.stop'];
+    if (isAdmin) caps.push('admin');
     return caps;
   }
 
@@ -533,7 +633,6 @@ export class ConnectionManager {
     }
     this.connections.clear();
     this.byUser.clear();
-    this.byIp.clear();
     this.preAuthByIp.clear();
     this.rateLimiter.destroy();
   }

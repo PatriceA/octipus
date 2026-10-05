@@ -30,6 +30,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { getDb } from '@/db/postgres';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { type ApiToken, type ApiTokenSummary, apiTokens } from '@/db/schema/api-tokens';
+import { users } from '@/db/schema/users';
 import { validateRequestedScopes } from '@/security/scopes';
 import { securityLogger } from '@/utils/logger';
 
@@ -130,6 +131,10 @@ export class ApiTokenManager {
     if (!scopeCheck.ok) {
       throw new ScopeValidationError(scopeCheck.error);
     }
+    // A remote member (S7) never signs in here, with a token or otherwise.
+    const [owner] = await this.db.select({ kind: users.kind }).from(users).where(eq(users.id, userId)).limit(1);
+    if (!owner) throw new Error('API token owner not found');
+    if (owner.kind !== 'local') throw new Error('Members from other installs cannot hold API tokens here');
 
     const plaintext = generateTokenPlaintext();
     const tokenHash = hashToken(plaintext);
@@ -161,7 +166,8 @@ export class ApiTokenManager {
   /**
    * Validate a Bearer token against the api_tokens table. Returns the
    * owning user-id on success; null when the token is unknown,
-   * revoked, expired, or malformed.
+   * revoked, expired, or malformed, or when its owner is deactivated
+   * (the join on `users.is_active` — a token outlives its owner's login).
    *
    * On a successful validation `last_used_at` is updated. The update
    * is best-effort — failures are logged but never propagate so a
@@ -173,13 +179,16 @@ export class ApiTokenManager {
     if (!looksLikeApiToken(plaintext)) return null;
     const tokenHash = hashToken(plaintext);
 
-    const [row] = await this.db
-      .select()
+    const [joined] = await this.db
+      .select({ token: apiTokens })
       .from(apiTokens)
+      // Never a remote member's (S7): they do not sign in here.
+      .innerJoin(users, and(eq(users.id, apiTokens.userId), eq(users.isActive, true), eq(users.kind, 'local')))
       .where(eq(apiTokens.tokenHash, tokenHash))
       .limit(1);
 
-    if (!row) return null;
+    if (!joined) return null;
+    const row = joined.token;
     // Defense-in-depth — the indexed lookup found a match, but verify
     // hash equality with constant-time compare just in case.
     if (!safeHashEqual(row.tokenHash, tokenHash)) return null;

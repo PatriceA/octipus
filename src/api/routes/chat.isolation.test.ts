@@ -71,6 +71,6 @@ describe('ApprovalManager.resolveApprovalDetailed(forUserId)', () => {
 
   test('refuses an unknown request id', async () => {
     const m = new ApprovalManager();
-    expect(await m.resolveApprovalDetailed('does-not-exist', true)).toEqual({ status: 'not_found' });
+    expect(await m.resolveApprovalDetailed('does-not-exist', true, undefined, { forUserId: aliceId })).toEqual({ status: 'not_found' });
   });
 });

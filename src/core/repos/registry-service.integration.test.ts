@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID, createHash } from 'node:crypto';
 import { getConfig } from '@/config';
+import { agentPrincipal } from '@/security/principal';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { repoRegistryRepository } from '@/db/repositories/repo-registry-repository';
 import { scanUserRepos, loadRepoGraph, resolveRepo, indexRepoKnowledge } from './registry-service';
@@ -16,15 +17,16 @@ vi.mock('@/core/rag/embeddings', () => ({
   getEmbeddingService: () => {
     if (knowledge.unavailable) throw new Error('No embedding model configured');
     return {
-      isFileIndexed: async (purpose: string, id: string, content: string) => knowledge.records.get(`${purpose}:${id}`) === content,
-      deleteBySource: async (purpose: string, id: string) => Number(knowledge.records.delete(`${purpose}:${id}`)),
-      indexText: async (purpose: string, id: string, content: string) => { knowledge.records.set(`${purpose}:${id}`, content); },
+      isFileIndexed: async (_owner: unknown, purpose: string, id: string, content: string) => knowledge.records.get(`${purpose}:${id}`) === content,
+      deleteBySource: async (_owner: unknown, purpose: string, id: string) => Number(knowledge.records.delete(`${purpose}:${id}`)),
+      indexText: async (_owner: unknown, purpose: string, id: string, content: string) => { knowledge.records.set(`${purpose}:${id}`, content); },
     };
   },
 }));
 
 const alice = randomUUID();
 const bob = randomUUID();
+const owner = (userId: string) => ({ userId, workspaceId: null });
 let suite: string;
 let second: string;
 let originalWorkspace: ReturnType<typeof getConfig>['workspace'];
@@ -82,8 +84,8 @@ describe('native multi-repo flow without external code search', () => {
       dependencies { implementation("com.example:core:1.0") }`);
     writeFileSync(join(appPath, 'gradlew'), '#!/bin/sh\nexit 99\n');
     writeFileSync(join(appPath, 'src/main/java/App.java'), 'public class App {}');
-    await scanUserRepos(alice);
-    const graph = await loadRepoGraph(alice);
+    await scanUserRepos(owner(alice));
+    const graph = await loadRepoGraph(owner(alice));
     const core = resolveRepo(graph.repos, 'java-core')!;
     const app = resolveRepo(graph.repos, 'java-app')!;
     expect(core.packageName).toBe('com.example:core');
@@ -131,33 +133,33 @@ describe('native multi-repo flow without external code search', () => {
     knowledge.unavailable = true;
     repo(suite, 'core', '@demo/core');
     repo(suite, 'app', '@demo/app', { '@demo/core': '^1.0.0' });
-    const scanned = await scanUserRepos(alice);
+    const scanned = await scanUserRepos(owner(alice));
     expect(scanned).toHaveLength(2);
-    const graph = await loadRepoGraph(alice);
+    const graph = await loadRepoGraph(owner(alice));
     const core = resolveRepo(graph.repos, 'core')!;
     const app = resolveRepo(graph.repos, 'app')!;
     expect(graph.edges).toEqual([{ from: app.id, to: core.id, via: '@demo/core', version: '^1.0.0' }]);
     expect(core.symbolIndex).not.toBeNull();
     expect(findSymbols(core.symbolIndex!, 'coreHandler')).toMatchObject([{ path: 'index.ts', line: 1, name: 'coreHandler' }]);
     expect(await repoRegistryRepository.getById(bob, core.id)).toBeNull();
-    expect((await loadRepoGraph(bob)).repos).toEqual([]);
+    expect((await loadRepoGraph(owner(bob))).repos).toEqual([]);
   });
 
   test('rescanning updates symbols and dependencies in place and removes deleted guide knowledge', async () => {
     const corePath = repo(suite, 'core', '@demo/core');
     const appPath = repo(suite, 'app', '@demo/app', { '@demo/core': '*' });
-    const first = await scanUserRepos(alice);
+    const first = await scanUserRepos(owner(alice));
     const core = resolveRepo(first, 'core')!;
     expect(knowledge.records.has(`document:repo:${core.id}:agents`)).toBe(true);
     writeFileSync(join(corePath, 'index.ts'), 'export function replacement() {}\n');
     writeFileSync(join(appPath, 'package.json'), JSON.stringify({ name: '@demo/app' }));
     rmSync(join(corePath, 'AGENTS.md'));
-    const updated = await scanUserRepos(alice);
+    const updated = await scanUserRepos(owner(alice));
     const refreshed = resolveRepo(updated, 'core')!;
     expect(refreshed.id).toBe(core.id);
     expect(findSymbols(refreshed.symbolIndex!, 'coreHandler')).toHaveLength(0);
     expect(findSymbols(refreshed.symbolIndex!, 'replacement')).toHaveLength(1);
-    expect((await loadRepoGraph(alice)).edges).toHaveLength(0);
+    expect((await loadRepoGraph(owner(alice))).edges).toHaveLength(0);
     expect(knowledge.records.has(`document:repo:${core.id}:agents`)).toBe(false);
     expect([...knowledge.records.values()].some(content => content.includes('export function'))).toBe(false);
   });
@@ -165,25 +167,25 @@ describe('native multi-repo flow without external code search', () => {
   test('removed or no-longer-exposed repositories are hidden without returning stale source maps', async () => {
     const removed = repo(suite, 'removed', 'removed');
     repo(second, 'revoked', 'revoked');
-    await scanUserRepos(alice);
+    await scanUserRepos(owner(alice));
     rmSync(removed, { recursive: true });
     getConfig().workspace.additionalPaths = [suite];
-    expect((await loadRepoGraph(alice)).repos).toHaveLength(0);
-    expect(await scanUserRepos(alice)).toHaveLength(0);
+    expect((await loadRepoGraph(owner(alice))).repos).toHaveLength(0);
+    expect(await scanUserRepos(owner(alice))).toHaveLength(0);
   });
 
   test('private per-user repositories stay isolated even after both users scan', async () => {
-    const aRoot = WorkspaceFS.forAgent({ userId: alice }); aRoot.ensureRootSync();
-    const bRoot = WorkspaceFS.forAgent({ userId: bob }); bRoot.ensureRootSync();
+    const aRoot = WorkspaceFS.forPrincipal(agentPrincipal(owner(alice))); aRoot.ensureRootSync();
+    const bRoot = WorkspaceFS.forPrincipal(agentPrincipal(owner(bob))); bRoot.ensureRootSync();
     repo(aRoot.root, 'private', '@alice/private'); repo(bRoot.root, 'private', '@bob/private');
-    await scanUserRepos(alice); await scanUserRepos(bob);
-    expect((await loadRepoGraph(alice)).repos.map(row => row.packageName)).toEqual(['@alice/private']);
-    expect((await loadRepoGraph(bob)).repos.map(row => row.packageName)).toEqual(['@bob/private']);
+    await scanUserRepos(owner(alice)); await scanUserRepos(owner(bob));
+    expect((await loadRepoGraph(owner(alice))).repos.map(row => row.packageName)).toEqual(['@alice/private']);
+    expect((await loadRepoGraph(owner(bob))).repos.map(row => row.packageName)).toEqual(['@bob/private']);
   });
 
   test('duplicate names require an id/path and explicit knowledge filters never broaden on typos', async () => {
     repo(suite, 'same', '@demo/one'); repo(second, 'same', '@demo/two');
-    const rows = await scanUserRepos(alice);
+    const rows = await scanUserRepos(owner(alice));
     expect(() => resolveRepo(rows, 'same')).toThrow(/ambiguous/);
     expect(resolveRepo(rows, rows[0].id)?.id).toBe(rows[0].id);
     expect(resolveRepo(rows, rows[0].rootPath)?.id).toBe(rows[0].id);
@@ -200,7 +202,7 @@ describe('native multi-repo flow without external code search', () => {
 
   test('a symlinked AGENTS guide is not copied into knowledge', async () => {
     const path = repo(suite, 'core', 'core');
-    const rows = await scanUserRepos(alice);
+    const rows = await scanUserRepos(owner(alice));
     const row = resolveRepo(rows, 'core')!;
     const outside = join(second, 'secret.md'); writeFileSync(outside, 'private guide');
     rmSync(join(path, 'AGENTS.md')); symlinkSync(outside, join(path, 'AGENTS.md'));

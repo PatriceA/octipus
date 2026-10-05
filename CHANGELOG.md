@@ -7,6 +7,756 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### Fixed
+
+- **A space session's files open only through the requester's access.**
+  `WorkspaceFS.forSession` now takes the requester's space access (role and
+  guest scope, from the turn's `AgentContext.space`, the request principal or
+  a membership read) and throws when a shared-workspace session is opened
+  without it, or with access naming another workspace; a guest gets their
+  folders only. Every call site passes it, and a test checks that they do.
+- **Coworking seams (final security review).** A deactivated account (and,
+  until federation exists, a remote one) passes no space door: its queued
+  and running room turns are dropped at once, its queued space jobs
+  cancelled and its space data sources paused (resumed on re-activation),
+  while an owner can still change or remove its membership. A deactivated
+  sponsor is no sponsor: sponsored turns, room and channel probes stop, and
+  each space they sponsor gets an audit row; the sponsor pays again once
+  re-activated. Trajectories of space and room turns record their space,
+  are written under the space's directory and purged with it, never show
+  in a personal list, and `distill_skill` reads only the caller's own
+  personal runs. Global search no longer returns other users' personal
+  model rows. A room post that asks the agent needs the `api:chat` scope
+  for an API token, on REST and on the gateway, where a token's scopes now
+  travel with the connection (chat, steer, commands and prompt answers
+  need `api:chat` too). The admin answer routes no longer list or answer
+  requests raised in a space or a room, whatever the admin's membership:
+  the requester answers them (an admin acts through audited impersonation).
+
+- **A live space note's reindex is billed to its space.** The reindex's
+  embedding cost rows now carry the space (`cost_log.workspace_id`) and
+  `funding: 'install'` as their own columns, not only in the row's metadata.
+  The docs now list every coworking route, setting and env var
+  (docs/API.md, docs/CONFIGURATION.md, `.env.example`), and the coworking
+  spec records where the build differs from it.
+
+- **Joining a space lands in it.** The web's workspace list is read again on
+  sign-in and on joining; when the read started at sign-in answered after the
+  join's own, its older list (without the space) switched the user back to
+  their default workspace. Only the latest read is applied now.
+
+- **Guests, registration and remote members (review of S6/S7).** A guest no
+  longer sees the space's whole audit log: activity shows the rows about
+  their rooms only, with actors they may see. `GET /api/spaces/:id` and the
+  space list count only the members a guest sees and name the creator and
+  sponsor only among them; budgets are forbidden to guests; live-note
+  cursors and file lease holders are limited to the members of their rooms.
+  A guest's room turn reads only the worker outputs of their own turns
+  (`task_state` tools), and its prompt lists only their folders. The repo
+  registry in a space needs the member's role: scanning (which writes the
+  space's knowledge) needs `write`, a guest sees only repositories under
+  their folders, a space without the membership is refused; creating a
+  repository through `/api/workspace` needs `write` there. Remote URLs are
+  never shown or stored with credentials. Migration 0135 (edited in place)
+  resets malformed guest scopes to the empty scope, carries existing
+  guests' `room_members` rooms into their scope, keeps only rooms of the
+  guest's own space, renames a local `~` username past any name already
+  taken and audits the rename; a stored scope that still does not parse
+  reads as the empty scope (logged) instead of breaking every guest list.
+  Guest folders whose note-slug form differs segment by segment (`日本/acme`)
+  are refused. Registration checks the mode before the invite and the
+  invite before telling whether a username or email exists; an unusable
+  invite is a 400 `invite_invalid` in every mode, and a name taken meanwhile
+  by SAML, SCIM or an admin is a 409. The invite page hands its token to the
+  sign-in page in the history state, not the URL. An impersonation whose
+  target became remote ends, and remote rows join no org, receive no
+  workspace transfer and own no channel binding.
+- **Sponsor, budgets and team surface (review of S5a).** A personal CLI
+  model can no longer be a sponsor model, nor run or release its
+  credential for anyone but its owner. Only the sponsor makes the space pay
+  for more (raising `own` → `unattended` → `sponsored`); an impersonating
+  admin can neither name the owner sponsor nor choose their models.
+  Sponsored work re-reads the space's funding at every spawn and every 30s
+  of a running worker, so it stops once the sponsor is gone, in any
+  process; a sponsor's account deletion is audited as such; `POST
+  /api/agents/:id/message` re-checks the funding and runs inside the
+  sponsor context. Room and bound-channel listen probes are install work
+  attributed to the space, gated by the space budget only (never the
+  sponsor's personal budget nor a member cap); a room's probe is claimed
+  in the database before it is paid (migration 0134), and a proactive
+  probe is skipped when the question's author may not ask the agent.
+  `listen` turns only read. Their answers take 👍 / 👎, and recent 👎 slow
+  the gate of rooms and channels down. Space spend sums use the
+  `cost_log` workspace index. `task.changed` reaches non-guest members
+  only, and the board debounces its refetch. A bound channel's turns pause
+  on the space budget only when the space sponsors them. A sponsor's own
+  install-type calls on a sponsor model are stamped `sponsor`. Writing the
+  same space budget again no longer resets its notices; budget audits carry
+  the previous value; a budget author who left is not told the space's
+  spend. My work leaves out archived spaces.
+- **Group-channel bridge and space connectors (review of S5).** The Git tool,
+  the shell, `gh` and CLI agents in a space run with a fresh per-run tool
+  home (`HOME`, `XDG_CONFIG_HOME`, `GH_CONFIG_DIR`, git's config) seeded only
+  with the space connector's GitHub login and removed after the run; the
+  host's SSH agent, askpass, git config and credential helpers are stripped
+  and every helper is reset (`credential.helper=`), so neither the host's
+  identity nor another member's planted config is ever used. In a space the
+  GitHub, Atlassian and `connector_*` tools act through the space's
+  connection and are space tools: writes follow the role, reads no longer
+  mark the session private. A bridged room cannot be made private while
+  bound and only open rooms are relayed; a binding ends (audited,
+  `owner_left`) when its owner stops owning the space; thread mappings count
+  only for rooms of the channel's current space (binding clears leftovers,
+  a stale cached binding is refused); permission prompts go to the platform
+  thread only for turns asked there and a room's prompt is never denied for
+  a paused channel; guests in a bound channel get a hint and no room; a
+  room held by another channel cannot be bound (400, not 500); a purge
+  drops the cached binding; superseded space secrets are deleted. OAuth
+  callbacks (connectors, space connectors, Google / Microsoft) must come from
+  the browser that started the flow (a `SameSite=Lax` binding cookie), and
+  `/api/connectors/:id/callback` is a public route like the other OAuth
+  callbacks.
+- **Rooms (review of S2).** `remember_for_space` goes through
+  `routeApprovalFor` as a space write (role cap, and an ASK after a private
+  read in a private space session). The space memory and a side panel's
+  linked-room transcript are injected per turn only, never stored with the
+  turn (`metadata.promptContext`, native snapshots) nor replayed. Room turns
+  carry a stop signal checked at handover, before the root agent spawns and
+  before the answer is stored; `/stop`, removal and the approval timeout
+  stop only the turn they decided about, and tool decisions in a room
+  re-check `roomAccess`. `/compact` refuses while a turn runs. Room history
+  and compaction page past the 400-row cap; a turn compacts first when its
+  transcript exceeds `rooms.transcriptWindowChars` and its history stays in
+  that window. A room `yes` resolves its approval by id. A requester's
+  limit refusal posts a neutral line in the room (details to the requester
+  only), and failed turns no longer broadcast error text. The swarm routes'
+  admin bypass never reaches rooms or space sessions. A room creator's
+  manage rights need a write role. Queue turns alternate between members;
+  `requester` checks the running turn's requester; pruned subscriptions
+  clear presence; `room.subscribe` re-checks access after joining.
+
+### Added
+
+- **Guests and registration modes (coworking S6).** A guest's scope
+  `{ rooms, folders }` lives on their membership and on guest invites
+  (validated on write: shape, and rooms of the space). Guests now reach
+  their scope instead of being refused every content route: the rooms it
+  names, the members of those rooms, the files and notes under its folders
+  (with their live documents, revisions, links and proposals), the tasks
+  raised from their rooms and the knowledge chunks of those notes and files;
+  documents, artifacts, space memory and private chats stay out of reach.
+  The invite dialog picks a guest's rooms and folders, and owners edit a
+  guest's access from the members list. `security.registration`
+  (`REGISTRATION_MODE`: `open` | `invite_only` | `closed`) decides who may
+  register; registration is one transaction (first-account detection and
+  an invite token's redemption inside it). The sign-in page hides
+  registering when closed and asks for an invite when invite-only. SAML,
+  SCIM and admin-created accounts are not subject to it. See
+  docs/SPACES.md → Guests, Registration modes.
+- **Remote members (coworking S7 contract).** `users.kind` (`local` |
+  `remote`), `remote_instance_id`, `remote_user_ref`; local usernames may no
+  longer start with `~` (registration, admin creation, SCIM and SAML JIT
+  refuse it; migration `0135_guests_remote` renames existing ones before a
+  CHECK). Remote rows never sign in (sessions, API tokens, impersonation,
+  SAML, passkeys refuse them) and are left out of admin user lists and
+  SCIM. See docs/SPACES.md → Across installs.
+- **The agent as co-editor, and file leases enforced (spaces).** In a space
+  whose agent edit mode is `suggest` (the default), the notes tool's
+  changes to existing notes — `write_note`, `capture_note`, `archive_note`
+  — become the session's pending edit proposal and answer
+  `{ proposed: true, proposalId, status: 'pending', baseSha256 }`;
+  `read_note` shows that pending proposal; new notes are still created.
+  `direct` mode writes through the live document as before. Members with
+  the note open hear of proposal changes live (`doc.proposals`; the
+  *proposals* tab shows the pending count). An accepted proposal on a
+  closed note refreshes its links and index. Every file-changing
+  filesystem tool now checks space file leases (prefix matching for a
+  recursive delete or a directory move) and refuses a leased path with who
+  holds it and until when. Lease paths are canonical (a lease through a
+  symlinked directory names the real file) and the agent's write is checked
+  by both spellings; the check and the write hold the path locks of the
+  file and its directories, which taking a lease also takes, so no lease is
+  taken between an agent file tool's check and its write. Shell, git,
+  docker, skill scripts and CLI agents stay advisory (docs/SPACES.md).
+  A session's pending proposal is shown rebased onto the note's current
+  text (or `stale`), and a write from a newer read carries it forward, so
+  an accepted proposal never reverts a member's edit; agents sharing a
+  session merge into one proposal or are refused; a proposal is decided
+  only as it was read; archive and edits never silently replace each other;
+  a write that changes nothing proposes nothing; an archive proposal of a
+  note edited since turns stale; an agent's new note (or new daily note) is
+  created only while its slug is free. A capture refused for size leaves no
+  new daily note behind. Meeting notes stay personal-only in spaces and
+  `link_knowledge` edges are direct (documented deviations from §7.4).
+- **Space funding, budgets and the team surface** (coworking S5,
+  `docs/SPACES.md` → "Funding and budgets", "The team surface"). A space's
+  owners choose who pays for the agent — each member (`own`), members for
+  their own turns and a sponsor for unprompted work (`unattended`, the
+  default), or a sponsor for everything (`sponsored`, each member under a
+  per-member cap) — and an owner can sponsor the space with their own
+  models. Space budgets cap the sponsor's spend for the whole space and per
+  member (Space settings → Budget); a member at their cap is paused alone.
+  Sponsored spend never moves a member's personal budget or token quota.
+  "My work" lists my open tasks across my spaces; assigning a space task
+  notifies the assignee; the space's board updates live from `task.changed`
+  instead of polling. Rooms get `listen` and `proactive` modes with the
+  group channels' gate (quiet hours, caps, 👍/👎 feedback), paid by the
+  sponsor. Migration `0132_space_funding`.
+- **Group channels bound to a space** (coworking §9.4). A group channel's
+  owner who also owns a space can bind the channel to it (Settings →
+  Channels → *Bind to space room*, with the acknowledgement that everyone
+  in the channel can read what the room shows; audited). Each thread is then
+  a room of the space: members' requests run as room turns as themselves,
+  linked people outside the space get a private hint and no turn, the room
+  is posted back in the thread, taken tasks land on the space's board (one
+  per message) and the space's budget replaces the channel's. Binding closes
+  the members' own thread sessions of that channel. Migration
+  `0133_space_bridge_connectors`.
+- **Space connectors** (coworking §9.5). Space settings get *Connectors*:
+  owners connect GitHub (a token) and Atlassian / Linear (OAuth, with their
+  own connect, callback and refresh flows) for the whole space. Their
+  credentials are a new vault scope, `space`, keyed by the space
+  (`dekForRow`, also used by both rotation scripts), readable only through
+  the space access layer and never through `{{secret:}}`. In a space the
+  shell, the GitHub tool and CLI agents run with an empty per-space
+  `GH_CONFIG_DIR` (CLI agents also an empty `HOME`), so a space session
+  never acts with the host's GitHub login.
+
+- **Rooms in the web.** With a shared space selected, the sidebar gets
+  *rooms* (with the unread count) and `/rooms` lists the space's rooms with
+  unread badges. A room shows everyone's posts (others on the left with name
+  and initials, mine on the right) and Octipus's answers; the composer has
+  an "Ask Octipus" toggle and `@` completion of the room's members; a turn
+  strip says "Octipus — answering Anna", "waiting for Anna to approve" and
+  who is queued (cancel for my own requests). Side panels: members (a
+  private room's creator and space owners add and remove), space memory
+  (add and retract with `write`), settings (title, visibility). Also mute,
+  "Ask privately" (opens my private chat in the space linked to the room),
+  new room for editors and owners, presence avatars in the header saying
+  where each member is, catch-up after a reconnect (`afterMessageId`), and
+  a notice when the room is taken away (`room.removed`). `/chat?session=<id>`
+  opens that chat.
+- **Rooms.** A space's shared chats (coworking S2, backend): sessions with
+  `kind = 'room'` (`space` or `private`), every space starting with
+  "General". Members post, `@mention` each other and ask Octipus; each turn
+  runs as its requester through a per-room queue
+  (`rooms.maxQueuedPerMember`, `rooms.approvalTimeoutMinutes`), sees the room
+  as one fenced, attributed transcript (compacted past
+  `rooms.transcriptWindowChars`), and its answer reaches every member while
+  the stream reaches the requester only. New gateway frames `space.subscribe`
+  and `room.*`, events `room.*` and `space.presence`, routes under
+  `/api/spaces/:id/rooms`. Space memory (`/api/spaces/:id/memory`, the
+  agent's `remember_for_space`, `spaces.memoryMaxItems`) is injected fenced
+  into every space session. Private side panel: a space chat with
+  `context.linkedRoomId`. Migration `0129_rooms`. Rooms are invisible to
+  every personal route, their creator included; a room's user row is
+  written once, with its author (the repositories refuse any other).
+  `notify()` takes the workspace as an argument. See docs/SPACES.md.
+- **Live space notes.** Members of a shared space edit a note together: the
+  notes editor binds to a shared document (Yjs over the gateway: `doc.join`,
+  `doc.update`, `doc.awareness`, `doc.leave`), shows the others' cursors and
+  avatars, and saves by itself ("Saved"). Every other writer — REST saves,
+  quick capture, meeting notes, the agent's note tool, restores, accepted
+  proposals — is merged into the live text from the base it read (three-way
+  merge) or refused as stale (409), never reverting typing; `read_note` and
+  `GET /api/notes/:id` return the live text and its sha. Space notes get a
+  history (revisions with authors, restore), the agent's edit proposals
+  (`note_edit_proposals`: diff, accept, reject; `workspaces.agent_edit_mode`),
+  and space files get leases ("Ben is editing", `file_leases`). Migration
+  `0130_live_documents`; new settings `spaces.noteMaxBytes`,
+  `docMaxUpdatesPerSecond`, `docPersistDebounceMs`, `docReindexMinutes`,
+  `docBaseTtlMinutes`, `fileLeaseTtlSeconds` — startup now fails when
+  `spaces.noteMaxBytes` exceeds half of `gateway.maxFrameBytes`. New
+  dependencies: `yjs`, `y-protocols`, `node-diff3` (server) and
+  `y-codemirror.next` (web): a CRDT and a three-way merge are not 20 lines.
+  See docs/SPACES.md.
+- **Own models.** Settings → My models (`/api/me/models`) adds a personal
+  model — provider, model id, your key or CLI token, a custom endpoint for
+  custom providers — and binds it to text lanes; your turns then run on it,
+  in your sessions and in spaces. Personal rows (`model_config.owner_user_id`,
+  `user_model_bindings`, migration `0131_personal_models`) never appear in
+  anyone else's lists, routing, defaults or caches; admin model and topic
+  routes refuse them. Keys resolve under the row's owner, a custom endpoint is
+  SSRF-checked on every request, and personal CLI rows run with a per-user
+  CLI home and the owner's token. See docs/SPACES.md ("Own models").
+
+### Changed
+
+- Install-topic model calls (compaction and its chunk summaries, learning,
+  link resolver, weekly review, evaluators, document processing, the group
+  listen probe) are now stamped `install` in `cost_log` whatever turn they
+  run in, through `withInstallUsage`. Spend budgets' `user_id` is nullable
+  for space budgets (author only); a user's own budgets are still deleted
+  with their account (a trigger replaces the cascade).
+
+- **Live space notes: review fixes** (coworking S3). Nothing typed is lost
+  on a reconnect: a closed note stays in memory for a minute (a member whose
+  connection blipped keeps the epoch and Yjs merges what they typed
+  offline), and after a rebuild (a restart, a reload) the editor merges its
+  unsent text back through the hub (`POST /api/notes/:id/merge`, three-way
+  from the last server text it synced) — a clash keeps the member's text
+  with a notice and a "Copy my version" button. Shutdown saves every open
+  note. A body write to an existing space note must name its base
+  (`baseSha256`; `write_note`'s `base_sha256`): without one it is refused
+  (400 `base_required`) instead of reverting what changed since its read;
+  meeting re-imports merge from the body they last rendered. The hub owns
+  awareness (a connection holds at most two client ids, never another's,
+  and its states name its member), refuses updates that write outside the
+  note's text (other root types, embeds, formats, `\r`) and caps the
+  encoded document, builds notes with `\n` line endings (CRLF bodies are
+  normalized and saved) and normalizes every writer's text. The live
+  reindex keeps explicit and meeting tags; capture appends to an open daily
+  note instead of merging; an archived note opens read-only; a membership
+  change during a join takes effect on the next frame; a failed save keeps
+  its authors; read bases outlive persist-only ones. See docs/SPACES.md.
+
+- **Model identity is the row name.** Agent contexts carry `modelName`
+  beside the provider `model` id, and providers re-read rows by
+  `modelConfigName`; a modelId lookup returns install rows first, then the
+  requester's own. `/model` overrides are per (session, user). Explicit model
+  names (`/model`, `POST /api/agents`, `/api/agents/route`, pipeline stage and
+  executor models, `/v1/chat/completions`, evaluation runs) resolve only to a
+  model the caller may use; a registered model they may not use is refused
+  instead of passed through. `GET /api/models/:name` returns only models the
+  caller may see. Custom providers resolve an install row's key from the
+  system vault only (no longer the requester's vault first).
+
+- **Shared spaces in the web.** The workspace picker lists "my workspaces"
+  and "shared spaces" (with role badges) and creates a space; a space has a
+  settings page (`/spaces/<id>/settings`: name, members, invites with a
+  copyable link, activity, archive, delete) and invite links open a join page
+  (`/join/<token>`) that signs in or registers and comes back. Notes, tasks
+  and documents follow the member's role (read-only for commenters and
+  viewers, and in an archived space). A removed member is switched back to
+  the default workspace and told so; the server's 404 for a denied workspace
+  now carries `code: "workspace_denied"`. See docs/SPACES.md.
+
+### Security
+
+- **Own models: review fixes** (coworking S4). A personal CLI model's
+  one-shot completions (mail triage, reader, research, `/plan`, the casual
+  path) run without native tools (`--tools=`, no settings files) in a
+  directory under the owner's CLI home, never in the shared workspace root;
+  a CLI tool that cannot run tool-less (Codex, Antigravity) can no longer be
+  bound to a lane and serves agent runs only. A personal CLI agent run is
+  locked to its adapter's safe mode, as in a space (Claude: permission mode
+  `default` with the stdio permission tool and only a locked settings file;
+  Codex: read-only; Antigravity: plan mode); Mistral Vibe is refused for
+  personal rows. Codex MCP discovery reads the run's own `CODEX_HOME`. A
+  personal row's key is released only to its owner at the provider layer
+  (`resolveModelKey`), so another user's request on it fails whatever key it
+  brings; `/compact` never compacts another member's conversation on their
+  personal model. In a space a personal CLI binding a commenter (or an
+  adapter without a space mode) may not use falls through to the install
+  lane instead of failing the turn, and side questions and the voice plan
+  gate follow the same rules. `isRegisteredModel` only considers install
+  rows and the caller's own (plus the reserved `u/` namespace), so another
+  user's personal model id no longer blocks a passthrough. Red-team runs,
+  `POST /api/eval/run` and `PATCH /api/topics/:topic/config` refuse personal
+  rows. Admins see disabled and other orgs' install rows in
+  `GET /api/models/:name` again; install rows fall back to the env key when
+  the vault cannot be read (personal rows still fail loud). The SSRF guard
+  also refuses `fec0::/10`, `ff00::/8`, IPv4-compatible `::a.b.c.d`, 6to4 of
+  a private IPv4, local-use NAT64, Teredo and documentation ranges, and a
+  personal endpoint must be `https://`. Personal rows may set
+  `contextWindow` and `maxTokens` within bounds, and a compaction that runs
+  on a personal row is funded `own`.
+- **Shared spaces: review fixes to the access layer** (coworking S1).
+  Admins no longer list, read or stream another user's agents in a space
+  (history list, live list, live details, events, stop). Starting an agent or
+  a pipeline, or messaging an agent, never keeps a space principal from a
+  `?sessionId=`, so a viewer or a member of an archived space cannot start a
+  run there; such routes keep the space for reads and stops only. The
+  personal repositories refuse to write into a space (an agent context in
+  a space, or a caller's `workspaceId`). Viewers cannot open chats in a space;
+  an archived space refuses new chats, chat edits, learning checks, monitor
+  events and plan feedback. Removing, demoting or the leaving of an owner
+  revokes the invite links they made, and an accept refuses a link whose
+  creator is no longer an owner. Task wakeup notifications go only to people
+  with access at send time: a personal task's owner, a space task's author
+  and assignee while members; space assignees must be members and personal
+  ones the owner, and space tasks are never assigned to roles or nodes.
+  Archive also cancels the space's queued jobs and expires its pending
+  prompts; a removal cancels the member's queued jobs there. A failed
+  follow-up after a committed membership change is reported in a `warning`
+  instead of a 500. Impersonated space changes name the admin in the audit
+  row. A user who authored space content cannot be deleted; a deletable one
+  leaves their spaces with audit rows first. The personal predicate is now
+  positive (no workspace, or a personal one), the gateway lets members follow
+  a space artifact, a page slug prefers the viewer's personal artifact and
+  never opens a space page to a guest, and a space search uses no personal
+  repositories or extra scan paths.
+
+- **Events reach their own user only.** Every gateway and turn event now names
+  its user, including swarm, pipeline and agent-stream events that used to go
+  out user-less to every signed-in browser. `/ws` and `/gateway` deliver an
+  event to its user's connections only, whatever the connection's trust level
+  or admin rights.
+- **Live-artifact events go to the artifact only.** Artifact updates are sent
+  to connections subscribed to `artifact:<id>` after an access check (the
+  workspace owner), and the gateway now accepts the `artifact_token` sign-in
+  the embed SDK sends; such a connection can follow its one artifact and
+  nothing else.
+- **The artifacts tool uses the agent's workspace.** It no longer guesses one
+  of the user's workspaces; without a workspace in context it refuses.
+- **Documents, knowledge and search no longer cross users** (coworking S0a,
+  L1–L3). The documents tool lists, reads and searches only the user's own
+  documents, and an admin's agent no longer inherits the admin bypass. The
+  knowledge base is per user: every chunk has an owner, and the knowledge
+  routes, the knowledge, documents and notes tools, and global search see the
+  caller's own entries plus the product docs. Admins reach the whole
+  knowledge base only with `?scope=install` on `/api/knowledge`, which is
+  audited. Global search returns only the caller's sessions and hooks.
+  Migration 0125 assigns owners to existing chunks (documents, notes, and
+  workspace files by path); chunks it cannot attribute are visible to admins
+  through `?scope=install` only.
+- **Deactivation takes effect at once.** Deactivating a user (admin console or
+  SCIM) revokes their sessions, refuses their API tokens, passkey, SAML and
+  device-pairing logins, closes every socket they hold, stops their agents,
+  expires their pending permission and approval prompts and ends any
+  impersonation of them. Sessions now read `is_active` and `is_admin` from the
+  database on every request, so a demoted admin loses admin rights immediately
+  (their gateway connections are closed and reconnect without them). Hooks,
+  heartbeats and monitors of an inactive user no longer fire. Migration
+  `0126_user_deactivation` adds `users.deactivated_by`.
+- **SCIM is scoped to its org.** A SCIM token's DELETE and PATCH answer 404 for
+  users outside its org, deactivate an account only when no other org holds it,
+  and can no longer re-activate an account an admin deactivated (409). SCIM
+  DELETE now answers a proper empty 204. SCIM POST no longer adopts an
+  existing account outside the org by `userName` (409 `uniqueness`), and
+  PATCH changes `userName`/`emails` only on an account the org alone holds
+  (403 otherwise). An org's SAML IdP signs in only that org's members or new
+  accounts; a username held by an account outside the org is refused (403),
+  so an IdP can no longer sign in as the install admin.
+- **Deactivation closes sockets that were still signing in**, and an admin's
+  deactivation of an account SCIM had already switched off is recorded, so
+  that org's SCIM cannot undo it. If a step of a deactivation fails, the admin
+  edit still applies and the response carries `warnings`.
+- **Global search returns only skills the caller can see** (system, own and
+  their orgs'), not other users' private skills.
+- **Live-artifact viewers are bounded.** At most 50 `artifact_token`
+  connections per artifact; each closes when its token expires, and all close
+  (with their tokens refused) when the artifact is deleted or its visibility
+  changes.
+- **The bundled web server appends its peer to `X-Forwarded-For`**, so it can
+  be listed in `TRUSTED_PROXIES` (`127.0.0.1,::1` in the Docker image) without
+  letting clients pick their own address.
+### Security: trust, client addresses, and who answers a request
+
+- **No more `local` or `system` trust.** The `local` gateway auth method and
+  the `~/.octipus/local-token` file are gone (the server no longer writes it),
+  as is the unwired `hmac` method. An admin signed in on loopback, or behind a
+  reverse proxy on the same host, used to see every user's events and pass
+  every session ownership check; admin API tokens did so from anywhere. Every
+  connection is now `user` trust: ownership checks (joining a session,
+  `/history`, `/proposals`, `agent.stop`, `chat.steer`, `chat.interject`)
+  compare user ids, and admin-only commands read `is_admin` from the database.
+  `/abort` and `/status` cover the caller's own agents only.
+- **The TUI signs in with your account.** It uses the CLI login
+  (`~/.octipus/session.json`), opens the login prompt once when there is none,
+  and does not connect without one. `/logout` disconnects.
+- **Client addresses come from the socket.** `X-Forwarded-For` / `X-Real-IP`
+  are honoured only from proxies listed in the new `security.trustedProxies`
+  (`TRUSTED_PROXIES`, default empty) — for the gateway, REST rate limits,
+  login and passkey lockouts, and audit rows. The gateway's per-address cap now
+  applies only to connections that have not authenticated yet.
+- **Voice mode** on `/ws` checks session ownership, and the voice planning gate
+  is keyed by session and user.
+- **Requests are answered by their requester.** Admins no longer answer other
+  users' permission requests or agent approvals through REST, `/ws` or the
+  gateway, and `GET /api/chat/approvals/pending` lists the caller's own. An
+  admin unblocks someone else's run through
+  `POST /api/admin/permission-requests/:id/resolve` or
+  `POST /api/admin/approvals/:id/resolve` with a `reason`, which is audited;
+  `GET /api/admin/permission-requests` and `GET /api/admin/approvals` list
+  what is pending.
+
+**Upgrade notes:** run `/login` in the TUI once (it prompts on start). If
+Octipus runs behind nginx, Caddy or a load balancer, set `TRUSTED_PROXIES` to
+the proxy's address, or every client shares the proxy's address for rate
+limits. Extensions that registered commands with `minTrustLevel: 'local'`
+now use `adminOnly: true`; an extension that still passes `minTrustLevel:
+'local'` or `'system'` gets an admin-only command and a deprecation warning.
+
+### Security: sign-in hygiene
+
+- **Sign-ins are audited.** `/api/auth/login` and `/api/auth/login-mobile`
+  write a `login` audit row on success and `login_failed` (with the reason:
+  unknown user, bad password, bad TOTP code, disabled, locked out) on failure;
+  `/api/auth/register` writes `user_created`.
+- **TOTP works in the web.** The login page now reads the server's
+  `requiresTOTP` answer, shows the code field and resubmits with the code;
+  TOTP accounts could not sign in from the browser before.
+- **Back to where you were.** Login and register accept a `returnTo` that must
+  be a same-origin path (one leading `/`, no `//`, no backslash, no control
+  characters); anything else is refused with 400. The web sends the page you
+  were on and returns there after sign-in.
+- **Pairing codes are hashed and single-use.** Device pairing codes are stored
+  as `sha256(code)` and redeemed with an atomic get-and-delete, so two
+  concurrent redeems of one code no longer both get a session. Codes issued
+  before the upgrade stop working (they expire within five minutes anyway).
+### One multi-user model
+
+- **Workspaces are always on.** The `multiuser.orgWorkspaces` setting
+  (`MULTIUSER_ORG_WORKSPACES`) is removed: `/api/me/workspaces` and the
+  workspace header always work, and `/api/admin/orgs` stays admin-only. A
+  stored row for the setting is deleted at startup.
+- **Workspace resolution fails closed.** When the workspace of an
+  authenticated request cannot be resolved, the request answers 503 instead
+  of running without a workspace filter.
+- **No stand-in users.** A user id that is not a real user is no longer mapped
+  to "the first admin" (skills routes) or "the first user" (the profiles
+  tool); it is an error. `'system'` is only ever a system job: system jobs keep
+  their rate-limit exemption and stay outside per-user Docker isolation, and
+  the Atlassian tools refuse without a real user. With
+  `security.dockerIsolation: enforce`, a Docker call with neither now fails
+  instead of running unisolated.
+- **User deletion is guarded.** Deleting a user goes through one check
+  (`assertDeletable`), which refuses the last active admin.
+### Workspaces: notes, integrity, transfer and workspace secrets
+
+- **Notes follow the request's workspace** (coworking S0c). Every note route
+  (list, query, index, tags, read, backlinks, suggestions, pin, delete,
+  capture) shows the current workspace's notes plus user-level ones, and new
+  notes land in the current workspace. `workspaceId` is no longer accepted in
+  the `POST /api/notes` and `POST /api/notes/capture` bodies. A slug lookup in
+  a workspace falls back to a user-level note of that slug, so daily capture
+  appends to an existing user-level daily note instead of creating a second
+  one.
+- **Migration 0127 repairs workspace stamps.** Notes, tasks, knowledge links,
+  repos and background jobs whose `workspace_id` named a deleted workspace or
+  another user's workspace become user-level; a note that would then clash
+  with a user-level note of the same slug is renamed `<slug>-<first 8 chars of
+  its id>` (the existing user-level note, or the oldest, keeps the slug). The
+  five columns now reference `workspaces(id) ON DELETE SET NULL`, like every
+  other `workspace_id`. Deleting a workspace renames its notes the same way
+  when their slug is already used at user level.
+- **Transfer moves the whole workspace.** Transferring a workspace now moves
+  the previous owner's rows of every workspace table — notes, tasks,
+  memories, embeddings, links, repos, agents, pipelines, jobs and the rest,
+  not only sessions, documents and hooks — in one transaction. Workspace
+  secrets are re-encrypted under the recipient's key; before, a transferred
+  secret could no longer be decrypted. The table list lives in
+  `src/db/workspace-tables.ts`, and `scripts/backfill-workspace-id.ts` uses
+  it too (it now also stamps notes, tasks, memories and links). The
+  workspace's files directory moves to the recipient too (see "Files per
+  workspace"); a transfer onto an existing directory is refused with 409
+  `files_conflict` and changes nothing.
+- **Workspace secrets resolve by name.** `getByName` with a workspace now
+  returns that workspace's secret (it was selected, then never decrypted). A
+  `scope='workspace'` secret bound to no workspace is no longer shown or
+  returned in every workspace.
+
+### Workspaces become real (coworking S0c)
+
+- **A turn runs in its session's workspace.** The root agent, role heartbeats
+  and gateway `chat.send` used the user's default workspace whatever session
+  they ran in, and went on without one when it could not be resolved. A turn
+  now uses `session.workspaceId` (the default only when the session has none),
+  checks the user owns it, and fails rather than run unscoped. Tasks,
+  artifacts, files and memories a turn produces land in that workspace.
+- **The TUI's workspace is honoured.** The gateway reads `?workspace=` (id or
+  slug) at sign-in and stores it on the connection; a name that matches none
+  of the user's workspaces fails the sign-in. `chat.send` accepts a
+  `workspaceId`, and new sessions are created in it, else in the connection's
+  workspace. An existing session keeps its own.
+- **Files per workspace.** Each workspace has its own file root,
+  `users/<id>/workspaces/<files_dir>/files`. `workspaces.files_dir` is stored
+  (migration 0127): the workspace that is each user's default at upgrade
+  keeps `default`, every other workspace (and every new one) uses its id.
+  Changing the default, or creating a workspace as the default, moves no
+  file. A transfer renames the directory to
+  `users/<recipient>/workspaces/<workspace id>`; deleting a workspace removes
+  its directory. The file browser,
+  the Changes tab, `/changes`, uploads, the repo registry and the shell all
+  follow the session's or the request's workspace. A user's agent never
+  resolves to the flat `workspace.rootPath`: an agent without a real user is
+  refused, and a system job names its root.
+- **Shell `cwd` is checked.** A named working directory must lie inside the
+  workspace root, an allowed extra path or the dev-mode project; a relative
+  one is taken from the workspace (or project). This keeps the work where the
+  evidence gate and Changes tab look; it is not a sandbox.
+- **A pipeline stage's verify command runs in the session's workspace.** It
+  had no workspace outside dev mode and was reported to the auditor as not
+  run.
+- **Hooks and link suggestions follow the workspace.** A directly spawned
+  (non-orchestrated) hook agent runs in the hook session's workspace, and
+  note link suggestions offer only notes of the note's workspace and
+  user-level notes.
+- **A new user's first requests no longer race.** Parallel first requests
+  each creating the default workspace could collide and answer 503; the
+  insert now tolerates the race and reads the winner's row.
+
+**Behaviour changes for users of several workspaces:** files created from a
+non-default workspace before this release sit in the `default` directory and
+stay there (nothing is moved); new files from that workspace go to its own
+directory. Memories now follow the session's workspace: facts learned in a
+non-default workspace, which were filed under the default one, are no longer
+mixed into it. Existing memories are not migrated.
+
+### Shared spaces (coworking S1, backend)
+
+- **Spaces: workspaces several people share.** A space is a workspace with
+  no owning user; access is membership with a role (`owner`, `editor`,
+  `commenter`, `viewer`, `guest`), read from the database on every request.
+  `POST /api/spaces` creates one (who may: `spaces.creation`, `any_user` by
+  default or `admins`); `/api/spaces/:id/...` renames, archives, lists and
+  manages members and invites, and shows the space's activity. Someone who is
+  not a member gets 404 for every space, admins included. See
+  [docs/SPACES.md](docs/SPACES.md).
+- **Invite links.** Owners create links per role with a clamped lifetime
+  (`spaces.inviteMaxTtlHours`, default 30 days) and a use count; only a hash
+  of the token is stored, a single-use link admits exactly one person, and a
+  revoke reaches only its own space. `GET /api/invites/:token` previews a link
+  without signing in; both invite routes are rate-limited like logins. A space
+  holds at most `spaces.maxMembers` members (default 50).
+- **Removal takes effect at once.** Removing or downgrading a member stops
+  their agents in the space, expires their pending prompts there and pauses
+  the data sources they own on the space's artifacts. The last owner cannot be
+  removed, demoted or leave, and a user who is the last owner of a space
+  cannot be deleted.
+- **Archive, then delete for good.** An archived space is read-only and its
+  agents stop. An owner can delete it once it has been archived for
+  `spaces.purgeAfterArchiveDays` (default 7): every row and file of the space
+  goes, in one transaction; its audit and cost history stay.
+- **Every change is audited** with the space's id (`space_*` audit actions).
+- Migration `0128_spaces` adds `workspaces.kind`, `created_by` and
+  `archived_at` (and makes `user_id` nullable for spaces only),
+  `workspace_members`, `workspace_invites`, `workspace_id` on `audit_log`,
+  `permission_requests` and `cost_log`, `funding` on `cost_log` and `agents`,
+  paused flags on artifact data sources, and a per-workspace unique note slug.
+- **Members work on the space's content.** With a space selected
+  (`X-Octipus-Workspace`), notes (and their links), tasks and comments,
+  documents, artifacts and their pages, knowledge, sessions and notifications
+  read and write the space's rows by the member's role: viewers read,
+  commenters also comment, editors and owners write (a refused write is 403,
+  an archived space 409). Every other route runs in the caller's personal
+  default workspace, except agents and pipelines addressed by id, which follow
+  their session. A header naming a space you are not (or no longer) a member
+  of is 404 on every route but sign-in, health, `/api/me/workspaces` and
+  `GET /api/spaces`.
+- **Personal paths never return a space's rows**, for their author or an
+  admin: the personal repositories, the note and link repositories, the notes
+  graph, global search, knowledge search, role-agent and heartbeat probes,
+  memory routes and the admin session lists all exclude shared workspaces.
+  Links resolve inside one scope, vault sync stays personal, and a space's
+  files live in `<workspace.rootPath>/spaces/<id>/files` and its uploads in
+  `<workspace.documentsPath>/spaces/<id>/`.
+- **Space tasks wake their own people.** Closing a blocker wakes and notifies
+  the dependent task's author (and a user assignee), whoever closed it; a
+  space task never wakes a role heartbeat. A data source of a space artifact
+  refreshes only while its owner may write in the space, and pauses
+  otherwise. Private artifacts in a space are their creator's only.
+- **Notifications carry their workspace.** A notification filed with a
+  `workspaceId` lists in that workspace's inbox (and user-level ones
+  everywhere).
+- **The agent works inside a space.** A member's private chat in a space
+  runs the agent there: its tools read and write the space's notes, tasks,
+  documents, artifacts, knowledge and files by the member's role. Every
+  agent context is built in one place (`buildAgentContext`,
+  `src/core/agent/context.ts`), which reads the membership and refuses a
+  viewer, a removed member, an archived space, and schedules or monitors in a
+  space; children inherit the space, what started the run (`trigger`) and
+  who pays (`funding`, `own` for now). `POST /api/agents` follows the session
+  it names: 403 for a viewer, 404 for a non-member, 409 for an archived space;
+  `POST /api/pipelines` likewise, for roles that may write (editors, owners).
+- **One decision for every tool call.** `routeApprovalFor` re-reads the
+  membership on every call, on all six dispatch paths (agent loop, tool
+  middleware, CLI permission relay, MCP, verification gate, action recovery):
+  a commenter's agent runs only read and comment tools, nobody runs a
+  personal-only tool in a space (scheduling, monitors, pipelines and recipes,
+  memory and profile tools, vault sync, indexing, meeting notes, writes
+  through personal connectors — the agent is told why), and once a session
+  has read your private data, writing into the space asks first even with
+  the flow guard off.
+- **Personal memories and profile stay out of spaces**, child workers
+  included, and space sessions are never learned from (`sessionAudience`).
+- **CLI models in spaces** run only in a mode where their own tools stay
+  behind Octipus's checks (Claude: permission mode `default` with the
+  permission tool; Codex: read-only; Antigravity: plan); Mistral Vibe is
+  refused, commenters use API models only, and an install CLI login serves
+  spaces only when its model is marked `metadata.cliAgent.sharedUse: true`.
+- **Spaces: personal connections and agent configuration stay out.** In a
+  space, writes go only through tools known to act on the space; writes
+  through your OAuth connectors (`connector_call_tool`), MCP servers, real
+  browser (`browser-ext`), MCP server administration, skill distillation and
+  `update_skill` are refused and not offered, and their reads mark the
+  session private so writing that data into the space asks first. The flow
+  label is now stored on the session (`sessions.flow_label`, migration 0128),
+  so a restart keeps it. A Claude-binary CLI model in a space reads no user,
+  project or local settings file (`--setting-sources=` with a locked
+  `--settings` file), and nothing writes `.claude/`, `.codex/`, `.gemini/`,
+  `.agents/` or `.mcp.json` in a space's files. A pipeline's verify command
+  follows the space rules, a pipeline resumes only for a starter who can
+  still write, and a space artifact takes no `tool` or `mcp` data source.
+- **Only an administrator edits a system skill.** Before, any signed-in user
+  could change a skill shared by every user (`update_skill`, `PATCH
+  /api/skills/:id`).
+- **Cost rows name the space.** Every model call of a space turn writes
+  `cost_log.workspace_id` and `funding`; compaction, embeddings, memory
+  extraction, toolshim, decision, vision and OCR calls are stamped `install`.
+  Permission requests carry their workspace, and an admin who is not a member
+  of a space can neither list nor answer its requests and approvals.
+### The web is on the gateway (coworking S0d)
+
+- **One gateway connection per tab.** The web app's chat page, permission
+  prompts, recommended-models panel and documents page share one `/gateway`
+  connection per browser tab (`/auth/ws-ticket` → `auth`). Every tab of a user
+  receives that user's events, so a reply, an error, a steered message or an
+  answered prompt shows in all of them. **The legacy `/ws` and
+  `/ws/permissions` sockets are removed** — integrations still on them must
+  move to `/gateway` (frame mapping in `docs/architecture/gateway.md`). The
+  browser extension's `/ws/browser-bridge` and `/voice` are unchanged.
+- **New gateway messages:** `chat.error`, `approval.resolved`, `document.*`,
+  `model.install_progress` and `voice.speak` events; the `permission.pending`
+  snapshot after `subscribe` (a tab opened after a prompt was raised shows
+  it); client `voice.set` and `replay { sessionId, afterEventId }` (own
+  sessions only). In-app deliveries to `webchat:<you>` arrive as a
+  user-stamped `chat.message`. `approval.respond` for an unknown or foreign
+  request now answers `APPROVAL_NOT_FOUND` instead of nothing.
+- **Limits are settings:** `gateway.maxConnectionsPerUser` (default 20, was a
+  fixed 10; a tab over it shows "Too many open tabs"),
+  `gateway.maxFrameBytes` (default 256 KiB, the gateway socket's
+  `maxPayload` — it was the `ws` default of 100 MiB) and
+  `gateway.replayMaxSessions` (default 500; replay buffers are now capped,
+  least recently active first, and dropped when a session is deleted or
+  archived). Env: `GATEWAY_MAX_CONNECTIONS_PER_USER`,
+  `GATEWAY_MAX_FRAME_BYTES`, `GATEWAY_REPLAY_MAX_SESSIONS`.
+- **Workspace switches are clean.** The API client's workspace header (now
+  the workspace id) changes synchronously on a switch and the query cache is
+  cleared; workspace-scoped queries key on the workspace id.
+
+- **Tabs keep to their own session.** A reply, error, status line or
+  streamed text of another session (another tab's turn) no longer stops this
+  tab's spinner or replaces its streamed text, a tab on "New chat" no longer
+  jumps into another tab's session, and only the spoken turn's own reply is
+  read aloud. `voice.set {on:false}` from a tab that did not turn voice on is
+  ignored, and a closing tab takes a session out of voice mode only when no
+  other tab of the user holds it there.
+- **A refused message says so.** A `chat.send` refused before its turn starts
+  (`INVALID_MESSAGE`, `RATE_LIMITED`, `SESSION_NOT_FOUND`) stops the spinner
+  and shows why; the chat page checks the 100 000-character limit and the
+  frame cap (`auth_ok.maxFrameBytes`) before sending.
+- **Reconnects do not duplicate.** `replay` without `afterEventId` answers
+  `gap: true` with no events (the client reloads from REST) instead of the
+  whole buffer; a replayed reply and another tab's steered message are
+  matched against their persisted rows instead of shown twice. `auth_ok`
+  reports the frame cap the socket enforces (read at start), not a later
+  config value. Replay buffers are also dropped for sessions removed by a
+  space purge. Model install progress is re-read on reconnect.
+- **In-app delivery needs a chat page.** A delivery to `webchat:<you>` counts
+  as delivered only while a connection shows the chat page (it subscribes to
+  the `chat:inbox` resource); an open terminal or a tab on another page no
+  longer counts.
+
+**Behaviour changes:** the TUI uploads pasted or attached images over REST
+(`POST /sessions/:id/attachments`, creating the session first if needed) and
+names them in `fileRefs`, as the web does, so images up to the 10 MiB upload
+limit work under the default `gateway.maxFrameBytes`. Inline `chat.send`
+`attachments` are now held to 256 KiB each. Approval answers from the web go
+over the gateway instead of `POST /chat/approve` (the route stays for REST
+clients).
+
 ## v0.6.0 — Shared work, budgets, and stronger review (2026-10-01)
 
 Octipus 0.6.0 brings a shared task board for people and role agents, dollar

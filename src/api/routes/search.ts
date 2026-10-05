@@ -1,13 +1,15 @@
-import { ilike, or, } from 'drizzle-orm';
+import { and, eq, ilike, or } from 'drizzle-orm';
+import { notInSharedWorkspace } from '@/db/repositories/scoped';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getEmbeddingService } from '@/core/rag/embeddings';
+import { principalKnowledgeScope } from '@/core/rag/knowledge-scope';
 import { loadRepoGraph } from '@/core/repos/registry-service';
 import { getDb } from '@/db/postgres';
+import { skillRepository } from '@/db/repositories/skill-repository';
 import { hooks } from '@/db/schema/hooks';
-import { modelConfig } from '@/db/schema/models';
 import { sessions } from '@/db/schema/sessions';
-import { skills } from '@/db/schema/skills';
+import { getModelRegistry } from '@/models/model-registry';
 import { getToolRegistry } from '@/tools/registry';
 
 interface SearchResult {
@@ -23,7 +25,7 @@ export const searchRoutes = new Elysia({ prefix: '/search' })
 
   .get(
     '/',
-    async ({ user, query: { q, limit: limitStr } }) => {
+    async ({ user, principal, query: { q, limit: limitStr } }) => {
       if (!user) {
         return { error: 'Not authenticated' };
       }
@@ -48,42 +50,45 @@ export const searchRoutes = new Elysia({ prefix: '/search' })
         knowledgeResults,
         toolResults,
       ] = await Promise.allSettled([
-        // Sessions — search by title
+        // Sessions — search by title, the caller's own only (admins too: the
+        // global view is the admin pages, not search).
         db
           .select({ id: sessions.id, title: sessions.title, channelType: sessions.channelType, status: sessions.status })
           .from(sessions)
-          .where(ilike(sessions.title, pattern))
+          .where(and(eq(sessions.userId, principal.userId), notInSharedWorkspace(sessions.workspaceId), ilike(sessions.title, pattern)))
           .limit(limit),
 
-        // Hooks — search by name or description
+        // Hooks — search by name or description, the caller's own only
         db
           .select({ id: hooks.id, name: hooks.name, description: hooks.description, trigger: hooks.trigger })
           .from(hooks)
-          .where(or(ilike(hooks.name, pattern), ilike(hooks.description, pattern)))
+          .where(and(eq(hooks.userId, principal.userId), or(ilike(hooks.name, pattern), ilike(hooks.description, pattern))))
           .limit(limit),
 
-        // Models — search by name
-        db
-          .select({ id: modelConfig.id, name: modelConfig.name, provider: modelConfig.provider, modelId: modelConfig.modelId })
-          .from(modelConfig)
-          .where(ilike(modelConfig.name, pattern))
-          .limit(limit),
+        // Models — search by name, among the rows the caller may see (the
+        // models list's rule: install rows of their orgs, plus their own
+        // personal rows — never another user's, I11).
+        (async () => {
+          const lower = searchTerm.toLowerCase();
+          const visible = await getModelRegistry().getModelsForUser(principal.userId);
+          return visible.filter((m) => m.name.toLowerCase().includes(lower)).slice(0, limit);
+        })(),
 
-        // Skills — search by name or description
-        db
-          .select({ id: skills.id, name: skills.name, description: skills.description, category: skills.category })
-          .from(skills)
-          .where(or(ilike(skills.name, pattern), ilike(skills.description, pattern)))
-          .limit(limit),
+        // Skills — search by name or description, among the ones the caller
+        // can see (system, own, their orgs'), as the skills list does.
+        skillRepository.searchVisible(principal.userId, pattern, limit),
 
         // Knowledge — full-text search
         (async () => {
           try {
             const service = getEmbeddingService();
             // Repo-scoped knowledge (AGENTS.md, repo maps) is per user: same
-            // visibility gate as /api/knowledge and the knowledge tool.
-            const { repos } = await loadRepoGraph(user.id);
-            return await service.ftsSearch(searchTerm, limit, undefined, undefined, { allowedRepoIds: repos.map(repo => repo.id) });
+            // visibility gate as /api/knowledge and the knowledge tool — in a
+            // space, none (§5.5).
+            const { repos } = principal.workspaceKind === 'shared'
+              ? { repos: [] }
+              : await loadRepoGraph({ userId: user.id, workspaceId: principal.workspaceId ?? null });
+            return await service.ftsSearch(principalKnowledgeScope(principal), searchTerm, limit, undefined, { allowedRepoIds: repos.map(repo => repo.id) });
           } catch {
             return [];
           }

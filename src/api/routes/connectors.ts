@@ -6,11 +6,12 @@ import { getCocoIndexService, redactCocoIndexStatus, resolveCocoIndexWorkspacePa
 import { coreLogger } from '@/utils/logger';
 import {
   connectorVaultKeys,
-  discoverAndRegisterConnector,
+  ensureConnectorClient,
   OAuthManager,
 } from '@/security/oauth';
 import { getVault } from '@/security/vault';
 import { embedCocoIndex } from '@/connectors/cocoindex-embedding';
+import { bindBrowser, callbackBrowser } from '@/api/oauth-browser';
 
 /** Derive the public URL used for OAuth redirect URIs. */
 function getPublicUrl(): string {
@@ -101,7 +102,7 @@ export const connectorRoutes = new Elysia({ prefix: '/connectors' })
     }
   }, { detail: { tags: ['connectors'] } })
 
-  .post('/cocoindex/install', async ({ user, body, set }) => {
+  .post('/cocoindex/install', async ({ user, principal, body, set }) => {
     if (!user) {
       set.status = 401;
       return { error: 'Not authenticated' };
@@ -111,7 +112,7 @@ export const connectorRoutes = new Elysia({ prefix: '/connectors' })
       return { error: 'Admin access required' };
     }
     try {
-      const path = await resolveCocoIndexWorkspacePath(body.workspacePath, user.id);
+      const path = await resolveCocoIndexWorkspacePath(body.workspacePath, principal);
       const status = await getCocoIndexService().install(path, body.embeddingModel, body.embeddingSource);
       set.status = 202;
       return status;
@@ -193,10 +194,11 @@ export const connectorRoutes = new Elysia({ prefix: '/connectors' })
     { detail: { tags: ['connectors'] } }
   )
 
-  // POST /connectors/:id/authorize — start OAuth flow, returns { url }
+  // POST /connectors/:id/authorize — start OAuth flow, returns { url }; the
+  // flow is bound to this browser (a cookie the callback checks).
   .post(
     '/:id/authorize',
-    async ({ user, params }) => {
+    async ({ user, params, request, set }) => {
       if (!user) {
         return { error: 'Not authenticated' };
       }
@@ -208,27 +210,18 @@ export const connectorRoutes = new Elysia({ prefix: '/connectors' })
         return { error: `Unknown connector: ${id}` };
       }
 
-      const vault = getVault();
-      const publicUrl = getPublicUrl();
-      const keys = connectorVaultKeys(connector.id);
-
-      // Check if client_id is already registered; if not, do dynamic registration
-      const existingClientId = await vault.getSystemSecret(keys.clientId);
-
-      if (!existingClientId) {
-        try {
-          const metadata = await discoverAndRegisterConnector(connector.id, publicUrl);
-          await vault.setSystemSecret(keys.clientId, metadata.clientId);
-          await vault.setSystemSecret(keys.authEndpoint, metadata.authorizationEndpoint);
-          await vault.setSystemSecret(keys.tokenEndpoint, metadata.tokenEndpoint);
-        } catch (err) {
-          return { error: `Failed to register ${connector.name} OAuth client: ${(err as Error).message}` };
-        }
+      // Dynamic client registration on first use.
+      try {
+        await ensureConnectorClient(connector.id, getPublicUrl());
+      } catch (err) {
+        return { error: `Failed to register ${connector.name} OAuth client: ${(err as Error).message}` };
       }
 
       try {
         const oauthManager = new OAuthManager();
-        const { url } = await oauthManager.generateAuthorizationUrl(user.id, connector.id);
+        const browser = bindBrowser(request);
+        const { url } = await oauthManager.generateAuthorizationUrl(user.id, connector.id, { browserBinding: browser.binding });
+        set.headers['Set-Cookie'] = browser.setCookie;
         return { url };
       } catch (err) {
         return { error: (err as Error).message };
@@ -243,7 +236,7 @@ export const connectorRoutes = new Elysia({ prefix: '/connectors' })
   // GET /connectors/:id/callback — OAuth redirect callback (no auth required)
   .get(
     '/:id/callback',
-    async ({ params, query }) => {
+    async ({ params, query, request }) => {
       const { id } = params;
       const code = query.code as string | undefined;
       const state = query.state as string | undefined;
@@ -268,7 +261,7 @@ export const connectorRoutes = new Elysia({ prefix: '/connectors' })
 
       try {
         const oauthManager = new OAuthManager();
-        await oauthManager.exchangeCode(id, code, state);
+        await oauthManager.exchangeCode(id, code, state, callbackBrowser(request));
         const html = buildCallbackHtml({ success: true, connectorId: id });
         return new Response(html, { headers: callbackHeaders });
       } catch (err) {

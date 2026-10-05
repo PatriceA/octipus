@@ -35,7 +35,7 @@ class TestableFilesystemTool extends FilesystemTool {
   }
 }
 
-const USER = 'alice-uuid';
+const USER = 'aaaaaaaa-0000-4000-8000-00000000a11c';
 
 /**
  * Build an AgentContext. `role: 'writing'` makes it an autonomous worker so
@@ -322,7 +322,7 @@ describe('real users — nested per-user root', () => {
 
   test('one user cannot reach another user\'s root by traversal', async () => {
     const tool = await makeTool();
-    const escape = `../../../bob-uuid/workspaces/default/files/secret.txt`;
+    const escape = `../../../bbbbbbbb-0000-4000-8000-0000000000b0/workspaces/default/files/secret.txt`;
     await expect(
       tool.handler('read_file').execute({ path: escape }, ctx()),
     ).rejects.toThrow(/outside allowed workspace directories/);
@@ -387,38 +387,30 @@ describe('real users — nested per-user root', () => {
   });
 });
 
-describe('system jobs — flat workspace root (no per-user nesting)', () => {
-  // Octipus is always multi-user, so real users get a per-user nested root.
-  // In-process system jobs (`userId: 'system'`) are the only callers that
-  // still resolve against the flat `config.workspace.rootPath`.
+describe('no flat root for an agent without a real user', () => {
+  // A user path never resolves to the shared `config.workspace.rootPath`:
+  // the old `'system'` sentinel that got the flat root is refused, and a
+  // system job names its root explicitly (`WorkspaceFS.forAgent({ system:
+  // true, root })`), which no filesystem tool call does.
   beforeEach(async () => {
     await reloadConfig();
   });
 
-  test('list_directory(".") resolves to the flat workspace root', async () => {
+  test("list_directory for a 'system' agent is refused", async () => {
     mkdirSync(dataRoot, { recursive: true });
     const tool = await makeTool();
-    const res = (await tool.handler('list_directory').execute({ path: '.' }, ctx({ userId: 'system' }))) as {
-      path: string;
-    };
-    expect(res.path).toBe(resolve(dataRoot));
-  });
-
-  test('write_file lands under the flat root', async () => {
-    const tool = await makeTool();
-    const res = (await tool.handler('write_file').execute(
-      { path: 'notes.md', content: 'hi\n' },
-      ctx({ userId: 'system' }),
-    )) as { path: string };
-    expect(res.path.startsWith(resolve(dataRoot) + sep)).toBe(true);
-    expect(existsSync(res.path)).toBe(true);
-  });
-
-  test('escapes are still rejected in flat mode', async () => {
-    const tool = await makeTool();
     await expect(
-      tool.handler('read_file').execute({ path: '/etc/passwd' }, ctx({ userId: 'system' })),
-    ).rejects.toThrow(/outside allowed workspace directories/);
+      tool.handler('list_directory').execute({ path: '.' }, ctx({ userId: 'system' })),
+    ).rejects.toThrow(/no real user/);
+  });
+
+  test("write_file for a 'system' agent writes nothing to the flat root", async () => {
+    const tool = await makeTool();
+    await expect(tool.handler('write_file').execute(
+      { path: 'system-notes.md', content: 'hi\n' },
+      ctx({ userId: 'system' }),
+    )).rejects.toThrow(/no real user/);
+    expect(existsSync(join(dataRoot, 'system-notes.md'))).toBe(false);
   });
 });
 

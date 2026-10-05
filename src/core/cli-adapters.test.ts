@@ -1,7 +1,8 @@
 import { parse as parseToml } from 'smol-toml';
+import { readFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CLIArgumentBuilder, discoverCodexMcpServers, injectVibeMcpServer, resolveClaudePermissionMode, resolveCodexSandboxMode, resolveVibeMode } from './cli-adapters';
+import { assertCliSpaceMode, CLI_SPACE_MODES, CLIArgumentBuilder, discoverCodexMcpServers, injectVibeMcpServer, resolveClaudePermissionMode, resolveCodexSandboxMode, resolveVibeMode } from './cli-adapters';
 
 vi.mock('node:child_process', () => ({ execFile: vi.fn() }));
 type ExecCb = (err: Error | null, stdout: string, stderr: string) => void;
@@ -231,6 +232,72 @@ describe('run-scoped CLI configuration', () => {
     expect(agy.args).not.toContain('--dangerously-skip-permissions');
   });
 
+  // Coworking §5.6: a CLI model runs in a space only in its adapter's
+  // declared space mode, where its native tools stay behind Octipus's
+  // decision path; one without such a mode is refused.
+  describe('in a shared space', () => {
+    const inSpace = { ...connection, planMode: false, space: true };
+    it('Claude runs in permission mode default with the stdio permission tool and no pre-approved tools', () => {
+      const claude = builder.build('Claude Code', 'task', { permissionMode: 'full', allowedTools: ['Bash', 'Edit'] }, [], null, 100, 'test', inSpace);
+      expect(claude.args[claude.args.indexOf('--permission-mode') + 1]).toBe('default');
+      expect(claude.args[claude.args.indexOf('--permission-prompt-tool') + 1]).toBe('stdio');
+      expect(claude.args).not.toContain('--allowedTools');
+      expect(claude.args).not.toContain('bypassPermissions');
+    });
+    it.each([true, false])('Claude reads no user, project or local settings, only a locked settings file (shell guard %s)', (shellGuard) => {
+      const claude = builder.build('Claude Code', 'task', { permissionMode: 'full' }, [], null, 100, 'test', { ...inSpace, shellGuard });
+      // Empty sources: neither `<space>/.claude/settings*.json` nor the host's `~/.claude/settings.json`.
+      expect(claude.args).toContain('--setting-sources=');
+      expect(claude.args.filter((a) => a.startsWith('--setting-sources'))).toEqual(['--setting-sources=']);
+      expect(claude.args.filter((a) => a === '--settings')).toHaveLength(1);
+      const settings = JSON.parse(readFileSync(claude.args[claude.args.indexOf('--settings') + 1], 'utf8'));
+      expect(settings.permissions).toEqual({ allow: [], defaultMode: 'default', disableBypassPermissionsMode: 'disable' });
+      expect(settings.enableAllProjectMcpServers).toBe(false);
+      // The only hook is the shell guard, when it is on.
+      expect(Object.keys(settings.hooks)).toEqual(shellGuard ? ['PreToolUse'] : []);
+      // Outside a space the host settings still load (the shell guard merges over them).
+      const personal = builder.build('Claude Code', 'task', {}, [], null, 100, 'test', { ...connection, planMode: false, shellGuard });
+      expect(personal.args.some((a) => a.startsWith('--setting-sources'))).toBe(false);
+    });
+    it('Codex runs in the read-only sandbox whatever the model row says', () => {
+      const codex = builder.build('Codex CLI', 'task', { permissionMode: 'full' }, [], null, 100, 'test', inSpace);
+      expect(codex.args[codex.args.indexOf('--sandbox') + 1]).toBe('read-only');
+    });
+    it('Antigravity runs in plan mode, never with skipped permissions', () => {
+      const agy = builder.build('Antigravity', 'task', { permissionMode: 'full' }, [], null, 100, 'test', inSpace);
+      expect(agy.args[agy.args.indexOf('--mode') + 1]).toBe('plan');
+      expect(agy.args).not.toContain('--dangerously-skip-permissions');
+    });
+    it('Mistral Vibe declares no space mode and is refused', () => {
+      expect(CLI_SPACE_MODES['Mistral Vibe']).toBeNull();
+      expect(() => builder.build('Mistral Vibe', 'task', {}, [], null, 100, 'test', inSpace)).toThrow(/cannot run in a shared space/);
+      expect(() => assertCliSpaceMode('Mistral Vibe')).toThrow(/cannot run in a shared space/);
+      for (const adapter of ['Claude Code', 'Codex CLI', 'Antigravity']) expect(assertCliSpaceMode(adapter)).toBeTruthy();
+    });
+  });
+
+  // Coworking §8.4: a personal CLI row runs in the same locked mode — the
+  // owner's token gives no say over the server's tools.
+  describe('on a personal row', () => {
+    const personal = { ...connection, planMode: false, personal: true };
+    it('Claude: permission mode default, the stdio permission tool, no settings file from the owner\'s cli-home', () => {
+      const claude = builder.build('Claude Code', 'task', {}, [], null, 100, 'test', personal);
+      expect(claude.args[claude.args.indexOf('--permission-mode') + 1]).toBe('default');
+      expect(claude.args[claude.args.indexOf('--permission-prompt-tool') + 1]).toBe('stdio');
+      expect(claude.args).toContain('--setting-sources=');
+    });
+    it('Codex runs read-only and Antigravity in plan mode', () => {
+      const codex = builder.build('Codex CLI', 'task', {}, [], null, 100, 'test', personal);
+      expect(codex.args[codex.args.indexOf('--sandbox') + 1]).toBe('read-only');
+      const agy = builder.build('Antigravity', 'task', {}, [], null, 100, 'test', personal);
+      expect(agy.args[agy.args.indexOf('--mode') + 1]).toBe('plan');
+      expect(agy.args).not.toContain('--dangerously-skip-permissions');
+    });
+    it('Mistral Vibe (default auto-approve) is refused', () => {
+      expect(() => builder.build('Mistral Vibe', 'task', {}, [], null, 100, 'test', personal)).toThrow(/cannot run on a personal model/);
+    });
+  });
+
   it('an unlimited turn budget passes no --max-turns', () => {
     const claude = builder.build('Claude Code', 'task', {}, [], null, 100, 'test', { ...connection, maxIterations: Infinity });
     expect(claude.args).not.toContain('--max-turns');
@@ -251,13 +318,13 @@ describe('run-scoped CLI configuration', () => {
   });
 
   it.each([undefined, 'relative/project'])('discovery refuses a non-absolute cwd (%s)', async workingDirectory => {
-    await expect(discoverCodexMcpServers(workingDirectory as string)).rejects.toThrow('absolute session working directory');
+    await expect(discoverCodexMcpServers(workingDirectory as string, process.env)).rejects.toThrow('absolute session working directory');
     expect(execFile).not.toHaveBeenCalled();
   });
 
   it.each(['null', '{}', '[{"name":""}]', '[{"name":4}]', '[null]'])('discovery rejects malformed effective configuration (%s)', async value => {
     mockCodexList(value);
-    await expect(discoverCodexMcpServers('/session/project')).rejects.toThrow('Invalid Codex MCP configuration listing');
+    await expect(discoverCodexMcpServers('/session/project', process.env)).rejects.toThrow('Invalid Codex MCP configuration listing');
   });
 
   it('discovery probes the same subscription home without inheriting backend credentials', async () => {
@@ -265,7 +332,7 @@ describe('run-scoped CLI configuration', () => {
     process.env.OPENAI_API_KEY = 'backend-api-secret';
     process.env.DATABASE_URL = 'backend-db-secret';
     mockCodexList('[{"name":"host","enabled":true}]');
-    await expect(discoverCodexMcpServers('/session/project')).resolves.toEqual([{ name: 'host' }]);
+    await expect(discoverCodexMcpServers('/session/project', process.env)).resolves.toEqual([{ name: 'host' }]);
     expect(execFile).toHaveBeenCalledWith('codex', ['mcp', 'list', '--json'], expect.objectContaining({
       cwd: '/session/project', timeout: 10_000, maxBuffer: 4 * 1024 * 1024,
       env: expect.objectContaining({ CODEX_HOME: '/account/codex' }),
@@ -275,10 +342,19 @@ describe('run-scoped CLI configuration', () => {
     expect(options.env).not.toHaveProperty('DATABASE_URL');
   });
 
+  it("discovery reads the run's own CODEX_HOME (a personal row's), not the server's", async () => {
+    process.env.CODEX_HOME = '/server/codex';
+    mockCodexList('[{"name":"personal","enabled":true}]');
+    const runEnv = { PATH: '/usr/bin', HOME: '/root/users/u1/cli-home', CODEX_HOME: '/root/users/u1/cli-home/.codex' };
+    await expect(discoverCodexMcpServers('/session/project', runEnv)).resolves.toEqual([{ name: 'personal' }]);
+    const options = vi.mocked(execFile).mock.calls[0][2] as { env: Record<string, string> };
+    expect(options.env).toMatchObject({ HOME: runEnv.HOME, CODEX_HOME: runEnv.CODEX_HOME });
+  });
+
   it('discovery fails closed without exposing subprocess output', async () => {
     mockCodexList(new Error('sensitive stdout and stderr'));
     let thrown: unknown;
-    try { await discoverCodexMcpServers('/session/project'); } catch (err) { thrown = err; }
+    try { await discoverCodexMcpServers('/session/project', process.env); } catch (err) { thrown = err; }
     expect(thrown).toBeInstanceOf(Error);
     expect(String(thrown)).toContain('refusing to launch an unscoped CLI run');
     expect(String(thrown)).not.toContain('sensitive');

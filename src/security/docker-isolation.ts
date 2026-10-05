@@ -5,8 +5,8 @@
  * exposes — there's nothing stopping user A's agent from `docker
  * stop`'ing a container created by user B, or from `docker exec`'ing
  * arbitrary commands inside one. When `security.dockerIsolation`
- * is `'enforce'` and `multiuser.enabled` is true, this module's
- * helpers gate every operation on a per-user label.
+ * is `'enforce'`, this module's helpers gate every operation of a
+ * real user on a per-user label. System jobs stay outside it.
  *
  * Convention:
  *   - Every container the tool creates carries `octipus.user_id=<uuid>`.
@@ -27,17 +27,20 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { spawn } from 'node:child_process';
 import { getConfig } from '@/config';
+import { requireRealUserId, SYSTEM_USER_ID } from '@/security/principal';
 
 const LABEL_KEY = 'octipus.user_id';
 
-/** Whether the per-user isolation should fire for this request. */
+/**
+ * Whether the per-user isolation should fire for this request. The caller is
+ * a real user (isolated) or a system job (not); any other id under `enforce`
+ * is a bug and throws rather than running unisolated.
+ */
 export function isolationActive(userId: string | null | undefined): boolean {
-  if (!userId || userId === 'system' || userId === 'local') return false;
-  try {
-    return getConfig().security.dockerIsolation === 'enforce';
-  } catch {
-    return false;
-  }
+  if (getConfig().security.dockerIsolation !== 'enforce') return false;
+  if (userId === SYSTEM_USER_ID) return false;
+  requireRealUserId(userId);
+  return true;
 }
 
 /** `octipus.user_id=<uuid>` label used on every container we create

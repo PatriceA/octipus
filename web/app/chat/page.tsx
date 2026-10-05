@@ -1,6 +1,7 @@
 'use client';
 
 import { reconcileChatMessages } from '../../../src/shared/chat-reconciliation';
+import { CHAT_INBOX_RESOURCE, CHAT_MESSAGE_MAX_CHARS } from '../../../src/shared/chat-gateway';
 import { SessionCost } from '@/components/chat/session-cost';
 import { SkillUsage } from '@/components/skills/skill-usage';
 
@@ -24,11 +25,19 @@ import { GlobalPermissionBanner } from '@/components/global-permission-banner';
 import type { SwarmTreeEvent } from '@/components/swarm-tree';
 import { useVoiceRealtime } from '@/hooks/useVoiceRealtime';
 import { fetchPersistedAgentEvents } from '@/hooks/useAgentEvents';
-import { api, ApiError, createAuthenticatedWebSocket, getApiUrl } from '@/lib/api';
-import { usePermissions } from '@/lib/permission-context';
+import { api, ApiError, getApiUrl } from '@/lib/api';
+import type { ClientMessage, GatewayEvent, GatewayMessage } from '@/lib/gateway';
+import { useGateway, useGatewayMessages, useGatewayStatus } from '@/lib/gateway-context';
 import { useWorkspace } from '@/lib/workspace-context';
 import type { ToolInputPreview, ToolResultPreview } from '../../../src/shared/work-stream';
 import type { AgentCompletionReason } from '../../../src/shared/agent-completion';
+
+/**
+ * `error` frame codes that refuse a `chat.send` before any turn starts: too
+ * long or malformed, rate-limited, or a session that is gone. No `chat.error`
+ * follows them.
+ */
+const REFUSED_SEND_CODES: ReadonlySet<string> = new Set(['INVALID_MESSAGE', 'RATE_LIMITED', 'SESSION_NOT_FOUND']);
 
 interface ToolCallInfo {
   id: string;
@@ -72,9 +81,6 @@ interface SessionState {
   swarmDurationMs: number;
   fileChanges: FileChange[];
 }
-
-// Module-level guard to prevent React Strict Mode double WebSocket connections
-let wsInstance: WebSocket | null = null;
 
 /**
  * When an agent reaches a terminal state, no more tool results will arrive —
@@ -144,8 +150,13 @@ function latestUserMessageTime(messages: ChatMessageData[]): number {
 
 
 export default function ChatPage() {
-  const { pushPermission, pushApproval } = usePermissions();
   const { activeWorkspace } = useWorkspace();
+  // The tab's one gateway connection, shared with the permission prompts and
+  // the rest of the app (lib/gateway.ts).
+  const gateway = useGateway();
+  const gatewayStatus = useGatewayStatus();
+  const connectionStatus: 'connected' | 'disconnected' | 'connecting' =
+    gatewayStatus === 'connected' ? 'connected' : gatewayStatus === 'connecting' || gatewayStatus === 'idle' ? 'connecting' : 'disconnected';
   const [mounted, setMounted] = useState(false);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [sessionListError, setSessionListError] = useState<string | null>(null);
@@ -156,6 +167,9 @@ export default function ChatPage() {
   const historyPauseUntilRef = useRef(new Map<string, number>());
   const deletedSessionsRef = useRef<Set<string>>(new Set());
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  /** The open session, for callbacks registered once (the reconnect reload). */
+  const activeSessionIdRef = useRef<string | null>(null);
+  useEffect(() => { activeSessionIdRef.current = activeSessionId; }, [activeSessionId]);
   const [sessionStates, setSessionStates] = useState<Map<string, SessionState>>(new Map());
   const [isLoading, setIsLoading] = useState(false);
   const [realtimeMode, setRealtimeMode] = useState(false);
@@ -163,7 +177,6 @@ export default function ChatPage() {
   // feature disables itself when neither is present.
   const [voiceAvailable, setVoiceAvailable] = useState<boolean | null>(null);
   const [voiceUnavailableReason, setVoiceUnavailableReason] = useState<string | null>(null);
-  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'connecting'>('connecting');
   const [models, setModels] = useState<Array<{ name: string; isDefault: boolean }>>([]);
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -212,9 +225,16 @@ export default function ChatPage() {
   // unrendered. The SwarmTree consumer tracks its own processed index, so a
   // queue never loses events even under batching.
   const [swarmEvents, setSwarmEvents] = useState<SwarmTreeEvent[]>([]);
-  const wsRef = useRef<WebSocket | null>(null);
   /** isLoading before the last send: a steered message joins a run, it doesn't start one. */
   const loadingBeforeSendRef = useRef(false);
+  /**
+   * The session of this tab's last `chat.send` until an event of that session
+   * shows the server took it. A send refused before its turn starts gets an
+   * `error` frame only (no `chat.error`); this is where it is reported.
+   */
+  const pendingSendRef = useRef<string | null>(null);
+  /** Sessions this tab created: the only ones an event may open while no session is. */
+  const ownSessionsRef = useRef<Set<string>>(new Set());
   // Durable cursors avoid reloading every event for every agent on the 10s
   // session poll. Parsed history stays here so each new DB page is applied once.
   const agentHistoryCacheRef = useRef<Map<string, AgentHistoryCache>>(new Map());
@@ -530,7 +550,8 @@ export default function ChatPage() {
   useEffect(() => {
     if (!mounted) {
       setMounted(true);
-      const savedActive = localStorage.getItem(STORAGE_KEY_ACTIVE);
+      // `?session=<id>` opens that chat (a room's "Ask privately"), else the last one.
+      const savedActive = new URLSearchParams(window.location.search).get('session') ?? localStorage.getItem(STORAGE_KEY_ACTIVE);
 
       loadSessions().then((items) => {
         if (items.length > 0) {
@@ -567,14 +588,8 @@ export default function ChatPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeWorkspace?.id]);
 
-  // Check connection + load models
-  const checkConnection = useCallback(async () => {
-    try {
-      const health = await api.get<{ status: string }>('/health');
-      if (health?.status === 'ok') setConnectionStatus('connected');
-    } catch {
-      setConnectionStatus('disconnected');
-    }
+  // Load models
+  const loadModels = useCallback(async () => {
     try {
       const data = await api.get<{ models: Array<{ name: string; isDefault: boolean }> }>('/models');
       if (data?.models) {
@@ -585,7 +600,7 @@ export default function ChatPage() {
     } catch {}
   }, [selectedModel]);
 
-  useEffect(() => { checkConnection(); }, [checkConnection]);
+  useEffect(() => { loadModels(); }, [loadModels]);
 
   // Poll for new messages (handles telegram/channel sessions that bypass WebSocket)
   useEffect(() => {
@@ -598,388 +613,443 @@ export default function ChatPage() {
     return () => clearInterval(interval);
   }, [activeSessionId, loadSessionMessages, loadSessions]);
 
-  // WebSocket with auto-reconnection
-  const reconnectDelay = useRef(1000);
+  // On every (re)connect: the session list and the open session may have
+  // moved while this tab was offline.
+  useEffect(() => gateway.onStatus((status) => {
+    if (status !== 'connected') return;
+    void loadSessions();
+    if (activeSessionIdRef.current) void loadSessionMessages(activeSessionIdRef.current);
+  }), [gateway, loadSessions, loadSessionMessages]);
 
+  // The open session's missed events are replayed after a reconnect.
+  useEffect(() => (activeSessionId ? gateway.watchSession(activeSessionId) : undefined), [gateway, activeSessionId]);
+
+  useGatewayMessages((message: GatewayMessage) => {
+    if (message.type === 'event') {
+      handleGatewayEvent(message.event);
+    } else if (message.type === 'replay' && message.gap) {
+      // More was missed than the server kept (or this tab saw nothing of the
+      // session live): reload the transcript.
+      void loadSessionMessages(message.sessionId);
+    } else if (message.type === 'error') {
+      handleSendRefused(message.code, message.message);
+    }
+  });
+
+  // While this page is open the connection says so (`chat:inbox`): an in-app
+  // delivery counts as delivered only when a chat page can show it.
   useEffect(() => {
-    if (!mounted) return;
+    if (gatewayStatus !== 'connected') return;
+    gateway.send({ type: 'subscribe', resources: [CHAT_INBOX_RESOURCE] });
+    return () => { gateway.send({ type: 'unsubscribe', resources: [CHAT_INBOX_RESOURCE] }); };
+  }, [gateway, gatewayStatus]);
 
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let cancelled = false;
+  /**
+   * Does an event of `sessionId` drive this tab's spinner, status line and
+   * streamed text? Only the open session's do: every tab gets every turn
+   * event of its user, and another tab's turn must not touch this one.
+   */
+  const concernsThisTab = (sessionId: string | null | undefined): boolean => !sessionId || sessionId === activeSessionId;
 
-    const connect = async () => {
-      if (cancelled) return;
+  /** Open a session an event names, when none is open and this tab created it. */
+  const adoptOwnSession = (sessionId: string) => {
+    if (!activeSessionId && ownSessionsRef.current.has(sessionId)) setActiveSessionId(sessionId);
+  };
 
-      if (wsInstance && wsInstance.readyState <= WebSocket.OPEN) {
-        wsRef.current = wsInstance;
-        wsInstance.onmessage = (event) => {
-          try { handleWsMessage(JSON.parse(event.data)); } catch {}
-        };
-        setConnectionStatus(wsInstance.readyState === WebSocket.OPEN ? 'connected' : 'connecting');
-        return;
-      }
+  /**
+   * An `error` frame while this tab's send is pending: the server refused the
+   * `chat.send` before any turn started (too long, rate-limited, the session
+   * is gone), so no `chat.error` follows. Stop waiting and say why. A
+   * `CHAT_ERROR` is a turn that failed: its `chat.error` event reports it.
+   */
+  const handleSendRefused = (code: string, text: string) => {
+    const sid = pendingSendRef.current;
+    if (!sid || !REFUSED_SEND_CODES.has(code)) return;
+    pendingSendRef.current = null;
+    if (voiceTurnRef.current === sid) voiceTurnRef.current = null;
+    if (sid === activeSessionId) {
+      setIsLoading(loadingBeforeSendRef.current);
+      if (!loadingBeforeSendRef.current) setStatusMessage(null);
+    }
+    updateSessionState(sid, (prev) => ({
+      ...prev,
+      messages: [...prev.messages, {
+        id: `refused-${Date.now()}`,
+        role: 'system',
+        content: `Message not sent: ${text}`,
+        timestamp: new Date(),
+      }],
+    }));
+  };
 
-      let ws: WebSocket;
-      try {
-        ws = await createAuthenticatedWebSocket('/ws');
-        if (cancelled) {
-          try { ws.close(); } catch { /* ignore */ }
-          return;
-        }
-        wsInstance = ws;
-        wsRef.current = ws;
-        ws.onopen = () => {
-          setConnectionStatus('connected');
-          reconnectDelay.current = 1000; // Reset backoff on successful connect
-        };
-        ws.onmessage = (event) => {
-          try { handleWsMessage(JSON.parse(event.data)); } catch {}
-        };
-        ws.onclose = (event) => {
-          if (event.code === 4000) return; // Superseded by new connection
-          if (cancelled) return;
-          if (wsInstance === ws) {
-            setConnectionStatus('disconnected');
-            wsRef.current = null;
-            wsInstance = null;
-            // Auto-reconnect with exponential backoff (max 30s)
-            reconnectTimer = setTimeout(() => {
-              reconnectDelay.current = Math.min(reconnectDelay.current * 1.5, 30000);
-              connect();
-            }, reconnectDelay.current);
-          }
-        };
-        ws.onerror = () => {
-          if (wsInstance === ws) setConnectionStatus('disconnected');
-        };
-      } catch {
-        // Ticket fetch failed (e.g. /auth/ws-ticket rate-limited). Grow the
-        // backoff here too — otherwise this path retried at a flat 1s and kept
-        // the rate-limit window pinned, so it never recovered.
-        setConnectionStatus('disconnected');
-        if (!cancelled) {
-          reconnectTimer = setTimeout(() => {
-            reconnectDelay.current = Math.min(reconnectDelay.current * 1.5, 30000);
-            connect();
-          }, reconnectDelay.current);
-        }
-      }
-    };
+  /**
+   * The reply of a finished turn (`chat.response`), from any tab of this
+   * user. `event` is the gateway event: its id names the bubble, so a replay
+   * of the same event, or the persisted copy REST brings back, is not shown
+   * twice.
+   */
+  const handleChatResponse = (data: { response?: string; sessionId?: string; agentId?: string; classification?: { type?: string }; metadata?: Record<string, any>; content?: unknown }, event?: { id: string; timestamp: number }) => {
+    if (concernsThisTab(data.sessionId)) {
+      setIsLoading(false);
+      setStatusMessage(null);
+    }
+    const streamSid = data.sessionId || activeSessionId;
+    setStreaming((prev) => (prev && prev.sessionId !== streamSid ? prev : null));
+    const meta: MessageMetadata | undefined = data.metadata ? {
+      model: data.metadata.model,
+      tokens: data.metadata.tokens,
+      latencyMs: data.metadata.latencyMs,
+      cached: data.metadata.cached,
+      limit: data.metadata.limit,
+    } : undefined;
 
-    connect();
-
-    return () => {
-      cancelled = true;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mounted]);
-
-  // WebSocket keepalive ping every 30s to prevent idle disconnection
-  useEffect(() => {
-    if (!mounted) return;
-    const interval = setInterval(() => {
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ type: 'ping' }));
-      }
-    }, 30_000);
-    return () => clearInterval(interval);
-  }, [mounted]);
-
-  const handleWsMessage = (data: any) => {
-    const eventSessionId = data.sessionId;
-
-    switch (data.type) {
-      case 'connected':
-        setConnectionStatus('connected');
-        void loadSessions();
-        if (activeSessionId) void loadSessionMessages(activeSessionId);
-        break;
-
-      case 'chat_response': {
-        setIsLoading(false);
-        setStatusMessage(null);
-        setStreaming(null);
-        const meta: MessageMetadata | undefined = data.metadata ? {
-          model: data.metadata.model,
-          tokens: data.metadata.tokens,
-          latencyMs: data.metadata.latencyMs,
-          cached: data.metadata.cached,
-          limit: data.metadata.limit,
-        } : undefined;
-
-        const sid = data.sessionId || activeSessionId;
-        // `/clear` returns the literal "[clear]" sentinel for webchat clients.
-        // Wipe the visible message list and tracked agents/teams instead of
-        // appending "[clear]" as an assistant message. The root agent side
-        // has already recorded clearedAt on the session so future replies
-        // ignore pre-clear history.
-        if (sid && typeof data.response === 'string' && data.response.trim() === '[clear]') {
-          messageLoadsRef.current.set(sid, (messageLoadsRef.current.get(sid) ?? 0) + 1);
-          appliedMessageLoadsRef.current.set(sid, messageLoadsRef.current.get(sid)!);
-          updateSessionState(sid, () => ({
-            messages: [
-              welcomeMessage(),
-              {
-                id: Date.now().toString(),
-                role: 'system',
-                content: 'Session context cleared. Send a new message to start fresh.',
-                timestamp: new Date(),
-              },
-            ],
-            trackedAgents: new Map(),
-            teams: new Map(),
-            totalTokens: 0,
-            swarmDurationMs: 0,
-            fileChanges: [],
-          }));
-          break;
-        }
-        if (sid) {
-          updateSessionState(sid, (prev) => {
-            // Finalize any agents still marked as 'running'.
-            // If the response indicates the task was stopped/aborted, mark as 'stopped'.
-            const responseText = typeof data.content === 'string' ? data.content : '';
-            const wasStopped = responseText.includes('stopped') || responseText.includes('aborted');
-            const finalStatus = wasStopped ? 'stopped' : 'completed';
-            const now = Date.now();
-            const next = new Map(prev.trackedAgents);
-            Array.from(next.entries()).forEach(([id, agent]) => {
-              if (agent.status === 'running') {
-                const elapsed = now - agent.startTime;
-                next.set(id, {
-                  ...agent,
-                  status: finalStatus,
-                  endTime: agent.endTime ?? now,
-                  // Keep existing durationMs if already set by worker_completed
-                  durationMs: agent.durationMs || elapsed,
-                });
-              }
+    const sid = data.sessionId || activeSessionId;
+    // `/clear` returns the literal "[clear]" sentinel for webchat clients.
+    // Wipe the visible message list and tracked agents/teams instead of
+    // appending "[clear]" as an assistant message. The root agent side
+    // has already recorded clearedAt on the session so future replies
+    // ignore pre-clear history.
+    if (sid && typeof data.response === 'string' && data.response.trim() === '[clear]') {
+      messageLoadsRef.current.set(sid, (messageLoadsRef.current.get(sid) ?? 0) + 1);
+      appliedMessageLoadsRef.current.set(sid, messageLoadsRef.current.get(sid)!);
+      updateSessionState(sid, () => ({
+        messages: [
+          welcomeMessage(),
+          {
+            id: Date.now().toString(),
+            role: 'system',
+            content: 'Session context cleared. Send a new message to start fresh.',
+            timestamp: new Date(),
+          },
+        ],
+        trackedAgents: new Map(),
+        teams: new Map(),
+        totalTokens: 0,
+        swarmDurationMs: 0,
+        fileChanges: [],
+      }));
+      return;
+    }
+    if (sid) {
+      updateSessionState(sid, (prev) => {
+        // Finalize any agents still marked as 'running'.
+        // If the response indicates the task was stopped/aborted, mark as 'stopped'.
+        const responseText = typeof data.content === 'string' ? data.content : '';
+        const wasStopped = responseText.includes('stopped') || responseText.includes('aborted');
+        const finalStatus = wasStopped ? 'stopped' : 'completed';
+        const now = Date.now();
+        const next = new Map(prev.trackedAgents);
+        Array.from(next.entries()).forEach(([id, agent]) => {
+          if (agent.status === 'running') {
+            const elapsed = now - agent.startTime;
+            next.set(id, {
+              ...agent,
+              status: finalStatus,
+              endTime: agent.endTime ?? now,
+              // Keep existing durationMs if already set by worker_completed
+              durationMs: agent.durationMs || elapsed,
             });
-            return {
-              ...prev,
-              trackedAgents: next,
-              messages: [...prev.messages, {
-                id: Date.now().toString(),
-                role: 'assistant',
-                content: data.response,
-                timestamp: new Date(),
-                agentId: data.agentId,
-                classification: data.classification?.type,
-                metadata: meta,
-              }],
-              totalTokens: data.metadata?.sessionTotalTokens != null
-                ? data.metadata.sessionTotalTokens
-                : prev.totalTokens + (meta?.tokens || 0),
-            };
+          }
+        });
+        const content = data.response ?? '';
+        const repliedAt = event?.timestamp ?? Date.now();
+        const askedAt = latestUserMessageTime(prev.messages);
+        // Already shown: the same event (a replay), or its persisted row from
+        // the reload a reconnect does — a stored reply to the latest question,
+        // with this text, from about this time.
+        const shown = prev.messages.some((m) => {
+          if (event && m.id === `gw-${event.id}`) return true;
+          if (m.role !== 'assistant' || m.content !== content || /^(\d+|gw-.+)$/.test(m.id)) return false;
+          const at = new Date(m.timestamp).getTime();
+          return at >= askedAt && Math.abs(at - repliedAt) < 60_000;
+        });
+        return {
+          ...prev,
+          trackedAgents: next,
+          messages: shown ? prev.messages : [...prev.messages, {
+            id: event ? `gw-${event.id}` : Date.now().toString(),
+            role: 'assistant',
+            content,
+            // Never before the message that asked (server and client clocks differ).
+            timestamp: new Date(Math.max(repliedAt, askedAt + 1)),
+            agentId: data.agentId,
+            classification: data.classification?.type,
+            metadata: meta,
+          }],
+          totalTokens: data.metadata?.sessionTotalTokens != null
+            ? data.metadata.sessionTotalTokens
+            : prev.totalTokens + (meta?.tokens || 0),
+        };
+      });
+
+      const replySessionId = data.sessionId;
+      if (replySessionId) {
+        setSessions(prev => {
+          if (prev.find(s => s.id === replySessionId)) return prev;
+          return [{ id: replySessionId, title: 'New Chat', updatedAt: new Date().toISOString(), messageCount: 0, tokenCount: 0, status: 'active' }, ...prev];
+        });
+        adoptOwnSession(replySessionId);
+      }
+    }
+    // Speak the reply only for a spoken turn (typed turns stay silent even
+    // with the mic on), and only that turn's own session's reply. This is THE
+    // fresh, complete reply — no stale scan.
+    if (sid && voiceTurnRef.current === sid) {
+      voiceTurnRef.current = null;
+      if (typeof data.response === 'string') speakRef.current(data.response);
+    }
+  };
+
+  /** A swarm lifecycle event (`swarm.*`). */
+  const handleSwarmEvent = (data: { event: string; payload: unknown; timestamp?: number }, eventSessionId: string | undefined) => {
+    // Persona narration: render as inline chat bubble so the root agent
+    // appears to "speak" while subagents work. Without this the bridge
+    // emits but no surface displays it, which manifests as "narration
+    // never fires" in the UI.
+    if (data.event === 'swarm.narration') {
+      const np = data.payload as { text?: string };
+      const text = (np?.text ?? '').trim();
+      const sid = eventSessionId || activeSessionId;
+      if (text && sid) {
+        adoptOwnSession(sid);
+        pushTransientNarration(sid, text, new Date(data.timestamp ?? Date.now()));
+      }
+      return;
+    }
+
+    // Swarm lifecycle events — funnel into the SwarmTree component AND
+    // into the per-session trackedAgents map so the sidepanel's agent
+    // count / duration / iteration / token columns populate live.
+    // Previously only `worker_spawned` (root agent → pipeline worker
+    // path) touched trackedAgents, so swarm-spawned children were
+    // invisible to the sidepanel until a page reload re-hydrated the
+    // agent log from REST.
+    if (
+      typeof data.event === 'string' &&
+      (data.event === 'swarm.node_spawned' || data.event === 'swarm.node_completed')
+    ) {
+      // First spawn often arrives BEFORE chat_response, when activeSessionId
+      // is still null. SwarmTree keys off activeSessionId — without
+      // adopting the event's session id now, the live tree stays empty
+      // until the user reloads the page. Adopt it eagerly here — only a
+      // session this tab created, never another tab's.
+      if (eventSessionId) adoptOwnSession(eventSessionId);
+      setSwarmEvents((prev) => {
+        const next = prev.concat({
+          type: data.event,
+          payload: data.payload,
+        } as SwarmTreeEvent);
+        // Cap so a long-running session doesn't grow the array forever.
+        // SwarmTree tracks its consumed index relative to length, so we
+        // only trim when well past anything still relevant.
+        return next.length > 1000 ? next.slice(-500) : next;
+      });
+
+      const p = data.payload as {
+        nodeId: string;
+        parentNodeId?: string | null;
+        kind?: 'root' | 'agent' | 'subagent';
+        role?: string;
+        model?: string;
+        status?: string;
+        usedTokens?: number;
+        durationMs?: number;
+      };
+      // Use client-receipt time (Date.now()) — not the server-stamped
+      // `data.timestamp` — for agent `startTime`. User messages are
+      // stamped with the client clock, so mixing in a server clock
+      // (even with small skew) lets agents sort *before* the message
+      // that triggered them. Clamping to the latest user message
+      // timestamp adds a belt-and-suspenders guarantee.
+      const clientNow = Date.now();
+
+      if (data.event === 'swarm.node_spawned' && eventSessionId && p.kind !== 'root') {
+        updateSessionState(eventSessionId, (prev) => {
+          const next = new Map(prev.trackedAgents);
+          const existing = next.get(p.nodeId);
+          const minStart = latestUserMessageTime(prev.messages) + 1;
+          next.set(p.nodeId, {
+            id: p.nodeId,
+            role: p.role || existing?.role || 'unknown',
+            model: p.model || existing?.model || '',
+            status: 'running',
+            toolCalls: existing?.toolCalls ?? [],
+            startTime: existing?.startTime ?? Math.max(clientNow, minStart),
+            parentAgentId: p.parentNodeId ?? existing?.parentAgentId,
           });
+          return { ...prev, trackedAgents: next };
+        });
+      }
 
-          if (data.sessionId) {
-            setSessions(prev => {
-              if (prev.find(s => s.id === data.sessionId)) return prev;
-              return [{ id: data.sessionId, title: 'New Chat', updatedAt: new Date().toISOString(), messageCount: 0, tokenCount: 0, status: 'active' }, ...prev];
+      if (data.event === 'swarm.node_completed' && eventSessionId) {
+        const tokens = typeof p.usedTokens === 'number' ? p.usedTokens : 0;
+        const duration = typeof p.durationMs === 'number' ? p.durationMs : 0;
+        // Session-level aggregates — drive Session Stats badges.
+        updateSessionState(eventSessionId, (prev) => {
+          const nextAgents = new Map(prev.trackedAgents);
+          // Only finalize non-root agent nodes in the sidepanel agent
+          // list. The root agent is not a tracked agent card.
+          if (p.kind !== 'root') {
+            const existing = nextAgents.get(p.nodeId);
+            const resolvedStatus: TrackedAgent['status'] =
+              p.status === 'completed' || p.status === 'cache_hit'
+                ? 'completed'
+                : p.status === 'cancelled' || p.status === 'stopped'
+                  ? 'stopped'
+                  : 'failed';
+            const minStart = latestUserMessageTime(prev.messages) + 1;
+            const fallbackStart = Math.max(clientNow - duration, minStart);
+            const startTime = existing?.startTime ?? fallbackStart;
+            nextAgents.set(p.nodeId, {
+              id: p.nodeId,
+              role: p.role || existing?.role || 'unknown',
+              model: p.model || existing?.model || '',
+              status: resolvedStatus,
+              toolCalls: finalizePendingToolCalls(existing?.toolCalls ?? []),
+              startTime,
+              endTime: startTime + duration,
+              durationMs: duration,
+              totalTokens: tokens,
+              iterations: existing?.iterations,
+              parentAgentId: p.parentNodeId ?? existing?.parentAgentId,
             });
-            if (!activeSessionId) setActiveSessionId(data.sessionId);
           }
-        }
-        // Speak the reply only for a spoken turn (typed turns stay silent even
-        // with the mic on). This is THE fresh, complete reply — no stale scan.
-        if (voiceTurnRef.current) {
-          voiceTurnRef.current = false;
-          if (typeof data.response === 'string') speakRef.current(data.response);
-        }
+          // Swarm duration represents wall-clock time of each swarm
+          // (the root agent's runtime). Sub-agent durations should NOT
+          // be added — those are nested inside the root agent's time.
+          // Total across multiple swarms in a session = sum of each
+          // root agent's duration.
+          const swarmDurationDelta = p.kind === 'root' ? duration : 0;
+          return {
+            ...prev,
+            trackedAgents: nextAgents,
+            totalTokens: (prev.totalTokens || 0) + tokens,
+            swarmDurationMs: (prev.swarmDurationMs || 0) + swarmDurationDelta,
+          };
+        });
+      }
+    }
+  };
+
+  /**
+   * One event of the user's, from the tab's gateway connection. Every tab of
+   * the user gets the same events; each applies them to the session they
+   * belong to.
+   */
+  const handleGatewayEvent = (event: GatewayEvent) => {
+    const eventSessionId = event.sessionId;
+    const sid = eventSessionId || activeSessionId;
+    const payload = (event.payload ?? {}) as Record<string, any>;
+    // An event of the session this tab just sent in: the server took the send.
+    if (eventSessionId && eventSessionId === pendingSendRef.current) pendingSendRef.current = null;
+
+    switch (event.type) {
+      case 'chat.response': {
+        const result = (payload.response ?? {}) as Record<string, any>;
+        handleChatResponse({ ...result, sessionId: eventSessionId ?? result.sessionId }, { id: event.id, timestamp: event.timestamp });
         break;
       }
 
-      case 'speak':
-        // Lifecycle narration pushed by the backend narrator (spawn ack, agent
-        // done) over /ws — supplemental to the spoken reply above.
-        // ponytail: shares the single Audio element with the reply, so a
-        // narration and reply arriving within ~seconds cut each other off. Fine
-        // in practice — the spawn ack plays immediately and the answer lands
-        // minutes later; add a small playback queue if fast tasks make it audible.
-        if (typeof data.text === 'string') speakRef.current(data.text);
-        break;
-
-      case 'chat_error':
-        setIsLoading(false);
-        setStatusMessage(null);
-        setStreaming(null);
-        voiceTurnRef.current = false; // failed spoken turn — don't speak the next reply
+      case 'chat.error':
+        if (concernsThisTab(eventSessionId)) {
+          setIsLoading(false);
+          setStatusMessage(null);
+        }
+        setStreaming((prev) => (prev && prev.sessionId !== sid ? prev : null));
+        // A failed spoken turn — don't speak the next reply.
+        if (sid && voiceTurnRef.current === sid) voiceTurnRef.current = null;
         // The voice hook unsticks itself from 'thinking' on isLoading's falling edge.
-        if (eventSessionId || activeSessionId) {
-          const sid = eventSessionId || activeSessionId!;
+        if (sid) {
           updateSessionState(sid, (prev) => ({
             ...prev,
             messages: [...prev.messages, {
-              id: Date.now().toString(),
+              id: `err-${event.id}`,
               role: 'assistant',
-              content: `Error: ${data.error}`,
+              content: `Error: ${String(payload.error ?? 'the turn failed')}`,
               timestamp: new Date(),
             }],
           }));
         }
         break;
 
-      case 'turn_event':
-        handleTurnEvent(data, eventSessionId || activeSessionId);
-        break;
-
-      case 'agent_event':
-        handleAgentEvent(data, eventSessionId || activeSessionId);
-        break;
-
-      case 'steer_result':
-        // Delivered to the running turn as guidance; no reply of its own.
-        if (data.steered) setIsLoading(loadingBeforeSendRef.current);
-        break;
-
-      case 'permission_request':
-        // Forward to global permission context for banner display
-        pushPermission({
-          requestId: data.requestId,
-          skillId: data.skillId,
-          action: data.action || data.toolName,
-          args: data.args,
-        });
-        break;
-
-      case 'swarm_event':
-        // Persona narration: render as inline chat bubble so the root agent
-        // appears to "speak" while subagents work. Without this the bridge
-        // emits but no surface displays it, which manifests as "narration
-        // never fires" in the UI.
-        if (data.event === 'swarm.narration') {
-          const np = data.payload as { text?: string };
-          const text = (np?.text ?? '').trim();
-          const sid = eventSessionId || activeSessionId;
-          if (text && sid) {
-            if (!activeSessionId) setActiveSessionId(sid);
-            pushTransientNarration(sid, text, new Date(data.timestamp ?? Date.now()));
-          }
-          break;
-        }
-
-        // Swarm lifecycle events — funnel into the SwarmTree component AND
-        // into the per-session trackedAgents map so the sidepanel's agent
-        // count / duration / iteration / token columns populate live.
-        // Previously only `worker_spawned` (root agent → pipeline worker
-        // path) touched trackedAgents, so swarm-spawned children were
-        // invisible to the sidepanel until a page reload re-hydrated the
-        // agent log from REST.
-        if (
-          typeof data.event === 'string' &&
-          (data.event === 'swarm.node_spawned' || data.event === 'swarm.node_completed')
-        ) {
-          // First spawn often arrives BEFORE chat_response, when activeSessionId
-          // is still null. SwarmTree keys off activeSessionId — without
-          // adopting the event's session id now, the live tree stays empty
-          // until the user reloads the page. Adopt it eagerly here.
-          if (eventSessionId && !activeSessionId) {
-            setActiveSessionId(eventSessionId);
-          }
-          setSwarmEvents((prev) => {
-            const next = prev.concat({
-              type: data.event,
-              payload: data.payload,
-            } as SwarmTreeEvent);
-            // Cap so a long-running session doesn't grow the array forever.
-            // SwarmTree tracks its consumed index relative to length, so we
-            // only trim when well past anything still relevant.
-            return next.length > 1000 ? next.slice(-500) : next;
-          });
-
-          const p = data.payload as {
-            nodeId: string;
-            parentNodeId?: string | null;
-            kind?: 'root' | 'agent' | 'subagent';
-            role?: string;
-            model?: string;
-            status?: string;
-            usedTokens?: number;
-            durationMs?: number;
-          };
-          // Use client-receipt time (Date.now()) — not the server-stamped
-          // `data.timestamp` — for agent `startTime`. User messages are
-          // stamped with the client clock, so mixing in a server clock
-          // (even with small skew) lets agents sort *before* the message
-          // that triggered them. Clamping to the latest user message
-          // timestamp adds a belt-and-suspenders guarantee.
-          const clientNow = Date.now();
-
-          if (data.event === 'swarm.node_spawned' && eventSessionId && p.kind !== 'root') {
-            updateSessionState(eventSessionId, (prev) => {
-              const next = new Map(prev.trackedAgents);
-              const existing = next.get(p.nodeId);
-              const minStart = latestUserMessageTime(prev.messages) + 1;
-              next.set(p.nodeId, {
-                id: p.nodeId,
-                role: p.role || existing?.role || 'unknown',
-                model: p.model || existing?.model || '',
-                status: 'running',
-                toolCalls: existing?.toolCalls ?? [],
-                startTime: existing?.startTime ?? Math.max(clientNow, minStart),
-                parentAgentId: p.parentNodeId ?? existing?.parentAgentId,
-              });
-              return { ...prev, trackedAgents: next };
-            });
-          }
-
-          if (data.event === 'swarm.node_completed' && eventSessionId) {
-            const tokens = typeof p.usedTokens === 'number' ? p.usedTokens : 0;
-            const duration = typeof p.durationMs === 'number' ? p.durationMs : 0;
-            // Session-level aggregates — drive Session Stats badges.
-            updateSessionState(eventSessionId, (prev) => {
-              const nextAgents = new Map(prev.trackedAgents);
-              // Only finalize non-root agent nodes in the sidepanel agent
-              // list. The root agent is not a tracked agent card.
-              if (p.kind !== 'root') {
-                const existing = nextAgents.get(p.nodeId);
-                const resolvedStatus: TrackedAgent['status'] =
-                  p.status === 'completed' || p.status === 'cache_hit'
-                    ? 'completed'
-                    : p.status === 'cancelled' || p.status === 'stopped'
-                      ? 'stopped'
-                      : 'failed';
-                const minStart = latestUserMessageTime(prev.messages) + 1;
-                const fallbackStart = Math.max(clientNow - duration, minStart);
-                const startTime = existing?.startTime ?? fallbackStart;
-                nextAgents.set(p.nodeId, {
-                  id: p.nodeId,
-                  role: p.role || existing?.role || 'unknown',
-                  model: p.model || existing?.model || '',
-                  status: resolvedStatus,
-                  toolCalls: finalizePendingToolCalls(existing?.toolCalls ?? []),
-                  startTime,
-                  endTime: startTime + duration,
-                  durationMs: duration,
-                  totalTokens: tokens,
-                  iterations: existing?.iterations,
-                  parentAgentId: p.parentNodeId ?? existing?.parentAgentId,
-                });
-              }
-              // Swarm duration represents wall-clock time of each swarm
-              // (the root agent's runtime). Sub-agent durations should NOT
-              // be added — those are nested inside the root agent's time.
-              // Total across multiple swarms in a session = sum of each
-              // root agent's duration.
-              const swarmDurationDelta = p.kind === 'root' ? duration : 0;
-              return {
-                ...prev,
-                trackedAgents: nextAgents,
-                totalTokens: (prev.totalTokens || 0) + tokens,
-                swarmDurationMs: (prev.swarmDurationMs || 0) + swarmDurationDelta,
-              };
-            });
+      case 'chat.message': {
+        if (payload.injected === true) {
+          // A message steered into the running turn. This tab sent it: it is
+          // already on screen and joined a run — it doesn't start one.
+          if (event.source === `steer:${gateway.getConnectionId()}`) {
+            if (concernsThisTab(eventSessionId)) setIsLoading(loadingBeforeSendRef.current);
+            break;
           }
         }
+        // Another tab's steer, a side question's answer, or an in-app
+        // delivery (`webchat:<you>`): show it in its session.
+        const target = sid;
+        if (!target || typeof payload.content !== 'string') break;
+        updateSessionState(target, (prev) => ({
+          ...prev,
+          messages: prev.messages.some((m) => m.id === `gw-${event.id}`) ? prev.messages : [...prev.messages, {
+            id: `gw-${event.id}`,
+            role: payload.role === 'user' ? 'user' : 'assistant',
+            content: payload.content,
+            timestamp: new Date(event.timestamp),
+          }],
+        }));
+        break;
+      }
+
+      case 'voice.speak':
+        // Lifecycle narration for the session this tab put into voice mode —
+        // supplemental to the spoken reply.
+        // ponytail: shares the single Audio element with the reply, so a
+        // narration and reply arriving within ~seconds cut each other off. Fine
+        // in practice — the spawn ack plays immediately and the answer lands
+        // minutes later; add a small playback queue if fast tasks make it audible.
+        if (typeof payload.text === 'string') speakRef.current(payload.text);
         break;
 
+      case 'rootAgent.status':
+        handleTurnEvent({ event: 'status_update', data: payload }, sid);
+        break;
+      case 'agent.spawned':
+        handleTurnEvent({ event: 'worker_spawned', data: payload }, sid);
+        break;
+      case 'agent.completed':
+        handleTurnEvent({ event: 'worker_completed', data: payload }, sid);
+        break;
+      case 'pipeline.event':
+        handleTurnEvent({ event: 'pipeline_event', data: payload }, sid);
+        break;
+      case 'team.started':
+        handleTurnEvent({ event: 'team_started', data: payload }, sid);
+        break;
+      case 'team.completed':
+        handleTurnEvent({ event: 'team_completed', data: payload }, sid);
+        break;
+
+      case 'chat.delta':
+        handleAgentEvent({ event: 'thought', agentId: payload.agentId, data: { type: 'text_delta', delta: payload.delta, iteration: payload.iteration } }, sid);
+        break;
+      case 'agent.action':
+        handleAgentEvent({ event: 'action', agentId: payload.agentId, data: payload }, sid);
+        break;
+      case 'agent.event':
+        handleAgentEvent({ event: payload.agentEvent, agentId: payload.agentId, data: payload }, sid);
+        break;
+
+      default:
+        if (event.type.startsWith('swarm.')) {
+          handleSwarmEvent({ event: event.type, payload: event.payload, timestamp: event.timestamp }, eventSessionId);
+        }
+        break;
     }
   };
 
   const handleTurnEvent = (data: any, sessionId: string | null) => {
     if (!sessionId) return;
+    // The status line is the open session's: another tab's turn leaves it be.
+    const setTurnStatus = (message: string | null) => {
+      if (concernsThisTab(sessionId)) setStatusMessage(message);
+    };
 
     switch (data.event) {
       case 'status_update':
@@ -992,51 +1062,41 @@ export default function ChatPage() {
               timestamp: new Date(update.createdAt),
             }],
           }));
-        } else setStatusMessage((data.data as any)?.message || null);
-        break;
-
-      case 'approval_required':
-        // Forward to global permission context for banner display
-        pushApproval({
-          requestId: (data.data as any).requestId,
-          summary: (data.data as any).summary,
-          question: (data.data as any).question,
-          options: (data.data as any).options,
-        });
+        } else setTurnStatus((data.data as any)?.message || null);
         break;
 
       case 'pipeline_event': {
         const pe = data.data as any;
         switch (pe.event) {
           case 'pipeline_created':
-            setStatusMessage(`Pipeline "${pe.title}" started (${pe.stageCount} stages)`);
+            setTurnStatus(`Pipeline "${pe.title}" started (${pe.stageCount} stages)`);
             break;
           case 'stage_started': {
             const stageNum = (pe.index ?? 0) + 1;
-            setStatusMessage(`Stage ${stageNum}: ${pe.name}...`);
+            setTurnStatus(`Stage ${stageNum}: ${pe.name}...`);
             // Stage messages are persisted to DB by the backend — reload to pick them up
             if (sessionId) loadSessionMessages(sessionId);
             break;
           }
           case 'stage_completed': {
             const note = pe.note ? ` (${pe.note})` : '';
-            setStatusMessage(`Stage "${pe.name}" completed${note}`);
+            setTurnStatus(`Stage "${pe.name}" completed${note}`);
             // Stage messages are persisted to DB by the backend — reload to pick them up
             if (sessionId) loadSessionMessages(sessionId);
             break;
           }
           case 'qa_retry': {
-            setStatusMessage(`QA found issues — retrying implementation (attempt ${pe.attempt}/${pe.maxRetries})`);
+            setTurnStatus(`QA found issues — retrying implementation (attempt ${pe.attempt}/${pe.maxRetries})`);
             break;
           }
           case 'pipeline_completed':
-            setStatusMessage(null);
+            setTurnStatus(null);
             break;
           case 'pipeline_failed':
             // A run that could take no route out of a stage stopped short. It
             // used to arrive here as `pipeline_completed`, so the UI cleared
             // itself and the run read as a success.
-            setStatusMessage(
+            setTurnStatus(
               pe.stoppedAt
                 ? `Pipeline stopped at "${pe.stoppedAt}" — no route left out of that stage`
                 : 'Pipeline stopped before finishing',
@@ -1160,6 +1220,9 @@ export default function ChatPage() {
   const handleAgentEvent = (data: any, sessionId: string | null) => {
     if (!sessionId) return;
     if (data.event === 'thought' && data.data?.type === 'text_delta' && typeof data.data.delta === 'string') {
+      // Only the open session streams here: another tab's reply must not
+      // replace this tab's streamed text.
+      if (!concernsThisTab(sessionId)) return;
       const { delta, iteration } = data.data as { delta: string; iteration: number };
       // Same iteration: append. New iteration: keep the lead-in ("Let me check…")
       // visible above the continuation until the reply replaces the block.
@@ -1426,6 +1489,7 @@ export default function ChatPage() {
           devMode: opts.devMode,
           projectName: opts.projectName,
         };
+        ownSessionsRef.current.add(item.id);
         setSessions(prev => [item, ...prev]);
         setActiveSessionId(item.id);
         updateSessionState(item.id, () => newSessionState());
@@ -1492,7 +1556,7 @@ export default function ChatPage() {
   };
 
   // Send message
-  const sendMessage = async (userInput: string, attachments?: Attachment[]) => {
+  const sendMessage = async (userInput: string, attachments?: Attachment[], options?: { voice?: boolean }) => {
     let sid = activeSessionId;
     // Snapshot edit-and-continue attachments for this turn; cleared once sent.
     let fileRefs: Array<{ path: string; version?: string }> | undefined = attachedFiles.length ? attachedFiles : undefined;
@@ -1509,6 +1573,7 @@ export default function ChatPage() {
         });
         if (result?.id) {
           sid = result.id;
+          ownSessionsRef.current.add(result.id);
           const item: SessionInfo = {
             id: result.id,
             title: result.title || 'New Chat',
@@ -1559,52 +1624,56 @@ export default function ChatPage() {
       // flicker when the 10s poll later re-hydrated them from the DB.
     }));
 
+    const frame: ClientMessage = {
+      type: 'chat.send',
+      sessionId: sid,
+      content: userInput,
+      // A session the server has not seen yet is created in this workspace.
+      ...(activeWorkspace ? { workspaceId: activeWorkspace.id } : {}),
+      ...(fileRefs ? { fileRefs } : {}),
+      ...(outputModeOverride ? { outputMode: outputModeOverride } : {}),
+    };
+    // What the server would refuse, said before sending: a message over the
+    // length limit is refused, and a frame over the size cap closes the socket.
+    const refusal = userInput.length > CHAT_MESSAGE_MAX_CHARS
+      ? `it is ${userInput.length.toLocaleString()} characters and the limit is ${CHAT_MESSAGE_MAX_CHARS.toLocaleString()}. Shorten it, or attach the text as a file.`
+      : gateway.frameTooLarge(frame);
+    if (refusal) {
+      const refusedSid = sid;
+      updateSessionState(refusedSid, (prev) => ({
+        ...prev,
+        messages: [...prev.messages, {
+          id: `refused-${Date.now()}`,
+          role: 'system',
+          content: `Message not sent: ${refusal}`,
+          timestamp: new Date(),
+        }],
+      }));
+      return;
+    }
+
+    if (options?.voice) voiceTurnRef.current = sid;
     loadingBeforeSendRef.current = isLoading;
     setIsLoading(true);
 
-    // WS is the primary transport. If it's OPEN → send.
-    // If it's CONNECTING → wait up to 5 s for open, then send. This avoids a
-    // race where we fall back to REST mid-connect, fire a 30 s+ root agent
-    // request against a proxy with a shorter timeout, and see a transient
-    // "Request failed" pop up while the real answer is still streaming in
-    // via the WS that finally opened.
-    const ws = wsRef.current;
-    if (ws && ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
-      const sendOverWs = () => {
-        ws.send(JSON.stringify({
-          type: 'chat',
-          content: userInput,
-          sessionId: sid,
-          fileRefs,
-          outputMode: outputModeOverride,
-        }));
-        if (fileRefs) setAttachedFiles([]);
-      };
-      if (ws.readyState === WebSocket.OPEN) {
-        sendOverWs();
-        return;
-      }
-      // CONNECTING — wait for open (bounded). Bumped from 5s to 10s after
-      // observing race conditions where WS reconnect took 6–8s on a slow
-      // network, the wait timed out, REST took over, and a transient
-      // "Request failed" appeared while the real answer streamed in via the
-      // WS that finally opened. The post-REST WS-alive check below
-      // additionally suppresses the toast if WS came back during the REST
-      // request itself.
-      const opened = await new Promise<boolean>((resolve) => {
-        const timer = setTimeout(() => resolve(false), 10_000);
-        const onOpen = () => { clearTimeout(timer); ws.removeEventListener('open', onOpen); resolve(true); };
-        ws.addEventListener('open', onOpen, { once: true });
-      });
-      const state: number = ws.readyState;
-      if (opened && state === WebSocket.OPEN) {
-        sendOverWs();
-        return;
-      }
-      // fall through to REST only if WS never opened
+    // The gateway is the primary transport. Not signed in yet (reconnecting)
+    // → wait up to 10 s for it, then send. This avoids a race where we fall
+    // back to REST mid-connect, fire a 30 s+ root agent request against a
+    // proxy with a shorter timeout, and see a transient "Request failed" pop
+    // up while the real answer is still streaming in over the connection that
+    // finally came back. Every tab of this user sees the turn's events.
+    const chatSend = () => {
+      pendingSendRef.current = sid;
+      if (gateway.send(frame)) return true;
+      pendingSendRef.current = null;
+      return false;
+    };
+    if (gatewayStatus !== 'too_many_tabs' && (chatSend() || ((await gateway.whenConnected(10_000)) && chatSend()))) {
+      if (fileRefs) setAttachedFiles([]);
+      return;
     }
 
-    // REST fallback (WS unavailable)
+    // REST fallback (gateway unavailable)
     try {
       const result = await api.post<{
         response: string;
@@ -1639,11 +1708,11 @@ export default function ChatPage() {
         }
       }
     } catch (error) {
-      // The REST `/chat` request often races a reconnecting WebSocket. If the
-      // WS came back online between our `sendMessage()` entry and the REST
-      // failure, the agent is already running and will deliver its answer via
-      // WS — surfacing a scary "backend is running?" toast in that case just
-      // confuses the user.
+      // The REST `/chat` request often races a reconnecting gateway. If it
+      // came back online between our `sendMessage()` entry and the REST
+      // failure, the agent is already running and will deliver its answer
+      // over it — surfacing a scary "backend is running?" toast in that case
+      // just confuses the user.
       //
       // Two-stage suppression:
       //   1. Wait up to 2500ms for the WS to reconnect (initial backoff is
@@ -1652,16 +1721,7 @@ export default function ChatPage() {
       //      backend is reachable and the REST failure was a transient
       //      proxy/timeout issue — the WS will deliver the real answer when
       //      it reconnects, so swallow the toast.
-      const wsAlive = await new Promise<boolean>((resolve) => {
-        const startedAt = Date.now();
-        const tick = () => {
-          const ws = wsRef.current;
-          if (ws && ws.readyState === WebSocket.OPEN) return resolve(true);
-          if (Date.now() - startedAt >= 2500) return resolve(false);
-          setTimeout(tick, 50);
-        };
-        tick();
-      });
+      const wsAlive = await gateway.whenConnected(2500);
 
       let backendReachable = wsAlive;
       if (!backendReachable) {
@@ -1705,10 +1765,11 @@ export default function ChatPage() {
       .catch(() => setVoiceAvailable(false));
   }, []);
 
-  // Only replies to a spoken turn are read aloud. sendTranscript (the voice
-  // hooks' path into sendMessage) sets this; a typed message leaves it false, so
-  // typing while the mic is on doesn't get the reply spoken back.
-  const voiceTurnRef = useRef(false);
+  // Only replies to a spoken turn are read aloud: the session of the spoken
+  // turn awaiting its reply. sendTranscript (the voice hooks' path into
+  // sendMessage) sets it; a typed message leaves it null, so typing while the
+  // mic is on doesn't get the reply spoken back, nor does another session's.
+  const voiceTurnRef = useRef<string | null>(null);
 
   // Voice conversation (hands-free, streaming): transcribe → sendMessage (same
   // pipeline as text, so agents spawn as usual). The reply is spoken when its
@@ -1719,7 +1780,7 @@ export default function ChatPage() {
     // Engine is chosen by the `voice.sttProvider` setting (Settings → Voice);
     // omitting it here lets the backend honor that choice ('auto' by default).
     isTurnActive: isLoading,
-    sendTranscript: (t) => { voiceTurnRef.current = true; sendMessage(t); },
+    sendTranscript: (t) => { void sendMessage(t, undefined, { voice: true }); },
   });
 
   // Route spoken output to whichever voice mode owns the mic. Held in a ref so
@@ -1736,21 +1797,22 @@ export default function ChatPage() {
   // Tell the backend when this session enters/leaves voice mode, so the
   // root agent's propose-then-confirm gate + lifecycle narration apply. On a
   // session switch, turn voice OFF for the previous session first so its flag
-  // isn't left set in the root agent.
+  // isn't left set in the root agent. Only a session this tab turned on is
+  // ever turned off: a tab without voice must not end another tab's.
+  // Re-sent after a reconnect: the server clears a connection's voice mode
+  // when the connection closes.
   const prevVoiceSessionRef = useRef<string | null>(null);
   useEffect(() => {
-    const ws = wsRef.current;
-    if (ws?.readyState !== WebSocket.OPEN) return;
-    const on = realtimeMode;
+    if (gatewayStatus !== 'connected') return;
     const prev = prevVoiceSessionRef.current;
-    if (prev && prev !== activeSessionId) {
-      ws.send(JSON.stringify({ type: 'voice', on: false, sessionId: prev }));
+    if (prev && (prev !== activeSessionId || !realtimeMode)) {
+      gateway.send({ type: 'voice.set', on: false, sessionId: prev });
     }
-    if (activeSessionId) {
-      ws.send(JSON.stringify({ type: 'voice', on, sessionId: activeSessionId }));
+    if (realtimeMode && activeSessionId) {
+      gateway.send({ type: 'voice.set', on: true, sessionId: activeSessionId });
     }
-    prevVoiceSessionRef.current = on ? activeSessionId : null;
-  }, [realtimeMode, activeSessionId]);
+    prevVoiceSessionRef.current = realtimeMode ? activeSessionId : null;
+  }, [gateway, gatewayStatus, realtimeMode, activeSessionId]);
 
   const closeCompactSessions = useCallback(() => {
     setShowCompactSessions(false);

@@ -46,6 +46,8 @@ export const permissionRequests = pgTable('permission_requests', {
   userId: uuid('user_id').references(() => users.id).notNull(),
   agentId: text('agent_id').notNull(),
   sessionId: uuid('session_id'),
+  /** The workspace the requesting agent ran in (a space's requests expire with a membership change). */
+  workspaceId: uuid('workspace_id'),
   toolId: text('skill_id').notNull(),
   action: text('action').notNull(),
   context: jsonb('context').$type<PermissionRequestContext>().notNull(),

@@ -5,6 +5,7 @@ import { ChevronDown, Loader2, Trash2, X } from 'lucide-react';
 import { useState } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
+import { useWorkspaceId } from '@/lib/workspace-context';
 
 interface MemoryRow {
   id: string;
@@ -29,13 +30,14 @@ interface MemoryListResponse {
 const FACT_TYPES = ['preference', 'profile', 'relationship', 'skill_observation', 'workflow_note'] as const;
 
 export default function MemoryPage() {
+  const workspaceId = useWorkspaceId();
   const qc = useQueryClient();
   const [includeHistory, setIncludeHistory] = useState(false);
   const [factType, setFactType] = useState<string>('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const list = useQuery<MemoryListResponse>({
-    queryKey: ['memory', { includeHistory, factType }],
+    queryKey: ['memory', { includeHistory, factType }, workspaceId],
     queryFn: () => {
       const params = new URLSearchParams();
       if (includeHistory) params.set('includeHistory', 'true');
@@ -51,7 +53,7 @@ export default function MemoryPage() {
   });
 
   const chain = useQuery({
-    queryKey: ['memory-chain', expandedId],
+    queryKey: ['memory-chain', expandedId, workspaceId],
     queryFn: () => expandedId ? api.get<{ chain: MemoryRow[] }>(`/memory/${expandedId}/chain`) : null,
     enabled: !!expandedId,
   });

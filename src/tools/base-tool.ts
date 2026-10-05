@@ -7,7 +7,7 @@ import { recordToolExecution } from '@/core/telemetry';
 import type { AgentContext, ToolManifest, } from '@/core/types';
 import { ApprovalBlockedError, consumeDispatchAuthorization } from '@/security/dispatch-authorization';
 import { auditRepository } from '@/db/repositories/audit-repository';
-import { routeApproval } from '@/security/approval-policy';
+import { routeApprovalFor } from '@/security/approval-route';
 import { getPermissionManager } from '@/security/permissions';
 import { injectSecrets, redactSecretValues } from '@/security/secret-injector';
 import { toolLogger } from '@/utils/logger';
@@ -182,22 +182,19 @@ export abstract class BaseTool {
     const manifestPermission = this.getManifest().permissions.find(permission => permission.action === action);
     const check = await permissionManager.check(context.userId, this.id, action, args, context,
       { revalidate: !!priorAuthorization, defaultLevel: manifestPermission?.defaultLevel, dangerous: manifestPermission?.dangerous });
-    const decision = routeApproval({
-      level: check.level, role: context.role, root: context.root,
-      attended: context.attended, toolId: this.id, action,
-    });
-    let authorizationSource = check.source ?? 'policy';
+    const decision = await routeApprovalFor(context, { toolId: this.id, action, toolName, args }, check);
+    let authorizationSource = decision.source ?? 'policy';
     if (decision.route === 'deny') {
-      throw new Error(`Permission denied for ${this.id}.${action}: ${check.reason ?? decision.reason}`);
+      throw new Error(`Permission denied for ${this.id}.${action}: ${decision.reason}`);
     }
-    if (check.level === 'ASK') {
+    if (decision.level === 'ASK') {
       if (priorAuthorization?.startsWith('approval:')) {
         authorizationSource = priorAuthorization;
       } else if (decision.route === 'blocked') {
         throw new ApprovalBlockedError(`${this.id}.${action}: ${decision.reason}`);
       } else {
         const requestId = await permissionManager.requestApproval(context.userId, context.id,
-          this.id, action, args, context.sessionId || undefined, toolName, getExecutionSignal(context));
+          this.id, action, args, context.sessionId || undefined, toolName, getExecutionSignal(context), context.workspaceId);
         if (context.status === 'stopped' || context.status === 'failed' || getExecutionSignal(context)?.aborted) {
           permissionManager.cancelWaits(context.id);
           await permissionManager.waitForApproval(requestId, { agentId: context.id });

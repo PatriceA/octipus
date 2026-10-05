@@ -1,4 +1,6 @@
 import { getModelRegistry } from '@/models/model-registry';
+import type { SpaceRole } from '@/db/schema/organizations';
+import { resolveModel, usableInSpace } from '@/models/resolve-model';
 import { coreLogger } from '@/utils/logger';
 import { selectLane } from './lane-intent';
 import { hasRecentShim } from './model-capability';
@@ -7,7 +9,26 @@ import type { MessageClassification } from './types';
 
 interface ModelRouting {
   model: string;
+  /** Row identity (`model_config.name`) of `model`; '' when no row was resolved. */
+  name: string;
   reason: string;
+}
+
+/** A resolved model: the provider-facing id and the registry row it came from (spec §8.1). */
+export interface SelectedModel {
+  modelId: string;
+  name: string;
+}
+
+/** Who a selection is for — scopes personal bindings and explicit names (spec §8.2). */
+export interface ModelRequester {
+  userId?: string;
+  /** The session runs in a shared space (D14 applies to install CLI rows). */
+  inSpace?: boolean;
+  /** The requester's role there: a commenter's turns use API models only (§5.6). */
+  spaceRole?: SpaceRole;
+  /** A sponsored turn: the sponsor's models replace the requester's own (§9.1). */
+  sponsor?: import('@/core/types').AgentSponsor | null;
 }
 
 /**
@@ -19,9 +40,11 @@ interface ModelRouting {
  */
 export async function findToolCapableFallback(
   modelId: string,
-): Promise<{ model: string; reason: string } | null> {
+  /** The row `modelId` was resolved from, when known; else the modelId lookup for `userId`. */
+  row: { modelName?: string; userId?: string } = {},
+): Promise<{ model: string; name: string; reason: string } | null> {
   const registry = getModelRegistry();
-  const model = await registry.getModelByModelId(modelId);
+  const model = row.modelName ? await registry.getModel(row.modelName) : await registry.getModelByModelId(modelId, { userId: row.userId });
   if (!model || model.supportsTools || model.provider === 'cli') {
     return null; // already supports tools, or CLI (frontier) — no change
   }
@@ -34,7 +57,7 @@ export async function findToolCapableFallback(
     && defaultModel.modelId !== modelId
     && localProviders.includes(defaultModel.provider)
   ) {
-    return { model: defaultModel.modelId, reason: 'routed model does not support tool calling' };
+    return { model: defaultModel.modelId, name: defaultModel.name, reason: 'routed model does not support tool calling' };
   }
 
   const allModels = await registry.getAllModels();
@@ -45,7 +68,7 @@ export async function findToolCapableFallback(
     && m.modelId !== modelId,
   );
   if (toolModel) {
-    return { model: toolModel.modelId, reason: `using ${toolModel.name} for tool support` };
+    return { model: toolModel.modelId, name: toolModel.name, reason: `using ${toolModel.name} for tool support` };
   }
 
   return null;
@@ -63,7 +86,8 @@ export class ModelSelector {
    *
    * Order, and the order is the design:
    *   1. the session's model override — the user said which model, explicitly
-   *   2. the lane this REQUEST routes to (see lane-intent.ts)
+   *   2. the lane this REQUEST routes to (see lane-intent.ts): the requester's
+   *      personal binding for it, else the install binding (spec §8.2)
    *   3. the default model
    *
    * An explicit choice always beats a classification; everything below it is
@@ -77,27 +101,30 @@ export class ModelSelector {
     turnType: MessageClassification['type'] = 'casual',
     /** The request being routed, and its classification. Absent ⇒ no routing. */
     routing?: { message: string; classification?: MessageClassification },
-  ): Promise<string> {
+    requester: ModelRequester = {},
+  ): Promise<SelectedModel> {
     const registry = getModelRegistry();
 
     // Per-session override (Phase 6) wins over the registry default,
     // but it must pass the same reasoner/no-tools rejection the default
     // model goes through. Earlier this bypassed the reasoner check,
     // letting `/model <thinking-model>` succeed at the command then fail
-    // mid-turn.
-    if (sessionId) {
-      const overrideId = getSessionModel(sessionId);
-      if (overrideId) {
-        const override = await registry.getModelByModelId(overrideId);
+    // mid-turn. The override is the requester's own — keyed by
+    // (session, user) — and is re-resolved with their visibility, so a
+    // row they lost access to stops applying.
+    if (sessionId && requester.userId) {
+      const overrideName = getSessionModel(sessionId, requester.userId);
+      if (overrideName) {
+        const override = await resolveModel({ userId: requester.userId, name: overrideName, inSpace: requester.inSpace, spaceRole: requester.spaceRole, sponsor: requester.sponsor });
         if (override) {
           coreLogger.info(
             { sessionId, model: override.modelId },
             'Session model override active',
           );
-          return this.validateRootModel(override.modelId, override);
+          return this.validateRootModel(override);
         }
         coreLogger.warn(
-          { sessionId, overrideId },
+          { sessionId, overrideName },
           'Session model override points to an unregistered model — falling back to configured routing',
         );
       }
@@ -110,13 +137,13 @@ export class ModelSelector {
     // message rather than per install.
     const routed = routing ? selectLane(routing.message, routing.classification) : null;
     if (routed) {
-      const routedModel = await registry.getModelForTopic(routed.lane);
+      const routedModel = await resolveModel({ userId: requester.userId, topic: routed.lane, inSpace: requester.inSpace, spaceRole: requester.spaceRole, sponsor: requester.sponsor });
       if (routedModel) {
         coreLogger.info(
           { lane: routed.lane, reason: routed.reason, model: routedModel.modelId, turnType },
           'Request routed to a model lane',
         );
-        return this.validateRootModel(routedModel.modelId, routedModel);
+        return this.validateRootModel(routedModel);
       }
       coreLogger.info(
         { lane: routed.lane },
@@ -128,7 +155,7 @@ export class ModelSelector {
     if (!defaultModel) {
       throw new Error('No default model configured. Set one in the Models page.');
     }
-    return this.validateRootModel(defaultModel.modelId, defaultModel);
+    return this.validateRootModel(defaultModel);
   }
 
   /**
@@ -137,9 +164,9 @@ export class ModelSelector {
    * branch above. Returns the final model id the root agent should run with.
    */
   private async validateRootModel(
-    modelName: string,
-    modelMeta: { modelId: string; supportsTools: boolean; provider: string },
-  ): Promise<string> {
+    modelMeta: { modelId: string; name: string; supportsTools: boolean; provider: string },
+  ): Promise<SelectedModel> {
+    const chosen: SelectedModel = { modelId: modelMeta.modelId, name: modelMeta.name };
     const registry = getModelRegistry();
     const isReasoner = modelMeta.modelId.includes('reasoner') || modelMeta.modelId.includes('thinking');
     const noTools = !modelMeta.supportsTools && modelMeta.provider !== 'cli';
@@ -148,7 +175,7 @@ export class ModelSelector {
     // providers run their own harness and never route through the shim, so
     // they are exempt.
     const shimUnreliable = modelMeta.provider !== 'cli' && hasRecentShim(modelMeta.modelId);
-    if (!isReasoner && !noTools && !shimUnreliable) return modelName;
+    if (!isReasoner && !noTools && !shimUnreliable) return chosen;
 
     const reason = isReasoner ? 'reasoner' : noTools ? 'no-tools' : 'shim-unreliable';
     const isSuitable = (m: { modelId: string; supportsTools: boolean; provider: string }): boolean =>
@@ -169,32 +196,32 @@ export class ModelSelector {
         { originalModel: modelMeta.modelId, selectedModel: suitable.modelId, reason },
         'Root agent model rerouted — it cannot reliably emit native tool calls',
       );
-      return suitable.modelId;
+      return { modelId: suitable.modelId, name: suitable.name };
     }
     coreLogger.warn(
       { candidateModel: modelMeta.modelId, reason },
       'Candidate model unsuitable for orchestration and no alternative configured — attempting anyway',
     );
-    return modelName;
+    return chosen;
   }
 
   /**
    * Select the best model for a worker role's topic, with fallback for tool support.
    */
-  async selectForWorker(topic: string, needsTools: boolean): Promise<ModelRouting> {
-    const registry = getModelRegistry();
-    const topicModel = await registry.getModelForTopic(topic);
+  async selectForWorker(topic: string, needsTools: boolean, requester: ModelRequester = {}): Promise<ModelRouting> {
+    const topicModel = await resolveModel({ userId: requester.userId, topic, inSpace: requester.inSpace, spaceRole: requester.spaceRole, sponsor: requester.sponsor });
 
     if (!topicModel) {
       coreLogger.warn(
         { topic },
         'No model mapped for topic — refusing to fall back to default. Map a model to this topic in the Models page.',
       );
-      return { model: '', reason: `No model mapped for topic "${topic}"` };
+      return { model: '', name: '', reason: `No model mapped for topic "${topic}"` };
     }
 
     const routing: ModelRouting = {
       model: topicModel.modelId,
+      name: topicModel.name,
       reason: `Best model for topic: ${topic}`,
     };
 
@@ -212,12 +239,12 @@ export class ModelSelector {
    */
   private async ensureToolSupport(routing: ModelRouting): Promise<ModelRouting | null> {
     const registry = getModelRegistry();
-    const model = await registry.getModelByModelId(routing.model);
+    const model = await registry.getModel(routing.name);
     // Only the "can't do tools" case is interesting — a supported/CLI model
     // short-circuits with no log (findToolCapableFallback returns null too).
     if (!model || model.supportsTools || model.provider === 'cli') return null;
 
-    const alt = await findToolCapableFallback(routing.model);
+    const alt = await findToolCapableFallback(routing.model, { modelName: routing.name });
     if (!alt) {
       coreLogger.warn(
         { model: routing.model },
@@ -229,18 +256,33 @@ export class ModelSelector {
       { from: routing.model, to: alt.model },
       'Routed model does not support tools — rerouting to a tool-capable local model',
     );
-    return { model: alt.model, reason: `Fallback: ${alt.reason}` };
+    return { model: alt.model, name: alt.name, reason: `Fallback: ${alt.reason}` };
   }
 
   /**
    * Select a model based on message complexity.
-   * Simple messages use a cheaper/faster model if available.
+   * Simple messages use a cheaper/faster model if available. A requester who
+   * bound a personal model to the `everyday` lane — the casual-chat lane —
+   * gets that row instead (spec §8.2). In a space session the space rules
+   * hold here too (side questions, the voice plan gate): a CLI row only when
+   * `usableInSpace` allows it for the requester's role.
    */
-  async selectByComplexity(complexity: 'simple' | 'moderate' | 'complex' = 'moderate'): Promise<string> {
+  async selectByComplexity(complexity: 'simple' | 'moderate' | 'complex' = 'moderate', requester: ModelRequester = {}): Promise<SelectedModel> {
     const registry = getModelRegistry();
-    const defaultModel = await registry.getDefaultModel();
-    if (!defaultModel) {
+    const usable = (row: Parameters<typeof usableInSpace>[0]) => !requester.inSpace || usableInSpace(row, requester.spaceRole);
+    if (requester.userId) {
+      const personal = await registry.getUserBinding(requester.userId, 'everyday');
+      if (personal && usable(personal)) return { modelId: personal.modelId, name: personal.name };
+    }
+    const configuredDefault = await registry.getDefaultModel();
+    if (!configuredDefault) {
       throw new Error('No default model configured. Set one in the Models page.');
+    }
+    const defaultModel = usable(configuredDefault)
+      ? configuredDefault
+      : (await registry.getAllModels()).find((m) => m.provider !== 'cli');
+    if (!defaultModel) {
+      throw new Error(`The default model ${configuredDefault.name} cannot run in this space and no API model is configured.`);
     }
     const defaultModelId = defaultModel.modelId;
 
@@ -258,10 +300,10 @@ export class ModelSelector {
           { complexity, model: cheapModel.modelId },
           'Routing simple message to cheaper model',
         );
-        return cheapModel.modelId;
+        return { modelId: cheapModel.modelId, name: cheapModel.name };
       }
     }
 
-    return defaultModelId;
+    return { modelId: defaultModelId, name: defaultModel.name };
   }
 }

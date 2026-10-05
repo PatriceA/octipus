@@ -40,6 +40,8 @@ export const defaultConfig: Partial<Config> = {
     shellSandbox: 'off',
     vaultDenyUnscopedSecrets: false,
     dockerIsolation: 'off',
+    trustedProxies: [],
+    registration: 'open',
   },
   api: {
     host: '0.0.0.0',
@@ -96,7 +98,6 @@ export const defaultConfig: Partial<Config> = {
     auditShadow: true,
     enforcePermissions: true,
     rlsEnabled: false,           // requires non-superuser app role; opt-in
-    orgWorkspaces: true,
     /**
      * Refuse (don't auto-approve) these actions for unattended workers.
      *
@@ -119,10 +120,33 @@ export const defaultConfig: Partial<Config> = {
     ocrModel: 'glm-ocr',
     ocrEndpoint: 'http://localhost:11435',
   },
+  spaces: {
+    creation: 'any_user',
+    maxMembers: 50,
+    inviteMaxTtlHours: 720,
+    purgeAfterArchiveDays: 7,
+    noteMaxBytes: 114_688,
+    docMaxUpdatesPerSecond: 30,
+    docPersistDebounceMs: 2000,
+    docReindexMinutes: 10,
+    docBaseTtlMinutes: 30,
+    fileLeaseTtlSeconds: 180,
+    memoryMaxItems: 50,
+  },
+  rooms: {
+    maxQueuedPerMember: 3,
+    approvalTimeoutMinutes: 30,
+    transcriptWindowChars: 6000,
+  },
   compaction: {
     minSavingsRatio: 0.10,
     growthMultiplier: 2.0,
     hardCeiling: 1_000_000,
+  },
+  gateway: {
+    maxConnectionsPerUser: 20,
+    maxFrameBytes: 262_144,
+    replayMaxSessions: 500,
   },
   swarm: {
     perUserSpawnsPerMinute: 30,

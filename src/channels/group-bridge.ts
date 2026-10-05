@@ -1,0 +1,565 @@
+/**
+ * The group-channel bridge (docs/plans/coworking-spec.md §9.4).
+ *
+ * A group channel bound to a space is that space's conversation on the
+ * platform: each thread of the channel is a room of the space
+ * (`group_channel_rooms`), and the room mirrors the thread.
+ *
+ * - **Binding** needs a space owner who is also the channel's owner, and an
+ *   explicit acknowledgement that everyone in the channel can read what the
+ *   room shows. It closes the members' per-thread sessions of the channel and
+ *   is audited with the space (I10). So is every unbinding: by the channel's
+ *   owner or a space owner, by a take-over of the channel (the new owner is
+ *   not the one who bound it), by its removal, and when the owner who bound
+ *   it stops being an owner of the space (demoted, removed, left:
+ *   `endBindingsOfFormerOwner`, from `onMembershipChanged`).
+ * - **Rooms** of a bound channel are open rooms of the space it is bound to
+ *   now: a thread's mapping counts only while its room is in the channel's
+ *   current space (a mapping left by an earlier binding never resolves), a
+ *   bridged room cannot be made private while bound (`updateRoom`), and a
+ *   room that is not open is never relayed.
+ * - **Turns** in a bound channel are room turns (`AgentService.handleRoomMessage`,
+ *   D8): the member's message is posted in the thread's room and the turn
+ *   runs as them. A linked member who is not a member of the space (or whose
+ *   role cannot ask the agent; a guest, who reads only the rooms they are
+ *   added to, neither) gets a private hint and no turn. Unlinked
+ *   people's posts are never stored in the room: they stay platform context,
+ *   which reaches the turn as the thread's fenced transcript.
+ * - **Relay**: every post and reply stored in a bridged room that did not
+ *   come from the platform is posted in its thread, so the channel reads what
+ *   the room shows — that is what the owner acknowledged.
+ * - **Taken tasks** go on the space's board through the space access layer,
+ *   one task per message whoever takes it (`takeChannelTask` with `space`).
+ * - **Budget**: the space's budget replaces the channel's while the space
+ *   sponsors its turns (`groupBudgetPause`); unprompted posts run only while
+ *   the space funds unprompted work, and are off without a sponsor
+ *   (`bridgeListenFunding`) — their probe is install work attributed to the
+ *   space (`group-listen.ts`).
+ */
+import { and, eq, notExists } from 'drizzle-orm';
+import { MAIN_THREAD } from '@/channels/group-handler';
+import type { ChannelType, UnifiedMessage } from '@/core/types';
+import { getDb } from '@/db/postgres';
+import { messageEvents } from '@/db/repositories/message-events';
+import { isUuid } from '@/db/repositories/scoped';
+import { sessionKindOf } from '@/db/repositories/session-kind';
+import { type GroupChannel, groupChannelRooms, groupChannels } from '@/db/schema/group-channels';
+import type { Message } from '@/db/schema/messages';
+import { workspaces } from '@/db/schema/organizations';
+import { sessions } from '@/db/schema/sessions';
+import { can, requireCan, SpaceError } from '@/security/space-access';
+import { channelLogger } from '@/utils/logger';
+import { getUMI } from './interface';
+
+type Db = ReturnType<typeof getDb>;
+type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+
+/** Who binds or unbinds; rights are read from the database. */
+export interface BridgeActor {
+  readonly userId: string;
+  readonly impersonatedBy?: string | null;
+}
+
+/** The acknowledgement the owner gives when binding (shown in the web flow). */
+export const BIND_ACKNOWLEDGEMENT = 'Everyone in this channel can read what the room shows: '
+  + 'every post and every answer of the space\'s agent in the room is posted in the channel\'s thread.';
+
+async function spaceService() {
+  return import('@/core/spaces/service');
+}
+
+async function forgetChannel(group: Pick<GroupChannel, 'id' | 'channelType' | 'channelId'>): Promise<void> {
+  const { invalidateGroupChannel } = await import('./group-channels');
+  invalidateGroupChannel(group);
+}
+
+/**
+ * Bind the channel to a space (§9.4 point 2). `roomId`, optional, is a room
+ * of the space that becomes the channel's main thread (the whole chat on a
+ * platform without threads); every other thread gets its own room on first
+ * use. Closes the members' active per-thread sessions of the channel.
+ */
+export async function bindGroupChannel(
+  actor: BridgeActor,
+  groupChannelId: string,
+  input: { workspaceId: string; acknowledged: boolean; roomId?: string },
+): Promise<GroupChannel> {
+  if (input.acknowledged !== true) {
+    throw new SpaceError('invalid_input', 'Confirm that everyone in the channel can read what the room shows');
+  }
+  if (!isUuid(groupChannelId)) throw new SpaceError('not_found', 'Group channel not found');
+  const { getMembership, writeSpaceAudit, auditActor } = await spaceService();
+  const bound = await getDb().transaction(async (tx) => {
+    const [group] = await tx.select().from(groupChannels)
+      .where(and(eq(groupChannels.id, groupChannelId), eq(groupChannels.ownerUserId, actor.userId)))
+      .for('update')
+      .limit(1);
+    // Someone else's enrolment answers like a missing one.
+    if (!group) throw new SpaceError('not_found', 'Group channel not found');
+    // A space owner who is also the channel's owner (§9.4).
+    requireCan(await getMembership(actor.userId, input.workspaceId, tx, { lock: 'share' }), 'manage_space');
+    // Read in the transaction (one connection in embedded mode).
+    const [space] = await tx.select({ archivedAt: workspaces.archivedAt }).from(workspaces).where(eq(workspaces.id, input.workspaceId)).limit(1);
+    if (space?.archivedAt) throw new SpaceError('archived', 'This space is archived');
+    if (group.workspaceId) throw new SpaceError('invalid_input', 'This channel is already bound to a space; unbind it first');
+    // Mappings a late message of an earlier binding left behind never carry over.
+    await tx.delete(groupChannelRooms).where(eq(groupChannelRooms.groupChannelId, groupChannelId));
+
+    if (input.roomId) {
+      if (!isUuid(input.roomId)) throw new SpaceError('invalid_input', 'That room is not in this space');
+      // Locked: making the room private (`updateRoom`) waits for this binding, and then refuses.
+      const [room] = await tx.select({ id: sessions.id, workspaceId: sessions.workspaceId, visibility: sessions.roomVisibility })
+        .from(sessions).where(and(eq(sessions.id, input.roomId), eq(sessions.kind, 'room'))).for('share').limit(1);
+      if (!room || room.workspaceId !== input.workspaceId) throw new SpaceError('invalid_input', 'That room is not in this space');
+      if (room.visibility !== 'space') throw new SpaceError('invalid_input', 'Only an open room can be bound: the channel reads it');
+      const [mapped] = await tx.select({ groupChannelId: groupChannelRooms.groupChannelId }).from(groupChannelRooms)
+        .where(eq(groupChannelRooms.sessionId, room.id)).limit(1);
+      if (mapped) throw new SpaceError('invalid_input', 'That room is already bound to a channel');
+      await tx.insert(groupChannelRooms).values({ groupChannelId, threadId: MAIN_THREAD, sessionId: room.id });
+    }
+    const [updated] = await tx.update(groupChannels)
+      .set({ workspaceId: input.workspaceId, updatedAt: new Date() })
+      .where(eq(groupChannels.id, groupChannelId))
+      .returning();
+    // The members' own thread sessions end here: from now on the channel's
+    // threads are rooms of the space.
+    const closed = await tx.update(sessions)
+      .set({ status: 'completed', updatedAt: new Date() })
+      .where(and(eq(sessions.groupChannelId, groupChannelId), eq(sessions.status, 'active')))
+      .returning({ id: sessions.id });
+    await writeSpaceAudit(tx, {
+      ...auditActor(actor),
+      action: 'space_updated',
+      workspaceId: input.workspaceId,
+      resourceType: 'group_channel',
+      resourceId: groupChannelId,
+      details: {
+        bound: true,
+        acknowledged: BIND_ACKNOWLEDGEMENT,
+        channelType: group.channelType,
+        channelId: group.channelId,
+        label: group.label,
+        ...(input.roomId ? { roomId: input.roomId } : {}),
+        closedSessions: closed.length,
+      },
+    });
+    return updated;
+  });
+  await forgetChannel(bound);
+  return bound;
+}
+
+/**
+ * Unbind in the caller's transaction: the thread → room rows go (the rooms
+ * stay in the space, as its content), the channel goes back to per-member
+ * sessions, and the space's audit trail says who and why.
+ */
+async function unbindInTx(
+  tx: Tx,
+  group: GroupChannel,
+  actor: BridgeActor,
+  reason: 'unbound' | 'owner_changed' | 'channel_removed' | 'owner_left',
+): Promise<void> {
+  if (!group.workspaceId) return;
+  const { writeSpaceAudit, auditActor } = await spaceService();
+  await tx.delete(groupChannelRooms).where(eq(groupChannelRooms.groupChannelId, group.id));
+  await tx.update(groupChannels).set({ workspaceId: null, updatedAt: new Date() }).where(eq(groupChannels.id, group.id));
+  await writeSpaceAudit(tx, {
+    ...auditActor(actor),
+    action: 'space_updated',
+    workspaceId: group.workspaceId,
+    resourceType: 'group_channel',
+    resourceId: group.id,
+    details: { bound: false, reason, channelType: group.channelType, channelId: group.channelId, label: group.label },
+  });
+}
+
+/** Unbind (the channel's owner, or an owner of the bound space). */
+export async function unbindGroupChannel(actor: BridgeActor, groupChannelId: string): Promise<GroupChannel> {
+  if (!isUuid(groupChannelId)) throw new SpaceError('not_found', 'Group channel not found');
+  const { getMembership } = await spaceService();
+  const updated = await getDb().transaction(async (tx) => {
+    const [group] = await tx.select().from(groupChannels).where(eq(groupChannels.id, groupChannelId)).for('update').limit(1);
+    if (!group?.workspaceId) throw new SpaceError('not_found', 'Group channel not found');
+    const spaceOwner = can((await getMembership(actor.userId, group.workspaceId, tx))?.role, 'manage_space');
+    if (group.ownerUserId !== actor.userId && !spaceOwner) throw new SpaceError('not_found', 'Group channel not found');
+    await unbindInTx(tx, group, actor, 'unbound');
+    return { ...group, workspaceId: null };
+  });
+  await forgetChannel(updated);
+  return updated;
+}
+
+/**
+ * The enrolment changes hands or goes away while bound: the binding ends
+ * with it (the new owner never bound it). Called inside the caller's
+ * transaction, before the change.
+ */
+export async function endBindingInTx(tx: Tx, group: GroupChannel, actor: BridgeActor, reason: 'owner_changed' | 'channel_removed'): Promise<void> {
+  await unbindInTx(tx, group, actor, reason);
+}
+
+/**
+ * `userId` is no longer an owner of `workspaceId` (demoted, removed, left):
+ * the bindings of channels they own there end (reason `owner_left`, audited
+ * with the space), since binding needs a space owner who owns the channel
+ * (§9.4). Membership is read in the transaction, so a binding racing the
+ * change is ended too. Returns how many ended. Called by
+ * `onMembershipChanged`.
+ */
+export async function endBindingsOfFormerOwner(workspaceId: string, userId: string): Promise<number> {
+  if (!isUuid(workspaceId) || !isUuid(userId)) return 0;
+  const { getMembership } = await spaceService();
+  const ended = await getDb().transaction(async (tx) => {
+    const groups = await tx.select().from(groupChannels)
+      .where(and(eq(groupChannels.workspaceId, workspaceId), eq(groupChannels.ownerUserId, userId)))
+      .for('update');
+    if (groups.length === 0) return [];
+    if (can((await getMembership(userId, workspaceId, tx))?.role, 'manage_space')) return [];
+    for (const group of groups) await unbindInTx(tx, group, { userId }, 'owner_left');
+    return groups;
+  });
+  for (const group of ended) await forgetChannel(group);
+  if (ended.length > 0) {
+    channelLogger.info({ workspaceId, userId, count: ended.length }, 'Group channel bindings ended: their owner is no longer a space owner');
+  }
+  return ended.length;
+}
+
+// ── Threads and rooms ───────────────────────────────────────────────────────
+
+/**
+ * The room of a bound channel's thread, or null when the thread has none
+ * yet. Only a room of the space the channel is bound to now counts: a
+ * mapping an earlier binding left behind never resolves.
+ */
+export async function bridgedRoomOf(groupChannelId: string, threadId: string, db: Db | Tx = getDb()): Promise<string | null> {
+  if (!isUuid(groupChannelId)) return null;
+  const [row] = await db.select({ sessionId: groupChannelRooms.sessionId }).from(groupChannelRooms)
+    .innerJoin(groupChannels, eq(groupChannels.id, groupChannelRooms.groupChannelId))
+    .innerJoin(sessions, eq(sessions.id, groupChannelRooms.sessionId))
+    .where(and(
+      eq(groupChannelRooms.groupChannelId, groupChannelId),
+      eq(groupChannelRooms.threadId, threadId),
+      eq(sessions.workspaceId, groupChannels.workspaceId),
+    ))
+    .limit(1);
+  return row?.sessionId ?? null;
+}
+
+/**
+ * The room of a bound channel's thread, created on first use: an open room
+ * of the space, created by the channel's owner (who bound it), titled after
+ * the channel and the thread's first message. `group` may be a cached read:
+ * the binding is read again (and held) in the transaction, and a channel
+ * unbound or bound elsewhere since refuses (`SpaceError('not_found')`)
+ * instead of creating a room in the space it left.
+ */
+export async function resolveBridgedRoom(group: GroupChannel, threadId: string, title?: string): Promise<string> {
+  if (!group.workspaceId) throw new Error('resolveBridgedRoom: the channel is not bound to a space');
+  const existing = await bridgedRoomOf(group.id, threadId);
+  if (existing) return existing;
+  const workspaceId = group.workspaceId;
+  const [{ createRoomInTx }, { writeSpaceAudit }] = await Promise.all([import('@/core/rooms/service'), spaceService()]);
+  const where = group.label ?? group.channelId;
+  const roomTitle = (threadId === MAIN_THREAD || !title ? where : `${where} · ${title}`).slice(0, 120);
+  const created = await getDb().transaction(async (tx) => {
+    // Held to the commit: an unbinding (which locks the row for update) waits.
+    const [current] = await tx.select({ workspaceId: groupChannels.workspaceId }).from(groupChannels)
+      .where(eq(groupChannels.id, group.id)).for('share').limit(1);
+    if (current?.workspaceId !== workspaceId) {
+      throw new SpaceError('not_found', 'This channel is no longer bound to that space');
+    }
+    // A mapping of the thread to a room of another space is a leftover: it goes.
+    await tx.delete(groupChannelRooms).where(and(
+      eq(groupChannelRooms.groupChannelId, group.id),
+      eq(groupChannelRooms.threadId, threadId),
+      notExists(tx.select({ id: sessions.id }).from(sessions)
+        .where(and(eq(sessions.id, groupChannelRooms.sessionId), eq(sessions.workspaceId, workspaceId)))),
+    ));
+    const roomId = await createRoomInTx(tx, { workspaceId, createdBy: group.ownerUserId, title: roomTitle, visibility: 'space' });
+    const [mapped] = await tx.insert(groupChannelRooms).values({ groupChannelId: group.id, threadId, sessionId: roomId })
+      .onConflictDoNothing().returning({ sessionId: groupChannelRooms.sessionId });
+    // Another message of the thread created its room first: drop ours.
+    if (!mapped) {
+      await tx.delete(sessions).where(eq(sessions.id, roomId));
+      return null;
+    }
+    await writeSpaceAudit(tx, {
+      actorId: group.ownerUserId,
+      action: 'space_content_changed',
+      workspaceId,
+      resourceType: 'room',
+      resourceId: roomId,
+      details: { created: true, title: roomTitle, visibility: 'space', groupChannelId: group.id, threadId },
+    });
+    return roomId;
+  });
+  if (created) return created;
+  const raced = await bridgedRoomOf(group.id, threadId);
+  if (!raced) throw new Error('resolveBridgedRoom: the thread\'s room vanished');
+  return raced;
+}
+
+/**
+ * Where a bridged room's posts go on the platform, or null for a room no
+ * channel is bound to. The mapping counts only while the room is in the
+ * channel's current space (a leftover of an earlier binding never relays a
+ * room into a channel bound elsewhere) and open: a room the channel may not
+ * read is never relayed.
+ */
+export async function bridgeTargetOf(roomId: string): Promise<{ group: GroupChannel; threadId: string } | null> {
+  if (!isUuid(roomId)) return null;
+  const [row] = await getDb()
+    .select({ group: groupChannels, threadId: groupChannelRooms.threadId })
+    .from(groupChannelRooms)
+    .innerJoin(groupChannels, eq(groupChannels.id, groupChannelRooms.groupChannelId))
+    .innerJoin(sessions, eq(sessions.id, groupChannelRooms.sessionId))
+    .where(and(
+      eq(groupChannelRooms.sessionId, roomId),
+      eq(sessions.workspaceId, groupChannels.workspaceId),
+      eq(sessions.roomVisibility, 'space'),
+    ))
+    .limit(1);
+  if (!row || !row.group.workspaceId) return null;
+  return row;
+}
+
+// ── Who may ask ─────────────────────────────────────────────────────────────
+
+export type BridgeAccess = 'ok' | 'not_member' | 'cannot_ask' | 'archived';
+
+/** Whether a linked member may start a turn in the bound channel (membership read now, D5). */
+export async function bridgeAccess(group: GroupChannel, userId: string): Promise<BridgeAccess> {
+  if (!group.workspaceId) return 'ok';
+  const { getMembership, isSpaceArchived } = await spaceService();
+  const membership = await getMembership(userId, group.workspaceId);
+  if (!membership) return 'not_member';
+  // A guest reads only the rooms they are added to; a thread's room is open.
+  if (!can(membership.role, 'run_agent') || membership.role === 'guest') return 'cannot_ask';
+  if (await isSpaceArchived(group.workspaceId)) return 'archived';
+  return 'ok';
+}
+
+/** The private hint for a linked member the bridge turns away. */
+export function bridgeHint(access: Exclude<BridgeAccess, 'ok'>): string {
+  switch (access) {
+    case 'not_member':
+      return 'This channel is bound to an Octipus space you are not a member of, so I can\'t answer you here. '
+        + 'Ask one of its owners for an invite.';
+    case 'cannot_ask':
+      return 'This channel is bound to an Octipus space where your role can\'t ask me. Ask a space owner for a role that can.';
+    case 'archived':
+      return 'The Octipus space this channel is bound to is archived, so I don\'t answer here any more.';
+  }
+}
+
+// ── Budget and funding ──────────────────────────────────────────────────────
+
+/**
+ * The budget pause of a channel: for a bound channel the space's `space`
+ * budget replaces the channel's (§9.2, §9.4 point 5) — its room turns run
+ * in room sessions, which no channel budget covers — but only when the
+ * space pays for those turns (`sponsored`). In `own` and `unattended` a
+ * member's room turn is their own (`fundingFor('room')`): no channel-wide
+ * pause, each member's own budgets refuse it at `checkSpend`. Member caps
+ * pause one member's sponsored turns at `checkSpend`, never the channel.
+ * An unbound channel: its own budget.
+ */
+export async function groupBudgetPause(group: GroupChannel): Promise<{ resetsAt: string } | null> {
+  const { groupChannelPause } = await import('@/security/spend-budgets');
+  if (group.workspaceId) {
+    const { spaceFunding } = await import('@/core/spaces/funding');
+    if ((await spaceFunding(group.workspaceId)).mode !== 'sponsored') return null;
+    return groupChannelPause(group.id, { funding: 'sponsor', spaceId: group.workspaceId });
+  }
+  return groupChannelPause(group.id);
+}
+
+/**
+ * Who pays for a bound channel's unprompted posts: the space's sponsor, or
+ * nobody — then they are off (§9.4 point 5). `fundingFor('listen', space,
+ * settings)` decides from the space's `agent_funding` and sponsor: `own`
+ * funds nothing unprompted, and no sponsor means off.
+ */
+export async function bridgeListenFunding(group: GroupChannel): Promise<{ sponsorUserId: string } | null> {
+  if (!group.workspaceId) throw new Error('bridgeListenFunding: the channel is not bound to a space');
+  const [{ fundingFor }, { spaceFunding }] = await Promise.all([import('@/core/agent/context'), import('@/core/spaces/funding')]);
+  const settings = await spaceFunding(group.workspaceId);
+  let funding: string;
+  try {
+    funding = fundingFor('listen', { workspaceId: group.workspaceId, role: 'owner', scope: null }, settings);
+  } catch (err) {
+    if (err instanceof SpaceError && err.code === 'funding_off') return null;
+    throw err;
+  }
+  if (funding !== 'sponsor') return null;
+  const sponsorUserId = await spaceSponsorOf(group.workspaceId);
+  return sponsorUserId ? { sponsorUserId } : null;
+}
+
+/** The space's sponsor (§9.1, `workspaces.sponsor_user_id`), or null when it has none. */
+export type SpaceSponsorOf = (workspaceId: string) => Promise<string | null>;
+export const spaceSponsorOf: SpaceSponsorOf = async (workspaceId) =>
+  (await (await import('@/core/spaces/funding')).spaceFunding(workspaceId)).sponsorUserId;
+
+// ── Turns from the platform ─────────────────────────────────────────────────
+
+/** A message from a bound channel, handed over by the channel dispatcher. */
+export interface BridgedTurn {
+  message: UnifiedMessage;
+  group: GroupChannel;
+  /** The platform thread's transcript (`readContext`), unlinked people's posts included. */
+  context: string;
+  take?: import('@/core/channels/taken-tasks').TakeRequest;
+}
+
+/**
+ * Post a member's message in the thread's room and queue a room turn as
+ * them (§9.4 point 3). Their access is read again here (D5). `take this`
+ * puts the task on the space's board first.
+ */
+export async function handleBridgedTurn(turn: BridgedTurn): Promise<'queued' | 'approval' | 'refused' | 'already_taken'> {
+  const { message, group } = turn;
+  const umi = getUMI();
+  const channelType = message.channelType as ChannelType;
+  const threadId = message.threadId;
+  if (!threadId) throw new Error('Bridged group message without a thread');
+  const privately = (content: string) => umi.sendPrivate(channelType, message.channelId, message.userId, { content, threadId })
+    .catch((err: unknown) => { channelLogger.warn({ err, groupChannelId: group.id }, 'Could not send a private bridge notice'); return false; });
+
+  const access = await bridgeAccess(group, message.userId);
+  if (access !== 'ok') {
+    await privately(bridgeHint(access));
+    return 'refused';
+  }
+  try {
+    return await bridgedTurnIn(turn, threadId, privately);
+  } catch (err) {
+    // The space said no (the binding or the member's access changed since):
+    // the member hears why, privately, not a generic error in the thread.
+    if (!(err instanceof SpaceError)) throw err;
+    channelLogger.info({ err, groupChannelId: group.id, userId: message.userId }, 'Bridged turn refused by the space');
+    await privately(`I can't take this message into the channel's Octipus space: ${err.message}.`);
+    return 'refused';
+  }
+}
+
+/** `handleBridgedTurn` once the member's access is checked. */
+async function bridgedTurnIn(
+  turn: BridgedTurn,
+  threadId: string,
+  privately: (content: string) => Promise<boolean>,
+): Promise<'queued' | 'approval' | 'refused' | 'already_taken'> {
+  const { message, group } = turn;
+  const umi = getUMI();
+  const channelType = message.channelType as ChannelType;
+  const roomId = await resolveBridgedRoom(group, threadId, message.content.slice(0, 60).replace(/\n/g, ' ').trim() || undefined);
+
+  let take: import('@/core/channels/group-context').GroupTake | undefined;
+  if (turn.take) {
+    const { memberPrincipal } = await import('@/db/repositories/space');
+    const principal = await memberPrincipal(message.userId, group.workspaceId as string);
+    if (!can(principal.spaceRole, 'write')) {
+      await privately('Your role in this channel\'s space can\'t add tasks to its board. Ask a space owner for an editor role.');
+      return 'refused';
+    }
+    const { takeChannelTask } = await import('@/core/channels/taken-tasks');
+    const { quietText } = await import('@/core/channels/group-context');
+    const name = message.userName ?? 'the requester';
+    const { task, created } = await takeChannelTask({
+      userId: message.userId, workspaceId: group.workspaceId, sessionId: roomId, space: principal,
+      requester: name, where: group.label ?? group.channelId, request: turn.take,
+    });
+    if (!created) {
+      const state = task.status === 'done' ? 'done' : task.status === 'archived' ? 'archived' : 'in progress';
+      await privately(`That is already on the space's board: *${quietText(task.title)}* (${state}). Mention me in its thread to continue it.`);
+      return 'already_taken';
+    }
+    await umi.send(channelType, message.channelId, { content: `On it — added *${quietText(task.title)}* to the space's board.`, threadId });
+    take = {
+      taskId: task.id,
+      title: task.title,
+      ...(turn.take.author ? { author: turn.take.author } : {}),
+      ...(turn.take.author || turn.take.quoted ? { text: turn.take.text } : {}),
+    };
+  }
+
+  const { postRoomMessage } = await import('@/core/rooms/service');
+  const platformMessageId = message.metadata?.messageId != null ? String(message.metadata.messageId) : '';
+  const { message: post } = await postRoomMessage({ userId: message.userId }, roomId, {
+    content: message.content || '(attachment)',
+    addressed: true,
+    bridged: { channelType, messageId: platformMessageId },
+  });
+  const { getAgentService } = await import('@/core/agent');
+  const { RoomQueueError } = await import('@/core/rooms/queue');
+  try {
+    const outcome = await getAgentService().handleRoomMessage(roomId, message.userId, post.id, {
+      requester: message.userName ?? 'A member', context: turn.context, ...(take ? { take } : {}),
+    });
+    return outcome.kind;
+  } catch (err) {
+    if (err instanceof RoomQueueError) {
+      await privately(err.message);
+      return 'refused';
+    }
+    throw err;
+  }
+}
+
+// ── Relay: the room, read in the channel ────────────────────────────────────
+
+/** The text a room row becomes in the thread; null for rows that stay in the room. */
+export function relayText(row: Message, authorName: string | null): string | null {
+  const meta = (row.metadata ?? {}) as Record<string, unknown>;
+  if (meta.bridged) return null;
+  if (meta.kind === 'progress') return null;
+  if (!row.content.trim()) return null;
+  if (row.role === 'assistant') return row.content;
+  if (row.role === 'user') return `*${authorName ?? 'A member'}* (in the web room): ${row.content}`;
+  return null;
+}
+
+async function relay(row: Message): Promise<void> {
+  if (row.role !== 'user' && row.role !== 'assistant') return;
+  if ((await sessionKindOf(row.sessionId)) !== 'room') return;
+  // Null too for a room that is not open, or not in the channel's space now.
+  const target = await bridgeTargetOf(row.sessionId);
+  if (!target) return;
+  const { isGroupChannelActive } = await import('./group-channels');
+  // Silent in a paused channel, as for every other message there.
+  if (!(await isGroupChannelActive(target.group))) return;
+  const { displayNames } = await import('@/core/session-history');
+  const name = row.authorUserId ? (await displayNames([row.authorUserId])).get(row.authorUserId) ?? null : null;
+  const text = relayText(row, name);
+  if (!text) return;
+  await getUMI().send(target.group.channelType as ChannelType, target.group.channelId, { content: text, threadId: target.threadId });
+}
+
+const chains = new Map<string, Promise<void>>();
+
+/** Queue `row` for the platform behind the room's earlier rows (commit order). */
+export function relayRoomMessage(row: Message): Promise<void> {
+  const previous = chains.get(row.sessionId) ?? Promise.resolve();
+  const next = previous
+    .then(() => relay(row))
+    .catch((err: unknown) => channelLogger.error({ err, sessionId: row.sessionId, messageId: row.id }, 'Group bridge relay failed'));
+  chains.set(row.sessionId, next);
+  void next.finally(() => { if (chains.get(row.sessionId) === next) chains.delete(row.sessionId); });
+  return next;
+}
+
+let stopRelay: (() => void) | null = null;
+
+/** Start relaying bridged rooms to their channels. Idempotent; returns the stop function. */
+export function startGroupBridgeRelay(): () => void {
+  if (stopRelay) return stopRelay;
+  const onCreated = (row: Message) => { void relayRoomMessage(row); };
+  messageEvents.on('created', onCreated);
+  stopRelay = () => {
+    messageEvents.off('created', onCreated);
+    stopRelay = null;
+  };
+  return stopRelay;
+}

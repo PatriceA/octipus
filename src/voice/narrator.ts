@@ -4,13 +4,13 @@
  * It only describes what the root agent already did, so it has zero runaway
  * surface (the only thing that starts work is the user's spoken request).
  *
- * Wired in `src/api/websocket.ts`: each `AgentService.onEvent` / `agentManager
- * .onEvent` that already reaches a `/ws` client also gets narrated as a
- * `{type:"speak"}` frame when that connection has voice enabled. `/voice` can't
- * carry this — it's half-duplex and closes after each utterance (voice-ws.ts).
+ * Wired in `src/core/gateway/event-bridge.ts`: each `AgentService.onEvent`
+ * turn event is narrated as a `voice.speak` gateway event to the connection(s)
+ * that put that session into voice mode (`voice.set`). `/voice` can't carry
+ * this — it's half-duplex and closes after each utterance (voice-ws.ts).
  *
  * Phase B swaps `narrate()` for an LLM on the assigned voice model; the wiring
- * and the `speak` frame stay the same.
+ * and the `voice.speak` event stay the same.
  */
 
 /** The subset of the root agent/agent event shape the narrator reads. */

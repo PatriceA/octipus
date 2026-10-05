@@ -9,6 +9,7 @@ import { taskFingerprint } from '@/core/swarm/spawner';
 import type { AgentWorker } from '@/core/agent-worker';
 import type { ToolHandler } from '@/core/agent-base';
 import { type AgentNode, getLevelDefault, LEVEL_DEFAULT, type PendingChild } from '@/core/swarm/types';
+import { agentPrincipal } from '@/security/principal';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { sessionGeneration } from '@/db/schema/sessions';
@@ -33,6 +34,9 @@ import delegationPrompt from './delegation-prompt.md';
 import { applyToolCap, isSmallModel } from './small-model';
 import { channelCanPrompt } from '@/security/approval-policy';
 import { ROOT_ROLE } from './types';
+import { type AgentScope, writesWithheld } from './context';
+import { spaceSessionNotice, withoutPersonalOnlyTools } from '@/security/space-tools';
+import { can } from '@/security/space-access';
 import type { TurnEvent, AgentService, TurnOutcome } from './service';
 import type { MessageClassification } from './types';
 
@@ -137,6 +141,18 @@ export interface RootRunExtras {
    * `complete_taken_task` for them (docs/plans/group-chat-bot.md §5).
    */
   takenTasks?: ReadonlyArray<{ id: string; title: string }>;
+  /**
+   * A room turn (coworking §6.4): the member's post it answers. The root
+   * agent's history leaves that post out (it is the request) and stores no
+   * user row of its own.
+   */
+  room?: { postedMessageId: string; title: string };
+  /**
+   * A room turn's stop (`/stop`, a removal, an approval timeout): checked
+   * right before the spawn, and once the root agent exists it stops it — a
+   * stop that lands before the agent is registered is not lost.
+   */
+  signal?: AbortSignal;
 }
 
 export async function runRootAgent(
@@ -146,22 +162,27 @@ export async function runRootAgent(
   userId: string,
   message: string,
   classification: MessageClassification,
-  guardFlags: string[] = [],
-  channel?: string,
+  guardFlags: string[],
+  channel: string | undefined,
   /**
    * Memory-redesign Phase D — appended to the root agent's system
    * prompt. Pre-rendered by `handleMessage` once per turn so both
    * the root agent and the directResponse path see the same
    * long-term memory block.
    */
-  extraSystemContext: string = '',
-  /** Workspace scope inherited by every spawned child. */
-  workspaceId: string | null = null,
+  extraSystemContext: string,
+  /**
+   * The turn's workspace, space, trigger and funding (`resolveAgentScope`),
+   * inherited by every spawned child.
+   */
+  scope: AgentScope,
   /** Chat/work split (Thread 3): inline vs file deliverable directive. */
   outputDirective: { mode: 'inline' | 'file'; forced: boolean } = { mode: 'inline', forced: false },
   extras: RootRunExtras = {},
 ): Promise<{ response: string; agentId: string; sources: string[]; outcome: TurnOutcome; limit?: LimitRefusal }> {
   const emit = deps.emit;
+  const workspaceId = scope.workspaceId;
+  const space = scope.space;
   const agentManager = getAgentManager();
   // One routing decision, used twice: the model comes from the lane, and so do
   // the lane's temperature and token limit. Computed here rather than inside the
@@ -171,7 +192,11 @@ export async function runRootAgent(
   const laneChoice = selectLane(message, classification);
   shadowLaneDecision(message, classification, laneChoice);
   const routedLane = laneChoice.lane;
-  const modelName = await deps.modelSelector.selectForRootAgent(sessionId, classification.type, { message, classification });
+  // The requester's own choices first (their `/model`, their personal lane
+  // binding), then the install's (coworking spec §8.2).
+  const inSpace = !!space;
+  const selectedModel = await deps.modelSelector.selectForRootAgent(sessionId, classification.type, { message, classification }, { userId, inSpace, spaceRole: space?.role, sponsor: scope.sponsor });
+  const modelName = selectedModel.modelId;
 
   // Resolve the root agent mode for THIS turn. 'auto' (default) re-derives
   // from the current default model's size every turn, so swapping to a
@@ -179,7 +204,7 @@ export async function runRootAgent(
   // router short-circuits below to a deterministic single-worker turn; lite
   // shrinks the prompt/tools/iterations further down; full is unchanged.
   const agentCfg = getConfig().agent;
-  const modelMeta = await getModelRegistry().getModelByModelId(modelName);
+  const modelMeta = await getModelRegistry().getModel(selectedModel.name);
   const promptTier = resolvePromptTier(
     { modelId: modelName, metadata: modelMeta?.metadata, provider: modelMeta?.provider },
     {
@@ -224,6 +249,7 @@ export async function runRootAgent(
   const parentNode: AgentNode = {
     id: '__pending__',
     rootSessionId: sessionId,
+    userId,
     parentNodeId: null,
     kind: 'root',
     depth: 0,
@@ -257,7 +283,7 @@ export async function runRootAgent(
   const rootWorkerRef: { current: AgentWorker | null } = { current: null };
 
   const isLite = promptTier === 'lite';
-  const metaTools = createMetaTools(service, {
+  const allMetaTools = createMetaTools(service, {
     parentNode,
     swarmRefs: {
       detachHookRef: rootDetachHookRef,
@@ -266,6 +292,13 @@ export async function runRootAgent(
     lite: isLite,
     takenTasks: extras.takenTasks,
   });
+  const metaTools = space ? withoutPersonalOnlyTools(allMetaTools) : allMetaTools;
+  // Space memory (§6.5): the agent may record a fact for the space.
+  if (space) {
+    const { createRememberForSpaceTool } = await import('@/core/spaces/memory-tool');
+    metaTools.push(createRememberForSpaceTool(service));
+    rootAllowedToolIds.add('remember_for_space');
+  }
 
   // The root's own tools. `getToolsForRole` is the same gate every worker goes
   // through (capability check, MCP lazy handlers, read-only filtering).
@@ -279,6 +312,14 @@ export async function runRootAgent(
   // granted what the parent does not hold — the same reasoning the read-only
   // role filter documents.
   if (isPlanMode(planSessionCtx)) rootTools = stripMutatingTools(rootTools);
+  // In a space: personal-only tools are not offered (the prompt says why),
+  // and a commenter's turn — or a listen turn nobody asked for (§9.3) —
+  // holds no file-changing tools either; every other write is refused at
+  // call time by `routeApprovalFor`.
+  if (space) {
+    rootTools = withoutPersonalOnlyTools(rootTools);
+    if (writesWithheld(space, scope.trigger)) rootTools = stripMutatingTools(rootTools);
+  }
   // The small-model answer to "what runs the loop now": the same loop, a reduced
   // tool set, and a hard iteration cap (below). Gated on `isSmallModel` — the
   // SMALL tier — and not on `isLite`, which is the 24B prompt tier: every worker
@@ -473,7 +514,8 @@ export async function runRootAgent(
 
   // Inject workspace awareness
   const sessionCtx = session?.context as import('@/db/schema/sessions').SessionContext | undefined;
-  const isDevMode = sessionCtx?.devMode === true && !!sessionCtx.projectPath;
+  // No dev-mode project root in a space: its agents work in the space's files.
+  const isDevMode = !space && sessionCtx?.devMode === true && !!sessionCtx.projectPath;
 
   // Plan mode: state what the tool filter below cannot enforce. Volatile tier,
   // because it is a property of this session right now rather than of the
@@ -502,21 +544,26 @@ export async function runRootAgent(
     staticParts.push(wsContext);
   } else {
     // Normal mode: generic workspace awareness.
-    // Advertise the per-user sandbox root (the same one the filesystem tool
-    // enforces via WorkspaceFS.forAgent), not the flat config.workspace.rootPath —
+    // Advertise the turn workspace's sandbox root (the same one the filesystem
+    // tool enforces via WorkspaceFS.forAgent), not the flat config.workspace.rootPath —
     // otherwise the root agent hands workers absolute paths that fall outside
     // their own sandbox.
     const wsConfig = getConfig();
-    const wsRoot = WorkspaceFS.forAgent({ userId }).root;
-    const wsAdditional = wsConfig.workspace.additionalPaths?.map((p: string) => resolve(p)).filter(Boolean) || [];
+    // A space's agents work in the space's files only: no extra paths and
+    // no personal repo registry.
+    const wsFs = space
+      ? WorkspaceFS.forSpace(space.workspaceId, { guestFolders: space.scope?.folders })
+      : WorkspaceFS.forPrincipal(agentPrincipal({ userId, workspaceId }));
+    const wsRoot = wsFs.root;
+    const wsAdditional = space ? [] : wsConfig.workspace.additionalPaths?.map((p: string) => resolve(p)).filter(Boolean) || [];
 
     // Multi-repo: when the repo registry has been scanned, inject the map of
     // the suite (kinds + dependency edges) — the root agent's "mental model"
     // — instead of a bare directory listing. See .octipus/multi-repo-design.md.
     let injectedSuite = false;
-    try {
+    if (!space) try {
       const { loadRepoGraph } = await import('@/core/repos/registry-service');
-      const { repos, edges, ambiguousPackages } = await loadRepoGraph(userId);
+      const { repos, edges, ambiguousPackages } = await loadRepoGraph({ userId, workspaceId });
       if (repos.length > 0) {
         const repoLines = repos.slice(0, 40).map((r) => {
           const deps = edges
@@ -545,16 +592,11 @@ export async function runRootAgent(
     // Registry is authoritative when present — otherwise fall back to a raw
     // directory listing of the workspace root.
     if (!injectedSuite) try {
-      const { readdirSync, statSync: statS } = await import('fs');
-      const { hasAgentsMd } = await import('./agents-md');
+      const { projectListing } = await import('./agents-md');
       // List sibling repos and flag which carry a curated AGENTS.md guide, so
-      // the root agent can point workers at it when entering a repo.
-      const dirs = readdirSync(wsRoot)
-        .filter(name => !name.startsWith('.') && statS(resolve(wsRoot, name)).isDirectory())
-        .map(name => {
-          const repoRoot = resolve(wsRoot, name);
-          return hasAgentsMd(repoRoot) ? `  - ${name}/ (has AGENTS.md)` : `  - ${name}/`;
-        });
+      // the root agent can point workers at it when entering a repo. A guest
+      // (S6) is shown the folders of their scope only.
+      const dirs = projectListing(wsFs);
       let wsContext = `\nWORKSPACE: Root is ${wsRoot}`;
       if (dirs.length > 0 && dirs.length <= 30) {
         wsContext += `\nProjects:\n${dirs.join('\n')}`;
@@ -571,6 +613,13 @@ export async function runRootAgent(
       coreLogger.debug({ err, wsRoot }, 'workspace readdir skipped — root may not exist yet');
       staticParts.push(`\nWORKSPACE: ${wsRoot}`);
     }
+  }
+  // A space session: where the agent is, what the role allows, and why the
+  // personal-only tools are missing.
+  if (space) {
+    const { getSpace } = await import('@/core/spaces/service');
+    const { name } = await getSpace({ userId }, space.workspaceId);
+    staticParts.push(spaceSessionNotice(name, space.role, can(space.role, 'run_agent_write'), extras.room ? { title: extras.room.title } : undefined));
   }
 
   // Append the volatile per-turn context (date, summary, history) after the
@@ -610,12 +659,14 @@ export async function runRootAgent(
     ? agentConfig.hookTurnTimeoutMs
     : agentConfig.turnTimeoutMs;
 
+  extras.signal?.throwIfAborted();
   const worker = await agentManager.spawn({
     sessionId,
     userId,
-    workspaceId,
+    ...scope,
     topic: routedLane,
     model: modelName,
+    modelName: selectedModel.name,
     role: ROOT_ROLE,
     root: true,
     // Who is on the other end — derived from whether this channel can actually
@@ -645,10 +696,14 @@ export async function runRootAgent(
       sessionGeneration: sessionGeneration(sessionCtx),
       inputGuardFlags: guardFlags,
       ...(isDevMode ? { projectPath: sessionCtx!.projectPath! } : {}),
+      ...(extras.room ? { room: { postedMessageId: extras.room.postedMessageId } } : {}),
     },
   });
 
   const agentId = worker.getContext().id;
+  const stopOnAbort = () => { agentManager.stop(agentId, { cascade: true }); };
+  if (extras.signal?.aborted) stopOnAbort();
+  else extras.signal?.addEventListener('abort', stopOnAbort, { once: true });
   parentNode.signal = worker.getAbortSignal();
   // Spend proxy — the swarm pool this feeds is a cost pool (see spawn-budget.ts).
   parentNode.ownTokenUsage = () => worker.getBillableTokens();
@@ -906,5 +961,7 @@ export async function runRootAgent(
       ? 'Task was stopped. Would you like to adjust the request or start something new?'
       : `I encountered an error while processing your request: ${humanizeProviderError(errMsg)}`;
     return { response, agentId, sources, outcome: wasStopped || isCancellationError(error) ? 'cancelled' : 'failed' };
+  } finally {
+    extras.signal?.removeEventListener('abort', stopOnAbort);
   }
 }

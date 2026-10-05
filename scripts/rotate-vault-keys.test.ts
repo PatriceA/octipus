@@ -146,4 +146,28 @@ describe('vault key rotation — exercising the same lazy upgrade the script tri
     const { rows } = await queryRaw(`SELECT key_version FROM vault WHERE id='${bad.id}'`);
     expect(rows[0]?.key_version).toBe(1);
   });
+
+  test('the script\'s upgrade reaches rows of every scope, a space secret included (§9.5)', async () => {
+    const { spaceWith } = await import('@/test-helpers/space-fixtures');
+    const spaceId = await spaceWith(aliceId, []);
+    const { encrypt } = await import('@/utils/crypto');
+    const { getDb } = await import('@/db/postgres');
+    const { vault: vaultTable } = await import('@/db/schema/vault');
+    // A space secret written at v1 (a partial migration): only the row's own
+    // key path can rewrite it — `vault.get` never selects a space row.
+    const pbk = pbkdf2Sync(process.env.MASTER_KEY!, 'assistant-vault-v1', 100_000, 32, 'sha256');
+    const enc = encrypt('space-v1', pbk);
+    const [row] = await getDb().insert(vaultTable).values({
+      userId: aliceId, scope: 'space', workspaceId: spaceId, name: 'space-rot', credentialType: 'api_key',
+      encryptedValue: enc.ciphertext, encryptionIv: enc.iv, encryptionAuthTag: enc.authTag, keyVersion: 1,
+    }).returning();
+    const { getVault, upgradeVaultRow, decryptRow } = await import('@/security/vault');
+    expect(await getVault().get(aliceId, row.id)).toBeNull();
+
+    expect(await upgradeVaultRow(row.id)).toBe('upgraded');
+    expect(await keyVersionOf(row.id)).toBe(2);
+    expect(await upgradeVaultRow(row.id)).toBe('current');
+    const [stored] = await getDb().select().from(vaultTable).where((await import('drizzle-orm')).eq(vaultTable.id, row.id));
+    expect(decryptRow(stored).plaintext).toBe('space-v1');
+  });
 });

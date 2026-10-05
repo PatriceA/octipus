@@ -7,9 +7,13 @@
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { artifactsRepository } from '@/db/repositories/artifacts-repository';
+import { contentRepos } from '@/db/repositories/content';
+import type { ArtifactStore } from '@/db/repositories/space';
+import type { Principal } from '@/security/principal';
+import { SpaceError } from '@/security/space-access';
 import type { Artifact } from '@/db/schema/artifacts';
 import { mintShareLink } from '@/core/artifacts/share-link';
-import { refreshSource } from '@/core/artifacts/refresh';
+import { refreshSource, spaceSourceRefusal } from '@/core/artifacts/refresh';
 import { renderRssFeed } from '@/core/artifacts/render';
 import { buildArtifactAppUrl, buildArtifactEmbedUrl, buildArtifactOuterUrl, getArtifactsHostMode, pickShareableUrl } from '@/core/artifacts/host';
 import type { ArtifactVisibility as ArtifactVisibilityType } from '@/db/schema/artifacts';
@@ -17,35 +21,14 @@ import { coreLogger } from '@/utils/logger';
 
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 
-function ensureWorkspace(principal: { workspaceId?: string | null }): string {
-  const wid = principal.workspaceId;
-  if (!wid) throw new Error('workspace not resolved');
-  return wid;
-}
-
-async function loadArtifactScoped(
-  id: string,
-  workspaceId: string,
-): Promise<Artifact | null> {
-  const a = await artifactsRepository.getById(id);
-  if (!a) return null;
-  if (a.workspaceId !== workspaceId) return null; // 404 not 403 — don't leak existence
-  return a;
-}
-
-/** Resolve by slug *or* id within a workspace. UUID-shaped ids try id first; otherwise slug. */
-async function resolveArtifactScoped(
-  slugOrId: string,
-  workspaceId: string,
-): Promise<Artifact | null> {
-  const looksLikeUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-    slugOrId,
-  );
-  if (looksLikeUuid) {
-    const byId = await loadArtifactScoped(slugOrId, workspaceId);
-    if (byId) return byId;
-  }
-  return artifactsRepository.getBySlug(workspaceId, slugOrId);
+/**
+ * The artifacts of the request's workspace — personal, or the space the
+ * member acts in (docs/plans/coworking-spec.md §5.5). `private` artifacts
+ * are their creator's only; changes need `write` in a space.
+ */
+function artifactStore(principal: Principal): ArtifactStore {
+  if (!principal.workspaceId) throw new Error('workspace not resolved');
+  return contentRepos(principal).artifacts;
 }
 
 export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
@@ -65,8 +48,7 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
         set.status = 401;
         return { error: 'unauthenticated' };
       }
-      const wid = ensureWorkspace(principal);
-      const items = await artifactsRepository.listByWorkspace(wid);
+      const items = await artifactStore(principal).list();
       return {
         artifacts: items.map((a) => ({
           ...a,
@@ -86,16 +68,14 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
         set.status = 401;
         return { error: 'unauthenticated' };
       }
-      const wid = ensureWorkspace(principal);
+      const store = artifactStore(principal);
       if (!SLUG_RE.test(body.slug)) {
         set.status = 400;
         return { error: 'invalid slug (lowercase, digits, dashes, 1-64 chars)' };
       }
       try {
-        const a = await artifactsRepository.create({
+        const a = await store.create({
           slug: body.slug,
-          workspaceId: wid,
-          createdByUserId: user.id,
           createdByAgentId: body.createdByAgentId ?? null,
           title: body.title,
           type: body.type,
@@ -114,6 +94,7 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
         set.status = 201;
         return { artifact: await artifactsRepository.getById(a.id) };
       } catch (err) {
+        if (err instanceof SpaceError) throw err;
         const msg = (err as Error).message;
         if (msg.includes('artifacts_workspace_id_slug_uq')) {
           set.status = 409;
@@ -155,8 +136,7 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
       set.status = 401;
       return { error: 'unauthenticated' };
     }
-    const wid = ensureWorkspace(principal);
-    const a = await resolveArtifactScoped(params.slugOrId, wid);
+    const a = await artifactStore(principal).resolve(params.slugOrId);
     if (!a) {
       set.status = 404;
       return { error: 'not found' };
@@ -236,8 +216,8 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
       set.status = 401;
       return { error: 'unauthenticated' };
     }
-    const wid = ensureWorkspace(principal);
-    const a = await loadArtifactScoped(params.id, wid);
+    const store = artifactStore(principal);
+    const a = await store.findById(params.id);
     if (!a) {
       set.status = 404;
       return { error: 'not found' };
@@ -262,12 +242,13 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
         set.status = 401;
         return { error: 'unauthenticated' };
       }
-      const wid = ensureWorkspace(principal);
-      const a = await loadArtifactScoped(params.id, wid);
+      const store = artifactStore(principal);
+      const a = await store.findById(params.id);
       if (!a) {
         set.status = 404;
         return { error: 'not found' };
       }
+      store.assertWrite();
       const patch: Partial<Artifact> = {};
       if (body.title !== undefined) patch.title = body.title;
       if (body.visibility !== undefined) patch.visibility = body.visibility;
@@ -307,12 +288,13 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
       set.status = 401;
       return { error: 'unauthenticated' };
     }
-    const wid = ensureWorkspace(principal);
-    const a = await loadArtifactScoped(params.id, wid);
+    const store = artifactStore(principal);
+    const a = await store.findById(params.id);
     if (!a) {
       set.status = 404;
       return { error: 'not found' };
     }
+    store.assertWrite();
     await artifactsRepository.softDelete(a.id);
     return { ok: true };
   })
@@ -323,8 +305,8 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
       set.status = 401;
       return { error: 'unauthenticated' };
     }
-    const wid = ensureWorkspace(principal);
-    const a = await loadArtifactScoped(params.id, wid);
+    const store = artifactStore(principal);
+    const a = await store.findById(params.id);
     if (!a) {
       set.status = 404;
       return { error: 'not found' };
@@ -339,12 +321,13 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
         set.status = 401;
         return { error: 'unauthenticated' };
       }
-      const wid = ensureWorkspace(principal);
-      const a = await loadArtifactScoped(params.id, wid);
+      const store = artifactStore(principal);
+      const a = await store.findById(params.id);
       if (!a) {
         set.status = 404;
         return { error: 'not found' };
       }
+      store.assertWrite();
       const target = await artifactsRepository.getVersion(params.versionId);
       if (!target || target.artifactId !== a.id) {
         set.status = 404;
@@ -370,8 +353,8 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
       set.status = 401;
       return { error: 'unauthenticated' };
     }
-    const wid = ensureWorkspace(principal);
-    const a = await loadArtifactScoped(params.id, wid);
+    const store = artifactStore(principal);
+    const a = await store.findById(params.id);
     if (!a) {
       set.status = 404;
       return { error: 'not found' };
@@ -386,11 +369,17 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
         set.status = 401;
         return { error: 'unauthenticated' };
       }
-      const wid = ensureWorkspace(principal);
-      const a = await loadArtifactScoped(params.id, wid);
+      const store = artifactStore(principal);
+      const a = await store.findById(params.id);
       if (!a) {
         set.status = 404;
         return { error: 'not found' };
+      }
+      store.assertWrite();
+      const refusal = spaceSourceRefusal(body.kind, principal.workspaceKind === 'shared');
+      if (refusal) {
+        set.status = 400;
+        return { error: refusal };
       }
       const s = await artifactsRepository.createSource({
         artifactId: a.id,
@@ -428,12 +417,13 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
         set.status = 401;
         return { error: 'unauthenticated' };
       }
-      const wid = ensureWorkspace(principal);
-      const a = await loadArtifactScoped(params.id, wid);
+      const store = artifactStore(principal);
+      const a = await store.findById(params.id);
       if (!a) {
         set.status = 404;
         return { error: 'not found' };
       }
+      store.assertWrite();
       const s = await artifactsRepository.getSource(params.sourceId);
       if (!s || s.artifactId !== a.id) {
         set.status = 404;
@@ -450,12 +440,13 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
       set.status = 401;
       return { error: 'unauthenticated' };
     }
-    const wid = ensureWorkspace(principal);
-    const a = await loadArtifactScoped(params.id, wid);
+    const store = artifactStore(principal);
+    const a = await store.findById(params.id);
     if (!a) {
       set.status = 404;
       return { error: 'not found' };
     }
+    store.assertWrite();
     const sources = await artifactsRepository.listSources(a.id);
     const results = await Promise.all(sources.map((s) => refreshSource(s.id)));
     return { refreshed: sources.length, results };
@@ -468,8 +459,8 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
         set.status = 401;
         return { error: 'unauthenticated' };
       }
-      const wid = ensureWorkspace(principal);
-      const a = await loadArtifactScoped(params.id, wid);
+      const store = artifactStore(principal);
+      const a = await store.findById(params.id);
       if (!a) {
         set.status = 404;
         return { error: 'not found' };
@@ -493,12 +484,13 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
         set.status = 401;
         return { error: 'unauthenticated' };
       }
-      const wid = ensureWorkspace(principal);
-      const a = await loadArtifactScoped(params.id, wid);
+      const store = artifactStore(principal);
+      const a = await store.findById(params.id);
       if (!a) {
         set.status = 404;
         return { error: 'not found' };
       }
+      store.assertWrite();
       const minted = await mintShareLink({
         artifactId: a.id,
         createdByUserId: user.id,
@@ -521,8 +513,8 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
       set.status = 401;
       return { error: 'unauthenticated' };
     }
-    const wid = ensureWorkspace(principal);
-    const a = await loadArtifactScoped(params.id, wid);
+    const store = artifactStore(principal);
+    const a = await store.findById(params.id);
     if (!a) {
       set.status = 404;
       return { error: 'not found' };
@@ -537,11 +529,18 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
         set.status = 401;
         return { error: 'unauthenticated' };
       }
-      const wid = ensureWorkspace(principal);
-      const a = await loadArtifactScoped(params.id, wid);
+      const store = artifactStore(principal);
+      const a = await store.findById(params.id);
       if (!a) {
         set.status = 404;
         return { error: 'not found' };
+      }
+      store.assertWrite();
+      // Only a link of this artifact: the id alone would revoke anyone's.
+      const links = await artifactsRepository.listShareLinks(a.id);
+      if (!links.some((l) => l.id === params.linkId)) {
+        set.status = 404;
+        return { error: 'share link not found' };
       }
       await artifactsRepository.revokeShareLink(params.linkId);
       return { ok: true };
@@ -554,8 +553,8 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
       set.status = 401;
       return { error: 'unauthenticated' };
     }
-    const wid = ensureWorkspace(principal);
-    const a = await loadArtifactScoped(params.id, wid);
+    const store = artifactStore(principal);
+    const a = await store.findById(params.id);
     if (!a) {
       set.status = 404;
       return { error: 'not found' };

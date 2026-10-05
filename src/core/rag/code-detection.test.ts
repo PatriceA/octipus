@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'vitest';
 import { CodeFileNotIndexableError, isCodeFile } from './code-detection';
 import { getFileIndexer } from './indexer';
+import type { KnowledgeOwner } from './knowledge-scope';
+
+const OWNER: KnowledgeOwner = { ownerUserId: '00000000-0000-4000-8000-000000000001', workspaceId: null };
 
 describe('isCodeFile', () => {
   test('classifies source-code files as code', () => {
@@ -38,11 +41,11 @@ describe('FileIndexer code guard', () => {
   test('indexFile refuses a raw code file before touching the filesystem', async () => {
     const indexer = getFileIndexer();
     // The guard runs before the existence check, so a non-existent path is fine.
-    await expect(indexer.indexFile('/nonexistent/repo/src/server.ts')).rejects.toBeInstanceOf(CodeFileNotIndexableError);
+    await expect(indexer.indexFile(OWNER, '/nonexistent/repo/src/server.ts')).rejects.toBeInstanceOf(CodeFileNotIndexableError);
   });
 
   test('indexFile rejects code even when purpose is "document" (closes the glob bypass)', async () => {
     const indexer = getFileIndexer();
-    await expect(indexer.indexFile('/nonexistent/repo/src/util.py', 'document')).rejects.toBeInstanceOf(CodeFileNotIndexableError);
+    await expect(indexer.indexFile(OWNER, '/nonexistent/repo/src/util.py', 'document')).rejects.toBeInstanceOf(CodeFileNotIndexableError);
   });
 });

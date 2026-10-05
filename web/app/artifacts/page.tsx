@@ -5,6 +5,7 @@ import { ExternalLink, Trash2 } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
 import { api } from '@/lib/api';
+import { useWorkspaceId } from '@/lib/workspace-context';
 
 interface Artifact {
   id: string;
@@ -24,15 +25,16 @@ interface HostMeta {
 }
 
 export default function ArtifactsPage() {
+  const workspaceId = useWorkspaceId();
   const qc = useQueryClient();
   const [confirmId, setConfirmId] = useState<string | null>(null);
 
   const list = useQuery({
-    queryKey: ['artifacts'],
+    queryKey: ['artifacts', workspaceId],
     queryFn: () => api.get<{ artifacts: Artifact[] }>('/artifacts'),
   });
   const meta = useQuery({
-    queryKey: ['artifacts', '_meta'],
+    queryKey: ['artifacts', '_meta', workspaceId],
     queryFn: () => api.get<HostMeta>('/artifacts/_meta'),
   });
 

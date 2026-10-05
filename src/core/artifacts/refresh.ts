@@ -6,6 +6,7 @@
  * `principalId`, never the requesting viewer.
  */
 
+import { buildAgentContext, fundingFor } from '@/core/agent/context';
 import { artifactsRepository } from '@/db/repositories/artifacts-repository';
 import type { ArtifactDataSource } from '@/db/schema/artifact-data-sources';
 import { coreLogger } from '@/utils/logger';
@@ -58,6 +59,30 @@ export async function refreshSource(sourceId: string): Promise<RefreshResult> {
     coreLogger.error({ sourceId }, 'artifact.refresh.source_missing');
     return { ok: false, error: 'source not found' };
   }
+  // A source of a space artifact whose principal lost write access to the
+  // space is paused (src/core/spaces/membership.ts); an archived space runs
+  // nothing at all.
+  if (source.pausedAt) {
+    coreLogger.info({ sourceId, reason: source.pausedReason }, 'artifact.refresh.paused');
+    return { ok: false, error: `source paused (${source.pausedReason ?? 'paused'})` };
+  }
+  if (await artifactsRepository.isSourceInArchivedSpace(sourceId)) {
+    coreLogger.info({ sourceId }, 'artifact.refresh.space_archived');
+    return { ok: false, error: 'This space is archived' };
+  }
+  // A space artifact's source runs as its principal only while that
+  // principal is a member who may write there (docs/plans/coworking-spec.md
+  // §5.5): read now, from the database, and paused otherwise.
+  const spaceId = await artifactsRepository.spaceOfSource(sourceId);
+  if (spaceId) {
+    const { can, getMembership } = await import('@/core/spaces/service');
+    if (!can((await getMembership(source.principalId, spaceId))?.role, 'write')) {
+      const { syncDataSources } = await import('@/core/spaces/membership');
+      await syncDataSources(spaceId, source.principalId);
+      coreLogger.info({ sourceId, spaceId }, 'artifact.refresh.paused_membership');
+      return { ok: false, error: 'source paused (membership)' };
+    }
+  }
 
   let payload: unknown;
   try {
@@ -99,8 +124,32 @@ export async function refreshSource(sourceId: string): Promise<RefreshResult> {
   return { ok: true, snapshotId: snapshot.id, payload };
 }
 
+/**
+ * Source kinds that run as their principal's personal agent: a registry tool
+ * with a synthetic personal context, or one of the principal's own MCP
+ * servers. Neither has a space scope (no membership re-read, no I6 consent,
+ * cost rows without the space), so a space artifact does not take them
+ * (docs/plans/coworking-spec.md §5.6): refused when one is attached, and
+ * again at refresh for a row attached before.
+ */
+const PERSONAL_SOURCE_KINDS: ReadonlySet<string> = new Set(['tool', 'mcp']);
+
+/** Why a source of `kind` cannot feed an artifact in a space, or undefined. */
+export function spaceSourceRefusal(kind: string, inSpace: boolean): string | undefined {
+  return inSpace && PERSONAL_SOURCE_KINDS.has(kind)
+    ? `a ${kind} data source runs as your personal agent, so it is not available on an artifact in a shared space`
+    : undefined;
+}
+
 async function dispatch(source: ArtifactDataSource): Promise<unknown> {
   const cfg = source.configJson ?? {};
+  if (PERSONAL_SOURCE_KINDS.has(source.kind)) {
+    const artifact = await artifactsRepository.getById(source.artifactId);
+    if (!artifact) throw new Error(`${source.kind} source ${source.id}: artifact missing`);
+    const { isSharedWorkspaceId } = await import('@/security/workspace-fs');
+    const refusal = spaceSourceRefusal(source.kind, await isSharedWorkspaceId(artifact.workspaceId));
+    if (refusal) throw new Error(refusal);
+  }
   switch (source.kind) {
     case 'tool':
       return runTool(cfg as ToolSourceConfig, source.principalId);
@@ -323,17 +372,16 @@ async function runSkillQuery(
 
 // ── helpers ──────────────────────────────────────────────────────────
 export function buildSyntheticContext(principalId: string): import('@/core/types').AgentContext {
-  const now = new Date();
-  return {
+  // A scheduled refresh in the principal's own (personal) scope.
+  return buildAgentContext({
     id: `artifact-refresh:${principalId}`,
     sessionId: `artifact-refresh:${principalId}`,
     userId: principalId,
+    scope: { workspaceId: null, space: null, trigger: 'schedule', funding: fundingFor('schedule', null) },
     topic: 'artifact-refresh',
     model: '',
     role: 'system',
     status: 'running',
-    createdAt: now,
-    updatedAt: now,
     metadata: { source: 'artifact-refresh' },
-  };
+  });
 }

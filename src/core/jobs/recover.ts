@@ -23,7 +23,7 @@ export interface RecoveryReport {
 async function repairDocument(job: BackgroundJob): Promise<void> {
   const documentId = typeof job.payload.documentId === 'string' ? job.payload.documentId : null;
   if (!documentId) return;
-  const doc = await documentRepository.findById(documentId);
+  const doc = await documentRepository.findByIdSystem(documentId);
   if (doc && (doc.status === 'processing' || doc.status === 'queued')) {
     await documentRepository.updateStatus(documentId, 'failed', INTERRUPTED_ERROR);
   }

@@ -11,7 +11,10 @@ import { languages } from '@codemirror/language-data';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { EditorView, keymap } from '@codemirror/view';
 import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror';
-import { forwardRef, useImperativeHandle, useMemo, useRef } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { yCollab } from 'y-codemirror.next';
+import * as Y from 'yjs';
+import type { Awareness } from 'y-protocols/awareness';
 import type { NoteIndexEntry, TagCount } from './types';
 
 // ---------------------------------------------------------------------------
@@ -44,9 +47,21 @@ export interface MarkdownEditorHandle {
   focus: () => void;
 }
 
+/** A live document to edit instead of a controlled `value` (space notes, §7.6). */
+export interface CollabBinding {
+  text: Y.Text;
+  awareness: Awareness;
+}
+
 interface Props {
   value: string;
   onChange: (value: string) => void;
+  /**
+   * Edit this shared document: the editor binds to it with `yCollab`
+   * (other members' changes, cursors and selections), and `value` is only
+   * read once for the initial text. Remount (a new `key`) to bind another.
+   */
+  collab?: CollabBinding;
   onSave?: () => void;
   getNotes: () => NoteIndexEntry[];
   getTags: () => TagCount[];
@@ -191,7 +206,7 @@ const editorTheme = EditorView.theme({
 });
 
 const NotesMarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function NotesMarkdownEditor(
-  { value, onChange, onSave, getNotes, getTags, onFiles },
+  { value, onChange, onSave, getNotes, getTags, onFiles, collab },
   ref,
 ) {
   const cmRef = useRef<ReactCodeMirrorRef>(null);
@@ -205,6 +220,20 @@ const NotesMarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function Not
   getNotesRef.current = getNotes;
   const getTagsRef = useRef(getTags);
   getTagsRef.current = getTags;
+
+  // The live document's undo history (only this member's edits). Made in an
+  // effect, so each remount's (and StrictMode's double mount's) manager is
+  // destroyed — it listens on the shared Y.Doc until then.
+  const [undoManager, setUndoManager] = useState<Y.UndoManager | null>(null);
+  useEffect(() => {
+    if (!collab) {
+      setUndoManager(null);
+      return;
+    }
+    const manager = new Y.UndoManager(collab.text);
+    setUndoManager(manager);
+    return () => manager.destroy();
+  }, [collab]);
 
   const extensions = useMemo(
     () => [
@@ -246,9 +275,16 @@ const NotesMarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function Not
       }),
       oneDark,
       editorTheme,
+      // Bound once this document's manager exists (never another's).
+      ...(collab && undoManager && undoManager.scope.includes(collab.text)
+        ? [yCollab(collab.text, collab.awareness, { undoManager })]
+        : []),
     ],
-    [],
+    [collab, undoManager],
   );
+  // Bound to a live document, the editor starts from its text and is then
+  // driven by yCollab alone: a changing `value` prop would fight it.
+  const initial = useMemo(() => (collab ? collab.text.toString() : null), [collab]);
 
   useImperativeHandle(ref, () => ({
     wrap(before, after = before, placeholder = 'text') {
@@ -299,7 +335,7 @@ const NotesMarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function Not
   return (
     <CodeMirror
       ref={cmRef}
-      value={value}
+      value={initial ?? value}
       onChange={onChange}
       height="100%"
       style={{ height: '100%' }}
@@ -311,6 +347,10 @@ const NotesMarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function Not
         autocompletion: false, // we supply our own with custom sources
         bracketMatching: true,
         closeBrackets: true,
+        // A live document undoes through its own Y.UndoManager (only this
+        // member's edits), not CodeMirror's history.
+        history: !collab,
+        historyKeymap: !collab,
       }}
     />
   );

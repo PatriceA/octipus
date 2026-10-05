@@ -26,6 +26,9 @@ const mkCtx = (over: Partial<AgentContext> = {}): AgentContext => ({
   createdAt: new Date(),
   updatedAt: new Date(),
   metadata: {},
+  space: null,
+  trigger: 'user',
+  funding: 'own',
   ...over,
 });
 

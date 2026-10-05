@@ -1,14 +1,16 @@
 import { createHash } from 'node:crypto';
+import { sessionAudience } from '@/core/agent/audience';
 import { z } from 'zod';
 import type { BackgroundJob } from '@/db/schema/background-jobs';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { backgroundJobRepository } from '@/db/repositories/background-job-repository';
 import { getModelRegistry } from '@/models/model-registry';
 import { getLiteLLMClient } from '@/models/litellm-client';
+import { withInstallUsage } from '@/models/providers/instrumented';
 import { SECURITY_PREAMBLE } from '@/core/agent/roles';
 import { filterPII } from '@/core/agent/pii-filter';
 import { judgeAndApply } from '@/core/memory/judge';
-import { getNoteRepository } from '@/db/repositories/note-repository';
+import { getNoteRepository, personalNoteScope } from '@/db/repositories/note-repository';
 import { getNoteService } from '@/core/knowledge/notes';
 import { fileSkillProposal } from '@/services/file-skill-proposal';
 import { getPermissionManager } from '@/security/permissions';
@@ -31,10 +33,14 @@ export async function processLearningJob(job: Pick<BackgroundJob, 'id' | 'userId
     const payload = learningPayloadSchema.parse(job.payload);
     const session = await sessionRepository.findById(payload.sessionId);
     if (!session || session.userId !== job.userId || session.workspaceId !== job.workspaceId) throw new Error('Learning session ownership or workspace changed');
-    // A group-channel thread carries other members' messages in its prompts;
-    // learning from it could file their words as the requester's facts.
-    if (session.groupChannelId) {
-      await backgroundJobRepository.finish(job.id, { status: 'done', stage: 'skipped_group_channel', result: { reason: 'Group channel conversations are not used for learning.', outputs } });
+    // A group-channel thread or a room carries other members' messages in its
+    // prompts (learning from it could file their words as the requester's
+    // facts), and a space session never feeds personal learning (I7).
+    const audience = await sessionAudience(session);
+    if (audience.personalMemoryOff) {
+      const space = audience.kind === 'space' || audience.kind === 'room';
+      await backgroundJobRepository.finish(job.id, { status: 'done', stage: space ? 'skipped_space' : 'skipped_group_channel', result: {
+        reason: space ? 'Conversations in a shared space are not used for personal learning.' : 'Group channel conversations are not used for learning.', outputs } });
       return;
     }
     let workspaceId = job.workspaceId;
@@ -57,14 +63,15 @@ export async function processLearningJob(job: Pick<BackgroundJob, 'id' | 'userId
     const ceiling = Math.min(model.maxTokens ?? model.defaultMaxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS, contextRoom);
     if (ceiling < 1024) throw new Error('Background model context is too small for this learning review. Configure a model with a larger context window.');
     const initialBudget = Math.min(model.defaultMaxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS, ceiling);
-    const completeReview = (maxTokens: number) => getLiteLLMClient().complete({
+    // Learning is install work: stamped `install` (coworking spec §9.1).
+    const completeReview = (maxTokens: number) => withInstallUsage(() => getLiteLLMClient().complete({
       model: model.modelId, modelConfigName: model.name, userId: job.userId,
       sessionId: session.id, requestType: 'learning-review', temperature: 0, maxTokens,
       responseFormat: { type: 'json_object' }, messages: [
         { role: 'system', content: systemText, timestamp: new Date() },
         { role: 'user', content: evidenceText, timestamp: new Date() },
       ],
-    });
+    }));
     let budget = initialBudget;
     let response = await completeReview(budget);
     // Reasoning shares the output budget. Retry once, before any writes, and
@@ -93,7 +100,7 @@ export async function processLearningJob(job: Pick<BackgroundJob, 'id' | 'userId
         if (existing) {
           outputs.push({ kind: 'knowledge', status: 'duplicate', id: existing.id }); continue;
         }
-        const saved = await getNoteService().save({ userId: job.userId, workspaceId,
+        const saved = await getNoteService().save({ scope: personalNoteScope(job.userId, workspaceId),
           slug: `learning-${fingerprint}`, title: filterPII(item.title).filtered, body: body + citations(item.sources),
           tags: ['session-learning'], frontmatter: { sessionId: session.id, learningJobId: job.id, sources: item.sources } });
         outputs.push({ kind: 'knowledge', status: saved.indexed ? saved.created ? 'saved' : 'duplicate' : 'saved_unindexed', id: saved.note.id,

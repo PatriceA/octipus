@@ -20,3 +20,10 @@ test('server acknowledgement and later polls preserve the visible time anchor', 
   const later = reconcileChatMessages([msg('server-id', 'hello', 5000)], first);
   expect(+new Date(later[0].timestamp)).toBe(1000);
 });
+
+test('a row that came over the gateway (another tab\'s steer, a reply) is replaced by its persisted copy', () => {
+  const steered = msg('gw-evt-1', 'go left instead', 1000);
+  expect(reconcileChatMessages([msg('stored-steer', 'go left instead', 1500)], [steered]).map(m => m.id)).toEqual(['stored-steer']);
+  expect(reconcileChatMessages([msg('stored-before', 'hi', 500), msg('stored-steer', 'go left instead', 1500)], [msg('stored-before', 'hi', 500), steered])
+    .map(m => m.id)).toEqual(['stored-before', 'stored-steer']);
+});

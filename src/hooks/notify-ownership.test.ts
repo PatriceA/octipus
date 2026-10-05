@@ -88,6 +88,28 @@ function appFor(uid: string, isAdmin: boolean, plugins: unknown[]): ElysiaLike {
     .group('/api', (a: any) => plugins.reduce((acc: any, p) => acc.use(p), a) as any) as unknown as ElysiaLike;
 }
 
+/**
+ * A signed-in `/gateway` connection of `userId` on the real hub — the
+ * in-app surface `webchat:<userId>` delivers to (one per browser tab). A
+ * tab on the chat page subscribes to `chat:inbox`, as the web does.
+ */
+async function openTab(userId: string, chatPage = true): Promise<{ connectionId: string; frames: Array<Record<string, any>>; close: () => void }> {
+  const { getGatewayHub } = await import('@/core/gateway/hub');
+  const hub = getGatewayHub();
+  hub.setSessionValidator(async (token) => (token.startsWith('tab:') ? { userId: token.slice(4), username: 'u', isAdmin: false } : null));
+  hub.setWorkspaceResolver(async () => '77777777-7777-4777-8777-777777777777');
+  const frames: Array<Record<string, any>> = [];
+  const ws = { data: {}, readyState: 1, send: (frame: string) => frames.push(JSON.parse(frame)), close: () => {} };
+  const connectionId = hub.connectionManager.handleOpen(ws, '127.0.0.1')!;
+  await hub.connectionManager.handleMessage(connectionId, JSON.stringify({ type: 'auth', method: 'session_token', credentials: { token: `tab:${userId}` }, clientType: 'webchat' }));
+  expect(frames.at(-1)).toMatchObject({ type: 'auth_ok', userId });
+  if (chatPage) {
+    await hub.connectionManager.handleMessage(connectionId, JSON.stringify({ type: 'subscribe', resources: ['chat:inbox'] }));
+    await vi.waitFor(() => expect(frames.at(-1)).toEqual({ type: 'subscribed', resources: ['chat:inbox'] }));
+  }
+  return { connectionId, frames, close: () => hub.connectionManager.handleClose(connectionId, 1000) };
+}
+
 /** A Bot Framework message activity, as the Teams webhook delivers it. */
 function teamsActivity(conversation: { id: string; conversationType: string }, from: { id: string; aadObjectId: string; name: string }) {
   return {
@@ -270,13 +292,12 @@ describe('canNotify', () => {
     expect(await canNotify(aliceId, 'webchat', aliceId)).toBe(true);
     expect(await canNotify(aliceId, 'api', aliceId)).toBe(true);
     expect(await canNotify(aliceId, 'webchat', bobId)).toBe(false);
-    const { webChatChannel } = await import('@/channels/webchat');
-    const conn = webChatChannel.registerConnection(aliceId, () => undefined, () => undefined);
+    const tab = await openTab(aliceId);
     try {
       // a raw connection id is not a target, even the user's own
-      expect(await canNotify(aliceId, 'webchat', conn)).toBe(false);
+      expect(await canNotify(aliceId, 'webchat', tab.connectionId)).toBe(false);
     } finally {
-      webChatChannel.unregisterConnection(conn);
+      tab.close();
     }
   });
 
@@ -343,18 +364,31 @@ describe('executeNotify', () => {
     expect(sentTo()).toEqual([`teams:${alicePersonalConv}`]);
   });
 
-  test('webchat:<ownId> is delivered to all of the owner’s live connections', async () => {
-    const { webChatChannel } = await import('@/channels/webchat');
-    const got: unknown[] = [];
-    const c1 = webChatChannel.registerConnection(aliceId, (d) => got.push(d), () => undefined);
-    const c2 = webChatChannel.registerConnection(aliceId, (d) => got.push(d), () => undefined);
+  test('webchat:<ownId> is delivered to all of the owner’s gateway tabs as a user-stamped chat.message', async () => {
+    const tabs = [await openTab(aliceId), await openTab(aliceId)];
+    const bobTab = await openTab(bobId);
     try {
       const r = await notify({ notifyChannels: [`webchat:${aliceId}`] });
       expect(r.success).toBe(true);
-      expect(got).toHaveLength(2);
+      for (const tab of tabs) {
+        const delivered = tab.frames.filter((f) => f.type === 'event' && f.event.type === 'chat.message');
+        expect(delivered).toHaveLength(1);
+        expect(delivered[0].event).toMatchObject({ userId: aliceId, payload: { role: 'assistant', proactive: true } });
+      }
+      expect(bobTab.frames.filter((f) => f.type === 'event')).toEqual([]);
     } finally {
-      webChatChannel.unregisterConnection(c1);
-      webChatChannel.unregisterConnection(c2);
+      for (const tab of [...tabs, bobTab]) tab.close();
+    }
+  });
+
+  test('webchat:<ownId> is not delivered when no open connection shows the chat page', async () => {
+    const terminal = await openTab(aliceId, false);
+    try {
+      const r = await notify({ notifyChannels: [`webchat:${aliceId}`] });
+      expect(r.success).toBe(false);
+      expect(terminal.frames.filter((f) => f.type === 'event' && f.event.type === 'chat.message')).toEqual([]);
+    } finally {
+      terminal.close();
     }
   });
 
@@ -440,12 +474,11 @@ describe('save-time validation', () => {
   });
 
   test('POST /api/hooks rejects a raw webchat connection id', async () => {
-    const { webChatChannel } = await import('@/channels/webchat');
-    const conn = webChatChannel.registerConnection(aliceId, () => undefined, () => undefined);
+    const tab = await openTab(aliceId);
     try {
-      expect((await create('notify', { notifyChannels: [`webchat:${conn}`] })).status).toBe(400);
+      expect((await create('notify', { notifyChannels: [`webchat:${tab.connectionId}`] })).status).toBe(400);
     } finally {
-      webChatChannel.unregisterConnection(conn);
+      tab.close();
     }
   });
 

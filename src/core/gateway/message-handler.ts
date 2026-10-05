@@ -1,12 +1,16 @@
 import { decodeChatAttachment, storeChatUploads } from '@/core/chat-uploads';
-import { WorkspaceFS } from '@/security/workspace-fs';
-import { resolveSession } from '@/core/agent/session-resolver';
+import { sessionFsAccess, WorkspaceFS } from '@/security/workspace-fs';
+import { resolveSession, turnWorkspaceId } from '@/core/agent/session-resolver';
 import { isSessionControlMessage } from '@/core/session-controls';
+import { canActInSession } from '@/core/rooms/access';
+import { mentionsOctipus } from '@/core/rooms/service';
+import { API_SCOPES, scopesSatisfy } from '@/security/scopes';
 import { coreLogger } from '@/utils/logger';
+import { presenceAfterClose } from '@/core/rooms/presence';
 import { getCommandRegistry } from './commands';
+import { handleRoomFrame, isRoomFrame } from './room-handlers';
 import type { GatewayHub } from './hub';
-import type { ClientMessage, ConnectionContext } from './protocol';
-import { resolveUserId } from './resolve-user';
+import type { ClientMessage, ConnectionContext, PendingApproval, PendingPermission, PermissionPendingMessage } from './protocol';
 
 /**
  * Inject a user message into a running root agent turn for this session, if
@@ -26,18 +30,59 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /**
  * May this connection use `sessionId`? Null when yes: the session is the
- * caller's own, does not exist yet (a fresh client id), or the caller is a
- * trusted console. Otherwise the refusal text. One gate for every path that
- * binds a connection to a session (chat.send, command adoption) — before it,
- * any authenticated client could attach to another user's existing session
- * by id and read or extend it.
+ * caller's own or does not exist yet (a fresh client id). Otherwise the
+ * refusal text. One gate for every path that binds a connection to a session
+ * (chat.send, chat.steer, chat.interject, command adoption) — before it, any
+ * authenticated client could attach to another user's existing session by id
+ * and read or extend it. It compares user ids and nothing else: no trust
+ * level and no admin flag opens another user's session.
  */
-export async function sessionAccessError(sessionId: string, context: Pick<ConnectionContext, 'userId' | 'trustLevel'>): Promise<string | null> {
-  if (context.trustLevel === 'local' || context.trustLevel === 'system') return null;
+export async function sessionAccessError(sessionId: string, context: Pick<ConnectionContext, 'userId'>): Promise<string | null> {
   if (!UUID_RE.test(sessionId)) return null; // channel-style ids resolve per user inside resolveSession
   const { sessionRepository } = await import('@/db/repositories/session-repository');
   const session = await sessionRepository.findById(sessionId);
-  return session && session.userId !== await resolveUserId(context.userId) ? 'Session not found' : null;
+  // A room is never a personal chat, its creator's included (§6.2): room
+  // frames are `room.*`.
+  return session && !(await canActInSession(session, context.userId, 'chat')) ? 'Session not found' : null;
+}
+
+/**
+ * Is `sessionId` an existing session of this connection's user? Stricter than
+ * `sessionAccessError`: reading a session's past (replay) needs the row, so a
+ * session that does not exist yet is refused like another user's.
+ */
+async function ownsExistingSession(sessionId: string, context: Pick<ConnectionContext, 'userId'>): Promise<boolean> {
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const session = await sessionRepository.findById(sessionId);
+  return canActInSession(session, context.userId, 'chat');
+}
+
+/**
+ * The user's open permission requests and root-agent approvals, in the shape
+ * `permission.request` / `agent.approval_required` carry them.
+ */
+export async function readPendingSnapshot(userId: string): Promise<Omit<PermissionPendingMessage, 'type'>> {
+  const [{ getPermissionManager }, { getAgentService }] = await Promise.all([
+    import('@/security/permissions'),
+    import('@/core/agent'),
+  ]);
+  const rows = await getPermissionManager().getPendingRequests(userId);
+  const requests: PendingPermission[] = rows.map((row) => ({
+    requestId: row.id,
+    toolId: row.toolId,
+    action: row.action,
+    toolName: row.context.toolName,
+    args: row.context.toolArguments,
+    ...(row.sessionId ? { sessionId: row.sessionId } : {}),
+  }));
+  const approvals: PendingApproval[] = getAgentService().getPendingApprovals(userId).map((approval) => ({
+    requestId: approval.id,
+    sessionId: approval.sessionId,
+    summary: approval.summary,
+    question: approval.question,
+    ...(approval.options ? { options: approval.options } : {}),
+  }));
+  return { requests, approvals };
 }
 
 /** Exported for unit tests. */
@@ -51,6 +96,9 @@ export async function trySteerRunningRootAgent(sessionId: string, content: strin
     .filter((a) => a.getStatus() === 'running' && a.getContext().root === true)
     .find((a): a is typeof a & SteerableWorker => typeof (a as Partial<SteerableWorker>).steer === 'function');
   if (!target) return false;
+  // A room turn is never steered: a member's post is stored once by the
+  // room, and a running room turn belongs to its requester alone (§6.3).
+  if (target.getContext().metadata?.room) return false;
 
   // Guard the injected content exactly as handleMessage guards a normal turn —
   // a steer must not be a hole around the input guard. On block, return false so
@@ -84,7 +132,34 @@ export async function trySteerRunningRootAgent(sessionId: string, content: strin
  * to the appropriate backend services (root agent, permissions, agents).
  */
 export function wireMessageHandler(hub: GatewayHub): void {
+  hub.setPendingSnapshotProvider(readPendingSnapshot);
+
+  // A connection that put a session into voice mode takes it out when it
+  // goes, so a refresh does not leave the session in the planning gate —
+  // unless another connection of the user still holds it in voice mode.
+  hub.setConnectionClosedHandler((context) => {
+    // Rooms and spaces it was in show it gone (coworking §6.6).
+    presenceAfterClose(context);
+    // Live documents the connection had open: it leaves them (the last one
+    // out persists the note).
+    import('@/core/docs')
+      .then(({ getDocHub }) => getDocHub().connectionClosed(context.connectionId))
+      .catch((err: unknown) => coreLogger.error({ err, connectionId: context.connectionId }, 'Could not leave the documents of a closed connection'));
+    const sessionId = context.voiceSessionId;
+    if (!sessionId) return;
+    context.voiceSessionId = undefined;
+    if (voiceHeldElsewhere(hub, context, sessionId)) return;
+    import('@/core/agent')
+      .then(({ getAgentService }) => getAgentService().setVoiceMode(sessionId, context.userId, false))
+      .catch((err: unknown) => coreLogger.error({ err, sessionId }, 'Could not clear voice mode of a closed connection'));
+  });
+
   hub.setMessageHandler(async (connectionId, context, message) => {
+    const scopeError = frameScopeError(context, message);
+    if (scopeError) {
+      hub.connectionManager.sendToConnection(connectionId, { type: 'error', code: 'FORBIDDEN', message: scopeError });
+      return;
+    }
     switch (message.type) {
       case 'chat.send':
         await handleChatSend(hub, connectionId, context, message);
@@ -114,11 +189,74 @@ export function wireMessageHandler(hub: GatewayHub): void {
         await handleAgentStop(hub, connectionId, context, message);
         break;
 
+      case 'voice.set':
+        await handleVoiceSet(hub, connectionId, context, message);
+        break;
+
+      case 'replay':
+        await handleReplay(hub, connectionId, context, message);
+        break;
+
+      // Live documents (docs/plans/coworking-spec.md §7.3). `doc.join` reads
+      // the membership from the database; updates and awareness check the
+      // in-process membership version (D5).
+      case 'doc.join': {
+        const { getDocHub } = await import('@/core/docs');
+        await getDocHub().join(context, message.noteId, { epoch: message.epoch, stateVector: message.stateVector });
+        break;
+      }
+
+      case 'doc.update': {
+        const { getDocHub } = await import('@/core/docs');
+        await getDocHub().update(context, message.noteId, message.epoch, message.update);
+        break;
+      }
+
+      case 'doc.awareness': {
+        const { getDocHub } = await import('@/core/docs');
+        await getDocHub().awareness(context, message.noteId, message.update);
+        break;
+      }
+
+      case 'doc.leave': {
+        const { getDocHub } = await import('@/core/docs');
+        await getDocHub().leave(context.connectionId, message.noteId);
+        break;
+      }
+
       default:
+        // Spaces and rooms (coworking §6.6): access-checked per frame.
+        if (isRoomFrame(message)) {
+          await handleRoomFrame(hub, connectionId, context, message);
+          break;
+        }
         // ping, subscribe, unsubscribe handled by hub itself
         break;
     }
   });
+}
+
+/**
+ * Frames that drive the agent or answer its prompts — what `api:chat` covers
+ * on REST (`POST /api/chat`, `/chat/approve`, the learning toggle).
+ */
+const CHAT_FRAMES: ReadonlySet<string> = new Set([
+  'chat.send', 'chat.interject', 'chat.steer', 'command', 'permission.respond', 'approval.respond', 'voice.set',
+]);
+
+/**
+ * WS6 on the gateway: why a connection signed in with a scoped API token may
+ * not send `message`, or null. A frame that drives the agent needs
+ * `api:chat` — a room post too when it asks Octipus (the `addressed` toggle
+ * or an @octipus mention), as on `POST /api/spaces/:id/rooms/:roomId/messages`.
+ * Everything else is what REST lets any token do (reads, subscriptions,
+ * documents, room posts that do not ask the agent).
+ */
+export function frameScopeError(context: Pick<ConnectionContext, 'scopes'>, message: ClientMessage): string | null {
+  if (scopesSatisfy(context.scopes, API_SCOPES.CHAT)) return null;
+  const drives = CHAT_FRAMES.has(message.type)
+    || (message.type === 'room.post' && !message.content.trim().startsWith('/') && (message.addressed === true || mentionsOctipus(message.content)));
+  return drives ? `API token missing required scope "${API_SCOPES.CHAT}"` : null;
 }
 
 async function handleChatSend(
@@ -139,9 +277,7 @@ async function handleChatSend(
     // Track the session on the connection for /status command
     context.sessionId = message.sessionId;
 
-    // Resolve the principal up front — we need userId both for the optional
-    // session pre-create below AND for the root agent call.
-    const userId = await resolveUserId(context.userId);
+    const userId = context.userId;
 
     // If a root agent turn is already running for this session, steer it
     // with this message instead of spawning a concurrent turn. Keeps one live
@@ -156,6 +292,12 @@ async function handleChatSend(
       });
       return;
     }
+
+    // A new session is created in the send's workspace: the one the message
+    // names, else the connection's (the TUI's `?workspace=`, resolved at
+    // auth). Either must be the user's own (`turnWorkspaceId` checks); an
+    // existing session keeps the workspace it was created in.
+    const sendWorkspace = message.workspaceId ?? context.workspaceId;
 
     // Set project context on the session if provided (enables dev mode).
     //
@@ -210,24 +352,14 @@ async function handleChatSend(
         }
       } else {
         // Pre-create with dev-mode context baked in. resolveSession will
-        // see the row exists and skip its own create. Also tag with the
-        // user's default workspace_id so the session shows up only in
-        // that workspace's session list — TUI sessions were previously
-        // created with workspace_id=NULL which made them visible from
-        // every workspace via the legacy "NULL = visible everywhere"
-        // fallback in scopedRepos.workspaceFilter.
-        let workspaceId: string | null = null;
-        try {
-          const { getOrgWorkspaceManager } = await import('@/security/orgs');
-          const def = await getOrgWorkspaceManager().ensureDefaultWorkspace(userId);
-          workspaceId = def?.id ?? null;
-        } catch (err) {
-          coreLogger.debug({ err, userId }, 'No default workspace available for session tagging');
-        }
+        // see the row exists and skip its own create. Created in the
+        // send's workspace so the session shows up only in that
+        // workspace's session list.
+        const workspaceId = await turnWorkspaceId(userId, sendWorkspace);
         await sessionRepository.create({
           id: message.sessionId,
           userId,
-          workspaceId: workspaceId ?? undefined,
+          workspaceId,
           channelType: context.clientType,
           channelId: message.sessionId,
           title: `${context.clientType} conversation`,
@@ -242,13 +374,14 @@ async function handleChatSend(
       }
     }
 
+    await resolveSession(message.sessionId, userId, context.clientType, sendWorkspace);
+
     if (message.attachments?.length) {
       if (message.attachments.length + (message.fileRefs?.length ?? 0) > 10) throw new Error('Attach at most 10 files per message.');
       const { sessionRepository } = await import('@/db/repositories/session-repository');
-      await resolveSession(message.sessionId, userId, context.clientType);
       const session = await sessionRepository.findById(message.sessionId);
-      if (!session || session.userId !== userId) throw new Error('Session not found');
-      const uploaded = await storeChatUploads(WorkspaceFS.forSession(session), message.attachments.map(decodeChatAttachment));
+      if (!session || !(await canActInSession(session, userId, 'chat'))) throw new Error('Session not found');
+      const uploaded = await storeChatUploads(WorkspaceFS.forSession(session, await sessionFsAccess(session, userId)), message.attachments.map(decodeChatAttachment));
       message.fileRefs = [...(message.fileRefs ?? []), ...uploaded.map(file => ({ path: file.path }))];
       message.content += '\n\n' + uploaded.map(file => `Attached file: ${file.path}`).join('\n');
     }
@@ -279,6 +412,14 @@ async function handleChatSend(
       type: 'error',
       code: 'CHAT_ERROR',
       message: (err as Error).message,
+    });
+    // Every tab of the user showing this session stops waiting on the turn.
+    hub.publishEvent({
+      type: 'chat.error',
+      source: 'rootAgent',
+      userId: context.userId,
+      sessionId: message.sessionId,
+      payload: { error: (err as Error).message },
     });
   }
 }
@@ -362,7 +503,12 @@ async function handleChatInterject(
       return;
     }
 
-    const userId = await resolveUserId(context.userId);
+    const refused = await sessionAccessError(message.sessionId, context);
+    if (refused) {
+      hub.connectionManager.sendToConnection(connectionId, { type: 'error', code: 'SESSION_NOT_FOUND', message: refused });
+      return;
+    }
+    const userId = context.userId;
     context.sessionId = message.sessionId;
 
     const { directResponse } = await import('@/core/agent/direct-response');
@@ -375,12 +521,19 @@ async function handleChatInterject(
 
     let reply: string;
     try {
+      // A side question in a space session follows the space's model rules
+      // (§5.6); resolving the scope also refuses a role that may not run the agent.
+      const { resolveAgentScope } = await import('@/core/agent/context');
+      const { sessionRepository } = await import('@/db/repositories/session-repository');
+      const session = await sessionRepository.findById(message.sessionId);
+      const scope = await resolveAgentScope({ session, userId, trigger: session?.kind === 'room' ? 'room' : 'user' });
       const result = await directResponse(
         message.content,
         message.sessionId,
         userId,
         selector,
         'simple',
+        [], '', undefined, scope.space,
       );
       reply = `${personaName} — side question: ${result.response}`;
     } catch (err) {
@@ -431,6 +584,7 @@ async function handleCommand(
   const result = await registry.execute(input, {
     userId: context.userId,
     sessionId: context.sessionId,
+    ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
     clientType: context.clientType,
     trustLevel: context.trustLevel,
     metadata: context.metadata,
@@ -454,21 +608,13 @@ async function handlePermissionRespond(
   try {
     const { getPermissionManager } = await import('@/security/permissions');
     const permissionManager = getPermissionManager();
-    // Local/system auth hands us the 'local' sentinel, not a DB UUID, and
-    // both resolvedBy and the user_id filter are uuid columns — passing it
-    // straight through made every TUI approval fail with a Postgres cast
-    // error instead of resolving the request.
-    const userId = await resolveUserId(context.userId);
-    // A local/system TUI is shown every user's prompt, but `resolveUserId`
-    // can only ever name the first admin — resolving another user's request
-    // as that admin matches zero rows and returns false silently, leaving the
-    // run blocked for the whole TTL. Trusted consoles resolve as admins, and
-    // an unresolved request is reported instead of swallowed.
-    const admin = context.trustLevel === 'local' || context.trustLevel === 'system';
-
+    // Only the requester answers: the manager matches the request's owner.
+    // An admin answering someone else's request goes through the audited
+    // POST /api/admin/permission-requests/:id/resolve, never through here.
+    // An unresolved request is reported instead of swallowed.
     const resolved = message.approved
-      ? await permissionManager.approve(message.requestId, userId, undefined, { admin })
-      : await permissionManager.deny(message.requestId, userId, undefined, { admin });
+      ? await permissionManager.approve(message.requestId, context.userId)
+      : await permissionManager.deny(message.requestId, context.userId);
 
     if (!resolved) {
       hub.connectionManager.sendToConnection(connectionId, {
@@ -476,6 +622,9 @@ async function handlePermissionRespond(
         code: 'PERMISSION_ERROR',
         message: 'That permission request is no longer pending (already answered, or expired).',
       });
+      // Another client may have answered first: reconcile this one from the
+      // owner's current list.
+      await hub.sendPendingSnapshot(connectionId, context);
     }
   } catch (err) {
     coreLogger.error({ err, connectionId, requestId: message.requestId }, 'Permission respond error');
@@ -497,17 +646,25 @@ async function handleApprovalRespond(
     const { getAgentService } = await import('@/core/agent');
     const rootAgent = getAgentService();
 
-    // Same rule as REST /chat/approve: admins may answer any request.
-    const isAdmin = !!(context.metadata as { isAdmin?: boolean } | undefined)?.isAdmin;
+    // Same rule as REST /chat/approve: only the requester answers. Admins
+    // use the audited POST /api/admin/approvals/:id/resolve.
     const outcome = await rootAgent.resolveApprovalDetailed(
       message.requestId, message.approved, message.response,
-      { forUserId: isAdmin ? undefined : context.userId, resolvedBy: context.userId },
+      { forUserId: context.userId, resolvedBy: context.userId },
     );
     if ('message' in outcome) {
       hub.connectionManager.sendToConnection(connectionId, {
         type: 'error',
         code: 'APPROVAL_EXPIRED',
         message: outcome.message,
+      });
+    } else if (outcome.status !== 'resolved') {
+      // Unknown, someone else's, or answered already: one answer for all
+      // three, as REST /chat/approve gives, so ids cannot be probed.
+      hub.connectionManager.sendToConnection(connectionId, {
+        type: 'error',
+        code: 'APPROVAL_NOT_FOUND',
+        message: 'Approval request not found or already resolved',
       });
     }
   } catch (err) {
@@ -532,8 +689,13 @@ async function handleChatSteer(
   message: Extract<ClientMessage, { type: 'chat.steer' }>,
 ): Promise<void> {
   try {
+    const refused = await sessionAccessError(message.sessionId, context);
+    if (refused) {
+      hub.connectionManager.sendToConnection(connectionId, { type: 'error', code: 'SESSION_NOT_FOUND', message: refused });
+      return;
+    }
     context.sessionId = message.sessionId;
-    const userId = await resolveUserId(context.userId);
+    const userId = context.userId;
 
     if (await trySteerRunningRootAgent(message.sessionId, message.content)) {
       hub.publishEvent({
@@ -568,19 +730,21 @@ async function handleAgentStop(
   context: ConnectionContext,
   message: Extract<ClientMessage, { type: 'agent.stop' }>,
 ): Promise<void> {
-  // Only admin/local trust can stop agents
-  if (context.trustLevel !== 'local' && context.trustLevel !== 'system' && !(context.metadata as any)?.isAdmin) {
-    hub.connectionManager.sendToConnection(connectionId, {
-      type: 'error',
-      code: 'FORBIDDEN',
-      message: 'Insufficient permissions to stop agents',
-    });
-    return;
-  }
-
   try {
     const { getAgentManager } = await import('@/core/agent-manager');
     const agentManager = getAgentManager();
+    // A connection stops its own user's agents only — the owner check compares
+    // user ids, whatever the connection's admin flag. Unknown and foreign ids
+    // get the same answer so ids cannot be probed.
+    const agent = agentManager.get(message.agentId);
+    if (!agent || agent.getContext().userId !== context.userId) {
+      hub.connectionManager.sendToConnection(connectionId, {
+        type: 'error',
+        code: 'AGENT_NOT_FOUND',
+        message: 'Agent not found',
+      });
+      return;
+    }
     agentManager.stop(message.agentId);
 
     hub.publishEvent({
@@ -597,4 +761,90 @@ async function handleAgentStop(
       message: (err as Error).message,
     });
   }
+}
+
+/**
+ * Does another connection of the user hold `sessionId` in voice mode? Voice
+ * mode is keyed by (session, user) in the root agent, so one connection
+ * leaving it must not take it from a tab that still speaks.
+ */
+function voiceHeldElsewhere(hub: GatewayHub, context: ConnectionContext, sessionId: string): boolean {
+  return hub.connectionManager.getConnectionsByUser(context.userId).some((conn) =>
+    !!conn.context && conn.context.connectionId !== context.connectionId && conn.context.voiceSessionId === sessionId);
+}
+
+/**
+ * Put a session into (or out of) voice mode for this connection. Owner check
+ * as for `chat.send`: another user's session is refused before anything
+ * changes. A session that does not exist yet (a fresh chat) is allowed — the
+ * gate is keyed by (session, user), so it only ever affects this user's turns.
+ *
+ * `on:false` is honoured only for the session this connection turned on, and
+ * the root agent leaves voice mode only when no other connection of the user
+ * still holds that session in it: a tab without voice cannot switch off
+ * another tab's.
+ */
+async function handleVoiceSet(
+  hub: GatewayHub,
+  connectionId: string,
+  context: ConnectionContext,
+  message: Extract<ClientMessage, { type: 'voice.set' }>,
+): Promise<void> {
+  try {
+    const refused = await sessionAccessError(message.sessionId, context);
+    if (refused) {
+      hub.connectionManager.sendToConnection(connectionId, { type: 'error', code: 'SESSION_NOT_FOUND', message: refused });
+      return;
+    }
+    const { getAgentService } = await import('@/core/agent');
+    const service = getAgentService();
+    const previous = context.voiceSessionId;
+    if (!message.on) {
+      if (previous !== message.sessionId) return; // not this connection's voice session
+      context.voiceSessionId = undefined;
+      if (!voiceHeldElsewhere(hub, context, message.sessionId)) service.setVoiceMode(message.sessionId, context.userId, false);
+      return;
+    }
+    // Moving voice to another session takes the previous one out first, so
+    // its flag is not left set in the root agent.
+    if (previous && previous !== message.sessionId && !voiceHeldElsewhere(hub, context, previous)) {
+      service.setVoiceMode(previous, context.userId, false);
+    }
+    service.setVoiceMode(message.sessionId, context.userId, true);
+    context.voiceSessionId = message.sessionId;
+  } catch (err) {
+    coreLogger.error({ err, connectionId, sessionId: message.sessionId }, 'voice.set failed');
+    hub.connectionManager.sendToConnection(connectionId, { type: 'error', code: 'VOICE_ERROR', message: (err as Error).message });
+  }
+}
+
+/**
+ * Serve a reconnecting client the events of one of its own sessions that it
+ * missed. The session must exist and be the caller's; every replayed event is
+ * the caller's own as well (a buffer is per session, and a session has one
+ * owner — checked again here rather than assumed).
+ */
+async function handleReplay(
+  hub: GatewayHub,
+  connectionId: string,
+  context: ConnectionContext,
+  message: Extract<ClientMessage, { type: 'replay' }>,
+): Promise<void> {
+  if (!(await ownsExistingSession(message.sessionId, context))) {
+    hub.connectionManager.sendToConnection(connectionId, { type: 'error', code: 'SESSION_NOT_FOUND', message: 'Session not found' });
+    return;
+  }
+  // No watermark: the client has seen none of the buffer live, so replaying
+  // it would apply old events again. It reloads from REST instead.
+  if (!message.afterEventId) {
+    hub.connectionManager.sendToConnection(connectionId, { type: 'replay', sessionId: message.sessionId, events: [], gap: true });
+    return;
+  }
+  const { events, gap } = hub.eventBus.replaySince(message.sessionId, message.afterEventId);
+  hub.connectionManager.sendToConnection(connectionId, {
+    type: 'replay',
+    sessionId: message.sessionId,
+    events: events.filter((event) => event.userId === context.userId),
+    gap,
+  });
 }

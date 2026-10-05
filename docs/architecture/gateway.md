@@ -2,6 +2,8 @@
 
 The Gateway Hub is the central WebSocket entry point for all clients — web UI, TUI, mobile, IDE extensions, and channel adapters. Every message, event, and command flows through a single authenticated connection with unified security, routing, and observability.
 
+The web app holds **one gateway connection per browser tab** (`web/lib/gateway.ts`), shared by the chat page, the permission prompts, the recommended-models panel and the documents page. The legacy `/ws` and `/ws/permissions` sockets were retired (coworking S0d); the only other sockets are the browser extension's `/ws/browser-bridge` and voice (`/voice`, `/voice/media/:provider`).
+
 ## Architecture
 
 ```
@@ -23,7 +25,7 @@ The Gateway Hub is the central WebSocket entry point for all clients — web UI,
 ```
 CONNECTING → AUTHENTICATING → ACTIVE → DRAINING → CLOSED
                                 │
-                                ├─ Idle timeout (30min remote, none local)
+                                ├─ Idle timeout
                                 ├─ Rate limit exceeded
                                 ├─ Auth token expired
                                 └─ Server shutdown (graceful drain)
@@ -35,17 +37,56 @@ Clients connect to `ws://host:port/gateway` and must send an auth message within
 
 | Client Type | Auth Method | Trust Level |
 |-------------|-------------|-------------|
-| Web UI | `session_token` | `user` |
-| TUI | `local` (file token at `~/.octipus/local-token`) | `local` |
-| Channel adapters | `hmac` (per-adapter key) | `system` |
+| Web UI | `session_token` (a 60 s ticket from `GET /api/auth/ws-ticket`, or the stored bearer) | `user` |
+| TUI / editor | `session_token` (the CLI login in `~/.octipus/session.json`) | `user` |
 | Mobile/IDE | `session_token` or `api_key` | `user` |
-| API/System | `api_key` (MASTER_KEY) | `system` |
+| Automation | `api_key` (a personal API token, `octi_…`) | `user` |
+| Live-artifact SDK (embed page) | `artifact_token` (`{ artifactId, token }`, minted per page view) | `user`; may only ping and (un)subscribe `artifact:<id>` of that one artifact |
+
+There are two methods for people, `session_token` and `api_key`, plus
+`artifact_token` for live-artifact embeds, and one trust level for people:
+`user`. Trust never widens what a connection may see or touch:
+
+- Events reach a connection only when they belong to its user.
+- Every ownership check compares user ids — joining a session, `/history`,
+  `/proposals`, answering a permission request or approval, `agent.stop`. An
+  admin's connection gets no further than anyone else's.
+- Admin-only commands (`/reload-extensions`, `/mcp reconnect`) read
+  `users.is_admin` from the database when they run.
+- An admin answers someone else's permission request or approval only through
+  the audited REST routes `POST /api/admin/permission-requests/:id/resolve`
+  and `POST /api/admin/approvals/:id/resolve` (each takes a `reason`).
+
+The machine token (`local`, `~/.octipus/local-token`) and the `hmac` adapter
+method were removed: the first reached every user's sessions from loopback,
+the second was never wired. The TUI signs in with the CLI login instead (see
+[the TUI guide](../guides/tui.md)).
+
+### Client address
+
+The address used for the pre-auth cap and the audit log is the socket's peer
+address. `X-Forwarded-For` / `X-Real-IP` are believed only when that peer is
+listed in `security.trustedProxies` (`TRUSTED_PROXIES`); see
+[CONFIGURATION.md](../CONFIGURATION.md#reverse-proxy). REST rate limits, login
+lockouts and the audit log use the same rule (`src/security/client-ip.ts`).
 
 ### Connection Budgets
 
-- Max 10 connections per user
-- Max 50 connections per IP
-- Max 20 pre-auth connections per IP
+- `gateway.maxConnectionsPerUser` (default 20) signed-in connections per user
+  — one per browser tab, plus terminals. The one over the cap gets
+  `auth_error` `Too many connections`; the web shows "Too many open tabs"
+  with a Retry and tries again every 30 s, the TUI keeps its login and says so.
+- Max 20 connections per address that have not authenticated yet. There is
+  no per-address cap on signed-in connections: behind a reverse proxy every
+  client shares one address, and that cap would become an install-wide one.
+- `gateway.maxFrameBytes` (default 262144, 256 KiB) is the socket's
+  `maxPayload` (read at server start): a bigger client frame closes the
+  connection with 1009. `auth_ok` carries that same startup value as
+  `maxFrameBytes` (not a later config change the socket does not enforce),
+  so a client can refuse such a frame itself (the web chat page and the TUI
+  do). Files do not travel in frames: the web and the TUI upload them with
+  `POST /sessions/:id/attachments` and send `fileRefs`; inline `chat.send`
+  `attachments` are held to 256 KiB each.
 
 ## Protocol
 
@@ -58,12 +99,19 @@ Clients connect to `ws://host:port/gateway` and must send an auth message within
 | `chat.interject` | Side-channel question sent while root agent is running (non-blocking) |
 | `chat.steer` | Inject a message into the running root agent turn to change course mid-flight |
 | `command` | Execute a gateway command (e.g., `/expert`, `/status`) |
-| `subscribe` | Subscribe to event patterns (e.g., `agent.*`) |
-| `unsubscribe` | Remove event subscriptions |
+| `subscribe` | Subscribe to event patterns over your own events (e.g., `agent.*`) and/or `resources` (e.g., `artifact:<id>`), each access-checked |
+| `unsubscribe` | Remove event patterns and/or resources |
 | `permission.respond` | Approve/deny a permission request |
-| `approval.respond` | Approve/deny a pipeline approval |
-| `agent.stop` | Stop a running agent (admin/local only) |
+| `approval.respond` | Approve/deny a pipeline approval (the requester only) |
+| `agent.stop` | Stop one of your own running agents |
+| `voice.set` | `{ sessionId, on }` — put one of your sessions into (or out of) voice mode for this connection: the propose-then-confirm gate applies, and its lifecycle is narrated to this connection as `voice.speak`. `on:false` counts only for the session this connection turned on; the session leaves voice mode when no connection of the user holds it there any more (also on close) |
+| `replay` | `{ sessionId, afterEventId? }` — the events of one of your own sessions after `afterEventId`, for a reconnecting client (answered with `replay`; without `afterEventId` the answer is `gap: true` with no events) |
 | `ping` | Heartbeat |
+
+`chat.send` takes an optional `workspaceId` (one you own): a session the
+server has not seen yet is created there. Without it, the connection's
+workspace (`?workspace=`, else your default) is used; an existing session
+keeps its own.
 
 ### Gateway → Client
 
@@ -75,26 +123,66 @@ Clients connect to `ws://host:port/gateway` and must send an auth message within
 | `command.result` | Result of a command execution |
 | `error` | Error message (rate limit, validation, etc.) |
 | `pong` | Heartbeat response with server time |
+| `subscribed` | The resources of a `subscribe` that passed the access check (a refused one answers `error` `FORBIDDEN`) |
 | `events_dropped` | Notification that events were dropped from the replay buffer |
+| `permission.pending` | `{ requests, approvals }` — your open permission requests and root-agent approvals. Sent after every `subscribe` with patterns, and again after a `permission.respond` that found the request already answered. Authoritative: the client replaces its list |
+| `replay` | `{ sessionId, events, gap }` — answer to `replay`; `gap: true` when `afterEventId` is missing or no longer buffered and the client must reload from REST |
+
+### Pending snapshot
+
+A tab opened after a prompt was raised still shows it: on `subscribe` the hub
+reads the user's open permission requests and root-agent approvals and sends
+`permission.pending`. Live `permission.request`, `permission.resolved`,
+`agent.approval_required` and `approval.resolved` events raised while the
+snapshot is read are held (`ConnectionContext.hydrationQueue`) and sent after
+it, minus a request already in the snapshot — so a resolution during
+hydration cannot resurrect a request, and no request arrives twice.
+
+### Web frame mapping
+
+What the web consumed on the retired `/ws` and `/ws/permissions`, and where it
+comes from now:
+
+| Legacy frame | Gateway |
+|---|---|
+| `connected` | `auth_ok` |
+| `agent_event` (incl. `thought/text_delta`) | `chat.delta`, `agent.action`, `agent.event` (the worker's own kind in `payload.agentEvent`) |
+| `turn_event` (`status_update`, `approval_required`, `worker_*`, `team_*`, `pipeline_event`), `chat_response` | `rootAgent.status`, `agent.approval_required`, `agent.spawned` / `agent.completed`, `team.*`, `pipeline.event`, `chat.response` |
+| `chat_error` | `chat.error` (to every tab of the user; the sender also gets `error` `CHAT_ERROR`) |
+| `permission_request` | `permission.request`, `permission.resolved` |
+| `pending_requests` | `permission.pending` |
+| `response_recorded`, `approval_resolved` | `permission.resolved`, `approval.resolved` (every tab; a refused answer is `error` `APPROVAL_NOT_FOUND` / `APPROVAL_EXPIRED` / `PERMISSION_ERROR` to the sender) |
+| `swarm_event` | `swarm.*` |
+| `document_event` | `document.enqueued` / `processing` / `completed` / `failed` (stamped with the uploader) |
+| `model_install_progress` | `model.install_progress` (stamped with who started the install) |
+| `steer_result` | `chat.message { injected: true }` (`source: steer:<connectionId>`), or the `chat.send` fallback when nothing is running |
+| `speak` | `voice.speak` |
+| in-app proactive delivery (`webchat:<you>`) | `chat.message { proactive: true }` |
+| client `chat`, `steer`, `approval_response`, `permission_response`, `voice` | `chat.send`, `chat.steer`, `approval.respond`, `permission.respond`, `voice.set` |
 
 ## Event Bus
 
 The `GatewayEventBus` is a typed pub/sub system that replaces scattered EventEmitter patterns:
 
 - **Pattern matching**: Subscribe to `agent.*`, `swarm.*`, `chat.message`, or `*` (all events)
-- **Replay buffer**: Last 200 events per session for reconnection (`swarm.*` events included)
+- **Replay buffer**: Last 200 events per session for reconnection (`swarm.*` events included; `voice.speak` is never kept). At most `gateway.replayMaxSessions` sessions (default 500) keep one — the least recently active is dropped first — and a session's buffer goes when it is deleted, archived or purged with its space (`session-lifecycle.ts`). A client reads it with `replay`, for its own existing sessions only.
 - **Error isolation**: One handler throwing doesn't break other handlers
-- **Security filtering**: Events are only delivered to connections authorized to see them
+- **Per-user delivery**: every event names its user (`GatewayEvent.userId` is required) and goes to that user's connections only — trust level and admin rights widen nothing. The only user-less types are listed in `GLOBAL_EVENT_TYPES` (`protocol.ts`) with their reason, and none of them reach a client by user. `publishEvent(event, only)` can narrow delivery to some of the user's connections (`voice.speak` goes to the voice-mode connection only), never widen it.
+- **User-less types**: resource events (artifact, room and similar) go only to a resource through `publishToResource`; two more stay on the internal bus: `audit` (connection-manager signals; the pre-auth ones have no user yet) and `extension.notify`. Host extensions are files the operator installs (`~/.octipus/extensions`, `<cwd>/.octipus/extensions`), so there is no installing user to stamp. `extension.notify` therefore stays user-less and on the internal bus (other extensions read it); it never reaches a client. This differs from the coworking spec (§4.1 L4), which planned to stamp it with the extension's installing user.
+- **Resource delivery**: `hub.publishToResource(resource, message)` sends to connections whose `ConnectionContext.resources` holds the resource, outside the bus and the user rule. A connection joins a resource only through a `subscribe` that `canSubscribeToResource` (`resource-access.ts`) accepts: `artifact:<id>` for the owner of the artifact's workspace, or for an `artifact_token` connection of that artifact; `chat:inbox` for any user connection (the web chat page holds it while open: an in-app delivery to `webchat:<you>` counts as delivered only when one of your connections does). Live-artifact events (`artifact.data_updated`, `artifact.version_updated`, `artifact.source_error`) travel this way.
 
 ### Event Families
 
 | Family | Events | Emitter |
 |---|---|---|
-| `chat.*` | `chat.message`, `chat.response`, `chat.typing` | Root agent |
+| `chat.*` | `chat.message`, `chat.response`, `chat.delta`, `chat.error` | Root agent, message handler, `WebChatChannel` (in-app delivery) |
 | `agent.*` | `agent.spawned`, `agent.completed`, `agent.failed`, `agent.stopped`, `agent.status`, `agent.event`, `agent.action`, `agent.iteration`, `agent.blocked` | AgentManager / Executor |
 | `swarm.*` | `swarm.node_spawned`, `swarm.node_completed`, `swarm.budget_warning`, `swarm.call_graph_cycle_blocked`, `swarm.narration` | SwarmSpawner / AgentWorker / SwarmCallGraph |
-| `permission.*` | `permission.request`, `permission.response` | PermissionManager |
-| `approval.*` | `approval.request`, `approval.response` | PipelineManager |
+| `permission.*` | `permission.request`, `permission.resolved` | PermissionManager |
+| `approval.*` | `agent.approval_required`, `approval.resolved` | ApprovalManager (root agent) |
+| `document.*` | `document.enqueued`, `document.processing`, `document.completed`, `document.failed` | Document queue |
+| `model.*` | `model.install_progress` | hwfit installer |
+| `voice.*` | `voice.speak` | Narrator (event bridge) |
 | `tool.*` | `tool.invoked`, `tool.result` | ToolExecutor |
 
 Additional event families exist for worker lifecycle, pipelines, sessions, and extensions. See `src/core/gateway/protocol.ts` for the complete list of `GatewayEventType` definitions.
@@ -104,20 +192,25 @@ Additional event families exist for worker lifecycle, pipelines, sessions, and e
 ### Event Bridge
 
 The `connectEventBridge()` function subscribes to:
-- Root agent events → mapped to `chat.response`, `agent.spawned`, `agent.completed`, etc.
-- Agent manager events → mapped to `agent.*`
-- Permission requests → mapped to `permission.request`
+- Root agent events → mapped to `chat.response`, `agent.spawned`, `agent.completed`, `approval.resolved`, etc.; each is also narrated (`voice.speak`) to the connections that put its session into voice mode
+- Agent manager events → mapped to `agent.*` and `chat.delta`, with the agent's session
+- Permission requests and resolutions → `permission.request`, `permission.resolved`
+- The document queue → `document.*`; local model installs → `model.install_progress`
+
+Every source is imported when the bridge connects; one that cannot load fails startup.
 
 ## Rate Limiting
 
 Sliding window rate limiter per connection per action type:
 
-| Action | User Limit | Local Limit | System Limit |
-|--------|-----------|-------------|--------------|
-| `chat.send` | 30/min | 60/min | 200/min |
-| `command` | 60/min | 120/min | 200/min |
-| `subscribe` | 30/min | 60/min | 100/min |
-| default | 60/min | 120/min | 300/min |
+| Action | User Limit |
+|--------|-----------|
+| `chat.send` | 30/min |
+| `command` | 60/min |
+| `subscribe` | 30/min |
+| default (`chat.steer`, `permission.respond`, `replay`, `voice.set`, …) | 60/min |
+
+Room and document frames (coworking S2/S3) will get their own buckets.
 
 ## Commands
 
@@ -128,7 +221,7 @@ Built-in commands available via the gateway protocol:
 | `/help` | `/h`, `/?` | List available commands |
 | `/status` | `/s` | Show session status and running agents |
 | `/expert` | `/e` | Switch expert or list available |
-| `/abort` | `/stop`, `/cancel` | Cancel all running agents |
+| `/abort` | `/stop`, `/cancel` | Cancel your running agents |
 | `/clear` | `/cls` | Clear conversation display |
 | `/compact` | | Compact session context |
 | `/cost` | | Show cumulative token usage and cost for this session |
@@ -192,7 +285,7 @@ src/core/gateway/
 ├── connection-manager.ts # Auth, budgets, connection lifecycle
 ├── event-bus.ts          # Central pub/sub with replay buffer
 ├── rate-limiter.ts       # Sliding window per-connection limiter
-├── local-auth.ts         # ~/.octipus/local-token auth
+├── cli-session.ts        # The CLI login (~/.octipus/session.json) terminal clients use
 ├── presence.ts           # Who's connected, idle timeouts
 ├── commands.ts           # Command registry + 9 built-in commands
 ├── feedback.ts           # Emoji reactions + stall detection
@@ -202,7 +295,6 @@ src/core/gateway/
 ├── message-handler.ts    # Dispatches inbound client messages
 ├── presence.ts           # Presence tracking
 ├── rate-limiter.ts       # Per-connection rate limits
-├── local-auth.ts         # Local/HMAC trust levels
 ├── steering.ts           # chat.steer / chat.interject handling
 ├── hub.ts                # GatewayHub singleton (wires everything)
 └── index.ts              # Public exports
@@ -216,6 +308,10 @@ src/channels/
 src/api/
 ├── gateway-ws.ts         # /gateway WebSocket endpoint
 └── routes/gateway.ts     # REST API for dashboard
+
+web/lib/
+├── gateway.ts            # The tab's one connection (auth, subscribe, replay, reconnect)
+└── gateway-context.tsx   # GatewayProvider, useGateway / useGatewayMessages, "Too many open tabs"
 
 src/tui-pi/              # pi-tui terminal client
 src/tui-editor/          # pi-tui code editor

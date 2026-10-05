@@ -33,6 +33,7 @@ const EvalComparePage = lazy(() => import('./app/eval/compare/page'));
 const EvalRedTeamPage = lazy(() => import('./app/eval/red-team/page'));
 const EvalViewPage = lazy(() => import('./app/eval/view/page'));
 const GraphPage = lazy(() => import('./app/graph/page'));
+const JoinPage = lazy(() => import('./app/join/page'));
 const HooksPage = lazy(() => import('./app/hooks/page'));
 const KnowledgePage = lazy(() => import('./app/knowledge/page'));
 const LinkAccountPage = lazy(() => import('./app/link-account/page'));
@@ -48,13 +49,16 @@ const PipelinesPage = lazy(() => import('./app/pipelines/page'));
 const ProfilesPage = lazy(() => import('./app/profiles/page'));
 const ReaderPage = lazy(() => import('./app/reader/page'));
 const ResearchPage = lazy(() => import('./app/research/page'));
+const RoomsPage = lazy(() => import('./app/rooms/page'));
 const RunsViewPage = lazy(() => import('./app/runs/view/page'));
 const SecretsPage = lazy(() => import('./app/secrets/page'));
 const SettingsPage = lazy(() => import('./app/settings/page'));
 const SetupPage = lazy(() => import('./app/setup/page'));
 const SkillsPage = lazy(() => import('./app/skills/page'));
+const SpaceSettingsPage = lazy(() => import('./app/spaces/settings/page'));
 const SkillsProposalsPage = lazy(() => import('./app/skills/proposals/page'));
 const TasksPage = lazy(() => import('./app/tasks/page'));
+const MyWorkPage = lazy(() => import('./app/my-work/page'));
 const ToolsPage = lazy(() => import('./app/tools/page'));
 const TopicsPage = lazy(() => import('./app/topics/page'));
 
@@ -108,6 +112,7 @@ const router = createBrowserRouter([
       { path: 'eval/view', element: <EvalViewPage /> },
       { path: 'graph', element: <GraphPage /> },
       { path: 'hooks', element: <HooksPage /> },
+      { path: 'join/:token', element: <JoinPage /> },
       { path: 'knowledge', element: <KnowledgePage /> },
       { path: 'link-account', element: <LinkAccountPage /> },
       { path: 'mcp', element: <McpPage /> },
@@ -121,13 +126,16 @@ const router = createBrowserRouter([
       { path: 'profiles', element: <ProfilesPage /> },
       { path: 'reader', element: <ReaderPage /> },
       { path: 'research', element: <ResearchPage /> },
+      { path: 'rooms', element: <RoomsPage /> },
       { path: 'runs/view', element: <RunsViewPage /> },
       { path: 'secrets', element: <SecretsPage /> },
       { path: 'settings', element: <SettingsPage /> },
       { path: 'setup', element: <SetupPage /> },
       { path: 'skills', element: <SkillsPage /> },
       { path: 'skills/proposals', element: <SkillsProposalsPage /> },
+      { path: 'spaces/:id/settings', element: <SpaceSettingsPage /> },
       { path: 'tasks', element: <TasksPage /> },
+      { path: 'my-work', element: <MyWorkPage /> },
       { path: 'tools', element: <ToolsPage /> },
       { path: 'topics', element: <TopicsPage /> },
       { path: 'login', element: <LoginPage /> },

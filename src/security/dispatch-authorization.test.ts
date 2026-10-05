@@ -27,7 +27,7 @@ class WriteTool extends BaseTool {
 }
 const writer = new WriteTool();
 function context(attended = false): AgentContext {
-  return { id: randomUUID(), sessionId, userId, workspaceId: null, attended,
+  return { space: null, trigger: 'user', funding: 'own',  id: randomUUID(), sessionId, userId, workspaceId: null, attended,
     role: 'coding', model: 'fixture', topic: 'coding', status: 'running',
     createdAt: new Date(), updatedAt: new Date(), metadata: {} };
 }
@@ -164,7 +164,9 @@ test('cancelling a running shell tool reaches the real subprocess', async () => 
   const shell = new ShellTool(operations);
   await getToolRegistry().register(shell);
   await getPermissionManager().setPermission(userId, 'shell', 'execute', 'ALLOW');
-  const executor = new ToolExecutor(context(), () => {}, undefined, controller.signal);
+  // `directory` is outside the user's workspace: it is this run's dev-mode
+  // project, the only other place a shell `cwd` may name.
+  const executor = new ToolExecutor({ ...context(), metadata: { projectPath: directory } }, () => {}, undefined, controller.signal);
   executor.registerTools(shell.getToolHandlers());
   const started = Date.now();
   const result = await executor.handleToolCalls([{ id: 'cancel-shell', name: 'shell__run', arguments: {

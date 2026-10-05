@@ -93,7 +93,8 @@ export async function legacyOwners(
   const out = new Map<string, { userId: string; handle?: string }[]>();
   if (pairs.length === 0) return out;
   const wanted = new Set(pairs.map((p) => legacyKey(p.channelType, p.externalId)));
-  const match = or(...pairs.map((p) => bindingsMayContain(p.externalId)))!;
+  // Local accounts only: a remote member's row (S7) owns no chat here.
+  const match = and(eq(users.kind, 'local'), or(...pairs.map((p) => bindingsMayContain(p.externalId))))!;
   const rows = await getDb()
     .select({ id: users.id, channelBindings: users.channelBindings })
     .from(users)
@@ -122,15 +123,22 @@ export class ChannelBindingManager {
    * backfills into the new table so the next lookup is fast.
    */
   async findUserByExternalId(channelType: ChannelType, externalId: string): Promise<string | null> {
+    // Only a local account answers for a chat: a remote member's row (S7)
+    // never signs in here, from a channel or otherwise.
     const [row] = await this.db
-      .select({ userId: channelIdentities.userId })
+      .select({ userId: channelIdentities.userId, kind: users.kind })
       .from(channelIdentities)
+      .innerJoin(users, eq(users.id, channelIdentities.userId))
       .where(and(
         eq(channelIdentities.channelType, channelType),
         eq(channelIdentities.externalId, externalId),
       ))
       .limit(1);
-    if (row) return row.userId;
+    if (row) {
+      if (row.kind === 'local') return row.userId;
+      securityLogger.warn({ channelType, externalId, userId: row.userId }, 'Channel binding names a remote member; treating it as unlinked');
+      return null;
+    }
 
     // Legacy fallback: the JSONB column, verified entries only. Two users
     // claiming the same chat is ambiguous: nobody gets it.

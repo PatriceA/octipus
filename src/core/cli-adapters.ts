@@ -46,6 +46,66 @@ export interface CliRunConnection {
   codexMcpServers?: Array<{ name: string }>;
   /** Install the network-shell guard hook (`agent.cliShellGuard`). */
   shellGuard?: boolean;
+  /**
+   * The run is in a shared space (§5.6): the adapter runs in its declared
+   * space mode (`CLI_SPACE_MODES`), where its native tools cannot act
+   * outside Octipus's decision path; an adapter without one is refused.
+   */
+  space?: boolean;
+  /**
+   * The run is on a personal CLI row (§8.4, §8.5): the user's own token
+   * gives no say over the server's tools, so it runs in the same locked mode
+   * as a space run (`CLI_SPACE_MODES`) — native tools behind Octipus's
+   * permission path, no user/project settings files — and an adapter
+   * without one is refused.
+   */
+  personal?: boolean;
+}
+
+/**
+ * The mode each CLI adapter runs in inside a space (docs/plans/coworking-spec.md
+ * §5.6), or null when it has none and is refused there:
+ *
+ * - Claude-binary tools (Claude Code, GLM, Kimi): `--permission-mode default`
+ *   with the stdio permission tool — every native tool use that is not a read
+ *   comes back through `answerCliPermissionRequest` → `routeApprovalFor`; the
+ *   operator's `allowedTools` pre-approvals are dropped.
+ * - Codex: the `read-only` sandbox; its writes happen only through Octipus tools.
+ * - Antigravity: `--mode plan`; likewise.
+ * - Mistral Vibe (default `auto-approve`): none yet.
+ */
+export const CLI_SPACE_MODES: Readonly<Record<string, string | null>> = {
+  'Claude Code': 'permission mode default with the stdio permission tool',
+  'Codex CLI': 'read-only sandbox',
+  Antigravity: 'plan mode',
+  'Mistral Vibe': null,
+};
+
+/** Throws unless `adapter` declares a space mode. */
+export function assertCliSpaceMode(adapter: string): string {
+  const mode = CLI_SPACE_MODES[adapter];
+  if (!mode) {
+    throw new Error(`${adapter} cannot run in a shared space: it has no mode in which its own tools stay behind Octipus's permission checks. Pick an API model or a CLI model that has one.`);
+  }
+  return mode;
+}
+
+/**
+ * Throws unless `adapter` can run a personal CLI row: the same locked mode
+ * as a space (`CLI_SPACE_MODES`). Vibe's default is `auto-approve`, which
+ * would hand any user the server's shell outside Octipus's policy.
+ */
+export function assertCliPersonalMode(adapter: string): string {
+  const mode = CLI_SPACE_MODES[adapter];
+  if (!mode) {
+    throw new Error(`${adapter} cannot run on a personal model: it has no mode in which its own tools stay behind Octipus's permission checks.`);
+  }
+  return mode;
+}
+
+/** The run is locked to its adapter's space mode: a space run, or a personal row's. */
+function lockedRun(connection: CliRunConnection | undefined): boolean {
+  return !!(connection?.space || connection?.personal);
 }
 
 /**
@@ -54,11 +114,20 @@ export interface CliRunConnection {
  * config; it does not connect to MCP servers. Errors are sanitized: subprocess
  * output can contain credentials.
  */
-export async function discoverCodexMcpServers(workingDirectory: string): Promise<Array<{ name: string }>> {
+export async function discoverCodexMcpServers(
+  workingDirectory: string,
+  /**
+   * The env the run itself spawns with (`cliEnvFor`). Its HOME/CODEX_HOME
+   * decide which `config.toml` codex reads: a personal row's lives in the
+   * owner's CLI home, and listing the server's instead would leave every MCP
+   * server the owner configured enabled.
+   */
+  runEnv: Record<string, string | undefined>,
+): Promise<Array<{ name: string }>> {
   if (typeof workingDirectory !== 'string' || !isAbsolute(workingDirectory)) throw new Error('Scoped Codex MCP discovery requires the absolute session working directory');
   const env: NodeJS.ProcessEnv = {};
   for (const name of ['PATH', 'HOME', 'CODEX_HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'SystemRoot', 'PATHEXT', 'ComSpec', 'TEMP', 'TMP', 'TMPDIR']) {
-    if (process.env[name] !== undefined) env[name] = process.env[name];
+    if (runEnv[name] !== undefined) env[name] = runEnv[name];
   }
   let configured: unknown;
   try {
@@ -200,6 +269,28 @@ export function getEmptyMcpConfigPath(): string {
 export function getClaudeShellGuardSettingsPath(): string {
   const path = join(dirname(getShellGuardScriptPath()), 'claude-shell-guard.json');
   writeFileSync(path, JSON.stringify({ hooks: { PreToolUse: [{ matcher: SHELL_GUARD_TOOL_MATCHER, hooks: [{ type: 'command', command: shellGuardHookCommand() }] }] } }));
+  return path;
+}
+
+/**
+ * The whole Claude settings of a space run (§5.6), passed with
+ * `--setting-sources=` so no user, project or local settings file is read:
+ * a member's agent could otherwise write `<space>/.claude/settings.json`
+ * (pre-approved tools, hooks) and act in every other member's runs, and the
+ * host's own allow rules would skip the stdio permission tool. No
+ * pre-approved tool, bypass mode disabled, no project MCP servers; the shell
+ * guard hook is the only hook, when it is on. Managed (policy) settings
+ * still apply — they are the operator's.
+ */
+export function getClaudeSpaceSettingsPath(shellGuard: boolean): string {
+  const dir = shellGuard ? dirname(getShellGuardScriptPath()) : join(tmpdir(), 'octipus-cli');
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, shellGuard ? 'claude-space-guarded.json' : 'claude-space.json');
+  writeFileSync(path, JSON.stringify({
+    permissions: { allow: [], defaultMode: 'default', disableBypassPermissionsMode: 'disable' },
+    enableAllProjectMcpServers: false,
+    hooks: shellGuard ? { PreToolUse: [{ matcher: SHELL_GUARD_TOOL_MATCHER, hooks: [{ type: 'command', command: shellGuardHookCommand() }] }] } : {},
+  }), { mode: 0o600 });
   return path;
 }
 
@@ -507,6 +598,8 @@ export class CLIArgumentBuilder {
     resume?: { id: string; isFirstRun: boolean },
   ): { binary: string; args: string[]; stdinPrompt?: string; keepStdinOpen?: boolean; useShell?: boolean; env?: Record<string, string> } {
     if (connection) validateScopedExtraArgs(toolName, settings.extraArgs ?? []);
+    if (connection?.space) assertCliSpaceMode(toolName);
+    if (connection?.personal) assertCliPersonalMode(toolName);
     // `toolName` is the CLIToolConfig.adapter key (defaults to name). Vendors
     // that reuse the Claude binary (z.ai GLM, Moonshot Kimi) pass 'Claude Code'.
     switch (toolName) {
@@ -635,7 +728,9 @@ export class CLIArgumentBuilder {
 
     // Shared 'safe'|'workspace'|'full' levels translate per adapter (C14);
     // native Claude modes pass through, codex-style values throw.
-    args.push('--permission-mode', connection?.planMode ? 'plan' : resolveClaudePermissionMode(settings.permissionMode));
+    // In a space, and on a personal row: `default`, so every non-read native
+    // tool use asks Octipus through the stdio permission tool (CLI_SPACE_MODES).
+    args.push('--permission-mode', connection?.planMode ? 'plan' : lockedRun(connection) ? 'default' : resolveClaudePermissionMode(settings.permissionMode));
 
     // Model override: env var > settings > vendor default. Vendor accepts an
     // alias ('sonnet', 'opus') or a full model id ('claude-sonnet-4-6').
@@ -677,7 +772,8 @@ export class CLIArgumentBuilder {
       args.push('--mcp-config', mcpConfig);
     }
 
-    if (settings.allowedTools?.length) {
+    // Pre-approved tools skip the permission tool: none in a space or on a personal row.
+    if (settings.allowedTools?.length && !lockedRun(connection)) {
       args.push('--allowedTools', ...settings.allowedTools);
     }
 
@@ -691,8 +787,13 @@ export class CLIArgumentBuilder {
     const { disallowed, rest } = splitClaudeDisallowedTools(settings.extraArgs ?? []);
     args.push('--disallowedTools', [...new Set([...disallowed, ...CLAUDE_NATIVE_SUBAGENT_TOOLS])].join(','));
 
-    // Per-launch settings layer; merges over the user's, never writes it.
-    if (connection?.shellGuard) args.push('--settings', getClaudeShellGuardSettingsPath());
+    // In a space and on a personal row: no settings file but ours
+    // (`getClaudeSpaceSettingsPath`), so the owner's cli-home settings
+    // (allow rules, hooks) never pre-approve a native tool.
+    // `=` form: an empty value survives a shell-wrapped Windows launch.
+    // Otherwise a per-launch layer that merges over the user's, never writes it.
+    if (lockedRun(connection)) args.push('--setting-sources=', '--settings', getClaudeSpaceSettingsPath(!!connection?.shellGuard));
+    else if (connection?.shellGuard) args.push('--settings', getClaudeShellGuardSettingsPath());
 
     if (rest.length) {
       args.push(...rest);
@@ -715,7 +816,7 @@ export class CLIArgumentBuilder {
     // --dangerously-skip-permissions auto-approves tool calls (the agy
     // equivalent of gemini's --approval-mode yolo).
     const args: string[] = [];
-    if (connection?.planMode || settings.permissionMode === 'safe' || settings.permissionMode === 'plan') args.push('--mode', 'plan');
+    if (connection?.planMode || lockedRun(connection) || settings.permissionMode === 'safe' || settings.permissionMode === 'plan') args.push('--mode', 'plan');
     else if (['workspace', 'accept-edits', 'auto_edit', 'auto'].includes(settings.permissionMode ?? '')) args.push('--mode', 'accept-edits', '--sandbox');
     else if (!settings.permissionMode || settings.permissionMode === 'full' || settings.permissionMode === 'yolo') args.push('--dangerously-skip-permissions');
     else throw new Error(`Unsupported Antigravity permission mode: ${settings.permissionMode}`);
@@ -792,7 +893,8 @@ export class CLIArgumentBuilder {
     // produce — see Claude (`bypassPermissions`) and Gemini (`yolo`)
     // adapters above for the write-enabled equivalents. Operators can
     // dial back per-model via `permissionMode` on the model row.
-    const codexPermMode = connection?.planMode ? 'read-only' : resolveCodexSandboxMode(settings?.permissionMode);
+    // A space or personal-row run is read-only (CLI_SPACE_MODES): writes go through Octipus tools.
+    const codexPermMode = connection?.planMode || lockedRun(connection) ? 'read-only' : resolveCodexSandboxMode(settings?.permissionMode);
     // resume.id present with isFirstRun false: continue that thread via
     // `codex exec resume <id>`. Otherwise (including the first run, which has
     // no id yet) --ephemeral is dropped whenever `resume` participates in

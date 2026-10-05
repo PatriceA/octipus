@@ -1,8 +1,8 @@
 import { estimateCost } from './pricing';
-import { and, desc, eq, gte, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, isNull, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { Cache } from '@/db/cache';
-import { type CostLogEntry, costLog, modelConfig, type NewCostLogEntry } from '@/db/schema/models';
+import { type CostFunding, type CostLogEntry, costLog, modelConfig, type NewCostLogEntry } from '@/db/schema/models';
 import { costSourceAggregates } from '@/db/cost-source';
 import { modelLogger } from '@/utils/logger';
 
@@ -94,8 +94,13 @@ export class CostTracker {
   }
 
   private async pricingModel(name: string, provider?: string, lookupByModelId = false) {
+    // A modelId match considers install rows only (coworking spec §8.1): a
+    // user's personal row sharing the id would otherwise make the match
+    // ambiguous and turn every install call on it into unknown cost. A personal
+    // row is priced through its exact (unique) name.
+    const byInstallModelId = and(eq(modelConfig.modelId, name), isNull(modelConfig.ownerUserId));
     const rows = await this.db.select().from(modelConfig)
-      .where(and(lookupByModelId ? eq(modelConfig.modelId, name) : or(eq(modelConfig.name, name), eq(modelConfig.modelId, name)), provider ? eq(modelConfig.provider, provider) : undefined));
+      .where(and(lookupByModelId ? byInstallModelId : or(eq(modelConfig.name, name), byInstallModelId), provider ? eq(modelConfig.provider, provider) : undefined));
     // Prefer an exact registry name; ambiguous model IDs must not pick an
     // arbitrary alias's rates or provider account.
     return (lookupByModelId ? undefined : rows.find(row => row.name === name)) ?? (rows.length === 1 ? rows[0] : undefined);
@@ -120,6 +125,10 @@ export class CostTracker {
       usageAvailable?: boolean;
       provider?: string;
       lookupByModelId?: boolean;
+      /** The workspace the call worked for (a space's id for a space turn). */
+      workspaceId?: string | null;
+      /** Who pays: the requester (`own`), a sponsor, or the install (install-topic calls). */
+      funding?: CostFunding;
     }
   ): Promise<CostLogEntry> {
     const cachedInputTokens = options?.cachedInputTokens ?? 0;
@@ -170,6 +179,8 @@ export class CostTracker {
       sessionId: options?.sessionId,
       agentId: options?.agentId,
       requestType: options?.requestType,
+      workspaceId: options?.workspaceId ?? null,
+      funding: options?.funding ?? 'own',
       metadata: {
         ...options?.metadata,
         costSource,

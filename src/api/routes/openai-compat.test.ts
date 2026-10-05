@@ -42,7 +42,14 @@ vi.mock('@/models/providers', async () => ({
 }));
 vi.mock('@/models/model-registry', async () => ({
   ...(await vi.importActual<typeof import('@/models/model-registry')>('@/models/model-registry')),
-  getModelRegistry: () => ({ getAllModels: () => getAllModelsImpl() }),
+  // The caller's models (`getModelsForUser`); explicit names resolve to nothing
+  // registered, so passthrough model ids go straight to the provider router.
+  getModelRegistry: () => ({
+    getModelsForUser: () => getAllModelsImpl(),
+    getModelVisibleTo: async () => null,
+    getModelByModelIdVisibleTo: async () => null,
+    isRegistered: async () => false,
+  }),
 }));
 
 const { getAgentService } = await import('@/core/agent');
@@ -102,8 +109,8 @@ describe('GET /v1/models', () => {
 
   test('lists the rootAgent model + registry models', async () => {
     getAllModelsImpl = async () => [
-      { name: 'gpt-4o', provider: 'openai' },
-      { name: 'llama3.2', provider: 'ollama' },
+      { name: 'gpt-4o', provider: 'openai', isEnabled: true },
+      { name: 'llama3.2', provider: 'ollama', isEnabled: true },
     ];
     const res = await appFor(fullUser).handle(new Request('http://localhost/v1/models'));
     expect(res.status).toBe(200);

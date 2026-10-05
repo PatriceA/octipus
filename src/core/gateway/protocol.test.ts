@@ -75,6 +75,17 @@ describe('Protocol', () => {
       expect(result.ok).toBe(true);
     });
 
+    test('an inline attachment is held to the default frame cap (larger files go over REST)', () => {
+      const send = (data: string) => parseClientMessage(JSON.stringify({
+        type: 'chat.send',
+        sessionId: '550e8400-e29b-41d4-a716-446655440000',
+        content: 'Check this file',
+        attachments: [{ name: 'shot.png', mimeType: 'image/png', data }],
+      }));
+      expect(send('a'.repeat(262_144)).ok).toBe(true);
+      expect(send('a'.repeat(262_145)).ok).toBe(false);
+    });
+
     test('parses chat.send with edit-and-continue fileRefs', () => {
       const result = parseClientMessage(JSON.stringify({
         type: 'chat.send',

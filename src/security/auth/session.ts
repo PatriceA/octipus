@@ -4,6 +4,7 @@ import { auditRepository } from '@/db/repositories/audit-repository';
 import { userRepository } from '@/db/repositories/user-repository';
 import { generateToken, sha256 } from '@/utils/crypto';
 import { securityLogger } from '@/utils/logger';
+import { isRemoteUser } from '@/security/user-kinds';
 
 const SESSION_PREFIX = 'session:';
 const USER_SESSIONS_PREFIX = 'user-sessions:';
@@ -49,6 +50,32 @@ function isEphemeralSession(s: { createdAt: Date | string; expiresAt: Date | str
   return new Date(s.expiresAt).getTime() - new Date(s.createdAt).getTime() <= EPHEMERAL_TTL_MAX_MS;
 }
 
+/**
+ * Thrown by {@link SessionManager.create} for a deactivated user. Every login
+ * path (password, passkey, SAML, device pairing, ws-ticket) mints its session
+ * there, so this is the one place a disabled account is refused a new one.
+ */
+export class InactiveUserError extends Error {
+  constructor(readonly userId: string) {
+    super('Account is disabled');
+    this.name = 'InactiveUserError';
+  }
+}
+
+/**
+ * Thrown by {@link SessionManager.create} for a remote member (S7,
+ * `users.kind = 'remote'`): they act only through their own install, so no
+ * login path mints them a session here. An `InactiveUserError`, so every
+ * caller that refuses a disabled account refuses it the same way.
+ */
+export class RemoteUserError extends InactiveUserError {
+  constructor(userId: string) {
+    super(userId);
+    this.message = 'Members from other installs cannot sign in here';
+    this.name = 'RemoteUserError';
+  }
+}
+
 export class SessionManager {
   private cache: Cache;
   private maxAge: number;
@@ -92,6 +119,14 @@ export class SessionManager {
     const user = await userRepository.findById(userId);
     if (!user) {
       throw new Error('User not found');
+    }
+    if (!user.isActive) {
+      securityLogger.warn({ userId }, 'Session refused: account is disabled');
+      throw new InactiveUserError(userId);
+    }
+    if (isRemoteUser(user)) {
+      securityLogger.warn({ userId }, 'Session refused: remote member');
+      throw new RemoteUserError(userId);
     }
 
     // Enforce the session count limit by EVICTING THE OLDEST, never by
@@ -154,7 +189,12 @@ export class SessionManager {
   }
 
   /**
-   * Validate a session token
+   * Validate a session token.
+   *
+   * The user row is read on every call: the session record is a snapshot taken
+   * at login, and a deactivated user or a demoted admin must lose access on the
+   * next request, not when the session expires. A disabled (or deleted) user's
+   * session is revoked here; `username` and `isAdmin` come from the database.
    */
   async validate(token: string): Promise<SessionData | null> {
     const tokenHash = sha256(token);
@@ -169,6 +209,16 @@ export class SessionManager {
       await this.revoke(token);
       return null;
     }
+
+    const user = await userRepository.findAuthState(session.userId);
+    if (!user || !user.isActive || isRemoteUser(user)) {
+      const reason = !user ? 'user_deleted' : !user.isActive ? 'account_disabled' : 'remote_member';
+      securityLogger.warn({ userId: session.userId, reason }, 'Session rejected');
+      await this.revoke(token);
+      return null;
+    }
+    session.username = user.username;
+    session.isAdmin = user.isAdmin;
 
     // Update last activity
     session.lastActivityAt = new Date();

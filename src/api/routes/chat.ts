@@ -156,8 +156,10 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
         sessionId = session.id;
       } else {
         // Verify session ownership through the scoped repo.
+        // A room is never a personal chat, its creator's included (§6.2).
         const session = await repos.sessions.findById(sessionId);
         if (!session) {
+          set.status = 404;
           return { error: 'Session not found' };
         }
       }
@@ -245,14 +247,16 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
       }
 
       const rootAgent = getAgentService();
-      // Ownership is checked by the manager (admins may answer any request).
-      // "Doesn't exist" and "not yours" collapse into the same response so
-      // attackers can't tell whether a requestId is currently pending.
+      // Only the requester answers, admins included: an admin answering
+      // someone else's request uses the audited
+      // POST /api/admin/approvals/:id/resolve. "Doesn't exist" and "not yours"
+      // collapse into the same response so attackers can't tell whether a
+      // requestId is currently pending.
       const outcome = await rootAgent.resolveApprovalDetailed(
         body.requestId,
         body.approved,
         body.response,
-        { forUserId: user.isAdmin ? undefined : user.id, resolvedBy: user.id },
+        { forUserId: user.id, resolvedBy: user.id },
       );
 
       if (outcome.status === 'orphaned' || outcome.status === 'timed_out') {
@@ -287,11 +291,10 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
       }
 
       const rootAgent = getAgentService();
-      // Admins see global list (operational triage); everyone else only
-      // their own pending approvals.
-      const pending = user.isAdmin
-        ? rootAgent.getPendingApprovals()
-        : rootAgent.getPendingApprovals(user.id);
+      // The caller's own pending approvals, admins included: these are the
+      // prompts this user can answer. Admin triage across users lives at
+      // GET /api/admin/approvals.
+      const pending = rootAgent.getPendingApprovals(user.id);
 
       return {
         approvals: pending.map((a) => ({

@@ -1,11 +1,11 @@
 /**
  * The signed-in user for local CLI clients (TUI, editor).
  *
- * Without one, a terminal client authenticates with `~/.octipus/local-token`
- * and the gateway hands it the synthetic `'local'` principal: it is nobody's
- * account, so it reads none of your memories, none of your user-scoped vault
- * secrets, and none of the settings you changed in the web UI. Storing a real
- * session token here makes the terminal the same principal as the browser.
+ * A terminal client signs in to the gateway with this session token and
+ * nothing else — there is no machine account. Without one the TUI asks for a
+ * login (once, at start) and does not connect. The token makes the terminal
+ * the same principal as the browser: your memories, vault secrets, settings,
+ * and only your sessions and events.
  *
  * The file holds a bearer token — same power as the browser's session cookie —
  * so it is written 0600 and never logged.

@@ -12,7 +12,33 @@ export type CliSessionRecord = {
   generation?: string;
   ownerAgentId?: string;
   acknowledged?: { id: string; createdAt: string };
+  /** The model row the vendor session ran on, and whose credentials (absent: the install's) — §8.5. */
+  modelName?: string;
+  credentialOwner?: string;
 };
+
+const OWNER_SEPARATOR = '@@';
+
+/**
+ * Root store key for a vendor session: the adapter for the install's own CLI
+ * login, the adapter plus the credential owner for a personal CLI row
+ * (coworking spec §8.5). Two members of a shared session running their own
+ * subscriptions keep separate vendor sessions, and a resume never crosses
+ * owners.
+ */
+export function rootCliSessionKey(adapterKey: string, credentialOwner?: string): string {
+  return credentialOwner ? `${adapterKey}${OWNER_SEPARATOR}${credentialOwner}` : adapterKey;
+}
+
+/** A child key's resume scope, with the credential owner folded in (see `rootCliSessionKey`). */
+export function ownedResumeKey(resumeKey: string, credentialOwner?: string): string {
+  return credentialOwner ? `${resumeKey}${OWNER_SEPARATOR}${credentialOwner}` : resumeKey;
+}
+
+/** The adapter a root store key belongs to. */
+export function cliSessionKeyAdapter(key: string): string {
+  return key.split(OWNER_SEPARATOR)[0];
+}
 
 /**
  * Fingerprints the parameters of a run that would change what a resumed

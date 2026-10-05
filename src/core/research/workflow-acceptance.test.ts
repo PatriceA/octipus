@@ -41,7 +41,7 @@ test('research produces a saved, source-linked document and a retry-safe follow-
   expect(fetched).toContain(sourceUrl);
   expect(report.sources[0].hash).toBe(createHash('sha256').update(sourceBody).digest('hex'));
   const id = await persistReport(report, userId); expect(id).toBeTruthy();
-  const document = await documentRepository.findById(id!); expect(document?.status).toBe('completed');
+  const document = await documentRepository.findByIdSystem(id!); expect(document?.status).toBe('completed');
   const content = await readFile(document!.storagePath, 'utf8');
   expect(content).toContain('42 tasks'); expect(content).toContain(sourceUrl); expect(content).toContain('One-day fixture');
   const principal = backgroundUserPrincipal(userId);

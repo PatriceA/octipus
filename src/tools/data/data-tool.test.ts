@@ -53,7 +53,7 @@ const call = (name: string, args: Record<string, unknown>, userId: string) =>
 
 /** Write a file into the caller's own workspace root, the way an agent would. */
 function writeWorkspaceFile(userId: string, name: string, body: string): string {
-  const fs = WorkspaceFS.forAgent({ userId });
+  const fs = WorkspaceFS.forAgent(ctx(userId));
   fs.ensureRootSync();
   writeFileSync(join(fs.root, name), body);
   return name;

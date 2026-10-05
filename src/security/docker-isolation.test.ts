@@ -56,14 +56,20 @@ describe('isolationActive', () => {
     expect(isolationActive('11111111-1111-1111-1111-111111111111')).toBe(false);
   });
 
-  test('false for system / local / empty userIds even when on', async () => {
+  test('false for a system job even when on', async () => {
     const { isolationActive } = await import('@/security/docker-isolation');
     const { getConfig } = await import('@/config');
     getConfig().security.dockerIsolation = 'enforce';
     expect(isolationActive('system')).toBe(false);
-    expect(isolationActive('local')).toBe(false);
-    expect(isolationActive('')).toBe(false);
-    expect(isolationActive(null)).toBe(false);
+  });
+
+  test('throws for an id that is neither a real user nor a system job when on', async () => {
+    const { isolationActive } = await import('@/security/docker-isolation');
+    const { getConfig } = await import('@/config');
+    getConfig().security.dockerIsolation = 'enforce';
+    for (const id of ['local', '', null, undefined]) {
+      expect(() => isolationActive(id)).toThrow('Expected a user id (uuid)');
+    }
   });
 
   test('true when both flags on and a real userId is supplied', async () => {

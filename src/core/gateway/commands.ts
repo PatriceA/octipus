@@ -4,6 +4,7 @@ import { addPlanFeedback, formatWorkPlan } from '@/shared/work-plan';
 import { workPlanRepository } from '@/db/repositories/work-plan-repository';
 import { coreLogger } from '@/utils/logger';
 import type { TrustLevel } from './protocol';
+import { canActInSession } from '@/core/rooms/access';
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -12,13 +13,20 @@ export interface CommandDef {
   aliases: string[];
   description: string;
   args?: { name: string; required: boolean; description: string }[];
-  minTrustLevel: TrustLevel;
+  /**
+   * Admins only. Checked against `users.is_admin` read from the database when
+   * the command runs, never against the connection's trust level or the
+   * admin flag it carried at sign-in.
+   */
+  adminOnly?: boolean;
   handler: (ctx: CommandContext) => Promise<CommandResult>;
 }
 
 export interface CommandContext {
   userId: string;
   sessionId?: string;
+  /** The connection's workspace (resolved at auth); new sessions are created in it. */
+  workspaceId?: string;
   clientType: string;
   trustLevel: TrustLevel;
   args: Record<string, string>;
@@ -34,12 +42,20 @@ export interface CommandResult {
   data?: unknown;
 }
 
-// ── Trust Level Ordering ──────────────────────────────────────────
+// ── Admin check ───────────────────────────────────────────────────
 
-const TRUST_ORDER: Record<TrustLevel, number> = { agent: 0, user: 1, local: 2, system: 3 };
-
-function hasTrust(actual: TrustLevel, required: TrustLevel): boolean {
-  return TRUST_ORDER[actual] >= TRUST_ORDER[required];
+/**
+ * Is `userId` an active admin right now? Read from the users row on every
+ * call, so a demotion takes effect on the next command rather than on the
+ * next sign-in. Gateway principals are always user ids; anything else is not
+ * an admin.
+ */
+export async function isAdminInDatabase(userId: string): Promise<boolean> {
+  const { isUuid } = await import('@/db/repositories/scoped');
+  if (!isUuid(userId)) return false;
+  const { userRepository } = await import('@/db/repositories/user-repository');
+  const user = await userRepository.findById(userId);
+  return user?.isAdmin === true && user.isActive !== false;
 }
 
 // ── Command Registry ──────────────────────────────────────────────
@@ -89,7 +105,7 @@ export class CommandRegistry {
       return { text: `Unknown command: /${name}. Use /help to see available commands.` };
     }
 
-    if (!hasTrust(ctx.trustLevel, cmd.minTrustLevel)) {
+    if (cmd.adminOnly && !(await isAdminInDatabase(ctx.userId))) {
       return { text: `Insufficient permissions for /${cmdName}.`, ephemeral: true };
     }
 
@@ -110,10 +126,10 @@ export class CommandRegistry {
   }
 
   /**
-   * Get all commands visible to a trust level.
+   * Get all commands visible to a caller; admin-only ones need `isAdmin`.
    */
-  getAvailable(trustLevel: TrustLevel): CommandDef[] {
-    return [...this.commands.values()].filter(cmd => hasTrust(trustLevel, cmd.minTrustLevel));
+  getAvailable(isAdmin: boolean): CommandDef[] {
+    return [...this.commands.values()].filter(cmd => !cmd.adminOnly || isAdmin);
   }
 }
 
@@ -121,31 +137,28 @@ export class CommandRegistry {
 
 export function registerBuiltinCommands(registry: CommandRegistry): void {
   registry.register({
-    name: 'skills', aliases: [], minTrustLevel: 'user',
+    name: 'skills', aliases: [],
     description: 'List or select skills: /skills <id or name> always|session|auto [--global]',
     handler: async ctx => {
-      const { resolveUserId } = await import('./resolve-user');
       const { handleSkillSelectionCommand } = await import('@/skills/selection-command');
-      const userId = await resolveUserId(ctx.userId);
+      const userId = ctx.userId;
       // The TUI allocates its UUID before the first message. Persist that session
       // so a skill can be selected before any model starts working.
       if (ctx.sessionId && /^[0-9a-f-]{36}$/i.test(ctx.sessionId)) {
         const { resolveSession } = await import('@/core/agent/session-resolver');
-        await resolveSession(ctx.sessionId, userId, ctx.clientType);
+        await resolveSession(ctx.sessionId, userId, ctx.clientType, ctx.workspaceId);
       }
       return { text: await handleSkillSelectionCommand(userId, ctx.sessionId, ctx.rawArgs) };
     },
   });
   for (const name of ['work-plan', 'work-plan-status', 'plan-feedback']) {
     registry.register({
-      name, aliases: [], minTrustLevel: 'user',
+      name, aliases: [],
       description: name === 'plan-feedback' ? 'Give feedback on the current work plan' : name === 'work-plan' ? 'Show the current plan, evidence, and feedback' : 'Compact work-plan progress',
       handler: async ctx => {
         // Compact status is machine-read by the TUI: empty text = no plan, error = unavailable.
         if (!ctx.sessionId) return { text: name === 'work-plan-status' ? '' : 'No active session.' };
-        // The local console's principal is the literal 'local'; the plan lives under a uuid.
-        const { resolveUserId } = await import('./resolve-user');
-        const userId = await resolveUserId(ctx.userId);
+        const userId = ctx.userId;
         // The session row is created by the first message; until then (or for
         // a session that is not the caller's) there is simply no plan.
         const state = await workPlanRepository.read(ctx.sessionId, userId)
@@ -181,9 +194,8 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     name: 'help',
     aliases: ['h', '?'],
     description: 'List available commands',
-    minTrustLevel: 'user',
     handler: async (ctx) => {
-      const cmds = registry.getAvailable(ctx.trustLevel);
+      const cmds = registry.getAvailable(await isAdminInDatabase(ctx.userId));
       const lines = cmds.map(c => {
         const aliasStr = c.aliases.length > 0 ? ` (${c.aliases.map(a => '/' + a).join(', ')})` : '';
         return `  /${c.name}${aliasStr} — ${c.description}`;
@@ -196,12 +208,12 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     name: 'status',
     aliases: ['s'],
     description: 'Show current session status, agents, and expert',
-    minTrustLevel: 'user',
     handler: async (ctx) => {
       try {
         const { getAgentManager } = await import('@/core/agent-manager');
         const agentManager = getAgentManager();
-        const agents = agentManager.list();
+        // The caller's own agents only: other users' roles and topics are theirs.
+        const agents = agentManager.list().filter(a => a.userId === ctx.userId);
         const running = agents.filter(a => a.status === 'running');
         let text = `Session: ${ctx.sessionId?.slice(0, 8) || 'none'}`;
         text += `\nAgents: ${running.length} running / ${agents.length} total`;
@@ -224,26 +236,21 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
   registry.register({
     name: 'abort',
     aliases: ['stop', 'cancel'],
-    description: 'Cancel running agents',
-    minTrustLevel: 'user',
+    description: 'Cancel your running agents',
     handler: async (ctx) => {
       try {
         const { getAgentManager } = await import('@/core/agent-manager');
         const agentManager = getAgentManager();
-        const running = agentManager.getRunningCount();
+        // The caller's own agents, never every user's on the install.
+        const running = agentManager.getByUser(ctx.userId).filter(a => a.getStatus() === 'running').length;
         if (running === 0) {
           return { text: 'No running agents to stop.' };
         }
-        // Not `silenceListeners`: this process keeps running, and its
-        // subscribers are the UI's event stream.
-        const { stillRunning } = await agentManager.stopAll();
-        return {
-          text: stillRunning > 0
-            ? `Stopped ${running} running agent(s); ${stillRunning} did not wind down in time.`
-            : `Stopped ${running} running agent(s).`,
-        };
-      } catch {
-        return { text: 'Error stopping agents.' };
+        const stopped = agentManager.stopUser(ctx.userId);
+        return { text: `Stopped ${stopped} running agent(s).` };
+      } catch (err) {
+        coreLogger.error({ err, userId: ctx.userId }, 'abort command failed');
+        return { text: `Error stopping agents: ${(err as Error).message}` };
       }
     },
   });
@@ -252,7 +259,6 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     name: 'plan',
     aliases: [],
     description: 'Toggle plan mode — explore and propose without changing anything. /plan on | off',
-    minTrustLevel: 'user',
     handler: async (ctx) => {
       if (!ctx.sessionId) return { text: 'No active session.' };
       const { togglePlanMode } = await import('@/core/agent/plan-mode');
@@ -265,10 +271,9 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     name: 'compact',
     aliases: [],
     description: 'Compact session context — summarizes history and saves to session folder. Optional: /compact <focus instructions>',
-    minTrustLevel: 'user',
     handler: async (ctx) => {
       const { compactSessionCommand } = await import('@/core/agent/session-compaction');
-      return { text: await compactSessionCommand(ctx.sessionId, ctx.rawArgs) };
+      return { text: await compactSessionCommand(ctx.sessionId, ctx.rawArgs, ctx.userId) };
     },
   });
 
@@ -276,7 +281,6 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     name: 'clear',
     aliases: ['cls', 'reset'],
     description: 'Reset rootAgent context (and clear UI display on channels that support it)',
-    minTrustLevel: 'user',
     handler: async (ctx) => {
       if (!ctx.sessionId) return { text: 'No active session.' };
       try {
@@ -307,12 +311,10 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     name: 'sessions',
     aliases: [],
     description: 'List your recent sessions (TUI: /resume <n|id> reopens one)',
-    minTrustLevel: 'user',
     handler: async (ctx) => {
-      const { resolveUserId } = await import('./resolve-user');
       const { sessionRepository } = await import('@/db/repositories/session-repository');
       const { messageRepository } = await import('@/db/repositories/message-repository');
-      const rows = await sessionRepository.listByUser(await resolveUserId(ctx.userId), 15);
+      const rows = await sessionRepository.listByUser(ctx.userId, 15);
       const data = await Promise.all(rows.map(async (s) => {
         // The default title is "<channel> conversation" — the first question is the useful label.
         const generic = !s.title || / conversation$/.test(s.title);
@@ -331,16 +333,14 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     name: 'history',
     aliases: [],
     description: 'Replay this session\'s conversation (last 50 messages)',
-    minTrustLevel: 'user',
     handler: async (ctx) => {
       if (!ctx.sessionId) return { text: 'No active session.' };
       // Gate here as well as at adoption: `chat.send` also binds the connection
-      // to a session, and a transcript must never follow a bare id.
+      // to a session, and a transcript must never follow a bare id. Owner
+      // only — no trust level or admin flag reads another user's transcript.
       const { sessionRepository } = await import('@/db/repositories/session-repository');
-      const { resolveUserId } = await import('./resolve-user');
       const session = await sessionRepository.findById(ctx.sessionId);
-      const trusted = ctx.trustLevel === 'local' || ctx.trustLevel === 'system';
-      if (!session || (!trusted && session.userId !== await resolveUserId(ctx.userId))) return { text: 'Session not found.' };
+      if (!(await canActInSession(session, ctx.userId, 'chat'))) return { text: 'Session not found.' };
       const { messageRepository } = await import('@/db/repositories/message-repository');
       const rows = (await messageRepository.getLastMessages(ctx.sessionId, 50)).reverse();
       const data = rows
@@ -355,7 +355,6 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     name: 'cost',
     aliases: [],
     description: 'Show cumulative token usage and cost for this session',
-    minTrustLevel: 'user',
     handler: async (ctx) => {
       try {
         const { getCostTracker } = await import('@/models/cost-tracker');
@@ -385,17 +384,13 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
       { name: 'action', required: false, description: 'approve | reject' },
       { name: 'index', required: false, description: 'Row number from the list' },
     ],
-    minTrustLevel: 'user',
     handler: async (ctx) => {
-      const { resolveUserId } = await import('./resolve-user');
       const {
         approveProposal, listPendingProposals, rejectProposal,
       } = await import('@/services/skill-proposal-service');
 
-      // Trusted local/system consoles see (and act on) everything; a normal
-      // user only ever sees their own.
-      const userId = await resolveUserId(ctx.userId);
-      const scope = ctx.trustLevel === 'local' || ctx.trustLevel === 'system' ? undefined : userId;
+      // Everyone, admins included, sees and acts on their own proposals only.
+      const scope = ctx.userId;
 
       const pending = await listPendingProposals(scope);
       const action = (ctx.args.action || '').toLowerCase();
@@ -447,7 +442,6 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
       { name: 'action', required: false, description: 'reconnect' },
       { name: 'server', required: false, description: 'Server id or name (omit for all enabled)' },
     ],
-    minTrustLevel: 'user',
     handler: async (ctx) => {
       const { getMCPBridge } = await import('@/mcp/bridge');
       const bridge = getMCPBridge();
@@ -475,8 +469,8 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
       }
 
       // Reconnecting rebinds a process-wide bridge every user's agents call,
-      // so it takes the same admin/local trust that stopping agents does.
-      if (ctx.trustLevel !== 'local' && ctx.trustLevel !== 'system' && !(ctx.metadata as { isAdmin?: boolean } | undefined)?.isAdmin) {
+      // so it needs an admin — read from the database, not the connection.
+      if (!(await isAdminInDatabase(ctx.userId))) {
         return { text: 'Reconnecting an MCP server needs an admin account.' };
       }
 
@@ -510,7 +504,6 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     name: 'diff',
     aliases: [],
     description: 'Show git diff for workspace changes',
-    minTrustLevel: 'user',
     handler: async () => {
       try {
         const { execSync } = await import('child_process');
@@ -529,11 +522,18 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     aliases: [],
     description: 'Review git changes in the workspace — /changes for the list, /changes <path> for a file diff',
     args: [{ name: 'path', required: false, description: 'File to show a before/after diff for' }],
-    minTrustLevel: 'user',
     handler: async (ctx) => {
       try {
-        const { WorkspaceFS } = await import('@/security/workspace-fs');
-        const fs = WorkspaceFS.forAgent({ userId: ctx.userId });
+        const { sessionFsAccess, WorkspaceFS } = await import('@/security/workspace-fs');
+        const { agentPrincipal } = await import('@/security/principal');
+        const { sessionRepository } = await import('@/db/repositories/session-repository');
+        // The session's own root (its workspace, or its dev-mode project) —
+        // what the agent wrote to; the connection's workspace before the
+        // session exists.
+        const session = ctx.sessionId ? await sessionRepository.findById(ctx.sessionId) : null;
+        const fs = session && await canActInSession(session, ctx.userId, 'chat')
+          ? WorkspaceFS.forSession(session, await sessionFsAccess(session, ctx.userId))
+          : WorkspaceFS.forPrincipal(agentPrincipal({ userId: ctx.userId, workspaceId: ctx.workspaceId ?? null }));
         // Use rawArgs, not ctx.args.path: the registry splits input on
         // whitespace, so a path containing a space would only populate the
         // first token in args.path. rawArgs preserves the whole path.
@@ -578,7 +578,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     name: 'reload-extensions',
     aliases: ['reload'],
     description: 'Re-discover and reload user extensions from .octipus/extensions/',
-    minTrustLevel: 'local',
+    adminOnly: true,
     handler: async () => {
       try {
         const { getExtensionRegistry } = await import('@/extensions');
@@ -594,7 +594,6 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     name: 'persona',
     aliases: [],
     description: 'Configure the rootAgent persona — name, tone, narration, free-form facts',
-    minTrustLevel: 'user',
     handler: async (ctx) => {
       const { handlePersonaCommand } = await import('@/core/personas/commands');
       try {
@@ -610,7 +609,6 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     name: 'version',
     aliases: ['v'],
     description: 'Show Octipus version and build info',
-    minTrustLevel: 'user',
     handler: async () => {
       const { getAppVersion } = await import('@/utils/version');
       return { text: `Octipus v${getAppVersion()} (Node ${process.versions.node})` };

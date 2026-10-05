@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { AgentContext } from './types';
 import type { AgentEvent, ToolHandler } from './agent-base';
 import { getPermissionManager } from '@/security/permissions';
-import { routeApproval } from '@/security/approval-policy';
+import { routeApprovalFor } from '@/security/approval-route';
 import { applyFlowGuard, ensureSharedAudienceKnown, observeFlow } from '@/security/flow-guard';
 import { getConfig } from '@/config';
 
@@ -55,16 +55,15 @@ export async function answerCliPermissionRequest(
   await ensureSharedAudienceKnown(context.sessionId);
   const permission = applyFlowGuard(getConfig().agent?.flowGuard, context.sessionId, flowCall,
     await manager.check(context.userId, toolId, request.tool_name, request.input, context));
-  const decision = routeApproval({ level: permission.level, role: context.role, root: context.root,
-    attended: context.attended, toolId, action: request.tool_name,
-    unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions });
+  const decision = await routeApprovalFor(context, { toolId, action: request.tool_name, toolName: request.tool_name, args: request.input },
+    permission, { unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions });
   let allowed = decision.route === 'execute';
   if (decision.route === 'ask_human' && context.status === 'running' && !signal?.aborted) {
     const id = await manager.requestApproval(context.userId, context.id, toolId, request.tool_name,
-      request.input, context.sessionId, `CLI: ${request.tool_name}`, signal);
+      request.input, context.sessionId, `CLI: ${request.tool_name}`, signal, context.workspaceId);
     if (context.status !== 'running' || signal?.aborted) manager.cancelWaits(context.id);
     emit('permission_request', { requestId: id, toolName: `CLI: ${request.tool_name}`, args: request.input, toolId,
-      ...(permission.source === 'flow-guard' ? { reason: permission.reason } : {}) });
+      ...(decision.source === 'flow-guard' || decision.source === 'space-flow' ? { reason: decision.reason } : {}) });
     allowed = await manager.waitForApproval(id, { agentId: context.id });
   }
   if (allowed) {
@@ -73,9 +72,11 @@ export async function answerCliPermissionRequest(
   }
   if (context.status !== 'running' || signal?.aborted) allowed = false;
   if (allowed) observeFlow(context.sessionId, flowCall);
-  const denial = decision.route === 'blocked' && permission.source === 'flow-guard'
-    ? `Octipus ${permission.reason}. Do not bypass this decision.`
-    : 'Octipus permission was denied or not granted. Do not bypass this decision.';
+  const denial = decision.source === 'space-role'
+    ? `Octipus: ${decision.reason}. Do not bypass this decision.`
+    : decision.route === 'blocked' && (decision.source === 'flow-guard' || decision.source === 'space-flow')
+      ? `Octipus ${decision.reason}. Do not bypass this decision.`
+      : 'Octipus permission was denied or not granted. Do not bypass this decision.';
   return { type: 'control_response', response: { subtype: 'success', request_id, response: allowed
     ? { behavior: 'allow', updatedInput: request.input, toolUseID: request.tool_use_id }
     : { behavior: 'deny', message: denial } } };

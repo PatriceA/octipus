@@ -6,6 +6,10 @@ import { CODE_NOT_INDEXED_MESSAGE, isCodeFile } from '@/core/rag/code-detection'
 import { type EmbeddingPurpose, getEmbeddingService } from '@/core/rag/embeddings';
 import { type getKBReadiness, isKBReady, kbNotReadyResponse, runKBSelfCheck } from '@/core/rag/health';
 import { getFileIndexer } from '@/core/rag/indexer';
+import { type KnowledgeScope, principalKnowledgeOwner, principalKnowledgeScope } from '@/core/rag/knowledge-scope';
+import { auditRepository } from '@/db/repositories/audit-repository';
+import { contentRepos } from '@/db/repositories/content';
+import type { Principal } from '@/security/principal';
 import { WorkspaceFS, WorkspaceFsError } from '@/security/workspace-fs';
 import { apiLogger } from '@/utils/logger';
 
@@ -29,6 +33,42 @@ function ensureKBReady(set: any): { error: string; kb: ReturnType<typeof getKBRe
   return body;
 }
 
+/**
+ * The knowledge scope of one request. Everyone gets their personal scope; an
+ * admin reaches every row only by asking for it with `?scope=install`, and
+ * each such request writes an audit row naming the operation.
+ */
+type ScopeResolution = { scope: KnowledgeScope } | { status: 400 | 403; error: string };
+
+/** Operations that change the knowledge base (the others read it). */
+const WRITE_OPS = new Set(['delete', 'cleanup', 'index']);
+
+async function requestScope(
+  principal: Principal,
+  requested: string | undefined,
+  op: string,
+  details: Record<string, unknown> = {},
+): Promise<ScopeResolution> {
+  if (requested === undefined || requested === 'personal') {
+    // In a space the scope is the space's (`principalKnowledgeScope`), and
+    // changing what is indexed there is a write the member's role must allow.
+    if (WRITE_OPS.has(op)) contentRepos(principal).can('write');
+    return { scope: principalKnowledgeScope(principal) };
+  }
+  if (requested !== 'install') return { status: 400, error: `Unknown scope "${requested}" — use personal or install` };
+  if (!principal.isAdmin) return { status: 403, error: 'Install scope requires an admin' };
+  await auditRepository.log({
+    userId: principal.userId,
+    action: 'knowledge_install_access',
+    resourceType: 'knowledge',
+    resourceId: typeof details.id === 'string' ? details.id : null,
+    details: { op, ...details },
+  });
+  return { scope: { kind: 'install' } };
+}
+
+const scopeQuery = t.Optional(t.Union([t.Literal('personal'), t.Literal('install')]));
+
 export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
   .use(apiContext)
 
@@ -48,7 +88,7 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
   })
 
   // List / browse knowledge entries (lightweight — no vectors or full content)
-  .get('/', async ({ user, query, set }) => {
+  .get('/', async ({ user, principal, query, set }) => {
     if (!user) {
       set.status = 401;
       return { error: 'Authentication required' };
@@ -58,9 +98,15 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
     const offset = query.offset ? parseInt(query.offset, 10) : 0;
     const purpose = (query.purpose || undefined) as EmbeddingPurpose | undefined;
 
+    const resolved = await requestScope(principal, query.scope, 'list', { purpose: purpose ?? null });
+    if ('error' in resolved) {
+      set.status = resolved.status;
+      return { error: resolved.error };
+    }
+
     try {
       const service = getEmbeddingService();
-      const result = await service.listAll(limit, offset, purpose);
+      const result = await service.listAll(resolved.scope, limit, offset, purpose);
       return {
         entries: result.entries,
         total: result.total,
@@ -78,20 +124,27 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
       limit: t.Optional(t.String()),
       offset: t.Optional(t.String()),
       purpose: t.Optional(t.String()),
+      scope: scopeQuery,
     }),
     detail: { tags: ['knowledge'] },
   })
 
   // Get stats
-  .get('/stats', async ({ user, set }) => {
+  .get('/stats', async ({ user, principal, query, set }) => {
     if (!user) {
       set.status = 401;
       return { error: 'Authentication required' };
     }
 
+    const resolved = await requestScope(principal, query.scope, 'stats');
+    if ('error' in resolved) {
+      set.status = resolved.status;
+      return { error: resolved.error };
+    }
+
     try {
       const service = getEmbeddingService();
-      return await service.getStats();
+      return await service.getStats(resolved.scope);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.error({ err, message, userId: user.id }, 'Knowledge stats failed');
@@ -99,11 +152,12 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
       return { error: `Failed to compute knowledge stats: ${message}` };
     }
   }, {
+    query: t.Object({ scope: scopeQuery }),
     detail: { tags: ['knowledge'] },
   })
 
   // Search knowledge base
-  .post('/search', async ({ user, body, set }) => {
+  .post('/search', async ({ user, principal, query: reqQuery, body, set }) => {
     if (!user) {
       set.status = 401;
       return { error: 'Authentication required' };
@@ -119,6 +173,13 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
     const purposeTyped = purpose as EmbeddingPurpose | undefined;
     const service = getEmbeddingService();
 
+    const resolved = await requestScope(principal, reqQuery.scope, 'search', { query });
+    if ('error' in resolved) {
+      set.status = resolved.status;
+      return { error: resolved.error };
+    }
+    const knowledge = resolved.scope;
+
     // Apply the same defaults as the MCP tool so REST callers get useful
     // results instead of "everything in the KB at ~0.01 similarity".
     const threshold = typeof minSimilarity === 'number'
@@ -126,7 +187,11 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
       : mode === 'semantic' ? 0.35 : mode === 'keyword' ? 0 : 0.3;
 
     try {
-      const { repos } = await loadRepoGraph(user.id);
+      // A member's repositories are personal: a space search reaches none
+      // of them (§5.5, no personal prefixes in space contexts).
+      const repos = principal.workspaceKind === 'shared'
+        ? []
+        : (await loadRepoGraph({ userId: user.id, workspaceId: principal.workspaceId ?? null })).repos;
       const allowedRepoIds = repos.map(repo => repo.id);
       if (repoIds?.some((id: string) => !allowedRepoIds.includes(id))) {
         set.status = 400;
@@ -136,14 +201,14 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
       let results;
       switch (mode) {
         case 'semantic':
-          results = await withProviderUsageContext({ userId: user.id }, () => service.search(query, limit, purposeTyped, threshold, undefined, scope));
+          results = await withProviderUsageContext({ userId: user.id }, () => service.search(knowledge, query, limit, purposeTyped, threshold, scope));
           break;
         case 'keyword':
-          results = await service.ftsSearch(query, limit, purposeTyped, undefined, scope);
+          results = await service.ftsSearch(knowledge, query, limit, purposeTyped, scope);
           break;
         case 'hybrid':
         default:
-          results = await withProviderUsageContext({ userId: user.id }, () => service.hybridSearch(query, limit, purposeTyped, undefined, threshold, undefined, scope));
+          results = await withProviderUsageContext({ userId: user.id }, () => service.hybridSearch(knowledge, query, limit, purposeTyped, undefined, threshold, scope));
           break;
       }
       return { results, mode, query, minSimilarity: threshold };
@@ -162,18 +227,26 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
       minSimilarity: t.Optional(t.Number()),
       repoIds: t.Optional(t.Array(t.String())),
     }),
+    query: t.Object({ scope: scopeQuery }),
     detail: { tags: ['knowledge'] },
   })
 
   // Get single entry (full content)
-  .get('/:id', async ({ user, params, set }) => {
+  .get('/:id', async ({ user, principal, params, query, set }) => {
     if (!user) {
       set.status = 401;
       return { error: 'Authentication required' };
     }
 
+    const resolved = await requestScope(principal, query.scope, 'read', { id: params.id });
+    if ('error' in resolved) {
+      set.status = resolved.status;
+      return { error: resolved.error };
+    }
+
     const service = getEmbeddingService();
-    const entry = await service.readById(params.id);
+    // Another user's entry is a miss, indistinguishable from a missing one.
+    const entry = await service.readById(resolved.scope, params.id);
 
     if (!entry) {
       set.status = 404;
@@ -183,18 +256,25 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
     return entry;
   }, {
     params: t.Object({ id: t.String() }),
+    query: t.Object({ scope: scopeQuery }),
     detail: { tags: ['knowledge'] },
   })
 
   // Delete single entry
-  .delete('/:id', async ({ user, params, set }) => {
+  .delete('/:id', async ({ user, principal, params, query, set }) => {
     if (!user) {
       set.status = 401;
       return { error: 'Authentication required' };
     }
 
+    const resolved = await requestScope(principal, query.scope, 'delete', { id: params.id });
+    if ('error' in resolved) {
+      set.status = resolved.status;
+      return { error: resolved.error };
+    }
+
     const service = getEmbeddingService();
-    const deleted = await service.deleteById(params.id);
+    const deleted = await service.deleteById(resolved.scope, params.id);
 
     if (!deleted) {
       set.status = 404;
@@ -205,11 +285,12 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
     return { deleted: true };
   }, {
     params: t.Object({ id: t.String() }),
+    query: t.Object({ scope: scopeQuery }),
     detail: { tags: ['knowledge'] },
   })
 
   // Cleanup stale/orphaned/duplicate entries
-  .post('/cleanup', async ({ user, body, set }) => {
+  .post('/cleanup', async ({ user, principal, query, body, set }) => {
     if (!user) {
       set.status = 401;
       return { error: 'Authentication required' };
@@ -218,8 +299,14 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
     const { maxAgeDays, minContentLength, dryRun } = body;
     const service = getEmbeddingService();
 
+    const resolved = await requestScope(principal, query.scope, 'cleanup', { dryRun: dryRun ?? false });
+    if ('error' in resolved) {
+      set.status = resolved.status;
+      return { error: resolved.error };
+    }
+
     try {
-      const result = await service.cleanup({
+      const result = await service.cleanup(resolved.scope, {
         maxAgeDays: maxAgeDays ?? 30,
         minContentLength: minContentLength ?? 50,
         dryRun: dryRun ?? false,
@@ -238,30 +325,38 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
       minContentLength: t.Optional(t.Number()),
       dryRun: t.Optional(t.Boolean()),
     }),
+    query: t.Object({ scope: scopeQuery }),
     detail: { tags: ['knowledge'] },
   })
 
   // Cleanup history
-  .get('/cleanup-history', async ({ user, query, set }) => {
+  .get('/cleanup-history', async ({ user, principal, query, set }) => {
     if (!user) {
       set.status = 401;
       return { error: 'Authentication required' };
     }
 
+    const resolved = await requestScope(principal, query.scope, 'cleanup-history');
+    if ('error' in resolved) {
+      set.status = resolved.status;
+      return { error: resolved.error };
+    }
+
     const limit = query.limit ? parseInt(query.limit, 10) : 20;
     const service = getEmbeddingService();
-    const history = await service.getCleanupHistory(limit);
+    const history = await service.getCleanupHistory(resolved.scope, limit);
 
     return { history };
   }, {
     query: t.Object({
       limit: t.Optional(t.String()),
+      scope: scopeQuery,
     }),
     detail: { tags: ['knowledge'] },
   })
 
   // Index file or directory — THE WRITE PATH. Gate on KB readiness + 5xx on failure.
-  .post('/index', async ({ user, body, set }) => {
+  .post('/index', async ({ user, principal, body, set }) => {
     if (!user) {
       set.status = 401;
       return { error: 'Authentication required' };
@@ -282,10 +377,9 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
     // Without this, `indexer.indexFile` does `fileAt(path).text()` on ANY
     // absolute path the request names — an authenticated user could index
     // `/etc/passwd`, app secrets, or another tenant's workspace into their
-    // own KB and read it back via search. `WorkspaceFS.forAgent` pins
-    // resolution to the caller's workspace root (per-user under multiuser;
-    // flat single-user root otherwise) plus the operator-configured
-    // `additionalPaths` escape hatch. Mirrors the session-file routes and the
+    // own KB and read it back via search. `WorkspaceFS.forRequest` pins
+    // resolution to the root of the caller's workspace, as an agent there
+    // sees it, plus the operator-configured `additionalPaths` escape hatch. Mirrors the session-file routes and the
     // filesystem tool. Runs before the KB-readiness gate so a hostile path is
     // rejected regardless of embedding-service state.
     //
@@ -294,7 +388,11 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
     // outward is rejected too. The file branch is covered by `fs.resolve`'s
     // realpath check.
     let safePath: string;
-    const fs = WorkspaceFS.forAgent({ userId: user.id });
+    // Indexed rows belong to the caller, in the caller's workspace — the same
+    // personal scope every read of this route uses.
+    contentRepos(principal).can('write');
+    const owner = principalKnowledgeOwner(principal);
+    const fs = WorkspaceFS.forRequest(principal);
     try {
       safePath = fs.resolve(path);
     } catch (err) {
@@ -314,7 +412,7 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
         const globPatterns = patterns ? patterns.split(',').map((p: string) => p.trim()) : undefined;
         // Per-file guard: a globbed leaf that realpath-resolves outside the
         // workspace (e.g. a symlink to /etc) is skipped, not indexed.
-        const result = await withProviderUsageContext({ userId: user.id }, () => indexer.indexDirectory(safePath, globPatterns, {
+        const result = await withProviderUsageContext({ userId: user.id }, () => indexer.indexDirectory(owner, safePath, globPatterns, {
           isAllowed: (p) => fs.resolveOptional(p) !== null,
         }));
         logger.info({ path: safePath, filesIndexed: result.filesIndexed, chunksStored: result.chunksStored, errors: result.errors.length, userId: user.id }, 'Directory indexed');
@@ -335,7 +433,7 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
           logger.info({ path: safePath, userId: user.id }, 'Index request rejected — raw code file');
           return { error: CODE_NOT_INDEXED_MESSAGE };
         }
-        const chunks = await withProviderUsageContext({ userId: user.id }, () => indexer.indexFile(safePath, validPurpose));
+        const chunks = await withProviderUsageContext({ userId: user.id }, () => indexer.indexFile(owner, safePath, validPurpose));
         logger.info({ path: safePath, chunks, userId: user.id }, 'File indexed');
         if (chunks === 0) {
           // indexText returns 0 either for empty content or every-chunk-failed

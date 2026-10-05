@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -51,6 +52,16 @@ export const ollamaConfigSchema = z.object({
   unifiedMemory: z.boolean().default(false).describe('GPU and CPU share one memory pool at one speed (APU / unified memory)'),
 });
 
+/** A `security.trustedProxies` entry: an IP address, or one with a valid prefix length. */
+function isAddressOrCidr(entry: string): boolean {
+  const [address, prefix, extra] = entry.trim().split('/');
+  const family = isIP(address.replace(/^::ffff:(?=\d)/i, ''));
+  if (family === 0 || extra !== undefined) return false;
+  if (prefix === undefined) return true;
+  const bits = Number(prefix);
+  return /^\d+$/.test(prefix) && bits <= (family === 4 ? 32 : 128);
+}
+
 // Security configuration schema
 export const securityConfigSchema = z.object({
   masterKey: z.string().min(32).describe('32-byte hex master encryption key'),
@@ -80,8 +91,8 @@ export const securityConfigSchema = z.object({
   shellSandbox: z.enum(['off', 'auto', 'required']).default('off'),
   vaultDenyUnscopedSecrets: z.boolean().default(false),
   /**
-   * Docker tool per-user isolation — Phase 3f. When `'enforce'` and
-   * `multiuser.enabled` is true, the Docker tool:
+   * Docker tool per-user isolation — Phase 3f. When `'enforce'`, the
+   * Docker tool, for a real user (system jobs stay outside it):
    *   - filters list_containers to containers labelled
    *     octipus.user_id=<userId>;
    *   - refuses start/stop/logs/exec on containers that don't carry
@@ -93,6 +104,24 @@ export const securityConfigSchema = z.object({
    * unaffected.
    */
   dockerIsolation: z.enum(['off', 'enforce']).default('off'),
+  /**
+   * Reverse proxies whose `X-Forwarded-For` / `X-Real-IP` headers are
+   * believed (security/client-ip.ts). Addresses or CIDR ranges. Empty (the
+   * default) means the socket address is the client address, whatever the
+   * headers claim — a forged forwarded header changes nothing.
+   */
+  trustedProxies: z.array(z.string().refine(isAddressOrCidr, {
+    message: 'must be an IP address or CIDR range (e.g. 127.0.0.1, 10.0.0.0/8, fd00::/8)',
+  })).default([]),
+  /**
+   * Who may create an account through `POST /api/auth/register` (S6,
+   * docs/SPACES.md → Guests): `open` (anyone), `invite_only` (only with a
+   * valid space invite token, redeemed in the same transaction as the
+   * account), `closed` (nobody). The install's first account may always
+   * register. SAML JIT, SCIM and admin-created accounts are gated by the IdP
+   * or an admin and are not subject to it.
+   */
+  registration: z.enum(['open', 'invite_only', 'closed']).default('open'),
 });
 
 // API server configuration schema
@@ -432,15 +461,6 @@ export const multiuserConfigSchema = z.object({
    * code paths continue to work non-disruptively when this is on.
    */
   rlsEnabled: z.boolean().default(false),
-  /**
-   * Org / workspace grouping layer — Phase 3g. When false (default),
-   * the `/api/me/workspaces` and `/api/admin/orgs` routes return 404
-   * and no part of the runtime consults the orgs/workspaces tables.
-   * The schema is in place (migration 0038) so flipping this on later
-   * requires no migration. Phase 4 wires `workspace_id` onto sessions
-   * and documents and gates that on the same flag.
-   */
-  orgWorkspaces: z.boolean().default(false),
 });
 
 // Workspace configuration schema
@@ -474,6 +494,30 @@ export const vaultSyncConfigSchema = z.object({
   direction: z.enum(['export', 'import', 'both']).default('both'),
 });
 
+/**
+ * The `/gateway` WebSocket (docs/architecture/gateway.md): every client —
+ * the web, the TUI — talks to the server over it.
+ */
+export const gatewayConfigSchema = z.object({
+  /**
+   * Authenticated connections one user may hold at once (every browser tab
+   * holds one). The one over the cap is refused with `auth_error` "Too many
+   * connections"; the web shows "Too many open tabs".
+   */
+  maxConnectionsPerUser: z.number().int().min(1).max(1000).default(20),
+  /**
+   * Largest frame a `/gateway` client may send, in bytes (the socket's
+   * `maxPayload`, read at server start). A bigger frame closes the
+   * connection with 1009.
+   */
+  maxFrameBytes: z.number().int().min(16_384).max(64 * 1024 * 1024).default(262_144),
+  /**
+   * Sessions whose recent events are kept in memory for `replay` after a
+   * reconnect. The least recently active session is dropped first.
+   */
+  replayMaxSessions: z.number().int().min(1).max(100_000).default(500),
+});
+
 // Full configuration schema
 export const sessionsConfigSchema = z.object({
   /**
@@ -492,6 +536,51 @@ export const sessionsConfigSchema = z.object({
  */
 export const groupChannelsConfigSchema = z.object({
   unpromptedEnabled: z.boolean().default(false),
+});
+
+/**
+ * Shared spaces (docs/plans/coworking-spec.md §5). Spaces are always
+ * available (D17); these keys are policy, not a switch.
+ */
+export const spacesConfigSchema = z.object({
+  /** Who may create a space: every signed-in user, or admins only. */
+  creation: z.enum(['any_user', 'admins']).default('any_user'),
+  /** Most members one space may have; enforced on every add (invite accept). */
+  maxMembers: z.number().int().min(2).max(10_000).default(50),
+  /** Longest lifetime an invite link may ask for, in hours; shorter asks are kept, longer ones clamped. */
+  inviteMaxTtlHours: z.number().int().min(1).max(8760).default(720),
+  /** Days a space must have been archived before its owner may purge it. */
+  purgeAfterArchiveDays: z.number().int().min(0).max(3650).default(7),
+  /**
+   * Largest space note body, in UTF-8 bytes (S3, live documents). Startup
+   * refuses a value above half of `gateway.maxFrameBytes`: a full `doc.sync`
+   * carries the note as a base64 Yjs update inside a JSON frame.
+   */
+  noteMaxBytes: z.number().int().min(1024).max(32 * 1024 * 1024).default(114_688),
+  /** `doc.update` frames one connection may send per second. */
+  docMaxUpdatesPerSecond: z.number().int().min(1).max(1000).default(30),
+  /** Idle time after the last edit before an open note is saved, in milliseconds. */
+  docPersistDebounceMs: z.number().int().min(100).max(600_000).default(2000),
+  /** Longest an open note's links and search index may lag its text, in minutes (also refreshed on last leave). */
+  docReindexMinutes: z.number().int().min(1).max(1440).default(10),
+  /** How long the hub keeps a text it handed out as a merge base, in minutes. */
+  docBaseTtlMinutes: z.number().int().min(1).max(1440).default(30),
+  /** Lifetime of a space file lease ("Ben is editing") without a renewal, in seconds. */
+  fileLeaseTtlSeconds: z.number().int().min(10).max(86_400).default(180),
+  /** Most space-memory entries injected into one turn of a space session, newest first (§6.5). */
+  memoryMaxItems: z.number().int().min(1).max(500).default(50),
+});
+
+/**
+ * Rooms — the shared chats of a space (docs/plans/coworking-spec.md §6).
+ */
+export const roomsConfigSchema = z.object({
+  /** Requests one member may have waiting in a room's queue at once. */
+  maxQueuedPerMember: z.number().int().min(1).max(50).default(3),
+  /** Minutes a room turn waits on its requester's approval before it gives up and stops. */
+  approvalTimeoutMinutes: z.number().int().min(1).max(1440).default(30),
+  /** Characters of attributed transcript after the checkpoint before a room is compacted. */
+  transcriptWindowChars: z.number().int().min(1000).max(200_000).default(6000),
 });
 
 /**
@@ -634,11 +723,17 @@ export const configSchema = z.object({
   heartbeat: heartbeatConfigSchema.prefault({}),
   sessions: sessionsConfigSchema.prefault({}),
   groupChannels: groupChannelsConfigSchema.prefault({}),
+  spaces: spacesConfigSchema.prefault({}),
+  rooms: roomsConfigSchema.prefault({}),
+  gateway: gatewayConfigSchema.prefault({}),
 });
 
 export type Config = z.infer<typeof configSchema>;
 export type HeartbeatConfig = z.infer<typeof heartbeatConfigSchema>;
 export type SessionsConfig = z.infer<typeof sessionsConfigSchema>;
+export type SpacesConfig = z.infer<typeof spacesConfigSchema>;
+export type RoomsConfig = z.infer<typeof roomsConfigSchema>;
+export type GatewayConfig = z.infer<typeof gatewayConfigSchema>;
 export type StorageMode = z.infer<typeof storageModeSchema>;
 export type DatabaseConfig = z.infer<typeof databaseConfigSchema>;
 export type LiteLLMConfig = z.infer<typeof litellmConfigSchema>;

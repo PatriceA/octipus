@@ -47,6 +47,13 @@ export const artifactDataSources = pgTable(
     lastRunAt: timestamp('last_run_at', { withTimezone: true }),
     lastStatus: artifactSourceStatusEnum('last_status').notNull().default('pending'),
     lastError: text('last_error'),
+    /**
+     * Set while the source must not refresh: its principal is no longer a
+     * member allowed to write in the artifact's space (§5.5, §5.9). Cleared
+     * when they are again.
+     */
+    pausedAt: timestamp('paused_at', { withTimezone: true }),
+    pausedReason: text('paused_reason'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },

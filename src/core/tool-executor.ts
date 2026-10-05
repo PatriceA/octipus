@@ -9,9 +9,10 @@ import { auditRepository } from '@/db/repositories/audit-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { getConfig } from '@/config';
 import { withDispatchAuthorization } from '@/security/dispatch-authorization';
-import { routeApproval } from '@/security/approval-policy';
+import { routeApprovalFor } from '@/security/approval-route';
 import { applyFlowGuard, ensureSharedAudienceKnown, isVaultAuthenticated, observeFlow } from '@/security/flow-guard';
 import { getPermissionManager } from '@/security/permissions';
+import { withoutPersonalOnlyTools } from '@/security/space-tools';
 import { agentLogger, coreLogger } from '@/utils/logger';
 import { DEFAULT_MAX_LENGTH, sanitizeToolOutput } from '@/utils/sanitize';
 import type { AgentEvent, ToolHandler } from './agent-base';
@@ -244,9 +245,10 @@ export class ToolExecutor {
     try {
       const { getModelRegistry } = await import('@/models/model-registry');
       const registry = getModelRegistry();
-      const model =
-        (await registry.getModel(this.context.model)) ||
-        (await registry.getModelByModelId(this.context.model));
+      // The agent's own row (spec §8.1), never another one sharing its modelId.
+      const model = this.context.modelName
+        ? await registry.getModel(this.context.modelName)
+        : await registry.getModelByModelId(this.context.model, { userId: this.context.userId });
       // A model we cannot find is not a model we can make claims about.
       this.visionSupport = model ? model.supportsVision : true;
     } catch (err) {
@@ -537,6 +539,16 @@ export class ToolExecutor {
 
       const toolId = tool.toolId || 'agent';
 
+      // A meta-tool never reaches `routeApprovalFor`, so in a space one that is
+      // not offered there (a personal-only tool such as `update_skill`) is
+      // refused here, whoever registered it.
+      if (toolId === 'agent' && this.context.space && withoutPersonalOnlyTools([tool]).length === 0) {
+        this.counters.permissionDenials++;
+        results.push({ toolCallId: toolCall.id, result: null, errorCode: 'permission_denied',
+          error: `Permission denied: ${toolCall.name} acts on your personal account and automation, so it is not available in a shared space. Do NOT retry this action — it is blocked by policy.` });
+        continue;
+      }
+
       // Internal root agent meta-tools are always allowed
       if (toolId === 'agent') {
         try {
@@ -677,22 +689,20 @@ export class ToolExecutor {
         agentLogger.info({ agentId: this.context.id, tool: toolCall.name, reason: permResult.reason }, 'Flow guard escalated tool call to approval');
       }
 
-      // ONE policy decision, shared with `base-tool.ts` — see
-      // `security/approval-policy.ts`. It answers what to do with the stored
-      // level given who is calling; the two dispatch paths used to answer that
-      // separately, in two copies asking each other to be kept in sync.
-      const decision = routeApproval({
-        level: permResult.level,
-        role: this.context.role,
-        root: this.context.root,
-        attended: this.context.attended,
-        toolId,
-        action: permAction,
-        unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions,
-      });
+      // ONE policy decision, shared with every dispatch path — see
+      // `security/approval-route.ts`. It answers what to do with the stored
+      // level given who is calling, the space role cap and the I6 rule
+      // included; the paths used to answer that separately, in copies asking
+      // each other to be kept in sync.
+      const decision = await routeApprovalFor(
+        this.context,
+        { toolId, action: permAction, toolName: bareName, args: toolCall.arguments },
+        permResult,
+        { unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions },
+      );
 
       if (decision.route === 'deny' || decision.route === 'blocked') {
-        const reason = permResult.reason || decision.reason;
+        const reason = decision.reason;
         agentLogger.info(
           { agentId: this.context.id, tool: toolCall.name, reason },
           'Tool call denied by permission policy'
@@ -716,8 +726,8 @@ export class ToolExecutor {
         continue;
       }
 
-      let authorizationSource = permResult.source ?? 'policy';
-      if (permResult.level === 'ASK') {
+      let authorizationSource = decision.source ?? 'policy';
+      if (decision.level === 'ASK') {
         if (decision.route === 'ask_human') {
           this.counters.approvalsRequired++;
           const requestId = await permissionManager.requestApproval(
@@ -729,6 +739,7 @@ export class ToolExecutor {
             this.context.sessionId,
             toolCall.name,
             this.signal,
+            this.context.workspaceId,
           );
 
           if (this.signal?.aborted || this.context.status === 'stopped' || this.context.status === 'failed') {
@@ -742,7 +753,7 @@ export class ToolExecutor {
             toolName: toolCall.name,
             args: toolCall.arguments,
             toolId,
-            ...(permResult.source === 'flow-guard' ? { reason: permResult.reason } : {}),
+            ...(decision.source === 'flow-guard' || decision.source === 'space-flow' ? { reason: decision.reason } : {}),
           });
 
           const approved = await permissionManager.waitForApproval(requestId, { agentId: this.context.id });
@@ -999,7 +1010,7 @@ export class ToolExecutor {
       const spilled = raw
         ? await spillToolOutput(raw, {
             toolCallId: result.toolCallId,
-            userId: this.context.userId,
+            context: this.context,
             threshold: DEFAULT_MAX_LENGTH,
           })
         : null;

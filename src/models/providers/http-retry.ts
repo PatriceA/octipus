@@ -20,8 +20,10 @@ export async function fetchWithRetryAfter(
   url: string | URL,
   init: RequestInit,
   providerName: string,
+  /** The transport — a personal row's endpoint passes the SSRF-guarded fetch. */
+  fetchImpl: typeof fetch = fetch,
 ): Promise<Response> {
-  const res = await fetch(url, init);
+  const res = await fetchImpl(url, init);
   if (res.status !== 429) return res;
 
   const retryAfterMs = parseRetryAfterMs(res.headers?.get?.('retry-after') ?? null);
@@ -35,7 +37,7 @@ export async function fetchWithRetryAfter(
   // Drain the failed body so the connection can be reused.
   await res.body?.cancel().catch(() => {});
   await new Promise((r) => setTimeout(r, waitMs));
-  return fetch(url, init);
+  return fetchImpl(url, init);
 }
 
 /**

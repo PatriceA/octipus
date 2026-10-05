@@ -1,4 +1,5 @@
 import { withProviderUsageContext } from '@/models/providers/instrumented';
+import { usageContextOf } from '@/core/agent/context';
 import { limitKindOf } from '@/core/errors/limit-refusal';
 import type { AgentCompletionReason } from '@/shared/agent-completion';
 import { formatWorkPlanContext } from './agent/work-plan-context';
@@ -8,7 +9,7 @@ import type { ChatCompletionTool } from 'openai/resources/chat/completions';
 import { homedir } from 'os';
 import { join as joinPath } from 'path';
 import { recordAgentCompletion } from '@/core/agent-task-recorder';
-import { capNativeSnapshot, readSessionHistory, toContextMessage, withSessionConversation } from './session-history';
+import { capNativeSnapshot, readSessionHistory, roomRequestOf, toContextMessage, withSessionConversation } from './session-history';
 import { VOLATILE_MARKER } from '@/models/providers/prompt-cache';
 import { agentRepository } from '@/db/repositories/agent-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
@@ -40,6 +41,7 @@ import {
 } from './swarm/errors';
 import type { ChildResult, PendingChild } from './swarm/types';
 import { getPermissionManager } from '@/security/permissions';
+import { isRealUserId } from '@/security/principal';
 import { ToolExecutor } from './tool-executor';
 import { DetachedChildManager } from './agent-worker/detached-child-manager';
 import { DriftDetector } from './agent-worker/drift-detector';
@@ -47,6 +49,7 @@ import { ToolLoopDetector } from './agent-worker/tool-loop-detector';
 import { isRootAgent } from './types';
 import type { AgentMessage, ToolCall } from './types';
 import { omitGroupTranscripts } from '@/core/channels/group-context';
+import { omitSpaceTurnContext } from '@/core/spaces/turn-context';
 
 // Re-export types for backward compatibility
 export type { AgentEvent, AgentEventHandler, AgentWorkerConfig, ToolHandler } from './agent-base';
@@ -159,6 +162,8 @@ export class AgentWorker extends BaseAgentWorker {
    * reads it (via getActivity) to tell a hung worker from one still progressing.
    */
   private lastActivityAt: number = 0;
+  /** When a sponsored agent last re-read its space's funding (`recheckSponsor`, every 30s). */
+  private sponsorCheckedAt = 0;
   /**
    * Non-null while the worker is inside a legitimately-long blocking wait it
    * DOESN'T bump activity during — collect_children / detached auto-collect, or
@@ -549,11 +554,14 @@ export class AgentWorker extends BaseAgentWorker {
       return;
     }
 
-    const history = await readSessionHistory(this.context.sessionId);
+    const history = await readSessionHistory(this.context.sessionId, { room: roomRequestOf(this.context) });
     this.messages = history.messages;
     this.cacheGeneration = history.generation;
     this.checkpointId = history.checkpoint?.entryId;
-    const saved = history.session?.context?.nativeConversation;
+    // A room's history is the fenced, attributed transcript every turn: no
+    // native conversation snapshot is read (or written, see run()) there (§6.4).
+    this.inRoom = history.session?.kind === 'room';
+    const saved = this.inRoom ? undefined : history.session?.context?.nativeConversation;
     if (saved && saved.generation === history.generation && saved.checkpointId === this.checkpointId) {
       const unseen = await messageRepository.findContextMessages(this.context.sessionId, history.session?.context?.clearedAt, saved.acknowledged, history.generation);
       this.messages = [...saved.messages.map(m => ({ ...m, providerRaw: saved.model === this.context.model ? m.providerRaw : undefined, timestamp: new Date(m.timestamp) })), ...unseen.map(toContextMessage)];
@@ -563,6 +571,8 @@ export class AgentWorker extends BaseAgentWorker {
   }
 
   private pendingPromptContext = '';
+  /** The session is a room: its user row is the member's post, stored once by the room (§6.3). */
+  private inRoom = false;
   private cacheGeneration = '';
   private checkpointId?: string;
   private userCursor?: { id: string; createdAt: string };
@@ -591,14 +601,20 @@ export class AgentWorker extends BaseAgentWorker {
     const message: AgentMessage = { role: 'user', content: [promptContext, content].filter(Boolean).join('\n\n'), timestamp: new Date() };
     this.messages.push(message);
 
-    // Only persist for the root agent
-    if (isRootAgent(this.context)) {
+    // Only persist for the root agent — and never in a room, where the
+    // member's post is the request's one user row (§6.3).
+    // (`metadata.room` is set on the root of every room turn; the message
+    // repository refuses an authorless user row in a room regardless.)
+    if (isRootAgent(this.context) && !this.inRoom && !this.context.metadata?.room) {
+      // The space turn context (space memory, a linked room's transcript) is
+      // read afresh each turn and never stored with it.
+      const storedContext = omitSpaceTurnContext(promptContext).trim();
       const row = await messageRepository.create({
         sessionId: this.context.sessionId,
         role: 'user',
         content,
         agentId: this.context.id,
-        metadata: promptContext ? { promptContext } : undefined,
+        metadata: storedContext ? { promptContext: storedContext } : undefined,
       }, this.cacheGeneration);
       message.sourceMessageId = row.id;
       this.userCursor = row.id ? { id: row.id, createdAt: row.createdAt.toISOString() } : undefined;
@@ -614,12 +630,14 @@ export class AgentWorker extends BaseAgentWorker {
     this.activeRuns++;
     this.subscribePermissionWait();
     try {
-      return await (isRootAgent(this.context) ? withSessionConversation(this.context.sessionId, async () => {
+      // Every model call of the run is attributed to the agent's user,
+      // workspace and funding, whoever started it (§5.6).
+      return await withProviderUsageContext(usageContextOf(this.context), () => (isRootAgent(this.context) ? withSessionConversation(this.context.sessionId, async () => {
         const system = this.messages.filter(m => m.role === 'system');
         await this.loadHistory();
         this.messages = [...system, ...this.messages];
         return this.runInternal(userMessage);
-      }) : this.runInternal(userMessage));
+      }) : this.runInternal(userMessage)));
     } finally {
       this.activeRuns--;
       this.permissionWaitCleanup?.();
@@ -757,16 +775,17 @@ export class AgentWorker extends BaseAgentWorker {
         throw new CascadedCancellationError({ agentId: this.context.id, reason: String(this.abortController.signal.reason) });
       }
       this.context.status = 'completed';
-      if (isRootAgent(this.context) && this.userCursor) {
+      if (isRootAgent(this.context) && this.userCursor && !this.inRoom) {
         const last = this.messages.at(-1);
         if (last?.role === 'assistant' && !last.toolCalls?.length) last.content = finalResult;
         else this.messages.push({ role: 'assistant', content: finalResult, timestamp: new Date() });
         await sessionRepository.patchContextIfGeneration(this.context.sessionId, this.cacheGeneration, {
           nativeConversation: { generation: this.cacheGeneration, model: this.context.model,
             ownerAgentId: this.context.id, checkpointId: this.checkpointId, acknowledged: this.userCursor,
-            // Group-thread transcripts are per turn: the next turn reads the
-            // thread afresh, so the snapshot keeps none (omitGroupTranscripts).
-            messages: capNativeSnapshot(this.messages.filter(m => m.role !== 'system' || m.content.startsWith('[Context Summary')).map(m => ({ ...m, role: m.role === 'system' ? 'user' : m.role, content: m.role === 'user' ? omitGroupTranscripts(m.content) : m.content, timestamp: m.timestamp.toISOString() }))) },
+            // Group-thread transcripts and the space turn context are per
+            // turn: the next turn reads them afresh, so the snapshot keeps
+            // none (omitGroupTranscripts, omitSpaceTurnContext).
+            messages: capNativeSnapshot(this.messages.filter(m => m.role !== 'system' || m.content.startsWith('[Context Summary')).map(m => ({ ...m, role: m.role === 'system' ? 'user' : m.role, content: m.role === 'user' ? omitSpaceTurnContext(omitGroupTranscripts(m.content)) : m.content, timestamp: m.timestamp.toISOString() }))) },
         });
       }
       this.context.completedAt = new Date();
@@ -1083,18 +1102,29 @@ export class AgentWorker extends BaseAgentWorker {
         });
       }
 
+      // ── Sponsored funding (coworking §9.1) ──────────────────────────
+      // The sponsor may have gone, or the mode may pay for less, since the
+      // agent started — in another process too, where `pauseSponsoredWork`
+      // cannot reach this worker. Re-read at the pace of the spend cache.
+      if (this.context.funding === 'sponsor' && Date.now() - this.sponsorCheckedAt >= 30_000) {
+        const { recheckSponsor } = await import('@/core/agent/context');
+        try {
+          await recheckSponsor(this.context);
+        } catch (err) {
+          this.abortController.abort('sponsor_gone');
+          throw err;
+        }
+        this.sponsorCheckedAt = Date.now();
+      }
+
       // ── Per-user daily token quota (Phase 3c-2) ─────────────────────
       // Aggregate across this user's running + completed agents for the
       // current UTC day. Distinct from the per-agent maxTokenBudget
       // above: throws QuotaExceededError so callers can distinguish a
-      // user-cap hit from an agent-cap hit. Only fires for a real userId
-      // (not the 'system'/'local' sentinel).
+      // user-cap hit from an agent-cap hit. Only fires for a real user, not
+      // a system job.
       try {
-        if (
-          this.context.userId
-          && this.context.userId !== 'system'
-          && this.context.userId !== 'local'
-        ) {
+        if (isRealUserId(this.context.userId)) {
           const { getQuotaManager } = await import('@/security/quotas');
           // Pre-call check uses delta=0 — we're asking "would we
           // already be over before this LLM call?" The next call's
@@ -1110,7 +1140,10 @@ export class AgentWorker extends BaseAgentWorker {
           // Dollar spend budgets (user / role / workspace / group channel): warns at the
           // soft ratio, throws SpendBudgetExceededError once paused.
           const { checkSpend } = await import('@/security/spend-budgets');
-          await checkSpend({ userId: this.context.userId, role: this.context.role, workspaceId: this.context.workspaceId, sessionId: this.context.sessionId });
+          await checkSpend({
+            userId: this.context.userId, role: this.context.role, workspaceId: this.context.workspaceId, sessionId: this.context.sessionId,
+            funding: this.context.funding, spaceId: this.context.space?.workspaceId ?? null,
+          });
         }
       } catch (err) {
         // Don't swallow QuotaExceededError / SpendBudgetExceededError — re-throw them.
@@ -1181,6 +1214,7 @@ export class AgentWorker extends BaseAgentWorker {
           preserveSystemMessages: true,
           preserveRecentCount: 10,
           summaryModel: this.context.model,
+          summaryModelName: this.context.modelName,
           userId: this.context.userId,
         });
         if (proactiveRemoved > 0) {
@@ -1198,6 +1232,7 @@ export class AgentWorker extends BaseAgentWorker {
         preserveSystemMessages: true,
         preserveRecentCount: 20,
         summaryModel: this.context.model,
+        summaryModelName: this.context.modelName,
         userId: this.context.userId,
       });
 
@@ -1278,6 +1313,7 @@ export class AgentWorker extends BaseAgentWorker {
             preserveSystemMessages: true,
             preserveRecentCount: 6,
             summaryModel: this.context.model,
+            summaryModelName: this.context.modelName,
             userId: this.context.userId,
           });
           this.messages = compacted;
@@ -1517,18 +1553,18 @@ export class AgentWorker extends BaseAgentWorker {
         const toolMessages: AgentMessage[] = await this.whileBlocked(blockedReason(toolCalls, isFinal, isCollect), () => {
           if (isFinal) {
             // Legitimately long (may await human approval) — no wall race.
-            return withProviderUsageContext({ userId: this.context.userId, sessionId: this.context.sessionId, agentId: this.context.id }, () => this.toolExecutor.handleToolCalls(toolCalls));
+            return withProviderUsageContext(usageContextOf(this.context), () => this.toolExecutor.handleToolCalls(toolCalls));
           }
           if (isCollect) {
             // Self-bounds (~child wall); keep a generous absolute backstop.
             return this.raceAbsolute(
-              withProviderUsageContext({ userId: this.context.userId, sessionId: this.context.sessionId, agentId: this.context.id }, () => this.toolExecutor.handleToolCalls(toolCalls)),
+              withProviderUsageContext(usageContextOf(this.context), () => this.toolExecutor.handleToolCalls(toolCalls)),
               'handleToolCalls:collect_children',
               this.config.selfTimedToolCeilingMs ?? DEFAULT_SELF_TIMED_TOOL_CEILING_MS,
             );
           }
           return this.raceTimeout(
-            withProviderUsageContext({ userId: this.context.userId, sessionId: this.context.sessionId, agentId: this.context.id }, () => this.toolExecutor.handleToolCalls(toolCalls)),
+            withProviderUsageContext(usageContextOf(this.context), () => this.toolExecutor.handleToolCalls(toolCalls)),
             'handleToolCalls',
           );
         });
@@ -2052,15 +2088,10 @@ export class AgentWorker extends BaseAgentWorker {
         )
       : undefined;
 
-    let apiKey: string | undefined;
-    if (model.apiKeyRef) {
-      try {
-        const { getVault } = await import('@/security/vault');
-        apiKey = (await getVault().getByName('system', model.apiKeyRef)) || undefined;
-      } catch (err) {
-        coreLogger.error({ err }, 'toolshim: vault key lookup failed');
-      }
-    }
+    // Install-level lane (background): the key is the row owner's — the system
+    // vault for this install row (coworking spec §8.3).
+    const { resolveModelKey } = await import('@/models/model-key');
+    const apiKey = await resolveModelKey(model, this.context.userId);
 
     const completionOpts = {
       model: model.modelId,
@@ -2148,8 +2179,8 @@ export class AgentWorker extends BaseAgentWorker {
       blockedReason(toolCalls, this.toolExecutor.hasFinalToolCall(toolCalls), toolCalls.some((tc) => tc.name === 'collect_children')),
       () =>
         isSelfTimedTool
-          ? withProviderUsageContext({ userId: this.context.userId, sessionId: this.context.sessionId, agentId: this.context.id }, () => this.toolExecutor.handleToolCalls(toolCalls))
-          : this.raceTimeout(withProviderUsageContext({ userId: this.context.userId, sessionId: this.context.sessionId, agentId: this.context.id }, () => this.toolExecutor.handleToolCalls(toolCalls)), 'handleToolCalls'),
+          ? withProviderUsageContext(usageContextOf(this.context), () => this.toolExecutor.handleToolCalls(toolCalls))
+          : this.raceTimeout(withProviderUsageContext(usageContextOf(this.context), () => this.toolExecutor.handleToolCalls(toolCalls)), 'handleToolCalls'),
     );
     this.messages.push(...toolMessages);
     this.appendToolReportingReminder();
@@ -2161,9 +2192,13 @@ export class AgentWorker extends BaseAgentWorker {
     const client = getLiteLLMClient();
     const registry = getModelRegistry();
 
-    const model = await registry.getModel(this.context.model) || await registry.getModelByModelId(this.context.model);
+    // The row this agent was resolved to (`modelName`), never a modelId
+    // re-lookup that could land on another row sharing the id (spec §8.1).
+    const model = this.context.modelName
+      ? await registry.getModel(this.context.modelName)
+      : await registry.getModelByModelId(this.context.model, { userId: this.context.userId });
     if (!model) {
-      throw new Error(`Model not found: ${this.context.model}`);
+      throw new Error(`Model not found: ${this.context.modelName ?? this.context.model}`);
     }
 
     const litellmModel = model.modelId;
@@ -2202,14 +2237,11 @@ export class AgentWorker extends BaseAgentWorker {
       if (Object.keys(extraBody).length === 0) extraBody = undefined;
     }
 
-    // Resolve API key from vault for custom/direct providers
-    let apiKey: string | undefined;
-    if (model.apiKeyRef) {
-      try {
-        const { getVault } = await import('@/security/vault');
-        apiKey = await getVault().getByName('system', model.apiKeyRef) || undefined;
-      } catch (err) { coreLogger.error({ err }, 'silent failure in agent-worker'); }
-    }
+    // Resolve the API key under the row's owner — the system vault for an
+    // install row, the owner's vault for a personal one (spec §8.3). A
+    // personal row without its key throws rather than run on the install key.
+    const { resolveModelKey } = await import('@/models/model-key');
+    const apiKey = await resolveModelKey(model, this.context.userId);
 
     // Per-topic overrides (W10) take precedence over the model's own defaults
     // when set on the Topics page — applied here so they reach the LLM call.

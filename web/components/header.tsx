@@ -9,7 +9,9 @@ import { useAuth } from '@/lib/auth-context';
 import { cn } from '@/lib/utils';
 import Link from 'next/link';
 import type { Notification } from '@/lib/types/notifications';
+import { SpacePresence } from './rooms/space-presence';
 import { WorkspacePicker } from './workspace-picker';
+import { useWorkspaceId } from '@/lib/workspace-context';
 
 interface SearchResult {
   id: string;
@@ -29,6 +31,7 @@ const SEARCH_TYPE_META: Record<SearchResult['type'], { label: string; icon: type
 };
 
 export function Header() {
+  const workspaceId = useWorkspaceId();
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -112,7 +115,7 @@ export function Header() {
 
   const searchEnabled = debouncedQuery.length >= 2;
   const { data: searchData, isFetching: isSearching } = useQuery({
-    queryKey: ['header-search', debouncedQuery],
+    queryKey: ['header-search', debouncedQuery, workspaceId],
     queryFn: () =>
       api.get<{ results: SearchResult[] }>(`/search?q=${encodeURIComponent(debouncedQuery)}&limit=10`),
     enabled: searchEnabled,
@@ -253,8 +256,9 @@ export function Header() {
         </div>
       </div>
 
-      {/* Right side — workspace picker, notifications, profile. */}
+      {/* Right side — who else is in the space, workspace picker, notifications, profile. */}
       <div className="flex items-center gap-1.5">
+        <SpacePresence />
         <WorkspacePicker />
 
         <div className="relative" ref={notifRef}>

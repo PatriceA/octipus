@@ -24,6 +24,7 @@ import type { ToolInputPreview, ToolResultPreview } from '../../../src/shared/wo
 import DiffView from '@/components/chat/diff-view';
 import { Markdown } from '@/components/ui/markdown-renderer';
 import { fmtUsd, type LimitRefusal, periodWord, resetLabel, scopeLabel } from '@/lib/spend-budgets';
+import { initials } from '@/lib/rooms';
 import { cn } from '@/lib/utils';
 
 // ---------------------------------------------------------------------------
@@ -47,6 +48,14 @@ export interface ChatMessageData {
   agentId?: string;
   classification?: string;
   metadata?: MessageMetadata;
+  /**
+   * Who posted it, in a room (a shared chat of a space): other members'
+   * posts sit on the left with their name and initials, mine on the right.
+   * Absent in a private chat, where every user message is mine.
+   */
+  author?: { name: string; mine: boolean };
+  /** Sent, not yet stored by the server (a room post awaiting its echo). */
+  pending?: boolean;
 }
 
 export interface TrackedAgent {
@@ -245,11 +254,36 @@ function MessageBubble({ message }: { message: ChatMessageData }) {
     );
   }
 
+  if (role === 'user' && message.author && !message.author.mine) {
+    // Another member's post in a room: left, with their initials and name.
+    return (
+      <div className="flex gap-3 py-1.5 group" data-role="user" data-author={message.author.name}>
+        <div className="shrink-0 mt-4">
+          <div
+            aria-hidden
+            className="h-7 w-7 rounded-full bg-surface-container-highest border border-outline-variant/40 flex items-center justify-center text-[10px] font-semibold text-on-surface"
+          >
+            {initials(message.author.name)}
+          </div>
+        </div>
+        <div className="flex flex-col items-start gap-0.5 min-w-0">
+          <span className="text-[11px] text-on-surface-variant px-1">{message.author.name}</span>
+          <div className="bg-surface-container-high text-on-surface px-4 py-2.5 rounded-2xl rounded-tl-md shadow-xs">
+            <p className="whitespace-pre-wrap text-sm">{content}</p>
+          </div>
+          <span className="text-[10px] text-on-surface-variant/60 px-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            {timeStr}
+          </span>
+        </div>
+      </div>
+    );
+  }
+
   if (role === 'user') {
     return (
-      <div className="flex justify-end py-1.5 group" data-role="user">
+      <div className="flex justify-end py-1.5 group" data-role="user" data-author={message.author?.name} data-pending={message.pending || undefined}>
         <div className="flex flex-col items-end gap-0.5">
-          <div className="bg-linear-to-r from-primary to-primary-container text-on-primary px-4 py-2.5 rounded-2xl rounded-br-md shadow-xs">
+          <div className={cn('bg-linear-to-r from-primary to-primary-container text-on-primary px-4 py-2.5 rounded-2xl rounded-br-md shadow-xs', message.pending && 'opacity-60')}>
             <p className="whitespace-pre-wrap text-sm">{content}</p>
           </div>
           <span className="text-[10px] text-on-surface-variant/60 px-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -780,6 +814,8 @@ interface MessageTimelineProps {
   streamingText?: string | null;
   /** Open a file (by resolved path) in the in-chat file view (Thread 2). */
   onOpenFile?: (path: string) => void;
+  /** The empty state's text (default "Start a conversation"). */
+  emptyLabel?: string;
 }
 
 type TimelineEntry =
@@ -797,6 +833,7 @@ export default function MessageTimeline({
   statusMessage,
   streamingText,
   onOpenFile,
+  emptyLabel = 'Start a conversation',
 }: MessageTimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -916,7 +953,7 @@ export default function MessageTimeline({
       {messages.length === 0 && !isLoading && (
         <div className="flex flex-col items-center justify-center h-full text-on-surface-variant gap-3">
           <Bot className="h-10 w-10 opacity-30" />
-          <p className="text-sm">Start a conversation</p>
+          <p className="text-sm">{emptyLabel}</p>
         </div>
       )}
 

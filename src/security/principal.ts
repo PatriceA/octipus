@@ -13,6 +13,8 @@
  *   - `anonymous`    — no credentials present; only public routes accept it
  */
 
+import type { AgentContext } from '@/core/types';
+import type { GuestScope, SpaceRole } from '@/db/schema/organizations';
 import { scopesSatisfy } from './scopes';
 
 export type PrincipalKind = 'user' | 'service' | 'system' | 'anonymous';
@@ -52,11 +54,25 @@ export interface Principal {
    *
    * Populated for any real user (`user` / `service`)
    * — the resolver lazily creates a default workspace if needed.
-   * Anonymous / system principals leave it undefined. The
-   * `multiuser.orgWorkspaces` flag only gates header-driven
-   * switching between multiple workspaces, not workspace existence.
+   * Anonymous / system principals leave it undefined. Workspaces
+   * are always on; there is no setting that switches them off.
    */
   readonly workspaceId?: string | null;
+  /**
+   * Coworking S1 (docs/plans/coworking-spec.md §5.4). `'shared'` when
+   * `workspaceId` names a space the user is a member of — the resolver
+   * read the membership from the database for this request — and
+   * `'personal'` for the user's own workspaces. Unset for principals no
+   * resolver touched (system jobs, agents built before S1 wiring): those
+   * are personal.
+   */
+  readonly workspaceKind?: 'personal' | 'shared';
+  /** The member's role in the space; set exactly when `workspaceKind` is `'shared'`. */
+  readonly spaceRole?: SpaceRole;
+  /** Guests only (S6): what of the space the guest may reach. */
+  readonly spaceScope?: GuestScope | null;
+  /** The space is archived: reads only, no writes, no agent runs. */
+  readonly spaceArchived?: boolean;
   /**
    * WS6 — API-token scopes. Present (and non-empty) ONLY when the request was
    * authenticated by a scoped personal access token. Undefined for browser
@@ -86,6 +102,31 @@ export const SYSTEM_PRINCIPAL: Principal = Object.freeze({
   roles: Object.freeze(['system_admin'] as string[]),
 });
 
+/**
+ * The user id in-process system jobs act under. Only system jobs carry it:
+ * no connection, socket or channel message is ever `'system'`.
+ */
+export const SYSTEM_USER_ID = 'system';
+
+const USER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** True for the id of a real user row (`users.id`, a uuid). */
+export function isRealUserId(userId: string | null | undefined): userId is string {
+  return !!userId && USER_ID_RE.test(userId);
+}
+
+/**
+ * A user id about to reach a `uuid` column. Every caller acts for a real user,
+ * so anything else (`'system'`, a username, an empty id) is a bug in the
+ * caller: throw rather than map it onto somebody.
+ */
+export function requireRealUserId(userId: string | null | undefined): string {
+  if (!isRealUserId(userId)) {
+    throw new Error(`Expected a user id (uuid), got ${JSON.stringify(userId ?? null)}`);
+  }
+  return userId;
+}
+
 export interface UserLike {
   id: string;
   username: string;
@@ -105,6 +146,42 @@ export function principalFromUser(
     sessionToken,
     roles: user.isAdmin ? ['system_admin', 'user'] : ['user'],
   };
+}
+
+/**
+ * The one builder of a principal from an agent context. Always a non-admin
+ * `user` principal for the user the agent works for, stamped with the
+ * agent's workspace: an admin's agent never inherits the repositories'
+ * admin bypass (`scopedRepos` skips the owner filter on by-id reads for
+ * admins), so a tool reads and writes exactly what its user owns.
+ *
+ * An agent in a space (`context.space`, set by `buildAgentContext` from the
+ * membership read for the turn) gets a shared principal with the member's
+ * role, so `contentRepos` hands its tools the space's rows by that role.
+ */
+export function agentPrincipal(context: Pick<AgentContext, 'userId' | 'workspaceId'> & { space?: AgentContext['space'] }): Principal {
+  if (!context.userId) {
+    throw new Error('Agent context has no userId: a tool reading user data needs the user it works for');
+  }
+  const base = {
+    kind: 'user' as const,
+    userId: context.userId,
+    username: context.userId,
+    isAdmin: false,
+    sessionToken: null,
+    roles: ['user'],
+  };
+  if (context.space) {
+    return {
+      ...base,
+      workspaceId: context.space.workspaceId,
+      workspaceKind: 'shared',
+      spaceRole: context.space.role,
+      spaceScope: context.space.scope,
+      spaceArchived: false,
+    };
+  }
+  return { ...base, workspaceId: context.workspaceId ?? null, workspaceKind: 'personal' };
 }
 
 /** True for any principal the rest of the system should consider authenticated. */

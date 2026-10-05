@@ -47,24 +47,24 @@ describe('EmbeddingService search tenant scoping', () => {
     const { executeRaw } = await import('@/db/postgres');
     await executeRaw('TRUNCATE TABLE embeddings');
     // Same searchable term, different owners.
-    await svc.store('note', `note:${randomUUID()}`, 'pineapple roadmap for alpha', vec, { title: 'A note' }, undefined, userA);
-    await svc.store('note', `note:${randomUUID()}`, 'pineapple roadmap for beta', vec, { title: 'B note' }, undefined, userB);
+    await svc.store({ ownerUserId: userA, workspaceId: null }, 'note', `note:${randomUUID()}`, 'pineapple roadmap for alpha', vec, { title: 'A note' });
+    await svc.store({ ownerUserId: userB, workspaceId: null }, 'note', `note:${randomUUID()}`, 'pineapple roadmap for beta', vec, { title: 'B note' });
   });
 
-  test('ftsSearch with userId returns only that user’s rows', async () => {
-    const a = await svc.ftsSearch('pineapple', 10, 'note', userA);
+  test('ftsSearch in a personal scope returns only that user’s rows', async () => {
+    const a = await svc.ftsSearch({ kind: 'personal', userId: userA, workspaceId: null }, 'pineapple', 10, 'note');
     expect(a).toHaveLength(1);
     expect(a[0].metadata.title).toBe('A note');
   });
 
-  test('ftsSearch without userId returns all (global KB behaviour preserved)', async () => {
-    const all = await svc.ftsSearch('pineapple', 10, 'note');
+  test('ftsSearch in install scope returns every row', async () => {
+    const all = await svc.ftsSearch({ kind: 'install' }, 'pineapple', 10, 'note');
     expect(all).toHaveLength(2);
   });
 
-  test('hybridSearch falls back to FTS and still scopes by userId', async () => {
-    // No embedding model → hybridSearch falls back to ftsSearch(query, limit, purpose, userId).
-    const b = await svc.hybridSearch('pineapple', 10, 'note', undefined, 0, userB);
+  test('hybridSearch falls back to FTS and still scopes by user', async () => {
+    // No embedding model → hybridSearch falls back to ftsSearch with the same scope.
+    const b = await svc.hybridSearch({ kind: 'personal', userId: userB, workspaceId: null }, 'pineapple', 10, 'note', undefined, 0);
     expect(b).toHaveLength(1);
     expect(b[0].metadata.title).toBe('B note');
   });
@@ -85,35 +85,32 @@ describe('EmbeddingService.searchGlobalDocs scoping', () => {
     await executeRaw('TRUNCATE TABLE embeddings');
     // (1) The legit global product-docs chunk — the ONLY row /docs may return.
     await svc.store(
+      { product: true }, // GLOBAL
       'document',
       '/app/docs/CHANNELS.md',
       'telegram setup steps using BotFather',
       vec,
       { source: 'octipus-docs', filePath: '/app/docs/CHANNELS.md' },
-      undefined,
-      null, // GLOBAL
     );
     // (2) A DIFFERENT user's PRIVATE document row matching the same query —
     //     same purpose, even the same source tag — must be excluded by user_id.
     await svc.store(
+      { ownerUserId: userA, workspaceId: null }, // PRIVATE — must NOT appear
       'document',
       '/uploads/a/telegram-notes.md',
       'my private telegram setup notes',
       vec,
       { source: 'octipus-docs', filePath: '/uploads/a/telegram-notes.md' },
-      undefined,
-      userA, // PRIVATE — must NOT appear
     );
     // (3) A GLOBAL document row that is NOT the docs corpus (no source tag) —
     //     excluded by the metadata->>'source' predicate.
     await svc.store(
+      { product: true },
       'document',
       '/uploads/global-misc.md',
       'telegram unrelated global upload',
       vec,
       { filePath: '/uploads/global-misc.md' },
-      undefined,
-      null,
     );
   });
 
@@ -133,13 +130,12 @@ describe('EmbeddingService.searchGlobalDocs scoping', () => {
     // octipus-docs chunk still surfaces even with limit=1.
     for (let i = 0; i < 60; i++) {
       await svc.store(
+        { ownerUserId: userA, workspaceId: null },
         'document',
         `/uploads/a/noise-${i}.md`,
         'telegram telegram telegram private noise document',
         vec,
         { source: 'octipus-docs', filePath: `/uploads/a/noise-${i}.md` },
-        undefined,
-        userA,
       );
     }
     const hits = await svc.searchGlobalDocs('telegram', 1);
@@ -153,6 +149,7 @@ describe('EmbeddingService repository visibility', () => {
   const owner = randomUUID();
   const allowed = randomUUID();
   const hidden = randomUUID();
+  const mine = { kind: 'personal' as const, userId: owner, workspaceId: null };
   beforeAll(async () => {
     const { getDb } = await import('@/db/postgres');
     const { workspaceRepos } = await import('@/db/schema/workspace-repos');
@@ -164,17 +161,17 @@ describe('EmbeddingService repository visibility', () => {
   beforeEach(async () => {
     const { executeRaw } = await import('@/db/postgres');
     await executeRaw('TRUNCATE TABLE embeddings');
-    await svc.store('knowledge_artifact', 'ordinary', 'visibilityneedle ordinary shared knowledge', vec, {}, undefined, null, null);
-    await svc.store('knowledge_artifact', 'allowed', 'visibilityneedle allowed repository map', vec, {}, undefined, owner, allowed);
-    await svc.store('knowledge_artifact', 'hidden', 'visibilityneedle hidden repository map', vec, {}, undefined, owner, hidden);
+    await svc.store({ ownerUserId: owner, workspaceId: null }, 'knowledge_artifact', 'ordinary', 'visibilityneedle ordinary shared knowledge', vec, {}, undefined, null);
+    await svc.store({ ownerUserId: owner, workspaceId: null }, 'knowledge_artifact', 'allowed', 'visibilityneedle allowed repository map', vec, {}, undefined, allowed);
+    await svc.store({ ownerUserId: owner, workspaceId: null }, 'knowledge_artifact', 'hidden', 'visibilityneedle hidden repository map', vec, {}, undefined, hidden);
     vi.spyOn(svc, 'generateEmbedding').mockResolvedValue(vec);
   });
   test.each(['vector', 'fts', 'hybrid', 'fallback'] as const)('%s constrains candidates before ranking and intersects explicit repo selections', async mode => {
     if (mode === 'fallback') vi.mocked(svc.generateEmbedding).mockRejectedValue(new Error('offline fixture'));
     const search = (scope?: SearchScope) => mode === 'vector'
-      ? svc.search('visibilityneedle', 10, 'knowledge_artifact', 0, undefined, scope)
-      : mode === 'fts' ? svc.ftsSearch('visibilityneedle', 10, 'knowledge_artifact', undefined, scope)
-      : svc.hybridSearch('visibilityneedle', 10, 'knowledge_artifact', undefined, 0, undefined, scope);
+      ? svc.search(mine, 'visibilityneedle', 10, 'knowledge_artifact', 0, scope)
+      : mode === 'fts' ? svc.ftsSearch(mine, 'visibilityneedle', 10, 'knowledge_artifact', scope)
+      : svc.hybridSearch(mine, 'visibilityneedle', 10, 'knowledge_artifact', undefined, 0, scope);
     const sources = async (scope?: SearchScope) => (await search(scope)).map(hit => hit.sourceId).sort();
     expect(await sources({ allowedRepoIds: [allowed] })).toEqual(['allowed', 'ordinary']);
     expect(await sources({ allowedRepoIds: [] })).toEqual(['ordinary']);

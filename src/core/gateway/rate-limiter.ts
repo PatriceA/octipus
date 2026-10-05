@@ -13,26 +13,39 @@ export interface RateLimitConfig {
 const DEFAULT_LIMITS: Record<string, Record<TrustLevel, RateLimitConfig>> = {
   'chat.send': {
     user: { limit: 30, windowMs: 60_000 },
-    local: { limit: 60, windowMs: 60_000 },
-    system: { limit: 200, windowMs: 60_000 },
     agent: { limit: 100, windowMs: 60_000 },
   },
   command: {
     user: { limit: 60, windowMs: 60_000 },
-    local: { limit: 120, windowMs: 60_000 },
-    system: { limit: 200, windowMs: 60_000 },
     agent: { limit: 60, windowMs: 60_000 },
   },
   subscribe: {
     user: { limit: 30, windowMs: 60_000 },
-    local: { limit: 60, windowMs: 60_000 },
-    system: { limit: 100, windowMs: 60_000 },
     agent: { limit: 30, windowMs: 60_000 },
+  },
+  // Rooms (coworking §6.6): posts as fast as chat, typing pings far slower
+  // than keystrokes (clients send at most one per 3 s).
+  'room.post': {
+    user: { limit: 30, windowMs: 60_000 },
+    agent: { limit: 30, windowMs: 60_000 },
+  },
+  'room.typing': {
+    user: { limit: 20, windowMs: 60_000 },
+    agent: { limit: 20, windowMs: 60_000 },
+  },
+  // Live documents (S3): keystroke-rate frames. The document hub enforces
+  // `spaces.docMaxUpdatesPerSecond` and 10 awareness frames per second per
+  // connection; this is only a ceiling above the largest allowed setting.
+  'doc.update': {
+    user: { limit: 1000, windowMs: 1000 },
+    agent: { limit: 1000, windowMs: 1000 },
+  },
+  'doc.awareness': {
+    user: { limit: 1000, windowMs: 1000 },
+    agent: { limit: 1000, windowMs: 1000 },
   },
   default: {
     user: { limit: 60, windowMs: 60_000 },
-    local: { limit: 120, windowMs: 60_000 },
-    system: { limit: 300, windowMs: 60_000 },
     agent: { limit: 60, windowMs: 60_000 },
   },
 };

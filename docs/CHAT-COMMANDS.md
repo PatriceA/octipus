@@ -79,7 +79,7 @@ These commands are available in the TUI and gateway clients (not web/channel cli
 | `/diff` | — | Show `git diff --stat` for workspace changes |
 | `/changes` | — | Review git changes in the workspace — `/changes` for the list, `/changes <path>` for a file diff |
 | `/help` | `/h`, `/?` | List available commands |
-| `/reload-extensions` | `/reload` | Re-discover and reload user extensions from `.octipus/extensions/` (local trust only) |
+| `/reload-extensions` | `/reload` | Re-discover and reload user extensions from `.octipus/extensions/` (admins only) |
 | `/persona` | — | Configure the root agent persona — name, tone, narration, free-form facts |
 | `/version` | `/v` | Show Octipus version and build info |
 

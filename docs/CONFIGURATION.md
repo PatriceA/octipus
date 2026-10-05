@@ -34,7 +34,12 @@ API_HOST=0.0.0.0
 LOG_LEVEL=info
 LOG_STDERR=0                           # 1 = write logs to stderr instead of stdout
 GATEWAY_STDIO=0                        # 1 = also serve the gateway protocol over this process's stdin/stdout as JSON lines (same as `--stdio`); logs move to stderr
+GATEWAY_MAX_CONNECTIONS_PER_USER=20    # signed-in /gateway connections per user; see "Gateway Config" below
+GATEWAY_MAX_FRAME_BYTES=262144         # largest frame a gateway client may send, bytes
+GATEWAY_REPLAY_MAX_SESSIONS=500        # sessions whose recent events are kept for replay
 CORS_ORIGINS=http://localhost:3007   # your web origin; code default is http://localhost:3001
+TRUSTED_PROXIES=                       # reverse proxies whose X-Forwarded-For is believed; see "Reverse proxy" below
+REGISTRATION_MODE=open                 # who may register: open | invite_only (with a space invite link) | closed; the first account always may (docs/SPACES.md → Guests)
 
 # ─── Models ───────────────────────────────────────────────────
 LITELLM_URL=http://localhost:4000      # LiteLLM proxy (optional)
@@ -75,6 +80,22 @@ SESSION_RETENTION_DAYS=14             # Delete sessions idle this many days (0 =
 
 # ─── Group channels ──────────────────────────────────────────
 GROUP_CHANNELS_UNPROMPTED_ENABLED=false  # Let channels in listen/proactive mode post unprompted (docs/CHANNELS.md)
+
+# ─── Shared spaces (docs/SPACES.md) ──────────────────────────
+SPACES_CREATION=any_user              # Who may create a space: any_user | admins
+SPACES_MAX_MEMBERS=50                 # Most members per space
+SPACES_INVITE_MAX_TTL_HOURS=720       # Longest invite-link lifetime (hours); longer requests are clamped
+SPACES_PURGE_AFTER_ARCHIVE_DAYS=7     # Days a space stays archived before its owner can delete it
+SPACES_NOTE_MAX_BYTES=114688          # Largest space note (bytes); at most half of GATEWAY_MAX_FRAME_BYTES or startup fails
+SPACES_DOC_MAX_UPDATES_PER_SECOND=30  # Live-note edits one tab may send per second
+SPACES_DOC_PERSIST_DEBOUNCE_MS=2000   # Idle time before a live note is saved (also saved when the last editor leaves)
+SPACES_DOC_REINDEX_MINUTES=10         # Most a live note's links/search index may lag its text
+SPACES_DOC_BASE_TTL_MINUTES=30        # How long a read of a live note stays a valid merge base for a write
+SPACES_FILE_LEASE_TTL_SECONDS=180     # "Someone is editing" lease on a space file, without renewal
+SPACES_MEMORY_MAX_ITEMS=50            # Space-memory entries given to one turn of a space session
+ROOMS_MAX_QUEUED_PER_MEMBER=3         # Requests one member may have waiting in a room
+ROOMS_APPROVAL_TIMEOUT_MINUTES=30     # A room turn waiting this long on an approval gives up
+ROOMS_TRANSCRIPT_WINDOW_CHARS=6000    # Room transcript after the summary before the room is compacted
 
 WORKSPACE_PATH=./workspace
 SEARXNG_URL=http://localhost:8888         # SearXNG meta-search (optional)
@@ -154,6 +175,73 @@ Both this `tokens` cap and `AGENT_MAX_TOKEN_BUDGET` (`agent.maxTokenBudget`, per
 | `compaction.growthMultiplier` | 2.0 | Trigger compaction when current context grows by this multiple relative to the last compaction baseline. |
 | `compaction.hardCeiling` | 1_000_000 | Hard ceiling in tokens — compaction always runs above this threshold regardless of other gates. |
 
+## Gateway Config
+
+| Key | Default | Purpose |
+|---|---|---|
+| `gateway.maxConnectionsPerUser` | 20 | Signed-in `/gateway` connections one user may hold (each browser tab holds one, each TUI one). The one over the cap is refused; the web shows "Too many open tabs". Env: `GATEWAY_MAX_CONNECTIONS_PER_USER`. |
+| `gateway.maxFrameBytes` | 262144 | Largest frame a gateway client may send, in bytes — the socket's `maxPayload`, read at server start. A bigger frame closes the connection (1009). Raise it for large TUI image attachments. Env: `GATEWAY_MAX_FRAME_BYTES`. |
+| `gateway.replayMaxSessions` | 500 | Sessions whose recent events stay in memory so a reconnecting tab can `replay` what it missed; the least recently active is dropped first. Env: `GATEWAY_REPLAY_MAX_SESSIONS`. |
+
+## Spaces, Rooms and Registration Config
+
+Shared spaces are always on; these keys bound them. What each one governs is
+described in [SPACES.md → Settings](SPACES.md#settings).
+
+| Key | Default | Purpose |
+|---|---|---|
+| `security.registration` | `open` | Who may create an account: `open`, `invite_only` (only with a valid space invite, redeemed with the account) or `closed`. The install's first account may always register; SAML, SCIM and admin-created accounts are not affected. Env: `REGISTRATION_MODE`. |
+| `spaces.creation` | `any_user` | Who may create a space: `any_user` or `admins`. Env: `SPACES_CREATION`. |
+| `spaces.maxMembers` | 50 | Most members per space. Env: `SPACES_MAX_MEMBERS`. |
+| `spaces.inviteMaxTtlHours` | 720 | Longest invite lifetime, hours; longer requests are clamped. Env: `SPACES_INVITE_MAX_TTL_HOURS`. |
+| `spaces.purgeAfterArchiveDays` | 7 | Days a space stays archived before its owner can delete it. Env: `SPACES_PURGE_AFTER_ARCHIVE_DAYS`. |
+| `spaces.noteMaxBytes` | 114688 | Largest space note (112 KiB). Startup fails above half of `gateway.maxFrameBytes`. Env: `SPACES_NOTE_MAX_BYTES`. |
+| `spaces.docMaxUpdatesPerSecond` | 30 | Live-note edits one tab may send per second. Env: `SPACES_DOC_MAX_UPDATES_PER_SECOND`. |
+| `spaces.docPersistDebounceMs` | 2000 | Quiet time before a live note is saved (it is also saved when the last editor leaves). Env: `SPACES_DOC_PERSIST_DEBOUNCE_MS`. |
+| `spaces.docReindexMinutes` | 10 | Most a live note's links and search index may lag its text; billed as install work to the last editor. Env: `SPACES_DOC_REINDEX_MINUTES`. |
+| `spaces.docBaseTtlMinutes` | 30 | How long a read of a live note stays a valid merge base for a write. Env: `SPACES_DOC_BASE_TTL_MINUTES`. |
+| `spaces.fileLeaseTtlSeconds` | 180 | Lifetime of a lease on a space file without renewal. Env: `SPACES_FILE_LEASE_TTL_SECONDS`. |
+| `spaces.memoryMaxItems` | 50 | Space-memory entries given to one turn, newest first. Env: `SPACES_MEMORY_MAX_ITEMS`. |
+| `rooms.maxQueuedPerMember` | 3 | Requests one member may have waiting in a room. Env: `ROOMS_MAX_QUEUED_PER_MEMBER`. |
+| `rooms.approvalTimeoutMinutes` | 30 | A room turn waiting this long on its requester's approval gives up. Env: `ROOMS_APPROVAL_TIMEOUT_MINUTES`. |
+| `rooms.transcriptWindowChars` | 6000 | Room transcript kept verbatim after the summary before the room is compacted. Env: `ROOMS_TRANSCRIPT_WINDOW_CHARS`. |
+
+## Reverse proxy
+
+Octipus takes a client's address from the TCP connection. The
+`X-Forwarded-For` and `X-Real-IP` headers are ignored — anyone can send them —
+unless the connection comes from a proxy listed in `security.trustedProxies`
+(env `TRUSTED_PROXIES`, comma-separated; addresses or CIDR ranges, IPv4 or
+IPv6). The address is used for the per-address REST rate limits, the login
+and passkey lockouts, the gateway's cap on unauthenticated connections, and
+the audit log. It never grants anything: there is no "local" trust, so a
+request from loopback is treated like any other.
+
+Behind nginx, Caddy or a load balancer, list the proxy, or every client
+shares the proxy's address for those limits:
+
+```env
+# nginx / Caddy on the same host
+TRUSTED_PROXIES=127.0.0.1,::1
+# a load balancer subnet
+TRUSTED_PROXIES=10.0.0.0/8
+```
+
+The proxy must set (not append to a client-supplied) `X-Forwarded-For`, or
+append the peer address as nginx's `$proxy_add_x_forwarded_for` does: the
+header is read right to left, skipping trusted proxies, and the first other
+hop is the client. An entry that is not an address or CIDR range is rejected
+when the configuration loads.
+
+The bundled web server (`web/serve.mjs`: port 3007 in the image, published as
+3017 by `docker-compose.yml`) proxies `/api`, `/a` and `/__artifacts__` to the
+backend over loopback and appends its peer address to `X-Forwarded-For`. In
+that setup, set `TRUSTED_PROXIES=127.0.0.1,::1` so the backend sees each
+browser's address instead of one shared one; a client that forges the header
+only adds hops left of the real one, which are ignored. If nginx or a load
+balancer sits in front of port 3017, list it too, and have it set or append
+`X-Forwarded-For` as above (a front proxy that sends only `X-Real-IP` is not
+enough here, because the bundled server always sends `X-Forwarded-For`).
 
 ## Docker Services
 

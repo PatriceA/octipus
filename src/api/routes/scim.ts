@@ -21,14 +21,16 @@
  *   PATCH semantics follow RFC 7644 §3.5.2 (replace / add / remove
  *   ops on `userName`, `active`, `emails`, group membership).
  */
-import { and, eq } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getDb } from '@/db/postgres';
 import { orgMembers, organizations } from '@/db/schema/organizations';
 import { orgSsoConfig } from '@/db/schema/org-sso';
 import { users } from '@/db/schema/users';
+import { setUserActive } from '@/security/user-lifecycle';
 import { getVault } from '@/security/vault';
+import { assertLocalUsername, InvalidUsernameError } from '@/security/user-kinds';
 
 const SCIM_USER_SCHEMA = 'urn:ietf:params:scim:schemas:core:2.0:User';
 const SCIM_GROUP_SCHEMA = 'urn:ietf:params:scim:schemas:core:2.0:Group';
@@ -98,6 +100,57 @@ async function resolveOrgFromBearer(authHeader: string | undefined): Promise<{ o
   return null;
 }
 
+async function isOrgMember(orgId: string, userId: string): Promise<boolean> {
+  const [row] = await getDb()
+    .select({ userId: orgMembers.userId })
+    .from(orgMembers)
+    .innerJoin(users, and(eq(users.id, orgMembers.userId), eq(users.kind, 'local')))
+    .where(and(eq(orgMembers.orgId, orgId), eq(orgMembers.userId, userId)))
+    .limit(1);
+  return !!row;
+}
+
+/**
+ * Whether the account is this org's own to rename: a member of no other org,
+ * not an install admin, and without a password of its own (the accounts SCIM
+ * and SAML create have none). The caller has already checked membership here.
+ */
+async function isOrgOwned(orgId: string, user: { id: string; isAdmin: boolean; passwordHash: string | null }): Promise<boolean> {
+  if (user.isAdmin || user.passwordHash !== null) return false;
+  const [other] = await getDb()
+    .select({ orgId: orgMembers.orgId })
+    .from(orgMembers)
+    .where(and(eq(orgMembers.userId, user.id), ne(orgMembers.orgId, orgId)))
+    .limit(1);
+  return !other;
+}
+
+/**
+ * A SCIM token speaks for one org only: it deactivates the account only when
+ * no other org membership remains; otherwise it only removes this org's
+ * membership. DELETE always drops the membership too; PATCH `active: false`
+ * keeps it while the account is the org's alone, so a later `active: true`
+ * from the same IdP can find the user again. Deactivation runs first, so a
+ * failed membership delete leaves a retry that still finds the member.
+ */
+async function deprovision(
+  orgId: string,
+  userId: string,
+  mode: 'delete' | 'deactivate',
+): Promise<'deactivated' | 'membership_removed'> {
+  const db = getDb();
+  const [other] = await db
+    .select({ orgId: orgMembers.orgId })
+    .from(orgMembers)
+    .where(and(eq(orgMembers.userId, userId), ne(orgMembers.orgId, orgId)))
+    .limit(1);
+  if (!other) await setUserActive(userId, false, null, `scim:${orgId}`);
+  if (other || mode === 'delete') {
+    await db.delete(orgMembers).where(and(eq(orgMembers.orgId, orgId), eq(orgMembers.userId, userId)));
+  }
+  return other ? 'membership_removed' : 'deactivated';
+}
+
 export const scimRoutes = new Elysia({ prefix: '/scim/v2' })
   .use(apiContext)
 
@@ -130,7 +183,8 @@ export const scimRoutes = new Elysia({ prefix: '/scim/v2' })
           updatedAt: users.updatedAt,
         })
         .from(users)
-        .innerJoin(orgMembers, and(eq(orgMembers.userId, users.id), eq(orgMembers.orgId, ctx.orgId)))
+        // The install's own accounts only: a remote member (S7) is never SCIM's.
+        .innerJoin(orgMembers, and(eq(orgMembers.userId, users.id), eq(orgMembers.orgId, ctx.orgId), eq(users.kind, 'local')))
         .limit(count)
         .offset(startIndex - 1);
 
@@ -169,7 +223,8 @@ export const scimRoutes = new Elysia({ prefix: '/scim/v2' })
           updatedAt: users.updatedAt,
         })
         .from(users)
-        .innerJoin(orgMembers, and(eq(orgMembers.userId, users.id), eq(orgMembers.orgId, ctx.orgId)))
+        // The install's own accounts only: a remote member (S7) is never SCIM's.
+        .innerJoin(orgMembers, and(eq(orgMembers.userId, users.id), eq(orgMembers.orgId, ctx.orgId), eq(users.kind, 'local')))
         .where(eq(users.id, params.id))
         .limit(1);
       if (!row) { set.status = 404; return scimError(404, 'User not found'); }
@@ -186,18 +241,30 @@ export const scimRoutes = new Elysia({ prefix: '/scim/v2' })
 
       const db = getDb();
       const email = body.emails?.find((e: { primary?: boolean; value?: string }) => e.primary)?.value ?? body.emails?.[0]?.value ?? null;
+      // A leading `~` marks members from other installs (S7).
+      try {
+        assertLocalUsername(body.userName);
+      } catch (err) {
+        if (!(err instanceof InvalidUsernameError)) throw err;
+        set.status = 400;
+        return { ...scimError(400, err.message), scimType: 'invalidValue' };
+      }
 
-      // Upsert by userName. SCIM clients re-POST on every reconciliation.
+      // Upsert by userName within this org. SCIM clients re-POST on every
+      // reconciliation, so a member of this org is returned as-is. A userName
+      // that belongs to an account outside this org is not adopted: the token
+      // speaks for its own org only, and adopting would let it read, patch
+      // and deactivate any account on the install (RFC 7644 §3.3: 409
+      // uniqueness).
       const [existing] = await db.select().from(users).where(eq(users.username, body.userName)).limit(1);
 
       let row: { id: string; username: string; email: string | null; isActive: boolean; createdAt: Date; updatedAt: Date };
       if (existing) {
+        if (!(await isOrgMember(ctx.orgId, existing.id))) {
+          set.status = 409;
+          return { ...scimError(409, 'userName is already taken'), scimType: 'uniqueness' };
+        }
         row = existing as typeof row;
-        // Existing user: just ensure membership (single write, no tx needed).
-        await db
-          .insert(orgMembers)
-          .values({ orgId: ctx.orgId, userId: existing.id, role: 'member' })
-          .onConflictDoNothing();
       } else {
         // Atomic: provision the user and their org membership together so a
         // failure on the membership insert can't leave an orphan user with no
@@ -209,6 +276,7 @@ export const scimRoutes = new Elysia({ prefix: '/scim/v2' })
               username: body.userName,
               email,
               isActive: body.active ?? true,
+              deactivatedBy: body.active === false ? `scim:${ctx.orgId}` : null,
               isAdmin: false,
               // Provisioned users have no password — they sign in via SAML.
               passwordHash: null,
@@ -246,7 +314,8 @@ export const scimRoutes = new Elysia({ prefix: '/scim/v2' })
       const [user] = await db
         .select()
         .from(users)
-        .innerJoin(orgMembers, and(eq(orgMembers.userId, users.id), eq(orgMembers.orgId, ctx.orgId)))
+        // The install's own accounts only: a remote member (S7) is never SCIM's.
+        .innerJoin(orgMembers, and(eq(orgMembers.userId, users.id), eq(orgMembers.orgId, ctx.orgId), eq(users.kind, 'local')))
         .where(eq(users.id, params.id))
         .limit(1);
       if (!user) { set.status = 404; return scimError(404, 'User not found'); }
@@ -258,11 +327,22 @@ export const scimRoutes = new Elysia({ prefix: '/scim/v2' })
       // group membership append) is ever handled here, it stops being idempotent
       // and must NOT be exposed to a blind retry.
       const patch: Record<string, unknown> = {};
+      let active: boolean | undefined;
       for (const op of body.Operations) {
         const path = (op.path ?? '').toLowerCase();
         if (op.op.toLowerCase() === 'replace' || op.op.toLowerCase() === 'add') {
-          if (path === 'active') patch.isActive = !!op.value;
-          else if (path === 'username') patch.username = String(op.value);
+          if (path === 'active') active = !!op.value;
+          else if (path === 'username') {
+            const username = String(op.value);
+            try {
+              assertLocalUsername(username);
+            } catch (err) {
+              if (!(err instanceof InvalidUsernameError)) throw err;
+              set.status = 400;
+              return { ...scimError(400, err.message), scimType: 'invalidValue' };
+            }
+            patch.username = username;
+          }
           else if (path === 'emails' && Array.isArray(op.value)) {
             const v = op.value as { value: string; primary?: boolean }[];
             patch.email = v.find((e) => e.primary)?.value ?? v[0]?.value ?? null;
@@ -270,12 +350,36 @@ export const scimRoutes = new Elysia({ prefix: '/scim/v2' })
         }
       }
 
+      // userName and email identify the account across the whole install, so
+      // the org may only rewrite them on an account that is its alone (see
+      // `isOrgOwned`). Checked before any write, so a refused PATCH changes
+      // nothing.
+      if (Object.keys(patch).length > 0 && !(await isOrgOwned(ctx.orgId, user.users))) {
+        set.status = 403;
+        return scimError(403, 'userName and emails of an account managed outside this organization cannot be changed');
+      }
+
+      // `active` goes through the one writer of `is_active`, and first, so a
+      // refused re-activation changes nothing else either.
+      let leftOrg = false;
+      if (active === true) {
+        const outcome = await setUserActive(params.id, true, null, `scim:${ctx.orgId}`);
+        if (outcome.status === 'refused') {
+          set.status = 409;
+          return scimError(409, 'User was deactivated outside this organization and cannot be re-activated by SCIM');
+        }
+      } else if (active === false) {
+        leftOrg = (await deprovision(ctx.orgId, params.id, 'deactivate')) === 'membership_removed';
+      }
+
       if (Object.keys(patch).length > 0) {
         await db.update(users).set({ ...patch, updatedAt: new Date() }).where(eq(users.id, params.id));
       }
 
       const [refreshed] = await db.select().from(users).where(eq(users.id, params.id)).limit(1);
-      return scimUser(refreshed!);
+      // A user who still belongs to another org is only removed from this one;
+      // to this org's IdP they are deactivated all the same.
+      return scimUser(leftOrg ? { ...refreshed!, isActive: false } : refreshed!);
     },
     {
       params: t.Object({ id: t.String() }),
@@ -297,19 +401,12 @@ export const scimRoutes = new Elysia({ prefix: '/scim/v2' })
       const ctx = await resolveOrgFromBearer(headers.authorization);
       if (!ctx) { set.status = 401; return scimError(401, 'Invalid bearer token'); }
 
-      const db = getDb();
-      // SCIM DELETE = deprovision. Soft-delete: drop org membership +
-      // mark inactive. The user row stays so audit logs remain valid.
-      // Atomic: a failure between the two writes would otherwise leave the user
-      // still a member but inactive (or vice-versa) — an inconsistent state.
-      await db.transaction(async (tx) => {
-        await tx
-          .delete(orgMembers)
-          .where(and(eq(orgMembers.orgId, ctx.orgId), eq(orgMembers.userId, params.id)));
-        await tx.update(users).set({ isActive: false }).where(eq(users.id, params.id));
-      });
+      // SCIM DELETE = deprovision, for members of the token's org only. The
+      // user row stays so audit logs remain valid.
+      if (!(await isOrgMember(ctx.orgId, params.id))) { set.status = 404; return scimError(404, 'User not found'); }
+      await deprovision(ctx.orgId, params.id, 'delete');
       set.status = 204;
-      return '';
+      return null;
     },
     { params: t.Object({ id: t.String() }), detail: { tags: ['scim'] } },
   )

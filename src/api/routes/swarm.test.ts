@@ -37,12 +37,11 @@ describe.skipIf(!isIntegration)('Swarm API (Integration)', () => {
     await setupIntegrationDb();
 
     // Defensive reset — bun's mock.module + shared `getConfig()` mean an
-    // earlier test in the run might have left RLS or workspace flags on.
+    // earlier test in the run might have left RLS on.
     // Swarm routes use the unscoped sessionRepository and would 401 if RLS
     // were enforcing under our non-superuser test role.
     const { getConfig } = await import('@/config');
     getConfig().multiuser.rlsEnabled = false;
-    getConfig().multiuser.orgWorkspaces = false;
 
     const { getDb } = await import('@/db/postgres');
     const { users } = await import('@/db/schema/users');

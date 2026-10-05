@@ -9,6 +9,7 @@ import {
 } from '@/models/evaluation';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
+import { isRegisteredModel, resolveModel } from '@/models/resolve-model';
 import {
   runConformanceTests,
 } from '@/models/testing';
@@ -204,8 +205,12 @@ export const evaluationRoutes = new Elysia({ prefix: '/evaluations' })
         }
       }
 
-      const registry = getModelRegistry();
-      const modelConfig = await registry.getModel(model) ?? await registry.getModelByModelId(model);
+      // Only a model this user may use (coworking spec §8.2).
+      const modelConfig = await resolveModel({ userId: user.id, name: model });
+      if (!modelConfig && await isRegisteredModel(model, user.id)) {
+        set.status = 400;
+        return { error: `Model '${model}' is not available` };
+      }
       const provider = modelConfig?.provider ?? 'unknown';
       const modelId = modelConfig?.modelId ?? model;
 
@@ -226,7 +231,7 @@ export const evaluationRoutes = new Elysia({ prefix: '/evaluations' })
           // Generate model outputs — call provider directly (bypass circuit breaker)
           const { getProviderRouter } = await import('@/models/providers');
           const router = getProviderRouter();
-          const resolvedProvider = await router.resolveProvider(modelId);
+          const resolvedProvider = await router.resolveProvider(modelId, { modelConfigName: modelConfig?.name, userId: user.id });
           const evalClient = getLiteLLMClient();
 
           const stampedDataset = [];
@@ -244,6 +249,7 @@ export const evaluationRoutes = new Elysia({ prefix: '/evaluations' })
                 const startMs = Date.now();
                 const completeOpts = {
                   model: modelId,
+                  modelConfigName: modelConfig?.name,
                   messages,
                   tools: dp.tools,
                   temperature: 0.3,

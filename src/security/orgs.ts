@@ -10,10 +10,8 @@
  * Responsibilities:
  *
  *   - **Org CRUD** is admin-gated. A non-admin asking the manager to
- *     create an organization gets `not_admin`. The manager doesn't
- *     consult `multiuser.orgWorkspaces` itself — that's the route
- *     layer's job — but the helper functions below stay safe even if
- *     a route forgets the check.
+ *     create an organization gets `not_admin`, so the helpers stay
+ *     safe even if a route forgets its admin check.
  *
  *   - **Membership** can be managed by any admin (system_admin); a
  *     later iteration adds `org_admin` role checks via `org_members`.
@@ -36,13 +34,11 @@
  * documents / hooks / vault and adopt the per-workspace data
  * boundary.
  */
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { auditRepository } from '@/db/repositories/audit-repository';
-import { documents } from '@/db/schema/documents';
-import { hooks } from '@/db/schema/hooks';
 import {
-  type NewWorkspace,
+  newWorkspaceRow,
   type Organization,
   type OrgMember,
   organizations,
@@ -50,9 +46,17 @@ import {
   type Workspace,
   workspaces,
 } from '@/db/schema/organizations';
-import { sessions } from '@/db/schema/sessions';
 import { users } from '@/db/schema/users';
 import { vault } from '@/db/schema/vault';
+import { workspaceMoveTables } from '@/db/workspace-tables';
+import { reencryptVaultRowForOwner } from '@/security/vault';
+import {
+  DEFAULT_WORKSPACE_SEGMENT,
+  forgetWorkspaceRow,
+  moveWorkspaceFiles,
+  noteWorkspaceRows,
+  removeWorkspaceFiles,
+} from '@/security/workspace-fs';
 import { securityLogger } from '@/utils/logger';
 
 /**
@@ -74,7 +78,8 @@ export class OrgWorkspaceError extends Error {
       | 'workspace_not_found'
       | 'cannot_delete_default'
       | 'recipient_not_found'
-      | 'cannot_transfer_to_self',
+      | 'cannot_transfer_to_self'
+      | 'files_conflict',
     message: string,
   ) {
     super(message);
@@ -212,6 +217,14 @@ export class OrgWorkspaceManager {
       .where(eq(organizations.id, orgId))
       .limit(1);
     if (!org) throw new OrgWorkspaceError('org_not_found', `organization ${orgId} not found`);
+    // Only a local account joins an org: a remote member's row (S7) is a
+    // member of one space hosted here, nothing more.
+    const [target] = await this.db
+      .select({ kind: users.kind })
+      .from(users)
+      .where(eq(users.id, targetUserId))
+      .limit(1);
+    if (!target || target.kind !== 'local') throw new OrgWorkspaceError('user_not_found', `user ${targetUserId} not found`);
 
     const [existing] = await this.db
       .select()
@@ -302,7 +315,9 @@ export class OrgWorkspaceManager {
   /**
    * Create a workspace owned by the caller. The slug must be unique
    * among the caller's workspaces; cross-user collisions are fine
-   * because the unique index is on (user_id, slug).
+   * because the unique index is on (user_id, slug). Its files live under
+   * its own id (`files_dir`), whether or not it is the default, so making
+   * it the default moves no file.
    */
   async createWorkspace(
     userId: string,
@@ -332,34 +347,35 @@ export class OrgWorkspaceManager {
         .where(and(eq(workspaces.userId, userId), eq(workspaces.isDefault, true)));
     }
 
-    const values: NewWorkspace = {
+    const [ws] = await this.db.insert(workspaces).values(newWorkspaceRow({
       userId,
       slug: input.slug,
       name: input.name.trim(),
       isDefault: input.isDefault ?? false,
-    };
-    const [ws] = await this.db.insert(workspaces).values(values).returning();
+    })).returning();
+    noteWorkspaceRows([ws]);
     return ws;
   }
 
   /**
-   * Find or create the user's default workspace. Phase 4 will call
-   * this on every authenticated request to populate
-   * `principal.workspaceId`. For Phase 3g it's just available so the
-   * REST `list` endpoint can return at least one row even on a fresh
-   * account.
+   * Find or create the user's default workspace. Every authenticated
+   * request derives its workspace through this, so a new user's first page
+   * calls it from several requests at once: the insert is
+   * `ON CONFLICT DO NOTHING` and a request that loses the race reads the
+   * row the winner wrote.
+   *
+   * A new default keeps its files under `default` when no other workspace
+   * of the user claims that directory: a user who wrote files before
+   * having any workspace row (user level) finds them there. Otherwise
+   * under its id.
    */
   async ensureDefaultWorkspace(userId: string): Promise<Workspace> {
-    const [existing] = await this.db
-      .select()
-      .from(workspaces)
-      .where(and(eq(workspaces.userId, userId), eq(workspaces.isDefault, true)))
-      .limit(1);
+    const existing = await this.findDefault(userId);
     if (existing) return existing;
 
-    // No default yet — create one. Use the canonical slug `default`
-    // unless the user already has a workspace by that slug, in which
-    // case promote the first one they have to default.
+    // No default yet. Use the canonical slug `default` unless the user
+    // already has a workspace by that slug, in which case promote it. Its
+    // files stay where they are (`files_dir` does not depend on the flag).
     const [bySlug] = await this.db
       .select()
       .from(workspaces)
@@ -369,15 +385,43 @@ export class OrgWorkspaceManager {
       const [updated] = await this.db
         .update(workspaces)
         .set({ isDefault: true, updatedAt: new Date() })
-        .where(eq(workspaces.id, bySlug.id))
+        .where(and(
+          eq(workspaces.id, bySlug.id),
+          sql`NOT EXISTS (SELECT 1 FROM workspaces d WHERE d.user_id = ${userId} AND d.is_default)`,
+        ))
         .returning();
-      return updated;
+      if (updated) {
+        noteWorkspaceRows([updated]);
+        return updated;
+      }
+    } else {
+      const [claimed] = await this.db
+        .select({ id: workspaces.id })
+        .from(workspaces)
+        .where(and(eq(workspaces.userId, userId), eq(workspaces.filesDir, DEFAULT_WORKSPACE_SEGMENT)))
+        .limit(1);
+      const row = newWorkspaceRow({ userId, slug: DEFAULT_WORKSPACE_SLUG, name: 'Default', isDefault: true });
+      if (!claimed) row.filesDir = DEFAULT_WORKSPACE_SEGMENT;
+      const [inserted] = await this.db.insert(workspaces).values(row).onConflictDoNothing().returning();
+      if (inserted) {
+        noteWorkspaceRows([inserted]);
+        return inserted;
+      }
     }
-    return this.createWorkspace(userId, {
-      slug: DEFAULT_WORKSPACE_SLUG,
-      name: 'Default',
-      isDefault: true,
-    });
+    // A concurrent request created or promoted the default first.
+    const raced = await this.findDefault(userId);
+    if (!raced) throw new Error(`could not create a default workspace for user ${userId}`);
+    return raced;
+  }
+
+  private async findDefault(userId: string): Promise<Workspace | null> {
+    const [row] = await this.db
+      .select()
+      .from(workspaces)
+      .where(and(eq(workspaces.userId, userId), eq(workspaces.isDefault, true)))
+      .limit(1);
+    if (row) noteWorkspaceRows([row]);
+    return row ?? null;
   }
 
   /**
@@ -391,6 +435,7 @@ export class OrgWorkspaceManager {
       .from(workspaces)
       .where(and(eq(workspaces.id, id), eq(workspaces.userId, userId)))
       .limit(1);
+    if (row) noteWorkspaceRows([row]);
     return row ?? null;
   }
 
@@ -400,14 +445,30 @@ export class OrgWorkspaceManager {
       .from(workspaces)
       .where(and(eq(workspaces.userId, userId), eq(workspaces.slug, slug)))
       .limit(1);
+    if (row) noteWorkspaceRows([row]);
     return row ?? null;
   }
 
   async listOwn(userId: string): Promise<Workspace[]> {
-    return this.db
+    const rows = await this.db
       .select()
       .from(workspaces)
       .where(eq(workspaces.userId, userId));
+    noteWorkspaceRows(rows);
+    return rows;
+  }
+
+  /**
+   * Load every workspace's owner and files directory into the file-root
+   * map (`workspace-fs.ts`) at boot, so a session's files resolve before
+   * any request has looked its workspace up.
+   */
+  async loadFileRoots(): Promise<number> {
+    const rows = await this.db
+      .select({ id: workspaces.id, userId: workspaces.userId, filesDir: workspaces.filesDir })
+      .from(workspaces);
+    noteWorkspaceRows(rows);
+    return rows.length;
   }
 
   /**
@@ -430,45 +491,78 @@ export class OrgWorkspaceManager {
    * doing so would leave the user with no place to put new sessions
    * once Phase 4 adopts workspace_id. To "delete" the default,
    * promote a different workspace first via `setDefault`.
+   *
+   * The workspace's rows become user-level (`ON DELETE SET NULL` on every
+   * `workspace_id`). A note whose slug the user already has at user level
+   * would collide on `notes_user_slug_uidx`, so it first gets the
+   * `-<first 8 chars of id>` suffix migration 0127 uses for the same case.
+   *
+   * Only personal workspaces: a shared workspace (a space) has no owning
+   * user, so `findOwnedById` never returns one, and the delete below is
+   * restricted to `kind = 'personal'` as well. Spaces are deleted only by
+   * `purgeSpace` (src/core/spaces/purge.ts), never by falling back to
+   * SET NULL into someone's personal scope.
+   *
+   * Its files are removed once the row is gone (a deleted workspace's files
+   * belong to no one; the rows that become user-level are database rows).
+   * Removing them after the commit means a failed delete keeps them.
    */
   async delete(userId: string, id: string): Promise<boolean> {
     const existing = await this.findOwnedById(userId, id);
     if (!existing) return false;
+    if (existing.kind !== 'personal') {
+      throw new OrgWorkspaceError('workspace_not_found', 'workspace not found or not owned by caller');
+    }
     if (existing.isDefault) {
       throw new OrgWorkspaceError(
         'cannot_delete_default',
         'cannot delete the default workspace; promote another one first',
       );
     }
-    const result = await this.db
-      .delete(workspaces)
-      .where(and(eq(workspaces.id, id), eq(workspaces.userId, userId)))
-      .returning({ id: workspaces.id });
-    return result.length > 0;
+    const deleted = await this.db.transaction(async (tx) => {
+      await tx.execute(sql`
+        UPDATE notes SET slug = notes.slug || '-' || left(notes.id::text, 8)
+        WHERE notes.workspace_id = ${id}
+          AND EXISTS (SELECT 1 FROM notes u WHERE u.user_id = notes.user_id AND u.workspace_id IS NULL AND u.slug = notes.slug)
+      `);
+      const result = await tx
+        .delete(workspaces)
+        .where(and(eq(workspaces.id, id), eq(workspaces.userId, userId), eq(workspaces.kind, 'personal')))
+        .returning({ id: workspaces.id });
+      return result.length > 0;
+    });
+    if (deleted) {
+      forgetWorkspaceRow(id);
+      removeWorkspaceFiles(userId, existing.filesDir);
+    }
+    return deleted;
   }
 
   /**
-   * Promote a workspace to default. Atomic-ish: clear the existing
-   * default in the same transaction so the partial unique index never
-   * sees two defaults at once.
+   * Promote a workspace to default. Atomic: clear the existing default in
+   * the same transaction so the partial unique index never sees two
+   * defaults at once. No file moves: each workspace keeps its `files_dir`.
    */
   async setDefault(userId: string, id: string): Promise<Workspace | null> {
     const target = await this.findOwnedById(userId, id);
     if (!target) return null;
     if (target.isDefault) return target;
 
-    return this.db.transaction(async (tx) => {
+    const updated = await this.db.transaction(async (tx) => {
       await tx
         .update(workspaces)
         .set({ isDefault: false, updatedAt: new Date() })
         .where(and(eq(workspaces.userId, userId), eq(workspaces.isDefault, true)));
-      const [updated] = await tx
+      const [row] = await tx
         .update(workspaces)
         .set({ isDefault: true, updatedAt: new Date() })
         .where(and(eq(workspaces.id, id), eq(workspaces.userId, userId)))
         .returning();
-      return updated;
+      return row;
     });
+    if (!updated) return null;
+    noteWorkspaceRows([updated]);
+    return updated;
   }
 
   /**
@@ -476,21 +570,21 @@ export class OrgWorkspaceManager {
    * `recipientUserId`. Atomic — runs in a single transaction so any
    * partial failure rolls back.
    *
-   * What follows the workspace:
-   *   - `sessions`, `documents`, `hooks` rows scoped to this
-   *     workspace_id have their `user_id` reassigned to the recipient.
-   *     These ARE the working state of the workspace; moving the
-   *     workspace without them would orphan the history.
-   *   - `vault` rows with `scope='workspace'` AND `workspace_id` =
-   *     this workspace follow too. Workspace-scoped secrets are part
-   *     of the workspace, not the user.
+   * What follows the workspace: every table WORKSPACE_TABLES marks
+   * `move` (`src/db/workspace-tables.ts`) — sessions, documents, notes,
+   * tasks, memories, embeddings, links, hooks, … — has the previous
+   * owner's rows in this workspace reassigned to the recipient. These
+   * ARE the working state of the workspace; moving the workspace
+   * without them would orphan the history. Workspace-scoped vault
+   * secrets follow too, re-encrypted under the recipient's key.
    *
    * What stays put:
    *   - `vault` rows with `scope='user'` (user's personal secrets) —
    *     those are the user's, not the workspace's, regardless of
    *     where they happened to be created.
-   *   - Artifacts on this workspace stay where they are; the new owner
-   *     simply inherits them via the new ownership.
+   *   - Tables marked `n/a`: notifications (a user's inbox), cleanup
+   *     history, and artifacts, which are keyed by workspace alone and
+   *     so follow the workspace row itself.
    *
    * Edge cases handled:
    *   - Transferring a default workspace clears its `isDefault` flag
@@ -500,6 +594,16 @@ export class OrgWorkspaceManager {
    *     this slug, we suffix `-from-<old-owner-username-or-id>` to the
    *     transferring slug. Cheap, deterministic, avoids the partial
    *     unique index conflict; the recipient can rename afterwards.
+   *
+   * Files: `users/<A>/workspaces/<files_dir>` becomes
+   * `users/<B>/workspaces/<id>` and `files_dir` becomes the id (a
+   * `default` directory would collide with the recipient's own). The
+   * rename is the last step inside the transaction: a failed rename (the
+   * target exists: `files_conflict`) rolls the database back, and a commit
+   * that fails after it renames the directory back. Renaming after the
+   * commit instead would leave, on a rename failure, a committed transfer
+   * whose files sit in the old owner's tree, with no single statement to
+   * undo it.
    */
   async transfer(
     actorUserId: string,
@@ -515,11 +619,12 @@ export class OrgWorkspaceManager {
     }
 
     const [recipient] = await this.db
-      .select({ id: users.id, username: users.username, isActive: users.isActive })
+      .select({ id: users.id, username: users.username, isActive: users.isActive, kind: users.kind })
       .from(users)
       .where(eq(users.id, recipientUserId))
       .limit(1);
-    if (!recipient || !recipient.isActive) {
+    // A remote member's row (S7) owns nothing here.
+    if (!recipient || !recipient.isActive || recipient.kind !== 'local') {
       throw new OrgWorkspaceError('recipient_not_found', 'recipient user not found or inactive');
     }
 
@@ -543,6 +648,9 @@ export class OrgWorkspaceManager {
       finalSlug = candidate || `${owned.slug.slice(0, 24)}-rcv`;
     }
 
+    const from = { userId: actorUserId, filesDir: owned.filesDir };
+    const to = { userId: recipientUserId, filesDir: workspaceId };
+    let filesMoved = false;
     return this.db.transaction(async (tx) => {
       // Strip the default flag so we never end up with two defaults
       // on the recipient (partial unique index would reject it).
@@ -552,6 +660,7 @@ export class OrgWorkspaceManager {
           userId: recipientUserId,
           slug: finalSlug,
           isDefault: false,
+          filesDir: workspaceId,
           updatedAt: new Date(),
         })
         .where(and(eq(workspaces.id, workspaceId), eq(workspaces.userId, actorUserId)))
@@ -561,34 +670,47 @@ export class OrgWorkspaceManager {
         throw new OrgWorkspaceError('workspace_not_found', 'workspace disappeared mid-transfer');
       }
 
-      // Reassign workspace-scoped working state to the recipient.
-      const updatedAt = new Date();
-      await tx
-        .update(sessions)
-        .set({ userId: recipientUserId, updatedAt })
-        .where(and(eq(sessions.workspaceId, workspaceId), eq(sessions.userId, actorUserId)));
-      // documents has no updatedAt column — only createdAt.
-      await tx
-        .update(documents)
-        .set({ userId: recipientUserId })
-        .where(and(eq(documents.workspaceId, workspaceId), eq(documents.userId, actorUserId)));
-      await tx
-        .update(hooks)
-        .set({ userId: recipientUserId, updatedAt })
-        .where(and(eq(hooks.workspaceId, workspaceId), eq(hooks.userId, actorUserId)));
-      // Workspace-scoped vault rows follow. User-scoped rows stay
-      // with their owner (they're not part of the workspace).
-      await tx
-        .update(vault)
-        .set({ userId: recipientUserId, updatedAt })
-        .where(and(
-          eq(vault.workspaceId, workspaceId),
-          eq(vault.scope, 'workspace'),
-          eq(vault.userId, actorUserId),
-        ));
+      // Reassign the workspace's working state — every `move` table of
+      // WORKSPACE_TABLES — to the recipient. Only the previous owner's
+      // rows move: a row of another user stamped with this workspace
+      // id is not this workspace's to give away.
+      for (const t of workspaceMoveTables()) {
+        const filter = t.rowFilter ? sql` AND ${sql.raw(t.rowFilter)}` : sql``;
+        if (t.reencrypt) {
+          if (t.table !== 'vault') throw new Error(`transfer: no re-encryption path for ${t.table}`);
+          // Vault secrets are encrypted under a key derived from their
+          // owner; rewriting `user_id` alone would leave them unreadable.
+          const rows = await tx
+            .select()
+            .from(vault)
+            .where(and(eq(vault.workspaceId, workspaceId), eq(vault.scope, 'workspace'), eq(vault.userId, actorUserId)));
+          for (const row of rows) {
+            await tx
+              .update(vault)
+              .set({ ...reencryptVaultRowForOwner(row, recipientUserId), userId: recipientUserId, updatedAt: new Date() })
+              .where(eq(vault.id, row.id));
+          }
+          continue;
+        }
+        await tx.execute(sql`
+          UPDATE ${sql.identifier(t.table)} SET ${sql.identifier(t.ownerColumn)} = ${recipientUserId}
+          WHERE workspace_id = ${workspaceId} AND ${sql.identifier(t.ownerColumn)} = ${actorUserId}${filter}
+        `);
+      }
 
+      try {
+        moveWorkspaceFiles(from, to);
+      } catch (err) {
+        throw new OrgWorkspaceError('files_conflict', `workspace files could not be moved: ${(err as Error).message}`);
+      }
+      filesMoved = true;
       return updated;
+    }).catch((err) => {
+      // The commit failed after the rename: put the files back.
+      if (filesMoved) moveWorkspaceFiles(to, from);
+      throw err;
     }).then(async (result) => {
+      noteWorkspaceRows([result]);
       await auditRepository.log({
         userId: actorUserId,
         action: 'settings_changed',

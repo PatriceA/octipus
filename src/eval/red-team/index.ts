@@ -285,7 +285,10 @@ async function sendViaProvider(
     const { getLiteLLMClient } = await import('@/models/litellm-client');
     const router = getProviderRouter();
     const registry = getModelRegistry();
-    const modelConfig = (await registry.getModel(modelId)) ?? (await registry.getModelByModelId(modelId));
+    // Install rows only: an operator's run never spends a user's personal key (§8.1).
+    const named = await registry.getModel(modelId);
+    if (named?.ownerUserId) throw new Error(`Model '${modelId}' is a personal model; red-team runs use install models only`);
+    const modelConfig = named ?? (await registry.getModelByModelId(modelId));
     const resolvedProvider = await router.resolveProvider(modelConfig?.modelId ?? modelId);
 
     const messages = [] as Array<{ role: 'system' | 'user' | 'assistant'; content: string; timestamp: Date }>;
@@ -296,6 +299,7 @@ async function sendViaProvider(
 
     const completeOpts = {
       model: modelConfig?.modelId ?? modelId,
+      modelConfigName: modelConfig?.name,
       messages,
       temperature: 0.3,
       maxTokens: 1024,
@@ -371,6 +375,13 @@ export async function runRedTeam(options?: RunRedTeamOptions): Promise<EvalSuite
     throw new Error(
       'Red-team runner: no model resolved. Pass --model <id> or register a model and set one as default.',
     );
+  }
+  // Install rows only (coworking spec §8.1): fail before the first test, not in each.
+  if (!dryRun && resolvedModel) {
+    const { getModelRegistry } = await import('@/models');
+    if (await getModelRegistry().isPersonalModelName(resolvedModel)) {
+      throw new Error(`Red-team runner: '${resolvedModel}' is a personal model; red-team runs use install models only.`);
+    }
   }
 
   // Generate tests

@@ -20,6 +20,7 @@ import { auditRepository } from '@/db/repositories/audit-repository';
 import { userRepository } from '@/db/repositories/user-repository';
 import type { PasskeyCredential } from '@/db/schema/users';
 import { securityLogger } from '@/utils/logger';
+import { isRemoteUser } from '@/security/user-kinds';
 
 // Redis-backed challenge storage with 5-minute TTL
 const challengeCache = new Cache(300);
@@ -47,6 +48,7 @@ export class PasskeyAuth {
     if (!user) {
       throw new Error('User not found');
     }
+    if (isRemoteUser(user)) throw new Error('Members from other installs cannot sign in here');
 
     // Get existing credentials to exclude
     const existingCredentials = (user.passkeyCredentials as PasskeyCredential[]).map((cred) => ({
@@ -137,6 +139,8 @@ export class PasskeyAuth {
 
     if (userId) {
       const user = await userRepository.findById(userId);
+      // A remote member (S7) never signs in here.
+      if (isRemoteUser(user)) throw new Error('Members from other installs cannot sign in here');
       if (user) {
         allowCredentials = (user.passkeyCredentials as PasskeyCredential[]).map((cred) => ({
           id: cred.id,
@@ -182,6 +186,10 @@ export class PasskeyAuth {
     const user = await userRepository.findById(userId);
     if (!user) {
       throw new Error('User not found');
+    }
+    if (isRemoteUser(user)) {
+      await auditRepository.logLoginFailed(user.username, ipAddress, 'Remote member');
+      throw new Error('Members from other installs cannot sign in here');
     }
 
     const credentials = user.passkeyCredentials as PasskeyCredential[];

@@ -59,7 +59,7 @@ vi.mock('node:child_process', async importOriginal => mockChildProcess(await imp
 vi.mock('@/models/model-registry', () => ({
   getModelRegistry: () => ({ getModel: async () => ({ metadata: { cliAgent: fixture.cliAgent } }), getModelByModelId: async () => ({}) }),
 }));
-vi.mock('@/models/quota-tracker', () => ({ getQuotaTracker: () => ({
+vi.mock('@/models/quota-tracker', () => ({ cliQuotaKey: (provider: string) => provider, getQuotaTracker: () => ({
   getStatus: async () => ({ exhausted: fixture.quotaExhausted }),
   markExhausted: async () => { fixture.quotaExhausted = true; },
 }) }));
@@ -142,7 +142,7 @@ function makeWorker(model: string, opts: { sessionId: string; model?: string; pe
   fixture.history = opts.history ?? [];
   makeSession(opts.sessionId, fixture.dir);
 
-  const context: AgentContext = {
+  const context: AgentContext = { space: null, trigger: 'user', funding: 'own', 
     id: `agent-${opts.sessionId}-${Math.random().toString(36).slice(2)}`,
     sessionId: opts.sessionId, userId: 'u', workspaceId: 'w', root: true,
     model, role: 'general', topic: 'general', status: 'idle',

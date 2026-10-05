@@ -18,6 +18,7 @@
  */
 import { Elysia } from '@/api/http';
 import { getConfig } from '@/config';
+import { recordedClientIp } from '@/security/client-ip';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import type { Principal } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
@@ -49,6 +50,15 @@ function shouldAudit(method: string, pathname: string): boolean {
   return true;
 }
 
+/**
+ * The path as recorded. A space invite token is a bearer secret stored only as
+ * a hash (docs/plans/coworking-spec.md I8), so it never lands in the audit log
+ * in the clear either.
+ */
+export function auditedPath(pathname: string): string {
+  return pathname.replace(/^\/api\/invites\/[^/]+/, '/api/invites/[token]');
+}
+
 /** Map an HTTP path to a coarse resource_type for filtering. */
 export function resourceTypeFromPath(pathname: string): string | undefined {
   // /api/<resource>/... → <resource>
@@ -64,12 +74,6 @@ export function resourceTypeFromPath(pathname: string): string | undefined {
 function getPrincipal(ctx: unknown): Principal | null {
   const p = (ctx as { principal?: Principal }).principal;
   return p ?? null;
-}
-
-function getClientIp(headers: Headers): string | undefined {
-  const xff = headers.get('x-forwarded-for');
-  if (xff) return xff.split(',')[0]?.trim();
-  return headers.get('x-real-ip') ?? undefined;
 }
 
 /**
@@ -99,7 +103,7 @@ export async function writeApiAudit(args: {
   const impersonating = !!principal?.actorUserId;
   const baseDetails: Record<string, unknown> = {
     method,
-    path: pathname,
+    path: auditedPath(pathname),
     status,
     duration: durationMs,
     principalKind: principal?.kind ?? 'anonymous',
@@ -159,7 +163,7 @@ export const auditShadowMiddleware = new Elysia({ name: 'audit-shadow' })
         pathname: url.pathname,
         status,
         durationMs,
-        ipAddress: getClientIp(ctx.request.headers),
+        ipAddress: recordedClientIp(ctx.request, ctx.socketAddress),
         userAgent: ctx.request.headers.get('user-agent') ?? undefined,
       });
     } catch (err) {

@@ -5,7 +5,7 @@ import { coreLogger } from '@/utils/logger';
 import { killProcessTree, posixShellArgv, whichSync, windowsCmdShim } from '@/utils/proc';
 import { resolve } from 'node:path';
 import { tokenizeSafe } from './policy';
-import type { ShellExecResult, ShellOperations } from './operations';
+import type { ShellEnvOptions, ShellExecResult, ShellOperations } from './operations';
 
 const MAX_OUTPUT_SIZE = 1024 * 1024; // 1MB
 
@@ -66,6 +66,13 @@ export function resolveAllowNetwork(options: { unsafe?: boolean; allowNetwork?: 
   return options.allowNetwork === true;
 }
 
+/** A command's environment: the inherited one without `unsetEnv`, `env` laid over it. */
+function childEnv(options: { env?: Record<string, string> } & ShellEnvOptions): Record<string, string> {
+  const env = buildChildEnv();
+  for (const k of options.unsetEnv ?? []) delete env[k];
+  return { ...env, ...options.env };
+}
+
 export class LocalShellOperations implements ShellOperations {
   async exec(
     command: string,
@@ -77,7 +84,7 @@ export class LocalShellOperations implements ShellOperations {
       signal?: AbortSignal;
       unsafe?: boolean;
       allowNetwork?: boolean;
-    } = {},
+    } & ShellEnvOptions = {},
   ): Promise<ShellExecResult> {
     // `cd <dir> && <cmd>` is the one metacharacter idiom models produce on
     // nearly every test run, and refusing it costs two round trips (measured
@@ -129,7 +136,7 @@ export class LocalShellOperations implements ShellOperations {
     const { wrapCommand } = await import('@/security/shell-sandbox');
     let wrap: ReturnType<typeof wrapCommand>;
     try {
-      wrap = wrapCommand(baseArgv, { workspaceRoot: cwd, allowNetwork: resolveAllowNetwork(options), path: options.env?.PATH });
+      wrap = wrapCommand(baseArgv, { workspaceRoot: cwd, allowNetwork: resolveAllowNetwork(options), path: options.env?.PATH, extraReadWrite: options.extraReadWrite });
     } catch (error) {
       throw new ToolNotExecutedError('shell', error instanceof Error ? error.message : String(error), { cause: error });
     }
@@ -157,7 +164,7 @@ export class LocalShellOperations implements ShellOperations {
       // the rule and turned the lane red.
       let child: ChildProcessWithoutNullStreams;
       try {
-        const env = buildChildEnv(options.env);
+        const env = childEnv(options);
         const run = windowsCmdShim(finalArgv, env, process.platform, cwd);
         // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn; shell only for a Windows .cmd with every arg quoted and cmd-expanding chars refused (windowsCmdShim)
         child = spawn(run.argv[0], run.argv.slice(1), {
@@ -256,7 +263,7 @@ export class LocalShellOperations implements ShellOperations {
   async spawnBackground(
     command: string,
     cwd: string,
-    options: { env?: Record<string, string>; unsafe?: boolean; allowNetwork?: boolean } = {},
+    options: { env?: Record<string, string>; unsafe?: boolean; allowNetwork?: boolean; onExit?: () => void } & ShellEnvOptions = {},
   ): Promise<{ pid: number | undefined }> {
     const argv = options.unsafe ? null : tokenizeSafe(command);
 
@@ -282,11 +289,13 @@ export class LocalShellOperations implements ShellOperations {
     const wrap = wrapCommand(baseArgv, {
       workspaceRoot: cwd,
       allowNetwork: resolveAllowNetwork(options),
+      extraReadWrite: options.extraReadWrite,
     });
+    const done = () => { wrap.cleanup(); options.onExit?.(); };
 
-    const env = buildChildEnv(options.env);
+    const env = childEnv(options);
     let run: ReturnType<typeof windowsCmdShim>;
-    try { run = windowsCmdShim(wrap.argv, env, process.platform, cwd); } catch (error) { wrap.cleanup(); throw new ToolNotExecutedError('shell', (error as Error).message, { cause: error }); }
+    try { run = windowsCmdShim(wrap.argv, env, process.platform, cwd); } catch (error) { done(); throw new ToolNotExecutedError('shell', (error as Error).message, { cause: error }); }
     // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn; shell only for a Windows .cmd with every arg quoted and cmd-expanding chars refused (windowsCmdShim)
     const child = spawn(run.argv[0], run.argv.slice(1), {
       cwd,
@@ -304,8 +313,8 @@ export class LocalShellOperations implements ShellOperations {
     //
     // Detached process is fire-and-forget; release the sandbox handle once the
     // child has exited so we don't leak any wrapper state.
-    child.on('close', () => wrap.cleanup());
-    child.on('error', () => wrap.cleanup());
+    child.on('close', done);
+    child.on('error', done);
     child.unref();
 
     return { pid: child.pid };

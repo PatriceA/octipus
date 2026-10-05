@@ -7,10 +7,11 @@ import {
   resolveTarget,
 } from '@/channels/ownership';
 import { getAgentManager } from '@/core/agent-manager';
-import type { AgentContext, Hook } from '@/core/types';
+import type { Hook } from '@/core/types';
 import { coreLogger } from '@/utils/logger';
 import type { TriggerContext } from './triggers';
 import { summarizeWebhookPayload } from './webhook-summary';
+import { canActInSession } from '@/core/rooms/access';
 
 export interface ActionResult {
   success: boolean;
@@ -276,7 +277,7 @@ async function isForeignSession(sessionId: string, userId: string): Promise<bool
   if (!SESSION_UUID_RE.test(sessionId)) return false;
   const { sessionRepository } = await import('@/db/repositories/session-repository');
   const session = await sessionRepository.findById(sessionId);
-  return Boolean(session && session.userId !== userId);
+  return Boolean(session && !(await canActInSession(session, userId, 'chat')));
 }
 
 /**
@@ -404,7 +405,7 @@ async function executeSpawnAgent(
     // A heartbeat hook routes on the 'heartbeat' channel so the run is tagged
     // origin='heartbeat' (RunContext) for auditability; everything else is 'hook'.
     const channel = hook?.trigger === 'heartbeat' ? 'heartbeat' : 'hook';
-    const result = await rootAgent.handleMessage(sessionId, userId, message, channel);
+    const result = await rootAgent.handleMessage(sessionId, userId, message, channel, [], undefined, undefined, undefined, 'schedule');
 
     // For orchestrated hooks, notify the owner with the result if either:
     // - notifyRoot is true (scheduled tasks that should deliver results)
@@ -427,9 +428,18 @@ async function executeSpawnAgent(
   const agentConfig = getConfig().agent;
   const hookTimeout = Math.max(agentConfig.defaultTimeout * 2, 1800000); // At least 30 min for hooks
 
+  // The hook session's workspace (the user's default when the session has
+  // none or does not exist yet), as the orchestrated and heartbeat paths do.
+  // A hook with no user behind it (`'system'`) has no workspace. A schedule
+  // has no producer in a space: a space session refuses (§5.6).
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const { resolveAgentScope, withAgentUsage } = await import('@/core/agent/context');
+  const scope = await resolveAgentScope({ session: await sessionRepository.findById(sessionId), userId, trigger: 'schedule' });
+
   const agent = await agentManager.spawn({
     sessionId,
     userId,
+    ...scope,
     topic: config.agentTopic,
     model: config.agentModel,
     systemPrompt: prompt,
@@ -438,7 +448,7 @@ async function executeSpawnAgent(
 
   // Run the agent and optionally notify owner with the result
   if (message) {
-    agent.run(message).then(async (result) => {
+    withAgentUsage(userId, scope, () => agent.run(message)).then(async (result) => {
       if (config.notifyOwner && userId && result) {
         try {
           await notifyOwnerWithResult(userId, result);
@@ -482,35 +492,30 @@ async function runRoleHeartbeat(
 ): Promise<ActionResult> {
   const { ROLE_CONFIGS } = await import('@/core/agent/roles');
   if (!Object.hasOwn(ROLE_CONFIGS, role)) return { success: false, error: `Unknown role "${role}" on heartbeat hook` };
-  let workspaceId: string | null = null;
-  try {
-    const { getOrgWorkspaceManager } = await import('@/security/orgs');
-    workspaceId = (await getOrgWorkspaceManager().ensureDefaultWorkspace(userId)).id;
-  } catch (err) {
-    coreLogger.debug({ err, userId }, 'role heartbeat: workspace resolve failed, proceeding with null');
-  }
-  const now = new Date();
-  const parent: import('@/core/types').AgentContext = {
+  // The hook session's workspace (the user's default when the session has
+  // none or does not exist yet), owned by the user; never unscoped.
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const { buildAgentContext, resolveAgentScope, withAgentUsage } = await import('@/core/agent/context');
+  const session = await sessionRepository.findById(sessionId);
+  const scope = await resolveAgentScope({ session, userId, trigger: 'schedule' });
+  const parent = buildAgentContext({
     id: `heartbeat:${role}:${sessionId}`,
     sessionId,
     userId,
-    workspaceId,
+    scope,
     topic: config.agentTopic || role,
     model: '',
     role,
     root: false,
     attended: false,
     status: 'running',
-    createdAt: now,
-    updatedAt: now,
-    metadata: {},
-  };
+  });
   const { getAgentService } = await import('@/core/agent');
   const task = [prompt, message].filter(Boolean).join('\n\n');
-  const result = await getAgentService().spawnWorker(role, task, '', parent, {
+  const result = await withAgentUsage(userId, scope, () => getAgentService().spawnWorker(role, task, '', parent, {
     extraToolIds: ['tasks'],
     ...(config.agentModel ? { model: config.agentModel } : {}),
-  });
+  }));
   if (result && typeof result === 'object' && 'error' in result) {
     return { success: false, error: String((result as { error: unknown }).error) };
   }
@@ -643,23 +648,27 @@ async function executeTool(
   const ownSession = hook.sessionId && !(await isForeignSession(hook.sessionId, hook.userId))
     ? hook.sessionId
     : null;
-  const agentContext: AgentContext = {
-    id: crypto.randomUUID(),
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const { buildAgentContext, resolveAgentScope, withAgentUsage } = await import('@/core/agent/context');
+  const scope = await resolveAgentScope({
+    session: ownSession ? await sessionRepository.findById(ownSession) : null,
+    userId: hook.userId,
+    trigger: 'schedule',
+  });
+  const agentContext = buildAgentContext({
     sessionId: ownSession ?? crypto.randomUUID(),
     userId: hook.userId,
+    scope,
     topic: 'hook',
     model: 'default',
     role: 'general',
     // Nobody is there to approve anything: an ASK is refused, and tools that
     // reach outside (messaging) apply their unattended rules.
     attended: false,
-    status: 'running' as const,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-    metadata: {},
-  };
+    status: 'running',
+  });
 
-  const result = await tool.execute(params, agentContext);
+  const result = await withAgentUsage(hook.userId, scope, () => tool.execute(params, agentContext));
 
   return { success: true, data: result };
 }

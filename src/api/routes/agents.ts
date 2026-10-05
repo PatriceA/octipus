@@ -1,17 +1,62 @@
 import { Elysia, t } from '@/api/http';
+import { inheritScope, recheckSponsor, recheckSpace } from '@/core/agent/context';
+import type { AgentContext } from '@/core/types';
+import { type AgentScope, resolveAgentScope, withAgentUsage } from '@/core/agent/context';
+import { SpaceError, spaceErrorStatus } from '@/security/space-access';
 import { apiContext } from '@/api/context';
 import { getAgentManager } from '@/core/agent-manager';
 import { getRouter } from '@/core/router';
+import { isRegisteredModel, resolveModel } from '@/models/resolve-model';
 import { sessionRepository } from '@/db/repositories/session-repository';
-import { scopedRepos } from '@/db/repositories/scoped';
+import { contentRepos } from '@/db/repositories/content';
 import { isAuthenticated } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
 import { readAgentCompletionReason } from '@/shared/agent-completion';
+import { getMembership, isSharedWorkspace } from '@/core/spaces/service';
+import { canActInSession } from '@/core/rooms/access';
+
+type LiveContext = { userId?: string | null; workspaceId?: string | null };
+
+/**
+ * May `user` reach a live agent (its details, events, stop, removal)? Its
+ * owner may — in a space only while still a member (I5). An admin reaches
+ * another user's live agent only outside spaces: admins reach spaces through
+ * membership or audited impersonation, and a space agent's tool output is
+ * space content (I2).
+ */
+async function mayReachLive(user: { id: string; isAdmin: boolean }, context: LiveContext): Promise<boolean> {
+  const inSpace = !!context.workspaceId && (await isSharedWorkspace(context.workspaceId));
+  if (context.userId === user.id) return !inSpace || (await getMembership(user.id, context.workspaceId as string)) !== null;
+  return user.isAdmin && !inSpace;
+}
+
+/**
+ * May `user` run their live agent again (`/:id/message`)? Outside spaces,
+ * yes. In a space, the membership is re-read the way every spawn re-reads
+ * it (`recheckSpace`, §5.6): only while their role may run the agent and
+ * the space is not archived — and a sponsored agent only while the space
+ * still pays for it, under the same sponsor (`recheckSponsor`, §9.1). A
+ * space agent built without its scope never runs. The scope to run under
+ * (the sponsor as it is now), or null.
+ */
+async function mayRunLive(userId: string, context: LiveContext & Pick<AgentContext, 'workspaceId' | 'space' | 'trigger' | 'funding' | 'sponsor'>): Promise<AgentScope | null> {
+  if (context.space) {
+    try {
+      await recheckSpace(userId, context.space);
+      return { ...inheritScope(context), sponsor: await recheckSponsor(context) };
+    } catch (err) {
+      if (err instanceof SpaceError) return null;
+      throw err;
+    }
+  }
+  if (context.workspaceId && (await isSharedWorkspace(context.workspaceId))) return null;
+  return inheritScope(context);
+}
 
 /**
  * Agents — Phase 1a multi-user conversion.
  *
- * DB lookups go through `scopedRepos(principal).agents`. The in-memory
+ * DB lookups go through `contentRepos(principal).agents`. The in-memory
  * agent manager continues to enforce ownership on `agent.getContext().userId`
  * (the live source of truth for running agents). The two layers compose:
  * a non-admin can only see live agents whose `context.userId` matches and
@@ -32,14 +77,16 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       }
 
       const agentManager = getAgentManager();
-      let liveAgents = agentManager.list();
+      // Each user sees their own live agents; an admin also sees other
+      // users' agents outside spaces (never a space's, I2).
+      const listed = agentManager.list();
+      const reachable = await Promise.all(listed.map((a) => mayReachLive(user, {
+        userId: a.userId,
+        workspaceId: agentManager.get(a.id)?.getContext().workspaceId ?? null,
+      })));
+      let liveAgents = listed.filter((_, i) => reachable[i]);
 
-      // Non-admin users can only see their own live agents
-      if (!user.isAdmin) {
-        liveAgents = liveAgents.filter((a) => a.userId === user.id);
-      }
-
-      const repos = scopedRepos(principal);
+      const repos = contentRepos(principal);
 
       // Pagination over the (potentially unbounded) historical rows. Live
       // agents are a small, active set and are always surfaced on the first
@@ -99,12 +146,11 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
             repos.agents.findBySessions(ids, limit, offset),
             repos.agents.countBySessions(ids),
           ]);
-        } else if (user.isAdmin) {
-          // Admin sees everything
-          const { agentRepository } = await import('@/db/repositories/agent-repository');
+        } else if (user.isAdmin && repos.kind === 'personal') {
+          // Admin sees every user's history — outside spaces (I2).
           [dbAgents, total] = await Promise.all([
-            agentRepository.listRecent(limit, offset),
-            agentRepository.countAll(),
+            repos.agents.listAllAdmin(limit, offset),
+            repos.agents.countAllAdmin(),
           ]);
         } else {
           [dbAgents, total] = await Promise.all([
@@ -170,7 +216,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
 
       if (agent) {
         const context = agent.getContext();
-        if (!user.isAdmin && context.userId !== user.id) {
+        if (!(await mayReachLive(user, context))) {
           return { error: 'Agent not found' };
         }
         // Same duration logic as `list()` — freeze at completedAt for finished
@@ -197,7 +243,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       }
 
       // Fall back to DB history — scoped repo collapses cross-tenant to null.
-      const dbAgent = await scopedRepos(principal).agents.findById(params.id);
+      const dbAgent = await contentRepos(principal).agents.findById(params.id);
       if (!dbAgent) {
         return { error: 'Agent not found' };
       }
@@ -229,18 +275,51 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
   // Spawn a new agent
   .post(
     '/',
-    async ({ user, principal, body }) => {
+    async ({ user, principal, body, set }) => {
       if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
 
       const { sessionId, topic, model, systemPrompt, message } = body;
 
-      // Verify session ownership through the scoped repo — cross-tenant
-      // requests come back null and surface as "Session not found".
-      const session = await scopedRepos(principal).sessions.findById(sessionId);
-      if (!session) {
+      // The body names the session, so the session decides the workspace —
+      // a member's private chat in a space included (the header does not
+      // make this route act on a space). Another user's session is "Session
+      // not found"; in a space, the agent runs only for a role that may run
+      // it (a viewer gets 403, a removed member 404, an archived space 409),
+      // through the one scope resolver every spawner uses (§5.6).
+      const session = await sessionRepository.findById(sessionId);
+      if (!(await canActInSession(session, user.id, 'chat'))) {
+        set.status = 404;
         return { error: 'Session not found' };
+      }
+      let scope: AgentScope;
+      try {
+        scope = await resolveAgentScope({ session, userId: user.id, trigger: 'user' });
+      } catch (err) {
+        if (err instanceof SpaceError) {
+          set.status = spaceErrorStatus(err);
+          return { error: err.message, code: err.code };
+        }
+        throw err;
+      }
+
+      // An explicit model resolves only to a row this user may use (coworking
+      // spec §8.2): an install/org row or their own personal row. An install
+      // or own row they may not use here (disabled, another org's, not usable
+      // in this space) is refused, never passed through, and so is any name in
+      // the personal `u/` namespace that is not the caller's own.
+      let modelId = model;
+      let modelName: string | undefined;
+      if (model) {
+        const row = await resolveModel({ userId: user.id, name: model, inSpace: !!scope.space, spaceRole: scope.space?.role, sponsor: scope.sponsor });
+        if (row) {
+          modelId = row.modelId;
+          modelName = row.name;
+        } else if (await isRegisteredModel(model, user.id)) {
+          set.status = 400;
+          return { error: `Model '${model}' is not available` };
+        }
       }
 
       const agentManager = getAgentManager();
@@ -249,14 +328,18 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
         const agent = await agentManager.spawn({
           sessionId,
           userId: user.id,
+          ...scope,
           topic,
-          model,
+          model: modelId,
+          modelName,
           systemPrompt,
+          // REST has no approval relay (`channelCanPrompt('api')`).
+          attended: false,
         });
 
         // Start the agent with initial message if provided
         if (message) {
-          agent.run(message).catch((error) => {
+          withAgentUsage(user.id, scope, () => agent.run(message)).catch((error) => {
             apiLogger.error({ error, agentId: agent.getContext().id }, 'Agent run failed');
           });
         }
@@ -289,7 +372,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
   // Send message to agent
   .post(
     '/:id/message',
-    async ({ user, principal, params, body }) => {
+    async ({ user, principal, params, body, set }) => {
       if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
@@ -302,16 +385,25 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       }
 
       const context = agent.getContext();
-      if (!user.isAdmin && context.userId !== user.id) {
+      if (!(await mayReachLive(user, context))) {
         return { error: 'Agent not found' };
+      }
+      // A run, not a read: in a space the role must allow it, and an
+      // archived space runs nothing.
+      const runScope = await mayRunLive(user.id, context);
+      if (!runScope) {
+        set.status = 403;
+        return { error: 'Your role in this space cannot run the agent, the space is archived, or its sponsor no longer pays for this agent' };
       }
 
       if (agent.getStatus() !== 'idle' && agent.getStatus() !== 'completed') {
         return { error: 'Agent is busy' };
       }
 
-      // Run agent with message
-      agent.run(body.message).catch((error) => {
+      // Run agent with message, inside its usage context and, when it is
+      // sponsored, its sponsor's (§9.1): the sponsor models' keys are
+      // released only there, as for the turn that spawned it.
+      withAgentUsage(context.userId, runScope, () => agent.run(body.message)).catch((error) => {
         apiLogger.error({ error, agentId: params.id }, 'Agent run failed');
       });
 
@@ -344,7 +436,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       }
 
       const context = agent.getContext();
-      if (!user.isAdmin && context.userId !== user.id) {
+      if (!(await mayReachLive(user, context))) {
         return { error: 'Agent not found' };
       }
 
@@ -378,7 +470,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       }
 
       const context = agent.getContext();
-      if (!user.isAdmin && context.userId !== user.id) {
+      if (!(await mayReachLive(user, context))) {
         return { error: 'Agent not found' };
       }
 
@@ -414,7 +506,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       // events, so preferring memory there silently truncates its history.
       if (agent && !persisted) {
         const context = agent.getContext();
-        if (!user.isAdmin && context.userId !== user.id) {
+        if (!(await mayReachLive(user, context))) {
           return { error: 'Agent not found' };
         }
 
@@ -437,7 +529,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
 
       // Fall back to DB history — but first verify the principal owns
       // this agent so we don't leak event streams cross-tenant.
-      const dbAgent = await scopedRepos(principal).agents.findById(params.id);
+      const dbAgent = await contentRepos(principal).agents.findById(params.id);
       if (!dbAgent) {
         return { error: 'Agent not found' };
       }
@@ -481,9 +573,12 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       }
 
       const router = getRouter();
-      const decision = await router.route(body.message, body.preferredModel);
-
-      return decision;
+      try {
+        // `preferredModel` resolves with this user's visibility (§8.2).
+        return await router.route(body.message, body.preferredModel, { userId: user.id });
+      } catch (err) {
+        return { error: (err as Error).message };
+      }
     },
     {
       body: t.Object({

@@ -2,7 +2,6 @@ export { ConnectionManager, type GatewayConnection } from './connection-manager'
 export { connectEventBridge } from './event-bridge';
 export { GatewayEventBus } from './event-bus';
 export { GatewayHub, getGatewayHub } from './hub';
-export { ensureLocalToken, regenerateLocalToken, validateLocalAuth } from './local-auth';
 export { wireMessageHandler } from './message-handler';
 export { type PresenceEntry, type PresenceStats, PresenceTracker } from './presence';
 export {

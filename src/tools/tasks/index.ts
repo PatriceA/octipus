@@ -6,8 +6,8 @@ import { ACTIVE_TASK_STATUSES, assigneePatch, TASK_ASSIGNEE_KINDS, TASK_STATUSES
 import { type Nested, nestTasks, normalizeEstimate, toLookup, waitingOn, waitingReason } from '@/core/tasks/structure';
 import { resolveUserTimezone } from '@/core/tasks/timezone';
 import type { AgentContext, ToolManifest } from '@/core/types';
-import { scopedRepos } from '@/db/repositories/scoped';
-import type { Principal } from '@/security/principal';
+import { contentRepos } from '@/db/repositories/content';
+import { agentPrincipal } from '@/security/principal';
 import { BaseTool, createParameterSchema } from '../base-tool';
 
 /**
@@ -61,7 +61,7 @@ export class TasksTool extends BaseTool {
         limit: { type: 'number', description: 'Max tasks to return for view "next" (default 10)' },
       }),
       async (args, context) => {
-        const principal = this.principalFor(context);
+        const principal = agentPrincipal(context);
         if (args.view === 'next') {
           const limit = Math.max(1, Math.min(50, Math.trunc(Number(args.limit) || 10)));
           const { timezone, ranked } = await nextActions(principal, { category: args.category as string | undefined, limit });
@@ -72,7 +72,7 @@ export class TasksTool extends BaseTool {
           dueBefore = new Date();
           dueBefore.setHours(23, 59, 59, 999);
         }
-        const repo = scopedRepos(principal).tasks;
+        const repo = contentRepos(principal).tasks;
         const status = args.status as string | undefined;
         const [tasks, active] = await Promise.all([
           repo.listOwn({
@@ -108,7 +108,7 @@ export class TasksTool extends BaseTool {
         source: { type: 'string', description: 'Provenance', enum: ['user', 'agent', 'reader', 'research', 'email'], default: 'agent' },
       }),
       async (args, context) => {
-        const principal = this.principalFor(context);
+        const principal = agentPrincipal(context);
         try {
           const values = {
             title: args.title as string,
@@ -123,7 +123,7 @@ export class TasksTool extends BaseTool {
             source: normalizeSource(args.source),
             sourceRef: context.sessionId ? { sessionId: context.sessionId } : undefined,
           };
-          const task = await scopedRepos(principal).tasks.create(values);
+          const task = await contentRepos(principal).tasks.create(values);
           await auditAgentTaskMutation(context, task.id, 'create', changedTaskFields(values));
           return { created: true, task: summarize(task) };
         } catch (err) {
@@ -145,7 +145,7 @@ export class TasksTool extends BaseTool {
         source: { type: 'string', description: 'Provenance', enum: ['user', 'agent', 'reader', 'research', 'email'], default: 'agent' },
       }),
       async (args, context) => {
-        const principal = this.principalFor(context);
+        const principal = agentPrincipal(context);
         const parsed = parseBacklog(args.items);
         if (!parsed.ok) return { error: parsed.error };
         // addBacklog writes as it goes, so a failure partway still leaves rows:
@@ -185,8 +185,8 @@ export class TasksTool extends BaseTool {
         assigneeRef: { type: 'string', description: 'The user / role / node id (with assigneeKind)' },
       }),
       async (args, context) => {
-        const principal = this.principalFor(context);
-        const repo = scopedRepos(principal).tasks;
+        const principal = agentPrincipal(context);
+        const repo = contentRepos(principal).tasks;
         const existing = await repo.findById(args.id as string);
         if (!existing) return { error: 'Task not found' };
         const status = args.status as string | undefined;
@@ -228,8 +228,8 @@ export class TasksTool extends BaseTool {
         id: { type: 'string', description: 'Task id', required: true },
       }),
       async (args, context) => {
-        const principal = this.principalFor(context);
-        const repo = scopedRepos(principal).tasks;
+        const principal = agentPrincipal(context);
+        const repo = contentRepos(principal).tasks;
         const existing = await repo.findById(args.id as string);
         if (!existing) return { error: 'Task not found' };
         // Idempotent: keep the original completedAt if already done.
@@ -253,7 +253,7 @@ export class TasksTool extends BaseTool {
         release: { type: 'boolean', description: 'Give the claim back instead of taking it' },
       }),
       async (args, context) => {
-        const repo = scopedRepos(this.principalFor(context)).tasks;
+        const repo = contentRepos(agentPrincipal(context)).tasks;
         const actor = agentActor(context);
         if (args.release) {
           const released = await repo.release(args.id as string, actor);
@@ -283,7 +283,7 @@ export class TasksTool extends BaseTool {
       async (args, context) => {
         const body = typeof args.body === 'string' ? args.body.trim().slice(0, 10_000) : '';
         if (!body) return { error: 'Comment body is required' };
-        const comment = await scopedRepos(this.principalFor(context)).tasks.addComment(args.id as string, {
+        const comment = await contentRepos(agentPrincipal(context)).tasks.addComment(args.id as string, {
           authorKind: 'agent',
           authorRef: agentActor(context),
           body,
@@ -293,22 +293,6 @@ export class TasksTool extends BaseTool {
       },
       { requiresPermission: true, permissionAction: 'write' },
     );
-  }
-
-  /** Build a non-admin principal scoped to the calling user. Own tasks only. */
-  private principalFor(context: AgentContext): Principal {
-    if (!context.userId) {
-      throw new Error('Tasks tool requires an authenticated user context (userId missing)');
-    }
-    return {
-      kind: 'user',
-      userId: context.userId,
-      username: context.userId,
-      isAdmin: false,
-      sessionToken: null,
-      roles: ['user'],
-      workspaceId: context.workspaceId ?? null,
-    };
   }
 }
 

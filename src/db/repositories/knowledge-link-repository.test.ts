@@ -133,7 +133,7 @@ describe('KnowledgeLinkRepository', () => {
       tags: ['target-note'], // same ref as the wikilink, but a tag
     });
     const noteId = randomUUID();
-    const resolved = await repo.resolveTo({ userId, toRef: 'target-note', toType: 'note', toId: noteId });
+    const resolved = await repo.resolveTo({ scope: userId, toRef: 'target-note', toType: 'note', toId: noteId });
     expect(resolved).toBe(1); // only the reference edge, not the tag edge
 
     const out = await repo.getOutgoing(userId, 'note', fromId);

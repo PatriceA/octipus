@@ -1,9 +1,11 @@
 import { getKnowledgeLinkRepository, type KnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
-import { getNoteRepository, type NoteRepository } from '@/db/repositories/note-repository';
+import { getNoteRepository, type NoteRepository, type NoteScope, noteStoreFor } from '@/db/repositories/note-repository';
 import { type EmbeddingService, getEmbeddingService } from '@/core/rag/embeddings';
+import { noteKnowledgeScope } from '@/core/rag/knowledge-scope';
 import { SECURITY_PREAMBLE } from '@/core/agent/roles';
 import { choiceOf, decide, preferDecision, type DecisionSite } from '@/models/decision';
 import { getLiteLLMClient } from '@/models/litellm-client';
+import { withInstallUsage } from '@/models/providers/instrumented';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
 import { entityRefFromSourceId } from './graph';
@@ -145,13 +147,13 @@ export class LinkResolverService {
    * only ever the leftovers.
    */
   async resolveGhostRefs(params: {
-    userId: string;
-    workspaceId: string | null;
+    /** The saved note's scope: candidates come from it only (§5.5). */
+    scope: NoteScope;
     /** The saved note — never a candidate for its own links. */
     noteId: string;
     wikilinks: WikiLink[];
   }): Promise<GhostResolution[]> {
-    const { userId, workspaceId, noteId } = params;
+    const { scope, noteId } = params;
 
     // Dedup by ref, keeping the author's display text for the prompt: the
     // slug (`octipus-architecture`) is a worse query than what they typed.
@@ -173,7 +175,7 @@ export class LinkResolverService {
     let examined = 0;
     for (const [ref, target] of byRef) {
       // Exact match wins and needs no guessing.
-      if (await this.notes.getBySlug(userId, workspaceId, ref)) continue;
+      if (await noteStoreFor(scope, this.notes).getBySlug(ref)) continue;
       if (examined >= MAX_REFS_PER_SAVE) {
         coreLogger.debug(
           { component: 'link-resolver', noteId, cap: MAX_REFS_PER_SAVE },
@@ -184,7 +186,7 @@ export class LinkResolverService {
       examined++;
 
       try {
-        const resolution = await this.resolveOne({ userId, workspaceId, noteId, ref, target, modelId: model.modelId });
+        const resolution = await this.resolveOne({ scope, noteId, ref, target, modelId: model.modelId });
         if (resolution) out.push(resolution);
       } catch (err) {
         // A guess that fails is not a save failure.
@@ -195,36 +197,37 @@ export class LinkResolverService {
   }
 
   private async resolveOne(params: {
-    userId: string;
-    workspaceId: string | null;
+    scope: NoteScope;
     noteId: string;
     ref: string;
     target: string;
     modelId: string;
   }): Promise<GhostResolution | null> {
-    const { userId, workspaceId, noteId, ref, target, modelId } = params;
+    const { scope, noteId, ref, target, modelId } = params;
+    const { userId } = scope;
 
-    // Blocking. Tenant-scoped to this user's notes, like link suggestions.
+    // Blocking. Scoped to the note's scope (the user's notes, or the
+    // space's), like link suggestions.
     const hits = await this.embeddings.hybridSearch(
+      noteKnowledgeScope(scope),
       target,
       MAX_CANDIDATES * 4,
       'note',
       undefined,
       MIN_CANDIDATE_SIMILARITY,
-      userId,
     );
     const blocked = selectCandidates(hits, noteId);
     if (blocked.length === 0) return null;
 
-    // Workspace boundary. The exact path is scoped by `getBySlug(userId,
-    // workspaceId, ref)`, so the guess path has to be too — otherwise a
+    // Workspace boundary. The exact path is scoped by the store's
+    // `getBySlug`, so the guess path has to be too — otherwise a
     // `[[Roadmap 2027]]` written in one workspace can bind to a "Roadmap" note
-    // that lives in another. The filter happens here rather than in the search
-    // because note chunks in `embeddings` carry no workspace column; the
-    // candidate notes themselves are the only authority.
-    const rows = await this.notes.getByIds(userId, blocked.map((c) => c.noteId));
+    // that lives in another. The candidate notes themselves are the
+    // authority: they are re-read in the scope, and a personal candidate must
+    // sit in the note's own workspace.
+    const rows = await this.notes.getByIds(scope, blocked.map((c) => c.noteId));
     const inScope = new Set(
-      rows.filter((n) => (n.workspaceId ?? null) === workspaceId).map((n) => n.id),
+      rows.filter((n) => (n.workspaceId ?? null) === scope.workspaceId).map((n) => n.id),
     );
     const candidates = blocked.filter((c) => inScope.has(c.noteId));
     if (candidates.length === 0) return null;
@@ -241,7 +244,7 @@ export class LinkResolverService {
 
     const chosen = candidates[match - 1];
     const edges = await this.links.resolveTo({
-      userId,
+      scope,
       toRef: ref,
       toType: 'note',
       toId: chosen.noteId,
@@ -261,7 +264,8 @@ export class LinkResolverService {
   /** LLM pair resolver: a 1-based candidate number as a label, or 'none'. */
   private async llmResolve(target: string, candidates: ResolverCandidate[], modelId: string, userId: string): Promise<string> {
     const list = candidates.map((c, i) => `${i + 1}. ${c.title}`).join('\n');
-    const result = await getLiteLLMClient().complete({
+    // Install work: stamped `install` (coworking spec §9.1).
+    const result = await withInstallUsage(() => getLiteLLMClient().complete({
       model: modelId,
       messages: [
         { role: 'system', content: RESOLVER_SYSTEM_PROMPT, timestamp: new Date() },
@@ -271,7 +275,7 @@ export class LinkResolverService {
       maxTokens: 50,
       responseFormat: { type: 'json_object' },
       userId,
-    });
+    }));
     return String(parseResolverMatch(result.content ?? '', candidates.length) ?? 'none');
   }
 }

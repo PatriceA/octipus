@@ -27,6 +27,34 @@ export interface ChannelBinding {
 }
 
 /**
+ * A personal model as its owner sees it (`/api/me/models`) — never the key.
+ * See `src/services/personal-models.ts` and coworking-spec §8.4.
+ */
+export interface PersonalModelSummary {
+  /** Row name, `u/<userId>/<slug>`. */
+  name: string;
+  slug: string;
+  provider: string;
+  modelId: string;
+  label: string | null;
+  endpoint: string | null;
+  isEnabled: boolean;
+  hasKey: boolean;
+  /** Token window and output limit (compaction thresholds derive from the window). */
+  contextWindow: number;
+  maxTokens: number;
+  /** Text lanes this row runs for its owner. */
+  topics: string[];
+}
+
+/** `GET /api/me/models`. */
+export interface PersonalModelsResponse {
+  models: PersonalModelSummary[];
+  providers: string[];
+  topics: string[];
+}
+
+/**
  * A group channel enrolment as the API returns it (`/api/me/group-channels`,
  * `/api/admin/group-channels`). See `src/channels/group-channels.ts`.
  */
@@ -40,6 +68,9 @@ export interface GroupChannelSummary {
   ownerName: string;
   /** False while the owner's account is deactivated: the bot is paused there. */
   ownerActive: boolean;
+  /** The space the channel is bound to (coworking §9.4): its threads are rooms there. Null when not bound. */
+  workspaceId: string | null;
+  spaceName: string | null;
   /** `mention`: speaks only when addressed; `listen`: offers help; `proactive`: may answer unasked. */
   mode: 'mention' | 'listen' | 'proactive';
   /** No unprompted posts in [start, end) local hours; null = none. */
@@ -53,4 +84,58 @@ export interface GroupChannelSummary {
   feedback: { up: number; down: number };
   createdAt: string;
   updatedAt: string;
+}
+
+// ── Coworking S5: funding, space budgets, My work, room modes ───────
+
+/** A space's budget as `GET/PUT /api/spaces/:id/budget` returns it (`SpendBudgetView` on the server). */
+export interface SpaceBudgetStatus {
+  id: string;
+  scopeKind: 'space' | 'space_member';
+  period: 'day' | 'month';
+  limitUsd: number;
+  warnRatio: number;
+  /** This period; the member cap shows the caller's own share. */
+  spentUsd: number;
+  percent: number;
+  state: 'ok' | 'warned' | 'paused';
+  resetsAt: string;
+}
+
+/** `PUT /api/spaces/:id/funding`. */
+export interface SpaceFundingSettingsView {
+  mode: 'own' | 'unattended' | 'sponsored';
+  sponsorUserId: string | null;
+  sponsorModels: string[];
+  warning?: string;
+}
+
+/** One task of "My work" (a `tasks` row, as the API sends it). */
+export interface MyWorkTask {
+  id: string;
+  title: string;
+  status: string;
+  priority: number;
+  dueAt: string | null;
+  workspaceId: string | null;
+}
+
+/** `GET /api/me/work`: open tasks assigned to me, grouped by space. */
+export interface MyWorkResponse {
+  groups: Array<{ workspaceId: string | null; name: string; kind: 'personal' | 'shared'; tasks: MyWorkTask[] }>;
+}
+
+export type RoomModeName = 'mention' | 'listen' | 'proactive';
+
+/** `GET/PUT /api/spaces/:id/rooms/:roomId/mode`. */
+export interface RoomModeView {
+  roomId: string;
+  mode: RoomModeName;
+  quietHoursStart: number | null;
+  quietHoursEnd: number | null;
+  timezone: string;
+  maxUnpromptedPerDay: number;
+  minMinutesBetween: number;
+  lastUnpromptedAt: string | null;
+  feedback: { up: number; down: number };
 }

@@ -66,9 +66,9 @@ beforeAll(async () => {
   );
 
   await executeRaw(
-    `INSERT INTO workspaces (id, user_id, slug, name) VALUES
-       ('${workspaceA}', '${aliceId}', 'a', 'A'),
-       ('${workspaceB}', '${aliceId}', 'b', 'B')`,
+    `INSERT INTO workspaces (id, user_id, slug, name, files_dir) VALUES
+       ('${workspaceA}', '${aliceId}', 'a', 'A', '${workspaceA}'),
+       ('${workspaceB}', '${aliceId}', 'b', 'B', '${workspaceB}')`,
   );
   // A qa task filed under workspace B: counted even when alice is in A.
   await executeRaw(

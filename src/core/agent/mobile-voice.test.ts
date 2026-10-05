@@ -2,7 +2,7 @@ import { beforeEach, expect, test, vi } from 'vitest';
 const fixture = vi.hoisted(() => ({ direct: vi.fn(), root: vi.fn(), messages: [] as any[] }));
 vi.mock('@/models/model-registry', () => ({ getModelRegistry: () => ({ getDefaultModel: async () => ({ modelId: 'test-model' }) }) }));
 vi.mock('./model-selector', () => ({ ModelSelector: class { async selectForWorker() { return { model: 'voice-model' }; } } }));
-vi.mock('./session-resolver', () => ({ resolveSession: async (id: string) => id }));
+vi.mock('./session-resolver', () => ({ resolveSession: async (id: string) => id, turnWorkspaceId: async () => 'workspace' }));
 vi.mock('@/security/orgs', () => ({ getOrgWorkspaceManager: () => ({ ensureDefaultWorkspace: async () => ({ id: 'workspace' }) }) }));
 vi.mock('@/core/commands', () => ({ handleCommand: async () => null }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: {
@@ -34,7 +34,7 @@ test.each([
 ])('mobile voice reaches the real root loop, never the tool-less planner: %s', async message => {
   const service = new AgentService();
   // Even a stale web voice toggle must not divert native voice to planning.
-  service.setVoiceMode('session', true);
+  service.setVoiceMode('session', 'user', true);
   const reply = await service.handleMessage('session', 'user', message, 'mobile-voice');
   expect(fixture.direct).not.toHaveBeenCalled();
   expect(fixture.root).toHaveBeenCalledTimes(1);
@@ -44,7 +44,7 @@ test.each([
 });
 test('legacy web voice planning still waits for confirmation', async () => {
   const service = new AgentService();
-  service.setVoiceMode('session', true);
+  service.setVoiceMode('session', 'user', true);
   await service.handleMessage('session', 'user', 'create a note about my meeting', 'webchat');
   expect(fixture.root).not.toHaveBeenCalled();
   await service.handleMessage('session', 'user', 'Ja, bitte!', 'webchat');

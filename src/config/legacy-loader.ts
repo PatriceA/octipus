@@ -63,6 +63,10 @@ export function loadFromEnvLegacy(): Partial<Config> {
       })(),
       vaultDenyUnscopedSecrets: process.env.VAULT_DENY_UNSCOPED_SECRETS === 'true',
       dockerIsolation: process.env.DOCKER_ISOLATION === 'enforce' ? 'enforce' : 'off',
+      trustedProxies: process.env.TRUSTED_PROXIES
+        ? process.env.TRUSTED_PROXIES.split(',').map((s) => s.trim()).filter(Boolean)
+        : defaultConfig.security!.trustedProxies!,
+      registration: (process.env.REGISTRATION_MODE as 'open' | 'invite_only' | 'closed' | undefined) || defaultConfig.security!.registration!,
     },
     api: {
       host: process.env.API_HOST || process.env.HOST || defaultConfig.api!.host!,
@@ -149,7 +153,6 @@ export function loadFromEnvLegacy(): Partial<Config> {
       auditShadow: process.env.MULTIUSER_AUDIT_SHADOW !== 'false',
       enforcePermissions: process.env.MULTIUSER_ENFORCE_PERMISSIONS !== 'false',
       rlsEnabled: process.env.MULTIUSER_RLS === 'true',
-      orgWorkspaces: process.env.MULTIUSER_ORG_WORKSPACES === 'true',
       // Falls back to the shipped default EXPLICITLY when the variable is
       // unset. The previous `(process.env.X || '').split(',')` produced `[]`
       // for an unset variable, and `deepMerge` treats an array as a scalar —
@@ -176,6 +179,30 @@ export function loadFromEnvLegacy(): Partial<Config> {
     },
     oauth: {
       publicUrl: process.env.PUBLIC_URL,
+    },
+    spaces: {
+      // Passed through as written: the schema rejects anything but the two values.
+      creation: (process.env.SPACES_CREATION as 'any_user' | 'admins' | undefined) || 'any_user',
+      maxMembers: parseInt(process.env.SPACES_MAX_MEMBERS || '50', 10),
+      inviteMaxTtlHours: parseInt(process.env.SPACES_INVITE_MAX_TTL_HOURS || '720', 10),
+      purgeAfterArchiveDays: parseInt(process.env.SPACES_PURGE_AFTER_ARCHIVE_DAYS || '7', 10),
+      noteMaxBytes: parseInt(process.env.SPACES_NOTE_MAX_BYTES || String(defaultConfig.spaces!.noteMaxBytes), 10),
+      docMaxUpdatesPerSecond: parseInt(process.env.SPACES_DOC_MAX_UPDATES_PER_SECOND || String(defaultConfig.spaces!.docMaxUpdatesPerSecond), 10),
+      docPersistDebounceMs: parseInt(process.env.SPACES_DOC_PERSIST_DEBOUNCE_MS || String(defaultConfig.spaces!.docPersistDebounceMs), 10),
+      docReindexMinutes: parseInt(process.env.SPACES_DOC_REINDEX_MINUTES || String(defaultConfig.spaces!.docReindexMinutes), 10),
+      docBaseTtlMinutes: parseInt(process.env.SPACES_DOC_BASE_TTL_MINUTES || String(defaultConfig.spaces!.docBaseTtlMinutes), 10),
+      fileLeaseTtlSeconds: parseInt(process.env.SPACES_FILE_LEASE_TTL_SECONDS || String(defaultConfig.spaces!.fileLeaseTtlSeconds), 10),
+      memoryMaxItems: parseInt(process.env.SPACES_MEMORY_MAX_ITEMS || '50', 10),
+    },
+    rooms: {
+      maxQueuedPerMember: parseInt(process.env.ROOMS_MAX_QUEUED_PER_MEMBER || '3', 10),
+      approvalTimeoutMinutes: parseInt(process.env.ROOMS_APPROVAL_TIMEOUT_MINUTES || '30', 10),
+      transcriptWindowChars: parseInt(process.env.ROOMS_TRANSCRIPT_WINDOW_CHARS || '6000', 10),
+    },
+    gateway: {
+      maxConnectionsPerUser: parseInt(process.env.GATEWAY_MAX_CONNECTIONS_PER_USER || String(defaultConfig.gateway!.maxConnectionsPerUser), 10),
+      maxFrameBytes: parseInt(process.env.GATEWAY_MAX_FRAME_BYTES || String(defaultConfig.gateway!.maxFrameBytes), 10),
+      replayMaxSessions: parseInt(process.env.GATEWAY_REPLAY_MAX_SESSIONS || String(defaultConfig.gateway!.replayMaxSessions), 10),
     },
   };
 }

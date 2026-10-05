@@ -1,4 +1,5 @@
 import { VAULT_USAGE_GUIDANCE } from '@/core/agent/vault-guidance';
+import { usageContextOf } from '@/core/agent/context';
 import { recordProviderUsage } from '@/models/providers/instrumented';
 import { billableTokens } from '@/models/billable-tokens';
 import { assertWindowsCmdLineFits, windowsShellQuote, windowsShellQuoter } from '@/models/providers/cli-provider';
@@ -15,13 +16,13 @@ import { sessionRepository } from '@/db/repositories/session-repository';
 import { sessionGeneration, type SessionContext } from '@/db/schema/sessions';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import type { CLIAgentConfig } from '@/db/schema/models';
-import { getQuotaTracker } from '@/models/quota-tracker';
+import { cliQuotaKey, getQuotaTracker } from '@/models/quota-tracker';
 import { agentLogger } from '@/utils/logger';
 import { killProcessTree } from '@/utils/proc';
 import type { AgentWorkerConfig, ToolHandler } from './agent-base';
 import { BaseAgentWorker } from './agent-base';
 import { CLIArgumentBuilder, CLIOutputParser, isCodexHookTrustWarning, discoverCodexMcpServers, resolveCliMcpEntry, sweepStaleFiles, type CliRunConnection } from './cli-adapters';
-import { childCliSessionKey, claimCliSession, cliSessionHolder, dropCliSession, fingerprintRun, loadCliSession, releaseCliSessions, saveCliSession } from './cli-session-store';
+import { childCliSessionKey, claimCliSession, cliSessionHolder, dropCliSession, fingerprintRun, loadCliSession, ownedResumeKey, releaseCliSessions, rootCliSessionKey, saveCliSession } from './cli-session-store';
 import { canResume, CLI_RESUME } from '@/shared/cli-capabilities';
 import { startCliToolBridge, type BridgeResult } from './cli-tool-bridge';
 import { ToolExecutor } from './tool-executor';
@@ -42,13 +43,16 @@ import type { ChildResult, PendingChild } from './swarm/types';
 import { getCLIToolConfig, resolveCliModelEntry } from './cli-agent-factory';
 import { getSkillRegistry } from '@/skills/registry';
 import { fetchActiveSkillIdsForTopic } from '@/skills/discovery';
-import { buildChildEnv } from './cli-child-env';
+import { type CliCredentialOwner, cliCredentialOwnerFor, cliEnvFor, cliSpaceEnv } from './cli-child-env';
+import { openSpaceToolHome, type SpaceToolHome } from '@/security/space-tool-env';
 import { getConfig } from '@/config';
 import { isRootAgent } from './types';
 import type { AgentContext, AgentMessage } from './types';
-import { readSessionHistory, toContextMessage, withSessionConversation } from './session-history';
+import { readSessionHistory, roomRequestOf, toContextMessage, withSessionConversation } from './session-history';
+import { isRoomSession } from '@/db/repositories/session-kind';
 import { VOLATILE_MARKER } from '@/models/providers/prompt-cache';
 import { isLongTailHandler, TOOL_DISCOVERY_TOOL_ID } from './agent/tool-split';
+import { canActInSession } from '@/core/rooms/access';
 
 /**
  * Whether this session's cwd is a directory someone ELSE owns — a dev-mode
@@ -277,6 +281,8 @@ When a task matches one of these skills, load it with get_skill before starting 
    */
   private runError: string | null = null;
   private accountingModelName: string | undefined;
+  /** Whose CLI login this run uses — null for the install's own (§8.5). Set by getCLISettings. */
+  private credentialOwner: CliCredentialOwner | null = null;
   /**
    * Cleanup for the parent AbortSignal listener. Symmetric with `AgentWorker`
    * (Swarm Phase 2): when an ancestor aborts, the cascade reaches the CLI
@@ -359,8 +365,10 @@ When a task matches one of these skills, load it with get_skill before starting 
 
   async addUserMessage(content: string): Promise<void> {
     this.messages.push({ role: 'user', content, timestamp: new Date() });
-    // Only persist for the root agent — sub-workers use handleMessage for persistence
-    if (isRootAgent(this.context)) {
+    // Only persist for the root agent — sub-workers use handleMessage for
+    // persistence — and never in a room, where the member's post is the
+    // request's one user row (§6.3).
+    if (isRootAgent(this.context) && !this.context.metadata?.room) {
       const row = await messageRepository.create({
         sessionId: this.context.sessionId,
         role: 'user',
@@ -374,7 +382,7 @@ When a task matches one of these skills, load it with get_skill before starting 
 
   private async fetchHistory(): Promise<AgentMessage[]> {
     if (!isRootAgent(this.context)) return [];
-    const history = await readSessionHistory(this.context.sessionId);
+    const history = await readSessionHistory(this.context.sessionId, { room: roomRequestOf(this.context) });
     this.generation = history.generation;
     this.clearedAt = history.session?.context?.clearedAt;
     return history.messages;
@@ -426,7 +434,7 @@ When a task matches one of these skills, load it with get_skill before starting 
 
       const session = await sessionRepository.findById(this.context.sessionId);
       if (this.aborted) throw new Error('Agent was aborted before bridge startup');
-      if (!session || session.userId !== this.context.userId) throw new Error('CLI session ownership mismatch');
+      if (!session || !(await canActInSession(session, this.context.userId, 'requester'))) throw new Error('CLI session ownership mismatch');
       // A child never loads root history, so it takes the generation once per
       // run, here: its cold retries and merge turns reuse it, and a /clear
       // mid-run then rejects its save like any stale root write.
@@ -728,8 +736,11 @@ When a task matches one of these skills, load it with get_skill before starting 
   }
 
   private async getCLISettings(): Promise<CLIAgentConfig> {
-    const model = await resolveCliModelEntry(this.context.model);
+    // The row this agent was resolved to (`modelName`), never another user's
+    // personal row reached by modelId (§8.1).
+    const model = await resolveCliModelEntry(this.context.model, { modelName: this.context.modelName, userId: this.context.userId });
     this.accountingModelName = model?.name;
+    this.credentialOwner = await cliCredentialOwnerFor(model, this.context.userId);
     return model?.metadata?.cliAgent || {};
   }
 
@@ -739,9 +750,13 @@ When a task matches one of these skills, load it with get_skill before starting 
       throw new Error(`No CLI tool config found for model: ${this.context.model}`);
     }
 
+    // The row's settings and credential owner first: the quota key is per owner.
+    const settings = await this.getCLISettings();
+    const quotaKey = cliQuotaKey(toolConfig.quotaProvider, this.credentialOwner);
+
     // Check quota
     const quotaTracker = getQuotaTracker();
-    const quota = await quotaTracker.getStatus(toolConfig.quotaProvider);
+    const quota = await quotaTracker.getStatus(quotaKey);
     if (quota.exhausted) {
       throw new ClassifiedError({ reason: FailoverReason.QUOTA_EXHAUSTED, recovery: RecoveryAction.FALLBACK_PROVIDER,
         providerHint: toolConfig.quotaProvider,
@@ -753,14 +768,16 @@ When a task matches one of these skills, load it with get_skill before starting 
     // (DB hiccup) does not block the run, as in agent-worker.
     try {
       const { checkSpend } = await import('@/security/spend-budgets');
-      await checkSpend({ userId: this.context.userId, role: this.context.role, workspaceId: this.context.workspaceId, sessionId: this.context.sessionId });
+      await checkSpend({
+        userId: this.context.userId, role: this.context.role, workspaceId: this.context.workspaceId, sessionId: this.context.sessionId,
+        funding: this.context.funding, spaceId: this.context.space?.workspaceId ?? null,
+      });
     } catch (err) {
       if (err instanceof Error && err.name === 'SpendBudgetExceededError') throw err;
       agentLogger.debug({ err }, 'spend budget check unavailable (not blocking)');
     }
 
     const systemPrompt = this.buildSystemPrompt();
-    const settings = await this.getCLISettings();
     // Adapter family for arg-building + output parsing (defaults to name);
     // vendor CLIs on the claude binary set adapter='Claude Code'.
     const adapterKey = toolConfig.adapter ?? toolConfig.name;
@@ -796,7 +813,7 @@ When a task matches one of these skills, load it with get_skill before starting 
       if (!session) {
         throw new Error(`CLI agent cwd resolution failed: no session ${this.context.sessionId}`);
       }
-      workspaceCwd = resolvePath(WorkspaceFS.forSession(session).root);
+      workspaceCwd = resolvePath(WorkspaceFS.forSession(session, { space: this.context.space ?? null }).root);
 
       if (!existsSync(workspaceCwd)) {
         // Whether a missing directory is routine or alarming depends on WHOSE
@@ -850,11 +867,18 @@ When a task matches one of these skills, load it with get_skill before starting 
     // that one starts cold rather than share a vendor conversation.
     const root = isRootAgent(this.context);
     let storeKey: string | undefined;
-    if (canResume(adapterKey)) {
+    // The credential owner is part of the store key and the fingerprint
+    // (§8.5): a vendor session started on one person's subscription is never
+    // resumed on another's, or on the install's.
+    const credentialOwnerId = this.credentialOwner?.userId;
+    // Never in a room (§6.4): a vendor session would carry one requester's
+    // conversation into the next requester's turn; each room turn starts
+    // cold from the fenced transcript.
+    if (canResume(adapterKey) && !(await isRoomSession(this.context.sessionId))) {
       const childResumeKey = root ? undefined : this.context.metadata?.resumeKey;
-      if (root) storeKey = adapterKey;
+      if (root) storeKey = rootCliSessionKey(adapterKey, credentialOwnerId);
       else if (typeof childResumeKey === 'string' && childResumeKey) {
-        const key = childCliSessionKey(adapterKey, childResumeKey);
+        const key = childCliSessionKey(adapterKey, ownedResumeKey(childResumeKey, credentialOwnerId));
         if (claimCliSession(this.context.sessionId, key, this.context.id)) storeKey = key;
         else agentLogger.info({ agentId: this.context.id, resumeKey: childResumeKey }, 'CLI resume key held by a running agent — starting cold');
       }
@@ -886,7 +910,7 @@ When a task matches one of these skills, load it with get_skill before starting 
       const toolIdentity = root
         ? tools.map(tool => [tool.name, tool.description, tool.parameters]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))
         : [this.context.role, [...new Set(tools.filter(tool => tool.toolId !== TOOL_DISCOVERY_TOOL_ID).map(tool => tool.toolId ?? tool.name))].sort()];
-      fingerprint = fingerprintRun({ ...run, providerIdentity: JSON.stringify([this.context.model, toolConfig.name, settings.extraArgs, providerEnv, toolIdentity]), instructions });
+      fingerprint = fingerprintRun({ ...run, providerIdentity: JSON.stringify([this.context.model, toolConfig.name, settings.extraArgs, providerEnv, toolIdentity, credentialOwnerId ?? null]), instructions });
       const existing = opts?.forceCold ? null : await loadCliSession(this.context.sessionId, storeKey!, fingerprint);
       this.resumeDelta = existing?.acknowledged
         ? (await messageRepository.findContextMessages(this.context.sessionId, this.clearedAt, existing.acknowledged, this.generation))
@@ -921,8 +945,14 @@ When a task matches one of these skills, load it with get_skill before starting 
     this.launchCleanup?.();
     this.launchCleanup = undefined;
     // Async vendor discovery stays out of the synchronous arg builder (event-loop safe).
-    const codexMcpServers = this.connection && adapterKey === 'Codex CLI' ? await discoverCodexMcpServers(workspaceCwd) : undefined;
-    const built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, resumedChildSystem ?? this.systemMessages, resumedChildSystem ? resumedChildSystem.join('\n\n') : systemPrompt, Math.max(0, this.config.maxTokenBudget - this.billableTokensUsed), this.context.id, this.connection ? { ...this.connection, workingDirectory: workspaceCwd, codexMcpServers, shellGuard: getConfig().agent?.cliShellGuard !== false, maxIterations: Math.max(1, this.config.maxIterations - this.iteration) } : undefined, resume);
+    // A space run needs the bridge: its adapter's space mode routes native
+    // tools through Octipus's decision path over it (CLI_SPACE_MODES).
+    if (this.context.space && !this.connection) throw new Error('A CLI model in a shared space needs the Octipus bridge, which did not start');
+    // A personal row runs in the same locked mode (§8.4), which needs the bridge too.
+    if (this.credentialOwner && !this.connection) throw new Error('A personal CLI model needs the Octipus bridge, which did not start');
+    // Discovery reads the config.toml the run will read: the owner's CODEX_HOME for a personal row.
+    const codexMcpServers = this.connection && adapterKey === 'Codex CLI' ? await discoverCodexMcpServers(workspaceCwd, cliEnvFor(this.credentialOwner, toolConfig)) : undefined;
+    const built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, resumedChildSystem ?? this.systemMessages, resumedChildSystem ? resumedChildSystem.join('\n\n') : systemPrompt, Math.max(0, this.config.maxTokenBudget - this.billableTokensUsed), this.context.id, this.connection ? { ...this.connection, workingDirectory: workspaceCwd, codexMcpServers, shellGuard: getConfig().agent?.cliShellGuard !== false, maxIterations: Math.max(1, this.config.maxIterations - this.iteration), space: !!this.context.space, personal: !!this.credentialOwner } : undefined, resume);
     const { binary, args, stdinPrompt, useShell } = built;
     this.launchCleanup = () => {
       const configIndex = args.indexOf('--mcp-config');
@@ -1038,6 +1068,7 @@ When a task matches one of these skills, load it with get_skill before starting 
           void saveCliSession(this.context.sessionId, storeKey!, {
             id, fingerprint: fingerprint!, lastUsedAt: new Date().toISOString(),
             generation: this.generation, ownerAgentId: this.context.id,
+            modelName: this.accountingModelName, credentialOwner: credentialOwnerId,
           }).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to store CLI session id'));
         },
       },
@@ -1089,11 +1120,23 @@ When a task matches one of these skills, load it with get_skill before starting 
     // Cleanup helper — removes temp context files and any ephemeral per-spawn
     // VIBE_HOME the arg builder created for vibe's MCP registration.
     const tempVibeHome = toolEnv?.VIBE_HOME;
+    // In a space the CLI's tools run in the run's own tool home (§9.5),
+    // removed with the context files.
+    let toolHome: SpaceToolHome | null = null;
     const cleanupContextFiles = () => {
       if (tempVibeHome && tempVibeHome.includes('octipus-cli')) {
         try { rmSync(tempVibeHome, { recursive: true, force: true }); } catch { /* already gone */ }
       }
+      toolHome?.dispose();
     };
+    if (this.context.space) {
+      try {
+        toolHome = await openSpaceToolHome({ ...this.context, space: this.context.space });
+      } catch (err) {
+        cleanupContextFiles();
+        throw err;
+      }
+    }
 
     // On Windows: shell: true is required for .cmd wrappers, and prompts are piped
     // via stdin (set up by CLIArgumentBuilder) to avoid shell argument mangling.
@@ -1107,9 +1150,11 @@ When a task matches one of these skills, load it with get_skill before starting 
       // Minimal env allowlist (C6): a CLI child running with bypassed
       // permissions must NOT inherit the server's DB creds and all API keys.
       // Pass only PATH/HOME/locale/TERM, the CLI's own auth var, and toolEnv.
-      const env = buildChildEnv(toolConfig, { ...toolEnv,
+      const baseEnv = cliEnvFor(this.credentialOwner, toolConfig, { ...toolEnv,
         ...(this.connection ? { OCTIPUS_AGENT_URL: this.connection.url, OCTIPUS_AGENT_KEY: this.connection.key } : {}),
       }, settings.inheritApiKeys === true);
+      // In a space the CLI's tools never find the host's logins (§9.5).
+      const env = toolHome ? cliSpaceEnv(baseEnv, toolHome) : baseEnv;
 
       if (this.aborted) { cleanupContextFiles(); reject(new Error('Agent was aborted before CLI spawn')); return; }
       try { assertWindowsCmdLineFits(binary, args, process.platform, useShellForSpawn); } catch (err) { cleanupContextFiles(); reject(err); return; }
@@ -1314,7 +1359,7 @@ When a task matches one of these skills, load it with get_skill before starting 
             this.totalTokens += invocationUsage.totalTokens;
             this.billableTokensUsed += billableTokens(invocationUsage);
           }
-          await recordProviderUsage({ model: this.context.model, modelConfigName: this.accountingModelName, messages: [], userId: this.context.userId, sessionId: this.context.sessionId, agentId: this.context.id, requestType: 'cli' }, 'cli', { model: this.context.model, usage: invocationUsage }, code !== 0 || this.aborted || !!this.runError);
+          await recordProviderUsage({ model: this.context.model, modelConfigName: this.accountingModelName, messages: [], ...usageContextOf(this.context), requestType: 'cli' }, 'cli', { model: this.context.model, usage: invocationUsage }, code !== 0 || this.aborted || !!this.runError);
 
           // A keyed child stopped by a turn limit (ours, or Claude's
           // error_max_turns), a timeout or a cancel still records its vendor
@@ -1332,6 +1377,7 @@ When a task matches one of these skills, load it with get_skill before starting 
               await saveCliSession(this.context.sessionId, storeKey!, {
                 id: confirmedId, fingerprint: fingerprint!, lastUsedAt: new Date().toISOString(),
                 generation: this.generation, ownerAgentId: this.context.id,
+                modelName: this.accountingModelName, credentialOwner: credentialOwnerId,
               }).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to store stopped CLI session id'));
             }
           }
@@ -1363,7 +1409,7 @@ When a task matches one of these skills, load it with get_skill before starting 
           // max-turns whose answer quoted a quota error re-armed the block.
           const failed = code !== 0 || !!signal || !!this.runError;
           if (failed && toolConfig.isQuotaError(`${stderr}\n${this.runError ?? ''}`)) {
-            await quotaTracker.markExhausted(toolConfig.quotaProvider);
+            await quotaTracker.markExhausted(quotaKey);
             reject(new ClassifiedError({ reason: FailoverReason.QUOTA_EXHAUSTED, recovery: RecoveryAction.FALLBACK_PROVIDER,
               providerHint: toolConfig.quotaProvider, message: `Quota exhausted for ${toolConfig.name}` }));
             return;
@@ -1428,6 +1474,7 @@ When a task matches one of these skills, load it with get_skill before starting 
           if (ownsStoreKey() && vendorId) await saveCliSession(this.context.sessionId, storeKey!, {
             id: vendorId, fingerprint: fingerprint!, lastUsedAt: new Date().toISOString(),
             generation: this.generation, ownerAgentId: this.context.id, acknowledged: this.userCursor,
+            modelName: this.accountingModelName, credentialOwner: credentialOwnerId,
           });
           resolve(accumulatedText || '(no response)');
         } catch (err) {

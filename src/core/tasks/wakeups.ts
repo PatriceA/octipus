@@ -65,6 +65,10 @@ export type WakeupCause = 'closed' | 'deleted';
 /** Payload of both wakeup events. */
 export interface TaskWakeupEvent {
   type: TaskWakeupType;
+  /**
+   * The woken task's owner (in a space, its author — docs/plans/coworking-spec.md
+   * §5.5), not the closer's: in a space another member's close wakes it.
+   */
   userId: string;
   workspaceId: string | null;
   /** The task that was woken (unblocked, or the parent whose children are all closed). */
@@ -279,14 +283,14 @@ export async function dispatchWakeups(input: WakeupInput): Promise<TaskWakeupEve
   const subject = cause === 'deleted' ? { ...closed, status: 'deleted' } : closed;
   const { unblocked, childrenCompleted } = computeWakeups(subject, previousStatus, rows, unknownIds);
 
-  const base = { userId: closed.userId, workspaceId: closed.workspaceId ?? null, triggeredBy: closed.id, cause };
-  const events: TaskWakeupEvent[] = unblocked.map((t) => ({ ...base, type: 'task.unblocked', taskId: t.id, title: t.title }));
+  const base = { workspaceId: closed.workspaceId ?? null, triggeredBy: closed.id, cause };
+  const events: TaskWakeupEvent[] = unblocked.map((t) => ({ ...base, userId: t.userId, type: 'task.unblocked', taskId: t.id, title: t.title }));
   if (childrenCompleted) {
-    events.push({ ...base, type: 'task.children_completed', taskId: childrenCompleted.id, title: childrenCompleted.title });
+    events.push({ ...base, userId: childrenCompleted.userId, type: 'task.children_completed', taskId: childrenCompleted.id, title: childrenCompleted.title });
   }
   for (const event of events) emitSafely(event);
   try {
-    await notifyWoken(closed, cause, events);
+    await notifyWoken(closed, cause, events, [...unblocked, ...(childrenCompleted ? [childrenCompleted] : [])]);
   } finally {
     // Then to the other server processes (Postgres only; see the header),
     // detached so the local path's latency is unchanged. A failed NOTIFY is
@@ -301,8 +305,44 @@ export async function dispatchWakeups(input: WakeupInput): Promise<TaskWakeupEve
   return events;
 }
 
-/** One notification per woken task (a task woken both ways gets one, combined). */
-async function notifyWoken(closed: Task, cause: WakeupCause, events: TaskWakeupEvent[]): Promise<void> {
+/**
+ * The people a woken task's notification goes to, decided at send time.
+ *
+ * - A personal task: its owner, and nobody else. A 'user' assignee there can
+ *   only be the owner (`TaskRepo` refuses anyone else), and a stored ref is
+ *   never trusted as a recipient: it would let a user send notifications of
+ *   their choosing to anyone.
+ * - A space task: its author and, when assigned to another user, that
+ *   assignee — each only while they are still a member (not a guest), read
+ *   from the database now (I1, I5): a removed author or assignee hears
+ *   nothing more of the space.
+ *
+ * Role assignees are personal automation and get nothing here.
+ */
+async function recipientsOf(
+  task: Pick<Task, 'userId' | 'workspaceId' | 'assigneeKind' | 'assigneeRef'> | undefined,
+  fallback: { userId: string; workspaceId: string | null },
+): Promise<string[]> {
+  const owner = task?.userId ?? fallback.userId;
+  const workspaceId = task ? task.workspaceId ?? null : fallback.workspaceId;
+  const { getMembership, isSharedWorkspace } = await import('@/core/spaces/service');
+  if (!workspaceId || !(await isSharedWorkspace(workspaceId))) return [owner];
+  const candidates = [owner];
+  if (task?.assigneeKind === 'user' && task.assigneeRef && task.assigneeRef !== owner) candidates.push(task.assigneeRef);
+  const out: string[] = [];
+  for (const userId of candidates) {
+    const member = await getMembership(userId, workspaceId);
+    if (member && member.role !== 'guest') out.push(userId);
+  }
+  return out;
+}
+
+/**
+ * One notification per woken task and recipient (a task woken both ways gets
+ * one, combined), sent to the woken task's people — not the closer: in a
+ * space the member who closed the blocker is often someone else.
+ */
+async function notifyWoken(closed: Task, cause: WakeupCause, events: TaskWakeupEvent[], woken: Task[] = []): Promise<void> {
   const workspaceId = closed.workspaceId ?? null;
   const byTask = new Map<string, TaskWakeupEvent[]>();
   for (const event of events) byTask.set(event.taskId, [...(byTask.get(event.taskId) ?? []), event]);
@@ -316,12 +356,15 @@ async function notifyWoken(closed: Task, cause: WakeupCause, events: TaskWakeupE
       : unblockedToo
         ? `“${title}” is unblocked`
         : `All sub-tasks of “${title}” are done`;
-    await notifications.notify(
-      closed.userId,
-      unblockedToo ? 'task_unblocked' : 'task_children_completed',
-      message,
-      `Triggered by ${cause === 'deleted' ? 'deleting' : 'closing'} “${closed.title}”.`,
-      { taskId, triggeredBy: closed.id, workspaceId, wakeups: kinds, cause },
-    );
+    const task = woken.find((t) => t.id === taskId);
+    for (const recipient of await recipientsOf(task, { userId: taskEvents[0].userId, workspaceId })) {
+      await notifications.notify(
+        recipient,
+        unblockedToo ? 'task_unblocked' : 'task_children_completed',
+        message,
+        `Triggered by ${cause === 'deleted' ? 'deleting' : 'closing'} “${closed.title}”.`,
+        { taskId, triggeredBy: closed.id, workspaceId, wakeups: kinds, cause },
+      );
+    }
   }
 }

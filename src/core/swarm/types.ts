@@ -246,6 +246,8 @@ export interface ChildResult {
 export interface AgentNode {
   id: string;                              // = agents.id (1:1)
   rootSessionId: string;
+  /** The user the swarm runs for. Every event about this node goes to them only. */
+  userId: string;
   parentNodeId: string | null;
   kind: SwarmNodeKind;
   depth: 0 | 1 | 2;

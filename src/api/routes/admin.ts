@@ -3,8 +3,11 @@ import { apiContext } from '@/api/context';
 import { EXTERNAL_CHANNEL_TYPES, EXTERNAL_CHANNELS } from '@/channels/ownership';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { userRepository } from '@/db/repositories/user-repository';
+import { recordedClientIp } from '@/security/client-ip';
 import { isAdmin, isAuthenticated } from '@/security/principal';
+import { onUserChanged, setUserActive } from '@/security/user-lifecycle';
 import { hashPassword } from '@/utils/crypto';
+import { assertLocalUsername, InvalidUsernameError } from '@/security/user-kinds';
 
 /**
  * Admin console — Phase 2c multi-user.
@@ -73,7 +76,8 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
     async (ctx) => {
       const guard = requireAdmin(ctx);
       if (!guard.ok) return guard.body;
-      const users = await userRepository.listAll();
+      // The install's own accounts: remote members (S7) are not listed.
+      const users = await userRepository.listLocal();
       return { users: users.map(publicUser) };
     },
     { detail: { tags: ['admin'] } },
@@ -85,7 +89,14 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
       const guard = requireAdmin(ctx);
       if (!guard.ok) return guard.body;
 
-      const { body, principal } = ctx;
+      const { body, principal, set } = ctx;
+      try {
+        assertLocalUsername(body.username);
+      } catch (err) {
+        if (!(err instanceof InvalidUsernameError)) throw err;
+        set.status = 400;
+        return { error: err.message };
+      }
       const passwordHash = body.password ? await hashPassword(body.password) : null;
 
       const user = await userRepository.create({
@@ -94,6 +105,7 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
         passwordHash,
         isAdmin: body.isAdmin ?? false,
         isActive: body.isActive ?? true,
+        deactivatedBy: body.isActive === false ? 'admin' : null,
       });
 
       await auditRepository.log({
@@ -133,17 +145,42 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
         return { error: 'You cannot demote or disable yourself. Use a different admin account.' };
       }
 
+      const before = await userRepository.findById(params.id);
+      // A remote member (S7) is not one of the install's accounts to edit.
+      if (!before || before.kind === 'remote') {
+        set.status = 404;
+        return { error: 'User not found' };
+      }
+
       const updates: Record<string, unknown> = {};
       if (body.email !== undefined) updates.email = body.email;
       if (body.isAdmin !== undefined) updates.isAdmin = body.isAdmin;
-      if (body.isActive !== undefined) updates.isActive = body.isActive;
       if (body.password) updates.passwordHash = await hashPassword(body.password);
 
-      const updated = await userRepository.update(params.id, updates as Partial<import('@/db/schema/users').NewUser>);
+      // `is_active` has one writer, which also ends the account's sessions,
+      // sockets, agents and pending prompts on deactivation. A consequence
+      // that failed does not drop the rest of the edit: it is reported back.
+      const warnings: string[] = [];
+      if (body.isActive !== undefined) {
+        const outcome = await setUserActive(params.id, body.isActive, principal.userId, 'admin');
+        if (outcome.status === 'not_found') {
+          set.status = 404;
+          return { error: 'User not found' };
+        }
+        if (outcome.status === 'changed') {
+          for (const step of outcome.failedSteps) warnings.push(`Deactivation step failed: ${step}`);
+        }
+      }
+
+      const updated = Object.keys(updates).length > 0
+        ? await userRepository.update(params.id, updates as Partial<import('@/db/schema/users').NewUser>)
+        : await userRepository.findById(params.id);
       if (!updated) {
         set.status = 404;
         return { error: 'User not found' };
       }
+      // Admin rights are fixed on a gateway connection at auth: reconnect it.
+      if (body.isAdmin !== undefined && body.isAdmin !== before.isAdmin) await onUserChanged(params.id);
 
       await auditRepository.log({
         userId: principal.userId,
@@ -151,13 +188,14 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
         resourceType: 'user',
         resourceId: updated.id,
         details: {
-          changes: Object.keys(updates),
+          changes: [...Object.keys(updates), ...(body.isActive !== undefined ? ['isActive'] : [])],
           targetUser: updated.username,
           byAdmin: principal.userId,
+          ...(warnings.length > 0 ? { warnings } : {}),
         },
       });
 
-      return publicUser(updated);
+      return warnings.length > 0 ? { ...publicUser(updated), warnings } : publicUser(updated);
     },
     {
       params: t.Object({ id: t.String() }),
@@ -195,7 +233,7 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
       const { userRepository } = await import('@/db/repositories/user-repository');
       const { getQuotaManager } = await import('@/security/quotas');
       const mgr = getQuotaManager();
-      const users = await userRepository.listAll();
+      const users = await userRepository.listLocal();
 
       const rows = await Promise.all(users.map(async (u) => {
         const [quota, usage] = await Promise.all([
@@ -698,7 +736,7 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
     async (ctx) => {
       const guard = requireAdmin(ctx);
       if (!guard.ok) return guard.body;
-      const { params, body, session, request, set } = ctx as any;
+      const { params, body, session, request, set, socketAddress } = ctx as any;
 
       if (!session?.token) {
         set.status = 400;
@@ -706,10 +744,7 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
       }
 
       const { getImpersonationManager } = await import('@/security/impersonation');
-      const ipAddress =
-        request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-        request.headers.get('x-real-ip') ||
-        undefined;
+      const ipAddress = recordedClientIp(request, socketAddress);
 
       const result = await getImpersonationManager().start(
         { id: ctx.principal.userId, username: ctx.principal.username, isAdmin: true },
@@ -722,6 +757,7 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
           case 'self':            set.status = 400; return { error: 'Cannot impersonate yourself' };
           case 'target_not_found': set.status = 404; return { error: 'Target user not found' };
           case 'target_inactive':  set.status = 400; return { error: 'Target user is disabled' };
+          case 'target_remote':    set.status = 400; return { error: 'Members from other installs cannot be impersonated' };
           default:                  set.status = 400; return { error: result.reason };
         }
       }

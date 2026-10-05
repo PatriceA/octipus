@@ -39,7 +39,17 @@ export function listen(app: App, options: ListenOptions): RunningServer {
   }) as unknown as Server;
 
   const wsRoutes = app.websocketRoutes();
-  const wss = new WebSocketServer({ noServer: true });
+  // One server per frame cap: `maxPayload` is a server option in `ws`, and a
+  // route declares its own (the gateway's is `gateway.maxFrameBytes`).
+  const servers = new Map<number | undefined, WebSocketServer>();
+  const serverFor = (maxPayload: number | undefined): WebSocketServer => {
+    let wss = servers.get(maxPayload);
+    if (!wss) {
+      wss = new WebSocketServer({ noServer: true, ...(maxPayload !== undefined ? { maxPayload } : {}) });
+      servers.set(maxPayload, wss);
+    }
+    return wss;
+  };
 
   nodeServer.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
@@ -48,8 +58,8 @@ export function listen(app: App, options: ListenOptions): RunningServer {
       socket.destroy();
       return;
     }
-    wss.handleUpgrade(req, socket, head, (raw) => {
-      attach(raw, route.handlers, url, req.headers, req.socket.remoteAddress ?? '127.0.0.1');
+    serverFor(route.handlers.maxPayload).handleUpgrade(req, socket, head, (raw) => {
+      attach(raw, route.handlers, url, req.headers, req.socket.remoteAddress);
     });
   });
 
@@ -59,8 +69,10 @@ export function listen(app: App, options: ListenOptions): RunningServer {
       return typeof addr === 'object' && addr ? addr.port : options.port;
     },
     stop: () => {
-      for (const client of wss.clients) client.terminate();
-      wss.close();
+      for (const wss of servers.values()) {
+        for (const client of wss.clients) client.terminate();
+        wss.close();
+      }
       nodeServer.close();
     },
   };
@@ -71,7 +83,9 @@ function attach(
   handlers: WebSocketHandlers,
   url: URL,
   headers: Record<string, string | string[] | undefined>,
-  remoteAddress: string,
+  // Undefined only when the socket is already gone; never defaulted to
+  // loopback, which would make a dropped address look like a local one.
+  remoteAddress: string | undefined,
 ): void {
   const request = new Request(url, {
     headers: Object.entries(headers).flatMap(([k, v]) =>

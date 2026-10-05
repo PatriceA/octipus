@@ -5,7 +5,7 @@ import { coreLogger } from '@/utils/logger';
 export { SlackChannel, slackChannel } from './slack';
 export { TeamsChannel, teamsChannel } from './teams';
 export { TelegramChannel, telegramChannel } from './telegram';
-export { WebChatChannel, type WebChatConnection, type WebChatMessage, webChatChannel } from './webchat';
+export { WebChatChannel, webChatChannel } from './webchat';
 export { WhatsAppChannel, whatsappChannel } from './whatsapp';
 
 import { getConfig } from '@/config';
@@ -167,6 +167,7 @@ async function analyzeImageAttachments(
 
         const result = await client.completeVision({
           model: visionModel.modelId,
+          modelConfigName: visionModel.name,
           prompt: 'Describe this image in detail. If it contains text, extract and include all text content. If it is a document, receipt, or form, describe its structure and content.',
           imageBase64: base64,
           mimeType: finalMime,
@@ -288,7 +289,7 @@ export function subscribeToDocumentResults(
 
     try {
       const { documentRepository } = await import('@/db/repositories/document-repository');
-      const doc = await documentRepository.findById(documentId);
+      const doc = await documentRepository.findByIdSystem(documentId);
       if (doc && doc.userId === message.userId) {
         const name = doc.originalName || 'Document';
         const summary = doc.summary || doc.ocrText?.slice(0, 500) || 'No content extracted';
@@ -336,7 +337,7 @@ export function subscribeToDocumentResults(
     if (ids.length > 0) {
       const { documentRepository } = await import('@/db/repositories/document-repository');
       for (const id of ids) {
-        const doc = await documentRepository.findById(id).catch(() => null);
+        const doc = await documentRepository.findByIdSystem(id).catch(() => null);
         if (doc?.status === 'completed') await onCompleted(id, message.userId);
         else if (doc?.status === 'failed') await onFailed(id, 'processing failed', message.userId);
       }
@@ -569,7 +570,14 @@ export async function forwardPermissionRequestToChannel(request: PermissionReque
   if (!userId || !sessionId) return;
 
   // Look up the session to find which channel originated it
-  const session = await sessionRepository.findById(sessionId);
+  const stored = await sessionRepository.findById(sessionId);
+  // A room of a channel bound to a space (§9.4) asks in its thread, as a
+  // group thread does (only the requester sees the details) — for a turn
+  // asked from the platform. A turn asked on the web asks there, and a room's
+  // request is never denied for the channel's sake: it stays pending for
+  // the web app.
+  const isRoom = stored?.kind === 'room';
+  const session = isRoom && stored ? await bridgedRoomAsGroupThread(stored, userId) : stored;
   // Only a messaging channel can carry a permission prompt. Non-messaging
   // sessions have a channelType too ('tui', 'webchat', 'api'), and the old
   // `!== 'webchat'` test let 'tui' through to `umi.send`, which throws for a
@@ -591,6 +599,11 @@ export async function forwardPermissionRequestToChannel(request: PermissionReque
     const { findGroupChannel, isGroupChannelActive } = await import('./group-channels');
     const group = await findGroupChannel(channelType, channelId);
     if (group?.id !== session.groupChannelId || !(await isGroupChannelActive(group))) {
+      // A room's members answer in the web app: left pending there.
+      if (isRoom) {
+        channelLogger.info({ sessionId, channelId }, 'Permission request of a bridged room whose channel is removed or paused — left to the web app');
+        return;
+      }
       // Not posted: the bot is silent in a removed or paused channel. Denied,
       // not left pending: permission requests do not expire, so nothing would
       // ever release the turn (and the session lock it holds).
@@ -674,19 +687,46 @@ export async function forwardPermissionRequestToChannel(request: PermissionReque
     }
     announce();
   } catch (error) {
+    // Remove only OUR entry: other prompts queued for this chat stay answerable.
+    removePending(key, request.requestId);
+    // A room's request is also shown in the web app, where its members can
+    // answer it: left pending there rather than denied.
+    if (isRoom) {
+      channelLogger.error({ error, channelType }, 'Failed to forward a bridged room\'s permission request to its channel — left to the web app');
+      return;
+    }
     // The prompt never reached a human, so leaving the request pending buys
     // nothing but a stall until it expires — the run blocks for the whole TTL
     // and then fails anyway. Deny it now, with the delivery failure as the
     // reason, so the agent gets an answer it can report.
     channelLogger.error({ error, channelType }, 'Failed to forward permission request to channel — denying it');
-    // Remove only OUR entry: other prompts queued for this chat stay answerable.
-    removePending(key, request.requestId);
     await permissionManager
       .deny(request.requestId, userId, `could not be delivered to the ${channelType} channel`)
       .catch((denyError) => {
         channelLogger.error({ denyError, channelType }, 'Failed to deny an undeliverable permission request');
       });
   }
+}
+
+/**
+ * A bridged room seen as the group thread it mirrors (channel, chat, thread
+ * and enrolment), for the permission prompt of `requesterId`'s turn — only
+ * when that turn was asked from the platform: the room's running turn is
+ * theirs and its post came over the bridge. The room itself (no channel,
+ * so the web app asks) for a turn asked on the web, or a room no channel is
+ * bound to. The room queue runs in this process, as the request does.
+ */
+async function bridgedRoomAsGroupThread<S extends { id: string; channelType: string | null; channelId: string | null; threadId: string | null; groupChannelId: string | null }>(room: S, requesterId: string): Promise<S> {
+  const { roomQueueSnapshot } = await import('@/core/rooms/queue');
+  const running = roomQueueSnapshot(room.id).running;
+  if (!running || running.requesterId !== requesterId) return room;
+  const { messageRepository } = await import('@/db/repositories/message-repository');
+  const post = await messageRepository.findById(running.messageId);
+  if (!(post?.metadata as Record<string, unknown> | null | undefined)?.bridged) return room;
+  const { bridgeTargetOf } = await import('./group-bridge');
+  const target = await bridgeTargetOf(room.id);
+  if (!target) return room;
+  return { ...room, channelType: target.group.channelType, channelId: target.group.channelId, threadId: target.threadId, groupChannelId: target.group.id };
 }
 
 /**
@@ -752,6 +792,8 @@ export async function initializeChannels(): Promise<void> {
   await startApprovalPrompts();
   // A task taken up in a group channel says in its thread when it closes.
   startTakenTaskNotices();
+  // Rooms of a channel bound to a space are read in its threads (§9.4).
+  (await import('./group-bridge')).startGroupBridgeRelay();
 
   // Bridge incoming channel messages → root agent → reply
   umi.on('message', async (message: UnifiedMessage) => {
@@ -767,6 +809,30 @@ export async function initializeChannels(): Promise<void> {
       recordChannelMessage(message.channelType, 'inbound');
       // A yes/no reply to a permission prompt or an approval posted in this chat
       if (await tryResolvePromptReply(message)) return;
+
+      // A channel bound to a space (§9.4): the message is a post in the
+      // thread's room and its turn a room turn, run as the member; the reply
+      // reaches the thread through the bridge's relay.
+      if (groupChannelId) {
+        const { findGroupChannel } = await import('./group-channels');
+        const group = await findGroupChannel(message.channelType, message.channelId);
+        if (!group || group.id !== groupChannelId) throw new Error('Group channel enrolment not found for this chat');
+        if (group.workspaceId) {
+          const { handleBridgedTurn } = await import('./group-bridge');
+          const outcome = await handleBridgedTurn({
+            message,
+            group,
+            context: typeof message.metadata?.groupContext === 'string' ? message.metadata.groupContext : '',
+            take: takeRequestOf(message.metadata?.take),
+          });
+          const platformMessageId = message.metadata?.messageId != null ? String(message.metadata.messageId) : undefined;
+          if (outcome === 'queued' && platformMessageId) {
+            umi.setReaction(message.channelType, message.channelId, platformMessageId, '👀')
+              .catch((err: unknown) => channelLogger.warn({ err }, 'Could not react to a bridged message'));
+          }
+          return;
+        }
+      }
 
       // Process file attachments → document OCR pipeline (fire-and-forget)
       const attachmentDocuments: Promise<string[]> = message.attachments?.length

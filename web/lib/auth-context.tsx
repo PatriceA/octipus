@@ -2,6 +2,8 @@
 
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
+import { loginPathReturningTo } from '../../src/shared/return-to';
+import { isPublicPath } from './public-routes';
 import { api } from './api';
 
 interface User {
@@ -42,13 +44,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const router = useRouter();
 
-  const logout = useCallback(() => {
+  const clearSession = useCallback(() => {
     setUser(null);
     setToken(null);
     api.setToken(null);
     localStorage.removeItem('assistant-user');
+  }, []);
+
+  const logout = useCallback(() => {
+    clearSession();
     router.push('/login');
-  }, [router]);
+  }, [clearSession, router]);
+
+  // Listen for auth:expired events from API client. On the sign-in page itself
+  // a 401 is a wrong password or a TOTP prompt, and navigating would drop the
+  // page's `returnTo`; on another public page (an invite) it is a visitor not
+  // signed in yet; anywhere else, sign in again and come back here.
+  useEffect(() => {
+    const handleExpired = () => {
+      clearSession();
+      const { pathname, search } = window.location;
+      if (isPublicPath(pathname)) return;
+      router.push(loginPathReturningTo(pathname + search));
+    };
+    window.addEventListener('auth:expired', handleExpired);
+    return () => window.removeEventListener('auth:expired', handleExpired);
+  }, [clearSession, router]);
 
   const login = useCallback((newToken: string, newUser: User) => {
     if (newToken) {
@@ -58,13 +79,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(newUser);
     localStorage.setItem('assistant-user', JSON.stringify(newUser));
   }, []);
-
-  // Listen for auth:expired events from API client
-  useEffect(() => {
-    const handleExpired = () => logout();
-    window.addEventListener('auth:expired', handleExpired);
-    return () => window.removeEventListener('auth:expired', handleExpired);
-  }, [logout]);
 
   // Validate token on mount
   useEffect(() => {

@@ -219,6 +219,7 @@ async function runQuality(
     try {
       const result = await router.complete({
         model: modelEntry.modelId,
+        modelConfigName: modelEntry.name,
         messages: [{ role: 'user', content: dp.input, timestamp: new Date() }],
         temperature: 0.1,
         maxTokens: 512,

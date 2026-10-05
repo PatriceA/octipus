@@ -1,9 +1,12 @@
 import { and, desc, eq, gte, isNull, lte } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
+import { personalNoteScope } from '@/db/repositories/note-repository';
+import { notInSharedWorkspace } from '@/db/repositories/scoped';
 import { memories } from '@/db/schema/memories';
 import { taskState } from '@/db/schema/task-state';
 import { SECURITY_PREAMBLE } from '@/core/agent/roles';
 import { type CompletionOptions, getLiteLLMClient } from '@/models/litellm-client';
+import { withInstallUsage } from '@/models/providers/instrumented';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
 import { getNoteService, type NoteService } from './notes';
@@ -59,7 +62,7 @@ export async function assembleReviewContext(userId: string, end: Date = new Date
   const db = getDb();
   const svc = getNoteService();
 
-  const daily = await svc.list(userId, { kind: 'daily', limit: 14 });
+  const daily = await svc.list(personalNoteScope(userId), { kind: 'daily', limit: 14 });
   const dailyNotes = daily
     .filter((n) => n.noteDate && n.noteDate >= startDay && n.noteDate <= endDay)
     .map((n) => ({ slug: n.slug, title: n.title, body: n.body }));
@@ -77,7 +80,7 @@ export async function assembleReviewContext(userId: string, end: Date = new Date
     await db
       .select({ factType: memories.factType, content: memories.content, createdAt: memories.createdAt })
       .from(memories)
-      .where(and(eq(memories.userId, userId), isNull(memories.supersededBy), gte(memories.createdAt, start), lte(memories.createdAt, end)))
+      .where(and(eq(memories.userId, userId), notInSharedWorkspace(memories.workspaceId), isNull(memories.supersededBy), gte(memories.createdAt, start), lte(memories.createdAt, end)))
       .orderBy(desc(memories.createdAt))
       .limit(50)
   ).map((m) => ({ factType: m.factType, content: m.content }));
@@ -116,7 +119,8 @@ export async function generateWeeklyReview(
     const m = await getModelRegistry().getModelForTopic('background');
     return m?.modelId ?? null;
   });
-  const complete = deps.complete ?? ((req) => getLiteLLMClient().complete(req));
+  // The weekly review is install work: stamped `install` (coworking spec §9.1).
+  const complete = deps.complete ?? ((req) => withInstallUsage(() => getLiteLLMClient().complete(req)));
 
   const modelId = await resolveModelId();
   if (!modelId) {
@@ -143,8 +147,7 @@ export async function generateWeeklyReview(
 
   const slug = `reviews/week-of-${ctx.start}`;
   const saved = await notes.save({
-    userId,
-    workspaceId,
+    scope: personalNoteScope(userId, workspaceId),
     slug,
     title: `Weekly review — week of ${ctx.start}`,
     body,

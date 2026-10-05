@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-430 mounted routes across 63 route files. The path is the full one, group prefix included — what a client actually calls.
+490 mounted routes across 68 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -18,6 +18,8 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/a/:slug/bundle.js` | `src/api/routes/artifact-pages.ts` |
 | GET | `/a/:slug/embed` | `src/api/routes/artifact-pages.ts` |
 | GET | `/a/:slug/export/:exportId` | `src/api/routes/artifact-pages.ts` |
+| GET | `/api/admin/approvals` | `src/api/routes/admin-approvals.ts` |
+| POST | `/api/admin/approvals/:id/resolve` | `src/api/routes/admin-approvals.ts` |
 | GET | `/api/admin/audit` | `src/api/routes/admin.ts` |
 | GET | `/api/admin/group-channels` | `src/api/routes/admin.ts` |
 | DELETE | `/api/admin/group-channels/:id` | `src/api/routes/admin.ts` |
@@ -40,6 +42,8 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/admin/orgs/:id/sso` | `src/api/routes/orgs.ts` |
 | PATCH | `/api/admin/orgs/:id/sso` | `src/api/routes/orgs.ts` |
 | GET | `/api/admin/orgs/:id/usage` | `src/api/routes/orgs.ts` |
+| GET | `/api/admin/permission-requests` | `src/api/routes/admin-approvals.ts` |
+| POST | `/api/admin/permission-requests/:id/resolve` | `src/api/routes/admin-approvals.ts` |
 | GET | `/api/admin/quotas` | `src/api/routes/admin.ts` |
 | DELETE | `/api/admin/quotas/:userId` | `src/api/routes/admin.ts` |
 | GET | `/api/admin/quotas/:userId` | `src/api/routes/admin.ts` |
@@ -98,6 +102,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/auth/passkey/register/options` | `src/api/routes/auth.ts` |
 | POST | `/api/auth/passkey/register/verify` | `src/api/routes/auth.ts` |
 | POST | `/api/auth/register` | `src/api/routes/auth.ts` |
+| GET | `/api/auth/registration` | `src/api/routes/auth.ts` |
 | POST | `/api/auth/totp/disable` | `src/api/routes/auth.ts` |
 | POST | `/api/auth/totp/enable` | `src/api/routes/auth.ts` |
 | POST | `/api/auth/totp/setup` | `src/api/routes/auth.ts` |
@@ -193,6 +198,8 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/hooks/incoming/:hookId` | `src/api/routes/webhook-incoming.ts` |
 | GET | `/api/hooks/suggestions` | `src/api/routes/hooks.ts` |
 | POST | `/api/hooks/suggestions/:suggestionId/apply` | `src/api/routes/hooks.ts` |
+| GET | `/api/invites/:token` | `src/api/routes/spaces.ts` |
+| POST | `/api/invites/:token/accept` | `src/api/routes/spaces.ts` |
 | GET | `/api/knowledge` | `src/api/routes/knowledge.ts` |
 | DELETE | `/api/knowledge/:id` | `src/api/routes/knowledge.ts` |
 | GET | `/api/knowledge/:id` | `src/api/routes/knowledge.ts` |
@@ -218,7 +225,14 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/me/group-channels` | `src/api/routes/group-channels.ts` |
 | DELETE | `/api/me/group-channels/:id` | `src/api/routes/group-channels.ts` |
 | PATCH | `/api/me/group-channels/:id` | `src/api/routes/group-channels.ts` |
+| DELETE | `/api/me/group-channels/:id/bind` | `src/api/routes/group-channels.ts` |
+| POST | `/api/me/group-channels/:id/bind` | `src/api/routes/group-channels.ts` |
+| GET | `/api/me/models` | `src/api/routes/me-models.ts` |
+| POST | `/api/me/models` | `src/api/routes/me-models.ts` |
+| DELETE | `/api/me/models/:slug` | `src/api/routes/me-models.ts` |
+| PATCH | `/api/me/models/:slug` | `src/api/routes/me-models.ts` |
 | GET | `/api/me/orgs` | `src/api/routes/orgs.ts` |
+| GET | `/api/me/work` | `src/api/routes/me-work.ts` |
 | GET | `/api/me/workspaces` | `src/api/routes/orgs.ts` |
 | POST | `/api/me/workspaces` | `src/api/routes/orgs.ts` |
 | DELETE | `/api/me/workspaces/:id` | `src/api/routes/orgs.ts` |
@@ -265,10 +279,17 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/notes` | `src/api/routes/notes.ts` |
 | DELETE | `/api/notes/:id` | `src/api/routes/notes.ts` |
 | GET | `/api/notes/:id` | `src/api/routes/notes.ts` |
+| POST | `/api/notes/:id/merge` | `src/api/routes/notes.ts` |
 | PATCH | `/api/notes/:id/pin` | `src/api/routes/notes.ts` |
+| GET | `/api/notes/:id/revisions` | `src/api/routes/notes.ts` |
+| GET | `/api/notes/:id/revisions/:revisionId` | `src/api/routes/notes.ts` |
+| POST | `/api/notes/:id/revisions/:revisionId/restore` | `src/api/routes/notes.ts` |
 | GET | `/api/notes/:id/suggestions` | `src/api/routes/notes.ts` |
 | POST | `/api/notes/capture` | `src/api/routes/notes.ts` |
 | GET | `/api/notes/index` | `src/api/routes/notes.ts` |
+| GET | `/api/notes/proposals` | `src/api/routes/notes.ts` |
+| POST | `/api/notes/proposals/:proposalId/accept` | `src/api/routes/notes.ts` |
+| POST | `/api/notes/proposals/:proposalId/reject` | `src/api/routes/notes.ts` |
 | POST | `/api/notes/query` | `src/api/routes/notes.ts` |
 | GET | `/api/notes/tags` | `src/api/routes/notes.ts` |
 | GET | `/api/notifications` | `src/api/routes/notifications.ts` |
@@ -383,6 +404,45 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | PATCH | `/api/skills/topics/bulk/:skillId` | `src/api/routes/skill-topic-assignments.ts` |
 | GET | `/api/skills/usage` | `src/api/routes/skills.ts` |
 | PATCH | `/api/skills/usage` | `src/api/routes/skills.ts` |
+| GET | `/api/spaces` | `src/api/routes/spaces.ts` |
+| POST | `/api/spaces` | `src/api/routes/spaces.ts` |
+| DELETE | `/api/spaces/:id` | `src/api/routes/spaces.ts` |
+| GET | `/api/spaces/:id` | `src/api/routes/spaces.ts` |
+| PATCH | `/api/spaces/:id` | `src/api/routes/spaces.ts` |
+| GET | `/api/spaces/:id/activity` | `src/api/routes/spaces.ts` |
+| PUT | `/api/spaces/:id/agent-edit-mode` | `src/api/routes/spaces.ts` |
+| POST | `/api/spaces/:id/archive` | `src/api/routes/spaces.ts` |
+| GET | `/api/spaces/:id/budget` | `src/api/routes/spaces.ts` |
+| PUT | `/api/spaces/:id/budget` | `src/api/routes/spaces.ts` |
+| GET | `/api/spaces/:id/connectors` | `src/api/routes/spaces.ts` |
+| DELETE | `/api/spaces/:id/connectors/:connectorId` | `src/api/routes/spaces.ts` |
+| POST | `/api/spaces/:id/connectors/:connectorId` | `src/api/routes/spaces.ts` |
+| DELETE | `/api/spaces/:id/file-leases` | `src/api/routes/spaces.ts` |
+| GET | `/api/spaces/:id/file-leases` | `src/api/routes/spaces.ts` |
+| POST | `/api/spaces/:id/file-leases` | `src/api/routes/spaces.ts` |
+| PUT | `/api/spaces/:id/funding` | `src/api/routes/spaces.ts` |
+| GET | `/api/spaces/:id/invites` | `src/api/routes/spaces.ts` |
+| POST | `/api/spaces/:id/invites` | `src/api/routes/spaces.ts` |
+| DELETE | `/api/spaces/:id/invites/:inviteId` | `src/api/routes/spaces.ts` |
+| GET | `/api/spaces/:id/members` | `src/api/routes/spaces.ts` |
+| DELETE | `/api/spaces/:id/members/:userId` | `src/api/routes/spaces.ts` |
+| PATCH | `/api/spaces/:id/members/:userId` | `src/api/routes/spaces.ts` |
+| GET | `/api/spaces/:id/memory` | `src/api/routes/rooms.ts` |
+| POST | `/api/spaces/:id/memory` | `src/api/routes/rooms.ts` |
+| DELETE | `/api/spaces/:id/memory/:entryId` | `src/api/routes/rooms.ts` |
+| GET | `/api/spaces/:id/rooms` | `src/api/routes/rooms.ts` |
+| POST | `/api/spaces/:id/rooms` | `src/api/routes/rooms.ts` |
+| PATCH | `/api/spaces/:id/rooms/:roomId` | `src/api/routes/rooms.ts` |
+| PATCH | `/api/spaces/:id/rooms/:roomId/me` | `src/api/routes/rooms.ts` |
+| GET | `/api/spaces/:id/rooms/:roomId/members` | `src/api/routes/rooms.ts` |
+| DELETE | `/api/spaces/:id/rooms/:roomId/members/:userId` | `src/api/routes/rooms.ts` |
+| POST | `/api/spaces/:id/rooms/:roomId/members/:userId` | `src/api/routes/rooms.ts` |
+| GET | `/api/spaces/:id/rooms/:roomId/messages` | `src/api/routes/rooms.ts` |
+| POST | `/api/spaces/:id/rooms/:roomId/messages` | `src/api/routes/rooms.ts` |
+| PUT | `/api/spaces/:id/rooms/:roomId/messages/:messageId/feedback` | `src/api/routes/rooms.ts` |
+| GET | `/api/spaces/:id/rooms/:roomId/mode` | `src/api/routes/rooms.ts` |
+| PUT | `/api/spaces/:id/rooms/:roomId/mode` | `src/api/routes/rooms.ts` |
+| POST | `/api/spaces/:id/unarchive` | `src/api/routes/spaces.ts` |
 | GET | `/api/spend-budgets/me` | `src/api/routes/spend-budgets.ts` |
 | GET | `/api/swarm/nodes` | `src/api/routes/swarm.ts` |
 | GET | `/api/swarm/nodes/:id` | `src/api/routes/swarm.ts` |
@@ -451,45 +511,46 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `capabilities` | 1 |
 | `(root)` | `channels` | 1 |
 | `(root)` | `config` | 4 |
-| `(root)` | `core` | 26 |
+| `(root)` | `core` | 29 |
 | `(root)` | `db` | 11 |
 | `(root)` | `extensions` | 2 |
 | `(root)` | `hooks` | 3 |
 | `(root)` | `mcp` | 1 |
 | `(root)` | `models` | 2 |
-| `(root)` | `security` | 4 |
+| `(root)` | `security` | 5 |
 | `(root)` | `skills` | 1 |
 | `(root)` | `tools` | 4 |
 | `(root)` | `utils` | 1 |
-| `api` | `capabilities` | 2 |
-| `api` | `channels` | 21 |
-| `api` | `config` | 20 |
+| `api` | `capabilities` | 1 |
+| `api` | `channels` | 22 |
+| `api` | `config` | 21 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 90 |
-| `api` | `db` | 103 |
+| `api` | `core` | 116 |
+| `api` | `db` | 110 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 3 |
-| `api` | `models` | 31 |
+| `api` | `models` | 36 |
 | `api` | `plugins` | 1 |
-| `api` | `security` | 83 |
-| `api` | `services` | 4 |
-| `api` | `shared` | 2 |
+| `api` | `security` | 119 |
+| `api` | `services` | 5 |
+| `api` | `shared` | 3 |
 | `api` | `skills` | 6 |
 | `api` | `tools` | 4 |
 | `api` | `utils` | 62 |
-| `api` | `voice` | 24 |
+| `api` | `voice` | 23 |
 | `capabilities` | `db` | 2 |
 | `capabilities` | `models` | 1 |
 | `capabilities` | `setup` | 1 |
 | `capabilities` | `tools` | 1 |
 | `capabilities` | `utils` | 7 |
 | `channels` | `config` | 7 |
-| `channels` | `core` | 23 |
-| `channels` | `db` | 33 |
-| `channels` | `models` | 5 |
+| `channels` | `core` | 38 |
+| `channels` | `db` | 41 |
+| `channels` | `models` | 6 |
 | `channels` | `security` | 22 |
-| `channels` | `utils` | 23 |
+| `channels` | `shared` | 1 |
+| `channels` | `utils` | 24 |
 | `channels` | `voice` | 2 |
 | `config` | `channels` | 1 |
 | `config` | `core` | 3 |
@@ -499,98 +560,103 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `config` | `utils` | 5 |
 | `config` | `voice` | 1 |
 | `connectors` | `config` | 2 |
+| `connectors` | `core` | 1 |
 | `connectors` | `mcp` | 2 |
 | `connectors` | `models` | 2 |
-| `connectors` | `security` | 4 |
+| `connectors` | `security` | 5 |
 | `connectors` | `shared` | 1 |
 | `connectors` | `utils` | 5 |
-| `core` | `capabilities` | 1 |
-| `core` | `channels` | 7 |
-| `core` | `config` | 34 |
-| `core` | `connectors` | 2 |
-| `core` | `db` | 210 |
+| `core` | `capabilities` | 2 |
+| `core` | `channels` | 11 |
+| `core` | `config` | 45 |
+| `core` | `connectors` | 3 |
+| `core` | `db` | 302 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 5 |
-| `core` | `models` | 90 |
-| `core` | `security` | 68 |
+| `core` | `models` | 112 |
+| `core` | `security` | 138 |
 | `core` | `services` | 2 |
-| `core` | `shared` | 13 |
+| `core` | `shared` | 15 |
 | `core` | `skills` | 10 |
 | `core` | `tools` | 16 |
-| `core` | `utils` | 154 |
-| `db` | `config` | 3 |
-| `db` | `core` | 10 |
+| `core` | `utils` | 174 |
+| `core` | `voice` | 1 |
+| `db` | `config` | 4 |
+| `db` | `core` | 18 |
 | `db` | `models` | 1 |
-| `db` | `security` | 2 |
+| `db` | `security` | 14 |
 | `db` | `services` | 1 |
 | `db` | `shared` | 3 |
-| `db` | `utils` | 18 |
+| `db` | `utils` | 20 |
 | `eval` | `config` | 3 |
 | `eval` | `core` | 6 |
 | `eval` | `db` | 8 |
-| `eval` | `models` | 7 |
+| `eval` | `models` | 8 |
 | `eval` | `security` | 2 |
 | `eval` | `utils` | 5 |
 | `extensions` | `core` | 2 |
 | `extensions` | `utils` | 4 |
 | `hooks` | `channels` | 2 |
 | `hooks` | `config` | 2 |
-| `hooks` | `core` | 9 |
-| `hooks` | `db` | 9 |
-| `hooks` | `security` | 2 |
+| `hooks` | `core` | 13 |
+| `hooks` | `db` | 13 |
+| `hooks` | `security` | 1 |
 | `hooks` | `tools` | 1 |
 | `hooks` | `utils` | 7 |
 | `mcp` | `config` | 2 |
 | `mcp` | `security` | 3 |
 | `mcp` | `utils` | 4 |
 | `models` | `config` | 10 |
-| `models` | `core` | 27 |
+| `models` | `core` | 29 |
 | `models` | `db` | 12 |
-| `models` | `security` | 19 |
+| `models` | `security` | 20 |
 | `models` | `services` | 1 |
 | `models` | `shared` | 4 |
-| `models` | `utils` | 40 |
+| `models` | `utils` | 42 |
 | `plugins` | `security` | 1 |
 | `plugins` | `tools` | 1 |
 | `plugins` | `utils` | 3 |
-| `security` | `config` | 12 |
+| `security` | `api` | 1 |
+| `security` | `config` | 13 |
 | `security` | `connectors` | 3 |
-| `security` | `core` | 2 |
-| `security` | `db` | 58 |
+| `security` | `core` | 19 |
+| `security` | `db` | 76 |
 | `security` | `tools` | 1 |
-| `security` | `utils` | 21 |
+| `security` | `utils` | 27 |
 | `services` | `capabilities` | 5 |
 | `services` | `config` | 3 |
-| `services` | `core` | 2 |
-| `services` | `db` | 8 |
-| `services` | `models` | 16 |
-| `services` | `security` | 3 |
+| `services` | `core` | 5 |
+| `services` | `db` | 11 |
+| `services` | `models` | 19 |
+| `services` | `security` | 4 |
 | `services` | `setup` | 1 |
 | `services` | `shared` | 2 |
 | `services` | `tools` | 3 |
-| `services` | `utils` | 5 |
+| `services` | `utils` | 6 |
 | `setup` | `utils` | 1 |
 | `skills` | `config` | 1 |
-| `skills` | `core` | 3 |
+| `skills` | `core` | 4 |
 | `skills` | `db` | 14 |
 | `skills` | `models` | 1 |
-| `skills` | `security` | 3 |
+| `skills` | `security` | 4 |
 | `skills` | `utils` | 7 |
 | `test-helpers` | `config` | 1 |
+| `test-helpers` | `core` | 2 |
 | `test-helpers` | `db` | 9 |
+| `test-helpers` | `security` | 2 |
 | `tools` | `api` | 2 |
 | `tools` | `channels` | 2 |
-| `tools` | `config` | 4 |
+| `tools` | `config` | 3 |
 | `tools` | `connectors` | 2 |
-| `tools` | `core` | 72 |
-| `tools` | `db` | 28 |
+| `tools` | `core` | 86 |
+| `tools` | `db` | 29 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |
 | `tools` | `models` | 8 |
 | `tools` | `plugins` | 1 |
-| `tools` | `security` | 25 |
-| `tools` | `services` | 2 |
+| `tools` | `security` | 33 |
+| `tools` | `services` | 1 |
 | `tools` | `shared` | 2 |
 | `tools` | `skills` | 5 |
 | `tools` | `utils` | 35 |
@@ -603,8 +669,8 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tui-pi` | `core` | 3 |
 | `tui-pi` | `voice` | 2 |
 | `utils` | `core` | 3 |
-| `utils` | `models` | 2 |
-| `utils` | `security` | 1 |
+| `utils` | `models` | 3 |
+| `utils` | `security` | 2 |
 | `visual` | `models` | 1 |
 | `visual` | `utils` | 2 |
 | `voice` | `capabilities` | 1 |
@@ -619,6 +685,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 
 Two modules that import each other. Not fatal, but it is what blocks an extraction.
 
+- api <-> security
 - api <-> tools
 - channels <-> config
 - channels <-> core
@@ -627,6 +694,7 @@ Two modules that import each other. Not fatal, but it is what blocks an extracti
 - config <-> models
 - config <-> security
 - config <-> voice
+- connectors <-> core
 - connectors <-> security
 - core <-> db
 - core <-> extensions
@@ -637,6 +705,7 @@ Two modules that import each other. Not fatal, but it is what blocks an extracti
 - core <-> skills
 - core <-> tools
 - core <-> utils
+- core <-> voice
 - db <-> models
 - db <-> security
 - db <-> services
@@ -664,28 +733,44 @@ Every member of the `GatewayEventType` union in `src/core/gateway/protocol.ts`, 
 | `agent.iteration` | yes | `src/core/gateway/event-bridge.ts` | `*` |
 | `agent.spawned` | yes | — | `*` |
 | `agent.stopped` | yes | `src/core/gateway/message-handler.ts` | `*` |
+| `approval.resolved` | yes | — | `*` |
 | `artifact.data_updated` | yes | `src/core/artifacts/events.ts` | `*` |
 | `artifact.source_error` | yes | `src/core/artifacts/events.ts` | `*` |
 | `artifact.version_updated` | yes | `src/core/artifacts/events.ts` | `*` |
 | `audit` | yes | `src/core/gateway/hub.ts` | `*` |
 | `chat.delta` | yes | `src/core/gateway/event-bridge.ts` | `*` |
-| `chat.message` | yes | `src/core/gateway/message-handler.ts` | `*` |
+| `chat.error` | yes | `src/core/agent/service.ts`, `src/core/gateway/message-handler.ts` | `*` |
+| `chat.message` | yes | `src/channels/webchat/index.ts`, `src/core/gateway/message-handler.ts` | `*` |
 | `chat.response` | yes | `src/core/gateway/message-handler.ts` | `*` |
+| `document.completed` | yes | `src/core/gateway/event-bridge.ts` | `*` |
+| `document.enqueued` | yes | `src/core/gateway/event-bridge.ts` | `*` |
+| `document.failed` | yes | `src/core/gateway/event-bridge.ts` | `*` |
+| `document.processing` | yes | `src/core/gateway/event-bridge.ts` | `*` |
 | `extension.notify` | yes | `src/extensions/api.ts` | `*` |
+| `model.install_progress` | yes | `src/core/gateway/event-bridge.ts` | `*` |
 | `permission.request` | yes | `src/core/gateway/event-bridge.ts` | `*` |
 | `permission.resolved` | yes | `src/core/gateway/event-bridge.ts` | `*` |
 | `pipeline.event` | yes | — | `*` |
+| `room.message` | yes | — | `*` |
+| `room.presence` | yes | — | `*` |
+| `room.read` | yes | — | `*` |
+| `room.removed` | yes | — | `*` |
+| `room.turn` | yes | — | `*` |
+| `room.typing` | yes | — | `*` |
 | `rootAgent.status` | yes | — | `*` |
 | `session.compaction_stalled` | yes | `src/core/agent/session-compaction.ts` | `*` |
 | `session.stats` | yes | `src/core/gateway/message-handler.ts` | `*` |
-| `swarm.budget_warning` | yes | `src/core/swarm/spawner.ts` | `*`, `swarm.*`, `swarm.budget_warning` |
-| `swarm.call_graph_cycle_blocked` | yes | `src/core/swarm/spawner.ts` | `*`, `swarm.*` |
-| `swarm.narration` | yes | `src/core/personas/narration-bridge.ts` | `*`, `swarm.*` |
-| `swarm.node_completed` | yes | `src/core/agent/root-runner.ts`, `src/core/agent/worker-spawner.ts`, `src/core/swarm/spawner.ts` | `*`, `swarm.*`, `swarm.node_completed` |
-| `swarm.node_spawned` | yes | `src/core/agent/root-runner.ts`, `src/core/agent/worker-spawner.ts`, `src/core/swarm/spawner.ts` | `*`, `swarm.*`, `swarm.node_spawned` |
+| `space.presence` | yes | — | `*` |
+| `swarm.budget_warning` | yes | `src/core/swarm/spawner.ts` | `*`, `swarm.budget_warning` |
+| `swarm.call_graph_cycle_blocked` | yes | `src/core/swarm/spawner.ts` | `*` |
+| `swarm.narration` | yes | `src/core/personas/narration-bridge.ts` | `*` |
+| `swarm.node_completed` | yes | `src/core/agent/root-runner.ts`, `src/core/agent/worker-spawner.ts`, `src/core/swarm/spawner.ts` | `*`, `swarm.node_completed` |
+| `swarm.node_spawned` | yes | `src/core/agent/root-runner.ts`, `src/core/agent/worker-spawner.ts`, `src/core/swarm/spawner.ts` | `*`, `swarm.node_spawned` |
+| `task.changed` | yes | — | `*` |
 | `team.completed` | yes | — | `*` |
 | `team.started` | yes | — | `*` |
 | `test.event` | yes | — | `*` |
+| `voice.speak` | yes | `src/core/gateway/event-bridge.ts` | `*` |
 
 ### Declared but never published
 
@@ -697,7 +782,16 @@ The contract promises these and no code emits them. Each is either a type to ret
 - `team.started` — subscribed by `src/core/monitors/service.ts`
 - `team.completed` — subscribed by `src/core/monitors/service.ts`
 - `agent.approval_required` — subscribed by `src/core/monitors/service.ts`
+- `approval.resolved` — subscribed by `src/core/monitors/service.ts`
 - `rootAgent.status` — subscribed by `src/core/monitors/service.ts`
+- `room.message` — subscribed by `src/core/monitors/service.ts`
+- `room.turn` — subscribed by `src/core/monitors/service.ts`
+- `room.presence` — subscribed by `src/core/monitors/service.ts`
+- `room.typing` — subscribed by `src/core/monitors/service.ts`
+- `room.read` — subscribed by `src/core/monitors/service.ts`
+- `room.removed` — subscribed by `src/core/monitors/service.ts`
+- `space.presence` — subscribed by `src/core/monitors/service.ts`
+- `task.changed` — subscribed by `src/core/monitors/service.ts`
 - `test.event` — subscribed by `src/core/monitors/service.ts`
 
 1 publish/subscribe site(s) use a non-literal event type and are counted here rather than dropped.

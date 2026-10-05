@@ -45,7 +45,7 @@ export const impersonationSessions = pgTable('impersonation_sessions', {
    *  by a new impersonation, or expired by the cleanup job). NULL
    *  means active. */
   endedAt: timestamp('ended_at', { withTimezone: true }),
-  /** Why it ended: 'explicit' / 'replaced' / 'expired'. */
+  /** Why it ended: 'explicit' / 'replaced' / 'expired' / 'target_inactive'. */
   endedReason: text('ended_reason'),
   /** Optional reason the admin gave for the action (free text). */
   reason: text('reason'),
