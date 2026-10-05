@@ -74,10 +74,15 @@ export async function proposeNoteEdit(scope: NoteScope, input: ProposeInput): Pr
 }
 
 /** The space's proposals, newest first (a note's, a status's). */
-export function listNoteProposals(scope: NoteScope, opts: { noteId?: string; status?: NoteEditProposalStatus } = {}): Promise<NoteEditProposal[]> {
+export async function listNoteProposals(scope: NoteScope, opts: { noteId?: string; status?: NoteEditProposalStatus } = {}): Promise<NoteEditProposal[]> {
   const space = spaceScopeOf(scope);
   assertNoteAccess(space, 'read');
-  return listProposals(space.workspaceId, opts);
+  const proposals = await listProposals(space.workspaceId, opts);
+  if (!space.folders) return proposals;
+  // A guest (S6): the proposals of the notes their folders hold.
+  const { getNoteService } = await import('@/core/knowledge/notes');
+  const visible = new Set((await getNoteService().store(space).getByIds([...new Set(proposals.map((p) => p.noteId))])).map((n) => n.id));
+  return proposals.filter((p) => visible.has(p.noteId));
 }
 
 /** The session's pending proposal for the note (`read_note` shows it to the agent). */

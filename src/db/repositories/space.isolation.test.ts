@@ -110,6 +110,7 @@ const ALLOWLIST: Record<string, string> = {
   'src/db/repositories/note-repository.ts': ACCESS_LAYER,
   'src/db/repositories/knowledge-link-repository.ts': ACCESS_LAYER,
   'src/core/rag/embeddings.ts': ACCESS_LAYER,
+  'src/core/rag/knowledge-scope.ts': ACCESS_LAYER,
   'src/core/rag/retention-service.ts': ACCESS_LAYER,
   'src/core/memory/repository.ts': ACCESS_LAYER,
   'src/core/spaces/service.ts': ACCESS_LAYER,
@@ -555,7 +556,7 @@ describe('artifact reach through the gateway and public pages (review findings 1
     const guest = randomUUID();
     const { seedUsers } = await import('@/test-helpers/multiuser-fixtures');
     await seedUsers([{ id: guest, username: `i-guest-${rand(3)}` }]);
-    await q(`INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, 'guest')`, [spaceId, guest]);
+    await q(`INSERT INTO workspace_members (workspace_id, user_id, role, scope) VALUES ($1, $2, 'guest', '{"rooms":[],"folders":[]}')`, [spaceId, guest]);
     expect(await findViewableArtifactBySlug(guest, slug)).toBeNull();
     await q(`DELETE FROM workspace_members WHERE workspace_id = $1 AND user_id = $2`, [spaceId, guest]);
   });

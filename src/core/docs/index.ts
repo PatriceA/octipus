@@ -6,8 +6,9 @@ import { getConfig } from '@/config';
 import { getGatewayHub } from '@/core/gateway/hub';
 import { membershipVersion } from '@/core/spaces/membership';
 import { getMembership } from '@/core/spaces/service';
-import { insertRevision, loadSpaceNote, writeBodyIfUnchanged } from '@/db/repositories/live-documents';
+import { insertRevision, loadSpaceNote, loadSpaceNoteSlug, writeBodyIfUnchanged } from '@/db/repositories/live-documents';
 import { userRepository } from '@/db/repositories/user-repository';
+import { noteInGuestScope, pathInGuestFolders } from '@/security/space-access';
 import { coreLogger } from '@/utils/logger';
 import { DocumentHub } from './hub';
 import { leaseViews, listLeases, setLeaseChangeListener } from './file-leases';
@@ -34,7 +35,14 @@ export function getDocHub(): DocumentHub {
       return getNoteService().refreshSpaceNote(noteId, editorUserId, previousBody);
     },
     userName: async (userId) => (await userRepository.findById(userId))?.username ?? null,
-    membership: async (userId, workspaceId) => (await getMembership(userId, workspaceId))?.role ?? null,
+    membership: async (userId, workspaceId, noteId) => {
+      const membership = await getMembership(userId, workspaceId);
+      if (!membership) return null;
+      if (!membership.scope) return membership.role;
+      // A guest reads a note of their folders only (S6).
+      const note = await loadSpaceNoteSlug(noteId);
+      return note && note.workspaceId === workspaceId && noteInGuestScope(note.slug, membership.scope) ? membership.role : null;
+    },
     membershipVersion,
     send: (connectionId, message) => gateway().connectionManager.sendToConnection(connectionId, message),
     setResource: (connectionId, resource, on) => {
@@ -70,7 +78,19 @@ export function wireDocumentHub(): void {
 async function publishLeases(workspaceId: string): Promise<void> {
   try {
     const leases = await leaseViews(await listLeases(workspaceId));
-    getGatewayHub().publishToResource(`space:${workspaceId}`, { type: 'file.leases', spaceId: workspaceId, leases });
+    const hub = getGatewayHub();
+    const resource = `space:${workspaceId}`;
+    // Each subscriber gets its own view: a guest the leases of their folders
+    // only (S6); a connection whose membership is gone, nothing.
+    const memberships = new Map<string, Awaited<ReturnType<typeof getMembership>>>();
+    for (const ctx of hub.connectionManager.getActiveConnections().filter((c) => c.resources.has(resource))) {
+      if (!memberships.has(ctx.userId)) memberships.set(ctx.userId, await getMembership(ctx.userId, workspaceId));
+      const membership = memberships.get(ctx.userId);
+      if (!membership) continue;
+      const scope = membership.scope;
+      const visible = scope ? leases.filter((l) => pathInGuestFolders(l.path, scope.folders)) : leases;
+      hub.connectionManager.sendToConnection(ctx.connectionId, { type: 'file.leases', spaceId: workspaceId, leases: visible });
+    }
   } catch (err) {
     coreLogger.error({ err, workspaceId }, 'Publishing file leases failed');
   }

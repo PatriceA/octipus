@@ -18,14 +18,19 @@
  * (sessions, messages), agents, pipelines and notifications are filtered by
  * the member as well as by the space.
  *
- * Guests (S6) have no content access yet: their scope has no defined shape
- * until guest scopes land, and an unscoped guest would read the whole space.
+ * Guests (S6) reach only their scope (`GuestScope`, docs/SPACES.md →
+ * Guests): the notes and files of their folders, the tasks raised from
+ * their rooms, and the knowledge chunks of those notes and files. Every
+ * other shared table answers no row to a guest (`spaceScope.shared` is
+ * false for them unless a repository applies its own guest rule), and a
+ * guest has no private chat, agent or pipeline in a space: they ask the
+ * agent in their rooms only.
  */
 import { join } from 'node:path';
-import { and, desc, eq, inArray, isNull, ne, or, type SQL } from 'drizzle-orm';
-import type { KnowledgeOwner, KnowledgeScope } from '@/core/rag/knowledge-scope';
+import { and, desc, eq, inArray, isNull, ne, or, type SQL, sql } from 'drizzle-orm';
+import { guestKnowledge, type KnowledgeOwner, type KnowledgeScope } from '@/core/rag/knowledge-scope';
 import { type Principal, isAuthenticated } from '@/security/principal';
-import { requireCan, SpaceError, type SpaceAction, type SpaceRole } from '@/security/space-access';
+import { type GuestScope, requireCan, SpaceError, type SpaceAction, type SpaceRole } from '@/security/space-access';
 import { spaceDirectories, WorkspaceFS } from '@/security/workspace-fs';
 import { getDb } from '../postgres';
 import { type Artifact, artifacts, type NewArtifact } from '../schema/artifacts';
@@ -51,6 +56,8 @@ export interface SpaceContext {
   readonly userId: string;
   readonly role: SpaceRole;
   readonly archived: boolean;
+  /** A guest's scope (never null for a guest); null for every other role. */
+  readonly guest: GuestScope | null;
 }
 
 /**
@@ -62,21 +69,30 @@ export function spaceContextOf(principal: Principal): SpaceContext {
   if (principal.workspaceKind !== 'shared' || !principal.workspaceId || !principal.spaceRole) {
     throw new SpaceError('not_found', 'Space not found');
   }
-  if (principal.spaceRole === 'guest') {
-    throw new SpaceError('forbidden_role', 'Guests reach space content through guest scopes, which this install does not have yet');
-  }
+  const guest = principal.spaceRole === 'guest' ? principal.spaceScope ?? null : null;
+  // Fail closed: a guest principal always carries its scope (`getMembership`).
+  if (principal.spaceRole === 'guest' && !guest) throw new Error('A guest principal carries no guest scope');
   return {
     workspaceId: principal.workspaceId,
     userId: principal.userId,
     role: principal.spaceRole,
     archived: principal.spaceArchived === true,
+    guest,
   };
 }
 
-/** `can()` of a space context: the role's grant, and nothing but reads in an archived space. */
+/**
+ * `can()` of a space context: the role's grant, and nothing but reads in an
+ * archived space. A guest's `run_agent` holds in their rooms only (room
+ * turns check it through `roomAccess`): through the access layer — a private
+ * chat, agent or pipeline in the space — it is refused.
+ */
 export function assertSpaceCan(space: SpaceContext, action: SpaceAction): void {
   if (space.archived && action !== 'read') throw new SpaceError('archived', 'This space is archived');
-  requireCan({ workspaceId: space.workspaceId, userId: space.userId, role: space.role, scope: null }, action);
+  requireCan({ workspaceId: space.workspaceId, userId: space.userId, role: space.role, scope: space.guest }, action);
+  if (space.guest && action === 'run_agent') {
+    throw new SpaceError('forbidden_role', 'A guest asks Octipus only in the rooms they were given');
+  }
 }
 
 /** The `RepoScope` of a space: shared rows by workspace, private rows by workspace and member. */
@@ -86,7 +102,8 @@ export function spaceScope(principal: Principal): RepoScope {
     kind: 'space',
     principal,
     spaceId: space.workspaceId,
-    shared: (t: ScopeColumns): SQL[] => [eq(t.workspaceId, space.workspaceId)],
+    // A guest reaches no shared row unless the repository applies a guest rule (S6).
+    shared: (t: ScopeColumns): SQL[] => space.guest ? [eq(t.workspaceId, space.workspaceId), sql`FALSE`] : [eq(t.workspaceId, space.workspaceId)],
     own: (t: ScopeColumns): SQL[] => [eq(t.workspaceId, space.workspaceId), eq(t.userId, space.userId)],
     stamp: () => ({ userId: space.userId, workspaceId: space.workspaceId }),
     can: (action) => assertSpaceCan(space, action),
@@ -94,6 +111,7 @@ export function spaceScope(principal: Principal): RepoScope {
       if (space.archived) throw new SpaceError('archived', 'This space is archived');
     },
     writeWorkspace: async () => space.workspaceId,
+    guest: space.guest,
   };
 }
 
@@ -160,6 +178,8 @@ export class ArtifactStore {
     private readonly userId: string,
     private readonly can: (action: SpaceAction) => void,
     private readonly door: () => Promise<void> = async () => undefined,
+    /** A guest (S6): artifacts are never in a guest's scope, so none is visible. */
+    private readonly hidden = false,
   ) {}
 
   private get db() { return getDb(); }
@@ -172,6 +192,7 @@ export class ArtifactStore {
   /** Live (not deleted) rows of this workspace the caller may see. */
   private visible(): SQL[] {
     return [
+      ...(this.hidden ? [sql`FALSE`] : []),
       eq(artifacts.workspaceId, this.workspaceId),
       isNull(artifacts.deletedAt),
       or(eq(artifacts.visibility, 'workspace'), eq(artifacts.visibility, 'signed'), eq(artifacts.visibility, 'public'), eq(artifacts.createdByUserId, this.userId)) as SQL,
@@ -232,8 +253,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /**
  * The artifact of `slug` a signed-in viewer may open as a page: the one in
  * a personal workspace of theirs first, then one in a space they are a
- * member of (any role reads; guests not until their scopes exist, as in
- * `spaceContextOf`). Slugs are unique per workspace only, so the personal
+ * member of (any role reads but a guest: artifacts are never in a guest's
+ * scope, S6). Slugs are unique per workspace only, so the personal
  * row always wins: a personal page link never opens a space's page.
  * `private` is the creator's only. Membership is `getMembership` (D5).
  */
@@ -306,7 +327,14 @@ export interface SpaceRepos {
 export function spaceRepos(principal: Principal): SpaceRepos {
   const space = spaceContextOf(principal);
   const scope = spaceScope(principal);
-  const noteScope: NoteScope = { kind: 'space', workspaceId: space.workspaceId, userId: space.userId, role: space.role, archived: space.archived };
+  const noteScope: NoteScope = {
+    kind: 'space',
+    workspaceId: space.workspaceId,
+    userId: space.userId,
+    role: space.role,
+    archived: space.archived,
+    ...(space.guest ? { folders: space.guest.folders } : {}),
+  };
   return {
     kind: 'space',
     principal,
@@ -324,9 +352,9 @@ export function spaceRepos(principal: Principal): SpaceRepos {
     notes: new SpaceNoteRepo(noteScope),
     noteScope,
     links: linkStoreFor(noteScope),
-    artifacts: new ArtifactStore(space.workspaceId, space.userId, scope.can),
-    knowledge: { kind: 'space', workspaceId: space.workspaceId },
+    artifacts: new ArtifactStore(space.workspaceId, space.userId, scope.can, undefined, space.guest !== null),
+    knowledge: { kind: 'space', workspaceId: space.workspaceId, guest: guestKnowledge(space.workspaceId, space.guest) },
     knowledgeOwner: { ownerUserId: space.userId, workspaceId: space.workspaceId },
-    files: () => WorkspaceFS.forSpace(space.workspaceId),
+    files: () => WorkspaceFS.forSpace(space.workspaceId, { guestFolders: space.guest?.folders }),
   };
 }

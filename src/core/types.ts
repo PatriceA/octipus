@@ -23,8 +23,8 @@ export type AgentFunding = 'own' | 'sponsor';
 export interface AgentSpace {
   readonly workspaceId: string;
   readonly role: import('@/db/schema/organizations').SpaceRole;
-  /** Guests only (S6). */
-  readonly scope: Record<string, unknown> | null;
+  /** Guests only (S6): the rooms and folders they reach; null for every other role. */
+  readonly scope: import('@/db/schema/organizations').GuestScope | null;
 }
 
 /**

@@ -23,7 +23,7 @@ const ROLE_MEANING: Record<InvitePreview['role'], string> = {
   editor: 'read and edit everything in the space',
   commenter: 'read everything and comment on tasks',
   viewer: 'read everything in the space',
-  guest: 'see only what you are given',
+  guest: 'see only the rooms and folders you are given',
 };
 
 /**
@@ -47,7 +47,9 @@ export default function JoinPage() {
 
   const here = `/join/${token}`;
   const signInHref = loginPathReturningTo(here);
-  const registerHref = `/login?mode=register&returnTo=${encodeURIComponent(here)}`;
+  // Registering from here redeems the invite with the new account (S6): on an
+  // invite-only install it is the way in.
+  const registerHref = `/login?mode=register&invite=${encodeURIComponent(token)}&returnTo=${encodeURIComponent(here)}`;
 
   const join = async () => {
     setJoining(true);

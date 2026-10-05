@@ -9,6 +9,29 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **Guests and registration modes (coworking S6).** A guest's scope
+  `{ rooms, folders }` lives on their membership and on guest invites
+  (validated on write: shape, and rooms of the space). Guests now reach
+  their scope instead of being refused every content route: the rooms it
+  names, the members of those rooms, the files and notes under its folders
+  (with their live documents, revisions, links and proposals), the tasks
+  raised from their rooms and the knowledge chunks of those notes and files;
+  documents, artifacts, space memory and private chats stay out of reach.
+  The invite dialog picks a guest's rooms and folders, and owners edit a
+  guest's access from the members list. `security.registration`
+  (`REGISTRATION_MODE`: `open` | `invite_only` | `closed`) decides who may
+  register; registration is one transaction (first-account detection and
+  an invite token's redemption inside it). The sign-in page hides
+  registering when closed and asks for an invite when invite-only. SAML,
+  SCIM and admin-created accounts are not subject to it. See
+  docs/SPACES.md → Guests, Registration modes.
+- **Remote members (coworking S7 contract).** `users.kind` (`local` |
+  `remote`), `remote_instance_id`, `remote_user_ref`; local usernames may no
+  longer start with `~` (registration, admin creation, SCIM and SAML JIT
+  refuse it; migration `0134_guests_remote` renames existing ones before a
+  CHECK). Remote rows never sign in (sessions, API tokens, impersonation,
+  SAML, passkeys refuse them) and are left out of admin user lists and
+  SCIM. See docs/SPACES.md → Across installs.
 - **Rooms in the web.** With a shared space selected, the sidebar gets
   *rooms* (with the unread count) and `/rooms` lists the space's rooms with
   unread badges. A room shows everyone's posts (others on the left with name

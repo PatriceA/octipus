@@ -13,7 +13,8 @@
  *   - `space` — the rows of one shared workspace, whoever wrote them. Built
  *     only from a principal the resolver marked shared after its membership
  *     check (`principalKnowledgeScope`, `contentRepos`), and from a space
- *     note's scope.
+ *     note's scope. A guest's space scope (`guest`, S6) narrows it to the
+ *     chunks of the notes and files of their folders.
  *   - `install` — every row. Admin routes reach it only through
  *     `?scope=install`, which is audited; otherwise system jobs only (cron
  *     cleanup, boot indexing).
@@ -27,15 +28,39 @@
  * the product corpus. There is no "no owner" write. Space content is written
  * by its author with the space's workspace id.
  */
+import { join } from 'node:path';
 import { type SQL, sql } from 'drizzle-orm';
 import type { AgentContext } from '@/core/types';
 import type { NoteScope } from '@/db/repositories/note-repository';
 import type { Principal } from '@/security/principal';
+import { type GuestScope, guestNoteFolders } from '@/security/space-access';
+import { spaceDirectories } from '@/security/workspace-fs';
 
 export type KnowledgeScope =
   | { kind: 'personal'; userId: string; workspaceId: string | null }
-  | { kind: 'space'; workspaceId: string }
+  | {
+    kind: 'space';
+    workspaceId: string;
+    /**
+     * A guest (S6): only the chunks of the notes and files their folders
+     * hold (`guestKnowledge`). Absent for every other role.
+     */
+    guest?: GuestKnowledge;
+  }
   | { kind: 'install' };
+
+/** What a guest's knowledge scope reaches: their folders, and the space's file root they are relative to. */
+export interface GuestKnowledge {
+  folders: readonly string[];
+  /** `<workspace.rootPath>/spaces/<id>/files`, where indexed space files live. */
+  filesRoot: string;
+}
+
+/** The guest part of a space knowledge scope for `scope` (null for every role but a guest). */
+export function guestKnowledge(workspaceId: string, scope: GuestScope | null | undefined): GuestKnowledge | undefined {
+  if (!scope) return undefined;
+  return { folders: scope.folders, filesRoot: join(spaceDirectories(workspaceId).root, 'files') };
+}
 
 /** Who a written row belongs to. Product docs are the only owner-less rows. */
 export type KnowledgeOwner =
@@ -67,6 +92,25 @@ function productDocsSql(alias?: string): SQL {
 }
 
 /**
+ * A guest's rows (S6): chunks of a note whose slug is in their folders
+ * (`source_id = 'note:<id>'`), or of a file indexed under a folder of theirs
+ * (`source_id` is the file's absolute path). No folder matches nothing.
+ */
+function guestRowsSql(workspaceId: string, guest: GuestKnowledge, alias?: string): SQL {
+  const noteFolders = guestNoteFolders(guest.folders);
+  const sourceId = column(alias, 'source_id');
+  const parts: SQL[] = [];
+  if (noteFolders.length > 0) {
+    const slugs = sql.join(noteFolders.map((f) => sql`(gn.slug = ${f} OR starts_with(gn.slug, ${`${f}/`}))`), sql` OR `);
+    parts.push(sql`${sourceId} IN (SELECT 'note:' || gn.id::text FROM notes gn WHERE gn.workspace_id = ${workspaceId} AND (${slugs}))`);
+  }
+  for (const folder of guest.folders) {
+    parts.push(sql`starts_with(${sourceId}, ${`${join(guest.filesRoot, folder)}/`})`);
+  }
+  return parts.length === 0 ? sql`FALSE` : sql`(${sql.join(parts, sql` OR `)})`;
+}
+
+/**
  * The SQL condition a row must meet to be in `scope`. Column names are
  * unqualified unless `alias` names the `embeddings` alias of the query.
  */
@@ -82,7 +126,9 @@ export function scopePredicate(scope: KnowledgeScope, access: KnowledgeAccess, a
       return access === 'read' ? sql`(${own} OR ${productDocsSql(alias)})` : own;
     }
     case 'space': {
-      const own = sql`(${column(alias, 'workspace_id')} = ${scope.workspaceId})`;
+      const own = scope.guest
+        ? sql`(${column(alias, 'workspace_id')} = ${scope.workspaceId} AND ${guestRowsSql(scope.workspaceId, scope.guest, alias)})`
+        : sql`(${column(alias, 'workspace_id')} = ${scope.workspaceId})`;
       return access === 'read' ? sql`(${own} OR ${productDocsSql(alias)})` : own;
     }
   }
@@ -123,7 +169,7 @@ export function principalKnowledgeScope(principal: Principal): KnowledgeScope {
   const userId = requireUserId(principal.userId, 'Knowledge access');
   if (principal.workspaceKind === 'shared') {
     if (!principal.workspaceId || !principal.spaceRole) throw new Error('A shared principal has no space');
-    return { kind: 'space', workspaceId: principal.workspaceId };
+    return { kind: 'space', workspaceId: principal.workspaceId, guest: guestKnowledge(principal.workspaceId, principal.spaceScope) };
   }
   return { kind: 'personal', userId, workspaceId: principal.workspaceId ?? null };
 }
@@ -131,7 +177,7 @@ export function principalKnowledgeScope(principal: Principal): KnowledgeScope {
 /** The knowledge scope a note scope searches embeddings in. */
 export function noteKnowledgeScope(scope: NoteScope): KnowledgeScope {
   return scope.kind === 'space'
-    ? { kind: 'space', workspaceId: scope.workspaceId }
+    ? { kind: 'space', workspaceId: scope.workspaceId, guest: scope.folders ? guestKnowledge(scope.workspaceId, { rooms: [], folders: [...scope.folders] }) : undefined }
     : { kind: 'personal', userId: scope.userId, workspaceId: null };
 }
 
@@ -139,7 +185,7 @@ export function noteKnowledgeScope(scope: NoteScope): KnowledgeScope {
 export function agentKnowledgeScope(context: Pick<AgentContext, 'userId' | 'workspaceId'> & { space?: AgentContext['space'] }): KnowledgeScope {
   // An agent in a space searches the space's knowledge (§5.6), the member's
   // role having been read for the turn.
-  if (context.space) return { kind: 'space', workspaceId: context.space.workspaceId };
+  if (context.space) return { kind: 'space', workspaceId: context.space.workspaceId, guest: guestKnowledge(context.space.workspaceId, context.space.scope) };
   return {
     kind: 'personal',
     userId: requireUserId(context.userId, 'Knowledge access'),

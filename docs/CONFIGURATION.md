@@ -36,6 +36,7 @@ LOG_STDERR=0                           # 1 = write logs to stderr instead of std
 GATEWAY_STDIO=0                        # 1 = also serve the gateway protocol over this process's stdin/stdout as JSON lines (same as `--stdio`); logs move to stderr
 CORS_ORIGINS=http://localhost:3007   # your web origin; code default is http://localhost:3001
 TRUSTED_PROXIES=                       # reverse proxies whose X-Forwarded-For is believed; see "Reverse proxy" below
+REGISTRATION_MODE=open                 # who may register: open | invite_only (with a space invite link) | closed; the first account always may (docs/SPACES.md → Guests)
 
 # ─── Models ───────────────────────────────────────────────────
 LITELLM_URL=http://localhost:4000      # LiteLLM proxy (optional)

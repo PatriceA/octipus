@@ -17,9 +17,9 @@ export class UserRepository {
    * The three columns every authenticated request re-reads (session and API
    * token validation): a session's own copy is a snapshot from login time.
    */
-  async findAuthState(id: string): Promise<{ username: string; isAdmin: boolean; isActive: boolean } | null> {
+  async findAuthState(id: string): Promise<{ username: string; isAdmin: boolean; isActive: boolean; kind: User['kind'] } | null> {
     const result = await this.db
-      .select({ username: users.username, isAdmin: users.isAdmin, isActive: users.isActive })
+      .select({ username: users.username, isAdmin: users.isAdmin, isActive: users.isActive, kind: users.kind })
       .from(users)
       .where(eq(users.id, id))
       .limit(1);
@@ -133,6 +133,11 @@ export class UserRepository {
 
   async listAll(): Promise<User[]> {
     return this.db.select().from(users);
+  }
+
+  /** The install's own accounts: every user but remote members (S7), for admin lists and SCIM. */
+  async listLocal(): Promise<User[]> {
+    return this.db.select().from(users).where(eq(users.kind, 'local'));
   }
 
   async listActive(): Promise<User[]> {

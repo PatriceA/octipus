@@ -1,9 +1,23 @@
 import { boolean, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
+/**
+ * `local`: an account of this install. `remote` (S7, docs/SPACES.md →
+ * Across installs): a member of a space hosted here who lives on another
+ * install — a username with a leading `~`, no email, no password, never an
+ * admin, and never signed in here (`users_kind_chk`).
+ */
+export type UserKind = 'local' | 'remote';
+
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
+  /** A local username never starts with `~` (`assertLocalUsername`); a remote one always does. */
   username: text('username').notNull().unique(),
   email: text('email').unique(),
+  kind: text('kind').$type<UserKind>().default('local').notNull(),
+  /** Remote members only: the fingerprint of the install they live on. */
+  remoteInstanceId: text('remote_instance_id'),
+  /** Remote members only: their user id on that install. */
+  remoteUserRef: text('remote_user_ref'),
   passwordHash: text('password_hash'),
   isAdmin: boolean('is_admin').default(false).notNull(),
   isActive: boolean('is_active').default(true).notNull(),

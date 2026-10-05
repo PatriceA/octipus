@@ -16,11 +16,11 @@ import { getDb } from '@/db/postgres';
 import { isUuid } from '@/db/repositories/scoped';
 import { type InvitableSpaceRole, workspaceInvites, workspaceMembers, workspaces } from '@/db/schema/organizations';
 import { users } from '@/db/schema/users';
-import { can, isInvitableRole, requireCan, SPACE_ROLES, SpaceError } from '@/security/space-access';
+import { can, type GuestScope, isInvitableRole, requireCan, SPACE_ROLES, SpaceError } from '@/security/space-access';
 import { generateToken, sha256 } from '@/utils/crypto';
 import { securityLogger } from '@/utils/logger';
 import { onMembershipGranted } from './membership';
-import { addMemberInTx, auditActor, getMembership, type SpaceActor, writeSpaceAudit } from './service';
+import { addMemberInTx, auditActor, getMembership, guestScopeForWrite, type SpaceActor, type Tx, writeSpaceAudit } from './service';
 
 /** The roles that may hand out invites: an invite is good only while its creator still holds one. */
 const INVITING_ROLES = SPACE_ROLES.filter((r) => can(r, 'manage_invites'));
@@ -61,7 +61,7 @@ export function clampInviteTtlHours(requested: number | undefined): number {
 export async function createInvite(
   actor: SpaceActor,
   workspaceId: string,
-  input: { role: string; scope?: Record<string, unknown> | null; expiresInHours?: number; maxUses?: number },
+  input: { role: string; scope?: unknown; expiresInHours?: number; maxUses?: number },
 ): Promise<CreatedInvite> {
   if (!isInvitableRole(input.role)) {
     throw new SpaceError('invalid_role', input.role === 'owner' ? 'Owners cannot be invited; promote a member instead' : `Unknown role: ${input.role}`);
@@ -80,12 +80,14 @@ export async function createInvite(
     requireCan(await getMembership(actor.userId, workspaceId, tx, { lock: 'share' }), 'manage_invites');
     const [space] = await tx.select({ archivedAt: workspaces.archivedAt }).from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
     if (space?.archivedAt) throw new SpaceError('archived', 'This space is archived');
+    // A guest invite carries the scope the guest joins with (validated: shape, rooms of this space).
+    const scope = role === 'guest' ? await guestScopeForWrite(tx, workspaceId, input.scope ?? null) : null;
     const [row] = await tx
       .insert(workspaceInvites)
       .values({
         workspaceId,
         role,
-        scope: role === 'guest' ? (input.scope ?? null) : null,
+        scope,
         tokenHash: sha256(token),
         createdBy: actor.userId,
         expiresAt,
@@ -98,7 +100,7 @@ export async function createInvite(
       workspaceId,
       resourceType: 'space_invite',
       resourceId: row.id,
-      details: { role, expiresAt: expiresAt.toISOString(), maxUses },
+      details: { role, expiresAt: expiresAt.toISOString(), maxUses, ...(scope ? { scope } : {}) },
     });
     return row;
   });
@@ -154,60 +156,72 @@ export interface AcceptedInvite {
  * existing member gets the use refunded.
  */
 export async function acceptInvite(actor: SpaceActor, token: string): Promise<AcceptedInvite> {
+  const result = await getDb().transaction((tx) => acceptInviteInTx(tx, actor, token));
+  await afterInviteAccepted(actor, result);
+  return result;
+}
+
+/**
+ * `acceptInvite` inside the caller's transaction: the use is taken and the
+ * membership written there, so they commit or roll back with the caller's
+ * own writes (registration redeems an invite in the same transaction that
+ * creates the user, S6). The caller runs `afterInviteAccepted` once it has
+ * committed.
+ */
+export async function acceptInviteInTx(tx: Tx, actor: SpaceActor, token: string): Promise<AcceptedInvite> {
   if (!isUuid(actor.userId)) throw new SpaceError('not_found', 'Invite not found or expired');
   if (!TOKEN_PATTERN.test(token)) throw new SpaceError('not_found', 'Invite not found or expired');
   const tokenHash = sha256(token);
-
-  const result = await getDb().transaction(async (tx) => {
-    const [taken] = await tx
-      .update(workspaceInvites)
-      .set({ useCount: sql`${workspaceInvites.useCount} + 1` })
-      .where(and(
-        eq(workspaceInvites.tokenHash, tokenHash),
-        isNull(workspaceInvites.revokedAt),
-        sql`${workspaceInvites.expiresAt} > now()`,
-        sql`${workspaceInvites.useCount} < ${workspaceInvites.maxUses}`,
-        creatorMayInvite(),
-      ))
-      .returning({
-        id: workspaceInvites.id,
-        workspaceId: workspaceInvites.workspaceId,
-        role: workspaceInvites.role,
-        scope: workspaceInvites.scope,
-        createdBy: workspaceInvites.createdBy,
-      });
-    if (!taken) throw new SpaceError('not_found', 'Invite not found or expired');
-
-    const added = await addMemberInTx(tx, taken.workspaceId, {
-      userId: actor.userId,
-      role: taken.role,
-      scope: taken.scope,
-      invitedBy: taken.createdBy,
+  const [taken] = await tx
+    .update(workspaceInvites)
+    .set({ useCount: sql`${workspaceInvites.useCount} + 1` })
+    .where(and(
+      eq(workspaceInvites.tokenHash, tokenHash),
+      isNull(workspaceInvites.revokedAt),
+      sql`${workspaceInvites.expiresAt} > now()`,
+      sql`${workspaceInvites.useCount} < ${workspaceInvites.maxUses}`,
+      creatorMayInvite(),
+    ))
+    .returning({
+      id: workspaceInvites.id,
+      workspaceId: workspaceInvites.workspaceId,
+      role: workspaceInvites.role,
+      scope: workspaceInvites.scope,
+      createdBy: workspaceInvites.createdBy,
     });
-    if (!added) {
-      // An existing member keeps their role; the use goes back.
-      await tx
-        .update(workspaceInvites)
-        .set({ useCount: sql`${workspaceInvites.useCount} - 1` })
-        .where(eq(workspaceInvites.id, taken.id));
-      const existing = await getMembership(actor.userId, taken.workspaceId, tx);
-      return { workspaceId: taken.workspaceId, role: existing?.role ?? taken.role, alreadyMember: true };
-    }
-    await writeSpaceAudit(tx, {
-      ...auditActor(actor),
-      action: 'space_invite_accepted',
-      workspaceId: taken.workspaceId,
-      resourceType: 'space_invite',
-      resourceId: taken.id,
-      details: { role: taken.role, invitedBy: taken.createdBy },
-    });
-    return { workspaceId: taken.workspaceId, role: taken.role, alreadyMember: false };
+  if (!taken) throw new SpaceError('not_found', 'Invite not found or expired');
+
+  const added = await addMemberInTx(tx, taken.workspaceId, {
+    userId: actor.userId,
+    role: taken.role,
+    scope: taken.scope,
+    invitedBy: taken.createdBy,
   });
-  if (!result.alreadyMember) {
-    securityLogger.info({ workspaceId: result.workspaceId, userId: actor.userId, role: result.role }, 'Space invite accepted');
-    await onMembershipGranted(result.workspaceId, actor.userId);
+  if (!added) {
+    // An existing member keeps their role; the use goes back.
+    await tx
+      .update(workspaceInvites)
+      .set({ useCount: sql`${workspaceInvites.useCount} - 1` })
+      .where(eq(workspaceInvites.id, taken.id));
+    const existing = await getMembership(actor.userId, taken.workspaceId, tx);
+    return { workspaceId: taken.workspaceId, role: existing?.role ?? taken.role, alreadyMember: true };
   }
-  return result;
+  await writeSpaceAudit(tx, {
+    ...auditActor(actor),
+    action: 'space_invite_accepted',
+    workspaceId: taken.workspaceId,
+    resourceType: 'space_invite',
+    resourceId: taken.id,
+    details: { role: taken.role, invitedBy: taken.createdBy },
+  });
+  return { workspaceId: taken.workspaceId, role: taken.role, alreadyMember: false };
+}
+
+/** After an accepted invite committed: log it and run the membership follow-up (§5.9). */
+export async function afterInviteAccepted(actor: SpaceActor, result: AcceptedInvite): Promise<void> {
+  if (result.alreadyMember) return;
+  securityLogger.info({ workspaceId: result.workspaceId, userId: actor.userId, role: result.role }, 'Space invite accepted');
+  await onMembershipGranted(result.workspaceId, actor.userId);
 }
 
 /** Revoke an invite of this space (owner only). An id of another space is `not_found`. */
@@ -239,7 +253,7 @@ export async function revokeInvite(actor: SpaceActor, workspaceId: string, invit
 export interface InviteView {
   id: string;
   role: InvitableSpaceRole;
-  scope: Record<string, unknown> | null;
+  scope: GuestScope | null;
   createdBy: string;
   createdByName: string | null;
   expiresAt: Date;

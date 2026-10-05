@@ -46,9 +46,10 @@ async function assertWritable(actor: SpaceActor, workspaceId: string): Promise<v
   if (await isSpaceArchived(workspaceId)) throw new SpaceError('archived', 'This space is archived');
 }
 
-/** The space's current entries, newest first (any member). */
+/** The space's current entries, newest first (any member but a guest: space memory is never in a guest's scope, S6). */
 export async function listSpaceMemory(actor: SpaceActor, workspaceId: string): Promise<SpaceMemoryView[]> {
-  requireCan(await getMembership(actor.userId, workspaceId), 'read');
+  const membership = requireCan(await getMembership(actor.userId, workspaceId), 'read');
+  if (membership.scope) throw new SpaceError('forbidden_role', 'Space memory is not in a guest\'s scope');
   return readSpaceMemory(workspaceId, 200);
 }
 

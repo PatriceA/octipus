@@ -66,6 +66,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
       trustedProxies: process.env.TRUSTED_PROXIES
         ? process.env.TRUSTED_PROXIES.split(',').map((s) => s.trim()).filter(Boolean)
         : defaultConfig.security!.trustedProxies!,
+      registration: (process.env.REGISTRATION_MODE as 'open' | 'invite_only' | 'closed' | undefined) || defaultConfig.security!.registration!,
     },
     api: {
       host: process.env.API_HOST || process.env.HOST || defaultConfig.api!.host!,

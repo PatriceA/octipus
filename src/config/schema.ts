@@ -113,6 +113,15 @@ export const securityConfigSchema = z.object({
   trustedProxies: z.array(z.string().refine(isAddressOrCidr, {
     message: 'must be an IP address or CIDR range (e.g. 127.0.0.1, 10.0.0.0/8, fd00::/8)',
   })).default([]),
+  /**
+   * Who may create an account through `POST /api/auth/register` (S6,
+   * docs/SPACES.md → Guests): `open` (anyone), `invite_only` (only with a
+   * valid space invite token, redeemed in the same transaction as the
+   * account), `closed` (nobody). The install's first account may always
+   * register. SAML JIT, SCIM and admin-created accounts are gated by the IdP
+   * or an admin and are not subject to it.
+   */
+  registration: z.enum(['open', 'invite_only', 'closed']).default('open'),
 });
 
 // API server configuration schema

@@ -145,8 +145,11 @@ export interface DocHubDeps {
   reindex(noteId: string, editorUserId: string, previousBody: string): Promise<string | null>;
   /** The member's display name (awareness states carry it). */
   userName(userId: string): Promise<string | null>;
-  /** The member's role, read from the database (D5); null when not a member. */
-  membership(userId: string, workspaceId: string): Promise<SpaceRole | null>;
+  /**
+   * The member's role for the note, read from the database (D5); null when
+   * not a member, or a guest whose scope does not reach the note (S6).
+   */
+  membership(userId: string, workspaceId: string, noteId: string): Promise<SpaceRole | null>;
   /** The in-process membership version (D5). */
   membershipVersion(workspaceId: string, userId: string): number;
   send(connectionId: string, message: GatewayMessage): void;
@@ -290,8 +293,8 @@ export class DocumentHub {
     // re-reads the membership.
     const version = note ? this.deps.membershipVersion(note.workspaceId, conn.userId) : 0;
     // Not a space note, or not a member: the same answer (I3).
-    const role = note ? await this.deps.membership(conn.userId, note.workspaceId) : null;
-    if (!note || !role || role === 'guest') {
+    const role = note ? await this.deps.membership(conn.userId, note.workspaceId, noteId) : null;
+    if (!note || !role) {
       this.error(conn.connectionId, noteId, 'NOT_FOUND', 'Note not found');
       return;
     }
@@ -599,10 +602,10 @@ export class DocumentHub {
     // The version before the role read (I5): a change in between makes the
     // next frame re-read.
     const version = this.deps.membershipVersion(workspaceId, userId);
-    const role = await this.deps.membership(userId, workspaceId);
     for (const doc of docs) {
+      const role = await this.deps.membership(userId, workspaceId, doc.noteId);
       for (const peer of [...doc.peers.values()].filter((p) => p.userId === userId)) {
-        if (!role || role === 'guest') {
+        if (!role) {
           this.removePeer(doc, peer.connectionId);
           this.deps.send(peer.connectionId, { type: 'doc.closed', noteId: doc.noteId, reason: 'access' });
           continue;
@@ -783,8 +786,8 @@ export class DocumentHub {
     }
     const version = this.deps.membershipVersion(doc.workspaceId, conn.userId);
     if (version !== peer.version) {
-      const role = await this.deps.membership(conn.userId, doc.workspaceId);
-      if (!role || role === 'guest') {
+      const role = await this.deps.membership(conn.userId, doc.workspaceId, noteId);
+      if (!role) {
         this.removePeer(doc, conn.connectionId);
         this.deps.send(conn.connectionId, { type: 'doc.closed', noteId, reason: 'access' });
         this.deps.peersChanged(doc.workspaceId);

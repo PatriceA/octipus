@@ -14,7 +14,7 @@
  */
 
 import type { AgentContext } from '@/core/types';
-import type { SpaceRole } from '@/db/schema/organizations';
+import type { GuestScope, SpaceRole } from '@/db/schema/organizations';
 import { scopesSatisfy } from './scopes';
 
 export type PrincipalKind = 'user' | 'service' | 'system' | 'anonymous';
@@ -70,7 +70,7 @@ export interface Principal {
   /** The member's role in the space; set exactly when `workspaceKind` is `'shared'`. */
   readonly spaceRole?: SpaceRole;
   /** Guests only (S6): what of the space the guest may reach. */
-  readonly spaceScope?: Record<string, unknown> | null;
+  readonly spaceScope?: GuestScope | null;
   /** The space is archived: reads only, no writes, no agent runs. */
   readonly spaceArchived?: boolean;
   /**

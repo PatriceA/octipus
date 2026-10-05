@@ -1,12 +1,15 @@
 'use client';
 
+import { useQuery } from '@tanstack/react-query';
 import { Eye, EyeOff, Loader2 } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useState } from 'react';
 import { isSafeReturnTo } from '../../../src/shared/return-to';
+import type { RegistrationInfo } from '../../../src/shared/spaces';
 import { ApiError, api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { cn } from '@/lib/utils';
+import { rememberWorkspaceSelection } from '@/lib/workspace-context';
 
 // The desktop client is cross-origin to the backend, so the HttpOnly session
 // cookie set by `/auth/login` is never sent back (SameSite) — auth silently
@@ -20,6 +23,8 @@ interface SignInResponse {
   token?: string;
   user?: { id: string; username: string; isAdmin: boolean };
   returnTo?: string;
+  /** Registering with an invite link joined this space (S6). */
+  joinedSpaceId?: string;
   error?: string;
 }
 
@@ -38,6 +43,19 @@ export default function LoginPage() {
   const [returnTo] = useState(() => (isSafeReturnTo(requestedReturnTo) ? requestedReturnTo : undefined));
   // `?mode=register` opens on the register tab (the invite page's Register link).
   const [isLogin, setIsLogin] = useState(() => searchParams.get('mode') !== 'register');
+  // `?invite=<token>`: the invite link the visitor came from, redeemed with the account (S6).
+  const [inviteToken] = useState(() => searchParams.get('invite') ?? undefined);
+  // The install's registration mode (`security.registration`): closed hides
+  // registering, invite_only needs an invite link. The first account always may.
+  const registration = useQuery({
+    queryKey: ['auth', 'registration'],
+    queryFn: () => api.get<RegistrationInfo>('/auth/registration'),
+    retry: false,
+  });
+  const mode = registration.data ? (registration.data.firstAccount ? 'open' : registration.data.mode) : null;
+  const registerHidden = mode === 'closed';
+  const inviteMissing = mode === 'invite_only' && !inviteToken;
+  const showLogin = isLogin || registerHidden;
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -58,16 +76,16 @@ export default function LoginPage() {
     setIsLoading(true);
 
     try {
-      if (!isLogin && formData.password !== formData.confirmPassword) {
+      if (!showLogin && formData.password !== formData.confirmPassword) {
         setError('passwords do not match');
         setIsLoading(false);
         return;
       }
 
-      const endpoint = isLogin ? LOGIN_ENDPOINT : '/auth/register';
-      const body = isLogin
+      const endpoint = showLogin ? LOGIN_ENDPOINT : '/auth/register';
+      const body = showLogin
         ? { username: formData.username, password: formData.password, returnTo }
-        : { username: formData.username, email: formData.email, password: formData.password, returnTo };
+        : { username: formData.username, email: formData.email, password: formData.password, returnTo, inviteToken };
 
       let data: SignInResponse;
       try {
@@ -75,7 +93,7 @@ export default function LoginPage() {
       } catch (err) {
         // The password was right and the account has TOTP on: the server
         // answers 401 `{ requiresTOTP: true }`; ask for the code and resubmit.
-        if (isLogin && isTotpChallenge(err)) {
+        if (showLogin && isTotpChallenge(err)) {
           setTotpRequired(true);
           return;
         }
@@ -88,19 +106,22 @@ export default function LoginPage() {
         // Desktop registration creates a cookie-only session; exchange the
         // credentials for a bearer token so cross-origin requests authenticate.
         let token = data.token || '';
-        if (IS_DESKTOP_BUILD && !token && !isLogin) {
+        if (IS_DESKTOP_BUILD && !token && !showLogin) {
           const m = await api.post<{ token?: string }>('/auth/login-mobile', {
             username: formData.username,
             password: formData.password,
           });
           token = m.token || '';
         }
-          login(token, {
+        // The invite was redeemed with the account: land in its space, not
+        // back on the (now used) invite link.
+        if (data.joinedSpaceId) rememberWorkspaceSelection(data.joinedSpaceId);
+        login(token, {
           id: data.user.id,
           username: data.user.username,
           isAdmin: data.user.isAdmin,
         });
-        router.push(data.returnTo ?? '/');
+        router.push(data.joinedSpaceId ? '/' : data.returnTo ?? '/');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'authentication failed');
@@ -160,7 +181,7 @@ export default function LoginPage() {
           <span className="text-on-surface">~</span>
           <span className="text-primary font-bold"> $</span>
           <span className="ml-2 text-on-surface-variant">
-            {totpRequired ? 'two-factor verification' : isLogin ? 'sign in' : 'register'}
+            {totpRequired ? 'two-factor verification' : showLogin ? 'sign in' : 'register'}
           </span>
           <span aria-hidden className="term-caret" />
         </div>
@@ -207,29 +228,45 @@ export default function LoginPage() {
                 terminal-app modal style. */}
             <div className="flex border-b border-outline-variant/60">
               <button
+                type="button"
                 onClick={() => setIsLogin(true)}
                 className={cn(
-                  'flex-1 py-2 text-center text-[12px] uppercase tracking-wider transition-colors border-r border-outline-variant/60',
-                  isLogin
+                  'flex-1 py-2 text-center text-[12px] uppercase tracking-wider transition-colors',
+                  !registerHidden && 'border-r border-outline-variant/60',
+                  showLogin
                     ? 'bg-primary-container/40 text-primary'
                     : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high'
                 )}
               >
                 sign in
               </button>
-              <button
-                onClick={() => setIsLogin(false)}
-                className={cn(
-                  'flex-1 py-2 text-center text-[12px] uppercase tracking-wider transition-colors',
-                  !isLogin
-                    ? 'bg-primary-container/40 text-primary'
-                    : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high'
-                )}
-              >
-                register
-              </button>
+              {/* Registration closed (`security.registration`): no register tab. */}
+              {!registerHidden && (
+                <button
+                  type="button"
+                  data-testid="register-tab"
+                  onClick={() => setIsLogin(false)}
+                  className={cn(
+                    'flex-1 py-2 text-center text-[12px] uppercase tracking-wider transition-colors',
+                    !showLogin
+                      ? 'bg-primary-container/40 text-primary'
+                      : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high'
+                  )}
+                >
+                  register
+                </button>
+              )}
             </div>
 
+            {!showLogin && inviteMissing ? (
+              <div className="p-4 space-y-2" data-testid="invite-required">
+                <p className="text-[13px] text-on-surface">invite required</p>
+                <p className="text-[12px] text-on-surface-variant">
+                  This install registers new accounts from an invite link only. Ask a member of a shared space for one,
+                  open it, and register from there.
+                </p>
+              </div>
+            ) : (
             <form onSubmit={handleSubmit} className="p-4 space-y-3">
               <div>
                 <label className={labelClass}>username</label>
@@ -243,7 +280,7 @@ export default function LoginPage() {
                 />
               </div>
 
-              {!isLogin && (
+              {!showLogin && (
                 <div>
                   <label className={labelClass}>email</label>
                   <input
@@ -252,7 +289,7 @@ export default function LoginPage() {
                     onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                     placeholder="alice@example.com"
                     className={inputClass}
-                    required={!isLogin}
+                    required={!showLogin}
                   />
                 </div>
               )}
@@ -279,7 +316,7 @@ export default function LoginPage() {
                 </div>
               </div>
 
-              {!isLogin && (
+              {!showLogin && (
                 <div>
                   <label className={labelClass}>confirm password</label>
                   <input
@@ -288,7 +325,7 @@ export default function LoginPage() {
                     onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
                     placeholder="••••••••"
                     className={inputClass}
-                    required={!isLogin}
+                    required={!showLogin}
                   />
                 </div>
               )}
@@ -307,13 +344,14 @@ export default function LoginPage() {
                 {isLoading ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    {isLogin ? 'signing in…' : 'creating account…'}
+                    {showLogin ? 'signing in…' : 'creating account…'}
                   </>
                 ) : (
-                  <>❯ {isLogin ? 'sign in' : 'create account'}</>
+                  <>❯ {showLogin ? 'sign in' : 'create account'}</>
                 )}
               </button>
             </form>
+            )}
           </div>
         )}
 

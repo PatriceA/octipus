@@ -1,7 +1,8 @@
 import { and, desc, eq, inArray, isNull, type SQL, sql } from 'drizzle-orm';
+import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import { getDb } from '../postgres';
 import { type NewNote, type Note, notes } from '../schema/notes';
-import { requireCan, SpaceError, type SpaceAction, type SpaceRole } from '@/security/space-access';
+import { guestNoteFolders, requireCan, SpaceError, type SpaceAction, type SpaceRole } from '@/security/space-access';
 import { isKnownSharedWorkspace } from '@/security/workspace-fs';
 import { assertPersonalWorkspace, notInSharedWorkspace } from './scoped';
 
@@ -23,7 +24,18 @@ import { assertPersonalWorkspace, notInSharedWorkspace } from './scoped';
  */
 export type NoteScope =
   | { kind: 'personal'; userId: string; workspaceId: string | null }
-  | { kind: 'space'; workspaceId: string; userId: string; role: SpaceRole; archived: boolean };
+  | {
+    kind: 'space';
+    workspaceId: string;
+    userId: string;
+    role: SpaceRole;
+    archived: boolean;
+    /**
+     * A guest's folders (S6): only notes whose slug is, or lies under, one
+     * of them are in scope. Absent for every other role (the whole space).
+     */
+    folders?: readonly string[];
+  };
 
 /**
  * Throws `SpaceError` when the scope may not `action` (a space member whose
@@ -56,9 +68,30 @@ export function personalNoteScope(userId: string, workspaceId: string | null = n
  * space's notes, whoever wrote them.
  */
 function owner(scope: NoteScope | string): SQL[] {
-  if (typeof scope !== 'string' && scope.kind === 'space') return [eq(notes.workspaceId, scope.workspaceId)];
+  if (typeof scope !== 'string' && scope.kind === 'space') {
+    return scope.folders ? [eq(notes.workspaceId, scope.workspaceId), slugInFolders(notes.slug, scope.folders)] : [eq(notes.workspaceId, scope.workspaceId)];
+  }
   const userId = typeof scope === 'string' ? scope : scope.userId;
   return [eq(notes.userId, userId), notInSharedWorkspace(notes.workspaceId)];
+}
+
+/**
+ * A note slug (column or alias) in a guest's folders: the slug is a folder,
+ * or lies under one. The folders are compared in slug form
+ * (`guestNoteFolders`); no folder matches nothing.
+ */
+export function slugInFolders(slug: AnyPgColumn | SQL, folders: readonly string[]): SQL {
+  const prefixes = guestNoteFolders(folders);
+  if (prefixes.length === 0) return sql`FALSE`;
+  return sql`(${sql.join(prefixes.map((f) => sql`(${slug} = ${f} OR starts_with(${slug}, ${`${f}/`}))`), sql` OR `)})`;
+}
+
+/**
+ * The ids of a guest's notes in the space, as a subquery (link and
+ * knowledge scopes, S6).
+ */
+export function guestNoteIds(workspaceId: string, folders: readonly string[]): SQL {
+  return sql`(SELECT gn.id FROM notes gn WHERE gn.workspace_id = ${workspaceId} AND ${slugInFolders(sql`gn.slug`, folders)})`;
 }
 
 /** The personal workspace rule, or no condition when no workspace is given (or in a space). */

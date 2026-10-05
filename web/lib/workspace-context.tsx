@@ -101,6 +101,14 @@ const STORAGE_KEY = 'octipus.activeWorkspace';
 /** The selected space's id and name, to name it if it is gone at the next load. */
 const SPACE_KEY = 'octipus.activeSpace';
 
+/**
+ * Select `id` at the next workspace load, before the provider has read the
+ * list: registering with an invite link (S6) joins a space and lands in it.
+ */
+export function rememberWorkspaceSelection(id: string): void {
+  localStorage.setItem(STORAGE_KEY, id);
+}
+
 function lastSpace(): { id: string; name: string } | null {
   try {
     const raw = localStorage.getItem(SPACE_KEY);

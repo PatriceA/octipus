@@ -70,7 +70,7 @@ export function isInside(parent: string, child: string, pathApi: typeof path.pos
 }
 
 export class WorkspaceFsError extends Error {
-  readonly code: 'TRAVERSAL' | 'OUTSIDE_ROOT' | 'UNAUTHENTICATED' | 'INVALID_INPUT' | 'AGENT_CONFIG';
+  readonly code: 'TRAVERSAL' | 'OUTSIDE_ROOT' | 'OUTSIDE_SCOPE' | 'UNAUTHENTICATED' | 'INVALID_INPUT' | 'AGENT_CONFIG';
   constructor(code: WorkspaceFsError['code'], message: string) {
     super(message);
     this.name = 'WorkspaceFsError';
@@ -88,6 +88,17 @@ export interface WorkspaceFsOptions {
    * of the prefix.
    */
   extraAllowedPrefixes?: readonly string[];
+}
+
+/** Options of a space's file root (`WorkspaceFS.forSpace`). */
+export interface SpaceFsOptions {
+  /** Tests: replaces the configured root. */
+  dataRoot?: string;
+  /**
+   * A guest's folders (S6): every path must lie under one of them
+   * (relative to the space's file root). Absent for every other role.
+   */
+  guestFolders?: readonly string[] | null;
 }
 
 /**
@@ -302,11 +313,14 @@ export class WorkspaceFS {
   private realRootCache: string | undefined;
   /** A space's file root (`forSpace`): writes to coding agent configuration are refused (`assertWritable`). */
   readonly isSpace: boolean;
+  /** A guest's folders in a space (S6): `resolve` refuses every path outside them. Null: the whole root. */
+  readonly guestFolders: readonly string[] | null;
 
-  private constructor(principal: Principal, root: string, options: WorkspaceFsOptions, isSpace = false) {
+  private constructor(principal: Principal, root: string, options: WorkspaceFsOptions, isSpace = false, guestFolders: readonly string[] | null = null) {
     this.principal = principal;
     this.root = root;
     this.isSpace = isSpace;
+    this.guestFolders = guestFolders;
     this.extraAllowedPrefixes = (options.extraAllowedPrefixes ?? [])
       .map((p) => pathResolve(p));
   }
@@ -323,7 +337,7 @@ export class WorkspaceFS {
         'WorkspaceFS requires an authenticated principal');
     }
     if (principal.workspaceKind === 'shared' || isKnownSharedWorkspace(principal.workspaceId)) {
-      return WorkspaceFS.forSpace(principal.workspaceId as string, options);
+      return WorkspaceFS.forSpace(principal.workspaceId as string, { dataRoot: options.dataRoot, guestFolders: principal.spaceScope?.folders });
     }
     const dataRoot = options.dataRoot ?? configuredDataRoot();
     const root = pathResolve(
@@ -342,13 +356,14 @@ export class WorkspaceFS {
    * `<workspace.rootPath>/spaces/<id>/files`, shared by every member. No
    * extra prefixes in a space context — not `/tmp/assistant-`, not
    * `workspace.additionalPaths`, not a caller's: a member's agent reaches
-   * the space's files and nothing of the host beside them.
+   * the space's files and nothing of the host beside them. A guest's
+   * (`guestFolders`, S6) reaches only the folders of their scope.
    */
-  static forSpace(workspaceId: string, options: WorkspaceFsOptions = {}): WorkspaceFS {
+  static forSpace(workspaceId: string, options: SpaceFsOptions = {}): WorkspaceFS {
     // `spaceDirectories` validates the id; a test's `dataRoot` replaces the configured root.
     const { root } = spaceDirectories(workspaceId);
     const base = options.dataRoot ? pathResolve(options.dataRoot, SPACES_DIR, workspaceId) : root;
-    return new WorkspaceFS(ANONYMOUS_PRINCIPAL, join(base, 'files'), {}, true);
+    return new WorkspaceFS(ANONYMOUS_PRINCIPAL, join(base, 'files'), {}, true, options.guestFolders ? [...options.guestFolders] : null);
   }
 
   /**
@@ -396,7 +411,7 @@ export class WorkspaceFS {
       throw new WorkspaceFsError('UNAUTHENTICATED',
         `agent context has no real user (${context.userId || 'none'}); a system job passes { system: true, root }`);
     }
-    if (context.space) return WorkspaceFS.forSpace(context.space.workspaceId);
+    if (context.space) return WorkspaceFS.forSpace(context.space.workspaceId, { guestFolders: context.space.scope?.folders });
     if (isKnownSharedWorkspace(context.workspaceId)) return WorkspaceFS.forSpace(context.workspaceId as string);
     return WorkspaceFS.forRequest(agentPrincipal(context), options);
   }
@@ -408,7 +423,7 @@ export class WorkspaceFS {
    */
   static forRequest(principal: Principal, options: WorkspaceFsOptions = {}): WorkspaceFS {
     if (principal.workspaceKind === 'shared' || isKnownSharedWorkspace(principal.workspaceId)) {
-      return WorkspaceFS.forSpace(principal.workspaceId as string);
+      return WorkspaceFS.forSpace(principal.workspaceId as string, { guestFolders: principal.spaceScope?.folders });
     }
     return WorkspaceFS.forPrincipal(principal, {
       ...options,
@@ -512,6 +527,12 @@ export class WorkspaceFS {
     if (!this.isUnder(real, this.realRoot()) && !this.isInExtraAllowed(real)) {
       throw new WorkspaceFsError('TRAVERSAL',
         `path resolves to a target outside workspace via symlink: ${real}`);
+    }
+    // A guest (S6): under one of their folders, judged on the real path so a
+    // link inside a folder cannot reach the rest of the space.
+    if (this.guestFolders && !this.guestFolders.some((f) => this.isUnder(real, join(this.realRoot(), f)))) {
+      throw new WorkspaceFsError('OUTSIDE_SCOPE',
+        `path is outside the folders you were given in this space: ${relative(this.root, lexical) || '.'}`);
     }
 
     return real;

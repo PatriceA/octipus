@@ -3,7 +3,8 @@
  *
  * - `roomAccess(userId, roomId)` is the one door to a room: the requester's
  *   space membership, read from the database (D5), plus a `room_members` row
- *   for a private room. Guests (S6) enter only rooms they were added to.
+ *   for a private room. Guests (S6) enter only the rooms their scope names
+ *   (`GuestScope.rooms`), with or without a `room_members` row.
  *   Null for everything else — a non-member, a missing room, a chat id — so
  *   room ids cannot be probed (I3).
  * - `canActInSession(session, userId, action)` replaces the inline
@@ -87,8 +88,9 @@ export async function isRoomMember(roomId: string, userId: string): Promise<bool
 
 /**
  * `userId`'s access to the room, read now: their membership of the room's
- * space and, for a private room (or a guest), their `room_members` row.
- * Null when they may not enter it, or it is no room.
+ * space and, for a private room, their `room_members` row — or, for a
+ * guest, the room in their scope. Null when they may not enter it, or it is
+ * no room.
  */
 export async function roomAccess(userId: string, roomId: string): Promise<RoomAccess | null> {
   if (!isUuid(userId)) return null;
@@ -102,7 +104,9 @@ export async function accessToRoom(userId: string, room: Room): Promise<RoomAcce
   const { getMembership } = await import('@/core/spaces/service');
   const membership = await getMembership(userId, room.workspaceId);
   if (!membership) return null;
-  if (room.visibility === 'private' || membership.role === 'guest') {
+  if (membership.scope) {
+    if (!membership.scope.rooms.includes(room.id)) return null;
+  } else if (room.visibility === 'private') {
     if (!(await isRoomMember(room.id, userId))) return null;
   }
   return {

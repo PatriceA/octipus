@@ -131,6 +131,10 @@ export class ApiTokenManager {
     if (!scopeCheck.ok) {
       throw new ScopeValidationError(scopeCheck.error);
     }
+    // A remote member (S7) never signs in here, with a token or otherwise.
+    const [owner] = await this.db.select({ kind: users.kind }).from(users).where(eq(users.id, userId)).limit(1);
+    if (!owner) throw new Error('API token owner not found');
+    if (owner.kind !== 'local') throw new Error('Members from other installs cannot hold API tokens here');
 
     const plaintext = generateTokenPlaintext();
     const tokenHash = hashToken(plaintext);
@@ -178,7 +182,8 @@ export class ApiTokenManager {
     const [joined] = await this.db
       .select({ token: apiTokens })
       .from(apiTokens)
-      .innerJoin(users, and(eq(users.id, apiTokens.userId), eq(users.isActive, true)))
+      // Never a remote member's (S7): they do not sign in here.
+      .innerJoin(users, and(eq(users.id, apiTokens.userId), eq(users.isActive, true), eq(users.kind, 'local')))
       .where(eq(apiTokens.tokenHash, tokenHash))
       .limit(1);
 
