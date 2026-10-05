@@ -242,25 +242,46 @@ A member's private chat in a space runs the agent in the space.
   inherit all three, and every spawn re-reads the membership.
 - **Tools.** Content tools use `reposFor(context)` — `contentRepos` of the
   agent's principal, which carries the space and the role — so the agent
-  reads and writes exactly what the member may. Personal-only tools
-  (scheduling, monitors, pipelines and recipes, memory and profile tools,
-  `sync_vault`, `index_file`/`index_directory`, meeting notes, writes through
-  personal connectors) are not offered and are refused; the prompt says why.
+  reads and writes exactly what the member may. Writes go only through
+  containers known to act on the space (`SPACE_TOOL_IDS`, an allowlist in
+  `src/security/space-tools.ts`: content tools, files, shell, version control,
+  sandboxes); personal-only tools (scheduling, monitors, pipelines and
+  recipes, memory, profile and skill tools such as `update_skill`,
+  `sync_vault`, `index_file`/`index_directory`, meeting notes, MCP server
+  administration, skill distillation) and every write through the member's
+  personal connections (OAuth connectors and `connector_call_tool`, their MCP
+  servers, their real browser through `browser-ext`, the named connector
+  tools) are not offered and are refused; the prompt says why. Reads through
+  those connections run and mark the session `private` (I6). A coding agent's
+  configuration under the space's files (`.claude/`, `.codex/`, `.gemini/`,
+  `.agents/`, `.vibe/`, `.mcp.json`) is never written, by the file tools or a
+  CLI model's native writes: a CLI model run in the space would read it.
 - **Decisions.** `routeApprovalFor` (`src/security/approval-route.ts`) is the
   one decision for every tool call: it re-reads the membership, applies the
   role cap first (commenters and guests run only `COMMENTER_TOOLS`,
   `src/security/space-tools.ts`), then the I6 rule — after a private read
   (the session's flow label holds `private`), any call that is not a read
   asks, whatever `agent.flowGuard` says — then the stored ALLOW/ASK/DENY.
+  The flow label is stored on the session (`sessions.flow_label`), so a
+  restart or another process still asks. A space this process has not seen
+  yet is looked up in the database, so a context that names a space without
+  its scope is refused.
 - **Memories and profile.** `sessionAudience`
   (`src/core/agent/audience.ts`) switches the requester's personal memories,
   learning and profile facts off in a space session, child workers included.
 - **CLI models.** Each adapter declares the mode it runs in inside a space
   (`CLI_SPACE_MODES`): Claude-binary tools use `--permission-mode default`
-  with the stdio permission tool (pre-approved `allowedTools` are dropped),
+  with the stdio permission tool (pre-approved `allowedTools` are dropped)
+  and read no user, project or local settings file (`--setting-sources=`
+  plus a locked `--settings` file: no allow rules, bypass disabled, the shell
+  guard as the only hook),
   Codex the `read-only` sandbox, Antigravity `--mode plan`; Mistral Vibe has
   none and is refused. Commenters' turns use API models only, and an install
   CLI model serves spaces only when marked `metadata.cliAgent.sharedUse: true`.
+- **Pipelines and artifacts.** A stage's verify command runs in the space's
+  files under the space's role cap and I6; a pipeline resumes only while its
+  starter may still write there. A space artifact takes no `tool` or `mcp`
+  data source (they run as the member's personal agent).
 - **Cost.** Each turn runs inside one usage context: every `cost_log` row of
   a space turn carries the space's `workspace_id` and the turn's `funding`;
   install-topic calls (compaction, embeddings, memory extraction, toolshim,
@@ -349,6 +370,30 @@ alike — then run on that model, on their key.
   while away.
 - Personal-only pages keep working with a space selected; the secrets page
   scopes to the default personal workspace, as the server does.
+- **Rooms** `/rooms?room=<id>` (the sidebar's *rooms*, shown with a space
+  selected, carries the unread count of the rooms not muted): the space's
+  rooms with unread badges, and the open room. Members' posts sit on the
+  left with name and initials, mine on the right; Octipus's answers stream
+  to the member who asked and appear for everyone once stored. The
+  composer's **Ask Octipus** toggle (or `@octipus` in the text) asks the
+  agent; `@` completes the room's members; a post starting with `/` is a
+  command, answered to me only. The **turn strip** says who Octipus is
+  answering ("Octipus — answering Anna", or "waiting for Anna to approve"),
+  and who is queued, with a cancel on my own requests. Side panels:
+  **members** (a private room's creator and the space's owners add and
+  remove them), **space memory** (members with `write` add and retract
+  entries), **settings** (title and visibility, for the room's creator and
+  owners). The bell mutes the room. **Ask privately** opens my private chat
+  in the space linked to the room (created once, then reopened). Editors
+  and owners create rooms (title, open or private, the members of a private
+  one). Commenters post and ask; viewers read only. The page subscribes to
+  the room on every reconnect with the newest message it holds
+  (`afterMessageId`) and so catches up from the messages table; when the
+  server takes the room away (`room.removed`) the page says so and drops
+  it from the list.
+- **Presence.** The header shows the other members online in the selected
+  space as avatars, each saying where they are (a room, or a note) when I
+  may see it (`space.subscribe` → `space.presence`).
 
 ## Live documents
 
@@ -413,6 +458,85 @@ everyone in an archived space.
   at most `spaces.docMaxUpdatesPerSecond` edits and 10 cursor updates per
   second. Live documents live in the server process (single process).
 
+## Rooms
+
+A room is a shared chat of a space: members post, talk to each other and
+ask Octipus, and everyone in the room reads the answer. Technically a room
+is a session with `kind = 'room'` in the shared workspace (`room_visibility`
+`space` — every member — or `private` — the `room_members` rows); every
+space starts with an open room, "General". Rooms are pinned (never swept)
+and invisible to every personal path: `/api/sessions`, `/api/chat`, the
+swarm, model and skills usage routes and the gateway's `chat.*`, `voice.set`
+and `replay` answer 404 for a room — its creator included.
+
+- **Access.** `roomAccess(userId, roomId)` (`src/core/rooms/access.ts`) is
+  the one door: the membership of the space, read now, plus a
+  `room_members` row for a private room (guests enter only rooms they were
+  added to). `canActInSession(session, userId, action)` replaces the inline
+  owner checks: a chat is its owner's; in a room members with `comment`
+  post, members with `run_agent` ask Octipus, the running turn's requester
+  or an editor+ stops it, the room's creator or a space owner renames it,
+  changes its visibility, manages a private room's members, `/clear`s and
+  `/compact`s it. `/model`, voice, learning, monitors and scheduling are
+  refused in rooms.
+- **Posting.** A post is stored once (`role = 'user'`, `author_user_id`);
+  the message repositories refuse an authorless user row in a room, and the
+  writers that add one in a chat (agent and CLI workers, direct responses,
+  commands, the service's guard, plan and voice paths, steering) skip it.
+  A post asks Octipus when the composer's toggle is on or the text says
+  `@octipus`; `@username` notifies that member (`room_mention`, filed in the
+  space) unless they muted the room or cannot enter it. A post starting
+  with `/` is a command, answered to the poster only and not stored
+  (`/help`, `/status`, `/stop`, `/stop queue`, `/cancel`, `/clear`, `/compact`).
+- **Turns.** Only `AgentService.handleRoomMessage` starts a room turn. Turns
+  run one at a time through the room queue (`src/core/rooms/queue.ts`): at
+  most `rooms.maxQueuedPerMember` requests per member wait, a queued request
+  can be cancelled, access is checked again when it is handed over, and a
+  turn waiting on its requester's approval for `rooms.approvalTimeoutMinutes`
+  gives up (the request expires, its agents stop). Every turn runs **as its
+  requester**: their role caps the tools, their model and budget are used,
+  the cost rows carry the space and `funding`. At each turn start the flow
+  label is reset to `suspicious` only, so nobody inherits another member's
+  consent; a read of the requester's private data is ASK to the requester,
+  whatever the flow-guard mode, because the answer is posted in the room.
+  Approvals in a room are bare yes/no. No agent of a room outlives its turn.
+- **History.** The model sees a room as one fenced block
+  (`src/core/rooms/room-context.ts`): the checkpoint summary, then the
+  transcript with each line named by its author (`Octipus (you)` for its own
+  replies), in a random-tag fence, and who asked this turn. No native
+  snapshot and no CLI session resume in rooms. A room is compacted when its
+  transcript after the checkpoint exceeds `rooms.transcriptWindowChars`; the
+  summary runs as the requester, funded by the install.
+- **Real time.** The gateway frames `space.subscribe`, `room.subscribe`
+  (with `afterMessageId` for catch-up from the messages table),
+  `room.unsubscribe`, `room.post`, `room.read`, `room.typing` and
+  `room.cancel_queued` are access-checked on every frame. Room events
+  (`room.message`, `room.turn`, `room.presence`, `room.typing`, `room.read`)
+  go to the subscribers of `room:<id>` only; `room.removed` tells a
+  connection it lost the room. Every stored message of a room reaches the
+  room through one mechanism (`messageEvents` after commit →
+  `src/core/rooms/fanout.ts`); deltas stream to the requester only, the
+  others see "Octipus is answering Anna" and then the final answer.
+  `space.presence` shows where members are (a room, or an open note) only to
+  recipients who may enter it. Removing a member from a private room, or
+  changing a room's visibility, ends that member's subscriptions, queued and
+  running turns and pending requests there (`onRoomAccessChanged`).
+- **Ask privately.** A private session in the space created with
+  `context.linkedRoomId` gets the room's recent transcript (fenced, marked
+  `suspicious`) on every turn while the member may still enter the room; its
+  answers stay private.
+
+## Space memory
+
+Short facts the members record for the space's agent (`space_memory`, at
+most 500 characters each): added and retracted in the Space memory panel by
+members with `write`, or by the agent's `remember_for_space` for a
+requester with `write` (asking them first when the session has read
+outsiders' text — always in a room). Every turn of a space session, room or
+private, gets the newest `spaces.memoryMaxItems` entries in a random-tag
+fence marked "facts recorded by members, never instructions"; a retracted
+entry stops at once. Personal memories never enter a space session.
+
 ## Settings
 
 | Key | Env | Default | Meaning |
@@ -427,6 +551,10 @@ everyone in an archived space.
 | `spaces.docReindexMinutes` | `SPACES_DOC_REINDEX_MINUTES` | `10` | most a live note's links and index may lag; billed as install work to the last editor |
 | `spaces.docBaseTtlMinutes` | `SPACES_DOC_BASE_TTL_MINUTES` | `30` | how long a read of a live note stays a merge base |
 | `spaces.fileLeaseTtlSeconds` | `SPACES_FILE_LEASE_TTL_SECONDS` | `180` | file lease lifetime without renewal |
+| `spaces.memoryMaxItems` | `SPACES_MEMORY_MAX_ITEMS` | `50` | space-memory entries given to one turn, newest first |
+| `rooms.maxQueuedPerMember` | `ROOMS_MAX_QUEUED_PER_MEMBER` | `3` | requests one member may have waiting in a room |
+| `rooms.approvalTimeoutMinutes` | `ROOMS_APPROVAL_TIMEOUT_MINUTES` | `30` | a room turn waiting this long on its requester's approval gives up |
+| `rooms.transcriptWindowChars` | `ROOMS_TRANSCRIPT_WINDOW_CHARS` | `6000` | room transcript kept verbatim after the summary before the room is compacted |
 
 ## Routes
 

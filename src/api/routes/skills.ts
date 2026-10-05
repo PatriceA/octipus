@@ -20,6 +20,7 @@ import {
   skillToMarkdown,
   toPortableSkill,
 } from '@/skills/markdown';
+import { canActInSession } from '@/core/rooms/access';
 
 export const skillRoutes = new Elysia({ prefix: '/skills' })
   .use(apiContext)
@@ -66,7 +67,7 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
       const session = await scopedRepos(principal).sessions.findById(body.sessionId);
       if (!session) { set.status = 404; return { error: 'Session not found' }; }
       // Admins may read another user's chat, but never change that user's skill defaults.
-      if (session.userId !== ownerId) { set.status = 403; return { error: 'Only the chat owner can change its skills' }; }
+      if (!(await canActInSession(session, ownerId, 'settings'))) { set.status = 403; return { error: 'Only the chat owner can change its skills' }; }
     }
     if (body.mode === 'session' && !body.sessionId) { set.status = 400; return { error: 'A session is required' }; }
     const registry = getSkillRegistry();
@@ -91,7 +92,7 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
       const found = await getSkillRegistry().getAll(ownerId);
       return { skills: found.filter(skill => user || skill.isSystem).map(skill => ({ ...skill,
         mounted: isExternalSkillId(skill.id),
-        canEdit: !!user && !isExternalSkillId(skill.id) && (skill.isSystem || user.isAdmin || skill.userId === ownerId),
+        canEdit: !!user && !isExternalSkillId(skill.id) && (user.isAdmin || (!skill.isSystem && skill.userId === ownerId)),
         canDelete: !!user && (skill.isSystem || user.isAdmin || skill.userId === ownerId || !!skill.orgId),
         removeOnly: skill.isSystem || isExternalSkillId(skill.id) || (!!skill.orgId && skill.userId !== ownerId),
       })) };

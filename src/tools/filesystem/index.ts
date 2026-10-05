@@ -312,7 +312,7 @@ export class FilesystemTool extends BaseTool {
         // auto-index, and reported `path` all operate on the same resolved
         // target the gate validated — consistent with `resolveAndValidate`
         // in every other tool here.
-        filePath = this.resolveSafe(fs, filePath);
+        filePath = this.writable(fs, this.resolveSafe(fs, filePath));
 
         return withFileMutationQueue(filePath, async () => {
           // Capture prior content (bounded) so the work stream can show a diff
@@ -382,7 +382,7 @@ export class FilesystemTool extends BaseTool {
       }),
       async (args, context) => {
         const fs = this.workspaceFor(context);
-        const filePath = this.resolveSessionAware(this.requireString(args, 'path'), context, fs);
+        const filePath = this.writable(fs, this.resolveSessionAware(this.requireString(args, 'path'), context, fs));
         const oldString = this.requireString(args, 'old_string');
         const newString = typeof args.new_string === 'string' ? args.new_string : '';
         // Validation failures are definite no-ops: say so with ToolNotExecutedError,
@@ -449,7 +449,7 @@ export class FilesystemTool extends BaseTool {
         const fs = this.workspaceFor(context);
         // Append targets the file write_file would have created — session-aware
         // so appending to a session-written file by relative path works.
-        const filePath = this.resolveSessionAware(this.requireString(args, 'path'), context, fs);
+        const filePath = this.writable(fs, this.resolveSessionAware(this.requireString(args, 'path'), context, fs));
 
         return withFileMutationQueue(filePath, async () => {
           const existing = existsSync(filePath) ? await readFile(filePath, 'utf-8') : '';
@@ -527,7 +527,7 @@ export class FilesystemTool extends BaseTool {
         // Mirror write_file's anchoring (preferExisting: false) so a dir made
         // here and a file written into it via the same relative path agree on
         // the session dir.
-        const dirPath = this.resolveSessionAware(args.path as string, context, fs, false);
+        const dirPath = this.writable(fs, this.resolveSessionAware(args.path as string, context, fs, false));
 
         await mkdir(dirPath, { recursive: args.recursive !== false });
         return { success: true, path: dirPath };
@@ -544,7 +544,7 @@ export class FilesystemTool extends BaseTool {
       }),
       async (args, context) => {
         const fs = this.workspaceFor(context);
-        const filePath = this.resolveSessionAware(args.path as string, context, fs);
+        const filePath = this.writable(fs, this.resolveSessionAware(args.path as string, context, fs));
 
         return withFileMutationQueue(filePath, async () => {
           await rm(filePath, { recursive: args.recursive as boolean, force: false });
@@ -566,7 +566,7 @@ export class FilesystemTool extends BaseTool {
         const srcPath = this.resolveSessionAware(args.source as string, context, fs);
         // Destination mirrors write_file (preferExisting: false) so a copy
         // within a session lands in the session dir, not the workspace root.
-        const destPath = this.resolveSessionAware(args.destination as string, context, fs, false);
+        const destPath = this.writable(fs, this.resolveSessionAware(args.destination as string, context, fs, false));
 
         return withFileMutationQueue(destPath, async () => {
           await copyFile(srcPath, destPath);
@@ -585,10 +585,10 @@ export class FilesystemTool extends BaseTool {
       }),
       async (args, context) => {
         const fs = this.workspaceFor(context);
-        const srcPath = this.resolveSessionAware(args.source as string, context, fs);
+        const srcPath = this.writable(fs, this.resolveSessionAware(args.source as string, context, fs));
         // Destination mirrors write_file (preferExisting: false) so a move/rename
         // within a session stays in the session dir, not the workspace root.
-        const destPath = this.resolveSessionAware(args.destination as string, context, fs, false);
+        const destPath = this.writable(fs, this.resolveSessionAware(args.destination as string, context, fs, false));
 
         return withFileMutationQueue(destPath, async () => {
           await rename(srcPath, destPath);
@@ -719,6 +719,21 @@ export class FilesystemTool extends BaseTool {
       }
       throw err;
     }
+  }
+
+  /**
+   * A path this call writes (or moves away): refused in a space when it is a
+   * coding agent's configuration (`WorkspaceFS.assertWritable`). Refused
+   * before anything touched the disk.
+   */
+  private writable(fs: WorkspaceFS, path: string): string {
+    try {
+      fs.assertWritable(path);
+    } catch (err) {
+      if (err instanceof WorkspaceFsError) throw new ToolNotExecutedError(this.id, err.message);
+      throw err;
+    }
+    return path;
   }
 
   /**

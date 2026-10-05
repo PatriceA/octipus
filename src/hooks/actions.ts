@@ -11,6 +11,7 @@ import type { Hook } from '@/core/types';
 import { coreLogger } from '@/utils/logger';
 import type { TriggerContext } from './triggers';
 import { summarizeWebhookPayload } from './webhook-summary';
+import { canActInSession } from '@/core/rooms/access';
 
 export interface ActionResult {
   success: boolean;
@@ -276,7 +277,7 @@ async function isForeignSession(sessionId: string, userId: string): Promise<bool
   if (!SESSION_UUID_RE.test(sessionId)) return false;
   const { sessionRepository } = await import('@/db/repositories/session-repository');
   const session = await sessionRepository.findById(sessionId);
-  return Boolean(session && session.userId !== userId);
+  return Boolean(session && !(await canActInSession(session, userId, 'chat')));
 }
 
 /**

@@ -50,11 +50,12 @@
 import { existsSync, mkdirSync, realpathSync, renameSync, rmSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import path, { basename, dirname, isAbsolute, join, resolve as pathResolve } from 'node:path';
+import path, { basename, dirname, isAbsolute, join, relative, resolve as pathResolve } from 'node:path';
 import { getConfig } from '@/config';
 import type { AgentContext } from '@/core/types';
 import type { Principal } from './principal';
 import { ANONYMOUS_PRINCIPAL, agentPrincipal, isAuthenticated, isRealUserId } from './principal';
+import { agentConfigRefusal, isAgentConfigPath } from './space-tools';
 
 /**
  * Whether `child` is `parent` or inside it, by path segments (`/a/foo` is not
@@ -69,7 +70,7 @@ export function isInside(parent: string, child: string, pathApi: typeof path.pos
 }
 
 export class WorkspaceFsError extends Error {
-  readonly code: 'TRAVERSAL' | 'OUTSIDE_ROOT' | 'UNAUTHENTICATED' | 'INVALID_INPUT';
+  readonly code: 'TRAVERSAL' | 'OUTSIDE_ROOT' | 'UNAUTHENTICATED' | 'INVALID_INPUT' | 'AGENT_CONFIG';
   constructor(code: WorkspaceFsError['code'], message: string) {
     super(message);
     this.name = 'WorkspaceFsError';
@@ -143,16 +144,53 @@ export function isKnownSharedWorkspace(id: string | null | undefined): boolean {
   return !!id && sharedWorkspaceIds.has(id);
 }
 
+/**
+ * Personal workspace ids `isSharedWorkspaceId` read from the database. A
+ * workspace's kind never changes, so a negative answer is cached as well.
+ */
+const personalWorkspaceIds = new Set<string>();
+const MAX_PERSONAL_IDS = 100_000;
+
+/**
+ * Whether `id` names a shared workspace: the process caches first, then
+ * the database (a space created by another process after boot is not in
+ * the cache until this process reads one of its memberships). A failed
+ * read throws — callers deciding who may act never guess "personal".
+ */
+export async function isSharedWorkspaceId(id: string | null | undefined): Promise<boolean> {
+  if (!id) return false;
+  if (sharedWorkspaceIds.has(id)) return true;
+  if (workspaceRows.has(id) || personalWorkspaceIds.has(id)) return false;
+  const { isUuid } = await import('@/db/repositories/scoped');
+  if (!isUuid(id)) return false;
+  const [{ getDb }, { workspaces }, { eq }] = await Promise.all([
+    import('@/db/postgres'), import('@/db/schema/organizations'), import('drizzle-orm'),
+  ]);
+  const [row] = await getDb().select({ kind: workspaces.kind }).from(workspaces).where(eq(workspaces.id, id)).limit(1);
+  if (row?.kind === 'shared') {
+    noteSharedWorkspace(id);
+    return true;
+  }
+  // An id with no row is not cached: it may be a workspace not created yet.
+  if (row) {
+    personalWorkspaceIds.add(id);
+    if (personalWorkspaceIds.size > MAX_PERSONAL_IDS) personalWorkspaceIds.delete(personalWorkspaceIds.values().next().value as string);
+  }
+  return false;
+}
+
 /** Drop a deleted workspace row. */
 export function forgetWorkspaceRow(id: string): void {
   workspaceRows.delete(id);
   sharedWorkspaceIds.delete(id);
+  personalWorkspaceIds.delete(id);
 }
 
 /** Test hook: clear the known workspace rows. */
 export function _resetWorkspaceRowsForTests(): void {
   workspaceRows.clear();
   sharedWorkspaceIds.clear();
+  personalWorkspaceIds.clear();
 }
 
 /**
@@ -262,10 +300,13 @@ export class WorkspaceFS {
   private readonly extraAllowedPrefixes: readonly string[];
   /** `root` with junctions/symlinks resolved; cached once the root exists. */
   private realRootCache: string | undefined;
+  /** A space's file root (`forSpace`): writes to coding agent configuration are refused (`assertWritable`). */
+  readonly isSpace: boolean;
 
-  private constructor(principal: Principal, root: string, options: WorkspaceFsOptions) {
+  private constructor(principal: Principal, root: string, options: WorkspaceFsOptions, isSpace = false) {
     this.principal = principal;
     this.root = root;
+    this.isSpace = isSpace;
     this.extraAllowedPrefixes = (options.extraAllowedPrefixes ?? [])
       .map((p) => pathResolve(p));
   }
@@ -307,7 +348,7 @@ export class WorkspaceFS {
     // `spaceDirectories` validates the id; a test's `dataRoot` replaces the configured root.
     const { root } = spaceDirectories(workspaceId);
     const base = options.dataRoot ? pathResolve(options.dataRoot, SPACES_DIR, workspaceId) : root;
-    return new WorkspaceFS(ANONYMOUS_PRINCIPAL, join(base, 'files'), {});
+    return new WorkspaceFS(ANONYMOUS_PRINCIPAL, join(base, 'files'), {}, true);
   }
 
   /**
@@ -474,6 +515,22 @@ export class WorkspaceFS {
     }
 
     return real;
+  }
+
+  /**
+   * Refuse a write to `absolute` (a path `resolve` returned) when this is a
+   * space's root and the path is, or lies under, a coding agent's
+   * configuration (`.claude/`, `.codex/`, `.gemini/`, `.agents/`, `.vibe/`,
+   * `.mcp.json`): a CLI model run in the space would read it as its own
+   * settings, hooks or MCP servers, in every member's runs (§5.6).
+   */
+  assertWritable(absolute: string): void {
+    if (!this.isSpace) return;
+    for (const root of [this.root, this.realRoot()]) {
+      if (this.isUnder(absolute, root) && isAgentConfigPath(relative(root, absolute))) {
+        throw new WorkspaceFsError('AGENT_CONFIG', agentConfigRefusal(relative(root, absolute)));
+      }
+    }
   }
 
   /** Like `resolve`, but returns null instead of throwing. */

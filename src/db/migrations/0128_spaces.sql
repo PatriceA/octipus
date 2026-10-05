@@ -106,3 +106,9 @@ ALTER TYPE "audit_action" ADD VALUE IF NOT EXISTS 'space_invite_revoked';
 ALTER TYPE "audit_action" ADD VALUE IF NOT EXISTS 'space_invite_accepted';
 --> statement-breakpoint
 ALTER TYPE "audit_action" ADD VALUE IF NOT EXISTS 'space_content_changed';
+--> statement-breakpoint
+-- The flow guard's label of a session (security/flow-guard.ts), written
+-- through when a flag is first gained: after a restart, data a space
+-- session read from personal sources still needs consent to be written
+-- into the space (I6).
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS flow_label jsonb;

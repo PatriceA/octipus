@@ -88,6 +88,10 @@ SPACES_DOC_PERSIST_DEBOUNCE_MS=2000   # Idle time before a live note is saved (a
 SPACES_DOC_REINDEX_MINUTES=10         # Most a live note's links/search index may lag its text
 SPACES_DOC_BASE_TTL_MINUTES=30        # How long a read of a live note stays a valid merge base for a write
 SPACES_FILE_LEASE_TTL_SECONDS=180     # "Someone is editing" lease on a space file, without renewal
+SPACES_MEMORY_MAX_ITEMS=50            # Space-memory entries given to one turn of a space session
+ROOMS_MAX_QUEUED_PER_MEMBER=3         # Requests one member may have waiting in a room
+ROOMS_APPROVAL_TIMEOUT_MINUTES=30     # A room turn waiting this long on an approval gives up
+ROOMS_TRANSCRIPT_WINDOW_CHARS=6000    # Room transcript after the summary before the room is compacted
 
 WORKSPACE_PATH=./workspace
 SEARXNG_URL=http://localhost:8888         # SearXNG meta-search (optional)

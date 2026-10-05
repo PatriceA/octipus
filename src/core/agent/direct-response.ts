@@ -68,7 +68,10 @@ async function directResponseInternal(
   const selected = modelOverride ?? (await modelSelector.selectByComplexity(complexity, { userId }));
   const modelName = selected.modelId;
 
-  const history = await readSessionHistory(sessionId);
+  // In a room the request is the member's post, already stored: the
+  // history (the fenced transcript) leaves it out and no user row is added.
+  const history = await readSessionHistory(sessionId, { room: { requesterId: userId, content: message } });
+  const inRoom = history.session?.kind === 'room';
   const sessionForBoundary = history.session;
   const session = history.session;
   const selectedSkills = await buildSelectedSkillPrompt(userId, sessionId);
@@ -151,11 +154,15 @@ async function directResponseInternal(
     const boundary = systemContent.match(VOLATILE_MARKER)?.index ?? systemContent.length;
     const stableSystem = systemContent.slice(0, boundary);
     const promptContext = systemContent.slice(boundary).trim();
-    const userRow = await messageRepository.createForGeneration({ sessionId, role: 'user', content: message,
-      metadata: { promptContext } }, history.generation);
-    if (!userRow) return { response: 'Conversation was cleared while this turn was running.', metadata: { model: modelName } };
-    await sessionRepository.incrementMessageCount(sessionId);
-    historyMessages.push({ role: 'user', content: [promptContext, message].filter(Boolean).join('\n\n'), timestamp: userRow.createdAt });
+    let requestAt = new Date();
+    if (!inRoom) {
+      const userRow = await messageRepository.createForGeneration({ sessionId, role: 'user', content: message,
+        metadata: { promptContext } }, history.generation);
+      if (!userRow) return { response: 'Conversation was cleared while this turn was running.', metadata: { model: modelName } };
+      await sessionRepository.incrementMessageCount(sessionId);
+      requestAt = userRow.createdAt;
+    }
+    historyMessages.push({ role: 'user', content: [promptContext, message].filter(Boolean).join('\n\n'), timestamp: requestAt });
     // Response reuse requires the whole effective context, model and clear generation.
     const recentContext = JSON.stringify([history.generation, modelName, stableSystem, historyMessages.map(m => [m.role, m.content])]);
     const cached = await cache.get(sessionId, message, recentContext);

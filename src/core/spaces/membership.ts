@@ -14,7 +14,9 @@
  *   data sources they own on the space's artifacts; their live documents
  *   follow the new role (dropped when they may no longer read, read-only
  *   when they may no longer write) and their file leases go when they may
- *   no longer write (S3).
+ *   no longer write (S3); in rooms (S2) it drops their queued and running
+ *   room turns, prunes their room and space subscriptions and expires their
+ *   requests there (`onRoomsMembershipChanged`).
  * - `onMembershipGranted` runs for a join or an upgrade: bumps the version
  *   and resumes the member's data sources if they may write again.
  * - `freezeSpace` runs for an archive: every agent of the space stops, its
@@ -24,7 +26,7 @@
  * Each step runs even when another fails; failures are logged and thrown
  * together at the end, so the caller (and the person) hears about them.
  */
-import { and, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { artifactDataSources } from '@/db/schema/artifact-data-sources';
 import { artifacts } from '@/db/schema/artifacts';
@@ -90,12 +92,16 @@ export async function cancelQueuedJobs(workspaceId: string, userId?: string): Pr
   return cancelled.length;
 }
 
-/** Session ids of `userId` in `workspaceId` (their private chats there). */
+/**
+ * Session ids where `userId` may hold requests in `workspaceId`: their
+ * private chats there, and every room of the space (a room turn runs as its
+ * requester, whoever created the room).
+ */
 async function sessionIdsIn(workspaceId: string, userId: string): Promise<Set<string>> {
   const rows = await getDb()
     .select({ id: sessions.id })
     .from(sessions)
-    .where(and(eq(sessions.workspaceId, workspaceId), eq(sessions.userId, userId)));
+    .where(and(eq(sessions.workspaceId, workspaceId), or(eq(sessions.userId, userId), eq(sessions.kind, 'room'))));
   return new Set(rows.map((r) => r.id));
 }
 
@@ -144,6 +150,10 @@ export async function onMembershipChanged(workspaceId: string, userId: string): 
     ['expire permission requests', () => getPermissionManager().expireForUserInWorkspace(userId, workspaceId)],
     ['expire approvals', async () => getAgentService().expireApprovalsForUser(userId, REMOVED_MESSAGE, await sessionIdsIn(workspaceId, userId))],
     ['pause data sources', () => syncDataSources(workspaceId, userId)],
+    ['rooms', async () => {
+      const { onRoomsMembershipChanged } = await import('@/core/rooms/membership');
+      await onRoomsMembershipChanged(workspaceId, userId);
+    }],
     ['live documents', async () => {
       const { getDocHub } = await import('@/core/docs');
       await getDocHub().membershipChanged(workspaceId, userId);
@@ -191,6 +201,10 @@ export async function freezeSpace(workspaceId: string): Promise<void> {
     return [...new Set([...members, ...chatters].map((r) => r.id))];
   };
   await runSteps('Space archive', { workspaceId }, [
+    ['clear room queues', async () => {
+      const { activeRoomsIn, clearRoomQueue } = await import('@/core/rooms/queue');
+      for (const roomId of activeRoomsIn(workspaceId)) clearRoomQueue(roomId);
+    }],
     ['stop agents', () => stopSpaceAgents(workspaceId)],
     ['cancel queued jobs', () => cancelQueuedJobs(workspaceId)],
     ['live documents read only', async () => {

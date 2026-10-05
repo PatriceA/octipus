@@ -1,4 +1,5 @@
 import { parse as parseToml } from 'smol-toml';
+import { readFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { assertCliSpaceMode, CLI_SPACE_MODES, CLIArgumentBuilder, discoverCodexMcpServers, injectVibeMcpServer, resolveClaudePermissionMode, resolveCodexSandboxMode, resolveVibeMode } from './cli-adapters';
@@ -242,6 +243,21 @@ describe('run-scoped CLI configuration', () => {
       expect(claude.args[claude.args.indexOf('--permission-prompt-tool') + 1]).toBe('stdio');
       expect(claude.args).not.toContain('--allowedTools');
       expect(claude.args).not.toContain('bypassPermissions');
+    });
+    it.each([true, false])('Claude reads no user, project or local settings, only a locked settings file (shell guard %s)', (shellGuard) => {
+      const claude = builder.build('Claude Code', 'task', { permissionMode: 'full' }, [], null, 100, 'test', { ...inSpace, shellGuard });
+      // Empty sources: neither `<space>/.claude/settings*.json` nor the host's `~/.claude/settings.json`.
+      expect(claude.args).toContain('--setting-sources=');
+      expect(claude.args.filter((a) => a.startsWith('--setting-sources'))).toEqual(['--setting-sources=']);
+      expect(claude.args.filter((a) => a === '--settings')).toHaveLength(1);
+      const settings = JSON.parse(readFileSync(claude.args[claude.args.indexOf('--settings') + 1], 'utf8'));
+      expect(settings.permissions).toEqual({ allow: [], defaultMode: 'default', disableBypassPermissionsMode: 'disable' });
+      expect(settings.enableAllProjectMcpServers).toBe(false);
+      // The only hook is the shell guard, when it is on.
+      expect(Object.keys(settings.hooks)).toEqual(shellGuard ? ['PreToolUse'] : []);
+      // Outside a space the host settings still load (the shell guard merges over them).
+      const personal = builder.build('Claude Code', 'task', {}, [], null, 100, 'test', { ...connection, planMode: false, shellGuard });
+      expect(personal.args.some((a) => a.startsWith('--setting-sources'))).toBe(false);
     });
     it('Codex runs in the read-only sandbox whatever the model row says', () => {
       const codex = builder.build('Codex CLI', 'task', { permissionMode: 'full' }, [], null, 100, 'test', inSpace);

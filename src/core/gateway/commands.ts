@@ -4,6 +4,7 @@ import { addPlanFeedback, formatWorkPlan } from '@/shared/work-plan';
 import { workPlanRepository } from '@/db/repositories/work-plan-repository';
 import { coreLogger } from '@/utils/logger';
 import type { TrustLevel } from './protocol';
+import { canActInSession } from '@/core/rooms/access';
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -339,7 +340,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
       // only — no trust level or admin flag reads another user's transcript.
       const { sessionRepository } = await import('@/db/repositories/session-repository');
       const session = await sessionRepository.findById(ctx.sessionId);
-      if (!session || session.userId !== ctx.userId) return { text: 'Session not found.' };
+      if (!(await canActInSession(session, ctx.userId, 'chat'))) return { text: 'Session not found.' };
       const { messageRepository } = await import('@/db/repositories/message-repository');
       const rows = (await messageRepository.getLastMessages(ctx.sessionId, 50)).reverse();
       const data = rows
@@ -530,7 +531,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
         // what the agent wrote to; the connection's workspace before the
         // session exists.
         const session = ctx.sessionId ? await sessionRepository.findById(ctx.sessionId) : null;
-        const fs = session && session.userId === ctx.userId
+        const fs = session && await canActInSession(session, ctx.userId, 'chat')
           ? WorkspaceFS.forSession(session)
           : WorkspaceFS.forPrincipal(agentPrincipal({ userId: ctx.userId, workspaceId: ctx.workspaceId ?? null }));
         // Use rawArgs, not ctx.args.path: the registry splits input on

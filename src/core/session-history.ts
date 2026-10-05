@@ -6,17 +6,85 @@ import type { SessionContext } from '@/db/schema/sessions';
 import type { AgentMessage } from './types';
 import { omitGroupTranscripts } from '@/core/channels/group-context';
 
-/** One ordering and boundary contract for cold launches and compaction. */
-export async function readSessionHistory(sessionId: string) {
+/** A history row, with its author's display name in a room (null in a chat). */
+export type HistoryRow = Message & { authorName: string | null };
+
+/** The current request of a room turn: it is never part of the history (each consumer appends it). */
+export interface RoomRequest {
+  requesterId: string;
+  /** The posted message the turn answers; without it, a trailing post of the requester with `content` is the request. */
+  postedMessageId?: string;
+  content?: string;
+}
+
+/**
+ * One ordering and boundary contract for cold launches and compaction.
+ *
+ * For a room (`kind = 'room'`, coworking §6.4) the history is ONE fenced
+ * block (`src/core/rooms/room-context.ts`): the checkpoint summary, then the
+ * attributed transcript from `checkpoint.through` on, then — given `room` —
+ * who asked and that everyone reads the reply. `rows` are the same rows with
+ * author names. The current request is never included.
+ */
+export async function readSessionHistory(sessionId: string, opts: { room?: RoomRequest } = {}) {
   const session = await sessionRepository.findById(sessionId);
   const context: SessionContext = session?.context ?? {};
   const generation = sessionGeneration(context);
   const checkpoint = context.checkpoint?.generation === generation ? context.checkpoint : undefined;
-  const rows = await messageRepository.findContextMessages(sessionId, context.clearedAt, checkpoint?.through, generation);
+  const found = await messageRepository.findContextMessages(sessionId, context.clearedAt, checkpoint?.through, generation);
+  if (session?.kind === 'room') {
+    const rows = await withAuthorNames(withoutRequest(found, opts.room));
+    const { renderRoomTranscript } = await import('@/core/rooms/room-context');
+    const requesterName = opts.room ? (await displayNames([opts.room.requesterId])).get(opts.room.requesterId) ?? null : null;
+    const block = renderRoomTranscript({ roomTitle: session.title ?? 'Room', rows, summary: checkpoint?.summary, requesterName });
+    const at = rows.at(-1)?.createdAt ?? (checkpoint ? new Date(checkpoint.through.createdAt) : session.createdAt);
+    return { session, generation, checkpoint, rows, messages: [{ role: 'user' as const, content: block, timestamp: at }] as AgentMessage[] };
+  }
+  const rows: HistoryRow[] = found.map((row) => ({ ...row, authorName: null }));
   return { session, generation, checkpoint, rows, messages: [
     ...(checkpoint ? [{ role: 'user' as const, content: `[Conversation checkpoint]\n${checkpoint.summary}`, timestamp: new Date(checkpoint.through.createdAt) }] : []),
     ...rows.map(toContextMessage),
-  ] };
+  ] as AgentMessage[] };
+}
+
+/** The room rows before the current request (by id, else the requester's trailing post of the same text). */
+function withoutRequest(rows: Message[], request: RoomRequest | undefined): Message[] {
+  if (!request) return rows;
+  if (request.postedMessageId) {
+    const at = rows.findIndex((row) => row.id === request.postedMessageId);
+    return at < 0 ? rows : rows.slice(0, at);
+  }
+  const last = rows.at(-1);
+  if (last && last.role === 'user' && last.authorUserId === request.requesterId && (request.content === undefined || last.content === request.content)) {
+    return rows.slice(0, -1);
+  }
+  return rows;
+}
+
+/**
+ * The room request a root agent of a room turn answers, from its context
+ * metadata (`room`, set by the room turn); undefined elsewhere.
+ */
+export function roomRequestOf(context: { userId: string; metadata?: Record<string, unknown> }): RoomRequest | undefined {
+  const room = context.metadata?.room as { postedMessageId?: unknown } | undefined;
+  if (!room) return undefined;
+  return { requesterId: context.userId, ...(typeof room.postedMessageId === 'string' ? { postedMessageId: room.postedMessageId } : {}) };
+}
+
+/** Display names (usernames) of `userIds`. */
+export async function displayNames(userIds: readonly string[]): Promise<Map<string, string>> {
+  const ids = [...new Set(userIds.filter(Boolean))];
+  if (ids.length === 0) return new Map();
+  const [{ getDb }, { users }, { inArray }] = await Promise.all([
+    import('@/db/postgres'), import('@/db/schema/users'), import('drizzle-orm'),
+  ]);
+  const rows = await getDb().select({ id: users.id, username: users.username }).from(users).where(inArray(users.id, ids));
+  return new Map(rows.map((row) => [row.id, row.username]));
+}
+
+async function withAuthorNames(rows: Message[]): Promise<HistoryRow[]> {
+  const names = await displayNames(rows.map((row) => row.authorUserId).filter((id): id is string => !!id));
+  return rows.map((row) => ({ ...row, authorName: row.authorUserId ? names.get(row.authorUserId) ?? null : null }));
 }
 
 export function toContextMessage(row: Message): AgentMessage {

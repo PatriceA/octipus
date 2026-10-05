@@ -130,6 +130,12 @@ export const defaultConfig: Partial<Config> = {
     docReindexMinutes: 10,
     docBaseTtlMinutes: 30,
     fileLeaseTtlSeconds: 180,
+    memoryMaxItems: 50,
+  },
+  rooms: {
+    maxQueuedPerMember: 3,
+    approvalTimeoutMinutes: 30,
+    transcriptWindowChars: 6000,
   },
   compaction: {
     minSavingsRatio: 0.10,

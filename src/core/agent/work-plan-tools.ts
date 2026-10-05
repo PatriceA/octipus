@@ -2,10 +2,11 @@ import type { ToolHandler } from '@/core/agent-base';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { workPlanRepository } from '@/db/repositories/work-plan-repository';
 import { expandWorkPlanPatch, planPatchSchema, planUpdateSchema, reviseWorkPlan } from '@/shared/work-plan';
+import { canActInSession } from '@/core/rooms/access';
 
 async function sessionIsInPlanMode(sessionId: string, userId: string): Promise<boolean> {
   const session = await sessionRepository.findById(sessionId);
-  if (!session || session.userId !== userId) throw new Error('Session not found');
+  if (!session || !(await canActInSession(session, userId, 'requester'))) throw new Error('Session not found');
   return (session.context as Record<string, unknown> | null)?.planMode === true;
 }
 

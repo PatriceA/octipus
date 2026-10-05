@@ -61,7 +61,7 @@ describe('runStageVerifyCommand', () => {
     writeFileSync(join(root, 'built.txt'), 'ok');
 
     const { runStageVerifyCommand } = await import('./pipeline-manager');
-    const ctx = { userId: aliceId, sessionId, role: 'coding', toolIds: ['shell'] };
+    const ctx = { userId: aliceId, sessionId, workspaceId: projectWs, space: null, role: 'coding', toolIds: ['shell'] };
     expect(await runStageVerifyCommand('ls built.txt', ctx)).toMatch(/RESULT: exit 0/);
     // The same command fails on a file the workspace does not hold: it ran
     // there, not somewhere that happens to hold everything.

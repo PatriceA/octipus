@@ -2181,6 +2181,29 @@ Still to come (see `docs/plans/coworking-spec.md`): the resolver and principal
 for a space selected in the header (`SPACE_ROUTES`), the space access layer for
 content, the agent inside a space, and the web screens.
 
+## 26. Rooms (coworking S2)
+
+- **Rooms are sessions** with `kind = 'room'` in a shared workspace (D7).
+  Every personal session path filters `kind = 'chat'` (`personalChat` in
+  `scoped.ts`, `session-repository.ts`), `resolveSession` refuses rooms, and
+  `channelType: 'room'` is refused on personal creates — so a room is
+  invisible to every personal route, its creator included (I2).
+- **One door, one helper.** `roomAccess(userId, roomId)` reads the space
+  membership and, for a private room, `room_members`, per request (D5).
+  `canActInSession(session, userId, action)` replaces inline owner checks; a
+  source test fails on a new `session.userId !==` comparison.
+- **Turns run as the requester** (D8), entered only through
+  `handleRoomMessage`, serialized by the room queue, with the flow label reset
+  per turn and private reads ASK to the requester. No room agent outlives its
+  turn. Approvals are answered by the requester only (D9).
+- **Delivery.** Room events go to the `room:<id>` resource only, filled by
+  `room.subscribe` after `roomAccess` and pruned by `onRoomAccessChanged` and
+  `onMembershipChanged`; every other event keeps the user rule (I11).
+- **Membership changes (I5).** Removal from a space or a private room stops
+  the member's running and queued room turns there, expires their requests
+  there and ends their room and space subscriptions.
+- **Space memory** replaces personal memories in space sessions (D10, I7).
+
 ## 25. Own models (coworking S4)
 
 Users bring their own models: personal `model_config` rows

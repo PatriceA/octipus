@@ -156,8 +156,10 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
         sessionId = session.id;
       } else {
         // Verify session ownership through the scoped repo.
+        // A room is never a personal chat, its creator's included (§6.2).
         const session = await repos.sessions.findById(sessionId);
         if (!session) {
+          set.status = 404;
           return { error: 'Session not found' };
         }
       }

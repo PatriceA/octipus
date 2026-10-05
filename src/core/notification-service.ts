@@ -24,13 +24,24 @@ export class NotificationService {
     title: string,
     body?: string,
     metadata?: Record<string, unknown>,
+    /**
+     * The workspace the notification is filed under (a space's list in the
+     * space; docs/plans/coworking-spec.md §5.1, §6.7). The service checks
+     * nothing: a caller notifying about a space has checked the target's
+     * membership. Older callers pass it as `metadata.workspaceId`.
+     */
+    options: { workspaceId?: string | null } = {},
   ): Promise<void> {
     try {
+      if (options.workspaceId != null && !UUID_RE.test(options.workspaceId)) {
+        throw new Error(`notify: workspaceId ${options.workspaceId} is not a workspace id`);
+      }
+      const workspaceId = options.workspaceId !== undefined
+        ? options.workspaceId
+        : typeof metadata?.workspaceId === 'string' && UUID_RE.test(metadata.workspaceId) ? metadata.workspaceId : null;
       await this.db.insert(notifications).values({
         userId,
-        // Filed under the workspace it came from (a space's notifications
-        // list in the space; docs/plans/coworking-spec.md §5.1).
-        workspaceId: typeof metadata?.workspaceId === 'string' && UUID_RE.test(metadata.workspaceId) ? metadata.workspaceId : null,
+        workspaceId: workspaceId ?? null,
         type,
         title,
         body,

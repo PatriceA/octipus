@@ -359,6 +359,17 @@ Shared workspaces ([SPACES.md](SPACES.md)). A caller who is not a member gets
 | GET | `/api/spaces/:id/file-leases` | member | Live file leases ("Ben is editing"): `{path, holderUserId, holderName, holderKind, expiresAt}` |
 | POST | `/api/spaces/:id/file-leases` | editor, owner | `{path, renew?}` take (or renew) the lease on a space file; 409 `lease_held` with `heldBy` when someone else has it (or a directory above it, or a file under it) |
 | DELETE | `/api/spaces/:id/file-leases?path=` | member | Release your lease |
+| GET | `/api/spaces/:id/rooms` | member | Rooms I can enter, with `unreadCount` and `muted` |
+| POST | `/api/spaces/:id/rooms` | editor, owner | `{title, visibility: "space" \| "private", memberIds?}` |
+| GET | `/api/spaces/:id/rooms/:roomId/messages` | room access | `?before=&after=&limit=` (message ids); posts and replies with `authorUserId`, `authorName` |
+| POST | `/api/spaces/:id/rooms/:roomId/messages` | commenter+ | `{content, addressed?, clientId?}`: REST fallback of `room.post` → `{messageId, queuedPosition?, notQueued?}`; `/…` → `{commandResult}` |
+| PATCH | `/api/spaces/:id/rooms/:roomId` | room creator, owner | `{title?, visibility?}` |
+| GET | `/api/spaces/:id/rooms/:roomId/members` | room access | A private room's members, or the space's for an open one |
+| POST/DELETE | `/api/spaces/:id/rooms/:roomId/members/:userId` | room creator, owner | Private rooms only; removal ends the member's subscriptions and turns there |
+| PATCH | `/api/spaces/:id/rooms/:roomId/me` | room access | `{muted?, lastReadMessageId?}` |
+| GET | `/api/spaces/:id/memory` | member | Space memory entries, newest first |
+| POST | `/api/spaces/:id/memory` | editor, owner | `{body}` (≤ 500 characters) |
+| DELETE | `/api/spaces/:id/memory/:entryId` | editor, owner | Retract an entry |
 | GET | `/api/invites/:token` | public | Preview `{spaceName, inviterName, role, expiresAt}`; rate-limited per IP |
 | POST | `/api/invites/:token/accept` | signed in | Join → `{workspaceId, role, alreadyMember}`; rate-limited per IP |
 

@@ -445,8 +445,14 @@ export interface ScorerContext {
   canRunCommands?: boolean;
   /** The child's role, for the permission decision. */
   role?: string;
-  /** The child's session and space, for the space role cap and I6 (`routeApprovalFor`). */
+  /**
+   * The child's session, workspace and space, for the space role cap and I6
+   * (`routeApprovalFor`). The workspace is passed on its own so a space
+   * workspace that arrives without its space scope is refused, not run as
+   * personal.
+   */
   sessionId?: string;
+  workspaceId?: string | null;
   space?: import('@/core/types').AgentSpace | null;
   /**
    * The dev-mode project directory the child's own tools operated in, when the
@@ -911,7 +917,7 @@ async function evaluate(
               role: ctx.role,
               root: false,
               attended: false,
-              workspaceId: ctx.space?.workspaceId ?? null,
+              workspaceId: ctx.workspaceId ?? ctx.space?.workspaceId ?? null,
               space: ctx.space ?? null,
             },
             // The SAME action the permission was read for. `matches()` builds

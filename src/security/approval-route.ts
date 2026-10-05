@@ -12,22 +12,30 @@
  *      tool decision;
  *   2. applies the role cap BEFORE anything else, because `routeApproval`
  *      executes any non-ASK level straight away: a commenter (or guest) runs
- *      only `COMMENTER_TOOLS`, nobody runs a personal-only tool;
+ *      only `COMMENTER_TOOLS`, nobody runs a personal-only tool or writes a
+ *      coding agent's configuration (`.claude/`, …) in the space;
  *   3. applies the I6 rule: once the session has read the requester's
- *      private data (flow label `private`), any call that is not a read is
- *      ASK — whatever the flow-guard mode — because it writes personal data
- *      into the space;
- *   4. calls the pure `routeApproval`.
+ *      private data (flow label `private`, loaded from the session row so a
+ *      restart keeps it), any call that is not a read is ASK — whatever the
+ *      flow-guard mode — because it writes personal data into the space;
+ *      and in a room (a shared audience, D8) a call that reads the
+ *      requester's private data is ASK to the requester, because the answer
+ *      is posted where every member of the room reads it;
+ *   4. calls the pure `routeApproval`;
+ *   5. marks the session `private` when the call goes ahead and reads
+ *      through one of the requester's personal connections
+ *      (`personalSourceRead`) — before it runs, so a failed read still
+ *      counts: the guard asks more, never less.
  *
  * A lint test (`approval-route.test.ts`) fails on `routeApproval(` in any
  * other source file.
  */
 import type { AgentSpace, PermissionLevel } from '@/core/types';
 import { type ApprovalDecision, routeApproval } from './approval-policy';
-import { getFlowLabel } from './flow-guard';
+import { classifyFlow, getFlowLabel, isSharedAudience, loadFlowLabel, observeFlow } from './flow-guard';
 import { can } from './space-access';
-import { commenterMayRun, isReadCall, personalOnlyReason, type SpaceToolCall } from './space-tools';
-import { isKnownSharedWorkspace } from './workspace-fs';
+import { agentConfigWriteReason, commenterMayRun, isReadCall, personalOnlyReason, personalSourceRead, type SpaceToolCall } from './space-tools';
+import { isSharedWorkspaceId } from './workspace-fs';
 
 /** The agent making the call (an `AgentContext`, or the scorer's view of one). */
 export interface ApprovalCaller {
@@ -68,8 +76,9 @@ export async function routeApprovalFor(
   let source = permission.source;
   const space = context.space ?? null;
   // Fail closed: an agent in a space workspace that carries no space scope
-  // was built outside `buildAgentContext`.
-  if (!space && isKnownSharedWorkspace(context.workspaceId)) {
+  // was built outside `buildAgentContext`. The database answers when this
+  // process has not seen the workspace yet.
+  if (!space && await isSharedWorkspaceId(context.workspaceId)) {
     return deny('this agent has no space scope, so nothing may run in the space');
   }
   if (space) {
@@ -81,8 +90,17 @@ export async function routeApprovalFor(
     if (!can(membership.role, 'run_agent_write') && !commenterMayRun(call)) {
       return deny(`your role (${membership.role}) can only read and comment in this space; ${call.toolId}.${call.toolName ?? call.action} is not allowed`);
     }
-    const personal = personalOnlyReason(call);
+    const personal = personalOnlyReason(call) ?? agentConfigWriteReason(call);
     if (personal) return deny(personal);
+    await loadFlowLabel(context.sessionId);
+    // A read through a personal connection reads private data too (`personalSourceRead`).
+    if (level !== 'DENY' && isSharedAudience(context.sessionId)
+      && (classifyFlow({ toolId: call.toolId, action: call.action }).taints.includes('private') || personalSourceRead(call))) {
+      level = 'ASK';
+      source = 'space-room';
+      reason = `${call.toolId}.${call.toolName ?? call.action} reads your private data, and the answer is posted in this room `
+        + 'where every member reads it: approving shares it with them';
+    }
     if (level !== 'DENY' && !isReadCall(call) && getFlowLabel(context.sessionId).private) {
       const { getSpace } = await import('@/core/spaces/service');
       const { name } = await getSpace({ userId: context.userId }, space.workspaceId);
@@ -101,5 +119,8 @@ export async function routeApprovalFor(
     action: call.action,
     unattendedDenyActions: options.unattendedDenyActions,
   });
+  if (space && (decision.route === 'execute' || decision.route === 'ask_human') && personalSourceRead(call)) {
+    observeFlow(context.sessionId, { toolId: call.toolId, action: call.action }, { taints: ['private'] });
+  }
   return { ...decision, level, reason: reason ?? decision.reason, source };
 }

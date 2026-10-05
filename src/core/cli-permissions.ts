@@ -55,7 +55,7 @@ export async function answerCliPermissionRequest(
   await ensureSharedAudienceKnown(context.sessionId);
   const permission = applyFlowGuard(getConfig().agent?.flowGuard, context.sessionId, flowCall,
     await manager.check(context.userId, toolId, request.tool_name, request.input, context));
-  const decision = await routeApprovalFor(context, { toolId, action: request.tool_name, toolName: request.tool_name },
+  const decision = await routeApprovalFor(context, { toolId, action: request.tool_name, toolName: request.tool_name, args: request.input },
     permission, { unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions });
   let allowed = decision.route === 'execute';
   if (decision.route === 'ask_human' && context.status === 'running' && !signal?.aborted) {

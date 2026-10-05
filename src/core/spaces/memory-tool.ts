@@ -1,0 +1,56 @@
+import type { ToolHandler } from '@/core/agent-base';
+import type { AgentService } from '@/core/agent/service';
+import { getFlowLabel, loadFlowLabel } from '@/security/flow-guard';
+import { requireCan } from '@/security/space-access';
+
+/**
+ * `remember_for_space` (docs/plans/coworking-spec.md §6.5): the agent
+ * records a fact in the space memory for its requester, who must have
+ * `write` in the space (re-read at the call, D5). When the session has read
+ * outsiders' text — its flow label is `suspicious`, which a room always is —
+ * or the requester's private data (`private`, I6), the requester is asked
+ * first: a fact injected into every later turn of the space must not be
+ * planted by someone else's message, nor carry personal data unasked.
+ */
+export function createRememberForSpaceTool(service: AgentService): ToolHandler {
+  return {
+    name: 'remember_for_space',
+    description:
+      'Record one durable fact in this shared space\'s memory, which every member\'s sessions in the space receive. '
+      + 'Use only for facts the space\'s members will need again (a decision, a convention, a key date) — never for '
+      + 'personal details. One short sentence, at most 500 characters. The member may be asked to confirm.',
+    parameters: {
+      type: 'object',
+      properties: {
+        body: { type: 'string', description: 'The fact, one short sentence (max 500 characters).' },
+      },
+      required: ['body'],
+    },
+    replaySafety: 'mutation',
+    execute: async (args, context) => {
+      const space = context.space;
+      if (!space) return { stored: false, error: 'remember_for_space works only in a shared space' };
+      const body = String(args.body ?? '').trim();
+      if (!body || body.length > 500) return { stored: false, error: 'The fact must be 1–500 characters' };
+      // The role first (read now): a member who may not write is not asked.
+      const { getMembership } = await import('./service');
+      requireCan(await getMembership(context.userId, space.workspaceId), 'write');
+      // Also after a read of the requester's private data (I6): the fact would
+      // carry it into every member's sessions. The label is the stored one too.
+      await loadFlowLabel(context.sessionId);
+      const label = getFlowLabel(context.sessionId);
+      if (label.suspicious || label.private) {
+        const answer = await service.requestApproval(
+          'Octipus wants to add a fact to the space memory, which every member\'s sessions in this space will receive.',
+          `Add this to the space memory?\n\n"${body}"`,
+          context,
+          ['Yes', 'No'],
+        ) as { approved?: boolean } | undefined;
+        if (answer?.approved !== true) return { stored: false, reason: 'The member did not approve adding this to the space memory.' };
+      }
+      const { rememberForSpace } = await import('./memory');
+      const entry = await rememberForSpace(context.userId, space.workspaceId, body, context.sessionId);
+      return { stored: true, id: entry.id };
+    },
+  };
+}
