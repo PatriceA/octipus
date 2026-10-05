@@ -748,6 +748,18 @@ export interface DocErrorMessage {
   message: string;
 }
 
+/**
+ * The agent's edit proposals for the note changed (§7.4): one was made or
+ * updated, accepted, rejected or went stale. Sent to the note's `doc:<id>`
+ * resource; `pending` is how many wait for a decision now.
+ */
+export interface DocProposalsMessage {
+  type: 'doc.proposals';
+  noteId: string;
+  spaceId: string;
+  pending: number;
+}
+
 export interface FileLeaseView {
   path: string;
   holderUserId: string;
@@ -783,6 +795,7 @@ export type GatewayMessage =
   | DocStatusMessage
   | DocClosedMessage
   | DocErrorMessage
+  | DocProposalsMessage
   | FileLeasesMessage;
 
 // ── Protocol Version ──────────────────────────────────────────────

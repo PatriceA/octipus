@@ -30,6 +30,21 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **The agent as co-editor, and file leases enforced (spaces).** In a space
+  whose agent edit mode is `suggest` (the default), the notes tool's
+  changes to existing notes — `write_note`, `capture_note`, `archive_note`
+  — become the session's pending edit proposal and answer
+  `{ proposed: true, proposalId, status: 'pending', baseSha256 }`;
+  `read_note` shows that pending proposal; new notes are still created.
+  `direct` mode writes through the live document as before. Members with
+  the note open hear of proposal changes live (`doc.proposals`; the
+  *proposals* tab shows the pending count). An accepted proposal on a
+  closed note refreshes its links and index. Every file-changing
+  filesystem tool now checks space file leases (prefix matching for a
+  recursive delete or a directory move) and refuses a leased path with who
+  holds it and until when, the check and the write under one per-path
+  mutex. Shell, git, docker, skill scripts and CLI agents stay advisory
+  (docs/SPACES.md).
 - **Space funding, budgets and the team surface** (coworking S5,
   `docs/SPACES.md` → "Funding and budgets", "The team surface"). A space's
   owners choose who pays for the agent — each member (`own`), members for
