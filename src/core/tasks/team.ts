@@ -15,19 +15,38 @@
  * Personal tasks have none of this: a personal task can be assigned only to
  * its owner, and nobody else watches the personal board.
  */
-import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { workspaceMembers, workspaces } from '@/db/schema/organizations';
 import { type Task, tasks } from '@/db/schema/tasks';
 import { coreLogger } from '@/utils/logger';
 import { ACTIVE_TASK_STATUSES } from './status';
 
-/** Tell the space's subscribers a task changed (created, edited, claimed, commented, deleted). */
+/**
+ * Tell the space's subscribers a task changed (created, edited, claimed,
+ * commented, deleted). Only to current members who are not guests, read
+ * now: a guest sees only the part of the space their scope grants, so the
+ * ids and timing of every task are not theirs to hear, and a removed
+ * member's still-open connection hears nothing.
+ *
+ * Guests are left out entirely for now; once guest scope lands (S6), a
+ * guest whose scope covers the task can be told too — the per-task check
+ * belongs with the scope check of `src/security/space-access.ts`.
+ */
 export async function taskChanged(workspaceId: string, taskId: string): Promise<void> {
   const [{ eventMessage, spaceResource }, { getGatewayHub }] = await Promise.all([
     import('@/core/rooms/events'), import('@/core/gateway/hub'),
   ]);
-  getGatewayHub().publishToResource(spaceResource(workspaceId), eventMessage('task.changed', { taskId, workspaceId }));
+  const rows = await getDb()
+    .select({ userId: workspaceMembers.userId })
+    .from(workspaceMembers)
+    .where(and(eq(workspaceMembers.workspaceId, workspaceId), ne(workspaceMembers.role, 'guest')));
+  const told = new Set(rows.map((r) => r.userId));
+  const resource = spaceResource(workspaceId);
+  getGatewayHub().connectionManager.broadcast(
+    eventMessage('task.changed', { taskId, workspaceId }),
+    (ctx) => ctx.resources.has(resource) && told.has(ctx.userId),
+  );
 }
 
 /** `taskChanged`, detached from the committed write; a failure is logged. */
@@ -88,8 +107,9 @@ export interface MyWorkGroup {
 }
 
 /**
- * The caller's open tasks: in every space they belong to (not as a guest),
- * the tasks assigned to them; in their personal workspaces, their own tasks
+ * The caller's open tasks: in every space they belong to (not as a guest)
+ * and that is not archived (its tasks can no longer move), the tasks
+ * assigned to them; in their personal workspaces, their own tasks
  * assigned to themselves. Grouped by workspace, spaces by name; tasks by
  * priority, then due date.
  */
@@ -99,7 +119,7 @@ export async function myWork(userId: string): Promise<MyWorkGroup[]> {
     .select({ id: workspaces.id, name: workspaces.name })
     .from(workspaceMembers)
     .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
-    .where(and(eq(workspaceMembers.userId, userId), eq(workspaces.kind, 'shared'), sql`${workspaceMembers.role} <> 'guest'`));
+    .where(and(eq(workspaceMembers.userId, userId), eq(workspaces.kind, 'shared'), isNull(workspaces.archivedAt), sql`${workspaceMembers.role} <> 'guest'`));
   const personal = await db
     .select({ id: workspaces.id, name: workspaces.name })
     .from(workspaces)

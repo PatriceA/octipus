@@ -94,8 +94,8 @@ async function prepare(options: CompletionOptions, provider: string): Promise<Co
  * The funding a call's cost row carries. An install-topic request type is
  * `install` (D13) — unless it ran on a personal row: a compaction (or any
  * install-type call) on the user's own model is paid with their own key, so
- * it is `own` — or `sponsor` when it is a sponsor model serving another
- * member of the space (coworking spec §9.1). Personal-key spend still lands
+ * it is `own` — or `sponsor` when it is a sponsor model inside a
+ * sponsored turn, the sponsor's own included (coworking spec §9.1). Personal-key spend still lands
  * in `cost_log` and counts against the payer's budgets. Calls made inside
  * `withInstallUsage` are install work too, whatever their request type.
  */
@@ -107,8 +107,14 @@ async function fundingOf(options: CompletionOptions): Promise<NonNullable<Comple
   if (options.modelConfigName) {
     const { getModelRegistry } = await import('../model-registry');
     const owner = (await getModelRegistry().getModel(options.modelConfigName))?.ownerUserId;
-    // A sponsor model run for another member is the sponsor's key (§9.1).
-    if (owner) return owner === options.userId ? 'own' : 'sponsor';
+    // A sponsor model inside a sponsored turn is the sponsor's money (§9.1),
+    // whoever the turn serves — the sponsor's own sponsored turn included:
+    // its compaction counts against the space's budget like the turn, never
+    // the sponsor's personal one. Outside one, the owner's own key is `own`.
+    if (owner) {
+      if (currentSponsor()?.userId === owner) return 'sponsor';
+      return owner === options.userId ? 'own' : 'sponsor';
+    }
   }
   return 'install';
 }

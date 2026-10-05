@@ -1,6 +1,6 @@
 import { Elysia, t } from '@/api/http';
-import { recheckSpace } from '@/core/agent/context';
-import type { AgentSpace } from '@/core/types';
+import { inheritScope, recheckSponsor, recheckSpace } from '@/core/agent/context';
+import type { AgentContext } from '@/core/types';
 import { type AgentScope, resolveAgentScope, withAgentUsage } from '@/core/agent/context';
 import { SpaceError, spaceErrorStatus } from '@/security/space-access';
 import { apiContext } from '@/api/context';
@@ -34,19 +34,23 @@ async function mayReachLive(user: { id: string; isAdmin: boolean }, context: Liv
  * May `user` run their live agent again (`/:id/message`)? Outside spaces,
  * yes. In a space, the membership is re-read the way every spawn re-reads
  * it (`recheckSpace`, §5.6): only while their role may run the agent and
- * the space is not archived. A space agent built without its scope never runs.
+ * the space is not archived — and a sponsored agent only while the space
+ * still pays for it, under the same sponsor (`recheckSponsor`, §9.1). A
+ * space agent built without its scope never runs. The scope to run under
+ * (the sponsor as it is now), or null.
  */
-async function mayRunLive(userId: string, context: LiveContext & { space?: AgentSpace | null }): Promise<boolean> {
+async function mayRunLive(userId: string, context: LiveContext & Pick<AgentContext, 'workspaceId' | 'space' | 'trigger' | 'funding' | 'sponsor'>): Promise<AgentScope | null> {
   if (context.space) {
     try {
       await recheckSpace(userId, context.space);
-      return true;
+      return { ...inheritScope(context), sponsor: await recheckSponsor(context) };
     } catch (err) {
-      if (err instanceof SpaceError) return false;
+      if (err instanceof SpaceError) return null;
       throw err;
     }
   }
-  return !context.workspaceId || !(await isSharedWorkspace(context.workspaceId));
+  if (context.workspaceId && (await isSharedWorkspace(context.workspaceId))) return null;
+  return inheritScope(context);
 }
 
 /**
@@ -386,17 +390,20 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       }
       // A run, not a read: in a space the role must allow it, and an
       // archived space runs nothing.
-      if (!(await mayRunLive(user.id, context))) {
+      const runScope = await mayRunLive(user.id, context);
+      if (!runScope) {
         set.status = 403;
-        return { error: 'Your role in this space cannot run the agent, or the space is archived' };
+        return { error: 'Your role in this space cannot run the agent, the space is archived, or its sponsor no longer pays for this agent' };
       }
 
       if (agent.getStatus() !== 'idle' && agent.getStatus() !== 'completed') {
         return { error: 'Agent is busy' };
       }
 
-      // Run agent with message
-      agent.run(body.message).catch((error) => {
+      // Run agent with message, inside its usage context and, when it is
+      // sponsored, its sponsor's (§9.1): the sponsor models' keys are
+      // released only there, as for the turn that spawned it.
+      withAgentUsage(context.userId, runScope, () => agent.run(body.message)).catch((error) => {
         apiLogger.error({ error, agentId: params.id }, 'Agent run failed');
       });
 

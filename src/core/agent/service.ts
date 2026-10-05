@@ -1051,6 +1051,9 @@ export class AgentService {
           ...(limit && !isRoom && { limit: limit }),
           // A room answer names the post and the member it answers.
           ...(isRoom && { requesterId: userId, ...(postedMessageId && { replyTo: postedMessageId }) }),
+          // Nobody asked for a listen turn's answer (§9.3): members rate it
+          // like the listen offers, and their 👎 slows the room's gate.
+          ...(isRoom && trigger === 'listen' && { unprompted: true }),
         },
       }, turnGeneration);
       if (!persistedAnswer) {

@@ -35,10 +35,9 @@ import type { TurnEvent } from './service';
 import { applyToolCap, isSmallModel } from './small-model';
 import { selectCoreToolIds } from './tool-intent';
 import type { AgentRole, WorkerResult } from './types';
-import { inheritScope } from './context';
+import { inheritScope, writesWithheld } from './context';
 import { sessionAudience } from './audience';
 import { withoutPersonalOnlyTools } from '@/security/space-tools';
-import { can } from '@/security/space-access';
 
 // Per-section token budget for the injected AGENTS.md guide (Phase 5 item 2).
 // ≈ the existing 8000-char cap in loadAgentsMd, so a normal guide isn't trimmed
@@ -313,7 +312,7 @@ export async function spawnWorker(
   // same reason as plan mode: the set is final only now.
   if (context.space) {
     roleTools = withoutPersonalOnlyTools(roleTools);
-    if (!can(context.space.role, 'run_agent_write')) roleTools = stripMutatingTools(roleTools);
+    if (writesWithheld(context.space, context.trigger)) roleTools = stripMutatingTools(roleTools);
   }
 
   coreLogger.info({ role: agentRole, toolCount: roleTools.length, toolNames: roleTools.map(t => t.name) }, 'Worker tools resolved');

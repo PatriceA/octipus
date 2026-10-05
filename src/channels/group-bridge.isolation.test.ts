@@ -287,7 +287,7 @@ describe('turns in a bound channel (§9.4 points 3–4)', () => {
 });
 
 describe('budget and funding of a bound channel (§9.4 point 5, §9.1, §9.2)', () => {
-  test('the space budget pauses the channel; unprompted posts are the sponsor\'s, and off without one', async () => {
+  test('the space budget pauses a sponsored channel; unprompted posts need a sponsor, their probe is install work of the space', async () => {
     const { spaceWith } = await import('@/test-helpers/space-fixtures');
     const budgetSpace = await spaceWith(ownerId, [[editorId, 'editor']], 'Budgeted');
     const enrolled = await enrol(ownerId, 'C-BUDGET');
@@ -306,7 +306,8 @@ describe('budget and funding of a bound channel (§9.4 point 5, §9.1, §9.2)', 
     await setSpaceFunding({ userId: ownerId }, budgetSpace, { sponsor: 'me' });
     expect(await bridgeListenFunding(group)).toEqual({ sponsorUserId: ownerId });
 
-    // The unprompted post's model call is billed to the sponsor, in the space.
+    // The probe is install work attributed to the space and to no person:
+    // never the sponsor's personal budgets nor a member cap.
     const { defaultListenDeps } = await import('@/channels/group-listen');
     const { getLiteLLMClient } = await import('@/models/litellm-client');
     const { recordProviderUsage } = await import('@/models/providers/instrumented');
@@ -318,9 +319,10 @@ describe('budget and funding of a bound channel (§9.4 point 5, §9.1, §9.2)', 
     const { getModelRegistry } = await import('@/models/model-registry');
     const bound = vi.spyOn(getModelRegistry(), 'getModelForTopic').mockResolvedValue({ name: 'probe-row', modelId: 'probe-model' } as never);
     const deps = defaultListenDeps();
+    const candidate = { thread: 't', message: { id: 'm', conversationId: 'c', author: 'A', authorId: 'u', text: 'why?', at: new Date().toISOString() } };
     try {
       expect(await deps.session(group)).toBeNull();
-      expect(await deps.mayRun(group, null)).toBe(true);
+      expect(await deps.mayRun(group, null, candidate)).toBe(true);
       expect(await deps.complete({ system: 's', user: 'u', ownerUserId: group.ownerUserId, sessionId: null, group })).toBe('I could look into it.');
     } finally {
       complete.mockRestore();
@@ -328,16 +330,21 @@ describe('budget and funding of a bound channel (§9.4 point 5, §9.1, §9.2)', 
     }
     const { queryRaw } = await import('@/db/postgres');
     const { rows } = await queryRaw(`SELECT user_id, funding, workspace_id FROM cost_log WHERE model_name = 'probe-row'`);
-    expect(rows).toEqual([{ user_id: ownerId, funding: 'sponsor', workspace_id: budgetSpace }]);
+    const { SYSTEM_USAGE_USER } = await import('@/models/providers/instrumented');
+    expect(rows).toEqual([{ user_id: SYSTEM_USAGE_USER, funding: 'install', workspace_id: budgetSpace }]);
 
-    // The space's budget replaces the channel's: used up, the channel pauses.
+    // The space's budget, used up, stops the probe; it pauses the channel's
+    // turns only when the space pays for them (`sponsored`): in `unattended`
+    // a member's room turn is their own.
     expect(await groupBudgetPause(group)).toBeNull();
     const { setSpaceBudget, _resetSpendBudgetsForTests } = await import('@/security/spend-budgets');
     await setSpaceBudget({ workspaceId: budgetSpace, authorId: ownerId, kind: 'space', period: 'month', limitUsd: 0.5 });
     await queryRaw(`INSERT INTO cost_log (user_id, model_name, input_tokens, output_tokens, total_cost, workspace_id, funding) VALUES ($1, 'm', 1, 1, 1, $2, 'sponsor')`, [editorId, budgetSpace]);
     _resetSpendBudgetsForTests();
+    expect(await groupBudgetPause(group)).toBeNull();
+    expect(await deps.mayRun(group, null, candidate)).toBe(false);
+    await setSpaceFunding({ userId: ownerId }, budgetSpace, { mode: 'sponsored' });
     expect(await groupBudgetPause(group)).toEqual({ resetsAt: expect.any(String) });
-    expect(await deps.mayRun(group, null)).toBe(false);
   });
 });
 

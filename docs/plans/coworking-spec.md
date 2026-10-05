@@ -1606,9 +1606,22 @@ refusal.
   (`session-compaction.ts:115`, `context-compaction.ts:574`). A test asserts a
   sponsored turn's toolshim row is `install`.
 
-- Removing or downgrading the sponsor clears `sponsor_user_id` and
-  `sponsor_models` in the same transaction, pauses sponsored work and is
-  audited.
+- Removing or downgrading the sponsor — or deleting their account, which
+  leaves every space first — clears `sponsor_user_id` and `sponsor_models` in
+  the same transaction, pauses sponsored work and is audited.
+- **Consent.** The sponsor names themselves; only the sponsor lists sponsor
+  models, and only the sponsor raises the mode while one is named (`own` →
+  `unattended` → `sponsored`): another owner may lower it or clear the
+  sponsor. An admin impersonating an owner can do none of these.
+- **Sponsor models are API rows.** A personal CLI row is refused as a
+  sponsor model, and never runs (nor releases its credential) for anyone but
+  its owner: a CLI child holds its row's credential in its environment,
+  where the member driving the turn could read it.
+- **Funding is re-read** at every sponsored spawn and every 30s of a
+  sponsored worker (`recheckSponsor`, like `recheckSpace`): work scoped
+  before the sponsor left or the mode lowered does not start or go on, in any
+  process. A live agent run again through `POST /api/agents/:id/message`
+  is re-checked the same way and runs inside its sponsor context.
 
 ### 9.2 Budgets and quotas
 
@@ -1618,13 +1631,18 @@ refusal.
   statelessly from `cost_log`, and its once-per-period notices are stored in
   `space_member_notices(space, user, period, warned_at, paused_at)`.
 - Space budgets are loaded by workspace (`spaceBudgetsOf(workspaceId)`), with a
-  partial unique index `(scope_ref, period) WHERE scope_kind IN
-  ('space','space_member')`. Owners write them through
-  `PUT /api/spaces/:id/budget`. For these two kinds `spend_budgets.user_id`
-  is the author only: nullable, `ON DELETE SET NULL`, so a budget survives its
-  author's account.
+  partial unique index `(scope_kind, scope_ref, period) WHERE scope_kind IN
+  ('space','space_member')` (the two kinds of one space and period must not
+  collide). Owners write them through
+  `PUT /api/spaces/:id/budget`; writing the same values again changes
+  nothing, a change is audited with the previous value. For these two kinds
+  `spend_budgets.user_id` is the author only: nullable, `ON DELETE SET NULL`,
+  so a budget survives its author's account (a database trigger deletes the
+  author's personal budgets, which keep a NOT NULL check). Notices go to the
+  sponsor, else to the author while they are still an owner, else nobody.
 - `SpendScope` gains `funding` and `spaceId`; all five `checkSpend` call sites
-  (§1.8) and the group handler's `budgetPaused` pass them. Own turns check the
+  (§1.8) and the group handler's `budgetPaused` pass them (a bound channel's
+  turns pause on the space budget only while the space is `sponsored`). Own turns check the
   requester's budgets; sponsored turns check the space budgets. Every agent
   spawn and iteration keeps a check (D13).
 - Personal scopes (`user`, `role`, `workspace`) add `funding <> 'sponsor'` to
@@ -1642,11 +1660,24 @@ refusal.
   space; web page "My work".
 - **Assignment notifies** the assignee (`task_assigned`, membership checked,
   with `workspaceId`).
+- **My work** leaves out spaces the user left and archived spaces.
 - **Live board:** `task.changed {taskId, workspaceId}` gateway events to the
-  space's subscribers; the board refetches on them instead of polling.
+  space's subscribers who are current non-guest members (guests until their
+  scope can be checked per task, S6); the board refetches on them, debounced,
+  instead of polling.
 - **Room modes:** `listen` and `proactive` for rooms, reusing the gate, quiet
   hours, caps and feedback of group channels (`src/channels/group-listen.ts`),
-  `trigger:'listen'`, funded by the sponsor (§9.1).
+  `trigger:'listen'`, funded by the sponsor (§9.1). A `listen` turn only
+  reads: its writing tools are withheld and its writes refused
+  (`routeApprovalFor`). Its answer is marked unprompted so members rate it;
+  recent 👎 outnumbering 👍 multiply the gate's minimum gap and divide its
+  daily cap by 2^(👎 − 👍), at most 16× (rooms and channels alike). The probe
+  of a room and of a bound channel is install work attributed to the space
+  (`workspace_id`, user `system`): gated by the space's `space` budget,
+  never the sponsor's personal budgets nor a member cap. A proactive probe is
+  skipped when the question's author may not ask the agent or is at their
+  member cap. A room's probe is claimed on its `room_modes` row before it is
+  paid (migration 0134), so several instances never pay for the same probe.
 
 ### 9.4 Group-channel bridge
 
@@ -1663,8 +1694,10 @@ refusal.
 4. Taken tasks (`src/core/channels/taken-tasks.ts:82,109-110`,
    `src/channels/taken-task-notices.ts`) use the space repo, and the dedup id is
    per message, not per member.
-5. The space budget replaces the channel budget for bound channels; unprompted
-   posts use the sponsor and are off without one.
+5. The space budget replaces the channel budget for bound channels while the
+   space sponsors their turns; unprompted posts need the space to fund
+   unprompted work (a sponsor) and are off without one; their probe is install
+   work attributed to the space (§9.3).
 
 ### 9.5 Space connectors
 
