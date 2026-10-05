@@ -89,6 +89,9 @@ describe.skipIf(!isIntegration)('Search API (Integration)', () => {
       .derive({ as: 'global' }, () => ({
         user: { id: testUserId, username: 'tester', isAdmin: true },
         session: null,
+        // The route searches as the caller's principal (its own rows, its
+        // workspace's knowledge), as the server's derive provides it.
+        principal: { kind: 'user', userId: testUserId, username: 'tester', isAdmin: true, workspaceId: null },
       }))
       .use(searchRoutes);
   });
