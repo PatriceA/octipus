@@ -9,6 +9,13 @@ labels reflect blast radius, not contract guarantees.
 
 ### Fixed
 
+- **A live space note's reindex is billed to its space.** The reindex's
+  embedding cost rows now carry the space (`cost_log.workspace_id`) and
+  `funding: 'install'` as their own columns, not only in the row's metadata.
+  The docs now list every coworking route, setting and env var
+  (docs/API.md, docs/CONFIGURATION.md, `.env.example`), and the coworking
+  spec records where the build differs from it.
+
 - **Guests, registration and remote members (review of S6/S7).** A guest no
   longer sees the space's whole audit log: activity shows the rows about
   their rooms only, with actors they may see. `GET /api/spaces/:id` and the

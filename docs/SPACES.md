@@ -5,13 +5,16 @@ tasks, documents, artifacts and files, and each works with the agent in their
 own private sessions inside the space. Spaces are always available; who may
 create one is a policy setting.
 
-This page describes what is built. The full design, including the parts
-still to come (sponsored agents, spaces across installs), is
+This page describes what is built. The full design is
 [docs/plans/coworking-spec.md](plans/coworking-spec.md).
 
-> **Status (coworking S1).** Spaces, members, roles, invites, archive and
-> purge are in place, with their REST routes, the content routes acting on a
-> space (see "Working in a space") and the web screens (see "In the web").
+> **Status (coworking S0–S6 built, S7 contract).** Spaces, members, roles,
+> invites, archive and purge; rooms and space memory; live documents and
+> file leases; own models; funding, sponsored agents, budgets, the team
+> surface, group channels bound to a space and space connectors; guests and
+> registration modes are all built, with their routes and web screens.
+> Spaces across installs (S7) is a contract: only the remote member
+> representation is built (see "Across installs (contract)").
 
 ## The model
 
@@ -34,8 +37,8 @@ Roles are code (`src/security/space-access.ts`, `can(role, action)`):
 | Action | owner | editor | commenter | viewer | guest |
 |---|---|---|---|---|---|
 | read | ✓ | ✓ | ✓ | ✓ | ✓ in scope |
-| comment (task comments; room posts later) | ✓ | ✓ | ✓ | – | ✓ in scope |
-| write (notes, tasks, files, documents, artifacts) | ✓ | ✓ | – | – | – |
+| comment (task comments, room posts) | ✓ | ✓ | ✓ | – | ✓ in scope |
+| write (notes, tasks, files, documents, artifacts, space memory) | ✓ | ✓ | – | – | – |
 | run the agent with read and comment tools | ✓ | ✓ | ✓ | – | ✓ in scope |
 | run the agent with write tools | ✓ | ✓ | – | – | – |
 | manage members, invites and the space | ✓ | – | – | – | – |
@@ -937,7 +940,7 @@ shell in a space can read the space's GitHub token from the tool home.
 | `spaces.maxMembers` | `SPACES_MAX_MEMBERS` | `50` | most members per space |
 | `spaces.inviteMaxTtlHours` | `SPACES_INVITE_MAX_TTL_HOURS` | `720` | longest invite lifetime, hours |
 | `spaces.purgeAfterArchiveDays` | `SPACES_PURGE_AFTER_ARCHIVE_DAYS` | `7` | days archived before a space can be deleted |
-| `spaces.noteMaxBytes` | `SPACES_NOTE_MAX_BYTES` | `114688` | largest space note (112 KiB); startup fails above half of `gateway.maxFrameBytes` |
+| `spaces.noteMaxBytes` | `SPACES_NOTE_MAX_BYTES` | `114688` | largest space note (112 KiB); startup fails above half of [`gateway.maxFrameBytes`](CONFIGURATION.md#gateway-config) |
 | `spaces.docMaxUpdatesPerSecond` | `SPACES_DOC_MAX_UPDATES_PER_SECOND` | `30` | live-note edits per tab per second |
 | `spaces.docPersistDebounceMs` | `SPACES_DOC_PERSIST_DEBOUNCE_MS` | `2000` | quiet time before a live note is saved |
 | `spaces.docReindexMinutes` | `SPACES_DOC_REINDEX_MINUTES` | `10` | most a live note's links and index may lag; billed as install work to the last editor |

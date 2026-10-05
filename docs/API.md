@@ -94,6 +94,19 @@ characters). Anything else is refused with 400; a valid one is echoed back as
 | GET | `/api/models/providers/litellm/models` | List LiteLLM models |
 | GET | `/api/models/providers/:provider/known` | Known models for a provider |
 
+### Own models (`/api/me/models`)
+
+A user's own model rows, run with their own key ([SPACES.md → Own
+models](SPACES.md#own-models)). Owner-only, admins included; another user's
+model answers 404. Bodies are validated against an allowlist (400 otherwise).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/me/models` | My models, with the allowed `providers` and the `topics` I may bind |
+| POST | `/api/me/models` | Add a model (201) |
+| PATCH | `/api/me/models/:slug` | Update one of my models |
+| DELETE | `/api/me/models/:slug` | Delete one of my models |
+
 ## Roles
 
 | Method | Endpoint | Description |
@@ -332,6 +345,29 @@ inert and stays in the array.
 | POST | `/api/admin/impersonate/stop` | Stop impersonation session |
 | GET | `/api/admin/impersonate` | List recent impersonation sessions (admin) |
 | GET | `/api/admin/audit` | Audit log (admin) |
+| GET | `/api/admin/permission-requests` | Pending tool permission requests of every user (admin); a space's requests only for its members |
+| POST | `/api/admin/permission-requests/:id/resolve` | Answer someone else's permission request: `{approved, reason}` (reason required, audited) |
+| GET | `/api/admin/approvals` | Pending root-agent approvals of every user (admin); a space's only for its members |
+| POST | `/api/admin/approvals/:id/resolve` | Answer someone else's approval: `{approved, reason, response?}` (reason required, audited) |
+| GET | `/api/admin/group-channels` | Every group-channel enrolment (admin) |
+| PATCH | `/api/admin/group-channels/:id` | Change an enrolment's mode, quiet hours or rate limit (admin, audited) |
+| DELETE | `/api/admin/group-channels/:id` | Remove an enrolment (admin, audited) |
+
+Requests and approvals are answered by their requester on every other path
+(REST and the gateway); these two routes are the admin's only way to answer
+for someone else.
+
+### My workspaces and organizations
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/me/workspaces` | My personal workspaces (the default one is created on first access); spaces are listed under `/api/spaces` |
+| POST | `/api/me/workspaces` | Create one: `{slug, name, isDefault?}` (201) |
+| PATCH | `/api/me/workspaces/:id` | Rename: `{name}` |
+| POST | `/api/me/workspaces/:id/default` | Make it my default workspace |
+| DELETE | `/api/me/workspaces/:id` | Delete one of my workspaces |
+| POST | `/api/me/workspaces/:id/transfer` | Give it to another user: `{recipientUserId}` or `{recipientUsername}`; its content moves with it |
+| GET | `/api/me/orgs` | My organization memberships |
 
 ## Spaces
 
@@ -552,6 +588,20 @@ in its body.
 | PUT | `/api/settings/:key` | Update one setting |
 | PUT | `/api/settings/batch` | Update several settings |
 | POST | `/api/settings/:key/reset` | Reset one setting to its default |
+
+## Group Channels
+
+Group chats enrolled from inside the channel ([CHANNELS.md](CHANNELS.md)).
+Owner-only, admins included (the admin routes above are the audited
+override); another user's enrolment answers 404.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/me/group-channels` | My enrolled group channels |
+| PATCH | `/api/me/group-channels/:id` | Set mode (`mention`/`listen`/`proactive`), quiet hours, timezone and rate limits |
+| DELETE | `/api/me/group-channels/:id` | Remove the enrolment |
+| POST | `/api/me/group-channels/:id/bind` | Bind the channel to a space I own: `{workspaceId, acknowledged: true, roomId?}`. `roomId` becomes the main thread; other threads get a room on first use. Audited ([SPACES.md → Group channels bound to a space](SPACES.md#group-channels-bound-to-a-space)) |
+| DELETE | `/api/me/group-channels/:id/bind` | Unbind it (the channel's owner, or an owner of the space) |
 
 ## Channel Bindings
 
