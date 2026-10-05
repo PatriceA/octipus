@@ -16,6 +16,11 @@ labels reflect blast radius, not contract guarantees.
   (docs/API.md, docs/CONFIGURATION.md, `.env.example`), and the coworking
   spec records where the build differs from it.
 
+- **Joining a space lands in it.** The web's workspace list is read again on
+  sign-in and on joining; when the read started at sign-in answered after the
+  join's own, its older list (without the space) switched the user back to
+  their default workspace. Only the latest read is applied now.
+
 - **Guests, registration and remote members (review of S6/S7).** A guest no
   longer sees the space's whole audit log: activity shows the rows about
   their rooms only, with actors they may see. `GET /api/spaces/:id` and the
