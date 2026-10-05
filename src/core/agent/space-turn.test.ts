@@ -63,6 +63,7 @@ vi.mock('@/models/model-registry', () => ({
     getDefaultModel: async () => ({ modelId: 'test-model' }),
     getAllModels: async () => [],
     getModelForTopic: async () => null,
+    getUserBinding: async () => null,
     getModelByModelId: async (id: string) => fx.cliModels[id] ?? null,
     getModel: async () => null,
   }),

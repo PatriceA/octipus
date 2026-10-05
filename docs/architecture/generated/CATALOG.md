@@ -543,21 +543,12 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `channels` | 7 |
 | `core` | `config` | 42 |
 | `core` | `connectors` | 2 |
-<<<<<<< HEAD
-| `core` | `db` | 245 |
-| `core` | `extensions` | 1 |
-| `core` | `hooks` | 5 |
-| `core` | `mcp` | 5 |
-| `core` | `models` | 92 |
-| `core` | `security` | 101 |
-=======
-| `core` | `db` | 253 |
+| `core` | `db` | 250 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 5 |
 | `core` | `models` | 102 |
-| `core` | `security` | 96 |
->>>>>>> ccr-9f806ada-hqby2t
+| `core` | `security` | 101 |
 | `core` | `services` | 2 |
 | `core` | `shared` | 15 |
 | `core` | `skills` | 10 |
