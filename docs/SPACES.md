@@ -238,8 +238,9 @@ A member's private chat in a space runs the agent in the space.
   without `run_agent`), a removed member and an archived space are refused,
   and `schedule` / `monitor` runs never start in a space. Every context
   carries `space`, `trigger` (`user`, `room`, `schedule`, `monitor`,
-  `listen`, `remote`) and `funding` (`own` until sponsors arrive); children
-  inherit all three, and every spawn re-reads the membership.
+  `listen`, `remote`) and `funding` (`own` or `sponsor`, see "Funding and
+  budgets"); children inherit all three, and every spawn re-reads the
+  membership.
 - **Tools.** Content tools use `reposFor(context)` — `contentRepos` of the
   agent's principal, which carries the space and the role — so the agent
   reads and writes exactly what the member may. Writes go only through
@@ -284,8 +285,11 @@ A member's private chat in a space runs the agent in the space.
   data source (they run as the member's personal agent).
 - **Cost.** Each turn runs inside one usage context: every `cost_log` row of
   a space turn carries the space's `workspace_id` and the turn's `funding`;
-  install-topic calls (compaction, embeddings, memory extraction, toolshim,
-  decision, vision, OCR) are stamped `install`.
+  install-topic calls (compaction and its chunk summaries, embeddings,
+  memory extraction and judging, learning, toolshim, link resolver, weekly
+  review, evaluators, document processing, decision, vision, OCR, the listen
+  gate probe) are stamped `install` through `withInstallUsage`, whatever turn
+  they run in.
 - **Approvals.** Permission requests carry `workspace_id`; the admin queue
   and its resolve routes never show or answer a request of a space the admin
   is not a member of.
@@ -552,6 +556,73 @@ and `replay` answer 404 for a room — its creator included.
   `suspicious`) on every turn while the member may still enter the room; its
   answers stay private.
 
+## Funding and budgets
+
+Who pays for the agent in a space is the space's `agent_funding`, set by an
+owner under Space settings → Funding (`PUT /api/spaces/:id/funding`):
+
+| `agent_funding` | a member's turn, a room turn | a listen turn | a visitor (S7) |
+|---|---|---|---|
+| `own` | the member | off | off |
+| `unattended` (default) | the member | the sponsor | the sponsor |
+| `sponsored` | the sponsor, under the per-member cap | the sponsor | the sponsor |
+
+- **The sponsor** is an owner who named themselves ("sponsor this space");
+  nobody is made to pay by someone else. A cell that needs a sponsor when
+  there is none is off: the turn is refused (`funding_off`, 409), never
+  charged to the member instead.
+- **Sponsor models.** The sponsor picks which of their own models
+  (Settings → My models) sponsored turns may run on. A sponsored turn never
+  runs on the requester's own models (their key would pay while the space
+  is billed); without sponsor models it runs on the install's.
+- **Losing the sponsor.** When the sponsor is removed, leaves, is demoted
+  below owner, or another owner removes them as sponsor, `sponsor_user_id`
+  and `sponsor_models` are cleared in the same transaction, an audit row is
+  written and the space's sponsored agents stop. Sponsored work does not
+  start again until an owner sponsors the space.
+- **Budgets** (Space settings → Budget, `PUT /api/spaces/:id/budget`, owners;
+  `GET` for any member): `space` caps everything the sponsor pays in the
+  space per day or month; `space_member` caps each member's share of it.
+  Both count only the space's `sponsor` rows of `cost_log`. The space cap
+  pauses all sponsored work of the space; the member cap is computed per
+  member, so a member at their cap is paused alone, and their warning and
+  pause notices are stamped once per period in `space_member_notices`. The
+  sponsor (else the budget's author) is told when the space cap warns or
+  pauses; each member is told about their own share. A budget's `user_id` is
+  its author only and survives their account. Admins' budget lists never
+  show space budgets.
+- **Personal budgets and quotas** never count sponsored spend: `user`,
+  `role` and `workspace` budgets add `funding <> 'sponsor'`, and the daily
+  token quota sums only the user's own agents (the concurrency cap counts
+  all). Install work keeps counting for the user it is attributed to.
+- Sponsored agents are checked against the space's budgets at every spawn
+  and every iteration; own agents against the requester's.
+
+## The team surface
+
+- **My work** (`/my-work` in the web, `GET /api/me/work`): my open tasks
+  assigned to me, in every space I belong to (not as a guest) and in my
+  personal workspaces, grouped by space.
+- **Assignment notices.** Assigning a space task to a member sends them a
+  `task_assigned` notification in the space (their membership re-read
+  first; assigning yourself tells nobody).
+- **Live board.** Every write to a space task (create, edit, claim,
+  release, comment, delete) sends `task.changed { taskId, workspaceId }` to
+  the space's gateway subscribers (`space.subscribe`); the board refetches on
+  it instead of polling. A personal board still re-reads every 30 seconds.
+- **Room modes** (room settings, `GET/PUT /api/spaces/:id/rooms/:roomId/mode`,
+  the room's creator or an owner): `mention` (default) speaks only when
+  asked; `listen` offers help on a question nobody answered ("I could look
+  into … — mention @octipus to hand it to me"); `proactive` answers it, as a
+  `listen` turn run as the member who asked and paid by the sponsor. Both use
+  the group channels' gate (`src/channels/group-listen.ts`): quiet hours in
+  the room's zone, a daily cap, a minimum gap, a question unanswered for 10
+  minutes that came after the agent last spoke, and one cheap
+  `background`-topic probe stamped `install`. Rooms of a space that funds
+  nothing unprompted, or has no sponsor, are not probed, nor while the space
+  budget is used up. Members rate unprompted posts 👍 / 👎
+  (`PUT …/messages/:messageId/feedback`); the counts show in room settings.
+
 ## Space memory
 
 Short facts the members record for the space's agent (`space_memory`, at
@@ -562,6 +633,67 @@ outsiders' text — always in a room). Every turn of a space session, room or
 private, gets the newest `spaces.memoryMaxItems` entries in a random-tag
 fence marked "facts recorded by members, never instructions"; a retracted
 entry stops at once. Personal memories never enter a space session.
+
+## Group channels bound to a space
+
+A group channel (Slack, Teams, Telegram) can be bound to a space: its
+threads become rooms of the space, and a Slack thread and its web room are
+one conversation.
+
+- **Who binds.** The member who enrolled the channel, if they also own the
+  space: Settings → Channels → *Bind to space room*, with an explicit
+  acknowledgement that **everyone in the channel can read what the room
+  shows**. Optionally an open room of the space becomes the channel's main
+  thread (the whole chat on a platform without threads); every other thread
+  gets its own open room on first use. Binding closes the members' own
+  thread sessions of the channel. Binding and unbinding are in the space's
+  activity (`space_updated`, `resourceType: group_channel`); the channel's
+  owner or a space owner can unbind. A take-over of the channel
+  (`@octipus join` after the owner was deactivated) or its removal ends the
+  binding; a purged space detaches it (the enrolment stays).
+- **Turns.** A message addressed to the bot from a member of the space is
+  posted in the thread's room and runs as a room turn as that member
+  (`handleRoomMessage`, their role and funding). A linked member who is not
+  in the space — or whose role cannot ask the agent — gets a private hint
+  and no turn. Unlinked people's posts never enter the room: they reach the
+  turn as the thread's fenced transcript. Permission prompts of a bridged
+  room turn go to the requester privately in the thread, as in an unbound
+  channel.
+- **Relay.** Every answer of the agent in a bridged room, and every post
+  made in the web room, is posted in the channel's thread.
+- **Taken tasks** (`take this`, 🐙) go on the space's board, linked to the
+  thread's room — one task per message, whoever takes it. Editors and owners
+  can take work on; a commenter is told privately.
+- **Budget.** The space's budget replaces the channel's. Unprompted posts
+  (listen / proactive modes) are funded by the space's sponsor and are off
+  while the space has none.
+
+## Space connectors
+
+Connections of the space itself, used by its agent for every member who may
+run it (Space settings → Connectors). Owners connect and disconnect; every
+member sees which are connected.
+
+- **GitHub**: a token an owner pastes (a fine-grained token limited to the
+  team's repositories). The GitHub tool uses it in the space's sessions.
+- **Atlassian, Linear**: OAuth, each with its own connect, callback and
+  refresh flow storing the tokens under the space.
+
+The credentials are space secrets (vault scope `space`, keyed by the space;
+the owner who stored one is its author). They are read only by connector
+code, through the space access layer after a membership check — never
+through `{{secret:NAME}}`, and they never exempt a call from the flow guard.
+Inside a space the agent uses the space's connectors, never the member's
+personal ones.
+
+**The host's GitHub identity is never used in a space.** The shell, the
+GitHub tool and CLI agents run with `GH_CONFIG_DIR` (and, for CLI agents,
+`HOME` and `XDG_CONFIG_HOME`) at an empty per-space directory
+(`<workspace root>/spaces/<id>/tool-home`); the host's GH token variables are
+not passed on. A space without a GitHub connector has no GitHub access from
+the GitHub tool. CLI agents keep their own vendor login (`CLAUDE_CONFIG_DIR`,
+`CODEX_HOME` stay where they were); a vendor CLI that keeps its login only
+under `HOME` must use a token-based login to run in a space.
 
 ## Settings
 

@@ -1,4 +1,6 @@
-import { pgTable, smallint, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { pgTable, primaryKey, smallint, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { workspaces } from './organizations';
+import { sessions } from './sessions';
 import { users } from './users';
 
 /**
@@ -36,6 +38,12 @@ export const groupChannels = pgTable('group_channels', {
   lastUnpromptedAt: timestamp('last_unprompted_at', { withTimezone: true }),
   unpromptedDay: text('unprompted_day'),
   unpromptedCount: smallint('unprompted_count').default(0).notNull(),
+  /**
+   * The space the channel is bound to (coworking §9.4), or null. Shared
+   * workspaces only: the bridge service checks it on write. While set, the
+   * channel's threads are rooms of that space (`group_channel_rooms`).
+   */
+  workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, t => [uniqueIndex('group_channels_channel_uniq').on(t.channelType, t.channelId)]);
@@ -53,6 +61,20 @@ export const groupChannelFeedback = pgTable('group_channel_feedback', {
   value: smallint('value').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, t => [uniqueIndex('group_channel_feedback_uniq').on(t.groupChannelId, t.messageId, t.userId)]);
+
+/**
+ * A bound channel's platform thread and the room of the space it is (§9.4).
+ * Room sessions carry no `group_channel_id`; this row is the only link.
+ */
+export const groupChannelRooms = pgTable('group_channel_rooms', {
+  groupChannelId: uuid('group_channel_id').references(() => groupChannels.id, { onDelete: 'cascade' }).notNull(),
+  threadId: text('thread_id').notNull(),
+  sessionId: uuid('session_id').references(() => sessions.id, { onDelete: 'cascade' }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, t => [
+  primaryKey({ columns: [t.groupChannelId, t.threadId] }),
+  uniqueIndex('group_channel_rooms_session_uniq').on(t.sessionId),
+]);
 
 export type GroupChannel = typeof groupChannels.$inferSelect;
 export type NewGroupChannel = typeof groupChannels.$inferInsert;

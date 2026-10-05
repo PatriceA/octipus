@@ -7,6 +7,27 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### Fixed
+
+- **Rooms (review of S2).** `remember_for_space` goes through
+  `routeApprovalFor` as a space write (role cap, and an ASK after a private
+  read in a private space session). The space memory and a side panel's
+  linked-room transcript are injected per turn only, never stored with the
+  turn (`metadata.promptContext`, native snapshots) nor replayed. Room turns
+  carry a stop signal checked at handover, before the root agent spawns and
+  before the answer is stored; `/stop`, removal and the approval timeout
+  stop only the turn they decided about, and tool decisions in a room
+  re-check `roomAccess`. `/compact` refuses while a turn runs. Room history
+  and compaction page past the 400-row cap; a turn compacts first when its
+  transcript exceeds `rooms.transcriptWindowChars` and its history stays in
+  that window. A room `yes` resolves its approval by id. A requester's
+  limit refusal posts a neutral line in the room (details to the requester
+  only), and failed turns no longer broadcast error text. The swarm routes'
+  admin bypass never reaches rooms or space sessions. A room creator's
+  manage rights need a write role. Queue turns alternate between members;
+  `requester` checks the running turn's requester; pruned subscriptions
+  clear presence; `room.subscribe` re-checks access after joining.
+
 ### Added
 
 - **The agent as co-editor, and file leases enforced (spaces).** In a space
@@ -24,6 +45,40 @@ labels reflect blast radius, not contract guarantees.
   holds it and until when, the check and the write under one per-path
   mutex. Shell, git, docker, skill scripts and CLI agents stay advisory
   (docs/SPACES.md).
+- **Space funding, budgets and the team surface** (coworking S5,
+  `docs/SPACES.md` → "Funding and budgets", "The team surface"). A space's
+  owners choose who pays for the agent — each member (`own`), members for
+  their own turns and a sponsor for unprompted work (`unattended`, the
+  default), or a sponsor for everything (`sponsored`, each member under a
+  per-member cap) — and an owner can sponsor the space with their own
+  models. Space budgets cap the sponsor's spend for the whole space and per
+  member (Space settings → Budget); a member at their cap is paused alone.
+  Sponsored spend never moves a member's personal budget or token quota.
+  "My work" lists my open tasks across my spaces; assigning a space task
+  notifies the assignee; the space's board updates live from `task.changed`
+  instead of polling. Rooms get `listen` and `proactive` modes with the
+  group channels' gate (quiet hours, caps, 👍/👎 feedback), paid by the
+  sponsor. Migration `0132_space_funding`.
+- **Group channels bound to a space** (coworking §9.4). A group channel's
+  owner who also owns a space can bind the channel to it (Settings →
+  Channels → *Bind to space room*, with the acknowledgement that everyone
+  in the channel can read what the room shows; audited). Each thread is then
+  a room of the space: members' requests run as room turns as themselves,
+  linked people outside the space get a private hint and no turn, the room
+  is posted back in the thread, taken tasks land on the space's board (one
+  per message) and the space's budget replaces the channel's. Binding closes
+  the members' own thread sessions of that channel. Migration
+  `0133_space_bridge_connectors`.
+- **Space connectors** (coworking §9.5). Space settings get *Connectors*:
+  owners connect GitHub (a token) and Atlassian / Linear (OAuth, with their
+  own connect, callback and refresh flows) for the whole space. Their
+  credentials are a new vault scope, `space`, keyed by the space
+  (`dekForRow`, also used by both rotation scripts), readable only through
+  the space access layer and never through `{{secret:}}`. In a space the
+  shell, the GitHub tool and CLI agents run with an empty per-space
+  `GH_CONFIG_DIR` (CLI agents also an empty `HOME`), so a space session
+  never acts with the host's GitHub login.
+
 - **Rooms in the web.** With a shared space selected, the sidebar gets
   *rooms* (with the unread count) and `/rooms` lists the space's rooms with
   unread badges. A room shows everyone's posts (others on the left with name
@@ -84,6 +139,13 @@ labels reflect blast radius, not contract guarantees.
 
 ### Changed
 
+- Install-topic model calls (compaction and its chunk summaries, learning,
+  link resolver, weekly review, evaluators, document processing, the group
+  listen probe) are now stamped `install` in `cost_log` whatever turn they
+  run in, through `withInstallUsage`. Spend budgets' `user_id` is nullable
+  for space budgets (author only); a user's own budgets are still deleted
+  with their account (a trigger replaces the cascade).
+
 - **Live space notes: review fixes** (coworking S3). Nothing typed is lost
   on a reconnect: a closed note stays in memory for a minute (a member whose
   connection blipped keeps the epoch and Yjs merges what they typed
@@ -128,6 +190,34 @@ labels reflect blast radius, not contract guarantees.
 
 ### Security
 
+- **Own models: review fixes** (coworking S4). A personal CLI model's
+  one-shot completions (mail triage, reader, research, `/plan`, the casual
+  path) run without native tools (`--tools=`, no settings files) in a
+  directory under the owner's CLI home, never in the shared workspace root;
+  a CLI tool that cannot run tool-less (Codex, Antigravity) can no longer be
+  bound to a lane and serves agent runs only. A personal CLI agent run is
+  locked to its adapter's safe mode, as in a space (Claude: permission mode
+  `default` with the stdio permission tool and only a locked settings file;
+  Codex: read-only; Antigravity: plan mode); Mistral Vibe is refused for
+  personal rows. Codex MCP discovery reads the run's own `CODEX_HOME`. A
+  personal row's key is released only to its owner at the provider layer
+  (`resolveModelKey`), so another user's request on it fails whatever key it
+  brings; `/compact` never compacts another member's conversation on their
+  personal model. In a space a personal CLI binding a commenter (or an
+  adapter without a space mode) may not use falls through to the install
+  lane instead of failing the turn, and side questions and the voice plan
+  gate follow the same rules. `isRegisteredModel` only considers install
+  rows and the caller's own (plus the reserved `u/` namespace), so another
+  user's personal model id no longer blocks a passthrough. Red-team runs,
+  `POST /api/eval/run` and `PATCH /api/topics/:topic/config` refuse personal
+  rows. Admins see disabled and other orgs' install rows in
+  `GET /api/models/:name` again; install rows fall back to the env key when
+  the vault cannot be read (personal rows still fail loud). The SSRF guard
+  also refuses `fec0::/10`, `ff00::/8`, IPv4-compatible `::a.b.c.d`, 6to4 of
+  a private IPv4, local-use NAT64, Teredo and documentation ranges, and a
+  personal endpoint must be `https://`. Personal rows may set
+  `contextWindow` and `maxTokens` within bounds, and a compaction that runs
+  on a personal row is funded `own`.
 - **Shared spaces: review fixes to the access layer** (coworking S1).
   Admins no longer list, read or stream another user's agents in a space
   (history list, live list, live details, events, stop). Starting an agent or

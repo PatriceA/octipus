@@ -28,8 +28,15 @@ export interface Space {
   archivedAt: string | null;
   createdBy: string | null;
   createdAt: string;
-  funding: 'own';
+  /** Who pays for the agent (`workspaces.agent_funding`, coworking spec §9.1). */
+  funding: AgentFundingMode;
+  /** The owner who pays for sponsored work, or null. */
+  sponsorUserId: string | null;
+  /** The sponsor's own model rows sponsored turns may run on. */
+  sponsorModels: string[];
 }
+
+export type AgentFundingMode = 'own' | 'unattended' | 'sponsored';
 
 /** The selected workspace: one of the caller's own, or a space. */
 export type ActiveWorkspace = ({ kind: 'personal' } & Workspace) | ({ kind: 'shared' } & Space);

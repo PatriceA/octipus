@@ -29,7 +29,7 @@ import { type RoomVisibility, sessions } from '@/db/schema/sessions';
 import { users } from '@/db/schema/users';
 import { can, requireCan, SpaceError } from '@/security/space-access';
 import { coreLogger } from '@/utils/logger';
-import { accessToRoom, loadRoom, type Room, type RoomAccess, roomAccess, roomOf } from './access';
+import { accessToRoom, loadRoom, mayManage, type Room, type RoomAccess, roomAccess, roomOf } from './access';
 
 type Db = ReturnType<typeof getDb>;
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -208,6 +208,8 @@ export interface RoomMessageView {
     replyTo?: string;
     /** The member the answer was for. */
     requesterId?: string;
+    /** Posted by the agent unprompted, in a listen room (§9.3); members rate it. */
+    unprompted?: boolean;
   };
 }
 
@@ -228,6 +230,7 @@ export function messageView(row: Message, authorName: string | null): RoomMessag
       ...(typeof meta.addressed === 'boolean' ? { addressed: meta.addressed } : {}),
       ...(typeof meta.replyTo === 'string' ? { replyTo: meta.replyTo } : {}),
       ...(typeof meta.requesterId === 'string' ? { requesterId: meta.requesterId } : {}),
+      ...(meta.unprompted === true ? { unprompted: true } : {}),
     },
   };
 }
@@ -295,7 +298,13 @@ export function mentionsOctipus(content: string): boolean {
 export async function postRoomMessage(
   actor: RoomActor,
   roomId: string,
-  input: { content: string; addressed?: boolean; clientId?: string },
+  input: {
+    content: string;
+    addressed?: boolean;
+    clientId?: string;
+    /** Posted in the bound group channel (§9.4): the bridge does not post it back there. */
+    bridged?: { channelType: string; messageId: string };
+  },
   opts: { workspaceId?: string } = {},
 ): Promise<{ message: RoomMessageView; access: RoomAccess; addressed: boolean }> {
   const access = opts.workspaceId ? await requireRoom(actor, opts.workspaceId, roomId) : await roomAccess(actor.userId, roomId);
@@ -314,6 +323,7 @@ export async function postRoomMessage(
     authorUserId: actor.userId,
     metadata: {
       ...(input.clientId ? { clientId: input.clientId } : {}),
+      ...(input.bridged ? { bridged: input.bridged } : {}),
       addressed,
     },
   });
@@ -362,9 +372,9 @@ export async function isRoomMuted(roomId: string, userId: string): Promise<boole
   return row?.muted ?? false;
 }
 
-/** Room creator or space owner (`manage`), or `forbidden_role`. */
+/** Room creator (while editor+) or space owner (`manage`), or `forbidden_role`. */
 function requireManage(actor: RoomActor, access: RoomAccess): void {
-  if (access.room.createdBy !== actor.userId && access.role !== 'owner') {
+  if (!mayManage(access, actor.userId)) {
     throw new SpaceError('forbidden_role', 'Only the room\'s creator or a space owner can change this room');
   }
 }

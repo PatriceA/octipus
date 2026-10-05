@@ -9,7 +9,9 @@ import {
   releaseLease,
   renewLease,
 } from '@/core/docs/file-leases';
+import { connectSpaceConnector, disconnectSpaceConnector, listSpaceConnectors } from '@/core/spaces/connectors';
 import { acceptInvite, createInvite, listInvites, previewInvite, revokeInvite } from '@/core/spaces/invites';
+import { setSpaceFunding } from '@/core/spaces/funding';
 import { purgeSpace } from '@/core/spaces/purge';
 import {
   archiveSpace,
@@ -43,7 +45,7 @@ import { requireCan, type SpaceAction, SpaceError, spaceErrorStatus } from '@/se
  * Errors are typed `SpaceError`s: `invalid_*` 400, `not_found` 404 (also for
  * every space a caller is not a member of), `forbidden_role` 403 (a member
  * whose role lacks the action), `last_owner` / `space_full` / `archived` /
- * `not_purgeable` 409.
+ * `not_purgeable` / `funding_off` 409.
  */
 
 export type RouteCtx = {
@@ -151,6 +153,65 @@ export const spaceRoutes = new Elysia({ prefix: '/spaces' })
     detail: { tags: ['spaces'] },
   })
 
+  // Who pays for the agent (§9.1): owners. `sponsor: 'me'` names the caller
+  // as the sponsor, null clears it; only the sponsor lists sponsor models.
+  .put('/:id/funding', (ctx) => handle(ctx, (actor) => setSpaceFunding(actor, ctx.params.id, ctx.body)), {
+    params: t.Object({ id: t.String() }),
+    body: t.Object({
+      mode: t.Optional(t.Union([t.Literal('own'), t.Literal('unattended'), t.Literal('sponsored')])),
+      sponsor: t.Optional(t.Union([t.Literal('me'), t.Null()])),
+      sponsorModels: t.Optional(t.Array(t.String({ minLength: 1, maxLength: 200 }), { maxItems: 20 })),
+    }, { additionalProperties: false }),
+    detail: { tags: ['spaces'] },
+  })
+
+  // The space's budgets (§9.2) with their spend this period; the member cap
+  // shows the caller's own share. Any member reads them.
+  .get('/:id/budget', (ctx) => handle(ctx, async (actor) => {
+    await requireMember(actor, ctx.params.id, 'read');
+    const { spaceBudgetStatuses } = await import('@/security/spend-budgets');
+    return { budgets: await spaceBudgetStatuses(ctx.params.id, actor.userId) };
+  }), {
+    params: t.Object({ id: t.String() }),
+    detail: { tags: ['spaces'] },
+  })
+
+  // Set (or, with `limitUsd: null`, remove) a space budget: owners. `space`
+  // caps everything the sponsor pays in the space, `space_member` each
+  // member's share. Audited (I10).
+  .put('/:id/budget', (ctx) => handle(ctx, async (actor) => {
+    await requireMember(actor, ctx.params.id, 'manage_space');
+    const { limitUsd, warnRatio } = ctx.body;
+    if (limitUsd !== null && !(limitUsd > 0)) throw new SpaceError('invalid_input', 'limitUsd must be a positive number or null');
+    if (warnRatio !== undefined && !(warnRatio > 0 && warnRatio <= 1)) throw new SpaceError('invalid_input', 'warnRatio must be in (0, 1]');
+    const { setSpaceBudget, spaceBudgetStatuses } = await import('@/security/spend-budgets');
+    const { auditActor, writeSpaceAudit } = await import('@/core/spaces/service');
+    const { getDb } = await import('@/db/postgres');
+    await getDb().transaction(async (tx) => {
+      const budget = await setSpaceBudget({
+        workspaceId: ctx.params.id, authorId: actor.userId, kind: ctx.body.kind, period: ctx.body.period, limitUsd, warnRatio,
+      }, tx);
+        await writeSpaceAudit(tx, {
+        ...auditActor(actor),
+        action: 'space_updated',
+        workspaceId: ctx.params.id,
+        resourceType: 'spend_budget',
+        resourceId: budget?.id ?? ctx.params.id,
+        details: { field: 'budget', kind: ctx.body.kind, period: ctx.body.period, newValue: limitUsd, ...(warnRatio !== undefined ? { warnRatio } : {}) },
+      });
+    });
+    return { budgets: await spaceBudgetStatuses(ctx.params.id, actor.userId) };
+  }), {
+    params: t.Object({ id: t.String() }),
+    body: t.Object({
+      kind: t.Union([t.Literal('space'), t.Literal('space_member')]),
+      period: t.Union([t.Literal('day'), t.Literal('month')]),
+      limitUsd: t.Union([t.Number(), t.Null()]),
+      warnRatio: t.Optional(t.Number()),
+    }, { additionalProperties: false }),
+    detail: { tags: ['spaces'] },
+  })
+
   .post('/:id/archive', (ctx) => handle(ctx, (actor) => archiveSpace(actor, ctx.params.id)), {
     params: t.Object({ id: t.String() }),
     detail: { tags: ['spaces'] },
@@ -235,6 +296,28 @@ export const spaceRoutes = new Elysia({ prefix: '/spaces' })
   }), {
     params: t.Object({ id: t.String() }),
     query: t.Object({ limit: t.Optional(t.String()), before: t.Optional(t.String()) }),
+    detail: { tags: ['spaces'] },
+  })
+
+  // ── Space connectors (§9.5) ─────────────────────────────────────────
+  // Every member sees which are connected; owners connect (an OAuth popup,
+  // or a pasted GitHub token) and disconnect. Values never leave the server.
+
+  .get('/:id/connectors', (ctx) => handle(ctx, async (actor) => ({ connectors: await listSpaceConnectors(actor, ctx.params.id) })), {
+    params: t.Object({ id: t.String() }),
+    detail: { tags: ['spaces'] },
+  })
+
+  .post('/:id/connectors/:connectorId', (ctx) => handle(ctx, (actor) =>
+    connectSpaceConnector(actor, ctx.params.id, ctx.params.connectorId, { token: ctx.body?.token })), {
+    params: t.Object({ id: t.String(), connectorId: t.String({ minLength: 1, maxLength: 64 }) }),
+    body: t.Optional(t.Object({ token: t.Optional(t.String({ minLength: 1, maxLength: 400 })) }, { additionalProperties: false })),
+    detail: { tags: ['spaces'] },
+  })
+
+  .delete('/:id/connectors/:connectorId', (ctx) => handle(ctx, (actor) =>
+    disconnectSpaceConnector(actor, ctx.params.id, ctx.params.connectorId)), {
+    params: t.Object({ id: t.String(), connectorId: t.String({ minLength: 1, maxLength: 64 }) }),
     detail: { tags: ['spaces'] },
   })
 

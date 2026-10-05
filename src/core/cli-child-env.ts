@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { getConfig } from '@/config';
 import type { ModelConfigEntry } from '@/db/schema/models';
 import type { CLIToolConfig } from '@/models/providers/cli-provider';
+import { spaceToolEnv } from '@/security/space-tool-env';
 
 export function buildChildEnv(tool: CLIToolConfig, toolEnv?: Record<string, string>, inheritApiKeys = false): Record<string, string> {
   const base: Record<string, string> = {};
@@ -91,16 +92,32 @@ export function cliHomeFor(userId: string): string {
 }
 
 /**
+ * The working directory of a personal row's one-shot completion: a directory
+ * of its own under the owner's CLI home, never `workspace.rootPath` (which
+ * holds every user's data). The completion runs without tools, so nothing is
+ * meant to be read from it; it only keeps the vendor's per-project state
+ * (Claude indexes sessions by cwd) inside the owner's home.
+ */
+export function cliWorkDirFor(userId: string): string {
+  const dir = join(cliHomeFor(userId), 'one-shot');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return dir;
+}
+
+/**
  * The credential owner of a CLI model row: `null` for an install row, the
  * row's owner and their stored token for a personal one. A personal row
- * without a token fails loud — it must never fall back to the server login.
+ * without a token fails loud — it must never fall back to the server login —
+ * and runs only for its owner: `requesterId` is the user the run serves, and
+ * another user's personal row throws (`resolveModelKey`).
  */
 export async function cliCredentialOwnerFor(
   row: Pick<ModelConfigEntry, 'name' | 'apiKeyRef' | 'ownerUserId' | 'provider'> | null | undefined,
+  requesterId: string | null | undefined,
 ): Promise<CliCredentialOwner | null> {
   if (!row?.ownerUserId) return null;
   const { resolveModelKey, PersonalModelKeyMissingError } = await import('@/models/model-key');
-  const token = await resolveModelKey(row);
+  const token = await resolveModelKey(row, requesterId);
   if (!token) throw new PersonalModelKeyMissingError(row.name);
   return { userId: row.ownerUserId, token };
 }
@@ -131,4 +148,21 @@ export function cliEnvFor(
   env.XDG_CONFIG_HOME = join(home, '.config');
   env[authVarFor(tool, owner.token)] = owner.token;
   return env;
+}
+
+/**
+ * A CLI agent's environment inside a space (coworking §9.5): `HOME`,
+ * `XDG_CONFIG_HOME` and `GH_CONFIG_DIR` move to the space's empty tool home,
+ * so the CLI's native tools (shell, gh, version control) find none of the
+ * host's — or the credential owner's — logins kept under `HOME`. The
+ * vendor's own config directory stays where `env` had it
+ * (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`), so the CLI itself is still signed in.
+ */
+export function cliSpaceEnv(env: Record<string, string>, workspaceId: string): Record<string, string> {
+  const out = { ...env };
+  if (out.HOME) {
+    out.CLAUDE_CONFIG_DIR ??= join(out.HOME, '.claude');
+    out.CODEX_HOME ??= join(out.HOME, '.codex');
+  }
+  return { ...out, ...spaceToolEnv(workspaceId, { home: true }) };
 }

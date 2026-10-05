@@ -30,6 +30,7 @@ import { spaceDirectories, WorkspaceFS } from '@/security/workspace-fs';
 import { getDb } from '../postgres';
 import { type Artifact, artifacts, type NewArtifact } from '../schema/artifacts';
 import { workspaceMembers, workspaces } from '../schema/organizations';
+import { type NewVaultEntry, vault } from '../schema/vault';
 import { type KnowledgeLinkRepository, getKnowledgeLinkRepository } from './knowledge-link-repository';
 import { type NoteScope, type NoteStore, SpaceNoteRepo } from './note-repository';
 import {
@@ -269,6 +270,132 @@ export async function findViewableArtifactBySlug(userId: string, slug: string): 
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Secrets (space connectors, §9.5)
+// ─────────────────────────────────────────────────────────────────────
+
+/** A space secret without its value. */
+export interface SpaceSecretView {
+  name: string;
+  credentialType: NewVaultEntry['credentialType'];
+  /** The owner who stored it: its author, never a grant (D4). */
+  storedBy: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * A space's credentials: vault rows with `scope = 'space'`, keyed by the
+ * space (`workspace_id`) and encrypted under a key derived from it
+ * (`dekForRow`). The only reader and writer of those rows (I1): every call
+ * goes through a member's space context, read for this request.
+ *
+ * - `list` (names only): any member who may read the space.
+ * - `read`: the space's connector code acting for a member who may run the
+ *   agent (token getters, `runGh` with `opts.token`). A space secret never
+ *   reaches `{{secret:}}` injection, which reads `user` and `system` rows
+ *   only, so a turn cannot route one into a shell or an HTTP call.
+ * - `write` / `remove`: owners (`manage_space`), audited with the space.
+ * - `refresh`: a connector's token refresh, by any member who may run the
+ *   agent, of a row that already exists.
+ */
+export class SpaceSecretStore {
+  constructor(private readonly space: SpaceContext) {}
+
+  private get db() { return getDb(); }
+
+  private live(name?: string): SQL[] {
+    return [
+      eq(vault.scope, 'space'),
+      eq(vault.workspaceId, this.space.workspaceId),
+      eq(vault.isActive, true),
+      ...(name === undefined ? [] : [eq(vault.name, name)]),
+    ];
+  }
+
+  async list(): Promise<SpaceSecretView[]> {
+    assertSpaceCan(this.space, 'read');
+    return this.db
+      .select({ name: vault.name, credentialType: vault.credentialType, storedBy: vault.userId, createdAt: vault.createdAt, updatedAt: vault.updatedAt })
+      .from(vault)
+      .where(and(...this.live()))
+      .orderBy(vault.name);
+  }
+
+  /** The value of `name`, or null. For connector code only (see the class comment). */
+  async read(name: string): Promise<string | null> {
+    assertSpaceCan(this.space, 'run_agent');
+    const [row] = await this.db.select().from(vault).where(and(...this.live(name))).orderBy(desc(vault.updatedAt)).limit(1);
+    if (!row) return null;
+    if (row.expiresAt && row.expiresAt < new Date()) return null;
+    const { decryptRow } = await import('@/security/vault');
+    return decryptRow(row).plaintext;
+  }
+
+  /** Store `name` (replacing a live row of that name). Owners only. */
+  async write(name: string, value: string, credentialType: NewVaultEntry['credentialType']): Promise<void> {
+    assertSpaceCan(this.space, 'manage_space');
+    if (!value.trim()) throw new SpaceError('invalid_input', 'A secret needs a value');
+    const { encryptForRow } = await import('@/security/vault');
+    const key = { scope: 'space' as const, userId: this.space.userId, workspaceId: this.space.workspaceId };
+    await this.db.transaction(async (tx) => {
+      await tx.update(vault).set({ isActive: false, updatedAt: new Date() }).where(and(...this.live(name)));
+      await tx.insert(vault).values({ ...key, name, credentialType, ...encryptForRow(key, value), tags: ['space-connector'] });
+    });
+  }
+
+  /**
+   * A connector's refreshed token: rewrites the live row of `name` in place
+   * (its author stays). False when there is none — a refresh never creates a
+   * secret the owners did not store.
+   */
+  async refresh(name: string, value: string): Promise<boolean> {
+    assertSpaceCan(this.space, 'run_agent');
+    const { encryptForRow } = await import('@/security/vault');
+    const key = { scope: 'space' as const, userId: this.space.userId, workspaceId: this.space.workspaceId };
+    const updated = await this.db.update(vault)
+      .set({ ...encryptForRow(key, value), updatedAt: new Date() })
+      .where(and(...this.live(name)))
+      .returning({ id: vault.id });
+    return updated.length > 0;
+  }
+
+  /** Deactivate the live rows of `names`; returns how many. Owners only. */
+  async remove(names: readonly string[]): Promise<number> {
+    assertSpaceCan(this.space, 'manage_space');
+    if (names.length === 0) return 0;
+    const removed = await this.db.update(vault)
+      .set({ isActive: false, updatedAt: new Date() })
+      .where(and(...this.live(), inArray(vault.name, [...names])))
+      .returning({ id: vault.id });
+    return removed.length;
+  }
+}
+
+/**
+ * The shared principal of `userId` in `workspaceId`, with the role read now
+ * (D5) — for code that acts for a member outside a request (an OAuth
+ * callback, a channel bridge). `SpaceError('not_found')` for a non-member.
+ */
+export async function memberPrincipal(userId: string, workspaceId: string): Promise<Principal> {
+  const { getMembership, isSpaceArchived } = await import('@/core/spaces/service');
+  const membership = await getMembership(userId, workspaceId);
+  if (!membership) throw new SpaceError('not_found', 'Space not found');
+  return {
+    kind: 'user',
+    userId,
+    username: userId,
+    isAdmin: false,
+    sessionToken: null,
+    roles: ['user'],
+    workspaceId,
+    workspaceKind: 'shared',
+    spaceRole: membership.role,
+    spaceScope: membership.scope,
+    spaceArchived: await isSpaceArchived(workspaceId),
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Bundle
 // ─────────────────────────────────────────────────────────────────────
 
@@ -292,6 +419,8 @@ export interface SpaceRepos {
   noteScope: NoteScope;
   links: LinkStore;
   artifacts: ArtifactStore;
+  /** The space's connector credentials (§9.5). */
+  secrets: SpaceSecretStore;
   knowledge: KnowledgeScope;
   knowledgeOwner: KnowledgeOwner;
   /** The space's files (`<workspace.rootPath>/spaces/<id>/files`). */
@@ -325,6 +454,7 @@ export function spaceRepos(principal: Principal): SpaceRepos {
     noteScope,
     links: linkStoreFor(noteScope),
     artifacts: new ArtifactStore(space.workspaceId, space.userId, scope.can),
+    secrets: new SpaceSecretStore(space),
     knowledge: { kind: 'space', workspaceId: space.workspaceId },
     knowledgeOwner: { ownerUserId: space.userId, workspaceId: space.workspaceId },
     files: () => WorkspaceFS.forSpace(space.workspaceId),

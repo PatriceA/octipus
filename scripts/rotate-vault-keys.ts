@@ -23,7 +23,7 @@ import { eq } from 'drizzle-orm';
 import { closeDb, getDb, initializeDb, initializeExtensions } from '../src/db/postgres';
 import { closeStorage, initializeStorage } from '../src/db/storage';
 import { vault } from '../src/db/schema/vault';
-import { initializeVault, getVault } from '../src/security/vault';
+import { initializeVault, upgradeVaultRow } from '../src/security/vault';
 import { logger } from '../src/utils/logger';
 
 interface Args {
@@ -58,7 +58,6 @@ async function main() {
   await initializeVault();
 
   const db = getDb();
-  const vaultApi = getVault();
 
   // Count work up-front for progress reporting.
   const v1Rows = await db
@@ -82,19 +81,17 @@ async function main() {
 
   let rotated = 0;
   let failed = 0;
-  // Each `getByName / get` call decrypts and (because of the lazy
-  // re-encryption inside vault.get) writes the row back at the current
-  // key version. We use `getByName` so we don't need to know the row's
-  // id; passing the userId lets the strict scope check pass.
+  // Each row is decrypted under its own key (`dekForRow`: its scope and
+  // owner, or its space for a space secret) and rewritten at the current
+  // key version. By row id, whatever the scope: the owner-scoped readers
+  // (`vault.get`) never select a workspace or space row.
   for (let i = 0; i < active.length; i += args.batchSize) {
     const batch = active.slice(i, i + args.batchSize);
     for (const row of batch) {
       try {
-        // The lazy re-encryption path requires a successful decrypt;
-        // anything else (key mismatch, corrupted ciphertext) raises.
-        const value = await vaultApi.get(row.userId, row.id);
-        if (value === null) {
-          logger.warn({ id: row.id }, 'rotate: row returned null (expired?)');
+        const outcome = await upgradeVaultRow(row.id);
+        if (outcome === 'missing') {
+          logger.warn({ id: row.id }, 'rotate: row vanished');
           failed++;
           continue;
         }

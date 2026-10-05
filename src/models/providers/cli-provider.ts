@@ -1,6 +1,6 @@
 import { describeCliCapabilities } from '@/shared/cli-capabilities';
-import { cliCredentialOwnerFor, cliEnvFor } from '@/core/cli-child-env';
-import { discoverCodexMcpServers, getEmptyMcpConfigPath, getEmptyVibeHome } from '@/core/cli-adapters';
+import { cliCredentialOwnerFor, cliEnvFor, cliWorkDirFor } from '@/core/cli-child-env';
+import { discoverCodexMcpServers, getClaudeSpaceSettingsPath, getEmptyMcpConfigPath, getEmptyVibeHome } from '@/core/cli-adapters';
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { delimiter, extname, join } from 'path';
@@ -101,7 +101,15 @@ export interface CLIToolConfig {
    * 2026-09-16: codex MERGES -c tables into config.toml rather than
    * replacing them). Preferred over `buildArgs` when present.
    */
-  buildArgsAsync?: (prompt: string, cwd: string) => Promise<string[]>;
+  buildArgsAsync?: (prompt: string, cwd: string, env: Record<string, string>) => Promise<string[]>;
+  /**
+   * argv of a one-shot completion with NO native tools and no user/project
+   * settings (prompt on stdin). A personal row's one-shot completions run
+   * only this way (coworking spec §8.4): their callers feed in external mail,
+   * fetched pages and other people's words. A tool without it cannot serve a
+   * personal row's one-shot completions, so such a row binds no lane.
+   */
+  toolLessArgs?: () => string[];
   /** Parse JSON output into CompletionResult */
   parseOutput: (stdout: string, startTime: number) => CompletionResult;
   /** Detect quota exhaustion from stderr/stdout */
@@ -143,6 +151,11 @@ const claudeCodeConfig: CLIToolConfig = {
   // config (measured 2k+ tokens of tool schemas on top of the real prompt).
   buildArgs: () => ['-p', '--output-format', 'json', '--strict-mcp-config', '--mcp-config', getEmptyMcpConfigPath()],
   promptVia: 'stdin',
+  // `--tools=` disables every built-in tool (`=` form: an empty value survives
+  // a shell-wrapped Windows launch); `--setting-sources=` plus the locked
+  // settings file keep the owner's cli-home settings (hooks, allow rules) out.
+  toolLessArgs: () => ['-p', '--output-format', 'json', '--strict-mcp-config', '--mcp-config', getEmptyMcpConfigPath(),
+    '--tools=', '--setting-sources=', '--settings', getClaudeSpaceSettingsPath(false)],
   // claude --output-format json returns { result, usage: {...} }; the shared
   // parser sums the SAME resolved input/output values (C18) and falls back to
   // plain text when the payload isn't JSON.
@@ -221,10 +234,10 @@ const codexCliConfig: CLIToolConfig = {
   // that override — codex merges -c tables into config.toml, it doesn't
   // replace them). Discover the effective set and disable each by name,
   // same technique the connected agent path already uses.
-  buildArgsAsync: async (prompt: string, cwd: string) => {
+  buildArgsAsync: async (prompt: string, cwd: string, env: Record<string, string>) => {
     const args = ['exec', '--json'];
     try {
-      const servers = await discoverCodexMcpServers(cwd);
+      const servers = await discoverCodexMcpServers(cwd, env);
       const disabled = servers.map(s => `${JSON.stringify(s.name)}={enabled=false}`);
       if (disabled.length) args.push('-c', `mcp_servers={${disabled.join(',')}}`);
     } catch (err) {
@@ -614,12 +627,21 @@ export class CLIProvider implements ModelProvider {
     // first, then the requester's own (spec §8.1) — and whose CLI login it uses
     // (§8.5). The quota key is per credential owner.
     const { getModelRegistry } = await import('../model-registry');
+    const { providerUsageUserId } = await import('./instrumented');
+    const requesterId = providerUsageUserId(options);
     const registry = getModelRegistry();
     const row = options.modelConfigName
       ? await registry.getModel(options.modelConfigName)
       : await registry.getModel(options.model).then((m) => (m && !m.ownerUserId ? m : null))
-        ?? await registry.getModelByModelId(options.model, { userId: options.userId });
-    const credentialOwner = await cliCredentialOwnerFor(row);
+        ?? await registry.getModelByModelId(options.model, { userId: requesterId });
+    // Throws for another user's personal row (the provider-layer owner check).
+    const credentialOwner = await cliCredentialOwnerFor(row, requesterId);
+    // A personal row's one-shot runs tool-less, in the owner's own directory
+    // (§8.4): its callers summarize external mail and fetched pages, and a
+    // CLI with native tools in the shared root would read every user's data.
+    if (credentialOwner && !tool.toolLessArgs) {
+      throw classifyError(new Error(`${tool.name} cannot answer one-shot completions on a personal model: it has no mode without its own tools. Use it as an agent model (/model) instead of binding it to a lane.`), 'cli');
+    }
     const quotaKey = cliQuotaKey(tool.quotaProvider, credentialOwner);
 
     // Check quota before executing
@@ -633,24 +655,26 @@ export class CLIProvider implements ModelProvider {
     const prompt = this.buildPrompt(options);
     // In stdin mode the prompt must not reach argv at all — the builders take
     // an empty string and place `-` (or nothing) instead.
-    const viaStdin = tool.promptVia === 'stdin';
+    const viaStdin = credentialOwner ? true : tool.promptVia === 'stdin';
     const argvPrompt = viaStdin ? '' : prompt;
-    const args = tool.buildArgsAsync ? await tool.buildArgsAsync(argvPrompt, resolveWorkspaceRoot()) : tool.buildArgs(argvPrompt);
-    const env = tool.buildEnv ? await tool.buildEnv() : undefined;
+    const cwd = credentialOwner ? cliWorkDirFor(credentialOwner.userId) : resolveWorkspaceRoot();
+    // Same allowlisted child env as the agent worker — never the server's
+    // full environment (DB credentials, every provider key). The model row's
+    // `cliAgent.inheritApiKeys` opts a key-mode CLI back into its own key,
+    // exactly as it does for managed runs.
+    const inheritApiKeys = row?.metadata?.cliAgent?.inheritApiKeys === true;
+    const childEnv = cliEnvFor(credentialOwner, tool, tool.buildEnv ? await tool.buildEnv() : undefined, inheritApiKeys);
+    const args = credentialOwner && tool.toolLessArgs ? tool.toolLessArgs()
+      : tool.buildArgsAsync ? await tool.buildArgsAsync(argvPrompt, cwd, childEnv) : tool.buildArgs(argvPrompt);
     const startTime = Date.now();
 
     modelLogger.debug({ tool: tool.name, model: options.model }, 'Executing CLI tool');
 
     try {
-      // Same allowlisted child env as the agent worker — never the server's
-      // full environment (DB credentials, every provider key). The model row's
-      // `cliAgent.inheritApiKeys` opts a key-mode CLI back into its own key,
-      // exactly as it does for managed runs.
-      const inheritApiKeys = row?.metadata?.cliAgent?.inheritApiKeys === true;
       const release = await acquireCliSlot();
       let stdout: string;
       try {
-        stdout = await this.execCli(tool.binaryPath, args, { env: cliEnvFor(credentialOwner, tool, env, inheritApiKeys), ...(viaStdin ? { stdin: prompt } : {}) });
+        stdout = await this.execCli(tool.binaryPath, args, { env: childEnv, cwd, ...(viaStdin ? { stdin: prompt } : {}) });
       } finally {
         release();
       }
@@ -772,7 +796,7 @@ export class CLIProvider implements ModelProvider {
   // Overridable seam: delegates to module-level execCli so tests can stub
   // `(provider as any).execCli` to force a classified error without
   // spawning a real subprocess.
-  private execCli(binary: string, args: string[], opts?: { timeoutMs?: number; env?: Record<string, string>; stdin?: string }): Promise<string> {
+  private execCli(binary: string, args: string[], opts?: { timeoutMs?: number; env?: Record<string, string>; cwd?: string; stdin?: string }): Promise<string> {
     return execCli(binary, args, opts);
   }
 

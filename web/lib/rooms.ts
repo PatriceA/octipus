@@ -40,6 +40,8 @@ export interface RoomMessage {
     addressed?: boolean;
     replyTo?: string;
     requesterId?: string;
+    /** Posted by the agent unprompted (a listen room); members rate it. */
+    unprompted?: boolean;
   };
 }
 

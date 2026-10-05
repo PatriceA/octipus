@@ -4,6 +4,7 @@ import { VOLATILE_MARKER } from '@/models/providers/prompt-cache';
 import { getResponseCache } from '@/core/response-cache';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
+import type { SpaceRole } from '@/db/schema/organizations';
 import type { SessionContext } from '@/db/schema/sessions';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
@@ -13,6 +14,7 @@ import { buildSecurityReminder } from './input-guard';
 import type { ModelSelector, SelectedModel } from './model-selector';
 import { SECURITY_PREAMBLE } from './roles';
 import { appendSources, type ResponseMetadata } from './types';
+import { omitSpaceTurnContext } from '@/core/spaces/turn-context';
 
 /**
  * Assemble a direct-response system prompt from its components.
@@ -62,10 +64,15 @@ async function directResponseInternal(
    * passes the fast `voice`-topic model here so spoken planning turns stay snappy.
    */
   modelOverride?: SelectedModel,
+  /**
+   * The turn's space, when it runs in one: the model honours the space rules
+   * (a commenter gets API models only, a CLI row only with a space mode).
+   */
+  space?: { role: SpaceRole } | null,
 ): Promise<{ response: string; metadata: ResponseMetadata }> {
   const startTime = Date.now();
   const client = getLiteLLMClient();
-  const selected = modelOverride ?? (await modelSelector.selectByComplexity(complexity, { userId }));
+  const selected = modelOverride ?? (await modelSelector.selectByComplexity(complexity, { userId, inSpace: !!space, spaceRole: space?.role }));
   const modelName = selected.modelId;
 
   // In a room the request is the member's post, already stored: the
@@ -156,8 +163,9 @@ async function directResponseInternal(
     const promptContext = systemContent.slice(boundary).trim();
     let requestAt = new Date();
     if (!inRoom) {
+      // The space turn context is this turn's only, never stored (§6.5, §6.7).
       const userRow = await messageRepository.createForGeneration({ sessionId, role: 'user', content: message,
-        metadata: { promptContext } }, history.generation);
+        metadata: { promptContext: omitSpaceTurnContext(promptContext).trim() } }, history.generation);
       if (!userRow) return { response: 'Conversation was cleared while this turn was running.', metadata: { model: modelName } };
       await sessionRepository.incrementMessageCount(sessionId);
       requestAt = userRow.createdAt;

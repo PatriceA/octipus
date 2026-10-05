@@ -301,17 +301,18 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       }
 
       // An explicit model resolves only to a row this user may use (coworking
-      // spec §8.2): an install/org row or their own personal row. A registered
-      // name they may not see — another user's personal model — is refused
-      // like an unknown one, never passed through.
+      // spec §8.2): an install/org row or their own personal row. An install
+      // or own row they may not use here (disabled, another org's, not usable
+      // in this space) is refused, never passed through, and so is any name in
+      // the personal `u/` namespace that is not the caller's own.
       let modelId = model;
       let modelName: string | undefined;
       if (model) {
-        const row = await resolveModel({ userId: user.id, name: model, inSpace: !!scope.space });
+        const row = await resolveModel({ userId: user.id, name: model, inSpace: !!scope.space, spaceRole: scope.space?.role, sponsor: scope.sponsor });
         if (row) {
           modelId = row.modelId;
           modelName = row.name;
-        } else if (await isRegisteredModel(model)) {
+        } else if (await isRegisteredModel(model, user.id)) {
           set.status = 400;
           return { error: `Model '${model}' is not available` };
         }

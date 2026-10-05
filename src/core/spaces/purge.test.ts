@@ -119,6 +119,9 @@ async function seedSpaceRows(ws: string, author: string): Promise<{ sessionId: s
   await one('trajectory_runs', `INSERT INTO trajectory_runs (user_id, root_session_id, outcome, started_at, ended_at, jsonl_path, jsonl_line, workspace_id) VALUES ($1, $2, 'success', now(), now(), '/t.jsonl', 1, $3)`, [author, session.id, ws]);
   await one('workspace_repos', `INSERT INTO workspace_repos (user_id, name, root_path, workspace_id) VALUES ($1, 'r', $2, $3)`, [author, `/repo/${randomUUID()}`, ws]);
   await one('space_memory', `INSERT INTO space_memory (workspace_id, body, author_kind, author_user_id) VALUES ($1, 'fact', 'member', $2)`, [ws, author]);
+  await one('space_member_notices', `INSERT INTO space_member_notices (workspace_id, user_id, period, warned_at) VALUES ($1, $2, 'day', now())`, [ws, author]);
+  // The space's budget is keyed by scope_ref, not workspace_id: purged with it.
+  await q(`INSERT INTO spend_budgets (user_id, scope_kind, scope_ref, period, limit_usd) VALUES ($1, 'space', $2, 'day', 5)`, [author, ws]);
   const { getVault } = await import('@/security/vault');
   await getVault().store(author, `ws_token_${rand(3)}`, 'secret', { credentialType: 'api_key', scope: 'workspace', workspaceId: ws });
   seeded.add('vault');
@@ -205,6 +208,14 @@ describe('purgeSpace', () => {
     mkdirSync(dirs.documents, { recursive: true });
     writeFileSync(join(dirs.documents, 'upload.pdf'), 'pdf');
 
+    // A group channel bound to the space (§9.4): it stays enrolled, unbound.
+    const [bound] = await q(
+      `INSERT INTO group_channels (channel_type, channel_id, owner_user_id, workspace_id) VALUES ('slack', $1, $2, $3) RETURNING id`,
+      [`C-${id.slice(0, 8)}`, owner, id],
+    );
+    await q(`INSERT INTO group_channels (channel_type, channel_id, owner_user_id, workspace_id) VALUES ('slack', $1, $2, $3)`,
+      [`C-${control.slice(0, 8)}`, owner, control]);
+
     // The gateway hears which sessions went, to drop their replay buffers.
     const { onSessionsRemoved } = await import('@/db/repositories/session-lifecycle');
     const removed: string[] = [];
@@ -215,9 +226,12 @@ describe('purgeSpace', () => {
     expect(removed).not.toContain(controlRows.sessionId);
     expect(removed).toHaveLength(result.deleted.sessions);
 
+    const [channel] = await q('SELECT workspace_id FROM group_channels WHERE id = $1', [bound.id]);
+    expect(channel).toEqual({ workspace_id: null });
     for (const t of WORKSPACE_TABLES) {
       const [row] = await q(`SELECT count(*)::int AS n FROM ${t.table} WHERE workspace_id = $1`, [id]);
-      if (t.purge === 'delete') expect(row.n, `${t.table} rows of the purged space`).toBe(0);
+      // `detach` rows (a bound group channel) outlive the space without naming it.
+      if (t.purge === 'delete' || t.purge === 'detach') expect(row.n, `${t.table} rows of the purged space`).toBe(0);
       else expect(row.n, `${t.table} history of the purged space`).toBeGreaterThan(0);
       const [kept] = await q(`SELECT count(*)::int AS n FROM ${t.table} WHERE workspace_id = $1`, [control]);
       expect(kept.n, `${t.table} rows of another space`).toBeGreaterThan(0);
@@ -231,6 +245,8 @@ describe('purgeSpace', () => {
       const [kept] = await q(`SELECT count(*)::int AS n FROM ${table} WHERE ${column}::text = $1`, [controlRows.sessionId]);
       expect(kept.n, `${table} rows of another space's session`).toBeGreaterThan(0);
     }
+    expect(await q(`SELECT 1 FROM spend_budgets WHERE scope_ref = $1`, [id])).toEqual([]);
+    expect(await q(`SELECT 1 FROM spend_budgets WHERE scope_ref = $1`, [control])).toHaveLength(1);
     expect(await q(`SELECT 1 FROM workspaces WHERE id = $1`, [id])).toEqual([]);
     expect(await q(`SELECT 1 FROM workspace_members WHERE workspace_id = $1`, [id])).toEqual([]);
     expect(await q(`SELECT 1 FROM workspace_invites WHERE workspace_id = $1`, [id])).toEqual([]);

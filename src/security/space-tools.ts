@@ -115,6 +115,8 @@ const SPACE_TOOL_IDS = new Set([
   'notes', 'tasks', 'documents', 'knowledge', 'artifacts', 'artifacts_toolbox', 'task_state', 'plan',
   'filesystem', 'shell', 'git', 'docker', 'browser', 'websearch', 'visual', 'repo_registry',
   'skill_runtime', 'test_container', 'action_recovery',
+  // `remember_for_space` (routed as `space_memory.write`): the space's own memory.
+  'space_memory',
 ]);
 /** Whole containers that act on the requester's own automation, records or configuration. */
 const PERSONAL_ONLY_TOOL_IDS = new Set(['scheduling', 'monitor', 'profiles', 'mcp_admin', 'skill-distill']);

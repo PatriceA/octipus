@@ -13,6 +13,8 @@
  *    can read it could be redeemed by someone else;
  *  - unlinked members get one private hint a day, never a public prompt;
  *  - the turn runs as the member who asked, never as the channel's owner;
+ *  - in a channel bound to a space, only members of the space whose role may
+ *    ask get a turn (a room turn); other linked members get a private hint;
  *  - `take this …` (or a reaction, where the platform has one) takes work on
  *    as a task on the member's board, worked in their thread
  *    (src/core/channels/taken-tasks.ts);
@@ -20,6 +22,7 @@
  */
 import { bareReply } from '@/core/channels/group-context';
 import type { GroupChannel } from '@/db/schema/group-channels';
+import type { BridgeAccess } from '@/channels/group-bridge';
 import type { JoinResult, LeaveResult } from '@/channels/group-channels';
 import type { TakeRequest } from '@/core/channels/taken-tasks';
 
@@ -96,13 +99,22 @@ export interface GroupDeps<Raw = unknown> {
   readMessage(channelId: string, messageId: string): Promise<GroupPost | null>;
   /** A link to a message, for the task notes; undefined when the platform gives none. */
   permalink(channelId: string, messageId: string): Promise<string | undefined>;
-  /** When the channel's spend budget is used up: when it resets. Null while it may run. */
+  /**
+   * When the budget the channel's turns run under is used up: when it resets.
+   * Null while it may run. A channel bound to a space answers to the space's
+   * budget (`groupBudgetPause`, coworking spec §9.2, §9.4).
+   */
   budgetPause(group: GroupChannel): Promise<{ resetsAt: string } | null>;
   shouldSendHint(key: string): boolean;
   /** Every message in an enrolled chat that reaches the bot, addressed or not (for adapters that keep a transcript). */
   seen?(msg: GroupInbound<Raw>, group: GroupChannel): void;
   /** The chat was enrolled or left: drop what the adapter kept about it. */
   forget?(channelId: string): void;
+  /**
+   * For a channel bound to a space (§9.4): whether this linked member may
+   * ask there. Defaults to the space membership read now (`group-bridge.ts`).
+   */
+  bridgeAccess?(group: GroupChannel, userId: string): Promise<BridgeAccess>;
   /** Store (or, with `removed`, withdraw) a member's ✅ / ❌ on one of the bot's messages. */
   feedback?(input: { groupChannelId: string; messageId: string; threadId?: string; userId: string; value: 1 | -1; removed: boolean }): Promise<void>;
   dispatch(input: {
@@ -246,6 +258,7 @@ export async function handleGroupMessage<Raw>(msg: GroupInbound<Raw>, deps: Grou
     if (deps.shouldSendHint(`unlinked:${user}`)) await deps.postPrivate(user, deps.hints.linkFirst, where);
     return 'hint';
   }
+  if (await refusedByBridge(group, member, user, where, deps)) return 'hint';
 
   // A bare yes/no may answer a prompt raised before the budget ran out, so it
   // still goes through; a new turn it would start is refused by the budget.
@@ -334,6 +347,7 @@ export async function handleGroupReaction<Raw>(
     if (deps.shouldSendHint(`unlinked:${user}`)) await deps.postPrivate(user, deps.hints.linkFirst, where);
     return 'hint';
   }
+  if (await refusedByBridge(group, member, user, where, deps)) return 'hint';
   if (await budgetPaused(group, channelId, replyThread, deps)) return 'paused';
   if (!taken?.text.trim()) {
     await deps.postPrivate(user, deps.hints.takeUnreadable, where);
@@ -397,6 +411,22 @@ async function authorOf<Raw>(post: GroupPost, deps: GroupDeps<Raw>): Promise<str
   if (post.user && post.user === deps.botUserId) return 'Octipus';
   if (post.user) return deps.displayName(post.user);
   return 'an app';
+}
+
+/**
+ * A bound channel (§9.4) answers only members of its space whose role may
+ * ask: anyone else linked gets a private hint (once a day) and no turn.
+ */
+async function refusedByBridge<Raw>(group: GroupChannel, member: GroupMember, user: string, where: HintTarget, deps: GroupDeps<Raw>): Promise<boolean> {
+  if (!group.workspaceId) return false;
+  const check = deps.bridgeAccess ?? (async (g: GroupChannel, userId: string) => (await import('@/channels/group-bridge')).bridgeAccess(g, userId));
+  const access = await check(group, member.id);
+  if (access === 'ok') return false;
+  if (deps.shouldSendHint(`bridge:${group.id}:${user}`)) {
+    const { bridgeHint } = await import('@/channels/group-bridge');
+    await deps.postPrivate(user, bridgeHint(access), where);
+  }
+  return true;
 }
 
 /** True (after one notice a day) while the channel's spend budget is used up. */

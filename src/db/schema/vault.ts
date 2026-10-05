@@ -21,6 +21,12 @@ export const credentialTypeEnum = pgEnum('credential_type', [
  *   - `workspace` : owned by a specific workspace within a user. Reserved
  *                   for Phase 2 multi-workspace support; written here so
  *                   the migration doesn't have to touch the enum twice.
+ *   - `space`     : a space connector's credential (coworking §9.5).
+ *                   `workspace_id` names the space (required), `user_id` is
+ *                   the owner who stored it — the author, never a grant. Its
+ *                   key derives from the space (`dekForRow`). Read and written
+ *                   only through `src/db/repositories/space.ts` after a
+ *                   membership check; never resolved by `{{secret:}}`.
  *
  * Phase 1b-1 introduces the column with a backfill: rows with the legacy
  * `user_id = 'system'` sentinel become `scope = 'system'`; everything
@@ -28,7 +34,7 @@ export const credentialTypeEnum = pgEnum('credential_type', [
  * lookups only return system rows, no more fallback into user-owned
  * secrets (that fallback was a cross-tenant leak).
  */
-export const vaultScopeEnum = pgEnum('vault_scope', ['system', 'user', 'workspace']);
+export const vaultScopeEnum = pgEnum('vault_scope', ['system', 'user', 'workspace', 'space']);
 
 export const vault = pgTable('vault', {
   id: uuid('id').primaryKey().defaultRandom(),

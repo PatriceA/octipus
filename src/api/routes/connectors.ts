@@ -6,7 +6,7 @@ import { getCocoIndexService, redactCocoIndexStatus, resolveCocoIndexWorkspacePa
 import { coreLogger } from '@/utils/logger';
 import {
   connectorVaultKeys,
-  discoverAndRegisterConnector,
+  ensureConnectorClient,
   OAuthManager,
 } from '@/security/oauth';
 import { getVault } from '@/security/vault';
@@ -208,22 +208,11 @@ export const connectorRoutes = new Elysia({ prefix: '/connectors' })
         return { error: `Unknown connector: ${id}` };
       }
 
-      const vault = getVault();
-      const publicUrl = getPublicUrl();
-      const keys = connectorVaultKeys(connector.id);
-
-      // Check if client_id is already registered; if not, do dynamic registration
-      const existingClientId = await vault.getSystemSecret(keys.clientId);
-
-      if (!existingClientId) {
-        try {
-          const metadata = await discoverAndRegisterConnector(connector.id, publicUrl);
-          await vault.setSystemSecret(keys.clientId, metadata.clientId);
-          await vault.setSystemSecret(keys.authEndpoint, metadata.authorizationEndpoint);
-          await vault.setSystemSecret(keys.tokenEndpoint, metadata.tokenEndpoint);
-        } catch (err) {
-          return { error: `Failed to register ${connector.name} OAuth client: ${(err as Error).message}` };
-        }
+      // Dynamic client registration on first use.
+      try {
+        await ensureConnectorClient(connector.id, getPublicUrl());
+      } catch (err) {
+        return { error: `Failed to register ${connector.name} OAuth client: ${(err as Error).message}` };
       }
 
       try {

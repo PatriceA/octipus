@@ -239,7 +239,7 @@ export const openaiCompatRoutes = new Elysia()
         // (§8.2); a registered row they may not see is "not found", never a
         // raw id passed through.
         const row = await resolveModel({ userId: user.id, name: model });
-        if (!row && await isRegisteredModel(model)) {
+        if (!row && await isRegisteredModel(model, user.id)) {
           set.status = 400;
           return oaiError(`Unknown model "${model}"`, 'invalid_request_error', 'model_not_found');
         }

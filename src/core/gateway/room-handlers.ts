@@ -113,6 +113,14 @@ async function roomSubscribe(hub: GatewayHub, connectionId: string, context: Con
     import('@/core/rooms/events'), import('@/core/spaces/membership'), import('@/core/rooms/presence'), import('@/core/rooms/queue'),
   ]);
   context.resources.add(roomResource(roomId));
+  // Checked again now that the connection is in the resource: an access
+  // change that pruned the room's subscribers between the first check and
+  // the add did not see this connection, so this read is the one that counts.
+  if (!(await roomAccess(context.userId, roomId))) {
+    context.resources.delete(roomResource(roomId));
+    sendError(hub, connectionId, 'FORBIDDEN', `Not allowed to subscribe to room:${roomId}`);
+    return;
+  }
   versionsOf(context)[roomId] = membershipVersion(access.room.workspaceId, context.userId);
   hub.connectionManager.sendToConnection(connectionId, { type: 'subscribed', resources: [roomResource(roomId)] });
   if (afterMessageId) {

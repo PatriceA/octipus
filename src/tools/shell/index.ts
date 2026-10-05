@@ -3,6 +3,7 @@ import { isToolNotExecutedResult, ToolNotExecutedError } from '@/core/tool-execu
 import { isAbsolute, resolve } from 'path';
 import { WorkspaceFS, WorkspaceFsError } from '@/security/workspace-fs';
 import { isSensitiveEnvName } from '@/security/child-env';
+import { spaceToolEnv } from '@/security/space-tool-env';
 import type { AgentContext, ToolManifest } from '@/core/types';
 import { toolLogger } from '@/utils/logger';
 import { BaseTool, createParameterSchema } from '../base-tool';
@@ -12,6 +13,16 @@ import type { ShellOperations } from './operations';
 import { commandPolicyViolation, matchDestructiveCommand, matchElevatedCommand } from './policy';
 
 const DEFAULT_TIMEOUT = 30000; // 30 seconds
+
+/**
+ * A command's environment: the caller's `env`, and in a space the space's
+ * own `GH_CONFIG_DIR` laid over it, so `gh` never finds the host's login
+ * (coworking §9.5) — whatever the call's `env` says.
+ */
+export function withSpaceEnv(env: Record<string, string> | undefined, context: Pick<AgentContext, 'space'> | undefined): Record<string, string> | undefined {
+  if (!context?.space) return env;
+  return { ...env, ...spaceToolEnv(context.space.workspaceId) };
+}
 
 
 export class ShellTool extends BaseTool {
@@ -72,7 +83,7 @@ export class ShellTool extends BaseTool {
         const command = args.command;
         const cwd = this.resolveCwd(args.cwd, context);
         const timeout = (args.timeout as number) || DEFAULT_TIMEOUT;
-        const env = args.env as Record<string, string> | undefined;
+        const env = withSpaceEnv(args.env as Record<string, string> | undefined, context);
         const unsafe = args.useShell === true;
         const allowNetwork = args.network === true;
 
@@ -147,7 +158,7 @@ export class ShellTool extends BaseTool {
         }
         const command = args.command;
         const cwd = this.resolveCwd(args.cwd, context);
-        const env = args.env as Record<string, string> | undefined;
+        const env = withSpaceEnv(args.env as Record<string, string> | undefined, context);
         const unsafe = args.useShell === true;
         const allowNetwork = args.network === true;
 

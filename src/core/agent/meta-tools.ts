@@ -662,12 +662,15 @@ export function createCompleteTakenTaskTool(open: ReadonlyArray<{ id: string }>)
     replaySafety: 'mutation',
     execute: async (args, context) => {
       const { completeTakenTask } = await import('@/core/channels/taken-tasks');
+      const { agentPrincipal } = await import('@/security/principal');
       const outcome = await completeTakenTask({
         userId: context.userId,
         sessionId: context.sessionId,
         taskId: String(args.taskId ?? ''),
         result: String(args.result ?? ''),
         agentId: context.id,
+        // In a room the tasks are the space's (§9.4).
+        ...(context.space ? { space: agentPrincipal(context) } : {}),
       });
       return outcome.ok
         ? { completed: true, note: `"${outcome.title}" is closed on the requester's board, and a ✅ line is posted in the thread. Now give your final reply.` }

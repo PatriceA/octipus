@@ -9,7 +9,8 @@
  *
  *   1. re-reads the requester's membership and the space's archive state
  *      from the database — removal, downgrade and archive bite at the next
- *      tool decision;
+ *      tool decision — and, in a room, `roomAccess` (a private room's
+ *      member removed while still in the space);
  *   2. applies the role cap BEFORE anything else, because `routeApproval`
  *      executes any non-ASK level straight away: a commenter (or guest) runs
  *      only `COMMENTER_TOOLS`, nobody runs a personal-only tool or writes a
@@ -87,6 +88,12 @@ export async function routeApprovalFor(
     if (!membership) return deny('you are no longer a member of this space');
     if (await isSpaceArchived(space.workspaceId)) return deny('this space is archived');
     if (!can(membership.role, 'run_agent')) return deny(`your role (${membership.role}) cannot run the agent in this space`);
+    // In a room, the room's own door too (a private room's member list, I5).
+    if (context.sessionId) {
+      const { accessToRoom, loadRoom } = await import('@/core/rooms/access');
+      const room = await loadRoom(context.sessionId);
+      if (room && !(await accessToRoom(context.userId, room))) return deny('you no longer have access to this room');
+    }
     if (!can(membership.role, 'run_agent_write') && !commenterMayRun(call)) {
       return deny(`your role (${membership.role}) can only read and comment in this space; ${call.toolId}.${call.toolName ?? call.action} is not allowed`);
     }

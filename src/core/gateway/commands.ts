@@ -273,7 +273,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     description: 'Compact session context — summarizes history and saves to session folder. Optional: /compact <focus instructions>',
     handler: async (ctx) => {
       const { compactSessionCommand } = await import('@/core/agent/session-compaction');
-      return { text: await compactSessionCommand(ctx.sessionId, ctx.rawArgs) };
+      return { text: await compactSessionCommand(ctx.sessionId, ctx.rawArgs, ctx.userId) };
     },
   });
 
