@@ -30,7 +30,7 @@ vi.mock('child_process', async importOriginal => {
 });
 vi.mock('@/models/model-registry', () => ({ getModelRegistry: () => ({ getModel: async () => ({ metadata: {} }),
   getModelByModelId: async () => ({ supportsVision: false }) }) }));
-vi.mock('@/models/quota-tracker', () => ({ getQuotaTracker: () => ({ getStatus: async () => ({ exhausted: false }) }) }));
+vi.mock('@/models/quota-tracker', () => ({ cliQuotaKey: (provider: string) => provider, getQuotaTracker: () => ({ getStatus: async () => ({ exhausted: false }) }) }));
 vi.mock('@/core/agent-task-recorder', () => ({ recordAgentCompletion: async () => {} }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: {
   findById: async () => ({ id: 's', userId: 'u', context: { devMode: true, projectPath: fixture.dir, planMode: false } }),

@@ -27,6 +27,31 @@ export interface ChannelBinding {
 }
 
 /**
+ * A personal model as its owner sees it (`/api/me/models`) — never the key.
+ * See `src/services/personal-models.ts` and coworking-spec §8.4.
+ */
+export interface PersonalModelSummary {
+  /** Row name, `u/<userId>/<slug>`. */
+  name: string;
+  slug: string;
+  provider: string;
+  modelId: string;
+  label: string | null;
+  endpoint: string | null;
+  isEnabled: boolean;
+  hasKey: boolean;
+  /** Text lanes this row runs for its owner. */
+  topics: string[];
+}
+
+/** `GET /api/me/models`. */
+export interface PersonalModelsResponse {
+  models: PersonalModelSummary[];
+  providers: string[];
+  topics: string[];
+}
+
+/**
  * A group channel enrolment as the API returns it (`/api/me/group-channels`,
  * `/api/admin/group-channels`). See `src/channels/group-channels.ts`.
  */

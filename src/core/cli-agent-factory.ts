@@ -21,9 +21,22 @@ export function isCLIProvider(provider: string): boolean {
  * share this lookup rather than each re-deriving it, or they can silently
  * resolve to different rows.
  */
-export async function resolveCliModelEntry(modelId: string): Promise<ModelConfigEntry | null> {
+export async function resolveCliModelEntry(
+  modelId: string,
+  /**
+   * The row the agent runs on (`AgentContext.modelName`) and its requester.
+   * With a row name the lookup is exact; without one, a name lookup accepts
+   * install rows only and the modelId lookup the requester's own personal rows
+   * at most (coworking spec §8.1) — a modelId must never reach another user's
+   * personal row by spelling its name.
+   */
+  row: { modelName?: string; userId?: string } = {},
+): Promise<ModelConfigEntry | null> {
   const registry = getModelRegistry();
-  return (await registry.getModel(modelId)) || (await registry.getModelByModelId(modelId));
+  if (row.modelName) return registry.getModel(row.modelName);
+  const byName = await registry.getModel(modelId);
+  if (byName && !byName.ownerUserId) return byName;
+  return registry.getModelByModelId(modelId, { userId: row.userId });
 }
 
 /**

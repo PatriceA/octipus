@@ -153,6 +153,8 @@ export interface SessionContext {
     id: string; fingerprint: string; lastUsedAt: string;
     generation?: string; ownerAgentId?: string;
     acknowledged?: { id: string; createdAt: string };
+    /** Model row and credential owner of the vendor session (coworking spec §8.5). */
+    modelName?: string; credentialOwner?: string;
   }>;
 }
 

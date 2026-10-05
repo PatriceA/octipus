@@ -25,7 +25,9 @@ import type {
 } from '@/db/schema/pipelines';
 import { pipelineNodes, pipelines } from '@/db/schema/pipelines';
 import { decide, type DecisionSite, recordShadow } from '@/models/decision';
+import type { ModelConfigEntry } from '@/db/schema/models';
 import { getModelRegistry, type ModelRegistry } from '@/models/model-registry';
+import { resolveModel } from '@/models/resolve-model';
 import { getTopicConfig } from '@/models/topic-config';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
@@ -491,23 +493,48 @@ async function workspaceHead(root: string | null): Promise<string | undefined> {
 }
 
 /**
+ * Resolve a model NAME (a row name or a provider model id) the way an explicit
+ * choice resolves (coworking spec §8.2): only to a row the pipeline's owner may
+ * see — an install/org row or their own personal row. With no owner (a system
+ * pipeline), install rows only.
+ */
+async function resolveNamedModel(
+  name: string,
+  userId: string | undefined,
+  registry: ModelRegistry,
+): Promise<ModelConfigEntry | null> {
+  if (userId) return resolveModel({ userId, name });
+  const byName = await registry.getModel(name);
+  if (byName && !byName.ownerUserId) return byName;
+  return registry.getModelByModelId(name);
+}
+
+/**
  * Resolve a per-stage model override (a bound model name or id) to a concrete
- * modelId. Returns undefined when no override is set; throws (fail loud) when an
- * override names a model that isn't registered/enabled.
+ * row. Returns undefined when no override is set; throws (fail loud) when an
+ * override names a model that isn't registered/enabled — or that the
+ * pipeline's owner may not use (another user's personal model).
  */
 async function resolveStageModelId(
   stageModel: string | undefined,
+  userId: string | undefined,
   registry: ModelRegistry,
-): Promise<string | undefined> {
+): Promise<StageModel | undefined> {
   if (!stageModel) return undefined;
-  const model = (await registry.getModel(stageModel)) || (await registry.getModelByModelId(stageModel));
+  const model = await resolveNamedModel(stageModel, userId, registry);
   if (!model) {
     throw new Error(
       `Pipeline stage has model override '${stageModel}' but no such model is registered. ` +
         `Fix the recipe's stage model or clear it.`,
     );
   }
-  return model.modelId;
+  return { modelId: model.modelId, name: model.name };
+}
+
+/** A stage's model: provider id plus the row it came from (spec §8.1). */
+interface StageModel {
+  modelId: string;
+  name: string;
 }
 
 /**
@@ -518,7 +545,8 @@ async function resolveStageModelId(
  *      `mechanical` (the pipeline's planner→executor split — see
  *      `PipelineStepConfig.mechanical`). A plan-less stage skips this branch
  *      entirely, exactly as a plan-less swarm child does
- *   3. the topic's primary binding
+ *   3. the topic's primary binding — the owner's personal binding first, then
+ *      the install's (spec §8.2)
  *
  * Every spawn a stage can make — first pass, implementation retry, auditor
  * re-run — resolves through here, so a retry can never silently land on a
@@ -528,18 +556,18 @@ async function resolveStageModelId(
  * back to the primary: a typo that silently costs full price is the failure
  * this whole declaration exists to end.
  */
-async function resolveStageModel(
+export async function resolveStageModel(
   declared: { model?: string; mechanical?: boolean } | undefined,
   topic: string,
+  userId: string | undefined,
   registry: ModelRegistry,
-): Promise<string | undefined> {
-  const explicit = await resolveStageModelId(declared?.model, registry);
+): Promise<StageModel | undefined> {
+  const explicit = await resolveStageModelId(declared?.model, userId, registry);
   if (explicit) return explicit;
 
   const executorName = declared?.mechanical ? getTopicConfig(topic).executorModel : null;
   if (executorName) {
-    const executor =
-      (await registry.getModel(executorName)) || (await registry.getModelByModelId(executorName));
+    const executor = await resolveNamedModel(executorName, userId, registry);
     if (!executor) {
       throw new Error(
         `Topic '${topic}' has executorModel '${executorName}' but no such model is registered. ` +
@@ -550,10 +578,11 @@ async function resolveStageModel(
       { topic, executorModel: executor.modelId },
       'Mechanical pipeline stage routed to the lane executorModel (cheap executor path)',
     );
-    return executor.modelId;
+    return { modelId: executor.modelId, name: executor.name };
   }
 
-  return (await registry.getModelForTopic(topic))?.modelId || undefined;
+  const bound = await resolveModel({ userId, topic });
+  return bound ? { modelId: bound.modelId, name: bound.name } : undefined;
 }
 
 /**
@@ -2480,7 +2509,8 @@ export class PipelineManager {
     try {
       // Resolve the model for this node's topic. Node override → a mechanical
       // node's lane executor → topic binding.
-      const modelOverride = await resolveStageModel(stageTemplate, node.role, registry);
+      const stageModel = await resolveStageModel(stageTemplate, node.role, pipeline.userId ?? undefined, registry);
+      const modelOverride = stageModel?.modelId;
       const sameModel = args.reviewModels
         ? noteReviewModel(args.reviewModels, modelOverride, { auditor: declared.stageType === 'qa_validation', builder: !!declared.producesArtifacts })
         : null;
@@ -2510,7 +2540,7 @@ export class PipelineManager {
           metadata: { ...(context.metadata ?? {}), pipelineId: pipeline.id, nodeKey: node.nodeKey },
         } as AgentContext,
         {
-          ...(modelOverride ? { model: modelOverride } : {}),
+          ...(stageModel ? { model: stageModel.modelId, modelName: stageModel.name } : {}),
           toolIds: node.toolIds ?? declared.toolIds,
           // Held to the same declaration the evidence gate judges afterwards —
           // but BEFORE the model runs, against the tools it will actually hold.

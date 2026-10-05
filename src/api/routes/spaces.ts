@@ -1,22 +1,34 @@
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
+import {
+  acquireLease,
+  InvalidLeasePathError,
+  leaseViews,
+  listLeases,
+  normalizeLeasePath,
+  releaseLease,
+  renewLease,
+} from '@/core/docs/file-leases';
 import { acceptInvite, createInvite, listInvites, previewInvite, revokeInvite } from '@/core/spaces/invites';
 import { purgeSpace } from '@/core/spaces/purge';
 import {
   archiveSpace,
   createSpace,
+  getMembership,
   getSpace,
+  isSpaceArchived,
   listActivity,
   listMembers,
   listSpaces,
   removeMember,
   renameSpace,
+  setAgentEditMode,
   setRole,
   type SpaceActor,
   unarchiveSpace,
 } from '@/core/spaces/service';
 import { isAuthenticated, type Principal } from '@/security/principal';
-import { SpaceError, spaceErrorStatus } from '@/security/space-access';
+import { requireCan, type SpaceAction, SpaceError, spaceErrorStatus } from '@/security/space-access';
 
 /**
  * Shared spaces (docs/plans/coworking-spec.md §5.7).
@@ -82,6 +94,25 @@ const invitableRoleSchema = t.Union([
 ]);
 const scopeSchema = t.Record(t.String(), t.Unknown());
 
+/**
+ * The actor may `action` in the space (membership read now, D5); anything
+ * but reading also needs the space open.
+ */
+async function requireMember(actor: SpaceActor, workspaceId: string, action: SpaceAction): Promise<void> {
+  requireCan(await getMembership(actor.userId, workspaceId), action);
+  if (action !== 'read' && await isSpaceArchived(workspaceId)) throw new SpaceError('archived', 'This space is archived');
+}
+
+/** A lease path from the request, normalized relative to the space's files root. */
+function leasePath(raw: string): string {
+  try {
+    return normalizeLeasePath(raw);
+  } catch (err) {
+    if (err instanceof InvalidLeasePathError) throw new SpaceError('invalid_input', err.message);
+    throw err;
+  }
+}
+
 export const spaceRoutes = new Elysia({ prefix: '/spaces' })
   .use(apiContext)
 
@@ -110,6 +141,13 @@ export const spaceRoutes = new Elysia({ prefix: '/spaces' })
   .patch('/:id', (ctx) => handle(ctx, (actor) => renameSpace(actor, ctx.params.id, ctx.body.name)), {
     params: t.Object({ id: t.String() }),
     body: t.Object({ name: t.String({ minLength: 1, maxLength: 120 }) }, { additionalProperties: false }),
+    detail: { tags: ['spaces'] },
+  })
+
+  // How the agent edits the space's notes (§7.4): owners only.
+  .put('/:id/agent-edit-mode', (ctx) => handle(ctx, (actor) => setAgentEditMode(actor, ctx.params.id, ctx.body.mode)), {
+    params: t.Object({ id: t.String() }),
+    body: t.Object({ mode: t.Union([t.Literal('suggest'), t.Literal('direct')]) }, { additionalProperties: false }),
     detail: { tags: ['spaces'] },
   })
 
@@ -197,6 +235,54 @@ export const spaceRoutes = new Elysia({ prefix: '/spaces' })
   }), {
     params: t.Object({ id: t.String() }),
     query: t.Object({ limit: t.Optional(t.String()), before: t.Optional(t.String()) }),
+    detail: { tags: ['spaces'] },
+  })
+
+  // ── File leases ("Ben is editing", §7.5) ────────────────────────────
+  // A member editing a space file holds its lease and renews it while the
+  // editor is open; every member sees who holds what. Changes are also
+  // pushed as `file.leases` to the space's gateway subscribers.
+
+  .get('/:id/file-leases', (ctx) => handle(ctx, async (actor) => {
+    await requireMember(actor, ctx.params.id, 'read');
+    return { leases: await leaseViews(await listLeases(ctx.params.id)) };
+  }), {
+    params: t.Object({ id: t.String() }),
+    detail: { tags: ['spaces'] },
+  })
+
+  // Take the lease, or renew it (`renew: true` refuses when it was lost).
+  .post('/:id/file-leases', (ctx) => handle(ctx, async (actor) => {
+    await requireMember(actor, ctx.params.id, 'write');
+    const path = leasePath(ctx.body.path);
+    const holder = { userId: actor.userId, kind: 'human' as const };
+    if (ctx.body.renew) {
+      const lease = await renewLease(ctx.params.id, path, holder);
+      if (!lease) {
+        ctx.set.status = 409;
+        return { error: 'The lease expired and is held by someone else now', code: 'lease_lost' };
+      }
+      return { lease: (await leaseViews([lease]))[0] };
+    }
+    const result = await acquireLease(ctx.params.id, path, holder);
+    if (!result.ok) {
+      ctx.set.status = 409;
+      return { error: `${path} is being edited by someone else`, code: 'lease_held', heldBy: await leaseViews(result.heldBy) };
+    }
+    return { lease: (await leaseViews([result.lease]))[0] };
+  }), {
+    params: t.Object({ id: t.String() }),
+    body: t.Object({ path: t.String({ minLength: 1, maxLength: 4096 }), renew: t.Optional(t.Boolean()) }, { additionalProperties: false }),
+    detail: { tags: ['spaces'] },
+  })
+
+  .delete('/:id/file-leases', (ctx) => handle(ctx, async (actor) => {
+    await requireMember(actor, ctx.params.id, 'read');
+    const released = await releaseLease(ctx.params.id, leasePath(ctx.query.path), { userId: actor.userId, kind: 'human' });
+    return { released };
+  }), {
+    params: t.Object({ id: t.String() }),
+    query: t.Object({ path: t.String({ minLength: 1, maxLength: 4096 }) }),
     detail: { tags: ['spaces'] },
   });
 

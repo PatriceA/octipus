@@ -20,6 +20,7 @@ import type { AgentContext } from '@/core/types';
 import { agentRepository } from '@/db/repositories/agent-repository';
 import { verificationEvidenceRepository } from '@/db/repositories/verification-evidence-repository';
 import { getModelRegistry } from '@/models/model-registry';
+import { resolveModel } from '@/models/resolve-model';
 import { getTopicConfig } from '@/models/topic-config';
 import { premiseNoteFor } from '@/core/premise';
 import { isRealUserId } from '@/security/principal';
@@ -638,7 +639,8 @@ export class SwarmSpawner {
     // placeholder id is mutated to the real one before any tool can fire.
 
     // ── Model resolution: the lane is authoritative ──
-    const { model: childModel, lane: childLane, systemPrompt, stablePrompt, skillContext, isSmall } = await releaseOnThrow(() =>
+    const childInSpace = !!parentContext.space;
+    const { model: childModel, modelName: childModelName, lane: childLane, systemPrompt, stablePrompt, skillContext, isSmall } = await releaseOnThrow(() =>
       this.resolveChildModel(
         parent.model,
         childRole,
@@ -647,6 +649,7 @@ export class SwarmSpawner {
         !!brief.plan?.length,
         params.topic,
         parentContext.userId,
+        childInSpace,
       ));
 
     // Small-tier child: cap the tool surface, mirroring the worker path. Role
@@ -813,7 +816,7 @@ export class SwarmSpawner {
     // brief; a short brief on a small-context model with big skill blocks is the
     // real risk. Warn-only (per the gate policy); the binding stays authoritative.
     try {
-      const boundModel = await getModelRegistry().getModelByModelId(childModel);
+      const boundModel = await getModelRegistry().getModel(childModelName);
       const ctx = boundModel?.contextWindow ?? 0;
       const estTokens = Math.ceil(((childSystemPrompt?.length ?? 0) + childMessage.length) / 4);
       // Break the input down per section. The warning below says "you are over
@@ -879,6 +882,7 @@ export class SwarmSpawner {
       childKind,
       childRole,
       childModel,
+      childModelName,
       childLane,
       childTools,
       childToolAdvertisement,
@@ -955,6 +959,8 @@ export class SwarmSpawner {
     childKind: 'agent' | 'subagent';
     childRole: AgentRole;
     childModel: string;
+    /** Row identity of `childModel` (`model_config.name`) — see `AgentContext.modelName`. */
+    childModelName: string;
     /** Resolved model lane (expert topic or role default) — the backup binding is keyed on this, not the raw role. */
     childLane: string;
     childTools: ToolHandler[];
@@ -1041,7 +1047,7 @@ export class SwarmSpawner {
       return null;
     }
     try {
-      if (!(await isCliModel(opts.childModel))) return null;
+      if (!(await isCliModel(opts.childModel, opts.childModelName))) return null;
       const tree = await sharedTreeRoot(opts.parentContext);
       if (!tree?.devProject) {
         coreLogger.debug({ parentNodeId: opts.parent.id }, 'Swarm worktree skipped — not a dev-mode project session');
@@ -1147,6 +1153,7 @@ export class SwarmSpawner {
     let lastResult: ChildResult | null = null;
     /** The model the surviving attempt ran on — not always `opts.childModel`. */
     let survivingModel = opts.childModel;
+    let survivingModelName = opts.childModelName;
     // Every attempt that failed before the one we ultimately return. Without
     // this the retry's clean `ok` is all the parent ever sees, and a run where
     // the first attempt lost every tool it had is indistinguishable from one
@@ -1193,7 +1200,8 @@ export class SwarmSpawner {
     // Skipped when no backup is bound or it would rerun the same model.
     if (lastResult && (lastResult.status === 'provider_error' || lastResult.status === 'tool_error')) {
       try {
-        const backup = await getModelRegistry().getBackupModelForTopic(opts.childLane);
+        // The install lane's backup — personal bindings have none (spec §8.2).
+        const backup = await resolveModel({ userId: opts.parentContext.userId, topic: opts.childLane, backup: true });
         if (backup && backup.modelId !== opts.childModel) {
           coreLogger.warn(
             { parentNodeId: opts.parent.id, failedModel: opts.childModel, backupModel: backup.modelId, topic: opts.childLane },
@@ -1207,10 +1215,11 @@ export class SwarmSpawner {
           // Same reset as the crash retry: a new node, a new allowance.
           opts.budget.fanOut = { cap: opts.budget.fanOut.cap, used: 0 };
           lastResult = await this.singleSpawnAndRun(
-            { ...opts, childModel: backup.modelId, reason: 'retry' },
+            { ...opts, childModel: backup.modelId, childModelName: backup.name, reason: 'retry' },
             true,
           );
           survivingModel = backup.modelId;
+          survivingModelName = backup.name;
           noteFailure(superseded);
           discardedTokens += superseded.usedTokens ?? 0;
         }
@@ -1239,7 +1248,7 @@ export class SwarmSpawner {
       // `opts.childModel` runs the corrective attempt on the model that already
       // failed — which then gets discarded as an unrelated failure, a whole
       // child run charged to the parent for nothing.
-      { ...opts, childModel: survivingModel },
+      { ...opts, childModel: survivingModel, childModelName: survivingModelName },
       lastResult,
       noteFailure,
       // Everything the crash retry and the backup-model attempt already burned.
@@ -1511,7 +1520,7 @@ export class SwarmSpawner {
     //  - A child with its own worktree uses it only on a CLI attempt: only a
     //    CLI worker honours `worktreePath`, so a native backup attempt runs
     //    and is judged on the shared tree, like any other native child.
-    const attemptIsCli = await isCliModel(opts.childModel);
+    const attemptIsCli = await isCliModel(opts.childModel, opts.childModelName);
     const inheritedTree = inheritedWorktreeOf(opts.parentContext);
     const attemptWorktree =
       inheritedTree ?? (opts.worktree && attemptIsCli ? opts.worktree.path : undefined);
@@ -1614,6 +1623,7 @@ export class SwarmSpawner {
         ...inheritScope(opts.parentContext),
         topic: getRoleConfig(opts.childRole).defaultTopic,
         model: opts.childModel,
+        modelName: opts.childModelName,
         role: opts.childRole,
         systemPrompt: opts.systemPrompt,
         tools,
@@ -2187,7 +2197,9 @@ export class SwarmSpawner {
      */
     requestedLane?: string,
     userId?: string,
-  ): Promise<{ model: string; lane: string; systemPrompt?: string; stablePrompt?: string; skillContext: string; isSmall: boolean }> {
+    /** The parent runs in a shared space — D14 applies to install CLI rows. */
+    inSpace = false,
+  ): Promise<{ model: string; modelName: string; lane: string; systemPrompt?: string; stablePrompt?: string; skillContext: string; isSmall: boolean }> {
     const registry = getModelRegistry();
 
     // No expert lookup: the row it read carried a model, a lane, a prompt and a
@@ -2291,6 +2303,7 @@ export class SwarmSpawner {
     }
     const lane = laneRequested || childRole;
     let candidate: string | undefined;
+    let candidateName = '';
     // One lookup for the whole routing block — getTopicConfig is an in-memory
     // cache, but the branches below reference the executor binding repeatedly
     // and must all agree on the same value.
@@ -2302,8 +2315,11 @@ export class SwarmSpawner {
       // when a plan actually needs the executor.
       const executorName = laneExecutor;
       if (executorName) {
-        const execModel =
-          (await registry.getModel(executorName)) || (await registry.getModelByModelId(executorName));
+        // An explicit name: only a row the requester may see (spec §8.2).
+        const execModel = userId
+          ? await resolveModel({ userId, name: executorName, inSpace })
+          : (await registry.getModel(executorName).then((m) => (m && !m.ownerUserId ? m : null)))
+            || (await registry.getModelByModelId(executorName));
         if (!execModel) {
           throw new Error(
             `Topic '${lane}' has executorModel '${executorName}' but no such model is registered. ` +
@@ -2311,6 +2327,7 @@ export class SwarmSpawner {
           );
         }
         candidate = execModel.modelId;
+        candidateName = execModel.name;
         coreLogger.info(
           { lane, childRole, executorModel: candidate },
           'Planned child routed to the lane executorModel (cheap executor path)',
@@ -2329,8 +2346,10 @@ export class SwarmSpawner {
       );
     }
     if (!candidate) {
-      const topicModel = await registry.getModelForTopic(lane);
+      // The requester's personal binding for the lane first, then the install's.
+      const topicModel = await resolveModel({ userId, topic: lane, inSpace });
       candidate = topicModel?.modelId;
+      candidateName = topicModel?.name ?? '';
     }
     if (!candidate) {
       throw new Error(
@@ -2359,7 +2378,7 @@ export class SwarmSpawner {
     let isSmall = false;
     try {
       const routerMax = getConfig().agent.smallModelMaxParams;
-      let bound = await registry.getModelByModelId(candidate);
+      let bound = await registry.getModel(candidateName);
       if (bound) {
         const { staticCapabilityWarnings } = await import('@/models/capability-gate');
         const warnings = staticCapabilityWarnings(bound, routerMax);
@@ -2368,15 +2387,16 @@ export class SwarmSpawner {
         }
         if (childUsesTools && !bound.supportsTools && bound.provider !== 'cli') {
           const { findToolCapableFallback } = await import('@/core/agent/model-selector');
-          const alt = await findToolCapableFallback(candidate);
+          const alt = await findToolCapableFallback(candidate, { modelName: candidateName });
           if (alt) {
             coreLogger.warn(
               { childRole, from: candidate, to: alt.model, reason: alt.reason },
               'Swarm child has tools but its model lacks tool support — rerouting to a tool-capable local model',
             );
             candidate = alt.model;
+            candidateName = alt.name;
             // Re-fetch: the tier below must describe the rerouted model.
-            bound = await registry.getModelByModelId(candidate);
+            bound = await registry.getModel(candidateName);
           } else {
             coreLogger.warn(
               { childRole, model: candidate },
@@ -2422,7 +2442,7 @@ export class SwarmSpawner {
       systemPrompt = `${systemPrompt}\n\n${skillFragments.join('\n\n')}`.trim();
     }
 
-    return { model: candidate, lane, systemPrompt, stablePrompt, skillContext: skillFragments.join('\n\n'), isSmall };
+    return { model: candidate, modelName: candidateName, lane, systemPrompt, stablePrompt, skillContext: skillFragments.join('\n\n'), isSmall };
   }
 
   private emitNodeSpawned(parent: AgentNode, payload: Record<string, unknown>): void {
@@ -2617,8 +2637,8 @@ function inheritedWorktreeOf(ctx: AgentContext): string | undefined {
  * Whether `model` runs as a CLI agent — the same test `AgentManager.spawn` uses
  * to pick `CLIAgentWorker`, so the worktree decision and the worker agree.
  */
-async function isCliModel(model: string): Promise<boolean> {
-  const entry = await resolveCliModelEntry(model).catch(() => null);
+async function isCliModel(model: string, modelName?: string): Promise<boolean> {
+  const entry = await resolveCliModelEntry(model, { modelName: modelName || undefined }).catch(() => null);
   return entry ? isCLIProvider(entry.provider) : !!getCLIToolConfig(model);
 }
 

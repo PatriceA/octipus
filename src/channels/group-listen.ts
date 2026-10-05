@@ -335,6 +335,7 @@ export function defaultListenDeps(): ListenDeps {
       if (!model?.modelId) throw new Error('Unprompted group posts need a model bound to the "background" topic.');
       const result = await getLiteLLMClient().complete({
         model: model.modelId,
+        modelConfigName: model.name,
         messages: [
           { role: 'system', content: system, timestamp: new Date() },
           { role: 'user', content: user, timestamp: new Date() },

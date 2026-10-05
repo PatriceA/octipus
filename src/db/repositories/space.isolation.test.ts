@@ -116,6 +116,7 @@ const ALLOWLIST: Record<string, string> = {
   'src/core/spaces/invites.ts': ACCESS_LAYER,
   'src/core/spaces/membership.ts': ACCESS_LAYER,
   'src/core/spaces/purge.ts': ACCESS_LAYER,
+  'src/db/repositories/live-documents.ts': ACCESS_LAYER,
   'src/security/workspace-resolver.ts': 'workspace of a session/agent/pipeline the caller owns, by id',
   // Unscoped stores keyed by an id the caller already holds (MARKED: per read).
   'src/db/repositories/session-repository.ts': 'system-side session store',

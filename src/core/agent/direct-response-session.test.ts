@@ -20,12 +20,12 @@ vi.mock('@/models/litellm-client', () => ({ getLiteLLMClient: () => ({ complete:
   if (fixture.clearDuringCall) fixture.context = { clearedAt: '2030-01-01T00:00:00Z' };
   return { content: 'answer', usage: { totalTokens: 2 } };
 } }) }));
-vi.mock('@/models/model-registry', () => ({ getModelRegistry: () => ({ getModelByModelId: async () => ({ name: 'model', defaultMaxTokens: 1024 }) }) }));
+vi.mock('@/models/model-registry', () => ({ getModelRegistry: () => ({ getModel: async () => ({ name: 'model', defaultMaxTokens: 1024 }) }) }));
 vi.mock('@/core/response-cache', () => ({ getResponseCache: () => ({ get: async () => null, set: async () => {} }) }));
 vi.mock('@/core/personas/resolver', () => ({ resolvePersonaForUser: async () => ({ promptBlock: 'Stable persona.' }) }));
 vi.mock('@/db/repositories/profile-repository', () => ({ ProfileRepository: class { async findUserProfile() { return null; } } }));
 import { directResponse } from './direct-response';
-const selector = { selectByComplexity: async () => 'model' } as any;
+const selector = { selectByComplexity: async () => ({ modelId: 'model', name: 'model' }) } as any;
 beforeEach(() => { fixture.rows = []; fixture.context = {}; fixture.requests = []; fixture.clearDuringCall = false; });
 test('casual turns retain the full checkpoint suffix and append immutable live context', async () => {
   fixture.rows = Array.from({ length: 12 }, (_, i) => ({ id: `m${i}`, role: i % 2 ? 'assistant' : 'user', content: `prior ${i}`, createdAt: new Date(0) } as Message));

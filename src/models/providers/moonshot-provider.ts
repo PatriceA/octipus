@@ -50,7 +50,7 @@ export class MoonshotProvider implements ModelProvider {
   }
 
   async complete(options: CompletionOptions): Promise<CompletionResult> {
-    const client = await this.createClient(options.model);
+    const client = await this.createClient(options.model, options.apiKey);
     const startTime = Date.now();
 
     const params: ChatCompletionCreateParams = {
@@ -131,7 +131,7 @@ export class MoonshotProvider implements ModelProvider {
   }
 
   async *stream(options: CompletionOptions): AsyncGenerator<StreamChunk> {
-    const client = await this.createClient(options.model);
+    const client = await this.createClient(options.model, options.apiKey);
 
     const params: ChatCompletionCreateParams = {
       model: options.model,
@@ -250,8 +250,10 @@ export class MoonshotProvider implements ModelProvider {
     }
   }
 
-  private async createClient(modelName?: string): Promise<OpenAI> {
-    const apiKey = await this.getApiKey();
+  private async createClient(modelName?: string, apiKeyOverride?: string): Promise<OpenAI> {
+    // A personal model row (coworking spec §8.3) carries its owner's key in
+    // `options.apiKey`; it wins over the install's env/vault key.
+    const apiKey = apiKeyOverride || await this.getApiKey();
     if (!apiKey) {
       throw classifyError(new Error('Moonshot API key not available. Set MOONSHOT_API_KEY or store it in the vault.'), this.name);
     }

@@ -185,6 +185,12 @@ export function loadFromEnvLegacy(): Partial<Config> {
       maxMembers: parseInt(process.env.SPACES_MAX_MEMBERS || '50', 10),
       inviteMaxTtlHours: parseInt(process.env.SPACES_INVITE_MAX_TTL_HOURS || '720', 10),
       purgeAfterArchiveDays: parseInt(process.env.SPACES_PURGE_AFTER_ARCHIVE_DAYS || '7', 10),
+      noteMaxBytes: parseInt(process.env.SPACES_NOTE_MAX_BYTES || String(defaultConfig.spaces!.noteMaxBytes), 10),
+      docMaxUpdatesPerSecond: parseInt(process.env.SPACES_DOC_MAX_UPDATES_PER_SECOND || String(defaultConfig.spaces!.docMaxUpdatesPerSecond), 10),
+      docPersistDebounceMs: parseInt(process.env.SPACES_DOC_PERSIST_DEBOUNCE_MS || String(defaultConfig.spaces!.docPersistDebounceMs), 10),
+      docReindexMinutes: parseInt(process.env.SPACES_DOC_REINDEX_MINUTES || String(defaultConfig.spaces!.docReindexMinutes), 10),
+      docBaseTtlMinutes: parseInt(process.env.SPACES_DOC_BASE_TTL_MINUTES || String(defaultConfig.spaces!.docBaseTtlMinutes), 10),
+      fileLeaseTtlSeconds: parseInt(process.env.SPACES_FILE_LEASE_TTL_SECONDS || String(defaultConfig.spaces!.fileLeaseTtlSeconds), 10),
     },
     gateway: {
       maxConnectionsPerUser: parseInt(process.env.GATEWAY_MAX_CONNECTIONS_PER_USER || String(defaultConfig.gateway!.maxConnectionsPerUser), 10),

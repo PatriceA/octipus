@@ -5,7 +5,7 @@
  * model only ever sees the cleaned article text, never raw remote HTML.
  */
 import { getLiteLLMClient } from '@/models/litellm-client';
-import { getModelRegistry } from '@/models/model-registry';
+import { resolveModel } from '@/models/resolve-model';
 import type { ReaderActionKind, ReaderActionResult } from './types';
 
 /** Cap the content sent to the model so a huge page can't blow the budget. */
@@ -41,7 +41,8 @@ export async function runReaderAction(
   argument: string | undefined,
   userId: string,
 ): Promise<ReaderActionResult> {
-  const model = await getModelRegistry().getModelForTopic('everyday');
+  // The reader's own `everyday` binding first, then the install's (§8.2).
+  const model = await resolveModel({ userId, topic: 'everyday' });
   if (!model) {
     throw new Error('No model is bound to the "everyday" lane — bind one on the Topics page to use reader actions.');
   }
@@ -52,6 +53,7 @@ export async function runReaderAction(
 
   const result = await getLiteLLMClient().complete({
     model: model.modelId,
+    modelConfigName: model.name,
     messages: [
       {
         role: 'system',

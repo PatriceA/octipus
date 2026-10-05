@@ -59,7 +59,7 @@ vi.mock('node:child_process', async importOriginal => mockChildProcess(await imp
 vi.mock('@/models/model-registry', () => ({
   getModelRegistry: () => ({ getModel: async () => ({ metadata: { cliAgent: fixture.cliAgent } }), getModelByModelId: async () => ({}) }),
 }));
-vi.mock('@/models/quota-tracker', () => ({ getQuotaTracker: () => ({
+vi.mock('@/models/quota-tracker', () => ({ cliQuotaKey: (provider: string) => provider, getQuotaTracker: () => ({
   getStatus: async () => ({ exhausted: fixture.quotaExhausted }),
   markExhausted: async () => { fixture.quotaExhausted = true; },
 }) }));

@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-450 mounted routes across 65 route files. The path is the full one, group prefix included — what a client actually calls.
+464 mounted routes across 66 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -224,6 +224,10 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/me/group-channels` | `src/api/routes/group-channels.ts` |
 | DELETE | `/api/me/group-channels/:id` | `src/api/routes/group-channels.ts` |
 | PATCH | `/api/me/group-channels/:id` | `src/api/routes/group-channels.ts` |
+| GET | `/api/me/models` | `src/api/routes/me-models.ts` |
+| POST | `/api/me/models` | `src/api/routes/me-models.ts` |
+| DELETE | `/api/me/models/:slug` | `src/api/routes/me-models.ts` |
+| PATCH | `/api/me/models/:slug` | `src/api/routes/me-models.ts` |
 | GET | `/api/me/orgs` | `src/api/routes/orgs.ts` |
 | GET | `/api/me/workspaces` | `src/api/routes/orgs.ts` |
 | POST | `/api/me/workspaces` | `src/api/routes/orgs.ts` |
@@ -272,9 +276,15 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | DELETE | `/api/notes/:id` | `src/api/routes/notes.ts` |
 | GET | `/api/notes/:id` | `src/api/routes/notes.ts` |
 | PATCH | `/api/notes/:id/pin` | `src/api/routes/notes.ts` |
+| GET | `/api/notes/:id/revisions` | `src/api/routes/notes.ts` |
+| GET | `/api/notes/:id/revisions/:revisionId` | `src/api/routes/notes.ts` |
+| POST | `/api/notes/:id/revisions/:revisionId/restore` | `src/api/routes/notes.ts` |
 | GET | `/api/notes/:id/suggestions` | `src/api/routes/notes.ts` |
 | POST | `/api/notes/capture` | `src/api/routes/notes.ts` |
 | GET | `/api/notes/index` | `src/api/routes/notes.ts` |
+| GET | `/api/notes/proposals` | `src/api/routes/notes.ts` |
+| POST | `/api/notes/proposals/:proposalId/accept` | `src/api/routes/notes.ts` |
+| POST | `/api/notes/proposals/:proposalId/reject` | `src/api/routes/notes.ts` |
 | POST | `/api/notes/query` | `src/api/routes/notes.ts` |
 | GET | `/api/notes/tags` | `src/api/routes/notes.ts` |
 | GET | `/api/notifications` | `src/api/routes/notifications.ts` |
@@ -395,7 +405,11 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/spaces/:id` | `src/api/routes/spaces.ts` |
 | PATCH | `/api/spaces/:id` | `src/api/routes/spaces.ts` |
 | GET | `/api/spaces/:id/activity` | `src/api/routes/spaces.ts` |
+| PUT | `/api/spaces/:id/agent-edit-mode` | `src/api/routes/spaces.ts` |
 | POST | `/api/spaces/:id/archive` | `src/api/routes/spaces.ts` |
+| DELETE | `/api/spaces/:id/file-leases` | `src/api/routes/spaces.ts` |
+| GET | `/api/spaces/:id/file-leases` | `src/api/routes/spaces.ts` |
+| POST | `/api/spaces/:id/file-leases` | `src/api/routes/spaces.ts` |
 | GET | `/api/spaces/:id/invites` | `src/api/routes/spaces.ts` |
 | POST | `/api/spaces/:id/invites` | `src/api/routes/spaces.ts` |
 | DELETE | `/api/spaces/:id/invites/:inviteId` | `src/api/routes/spaces.ts` |
@@ -471,7 +485,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `capabilities` | 1 |
 | `(root)` | `channels` | 1 |
 | `(root)` | `config` | 4 |
-| `(root)` | `core` | 26 |
+| `(root)` | `core` | 27 |
 | `(root)` | `db` | 11 |
 | `(root)` | `extensions` | 2 |
 | `(root)` | `hooks` | 3 |
@@ -485,15 +499,15 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 20 |
 | `api` | `config` | 20 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 98 |
-| `api` | `db` | 107 |
+| `api` | `core` | 102 |
+| `api` | `db` | 108 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 3 |
-| `api` | `models` | 31 |
+| `api` | `models` | 34 |
 | `api` | `plugins` | 1 |
-| `api` | `security` | 108 |
-| `api` | `services` | 4 |
+| `api` | `security` | 109 |
+| `api` | `services` | 5 |
 | `api` | `shared` | 3 |
 | `api` | `skills` | 6 |
 | `api` | `tools` | 4 |
@@ -527,19 +541,28 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `connectors` | `utils` | 5 |
 | `core` | `capabilities` | 2 |
 | `core` | `channels` | 7 |
-| `core` | `config` | 38 |
+| `core` | `config` | 42 |
 | `core` | `connectors` | 2 |
+<<<<<<< HEAD
 | `core` | `db` | 245 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 5 |
 | `core` | `models` | 92 |
 | `core` | `security` | 101 |
+=======
+| `core` | `db` | 253 |
+| `core` | `extensions` | 1 |
+| `core` | `hooks` | 5 |
+| `core` | `mcp` | 5 |
+| `core` | `models` | 102 |
+| `core` | `security` | 96 |
+>>>>>>> ccr-9f806ada-hqby2t
 | `core` | `services` | 2 |
 | `core` | `shared` | 15 |
 | `core` | `skills` | 10 |
 | `core` | `tools` | 16 |
-| `core` | `utils` | 159 |
+| `core` | `utils` | 163 |
 | `core` | `voice` | 1 |
 | `db` | `config` | 4 |
 | `db` | `core` | 15 |
@@ -572,7 +595,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `models` | `security` | 19 |
 | `models` | `services` | 1 |
 | `models` | `shared` | 4 |
-| `models` | `utils` | 40 |
+| `models` | `utils` | 41 |
 | `plugins` | `security` | 1 |
 | `plugins` | `tools` | 1 |
 | `plugins` | `utils` | 3 |
@@ -585,14 +608,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `security` | `utils` | 24 |
 | `services` | `capabilities` | 5 |
 | `services` | `config` | 3 |
-| `services` | `core` | 2 |
-| `services` | `db` | 8 |
-| `services` | `models` | 16 |
-| `services` | `security` | 3 |
+| `services` | `core` | 4 |
+| `services` | `db` | 11 |
+| `services` | `models` | 19 |
+| `services` | `security` | 4 |
 | `services` | `setup` | 1 |
 | `services` | `shared` | 2 |
 | `services` | `tools` | 3 |
-| `services` | `utils` | 5 |
+| `services` | `utils` | 6 |
 | `setup` | `utils` | 1 |
 | `skills` | `config` | 1 |
 | `skills` | `core` | 2 |

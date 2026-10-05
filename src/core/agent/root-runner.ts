@@ -180,7 +180,11 @@ export async function runRootAgent(
   const laneChoice = selectLane(message, classification);
   shadowLaneDecision(message, classification, laneChoice);
   const routedLane = laneChoice.lane;
-  const modelName = await deps.modelSelector.selectForRootAgent(sessionId, classification.type, { message, classification });
+  // The requester's own choices first (their `/model`, their personal lane
+  // binding), then the install's (coworking spec §8.2).
+  const inSpace = !!space;
+  const selectedModel = await deps.modelSelector.selectForRootAgent(sessionId, classification.type, { message, classification }, { userId, inSpace });
+  const modelName = selectedModel.modelId;
 
   // Resolve the root agent mode for THIS turn. 'auto' (default) re-derives
   // from the current default model's size every turn, so swapping to a
@@ -188,7 +192,7 @@ export async function runRootAgent(
   // router short-circuits below to a deterministic single-worker turn; lite
   // shrinks the prompt/tools/iterations further down; full is unchanged.
   const agentCfg = getConfig().agent;
-  const modelMeta = await getModelRegistry().getModelByModelId(modelName);
+  const modelMeta = await getModelRegistry().getModel(selectedModel.name);
   const promptTier = resolvePromptTier(
     { modelId: modelName, metadata: modelMeta?.metadata, provider: modelMeta?.provider },
     {
@@ -646,6 +650,7 @@ export async function runRootAgent(
     ...scope,
     topic: routedLane,
     model: modelName,
+    modelName: selectedModel.name,
     role: ROOT_ROLE,
     root: true,
     // Who is on the other end — derived from whether this channel can actually
