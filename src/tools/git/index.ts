@@ -1,7 +1,9 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawn } from 'child_process';
 import { buildChildEnv } from '@/security/child-env';
-import type { ToolManifest } from '@/core/types';
-import { BaseTool, createParameterSchema } from '../base-tool';
+import { openSpaceToolHome, type SpaceToolHome, withToolHome } from '@/security/space-tool-env';
+import type { AgentContext, ToolManifest } from '@/core/types';
+import { BaseTool, createParameterSchema, type ToolExecutionOptions } from '../base-tool';
 import { tokenizeSafe } from '../shell/policy';
 
 /**
@@ -268,20 +270,58 @@ export class GitTool extends BaseTool {
     );
   }
 
+  /** The agent a git call runs for: every handler runs inside it (see `registerTool`). */
+  private readonly caller = new AsyncLocalStorage<AgentContext>();
+
+  /**
+   * Every handler runs with its agent context in `caller`, so `git` can tell
+   * a space session from a personal one without threading the context
+   * through every handler.
+   */
+  protected override registerTool(
+    name: string,
+    description: string,
+    parameters: Record<string, unknown>,
+    execute: (args: Record<string, unknown>, context: AgentContext) => Promise<unknown>,
+    options?: ToolExecutionOptions,
+  ): void {
+    super.registerTool(name, description, parameters, (args, context) => this.caller.run(context, () => execute(args, context)), options);
+  }
+
+  /**
+   * How one git run is spawned. git authenticates through the credential
+   * helper and ssh-agent, not through the environment, so it needs none of
+   * the secrets the harness holds. In a space (coworking §9.5) it never uses
+   * the host's identity: the run's own tool home (only the space's GitHub
+   * connection in it), the host's agent and askpass variables removed, and
+   * every configured credential helper reset on the command line. Public
+   * for the tests; the caller disposes of `home`.
+   */
+  async spawnPlan(args: string[]): Promise<{ args: string[]; env: Record<string, string>; home: SpaceToolHome | null }> {
+    const context = this.caller.getStore();
+    if (!context?.space) return { args, env: buildChildEnv(), home: null };
+    const home = await openSpaceToolHome({ ...context, space: context.space });
+    return { args: [...home.gitArgs, ...args], env: withToolHome(buildChildEnv(), home), home };
+  }
+
+  /** `spawnPlan` as the agent `context` would get it (tests). */
+  spawnPlanFor(context: AgentContext, args: string[]): ReturnType<GitTool['spawnPlan']> {
+    return this.caller.run(context, () => this.spawnPlan(args));
+  }
+
   private async git(args: string[], cwd: string): Promise<string> {
+    const plan = await this.spawnPlan(args);
     return new Promise((resolve, reject) => {
-      // git authenticates through the credential helper and ssh-agent, not
-      // through the environment, so it needs none of the secrets the harness
-      // holds.
-      const child = spawn('git', args, { cwd, env: buildChildEnv() });
+      const child = spawn('git', plan.args, { cwd, env: plan.env });
       let stdout = '';
       let stderr = '';
 
       child.stdout.on('data', (data) => { stdout += data; });
       child.stderr.on('data', (data) => { stderr += data; });
-      child.on('error', reject);
+      child.on('error', (err) => { plan.home?.dispose(); reject(err); });
 
       child.on('close', (code) => {
+        plan.home?.dispose();
         if (code === 0) {
           resolve(stdout.trim());
         } else {

@@ -572,8 +572,12 @@ export async function forwardPermissionRequestToChannel(request: PermissionReque
   // Look up the session to find which channel originated it
   const stored = await sessionRepository.findById(sessionId);
   // A room of a channel bound to a space (§9.4) asks in its thread, as a
-  // group thread does: only the requester sees the details.
-  const session = stored?.kind === 'room' ? await bridgedRoomAsGroupThread(stored) : stored;
+  // group thread does (only the requester sees the details) — for a turn
+  // asked from the platform. A turn asked on the web asks there, and a room's
+  // request is never denied for the channel's sake: it stays pending for
+  // the web app.
+  const isRoom = stored?.kind === 'room';
+  const session = isRoom && stored ? await bridgedRoomAsGroupThread(stored, userId) : stored;
   // Only a messaging channel can carry a permission prompt. Non-messaging
   // sessions have a channelType too ('tui', 'webchat', 'api'), and the old
   // `!== 'webchat'` test let 'tui' through to `umi.send`, which throws for a
@@ -595,6 +599,11 @@ export async function forwardPermissionRequestToChannel(request: PermissionReque
     const { findGroupChannel, isGroupChannelActive } = await import('./group-channels');
     const group = await findGroupChannel(channelType, channelId);
     if (group?.id !== session.groupChannelId || !(await isGroupChannelActive(group))) {
+      // A room's members answer in the web app: left pending there.
+      if (isRoom) {
+        channelLogger.info({ sessionId, channelId }, 'Permission request of a bridged room whose channel is removed or paused — left to the web app');
+        return;
+      }
       // Not posted: the bot is silent in a removed or paused channel. Denied,
       // not left pending: permission requests do not expire, so nothing would
       // ever release the turn (and the session lock it holds).
@@ -678,13 +687,19 @@ export async function forwardPermissionRequestToChannel(request: PermissionReque
     }
     announce();
   } catch (error) {
+    // Remove only OUR entry: other prompts queued for this chat stay answerable.
+    removePending(key, request.requestId);
+    // A room's request is also shown in the web app, where its members can
+    // answer it: left pending there rather than denied.
+    if (isRoom) {
+      channelLogger.error({ error, channelType }, 'Failed to forward a bridged room\'s permission request to its channel — left to the web app');
+      return;
+    }
     // The prompt never reached a human, so leaving the request pending buys
     // nothing but a stall until it expires — the run blocks for the whole TTL
     // and then fails anyway. Deny it now, with the delivery failure as the
     // reason, so the agent gets an answer it can report.
     channelLogger.error({ error, channelType }, 'Failed to forward permission request to channel — denying it');
-    // Remove only OUR entry: other prompts queued for this chat stay answerable.
-    removePending(key, request.requestId);
     await permissionManager
       .deny(request.requestId, userId, `could not be delivered to the ${channelType} channel`)
       .catch((denyError) => {
@@ -695,10 +710,19 @@ export async function forwardPermissionRequestToChannel(request: PermissionReque
 
 /**
  * A bridged room seen as the group thread it mirrors (channel, chat, thread
- * and enrolment), for the permission prompt; the room itself (no channel)
- * when no channel is bound to it.
+ * and enrolment), for the permission prompt of `requesterId`'s turn — only
+ * when that turn was asked from the platform: the room's running turn is
+ * theirs and its post came over the bridge. The room itself (no channel,
+ * so the web app asks) for a turn asked on the web, or a room no channel is
+ * bound to. The room queue runs in this process, as the request does.
  */
-async function bridgedRoomAsGroupThread<S extends { id: string; channelType: string | null; channelId: string | null; threadId: string | null; groupChannelId: string | null }>(room: S): Promise<S> {
+async function bridgedRoomAsGroupThread<S extends { id: string; channelType: string | null; channelId: string | null; threadId: string | null; groupChannelId: string | null }>(room: S, requesterId: string): Promise<S> {
+  const { roomQueueSnapshot } = await import('@/core/rooms/queue');
+  const running = roomQueueSnapshot(room.id).running;
+  if (!running || running.requesterId !== requesterId) return room;
+  const { messageRepository } = await import('@/db/repositories/message-repository');
+  const post = await messageRepository.findById(running.messageId);
+  if (!(post?.metadata as Record<string, unknown> | null | undefined)?.bridged) return room;
   const { bridgeTargetOf } = await import('./group-bridge');
   const target = await bridgeTargetOf(room.id);
   if (!target) return room;

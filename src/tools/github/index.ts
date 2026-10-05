@@ -193,15 +193,16 @@ export class GitHubTool extends BaseTool {
   }
 
   /**
-   * How `gh` runs for the current call. In a space (coworking §9.5) it never
-   * uses the host's GitHub identity: an empty per-space `GH_CONFIG_DIR`, and
-   * the space's own token when an owner connected GitHub to the space — or a
-   * refusal saying how to connect one. Personal sessions keep the host's gh.
+   * Run `gh` for the current call. In a space (coworking §9.5) it never
+   * uses the host's GitHub identity: the run's own tool home, removed after
+   * it, and the space's own token when an owner connected GitHub to the
+   * space — or a refusal saying how to connect one. Personal sessions keep
+   * the host's gh.
    */
-  private async ghOptions(): Promise<Pick<RunGhOptions, 'token' | 'configDir'>> {
+  private async runGhForCall(args: string[], opts: Omit<RunGhOptions, 'token' | 'toolHome'> = {}): Promise<string> {
     const context = this.caller.getStore();
-    if (!context?.space) return {};
-    const [{ agentPrincipal }, { spaceGithubToken }, { spaceToolEnv }] = await Promise.all([
+    if (!context?.space) return runGh(args, opts);
+    const [{ agentPrincipal }, { spaceGithubToken }, { openSpaceToolHome }] = await Promise.all([
       import('@/security/principal'), import('@/core/spaces/connectors'), import('@/security/space-tool-env'),
     ]);
     const token = await spaceGithubToken(agentPrincipal(context));
@@ -209,7 +210,12 @@ export class GitHubTool extends BaseTool {
       throw new Error('This space has no GitHub connection. A space owner can connect one under the space\'s settings → Connectors; '
         + 'the host\'s GitHub login is never used in a space.');
     }
-    return { token, configDir: spaceToolEnv(context.space.workspaceId).GH_CONFIG_DIR };
+    const toolHome = await openSpaceToolHome({ ...context, space: context.space });
+    try {
+      return await runGh(args, { ...opts, token, toolHome });
+    } finally {
+      toolHome.dispose();
+    }
   }
 
   protected async registerTools(): Promise<void> {
@@ -498,9 +504,9 @@ export class GitHubTool extends BaseTool {
       number: { type: 'number', description: 'PR number', required: true },
     }), async (args) => {
       // Exit 8 = checks pending, 1 = a check failed; both still print the JSON.
-      const raw = await runGh(
+      const raw = await this.runGhForCall(
         ['pr', 'checks', assertNumber(args.number, 'PR number'), '-R', args.repo as string, '--json', 'name,state,bucket,workflow,link,description,startedAt,completedAt'],
-        { acceptExitCodes: [1, 8], ...await this.ghOptions() },
+        { acceptExitCodes: [1, 8] },
       );
       const checks = JSON.parse(raw.trim() || '[]') as Array<{ bucket?: string }>;
       const counts: Record<string, number> = {};
@@ -641,7 +647,7 @@ export class GitHubTool extends BaseTool {
   }
 
   private async gh(args: string[]): Promise<string> {
-    return (await runGh(args, await this.ghOptions())).trim();
+    return (await this.runGhForCall(args)).trim();
   }
 }
 

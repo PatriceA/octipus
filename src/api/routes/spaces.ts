@@ -10,6 +10,7 @@ import {
   renewLease,
 } from '@/core/docs/file-leases';
 import { connectSpaceConnector, disconnectSpaceConnector, listSpaceConnectors } from '@/core/spaces/connectors';
+import { bindBrowser } from '@/api/oauth-browser';
 import { acceptInvite, createInvite, listInvites, previewInvite, revokeInvite } from '@/core/spaces/invites';
 import { purgeSpace } from '@/core/spaces/purge';
 import {
@@ -248,8 +249,13 @@ export const spaceRoutes = new Elysia({ prefix: '/spaces' })
     detail: { tags: ['spaces'] },
   })
 
-  .post('/:id/connectors/:connectorId', (ctx) => handle(ctx, (actor) =>
-    connectSpaceConnector(actor, ctx.params.id, ctx.params.connectorId, { token: ctx.body?.token })), {
+  // An OAuth connect is bound to this browser (a cookie the callback checks).
+  .post('/:id/connectors/:connectorId', (ctx) => handle(ctx, async (actor) => {
+    const browser = bindBrowser(ctx.request);
+    const result = await connectSpaceConnector(actor, ctx.params.id, ctx.params.connectorId, { token: ctx.body?.token, browserBinding: browser.binding });
+    if ('url' in result) ctx.set.headers['Set-Cookie'] = browser.setCookie;
+    return result;
+  }), {
     params: t.Object({ id: t.String(), connectorId: t.String({ minLength: 1, maxLength: 64 }) }),
     body: t.Optional(t.Object({ token: t.Optional(t.String({ minLength: 1, maxLength: 400 })) }, { additionalProperties: false })),
     detail: { tags: ['spaces'] },
