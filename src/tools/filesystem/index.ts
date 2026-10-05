@@ -646,7 +646,7 @@ export class FilesystemTool extends BaseTool {
         const raw = args.pattern as string;
         const isGlob = /[*?]/.test(raw) && !/[()[\]^$|+\\]|\.[*?]/.test(raw);
         const pattern = safeRegExp(isGlob
-          ? '^' + raw.replace(/^.*\//, '').replace(/[.{}]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$'
+          ? '^' + raw.replace(/^.*\//, '').replace(/[.{}\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$'
           : raw);
         if (!pattern) {
           return { pattern: args.pattern, results: [], error: 'Invalid or too complex regex pattern' };
