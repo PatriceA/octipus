@@ -22,9 +22,9 @@ export async function turnWorkspaceId(userId: string, workspaceId: string | null
  * or in the user's default workspace when none is given. An existing
  * session keeps the workspace it was created in.
  *
- * An existing UUID session owned by a different user is refused ("Session
- * not found", the same answer as a missing row, so ownership is not
- * disclosed): every caller passes the acting user, and sessions.user_id is
+ * An existing UUID session owned by a different user, or a room, is refused
+ * ("Session not found", the same answer as a missing row, so ownership is
+ * not disclosed): every caller passes the acting user, and sessions.user_id is
  * NOT NULL, so there is no legitimate cross-user resolution.
  */
 export async function resolveSession(
@@ -37,7 +37,9 @@ export async function resolveSession(
   if (uuidRegex.test(sessionId)) {
     const existing = await sessionRepository.findById(sessionId);
     if (existing) {
-      if (existing.userId !== userId) throw new Error('Session not found');
+      // A room is never resolved as a personal chat — its creator included
+      // (§6.2): room turns enter only through `handleRoomMessage`.
+      if (existing.kind === 'room' || existing.userId !== userId) throw new Error('Session not found');
       return sessionId;
     }
 
@@ -58,6 +60,8 @@ export async function resolveSession(
   const parts = sessionId.split('-');
   const channelType = parts[0] || channel;
   const channelId = parts.slice(1).join('-') || sessionId;
+  // `room` is not a channel a personal chat can live on (§6.1).
+  if (channelType === 'room' || channel === 'room') throw new Error('Session not found');
 
   const existing = await sessionRepository.findByUserAndChannel(userId, channelType, channelId);
   if (existing) return existing.id;

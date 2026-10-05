@@ -18,6 +18,9 @@
  *      private data (flow label `private`, loaded from the session row so a
  *      restart keeps it), any call that is not a read is ASK — whatever the
  *      flow-guard mode — because it writes personal data into the space;
+ *      and in a room (a shared audience, D8) a call that reads the
+ *      requester's private data is ASK to the requester, because the answer
+ *      is posted where every member of the room reads it;
  *   4. calls the pure `routeApproval`;
  *   5. marks the session `private` when the call goes ahead and reads
  *      through one of the requester's personal connections
@@ -29,7 +32,7 @@
  */
 import type { AgentSpace, PermissionLevel } from '@/core/types';
 import { type ApprovalDecision, routeApproval } from './approval-policy';
-import { getFlowLabel, loadFlowLabel, observeFlow } from './flow-guard';
+import { classifyFlow, getFlowLabel, isSharedAudience, loadFlowLabel, observeFlow } from './flow-guard';
 import { can } from './space-access';
 import { agentConfigWriteReason, commenterMayRun, isReadCall, personalOnlyReason, personalSourceRead, type SpaceToolCall } from './space-tools';
 import { isSharedWorkspaceId } from './workspace-fs';
@@ -90,6 +93,14 @@ export async function routeApprovalFor(
     const personal = personalOnlyReason(call) ?? agentConfigWriteReason(call);
     if (personal) return deny(personal);
     await loadFlowLabel(context.sessionId);
+    // A read through a personal connection reads private data too (`personalSourceRead`).
+    if (level !== 'DENY' && isSharedAudience(context.sessionId)
+      && (classifyFlow({ toolId: call.toolId, action: call.action }).taints.includes('private') || personalSourceRead(call))) {
+      level = 'ASK';
+      source = 'space-room';
+      reason = `${call.toolId}.${call.toolName ?? call.action} reads your private data, and the answer is posted in this room `
+        + 'where every member reads it: approving shares it with them';
+    }
     if (level !== 'DENY' && !isReadCall(call) && getFlowLabel(context.sessionId).private) {
       const { getSpace } = await import('@/core/spaces/service');
       const { name } = await getSpace({ userId: context.userId }, space.workspaceId);

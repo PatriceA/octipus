@@ -9,6 +9,22 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **Rooms.** A space's shared chats (coworking S2, backend): sessions with
+  `kind = 'room'` (`space` or `private`), every space starting with
+  "General". Members post, `@mention` each other and ask Octipus; each turn
+  runs as its requester through a per-room queue
+  (`rooms.maxQueuedPerMember`, `rooms.approvalTimeoutMinutes`), sees the room
+  as one fenced, attributed transcript (compacted past
+  `rooms.transcriptWindowChars`), and its answer reaches every member while
+  the stream reaches the requester only. New gateway frames `space.subscribe`
+  and `room.*`, events `room.*` and `space.presence`, routes under
+  `/api/spaces/:id/rooms`. Space memory (`/api/spaces/:id/memory`, the
+  agent's `remember_for_space`, `spaces.memoryMaxItems`) is injected fenced
+  into every space session. Private side panel: a space chat with
+  `context.linkedRoomId`. Migration `0129_rooms`. Rooms are invisible to
+  every personal route, their creator included; a room's user row is
+  written once, with its author (the repositories refuse any other).
+  `notify()` takes the workspace as an argument. See docs/SPACES.md.
 - **Live space notes.** Members of a shared space edit a note together: the
   notes editor binds to a shared document (Yjs over the gateway: `doc.join`,
   `doc.update`, `doc.awareness`, `doc.leave`), shows the others' cursors and

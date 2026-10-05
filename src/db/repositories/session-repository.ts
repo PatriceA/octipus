@@ -3,7 +3,7 @@ import { and, desc, eq, isNull, lt, sql, type SQL } from 'drizzle-orm';
 import { dbLogger } from '@/utils/logger';
 import { getDb } from '../postgres';
 import { type NewSession, type Session, sessions } from '../schema/sessions';
-import { notInSharedWorkspace } from './scoped';
+import { assertNotRoomCreate, notInSharedWorkspace, personalChat } from './scoped';
 import { sessionsRemoved } from './session-lifecycle';
 
 /** A jsonb path as a bound text[] — keys are parameters, never spliced into an array literal. */
@@ -87,7 +87,9 @@ export class SessionRepository {
           eq(sessions.channelId, channelId),
           eq(sessions.status, 'active'),
           // Group-thread sessions share the chat id but are separate conversations.
-          isNull(sessions.groupChannelId)
+          isNull(sessions.groupChannelId),
+          // A room is never a personal chat, its creator's included (§6.2).
+          personalChat,
         )
       )
       .orderBy(desc(sessions.createdAt))
@@ -143,13 +145,16 @@ export class SessionRepository {
           eq(sessions.userId, userId),
           eq(sessions.channelType, channelType),
           eq(sessions.channelId, channelId),
-          isNull(sessions.groupChannelId)
+          isNull(sessions.groupChannelId),
+          personalChat,
         )
       )
       .orderBy(desc(sessions.createdAt));
   }
 
+  /** Create a chat. Rooms are created by the rooms service only (§6.1). */
   async create(data: NewSession): Promise<Session> {
+    assertNotRoomCreate(data);
     const result = await this.db.insert(sessions).values(data).returning();
     dbLogger.info({ sessionId: result[0].id, userId: data.userId }, 'Session created');
     return result[0];
@@ -326,7 +331,7 @@ export class SessionRepository {
       .select()
       // i2: a user's own chats, with the personal predicate
       .from(sessions)
-      .where(and(eq(sessions.userId, userId), notInSharedWorkspace(sessions.workspaceId)))
+      .where(and(eq(sessions.userId, userId), notInSharedWorkspace(sessions.workspaceId), personalChat))
       .orderBy(desc(sessions.updatedAt))
       .limit(limit);
   }

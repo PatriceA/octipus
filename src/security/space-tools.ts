@@ -50,7 +50,8 @@ export const COMMENTER_TOOLS: ReadonlySet<string> = new Set([
   'websearch:search', 'websearch:fetch_page',
   'task_state:list_recent_session_tasks', 'task_state:read_task_state',
   'skill_runtime:read_resource',
-  // Room posts join this list in S2.
+  // Room posts (S2) are not a tool: a room turn's answer is posted as the
+  // turn's reply, which a commenter's turn may give.
 ]);
 
 /** Connector containers whose `*_read` actions count as reads (flow-guard.ts `classifyFlow`). */
@@ -229,8 +230,11 @@ export function withoutPersonalOnlyTools(handlers: ToolHandler[]): ToolHandler[]
  * What the agent is told in a space session: where it is, what the role
  * allows, and why some tools are missing.
  */
-export function spaceSessionNotice(spaceName: string, role: SpaceRole, mayWrite: boolean): string {
-  return `\n\nSHARED SPACE: this conversation is a private session inside the shared space "${spaceName}", `
+export function spaceSessionNotice(spaceName: string, role: SpaceRole, mayWrite: boolean, room?: { title: string }): string {
+  const where = room
+    ? `this conversation is the room "${room.title}" of the shared space "${spaceName}": every member of the room reads it, and you are answering one of them`
+    : `this conversation is a private session inside the shared space "${spaceName}"`;
+  return `\n\nSHARED SPACE: ${where}, `
     + `where the user is ${role === 'owner' || role === 'editor' ? 'an' : 'a'} ${role}. Notes, tasks, documents, artifacts, knowledge and files you `
     + 'read and write here are the space\'s, visible to its members. '
     + (mayWrite ? '' : 'The user\'s role can only read and comment here: do not try to create or change anything except task comments. ')

@@ -118,6 +118,7 @@ async function seedSpaceRows(ws: string, author: string): Promise<{ sessionId: s
   await one('tasks', `INSERT INTO tasks (user_id, title, workspace_id) VALUES ($1, 't', $2)`, [author, ws]);
   await one('trajectory_runs', `INSERT INTO trajectory_runs (user_id, root_session_id, outcome, started_at, ended_at, jsonl_path, jsonl_line, workspace_id) VALUES ($1, $2, 'success', now(), now(), '/t.jsonl', 1, $3)`, [author, session.id, ws]);
   await one('workspace_repos', `INSERT INTO workspace_repos (user_id, name, root_path, workspace_id) VALUES ($1, 'r', $2, $3)`, [author, `/repo/${randomUUID()}`, ws]);
+  await one('space_memory', `INSERT INTO space_memory (workspace_id, body, author_kind, author_user_id) VALUES ($1, 'fact', 'member', $2)`, [ws, author]);
   const { getVault } = await import('@/security/vault');
   await getVault().store(author, `ws_token_${rand(3)}`, 'secret', { credentialType: 'api_key', scope: 'workspace', workspaceId: ws });
   seeded.add('vault');

@@ -204,12 +204,9 @@ export function clearFlowLabel(sessionId: string): void {
   sharedAudience.delete(sessionId);
   lookedUp.delete(sessionId);
   uncertain.delete(sessionId);
-  loaded.delete(sessionId);
-  if (isUuidShape(sessionId)) {
-    void import('@/db/repositories/session-repository')
-      .then(({ sessionRepository }) => sessionRepository.clearFlowLabel(sessionId))
-      .catch((err) => flowLogger().then((log) => log.error({ err, sessionId }, 'flow label: clearing the stored label failed')));
-  }
+  // Cleared, not unknown: the stored label is not merged back in this process.
+  rememberLoaded(sessionId);
+  storeWrite(sessionId, 'clearing', (repo) => repo.clearFlowLabel(sessionId));
 }
 
 /** Test seam. */
@@ -237,18 +234,33 @@ async function flowLogger() {
   return (await import('@/utils/logger')).securityLogger;
 }
 
-/** Write newly gained flags through to the session row (synthetic ids have none). */
-function persistGained(sessionId: string, gained: StoredFlowLabel): void {
+type SessionRepo = typeof import('@/db/repositories/session-repository')['sessionRepository'];
+/** The last stored-label write of each session: writes of one session land in order (a room's clear, then its turn's flags). */
+const storeWrites = new Map<string, Promise<void>>();
+
+/** Queue a write of the session's stored label behind its previous one (synthetic ids have no row). */
+function storeWrite(sessionId: string, what: string, write: (repo: SessionRepo) => Promise<void>): void {
   if (!isUuidShape(sessionId)) return;
-  void import('@/db/repositories/session-repository')
-    .then(({ sessionRepository }) => sessionRepository.addFlowLabel(sessionId, gained))
-    .catch((err) => flowLogger().then((log) => log.error({ err, sessionId }, 'flow label: persisting the label failed')));
+  const next = (storeWrites.get(sessionId) ?? Promise.resolve())
+    .then(async () => write((await import('@/db/repositories/session-repository')).sessionRepository))
+    .catch((err) => flowLogger().then((log) => log.error({ err, sessionId }, `flow label: ${what} the stored label failed`)));
+  storeWrites.set(sessionId, next);
+  void next.finally(() => { if (storeWrites.get(sessionId) === next) storeWrites.delete(sessionId); });
+}
+
+/** Write newly gained flags through to the session row. */
+function persistGained(sessionId: string, gained: StoredFlowLabel): void {
+  storeWrite(sessionId, 'persisting', (repo) => repo.addFlowLabel(sessionId, gained));
+}
+
+function rememberLoaded(sessionId: string): void {
+  loaded.add(sessionId);
+  if (loaded.size > MAX_SHARED_SESSIONS) loaded.delete(loaded.values().next().value as string);
 }
 
 /** Merge a stored label into the in-memory one (labels only tighten). */
 function mergeStored(sessionId: string, stored: StoredFlowLabel | null | undefined): void {
-  loaded.add(sessionId);
-  if (loaded.size > MAX_SHARED_SESSIONS) loaded.delete(loaded.values().next().value as string);
+  rememberLoaded(sessionId);
   if (!stored) return;
   const label = labels.get(sessionId) ?? empty();
   labels.delete(sessionId);
@@ -343,7 +355,7 @@ export async function ensureSharedAudienceKnown(sessionId: string | undefined): 
   const { isUuid } = await import('@/db/repositories/scoped');
   if (!isUuid(sessionId)) { rememberLookup(sessionId); return; }
   const { sessionRepository } = await import('@/db/repositories/session-repository');
-  let session: { groupChannelId?: string | null; flowLabel?: unknown } | null;
+  let session: { groupChannelId?: string | null; kind?: string | null; flowLabel?: unknown } | null;
   try {
     session = await sessionRepository.findById(sessionId);
   } catch {
@@ -358,7 +370,8 @@ export async function ensureSharedAudienceKnown(sessionId: string | undefined): 
   uncertain.delete(sessionId);
   rememberLookup(sessionId);
   if (!loaded.has(sessionId)) mergeStored(sessionId, session?.flowLabel as StoredFlowLabel | null | undefined);
-  if (session?.groupChannelId) markSharedAudience(sessionId);
+  // A group thread, or a room (coworking §6.4): replies everyone reads.
+  if (session?.groupChannelId || session?.kind === 'room') markSharedAudience(sessionId);
 }
 
 /** Why a private read in a shared-audience session needs a human, or undefined. Pure. */

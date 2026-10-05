@@ -163,6 +163,16 @@ export type GatewayEventType =
   | 'artifact.data_updated'
   | 'artifact.version_updated'
   | 'artifact.source_error'
+  // Rooms (coworking §6.6): delivered to the resource `room:<id>` only.
+  | 'room.message'
+  | 'room.turn'
+  | 'room.presence'
+  | 'room.typing'
+  | 'room.read'
+  | 'room.removed'
+  // Who is online in a space, and where (a room only when the recipient may
+  // enter it, I3): to the resource `space:<id>`, one view per recipient.
+  | 'space.presence'
   // Published only by the gateway's own tests, as a synthetic type to drive
   // subscription and replay. It shows up in the generated catalog's
   // never-published list because that scan deliberately excludes test files —
@@ -192,6 +202,20 @@ export const GLOBAL_EVENT_TYPES = {
     'Belongs to an artifact, not a user: sent to the resource artifact:<id> only, to connections that passed the artifact access check.',
   'artifact.source_error':
     'Belongs to an artifact, not a user: sent to the resource artifact:<id> only, to connections that passed the artifact access check.',
+  'room.message':
+    'Belongs to a room, not a user: sent to the resource room:<id> only, to connections whose room.subscribe passed roomAccess.',
+  'room.turn':
+    'Belongs to a room, not a user: sent to the resource room:<id> only, to connections whose room.subscribe passed roomAccess.',
+  'room.presence':
+    'Belongs to a room, not a user: sent to the resource room:<id> only, to connections whose room.subscribe passed roomAccess.',
+  'room.typing':
+    'Belongs to a room, not a user: sent to the resource room:<id> only, to connections whose room.subscribe passed roomAccess.',
+  'room.read':
+    'Belongs to a room, not a user: sent to the resource room:<id> only, to connections whose room.subscribe passed roomAccess.',
+  'room.removed':
+    'Sent once, directly, to a connection whose room subscription was just pruned (it lost access); never broadcast.',
+  'space.presence':
+    'Belongs to a space, not a user: sent to connections in the resource space:<id> (space.subscribe passed the membership check), each with its own view.',
 } as const satisfies Partial<Record<GatewayEventType, string>>;
 
 export type GlobalEventType = keyof typeof GLOBAL_EVENT_TYPES;
@@ -363,6 +387,66 @@ export const PingSchema = z.object({
   type: z.literal('ping'),
 });
 
+// ── Spaces and rooms (coworking §6.6) ──
+// Every frame below is access-checked when it arrives: membership read from
+// the database for subscribe, post, read and cancel (D5); the in-process
+// membership version for typing.
+
+const RoomIdSchema = z.string().uuid();
+
+/** Join the space's presence (`space:<id>`); answered with `subscribed` and a `space.presence`. */
+export const SpaceSubscribeSchema = z.object({
+  type: z.literal('space.subscribe'),
+  spaceId: z.string().uuid(),
+});
+
+/**
+ * Receive the room's events (`room:<id>`). `afterMessageId` asks for the
+ * posts missed since (catch-up after a reconnect, served from the messages
+ * table): answered with `room.catchup`.
+ */
+export const RoomSubscribeSchema = z.object({
+  type: z.literal('room.subscribe'),
+  roomId: RoomIdSchema,
+  afterMessageId: z.string().uuid().optional(),
+});
+
+export const RoomUnsubscribeSchema = z.object({
+  type: z.literal('room.unsubscribe'),
+  roomId: RoomIdSchema,
+});
+
+/**
+ * Post in a room. `addressed` (the "Ask Octipus" toggle, or `@octipus` in
+ * the text) queues a turn for the poster. `clientId` is echoed on the
+ * resulting `room.message` so the client reconciles its optimistic copy.
+ */
+export const RoomPostSchema = z.object({
+  type: z.literal('room.post'),
+  roomId: RoomIdSchema,
+  content: z.string().min(1).max(CHAT_MESSAGE_MAX_CHARS),
+  addressed: z.boolean().optional(),
+  clientId: z.string().min(1).max(64).optional(),
+});
+
+export const RoomReadSchema = z.object({
+  type: z.literal('room.read'),
+  roomId: RoomIdSchema,
+  messageId: z.string().uuid(),
+});
+
+/** "I am typing" — clients send at most one per 3 s. */
+export const RoomTypingSchema = z.object({
+  type: z.literal('room.typing'),
+  roomId: RoomIdSchema,
+});
+
+export const RoomCancelQueuedSchema = z.object({
+  type: z.literal('room.cancel_queued'),
+  roomId: RoomIdSchema,
+  messageId: z.string().uuid(),
+});
+
 /**
  * `voice.set` — put a session into (or out of) voice mode for this
  * connection: the root agent's propose-then-confirm gate applies to the
@@ -442,6 +526,13 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   PingSchema,
   VoiceSetSchema,
   ReplaySchema,
+  SpaceSubscribeSchema,
+  RoomSubscribeSchema,
+  RoomUnsubscribeSchema,
+  RoomPostSchema,
+  RoomReadSchema,
+  RoomTypingSchema,
+  RoomCancelQueuedSchema,
   DocJoinSchema,
   DocUpdateSchema,
   DocAwarenessSchema,
@@ -553,6 +644,29 @@ export interface ReplayMessage {
   gap: boolean;
 }
 
+/** Answer to `room.subscribe` with `afterMessageId`: the room's posts since, oldest first. */
+export interface RoomCatchupMessage {
+  type: 'room.catchup';
+  roomId: string;
+  messages: unknown[];
+  /** More posts follow; page with the last id. */
+  hasMore: boolean;
+}
+
+/** Answer to a `room.post`: stored (and queued when addressed). */
+export interface RoomPostedMessage {
+  type: 'room.posted';
+  roomId: string;
+  messageId: string;
+  clientId?: string;
+  /** Set when the post queued a turn: its position (0 = runs next). */
+  queuedPosition?: number;
+  /** Set when the post was addressed but no turn was queued, with why. */
+  notQueued?: string;
+  /** A room command's answer (`/status`, `/stop`, …), for the poster only. */
+  commandResult?: string;
+}
+
 // ── Live documents (S3) ──────────────────────────────────────────
 
 /**
@@ -656,6 +770,8 @@ export type GatewayMessage =
   | EventsDroppedMessage
   | PermissionPendingMessage
   | ReplayMessage
+  | RoomCatchupMessage
+  | RoomPostedMessage
   | DocSyncMessage
   | DocUpdateMessage
   | DocAwarenessMessage

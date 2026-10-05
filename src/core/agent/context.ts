@@ -102,13 +102,16 @@ async function readSpace(userId: string, workspaceId: string): Promise<AgentSpac
  * with no real user behind it (a `'system'` hook) gets no workspace.
  */
 export async function resolveAgentScope(input: {
-  session: { userId: string; workspaceId?: string | null } | null;
+  session: { id?: string; userId: string; workspaceId?: string | null; kind?: string | null } | null;
   userId: string;
   trigger: AgentTrigger;
   /** Only when there is no session row: the workspace the turn is asked to run in. */
   workspaceId?: string | null;
 }): Promise<AgentScope> {
   const { session, userId, trigger } = input;
+  // A room (§6.2) is no one's own session: its turns run as their requester,
+  // who must be able to enter the room now, and only as room turns.
+  if (session?.kind === 'room') return resolveRoomScope(session, userId, trigger);
   if (session && session.userId !== userId) throw new Error('Session not found');
   if (!isRealUserId(userId)) {
     return { workspaceId: null, space: null, trigger, funding: fundingFor(trigger, null) };
@@ -117,6 +120,21 @@ export async function resolveAgentScope(input: {
   if (resolved.space && !SPACE_TRIGGERS.has(trigger)) {
     throw new SpaceError('forbidden_role', `A ${trigger} run cannot start in a space`);
   }
+  return { workspaceId: resolved.workspaceId, space: resolved.space, trigger, funding: fundingFor(trigger, resolved.space) };
+}
+
+async function resolveRoomScope(
+  session: { id?: string; workspaceId?: string | null },
+  userId: string,
+  trigger: AgentTrigger,
+): Promise<AgentScope> {
+  if (trigger !== 'room') throw new Error('Session not found');
+  if (!session.id || !isRealUserId(userId)) throw new Error('Session not found');
+  const { roomAccess } = await import('@/core/rooms/access');
+  const access = await roomAccess(userId, session.id);
+  if (!access) throw new SpaceError('not_found', 'Room not found');
+  const resolved = await resolveTurnWorkspace(userId, access.room.workspaceId);
+  if (!resolved.space) throw new Error('A room lives in a space');
   return { workspaceId: resolved.workspaceId, space: resolved.space, trigger, funding: fundingFor(trigger, resolved.space) };
 }
 
