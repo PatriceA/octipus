@@ -36,17 +36,17 @@ function requireAdmin(ctx: AdminCtx): { error: string } | null {
 }
 
 /**
- * Whether an admin may answer for a request raised in `sessionId`: not when
- * the session is in a space the admin is not a member of (D9).
+ * Whether an admin may answer for a request raised in `sessionId`: never in
+ * a space or a room, whatever the admin's own membership (D9: the requester
+ * answers; approving a private read in a room is the member's own consent,
+ * D8). An admin who must act there impersonates the member, which is audited.
  */
-async function adminMayAnswerSession(adminUserId: string, sessionId: string): Promise<boolean> {
+async function adminMayAnswerSession(sessionId: string): Promise<boolean> {
   const session = await sessionRepository.findById(sessionId);
   if (!session?.workspaceId) return true;
-  const { sessionAudience } = await import('@/core/agent/audience');
-  const { kind } = await sessionAudience(session);
-  if (kind !== 'space' && kind !== 'room') return true;
-  const { getMembership } = await import('@/core/spaces/service');
-  return (await getMembership(adminUserId, session.workspaceId)) !== null;
+  if (session.kind === 'room') return false;
+  const { isSharedWorkspace } = await import('@/core/spaces/service');
+  return !(await isSharedWorkspace(session.workspaceId));
 }
 
 const resolveBody = t.Object({
@@ -64,7 +64,7 @@ export const adminApprovalRoutes = new Elysia({ prefix: '/admin' })
     async (ctx) => {
       const refused = requireAdmin(ctx);
       if (refused) return refused;
-      // Requests of a space the admin is not a member of are not theirs to see (D9).
+      // Requests of spaces and rooms are not theirs to see or answer (D9).
       const requests = await getPermissionManager().getAllPendingRequests(ctx.principal.userId);
       return {
         requests: requests.map((r) => ({
@@ -88,8 +88,8 @@ export const adminApprovalRoutes = new Elysia({ prefix: '/admin' })
       const refused = requireAdmin(ctx);
       if (refused) return refused;
       const { params, body, principal, request, socketAddress, set } = ctx;
-      // A request of a space the admin is not a member of is refused like a
-      // missing one (D9, I3): `resolveAsAdmin` never matches it.
+      // A request of a space or a room is refused like a missing one (D9,
+      // I3): `resolveAsAdmin` never matches it.
       const resolved = await getPermissionManager().resolveAsAdmin(params.id, body.approved, principal.userId, body.reason);
       if (!resolved) {
         set.status = 404;
@@ -127,7 +127,7 @@ export const adminApprovalRoutes = new Elysia({ prefix: '/admin' })
       if (refused) return refused;
       const visible: ReturnType<ReturnType<typeof getAgentService>['getPendingApprovals']> = [];
       for (const a of getAgentService().getPendingApprovals()) {
-        if (await adminMayAnswerSession(ctx.principal.userId, a.sessionId)) visible.push(a);
+        if (await adminMayAnswerSession(a.sessionId)) visible.push(a);
       }
       return {
         approvals: visible.map((a) => ({
@@ -150,10 +150,10 @@ export const adminApprovalRoutes = new Elysia({ prefix: '/admin' })
       const refused = requireAdmin(ctx);
       if (refused) return refused;
       const { params, body, principal, request, socketAddress, set } = ctx;
-      // An approval raised in a space the admin is not a member of is refused
-      // like a missing one (D9, I3).
+      // An approval raised in a space or a room is refused like a missing
+      // one (D9, I3).
       const pending = getAgentService().getPendingApprovals().find((a) => a.id === params.id);
-      if (pending && !(await adminMayAnswerSession(principal.userId, pending.sessionId))) {
+      if (pending && !(await adminMayAnswerSession(pending.sessionId))) {
         set.status = 404;
         return { error: 'Approval request not found or already resolved' };
       }

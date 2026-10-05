@@ -3,6 +3,8 @@ import { WorkspaceFS } from '@/security/workspace-fs';
 import { resolveSession, turnWorkspaceId } from '@/core/agent/session-resolver';
 import { isSessionControlMessage } from '@/core/session-controls';
 import { canActInSession } from '@/core/rooms/access';
+import { mentionsOctipus } from '@/core/rooms/service';
+import { API_SCOPES, scopesSatisfy } from '@/security/scopes';
 import { coreLogger } from '@/utils/logger';
 import { presenceAfterClose } from '@/core/rooms/presence';
 import { getCommandRegistry } from './commands';
@@ -153,6 +155,11 @@ export function wireMessageHandler(hub: GatewayHub): void {
   });
 
   hub.setMessageHandler(async (connectionId, context, message) => {
+    const scopeError = frameScopeError(context, message);
+    if (scopeError) {
+      hub.connectionManager.sendToConnection(connectionId, { type: 'error', code: 'FORBIDDEN', message: scopeError });
+      return;
+    }
     switch (message.type) {
       case 'chat.send':
         await handleChatSend(hub, connectionId, context, message);
@@ -227,6 +234,29 @@ export function wireMessageHandler(hub: GatewayHub): void {
         break;
     }
   });
+}
+
+/**
+ * Frames that drive the agent or answer its prompts — what `api:chat` covers
+ * on REST (`POST /api/chat`, `/chat/approve`, the learning toggle).
+ */
+const CHAT_FRAMES: ReadonlySet<string> = new Set([
+  'chat.send', 'chat.interject', 'chat.steer', 'command', 'permission.respond', 'approval.respond', 'voice.set',
+]);
+
+/**
+ * WS6 on the gateway: why a connection signed in with a scoped API token may
+ * not send `message`, or null. A frame that drives the agent needs
+ * `api:chat` — a room post too when it asks Octipus (the `addressed` toggle
+ * or an @octipus mention), as on `POST /api/spaces/:id/rooms/:roomId/messages`.
+ * Everything else is what REST lets any token do (reads, subscriptions,
+ * documents, room posts that do not ask the agent).
+ */
+export function frameScopeError(context: Pick<ConnectionContext, 'scopes'>, message: ClientMessage): string | null {
+  if (scopesSatisfy(context.scopes, API_SCOPES.CHAT)) return null;
+  const drives = CHAT_FRAMES.has(message.type)
+    || (message.type === 'room.post' && !message.content.trim().startsWith('/') && (message.addressed === true || mentionsOctipus(message.content)));
+  return drives ? `API token missing required scope "${API_SCOPES.CHAT}"` : null;
 }
 
 async function handleChatSend(

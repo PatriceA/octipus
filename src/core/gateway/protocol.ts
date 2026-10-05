@@ -48,6 +48,13 @@ export interface ConnectionContext {
    */
   workspaceId?: string;
   /**
+   * The API scopes of the token this connection signed in with (WS6), as on
+   * the REST principal. Unset (all scopes) for a browser session and an
+   * unscoped token; a frame that drives the agent needs `api:chat`
+   * (`frameScopeError`).
+   */
+  scopes?: readonly string[];
+  /**
    * The session this connection put into voice mode (`voice.set`): turn
    * events of that session are narrated to this connection as `voice.speak`.
    * Cleared on `voice.set {on:false}` and when the connection closes.

@@ -275,6 +275,7 @@ export class ConnectionManager {
     // connection comes from or which credential it used.
     const trustLevel: TrustLevel = 'user';
     let isAdmin = false;
+    let scopes: readonly string[] | undefined;
     let artifactId: string | undefined;
     let artifactTokenExp: number | undefined;
     // Taken before the credential is checked: see the re-check after
@@ -329,6 +330,8 @@ export class ConnectionManager {
               if (u) {
                 userId = u.id;
                 isAdmin = u.isAdmin;
+                // The token's scopes travel with the connection, as on REST.
+                scopes = validated.scopes;
                 break;
               }
             }
@@ -432,6 +435,7 @@ export class ConnectionManager {
         resources: new Set(),
         ...(artifactId !== undefined ? { artifactId } : {}),
         ...(workspaceId !== undefined ? { workspaceId } : {}),
+        ...(scopes && scopes.length > 0 ? { scopes } : {}),
         metadata: { isAdmin, clientVersion: msg.clientVersion },
       };
 

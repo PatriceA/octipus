@@ -107,7 +107,7 @@ export async function setUserActive(
   securityLogger.warn({ userId, active, source, actor }, active ? 'User re-activated' : 'User deactivated');
 
   await onUserChanged(userId);
-  const failedSteps = active ? [] : await applyDeactivation(userId);
+  const failedSteps = active ? await applyReactivation(userId) : await applyDeactivation(userId, actor ?? userId, source);
   return { status: 'changed', user: updated, failedSteps };
 }
 
@@ -116,13 +116,14 @@ export async function setUserActive(
  * failure is logged and its name returned (the flag itself is already off, and
  * every request re-reads it).
  */
-async function applyDeactivation(userId: string): Promise<string[]> {
+async function applyDeactivation(userId: string, actorId: string, source: ActiveSource): Promise<string[]> {
   const { getSessionManager } = await import('@/security/auth/session');
   const { closeUserSockets } = await import('@/api/user-sockets');
   const { getAgentManager } = await import('@/core/agent-manager');
   const { getPermissionManager } = await import('@/security/permissions');
   const { getAgentService } = await import('@/core/agent');
   const { getImpersonationManager } = await import('@/security/impersonation');
+  const { onAccountDeactivated } = await import('@/core/spaces/membership');
 
   const steps: Array<[string, () => Promise<unknown> | unknown]> = [
     ['revoke sessions', () => getSessionManager().revokeAllForUser(userId)],
@@ -131,13 +132,25 @@ async function applyDeactivation(userId: string): Promise<string[]> {
     ['expire permission requests', () => getPermissionManager().expireForUser(userId)],
     ['expire approvals', () => getAgentService().expireApprovalsForUser(userId, DEACTIVATED_MESSAGE)],
     ['end impersonations', () => getImpersonationManager().endForTarget(userId)],
+    // Room turns, space jobs, data sources and sponsored work (§4.1).
+    ['spaces', () => onAccountDeactivated(userId, { actorId, source })],
   ];
+  return runLifecycleSteps(userId, steps);
+}
+
+/** What a re-activation resumes: the space data sources the deactivation paused. */
+async function applyReactivation(userId: string): Promise<string[]> {
+  const { onAccountReactivated } = await import('@/core/spaces/membership');
+  return runLifecycleSteps(userId, [['spaces', () => onAccountReactivated(userId)]]);
+}
+
+async function runLifecycleSteps(userId: string, steps: Array<[string, () => Promise<unknown> | unknown]>): Promise<string[]> {
   const failed: string[] = [];
   for (const [name, run] of steps) {
     try {
       await run();
     } catch (err) {
-      securityLogger.error({ err, userId, step: name }, 'Deactivation step failed');
+      securityLogger.error({ err, userId, step: name }, 'Account lifecycle step failed');
       failed.push(name);
     }
   }

@@ -38,6 +38,7 @@ import { messages } from '@/db/schema/messages';
 import { workspaces } from '@/db/schema/organizations';
 import { type RoomMode, roomFeedback, roomModes } from '@/db/schema/rooms';
 import { sessions } from '@/db/schema/sessions';
+import { users } from '@/db/schema/users';
 import { SpaceError } from '@/security/space-access';
 import type { RoomModeView } from '@/shared/types';
 import { coreLogger } from '@/utils/logger';
@@ -174,7 +175,7 @@ export interface RoomListenTarget extends ListenTarget {
 
 /**
  * Rooms in listen or proactive mode whose space pays for unprompted work:
- * not archived, `agent_funding` other than `own`, a sponsor named.
+ * not archived, `agent_funding` other than `own`, an active sponsor named.
  */
 async function listenRooms(): Promise<RoomListenTarget[]> {
   const rows = await getDb()
@@ -182,12 +183,13 @@ async function listenRooms(): Promise<RoomListenTarget[]> {
     .from(roomModes)
     .innerJoin(sessions, and(eq(sessions.id, roomModes.sessionId), eq(sessions.kind, 'room')))
     .innerJoin(workspaces, eq(workspaces.id, sessions.workspaceId))
+    // An active local sponsor (a deactivated one is no sponsor).
+    .innerJoin(users, and(eq(users.id, workspaces.sponsorUserId), eq(users.isActive, true), eq(users.kind, 'local')))
     .where(and(
       ne(roomModes.mode, 'mention'),
       eq(workspaces.kind, 'shared'),
       isNull(workspaces.archivedAt),
       ne(workspaces.agentFunding, 'own'),
-      sql`${workspaces.sponsorUserId} IS NOT NULL`,
     ));
   return rows.map((r) => ({
     id: r.room.id,
@@ -343,7 +345,11 @@ export function roomListenDeps(): ListenDeps<RoomListenTarget> {
     },
     now: () => new Date(),
     listGroups: listenRooms,
-    isGroupActive: async () => true,
+    // The sponsor pays for the probe: a deactivated sponsor is no sponsor (`spaceFunding`).
+    isGroupActive: async (target) => {
+      const { spaceFunding } = await import('@/core/spaces/funding');
+      return (await spaceFunding(target.workspaceId)).sponsorUserId !== null;
+    },
     localTime: (now, tz) => ({ hour: localHour(now, tz), day: localDayKey(now, tz) }),
     threads: (_type, roomId, now) => roomThreads(roomId, now),
     mayRun: async (target, _sessionId, candidate) => {

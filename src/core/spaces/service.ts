@@ -107,28 +107,41 @@ function assertName(name: string): string {
 
 /**
  * `userId`'s membership of the shared workspace `workspaceId`, or null when
- * they are not a member, the workspace is not shared, or either id is not a
- * uuid. The only read of `workspace_members`.
+ * they are not a member, the workspace is not shared, either id is not a
+ * uuid, or the account is deactivated or not a local account. The only read
+ * of `workspace_members`.
+ *
+ * A deactivated account passes no space door (§4.1): its queued room turns,
+ * listen turns, data sources and wake-ups all re-read this and stop. A
+ * remote account (`kind = 'remote'`) is refused too: remote members get
+ * their membership through the federation transport (S7), which does not
+ * exist yet — until it does, no remote row may pass here.
  *
  * `lock` (inside a transaction) locks the membership row: `share` for an
  * actor's own rights, so a demotion or removal committing meanwhile waits
  * for the operation instead of racing it; `update` for a row about to change.
+ * `anyAccount` reads the row whatever the account's state — only for an
+ * owner managing that row (a deactivated member can still be removed or
+ * have their role changed), never for access.
  */
 export async function getMembership(
   userId: string,
   workspaceId: string,
   db: Executor = getDb(),
-  opts: { lock?: 'share' | 'update' } = {},
+  opts: { lock?: 'share' | 'update'; anyAccount?: boolean } = {},
 ): Promise<SpaceMembership | null> {
   if (!isUuid(userId) || !isUuid(workspaceId)) return null;
   const query = db
     .select({ role: workspaceMembers.role, scope: workspaceMembers.scope })
     .from(workspaceMembers)
     .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
+    .innerJoin(users, eq(users.id, workspaceMembers.userId))
     .where(and(
       eq(workspaceMembers.workspaceId, workspaceId),
       eq(workspaceMembers.userId, userId),
       eq(workspaces.kind, 'shared'),
+      opts.anyAccount ? undefined : eq(users.isActive, true),
+      opts.anyAccount ? undefined : eq(users.kind, 'local'),
     ))
     .limit(1);
   const [row] = opts.lock ? await query.for(opts.lock, { of: workspaceMembers }) : await query;
@@ -619,7 +632,7 @@ export async function setRole(
   const outcome = await getDb().transaction(async (tx) => {
     await authorize(actor, workspaceId, 'manage_members', tx);
     // Locked: a target leaving meanwhile waits, or is already gone here.
-    const target = await getMembership(targetUserId, workspaceId, tx, { lock: 'update' });
+    const target = await getMembership(targetUserId, workspaceId, tx, { lock: 'update', anyAccount: true });
     if (!target) throw new SpaceError('not_found', 'Member not found');
     const scope = role !== 'guest' ? null
       : input.scope != null ? await guestScopeForWrite(tx, workspaceId, input.scope)
@@ -674,7 +687,7 @@ export async function removeMember(actor: SpaceActor, workspaceId: string, targe
   if (targetUserId === actor.userId) return leaveSpace(actor, workspaceId);
   const sponsorLost = await getDb().transaction(async (tx) => {
     await authorize(actor, workspaceId, 'manage_members', tx);
-    const target = await getMembership(targetUserId, workspaceId, tx, { lock: 'update' });
+    const target = await getMembership(targetUserId, workspaceId, tx, { lock: 'update', anyAccount: true });
     if (!target) throw new SpaceError('not_found', 'Member not found');
     if (target.role === 'owner') await assertNotLastOwner(tx, workspaceId, targetUserId);
     await tx
@@ -702,7 +715,8 @@ export async function removeMember(actor: SpaceActor, workspaceId: string, targe
 /** Leave a space. The last owner cannot. */
 export async function leaveSpace(actor: SpaceActor, workspaceId: string, details: Record<string, unknown> = {}): Promise<MembershipChangeResult> {
   const sponsorLost = await getDb().transaction(async (tx) => {
-    const membership = await getMembership(actor.userId, workspaceId, tx, { lock: 'update' });
+    // An account being deleted may be deactivated already: its rows still go.
+    const membership = await getMembership(actor.userId, workspaceId, tx, { lock: 'update', anyAccount: details.accountDeleted === true });
     if (!membership) throw new SpaceError('not_found', 'Space not found');
     if (membership.role === 'owner') await assertNotLastOwner(tx, workspaceId, actor.userId);
     await tx
@@ -767,7 +781,7 @@ export async function addMemberInTx(
     .for('update');
   if (!space) throw new SpaceError('not_found', 'Space not found');
   if (space.archivedAt) throw new SpaceError('archived', 'This space is archived');
-  if (await getMembership(input.userId, workspaceId, tx)) return false;
+  if (await getMembership(input.userId, workspaceId, tx, { anyAccount: true })) return false;
   if ((await memberCount(workspaceId, tx)) >= getConfig().spaces.maxMembers) {
     throw new SpaceError('space_full', 'This space has reached its member limit');
   }

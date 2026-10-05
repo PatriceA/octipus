@@ -34,10 +34,10 @@ import { artifactDataSources } from '@/db/schema/artifact-data-sources';
 import { artifacts } from '@/db/schema/artifacts';
 import { backgroundJobs } from '@/db/schema/background-jobs';
 import { sessions } from '@/db/schema/sessions';
-import { workspaceMembers } from '@/db/schema/organizations';
+import { workspaceMembers, workspaces } from '@/db/schema/organizations';
 import { can } from '@/security/space-access';
 import { coreLogger } from '@/utils/logger';
-import { getMembership } from './service';
+import { getMembership, writeSpaceAudit } from './service';
 
 const versions = new Map<string, number>();
 const versionKey = (workspaceId: string, userId: string) => `${workspaceId}:${userId}`;
@@ -171,6 +171,67 @@ export async function onMembershipChanged(workspaceId: string, userId: string): 
       await dropMemberLeases(workspaceId, userId);
     }],
   ]);
+}
+
+/** The shared workspaces `userId` holds a membership row in, whatever their account's state. */
+async function spacesOf(userId: string): Promise<string[]> {
+  const rows = await getDb()
+    .select({ id: workspaceMembers.workspaceId })
+    .from(workspaceMembers)
+    .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
+    .where(and(eq(workspaceMembers.userId, userId), eq(workspaces.kind, 'shared')));
+  return rows.map((r) => r.id);
+}
+
+/**
+ * `userId`'s account was deactivated (§4.1): they pass no space door any
+ * more (`getMembership`), and what they left running or waiting stops now —
+ * their queued and running room turns everywhere, their queued background
+ * jobs and their data sources in every space; and in every space they
+ * sponsor, the sponsored work (an inactive sponsor is no sponsor:
+ * `spaceFunding`), with an audit row. Their rows stay: a reactivation
+ * resumes (`onAccountReactivated`). Throws (after every step) when a step
+ * failed.
+ */
+export async function onAccountDeactivated(userId: string, by: { actorId: string; source: string }): Promise<void> {
+  const spaces = await spacesOf(userId);
+  for (const workspaceId of spaces) bumpVersion(workspaceId, userId);
+  const sponsored = await getDb()
+    .select({ id: workspaces.id })
+    .from(workspaces)
+    .where(and(eq(workspaces.sponsorUserId, userId), eq(workspaces.kind, 'shared')));
+  await runSteps('Account deactivation', { userId }, [
+    ['room turns', async () => {
+      const { dropAllRoomTurnsOf } = await import('@/core/rooms/queue');
+      await dropAllRoomTurnsOf(userId);
+    }],
+    ['cancel queued jobs', async () => {
+      for (const workspaceId of spaces) await cancelQueuedJobs(workspaceId, userId);
+    }],
+    ['pause data sources', async () => {
+      for (const workspaceId of spaces) await syncDataSources(workspaceId, userId);
+    }],
+    ['pause sponsored work', async () => {
+      const { pauseSponsoredWork } = await import('./funding');
+      for (const { id: workspaceId } of sponsored) {
+        await pauseSponsoredWork(workspaceId);
+        await writeSpaceAudit(getDb(), {
+          actorId: by.actorId,
+          action: 'space_updated',
+          workspaceId,
+          details: { field: 'funding', reason: 'sponsor_deactivated', sponsor: userId, source: by.source },
+        });
+      }
+    }],
+  ]);
+}
+
+/** `userId`'s account was re-activated: the data sources a deactivation paused resume. */
+export async function onAccountReactivated(userId: string): Promise<void> {
+  for (const workspaceId of await spacesOf(userId)) {
+    bumpVersion(workspaceId, userId);
+    await syncDataSources(workspaceId, userId);
+  }
 }
 
 /** A member joined `workspaceId` or was upgraded. */

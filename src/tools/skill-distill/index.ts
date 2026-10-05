@@ -1,9 +1,12 @@
-import type { ToolManifest } from '@/core/types';
+import { isSharedWorkspace } from '@/core/spaces/service';
+import type { AgentContext, ToolManifest } from '@/core/types';
 import { messageRepository } from '@/db/repositories/message-repository';
-import { trajectoryRepository } from '@/db/repositories/trajectory-repository';
+import { scopedRepos } from '@/db/repositories/scoped';
+import { sessionRepository } from '@/db/repositories/session-repository';
 import { verificationEvidenceRepository } from '@/db/repositories/verification-evidence-repository';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
+import { agentPrincipal } from '@/security/principal';
 import { toolLogger } from '@/utils/logger';
 import { BaseTool, createParameterSchema } from '../base-tool';
 import { interpretDistillOutput, SKILL_DISTILL_SYSTEM_PROMPT } from './distiller';
@@ -76,7 +79,7 @@ export class SkillDistillTool extends BaseTool {
           if (!material) return { error: "source='text' requires a non-empty `content`" };
           sourceRef = 'text';
         } else if (source === 'trajectory') {
-          const gathered = await this.gatherTrajectory(String(args.ref ?? '').trim());
+          const gathered = await this.gatherTrajectory(String(args.ref ?? '').trim(), context);
           if ('error' in gathered) return gathered.error;
           material = gathered.material;
           sourceRef = gathered.sourceRef;
@@ -143,11 +146,24 @@ export class SkillDistillTool extends BaseTool {
    */
   private async gatherTrajectory(
     ref: string,
+    context: AgentContext,
   ): Promise<{ material: string; sourceRef: string } | { error: Record<string, unknown> }> {
     if (!ref) return { error: { error: "source='trajectory' requires `ref` (a trajectory run id)" } };
+    // A proposal is personal: a space's runs never become one (I2, I9).
+    if (context.space) {
+      return { error: { error: "source='trajectory' is not available in a shared space: a skill proposal is personal" } };
+    }
 
-    const run = await trajectoryRepository.findById(ref);
+    // The caller's own runs of their personal scope only (`scopedRepos`): never
+    // another user's, never a space's.
+    const run = await scopedRepos(agentPrincipal(context)).trajectories.findById(ref);
     if (!run) return { error: { error: `Trajectory run ${ref} not found` } };
+    // A run recorded before its workspace was stored has none: its root
+    // session tells. A room or a space session is not personal material.
+    const session = await sessionRepository.findById(run.rootSessionId);
+    if (session && (session.kind === 'room' || (session.workspaceId && (await isSharedWorkspace(session.workspaceId))))) {
+      return { error: { error: `Trajectory run ${ref} belongs to a shared space: it cannot be distilled into a personal skill` } };
+    }
 
     if (run.outcome !== 'success') {
       return { error: { distilled: false, message: `Trajectory outcome is '${run.outcome}', not 'success' — skipped.` } };

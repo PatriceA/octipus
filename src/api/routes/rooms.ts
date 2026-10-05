@@ -10,12 +10,15 @@ import {
   listRoomMessages,
   listRooms,
   markRoomRead,
+  mentionsOctipus,
   removeRoomMember,
   requireRoom,
   setRoomMuted,
   updateRoom,
 } from '@/core/rooms/service';
 import { addSpaceMemory, listSpaceMemory, retractSpaceMemory } from '@/core/spaces/memory';
+import { requireScope } from '@/security/principal';
+import { API_SCOPES } from '@/security/scopes';
 import { SpaceError } from '@/security/space-access';
 import { handle } from './spaces';
 
@@ -94,6 +97,12 @@ export const roomRoutes = new Elysia({ prefix: '/spaces' })
     '/:id/rooms/:roomId/messages',
     (ctx) => handle(ctx, async (actor) => {
       const content = ctx.body.content.trim();
+      // WS6: a post that asks the agent drives it (tools, spend) like a chat
+      // message, so an API token needs `api:chat` for it, as on /api/chat.
+      if (!content.startsWith('/') && (ctx.body.addressed === true || mentionsOctipus(content)) && !requireScope(ctx.principal, API_SCOPES.CHAT)) {
+        ctx.set.status = 403;
+        return { error: `API token missing required scope "${API_SCOPES.CHAT}"`, code: 'missing_scope' };
+      }
       if (content.startsWith('/')) {
         // A command: answered to the poster, never stored (as on the socket).
         await requireRoom(actor, ctx.params.id, ctx.params.roomId);
