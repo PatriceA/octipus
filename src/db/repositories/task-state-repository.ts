@@ -82,14 +82,15 @@ export class TaskStateRepository {
 
   /**
    * Recent tasks in a session, newest first. Sibling-discovery primary
-   * use case: an agent asks "what did my peers just finish?".
+   * use case: an agent asks "what did my peers just finish?". `userId`
+   * keeps the rows of that user's turns only.
    */
-  async listSessionRecent(sessionId: string, limit = 50): Promise<TaskState[]> {
+  async listSessionRecent(sessionId: string, limit = 50, opts: { userId?: string } = {}): Promise<TaskState[]> {
     return this.db
       .select()
       // i2: session task state by id or session, for the runtime that owns the session
       .from(taskState)
-      .where(eq(taskState.sessionId, sessionId))
+      .where(and(eq(taskState.sessionId, sessionId), opts.userId ? eq(taskState.userId, opts.userId) : undefined))
       .orderBy(desc(taskState.createdAt))
       .limit(limit);
   }

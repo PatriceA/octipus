@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Eye, EyeOff, Loader2 } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { isSafeReturnTo } from '../../../src/shared/return-to';
 import type { RegistrationInfo } from '../../../src/shared/spaces';
 import { ApiError, api } from '@/lib/api';
@@ -28,6 +29,15 @@ interface SignInResponse {
   error?: string;
 }
 
+/**
+ * What another page hands the login page in the history state: where to go
+ * after signing in, and the invite token to redeem with a new account.
+ */
+export interface LoginNavigationState {
+  returnTo?: string;
+  invite?: string;
+}
+
 /** A 401 that asks for the second factor rather than rejecting the password. */
 function isTotpChallenge(err: unknown): boolean {
   return err instanceof ApiError && err.status === 401 && err.body.requiresTOTP === true;
@@ -39,12 +49,15 @@ export default function LoginPage() {
   // `?returnTo=` is attacker-controllable; anything but a same-origin path is
   // ignored. Captured once: the server echoes back what it validated.
   const searchParams = useSearchParams();
-  const requestedReturnTo = searchParams.get('returnTo');
+  // The invite page passes its return path and token in the history state,
+  // never in this page's URL (the token is a bearer secret).
+  const navState = (useLocation().state ?? null) as LoginNavigationState | null;
+  const requestedReturnTo = typeof navState?.returnTo === 'string' ? navState.returnTo : searchParams.get('returnTo');
   const [returnTo] = useState(() => (isSafeReturnTo(requestedReturnTo) ? requestedReturnTo : undefined));
   // `?mode=register` opens on the register tab (the invite page's Register link).
   const [isLogin, setIsLogin] = useState(() => searchParams.get('mode') !== 'register');
-  // `?invite=<token>`: the invite link the visitor came from, redeemed with the account (S6).
-  const [inviteToken] = useState(() => searchParams.get('invite') ?? undefined);
+  // The invite link the visitor came from, redeemed with the account (S6).
+  const [inviteToken] = useState(() => (typeof navState?.invite === 'string' && navState.invite ? navState.invite : undefined));
   // The install's registration mode (`security.registration`): closed hides
   // registering, invite_only needs an invite link. The first account always may.
   const registration = useQuery({

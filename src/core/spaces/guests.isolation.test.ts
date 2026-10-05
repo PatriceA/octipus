@@ -5,7 +5,8 @@
  *
  * Space "Launch": rooms General (open), Client (open) and Leads (private,
  * owner and editor). Guest `gina` has the scope { rooms: [Client], folders:
- * [client] }; guest `gus` has { rooms: [Leads], folders: [] }.
+ * [client] }; guest `gus` has { rooms: [Leads], folders: [] }; guest `gail`
+ * has the empty scope.
  *
  *   - scope writes are validated (shape, rooms of this space, guests only);
  *   - rooms: gina lists and enters Client only, posts there, nowhere else;
@@ -25,7 +26,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 
 const rand = (n: number) => randomBytes(n).toString('hex');
 process.env.MASTER_KEY ??= `test-master-${rand(24)}`;
@@ -33,7 +34,7 @@ process.env.JWT_SECRET ??= `test-jwt-${rand(24)}`;
 process.env.SESSION_SECRET ??= `test-session-${rand(24)}`;
 process.env.LOG_LEVEL ??= 'error';
 
-const ids = { owner: randomUUID(), editor: randomUUID(), viewer: randomUUID(), gina: randomUUID(), gus: randomUUID(), stranger: randomUUID() };
+const ids = { owner: randomUUID(), editor: randomUUID(), viewer: randomUUID(), gina: randomUUID(), gus: randomUUID(), gail: randomUUID(), stranger: randomUUID() };
 type Who = keyof typeof ids;
 
 type App = { handle(request: Request): Promise<Response> };
@@ -102,6 +103,8 @@ beforeAll(async () => {
   leadsId = (await json(await call('owner', 'POST', `/api/spaces/${spaceId}/rooms`, { body: { title: 'Leads', visibility: 'private', memberIds: [ids.editor] }, space: null }), 201)).id;
   await joinAs('gina', 'guest', { rooms: [clientId], folders: ['client'] });
   await joinAs('gus', 'guest', { rooms: [leadsId], folders: [] });
+  // gail has been given nothing yet: no room, no folder.
+  await joinAs('gail', 'guest', { rooms: [], folders: [] });
 
   otherSpaceId = (await json(await call('stranger', 'POST', '/api/spaces', { body: { name: 'Elsewhere' }, space: null }), 201)).id;
   [{ id: otherRoomId }] = await q<{ id: string }>(`SELECT id FROM sessions WHERE workspace_id = $1 AND kind = 'room'`, [otherSpaceId]);
@@ -144,6 +147,17 @@ describe('scope writes', () => {
     expect(asOwner.members.find((m) => m.userId === ids.gina)?.scope).toEqual({ rooms: [clientId], folders: ['client'] });
     const asEditor = await json<{ members: Array<{ userId: string; scope?: unknown }> }>(await call('editor', 'GET', `/api/spaces/${spaceId}/members`, { space: null }));
     expect(asEditor.members.find((m) => m.userId === ids.gina)?.scope).toBeUndefined();
+  });
+
+  test('a folder whose note-slug form differs from its own segments is refused', async () => {
+    const invite = (folders: string[]) => call('owner', 'POST', `/api/spaces/${spaceId}/invites`, { body: { role: 'guest', scope: { rooms: [], folders } }, space: null });
+    // `日本/acme` would match the notes under `acme/`; `€/x` those under `x/`; `private/€` all of `private/`.
+    for (const folder of ['日本/acme', '€/x', 'private/€', 'a/-b']) expect((await invite([folder])).status, folder).toBe(400);
+    // Spelled differently from its slug is fine when every segment keeps one.
+    expect((await invite(['Client Docs/Specs'])).status).toBe(201);
+    const { normalizeGuestFolder } = await import('@/security/space-access');
+    expect(normalizeGuestFolder('日本/acme')).toBeNull();
+    expect(normalizeGuestFolder('/client/specs/')).toBe('client/specs');
   });
 
   test('a guest cannot be put in a private room by its member list (their rooms are their scope)', async () => {
@@ -226,7 +240,19 @@ describe('content', () => {
       await getDocHub().join({ connectionId: 'guest-test-1', userId: ids.gina }, planId);
       expect(sent.at(-1)).toMatchObject({ type: 'doc.error', code: 'NOT_FOUND' });
       await getDocHub().join({ connectionId: 'guest-test-2', userId: ids.gina }, briefId);
-      expect(sent.some((m) => m.type === 'doc.state' || m.type === 'doc.joined' || m.readOnly === true)).toBe(true);
+      const sync = sent.find((m) => m.type === 'doc.sync' && m.noteId === briefId);
+      expect(sync).toMatchObject({ readOnly: true });
+      // A guest's edit is refused, whatever the client says.
+      const Y = await import('yjs');
+      const ydoc = new Y.Doc();
+      Y.applyUpdate(ydoc, new Uint8Array(Buffer.from(sync!.state as string, 'base64')));
+      const before = Y.encodeStateVector(ydoc);
+      ydoc.getText('body').insert(0, 'guest was here ');
+      const update = Buffer.from(Y.encodeStateAsUpdate(ydoc, before)).toString('base64');
+      sent.length = 0;
+      await getDocHub().update({ connectionId: 'guest-test-2', userId: ids.gina }, briefId, sync!.epoch as string, update);
+      expect(sent.at(-1)).toMatchObject({ type: 'doc.error', code: 'FORBIDDEN' });
+      expect(getDocHub().readLive(briefId)?.text ?? '').not.toContain('guest was here');
       await getDocHub().leave('guest-test-2', briefId);
     } finally {
       getGatewayHub().connectionManager.sendToConnection = original;
@@ -426,6 +452,303 @@ describe('presence', () => {
       expect(changed(gina)).toEqual([inScope.id]);
     } finally {
       for (const t of tabs) hub.connectionManager.handleClose(t.id, 1000, 'test');
+    }
+  });
+
+  test('a scope change takes effect at once: the room, the open note, the running work, presence', async () => {
+    const { getGatewayHub } = await import('@/core/gateway/hub');
+    const hub = getGatewayHub();
+    const { getAgentManager } = await import('@/core/agent-manager');
+    const stopped = vi.spyOn(getAgentManager(), 'stopWorkspace');
+    const { getDocHub } = await import('@/core/docs');
+    const patchGina = (scope: unknown) => call('owner', 'PATCH', `/api/spaces/${spaceId}/members/${ids.gina}`, { body: { role: 'guest', scope }, space: null });
+    const tabs: Tab[] = [];
+    try {
+      const gina = await tab(ids.gina);
+      const viewer = await tab(ids.viewer);
+      tabs.push(gina, viewer);
+      for (const t of tabs) await t.send({ type: 'space.subscribe', spaceId });
+      await gina.send({ type: 'room.subscribe', roomId: clientId });
+      await waitFor(() => gina.frames.find((f) => f.type === 'subscribed' && f.resources?.includes(`room:${clientId}`)), 'gina in Client');
+      await getDocHub().join({ connectionId: gina.id, userId: ids.gina }, briefId);
+      await waitFor(() => gina.frames.find((f) => f.type === 'doc.sync' && f.noteId === briefId), 'the brief open');
+      await waitFor(() => seen(lastPresence(gina.frames)) === [ids.viewer, ids.gina].sort().join(','), 'gina sees the viewer');
+
+      // The owner takes Client and the folder away.
+      await json(await patchGina({ rooms: [], folders: [] }));
+      await waitFor(() => gina.frames.find((f) => f.type === 'event' && f.event.type === 'room.removed' && f.event.payload.roomId === clientId), 'room.removed');
+      expect(hub.connectionManager.getConnection(gina.id)?.context.resources.has(`room:${clientId}`)).toBe(false);
+      await waitFor(() => gina.frames.find((f) => f.type === 'doc.closed' && f.noteId === briefId), 'doc.closed');
+      expect(getDocHub().openDocsFor(ids.gina, spaceId)).toEqual([]);
+      expect(stopped).toHaveBeenCalledWith(spaceId, ids.gina);
+      await waitFor(() => seen(lastPresence(gina.frames)) === ids.gina, 'gina\'s view is herself only');
+    } finally {
+      stopped.mockRestore();
+      for (const t of tabs) hub.connectionManager.handleClose(t.id, 1000, 'test');
+      await json(await patchGina({ rooms: [clientId], folders: ['client'] }));
+    }
+  });
+});
+
+describe('space metadata, activity and budget', () => {
+  test('GET /spaces/:id and the space list: a guest sees the members of their rooms only', async () => {
+    const asGina = await json(await call('gina', 'GET', `/api/spaces/${spaceId}`, { space: null }));
+    // Client is open: every non-guest member, and gina.
+    expect(asGina).toMatchObject({ role: 'guest', memberCount: 4, createdBy: ids.owner, sponsorModels: [] });
+    const asGail = await json(await call('gail', 'GET', `/api/spaces/${spaceId}`, { space: null }));
+    expect(asGail).toMatchObject({ role: 'guest', memberCount: 1, createdBy: null, sponsorUserId: null });
+    const listed = await json<{ spaces: Array<{ id: string; memberCount: number; createdBy: string | null }> }>(await call('gail', 'GET', '/api/spaces', { space: null }));
+    expect(listed.spaces.find((x) => x.id === spaceId)).toMatchObject({ memberCount: 1, createdBy: null });
+    const asViewer = await json(await call('viewer', 'GET', `/api/spaces/${spaceId}`, { space: null }));
+    expect(asViewer).toMatchObject({ memberCount: 6, createdBy: ids.owner });
+  });
+
+  test('budgets: forbidden to guests', async () => {
+    expect((await call('gina', 'GET', `/api/spaces/${spaceId}/budget`, { space: null })).status).toBe(403);
+    expect((await call('viewer', 'GET', `/api/spaces/${spaceId}/budget`, { space: null })).status).toBe(200);
+  });
+
+  test('activity: a guest gets the rows about their rooms only, actors they may see only', async () => {
+    type Entry = { action: string; userId: string | null; username: string | null; resourceType: string | null; resourceId: string | null; details: Record<string, unknown> | null };
+    const rows = async (who: Who) => (await json<{ activity: Entry[] }>(await call(who, 'GET', `/api/spaces/${spaceId}/activity?limit=200`, { space: null }))).activity;
+    const all = await rows('viewer');
+    expect(all.some((e) => e.action === 'space_invite_created')).toBe(true);
+    expect(all.some((e) => e.resourceId === leadsId)).toBe(true);
+
+    const gina = await rows('gina');
+    expect(gina.length).toBeGreaterThan(0);
+    for (const e of gina) expect(e).toMatchObject({ resourceType: 'room', resourceId: clientId });
+    expect(gina.find((e) => e.details?.created)).toMatchObject({ userId: ids.owner, username: 'g-owner' });
+    expect(await rows('gail')).toEqual([]);
+
+    // A row on Leads by someone outside it (here, the viewer), made while
+    // impersonated: gus sees the row, not who acted, not the admin, and only
+    // the room members he may see.
+    await q(`INSERT INTO audit_log (user_id, action, resource_type, resource_id, workspace_id, details) VALUES ($1, 'space_content_changed', 'room', $2, $3, $4)`,
+      [ids.viewer, leadsId, spaceId, JSON.stringify({ impersonatedBy: 'some-admin', members: [ids.owner, ids.viewer] })]);
+    const gus = await rows('gus');
+    for (const e of gus) expect(e).toMatchObject({ resourceType: 'room', resourceId: leadsId });
+    const injected = gus.find((e) => Array.isArray(e.details?.members) && !e.details?.created);
+    expect(injected).toMatchObject({ userId: null, username: null, details: { members: [ids.owner] } });
+    expect(injected?.details).not.toHaveProperty('impersonatedBy');
+  });
+
+  test('file leases: a holder outside the guest\'s rooms is not named', async () => {
+    const patch = (scope: unknown) => call('owner', 'PATCH', `/api/spaces/${spaceId}/members/${ids.gail}`, { body: { role: 'guest', scope }, space: null });
+    await json(await patch({ rooms: [], folders: ['client'] }));
+    try {
+      const { leases } = await json<{ leases: Array<{ path: string; holderUserId: string | null; holderName: string | null }> }>(await call('gail', 'GET', `/api/spaces/${spaceId}/file-leases`, { space: null }));
+      expect(leases).toEqual([expect.objectContaining({ path: 'client/spec.md', holderUserId: null, holderName: null })]);
+      const asGina = await json<{ leases: Array<{ holderUserId: string | null }> }>(await call('gina', 'GET', `/api/spaces/${spaceId}/file-leases`, { space: null }));
+      expect(asGina.leases.map((l) => l.holderUserId)).toEqual([ids.editor]);
+    } finally {
+      await json(await patch({ rooms: [], folders: [] }));
+    }
+  });
+
+  test('the document hub sends a guest the cursors of the members of their rooms only', async () => {
+    const { getDocHub } = await import('@/core/docs');
+    const { getGatewayHub } = await import('@/core/gateway/hub');
+    const { Awareness, encodeAwarenessUpdate, applyAwarenessUpdate } = await import('y-protocols/awareness');
+    const Y = await import('yjs');
+    const patch = (scope: unknown) => call('owner', 'PATCH', `/api/spaces/${spaceId}/members/${ids.gail}`, { body: { role: 'guest', scope }, space: null });
+    await json(await patch({ rooms: [], folders: ['client'] }));
+    const inbox = new Map<string, Array<Record<string, any>>>();
+    const cm = getGatewayHub().connectionManager;
+    const original = cm.sendToConnection.bind(cm);
+    cm.sendToConnection = (connectionId: string, message: unknown) => {
+      if (connectionId.startsWith('aw-test-')) { (inbox.get(connectionId) ?? inbox.set(connectionId, []).get(connectionId)!).push(message as Record<string, any>); return true; }
+      return original(connectionId, message as never);
+    };
+    // The cursor clients a connection was told about, by owner name.
+    const names = (connectionId: string) => {
+      const doc = new Y.Doc();
+      const seen = new Awareness(doc);
+      for (const m of inbox.get(connectionId) ?? []) if (m.type === 'doc.awareness') applyAwarenessUpdate(seen, new Uint8Array(Buffer.from(m.update, 'base64')), 'server');
+      return [...seen.getStates().values()].map((st) => (st.user as { name?: string } | undefined)?.name).filter(Boolean).sort();
+    };
+    const cursor = (clientId: number, connectionId: string) => {
+      const doc = new Y.Doc();
+      doc.clientID = clientId;
+      const a = new Awareness(doc);
+      a.setLocalState({ cursor: 1 });
+      return getDocHub().awareness({ connectionId, userId: connectionId === 'aw-test-editor' ? ids.editor : connectionId === 'aw-test-gina' ? ids.gina : ids.gail }, briefId, Buffer.from(encodeAwarenessUpdate(a, [clientId])).toString('base64'));
+    };
+    try {
+      await getDocHub().join({ connectionId: 'aw-test-editor', userId: ids.editor }, briefId);
+      await getDocHub().join({ connectionId: 'aw-test-gina', userId: ids.gina }, briefId);
+      await getDocHub().join({ connectionId: 'aw-test-gail', userId: ids.gail }, briefId);
+      await cursor(9101, 'aw-test-editor');
+      await cursor(9102, 'aw-test-gina');
+      await cursor(9103, 'aw-test-gail');
+      // gina (Client is open) sees the editor's cursor; gail (no room) sees
+      // her own only; the editor sees everyone.
+      expect(names('aw-test-gina')).toEqual(['g-editor']);
+      expect(names('aw-test-gail')).toEqual([]);
+      expect(names('aw-test-editor')).toEqual(['g-gail', 'g-gina']);
+    } finally {
+      for (const c of ['aw-test-editor', 'aw-test-gina', 'aw-test-gail']) await getDocHub().leave(c, briefId);
+      cm.sendToConnection = original;
+      await json(await patch({ rooms: [], folders: [] }));
+    }
+  });
+});
+
+describe('the repo registry and the workspace routes', () => {
+  const guestSpace = () => ({ workspaceId: spaceId, role: 'guest' as const, scope: { rooms: [clientId], folders: ['client'] } });
+
+  beforeAll(() => {
+    // Two repositories at the top of the space: one in gina's folder, one not.
+    writeFileSync(join(filesRoot, 'client', 'package.json'), JSON.stringify({ name: '@launch/client' }));
+    writeFileSync(join(filesRoot, 'internal', 'package.json'), JSON.stringify({ name: '@launch/internal' }));
+  });
+
+  test('/api/workspace is not a space route: with the space header it acts in the caller\'s own workspace', async () => {
+    const listed = await json<{ repositories: Array<{ name: string; path: string }> }>(await call('gina', 'GET', '/api/workspace/repositories'));
+    expect(listed.repositories.every((r) => !r.path.startsWith(filesRoot))).toBe(true);
+    const created = await json<{ path: string }>(await call('gina', 'POST', '/api/workspace/repositories', { body: { name: 'gina-own' } }));
+    expect(created.path.startsWith(filesRoot)).toBe(false);
+    const scanned = await json<{ repos: Array<{ name: string }> }>(await call('gina', 'POST', '/api/workspace/repos/scan'));
+    expect(scanned.repos.map((r) => r.name)).not.toContain('internal');
+  });
+
+  test('in a space, scanning needs the write right, and the membership', async () => {
+    const { scanUserRepos, loadRepoGraph } = await import('@/core/repos/registry-service');
+    for (const role of ['viewer', 'commenter'] as const) {
+      await expect(scanUserRepos({ userId: ids.viewer, workspaceId: spaceId, space: { workspaceId: spaceId, role, scope: null } })).rejects.toMatchObject({ code: 'forbidden_role' });
+    }
+    await expect(scanUserRepos({ userId: ids.gina, workspaceId: spaceId, space: guestSpace() })).rejects.toMatchObject({ code: 'forbidden_role' });
+    // A space named without the membership is refused, never read as the whole space.
+    await expect(loadRepoGraph({ userId: ids.editor, workspaceId: spaceId })).rejects.toMatchObject({ code: 'forbidden_role' });
+    const scanned = await scanUserRepos({ userId: ids.editor, workspaceId: spaceId, space: { workspaceId: spaceId, role: 'editor', scope: null } });
+    expect(scanned.map((r) => r.name)).toEqual(expect.arrayContaining(['client', 'internal']));
+  });
+
+  test('a guest reads only the repositories under their folders, and no remote URL carries credentials', async () => {
+    const { repoRegistryRepository } = await import('@/db/repositories/repo-registry-repository');
+    // gina's registry rows (written before she was a guest): one in her folder, one not.
+    for (const name of ['client', 'internal']) {
+      await repoRegistryRepository.upsert({
+        userId: ids.gina, workspaceId: spaceId, name, rootPath: join(filesRoot, name), kind: 'library', languages: [],
+        dependencies: [], hasAgentsMd: false, remoteUrl: 'https://bot:s3cr3t-token@git.example.com/launch.git', lastScannedAt: new Date(),
+      });
+    }
+    const { loadRepoGraph } = await import('@/core/repos/registry-service');
+    expect((await loadRepoGraph({ userId: ids.gina, workspaceId: spaceId, space: guestSpace() })).repos.map((r) => r.name)).toEqual(['client']);
+
+    // The agent's tool (a guest's turn is refused it by the approval path; an
+    // editor's) shows no credentials either.
+    await q(`UPDATE workspace_repos SET remote_url = 'https://bot:s3cr3t-token@git.example.com/launch.git' WHERE user_id = $1 AND name = 'client'`, [ids.editor]);
+    const { repoRegistryTool } = await import('@/tools/repo-registry');
+    await repoRegistryTool.initialize();
+    const handlers = new Map(repoRegistryTool.getToolHandlers().map((h) => [h.name.replace('repo_registry__', ''), h]));
+    const { buildAgentContext } = await import('@/core/agent/context');
+    const context = buildAgentContext({
+      sessionId: clientId, userId: ids.editor, topic: 'general', model: 'm', role: 'general',
+      scope: { workspaceId: spaceId, space: { workspaceId: spaceId, role: 'editor', scope: null }, trigger: 'room', funding: 'own' },
+    });
+    const unwrap = (r: any) => (r && typeof r === 'object' && 'data' in r ? r.data : r);
+    const detail = unwrap(await handlers.get('get_repo')!.execute({ repo: join(filesRoot, 'client') }, context));
+    expect(detail.remoteUrl).toBe('https://git.example.com/launch.git');
+
+    // And the REST detail of a personal repository.
+    const { redactRemoteUrl } = await import('@/core/repos/registry-service');
+    expect(redactRemoteUrl('https://user:tok@host/x.git')).toBe('https://host/x.git');
+    expect(redactRemoteUrl('ssh://git@host:22/x.git')).toBe('ssh://host:22/x.git');
+    expect(redactRemoteUrl('git@host:x.git')).toBe('git@host:x.git');
+    const { WorkspaceFS } = await import('@/security/workspace-fs');
+    const { agentPrincipal } = await import('@/security/principal');
+    const personal = WorkspaceFS.forPrincipal(agentPrincipal({ userId: ids.editor, workspaceId: (await q<{ id: string }>(`SELECT id FROM workspaces WHERE user_id = $1 AND is_default`, [ids.editor]))[0].id }));
+    mkdirSync(join(personal.root, 'tool'), { recursive: true });
+    writeFileSync(join(personal.root, 'tool', 'package.json'), JSON.stringify({ name: 'tool' }));
+    await json(await call('editor', 'POST', '/api/workspace/repos/scan', { space: null }));
+    await q(`UPDATE workspace_repos SET remote_url = 'https://bot:s3cr3t-token@git.example.com/tool.git' WHERE user_id = $1 AND name = 'tool'`, [ids.editor]);
+    const { repos } = await json<{ repos: Array<{ id: string; name: string }> }>(await call('editor', 'GET', '/api/workspace/repos', { space: null }));
+    const tool = repos.find((r) => r.name === 'tool')!;
+    expect((await json<{ remoteUrl: string }>(await call('editor', 'GET', `/api/workspace/repos/${tool.id}`, { space: null }))).remoteUrl).toBe('https://git.example.com/tool.git');
+  });
+
+  test('the root agent\'s project list shows a guest their folders only', async () => {
+    const { projectListing } = await import('@/core/agent/agents-md');
+    const { WorkspaceFS } = await import('@/security/workspace-fs');
+    expect(projectListing(WorkspaceFS.forSpace(spaceId, { guestFolders: ['client'] }))).toEqual(['  - client/']);
+    expect(projectListing(WorkspaceFS.forSpace(spaceId, { guestFolders: [] }))).toEqual([]);
+    expect(projectListing(WorkspaceFS.forSpace(spaceId))).toEqual(expect.arrayContaining(['  - client/', '  - internal/']));
+  });
+});
+
+describe('the agent\'s task_state tools', () => {
+  test('a guest\'s turn reads the rows of their own turns only; a member\'s reads the room\'s', async () => {
+    const { taskStateTool } = await import('@/tools/task-state');
+    await taskStateTool.initialize();
+    const handlers = new Map(taskStateTool.getToolHandlers().map((h) => [h.name.replace('task_state__', ''), h]));
+    const [editorRow] = await q<{ id: string }>(`INSERT INTO task_state (session_id, user_id, workspace_id, owner_agent, task_kind, status, outputs) VALUES ($1, $2, $3, 'research', 'agent_output', 'done', $4) RETURNING id`,
+      [clientId, ids.editor, spaceId, JSON.stringify({ text: 'internal/plan.md says: secret plan' })]);
+    const [ginaRow] = await q<{ id: string }>(`INSERT INTO task_state (session_id, user_id, workspace_id, owner_agent, task_kind, status, outputs) VALUES ($1, $2, $3, 'research', 'agent_output', 'done', $4) RETURNING id`,
+      [clientId, ids.gina, spaceId, JSON.stringify({ text: 'the client brief, summarised' })]);
+    const { buildAgentContext } = await import('@/core/agent/context');
+    const context = (userId: string, space: { role: 'guest' | 'editor'; scope: { rooms: string[]; folders: string[] } | null }) => buildAgentContext({
+      sessionId: clientId, userId, topic: 'general', model: 'm', role: 'general',
+      scope: { workspaceId: spaceId, space: { workspaceId: spaceId, ...space }, trigger: 'room', funding: 'own' },
+    });
+    const gina = context(ids.gina, { role: 'guest', scope: { rooms: [clientId], folders: ['client'] } });
+    const editor = context(ids.editor, { role: 'editor', scope: null });
+    const run = (name: string, args: Record<string, unknown>, ctx: ReturnType<typeof context>) => handlers.get(name)!.execute(args, ctx) as Promise<any>;
+    const unwrap = (r: any) => (r && typeof r === 'object' && 'data' in r ? r.data : r);
+
+    const listed = unwrap(await run('list_recent_session_tasks', {}, gina));
+    expect(listed.tasks.map((t: { id: string }) => t.id)).toEqual([ginaRow.id]);
+    expect(unwrap(await run('read_task_state', { id: editorRow.id }, gina))).toMatchObject({ error: 'Task is not in the current session.' });
+    expect(unwrap(await run('read_task_state', { id: ginaRow.id }, gina))).toMatchObject({ id: ginaRow.id });
+    const asEditor = unwrap(await run('list_recent_session_tasks', {}, editor));
+    expect(asEditor.tasks.map((t: { id: string }) => t.id).sort()).toEqual([editorRow.id, ginaRow.id].sort());
+    expect(unwrap(await run('read_task_state', { id: editorRow.id }, editor))).toMatchObject({ outputs: { text: expect.stringContaining('secret plan') } });
+  });
+});
+
+describe('search', () => {
+  test('global search and hybrid knowledge search: the guest\'s chunks only', async () => {
+    const mine = [`note:${briefId}`, join(filesRoot, 'client', 'spec.md')];
+    // `/api/search` is not a space route: with the space header it searches
+    // the caller's own workspace, never the space's chunks.
+    const { results } = await json<{ results: Array<{ type: string; title: string }> }>(await call('gina', 'GET', '/api/search?q=chunk&limit=50'));
+    const knowledge = results.filter((r) => r.type === 'knowledge').map((r) => r.title);
+    expect(knowledge.filter((title) => title.startsWith('note:') || title.startsWith(filesRoot))).toEqual([]);
+
+    const { getEmbeddingService } = await import('@/core/rag/embeddings');
+    const { principalKnowledgeScope } = await import('@/core/rag/knowledge-scope');
+    const { resolvedPrincipal } = await import('@/test-helpers/space-fixtures');
+    const service = getEmbeddingService();
+    const embed = vi.spyOn(service, 'generateEmbedding').mockResolvedValue([0.1, 0.2, 0.3]);
+    try {
+      const hits = await service.hybridSearch(principalKnowledgeScope(await resolvedPrincipal(ids.gina, spaceId)), 'chunk', 50);
+      expect(hits.length).toBeGreaterThan(0);
+      for (const hit of hits) expect(mine).toContain(hit.sourceId);
+      const viewerHits = await service.hybridSearch(principalKnowledgeScope(await resolvedPrincipal(ids.viewer, spaceId)), 'chunk', 50);
+      expect(viewerHits.length).toBeGreaterThan(hits.length);
+    } finally {
+      embed.mockRestore();
+    }
+  });
+});
+
+describe('stored scopes', () => {
+  test('a malformed stored scope reads as the empty scope for that guest, and breaks nobody else', async () => {
+    const [{ scope: kept }] = await q<{ scope: unknown }>(`SELECT scope FROM workspace_members WHERE workspace_id = $1 AND user_id = $2`, [spaceId, ids.gus]);
+    await q(`UPDATE workspace_members SET scope = '{"foo":1,"rooms":["${leadsId}"]}'::jsonb WHERE workspace_id = $1 AND user_id = $2`, [spaceId, ids.gus]);
+    try {
+      // Lists that walk every guest still answer.
+      expect((await call('owner', 'GET', `/api/spaces/${spaceId}/rooms/${leadsId}/members`, { space: null })).status).toBe(200);
+      const members = await json<{ members: Array<{ userId: string; scope?: unknown }> }>(await call('owner', 'GET', `/api/spaces/${spaceId}/members`, { space: null }));
+      expect(members.members.find((m) => m.userId === ids.gus)?.scope).toEqual({ rooms: [], folders: [] });
+      expect((await call('gina', 'GET', `/api/spaces/${spaceId}/members`, { space: null })).status).toBe(200);
+      // gus himself reaches nothing: the least access, never more.
+      const { rooms } = await json<{ rooms: unknown[] }>(await call('gus', 'GET', `/api/spaces/${spaceId}/rooms`, { space: null }));
+      expect(rooms).toEqual([]);
+      const { roomAccess } = await import('@/core/rooms/access');
+      expect(await roomAccess(ids.gus, leadsId)).toBeNull();
+    } finally {
+      await q(`UPDATE workspace_members SET scope = $3 WHERE workspace_id = $1 AND user_id = $2`, [spaceId, ids.gus, JSON.stringify(kept)]);
     }
   });
 });

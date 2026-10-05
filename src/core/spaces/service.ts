@@ -136,7 +136,7 @@ export async function getMembership(
   // The synchronous file-root lookups (`WorkspaceFS.forAgent` / `forSession`)
   // learn the space from here: every path into a space reads a membership.
   noteSharedWorkspace(workspaceId);
-  return { workspaceId, userId, role: row.role, scope: storedGuestScope(row.role, row.scope) };
+  return { workspaceId, userId, role: row.role, scope: storedGuestScope(row.role, row.scope, { workspaceId, userId }) };
 }
 
 /** Whether `workspaceId` names a shared workspace (read from the database). */
@@ -290,19 +290,40 @@ export async function listSpaces(actor: SpaceActor): Promise<SpaceSummary[]> {
     .select({
       space: workspaces,
       role: workspaceMembers.role,
+      scope: workspaceMembers.scope,
       members: sql<number>`(SELECT count(*)::int FROM workspace_members m WHERE m.workspace_id = ${workspaces.id})`,
     })
     .from(workspaceMembers)
     .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
     .where(and(eq(workspaceMembers.userId, actor.userId), eq(workspaces.kind, 'shared')))
     .orderBy(desc(workspaces.createdAt));
-  return rows.map((r) => summarize(r.space, r.role, Number(r.members)));
+  return Promise.all(rows.map((r) => {
+    const scope = storedGuestScope(r.role, r.scope, { workspaceId: r.space.id, userId: actor.userId });
+    return scope ? summarizeForGuest(r.space, actor.userId, scope) : summarize(r.space, r.role, Number(r.members));
+  }));
 }
 
 /** One space, for a member. */
 export async function getSpace(actor: SpaceActor, workspaceId: string): Promise<SpaceSummary> {
   const { membership, space } = await authorize(actor, workspaceId, 'read');
+  if (membership.scope) return summarizeForGuest(space, actor.userId, membership.scope);
   return summarize(space, membership.role, await memberCount(workspaceId));
+}
+
+/**
+ * A space as a guest sees it (S6): the members of their rooms only — the
+ * count is theirs, the creator and the sponsor are named only when among
+ * them — and never the sponsor's models.
+ */
+async function summarizeForGuest(space: Workspace, guestId: string, scope: GuestScope, db: Executor = getDb()): Promise<SpaceSummary> {
+  const visible = await membersVisibleToGuest(space.id, guestId, scope, db);
+  const summary = summarize(space, 'guest', visible.size);
+  return {
+    ...summary,
+    createdBy: summary.createdBy && visible.has(summary.createdBy) ? summary.createdBy : null,
+    sponsorUserId: summary.sponsorUserId && visible.has(summary.sponsorUserId) ? summary.sponsorUserId : null,
+    sponsorModels: [],
+  };
 }
 
 export async function renameSpace(actor: SpaceActor, workspaceId: string, name: string): Promise<SpaceSummary> {
@@ -489,7 +510,9 @@ export async function guestsInRooms(workspaceId: string, roomIds: readonly strin
     .select({ userId: workspaceMembers.userId, scope: workspaceMembers.scope })
     .from(workspaceMembers)
     .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.role, 'guest')));
-  return guests.filter((g) => parseGuestScope(g.scope).rooms.some((r) => wanted.has(r))).map((g) => g.userId);
+  return guests
+    .filter((g) => storedGuestScope('guest', g.scope, { workspaceId, userId: g.userId })?.rooms.some((r) => wanted.has(r)))
+    .map((g) => g.userId);
 }
 
 /**
@@ -548,7 +571,7 @@ export async function listMembers(actor: SpaceActor, workspaceId: string): Promi
     .orderBy(workspaceMembers.joinedAt);
   const managing = can(membership.role, 'manage_members');
   return rows.map(({ scope, ...row }) => {
-    const guestScope = managing ? storedGuestScope(row.role, scope) : null;
+    const guestScope = managing ? storedGuestScope(row.role, scope, { workspaceId, userId: row.userId }) : null;
     return guestScope ? { ...row, scope: guestScope } : row;
   });
 }
@@ -754,8 +777,10 @@ export async function addMemberInTx(
       workspaceId,
       userId: input.userId,
       role: input.role,
-      // A guest always has a scope row (empty until the owner gives one).
-      scope: input.role === 'guest' ? parseGuestScope(input.scope ?? null) : null,
+      // A guest always has a scope row (empty until the owner gives one). An
+      // invite's stored scope is read back like a membership's (a malformed
+      // one joins with the empty scope, logged).
+      scope: storedGuestScope(input.role, input.scope ?? null, { workspaceId, userId: input.userId }),
       invitedBy: input.invitedBy ?? null,
     })
     .onConflictDoNothing()
@@ -777,14 +802,22 @@ export interface SpaceActivityEntry {
 /**
  * The space's audit rows, newest first, for any member. Paged by `before`
  * (the `createdAt` of the last row of the previous page).
+ *
+ * A guest (S6) gets the rows about the rooms of their scope only (created,
+ * renamed, mode changes: `resourceType = 'room'`), none other — no member,
+ * invite, funding or other room's row. Who acted is named only when the
+ * guest may see that member (`membersVisibleToGuest`), and the admin behind
+ * an impersonation never.
  */
 export async function listActivity(
   actor: SpaceActor,
   workspaceId: string,
   opts: { limit?: number; before?: Date } = {},
 ): Promise<SpaceActivityEntry[]> {
-  await authorize(actor, workspaceId, 'read');
+  const { membership } = await authorize(actor, workspaceId, 'read');
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+  const guest = membership.scope;
+  if (guest && guest.rooms.length === 0) return [];
   const rows = await getDb()
     .select({
       id: auditLog.id,
@@ -801,10 +834,23 @@ export async function listActivity(
     .where(and(
       eq(auditLog.workspaceId, workspaceId),
       opts.before ? lt(auditLog.createdAt, opts.before) : undefined,
+      guest ? and(eq(auditLog.resourceType, 'room'), inArray(auditLog.resourceId, guest.rooms)) : undefined,
     ))
     .orderBy(desc(auditLog.createdAt), desc(auditLog.id))
     .limit(limit);
-  return rows;
+  if (!guest) return rows;
+  const visible = await membersVisibleToGuest(workspaceId, actor.userId, guest);
+  return rows.map((row) => {
+    const { impersonatedBy: _admin, members, ...details } = (row.details ?? {}) as AuditDetails & { impersonatedBy?: unknown; members?: unknown };
+    const shownMembers = Array.isArray(members) ? members.filter((m): m is string => typeof m === 'string' && visible.has(m)) : undefined;
+    const named = !!row.userId && visible.has(row.userId);
+    return {
+      ...row,
+      userId: named ? row.userId : null,
+      username: named ? row.username : null,
+      details: shownMembers ? { ...details, members: shownMembers } : details,
+    };
+  });
 }
 
 /**

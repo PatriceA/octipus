@@ -6,10 +6,11 @@ import { join, resolve } from 'path';
 import { apiContext } from '@/api/context';
 import { getConfig } from '@/config';
 import { dependenciesOf, dependentsOf } from '@/core/repos/graph';
-import { loadRepoGraph, type RepoOwner, repoToGraphNode, scanUserRepos, toRepoSummary } from '@/core/repos/registry-service';
+import { loadRepoGraph, redactRemoteUrl, repoOwnerOf, repoToGraphNode, scanUserRepos, toRepoSummary } from '@/core/repos/registry-service';
+import { contentRepos } from '@/db/repositories/content';
 import { repoRegistryRepository } from '@/db/repositories/repo-registry-repository';
 import type { Principal } from '@/security/principal';
-import { WorkspaceFS } from '@/security/workspace-fs';
+import type { WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
 
 /**
@@ -25,14 +26,18 @@ import { coreLogger } from '@/utils/logger';
  * list instead of ENOENT.
  */
 function userWorkspaceRoot(principal: Principal): string {
-  const fs = WorkspaceFS.forPrincipal(principal);
-  fs.ensureRootSync();
-  return fs.root;
+  return workspaceFiles(principal).root;
 }
 
-/** The request's user and workspace, for the repo registry. */
-function repoOwner(userId: string, principal: Principal): RepoOwner {
-  return { userId, workspaceId: principal.workspaceId ?? null };
+/**
+ * The request's file root as `contentRepos` gives it: the user's workspace,
+ * or the space's, where a guest reaches only the folders of their scope
+ * (`guestFolders`, S6). The root directory itself is created if missing.
+ */
+function workspaceFiles(principal: Principal): WorkspaceFS {
+  const fs = contentRepos(principal).files();
+  fs.ensureRootSync();
+  return fs;
 }
 
 // System directories that must never be added as workspace paths
@@ -184,7 +189,24 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
       set.status = 401;
       return { error: 'Authentication required' };
     }
-    const rootPath = userWorkspaceRoot(principal);
+    const fs = workspaceFiles(principal);
+    const rootPath = fs.root;
+    const isDirectory = (path: string) => {
+      try {
+        return statSync(path).isDirectory();
+      } catch {
+        return false;
+      }
+    };
+
+    // A guest (S6) lists the folders of their scope, nothing else of the space.
+    if (fs.guestFolders) {
+      const repositories = fs.guestFolders
+        .map(folder => ({ folder, path: fs.resolveOptional(folder) }))
+        .filter((f): f is { folder: string; path: string } => f.path !== null && isDirectory(f.path))
+        .map(({ folder, path }) => ({ name: folder, path, isGit: existsSync(join(path, '.git')) }));
+      return { repositories };
+    }
 
     if (!existsSync(rootPath)) {
       return { repositories: [] };
@@ -192,15 +214,7 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
 
     const items = readdirSync(rootPath);
     const repositories = items
-      .filter(item => {
-        const fullPath = join(rootPath, item);
-        try {
-          const stats = statSync(fullPath);
-          return stats.isDirectory() && !item.startsWith('.');
-        } catch {
-          return false;
-        }
-      })
+      .filter(item => !item.startsWith('.') && isDirectory(join(rootPath, item)))
       .map(item => ({
         name: item,
         path: join(rootPath, item),
@@ -219,8 +233,15 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
     // own per-user workspace root. This is per-user data confined to the
     // user's sandbox (and name-validated below), so it no longer requires
     // admin — every authenticated user may scaffold repos in their own space.
+    // In a shared space it writes the space's files: the write right
+    // (editor or owner), and the space open.
+    const repos = contentRepos(principal);
+    repos.can('write');
+    repos.assertOpen();
+    const inSpace = repos.kind === 'space';
     const config = getConfig();
-    const rootPath = userWorkspaceRoot(principal);
+    const fs = workspaceFiles(principal);
+    const rootPath = fs.root;
 
     // Resolve the parent directory the repo lands in. Defaults to the
     // workspace root; an explicit `parentPath` lets the user choose where the
@@ -232,9 +253,10 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
     // users), so only admins may target them. A non-admin is confined to their
     // own per-user root — otherwise de-admin-gating this route would let any
     // user scaffold dirs in shared paths they don't own.
+    // A space has its own file root only (§5.5): no additional path there.
     const allowedRoots = [
       rootPath,
-      ...(user.isAdmin ? config.workspace.additionalPaths.map((p) => resolve(p)) : []),
+      ...(user.isAdmin && !inSpace ? config.workspace.additionalPaths.map((p) => resolve(p)) : []),
     ];
     let parentPath = rootPath;
     if (body.parentPath) {
@@ -287,6 +309,8 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
       set.status = 409;
       return { error: 'Directory already exists' };
     }
+    // Never a coding agent's configuration directory in a space (`.claude/`, ...).
+    if (inSpace) fs.assertWritable(repoPath);
 
     try {
       mkdirSync(repoPath, { recursive: true });
@@ -318,7 +342,7 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
       set.status = 401;
       return { error: 'Authentication required' };
     }
-    const { repos, edges, ambiguousPackages } = await loadRepoGraph(repoOwner(user.id, principal));
+    const { repos, edges, ambiguousPackages } = await loadRepoGraph(repoOwnerOf(principal));
     return {
       repos: repos.map((r) => ({ ...toRepoSummary(r, edges), lastScannedAt: r.lastScannedAt })),
       ambiguousPackages,
@@ -331,7 +355,10 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
       set.status = 401;
       return { error: 'Authentication required' };
     }
-    const repos = await scanUserRepos(repoOwner(user.id, principal));
+    // In a space the scan writes the space's knowledge: editors and owners,
+    // the space open (`scanUserRepos` checks the role too).
+    contentRepos(principal).assertOpen();
+    const repos = await scanUserRepos(repoOwnerOf(principal));
     return { scanned: repos.length, repos: repos.map((r) => ({ id: r.id, name: r.name, kind: r.kind })) };
   }, { detail: { tags: ['workspace'] } })
 
@@ -340,7 +367,7 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
       set.status = 401;
       return { error: 'Authentication required' };
     }
-    const { repos, edges, ambiguousPackages } = await loadRepoGraph(repoOwner(user.id, principal));
+    const { repos, edges, ambiguousPackages } = await loadRepoGraph(repoOwnerOf(principal));
     const repo = repos.find(candidate => candidate.id === params.id);
     if (!repo) {
       set.status = 404;
@@ -356,7 +383,8 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
       path: repo.rootPath,
       languages: repo.languages,
       packageName: repo.packageName,
-      remoteUrl: repo.remoteUrl,
+      // Never the credentials a remote URL may carry, whoever asks.
+      remoteUrl: redactRemoteUrl(repo.remoteUrl),
       defaultBranch: repo.defaultBranch,
       hasAgentsMd: repo.hasAgentsMd,
       repoMap: repo.repoMap,

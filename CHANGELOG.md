@@ -9,6 +9,32 @@ labels reflect blast radius, not contract guarantees.
 
 ### Fixed
 
+- **Guests, registration and remote members (review of S6/S7).** A guest no
+  longer sees the space's whole audit log: activity shows the rows about
+  their rooms only, with actors they may see. `GET /api/spaces/:id` and the
+  space list count only the members a guest sees and name the creator and
+  sponsor only among them; budgets are forbidden to guests; live-note
+  cursors and file lease holders are limited to the members of their rooms.
+  A guest's room turn reads only the worker outputs of their own turns
+  (`task_state` tools), and its prompt lists only their folders. The repo
+  registry in a space needs the member's role: scanning (which writes the
+  space's knowledge) needs `write`, a guest sees only repositories under
+  their folders, a space without the membership is refused; creating a
+  repository through `/api/workspace` needs `write` there. Remote URLs are
+  never shown or stored with credentials. Migration 0135 (edited in place)
+  resets malformed guest scopes to the empty scope, carries existing
+  guests' `room_members` rooms into their scope, keeps only rooms of the
+  guest's own space, renames a local `~` username past any name already
+  taken and audits the rename; a stored scope that still does not parse
+  reads as the empty scope (logged) instead of breaking every guest list.
+  Guest folders whose note-slug form differs segment by segment (`日本/acme`)
+  are refused. Registration checks the mode before the invite and the
+  invite before telling whether a username or email exists; an unusable
+  invite is a 400 `invite_invalid` in every mode, and a name taken meanwhile
+  by SAML, SCIM or an admin is a 409. The invite page hands its token to the
+  sign-in page in the history state, not the URL. An impersonation whose
+  target became remote ends, and remote rows join no org, receive no
+  workspace transfer and own no channel binding.
 - **Sponsor, budgets and team surface (review of S5a).** A personal CLI
   model can no longer be a sponsor model, nor run or release its
   credential for anyone but its owner. Only the sponsor makes the space pay

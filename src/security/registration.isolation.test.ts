@@ -4,11 +4,15 @@
  *
  *   - the first account always registers and is the only admin, even when
  *     several race for it and the mode is closed;
- *   - `closed` refuses everyone after it; `GET /api/auth/registration` says so;
+ *   - `closed` refuses everyone after it, before telling whether a username
+ *     or email exists; `GET /api/auth/registration` says so;
  *   - `invite_only` needs a valid invite token, redeemed in the same
  *     transaction as the account: a used-up, revoked or unknown token creates
- *     no account, and two registrations racing for a single-use token get one
- *     account between them;
+ *     no account (400 `invite_invalid`, before the uniqueness checks), a
+ *     refusal after the use was taken spends no use, and two registrations
+ *     racing for a single-use token get one account between them;
+ *   - a unique violation from an account created meanwhile outside the
+ *     registration lock is a 409, not a 500;
  *   - a guest invite's scope lands on the new membership;
  *   - a username starting with `~` is refused.
  *
@@ -125,6 +129,16 @@ describe('closed', () => {
     expect((await res.json()).code).toBe('registration_closed');
     expect(await q(`SELECT id FROM users WHERE username = 'closed-a'`)).toHaveLength(0);
   });
+
+  test('tells nothing about existing usernames or emails', async () => {
+    await setMode('closed');
+    await q(`UPDATE users SET email = 'taken@example.com' WHERE username = 'open-a'`);
+    for (const extra of [{}, { email: 'taken@example.com' }]) {
+      const res = await register(extra.email ? 'fresh-name' : 'open-a', extra);
+      expect(res.status).toBe(403);
+      expect((await res.json()).code).toBe('registration_closed');
+    }
+  });
 });
 
 describe('invite_only', () => {
@@ -163,20 +177,24 @@ describe('invite_only', () => {
 
     // Used up: the next registration with it creates no account.
     const again = await register('invited-b', { inviteToken: token });
-    expect(again.status).toBe(404);
+    expect(again.status).toBe(400);
     expect((await again.json()).code).toBe('invite_invalid');
     expect(await q(`SELECT id FROM users WHERE username = 'invited-b'`)).toHaveLength(0);
   });
 
   test('an unknown or revoked token creates no account, and a failed account spends no use', async () => {
     await setMode('invite_only');
-    expect((await register('bogus', { inviteToken: 'f'.repeat(64) })).status).toBe(404);
+    expect((await register('bogus', { inviteToken: 'f'.repeat(64) })).status).toBe(400);
+    // A made-up token is no way to probe usernames either.
+    const probe = await register('invited-a', { inviteToken: 'f'.repeat(64) });
+    expect(probe.status).toBe(400);
+    expect((await probe.json()).code).toBe('invite_invalid');
     expect(await q(`SELECT id FROM users WHERE username = 'bogus'`)).toHaveLength(0);
 
     const { createInvite, revokeInvite } = await import('@/core/spaces/invites');
     const revoked = await createInvite({ userId: ownerId }, spaceId, { role: 'viewer' });
     await revokeInvite({ userId: ownerId }, spaceId, revoked.id);
-    expect((await register('revoked', { inviteToken: revoked.token })).status).toBe(404);
+    expect((await register('revoked', { inviteToken: revoked.token })).status).toBe(400);
     expect(await q(`SELECT id FROM users WHERE username = 'revoked'`)).toHaveLength(0);
 
     // A taken username fails the registration before the invite: the use stays.
@@ -186,11 +204,31 @@ describe('invite_only', () => {
     expect(row.use_count).toBe(0);
   });
 
+  test('a refusal after the invite\'s use was taken (the space is full) creates no account and spends no use', async () => {
+    await setMode('invite_only');
+    const token = await invite();
+    const { getConfig } = await import('@/config');
+    const spaces = getConfig().spaces;
+    const limit = spaces.maxMembers;
+    const [{ n }] = await q<{ n: number }>(`SELECT count(*)::int AS n FROM workspace_members WHERE workspace_id = $1`, [spaceId]);
+    spaces.maxMembers = n;
+    try {
+      const res = await register('too-many', { inviteToken: token });
+      expect(res.status).toBe(409);
+      expect((await res.json()).code).toBe('invite_invalid');
+    } finally {
+      spaces.maxMembers = limit;
+    }
+    expect(await q(`SELECT id FROM users WHERE username = 'too-many'`)).toHaveLength(0);
+    const [row] = await q<{ use_count: number }>(`SELECT use_count FROM workspace_invites WHERE workspace_id = $1 ORDER BY created_at DESC LIMIT 1`, [spaceId]);
+    expect(row.use_count).toBe(0);
+  });
+
   test('two registrations racing for a single-use token: one account between them', async () => {
     await setMode('invite_only');
     const token = await invite();
     const results = await Promise.all(['race-a', 'race-b'].map((u) => register(u, { inviteToken: token })));
-    expect(results.map((r) => r.status).sort()).toEqual([200, 404]);
+    expect(results.map((r) => r.status).sort()).toEqual([200, 400]);
     const created = await q(`SELECT username FROM users WHERE username IN ('race-a','race-b')`);
     expect(created).toHaveLength(1);
     const members = await q(`SELECT m.user_id FROM workspace_members m JOIN users u ON u.id = m.user_id WHERE m.workspace_id = $1 AND u.username IN ('race-a','race-b')`, [spaceId]);
@@ -207,13 +245,15 @@ describe('invite_only', () => {
     expect(m).toEqual({ role: 'guest', scope: { rooms: [], folders: ['client'] } });
   });
 
-  test('open mode redeems a given token too, and a bad one fails the registration', async () => {
+  test('open mode redeems a given token too, and a bad one fails the registration with a clear 400', async () => {
     await setMode('open');
     const token = await invite({ role: 'viewer' });
     const ok = await register('open-invited', { inviteToken: token });
     expect(ok.status).toBe(200);
     expect((await ok.json()).joinedSpaceId).toBe(spaceId);
-    expect((await register('open-bogus', { inviteToken: 'a'.repeat(64) })).status).toBe(404);
+    const bogus = await register('open-bogus', { inviteToken: 'a'.repeat(64) });
+    expect(bogus.status).toBe(400);
+    expect(await bogus.json()).toMatchObject({ code: 'invite_invalid', error: expect.stringContaining('register without it') });
     expect(await q(`SELECT id FROM users WHERE username = 'open-bogus'`)).toHaveLength(0);
   });
 });
@@ -225,5 +265,27 @@ describe('usernames', () => {
     expect(res.status).toBe(400);
     expect((await res.json()).code).toBe('invalid_username');
     expect(await q(`SELECT id FROM users WHERE username = '~mallory'`)).toHaveLength(0);
+  });
+});
+
+describe('accounts created outside the registration lock', () => {
+  test('a unique violation at the insert is a 409, not a 500', async () => {
+    await setMode('open');
+    // Stands in for SAML JIT, SCIM or an admin taking the name between the
+    // registration's check and its insert: the insert fails as Postgres would.
+    await q(`CREATE OR REPLACE FUNCTION reg_test_race() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION USING ERRCODE = 'unique_violation', CONSTRAINT = CASE WHEN NEW.username = 'race-email' THEN 'users_email_key' ELSE 'users_username_key' END, MESSAGE = 'duplicate key'; END $$`);
+    await q(`CREATE TRIGGER reg_test_race BEFORE INSERT ON users FOR EACH ROW WHEN (NEW.username IN ('race-name', 'race-email')) EXECUTE FUNCTION reg_test_race()`);
+    try {
+      const name = await register('race-name');
+      expect(name.status).toBe(409);
+      expect((await name.json()).code).toBe('username_taken');
+      const email = await register('race-email', { email: 'race@example.com' });
+      expect(email.status).toBe(409);
+      expect((await email.json()).code).toBe('email_taken');
+    } finally {
+      await q(`DROP TRIGGER reg_test_race ON users`);
+      await q(`DROP FUNCTION reg_test_race()`);
+    }
   });
 });

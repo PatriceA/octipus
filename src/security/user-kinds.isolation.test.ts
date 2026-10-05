@@ -5,12 +5,15 @@
  *
  *   - the CHECK: a local username never starts with `~`, a remote row is
  *     `~`-named, e-mail-less, password-less, never admin, with its instance;
- *   - migration `0135_guests_remote` renames an existing local `~` name;
+ *   - migration `0135_guests_remote` renames an existing local `~` name, past
+ *     a name already taken, and audits it;
  *   - registration (see registration.isolation.test.ts), admin creation, SCIM
  *     (create and rename) and SAML JIT refuse a `~` username;
  *   - a remote row cannot sign in: sessions (create and validate), API
  *     tokens (issue and validate), impersonation, passkeys, password login;
- *   - admin user lists, the admin edit route and SCIM leave remote rows out.
+ *   - an impersonation started before its target became remote ends;
+ *   - admin user lists, the admin edit route and SCIM leave remote rows out;
+ *   - org membership, workspace transfer and channel bindings refuse them.
  *
  * Backed by ephemeral PGlite; the IdP (samlify) and the SCIM token's vault
  * lookup are stubbed, as in leaks-deactivation.isolation.test.ts.
@@ -114,12 +117,17 @@ describe('the representation', () => {
     await q(`ALTER TABLE users DROP CONSTRAINT users_kind_chk`);
     const id = randomUUID();
     await q(`INSERT INTO users (id, username) VALUES ($1, '~legacy')`, [id]);
+    // The name the rename would pick is taken already: it takes the next one.
+    const base = `renamed-${id.replace(/-/g, '').slice(0, 8)}`;
+    await q(`INSERT INTO users (username) VALUES ($1)`, [`${base}-legacy`]);
     const sql = readFileSync(join(process.cwd(), 'src/db/migrations/0135_guests_remote.sql'), 'utf8');
     for (const statement of sql.split('--> statement-breakpoint')) {
       if (statement.replace(/--.*$/gm, '').trim()) await q(statement);
     }
     const [row] = await q<{ username: string }>(`SELECT username FROM users WHERE id = $1`, [id]);
-    expect(row.username).toBe(`renamed-${id.replace(/-/g, '').slice(0, 8)}-legacy`);
+    expect(row.username).toBe(`${base}-2-legacy`);
+    const audits = await q<{ details: Record<string, unknown> }>(`SELECT details FROM audit_log WHERE action = 'user_updated' AND resource_id = $1`, [id]);
+    expect(audits.map((a) => a.details)).toEqual([expect.objectContaining({ event: 'username_renamed', from: '~legacy', to: `${base}-2-legacy` })]);
     expect((await q<{ username: string }>(`SELECT username FROM users WHERE id = $1`, [REMOTE]))[0].username).toBe(REMOTE_NAME);
     await expect(q(`INSERT INTO users (username) VALUES ('~again')`)).rejects.toThrow(/users_kind_chk/);
   });
@@ -164,6 +172,49 @@ describe('a remote row never signs in', () => {
     expect(res.status).toBe(400);
     expect((await res.json()).error).toMatch(/other installs/);
   });
+
+  test('an impersonation started before its target became remote ends: the admin acts as themselves', async () => {
+    const target = randomUUID();
+    await q(`INSERT INTO users (id, username) VALUES ($1, 'soon-remote')`, [target]);
+    const { getSessionManager } = await import('@/security/auth/session');
+    const token = (await getSessionManager().create(ADMIN)).token;
+    expect((await call('POST', `/api/admin/impersonate/${target}`, { token, body: { reason: 'support' } })).status).toBe(200);
+    expect((await (await call('GET', '/api/auth/me', { token })).json()).id).toBe(target);
+    await q(`UPDATE users SET kind = 'remote', username = '~soon@i', remote_instance_id = 'i', remote_user_ref = 'soon', password_hash = NULL, email = NULL WHERE id = $1`, [target]);
+    expect((await (await call('GET', '/api/auth/me', { token })).json()).id).toBe(ADMIN);
+    expect(await q(`SELECT id FROM impersonation_sessions WHERE target_user_id = $1 AND ended_at IS NULL`, [target])).toHaveLength(0);
+  });
+});
+
+describe('orgs, workspaces and channels refuse remote rows', () => {
+  test('org membership and workspace transfer', async () => {
+    const { getOrgWorkspaceManager, OrgWorkspaceError } = await import('@/security/orgs');
+    const orgs = getOrgWorkspaceManager();
+    const other = randomUUID();
+    await q(`INSERT INTO organizations (id, slug, name) VALUES ($1, 'uk-org-2', 'UK Org 2')`, [other]);
+    const added = await orgs.addMember({ id: ADMIN, isAdmin: true } as never, other, REMOTE).catch((e: unknown) => e);
+    expect(added).toBeInstanceOf(OrgWorkspaceError);
+    expect((added as InstanceType<typeof OrgWorkspaceError>).code).toBe('user_not_found');
+    expect(await q(`SELECT user_id FROM org_members WHERE org_id = $1`, [other])).toEqual([]);
+    expect((await orgs.addMember({ id: ADMIN, isAdmin: true } as never, other, LOCAL)).userId).toBe(LOCAL);
+
+    await orgs.ensureDefaultWorkspace(LOCAL);
+    const extra = await orgs.createWorkspace(LOCAL, { slug: 'to-give', name: 'To give' });
+    const transferred = await orgs.transfer(LOCAL, extra.id, REMOTE).catch((e: unknown) => e);
+    expect((transferred as InstanceType<typeof OrgWorkspaceError>).code).toBe('recipient_not_found');
+  });
+
+  test('a channel binding never resolves to a remote row', async () => {
+    await q(`INSERT INTO channel_identities (user_id, channel_type, external_id, verified_at) VALUES ($1, 'telegram', 'tg-remote', now())`, [REMOTE]);
+    await q(`UPDATE users SET channel_bindings = $2 WHERE id = $1`, [REMOTE, JSON.stringify([{ channelType: 'slack', channelUserId: 'sl-remote', isVerified: true }])]);
+    const { getChannelBindingManager } = await import('@/security/channel-bindings');
+    expect(await getChannelBindingManager().findUserByExternalId('telegram', 'tg-remote')).toBeNull();
+    expect(await getChannelBindingManager().findUserByExternalId('slack', 'sl-remote')).toBeNull();
+    // A local account's binding still resolves.
+    await q(`UPDATE users SET channel_bindings = $2 WHERE id = $1`, [LOCAL, JSON.stringify([{ channelType: 'slack', channelUserId: 'sl-local', isVerified: true }])]);
+    expect(await getChannelBindingManager().findUserByExternalId('slack', 'sl-local')).toBe(LOCAL);
+    expect(await getChannelBindingManager().findUserByExternalId('slack', 'sl-local')).toBe(LOCAL);
+  });
 });
 
 describe('admin and SCIM leave remote rows out, and refuse ~ names', () => {
@@ -191,6 +242,10 @@ describe('admin and SCIM leave remote rows out, and refuse ~ names', () => {
     const own = await (await call('POST', '/api/scim/v2/Users', { bearer: SCIM_TOKEN, body: { schemas: [], userName: 'scim-own@idp' } })).json() as { id: string };
     const rename = await call('PATCH', `/api/scim/v2/Users/${own.id}`, { bearer: SCIM_TOKEN, body: { schemas: [], Operations: [{ op: 'replace', path: 'userName', value: '~bob@idp' }] } });
     expect(rename.status).toBe(400);
+    expect((await q(`SELECT username FROM users WHERE id = $1`, [own.id]))[0]).toEqual({ username: 'scim-own@idp' });
+    // An op without a path carrying a value object renames nothing.
+    const bare = await call('PATCH', `/api/scim/v2/Users/${own.id}`, { bearer: SCIM_TOKEN, body: { schemas: [], Operations: [{ op: 'replace', value: { userName: '~bob@idp' } }] } });
+    expect(bare.status).toBeLessThan(500);
     expect((await q(`SELECT username FROM users WHERE id = $1`, [own.id]))[0]).toEqual({ username: 'scim-own@idp' });
   });
 

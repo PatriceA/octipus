@@ -203,12 +203,12 @@ test.describe('join page', () => {
     await expect(preview).toContainText('olga invites you to');
     await expect(preview).toContainText('Launch');
     await expect(preview).toContainText('editor');
-    await expect(page.getByRole('link', { name: 'register' })).toHaveAttribute(
-      'href', `/login?mode=register&invite=${TOKEN}&returnTo=${encodeURIComponent(`/join/${TOKEN}`)}`,
-    );
+    // The token (a bearer secret) never lands in the login page's URL: the
+    // invite page hands it, and where to come back, in the history state.
+    await expect(page.getByRole('link', { name: 'register' })).toHaveAttribute('href', '/login?mode=register');
 
     await page.getByRole('link', { name: 'sign in to join' }).click();
-    await expect(page).toHaveURL(new RegExp(`/login\\?returnTo=${encodeURIComponent(`/join/${TOKEN}`)}$`));
+    await expect(page).toHaveURL(/\/login$/);
     await page.locator('input[type="text"]').first().fill('e2etest');
     await page.locator('input[type="password"]').first().fill('Correct-horse-1');
     await page.locator('form').getByRole('button', { name: /sign in/i }).click();

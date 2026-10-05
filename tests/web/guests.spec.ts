@@ -149,6 +149,8 @@ test.describe('registration modes', () => {
     await page.goto(`/join/${TOKEN}`);
     await expect(page.getByTestId('invite-preview')).toContainText('see only the rooms and folders you are given');
     await page.getByRole('link', { name: 'register' }).click();
+    // The token travels in the history state, never in the login page's URL.
+    await expect(page).toHaveURL(/\/login\?mode=register$/);
     await expect(page.getByTestId('invite-required')).toHaveCount(0);
     await page.locator('input[type="text"]').first().fill('newguest');
     await page.locator('input[type="email"]').fill('newguest@example.com');

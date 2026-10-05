@@ -37,6 +37,7 @@ import {
 } from '@/db/repositories/live-documents';
 import type { FileLease } from '@/db/schema/live-documents';
 import type { FileLeaseView } from '@/core/gateway/protocol';
+import { pathInGuestFolders, type SpaceMembership } from '@/security/space-access';
 import { WorkspaceFS, WorkspaceFsError } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
 import { KeyedMutex } from './keyed-mutex';
@@ -261,6 +262,20 @@ export async function leaseViews(leases: FileLease[]): Promise<FileLeaseView[]> 
     holderKind: l.holderKind,
     expiresAt: l.expiresAt.toISOString(),
   }));
+}
+
+/**
+ * The leases as one member sees them: all of them, or for a guest (S6) the
+ * leases of their folders only, the holder named only when among the
+ * members of their rooms ("someone is editing").
+ */
+export async function leasesForMember(workspaceId: string, membership: SpaceMembership, leases: FileLease[]): Promise<FileLeaseView[]> {
+  const scope = membership.scope;
+  if (!scope) return leaseViews(leases);
+  const { membersVisibleToGuest } = await import('@/core/spaces/service');
+  const visible = await membersVisibleToGuest(workspaceId, membership.userId, scope);
+  const views = await leaseViews(leases.filter((l) => pathInGuestFolders(l.path, scope.folders)));
+  return views.map((v) => (v.holderUserId && visible.has(v.holderUserId) ? v : { ...v, holderUserId: null, holderName: null }));
 }
 
 // ── Change notification ─────────────────────────────────────────

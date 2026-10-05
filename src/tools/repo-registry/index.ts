@@ -1,7 +1,7 @@
 import { buildRepoEdges, dependenciesOf, dependentsOf } from '@/core/repos/graph';
-import { loadRepoGraph, type RepoOwner, repoToGraphNode, resolveRepo, scanUserRepos, toRepoSummary } from '@/core/repos/registry-service';
+import { loadRepoGraph, redactRemoteUrl, type RepoOwner, repoToGraphNode, resolveRepo, scanUserRepos, toRepoSummary } from '@/core/repos/registry-service';
 import { findSymbols, outlineSymbols, type SymbolKind } from '@/core/repos/symbols';
-import type { ToolManifest } from '@/core/types';
+import type { AgentContext, ToolManifest } from '@/core/types';
 import { BaseTool, createParameterSchema } from '../base-tool';
 
 /**
@@ -69,7 +69,7 @@ export class RepoRegistryTool extends BaseTool {
           path: repo.rootPath,
           languages: repo.languages,
           packageName: repo.packageName ?? undefined,
-          remoteUrl: repo.remoteUrl ?? undefined,
+          remoteUrl: redactRemoteUrl(repo.remoteUrl) ?? undefined,
           defaultBranch: repo.defaultBranch ?? undefined,
           hasAgentsMd: repo.hasAgentsMd,
           repoMap: repo.repoMap ?? undefined,
@@ -172,9 +172,14 @@ export class RepoRegistryTool extends BaseTool {
   }
 }
 
-/** The agent's user and workspace: the registry is read and scanned as seen from that workspace. */
-function repoOwner(context: { userId?: string; workspaceId?: string | null }): RepoOwner {
+/**
+ * The agent's user and workspace: the registry is read and scanned as seen
+ * from that workspace — in a space, by the member's role and a guest's
+ * folders (the turn's membership).
+ */
+function repoOwner(context: Pick<AgentContext, 'userId' | 'workspaceId' | 'space'>): RepoOwner {
   if (!context.userId) throw new Error('repo_registry requires an authenticated user context');
+  if (context.space) return { userId: context.userId, workspaceId: context.space.workspaceId, space: context.space };
   return { userId: context.userId, workspaceId: context.workspaceId ?? null };
 }
 

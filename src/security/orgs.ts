@@ -217,6 +217,14 @@ export class OrgWorkspaceManager {
       .where(eq(organizations.id, orgId))
       .limit(1);
     if (!org) throw new OrgWorkspaceError('org_not_found', `organization ${orgId} not found`);
+    // Only a local account joins an org: a remote member's row (S7) is a
+    // member of one space hosted here, nothing more.
+    const [target] = await this.db
+      .select({ kind: users.kind })
+      .from(users)
+      .where(eq(users.id, targetUserId))
+      .limit(1);
+    if (!target || target.kind !== 'local') throw new OrgWorkspaceError('user_not_found', `user ${targetUserId} not found`);
 
     const [existing] = await this.db
       .select()
@@ -611,11 +619,12 @@ export class OrgWorkspaceManager {
     }
 
     const [recipient] = await this.db
-      .select({ id: users.id, username: users.username, isActive: users.isActive })
+      .select({ id: users.id, username: users.username, isActive: users.isActive, kind: users.kind })
       .from(users)
       .where(eq(users.id, recipientUserId))
       .limit(1);
-    if (!recipient || !recipient.isActive) {
+    // A remote member's row (S7) owns nothing here.
+    if (!recipient || !recipient.isActive || recipient.kind !== 'local') {
       throw new OrgWorkspaceError('recipient_not_found', 'recipient user not found or inactive');
     }
 
