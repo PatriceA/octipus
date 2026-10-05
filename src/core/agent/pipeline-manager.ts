@@ -293,6 +293,12 @@ export async function runStageVerifyCommand(
     const { isSharedWorkspaceId, WorkspaceFS } = await import('@/security/workspace-fs');
     const workspaceId = await turnWorkspaceId(session.userId, session.workspaceId);
     const inSpace = !!ctx.space || await isSharedWorkspaceId(workspaceId);
+    // A stage naming a space without its scope is refused outright: never
+    // run as personal, and the auditor is told it failed rather than left to
+    // judge without it.
+    if (inSpace && !ctx.space) {
+      return `VERIFY COMMAND (run by the pipeline, not by you): \`${command}\`\nRESULT: FAILED.\nThe stage runs in a space but carries no space scope, so the command was refused.\n\nThat is the ground truth for this stage. Do not re-run it to check; explain it.`;
+    }
     const outcome = await runScorers(
       [{ kind: 'command_exit_zero', command }],
       { output: '', notes: '' },

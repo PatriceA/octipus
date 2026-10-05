@@ -88,15 +88,17 @@ describe.skipIf(!isIntegration)('space races (Integration)', () => {
         removeMember({ userId: owner }, space.id, coOwner),
         acceptInvite({ userId: joiner }, link.token),
       ]);
-      // Either the accept went first (and the joiner is a member who joined
-      // while the link was good), or it was refused; never a join recorded
-      // after the removal's audit row.
+      // Either the accept went first (the joiner joined while the link was
+      // good) or it was refused. Audit timestamps cannot tell which committed
+      // first — each transaction stamps its row before it waits on the other's
+      // lock — so the check is on state: the removal always ends with the
+      // link revoked and the remover's demotion in place, and a join that
+      // happened spent exactly one use of the link.
       const joined = await getMembership(joiner, space.id);
-      if (joined) {
-        const [accepted] = await q(`SELECT created_at FROM audit_log WHERE workspace_id = $1 AND action = 'space_invite_accepted' AND resource_id = $2`, [space.id, link.id]);
-        const [removed] = await q(`SELECT created_at FROM audit_log WHERE workspace_id = $1 AND action = 'space_member_removed' AND resource_id = $2`, [space.id, coOwner]);
-        expect(new Date(accepted.created_at).getTime(), `round ${round}`).toBeLessThanOrEqual(new Date(removed.created_at).getTime());
-      }
+      const [linkRow] = await q(`SELECT use_count, revoked_at FROM workspace_invites WHERE id = $1`, [link.id]);
+      expect(linkRow.revoked_at, `round ${round}`).not.toBeNull();
+      expect(await getMembership(coOwner, space.id), `round ${round}`).toBeNull();
+      expect(linkRow.use_count, `round ${round}`).toBe(joined ? 1 : 0);
       await expect(acceptInvite({ userId: joiners[(round + 1) % joiners.length] }, link.token)).rejects.toMatchObject({ code: 'not_found' });
     }
   });
