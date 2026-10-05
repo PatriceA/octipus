@@ -59,17 +59,18 @@ export interface PermissionResolvedEvent {
 }
 
 /**
- * A request an admin may answer for its requester: not one raised in a space
- * (its stamped `workspace_id`, or its session's workspace) the admin is not a
- * member of (D9).
+ * A request an admin may answer for its requester: never one raised in a
+ * space or a room (its stamped `workspace_id`, or its session's workspace),
+ * whatever the admin's own membership (D9: answered by the requester only —
+ * approving a member's private read in a room is that member's consent, D8).
+ * An admin who must act there impersonates the member, which is audited.
  */
-function adminMayAnswer(adminUserId: string): SQL {
+function adminMayAnswer(): SQL {
   return sql`NOT EXISTS (
     SELECT 1 FROM workspaces w
     WHERE w.kind = 'shared'
       AND w.id = COALESCE(${permissionRequests.workspaceId},
-        (SELECT s.workspace_id FROM sessions s WHERE s.id = ${permissionRequests.sessionId}))
-      AND NOT EXISTS (SELECT 1 FROM workspace_members m WHERE m.workspace_id = w.id AND m.user_id = ${adminUserId}))`;
+        (SELECT s.workspace_id FROM sessions s WHERE s.id = ${permissionRequests.sessionId})))`;
 }
 
 export class PermissionManager {
@@ -651,14 +652,14 @@ export class PermissionManager {
     resolvedBy: string,
     resolution: string | undefined,
     owner: string | null,
-    /** An admin answering someone else's request: never one of a space they are not a member of (D9). */
+    /** An admin answering someone else's request: never one of a space or a room (D9). */
     admin?: string,
   ): Promise<PermissionRequest | null> {
     const filters = [
       eq(permissionRequests.id, requestId),
       eq(permissionRequests.status, 'pending'),
     ];
-    if (admin !== undefined) filters.push(adminMayAnswer(admin));
+    if (admin !== undefined) filters.push(adminMayAnswer());
     // An approval must not land on a request that has already timed out.
     if (status === 'approved') {
       filters.push(sql`(${permissionRequests.expiresAt} IS NULL OR ${permissionRequests.expiresAt} > NOW())`);
@@ -713,7 +714,7 @@ export class PermissionManager {
    */
   /**
    * Every pending request, for the admin queue. With `forAdmin`, requests of
-   * a space the admin is not a member of are left out (D9, I3).
+   * spaces and rooms are left out (D9, I3): their requesters answer them.
    */
   async getAllPendingRequests(forAdmin?: string): Promise<PermissionRequest[]> {
     return this.db
@@ -723,7 +724,7 @@ export class PermissionManager {
         and(
           eq(permissionRequests.status, 'pending'),
           sql`(${permissionRequests.expiresAt} IS NULL OR ${permissionRequests.expiresAt} > NOW())`,
-          forAdmin !== undefined ? adminMayAnswer(forAdmin) : undefined,
+          forAdmin !== undefined ? adminMayAnswer() : undefined,
         )
       );
   }

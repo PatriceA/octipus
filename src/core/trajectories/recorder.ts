@@ -20,6 +20,7 @@ import { gzipSync } from 'zlib';
 import { getConfig } from '@/config';
 import { filterPII } from '@/core/agent/pii-filter';
 import type { MessageClassification } from '@/core/agent/types';
+import { spaceDirectories } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
 import type {
   TrajectoryClassification,
@@ -103,6 +104,17 @@ export interface TrajectoryRecorderOptions {
   channel?: string;
   classification?: MessageClassification;
   expertId?: string;
+  /**
+   * The workspace the turn ran in, stored on the pointer row so personal
+   * lists (`workspaceFilter`) never show a space's runs (I2).
+   */
+  workspaceId?: string | null;
+  /**
+   * The shared workspace (space) the turn ran in, when it did: its record
+   * goes under the space's own directory (`<workspace>/spaces/<id>/trajectories`,
+   * outside the members' file root), which the space purge removes (I9).
+   */
+  spaceId?: string | null;
   /** Override the workspace root — used by tests to target a tmp dir. */
   workspaceRootOverride?: string;
   /** When true, suppress DB writes (useful from tests that don't spin up Postgres). */
@@ -297,7 +309,7 @@ export class TrajectoryRecorder {
     let jsonlPath: string;
     let jsonlLine: number;
     try {
-      const written = writeJsonlLine(record, this.opts.workspaceRootOverride);
+      const written = writeJsonlLine(record, this.opts.workspaceRootOverride ?? (this.opts.spaceId ? spaceDirectories(this.opts.spaceId).root : undefined));
       jsonlPath = written.path;
       jsonlLine = written.line;
     } catch (err) {
@@ -311,6 +323,7 @@ export class TrajectoryRecorder {
         const { trajectoryRepository } = await import('@/db/repositories/trajectory-repository');
         await trajectoryRepository.create({
           userId: record.userId,
+          workspaceId: this.opts.workspaceId ?? null,
           rootSessionId: record.rootSessionId,
           outcome: record.outcome,
           startedAt: new Date(record.startedAt),

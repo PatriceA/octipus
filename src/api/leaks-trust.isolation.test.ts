@@ -417,6 +417,22 @@ describe('owner-only gateway commands', () => {
   });
 });
 
+describe('API token scopes on the gateway (WS6)', () => {
+  test('a read-only token connects but cannot drive the agent; its scopes travel with the connection', async () => {
+    const { getApiTokenManager } = await import('@/security/api-tokens');
+    const { plaintext } = await getApiTokenManager().issue(aliceId, { name: `ro-${Math.random().toString(36).slice(2, 8)}`, scopes: ['api:read'] });
+    const client = await open('/gateway');
+    client.send({ type: 'auth', method: 'api_key', credentials: { key: plaintext }, clientType: 'tui' });
+    await client.waitFor((f) => f.type === 'auth_ok');
+    expect((await connectionOf(client)).scopes).toEqual(['api:read']);
+    client.send({ type: 'chat.send', sessionId: aliceSession, content: 'hello' });
+    expect(await client.waitFor((f) => f.type === 'error' && f.code === 'FORBIDDEN')).toMatchObject({ message: 'API token missing required scope "api:chat"' });
+
+    // A browser session carries no scopes: every frame passes the scope check.
+    expect((await connectionOf(await gateway(aliceId))).scopes).toBeUndefined();
+  });
+});
+
 // ── The TUI client ───────────────────────────────────────────────
 
 describe('the TUI gateway client', () => {

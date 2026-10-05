@@ -288,6 +288,24 @@ export async function dropRoomTurnsOf(roomId: string, userId: string): Promise<{
   return { queued: dropped.length, stopped };
 }
 
+/**
+ * `userId`'s account was deactivated: drop their queued requests and stop
+ * their running turn in every room. Returns how many requests were dropped
+ * and turns stopped.
+ */
+export async function dropAllRoomTurnsOf(userId: string): Promise<{ queued: number; stopped: number }> {
+  const total = { queued: 0, stopped: 0 };
+  const held = [...rooms.entries()]
+    .filter(([, s]) => s.running?.requesterId === userId || s.waiting.some((q) => q.requesterId === userId))
+    .map(([id]) => id);
+  for (const roomId of held) {
+    const dropped = await dropRoomTurnsOf(roomId, userId);
+    total.queued += dropped.queued;
+    if (dropped.stopped) total.stopped++;
+  }
+  return total;
+}
+
 /** Rooms with queued or running turns in `workspaceId` (for a membership change). */
 export function activeRoomsIn(workspaceId: string): string[] {
   return [...rooms.entries()].filter(([, s]) => s.workspaceId === workspaceId).map(([id]) => id);

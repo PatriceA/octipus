@@ -591,6 +591,8 @@ export class AgentService {
         userId,
         userMessage: message,
         channel,
+        workspaceId: scope.workspaceId,
+        spaceId: scope.space?.workspaceId ?? null,
       });
 
       // A group-channel thread or a room: the reply is posted where every

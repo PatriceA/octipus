@@ -9,6 +9,24 @@ labels reflect blast radius, not contract guarantees.
 
 ### Fixed
 
+- **Coworking seams (final security review).** A deactivated account (and,
+  until federation exists, a remote one) passes no space door: its queued
+  and running room turns are dropped at once, its queued space jobs
+  cancelled and its space data sources paused (resumed on re-activation),
+  while an owner can still change or remove its membership. A deactivated
+  sponsor is no sponsor: sponsored turns, room and channel probes stop, and
+  each space they sponsor gets an audit row; the sponsor pays again once
+  re-activated. Trajectories of space and room turns record their space,
+  are written under the space's directory and purged with it, never show
+  in a personal list, and `distill_skill` reads only the caller's own
+  personal runs. Global search no longer returns other users' personal
+  model rows. A room post that asks the agent needs the `api:chat` scope
+  for an API token, on REST and on the gateway, where a token's scopes now
+  travel with the connection (chat, steer, commands and prompt answers
+  need `api:chat` too). The admin answer routes no longer list or answer
+  requests raised in a space or a room, whatever the admin's membership:
+  the requester answers them (an admin acts through audited impersonation).
+
 - **A live space note's reindex is billed to its space.** The reindex's
   embedding cost rows now carry the space (`cost_log.workspace_id`) and
   `funding: 'install'` as their own columns, not only in the row's metadata.

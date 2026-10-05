@@ -8,8 +8,8 @@ import { loadRepoGraph } from '@/core/repos/registry-service';
 import { getDb } from '@/db/postgres';
 import { skillRepository } from '@/db/repositories/skill-repository';
 import { hooks } from '@/db/schema/hooks';
-import { modelConfig } from '@/db/schema/models';
 import { sessions } from '@/db/schema/sessions';
+import { getModelRegistry } from '@/models/model-registry';
 import { getToolRegistry } from '@/tools/registry';
 
 interface SearchResult {
@@ -65,12 +65,14 @@ export const searchRoutes = new Elysia({ prefix: '/search' })
           .where(and(eq(hooks.userId, principal.userId), or(ilike(hooks.name, pattern), ilike(hooks.description, pattern))))
           .limit(limit),
 
-        // Models — search by name
-        db
-          .select({ id: modelConfig.id, name: modelConfig.name, provider: modelConfig.provider, modelId: modelConfig.modelId })
-          .from(modelConfig)
-          .where(ilike(modelConfig.name, pattern))
-          .limit(limit),
+        // Models — search by name, among the rows the caller may see (the
+        // models list's rule: install rows of their orgs, plus their own
+        // personal rows — never another user's, I11).
+        (async () => {
+          const lower = searchTerm.toLowerCase();
+          const visible = await getModelRegistry().getModelsForUser(principal.userId);
+          return visible.filter((m) => m.name.toLowerCase().includes(lower)).slice(0, limit);
+        })(),
 
         // Skills — search by name or description, among the ones the caller
         // can see (system, own, their orgs'), as the skills list does.

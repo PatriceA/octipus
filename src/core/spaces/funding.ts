@@ -13,11 +13,12 @@
  * and the space's sponsored agents stop (`pauseSponsoredWork`): sponsored
  * work does not run again until an owner names a new sponsor.
  */
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { SpaceFundingSettings } from '@/core/agent/context';
 import { getDb } from '@/db/postgres';
 import { isUuid } from '@/db/repositories/scoped';
 import { type AgentFundingMode, type SpaceRole, workspaces } from '@/db/schema/organizations';
+import { users } from '@/db/schema/users';
 import { requireCan, SpaceError } from '@/security/space-access';
 import { coreLogger } from '@/utils/logger';
 import { auditActor, type Executor, getMembership, type SpaceActor, writeSpaceAudit } from './service';
@@ -30,15 +31,29 @@ const LIABILITY: Record<AgentFundingMode, number> = { own: 0, unattended: 1, spo
 /** At most this many sponsor models. */
 const MAX_SPONSOR_MODELS = 20;
 
-/** The space's funding settings, read now. Throws `not_found` for an id that names no space. */
+/**
+ * The space's funding settings, read now. Throws `not_found` for an id that
+ * names no space. A sponsor whose account is deactivated (or not a local
+ * account) is no sponsor: `sponsorUserId` is null, so `fundingFor` refuses
+ * sponsored work (`funding_off`) and `recheckSponsor` stops what runs —
+ * nobody spends a deactivated person's money or keys. The stored sponsor is
+ * kept, and pays again once the account is re-activated.
+ */
 export async function spaceFunding(workspaceId: string, db: Executor = getDb()): Promise<SpaceFundingSettings> {
   if (!isUuid(workspaceId)) throw new SpaceError('not_found', 'Space not found');
   const [row] = await db
-    .select({ mode: workspaces.agentFunding, sponsorUserId: workspaces.sponsorUserId, sponsorModels: workspaces.sponsorModels })
+    .select({
+      mode: workspaces.agentFunding,
+      sponsorUserId: workspaces.sponsorUserId,
+      sponsorModels: workspaces.sponsorModels,
+      sponsorActive: sql<boolean>`coalesce(${users.isActive} and ${users.kind} = 'local', false)`,
+    })
     .from(workspaces)
+    .leftJoin(users, eq(users.id, workspaces.sponsorUserId))
     .where(and(eq(workspaces.id, workspaceId), eq(workspaces.kind, 'shared')))
     .limit(1);
   if (!row) throw new SpaceError('not_found', 'Space not found');
+  if (row.sponsorUserId && !row.sponsorActive) return { mode: row.mode, sponsorUserId: null, sponsorModels: [] };
   return { mode: row.mode, sponsorUserId: row.sponsorUserId, sponsorModels: row.sponsorModels ?? [] };
 }
 
