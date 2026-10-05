@@ -408,14 +408,33 @@ text change live but cannot edit (their updates are refused); so is
 everyone in an archived space.
 
 - **Other writers merge.** Everything else that writes a space note — a
-  REST save, quick capture, meeting notes, the agent, accepting a proposal,
-  restoring a revision — names the text it started from (its *base*). The
-  server merges that change into the live text (a three-way merge, lines
-  first, then words) or refuses it as stale; it never overwrites what
-  someone typed meanwhile. A read of an open note returns the live text and
-  its sha, which the server keeps as a base for `spaces.docBaseTtlMinutes`.
-  Archiving an open note saves what was typed first, then closes it for
-  everyone.
+  REST save, meeting notes, the agent, accepting a proposal, restoring a
+  revision — names the text it started from (its *base*); a body write to
+  an existing note without one is refused (it could not be told apart from
+  a revert of what changed since its read). The server merges that change
+  into the live text (a three-way merge, lines first, then words) or
+  refuses it as stale; it never overwrites what someone typed meanwhile. A
+  read of an open note returns the live text and its sha, which the server
+  keeps as a base for `spaces.docBaseTtlMinutes` (bases handed to a reader
+  outlive those only saved). Quick capture appends to the end of the live
+  text. A meeting re-import merges from the body it last rendered into the
+  note. Archiving an open note saves what was typed first, then closes it
+  for everyone; an archived note opens read-only.
+- **Reconnects.** After the last editor leaves, a note stays in memory for
+  a minute: a member whose connection blipped rejoins the same document and
+  what they typed offline merges in. When the server rebuilt the document
+  meanwhile (a restart — shutdown saves every open note first — or a change
+  made around it), the editor re-seeds and merges what it had beyond the
+  last server text it synced back in (`POST /api/notes/:id/merge`); if that
+  clashes with a change made meanwhile, nothing is applied and the editor
+  says so and offers "Copy my version".
+- **Integrity.** An editor's update may only insert or delete text of the
+  note (no other shared type, embed or format), and the server caps the
+  whole document's encoded size, not just the text. Cursors and avatars are
+  the server's: a connection announces at most two cursors, never another
+  connection's, and each names the member of its connection. Line endings
+  are `\n`: a note stored with `\r\n` is normalized (and saved) when
+  opened, and every writer's text is normalized.
 - **History.** Every save is a revision with its authors (and the member an
   agent wrote for). The notes page's right panel has a *history* tab: open a
   revision to read it, restore it as a new revision.
