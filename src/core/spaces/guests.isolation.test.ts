@@ -450,6 +450,14 @@ describe('presence', () => {
       const changed = (t: Tab) => t.frames.filter((f) => f.type === 'event' && f.event.type === 'task.changed').map((f) => f.event.payload.taskId as string);
       await waitFor(() => changed(viewer).includes(inScope.id) && changed(viewer).includes(outOfScope.id), 'the viewer hears both');
       expect(changed(gina)).toEqual([inScope.id]);
+
+      // A deletion is judged on the deleted row: the guest hears of the
+      // in-scope task going, never of the out-of-scope one.
+      expect(await editor.tasks.delete(outOfScope.id)).toBe(true);
+      expect(await editor.tasks.delete(inScope.id)).toBe(true);
+      await waitFor(() => changed(viewer).filter((id) => id === inScope.id || id === outOfScope.id).length === 4, 'the viewer hears both deletions');
+      await waitFor(() => changed(gina).length === 2, 'gina to hear the in-scope deletion');
+      expect(changed(gina)).toEqual([inScope.id, inScope.id]);
     } finally {
       for (const t of tabs) hub.connectionManager.handleClose(t.id, 1000, 'test');
     }

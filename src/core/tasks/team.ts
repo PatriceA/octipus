@@ -27,9 +27,14 @@ import { ACTIVE_TASK_STATUSES } from './status';
  * commented, deleted). Only to current members, read now — a removed
  * member's still-open connection hears nothing — and of guests only those
  * whose scope reaches the task (S6, `taskInGuestScope`: raised from one of
- * their rooms). A deleted task's row is gone, so no guest hears of it.
+ * their rooms). A deletion passes the deleted row's `sourceRef`, since the
+ * row itself is gone by now.
  */
-export async function taskChanged(workspaceId: string, taskId: string): Promise<void> {
+export async function taskChanged(
+  workspaceId: string,
+  taskId: string,
+  deleted?: { sourceRef: Task['sourceRef'] },
+): Promise<void> {
   const [{ eventMessage, spaceResource }, { getGatewayHub }, { storedGuestScope, taskInGuestScope }] = await Promise.all([
     import('@/core/rooms/events'), import('@/core/gateway/hub'), import('@/security/space-access'),
   ]);
@@ -38,7 +43,7 @@ export async function taskChanged(workspaceId: string, taskId: string): Promise<
     .from(workspaceMembers)
     .where(eq(workspaceMembers.workspaceId, workspaceId));
   const guests = rows.filter((r) => r.role === 'guest');
-  const [task] = guests.length === 0 ? [] : await getDb()
+  const [task] = guests.length === 0 ? [] : deleted ? [deleted] : await getDb()
     .select({ sourceRef: tasks.sourceRef })
     .from(tasks)
     .where(and(eq(tasks.id, taskId), eq(tasks.workspaceId, workspaceId)))
@@ -58,8 +63,8 @@ export async function taskChanged(workspaceId: string, taskId: string): Promise<
 }
 
 /** `taskChanged`, detached from the committed write; a failure is logged. */
-export function publishTaskChanged(workspaceId: string, taskId: string): void {
-  taskChanged(workspaceId, taskId).catch((err: unknown) => coreLogger.error({ err, workspaceId, taskId }, 'task.changed not published'));
+export function publishTaskChanged(workspaceId: string, taskId: string, deleted?: { sourceRef: Task['sourceRef'] }): void {
+  taskChanged(workspaceId, taskId, deleted).catch((err: unknown) => coreLogger.error({ err, workspaceId, taskId }, 'task.changed not published'));
 }
 
 /**

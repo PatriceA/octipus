@@ -794,9 +794,11 @@ owner under Space settings → Funding (`PUT /api/spaces/:id/funding`):
 - **Live board.** Every write to a space task (create, edit, claim,
   release, comment, delete) sends `task.changed { taskId, workspaceId }` to
   the space's gateway subscribers (`space.subscribe`) who are current
-  members other than guests (a guest's scope is not checked per task yet);
-  the board refetches on it, once per burst, instead of polling. A personal
-  board still re-reads every 30 seconds.
+  members; a guest hears only of tasks in their scope (raised from one of
+  their rooms), a deletion included, judged on the deleted row. The board
+  refetches on it, once per burst, instead of polling while the gateway is
+  connected; a personal board, or a space board without a connection,
+  re-reads every 30 seconds.
 - **Room modes** (room settings, `GET/PUT /api/spaces/:id/rooms/:roomId/mode`,
   the room's creator or an owner): `mention` (default) speaks only when
   asked; `listen` offers help on a question nobody answered ("I could look
