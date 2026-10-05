@@ -14,6 +14,7 @@ import { buildSecurityReminder } from './input-guard';
 import type { ModelSelector, SelectedModel } from './model-selector';
 import { SECURITY_PREAMBLE } from './roles';
 import { appendSources, type ResponseMetadata } from './types';
+import { omitSpaceTurnContext } from '@/core/spaces/turn-context';
 
 /**
  * Assemble a direct-response system prompt from its components.
@@ -162,8 +163,9 @@ async function directResponseInternal(
     const promptContext = systemContent.slice(boundary).trim();
     let requestAt = new Date();
     if (!inRoom) {
+      // The space turn context is this turn's only, never stored (§6.5, §6.7).
       const userRow = await messageRepository.createForGeneration({ sessionId, role: 'user', content: message,
-        metadata: { promptContext } }, history.generation);
+        metadata: { promptContext: omitSpaceTurnContext(promptContext).trim() } }, history.generation);
       if (!userRow) return { response: 'Conversation was cleared while this turn was running.', metadata: { model: modelName } };
       await sessionRepository.incrementMessageCount(sessionId);
       requestAt = userRow.createdAt;

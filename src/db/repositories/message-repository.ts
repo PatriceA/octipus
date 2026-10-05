@@ -12,6 +12,17 @@ import { assertRoomAuthor, messageEvents } from './message-events';
  */
 export const CONTEXT_MESSAGE_CAP = 400;
 
+/** The rows of a session's transcript after a clear/checkpoint (`findContextMessages`). */
+function contextFilters(sessionId: string, since: string | undefined, after: { id: string; createdAt: string } | undefined, generation: string | undefined) {
+  const filters = [eq(messages.sessionId, sessionId), inArray(messages.role, ['user', 'assistant'])];
+  if (generation !== undefined) {
+    const legacy = since ? sql`${messages.createdAt} > ${since}::timestamptz` : sql`true`;
+    filters.push(sql`(${messages.metadata}->>'sessionGeneration' = ${generation} OR (${messages.metadata}->>'sessionGeneration' IS NULL AND ${legacy}))`);
+  } else if (since) filters.push(gte(messages.createdAt, new Date(since)));
+  if (after) filters.push(sql`(${messages.createdAt}, ${messages.id}) > (${after.createdAt}::timestamptz, ${after.id}::uuid)`);
+  return filters;
+}
+
 export class MessageRepository {
   private get db() { return getDb(); }
 
@@ -24,16 +35,22 @@ export class MessageRepository {
    * Selected newest-first and reversed, so the cap drops the OLDEST rows.
    */
   async findContextMessages(sessionId: string, since?: string, after?: { id: string; createdAt: string }, generation?: string, limit = CONTEXT_MESSAGE_CAP): Promise<Message[]> {
-    const filters = [eq(messages.sessionId, sessionId), inArray(messages.role, ['user', 'assistant'])];
-    if (generation !== undefined) {
-      const legacy = since ? sql`${messages.createdAt} > ${since}::timestamptz` : sql`true`;
-      filters.push(sql`(${messages.metadata}->>'sessionGeneration' = ${generation} OR (${messages.metadata}->>'sessionGeneration' IS NULL AND ${legacy}))`);
-    } else if (since) filters.push(gte(messages.createdAt, new Date(since)));
-    if (after) filters.push(sql`(${messages.createdAt}, ${messages.id}) > (${after.createdAt}::timestamptz, ${after.id}::uuid)`);
     // i2: by session id, for the agent runtime that owns the session; user routes use ScopedMessageRepo
-    const newestFirst = await this.db.select().from(messages).where(and(...filters))
+    const newestFirst = await this.db.select().from(messages).where(and(...contextFilters(sessionId, since, after, generation)))
       .orderBy(desc(messages.createdAt), desc(messages.id)).limit(limit);
     return newestFirst.reverse();
+  }
+
+  /**
+   * The same transcript as {@link findContextMessages}, oldest first, one
+   * page of `limit` rows after `after` — for a reader that must see every
+   * row (a room's history and compaction, coworking §6.4), where the
+   * newest-first backstop would silently drop the oldest ones.
+   */
+  async findContextMessagesPage(sessionId: string, since: string | undefined, after: { id: string; createdAt: string } | undefined, generation: string | undefined, limit = CONTEXT_MESSAGE_CAP): Promise<Message[]> {
+    // i2: by session id, for the agent runtime that owns the session; user routes use ScopedMessageRepo
+    return this.db.select().from(messages).where(and(...contextFilters(sessionId, since, after, generation)))
+      .orderBy(asc(messages.createdAt), asc(messages.id)).limit(limit);
   }
 
   async findById(id: string): Promise<Message | null> {

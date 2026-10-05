@@ -7,6 +7,27 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### Fixed
+
+- **Rooms (review of S2).** `remember_for_space` goes through
+  `routeApprovalFor` as a space write (role cap, and an ASK after a private
+  read in a private space session). The space memory and a side panel's
+  linked-room transcript are injected per turn only, never stored with the
+  turn (`metadata.promptContext`, native snapshots) nor replayed. Room turns
+  carry a stop signal checked at handover, before the root agent spawns and
+  before the answer is stored; `/stop`, removal and the approval timeout
+  stop only the turn they decided about, and tool decisions in a room
+  re-check `roomAccess`. `/compact` refuses while a turn runs. Room history
+  and compaction page past the 400-row cap; a turn compacts first when its
+  transcript exceeds `rooms.transcriptWindowChars` and its history stays in
+  that window. A room `yes` resolves its approval by id. A requester's
+  limit refusal posts a neutral line in the room (details to the requester
+  only), and failed turns no longer broadcast error text. The swarm routes'
+  admin bypass never reaches rooms or space sessions. A room creator's
+  manage rights need a write role. Queue turns alternate between members;
+  `requester` checks the running turn's requester; pruned subscriptions
+  clear presence; `room.subscribe` re-checks access after joining.
+
 ### Added
 
 - **Rooms in the web.** With a shared space selected, the sidebar gets

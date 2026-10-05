@@ -49,6 +49,7 @@ import { ToolLoopDetector } from './agent-worker/tool-loop-detector';
 import { isRootAgent } from './types';
 import type { AgentMessage, ToolCall } from './types';
 import { omitGroupTranscripts } from '@/core/channels/group-context';
+import { omitSpaceTurnContext } from '@/core/spaces/turn-context';
 
 // Re-export types for backward compatibility
 export type { AgentEvent, AgentEventHandler, AgentWorkerConfig, ToolHandler } from './agent-base';
@@ -603,12 +604,15 @@ export class AgentWorker extends BaseAgentWorker {
     // (`metadata.room` is set on the root of every room turn; the message
     // repository refuses an authorless user row in a room regardless.)
     if (isRootAgent(this.context) && !this.inRoom && !this.context.metadata?.room) {
+      // The space turn context (space memory, a linked room's transcript) is
+      // read afresh each turn and never stored with it.
+      const storedContext = omitSpaceTurnContext(promptContext).trim();
       const row = await messageRepository.create({
         sessionId: this.context.sessionId,
         role: 'user',
         content,
         agentId: this.context.id,
-        metadata: promptContext ? { promptContext } : undefined,
+        metadata: storedContext ? { promptContext: storedContext } : undefined,
       }, this.cacheGeneration);
       message.sourceMessageId = row.id;
       this.userCursor = row.id ? { id: row.id, createdAt: row.createdAt.toISOString() } : undefined;
@@ -776,9 +780,10 @@ export class AgentWorker extends BaseAgentWorker {
         await sessionRepository.patchContextIfGeneration(this.context.sessionId, this.cacheGeneration, {
           nativeConversation: { generation: this.cacheGeneration, model: this.context.model,
             ownerAgentId: this.context.id, checkpointId: this.checkpointId, acknowledged: this.userCursor,
-            // Group-thread transcripts are per turn: the next turn reads the
-            // thread afresh, so the snapshot keeps none (omitGroupTranscripts).
-            messages: capNativeSnapshot(this.messages.filter(m => m.role !== 'system' || m.content.startsWith('[Context Summary')).map(m => ({ ...m, role: m.role === 'system' ? 'user' : m.role, content: m.role === 'user' ? omitGroupTranscripts(m.content) : m.content, timestamp: m.timestamp.toISOString() }))) },
+            // Group-thread transcripts and the space turn context are per
+            // turn: the next turn reads them afresh, so the snapshot keeps
+            // none (omitGroupTranscripts, omitSpaceTurnContext).
+            messages: capNativeSnapshot(this.messages.filter(m => m.role !== 'system' || m.content.startsWith('[Context Summary')).map(m => ({ ...m, role: m.role === 'system' ? 'user' : m.role, content: m.role === 'user' ? omitSpaceTurnContext(omitGroupTranscripts(m.content)) : m.content, timestamp: m.timestamp.toISOString() }))) },
         });
       }
       this.context.completedAt = new Date();

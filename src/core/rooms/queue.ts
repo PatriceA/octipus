@@ -12,8 +12,15 @@
  * - a member has at most `rooms.maxQueuedPerMember` requests waiting;
  * - the runner re-checks the requester's access when the request is handed
  *   over (it may have been removed meanwhile);
- * - `/stop` stops the running turn's agents (the requester's own turn, or
- *   anyone's for an editor+, who may also clear the queue);
+ * - `/stop` stops the running turn (the requester's own turn, or anyone's
+ *   for an editor+, who may also clear the queue): its abort signal fires —
+ *   the runner checks it at handover, before the root agent spawns and
+ *   before the answer is stored — and its agents are stopped. A stop names
+ *   the turn it means (`expectedMessageId`), so a stop decided while one
+ *   turn ran never ends the next one;
+ * - the next turn goes to the oldest request of a member other than the
+ *   one just answered, when there is one, so one member's queued requests
+ *   do not hold everyone else back;
  * - a turn waiting on its requester's approval for longer than
  *   `rooms.approvalTimeoutMinutes` gives up: the request is expired through
  *   the permission or approval manager and the turn's agents are stopped,
@@ -34,8 +41,12 @@ export interface RoomRequest {
   enqueuedAt: Date;
 }
 
-/** Runs one turn of the room for `request`; resolves when the turn is over. */
-export type RoomTurnRun = (request: RoomRequest) => Promise<void>;
+/**
+ * Runs one turn of the room for `request`; resolves when the turn is over.
+ * `signal` fires when the turn is stopped: the runner must not start work
+ * (or store an answer) once it has.
+ */
+export type RoomTurnRun = (request: RoomRequest, signal: AbortSignal) => Promise<void>;
 
 interface Queued extends RoomRequest {
   run: RoomTurnRun;
@@ -45,6 +56,7 @@ interface Running extends RoomRequest {
   startedAt: Date;
   waiting: boolean;
   model?: string;
+  abort: AbortController;
 }
 
 interface RoomState {
@@ -144,23 +156,31 @@ async function drain(roomId: string): Promise<void> {
   if (!state || state.draining) return;
   state.draining = true;
   try {
-    for (let next = state.waiting.shift(); next; next = state.waiting.shift()) {
+    let lastRequester: string | null = null;
+    for (let next = takeNext(state, lastRequester); next; next = takeNext(state, lastRequester)) {
       const { run, ...request } = next;
-      state.running = { ...request, startedAt: new Date(), waiting: false };
+      lastRequester = request.requesterId;
+      const abort = new AbortController();
+      state.running = { ...request, startedAt: new Date(), waiting: false, abort };
       announce(roomId, 'started', request);
       const stopWatch = watchApprovals(roomId, request);
       let outcome: RoomTurnOutcome = 'success';
       let error: string | undefined;
       try {
-        await run(request);
-        if (stoppedTurns.has(request.messageId)) outcome = 'stopped';
+        await run(request, abort.signal);
+        if (abort.signal.aborted) outcome = 'stopped';
       } catch (err) {
-        outcome = err instanceof RoomTurnDropped ? 'dropped' : 'failed';
-        error = err instanceof Error ? err.message : String(err);
-        if (outcome === 'failed') coreLogger.error({ err, roomId, requesterId: request.requesterId }, 'Room turn failed');
+        outcome = abort.signal.aborted ? 'stopped' : err instanceof RoomTurnDropped ? 'dropped' : 'failed';
+        // Every member reads `room.turn`: a dropped turn says why (its reasons
+        // are written for the room); a failure says only that it failed — its
+        // details are logged, and sent to the requester alone by the runner.
+        if (outcome === 'dropped') error = (err as Error).message;
+        if (outcome === 'failed') {
+          error = `Octipus could not answer ${request.requesterName}`;
+          coreLogger.error({ err, roomId, requesterId: request.requesterId }, 'Room turn failed');
+        }
       } finally {
         stopWatch();
-        stoppedTurns.delete(request.messageId);
         await stopLeftovers(roomId);
         state.running = null;
       }
@@ -172,6 +192,15 @@ async function drain(roomId: string): Promise<void> {
   }
 }
 
+/**
+ * The next request: the oldest one of a member other than `lastRequester`
+ * (the member just answered), else the oldest.
+ */
+function takeNext(state: RoomState, lastRequester: string | null): Queued | undefined {
+  const at = lastRequester ? state.waiting.findIndex((q) => q.requesterId !== lastRequester) : 0;
+  return state.waiting.splice(at < 0 ? 0 : at, 1)[0];
+}
+
 /** Thrown by a runner that dropped its request at handover (access gone). */
 export class RoomTurnDropped extends Error {
   constructor(message: string) {
@@ -179,9 +208,6 @@ export class RoomTurnDropped extends Error {
     this.name = 'RoomTurnDropped';
   }
 }
-
-/** Turns stopped by `/stop`, so their end is announced as `stopped`. */
-const stoppedTurns = new Set<string>();
 
 /** Agents of the room still running. */
 async function roomAgents(roomId: string, userId?: string) {
@@ -203,14 +229,19 @@ async function stopLeftovers(roomId: string): Promise<void> {
 }
 
 /**
- * Stop the running turn's agents. Returns whether a turn was running. The
- * caller has checked `canActInSession(room, user, 'stop')`.
+ * Stop the running turn — only the turn for `expectedMessageId`, the one
+ * the caller decided about: a turn that started meanwhile is not touched.
+ * Its abort signal fires (the runner stops before spawning or storing) and
+ * its agents are stopped. Returns whether that turn was running. The caller
+ * has checked `canActInSession(room, user, 'stop')`.
  */
-export async function stopRoomTurn(roomId: string): Promise<boolean> {
+export async function stopRoomTurn(roomId: string, expectedMessageId: string): Promise<boolean> {
   const running = rooms.get(roomId)?.running;
-  if (!running) return false;
-  stoppedTurns.add(running.messageId);
+  if (!running || running.messageId !== expectedMessageId) return false;
+  running.abort.abort(new Error('The room turn was stopped'));
   const { manager, agents } = await roomAgents(roomId);
+  // Re-read after the await: only this turn's agents.
+  if (rooms.get(roomId)?.running !== running) return true;
   for (const agent of agents) manager.stop(agent.getContext().id, { cascade: true });
   return true;
 }
@@ -251,7 +282,8 @@ export async function dropRoomTurnsOf(roomId: string, userId: string): Promise<{
   const dropped = state.waiting.filter((q) => q.requesterId === userId);
   state.waiting = state.waiting.filter((q) => q.requesterId !== userId);
   for (const request of dropped) announce(roomId, 'done', request, { outcome: 'dropped' });
-  const stopped = state.running?.requesterId === userId ? await stopRoomTurn(roomId) : false;
+  const running = state.running;
+  const stopped = running?.requesterId === userId ? await stopRoomTurn(roomId, running.messageId) : false;
   forget(roomId);
   return { queued: dropped.length, stopped };
 }
@@ -301,7 +333,7 @@ function watchApprovals(roomId: string, request: RoomRequest): () => void {
   const timer = setInterval(() => {
     if (checking) return;
     checking = true;
-    expireStaleRequests(roomId, request.requesterId, timeoutMs)
+    expireStaleRequests(roomId, request.requesterId, timeoutMs, request.messageId)
       .catch((err: unknown) => coreLogger.error({ err, roomId }, 'Room approval timeout check failed'))
       .finally(() => { checking = false; });
   }, every);
@@ -311,8 +343,11 @@ function watchApprovals(roomId: string, request: RoomRequest): () => void {
 
 const TIMED_OUT = 'Nobody answered in time, so this room turn gave up.';
 
-/** Expire `requesterId`'s requests in the room older than `timeoutMs`; stop the turn when any. Returns how many. */
-export async function expireStaleRequests(roomId: string, requesterId: string, timeoutMs: number): Promise<number> {
+/**
+ * Expire `requesterId`'s requests in the room older than `timeoutMs`; stop
+ * their turn (`messageId`) when any. Returns how many.
+ */
+export async function expireStaleRequests(roomId: string, requesterId: string, timeoutMs: number, messageId: string): Promise<number> {
   const cutoff = Date.now() - timeoutMs;
   const [{ getAgentService }, { getPermissionManager }] = await Promise.all([
     import('@/core/agent'), import('@/security/permissions'),
@@ -326,12 +361,11 @@ export async function expireStaleRequests(roomId: string, requesterId: string, t
   if (approvals.length > 0) expired += await getAgentService().expireApprovalsForUser(requesterId, TIMED_OUT, new Set([roomId]));
   if (permissions.length > 0) expired += await getPermissionManager().expireForUserInSession(requesterId, roomId);
   coreLogger.info({ roomId, requesterId, expired }, 'Room turn gave up waiting for an approval');
-  await stopRoomTurn(roomId);
+  await stopRoomTurn(roomId, messageId);
   return expired;
 }
 
 /** Test hook. */
 export function _resetRoomQueuesForTests(): void {
   rooms.clear();
-  stoppedTurns.clear();
 }

@@ -80,6 +80,11 @@ export interface MaybeCompactSessionOptions {
    * by the install. Required for a room.
    */
   requesterId?: string;
+  /**
+   * A room: compact only the rows before this post — the request of the
+   * turn about to run, which is never summarized before it is answered.
+   */
+  before?: { id: string; createdAt: string };
 }
 
 /**
@@ -220,40 +225,60 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
  * starts where it ends (no gap, no overlap). The summary call runs as the
  * requester, funded by the install; it never feeds memory extraction (a
  * room's words are not anyone's personal memories).
+ *
+ * The history holds every row after the checkpoint (paged, no row cap), and
+ * the summary is made in chunks of at most `ROOM_SUMMARY_CHUNK_CHARS`, each
+ * folding into the previous one's summary: however many posts piled up
+ * since the last pass, all of them are summarized, none skipped.
  */
 async function compactRoom(sessionId: string, options: MaybeCompactSessionOptions): Promise<boolean> {
   if (!options.requesterId) throw new Error('Room compaction needs the requester of the turn that triggered it');
   const history = await readSessionHistory(sessionId);
-  if (!history.session || history.rows.length < 2) return false;
+  if (!history.session) return false;
+  const { isBefore } = await import('@/core/session-history');
+  const before = options.before;
+  const rows = before ? history.rows.filter((row) => isBefore(row, before)) : history.rows;
+  if (rows.length < 2) return false;
   const { transcriptChars, renderRoomTranscript } = await import('@/core/rooms/room-context');
   const window = getConfig().rooms.transcriptWindowChars;
   const manual = Boolean(options.force || options.userInstructions);
-  const chars = transcriptChars(history.rows);
+  const chars = transcriptChars(rows);
   if (!manual && chars <= window) return false;
   // Keep the newest rows that fit in half the window verbatim (at least one),
   // summarize everything before them (at least one).
-  let boundary = history.rows.length - 1;
-  while (boundary > 1 && transcriptChars(history.rows.slice(boundary - 1)) <= window / 2) boundary--;
-  const prefix = history.rows.slice(0, boundary);
+  let boundary = rows.length - 1;
+  for (let kept = transcriptChars([rows[boundary]]); boundary > 1; boundary--) {
+    kept += transcriptChars([rows[boundary - 1]]);
+    if (kept > window / 2) break;
+  }
+  const prefix = rows.slice(0, boundary);
   if (prefix.length === 0) return false;
   const model = await getModelRegistry().getDefaultModel();
   if (!model) throw new Error('No model configured for session compaction');
-  const transcript = renderRoomTranscript({ roomTitle: history.session.title ?? 'Room', rows: prefix });
   const { withProviderUsageContext } = await import('@/models/providers/instrumented');
-  const result = await withProviderUsageContext(
-    { userId: options.requesterId, sessionId, workspaceId: history.session.workspaceId, funding: 'install' },
-    () => createLLMSummary([{ role: 'user', content: transcript, timestamp: new Date() }], model.modelId, {
-      previousSummary: history.checkpoint?.summary,
-      previousFileOps: history.checkpoint?.fileOps,
-      userInstructions: options.userInstructions,
-      userId: options.requesterId,
-      requireSuccess: true,
-    }),
-  );
-  if (!result.summaryText.trim()) return false;
+  let previousSummary = history.checkpoint?.summary;
+  let previousFileOps = history.checkpoint?.fileOps;
+  let result: Awaited<ReturnType<typeof createLLMSummary>> | undefined;
+  for (const chunk of roomSummaryChunks(prefix, transcriptChars)) {
+    const transcript = renderRoomTranscript({ roomTitle: history.session.title ?? 'Room', rows: chunk });
+    result = await withProviderUsageContext(
+      { userId: options.requesterId, sessionId, workspaceId: history.session.workspaceId, funding: 'install' },
+      () => createLLMSummary([{ role: 'user', content: transcript, timestamp: new Date() }], model.modelId, {
+        previousSummary,
+        previousFileOps,
+        userInstructions: options.userInstructions,
+        userId: options.requesterId,
+        requireSuccess: true,
+      }),
+    );
+    if (!result.summaryText.trim()) return false;
+    previousSummary = result.message.content;
+    previousFileOps = result.fileOps;
+  }
+  if (!result) return false;
   const summary = result.message.content;
   const tokensBefore = Math.ceil(chars / 4);
-  const tokensAfter = Math.ceil((summary.length + transcriptChars(history.rows.slice(boundary))) / 4);
+  const tokensAfter = Math.ceil((summary.length + transcriptChars(rows.slice(boundary))) / 4);
   const savingsRatio = tokensBefore > 0 ? (tokensBefore - tokensAfter) / tokensBefore : 0;
   const last = prefix[prefix.length - 1];
   const entry = await compactionEntryRepository.insert({
@@ -271,6 +296,37 @@ async function compactRoom(sessionId: string, options: MaybeCompactSessionOption
   });
   if (published) coreLogger.info({ sessionId, chars, summarized: prefix.length }, 'Room checkpoint committed');
   return Boolean(published);
+}
+
+/** The most transcript one room summary call reads; a longer prefix is summarized in several. */
+export const ROOM_SUMMARY_CHUNK_CHARS = 48_000;
+
+/**
+ * `rows` cut into consecutive chunks of at most `ROOM_SUMMARY_CHUNK_CHARS`
+ * of transcript; a single longer post is cut to that size in its chunk.
+ */
+function roomSummaryChunks<T extends { content: string; role: string; createdAt: Date; authorName: string | null }>(
+  rows: readonly T[],
+  charsOf: (rows: readonly T[]) => number,
+): T[][] {
+  const chunks: T[][] = [];
+  let chunk: T[] = [];
+  let size = 0;
+  for (const original of rows) {
+    const row = original.content.length > ROOM_SUMMARY_CHUNK_CHARS
+      ? { ...original, content: `${original.content.slice(0, ROOM_SUMMARY_CHUNK_CHARS - 200)} …[cut]` }
+      : original;
+    const chars = charsOf([row]);
+    if (chunk.length > 0 && size + chars > ROOM_SUMMARY_CHUNK_CHARS) {
+      chunks.push(chunk);
+      chunk = [];
+      size = 0;
+    }
+    chunk.push(row);
+    size += chars;
+  }
+  if (chunk.length > 0) chunks.push(chunk);
+  return chunks;
 }
 
 /**

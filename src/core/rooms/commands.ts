@@ -8,7 +8,11 @@
  *   /help, /status, /cancel  any member (status without other members' details)
  *   /stop                    the running turn's requester, or an editor+;
  *                            `/stop queue` (editor+) also clears the queue
- *   /clear, /compact         the room's creator or a space owner
+ *   /clear, /compact         the room's creator (while an editor+) or a space
+ *                            owner, and only while no turn runs: /compact
+ *                            waits on the conversation the running turn
+ *                            holds, and this connection's later frames
+ *                            (a `yes` the turn waits on) wait on it
  *   /model, /voice, /learn…  refused (model choice and learning are the
  *                            requester's own, personal — not a room's)
  */
@@ -63,17 +67,19 @@ export async function runRoomCommand(roomId: string, userId: string, content: st
       return cancelled > 0 ? `Cancelled ${cancelled} waiting request(s).` : 'You have no request waiting.';
     }
     case 'stop': {
-      const requester = runningRequester(roomId);
+      // The turn decided about: the stop below acts on it only, never on a
+      // turn that started during the access check.
+      const running = roomQueueSnapshot(roomId).running;
       const clearQueue = arg === 'queue' || arg === 'all';
       if (clearQueue) {
         // Clearing everyone's queue is an editor+ act, whoever runs now.
         if (!(await canActInSession(room, userId, 'stop', { turnRequesterId: null }))) return 'Only editors and owners can clear the room\'s queue.';
-      } else if (!requester) {
+      } else if (!running) {
         return 'Nothing is running in this room.';
-      } else if (!(await canActInSession(room, userId, 'stop', { turnRequesterId: requester }))) {
+      } else if (!(await canActInSession(room, userId, 'stop', { turnRequesterId: running.requesterId }))) {
         return 'Only the member Octipus is answering, or an editor or owner, can stop it.';
       }
-      const stopped = await stopRoomTurn(roomId);
+      const stopped = running ? await stopRoomTurn(roomId, running.messageId) : false;
       const cleared = clearQueue ? clearRoomQueue(roomId) : 0;
       return [stopped ? 'Stopped.' : 'Nothing was running.', clearQueue ? `Cleared ${cleared} waiting request(s).` : ''].filter(Boolean).join(' ');
     }
@@ -85,6 +91,7 @@ export async function runRoomCommand(roomId: string, userId: string, content: st
     }
     case 'compact': {
       if (!(await canActInSession(room, userId, 'manage'))) return 'Only the room\'s creator or a space owner can compact it.';
+      if (runningRequester(roomId)) return 'Octipus is answering right now; /compact once the answer is in.';
       const { maybeCompactSession } = await import('@/core/agent/session-compaction');
       const done = await maybeCompactSession(roomId, { force: true, requesterId: userId, userInstructions: rest.join(' ').trim() || undefined });
       return done ? 'Older messages summarized for Octipus; recent ones kept as they are.' : 'Nothing to summarize yet.';
