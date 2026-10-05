@@ -304,18 +304,21 @@ export default function TasksPage() {
       fetchTasks();
     }, TASK_CHANGED_DEBOUNCE_MS);
   });
+  // Keyed on `live`, not on the raw status: while the gateway is down it
+  // cycles connecting/disconnected on every backoff retry (from 1s), and a
+  // timer re-armed on each flip would never reach 30s, so the poll never ran.
+  const live = !!spaceId && gatewayStatus === 'connected';
   useEffect(() => {
     const tick = () => {
       if (document.visibilityState === 'visible') fetchTasks();
     };
-    const live = !!spaceId && gatewayStatus === 'connected';
     const timer = live ? null : setInterval(tick, REFRESH_MS);
     document.addEventListener('visibilitychange', tick);
     return () => {
       if (timer) clearInterval(timer);
       document.removeEventListener('visibilitychange', tick);
     };
-  }, [fetchTasks, spaceId, gatewayStatus]);
+  }, [fetchTasks, live]);
 
   useEffect(() => {
     let cancelled = false;
