@@ -122,6 +122,12 @@ const ALLOWLIST: Record<string, string> = {
   'src/core/rooms/service.ts': ACCESS_LAYER,
   'src/core/rooms/membership.ts': 'pending requests of one room, for an access change',
   'src/core/spaces/memory.ts': ACCESS_LAYER,
+  // S5: the listen gate reads rooms in listen mode and their recent posts for
+  // no caller; room settings and feedback follow `requireRoom`.
+  'src/core/rooms/listen.ts': ACCESS_LAYER,
+  // S5 "My work": tasks assigned to the caller, in spaces joined through
+  // their membership in the same query, and their own personal workspaces.
+  'src/core/tasks/team.ts': 'my tasks across my memberships, by assignee',
   'src/db/repositories/session-kind.ts': 'the kind of one session by id (no content)',
   'src/security/workspace-resolver.ts': 'workspace of a session/agent/pipeline the caller owns, by id',
   // Unscoped stores keyed by an id the caller already holds (MARKED: per read).

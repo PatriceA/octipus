@@ -82,7 +82,9 @@ test('an owner sponsors the space, picks a sponsor model and sets a budget', asy
 
   await funding.getByRole('button', { name: 'sponsor this space' }).click();
   await expect(funding.getByTestId('space-sponsor')).toHaveText(STUB_USER.username);
-  await funding.getByLabel('Sponsor model My paid model').check();
+  // A controlled box: checked once the server's answer is read back.
+  await funding.getByLabel('Sponsor model My paid model').click();
+  await expect(funding.getByLabel('Sponsor model My paid model')).toBeChecked();
   await expect.poll(() => calls.at(-1)?.body).toEqual({ sponsorModels: [MY_MODEL] });
   await expect(page.getByText(/agent runs paid by/)).toBeVisible();
 
