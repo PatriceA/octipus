@@ -131,7 +131,7 @@ export function NotesWorkspace() {
   };
 
   const save = useMutation({
-    mutationFn: (payload: { id?: string; title: string; body?: string; tags: string[]; noteKind: string; slug?: string }) =>
+    mutationFn: (payload: { id?: string; title: string; body?: string; tags: string[]; noteKind: string; slug?: string; baseSha256?: string }) =>
       api.post<{ note: NoteRow }>('/notes', payload),
     onSuccess: (res, vars) => {
       setSelectedId(res.note.id);
@@ -222,7 +222,9 @@ export function NotesWorkspace() {
     const next = draftBody.trim() ? `${draftBody.trimEnd()}\n\n[[${title}]]` : `[[${title}]]`;
     setDraftBody(next);
     if (selectedId && draftTitle) {
-      save.mutate({ id: selectedId, title: draftTitle, body: next, tags: draftTags, noteKind: draftKind });
+      // A space note's body write names the text it was made from.
+      const baseSha256 = isSpace && detail.data?.id === selectedId ? detail.data.bodySha256 : undefined;
+      save.mutate({ id: selectedId, title: draftTitle, body: next, tags: draftTags, noteKind: draftKind, baseSha256 });
     }
   }
 

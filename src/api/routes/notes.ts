@@ -1,7 +1,8 @@
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { acceptProposal, listNoteProposals, rejectProposal } from '@/core/docs/edit-proposals';
-import { NoteTooLargeError, StaleWriteError } from '@/core/docs/hub';
+import { getConfig } from '@/config';
+import { NoteTooLargeError, StaleWriteError, sha256Hex } from '@/core/docs/hub';
 import { getNoteService } from '@/core/knowledge/notes';
 import { getSuggestionService } from '@/core/knowledge/suggestions';
 import { type ContentRepos, contentRepos } from '@/db/repositories/content';
@@ -28,10 +29,15 @@ type StatusSetter = { status?: number | string };
 
 /**
  * A space-note write refused by the document hub: 409 when the note changed
- * in a way the write cannot merge with (read it again), 413 when it would
- * exceed `spaces.noteMaxBytes`. Null for any other error (rethrown).
+ * in a way the write cannot merge with (read it again), 400 when a body
+ * write to an existing space note names no base, 413 when it would exceed
+ * `spaces.noteMaxBytes`. Null for any other error (rethrown).
  */
 function liveWriteError(err: unknown, set: StatusSetter): { error: string; code: string; currentSha256?: string } | null {
+  if (err instanceof StaleWriteError && err.reason === 'missing_base') {
+    set.status = 400;
+    return { error: err.message, code: 'base_required', currentSha256: err.currentSha256 };
+  }
   if (err instanceof StaleWriteError) {
     set.status = 409;
     return { error: err.message, code: 'stale', currentSha256: err.currentSha256 };
@@ -43,7 +49,11 @@ function liveWriteError(err: unknown, set: StatusSetter): { error: string; code:
   return null;
 }
 
-/** The space scope of the request, or a 404 (revisions and proposals exist in spaces only). */
+/**
+ * The space scope of the request, or a 404 (revisions and proposals exist
+ * in spaces only). A guest never gets here: `contentRepos` refuses them
+ * (403) until guest scopes exist (S6), as the document hub does.
+ */
 function spaceNoteScope(principal: Principal, set: StatusSetter) {
   const { noteScope } = noteRepos(principal);
   if (noteScope.kind !== 'space') {
@@ -333,6 +343,7 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
       const scope = spaceNoteScope(principal, set);
       if (!scope) return { error: 'Not found' };
+      if (!(await noteRepos(principal).notes.getById(params.id))) { set.status = 404; return { error: 'Note not found' }; }
       const revision = await getRevision(scope.workspaceId, params.id, params.revisionId);
       if (!revision) { set.status = 404; return { error: 'Revision not found' }; }
       return { revision };
@@ -377,6 +388,47 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
       }
     },
     { detail: { tags: ['notes'] } },
+  )
+
+  // A live editor's text the server never got (typed offline, or unsent
+  // when the document was rebuilt under a new epoch): merged into the note
+  // through the document hub like any writer's change (diff3 of the last
+  // server text the editor synced, the current text and the editor's), as
+  // the member's own typing. 409 `stale` when it clashes with a change made
+  // meanwhile: nothing is applied and the editor keeps its text to copy.
+  .post(
+    '/:id/merge',
+    async ({ user, principal, params, body, set }) => {
+      if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+      const scope = spaceNoteScope(principal, set);
+      if (!scope) return { error: 'Not found' };
+      if (!(await noteRepos(principal).notes.getById(params.id))) { set.status = 404; return { error: 'Note not found' }; }
+      if (Buffer.byteLength(body.base, 'utf8') > getConfig().spaces.noteMaxBytes) {
+        set.status = 413;
+        return { error: 'The base text is larger than a space note can be', code: 'too_large' };
+      }
+      try {
+        const write = await getNoteService().writeSpaceBody(scope, params.id, {
+          base: { sha256: sha256Hex(body.base), text: body.base },
+          next: body.text,
+          origin: { kind: 'peer', userId: scope.userId },
+        });
+        return { changed: write.changed, merged: write.merged, sha256: write.note.bodySha256, revisionId: write.revisionId };
+      } catch (err) {
+        const refused = liveWriteError(err, set);
+        if (refused) return refused;
+        throw err;
+      }
+    },
+    {
+      body: t.Object({
+        /** The last server text the editor synced. */
+        base: t.String(),
+        /** The editor's text. */
+        text: t.String(),
+      }),
+      detail: { tags: ['notes'] },
+    },
   )
 
   .get(

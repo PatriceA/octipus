@@ -1,7 +1,7 @@
 import { getConfig } from '@/config';
 import { type DocOrigin, type DocumentHub, NoteTooLargeError, StaleWriteError } from '@/core/docs/hub';
 import { getDocHub } from '@/core/docs';
-import { merge3 } from '@/core/docs/text-merge';
+import { merge3, normalizeNewlines } from '@/core/docs/text-merge';
 import { getKnowledgeLinkRepository, type KnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
 import { insertRevision, loadSpaceNote, writeBodyIfUnchanged } from '@/db/repositories/live-documents';
 import { withProviderUsageContext } from '@/models/providers/instrumented';
@@ -36,10 +36,14 @@ import { parseLinks, slugify } from './wikilink';
  * every body write here goes through the document hub
  * (`writeSpaceBody`): the writer's base is merged with the live text, or
  * the write is refused as stale (`StaleWriteError`) — never applied over
- * someone's typing. A closed space note is written by one conditional
- * update on its sha, under the same per-note mutex, with a revision. Reads
- * (`getById`, `getBySlug`) return the live text and its sha while the note
- * is open. Space notes hold at most `spaces.noteMaxBytes`.
+ * someone's typing. A body write to an existing space note must name the
+ * base it was made from (`baseSha256` / `baseBody`): without one the write
+ * would be taken as made from the current text and revert whatever changed
+ * since its read, so it is refused (`missing_base`). A closed space note is
+ * written by one conditional update on its sha, under the same per-note
+ * mutex, with a revision. Reads (`getById`, `getBySlug`) return the live
+ * text and its sha while the note is open. Space notes hold at most
+ * `spaces.noteMaxBytes`, with `\n` line endings (`normalizeNewlines`).
  *
  * Re-index degradation: indexing needs an embedding model. If none is
  * configured the note + its links are still saved (they don't depend on
@@ -77,8 +81,9 @@ export interface SaveNoteInput {
   createdByAgentId?: string | null;
   /**
    * Space notes: the sha of the body the writer read (`getById` returns it
-   * as `bodySha256`). Omitted: the note's stored sha. A base the hub no
-   * longer knows, or a change in the same place, is refused as stale.
+   * as `bodySha256`). Required (or `baseBody`) to write the body of an
+   * existing space note. A base the hub no longer knows, or a change in the
+   * same place, is refused as stale.
    */
   baseSha256?: string;
   /** Space notes: the body the writer read, when it kept it — merges even after the hub forgot the base. */
@@ -152,7 +157,10 @@ export class NoteService {
     assertNoteAccess(scope, 'write');
     const store = this.store(scope);
     let body = input.body ?? '';
-    if (scope.kind === 'space') assertSpaceNoteSize(body);
+    if (scope.kind === 'space') {
+      body = normalizeNewlines(body);
+      assertSpaceNoteSize(body);
+    }
     let bodySha = sha256Hex(body);
 
     // Resolve the existing row (by id, else by derived slug). On create,
@@ -174,8 +182,11 @@ export class NoteService {
       body = existing.body;
       bodySha = existing.bodySha256;
     } else if (existing && scope.kind === 'space') {
+      // No base: the writer's text cannot be told apart from a revert of
+      // what others wrote since its read.
+      if (input.baseSha256 === undefined && input.baseBody === undefined) throw new StaleWriteError('missing_base', existing.bodySha256);
       const write = await this.writeSpaceBody(scope, existing.id, {
-        base: { sha256: input.baseSha256 ?? existing.bodySha256, text: input.baseBody },
+        base: { sha256: input.baseSha256 ?? sha256Hex(input.baseBody ?? ''), text: input.baseBody },
         next: body,
         origin: { kind: 'external', userId: scope.userId, onBehalfOfUserId: input.onBehalfOfUserId ?? null },
       });
@@ -313,8 +324,9 @@ export class NoteService {
    * Throws `StaleWriteError`, `NoteTooLargeError`, and `SpaceError` for a
    * role that may not write.
    */
-  async writeSpaceBody(scope: SpaceScope, noteId: string, write: SpaceBodyWrite): Promise<SpaceBodyWriteResult> {
+  async writeSpaceBody(scope: SpaceScope, noteId: string, input: SpaceBodyWrite): Promise<SpaceBodyWriteResult> {
     assertNoteAccess(scope, 'write');
+    const write = { ...input, next: normalizeNewlines(input.next) };
     assertSpaceNoteSize(write.next);
     const store = this.store(scope);
     const hub = this.hub();
@@ -336,7 +348,8 @@ export class NoteService {
         ? write.base.text
         : write.base.sha256 === row.bodySha256 ? row.body : null;
       if (baseText === null) throw new StaleWriteError('unknown_base', row.bodySha256);
-      const result = merge3(baseText, row.body, write.next);
+      // A stored body from before line endings were normalized merges as `\n`.
+      const result = merge3(normalizeNewlines(baseText), normalizeNewlines(row.body), write.next);
       if (!result.ok) throw new StaleWriteError('conflict', row.bodySha256);
       assertSpaceNoteSize(result.text);
       if (result.text === row.body) {
@@ -367,24 +380,33 @@ export class NoteService {
    * stored body (the hub calls it on last leave and every
    * `spaces.docReindexMinutes`). Embedding calls are billed
    * `funding: 'install'` to `editorUserId`, the space's last editor.
+   *
+   * Tags that did not come from the body — explicit ones from a save, a
+   * meeting's `meeting` / `source/…` — are kept: only the `#tags` of
+   * `previousBody` (the body the tags were last derived from) are replaced
+   * by the current body's. Returns the body indexed, null when the note is
+   * gone.
    */
-  async refreshSpaceNote(noteId: string, editorUserId: string): Promise<void> {
+  async refreshSpaceNote(noteId: string, editorUserId: string, previousBody?: string): Promise<string | null> {
     const row = await loadSpaceNote(noteId);
-    if (!row) return;
+    if (!row) return null;
     // A system refresh of the space's own note: the scope reads the space
     // and writes only the note's derived tags.
     const scope: SpaceScope = { kind: 'space', workspaceId: row.workspaceId, userId: editorUserId, role: 'editor', archived: false };
     const note = await this.notes.getById(scope, noteId);
-    if (!note) return;
+    if (!note) return null;
     const parsed = parseLinks(stripFrontmatter(note.body));
-    const current = (await this.notes.update(scope, noteId, { tags: parsed.tags })) ?? note;
+    const previousBodyTags = new Set(previousBody === undefined ? [] : parseLinks(stripFrontmatter(previousBody)).tags);
+    const tags = [...new Set([...note.tags.filter((tag) => !previousBodyTags.has(tag)), ...parsed.tags])];
+    const current = (await this.notes.update(scope, noteId, { tags })) ?? note;
     await withProviderUsageContext(
       { userId: editorUserId, accountingMetadata: { funding: 'install', workspaceId: row.workspaceId, noteId, purpose: 'live-note-reindex' } },
       async () => {
-        await this.relink(scope, current, parsed, parsed.tags, null);
+        await this.relink(scope, current, parsed, tags, null);
         await this.reindex(current);
       },
     );
+    return note.body;
   }
 
   /** A space note read while it is open shows the live text and its sha. */
@@ -462,8 +484,20 @@ export class NoteService {
    */
   async capture(scope: NoteScope, text: string, day?: string): Promise<Note> {
     const date = normalizeDay(day ?? new Date().toISOString());
-    const daily = this.withLive(scope, await this.getOrCreateDaily(scope, date));
     const time = new Date().toISOString().slice(11, 16);
+    if (scope.kind === 'space') {
+      // An open daily note: appended at the end of the live text, which
+      // never conflicts with someone typing there (a merge would).
+      assertNoteAccess(scope, 'write');
+      const opened = await this.getOrCreateDaily(scope, date);
+      const hub = this.hub();
+      const line = `- ${time} ${text}\n`;
+      const appended = await hub.exclusive(opened.id, (open) => (open
+        ? hub.appendLocked(opened.id, (current) => (current === '' || current.endsWith('\n') ? line : `\n${line}`), { kind: 'external', userId: scope.userId })
+        : Promise.resolve(null)));
+      if (appended) return { ...opened, body: appended.text, bodySha256: appended.sha256 };
+    }
+    const daily = this.withLive(scope, await this.getOrCreateDaily(scope, date));
     const body = `${daily.body.replace(/\s+$/, '')}\n- ${time} ${text}\n`;
     // Based on the text just read: a space note's capture merges with
     // whatever members typed meanwhile.
