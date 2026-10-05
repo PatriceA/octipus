@@ -10,9 +10,11 @@
  * maps it to HTTP. Non-members get `not_found` — never `forbidden_role` — so a
  * space id cannot be probed (I3).
  */
-import type { InvitableSpaceRole, SpaceRole } from '@/db/schema/organizations';
+import { z } from 'zod';
+import type { GuestScope, InvitableSpaceRole, SpaceRole } from '@/db/schema/organizations';
+import { slugify } from '@/core/knowledge/wikilink';
 
-export type { InvitableSpaceRole, SpaceRole } from '@/db/schema/organizations';
+export type { GuestScope, InvitableSpaceRole, SpaceRole } from '@/db/schema/organizations';
 
 export const SPACE_ROLES: readonly SpaceRole[] = ['owner', 'editor', 'commenter', 'viewer', 'guest'];
 export const INVITABLE_SPACE_ROLES: readonly InvitableSpaceRole[] = ['editor', 'commenter', 'viewer', 'guest'];
@@ -104,8 +106,104 @@ export interface SpaceMembership {
   readonly workspaceId: string;
   readonly userId: string;
   readonly role: SpaceRole;
-  /** Guests only (S6). */
-  readonly scope: Record<string, unknown> | null;
+  /** Guests only (S6): what they reach (never null for a guest); null for every other role. */
+  readonly scope: GuestScope | null;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Guest scopes (S6, docs/SPACES.md → Guests)
+// ─────────────────────────────────────────────────────────────────────
+//
+// A guest reaches exactly:
+//   - the rooms named in `rooms` (open or private, no `room_members` row
+//     needed), their transcripts, and the members of those rooms;
+//   - the space's files under a folder of `folders` (a path prefix relative
+//     to the space's file root, matched by whole segments);
+//   - the notes whose slug is, or lies under, a folder of `folders` (slugs
+//     keep `/`, so `client/brief` is in the folder `client`; the folder is
+//     compared in its slug form);
+//   - the tasks raised from one of their rooms (`source_ref.sessionId`);
+//   - the knowledge chunks of those notes and files.
+// Everything without a room or a path — documents, artifacts, space memory,
+// other members' private chats — is never in a guest's scope.
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const GUEST_SCOPE_MAX_ITEMS = 100;
+const FOLDER_MAX_LENGTH = 512;
+
+/**
+ * A folder of a guest scope in its one spelling: `/`-separated segments, no
+ * leading or trailing slash, no `.`/`..`/empty segment, no backslash or NUL.
+ * Null when `raw` is not a folder.
+ */
+export function normalizeGuestFolder(raw: string): string | null {
+  if (raw.includes('\\') || raw.includes('\0')) return null;
+  const segments = raw.trim().split('/').filter((s) => s.length > 0);
+  if (segments.length === 0 || segments.some((s) => s === '.' || s === '..' || s.trim() !== s)) return null;
+  const folder = segments.join('/');
+  return folder.length <= FOLDER_MAX_LENGTH ? folder : null;
+}
+
+const guestScopeSchema = z.object({
+  rooms: z.array(z.string().regex(UUID_RE, 'a room id is a uuid')).max(GUEST_SCOPE_MAX_ITEMS).default([]),
+  folders: z.array(z.string().min(1).max(FOLDER_MAX_LENGTH)).max(GUEST_SCOPE_MAX_ITEMS).default([]),
+}).strict();
+
+/**
+ * Validate a guest scope as written (invite create, member PATCH) and return
+ * it normalized: folders in their one spelling, duplicates dropped, room
+ * ids lowercased. `null`/`undefined` is the empty scope (the guest reaches
+ * nothing until the owner gives them something). Throws
+ * `SpaceError('invalid_input')` naming what is wrong. Whether the rooms are
+ * rooms of the space is the caller's check (`assertGuestRooms`).
+ */
+export function parseGuestScope(input: unknown): GuestScope {
+  if (input == null) return { rooms: [], folders: [] };
+  const parsed = guestScopeSchema.safeParse(input);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    throw new SpaceError('invalid_input', `Invalid guest scope${issue?.path.length ? ` (${issue.path.join('.')})` : ''}: ${issue?.message ?? 'malformed'}`);
+  }
+  const folders: string[] = [];
+  for (const raw of parsed.data.folders) {
+    const folder = normalizeGuestFolder(raw);
+    if (!folder) throw new SpaceError('invalid_input', `Invalid guest scope folder: ${JSON.stringify(raw)}`);
+    if (!folders.includes(folder)) folders.push(folder);
+  }
+  return { rooms: [...new Set(parsed.data.rooms.map((r) => r.toLowerCase()))], folders };
+}
+
+/**
+ * The scope a membership row stores, read back: a guest's (malformed rows
+ * throw — they were validated on write, so one that is not is a bug or a
+ * hand edit, never silently widened or narrowed), null for every other role.
+ */
+export function storedGuestScope(role: SpaceRole, stored: unknown): GuestScope | null {
+  return role === 'guest' ? parseGuestScope(stored) : null;
+}
+
+/**
+ * Whether a task is in the scope: raised from one of its rooms
+ * (`source_ref.sessionId`, the rule `guestTaskFilter` applies in SQL).
+ */
+export function taskInGuestScope(sourceRef: { sessionId?: string } | null | undefined, scope: GuestScope): boolean {
+  return typeof sourceRef?.sessionId === 'string' && scope.rooms.includes(sourceRef.sessionId.toLowerCase());
+}
+
+/** Whether `relPath` (relative to the space's file root) is, or lies under, a folder of the scope. */
+export function pathInGuestFolders(relPath: string, folders: readonly string[]): boolean {
+  const path = relPath.split(/[\\/]+/).filter((s) => s && s !== '.').join('/');
+  return folders.some((f) => path === f || path.startsWith(`${f}/`));
+}
+
+/** The folders of a scope in note-slug form (`slugify`), the spelling note slugs are compared in. */
+export function guestNoteFolders(folders: readonly string[]): string[] {
+  return [...new Set(folders.map((f) => slugify(f)).filter((f) => f.length > 0))];
+}
+
+/** Whether a note of `slug` is in the scope's folders. */
+export function noteInGuestScope(slug: string, scope: GuestScope): boolean {
+  return guestNoteFolders(scope.folders).some((f) => slug === f || slug.startsWith(`${f}/`));
 }
 
 /**

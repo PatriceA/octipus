@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-489 mounted routes across 68 route files. The path is the full one, group prefix included — what a client actually calls.
+490 mounted routes across 68 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -102,6 +102,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/auth/passkey/register/options` | `src/api/routes/auth.ts` |
 | POST | `/api/auth/passkey/register/verify` | `src/api/routes/auth.ts` |
 | POST | `/api/auth/register` | `src/api/routes/auth.ts` |
+| GET | `/api/auth/registration` | `src/api/routes/auth.ts` |
 | POST | `/api/auth/totp/disable` | `src/api/routes/auth.ts` |
 | POST | `/api/auth/totp/enable` | `src/api/routes/auth.ts` |
 | POST | `/api/auth/totp/setup` | `src/api/routes/auth.ts` |
@@ -524,14 +525,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 22 |
 | `api` | `config` | 21 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 116 |
+| `api` | `core` | 117 |
 | `api` | `db` | 110 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 3 |
 | `api` | `models` | 35 |
 | `api` | `plugins` | 1 |
-| `api` | `security` | 114 |
+| `api` | `security` | 118 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 3 |
 | `api` | `skills` | 6 |
@@ -569,12 +570,12 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `channels` | 11 |
 | `core` | `config` | 45 |
 | `core` | `connectors` | 3 |
-| `core` | `db` | 297 |
+| `core` | `db` | 300 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 5 |
 | `core` | `models` | 112 |
-| `core` | `security` | 129 |
+| `core` | `security` | 134 |
 | `core` | `services` | 2 |
 | `core` | `shared` | 15 |
 | `core` | `skills` | 10 |
@@ -582,7 +583,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `utils` | 174 |
 | `core` | `voice` | 1 |
 | `db` | `config` | 4 |
-| `db` | `core` | 17 |
+| `db` | `core` | 18 |
 | `db` | `models` | 1 |
 | `db` | `security` | 14 |
 | `db` | `services` | 1 |
@@ -617,12 +618,12 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `plugins` | `tools` | 1 |
 | `plugins` | `utils` | 3 |
 | `security` | `api` | 1 |
-| `security` | `config` | 12 |
+| `security` | `config` | 13 |
 | `security` | `connectors` | 3 |
-| `security` | `core` | 14 |
-| `security` | `db` | 74 |
+| `security` | `core` | 16 |
+| `security` | `db` | 76 |
 | `security` | `tools` | 1 |
-| `security` | `utils` | 24 |
+| `security` | `utils` | 26 |
 | `services` | `capabilities` | 5 |
 | `services` | `config` | 3 |
 | `services` | `core` | 5 |

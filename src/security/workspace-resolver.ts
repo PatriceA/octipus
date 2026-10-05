@@ -48,7 +48,7 @@ import { pipelines } from '@/db/schema/pipelines';
 import { sessions } from '@/db/schema/sessions';
 import { getOrgWorkspaceManager } from '@/security/orgs';
 import type { Principal } from '@/security/principal';
-import type { SpaceRole } from '@/security/space-access';
+import type { GuestScope, SpaceRole } from '@/security/space-access';
 
 /** RFC 4122 UUID, case-insensitive. */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -66,7 +66,7 @@ export interface WorkspaceResolution {
   /** `'shared'` for a space the user is a member of; absent for non-user principals. */
   workspaceKind?: 'personal' | 'shared';
   spaceRole?: SpaceRole;
-  spaceScope?: Record<string, unknown> | null;
+  spaceScope?: GuestScope | null;
   spaceArchived?: boolean;
   /** The header named a space the user is not a member of: answer 404. */
   denied?: true;

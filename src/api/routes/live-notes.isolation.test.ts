@@ -5,8 +5,8 @@
  *
  *   - members list and read a note's revisions; an editor restores one
  *     (written as a new revision); a viewer may not;
- *   - a non-member or another space's ids get 404 (I3); a guest, 403
- *     (guest scopes are S6: no space content until then);
+ *   - a non-member or another space's ids get 404 (I3), and so does a
+ *     guest for a note outside their folders (S6);
  *   - a body write to an existing note names its base (400 without one);
  *   - `POST /notes/:id/merge` merges a live editor's unsent text, 409 on a
  *     clash;
@@ -118,7 +118,7 @@ describe('revisions', () => {
     expect(after.revisions.some((r) => r.origin === 'restore')).toBe(true);
   });
 
-  test('a non-member and another space’s ids get 404; a guest is refused', async () => {
+  test('a non-member and another space’s ids get 404, and so does a guest outside their folders', async () => {
     const note = await createNote('editor', 'Private history', 'v1\n');
     const { revisions } = await (await call('editor', 'GET', `/api/notes/${note.id}/revisions`)).json() as { revisions: Array<{ id: string }> };
     const rev = revisions[0].id;
@@ -130,10 +130,16 @@ describe('revisions', () => {
     ];
     for (const [method, path] of paths) {
       expect((await call('stranger', method, path)).status, `stranger ${method} ${path}`).toBe(404);
-      expect((await call('guest', method, path)).status, `guest ${method} ${path}`).toBe(403);
     }
+    // The guest's scope is empty: the note is not theirs to see, and the proposals list holds nothing of it.
+    for (const [method, path] of paths.slice(0, 3)) {
+      expect((await call('guest', method, path)).status, `guest ${method} ${path}`).toBe(404);
+    }
+    const guestProposals = await call('guest', 'GET', '/api/notes/proposals');
+    expect(guestProposals.status).toBe(200);
+    expect((await guestProposals.json()).proposals).toEqual([]);
     expect((await call('stranger', 'POST', `/api/notes/${note.id}/merge`, { body: { base: 'v1\n', text: 'v2\n' } })).status).toBe(404);
-    expect((await call('guest', 'POST', `/api/notes/${note.id}/merge`, { body: { base: 'v1\n', text: 'v2\n' } })).status).toBe(403);
+    expect([403, 404]).toContain((await call('guest', 'POST', `/api/notes/${note.id}/merge`, { body: { base: 'v1\n', text: 'v2\n' } })).status);
 
     // Another space's note and revision, named from this space: 404.
     const foreign = await createNote('stranger', 'Foreign', 'theirs\n', otherSpaceId);

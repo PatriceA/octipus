@@ -51,8 +51,9 @@ function liveWriteError(err: unknown, set: StatusSetter): { error: string; code:
 
 /**
  * The space scope of the request, or a 404 (revisions and proposals exist
- * in spaces only). A guest never gets here: `contentRepos` refuses them
- * (403) until guest scopes exist (S6), as the document hub does.
+ * in spaces only). A guest's scope carries their folders (S6): they reach
+ * the revisions and proposals of the notes those folders hold, as the
+ * document hub does.
  */
 function spaceNoteScope(principal: Principal, set: StatusSetter) {
   const { noteScope } = noteRepos(principal);

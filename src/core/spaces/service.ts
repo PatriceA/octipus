@@ -20,15 +20,20 @@ import { getDb, queryRaw } from '@/db/postgres';
 import { isUuid } from '@/db/repositories/scoped';
 import { type AuditDetails, auditLog } from '@/db/schema/audit';
 import { type AgentEditMode, type AgentFundingMode, newWorkspaceRow, type SpaceRole, type Workspace, workspaceInvites, workspaceMembers, workspaces } from '@/db/schema/organizations';
+import { roomMembers } from '@/db/schema/rooms';
+import { sessions } from '@/db/schema/sessions';
 import { users } from '@/db/schema/users';
 import { requireRealUserId } from '@/security/principal';
 import { noteSharedWorkspace } from '@/security/workspace-fs';
 import {
   can,
   isSpaceRole,
+  type GuestScope,
+  parseGuestScope,
   requireCan,
   SpaceError,
   type SpaceMembership,
+  storedGuestScope,
 } from '@/security/space-access';
 import { generateToken } from '@/utils/crypto';
 import { securityLogger } from '@/utils/logger';
@@ -37,7 +42,7 @@ import { freezeSpace, onMembershipChanged, onMembershipGranted, settleFollowUp }
 export { can, SpaceError, type SpaceMembership } from '@/security/space-access';
 
 type Db = ReturnType<typeof getDb>;
-type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+export type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 export type Executor = Db | Tx;
 
 /** Whoever performs a space operation. Rights are read from the database, never from here. */
@@ -131,7 +136,7 @@ export async function getMembership(
   // The synchronous file-root lookups (`WorkspaceFS.forAgent` / `forSession`)
   // learn the space from here: every path into a space reads a membership.
   noteSharedWorkspace(workspaceId);
-  return { workspaceId, userId, role: row.role, scope: row.scope ?? null };
+  return { workspaceId, userId, role: row.role, scope: storedGuestScope(row.role, row.scope) };
 }
 
 /** Whether `workspaceId` names a shared workspace (read from the database). */
@@ -413,6 +418,8 @@ export interface SpaceMemberView {
   username: string;
   role: SpaceRole;
   joinedAt: Date;
+  /** A guest's scope (S6), shown to those who manage members; absent otherwise. */
+  scope?: GuestScope;
 }
 
 /** What a committed membership change reports: a failed follow-up (§5.9), logged. */
@@ -450,26 +457,100 @@ async function revokeInvitesBy(tx: Tx, actor: SpaceActor, workspaceId: string, c
 }
 
 /**
- * The members of a space, for any member. A guest sees only themselves:
- * guests see the members of their rooms, and rooms arrive in S2.
+ * Throws `invalid_input` unless every id of `rooms` names a room of the
+ * space: a guest scope never names another space's room, a chat, or nothing.
+ */
+export async function assertGuestRooms(db: Executor, workspaceId: string, rooms: readonly string[]): Promise<void> {
+  if (rooms.length === 0) return;
+  const found = await db
+    .select({ id: sessions.id })
+    .from(sessions)
+    .where(and(inArray(sessions.id, [...rooms]), eq(sessions.workspaceId, workspaceId), eq(sessions.kind, 'room')));
+  const known = new Set(found.map((r) => r.id));
+  const missing = rooms.find((r) => !known.has(r));
+  if (missing) throw new SpaceError('invalid_input', `Invalid guest scope: ${missing} is not a room of this space`);
+}
+
+/** Validate a guest scope as written for the space (shape, then its rooms). */
+export async function guestScopeForWrite(db: Executor, workspaceId: string, input: unknown): Promise<GuestScope> {
+  const scope = parseGuestScope(input);
+  await assertGuestRooms(db, workspaceId, scope.rooms);
+  return scope;
+}
+
+/**
+ * The guests of the space whose scope names one of `roomIds` — the guests
+ * in those rooms (they need no `room_members` row).
+ */
+export async function guestsInRooms(workspaceId: string, roomIds: readonly string[], db: Executor = getDb()): Promise<string[]> {
+  if (roomIds.length === 0 || !isUuid(workspaceId)) return [];
+  const wanted = new Set(roomIds);
+  const guests = await db
+    .select({ userId: workspaceMembers.userId, scope: workspaceMembers.scope })
+    .from(workspaceMembers)
+    .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.role, 'guest')));
+  return guests.filter((g) => parseGuestScope(g.scope).rooms.some((r) => wanted.has(r))).map((g) => g.userId);
+}
+
+/**
+ * Who a guest may see of the space's members: everyone in a room of their
+ * scope — every non-guest member for an open room, the `room_members` of a
+ * private one, the guests whose scope names the room — and themselves.
+ */
+export async function membersVisibleToGuest(workspaceId: string, guestId: string, scope: GuestScope, db: Executor = getDb()): Promise<Set<string>> {
+  const visible = new Set<string>([guestId]);
+  if (scope.rooms.length === 0) return visible;
+  const rooms = await db
+    .select({ id: sessions.id, visibility: sessions.roomVisibility })
+    .from(sessions)
+    .where(and(inArray(sessions.id, scope.rooms), eq(sessions.workspaceId, workspaceId), eq(sessions.kind, 'room')));
+  const privateIds = rooms.filter((r) => r.visibility === 'private').map((r) => r.id);
+  const memberRows = await db
+    .select({ userId: workspaceMembers.userId, role: workspaceMembers.role })
+    .from(workspaceMembers)
+    .where(eq(workspaceMembers.workspaceId, workspaceId));
+  const nonGuests = new Set(memberRows.filter((m) => m.role !== 'guest').map((m) => m.userId));
+  if (rooms.some((r) => r.visibility !== 'private')) for (const id of nonGuests) visible.add(id);
+  if (privateIds.length > 0) {
+    const inPrivate = await db
+      .select({ userId: roomMembers.userId })
+      .from(roomMembers)
+      .where(inArray(roomMembers.sessionId, privateIds));
+    for (const row of inPrivate) if (nonGuests.has(row.userId)) visible.add(row.userId);
+  }
+  for (const id of await guestsInRooms(workspaceId, rooms.map((r) => r.id), db)) visible.add(id);
+  return visible;
+}
+
+/**
+ * The members of a space, for any member. A guest sees only the members of
+ * the rooms in their scope, and themselves (`membersVisibleToGuest`).
  */
 export async function listMembers(actor: SpaceActor, workspaceId: string): Promise<SpaceMemberView[]> {
   const { membership } = await authorize(actor, workspaceId, 'read');
+  const visible = membership.role === 'guest' && membership.scope
+    ? await membersVisibleToGuest(workspaceId, actor.userId, membership.scope)
+    : null;
   const rows = await getDb()
     .select({
       userId: workspaceMembers.userId,
       username: users.username,
       role: workspaceMembers.role,
       joinedAt: workspaceMembers.joinedAt,
+      scope: workspaceMembers.scope,
     })
     .from(workspaceMembers)
     .innerJoin(users, eq(users.id, workspaceMembers.userId))
     .where(and(
       eq(workspaceMembers.workspaceId, workspaceId),
-      membership.role === 'guest' ? eq(workspaceMembers.userId, actor.userId) : undefined,
+      visible ? inArray(workspaceMembers.userId, [...visible]) : undefined,
     ))
     .orderBy(workspaceMembers.joinedAt);
-  return rows;
+  const managing = can(membership.role, 'manage_members');
+  return rows.map(({ scope, ...row }) => {
+    const guestScope = managing ? storedGuestScope(row.role, scope) : null;
+    return guestScope ? { ...row, scope: guestScope } : row;
+  });
 }
 
 /**
@@ -494,25 +575,32 @@ function losesGrant(from: SpaceRole, to: SpaceRole): boolean {
   return actions.some((a) => can(from, a) && !can(to, a));
 }
 
-/** Change a member's role (owner only). `scope` applies to guests and is cleared for every other role. */
+/**
+ * Change a member's role (owner only). `scope` applies to guests (validated:
+ * shape, and rooms of this space) and is cleared for every other role; a
+ * guest whose PATCH names no scope keeps theirs, and a new guest starts
+ * with the empty scope.
+ */
 export async function setRole(
   actor: SpaceActor,
   workspaceId: string,
   targetUserId: string,
-  input: { role: string; scope?: Record<string, unknown> | null },
+  input: { role: string; scope?: unknown },
 ): Promise<SpaceMemberView & MembershipChangeResult> {
   if (!isSpaceRole(input.role)) throw new SpaceError('invalid_role', `Unknown role: ${input.role}`);
   const role = input.role;
   if (input.scope != null && role !== 'guest') {
     throw new SpaceError('invalid_input', 'Only a guest has a scope');
   }
-  const scope = role === 'guest' ? (input.scope ?? null) : null;
 
   const outcome = await getDb().transaction(async (tx) => {
     await authorize(actor, workspaceId, 'manage_members', tx);
     // Locked: a target leaving meanwhile waits, or is already gone here.
     const target = await getMembership(targetUserId, workspaceId, tx, { lock: 'update' });
     if (!target) throw new SpaceError('not_found', 'Member not found');
+    const scope = role !== 'guest' ? null
+      : input.scope != null ? await guestScopeForWrite(tx, workspaceId, input.scope)
+      : target.scope ?? parseGuestScope(null);
     if (target.role === 'owner' && role !== 'owner') await assertNotLastOwner(tx, workspaceId, targetUserId);
     const [updated] = await tx
       .update(workspaceMembers)
@@ -647,7 +735,7 @@ export async function leaveAllSpaces(userId: string): Promise<void> {
 export async function addMemberInTx(
   tx: Tx,
   workspaceId: string,
-  input: { userId: string; role: SpaceRole; scope?: Record<string, unknown> | null; invitedBy?: string | null },
+  input: { userId: string; role: SpaceRole; scope?: GuestScope | null; invitedBy?: string | null },
 ): Promise<boolean> {
   const [space] = await tx
     .select({ id: workspaces.id, archivedAt: workspaces.archivedAt })
@@ -666,7 +754,8 @@ export async function addMemberInTx(
       workspaceId,
       userId: input.userId,
       role: input.role,
-      scope: input.role === 'guest' ? (input.scope ?? null) : null,
+      // A guest always has a scope row (empty until the owner gives one).
+      scope: input.role === 'guest' ? parseGuestScope(input.scope ?? null) : null,
       invitedBy: input.invitedBy ?? null,
     })
     .onConflictDoNothing()

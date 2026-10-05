@@ -13,7 +13,9 @@ import { isAuthenticated } from '@/security/principal';
 import { clientIp, recordedClientIp } from '@/security/client-ip';
 import { getRateLimiter } from '@/security/rate-limiter';
 import { isSafeReturnTo, RETURN_TO_MAX_LENGTH } from '@/shared/return-to';
-import { hashPassword, verifyPassword } from '@/utils/crypto';
+import { afterInviteAccepted } from '@/core/spaces/invites';
+import { hasLocalAccount, type RegisterOutcome, RegistrationError, registerUser } from '@/security/registration';
+import { verifyPassword } from '@/utils/crypto';
 import { apiLogger, securityLogger } from '@/utils/logger';
 
 /**
@@ -404,7 +406,7 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
   .post(
     '/register',
     async ({ body, request, set, socketAddress }) => {
-      const { username, email, password, returnTo } = body;
+      const { username, email, password, returnTo, inviteToken } = body;
       if (returnTo !== undefined && !isSafeReturnTo(returnTo)) {
         set.status = 400;
         return INVALID_RETURN_TO;
@@ -426,35 +428,19 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
         return { error: 'Password must contain at least one uppercase letter, one lowercase letter, and one digit' };
       }
 
-      // Check if username exists
-      const existing = await userRepository.findByUsername(username);
-      if (existing) {
-        set.status = 409;
-        return { error: 'Username already exists' };
-      }
-
-      if (email) {
-        const existingEmail = await userRepository.findByEmail(email);
-        if (existingEmail) {
-          set.status = 409;
-          return { error: 'Email already exists' };
+      let outcome: RegisterOutcome;
+      try {
+        outcome = await registerUser({ username, email: email ?? null, password, inviteToken });
+      } catch (err) {
+        if (err instanceof RegistrationError) {
+          set.status = err.status;
+          return { error: err.message, code: err.code };
         }
+        throw err;
       }
+      const { user, joined } = outcome;
 
-      // First user becomes admin automatically
-      const allUsers = await userRepository.listAll();
-      const isFirstUser = allUsers.length === 0;
-
-      const passwordHash = await hashPassword(password);
-
-      const user = await userRepository.create({
-        username,
-        email,
-        passwordHash,
-        isAdmin: isFirstUser,
-      });
-
-      if (isFirstUser) {
+      if (user.isAdmin) {
         apiLogger.info({ username }, 'First user registered — granted admin privileges');
       }
 
@@ -467,8 +453,18 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
         ipAddress: recordedClientIp(request, socketAddress),
         userAgent: request.headers.get('user-agent') || undefined,
         channelType: 'web',
-        details: { username: user.username, isAdmin: user.isAdmin, selfRegistered: true },
+        details: { username: user.username, isAdmin: user.isAdmin, selfRegistered: true, ...(joined ? { joinedSpace: joined.workspaceId } : {}) },
       });
+      // The invite was redeemed with the account: its membership follow-up
+      // (§5.9). The account and membership have committed; a failed
+      // follow-up is logged and the registration stands.
+      if (joined) {
+        try {
+          await afterInviteAccepted({ userId: user.id }, joined);
+        } catch (err) {
+          apiLogger.error({ err, userId: user.id, workspaceId: joined.workspaceId }, 'Membership follow-up after registering with an invite failed');
+        }
+      }
 
       // Every user starts with one proactive turn a day: the weekday-morning
       // briefing. It is an ordinary hook (pause / edit / delete on the Hooks
@@ -504,6 +500,8 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
         },
         expiresAt: session.expiresAt,
         returnTo: returnTo ?? '/',
+        // The space the invite token joined, with the account (S6).
+        ...(joined ? { joinedSpaceId: joined.workspaceId } : {}),
       };
     },
     {
@@ -516,9 +514,21 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
         email: t.Optional(t.String({ pattern: '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$' })),
         password: t.String({ minLength: 8 }),
         returnTo: returnToField,
+        /** A space invite token (`/join/<token>`): redeemed in the same transaction as the account. */
+        inviteToken: t.Optional(t.String({ maxLength: 128 })),
       }),
       detail: { tags: ['auth'] },
     }
+  )
+
+  // Which registration mode the install runs (`security.registration`, S6):
+  // the sign-in page shows or hides registering by it. `firstAccount`: no
+  // account exists yet, so the first registration is open whatever the
+  // mode. Public.
+  .get(
+    '/registration',
+    async () => ({ mode: getConfig().security.registration, firstAccount: !(await hasLocalAccount()) }),
+    { detail: { tags: ['auth'] } },
   )
 
   // Passkey registration options

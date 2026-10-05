@@ -65,7 +65,7 @@ export interface StartResult {
 
 export interface StartError {
   ok: false;
-  reason: 'not_admin' | 'self' | 'target_not_found' | 'target_inactive';
+  reason: 'not_admin' | 'self' | 'target_not_found' | 'target_inactive' | 'target_remote';
 }
 
 /** SHA-256 hex of the admin's session token. The auth-derive
@@ -90,6 +90,8 @@ export class ImpersonationManager {
     const target = await userRepository.findById(targetUserId);
     if (!target) return { ok: false, reason: 'target_not_found' };
     if (!target.isActive) return { ok: false, reason: 'target_inactive' };
+    // A remote member (S7) acts only through their own install.
+    if (target.kind === 'remote') return { ok: false, reason: 'target_remote' };
 
     const tokenHash = hashSessionToken(actorSessionToken);
 

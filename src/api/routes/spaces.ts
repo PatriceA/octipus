@@ -31,7 +31,7 @@ import {
   unarchiveSpace,
 } from '@/core/spaces/service';
 import { isAuthenticated, type Principal } from '@/security/principal';
-import { requireCan, type SpaceAction, SpaceError, spaceErrorStatus } from '@/security/space-access';
+import { pathInGuestFolders, requireCan, type SpaceAction, SpaceError, spaceErrorStatus } from '@/security/space-access';
 
 /**
  * Shared spaces (docs/plans/coworking-spec.md §5.7).
@@ -95,7 +95,11 @@ const invitableRoleSchema = t.Union([
   t.Literal('viewer'),
   t.Literal('guest'),
 ]);
-const scopeSchema = t.Record(t.String(), t.Unknown());
+/** A guest scope's shape at the door; `parseGuestScope` (zod) validates it fully, rooms included. */
+const scopeSchema = t.Object({
+  rooms: t.Optional(t.Array(t.String())),
+  folders: t.Optional(t.Array(t.String())),
+}, { additionalProperties: false });
 
 /**
  * The actor may `action` in the space (membership read now, D5); anything
@@ -342,8 +346,11 @@ export const spaceRoutes = new Elysia({ prefix: '/spaces' })
   // pushed as `file.leases` to the space's gateway subscribers.
 
   .get('/:id/file-leases', (ctx) => handle(ctx, async (actor) => {
-    await requireMember(actor, ctx.params.id, 'read');
-    return { leases: await leaseViews(await listLeases(ctx.params.id)) };
+    const membership = requireCan(await getMembership(actor.userId, ctx.params.id), 'read');
+    const leases = await listLeases(ctx.params.id);
+    // A guest sees the leases of their folders only (S6).
+    const scope = membership.scope;
+    return { leases: await leaseViews(scope ? leases.filter((l) => pathInGuestFolders(l.path, scope.folders)) : leases) };
   }), {
     params: t.Object({ id: t.String() }),
     detail: { tags: ['spaces'] },

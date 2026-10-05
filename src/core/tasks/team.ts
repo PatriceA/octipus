@@ -15,7 +15,7 @@
  * Personal tasks have none of this: a personal task can be assigned only to
  * its owner, and nobody else watches the personal board.
  */
-import { and, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { workspaceMembers, workspaces } from '@/db/schema/organizations';
 import { type Task, tasks } from '@/db/schema/tasks';
@@ -24,24 +24,32 @@ import { ACTIVE_TASK_STATUSES } from './status';
 
 /**
  * Tell the space's subscribers a task changed (created, edited, claimed,
- * commented, deleted). Only to current members who are not guests, read
- * now: a guest sees only the part of the space their scope grants, so the
- * ids and timing of every task are not theirs to hear, and a removed
- * member's still-open connection hears nothing.
- *
- * Guests are left out entirely for now; once guest scope lands (S6), a
- * guest whose scope covers the task can be told too — the per-task check
- * belongs with the scope check of `src/security/space-access.ts`.
+ * commented, deleted). Only to current members, read now — a removed
+ * member's still-open connection hears nothing — and of guests only those
+ * whose scope reaches the task (S6, `taskInGuestScope`: raised from one of
+ * their rooms). A deleted task's row is gone, so no guest hears of it.
  */
 export async function taskChanged(workspaceId: string, taskId: string): Promise<void> {
-  const [{ eventMessage, spaceResource }, { getGatewayHub }] = await Promise.all([
-    import('@/core/rooms/events'), import('@/core/gateway/hub'),
+  const [{ eventMessage, spaceResource }, { getGatewayHub }, { storedGuestScope, taskInGuestScope }] = await Promise.all([
+    import('@/core/rooms/events'), import('@/core/gateway/hub'), import('@/security/space-access'),
   ]);
   const rows = await getDb()
-    .select({ userId: workspaceMembers.userId })
+    .select({ userId: workspaceMembers.userId, role: workspaceMembers.role, scope: workspaceMembers.scope })
     .from(workspaceMembers)
-    .where(and(eq(workspaceMembers.workspaceId, workspaceId), ne(workspaceMembers.role, 'guest')));
-  const told = new Set(rows.map((r) => r.userId));
+    .where(eq(workspaceMembers.workspaceId, workspaceId));
+  const guests = rows.filter((r) => r.role === 'guest');
+  const [task] = guests.length === 0 ? [] : await getDb()
+    .select({ sourceRef: tasks.sourceRef })
+    .from(tasks)
+    .where(and(eq(tasks.id, taskId), eq(tasks.workspaceId, workspaceId)))
+    .limit(1);
+  const told = new Set(rows
+    .filter((r) => {
+      if (r.role !== 'guest') return true;
+      const scope = storedGuestScope(r.role, r.scope);
+      return !!task && !!scope && taskInGuestScope(task.sourceRef, scope);
+    })
+    .map((r) => r.userId));
   const resource = spaceResource(workspaceId);
   getGatewayHub().connectionManager.broadcast(
     eventMessage('task.changed', { taskId, workspaceId }),

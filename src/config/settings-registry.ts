@@ -943,6 +943,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'TRUSTED_PROXIES',
   },
   {
+    key: 'security.registration',
+    category: 'security',
+    valueType: 'string',
+    defaultValue: 'open',
+    description:
+      'Who may create an account on the sign-in page: open (anyone), invite_only (only with a valid space invite link, redeemed together with the account) or closed (nobody). The first account of an install may always register. SAML, SCIM and admin-created accounts are not affected.',
+    isSecret: false,
+    envVar: 'REGISTRATION_MODE',
+  },
+  {
     key: 'security.totpIssuer',
     category: 'security',
     valueType: 'string',

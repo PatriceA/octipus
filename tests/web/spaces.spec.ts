@@ -204,7 +204,7 @@ test.describe('join page', () => {
     await expect(preview).toContainText('Launch');
     await expect(preview).toContainText('editor');
     await expect(page.getByRole('link', { name: 'register' })).toHaveAttribute(
-      'href', `/login?mode=register&returnTo=${encodeURIComponent(`/join/${TOKEN}`)}`,
+      'href', `/login?mode=register&invite=${TOKEN}&returnTo=${encodeURIComponent(`/join/${TOKEN}`)}`,
     );
 
     await page.getByRole('link', { name: 'sign in to join' }).click();

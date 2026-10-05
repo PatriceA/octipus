@@ -53,8 +53,8 @@ async function userMayReadArtifact(userId: string, artifactId: string): Promise<
   if (!ws) return false;
   if (ws.kind === 'personal') return ws.userId === userId;
   // A space (no owning user, D2): its members read it — the membership read
-  // now (D5), guests not until their scopes exist — and `private` stays the
-  // creator's, as on the REST routes.
+  // now (D5), never a guest (artifacts are not in a guest's scope, S6) — and
+  // `private` stays the creator's, as on the REST routes.
   const { getMembership } = await import('@/core/spaces/service');
   const membership = await getMembership(userId, artifact.workspaceId);
   if (!membership || membership.role === 'guest') return false;

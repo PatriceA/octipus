@@ -42,6 +42,7 @@ import { users } from '@/db/schema/users';
 import { getSessionManager } from '@/security/auth/session';
 import { recordedClientIp } from '@/security/client-ip';
 import { coreLogger } from '@/utils/logger';
+import { assertLocalUsername, InvalidUsernameError, isRemoteUser } from '@/security/user-kinds';
 
 type Samlify = typeof import('samlify');
 
@@ -228,6 +229,14 @@ export const samlRoutes = new Elysia({ prefix: '/saml' })
           set.status = 400;
           return { error: 'SAML response did not yield a username (set attributeMap.username)' };
         }
+        // A leading `~` marks members from other installs (S7): never an IdP's account.
+        try {
+          assertLocalUsername(username);
+        } catch (err) {
+          if (!(err instanceof InvalidUsernameError)) throw err;
+          set.status = 400;
+          return { error: err.message };
+        }
 
         const db = getDb();
         // NameID is the canonical identity, but an org's IdP speaks for that
@@ -237,6 +246,13 @@ export const samlRoutes = new Elysia({ prefix: '/saml' })
         // the install admin's username and sign in as them.
         const [existing] = await db.select().from(users).where(eq(users.username, username)).limit(1);
         let user = existing;
+        if (user && isRemoteUser(user)) {
+          // A remote member (S7) never signs in here; the guard above refuses
+          // their `~` names, this refuses any row that still is one.
+          coreLogger.warn({ userId: user.id, orgSlug: params.orgSlug }, 'SAML login refused: remote member');
+          set.status = 403;
+          return { error: 'Members from other installs cannot sign in here' };
+        }
         if (user) {
           const [member] = await db
             .select({ userId: orgMembers.userId })

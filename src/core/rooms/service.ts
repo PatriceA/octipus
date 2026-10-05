@@ -77,10 +77,14 @@ async function assertSpaceMembers(tx: Db | Tx, workspaceId: string, userIds: rea
   if (ids.length === 0) return;
   if (!ids.every(isUuid)) throw new SpaceError('invalid_input', 'Room members must be members of the space');
   const rows = await tx
-    .select({ userId: workspaceMembers.userId })
+    .select({ userId: workspaceMembers.userId, role: workspaceMembers.role })
     .from(workspaceMembers)
     .where(and(eq(workspaceMembers.workspaceId, workspaceId), inArray(workspaceMembers.userId, ids)));
   if (rows.length !== ids.length) throw new SpaceError('invalid_input', 'Room members must be members of the space');
+  // A guest's rooms are their scope (S6), set by an owner on the membership.
+  if (rows.some((r) => r.role === 'guest')) {
+    throw new SpaceError('invalid_input', "A guest enters the rooms of their scope; change it in the space's member settings");
+  }
 }
 
 /**
@@ -181,8 +185,10 @@ export async function listRooms(actor: RoomActor, workspaceId: string): Promise<
     .where(and(
       eq(sessions.workspaceId, workspaceId),
       eq(sessions.kind, 'room'),
-      // Guests (S6) see only rooms they were added to; others every open room.
-      membership.role === 'guest' ? mine : or(eq(sessions.roomVisibility, 'space'), mine),
+      // Guests (S6) see only the rooms of their scope; others every open room and their private ones.
+      membership.scope
+        ? (membership.scope.rooms.length > 0 ? inArray(sessions.id, membership.scope.rooms) : sql`FALSE`)
+        : or(eq(sessions.roomVisibility, 'space'), mine),
     ))
     .orderBy(asc(sessions.createdAt), asc(sessions.id));
   return rows.map((r) => {
@@ -447,24 +453,38 @@ export interface RoomMemberView {
   addedAt: Date | null;
 }
 
-/** Who is in the room: the `room_members` of a private room, every member of the space for an open one. */
+/**
+ * Who is in the room: the `room_members` of a private room, every member of
+ * the space for an open one — guests not by either rule but by their scope
+ * (S6): the guests whose scope names the room.
+ */
 export async function listRoomMembers(actor: RoomActor, workspaceId: string, roomId: string): Promise<RoomMemberView[]> {
   const access = await requireRoom(actor, workspaceId, roomId);
+  const { guestsInRooms } = await import('@/core/spaces/service');
+  const guests = await guestsInRooms(workspaceId, [roomId]);
+  const guestRows = guests.length === 0 ? [] : await getDb()
+    .select({ userId: workspaceMembers.userId, username: users.username, addedAt: sql<Date | null>`NULL` })
+    .from(workspaceMembers)
+    .innerJoin(users, eq(users.id, workspaceMembers.userId))
+    .where(and(eq(workspaceMembers.workspaceId, workspaceId), inArray(workspaceMembers.userId, guests)))
+    .orderBy(asc(workspaceMembers.joinedAt));
   if (access.room.visibility === 'private') {
-    return getDb()
+    const members = await getDb()
       .select({ userId: roomMembers.userId, username: users.username, addedAt: roomMembers.addedAt })
       .from(roomMembers)
       .innerJoin(users, eq(users.id, roomMembers.userId))
       .innerJoin(workspaceMembers, and(eq(workspaceMembers.userId, roomMembers.userId), eq(workspaceMembers.workspaceId, workspaceId)))
-      .where(eq(roomMembers.sessionId, roomId))
+      .where(and(eq(roomMembers.sessionId, roomId), ne(workspaceMembers.role, 'guest')))
       .orderBy(asc(roomMembers.addedAt));
+    return [...members, ...guestRows];
   }
-  return getDb()
+  const members = await getDb()
     .select({ userId: workspaceMembers.userId, username: users.username, addedAt: sql<Date | null>`NULL` })
     .from(workspaceMembers)
     .innerJoin(users, eq(users.id, workspaceMembers.userId))
     .where(and(eq(workspaceMembers.workspaceId, workspaceId), ne(workspaceMembers.role, 'guest')))
     .orderBy(asc(workspaceMembers.joinedAt));
+  return [...members, ...guestRows];
 }
 
 async function requirePrivateManaged(actor: RoomActor, workspaceId: string, roomId: string): Promise<RoomAccess> {

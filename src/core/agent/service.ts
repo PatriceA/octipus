@@ -435,9 +435,10 @@ export class AgentService {
     const [{ getSpace }, { fenceSpaceTurnContext }] = await Promise.all([
       import('@/core/spaces/service'), import('@/core/spaces/turn-context'),
     ]);
-    const { name } = await getSpace({ userId }, workspaceId);
+    const { name, role } = await getSpace({ userId }, workspaceId);
     const { spaceMemoryBlock } = await import('@/core/spaces/memory');
-    let block = await spaceMemoryBlock(workspaceId, name);
+    // Space memory is never in a guest's scope (S6): a guest's room turn runs without it.
+    let block = role === 'guest' ? '' : await spaceMemoryBlock(workspaceId, name);
     const linkedRoomId = session.kind === 'chat' ? session.context?.linkedRoomId : undefined;
     if (typeof linkedRoomId === 'string') {
       const { roomAccess } = await import('@/core/rooms/access');

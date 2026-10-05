@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { GuestScope } from '@/shared/spaces';
 import {
   boolean,
   index,
@@ -134,6 +135,9 @@ export type SpaceRole = 'owner' | 'editor' | 'commenter' | 'viewer' | 'guest';
 /** What an invite may grant: every role but `owner`. */
 export type InvitableSpaceRole = Exclude<SpaceRole, 'owner'>;
 
+/** What a guest reaches in a space (S6); validated on write by `parseGuestScope` (`src/security/space-access.ts`). */
+export type { GuestScope } from '@/shared/spaces';
+
 /** Membership of a shared workspace. The only source of access to a space. */
 export const workspaceMembers = pgTable('workspace_members', {
   workspaceId: uuid('workspace_id')
@@ -144,7 +148,7 @@ export const workspaceMembers = pgTable('workspace_members', {
     .references(() => users.id, { onDelete: 'cascade' }),
   role: text('role').$type<SpaceRole>().notNull(),
   /** Guests only (S6): what part of the space they see. */
-  scope: jsonb('scope').$type<Record<string, unknown>>(),
+  scope: jsonb('scope').$type<GuestScope>(),
   invitedBy: uuid('invited_by').references(() => users.id, { onDelete: 'set null' }),
   joinedAt: timestamp('joined_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
@@ -159,7 +163,8 @@ export const workspaceInvites = pgTable('workspace_invites', {
     .notNull()
     .references(() => workspaces.id, { onDelete: 'cascade' }),
   role: text('role').$type<InvitableSpaceRole>().notNull(),
-  scope: jsonb('scope').$type<Record<string, unknown>>(),
+  /** Guest invites only (S6): the scope the guest joins with. */
+  scope: jsonb('scope').$type<GuestScope>(),
   tokenHash: text('token_hash').notNull().unique(),
   createdBy: uuid('created_by')
     .notNull()

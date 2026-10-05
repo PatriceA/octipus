@@ -257,6 +257,7 @@ export function spaceSessionNotice(spaceName: string, role: SpaceRole, mayWrite:
     + `where the user is ${role === 'owner' || role === 'editor' ? 'an' : 'a'} ${role}. Notes, tasks, documents, artifacts, knowledge and files you `
     + 'read and write here are the space\'s, visible to its members. '
     + (mayWrite ? '' : 'The user\'s role can only read and comment here: do not try to create or change anything except task comments. ')
+    + (role === 'guest' ? 'As a guest the user reaches only some rooms and folders of the space; tools answer within that scope, so what they do not return may still exist. ' : '')
     + 'Scheduling, monitors, pipelines and recipes, memory, profile and skill tools, vault sync, indexing and writes through '
     + 'the user\'s personal connections (mail, calendar, chat, GitLab, MCP servers, their browser) are not '
     + 'available in a space, because they act on the user\'s personal account and automation. GitHub, Atlassian and the '

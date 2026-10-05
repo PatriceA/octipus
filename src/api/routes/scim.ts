@@ -30,6 +30,7 @@ import { orgSsoConfig } from '@/db/schema/org-sso';
 import { users } from '@/db/schema/users';
 import { setUserActive } from '@/security/user-lifecycle';
 import { getVault } from '@/security/vault';
+import { assertLocalUsername, InvalidUsernameError } from '@/security/user-kinds';
 
 const SCIM_USER_SCHEMA = 'urn:ietf:params:scim:schemas:core:2.0:User';
 const SCIM_GROUP_SCHEMA = 'urn:ietf:params:scim:schemas:core:2.0:Group';
@@ -103,6 +104,7 @@ async function isOrgMember(orgId: string, userId: string): Promise<boolean> {
   const [row] = await getDb()
     .select({ userId: orgMembers.userId })
     .from(orgMembers)
+    .innerJoin(users, and(eq(users.id, orgMembers.userId), eq(users.kind, 'local')))
     .where(and(eq(orgMembers.orgId, orgId), eq(orgMembers.userId, userId)))
     .limit(1);
   return !!row;
@@ -181,7 +183,8 @@ export const scimRoutes = new Elysia({ prefix: '/scim/v2' })
           updatedAt: users.updatedAt,
         })
         .from(users)
-        .innerJoin(orgMembers, and(eq(orgMembers.userId, users.id), eq(orgMembers.orgId, ctx.orgId)))
+        // The install's own accounts only: a remote member (S7) is never SCIM's.
+        .innerJoin(orgMembers, and(eq(orgMembers.userId, users.id), eq(orgMembers.orgId, ctx.orgId), eq(users.kind, 'local')))
         .limit(count)
         .offset(startIndex - 1);
 
@@ -220,7 +223,8 @@ export const scimRoutes = new Elysia({ prefix: '/scim/v2' })
           updatedAt: users.updatedAt,
         })
         .from(users)
-        .innerJoin(orgMembers, and(eq(orgMembers.userId, users.id), eq(orgMembers.orgId, ctx.orgId)))
+        // The install's own accounts only: a remote member (S7) is never SCIM's.
+        .innerJoin(orgMembers, and(eq(orgMembers.userId, users.id), eq(orgMembers.orgId, ctx.orgId), eq(users.kind, 'local')))
         .where(eq(users.id, params.id))
         .limit(1);
       if (!row) { set.status = 404; return scimError(404, 'User not found'); }
@@ -237,6 +241,14 @@ export const scimRoutes = new Elysia({ prefix: '/scim/v2' })
 
       const db = getDb();
       const email = body.emails?.find((e: { primary?: boolean; value?: string }) => e.primary)?.value ?? body.emails?.[0]?.value ?? null;
+      // A leading `~` marks members from other installs (S7).
+      try {
+        assertLocalUsername(body.userName);
+      } catch (err) {
+        if (!(err instanceof InvalidUsernameError)) throw err;
+        set.status = 400;
+        return { ...scimError(400, err.message), scimType: 'invalidValue' };
+      }
 
       // Upsert by userName within this org. SCIM clients re-POST on every
       // reconciliation, so a member of this org is returned as-is. A userName
@@ -302,7 +314,8 @@ export const scimRoutes = new Elysia({ prefix: '/scim/v2' })
       const [user] = await db
         .select()
         .from(users)
-        .innerJoin(orgMembers, and(eq(orgMembers.userId, users.id), eq(orgMembers.orgId, ctx.orgId)))
+        // The install's own accounts only: a remote member (S7) is never SCIM's.
+        .innerJoin(orgMembers, and(eq(orgMembers.userId, users.id), eq(orgMembers.orgId, ctx.orgId), eq(users.kind, 'local')))
         .where(eq(users.id, params.id))
         .limit(1);
       if (!user) { set.status = 404; return scimError(404, 'User not found'); }
@@ -319,7 +332,17 @@ export const scimRoutes = new Elysia({ prefix: '/scim/v2' })
         const path = (op.path ?? '').toLowerCase();
         if (op.op.toLowerCase() === 'replace' || op.op.toLowerCase() === 'add') {
           if (path === 'active') active = !!op.value;
-          else if (path === 'username') patch.username = String(op.value);
+          else if (path === 'username') {
+            const username = String(op.value);
+            try {
+              assertLocalUsername(username);
+            } catch (err) {
+              if (!(err instanceof InvalidUsernameError)) throw err;
+              set.status = 400;
+              return { ...scimError(400, err.message), scimType: 'invalidValue' };
+            }
+            patch.username = username;
+          }
           else if (path === 'emails' && Array.isArray(op.value)) {
             const v = op.value as { value: string; primary?: boolean }[];
             patch.email = v.find((e) => e.primary)?.value ?? v[0]?.value ?? null;

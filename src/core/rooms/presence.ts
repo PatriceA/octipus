@@ -15,10 +15,11 @@
  * to (`ctx.metadata.presenceWhere`, set by `room.subscribe` through
  * `setPresenceWhere`), and the note they opened in the document hub (S3,
  * `openDocsFor`). A room is shown to recipients who may enter it, a note to
- * members who may read the space's notes (not guests, whose scope arrives
- * in S6). Other kinds are shown only through a check registered with
+ * members who may read it (a guest: a note of their folders, S6). Other
+ * kinds are shown only through a check registered with
  * `registerPresenceWhereCheck`. Online members are the space's subscribers
- * and the document hub's peers in the space (`peersIn`).
+ * and the document hub's peers in the space (`peersIn`); a guest recipient
+ * sees only the members of their rooms (`membersVisibleToGuest`).
  */
 import { getGatewayHub } from '@/core/gateway/hub';
 import type { ConnectionContext } from '@/core/gateway/protocol';
@@ -38,10 +39,15 @@ const whereChecks = new Map<string, WhereCheck>([
     const room = await loadRoom(where.id);
     return !!room && room.workspaceId === spaceId && (await accessToRoom(userId, room)) !== null;
   }],
-  ['note', async (userId, spaceId) => {
+  ['note', async (userId, spaceId, where) => {
     const { getMembership } = await import('@/core/spaces/service');
     const membership = await getMembership(userId, spaceId);
-    return !!membership && membership.role !== 'guest';
+    if (!membership) return false;
+    if (!membership.scope) return true;
+    const { loadSpaceNoteSlug } = await import('@/db/repositories/live-documents');
+    const { noteInGuestScope } = await import('@/security/space-access');
+    const note = await loadSpaceNoteSlug(where.id);
+    return !!note && note.workspaceId === spaceId && noteInGuestScope(note.slug, membership.scope);
   }],
 ]);
 
@@ -111,9 +117,18 @@ export async function publishSpacePresence(spaceId: string): Promise<void> {
     const usernames = await names([...online.keys()]);
     const visible = new Map<string, boolean>();
     const hub = getGatewayHub();
+    const { getMembership, membersVisibleToGuest } = await import('@/core/spaces/service');
+    // Per recipient: everyone online, or for a guest the members of their rooms (S6).
+    const audiences = new Map<string, Set<string> | null>();
     for (const recipient of conns) {
+      if (!audiences.has(recipient.userId)) {
+        const membership = await getMembership(recipient.userId, spaceId);
+        audiences.set(recipient.userId, membership?.scope ? await membersVisibleToGuest(spaceId, recipient.userId, membership.scope) : null);
+      }
+      const audience = audiences.get(recipient.userId) ?? null;
       const members: Array<{ userId: string; username: string | null; where?: PresenceWhere }> = [];
       for (const [userId, where] of online) {
+        if (audience && !audience.has(userId)) continue;
         let shown: PresenceWhere | undefined;
         if (where) {
           const key = `${recipient.userId}:${where.kind}:${where.id}`;

@@ -9,8 +9,10 @@ import { BudgetSection, FundingSection, fundingSummary } from '@/components/spac
 import { SpaceConnectors } from '@/components/spaces/space-connectors';
 import { RoleBadge } from '@/components/workspace-picker';
 import { PageHeader } from '@/components/ui/page-header';
+import type { GuestScope } from '../../../../src/shared/spaces';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { useRooms } from '@/lib/rooms';
 import { type Space, type SpaceRole, useWorkspace } from '@/lib/workspace-context';
 
 interface Member {
@@ -18,11 +20,14 @@ interface Member {
   username: string;
   role: SpaceRole;
   joinedAt: string;
+  /** A guest's scope; sent to owners only. */
+  scope?: GuestScope;
 }
 
 interface Invite {
   id: string;
   role: Exclude<SpaceRole, 'owner'>;
+  scope: GuestScope | null;
   createdByName: string | null;
   expiresAt: string;
   maxUses: number;
@@ -125,10 +130,12 @@ export default function SpaceSettingsPage() {
     onError,
   });
   const setRole = useMutation({
-    mutationFn: (v: { userId: string; role: SpaceRole }) => api.patch(`/spaces/${id}/members/${v.userId}`, { role: v.role }),
+    mutationFn: (v: { userId: string; role: SpaceRole; scope?: GuestScope }) =>
+      api.patch(`/spaces/${id}/members/${v.userId}`, v.scope ? { role: v.role, scope: v.scope } : { role: v.role }),
     onSuccess: changed,
     onError,
   });
+  const [editingScope, setEditingScope] = useState<string | null>(null);
   const removeMember = useMutation({
     mutationFn: (userId: string) => api.delete(`/spaces/${id}/members/${userId}`),
     onSuccess: async (_r, userId) => {
@@ -199,7 +206,8 @@ export default function SpaceSettingsPage() {
           {members.map((m) => {
             const self = m.userId === user?.id;
             return (
-              <div key={m.userId} className="flex items-center gap-3 px-3 py-2" data-testid="space-member">
+              <div key={m.userId} data-testid="space-member">
+              <div className="flex items-center gap-3 px-3 py-2">
                 <span className="text-[13px] text-on-surface flex-1 min-w-0 truncate">
                   {m.username}
                   {self && <span className="ml-1.5 text-outline-variant">(you)</span>}
@@ -240,6 +248,34 @@ export default function SpaceSettingsPage() {
                     <LogOut className="w-3.5 h-3.5" /> leave
                   </button>
                 )}
+              </div>
+              {isOwner && m.role === 'guest' && (
+                <div className="px-3 pb-2 space-y-2">
+                  <p className="text-[11px] text-on-surface-variant" data-testid="guest-scope-summary">
+                    sees {describeScope(m.scope)}
+                    {!archived && (
+                      <button
+                        type="button"
+                        onClick={() => setEditingScope(editingScope === m.userId ? null : m.userId)}
+                        className="ml-2 text-primary hover:underline cursor-pointer"
+                      >
+                        {editingScope === m.userId ? 'cancel' : 'edit access'}
+                      </button>
+                    )}
+                  </p>
+                  {editingScope === m.userId && (
+                    <GuestScopeForm
+                      spaceId={space.id}
+                      initial={m.scope ?? { rooms: [], folders: [] }}
+                      saving={setRole.isPending}
+                      onSave={(scope) => setRole.mutate(
+                        { userId: m.userId, role: 'guest', scope },
+                        { onSuccess: () => setEditingScope(null) },
+                      )}
+                    />
+                  )}
+                </div>
+              )}
               </div>
             );
           })}
@@ -365,9 +401,13 @@ function InviteForm({ spaceId, onCreated, onError }: { spaceId: string; onCreate
   const [maxUses, setMaxUses] = useState(1);
   const [link, setLink] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // A guest joins with the rooms and folders picked here (S6).
+  const [scope, setScope] = useState<GuestScope>({ rooms: [], folders: [] });
 
   const create = useMutation({
-    mutationFn: () => api.post<CreatedInvite>(`/spaces/${spaceId}/invites`, { role, expiresInHours: hours, maxUses }),
+    mutationFn: () => api.post<CreatedInvite>(`/spaces/${spaceId}/invites`, role === 'guest'
+      ? { role, scope, expiresInHours: hours, maxUses }
+      : { role, expiresInHours: hours, maxUses }),
     onSuccess: async (inv) => {
       setLink(`${window.location.origin}/join/${inv.token}`);
       setCopied(false);
@@ -417,10 +457,12 @@ function InviteForm({ spaceId, onCreated, onError }: { spaceId: string; onCreate
           <Link2 className="w-3.5 h-3.5" /> create invite link
         </button>
       </div>
+      {role === 'guest' && <GuestScopeFields spaceId={spaceId} value={scope} onChange={setScope} />}
       {link && (
         <div className="space-y-1" data-testid="invite-link">
           <p className="text-[11px] text-on-surface-variant">
-            share this link — it is shown only now. anyone who opens it can join as {role} until it expires or is used up.
+            share this link — it is shown only now. anyone who opens it can join as {role} until it expires or is used up
+            {role === 'guest' && <>, and will see {describeScope(scope)}</>}.
           </p>
           <div className="flex items-center gap-2">
             <input readOnly value={link} aria-label="Invite link" onFocus={(e) => e.target.select()} className={`${inputClass} flex-1 text-[12px]`} />
@@ -459,6 +501,79 @@ function InviteRow({ spaceId, invite, onRevoked, onError }: { spaceId: string; i
           revoke
         </button>
       )}
+    </div>
+  );
+}
+
+/** A guest scope in words: which rooms and folders. */
+function describeScope(scope: GuestScope | null | undefined): string {
+  const rooms = scope?.rooms.length ?? 0;
+  const folders = scope?.folders ?? [];
+  if (rooms === 0 && folders.length === 0) return 'nothing yet';
+  const parts: string[] = [];
+  if (rooms > 0) parts.push(`${rooms} room${rooms === 1 ? '' : 's'}`);
+  if (folders.length > 0) parts.push(`folder${folders.length === 1 ? '' : 's'} ${folders.join(', ')}`);
+  return parts.join(' and ');
+}
+
+/**
+ * The rooms and folders a guest reaches (S6, docs/SPACES.md → Guests):
+ * rooms by checkbox; folders as paths of the space's files, one per line —
+ * the notes whose slug lies under a folder are in it too.
+ */
+function GuestScopeFields({ spaceId, value, onChange }: { spaceId: string; value: GuestScope; onChange: (scope: GuestScope) => void }) {
+  const rooms = useRooms(spaceId);
+  const [folderText, setFolderText] = useState(value.folders.join('\n'));
+  const toggleRoom = (roomId: string, on: boolean) =>
+    onChange({ ...value, rooms: on ? [...value.rooms, roomId] : value.rooms.filter((r) => r !== roomId) });
+  return (
+    <div className="grid gap-3 sm:grid-cols-2" data-testid="guest-scope">
+      <fieldset className="space-y-1">
+        <legend className="text-[10px] uppercase tracking-wider text-outline-variant mb-1">rooms the guest enters</legend>
+        {(rooms.data ?? []).length === 0 ? (
+          <p className="text-[12px] text-on-surface-variant">no rooms yet</p>
+        ) : (
+          (rooms.data ?? []).map((room) => (
+            <label key={room.id} className="flex items-center gap-2 text-[12px] text-on-surface cursor-pointer">
+              <input
+                type="checkbox"
+                aria-label={`Guest room ${room.title}`}
+                checked={value.rooms.includes(room.id)}
+                onChange={(e) => toggleRoom(room.id, e.target.checked)}
+              />
+              {room.title}
+              {room.visibility === 'private' && <span className="text-outline-variant">(private)</span>}
+            </label>
+          ))
+        )}
+      </fieldset>
+      <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wider text-outline-variant">
+        folders the guest reads (one per line)
+        <textarea
+          aria-label="Guest folders"
+          rows={3}
+          value={folderText}
+          placeholder={'client/brief\nshared'}
+          onChange={(e) => {
+            setFolderText(e.target.value);
+            onChange({ ...value, folders: e.target.value.split('\n').map((f) => f.trim()).filter(Boolean) });
+          }}
+          className={`${inputClass} normal-case tracking-normal`}
+        />
+      </label>
+    </div>
+  );
+}
+
+/** Edit an existing guest's scope. */
+function GuestScopeForm({ spaceId, initial, saving, onSave }: { spaceId: string; initial: GuestScope; saving: boolean; onSave: (scope: GuestScope) => void }) {
+  const [scope, setScope] = useState<GuestScope>(initial);
+  return (
+    <div className="term-frame rounded-xs p-3 space-y-2">
+      <GuestScopeFields spaceId={spaceId} value={scope} onChange={setScope} />
+      <button type="button" onClick={() => onSave(scope)} disabled={saving} className={primaryClass}>
+        <Check className="w-3.5 h-3.5" /> save access
+      </button>
     </div>
   );
 }

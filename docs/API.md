@@ -30,7 +30,8 @@ curl -H "Authorization: Bearer $OCTIPUS_API_TOKEN" http://localhost:3005/api/aut
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| POST | `/api/auth/register` | No | Register new user (audited as `user_created`) |
+| POST | `/api/auth/register` | No | Register new user (audited as `user_created`); `security.registration` applies, `inviteToken?` is redeemed with the account (SPACES.md → Registration modes) |
+| GET | `/api/auth/registration` | No | `{mode, firstAccount}`: the registration mode |
 | POST | `/api/auth/login` | No | Login with credentials; a TOTP account without `totpCode` gets `401 { requiresTOTP: true }` (audited as `login` / `login_failed`) |
 | POST | `/api/auth/login-mobile` | No | Login returning bearer token in response body (for native clients) |
 
@@ -352,7 +353,7 @@ Shared workspaces ([SPACES.md](SPACES.md)). A caller who is not a member gets
 | POST | `/api/spaces/:id/unarchive` | owner | Undo archive |
 | DELETE | `/api/spaces/:id` | owner | Delete for good; only archived for `spaces.purgeAfterArchiveDays` |
 | GET | `/api/spaces/:id/members` | member | `{userId, username, role, joinedAt}` |
-| PATCH | `/api/spaces/:id/members/:userId` | owner | Change role `{role, scope?}` (scope for guests) |
+| PATCH | `/api/spaces/:id/members/:userId` | owner | Change role `{role, scope?}`; `scope` = `{rooms, folders}` for guests (SPACES.md → Guests) |
 | DELETE | `/api/spaces/:id/members/:userId` | owner, or self | Remove a member, or leave |
 | GET | `/api/spaces/:id/invites` | owner | Invites (never the token) |
 | POST | `/api/spaces/:id/invites` | owner | `{role, scope?, expiresInHours?, maxUses?}` → `{id, token, role, expiresAt, maxUses}`; the token is shown once |

@@ -2,7 +2,7 @@ import { and, eq, inArray, isNull, lt, or, type SQL, sql } from 'drizzle-orm';
 import type { WikiLink } from '@/core/knowledge/wikilink';
 import { coreLogger } from '@/utils/logger';
 import { getDb } from '../postgres';
-import type { NoteScope } from './note-repository';
+import { guestNoteIds, type NoteScope } from './note-repository';
 import { notInSharedWorkspace } from './scoped';
 import {
   type KnowledgeLink,
@@ -26,7 +26,17 @@ function linksInWorkspace(scope: NoteScope | string, workspaceId: string | undef
  * space note and the reverse.
  */
 function linkScope(scope: NoteScope | string): SQL[] {
-  if (typeof scope !== 'string' && scope.kind === 'space') return [eq(knowledgeLinks.workspaceId, scope.workspaceId)];
+  if (typeof scope !== 'string' && scope.kind === 'space') {
+    if (!scope.folders) return [eq(knowledgeLinks.workspaceId, scope.workspaceId)];
+    // A guest (S6): the edges between notes of their folders, and their
+    // notes' unresolved links — never an edge naming anything else.
+    const mine = guestNoteIds(scope.workspaceId, scope.folders);
+    return [
+      eq(knowledgeLinks.workspaceId, scope.workspaceId),
+      sql`${knowledgeLinks.fromType} = 'note' AND ${knowledgeLinks.fromId} IN ${mine}`,
+      sql`(${knowledgeLinks.toId} IS NULL OR (${knowledgeLinks.toType} = 'note' AND ${knowledgeLinks.toId} IN ${mine}))`,
+    ];
+  }
   const userId = typeof scope === 'string' ? scope : scope.userId;
   return [eq(knowledgeLinks.userId, userId), notInSharedWorkspace(knowledgeLinks.workspaceId)];
 }

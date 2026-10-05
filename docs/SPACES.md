@@ -6,7 +6,7 @@ own private sessions inside the space. Spaces are always available; who may
 create one is a policy setting.
 
 This page describes what is built. The full design, including the parts
-still to come (rooms, live documents, sponsored agents, guests), is
+still to come (sponsored agents, spaces across installs), is
 [docs/plans/coworking-spec.md](plans/coworking-spec.md).
 
 > **Status (coworking S1).** Spaces, members, roles, invites, archive and
@@ -48,7 +48,8 @@ Roles are code (`src/security/space-access.ts`, `can(role, action)`):
   cascade would take that content with it. The refusal names the spaces. A
   user who may be deleted first leaves each space they belong to, with its
   audit row and the consequences below.
-- Guests see only their own membership until rooms exist.
+- Guests reach only their scope — see "Guests" below. In the members list
+  they see the members of their rooms and themselves.
 
 Someone who is not a member gets **404** for every space id — the same answer
 as for an id that does not exist. A member whose role lacks an action gets
@@ -69,6 +70,10 @@ POST /api/spaces/<id>/invites
 {"role": "editor", "expiresInHours": 48, "maxUses": 1}
 → 201 {"id": "…", "token": "<64 hex>", "role": "editor", "expiresAt": "…", "maxUses": 1}
 ```
+
+A `guest` invite carries the guest's scope (`{"role": "guest", "scope":
+{"rooms": ["<room id>"], "folders": ["client"]}}`, see "Guests"); no other
+role has one.
 
 - The token is shown **once**, in this response. Only `sha256(token)` is
   stored; listings never show it.
@@ -226,7 +231,101 @@ for that request.
   notifications go to its owner alone. Role agents are personal automation:
   a space task is never assigned to a role or a node (400) and never wakes a
   role heartbeat.
-- **Guests** have no content access yet: guest scopes arrive with S6.
+- **Guests** reach only their scope (next section).
+
+### Guests
+
+A guest is a member with the `guest` role and a **scope** stored on the
+membership (`workspace_members.scope`, and on a guest invite
+`workspace_invites.scope`):
+
+```json
+{ "rooms": ["<room id>", "…"], "folders": ["client", "shared/specs"] }
+```
+
+The owner sets it when creating a guest invite and changes it with
+`PATCH /api/spaces/<id>/members/<userId> {"role": "guest", "scope": {…}}`
+(a PATCH that names no scope keeps the guest's; a member made a guest without
+one starts with the empty scope, which reaches nothing). It is validated on
+write (`parseGuestScope`, `src/security/space-access.ts`): at most 100 rooms
+and 100 folders, every room a room of this space, every folder a relative
+path without `.`/`..`/empty segments or backslashes, stored in one spelling
+(`/client/` is `client`). A changed scope takes effect at once like a
+downgrade (`onMembershipChanged`).
+
+What a guest reaches — one rule per kind of content, applied by the access
+layer (`spaceRepos`) and every surface beside it:
+
+| Content | A guest reaches |
+|---|---|
+| Rooms | the rooms in `rooms` (open or private; no `room_members` row needed), their transcripts and presence, and posting and asking Octipus there (`comment`, `run_agent`) |
+| Members | the members of those rooms — every non-guest member for an open room, the `room_members` of a private one, and the guests whose scope names the room — and themselves (members list, room member lists, space presence) |
+| Files | the space's files under a folder of `folders` (a path prefix matched by whole segments, judged on the real path so a link inside a folder cannot leave it); file leases of those paths |
+| Notes | the notes whose slug is, or lies under, a folder (slugs keep `/`: `client/brief` is in `client`; the folder is compared in its slug form, so `Client Docs` matches `client-docs/…`), with their live documents, revisions, links between such notes and edit proposals |
+| Tasks | the tasks raised from one of their rooms (`source_ref.sessionId`), and commenting on them |
+| Knowledge | the chunks of those notes and files |
+| Documents, artifacts, space memory, space connectors and secrets | nothing: they have no room and no path |
+| Private chats, agents, pipelines | none: a guest asks Octipus in their rooms only |
+
+A guest never writes (the role table), so their turns run the commenter tool
+list, never a CLI model, and never see space memory. Rooms list only their
+rooms; a private room's member list cannot hold a guest (their rooms are
+their scope). Guests are never a task's assignee and never get a space
+notification for one.
+
+### Registration modes
+
+`security.registration` (env `REGISTRATION_MODE`) decides who may create an
+account through `POST /api/auth/register` (the sign-in page's register tab):
+
+| Mode | Who may register |
+|---|---|
+| `open` (default) | anyone |
+| `invite_only` | only with a valid space invite token (`inviteToken` in the body; the invite page's "register" link carries it) |
+| `closed` | nobody; the register tab is hidden |
+
+- An invite token given at registration (in any mode) is redeemed **in the
+  same transaction** that creates the account: the account and its
+  membership commit together, or neither does. A used-up, revoked or expired
+  token creates no account; a failed registration spends no use.
+- The install's **first account** may always register and becomes its
+  admin. Which registration is the first is decided inside the transaction,
+  under a lock that serialises registrations, so two racing first sign-ups
+  cannot both become admin.
+- `GET /api/auth/registration` (public) answers `{mode, firstAccount}`; the
+  sign-in page hides registering when it is closed and says "invite
+  required" on an invite-only install reached without an invite.
+- **Not subject to it:** accounts created by SAML JIT (the organization's
+  IdP vouches for them), SCIM provisioning (the IdP's bearer token) and
+  admins (`POST /api/admin/users`). Each is gated by an IdP or an admin.
+
+## Across installs (contract)
+
+A space has one host install. Members from other installs (S7) will reach it
+over the federation transport, which does not exist yet; what is fixed now
+is how such a member is represented on the host:
+
+- A **remote member** is a `users` row with `kind = 'remote'`,
+  `remote_instance_id` (the fingerprint of their install),
+  `remote_user_ref` (their id there), `email` NULL, no password, never an
+  admin, and a username with a leading `~` (`~name@<instance-fingerprint>`,
+  shown as `name@instance`). A CHECK (`users_kind_chk`) holds all of it;
+  `(remote_instance_id, remote_user_ref)` is unique.
+- **Local usernames may not start with `~`.** Registration, admin creation,
+  SCIM (create and rename) and SAML JIT refuse one (`assertLocalUsername`,
+  `src/security/user-kinds.ts`); migration `0135_guests_remote` renamed any
+  existing `~` username to `renamed-<id>-<name>` before adding the CHECK.
+  `@` stays allowed (SAML NameIDs and SCIM userNames are e-mail addresses).
+- **Remote members never sign in here.** `SessionManager.create` refuses them
+  (so do password, passkey, SAML, device pairing and ws-ticket logins, which
+  all mint their session there), session validation and API tokens refuse
+  them, admins cannot impersonate them, SAML JIT refuses a `~` account and
+  passkeys refuse them.
+- **They are not the install's accounts:** the admin user and quota lists,
+  `PATCH /api/admin/users/<id>` and SCIM leave them out.
+- Each holds a normal `workspace_members` row and role. Work they cause on
+  the host runs on the host's sponsored agent (`trigger: 'remote'`); its
+  funding is `fundingFor`'s (§9.1 of the spec).
 
 ### The agent in a space
 
@@ -532,8 +631,8 @@ and `replay` answer 404 for a room — its creator included.
 
 - **Access.** `roomAccess(userId, roomId)` (`src/core/rooms/access.ts`) is
   the one door: the membership of the space, read now, plus a
-  `room_members` row for a private room (guests enter only rooms they were
-  added to). `canActInSession(session, userId, action)` replaces the inline
+  `room_members` row for a private room (guests enter only the rooms of
+  their scope, see "Guests"). `canActInSession(session, userId, action)` replaces the inline
   owner checks: a chat is its owner's; in a room members with `comment`
   post, members with `run_agent` ask Octipus, the running turn's requester
   or an editor+ stops it, the room's creator or a space owner renames it,
@@ -792,6 +891,7 @@ shell in a space can read the space's GitHub token from the tool home.
 
 | Key | Env | Default | Meaning |
 |---|---|---|---|
+| `security.registration` | `REGISTRATION_MODE` | `open` | `open`, `invite_only` or `closed`: who may register an account (see "Registration modes") |
 | `spaces.creation` | `SPACES_CREATION` | `any_user` | `any_user` or `admins`: who may create a space |
 | `spaces.maxMembers` | `SPACES_MAX_MEMBERS` | `50` | most members per space |
 | `spaces.inviteMaxTtlHours` | `SPACES_INVITE_MAX_TTL_HOURS` | `720` | longest invite lifetime, hours |

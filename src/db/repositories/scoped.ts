@@ -36,7 +36,7 @@ import { alias, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { afterSpaceTaskWrite, publishTaskChanged } from '@/core/tasks/team';
 import { dispatchWakeups, notifyTaskClosed, scheduleWakeup, type WakeupCause } from '@/core/tasks/wakeups';
 import { isAdmin, isAuthenticated, type Principal } from '@/security/principal';
-import { type SpaceAction, SpaceError } from '@/security/space-access';
+import { type GuestScope, type SpaceAction, SpaceError } from '@/security/space-access';
 import { TASK_CHECKOUT_TTL_MS } from '@/core/tasks/checkout';
 import { ACTIVE_TASK_STATUSES, isActiveStatus, isTaskStatus } from '@/core/tasks/status';
 import { toLookup, type WaitingOn, waitingOn } from '@/core/tasks/structure';
@@ -184,6 +184,12 @@ export interface RepoScope {
   can(action: SpaceAction): void;
   /** Throws `SpaceError('archived')` when the scope reads only (an archived space); the personal scope never does. */
   assertOpen(): void;
+  /**
+   * A guest's scope (S6). Then `shared` reaches no row by default — a
+   * repository whose table has a guest rule applies it instead (tasks:
+   * raised from a room of the scope). Absent for every other scope.
+   */
+  readonly guest?: GuestScope | null;
   /**
    * The workspace a new row is stamped with. In a space, always the space
    * (`requested` is ignored); personally, `requested` or the principal's
@@ -1067,7 +1073,16 @@ export type TaskReleaseResult =
   | { ok: false; reason: 'conflict'; holder: string | null };
 
 /** The owner / workspace columns scoping reads, on `tasks` or an alias of it. */
-export type TaskScopeColumns = ScopeColumns;
+export type TaskScopeColumns = ScopeColumns & { sourceRef: AnyPgColumn };
+
+/**
+ * A guest's tasks (S6): those raised from a room of their scope
+ * (`source_ref.sessionId`). No room reaches none.
+ */
+export function guestTaskFilter(t: TaskScopeColumns, guest: GuestScope): SQL {
+  if (guest.rooms.length === 0) return sql`FALSE`;
+  return inArray(sql`(${t.sourceRef} ->> 'sessionId')`, guest.rooms);
+}
 
 /**
  * The board's lease rule as a condition on `tasks`: nobody holds the row, or
@@ -1143,7 +1158,7 @@ export class TaskRepo {
 
   /** List the scope's tasks (the principal's own, or the space's), newest-first, optionally filtered. */
   async listOwn(filter: TaskListFilter = {}): Promise<Task[]> {
-    const filters: SQL[] = [...this.taskScope.shared(tasks)];
+    const filters: SQL[] = [...this.rows(tasks)];
     if (filter.status) filters.push(eq(tasks.status, filter.status));
     else if (filter.statuses?.length) filters.push(inArray(tasks.status, filter.statuses));
     if (filter.dueBefore) filters.push(sql`${tasks.dueAt} IS NOT NULL AND ${tasks.dueAt} <= ${filter.dueBefore}`);
@@ -1167,7 +1182,7 @@ export class TaskRepo {
    * email triage, research, the reader) — the ones the user has not seen yet.
    */
   async createdSince(since: Date, opts: { excludeSource?: string; limit?: number } = {}): Promise<CreatedTaskRow[]> {
-    const filters: SQL[] = [...this.taskScope.shared(tasks), gte(tasks.createdAt, since)];
+    const filters: SQL[] = [...this.rows(tasks), gte(tasks.createdAt, since)];
     if (opts.excludeSource) filters.push(ne(tasks.source, opts.excludeSource));
     return this.db
       .select({ id: tasks.id, title: tasks.title, source: tasks.source, createdAt: tasks.createdAt })
@@ -1387,7 +1402,14 @@ export class TaskRepo {
    * one place.
    */
   private scope(t: TaskScopeColumns = tasks): SQL[] {
-    return this.taskScope.shared(t, { byId: true });
+    return this.rows(t, { byId: true });
+  }
+
+  /** The rows the scope reaches: shared ones, or a guest's (their rooms' tasks, S6). */
+  private rows(t: TaskScopeColumns, opts?: { byId?: boolean }): SQL[] {
+    const guest = this.taskScope.guest;
+    if (guest) return [eq(t.workspaceId, this.taskScope.spaceId as string), guestTaskFilter(t, guest)];
+    return this.taskScope.shared(t, opts);
   }
 
   /** `id` plus the scope filters, and any extra conditions. */

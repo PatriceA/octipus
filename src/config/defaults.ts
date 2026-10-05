@@ -41,6 +41,7 @@ export const defaultConfig: Partial<Config> = {
     vaultDenyUnscopedSecrets: false,
     dockerIsolation: 'off',
     trustedProxies: [],
+    registration: 'open',
   },
   api: {
     host: '0.0.0.0',

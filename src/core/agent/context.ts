@@ -164,6 +164,11 @@ export async function resolveAgentScope(input: {
   if (resolved.space && !SPACE_TRIGGERS.has(trigger)) {
     throw new SpaceError('forbidden_role', `A ${trigger} run cannot start in a space`);
   }
+  // A guest's `run_agent` holds in the rooms of their scope only (S6): no
+  // private session, agent or pipeline of theirs runs in the space.
+  if (resolved.space?.scope) {
+    throw new SpaceError('forbidden_role', 'A guest asks Octipus only in the rooms they were given');
+  }
   return scopeIn(resolved.workspaceId, resolved.space, trigger);
 }
 

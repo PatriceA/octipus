@@ -64,6 +64,17 @@ export async function loadSpaceNote(noteId: string): Promise<SpaceNoteRow | null
   return { ...note, workspaceId: row.workspaceId, spaceArchived: spaceArchivedAt !== null };
 }
 
+/** The workspace and slug of a note (a guest's scope is checked against the slug, S6). */
+export async function loadSpaceNoteSlug(noteId: string): Promise<{ workspaceId: string; slug: string } | null> {
+  if (!UUID_RE.test(noteId)) return null;
+  const [row] = await getDb()
+    .select({ workspaceId: notes.workspaceId, slug: notes.slug })
+    .from(notes)
+    .where(eq(notes.id, noteId))
+    .limit(1);
+  return row?.workspaceId ? { workspaceId: row.workspaceId, slug: row.slug } : null;
+}
+
 /**
  * Write `body` over the note only while its body is still `expectedSha`
  * (one conditional `UPDATE … RETURNING`): the compare-and-write every
