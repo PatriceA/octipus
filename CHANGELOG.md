@@ -9,6 +9,25 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **Live space notes.** Members of a shared space edit a note together: the
+  notes editor binds to a shared document (Yjs over the gateway: `doc.join`,
+  `doc.update`, `doc.awareness`, `doc.leave`), shows the others' cursors and
+  avatars, and saves by itself ("Saved"). Every other writer — REST saves,
+  quick capture, meeting notes, the agent's note tool, restores, accepted
+  proposals — is merged into the live text from the base it read (three-way
+  merge) or refused as stale (409), never reverting typing; `read_note` and
+  `GET /api/notes/:id` return the live text and its sha. Space notes get a
+  history (revisions with authors, restore), the agent's edit proposals
+  (`note_edit_proposals`: diff, accept, reject; `workspaces.agent_edit_mode`),
+  and space files get leases ("Ben is editing", `file_leases`). Migration
+  `0130_live_documents`; new settings `spaces.noteMaxBytes`,
+  `docMaxUpdatesPerSecond`, `docPersistDebounceMs`, `docReindexMinutes`,
+  `docBaseTtlMinutes`, `fileLeaseTtlSeconds` — startup now fails when
+  `spaces.noteMaxBytes` exceeds half of `gateway.maxFrameBytes`. New
+  dependencies: `yjs`, `y-protocols`, `node-diff3` (server) and
+  `y-codemirror.next` (web): a CRDT and a three-way merge are not 20 lines.
+  See docs/SPACES.md.
+
 - **Shared spaces in the web.** The workspace picker lists "my workspaces"
   and "shared spaces" (with role badges) and creates a space; a space has a
   settings page (`/spaces/<id>/settings`: name, members, invites with a

@@ -19,7 +19,7 @@ import { getConfig } from '@/config';
 import { getDb, queryRaw } from '@/db/postgres';
 import { isUuid } from '@/db/repositories/scoped';
 import { type AuditDetails, auditLog } from '@/db/schema/audit';
-import { newWorkspaceRow, type SpaceRole, type Workspace, workspaceInvites, workspaceMembers, workspaces } from '@/db/schema/organizations';
+import { type AgentEditMode, newWorkspaceRow, type SpaceRole, type Workspace, workspaceInvites, workspaceMembers, workspaces } from '@/db/schema/organizations';
 import { users } from '@/db/schema/users';
 import { requireRealUserId } from '@/security/principal';
 import { noteSharedWorkspace } from '@/security/workspace-fs';
@@ -212,6 +212,8 @@ export interface SpaceSummary {
    * (`own`). A space-sponsored agent arrives in S5.
    */
   funding: 'own';
+  /** How the agent edits the space's notes (§7.4). */
+  agentEditMode: AgentEditMode;
   /** Set when the change committed but its follow-up (stopping agents, expiring requests) failed; logged. */
   warning?: string;
 }
@@ -227,6 +229,7 @@ function summarize(space: Workspace, role: SpaceRole, members: number): SpaceSum
     createdBy: space.createdBy,
     createdAt: space.createdAt,
     funding: 'own',
+    agentEditMode: space.agentEditMode,
   };
 }
 
@@ -334,15 +337,46 @@ export async function archiveSpace(actor: SpaceActor, workspaceId: string): Prom
 }
 
 export async function unarchiveSpace(actor: SpaceActor, workspaceId: string): Promise<SpaceSummary> {
-  return getDb().transaction(async (tx) => {
+  const result = await getDb().transaction(async (tx) => {
     const { membership, space } = await authorize(actor, workspaceId, 'manage_space', tx);
-    if (!space.archivedAt) return summarize(space, membership.role, await memberCount(workspaceId, tx));
+    if (!space.archivedAt) return { summary: summarize(space, membership.role, await memberCount(workspaceId, tx)), changed: false };
     const [updated] = await tx
       .update(workspaces)
       .set({ archivedAt: null, updatedAt: new Date() })
       .where(eq(workspaces.id, workspaceId))
       .returning();
     await writeSpaceAudit(tx, { ...auditActor(actor), action: 'space_updated', workspaceId, details: { archived: false } });
+    return { summary: summarize(updated, membership.role, await memberCount(workspaceId, tx)), changed: true };
+  });
+  if (!result.changed) return result.summary;
+  // Open live documents become editable again (S3).
+  const warning = await settleFollowUp('Space unarchive', { workspaceId }, async () => {
+    const { getDocHub } = await import('@/core/docs');
+    await getDocHub().setSpaceArchived(workspaceId, false);
+  });
+  return warning ? { ...result.summary, warning } : result.summary;
+}
+
+/**
+ * How the agent edits the space's notes (§7.4): `suggest` (its writes
+ * become edit proposals) or `direct`. Owners only.
+ */
+export async function setAgentEditMode(actor: SpaceActor, workspaceId: string, mode: AgentEditMode): Promise<SpaceSummary> {
+  if (mode !== 'suggest' && mode !== 'direct') throw new SpaceError('invalid_input', 'agentEditMode must be suggest or direct');
+  return getDb().transaction(async (tx) => {
+    const { membership, space } = await authorize(actor, workspaceId, 'manage_space', tx);
+    assertNotArchived(space);
+    const [updated] = await tx
+      .update(workspaces)
+      .set({ agentEditMode: mode, updatedAt: new Date() })
+      .where(eq(workspaces.id, workspaceId))
+      .returning();
+    await writeSpaceAudit(tx, {
+      ...auditActor(actor),
+      action: 'space_updated',
+      workspaceId,
+      details: { field: 'agentEditMode', previousValue: space.agentEditMode, newValue: mode },
+    });
     return summarize(updated, membership.role, await memberCount(workspaceId, tx));
   });
 }

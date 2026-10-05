@@ -367,6 +367,8 @@ async function main() {
 
     // Wire gateway message handler and bridge root agent/agent events
     wireMessageHandler(gatewayHub);
+    const { wireDocumentHub } = await import('@/core/docs');
+    wireDocumentHub();
     const disconnectBridge = await connectEventBridge(gatewayHub);
 
     // Start API server. The returned Elysia app MUST stay referenced for the

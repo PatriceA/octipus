@@ -542,6 +542,22 @@ export const spacesConfigSchema = z.object({
   inviteMaxTtlHours: z.number().int().min(1).max(8760).default(720),
   /** Days a space must have been archived before its owner may purge it. */
   purgeAfterArchiveDays: z.number().int().min(0).max(3650).default(7),
+  /**
+   * Largest space note body, in UTF-8 bytes (S3, live documents). Startup
+   * refuses a value above half of `gateway.maxFrameBytes`: a full `doc.sync`
+   * carries the note as a base64 Yjs update inside a JSON frame.
+   */
+  noteMaxBytes: z.number().int().min(1024).max(32 * 1024 * 1024).default(114_688),
+  /** `doc.update` frames one connection may send per second. */
+  docMaxUpdatesPerSecond: z.number().int().min(1).max(1000).default(30),
+  /** Idle time after the last edit before an open note is saved, in milliseconds. */
+  docPersistDebounceMs: z.number().int().min(100).max(600_000).default(2000),
+  /** Longest an open note's links and search index may lag its text, in minutes (also refreshed on last leave). */
+  docReindexMinutes: z.number().int().min(1).max(1440).default(10),
+  /** How long the hub keeps a text it handed out as a merge base, in minutes. */
+  docBaseTtlMinutes: z.number().int().min(1).max(1440).default(30),
+  /** Lifetime of a space file lease ("Ben is editing") without a renewal, in seconds. */
+  fileLeaseTtlSeconds: z.number().int().min(10).max(86_400).default(180),
 });
 
 /**

@@ -1,5 +1,6 @@
 import type { Elysia } from '@/api/http';
 import { getConfig } from '@/config';
+import { assertDocLimits } from '@/core/docs/hub';
 import { getGatewayHub } from '@/core/gateway/hub';
 import { getSessionManager } from '@/security/auth/session';
 import { getOrgWorkspaceManager } from '@/security/orgs';
@@ -51,6 +52,9 @@ export function setupGatewayWebSocket(app: Elysia): void {
   // are told this same number in `auth_ok`, not a later config value the
   // socket does not enforce.
   const maxFrameBytes = getConfig().gateway.maxFrameBytes;
+  // A full `doc.sync` must fit one frame (live documents, §7.3): refuse to
+  // start with a note size the frame cannot carry.
+  assertDocLimits(getConfig().spaces.noteMaxBytes, maxFrameBytes);
   hub.connectionManager.setMaxFrameBytes(maxFrameBytes);
 
   app.ws('/gateway', {

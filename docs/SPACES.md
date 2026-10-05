@@ -296,6 +296,50 @@ A member's private chat in a space runs the agent in the space.
 - Personal-only pages keep working with a space selected; the secrets page
   scopes to the default personal workspace, as the server does.
 
+## Live documents
+
+Space notes are edited together (S3, `src/core/docs/hub.ts`). Opening a
+note in the editor joins its live document over the gateway (`doc.join`);
+every member with it open sees the others' text, cursors and selections as
+they type, and an avatar for each in the note's header. There is no Save
+for the text: the server saves it after `spaces.docPersistDebounceMs` of
+quiet and when the last editor leaves, and the editor says "Saved". Save
+stores the title, tags and kind only. Commenters and viewers watch the
+text change live but cannot edit (their updates are refused); so is
+everyone in an archived space.
+
+- **Other writers merge.** Everything else that writes a space note — a
+  REST save, quick capture, meeting notes, the agent, accepting a proposal,
+  restoring a revision — names the text it started from (its *base*). The
+  server merges that change into the live text (a three-way merge, lines
+  first, then words) or refuses it as stale; it never overwrites what
+  someone typed meanwhile. A read of an open note returns the live text and
+  its sha, which the server keeps as a base for `spaces.docBaseTtlMinutes`.
+  Archiving an open note saves what was typed first, then closes it for
+  everyone.
+- **History.** Every save is a revision with its authors (and the member an
+  agent wrote for). The notes page's right panel has a *history* tab: open a
+  revision to read it, restore it as a new revision.
+- **Edit proposals.** In `suggest` mode (the default; owners switch with
+  `PUT /api/spaces/<id>/agent-edit-mode`), what the agent writes into a
+  space note becomes a proposal. The *proposals* tab shows each with a diff;
+  accept applies it through the same merge (if it collides with a newer
+  edit it turns stale and the three texts are shown), reject closes it.
+  (The agent's note tool switches to proposals in a later step; the
+  proposals table, the service and the accept/reject routes are in place.)
+- **File leases.** A member editing a space file holds a lease on it
+  (`POST /api/spaces/<id>/file-leases`, renewed while the editor is open,
+  lapsing after `spaces.fileLeaseTtlSeconds`), so others see "Ben is
+  editing". A lease on a directory covers its files; a directory operation
+  conflicts with a lease anywhere under it. Changes are pushed as
+  `file.leases` to the space's gateway subscribers. Leases are the
+  human-facing signal; the guarantee for space files is a per-path
+  compare-and-write mutex. Shell, git, docker, skill scripts and CLI agents
+  do not check leases — they are advisory for them.
+- **Limits.** A space note holds at most `spaces.noteMaxBytes`; a tab sends
+  at most `spaces.docMaxUpdatesPerSecond` edits and 10 cursor updates per
+  second. Live documents live in the server process (single process).
+
 ## Settings
 
 | Key | Env | Default | Meaning |
@@ -304,6 +348,12 @@ A member's private chat in a space runs the agent in the space.
 | `spaces.maxMembers` | `SPACES_MAX_MEMBERS` | `50` | most members per space |
 | `spaces.inviteMaxTtlHours` | `SPACES_INVITE_MAX_TTL_HOURS` | `720` | longest invite lifetime, hours |
 | `spaces.purgeAfterArchiveDays` | `SPACES_PURGE_AFTER_ARCHIVE_DAYS` | `7` | days archived before a space can be deleted |
+| `spaces.noteMaxBytes` | `SPACES_NOTE_MAX_BYTES` | `114688` | largest space note (112 KiB); startup fails above half of `gateway.maxFrameBytes` |
+| `spaces.docMaxUpdatesPerSecond` | `SPACES_DOC_MAX_UPDATES_PER_SECOND` | `30` | live-note edits per tab per second |
+| `spaces.docPersistDebounceMs` | `SPACES_DOC_PERSIST_DEBOUNCE_MS` | `2000` | quiet time before a live note is saved |
+| `spaces.docReindexMinutes` | `SPACES_DOC_REINDEX_MINUTES` | `10` | most a live note's links and index may lag; billed as install work to the last editor |
+| `spaces.docBaseTtlMinutes` | `SPACES_DOC_BASE_TTL_MINUTES` | `30` | how long a read of a live note stays a merge base |
+| `spaces.fileLeaseTtlSeconds` | `SPACES_FILE_LEASE_TTL_SECONDS` | `180` | file lease lifetime without renewal |
 
 ## Routes
 

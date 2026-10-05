@@ -355,8 +355,32 @@ Shared workspaces ([SPACES.md](SPACES.md)). A caller who is not a member gets
 | POST | `/api/spaces/:id/invites` | owner | `{role, scope?, expiresInHours?, maxUses?}` → `{id, token, role, expiresAt, maxUses}`; the token is shown once |
 | DELETE | `/api/spaces/:id/invites/:inviteId` | owner | Revoke an invite of this space |
 | GET | `/api/spaces/:id/activity` | member | Audit rows of the space, newest first; `?limit=&before=` |
+| PUT | `/api/spaces/:id/agent-edit-mode` | owner | `{mode: "suggest" \| "direct"}`: whether the agent's note writes become edit proposals |
+| GET | `/api/spaces/:id/file-leases` | member | Live file leases ("Ben is editing"): `{path, holderUserId, holderName, holderKind, expiresAt}` |
+| POST | `/api/spaces/:id/file-leases` | editor, owner | `{path, renew?}` take (or renew) the lease on a space file; 409 `lease_held` with `heldBy` when someone else has it (or a directory above it, or a file under it) |
+| DELETE | `/api/spaces/:id/file-leases?path=` | member | Release your lease |
 | GET | `/api/invites/:token` | public | Preview `{spaceName, inviterName, role, expiresAt}`; rate-limited per IP |
 | POST | `/api/invites/:token/accept` | signed in | Join → `{workspaceId, role, alreadyMember}`; rate-limited per IP |
+
+### Live space notes
+
+In a space, `POST /api/notes` takes `baseSha256` (the sha of the body the
+edit was made from — `GET /api/notes/:id` returns the live text and its sha
+as `bodySha256` while the note is open in an editor). The edit is merged with
+what others wrote since, or refused with 409 `{code: "stale",
+currentSha256}`; a note over `spaces.noteMaxBytes` is a 413. Omitting `body`
+on an existing space note saves only its title, tags and kind.
+
+| Method | Endpoint | Who | Description |
+|--------|----------|-----|-------------|
+| GET | `/api/notes/:id/revisions` | member | Revisions, newest first: `{id, createdAt, origin, size, authors[], onBehalfOf}` |
+| GET | `/api/notes/:id/revisions/:revisionId` | member | One revision with its body |
+| POST | `/api/notes/:id/revisions/:revisionId/restore` | editor, owner | Write that revision's text as a new revision |
+| GET | `/api/notes/proposals?noteId=&status=` | member | The agent's edit proposals |
+| POST | `/api/notes/proposals/:proposalId/accept` | editor, owner | Apply it (merged through the live document); 409 `{status: "stale", base, current, proposed}` when it collides with a newer edit |
+| POST | `/api/notes/proposals/:proposalId/reject` | editor, owner | Close it |
+
+In a personal workspace these routes answer 404.
 
 ## Swarm
 
