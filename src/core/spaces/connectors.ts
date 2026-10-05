@@ -97,14 +97,15 @@ async function audit(actor: SpaceActor, workspaceId: string, connectorId: string
 
 /**
  * Connect a connector to the space (owners). GitHub takes `token`; an OAuth
- * connector returns the authorization URL its popup opens — the callback
+ * connector returns the authorization URL its popup opens — the callback,
+ * from the same browser (`browserBinding`, `src/api/oauth-browser.ts`),
  * stores the tokens (`storeSpaceConnectorTokens`).
  */
 export async function connectSpaceConnector(
   actor: SpaceActor,
   workspaceId: string,
   connectorId: string,
-  input: { token?: string },
+  input: { token?: string; browserBinding: string },
 ): Promise<{ connected: true } | { url: string }> {
   const principal = await requireOwner(actor, workspaceId);
   if (connectorId === GITHUB_SPACE_CONNECTOR.id) {
@@ -120,7 +121,7 @@ export async function connectSpaceConnector(
   if (input.token !== undefined) throw new SpaceError('invalid_input', `${connector.name} connects with OAuth, not a pasted token`);
   const { ensureConnectorClient, OAuthManager, oauthPublicUrl } = await import('@/security/oauth');
   await ensureConnectorClient(connector.id, oauthPublicUrl());
-  return new OAuthManager().generateAuthorizationUrl(actor.userId, connector.id, { spaceId: workspaceId });
+  return new OAuthManager().generateAuthorizationUrl(actor.userId, connector.id, { spaceId: workspaceId, browserBinding: input.browserBinding });
 }
 
 /**
@@ -151,7 +152,7 @@ export async function storeSpaceConnectorTokens(input: {
   await audit(actor, input.workspaceId, input.connectorId, { connected: true });
 }
 
-/** Disconnect (owners): the space's secrets of that connector are deactivated. */
+/** Disconnect (owners): the space's secrets of that connector are deleted. */
 export async function disconnectSpaceConnector(actor: SpaceActor, workspaceId: string, connectorId: string): Promise<{ removed: number }> {
   if (connectorId !== GITHUB_SPACE_CONNECTOR.id && !findConnector(connectorId)) throw new SpaceError('not_found', `Unknown connector: ${connectorId}`);
   const principal = await requireOwner(actor, workspaceId);

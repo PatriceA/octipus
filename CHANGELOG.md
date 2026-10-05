@@ -9,6 +9,28 @@ labels reflect blast radius, not contract guarantees.
 
 ### Fixed
 
+- **Group-channel bridge and space connectors (review of S5).** The Git tool,
+  the shell, `gh` and CLI agents in a space run with a fresh per-run tool
+  home (`HOME`, `XDG_CONFIG_HOME`, `GH_CONFIG_DIR`, git's config) seeded only
+  with the space connector's GitHub login and removed after the run; the
+  host's SSH agent, askpass, git config and credential helpers are stripped
+  and every helper is reset (`credential.helper=`), so neither the host's
+  identity nor another member's planted config is ever used. In a space the
+  GitHub, Atlassian and `connector_*` tools act through the space's
+  connection and are space tools: writes follow the role, reads no longer
+  mark the session private. A bridged room cannot be made private while
+  bound and only open rooms are relayed; a binding ends (audited,
+  `owner_left`) when its owner stops owning the space; thread mappings count
+  only for rooms of the channel's current space (binding clears leftovers,
+  a stale cached binding is refused); permission prompts go to the platform
+  thread only for turns asked there and a room's prompt is never denied for
+  a paused channel; guests in a bound channel get a hint and no room; a
+  room held by another channel cannot be bound (400, not 500); a purge
+  drops the cached binding; superseded space secrets are deleted. OAuth
+  callbacks (connectors, space connectors, Google / Microsoft) must come from
+  the browser that started the flow (a `SameSite=Lax` binding cookie), and
+  `/api/connectors/:id/callback` is a public route like the other OAuth
+  callbacks.
 - **Rooms (review of S2).** `remember_for_space` goes through
   `routeApprovalFor` as a space write (role cap, and an ASK after a private
   read in a private space session). The space memory and a side panel's

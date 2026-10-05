@@ -44,6 +44,7 @@ import { getCLIToolConfig, resolveCliModelEntry } from './cli-agent-factory';
 import { getSkillRegistry } from '@/skills/registry';
 import { fetchActiveSkillIdsForTopic } from '@/skills/discovery';
 import { type CliCredentialOwner, cliCredentialOwnerFor, cliEnvFor, cliSpaceEnv } from './cli-child-env';
+import { openSpaceToolHome, type SpaceToolHome } from '@/security/space-tool-env';
 import { getConfig } from '@/config';
 import { isRootAgent } from './types';
 import type { AgentContext, AgentMessage } from './types';
@@ -1119,11 +1120,23 @@ When a task matches one of these skills, load it with get_skill before starting 
     // Cleanup helper — removes temp context files and any ephemeral per-spawn
     // VIBE_HOME the arg builder created for vibe's MCP registration.
     const tempVibeHome = toolEnv?.VIBE_HOME;
+    // In a space the CLI's tools run in the run's own tool home (§9.5),
+    // removed with the context files.
+    let toolHome: SpaceToolHome | null = null;
     const cleanupContextFiles = () => {
       if (tempVibeHome && tempVibeHome.includes('octipus-cli')) {
         try { rmSync(tempVibeHome, { recursive: true, force: true }); } catch { /* already gone */ }
       }
+      toolHome?.dispose();
     };
+    if (this.context.space) {
+      try {
+        toolHome = await openSpaceToolHome({ ...this.context, space: this.context.space });
+      } catch (err) {
+        cleanupContextFiles();
+        throw err;
+      }
+    }
 
     // On Windows: shell: true is required for .cmd wrappers, and prompts are piped
     // via stdin (set up by CLIArgumentBuilder) to avoid shell argument mangling.
@@ -1141,7 +1154,7 @@ When a task matches one of these skills, load it with get_skill before starting 
         ...(this.connection ? { OCTIPUS_AGENT_URL: this.connection.url, OCTIPUS_AGENT_KEY: this.connection.key } : {}),
       }, settings.inheritApiKeys === true);
       // In a space the CLI's tools never find the host's logins (§9.5).
-      const env = this.context.space ? cliSpaceEnv(baseEnv, this.context.space.workspaceId) : baseEnv;
+      const env = toolHome ? cliSpaceEnv(baseEnv, toolHome) : baseEnv;
 
       if (this.aborted) { cleanupContextFiles(); reject(new Error('Agent was aborted before CLI spawn')); return; }
       try { assertWindowsCmdLineFits(binary, args, process.platform, useShellForSpawn); } catch (err) { cleanupContextFiles(); reject(err); return; }

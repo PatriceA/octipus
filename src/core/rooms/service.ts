@@ -22,6 +22,7 @@ import { and, asc, desc, eq, inArray, ne, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { isUuid } from '@/db/repositories/scoped';
 import { noteSessionKind } from '@/db/repositories/session-kind';
+import { groupChannelRooms } from '@/db/schema/group-channels';
 import { type Message, messages } from '@/db/schema/messages';
 import { workspaceMembers } from '@/db/schema/organizations';
 import { roomMembers, roomReads } from '@/db/schema/rooms';
@@ -398,6 +399,16 @@ export async function updateRoom(
   const visibilityChanged = visibility !== undefined && visibility !== access.room.visibility;
   const { writeSpaceAudit, auditActor } = await import('@/core/spaces/service');
   await getDb().transaction(async (tx) => {
+    if (visibilityChanged && visibility === 'private') {
+      // A room a group channel is bound to is read in that channel (§9.4): it
+      // stays open while bound. Locked, so a binding in flight decides first.
+      await tx.select({ id: sessions.id }).from(sessions).where(eq(sessions.id, roomId)).for('update');
+      const [bound] = await tx.select({ groupChannelId: groupChannelRooms.groupChannelId }).from(groupChannelRooms)
+        .where(eq(groupChannelRooms.sessionId, roomId)).limit(1);
+      if (bound) {
+        throw new SpaceError('invalid_input', 'This room is bound to a group channel, whose members read it: unbind the channel before making the room private');
+      }
+    }
     await tx.update(sessions)
       .set({ ...(title !== undefined ? { title } : {}), ...(visibility !== undefined ? { roomVisibility: visibility } : {}), updatedAt: new Date() })
       .where(and(eq(sessions.id, roomId), eq(sessions.kind, 'room')));
