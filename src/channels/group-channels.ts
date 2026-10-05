@@ -34,6 +34,8 @@ export type GroupChannelType = (typeof GROUP_CHANNEL_TYPES)[number];
 export interface GroupChannelView extends GroupChannel {
   ownerName: string;
   ownerActive: boolean;
+  /** The space the channel is bound to (§9.4), or null. */
+  spaceName: string | null;
   /** ✅ / ❌ reactions members put on the bot's messages here. */
   feedback: { up: number; down: number };
 }
@@ -74,6 +76,12 @@ export function clearGroupChannelCache(): void {
 /** After a write: forget this chat's enrolment lookup only. */
 function invalidateChannel(channelType: string, channelId: string): void {
   cache.delete(cacheKey(channelType, channelId));
+}
+
+/** After a bridge change (bind, unbind): forget the chat's enrolment and its threads. */
+export function invalidateGroupChannel(group: Pick<GroupChannel, 'id' | 'channelType' | 'channelId'>): void {
+  invalidateChannel(group.channelType, group.channelId);
+  forgetThreads(group.id);
 }
 
 /** After a removal: the group's threads are gone with it. */
@@ -132,14 +140,24 @@ export async function joinGroupChannel(input: {
     if (existing.ownerUserId === input.userId) return { status: 'already_yours', group: existing };
     const owner = await ownerSummary(existing.ownerUserId);
     if (owner.active) return { status: 'taken', ownerName: owner.name };
-    const [updated] = await db
-      .update(groupChannels)
-      // The new owner pays for unprompted posts, so they opt in again: back to mention mode.
-      .set({ ownerUserId: input.userId, mode: 'mention', updatedAt: new Date() })
-      // Guard on the previous owner so two members taking over at once cannot both win.
-      .where(and(eq(groupChannels.id, existing.id), eq(groupChannels.ownerUserId, existing.ownerUserId)))
-      .returning();
+    const updated = await db.transaction(async (tx) => {
+      const [row] = await tx
+        .update(groupChannels)
+        // The new owner pays for unprompted posts, so they opt in again: back to mention mode.
+        .set({ ownerUserId: input.userId, mode: 'mention', updatedAt: new Date() })
+        // Guard on the previous owner so two members taking over at once cannot both win.
+        .where(and(eq(groupChannels.id, existing.id), eq(groupChannels.ownerUserId, existing.ownerUserId)))
+        .returning();
+      // A binding to a space was the previous owner's (§9.4): it ends here.
+      if (row?.workspaceId) {
+        const { endBindingInTx } = await import('./group-bridge');
+        await endBindingInTx(tx, row, { userId: input.userId }, 'owner_changed');
+        return { ...row, workspaceId: null };
+      }
+      return row;
+    });
     invalidateChannel(input.channelType, input.channelId);
+    if (updated) forgetThreads(updated.id);
     if (!updated) return joinGroupChannel(input);
     await audit(input.userId, updated, { takenOverFrom: existing.ownerUserId });
     // The channel's spend budget is filed under its owner, who is notified.
@@ -191,6 +209,7 @@ async function listViews(ownerUserId?: string): Promise<GroupChannelView[]> {
       group: groupChannels,
       ownerName: users.username,
       ownerActive: users.isActive,
+      spaceName: sql<string | null>`(SELECT w.name FROM workspaces w WHERE w.id = ${groupChannels.workspaceId})`,
       up: sql<number>`(SELECT count(*)::int FROM group_channel_feedback f WHERE f.group_channel_id = ${groupChannels.id} AND f.value = 1)`,
       down: sql<number>`(SELECT count(*)::int FROM group_channel_feedback f WHERE f.group_channel_id = ${groupChannels.id} AND f.value = -1)`,
     })
@@ -199,7 +218,8 @@ async function listViews(ownerUserId?: string): Promise<GroupChannelView[]> {
     .where(ownerUserId ? eq(groupChannels.ownerUserId, ownerUserId) : undefined)
     .orderBy(groupChannels.createdAt);
   return rows.map(r => ({
-    ...r.group, ownerName: r.ownerName, ownerActive: r.ownerActive, feedback: { up: Number(r.up), down: Number(r.down) },
+    ...r.group, ownerName: r.ownerName, ownerActive: r.ownerActive, spaceName: r.spaceName ?? null,
+    feedback: { up: Number(r.up), down: Number(r.down) },
   }));
 }
 
@@ -343,7 +363,17 @@ export async function removeGroupChannel(id: string, actor: { userId: string; is
   const where = actor.isAdmin
     ? eq(groupChannels.id, id)
     : and(eq(groupChannels.id, id), eq(groupChannels.ownerUserId, actor.userId));
-  const [removed] = await getDb().delete(groupChannels).where(where).returning();
+  const removed = await getDb().transaction(async (tx) => {
+    const [row] = await tx.select().from(groupChannels).where(where).for('update').limit(1);
+    if (!row) return null;
+    // A bound channel's space records that its binding ended (I10).
+    if (row.workspaceId) {
+      const { endBindingInTx } = await import('./group-bridge');
+      await endBindingInTx(tx, row, { userId: actor.userId }, 'channel_removed');
+    }
+    await tx.delete(groupChannels).where(eq(groupChannels.id, row.id));
+    return row;
+  });
   if (removed) {
     invalidateChannel(removed.channelType, removed.channelId);
     forgetThreads(removed.id);
@@ -430,7 +460,9 @@ export async function isGroupThreadActive(groupChannelId: string, threadId: stri
   const key = `${groupChannelId}:${threadId}`;
   const hit = threadActive.get(key);
   if (hit && Date.now() - hit.at < (hit.active ? THREAD_ACTIVE_TTL_MS : CACHE_TTL_MS)) return hit.active;
-  const active = await sessionRepository.hasGroupThread(groupChannelId, threadId);
+  // A thread of a bound channel is followed once it has a room (§9.4).
+  const active = await sessionRepository.hasGroupThread(groupChannelId, threadId)
+    || (await import('./group-bridge').then(({ bridgedRoomOf }) => bridgedRoomOf(groupChannelId, threadId))) !== null;
   rememberThread(key, active);
   return active;
 }
@@ -439,6 +471,10 @@ export async function isGroupThreadActive(groupChannelId: string, threadId: stri
  * The acting member's session for a group thread, created on first use in the
  * member's own default workspace — turns run with the member's own data and
  * permissions. Never another user's session.
+ *
+ * For a channel bound to a space (§9.4) it is the thread's room instead,
+ * shared by the members, whose turns run as their requester through
+ * `handleRoomMessage`; the caller checks the member's access first.
  */
 export async function resolveGroupSession(input: {
   userId: string;
@@ -449,6 +485,12 @@ export async function resolveGroupSession(input: {
   pinned?: boolean;
 }): Promise<string> {
   const threadKey = `${input.group.id}:${input.threadId}`;
+  if (input.group.workspaceId) {
+    const { resolveBridgedRoom } = await import('./group-bridge');
+    const roomId = await resolveBridgedRoom(input.group, input.threadId, input.title);
+    rememberThread(threadKey, true);
+    return roomId;
+  }
   const existing = await sessionRepository.findGroupThreadSession(input.userId, input.group.id, input.threadId);
   if (existing) {
     rememberThread(threadKey, true);

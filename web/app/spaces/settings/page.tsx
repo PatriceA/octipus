@@ -5,6 +5,7 @@ import { Archive, ArchiveRestore, Check, Copy, Link2, LogOut, Trash2, UserMinus 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
+import { SpaceConnectors } from '@/components/spaces/space-connectors';
 import { RoleBadge } from '@/components/workspace-picker';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
@@ -66,8 +67,8 @@ function activityLabel(action: string): string {
 }
 
 /**
- * `/spaces/:id/settings`: a space's name, members, invites, activity,
- * archive and purge. Every member reads it; the controls that change the
+ * `/spaces/:id/settings`: a space's name, members, invites, connectors,
+ * activity, archive and purge. Every member reads it; the controls that change the
  * space (owner only, as the server enforces) are shown to owners only.
  */
 export default function SpaceSettingsPage() {
@@ -258,6 +259,8 @@ export default function SpaceSettingsPage() {
           </div>
         </section>
       )}
+
+      <SpaceConnectors spaceId={id} canManage={isOwner && !archived} />
 
       <section aria-label="Activity" className="space-y-2">
         <h2 className="section-label">activity</h2>

@@ -174,12 +174,16 @@ export interface ListenDeps {
   localTime(now: Date, tz: string): { hour: number; day: string };
   /** The recorded threads of a chat (`group-buffer.ts`). */
   threads(channelType: string, channelId: string, now: number): ReadonlyMap<string, readonly ChannelMessage[]>;
-  /** False while the channel's or the owner's spend budget is used up. */
-  mayRun(group: GroupChannel, sessionId: string): Promise<boolean>;
-  /** The owner's unprompted-posts session for the channel. */
-  session(group: GroupChannel): Promise<string>;
+  /**
+   * False while the channel's or the owner's spend budget is used up — for a
+   * channel bound to a space (§9.4): while the space has no sponsor, or its
+   * budget is used up.
+   */
+  mayRun(group: GroupChannel, sessionId: string | null): Promise<boolean>;
+  /** The owner's unprompted-posts session for the channel; null for a bound channel (no personal session). */
+  session(group: GroupChannel): Promise<string | null>;
   /** One `background` model call; the reply text, or undefined. */
-  complete(input: { system: string; user: string; ownerUserId: string; sessionId: string }): Promise<string | undefined>;
+  complete(input: { system: string; user: string; ownerUserId: string; sessionId: string | null; group: GroupChannel }): Promise<string | undefined>;
   claim(group: GroupChannel, now: Date, day: string): Promise<boolean>;
   post(group: GroupChannel, candidate: ListenCandidate, text: string): Promise<void>;
 }
@@ -241,6 +245,7 @@ export async function probeGroup(group: GroupChannel, deps: ListenDeps): Promise
     user: renderProbe(candidate, conversation, group.label),
     ownerUserId: group.ownerUserId,
     sessionId,
+    group,
   });
   const draft = parseDraft(reply, mode);
   if (!draft) return 'none';
@@ -312,28 +317,42 @@ export function defaultListenDeps(): ListenDeps {
     localTime: (now, tz) => ({ hour: localHour(now, tz), day: localDayKey(now, tz) }),
     threads: groupThreads,
     mayRun: async (group, sessionId) => {
-      const { checkSpend, groupChannelPause } = await import('@/security/spend-budgets');
+      const { checkSpend } = await import('@/security/spend-budgets');
       const { SpendBudgetExceededError } = await import('@/security/spend-budget-error');
-      if (await groupChannelPause(group.id)) return false;
+      const { bridgeListenFunding, groupBudgetPause } = await import('@/channels/group-bridge');
+      if (await groupBudgetPause(group)) return false;
+      // A bound channel's unprompted posts are the space's sponsor's, or off.
+      const payer = group.workspaceId ? (await bridgeListenFunding(group))?.sponsorUserId : group.ownerUserId;
+      if (!payer) return false;
       try {
-        await checkSpend({ userId: group.ownerUserId, sessionId });
+        await checkSpend({ userId: payer, sessionId, workspaceId: group.workspaceId });
         return true;
       } catch (err) {
         if (err instanceof SpendBudgetExceededError) return false;
         throw err;
       }
     },
-    session: async (group) => (await import('@/channels/group-channels')).resolveGroupSession({
+    // A bound channel has no personal session: its posts are the space's, paid by the sponsor.
+    session: async (group) => group.workspaceId ? null : (await import('@/channels/group-channels')).resolveGroupSession({
       userId: group.ownerUserId, group, threadId: UNPROMPTED_THREAD, title: `${group.label ?? group.channelId} — unprompted posts`,
       // Never swept by retention: its cost rows count against the channel's budget through it.
       pinned: true,
     }),
-    complete: async ({ system, user, ownerUserId, sessionId }) => {
+    complete: async ({ system, user, ownerUserId, sessionId, group }) => {
       const { getModelRegistry } = await import('@/models/model-registry');
       const { getLiteLLMClient } = await import('@/models/litellm-client');
+      const { withProviderUsageContext } = await import('@/models/providers/instrumented');
       const model = await getModelRegistry().getModelForTopic('background');
       if (!model?.modelId) throw new Error('Unprompted group posts need a model bound to the "background" topic.');
-      const result = await getLiteLLMClient().complete({
+      let payer = ownerUserId;
+      if (group.workspaceId) {
+        const { bridgeListenFunding } = await import('@/channels/group-bridge');
+        const funding = await bridgeListenFunding(group);
+        if (!funding) throw new Error('A bound channel\'s unprompted posts need the space\'s sponsor');
+        payer = funding.sponsorUserId;
+      }
+      const usage = group.workspaceId ? { userId: payer, workspaceId: group.workspaceId, funding: 'sponsor' as const } : { userId: payer };
+      const result = await withProviderUsageContext(usage, () => getLiteLLMClient().complete({
         model: model.modelId,
         modelConfigName: model.name,
         messages: [
@@ -342,9 +361,9 @@ export function defaultListenDeps(): ListenDeps {
         ],
         temperature: 0.2,
         maxTokens: 400,
-        userId: ownerUserId,
-        sessionId,
-      });
+        userId: payer,
+        ...(sessionId ? { sessionId } : {}),
+      }));
       return result.content ?? undefined;
     },
     claim: async (group, now, day) => (await import('@/channels/group-channels')).claimUnpromptedSlot(group, now, day),

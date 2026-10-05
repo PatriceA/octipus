@@ -8,7 +8,8 @@
  *   1. deletes the rows keyed by the space's sessions that no cascading key
  *      reaches (agents, tool actions, run events, approvals, …), whatever
  *      their own `workspace_id` says;
- *   2. deletes, for every `WORKSPACE_TABLES` entry whose purge action is
+ *   2. detaches the rows of `detach` tables (a bound group channel forgets
+ *      the space) and deletes, for every `WORKSPACE_TABLES` entry whose purge action is
  *      `delete`, the rows with this `workspace_id` — sessions last, since
  *      other rows still point at them;
  *   3. counts what is left in those tables and aborts when anything is;
@@ -103,6 +104,12 @@ export async function purgeSpace(actor: SpaceActor, workspaceId: string): Promis
       deleted[t.table] = (deleted[t.table] ?? 0) + rows(result).length;
     }
 
+    // Rows that outlive the space forget it first (a bound group channel, §9.4).
+    for (const t of WORKSPACE_TABLES.filter((w) => w.purge === 'detach')) {
+      const result = await tx.execute(sql`UPDATE ${sql.identifier(t.table)} SET workspace_id = NULL WHERE workspace_id = ${workspaceId} RETURNING 1`);
+      deleted[`${t.table} (detached)`] = rows(result).length;
+    }
+
     const purged = WORKSPACE_TABLES.filter((t) => t.purge === 'delete');
     const ordered = [...purged.filter((t) => t.table !== 'sessions'), ...purged.filter((t) => t.table === 'sessions')];
     for (const t of ordered) {
@@ -117,7 +124,7 @@ export async function purgeSpace(actor: SpaceActor, workspaceId: string): Promis
       deleted[t.table] = (deleted[t.table] ?? 0) + rows(result).length;
     }
 
-    for (const t of purged) {
+    for (const t of WORKSPACE_TABLES.filter((w) => w.purge !== 'keep')) {
       const left = await tx.execute(sql`SELECT count(*)::int AS n FROM ${sql.identifier(t.table)} WHERE workspace_id = ${workspaceId}`);
       const n = Number(rows<{ n: number }>(left)[0]?.n ?? 0);
       if (n > 0) throw new Error(`purgeSpace: ${n} row(s) of ${t.table} still name space ${workspaceId}; aborting`);

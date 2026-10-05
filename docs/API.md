@@ -359,6 +359,9 @@ Shared workspaces ([SPACES.md](SPACES.md)). A caller who is not a member gets
 | GET | `/api/spaces/:id/file-leases` | member | Live file leases ("Ben is editing"): `{path, holderUserId, holderName, holderKind, expiresAt}` |
 | POST | `/api/spaces/:id/file-leases` | editor, owner | `{path, renew?}` take (or renew) the lease on a space file; 409 `lease_held` with `heldBy` when someone else has it (or a directory above it, or a file under it) |
 | DELETE | `/api/spaces/:id/file-leases?path=` | member | Release your lease |
+| GET | `/api/spaces/:id/connectors` | member | The space's connectors (GitHub, Atlassian, Linear): `{id, name, kind, connected, connectedBy, connectedAt}`; never a value |
+| POST | `/api/spaces/:id/connectors/:connectorId` | owner | Connect: `{token}` for GitHub; an OAuth connector returns `{url}` for the popup, whose callback stores the tokens under the space |
+| DELETE | `/api/spaces/:id/connectors/:connectorId` | owner | Disconnect (the space's secrets of that connector are deactivated) |
 | GET | `/api/spaces/:id/rooms` | member | Rooms I can enter, with `unreadCount` and `muted` |
 | POST | `/api/spaces/:id/rooms` | editor, owner | `{title, visibility: "space" \| "private", memberIds?}` |
 | GET | `/api/spaces/:id/rooms/:roomId/messages` | room access | `?before=&after=&limit=` (message ids); posts and replies with `authorUserId`, `authorName` |

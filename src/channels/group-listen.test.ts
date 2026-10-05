@@ -20,7 +20,7 @@ const msg = (id: string, text: string, at: string, authorId = 'U-ANNA', author =
 const group = (over: Partial<GroupChannel> = {}): GroupChannel => ({
   id: 'g1', channelType: 'slack', channelId: 'C1', label: '#release', ownerUserId: 'owner',
   createdAt: new Date(), updatedAt: new Date(), mode: 'listen', quietHoursStart: null, quietHoursEnd: null,
-  timezone: 'UTC', maxUnpromptedPerDay: 8, minMinutesBetween: 60, lastUnpromptedAt: null, unpromptedDay: null, unpromptedCount: 0,
+  timezone: 'UTC', maxUnpromptedPerDay: 8, minMinutesBetween: 60, lastUnpromptedAt: null, unpromptedDay: null, unpromptedCount: 0, workspaceId: null,
   ...over,
 });
 

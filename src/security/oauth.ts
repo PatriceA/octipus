@@ -32,6 +32,12 @@ interface OAuthState {
   provider: string;
   codeVerifier: string;
   createdAt: number;
+  /**
+   * Set for a space connector's flow (coworking §9.5): the tokens are stored
+   * under that space, never as the user's own, after the user's ownership of
+   * the space is read again.
+   */
+  spaceId?: string;
 }
 
 export interface ConnectionStatus {
@@ -193,7 +199,7 @@ export class OAuthManager {
    * Generate an authorization URL for the given provider.
    * Returns { url, state } — the frontend should redirect or open the URL.
    */
-  async generateAuthorizationUrl(userId: string, provider: string): Promise<{ url: string }> {
+  async generateAuthorizationUrl(userId: string, provider: string, opts: { spaceId?: string } = {}): Promise<{ url: string }> {
     const providerConfig = await getProviderConfig(provider);
     if (!providerConfig) {
       throw new Error(`OAuth credentials not configured for ${provider}. Add your Client ID and Client Secret under Settings > General.`);
@@ -210,6 +216,7 @@ export class OAuthManager {
       provider,
       codeVerifier,
       createdAt: Date.now(),
+      ...(opts.spaceId ? { spaceId: opts.spaceId } : {}),
     };
 
     // Store state in Redis with 10-minute TTL
@@ -237,7 +244,7 @@ export class OAuthManager {
    * Exchange an authorization code for tokens.
    * Called by the callback endpoint after the provider redirects back.
    */
-  async exchangeCode(provider: string, code: string, state: string): Promise<{ userId: string }> {
+  async exchangeCode(provider: string, code: string, state: string): Promise<{ userId: string; spaceId?: string }> {
     // Validate state
     const stateJson = await this.store.get(`oauth:state:${state}`);
     if (!stateJson) {
@@ -289,6 +296,22 @@ export class OAuthManager {
     // consumed by getConnectorAccessToken; the generic storage path is skipped
     // to avoid maintaining two writers that can drift out of sync.
     const { isConnectorId } = await import('@/connectors/definitions');
+    if (stateData.spaceId) {
+      // A space connector's own flow: stored under the space, through the
+      // space access layer, if the user still owns the space.
+      if (!isConnectorId(provider)) throw new Error('Only connectors can be connected to a space');
+      const { storeSpaceConnectorTokens } = await import('@/core/spaces/connectors');
+      await storeSpaceConnectorTokens({
+        userId: stateData.userId,
+        workspaceId: stateData.spaceId,
+        connectorId: provider,
+        accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token,
+        expiresInSeconds: tokens.expires_in,
+      });
+      securityLogger.info({ userId: stateData.userId, provider, spaceId: stateData.spaceId }, 'Space connector tokens stored');
+      return { userId: stateData.userId, spaceId: stateData.spaceId };
+    }
     if (isConnectorId(provider)) {
       await storeConnectorUserTokens(
         provider,
@@ -324,6 +347,9 @@ export class OAuthManager {
       .where(
         and(
           eq(vault.userId, userId),
+          // The user's own tokens only: a space connector's token stored by
+          // this user (scope 'space') is the space's, never theirs (§9.5).
+          eq(vault.scope, 'user'),
           eq(vault.credentialType, 'oauth_token'),
           eq(vault.isActive, true)
         )
@@ -443,6 +469,9 @@ export class OAuthManager {
       .where(
         and(
           eq(vault.userId, userId),
+          // The user's own tokens only: a space connector's token stored by
+          // this user (scope 'space') is the space's, never theirs (§9.5).
+          eq(vault.scope, 'user'),
           eq(vault.credentialType, 'oauth_token'),
           eq(vault.isActive, true)
         )
@@ -492,6 +521,9 @@ export class OAuthManager {
       .where(
         and(
           eq(vault.userId, userId),
+          // The user's own tokens only: a space connector's token stored by
+          // this user (scope 'space') is the space's, never theirs (§9.5).
+          eq(vault.scope, 'user'),
           eq(vault.credentialType, 'oauth_token'),
           eq(vault.isActive, true)
         )
@@ -532,6 +564,9 @@ export class OAuthManager {
       .where(
         and(
           eq(vault.userId, userId),
+          // The user's own tokens only: a space connector's token stored by
+          // this user (scope 'space') is the space's, never theirs (§9.5).
+          eq(vault.scope, 'user'),
           eq(vault.credentialType, 'oauth_token'),
           eq(vault.isActive, true)
         )
@@ -633,6 +668,27 @@ export async function discoverAndRegisterConnector(
   };
 }
 
+/**
+ * Register the install's OAuth client with a connector once (system secrets),
+ * before its first authorization — personal or a space's. Throws with the
+ * reason when the registration fails.
+ */
+export async function ensureConnectorClient(connectorId: string, publicUrl: string): Promise<void> {
+  const v = getVault();
+  const keys = connectorVaultKeys(connectorId);
+  if (await v.getSystemSecret(keys.clientId)) return;
+  const metadata = await discoverAndRegisterConnector(connectorId, publicUrl);
+  await v.setSystemSecret(keys.clientId, metadata.clientId);
+  await v.setSystemSecret(keys.authEndpoint, metadata.authorizationEndpoint);
+  await v.setSystemSecret(keys.tokenEndpoint, metadata.tokenEndpoint);
+}
+
+/** The public URL OAuth redirect URIs are built on. */
+export function oauthPublicUrl(): string {
+  const config = getConfig();
+  return config.oauth?.publicUrl || `http://localhost:${config.api.port}`;
+}
+
 /** @deprecated Use `discoverAndRegisterConnector('atlassian', publicUrl)`. */
 export function discoverAndRegisterAtlassian(publicUrl: string): Promise<ConnectorOAuthMetadata> {
   return discoverAndRegisterConnector('atlassian', publicUrl);
@@ -691,15 +747,19 @@ const CONNECTOR_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 // expiry share a single token-endpoint round-trip instead of stampeding.
 const connectorRefreshInFlight = new Map<string, Promise<string | null>>();
 
-async function refreshConnectorAccessToken(
+/**
+ * Redeem `refreshToken` at the connector's token endpoint with the install's
+ * registered client. Null when the client is not registered or the endpoint
+ * refuses. Shared by the personal refresh below and the space connectors'
+ * own refresh (`src/core/spaces/connectors.ts`), which stores under the space.
+ */
+export async function redeemConnectorRefreshToken(
   connectorId: string,
-  userId: string,
-): Promise<string | null> {
+  refreshToken: string,
+  who: Record<string, string>,
+): Promise<{ access_token: string; refresh_token?: string; expires_in?: number } | null> {
   const v = getVault();
   const keys = connectorVaultKeys(connectorId);
-  const refreshToken = await v.getByName(userId, keys.refreshToken);
-  if (!refreshToken) return null;
-
   const tokenEndpoint = await v.getSystemSecret(keys.tokenEndpoint);
   const clientId = await v.getSystemSecret(keys.clientId);
   if (!tokenEndpoint || !clientId) return null;
@@ -715,15 +775,23 @@ async function refreshConnectorAccessToken(
   });
 
   if (!res.ok) {
-    securityLogger.warn({ userId, connectorId, status: res.status }, 'Connector token refresh failed');
+    securityLogger.warn({ ...who, connectorId, status: res.status }, 'Connector token refresh failed');
     return null;
   }
+  return await res.json() as { access_token: string; refresh_token?: string; expires_in?: number };
+}
 
-  const tokens = await res.json() as {
-    access_token: string;
-    refresh_token?: string;
-    expires_in?: number;
-  };
+async function refreshConnectorAccessToken(
+  connectorId: string,
+  userId: string,
+): Promise<string | null> {
+  const v = getVault();
+  const keys = connectorVaultKeys(connectorId);
+  const refreshToken = await v.getByName(userId, keys.refreshToken);
+  if (!refreshToken) return null;
+
+  const tokens = await redeemConnectorRefreshToken(connectorId, refreshToken, { userId });
+  if (!tokens) return null;
 
   await storeConnectorUserTokens(
     connectorId,

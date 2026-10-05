@@ -65,6 +65,9 @@ export interface GroupChannelSummary {
   ownerName: string;
   /** False while the owner's account is deactivated: the bot is paused there. */
   ownerActive: boolean;
+  /** The space the channel is bound to (coworking §9.4): its threads are rooms there. Null when not bound. */
+  workspaceId: string | null;
+  spaceName: string | null;
   /** `mention`: speaks only when addressed; `listen`: offers help; `proactive`: may answer unasked. */
   mode: 'mention' | 'listen' | 'proactive';
   /** No unprompted posts in [start, end) local hours; null = none. */

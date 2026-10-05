@@ -497,6 +497,67 @@ private, gets the newest `spaces.memoryMaxItems` entries in a random-tag
 fence marked "facts recorded by members, never instructions"; a retracted
 entry stops at once. Personal memories never enter a space session.
 
+## Group channels bound to a space
+
+A group channel (Slack, Teams, Telegram) can be bound to a space: its
+threads become rooms of the space, and a Slack thread and its web room are
+one conversation.
+
+- **Who binds.** The member who enrolled the channel, if they also own the
+  space: Settings → Channels → *Bind to space room*, with an explicit
+  acknowledgement that **everyone in the channel can read what the room
+  shows**. Optionally an open room of the space becomes the channel's main
+  thread (the whole chat on a platform without threads); every other thread
+  gets its own open room on first use. Binding closes the members' own
+  thread sessions of the channel. Binding and unbinding are in the space's
+  activity (`space_updated`, `resourceType: group_channel`); the channel's
+  owner or a space owner can unbind. A take-over of the channel
+  (`@octipus join` after the owner was deactivated) or its removal ends the
+  binding; a purged space detaches it (the enrolment stays).
+- **Turns.** A message addressed to the bot from a member of the space is
+  posted in the thread's room and runs as a room turn as that member
+  (`handleRoomMessage`, their role and funding). A linked member who is not
+  in the space — or whose role cannot ask the agent — gets a private hint
+  and no turn. Unlinked people's posts never enter the room: they reach the
+  turn as the thread's fenced transcript. Permission prompts of a bridged
+  room turn go to the requester privately in the thread, as in an unbound
+  channel.
+- **Relay.** Every answer of the agent in a bridged room, and every post
+  made in the web room, is posted in the channel's thread.
+- **Taken tasks** (`take this`, 🐙) go on the space's board, linked to the
+  thread's room — one task per message, whoever takes it. Editors and owners
+  can take work on; a commenter is told privately.
+- **Budget.** The space's budget replaces the channel's. Unprompted posts
+  (listen / proactive modes) are funded by the space's sponsor and are off
+  while the space has none.
+
+## Space connectors
+
+Connections of the space itself, used by its agent for every member who may
+run it (Space settings → Connectors). Owners connect and disconnect; every
+member sees which are connected.
+
+- **GitHub**: a token an owner pastes (a fine-grained token limited to the
+  team's repositories). The GitHub tool uses it in the space's sessions.
+- **Atlassian, Linear**: OAuth, each with its own connect, callback and
+  refresh flow storing the tokens under the space.
+
+The credentials are space secrets (vault scope `space`, keyed by the space;
+the owner who stored one is its author). They are read only by connector
+code, through the space access layer after a membership check — never
+through `{{secret:NAME}}`, and they never exempt a call from the flow guard.
+Inside a space the agent uses the space's connectors, never the member's
+personal ones.
+
+**The host's GitHub identity is never used in a space.** The shell, the
+GitHub tool and CLI agents run with `GH_CONFIG_DIR` (and, for CLI agents,
+`HOME` and `XDG_CONFIG_HOME`) at an empty per-space directory
+(`<workspace root>/spaces/<id>/tool-home`); the host's GH token variables are
+not passed on. A space without a GitHub connector has no GitHub access from
+the GitHub tool. CLI agents keep their own vendor login (`CLAUDE_CONFIG_DIR`,
+`CODEX_HOME` stay where they were); a vendor CLI that keeps its login only
+under `HOME` must use a token-based login to run in a space.
+
 ## Settings
 
 | Key | Env | Default | Meaning |

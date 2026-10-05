@@ -43,7 +43,7 @@ import type { ChildResult, PendingChild } from './swarm/types';
 import { getCLIToolConfig, resolveCliModelEntry } from './cli-agent-factory';
 import { getSkillRegistry } from '@/skills/registry';
 import { fetchActiveSkillIdsForTopic } from '@/skills/discovery';
-import { type CliCredentialOwner, cliCredentialOwnerFor, cliEnvFor } from './cli-child-env';
+import { type CliCredentialOwner, cliCredentialOwnerFor, cliEnvFor, cliSpaceEnv } from './cli-child-env';
 import { getConfig } from '@/config';
 import { isRootAgent } from './types';
 import type { AgentContext, AgentMessage } from './types';
@@ -1131,9 +1131,11 @@ When a task matches one of these skills, load it with get_skill before starting 
       // Minimal env allowlist (C6): a CLI child running with bypassed
       // permissions must NOT inherit the server's DB creds and all API keys.
       // Pass only PATH/HOME/locale/TERM, the CLI's own auth var, and toolEnv.
-      const env = cliEnvFor(this.credentialOwner, toolConfig, { ...toolEnv,
+      const baseEnv = cliEnvFor(this.credentialOwner, toolConfig, { ...toolEnv,
         ...(this.connection ? { OCTIPUS_AGENT_URL: this.connection.url, OCTIPUS_AGENT_KEY: this.connection.key } : {}),
       }, settings.inheritApiKeys === true);
+      // In a space the CLI's tools never find the host's logins (§9.5).
+      const env = this.context.space ? cliSpaceEnv(baseEnv, this.context.space.workspaceId) : baseEnv;
 
       if (this.aborted) { cleanupContextFiles(); reject(new Error('Agent was aborted before CLI spawn')); return; }
       try { assertWindowsCmdLineFits(binary, args, process.platform, useShellForSpawn); } catch (err) { cleanupContextFiles(); reject(err); return; }

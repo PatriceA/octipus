@@ -1,15 +1,34 @@
 import type { ToolHandler } from '@/core/agent-base';
 import { MCPProtocol, type MCPToolDefinition } from '@/mcp/protocol';
+import type { AgentContext } from '@/core/types';
+import { agentPrincipal, type Principal } from '@/security/principal';
 import { coreLogger } from '@/utils/logger';
 import { ALL_CONNECTORS, findConnector } from './definitions';
 import { OAuthHTTPTransport } from './oauth-http-transport';
 import type { ConnectorDefinition } from './types';
 
+/**
+ * Whose connection a connector call uses: a user's own (a user id), or a
+ * space's (coworking §9.5) — a member's principal in the space, whose
+ * membership the space access layer checks on every token read. An agent in
+ * a space uses the space's connectors only, never the member's personal ones.
+ */
+export type ConnectorOwner = string | { space: Principal };
+
+/** The connector owner of an agent: its space's connections inside a space, else its user's. */
+export function connectorOwnerOf(context: Pick<AgentContext, 'userId' | 'workspaceId' | 'space'>): ConnectorOwner {
+  return context.space ? { space: agentPrincipal(context) } : context.userId;
+}
+
+function ownerKey(owner: ConnectorOwner): string {
+  return typeof owner === 'string' ? owner : `space:${owner.space.workspaceId}:${owner.space.userId}`;
+}
+
 export class ConnectorRegistry {
   constructor(
     private readonly getAccessToken: (
       connectorId: string,
-      userId: string,
+      owner: ConnectorOwner,
     ) => Promise<string | null>,
   ) {}
 
@@ -24,27 +43,27 @@ export class ConnectorRegistry {
    *   default for roles that bind none).
    */
   async getUserToolHandlers(
-    userId: string,
+    owner: ConnectorOwner,
     allowedConnectorIds?: ReadonlySet<string>,
   ): Promise<ToolHandler[]> {
     const activeConnectors: ConnectorDefinition[] = [];
 
     for (const connector of ALL_CONNECTORS) {
       if (allowedConnectorIds && !allowedConnectorIds.has(connector.id)) continue;
-      const token = await this.getAccessToken(connector.id, userId).catch(() => null);
+      const token = await this.getAccessToken(connector.id, owner).catch(() => null);
       if (token) activeConnectors.push(connector);
     }
 
     if (activeConnectors.length === 0) return [];
 
     return [
-      this.buildListToolsHandler(userId, activeConnectors),
-      this.buildCallToolHandler(userId, activeConnectors),
+      this.buildListToolsHandler(owner, activeConnectors),
+      this.buildCallToolHandler(owner, activeConnectors),
     ];
   }
 
   private buildListToolsHandler(
-    userId: string,
+    owner: ConnectorOwner,
     connectors: ConnectorDefinition[],
   ): ToolHandler {
     const registry = this;
@@ -75,8 +94,8 @@ export class ConnectorRegistry {
         for (const connector of connectors) {
           if (filterId && connector.id !== filterId) continue;
 
-          const tools = await registry.fetchConnectorTools(connector, userId).catch((err) => {
-            coreLogger.warn({ err, connectorId: connector.id, userId }, 'Failed to list connector tools');
+          const tools = await registry.fetchConnectorTools(connector, owner).catch((err) => {
+            coreLogger.warn({ err, connectorId: connector.id, owner: ownerKey(owner) }, 'Failed to list connector tools');
             return [] as MCPToolDefinition[];
           });
 
@@ -97,7 +116,7 @@ export class ConnectorRegistry {
   }
 
   private buildCallToolHandler(
-    userId: string,
+    owner: ConnectorOwner,
     connectors: ConnectorDefinition[],
   ): ToolHandler {
     const registry = this;
@@ -126,7 +145,7 @@ export class ConnectorRegistry {
           throw new Error(`Connector '${connectorId}' not found or not connected for this user.`);
         }
 
-        return registry.callConnectorTool(connector, userId, toolName, toolArgs);
+        return registry.callConnectorTool(connector, owner, toolName, toolArgs);
       },
     };
   }
@@ -140,9 +159,9 @@ export class ConnectorRegistry {
    */
   async fetchConnectorTools(
     connector: ConnectorDefinition,
-    userId: string,
+    owner: ConnectorOwner,
   ): Promise<MCPToolDefinition[]> {
-    const { transport, protocol, send } = await this.openConnection(connector, userId);
+    const { transport, protocol, send } = await this.openConnection(connector, owner);
     try {
       await transport.connect();
       await protocol.sendRequest(send, 'initialize', {
@@ -162,11 +181,11 @@ export class ConnectorRegistry {
   /** Invoke one tool on a connector. Public for the same reason as above. */
   async callConnectorTool(
     connector: ConnectorDefinition,
-    userId: string,
+    owner: ConnectorOwner,
     toolName: string,
     toolArgs: Record<string, unknown>,
   ): Promise<unknown> {
-    const { transport, protocol, send } = await this.openConnection(connector, userId);
+    const { transport, protocol, send } = await this.openConnection(connector, owner);
     try {
       await transport.connect();
       await protocol.sendRequest(send, 'initialize', {
@@ -184,13 +203,13 @@ export class ConnectorRegistry {
 
   private async openConnection(
     connector: ConnectorDefinition,
-    userId: string,
+    owner: ConnectorOwner,
   ): Promise<{ transport: OAuthHTTPTransport; protocol: MCPProtocol; send: (msg: string) => void }> {
     const transport = new OAuthHTTPTransport(
       connector.mcpEndpoint,
       async () => {
-        const token = await this.getAccessToken(connector.id, userId);
-        if (!token) throw new Error(`No ${connector.id} token for user ${userId}`);
+        const token = await this.getAccessToken(connector.id, owner);
+        if (!token) throw new Error(`No ${connector.id} token for ${typeof owner === 'string' ? `user ${owner}` : 'this space'}`);
         return token;
       },
     );
@@ -218,11 +237,15 @@ export function getConnectorRegistry(): ConnectorRegistry {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { getConnectorAccessToken } = require('@/security/oauth') as typeof import('@/security/oauth');
     registryInstance = new ConnectorRegistry(
-      async (connectorId, userId) => {
+      async (connectorId, owner) => {
         // An unknown id must not reach the vault: `connector_<id>_access_token`
         // built from an arbitrary string is a lookup by attacker-chosen name.
         if (!findConnector(connectorId)) return null;
-        return getConnectorAccessToken(connectorId, userId);
+        if (typeof owner !== 'string') {
+          const { spaceConnectorAccessToken } = await import('@/core/spaces/connectors');
+          return spaceConnectorAccessToken(owner.space, connectorId);
+        }
+        return getConnectorAccessToken(connectorId, owner);
       },
     );
   }

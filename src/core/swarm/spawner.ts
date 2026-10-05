@@ -591,8 +591,9 @@ export class SwarmSpawner {
 
     if (isRealUserId(parentContext.userId)) {
       try {
-        const { getConnectorRegistry } = await import('@/connectors');
-        const connectorHandlers = await getConnectorRegistry().getUserToolHandlers(parentContext.userId);
+        const { connectorOwnerOf, getConnectorRegistry } = await import('@/connectors');
+        // The child works where its parent does: in a space, the space's connectors (§9.5).
+        const connectorHandlers = await getConnectorRegistry().getUserToolHandlers(connectorOwnerOf(parentContext));
         roleTools.push(...connectorHandlers);
       } catch (err) {
         coreLogger.error({ err, userId: parentContext.userId }, 'Failed to load connector tools for swarm child');
