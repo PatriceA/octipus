@@ -11,7 +11,15 @@
  *   - a space secret is unusable through `{{secret:}}` and never exempts a
  *     call from the flow guard; personal paths never return it;
  *   - space connector routes: members list, owners connect and disconnect;
- *   - the GitHub tool in a space never uses the host's gh identity.
+ *   - the binding follows the space: a bridged room stays open while bound
+ *     and only open rooms of the channel's current space are relayed; the
+ *     binding ends when its owner stops owning the space; leftover mappings
+ *     never reach another space's room; guests get a hint, no room; a purge
+ *     drops the cached binding;
+ *   - permission requests of a bridged room ask in the thread only for a
+ *     turn asked from the platform, and are never denied for the channel.
+ *
+ * (Tool homes and the GitHub tool in a space: space-connectors.isolation.test.ts.)
  *
  * Driven through the real routes (`createServer()`), the real group handler
  * and the real bridge. Backed by ephemeral PGlite.
@@ -30,7 +38,8 @@ process.env.LOG_LEVEL ??= 'error';
 
 /** What the bridge sent to the platform. */
 const sent: Array<{ kind: 'send' | 'private'; channelId: string; userId?: string; content: string; threadId?: string }> = [];
-vi.mock('@/channels/interface', () => ({
+vi.mock('@/channels/interface', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/channels/interface')>(),
   getUMI: () => ({
     send: async (_type: string, channelId: string, r: { content: string; threadId?: string }) => {
       sent.push({ kind: 'send', channelId, content: r.content, threadId: r.threadId });
@@ -48,6 +57,7 @@ const ownerId = randomUUID();
 const editorId = randomUUID();
 const outsiderId = randomUUID();
 const otherOwnerId = randomUUID();
+const guestId = randomUUID();
 
 type App = { handle(request: Request): Promise<Response> };
 let app: App;
@@ -90,6 +100,7 @@ beforeAll(async () => {
     { id: editorId, username: 'editor' },
     { id: outsiderId, username: 'outsider' },
     { id: otherOwnerId, username: 'other' },
+    { id: guestId, username: 'guest' },
   ]);
   const { getSessionManager } = await import('@/security/auth/session');
   for (const [name, id] of [['owner', ownerId], ['editor', editorId], ['outsider', outsiderId], ['other', otherOwnerId]]) {
@@ -371,30 +382,266 @@ describe('space secrets (§9.5)', () => {
   });
 });
 
-describe('GitHub identity in a space (§9.5)', () => {
-  test('gh in a space runs with an empty per-space GH_CONFIG_DIR and the space\'s token, never the host\'s', async () => {
-    process.env.GH_TOKEN = 'host-token';
-    const gh = await import('@/utils/gh');
-    const personal = gh.ghEnv();
-    expect(personal.GH_TOKEN).toBe('host-token');
-    const { spaceToolEnv } = await import('@/security/space-tool-env');
-    const dir = spaceToolEnv(spaceId).GH_CONFIG_DIR;
-    expect(existsSync(dir) && readdirSync(dir)).toEqual([]);
-    const inSpace = gh.ghEnv({ configDir: dir, token: 'ghp_team' });
-    expect(inSpace).toMatchObject({ GH_CONFIG_DIR: dir, GH_TOKEN: 'ghp_team' });
-    expect(gh.ghEnv({ configDir: dir }).GH_TOKEN).toBeUndefined();
-    delete process.env.GH_TOKEN;
 
-    // The shell in a space: GH_CONFIG_DIR wins over the call's own env.
-    const { withSpaceEnv } = await import('@/tools/shell');
-    const space = { workspaceId: spaceId, role: 'editor' as const, scope: null };
-    expect(withSpaceEnv({ GH_CONFIG_DIR: '/root/.config/gh', X: '1' }, { space })).toEqual({ GH_CONFIG_DIR: dir, X: '1' });
-    expect(withSpaceEnv({ X: '1' }, { space: null })).toEqual({ X: '1' });
+// ── The binding follows the space ───────────────────────────────────────────
 
-    // CLI agents: HOME moves too, the vendor's config stays.
-    const { cliSpaceEnv } = await import('@/core/cli-child-env');
-    const cli = cliSpaceEnv({ HOME: '/home/octi', PATH: '/bin' }, spaceId);
-    expect(cli).toMatchObject({ GH_CONFIG_DIR: dir, CLAUDE_CONFIG_DIR: '/home/octi/.claude', CODEX_HOME: '/home/octi/.codex' });
-    expect(cli.HOME).toBe(join(dir, '..', '..'));
+/** A bound channel of `owner` in `workspaceId`, read back as the dispatcher would. */
+async function boundChannel(owner: string, ownerName: string, channelId: string, workspaceId: string) {
+  const group = await enrol(owner, channelId);
+  const res = await call(ownerName, 'POST', `/api/me/group-channels/${group.id}/bind`, { workspaceId, acknowledged: true });
+  expect(res.status).toBe(200);
+  const { findGroupChannel } = await import('@/channels/group-channels');
+  return (await findGroupChannel('slack', channelId))!;
+}
+
+function bridgedMessage(channelId: string, userId: string, threadId: string, content = 'hello') {
+  return {
+    id: randomUUID(), channelType: 'slack' as const, channelId, userId, userName: 'Someone',
+    content, threadId, timestamp: new Date(), metadata: { messageId: threadId },
+  };
+}
+
+async function mappingCount(groupChannelId: string): Promise<number> {
+  const { queryRaw } = await import('@/db/postgres');
+  const { rows } = await queryRaw('SELECT count(*)::int AS n FROM group_channel_rooms WHERE group_channel_id = $1', [groupChannelId]);
+  return Number((rows[0] as { n: number }).n);
+}
+
+/** A second space where `other` is an owner too. */
+async function secondSpace(name: string): Promise<string> {
+  const { spaceWith } = await import('@/test-helpers/space-fixtures');
+  const id = await spaceWith(ownerId, [[otherOwnerId, 'editor'], [editorId, 'editor']], name);
+  expect((await call('owner', 'PATCH', `/api/spaces/${id}/members/${otherOwnerId}`, { role: 'owner' })).status).toBe(200);
+  return id;
+}
+
+describe('a bridged room stays readable by its channel only (§9.4)', () => {
+  test('it cannot be made private while bound; a room that is not open is never relayed', async () => {
+    const bound = await boundChannel(ownerId, 'owner', 'C-PRIVATE', spaceId);
+    const { resolveBridgedRoom, bridgeTargetOf, relayRoomMessage } = await import('@/channels/group-bridge');
+    const roomId = await resolveBridgedRoom(bound, '7.7', 'plan');
+    const { updateRoom } = await import('@/core/rooms/service');
+    await expect(updateRoom({ userId: ownerId }, spaceId, roomId, { visibility: 'private' })).rejects.toThrow(/bound to a group channel/);
+    const { loadRoom } = await import('@/core/rooms/access');
+    expect((await loadRoom(roomId))?.visibility).toBe('space');
+
+    // A room that is private anyway (made so before this rule) is not relayed.
+    const { queryRaw } = await import('@/db/postgres');
+    await queryRaw(`UPDATE sessions SET room_visibility = 'private' WHERE id = $1`, [roomId]);
+    expect(await bridgeTargetOf(roomId)).toBeNull();
+    const { messageRepository } = await import('@/db/repositories/message-repository');
+    sent.length = 0;
+    await relayRoomMessage(await messageRepository.create({ sessionId: roomId, role: 'assistant', content: 'private answer' }));
+    expect(sent).toEqual([]);
+    await queryRaw(`UPDATE sessions SET room_visibility = 'space' WHERE id = $1`, [roomId]);
+
+    // Unbound, it may go private.
+    expect((await call('owner', 'DELETE', `/api/me/group-channels/${bound.id}/bind`)).status).toBe(200);
+    await expect(updateRoom({ userId: ownerId }, spaceId, roomId, { visibility: 'private' })).resolves.toMatchObject({ visibility: 'private' });
+  });
+
+  test('relay is silent for a paused channel, progress rows and rooms no channel is bound to', async () => {
+    const bound = await boundChannel(ownerId, 'owner', 'C-QUIET', spaceId);
+    const { resolveBridgedRoom, relayRoomMessage } = await import('@/channels/group-bridge');
+    const roomId = await resolveBridgedRoom(bound, '8.8');
+    const { messageRepository } = await import('@/db/repositories/message-repository');
+    sent.length = 0;
+    await relayRoomMessage(await messageRepository.create({ sessionId: roomId, role: 'assistant', content: 'working…', metadata: { kind: 'progress' } }));
+    const { createRoom } = await import('@/core/rooms/service');
+    const loose = await createRoom({ userId: ownerId }, spaceId, { title: 'Not bridged', visibility: 'space' });
+    await relayRoomMessage(await messageRepository.create({ sessionId: loose.id, role: 'assistant', content: 'nobody on the platform reads this' }));
+    expect(sent).toEqual([]);
+
+    const { getDb } = await import('@/db/postgres');
+    const { users } = await import('@/db/schema/users');
+    const { eq } = await import('drizzle-orm');
+    await getDb().update(users).set({ isActive: false }).where(eq(users.id, ownerId));
+    try {
+      await relayRoomMessage(await messageRepository.create({ sessionId: roomId, role: 'assistant', content: 'paused' }));
+      expect(sent).toEqual([]);
+    } finally {
+      await getDb().update(users).set({ isActive: true }).where(eq(users.id, ownerId));
+    }
+    await relayRoomMessage(await messageRepository.create({ sessionId: roomId, role: 'assistant', content: 'back' }));
+    expect(sent).toEqual([expect.objectContaining({ kind: 'send', channelId: 'C-QUIET', threadId: '8.8', content: 'back' })]);
+  });
+});
+
+describe('the binding ends with its owner\'s ownership of the space (§9.4)', () => {
+  test('demoted or removed, the owner who bound it unbinds it (audited); a space owner who is not the channel\'s may unbind, a member may not', async () => {
+    const second = await secondSpace('Demotion');
+    const bound = await boundChannel(otherOwnerId, 'other', 'C-DEMOTE', second);
+    // An editor of the space who does not own the channel: 404.
+    expect((await call('editor', 'DELETE', `/api/me/group-channels/${bound.id}/bind`)).status).toBe(404);
+    // Demoting someone else leaves it bound.
+    expect((await call('owner', 'PATCH', `/api/spaces/${second}/members/${editorId}`, { role: 'viewer' })).status).toBe(200);
+    const { findGroupChannel } = await import('@/channels/group-channels');
+    expect((await findGroupChannel('slack', 'C-DEMOTE'))?.workspaceId).toBe(second);
+
+    expect((await call('owner', 'PATCH', `/api/spaces/${second}/members/${otherOwnerId}`, { role: 'editor' })).status).toBe(200);
+    expect((await findGroupChannel('slack', 'C-DEMOTE'))?.workspaceId).toBeNull();
+    expect((await auditRows(bound.id)).at(-1)).toMatchObject({ workspace_id: second, details: expect.objectContaining({ bound: false, reason: 'owner_left' }) });
+
+    // Owner again, bound again, then removed.
+    expect((await call('owner', 'PATCH', `/api/spaces/${second}/members/${otherOwnerId}`, { role: 'owner' })).status).toBe(200);
+    expect((await call('other', 'POST', `/api/me/group-channels/${bound.id}/bind`, { workspaceId: second, acknowledged: true })).status).toBe(200);
+    expect((await call('owner', 'DELETE', `/api/spaces/${second}/members/${otherOwnerId}`)).status).toBe(200);
+    expect((await findGroupChannel('slack', 'C-DEMOTE'))?.workspaceId).toBeNull();
+    expect((await auditRows(bound.id)).at(-1)?.details).toMatchObject({ bound: false, reason: 'owner_left' });
+
+    // A space owner who does not own the channel unbinds it.
+    const mine = await boundChannel(ownerId, 'owner', 'C-COOWNED', spaceId);
+    const third = await secondSpace('Co-owned');
+    const theirs = await boundChannel(otherOwnerId, 'other', 'C-THEIRS', third);
+    expect((await call('owner', 'DELETE', `/api/me/group-channels/${theirs.id}/bind`)).status).toBe(200);
+    expect((await auditRows(theirs.id)).at(-1)).toMatchObject({ user_id: ownerId, details: expect.objectContaining({ reason: 'unbound' }) });
+    expect((await call('owner', 'DELETE', `/api/me/group-channels/${mine.id}/bind`)).status).toBe(200);
+  });
+});
+
+describe('a channel never reaches another space\'s room (§9.4)', () => {
+  test('leftover mappings are cleared on bind, never resolve, never relay; a cached binding cannot create a room in the space it left', async () => {
+    const elsewhere = await secondSpace('Elsewhere');
+    const boundA = await boundChannel(ownerId, 'owner', 'C-STALE', spaceId);
+    const { resolveBridgedRoom, bridgedRoomOf, bridgeTargetOf, handleBridgedTurn } = await import('@/channels/group-bridge');
+    const roomA = await resolveBridgedRoom(boundA, 's1');
+    expect((await call('owner', 'DELETE', `/api/me/group-channels/${boundA.id}/bind`)).status).toBe(200);
+    const { queryRaw } = await import('@/db/postgres');
+    const leftover = () => queryRaw('INSERT INTO group_channel_rooms (group_channel_id, thread_id, session_id) VALUES ($1, $2, $3)', [boundA.id, 's1', roomA]);
+    // A late message of the old binding (before this fix, or on another instance).
+    await leftover();
+
+    expect((await call('owner', 'POST', `/api/me/group-channels/${boundA.id}/bind`, { workspaceId: elsewhere, acknowledged: true })).status).toBe(200);
+    expect(await mappingCount(boundA.id)).toBe(0);
+    await leftover();
+    expect(await bridgedRoomOf(boundA.id, 's1')).toBeNull();
+    expect(await bridgeTargetOf(roomA)).toBeNull();
+    // The thread gets a room of the space it is bound to now.
+    const { findGroupChannel } = await import('@/channels/group-channels');
+    const boundB = (await findGroupChannel('slack', 'C-STALE'))!;
+    const roomB = await resolveBridgedRoom(boundB, 's1');
+    const { loadRoom } = await import('@/core/rooms/access');
+    expect((await loadRoom(roomB))?.workspaceId).toBe(elsewhere);
+    expect(await bridgedRoomOf(boundA.id, 's1')).toBe(roomB);
+
+    // A message read under the old binding (a cached `GroupChannel`).
+    const before = await queryRaw('SELECT count(*)::int AS n FROM sessions WHERE workspace_id = $1 AND kind = \'room\'', [spaceId]);
+    await expect(resolveBridgedRoom(boundA, 's2')).rejects.toThrow(/no longer bound/);
+    const { getAgentService } = await import('@/core/agent');
+    const asked = vi.spyOn(getAgentService(), 'handleRoomMessage').mockResolvedValue({ kind: 'queued', position: 0 });
+    sent.length = 0;
+    expect(await handleBridgedTurn({ message: bridgedMessage('C-STALE', editorId, 's3'), group: boundA, context: '' })).toBe('refused');
+    expect(sent).toEqual([expect.objectContaining({ kind: 'private', userId: editorId, content: expect.stringMatching(/no longer bound/) })]);
+    expect(asked).not.toHaveBeenCalled();
+    asked.mockRestore();
+    const after = await queryRaw('SELECT count(*)::int AS n FROM sessions WHERE workspace_id = $1 AND kind = \'room\'', [spaceId]);
+    expect(after.rows[0]).toEqual(before.rows[0]);
+  });
+
+  test('a room another channel holds cannot be bound', async () => {
+    const { createRoom } = await import('@/core/rooms/service');
+    const room = await createRoom({ userId: ownerId }, spaceId, { title: 'Shared thread', visibility: 'space' });
+    const first = await enrol(ownerId, 'C-HOLD1');
+    expect((await call('owner', 'POST', `/api/me/group-channels/${first.id}/bind`, { workspaceId: spaceId, acknowledged: true, roomId: room.id })).status).toBe(200);
+    const second = await enrol(ownerId, 'C-HOLD2');
+    const res = await call('owner', 'POST', `/api/me/group-channels/${second.id}/bind`, { workspaceId: spaceId, acknowledged: true, roomId: room.id });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/already bound to a channel/);
+  });
+});
+
+describe('guests in a bound channel (§9.4)', () => {
+  test('a guest gets a private hint, no turn and no room', async () => {
+    const { createInvite, acceptInvite } = await import('@/core/spaces/invites');
+    const invite = await createInvite({ userId: ownerId }, spaceId, { role: 'guest' });
+    await acceptInvite({ userId: guestId }, invite.token);
+    const bound = await boundChannel(ownerId, 'owner', 'C-GUEST', spaceId);
+    const { handleBridgedTurn, bridgedRoomOf } = await import('@/channels/group-bridge');
+    sent.length = 0;
+    expect(await handleBridgedTurn({ message: bridgedMessage('C-GUEST', guestId, 'g1'), group: bound, context: '' })).toBe('refused');
+    expect(sent).toEqual([expect.objectContaining({ kind: 'private', userId: guestId, content: expect.stringMatching(/your role can't ask me/) })]);
+    expect(await bridgedRoomOf(bound.id, 'g1')).toBeNull();
+  });
+});
+
+describe('purging a space forgets its channels at once (§9.4)', () => {
+  test('the cached binding is dropped with the commit', async () => {
+    const doomed = await secondSpace('Doomed');
+    await boundChannel(ownerId, 'owner', 'C-PURGE', doomed);
+    const { findGroupChannel } = await import('@/channels/group-channels');
+    expect((await findGroupChannel('slack', 'C-PURGE'))?.workspaceId).toBe(doomed);
+    const { archiveSpace } = await import('@/core/spaces/service');
+    await archiveSpace({ userId: ownerId }, doomed);
+    const { refreshConfigKey } = await import('@/config');
+    refreshConfigKey('spaces.purgeAfterArchiveDays', 0);
+    try {
+      const { purgeSpace } = await import('@/core/spaces/purge');
+      const result = await purgeSpace({ userId: ownerId }, doomed);
+      expect(result.deleted['group_channels (detached)']).toBe(1);
+    } finally {
+      refreshConfigKey('spaces.purgeAfterArchiveDays', 7);
+    }
+    expect((await findGroupChannel('slack', 'C-PURGE'))?.workspaceId).toBeNull();
+  });
+});
+
+describe('permission requests of a bridged room (§9.4)', () => {
+  test('a turn asked from the platform asks in its thread (details privately); one asked on the web, or in a paused channel, stays pending for the web app', async () => {
+    const bound = await boundChannel(ownerId, 'owner', 'C-ASK', spaceId);
+    const { resolveBridgedRoom } = await import('@/channels/group-bridge');
+    const roomId = await resolveBridgedRoom(bound, '4.4');
+    const { postRoomMessage } = await import('@/core/rooms/service');
+    const { enqueueRoomTurn, roomQueueSnapshot } = await import('@/core/rooms/queue');
+    const { forwardPermissionRequestToChannel } = await import('@/channels');
+    const { getPermissionManager } = await import('@/security/permissions');
+    const denied = vi.spyOn(getPermissionManager(), 'deny').mockResolvedValue(true as never);
+
+    /** Run `fn` while the room's running turn is `editor`'s post (bridged or from the web). */
+    async function duringTurn(bridged: boolean, fn: () => Promise<void>): Promise<void> {
+      const { message } = await postRoomMessage({ userId: editorId }, roomId, {
+        content: 'edit the plan', addressed: true, ...(bridged ? { bridged: { channelType: 'slack', messageId: '4.4' } } : {}),
+      });
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      enqueueRoomTurn(roomId, spaceId, { requesterId: editorId, requesterName: 'Ed', messageId: message.id, enqueuedAt: new Date() }, () => held);
+      await vi.waitFor(() => expect(roomQueueSnapshot(roomId).running?.messageId).toBe(message.id));
+      try {
+        await fn();
+      } finally {
+        release();
+        await vi.waitFor(() => expect(roomQueueSnapshot(roomId).running).toBeNull());
+      }
+    }
+    const request = (requestId: string) => ({
+      requestId, userId: editorId, agentId: 'a1', toolId: 'shell', action: 'execute', toolName: 'shell', sessionId: roomId,
+      args: { command: 'cat secret-salaries.csv' },
+    });
+
+    try {
+      sent.length = 0;
+      await duringTurn(true, () => forwardPermissionRequestToChannel(request(randomUUID())));
+      expect(sent).toEqual([
+        expect.objectContaining({ kind: 'private', userId: editorId, threadId: '4.4', content: expect.stringContaining('secret-salaries') }),
+        expect.objectContaining({ kind: 'send', channelId: 'C-ASK', threadId: '4.4', content: expect.not.stringContaining('secret-salaries') }),
+      ]);
+
+      sent.length = 0;
+      await duringTurn(false, () => forwardPermissionRequestToChannel(request(randomUUID())));
+      expect(sent).toEqual([]);
+
+      const { getDb } = await import('@/db/postgres');
+      const { users } = await import('@/db/schema/users');
+      const { eq } = await import('drizzle-orm');
+      await getDb().update(users).set({ isActive: false }).where(eq(users.id, ownerId));
+      try {
+        await duringTurn(true, () => forwardPermissionRequestToChannel(request(randomUUID())));
+      } finally {
+        await getDb().update(users).set({ isActive: true }).where(eq(users.id, ownerId));
+      }
+      expect(sent).toEqual([]);
+      expect(denied).not.toHaveBeenCalled();
+    } finally {
+      denied.mockRestore();
+    }
   });
 });

@@ -331,14 +331,27 @@ export class SpaceSecretStore {
     return decryptRow(row).plaintext;
   }
 
-  /** Store `name` (replacing a live row of that name). Owners only. */
+  /** Every row of `name` in the space, live or not. */
+  private everyRow(name?: string): SQL[] {
+    return [
+      eq(vault.scope, 'space'),
+      eq(vault.workspaceId, this.space.workspaceId),
+      ...(name === undefined ? [] : [eq(vault.name, name)]),
+    ];
+  }
+
+  /**
+   * Store `name`, replacing every row of that name: the superseded
+   * ciphertext is deleted, not kept inactive under the space's key. Owners
+   * only.
+   */
   async write(name: string, value: string, credentialType: NewVaultEntry['credentialType']): Promise<void> {
     assertSpaceCan(this.space, 'manage_space');
     if (!value.trim()) throw new SpaceError('invalid_input', 'A secret needs a value');
     const { encryptForRow } = await import('@/security/vault');
     const key = { scope: 'space' as const, userId: this.space.userId, workspaceId: this.space.workspaceId };
     await this.db.transaction(async (tx) => {
-      await tx.update(vault).set({ isActive: false, updatedAt: new Date() }).where(and(...this.live(name)));
+      await tx.delete(vault).where(and(...this.everyRow(name)));
       await tx.insert(vault).values({ ...key, name, credentialType, ...encryptForRow(key, value), tags: ['space-connector'] });
     });
   }
@@ -359,15 +372,17 @@ export class SpaceSecretStore {
     return updated.length > 0;
   }
 
-  /** Deactivate the live rows of `names`; returns how many. Owners only. */
+  /**
+   * Delete the rows of `names` (inactive leftovers of an earlier version
+   * too); returns how many were live. Owners only.
+   */
   async remove(names: readonly string[]): Promise<number> {
     assertSpaceCan(this.space, 'manage_space');
     if (names.length === 0) return 0;
-    const removed = await this.db.update(vault)
-      .set({ isActive: false, updatedAt: new Date() })
-      .where(and(...this.live(), inArray(vault.name, [...names])))
-      .returning({ id: vault.id });
-    return removed.length;
+    const removed = await this.db.delete(vault)
+      .where(and(...this.everyRow(), inArray(vault.name, [...names])))
+      .returning({ isActive: vault.isActive });
+    return removed.filter((r) => r.isActive).length;
   }
 }
 
