@@ -250,6 +250,7 @@ async function maybeCompressTrajectories(): Promise<void> {
 }
 
 const listenDeps = defaultListenDeps();
+let roomListenDeps: import('@/channels/group-listen').ListenDeps<import('@/core/rooms/listen').RoomListenTarget> | null = null;
 
 async function processCronTick(): Promise<void> {
   try {
@@ -271,6 +272,10 @@ async function processCronTick(): Promise<void> {
     // awaited: its model calls must not hold up scheduled hooks; a tick still
     // running makes the next one a no-op.
     void runListenTick(listenDeps);
+    // Rooms in listen / proactive mode (coworking §9.3): the same gate, paid
+    // by the space's sponsor.
+    roomListenDeps ??= (await import('@/core/rooms/listen')).roomListenDeps();
+    void runListenTick(roomListenDeps);
 
     // Find schedule-triggered hooks that are due
     const dueHooks = await db

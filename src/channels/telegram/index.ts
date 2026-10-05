@@ -252,9 +252,9 @@ export class TelegramChannel extends BaseChannel {
         return m ? { text: m.text, user: m.authorId === BUFFER_BOT_ID ? botUserId : m.authorId ?? null } : null;
       },
       permalink: async (chatId, id) => telegramPermalink(chatId, id),
-      budgetPause: async (group) => {
+      budgetPause: async (group, scope) => {
         const { groupChannelPause } = await import('@/security/spend-budgets');
-        return groupChannelPause(group.id).catch((err: unknown) => {
+        return groupChannelPause(group.id, scope).catch((err: unknown) => {
           channelLogger.warn({ err, groupId: group.id }, 'Group channel budget check failed — not pausing');
           return null;
         });

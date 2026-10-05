@@ -96,8 +96,12 @@ export interface GroupDeps<Raw = unknown> {
   readMessage(channelId: string, messageId: string): Promise<GroupPost | null>;
   /** A link to a message, for the task notes; undefined when the platform gives none. */
   permalink(channelId: string, messageId: string): Promise<string | undefined>;
-  /** When the channel's spend budget is used up: when it resets. Null while it may run. */
-  budgetPause(group: GroupChannel): Promise<{ resetsAt: string } | null>;
+  /**
+   * When the budget the channel's turns run under is used up: when it resets.
+   * Null while it may run. `scope` says who pays (coworking spec §9.2): own
+   * turns check the channel's budget, sponsored ones the space's.
+   */
+  budgetPause(group: GroupChannel, scope: GroupSpendScope): Promise<{ resetsAt: string } | null>;
   shouldSendHint(key: string): boolean;
   /** Every message in an enrolled chat that reaches the bot, addressed or not (for adapters that keep a transcript). */
   seen?(msg: GroupInbound<Raw>, group: GroupChannel): void;
@@ -399,9 +403,24 @@ async function authorOf<Raw>(post: GroupPost, deps: GroupDeps<Raw>): Promise<str
   return 'an app';
 }
 
+/** Who pays for a channel's turns: the funding and the space of `SpendScope`. */
+export interface GroupSpendScope {
+  funding: import('@/core/types').AgentFunding;
+  spaceId: string | null;
+}
+
+/**
+ * The spend scope of a channel's turns. An enrolled channel's turns run in
+ * their members' own workspaces and are funded `own`; a channel bound to a
+ * space (the bridge, §9.4) is paid by that space's budget instead.
+ */
+export function groupSpendScope(_group: GroupChannel): GroupSpendScope {
+  return { funding: 'own', spaceId: null };
+}
+
 /** True (after one notice a day) while the channel's spend budget is used up. */
 async function budgetPaused<Raw>(group: GroupChannel, channelId: string, threadId: string, deps: GroupDeps<Raw>): Promise<boolean> {
-  const pause = await deps.budgetPause(group);
+  const pause = await deps.budgetPause(group, groupSpendScope(group));
   if (!pause) return false;
   if (deps.shouldSendHint(`budget:${group.id}`)) await deps.postInThread(channelId, threadId, budgetPausedText(pause.resetsAt));
   return true;

@@ -61,6 +61,8 @@ export interface MessageMetadata {
   replyTo?: string;
   /** A room answer: the member it answers (the turn's requester). */
   requesterId?: string;
+  /** A room post the agent made unprompted, in a listen room (coworking §9.3); members rate it. */
+  unprompted?: boolean;
 }
 
 export interface AttachmentData {

@@ -620,10 +620,9 @@ export async function setSpaceBudget(input: {
   period: SpendPeriod;
   limitUsd: number | null;
   warnRatio?: number;
-}): Promise<SpendBudget | null> {
+}, db: Pick<ReturnType<typeof getDb>, 'insert' | 'update' | 'delete'> = getDb()): Promise<SpendBudget | null> {
   if (!UUID_RE.test(input.workspaceId)) throw new Error('setSpaceBudget: not a space id');
   const scopeRef = input.workspaceId.toLowerCase();
-  const db = getDb();
   const where = and(eq(spendBudgets.scopeKind, input.kind), eq(spendBudgets.scopeRef, scopeRef), eq(spendBudgets.period, input.period));
   if (input.limitUsd === null) {
     const gone = await db.delete(spendBudgets).where(where)
@@ -740,7 +739,16 @@ export async function deleteBudget(id: string): Promise<boolean> {
  * gate before it starts a turn: when the last pause lifts, or null. Read-only;
  * the pause is stamped, and its notification sent, by `checkSpend` on a run.
  */
-export async function groupChannelPause(groupChannelId: string, now: Date = new Date()): Promise<{ resetsAt: string } | null> {
+export async function groupChannelPause(
+  groupChannelId: string,
+  /** Who pays the channel's turns: a sponsored channel answers to its space's budget (§9.2). */
+  scope: Pick<SpendScope, 'funding' | 'spaceId'> = { funding: 'own', spaceId: null },
+  now: Date = new Date(),
+): Promise<{ resetsAt: string } | null> {
+  if (scope.funding === 'sponsor') {
+    if (!scope.spaceId) throw new Error('A sponsored channel needs its space');
+    return spaceBudgetPause(scope.spaceId, now);
+  }
   if (!UUID_RE.test(groupChannelId) || !(await groupBudgetsExist(now))) return null;
   let resetsAt: Date | null = null;
   for (const b of await groupBudgetsOf(groupChannelId, now)) {

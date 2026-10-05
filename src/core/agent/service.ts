@@ -315,13 +315,39 @@ export class AgentService {
   }
 
   /**
+   * The turn after a positive listen probe in a `proactive` room (§9.3):
+   * the agent answers `questionMessageId`, a member's unanswered question,
+   * as a `listen` turn — run as that member (their role caps its tools, the
+   * room's rules hold), paid by the space's sponsor (`fundingFor`). Queued
+   * behind the room's other turns. Nothing when the member may no longer
+   * ask the agent there.
+   */
+  async handleRoomListen(roomId: string, requesterId: string, questionMessageId: string): Promise<RoomMessageOutcome | null> {
+    const [{ roomAccess }, { can }] = await Promise.all([import('@/core/rooms/access'), import('@/security/space-access')]);
+    const access = await roomAccess(requesterId, roomId);
+    if (!access || !can(access.role, 'run_agent')) return null;
+    const posted = await messageRepository.findById(questionMessageId);
+    if (!posted || posted.sessionId !== roomId || posted.role !== 'user' || posted.authorUserId !== requesterId) return null;
+    const { displayNames } = await import('@/core/session-history');
+    const requesterName = (await displayNames([requesterId])).get(requesterId) ?? 'A member';
+    const { enqueueRoomTurn } = await import('@/core/rooms/queue');
+    const { position } = enqueueRoomTurn(
+      roomId,
+      access.room.workspaceId,
+      { requesterId, requesterName, messageId: questionMessageId, enqueuedAt: new Date() },
+      (request) => this.runRoomTurn(roomId, request.requesterId, request.messageId, 'listen'),
+    );
+    return { kind: 'queued', position };
+  }
+
+  /**
    * Run one queued room turn, handed over by the room queue. The requester's
    * access is checked again (they may have been removed while waiting); the
    * turn runs as them, under `withSessionTurn`, with their workspace and
    * funding as the usage context. Throws when the turn failed, so the queue
    * reports it to the room.
    */
-  private async runRoomTurn(roomId: string, requesterId: string, postedMessageId: string): Promise<void> {
+  private async runRoomTurn(roomId: string, requesterId: string, postedMessageId: string, trigger: 'room' | 'listen' = 'room'): Promise<void> {
     const [{ roomAccess }, { can }, { RoomTurnDropped }] = await Promise.all([
       import('@/core/rooms/access'), import('@/security/space-access'), import('@/core/rooms/queue'),
     ]);
@@ -338,7 +364,7 @@ export class AgentService {
         () => withProviderUsageContext({ userId: requesterId }, async () => {
           const noModel = await this.noModelAnswer(requesterId);
           if (noModel) throw new Error(noModel.response);
-          return this.runTurn({ session, requesterId, message: posted.content, channel: 'room', trigger: 'room', postedMessageId });
+          return this.runTurn({ session, requesterId, message: posted.content, channel: 'room', trigger, postedMessageId });
         }),
       );
       if (result.outcome === 'failed' && !result.metadata?.limit) throw new Error(result.response);

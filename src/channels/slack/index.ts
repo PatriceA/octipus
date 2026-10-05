@@ -256,9 +256,9 @@ export class SlackChannel extends BaseChannel {
           return undefined;
         }
       },
-      budgetPause: async (group) => {
+      budgetPause: async (group, scope) => {
         const { groupChannelPause } = await import('@/security/spend-budgets');
-        return groupChannelPause(group.id).catch((err: unknown) => {
+        return groupChannelPause(group.id, scope).catch((err: unknown) => {
           // Not blocking: checkSpend still refuses each run once the budget is spent.
           channelLogger.warn({ err, groupId: group.id }, 'Group channel budget check failed — not pausing');
           return null;
