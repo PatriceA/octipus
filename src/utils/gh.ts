@@ -4,6 +4,10 @@
  * child environment; everything else the harness holds is not gh's business
  * (`buildChildEnv`). An optional timeout kills a hung `gh` — the tool runs
  * without one (an interactive turn can wait), a background probe cannot.
+ *
+ * Inside a space (coworking §9.5) the caller passes `configDir` (an empty
+ * per-space `GH_CONFIG_DIR`) and the space's own `token`, if it has one: the
+ * host's gh login and GH tokens are then never used.
  */
 import { spawn } from 'node:child_process';
 import { buildChildEnv } from '@/security/child-env';
@@ -18,11 +22,27 @@ export interface RunGhOptions {
    * the answer the caller wanted, not an error.
    */
   acceptExitCodes?: number[];
+  /**
+   * The GitHub token to act with (`GH_TOKEN`), instead of the host's. Set,
+   * the host's GH token variables are not passed on.
+   */
+  token?: string;
+  /** `GH_CONFIG_DIR` for this run (a space's empty one), instead of the host's. */
+  configDir?: string;
+}
+
+/** The environment of one `gh` run. Exported for the tests. */
+export function ghEnv(opts: Pick<RunGhOptions, 'token' | 'configDir'> = {}): Record<string, string> {
+  const own = opts.token !== undefined || opts.configDir !== undefined;
+  return buildChildEnv({
+    ...(opts.configDir ? { GH_CONFIG_DIR: opts.configDir } : {}),
+    ...(opts.token ? { GH_TOKEN: opts.token } : {}),
+  }, { keep: own ? [] : GH_KEEP_ENV });
 }
 
 export function runGh(args: string[], opts: RunGhOptions = {}): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn('gh', args, { env: buildChildEnv(undefined, { keep: GH_KEEP_ENV }) });
+    const child = spawn('gh', args, { env: ghEnv(opts) });
     let stdout = '';
     let stderr = '';
     const timer = opts.timeoutMs

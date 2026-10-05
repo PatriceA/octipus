@@ -12,7 +12,7 @@ import { answerHow, type GroupDeps, type GroupInbound, groupHints, handleGroupMe
 const group: GroupChannel = {
   id: 'g1', channelType: 'telegram', channelId: '-1001', label: 'Release crew',
   ownerUserId: 'owner', createdAt: new Date(), updatedAt: new Date(), mode: 'mention', quietHoursStart: null, quietHoursEnd: null,
-  timezone: 'UTC', maxUnpromptedPerDay: 8, minMinutesBetween: 60, lastUnpromptedAt: null, unpromptedDay: null, unpromptedCount: 0,
+  timezone: 'UTC', maxUnpromptedPerDay: 8, minMinutesBetween: 60, lastUnpromptedAt: null, unpromptedDay: null, unpromptedCount: 0, workspaceId: null,
 };
 const anna = { id: 'u-anna', username: 'anna', isActive: true, isAdmin: false };
 const hints = groupHints({ platform: 'Telegram', linkHow: 'send me /link in a private chat', takeAlso: 'or reply', followHow: 'reply to me' });
@@ -125,6 +125,23 @@ describe('handleGroupMessage', () => {
     ctx = makeDeps({ forget });
     await handleGroupMessage(inbound({ text: 'leave' }), ctx.deps);
     expect(forget).toHaveBeenCalledTimes(2);
+  });
+
+  test('a channel bound to a space answers only its members: others get a private hint, once a day, and no turn', async () => {
+    const bridgeAccess = vi.fn(async () => 'not_member' as const);
+    ctx = makeDeps({ findGroup: vi.fn(async () => ({ ...group, workspaceId: 'space-1' })), bridgeAccess });
+    expect(await handleGroupMessage(inbound(), ctx.deps)).toBe('hint');
+    expect(await handleGroupMessage(inbound({ messageId: '51' }), ctx.deps)).toBe('hint');
+    expect(bridgeAccess).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: 'space-1' }), anna.id);
+    expect(ctx.calls.private).toEqual([expect.stringContaining('not a member')]);
+    expect(ctx.calls.dispatched).toEqual([]);
+    // A member of the space gets the turn; an unbound channel never asks.
+    ctx = makeDeps({ findGroup: vi.fn(async () => ({ ...group, workspaceId: 'space-1' })), bridgeAccess: vi.fn(async () => 'ok' as const) });
+    expect(await handleGroupMessage(inbound(), ctx.deps)).toBe('dispatched');
+    const never = vi.fn(async () => 'not_member' as const);
+    ctx = makeDeps({ bridgeAccess: never });
+    expect(await handleGroupMessage(inbound(), ctx.deps)).toBe('dispatched');
+    expect(never).not.toHaveBeenCalled();
   });
 
   test('platform texts: how to link, and how the conversation continues', async () => {

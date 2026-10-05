@@ -160,6 +160,9 @@ const ALLOWLIST: Record<string, string> = {
   // The vault: a user's secrets; workspace-scoped secrets follow transfer.
   'src/security/vault.ts': 'secret store',
   'src/security/oauth.ts': "a user's OAuth tokens in the secret store",
+  // Group channels (enrolments, not content): a bound one names its space (§9.4).
+  'src/channels/group-channels.ts': "channel enrolments; a binding grants nothing to the channel's owner",
+  'src/channels/group-bridge.ts': 'the bridge: bindings checked against the space membership',
   // Hooks are personal automation: never offered in space sessions (§5.6).
   'src/hooks/manager.ts': 'hooks, personal automation',
   'src/hooks/actions.ts': 'hooks, personal automation',

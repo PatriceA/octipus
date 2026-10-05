@@ -9,6 +9,7 @@ import {
   releaseLease,
   renewLease,
 } from '@/core/docs/file-leases';
+import { connectSpaceConnector, disconnectSpaceConnector, listSpaceConnectors } from '@/core/spaces/connectors';
 import { acceptInvite, createInvite, listInvites, previewInvite, revokeInvite } from '@/core/spaces/invites';
 import { purgeSpace } from '@/core/spaces/purge';
 import {
@@ -235,6 +236,28 @@ export const spaceRoutes = new Elysia({ prefix: '/spaces' })
   }), {
     params: t.Object({ id: t.String() }),
     query: t.Object({ limit: t.Optional(t.String()), before: t.Optional(t.String()) }),
+    detail: { tags: ['spaces'] },
+  })
+
+  // ── Space connectors (§9.5) ─────────────────────────────────────────
+  // Every member sees which are connected; owners connect (an OAuth popup,
+  // or a pasted GitHub token) and disconnect. Values never leave the server.
+
+  .get('/:id/connectors', (ctx) => handle(ctx, async (actor) => ({ connectors: await listSpaceConnectors(actor, ctx.params.id) })), {
+    params: t.Object({ id: t.String() }),
+    detail: { tags: ['spaces'] },
+  })
+
+  .post('/:id/connectors/:connectorId', (ctx) => handle(ctx, (actor) =>
+    connectSpaceConnector(actor, ctx.params.id, ctx.params.connectorId, { token: ctx.body?.token })), {
+    params: t.Object({ id: t.String(), connectorId: t.String({ minLength: 1, maxLength: 64 }) }),
+    body: t.Optional(t.Object({ token: t.Optional(t.String({ minLength: 1, maxLength: 400 })) }, { additionalProperties: false })),
+    detail: { tags: ['spaces'] },
+  })
+
+  .delete('/:id/connectors/:connectorId', (ctx) => handle(ctx, (actor) =>
+    disconnectSpaceConnector(actor, ctx.params.id, ctx.params.connectorId)), {
+    params: t.Object({ id: t.String(), connectorId: t.String({ minLength: 1, maxLength: 64 }) }),
     detail: { tags: ['spaces'] },
   })
 

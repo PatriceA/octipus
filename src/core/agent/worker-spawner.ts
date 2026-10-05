@@ -274,13 +274,14 @@ export async function spawnWorker(
 
   if (isRealUserId(context.userId)) {
     try {
-      const { getConnectorRegistry } = await import('@/connectors');
+      const { connectorOwnerOf, getConnectorRegistry } = await import('@/connectors');
       // Role↔connector binding: if the role binds specific connectors
       // (`connector:<id>` in its toolIds), expose only those; otherwise expose
       // all of the user's active connectors (backward-compatible default).
+      // In a space, the space's connectors instead of the member's (§9.5).
       const boundConnectorIds = getBoundConnectorIds(agentRole);
       const allowed = boundConnectorIds.length > 0 ? new Set(boundConnectorIds) : undefined;
-      const connectorHandlers = await getConnectorRegistry().getUserToolHandlers(context.userId, allowed);
+      const connectorHandlers = await getConnectorRegistry().getUserToolHandlers(connectorOwnerOf(context), allowed);
       roleTools.push(...connectorHandlers);
     } catch (err) {
       coreLogger.warn({ err, userId: context.userId }, 'Failed to load connector tool handlers');

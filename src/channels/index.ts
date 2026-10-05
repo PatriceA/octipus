@@ -570,7 +570,10 @@ export async function forwardPermissionRequestToChannel(request: PermissionReque
   if (!userId || !sessionId) return;
 
   // Look up the session to find which channel originated it
-  const session = await sessionRepository.findById(sessionId);
+  const stored = await sessionRepository.findById(sessionId);
+  // A room of a channel bound to a space (§9.4) asks in its thread, as a
+  // group thread does: only the requester sees the details.
+  const session = stored?.kind === 'room' ? await bridgedRoomAsGroupThread(stored) : stored;
   // Only a messaging channel can carry a permission prompt. Non-messaging
   // sessions have a channelType too ('tui', 'webchat', 'api'), and the old
   // `!== 'webchat'` test let 'tui' through to `umi.send`, which throws for a
@@ -691,6 +694,18 @@ export async function forwardPermissionRequestToChannel(request: PermissionReque
 }
 
 /**
+ * A bridged room seen as the group thread it mirrors (channel, chat, thread
+ * and enrolment), for the permission prompt; the room itself (no channel)
+ * when no channel is bound to it.
+ */
+async function bridgedRoomAsGroupThread<S extends { id: string; channelType: string | null; channelId: string | null; threadId: string | null; groupChannelId: string | null }>(room: S): Promise<S> {
+  const { bridgeTargetOf } = await import('./group-bridge');
+  const target = await bridgeTargetOf(room.id);
+  if (!target) return room;
+  return { ...room, channelType: target.group.channelType, channelId: target.group.channelId, threadId: target.threadId, groupChannelId: target.group.id };
+}
+
+/**
  * The acting member's own session for a group-channel thread. The adapter
  * only tags messages from enrolled channels; re-check here so a stale or
  * forged tag cannot attach a turn to another chat's enrolment.
@@ -753,6 +768,8 @@ export async function initializeChannels(): Promise<void> {
   await startApprovalPrompts();
   // A task taken up in a group channel says in its thread when it closes.
   startTakenTaskNotices();
+  // Rooms of a channel bound to a space are read in its threads (§9.4).
+  (await import('./group-bridge')).startGroupBridgeRelay();
 
   // Bridge incoming channel messages → root agent → reply
   umi.on('message', async (message: UnifiedMessage) => {
@@ -768,6 +785,30 @@ export async function initializeChannels(): Promise<void> {
       recordChannelMessage(message.channelType, 'inbound');
       // A yes/no reply to a permission prompt or an approval posted in this chat
       if (await tryResolvePromptReply(message)) return;
+
+      // A channel bound to a space (§9.4): the message is a post in the
+      // thread's room and its turn a room turn, run as the member; the reply
+      // reaches the thread through the bridge's relay.
+      if (groupChannelId) {
+        const { findGroupChannel } = await import('./group-channels');
+        const group = await findGroupChannel(message.channelType, message.channelId);
+        if (!group || group.id !== groupChannelId) throw new Error('Group channel enrolment not found for this chat');
+        if (group.workspaceId) {
+          const { handleBridgedTurn } = await import('./group-bridge');
+          const outcome = await handleBridgedTurn({
+            message,
+            group,
+            context: typeof message.metadata?.groupContext === 'string' ? message.metadata.groupContext : '',
+            take: takeRequestOf(message.metadata?.take),
+          });
+          const platformMessageId = message.metadata?.messageId != null ? String(message.metadata.messageId) : undefined;
+          if (outcome === 'queued' && platformMessageId) {
+            umi.setReaction(message.channelType, message.channelId, platformMessageId, '👀')
+              .catch((err: unknown) => channelLogger.warn({ err }, 'Could not react to a bridged message'));
+          }
+          return;
+        }
+      }
 
       // Process file attachments → document OCR pipeline (fire-and-forget)
       const attachmentDocuments: Promise<string[]> = message.attachments?.length

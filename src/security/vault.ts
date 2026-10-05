@@ -49,13 +49,31 @@ export async function initializeVault(): Promise<void> {
   securityLogger.info('Vault initialized');
 }
 
-/** Per-user DEK for `key_version=2` rows. Deterministic given the raw
- *  master key + (scope, userId) pair, so we never persist it. */
-function dekFor(scope: VaultScope, userId: string): Buffer {
+/** What a row's key derives from: its scope, owner and (for a space secret) space. */
+export type VaultKeyRow = Pick<VaultEntry, 'scope' | 'userId' | 'workspaceId'>;
+
+/**
+ * The `key_version=2` DEK of a vault row, under `masterKey`. The one
+ * derivation every decrypt, encrypt and rotation path uses (coworking §9.5):
+ * a `space` row's key derives from its space (`workspace_id`) — the owner who
+ * stored it is its author, not its key, so a space secret stays readable
+ * whoever of its owners stored it and after that owner leaves — and every
+ * other row's from `(scope, user_id)`, as before.
+ */
+export function dekForRow(row: VaultKeyRow, masterKey: Buffer): Buffer {
+  if (row.scope === 'space') {
+    if (!row.workspaceId) throw new Error('A space secret has no workspace_id');
+    return deriveDek(masterKey, 'space', row.workspaceId);
+  }
+  return deriveDek(masterKey, row.scope, row.userId);
+}
+
+/** `dekForRow` under the running master key. Deterministic, so never persisted. */
+function dekFor(row: VaultKeyRow): Buffer {
   if (!rawMasterKey) {
     throw new Error('Vault not initialized. Call initializeVault() first.');
   }
-  return deriveDek(rawMasterKey, scope, userId);
+  return dekForRow(row, rawMasterKey);
 }
 
 /** Legacy PBKDF2 key (key_version=1). */
@@ -99,9 +117,9 @@ function inferScope(userId: string): VaultScope {
  *
  * The re-encryption path is identical to the lazy v1→v2 upgrade in
  * `vault.get` but with a different DEK derivation: the old DEK is
- * derived from `oldMasterKey`, the new DEK from `newMasterKey`. The
- * scope+userId pair stays the same so existing per-(scope,user)
- * isolation is preserved across the rotation.
+ * derived from `oldMasterKey`, the new DEK from `newMasterKey`. Both
+ * come from `dekForRow`, so the row keeps its per-(scope, user) — or,
+ * for a space secret, per-space — isolation across the rotation.
  *
  * Returns:
  *   - 'rotated'   on a successful rewrite (default; row was at v2
@@ -123,8 +141,8 @@ export async function rotateVaultRowMasterKey(
   const [row] = await db.select().from(vault).where(eq(vault.id, rowId)).limit(1);
   if (!row) return 'failed';
 
-  const oldDek = deriveDek(oldMasterKey, row.scope, row.userId);
-  const newDek = deriveDek(newMasterKey, row.scope, row.userId);
+  const oldDek = dekForRow(row, oldMasterKey);
+  const newDek = dekForRow(row, newMasterKey);
 
   const encData = {
     ciphertext: row.encryptedValue,
@@ -160,18 +178,18 @@ export async function rotateVaultRowMasterKey(
   return 'rotated';
 }
 
-type VaultCiphertextRow = Pick<VaultEntry, 'scope' | 'userId' | 'keyVersion' | 'encryptedValue' | 'encryptionIv' | 'encryptionAuthTag'>;
+type VaultCiphertextRow = VaultKeyRow & Pick<VaultEntry, 'keyVersion' | 'encryptedValue' | 'encryptionIv' | 'encryptionAuthTag'>;
 
 /**
  * Decrypt a vault row under its recorded key version, falling through
  * every older scheme when the column and the ciphertext disagree.
- *   2: per-(scope, user) HKDF DEK, derived from the row's own scope and owner.
+ *   2: HKDF DEK of the row itself (`dekForRow`): its scope and owner, or its space.
  *   1: legacy PBKDF2 key (single key for every row).
  *   0/missing: even older SHA-256(masterKey) — pre-PBKDF2 migration.
  * `needsReencrypt` is true when the row should be rewritten at
  * CURRENT_KEY_VERSION. Throws when no scheme decrypts it.
  */
-function decryptRow(row: VaultCiphertextRow): { plaintext: string; needsReencrypt: boolean } {
+export function decryptRow(row: VaultCiphertextRow): { plaintext: string; needsReencrypt: boolean } {
   const encData = {
     ciphertext: row.encryptedValue,
     iv: row.encryptionIv,
@@ -184,7 +202,7 @@ function decryptRow(row: VaultCiphertextRow): { plaintext: string; needsReencryp
   let decrypted: string | null = null;
   let needsReencrypt = false;
   if (row.keyVersion === 2) {
-    decrypted = tryAt(dekFor(row.scope, row.userId));
+    decrypted = tryAt(dekFor(row));
   } else if (row.keyVersion === 1) {
     decrypted = tryAt(getPbkdf2Key());
     needsReencrypt = decrypted !== null;
@@ -192,7 +210,7 @@ function decryptRow(row: VaultCiphertextRow): { plaintext: string; needsReencryp
   if (decrypted === null) {
     // Fall back through every older scheme just in case the column is
     // out of sync with the actual ciphertext (e.g. partial migration).
-    decrypted = tryAt(dekFor(row.scope, row.userId));
+    decrypted = tryAt(dekFor(row));
     if (decrypted === null) decrypted = tryAt(getPbkdf2Key());
     if (decrypted === null && legacyKey) decrypted = tryAt(legacyKey);
     if (decrypted !== null) needsReencrypt = true;
@@ -201,6 +219,36 @@ function decryptRow(row: VaultCiphertextRow): { plaintext: string; needsReencryp
     throw new Error('Decryption failed across all known key versions');
   }
   return { plaintext: decrypted, needsReencrypt };
+}
+
+/** The ciphertext columns of `plaintext` sealed for `row` at the current key version. */
+export function encryptForRow(
+  row: VaultKeyRow,
+  plaintext: string,
+): Pick<VaultEntry, 'encryptedValue' | 'encryptionIv' | 'encryptionAuthTag' | 'keyVersion'> {
+  const encrypted = encrypt(trimSecret(plaintext), dekFor(row));
+  return {
+    encryptedValue: encrypted.ciphertext,
+    encryptionIv: encrypted.iv,
+    encryptionAuthTag: encrypted.authTag,
+    keyVersion: CURRENT_KEY_VERSION,
+  };
+}
+
+/**
+ * Rewrite one row at the current key version, whatever its scope (the
+ * `rotate-vault-keys` script). `'current'` when it already is, `'upgraded'`
+ * after the rewrite, `'missing'` for no such row. Throws when no scheme
+ * decrypts it, leaving the row as it was.
+ */
+export async function upgradeVaultRow(rowId: string): Promise<'upgraded' | 'current' | 'missing'> {
+  const db = getDb();
+  const [row] = await db.select().from(vault).where(eq(vault.id, rowId)).limit(1);
+  if (!row) return 'missing';
+  const { plaintext, needsReencrypt } = decryptRow(row);
+  if (!needsReencrypt && row.keyVersion === CURRENT_KEY_VERSION) return 'current';
+  await db.update(vault).set({ ...encryptForRow(row, plaintext), updatedAt: new Date() }).where(eq(vault.id, rowId));
+  return 'upgraded';
 }
 
 /**
@@ -215,8 +263,9 @@ export function reencryptVaultRowForOwner(
   row: VaultCiphertextRow,
   newUserId: string,
 ): Pick<VaultEntry, 'encryptedValue' | 'encryptionIv' | 'encryptionAuthTag' | 'keyVersion'> {
+  if (row.scope === 'space') throw new Error('A space secret has no owner to re-encrypt for: its key is the space');
   const { plaintext } = decryptRow(row);
-  const encrypted = encrypt(plaintext, dekFor(row.scope, newUserId));
+  const encrypted = encrypt(plaintext, dekFor({ ...row, userId: newUserId }));
   return {
     encryptedValue: encrypted.ciphertext,
     encryptionIv: encrypted.iv,
@@ -270,13 +319,16 @@ export class Vault {
     }
   ): Promise<VaultEntry> {
     const scope = options.scope ?? inferScope(userId);
-    const dek = dekFor(scope, userId);
+    // Space secrets are written by the space access layer only (§9.5).
+    if (scope === 'space') throw new Error('Space secrets are stored through the space access layer');
+    const workspaceId = scope === 'workspace' ? (options.workspaceId ?? null) : null;
+    const dek = dekFor({ scope, userId, workspaceId });
     const encrypted = encrypt(trimSecret(value), dek);
 
     const entry: NewVaultEntry = {
       userId,
       scope,
-      workspaceId: scope === 'workspace' ? (options.workspaceId ?? null) : null,
+      workspaceId,
       name,
       credentialType: options.credentialType,
       encryptedValue: encrypted.ciphertext,
@@ -355,7 +407,7 @@ export class Vault {
       // so the next access takes the fast path. Failures here are
       // logged and swallowed: the read itself succeeded.
       try {
-        const dek = dekFor(row.scope, row.userId);
+        const dek = dekFor(row);
         const reEncrypted = encrypt(decrypted, dek);
         await this.db.update(vault).set({
           encryptedValue: reEncrypted.ciphertext,
@@ -501,7 +553,7 @@ export class Vault {
 
     if (updates.value) {
       const scope = inferScope(userId);
-      const dek = dekFor(scope, userId);
+      const dek = dekFor({ scope, userId, workspaceId: null });
       const encrypted = encrypt(trimSecret(updates.value), dek);
       updateData.encryptedValue = encrypted.ciphertext;
       updateData.encryptionIv = encrypted.iv;
@@ -639,7 +691,7 @@ export class Vault {
    */
   async rotate(userId: string, credentialId: string, newValue: string): Promise<boolean> {
     const scope = inferScope(userId);
-    const dek = dekFor(scope, userId);
+    const dek = dekFor({ scope, userId, workspaceId: null });
     const encrypted = encrypt(newValue, dek);
 
     const result = await this.db
@@ -729,6 +781,10 @@ export class Vault {
    *   1. user-scoped row owned by `agent.userId` with the same `name`
    *      and `(allowedTools, allowedAgents)` allowing this caller.
    *   2. system-scoped row with the same `name` and allowlist passing.
+   *
+   * Never a `workspace` or `space` row: a space connector's secret is used
+   * by connector code only (coworking §9.5), so `{{secret:NAME}}` cannot
+   * route it into a shell command or an HTTP request.
    *
    * Returns `null` if neither resolves OR if the matching row's
    * allowlist excludes the calling tool/agent. The allowlist check is
