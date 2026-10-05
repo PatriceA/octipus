@@ -30,23 +30,13 @@ import { workspaces } from '@/db/schema/organizations';
 import { type RoomMode, roomFeedback, roomModes } from '@/db/schema/rooms';
 import { sessions } from '@/db/schema/sessions';
 import { SpaceError } from '@/security/space-access';
+import type { RoomModeView } from '@/shared/types';
 import { coreLogger } from '@/utils/logger';
 import { requireRoom, type RoomActor } from './service';
 
 export const ROOM_MODES: readonly RoomMode[] = ['mention', 'listen', 'proactive'];
 
-/** A room's mode and gate settings, as the room settings show them. */
-export interface RoomModeView {
-  roomId: string;
-  mode: RoomMode;
-  quietHoursStart: number | null;
-  quietHoursEnd: number | null;
-  timezone: string;
-  maxUnpromptedPerDay: number;
-  minMinutesBetween: number;
-  lastUnpromptedAt: string | null;
-  feedback: { up: number; down: number };
-}
+export type { RoomModeView } from '@/shared/types';
 
 const DEFAULTS = { mode: 'mention' as RoomMode, quietHoursStart: null, quietHoursEnd: null, timezone: 'UTC', maxUnpromptedPerDay: 8, minMinutesBetween: 60, lastUnpromptedAt: null };
 

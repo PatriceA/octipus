@@ -58,6 +58,7 @@ const SkillsPage = lazy(() => import('./app/skills/page'));
 const SpaceSettingsPage = lazy(() => import('./app/spaces/settings/page'));
 const SkillsProposalsPage = lazy(() => import('./app/skills/proposals/page'));
 const TasksPage = lazy(() => import('./app/tasks/page'));
+const MyWorkPage = lazy(() => import('./app/my-work/page'));
 const ToolsPage = lazy(() => import('./app/tools/page'));
 const TopicsPage = lazy(() => import('./app/topics/page'));
 
@@ -134,6 +135,7 @@ const router = createBrowserRouter([
       { path: 'skills/proposals', element: <SkillsProposalsPage /> },
       { path: 'spaces/:id/settings', element: <SpaceSettingsPage /> },
       { path: 'tasks', element: <TasksPage /> },
+      { path: 'my-work', element: <MyWorkPage /> },
       { path: 'tools', element: <ToolsPage /> },
       { path: 'topics', element: <TopicsPage /> },
       { path: 'login', element: <LoginPage /> },

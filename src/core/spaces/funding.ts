@@ -58,6 +58,9 @@ export async function setSpaceFunding(actor: SpaceActor, workspaceId: string, in
   }
   const models = input.sponsorModels === undefined ? undefined : [...new Set(input.sponsorModels.map((m) => m.trim()).filter(Boolean))];
   if (models && models.length > MAX_SPONSOR_MODELS) throw new SpaceError('invalid_input', `At most ${MAX_SPONSOR_MODELS} sponsor models`);
+  // Read before the transaction (the registry reads on its own connection):
+  // the actor lists their own rows; that they are the sponsor is checked inside.
+  if (models) await assertOwnModels(actor.userId, models);
 
   const outcome = await getDb().transaction(async (tx) => {
     requireCan(await getMembership(actor.userId, workspaceId, tx, { lock: 'share' }), 'manage_space');
@@ -78,7 +81,6 @@ export async function setSpaceFunding(actor: SpaceActor, workspaceId: string, in
       if (!sponsorUserId || sponsorUserId !== actor.userId) {
         throw new SpaceError('forbidden_role', 'Only the sponsor chooses the sponsor models');
       }
-      await assertOwnModels(actor.userId, models);
       sponsorModels = models;
     }
 

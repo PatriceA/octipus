@@ -9,6 +9,21 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **Space funding, budgets and the team surface** (coworking S5,
+  `docs/SPACES.md` → "Funding and budgets", "The team surface"). A space's
+  owners choose who pays for the agent — each member (`own`), members for
+  their own turns and a sponsor for unprompted work (`unattended`, the
+  default), or a sponsor for everything (`sponsored`, each member under a
+  per-member cap) — and an owner can sponsor the space with their own
+  models. Space budgets cap the sponsor's spend for the whole space and per
+  member (Space settings → Budget); a member at their cap is paused alone.
+  Sponsored spend never moves a member's personal budget or token quota.
+  "My work" lists my open tasks across my spaces; assigning a space task
+  notifies the assignee; the space's board updates live from `task.changed`
+  instead of polling. Rooms get `listen` and `proactive` modes with the
+  group channels' gate (quiet hours, caps, 👍/👎 feedback), paid by the
+  sponsor. Migration `0132_space_funding`.
+
 - **Rooms in the web.** With a shared space selected, the sidebar gets
   *rooms* (with the unread count) and `/rooms` lists the space's rooms with
   unread badges. A room shows everyone's posts (others on the left with name
@@ -68,6 +83,13 @@ labels reflect blast radius, not contract guarantees.
   CLI home and the owner's token. See docs/SPACES.md ("Own models").
 
 ### Changed
+
+- Install-topic model calls (compaction and its chunk summaries, learning,
+  link resolver, weekly review, evaluators, document processing, the group
+  listen probe) are now stamped `install` in `cost_log` whatever turn they
+  run in, through `withInstallUsage`. Spend budgets' `user_id` is nullable
+  for space budgets (author only); a user's own budgets are still deleted
+  with their account (a trigger replaces the cascade).
 
 - **Model identity is the row name.** Agent contexts carry `modelName`
   beside the provider `model` id, and providers re-read rows by

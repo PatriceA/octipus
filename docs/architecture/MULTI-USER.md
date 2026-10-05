@@ -2204,6 +2204,25 @@ content, the agent inside a space, and the web screens.
   there and ends their room and space subscriptions.
 - **Space memory** replaces personal memories in space sessions (D10, I7).
 
+## 27. Sponsor and team surface (coworking S5, §9.1–§9.3)
+
+- **Funding is explicit** (D13). `fundingFor(trigger, space, settings)`
+  decides `own` or `sponsor` from the space's `agent_funding` (migration
+  `0132_space_funding`); a cell without a sponsor is refused
+  (`funding_off`), never charged to someone else. A sponsor names
+  themselves; losing owner rights (removal, demotion, leaving) clears the
+  sponsor in the same transaction, audits it and stops sponsored agents.
+- **Sponsored turns run on the sponsor's models** (`AgentSponsor`,
+  inherited by children), never on the requester's personal rows.
+- **Budgets per payer.** Sponsored work checks the space's `space` and
+  `space_member` budgets; own work the requester's. Personal scopes never
+  count sponsored rows; the token quota sums own agents only. Install-topic
+  calls are stamped `install` (`withInstallUsage`) in every turn.
+- **Space events** stay on the `space:<id>` resource: `task.changed`
+  carries ids only; assignment notices re-read the assignee's membership.
+- **Room modes** reuse the group channels' gate; the probe is install work,
+  the answering turn a `listen` turn run as the member who asked.
+
 ## 25. Own models (coworking S4)
 
 Users bring their own models: personal `model_config` rows

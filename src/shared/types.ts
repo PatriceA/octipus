@@ -79,3 +79,57 @@ export interface GroupChannelSummary {
   createdAt: string;
   updatedAt: string;
 }
+
+// ── Coworking S5: funding, space budgets, My work, room modes ───────
+
+/** A space's budget as `GET/PUT /api/spaces/:id/budget` returns it (`SpendBudgetView` on the server). */
+export interface SpaceBudgetStatus {
+  id: string;
+  scopeKind: 'space' | 'space_member';
+  period: 'day' | 'month';
+  limitUsd: number;
+  warnRatio: number;
+  /** This period; the member cap shows the caller's own share. */
+  spentUsd: number;
+  percent: number;
+  state: 'ok' | 'warned' | 'paused';
+  resetsAt: string;
+}
+
+/** `PUT /api/spaces/:id/funding`. */
+export interface SpaceFundingSettingsView {
+  mode: 'own' | 'unattended' | 'sponsored';
+  sponsorUserId: string | null;
+  sponsorModels: string[];
+  warning?: string;
+}
+
+/** One task of "My work" (a `tasks` row, as the API sends it). */
+export interface MyWorkTask {
+  id: string;
+  title: string;
+  status: string;
+  priority: number;
+  dueAt: string | null;
+  workspaceId: string | null;
+}
+
+/** `GET /api/me/work`: open tasks assigned to me, grouped by space. */
+export interface MyWorkResponse {
+  groups: Array<{ workspaceId: string | null; name: string; kind: 'personal' | 'shared'; tasks: MyWorkTask[] }>;
+}
+
+export type RoomModeName = 'mention' | 'listen' | 'proactive';
+
+/** `GET/PUT /api/spaces/:id/rooms/:roomId/mode`. */
+export interface RoomModeView {
+  roomId: string;
+  mode: RoomModeName;
+  quietHoursStart: number | null;
+  quietHoursEnd: number | null;
+  timezone: string;
+  maxUnpromptedPerDay: number;
+  minMinutesBetween: number;
+  lastUnpromptedAt: string | null;
+  feedback: { up: number; down: number };
+}

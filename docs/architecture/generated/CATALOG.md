@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-476 mounted routes across 67 route files. The path is the full one, group prefix included — what a client actually calls.
+483 mounted routes across 68 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -229,6 +229,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | DELETE | `/api/me/models/:slug` | `src/api/routes/me-models.ts` |
 | PATCH | `/api/me/models/:slug` | `src/api/routes/me-models.ts` |
 | GET | `/api/me/orgs` | `src/api/routes/orgs.ts` |
+| GET | `/api/me/work` | `src/api/routes/me-work.ts` |
 | GET | `/api/me/workspaces` | `src/api/routes/orgs.ts` |
 | POST | `/api/me/workspaces` | `src/api/routes/orgs.ts` |
 | DELETE | `/api/me/workspaces/:id` | `src/api/routes/orgs.ts` |
@@ -407,9 +408,12 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/spaces/:id/activity` | `src/api/routes/spaces.ts` |
 | PUT | `/api/spaces/:id/agent-edit-mode` | `src/api/routes/spaces.ts` |
 | POST | `/api/spaces/:id/archive` | `src/api/routes/spaces.ts` |
+| GET | `/api/spaces/:id/budget` | `src/api/routes/spaces.ts` |
+| PUT | `/api/spaces/:id/budget` | `src/api/routes/spaces.ts` |
 | DELETE | `/api/spaces/:id/file-leases` | `src/api/routes/spaces.ts` |
 | GET | `/api/spaces/:id/file-leases` | `src/api/routes/spaces.ts` |
 | POST | `/api/spaces/:id/file-leases` | `src/api/routes/spaces.ts` |
+| PUT | `/api/spaces/:id/funding` | `src/api/routes/spaces.ts` |
 | GET | `/api/spaces/:id/invites` | `src/api/routes/spaces.ts` |
 | POST | `/api/spaces/:id/invites` | `src/api/routes/spaces.ts` |
 | DELETE | `/api/spaces/:id/invites/:inviteId` | `src/api/routes/spaces.ts` |
@@ -428,6 +432,9 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/spaces/:id/rooms/:roomId/members/:userId` | `src/api/routes/rooms.ts` |
 | GET | `/api/spaces/:id/rooms/:roomId/messages` | `src/api/routes/rooms.ts` |
 | POST | `/api/spaces/:id/rooms/:roomId/messages` | `src/api/routes/rooms.ts` |
+| PUT | `/api/spaces/:id/rooms/:roomId/messages/:messageId/feedback` | `src/api/routes/rooms.ts` |
+| GET | `/api/spaces/:id/rooms/:roomId/mode` | `src/api/routes/rooms.ts` |
+| PUT | `/api/spaces/:id/rooms/:roomId/mode` | `src/api/routes/rooms.ts` |
 | POST | `/api/spaces/:id/unarchive` | `src/api/routes/spaces.ts` |
 | GET | `/api/spend-budgets/me` | `src/api/routes/spend-budgets.ts` |
 | GET | `/api/swarm/nodes` | `src/api/routes/swarm.ts` |
@@ -511,14 +518,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 20 |
 | `api` | `config` | 20 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 110 |
-| `api` | `db` | 108 |
+| `api` | `core` | 114 |
+| `api` | `db` | 109 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 3 |
 | `api` | `models` | 34 |
 | `api` | `plugins` | 1 |
-| `api` | `security` | 110 |
+| `api` | `security` | 113 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 3 |
 | `api` | `skills` | 6 |
@@ -533,7 +540,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `channels` | `config` | 7 |
 | `channels` | `core` | 25 |
 | `channels` | `db` | 32 |
-| `channels` | `models` | 5 |
+| `channels` | `models` | 6 |
 | `channels` | `security` | 22 |
 | `channels` | `shared` | 1 |
 | `channels` | `utils` | 23 |
@@ -552,23 +559,23 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `connectors` | `shared` | 1 |
 | `connectors` | `utils` | 5 |
 | `core` | `capabilities` | 2 |
-| `core` | `channels` | 7 |
+| `core` | `channels` | 9 |
 | `core` | `config` | 44 |
 | `core` | `connectors` | 2 |
-| `core` | `db` | 280 |
+| `core` | `db` | 294 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 5 |
-| `core` | `models` | 103 |
-| `core` | `security` | 109 |
+| `core` | `models` | 112 |
+| `core` | `security` | 114 |
 | `core` | `services` | 2 |
 | `core` | `shared` | 15 |
 | `core` | `skills` | 10 |
 | `core` | `tools` | 16 |
-| `core` | `utils` | 170 |
+| `core` | `utils` | 173 |
 | `core` | `voice` | 1 |
 | `db` | `config` | 4 |
-| `db` | `core` | 15 |
+| `db` | `core` | 16 |
 | `db` | `models` | 1 |
 | `db` | `security` | 11 |
 | `db` | `services` | 1 |
@@ -605,7 +612,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `security` | `api` | 1 |
 | `security` | `config` | 12 |
 | `security` | `connectors` | 3 |
-| `security` | `core` | 9 |
+| `security` | `core` | 10 |
 | `security` | `db` | 68 |
 | `security` | `tools` | 1 |
 | `security` | `utils` | 23 |
@@ -654,7 +661,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tui-pi` | `core` | 3 |
 | `tui-pi` | `voice` | 2 |
 | `utils` | `core` | 3 |
-| `utils` | `models` | 2 |
+| `utils` | `models` | 3 |
 | `utils` | `security` | 1 |
 | `visual` | `models` | 1 |
 | `visual` | `utils` | 2 |
@@ -750,6 +757,7 @@ Every member of the `GatewayEventType` union in `src/core/gateway/protocol.ts`, 
 | `swarm.narration` | yes | `src/core/personas/narration-bridge.ts` | `*` |
 | `swarm.node_completed` | yes | `src/core/agent/root-runner.ts`, `src/core/agent/worker-spawner.ts`, `src/core/swarm/spawner.ts` | `*`, `swarm.node_completed` |
 | `swarm.node_spawned` | yes | `src/core/agent/root-runner.ts`, `src/core/agent/worker-spawner.ts`, `src/core/swarm/spawner.ts` | `*`, `swarm.node_spawned` |
+| `task.changed` | yes | — | `*` |
 | `team.completed` | yes | — | `*` |
 | `team.started` | yes | — | `*` |
 | `test.event` | yes | — | `*` |
@@ -774,6 +782,7 @@ The contract promises these and no code emits them. Each is either a type to ret
 - `room.read` — subscribed by `src/core/monitors/service.ts`
 - `room.removed` — subscribed by `src/core/monitors/service.ts`
 - `space.presence` — subscribed by `src/core/monitors/service.ts`
+- `task.changed` — subscribed by `src/core/monitors/service.ts`
 - `test.event` — subscribed by `src/core/monitors/service.ts`
 
 1 publish/subscribe site(s) use a non-literal event type and are counted here rather than dropped.

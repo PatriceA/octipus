@@ -17,7 +17,8 @@ import {
 } from '@/components/tasks/work-board';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
-import { useWorkspaceAccess, useWorkspaceId } from '@/lib/workspace-context';
+import { useGateway, useGatewayMessages, useGatewayStatus } from '@/lib/gateway-context';
+import { useWorkspace, useWorkspaceAccess, useWorkspaceId } from '@/lib/workspace-context';
 import { NEXT_BUCKET_ORDER, NEXT_BUCKET_TITLE, type NextBucket } from '../../../src/core/tasks/rank';
 import { isActiveStatus, TASK_STATUS_TITLE, type TaskStatus } from '../../../src/core/tasks/status';
 import { type Nested, nestTasks, toLookup, waitingOn, waitingReason } from '../../../src/core/tasks/structure';
@@ -183,6 +184,11 @@ function groupOpenTasks(tasks: Task[], by: GroupBy): { key: string; title: strin
 
 export default function TasksPage() {
   const workspaceId = useWorkspaceId();
+  const { activeWorkspace } = useWorkspace();
+  // A space's board is live (coworking §9.3): `task.changed` from the gateway.
+  const spaceId = activeWorkspace?.kind === 'shared' ? activeWorkspace.id : null;
+  const gateway = useGateway();
+  const gatewayStatus = useGatewayStatus();
   // Commenters and viewers in a space (and everyone in an archived one)
   // see the board without create, edit or drag; commenters still comment.
   const { canWrite, canComment } = useWorkspaceAccess();
@@ -273,20 +279,30 @@ export default function TasksPage() {
     fetchTasks();
   }, [fetchTasks]);
 
-  // Live-ish: agents check out, comment and finish tasks on their own, so the
-  // list re-reads every 30s while the tab is visible, and at once when it
-  // comes back into view.
+  // A space's board refetches on `task.changed` (every member's and agent's
+  // writes), joined with `space.subscribe` on every (re)connect; a personal
+  // board has no such event and re-reads every 30s while the tab is visible.
+  // Both re-read at once when the tab comes back into view.
+  useEffect(() => {
+    if (spaceId && gatewayStatus === 'connected') gateway.send({ type: 'space.subscribe', spaceId });
+  }, [gateway, spaceId, gatewayStatus]);
+  useGatewayMessages((message) => {
+    if (!spaceId || message.type !== 'event' || message.event.type !== 'task.changed') return;
+    const payload = message.event.payload as { workspaceId?: string };
+    if (payload.workspaceId === spaceId) fetchTasks();
+  });
   useEffect(() => {
     const tick = () => {
       if (document.visibilityState === 'visible') fetchTasks();
     };
-    const timer = setInterval(tick, REFRESH_MS);
+    const live = !!spaceId && gatewayStatus === 'connected';
+    const timer = live ? null : setInterval(tick, REFRESH_MS);
     document.addEventListener('visibilitychange', tick);
     return () => {
-      clearInterval(timer);
+      if (timer) clearInterval(timer);
       document.removeEventListener('visibilitychange', tick);
     };
-  }, [fetchTasks]);
+  }, [fetchTasks, spaceId, gatewayStatus]);
 
   useEffect(() => {
     let cancelled = false;
