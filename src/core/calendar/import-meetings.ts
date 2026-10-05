@@ -94,6 +94,8 @@ export async function importCalendarMeetings(input: {
         body: eventBody(event),
         source: event.provider,
         externalId: event.id,
+        // Based on the text just read: a change made since merges in.
+        baseSha256: existing?.bodySha256,
         createdByAgentId: input.createdByAgentId ?? null,
       });
       imported.push({ ...result, title: event.title, at: event.start, provider: event.provider });

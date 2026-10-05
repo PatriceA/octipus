@@ -69,6 +69,27 @@ labels reflect blast radius, not contract guarantees.
 
 ### Changed
 
+- **Live space notes: review fixes** (coworking S3). Nothing typed is lost
+  on a reconnect: a closed note stays in memory for a minute (a member whose
+  connection blipped keeps the epoch and Yjs merges what they typed
+  offline), and after a rebuild (a restart, a reload) the editor merges its
+  unsent text back through the hub (`POST /api/notes/:id/merge`, three-way
+  from the last server text it synced) — a clash keeps the member's text
+  with a notice and a "Copy my version" button. Shutdown saves every open
+  note. A body write to an existing space note must name its base
+  (`baseSha256`; `write_note`'s `base_sha256`): without one it is refused
+  (400 `base_required`) instead of reverting what changed since its read;
+  meeting re-imports merge from the body they last rendered. The hub owns
+  awareness (a connection holds at most two client ids, never another's,
+  and its states name its member), refuses updates that write outside the
+  note's text (other root types, embeds, formats, `\r`) and caps the
+  encoded document, builds notes with `\n` line endings (CRLF bodies are
+  normalized and saved) and normalizes every writer's text. The live
+  reindex keeps explicit and meeting tags; capture appends to an open daily
+  note instead of merging; an archived note opens read-only; a membership
+  change during a join takes effect on the next frame; a failed save keeps
+  its authors; read bases outlive persist-only ones. See docs/SPACES.md.
+
 - **Model identity is the row name.** Agent contexts carry `modelName`
   beside the provider `model` id, and providers re-read rows by
   `modelConfigName`; a modelId lookup returns install rows first, then the

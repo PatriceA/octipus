@@ -20,6 +20,16 @@ import { diff3Merge, diffPatch } from 'node-diff3';
 
 export type MergeResult = { ok: true; text: string } | { ok: false };
 
+/**
+ * A space note's line endings: `\n` only. The editor (CodeMirror) splits on
+ * `\r\n?|\n` and joins with `\n`, mapping offsets one to one onto the live
+ * `Y.Text`, so a `\r` left in the text shifts every edit after it; and a
+ * CRLF text merged with an LF writer conflicts on every line.
+ */
+export function normalizeNewlines(text: string): string {
+  return text.includes('\r') ? text.replace(/\r\n?/g, '\n') : text;
+}
+
 /** A conflicting line region is merged word by word up to this many tokens; above it the write is stale. */
 const MAX_TOKEN_REGION = 4000;
 
