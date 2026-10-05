@@ -12,6 +12,7 @@ import { isAuthenticated } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
 import { readAgentCompletionReason } from '@/shared/agent-completion';
 import { getMembership, isSharedWorkspace } from '@/core/spaces/service';
+import { canActInSession } from '@/core/rooms/access';
 
 type LiveContext = { userId?: string | null; workspaceId?: string | null };
 
@@ -283,7 +284,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       // it (a viewer gets 403, a removed member 404, an archived space 409),
       // through the one scope resolver every spawner uses (§5.6).
       const session = await sessionRepository.findById(sessionId);
-      if (!session || session.userId !== user.id) {
+      if (!(await canActInSession(session, user.id, 'chat'))) {
         set.status = 404;
         return { error: 'Session not found' };
       }

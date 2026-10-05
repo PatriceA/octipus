@@ -542,6 +542,20 @@ export const spacesConfigSchema = z.object({
   inviteMaxTtlHours: z.number().int().min(1).max(8760).default(720),
   /** Days a space must have been archived before its owner may purge it. */
   purgeAfterArchiveDays: z.number().int().min(0).max(3650).default(7),
+  /** Most space-memory entries injected into one turn of a space session, newest first (§6.5). */
+  memoryMaxItems: z.number().int().min(1).max(500).default(50),
+});
+
+/**
+ * Rooms — the shared chats of a space (docs/plans/coworking-spec.md §6).
+ */
+export const roomsConfigSchema = z.object({
+  /** Requests one member may have waiting in a room's queue at once. */
+  maxQueuedPerMember: z.number().int().min(1).max(50).default(3),
+  /** Minutes a room turn waits on its requester's approval before it gives up and stops. */
+  approvalTimeoutMinutes: z.number().int().min(1).max(1440).default(30),
+  /** Characters of attributed transcript after the checkpoint before a room is compacted. */
+  transcriptWindowChars: z.number().int().min(1000).max(200_000).default(6000),
 });
 
 /**
@@ -685,6 +699,7 @@ export const configSchema = z.object({
   sessions: sessionsConfigSchema.prefault({}),
   groupChannels: groupChannelsConfigSchema.prefault({}),
   spaces: spacesConfigSchema.prefault({}),
+  rooms: roomsConfigSchema.prefault({}),
   gateway: gatewayConfigSchema.prefault({}),
 });
 
@@ -692,6 +707,7 @@ export type Config = z.infer<typeof configSchema>;
 export type HeartbeatConfig = z.infer<typeof heartbeatConfigSchema>;
 export type SessionsConfig = z.infer<typeof sessionsConfigSchema>;
 export type SpacesConfig = z.infer<typeof spacesConfigSchema>;
+export type RoomsConfig = z.infer<typeof roomsConfigSchema>;
 export type GatewayConfig = z.infer<typeof gatewayConfigSchema>;
 export type StorageMode = z.infer<typeof storageModeSchema>;
 export type DatabaseConfig = z.infer<typeof databaseConfigSchema>;

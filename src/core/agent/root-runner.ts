@@ -141,6 +141,12 @@ export interface RootRunExtras {
    * `complete_taken_task` for them (docs/plans/group-chat-bot.md §5).
    */
   takenTasks?: ReadonlyArray<{ id: string; title: string }>;
+  /**
+   * A room turn (coworking §6.4): the member's post it answers. The root
+   * agent's history leaves that post out (it is the request) and stores no
+   * user row of its own.
+   */
+  room?: { postedMessageId: string; title: string };
 }
 
 export async function runRootAgent(
@@ -277,6 +283,12 @@ export async function runRootAgent(
     takenTasks: extras.takenTasks,
   });
   const metaTools = space ? withoutPersonalOnlyTools(allMetaTools) : allMetaTools;
+  // Space memory (§6.5): the agent may record a fact for the space.
+  if (space) {
+    const { createRememberForSpaceTool } = await import('@/core/spaces/memory-tool');
+    metaTools.push(createRememberForSpaceTool(service));
+    rootAllowedToolIds.add('remember_for_space');
+  }
 
   // The root's own tools. `getToolsForRole` is the same gate every worker goes
   // through (capability check, MCP lazy handlers, read-only filtering).
@@ -600,7 +612,7 @@ export async function runRootAgent(
   if (space) {
     const { getSpace } = await import('@/core/spaces/service');
     const { name } = await getSpace({ userId }, space.workspaceId);
-    staticParts.push(spaceSessionNotice(name, space.role, can(space.role, 'run_agent_write')));
+    staticParts.push(spaceSessionNotice(name, space.role, can(space.role, 'run_agent_write'), extras.room ? { title: extras.room.title } : undefined));
   }
 
   // Append the volatile per-turn context (date, summary, history) after the
@@ -675,6 +687,7 @@ export async function runRootAgent(
       sessionGeneration: sessionGeneration(sessionCtx),
       inputGuardFlags: guardFlags,
       ...(isDevMode ? { projectPath: sessionCtx!.projectPath! } : {}),
+      ...(extras.room ? { room: { postedMessageId: extras.room.postedMessageId } } : {}),
     },
   });
 

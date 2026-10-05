@@ -38,6 +38,7 @@ import { channelLogger } from '@/utils/logger';
 import { answerHow } from './group-handler';
 import { getUMI } from './interface';
 import { EXTERNAL_CHANNELS, loadNotifyScope, resolveTarget, sendResolved } from './ownership';
+import { canActInSession } from '@/core/rooms/access';
 
 interface ApprovalEventData {
   requestId?: string;
@@ -162,7 +163,7 @@ export async function announceApproval(event: TurnEvent): Promise<void> {
   if (event.type !== 'approval_required' || !requestId || !userId || !isUuid(event.sessionId)) return;
 
   const session = await sessionRepository.findById(event.sessionId);
-  if (!session || session.userId !== userId || !EXTERNAL_CHANNELS.has(session.channelType) || !session.channelId) return;
+  if (!session || !(await canActInSession(session, userId, 'chat')) || !EXTERNAL_CHANNELS.has(session.channelType) || !session.channelId) return;
   const channelType = session.channelType as ChannelType;
   const channelId = session.channelId;
   const agent = await agentService();

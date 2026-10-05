@@ -2,8 +2,11 @@ import { decodeChatAttachment, storeChatUploads } from '@/core/chat-uploads';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { resolveSession, turnWorkspaceId } from '@/core/agent/session-resolver';
 import { isSessionControlMessage } from '@/core/session-controls';
+import { canActInSession } from '@/core/rooms/access';
 import { coreLogger } from '@/utils/logger';
+import { presenceAfterClose } from '@/core/rooms/presence';
 import { getCommandRegistry } from './commands';
+import { handleRoomFrame, isRoomFrame } from './room-handlers';
 import type { GatewayHub } from './hub';
 import type { ClientMessage, ConnectionContext, PendingApproval, PendingPermission, PermissionPendingMessage } from './protocol';
 
@@ -36,7 +39,9 @@ export async function sessionAccessError(sessionId: string, context: Pick<Connec
   if (!UUID_RE.test(sessionId)) return null; // channel-style ids resolve per user inside resolveSession
   const { sessionRepository } = await import('@/db/repositories/session-repository');
   const session = await sessionRepository.findById(sessionId);
-  return session && session.userId !== context.userId ? 'Session not found' : null;
+  // A room is never a personal chat, its creator's included (§6.2): room
+  // frames are `room.*`.
+  return session && !(await canActInSession(session, context.userId, 'chat')) ? 'Session not found' : null;
 }
 
 /**
@@ -47,7 +52,7 @@ export async function sessionAccessError(sessionId: string, context: Pick<Connec
 async function ownsExistingSession(sessionId: string, context: Pick<ConnectionContext, 'userId'>): Promise<boolean> {
   const { sessionRepository } = await import('@/db/repositories/session-repository');
   const session = await sessionRepository.findById(sessionId);
-  return session !== null && session.userId === context.userId;
+  return canActInSession(session, context.userId, 'chat');
 }
 
 /**
@@ -89,6 +94,9 @@ export async function trySteerRunningRootAgent(sessionId: string, content: strin
     .filter((a) => a.getStatus() === 'running' && a.getContext().root === true)
     .find((a): a is typeof a & SteerableWorker => typeof (a as Partial<SteerableWorker>).steer === 'function');
   if (!target) return false;
+  // A room turn is never steered: a member's post is stored once by the
+  // room, and a running room turn belongs to its requester alone (§6.3).
+  if (target.getContext().metadata?.room) return false;
 
   // Guard the injected content exactly as handleMessage guards a normal turn —
   // a steer must not be a hole around the input guard. On block, return false so
@@ -128,6 +136,8 @@ export function wireMessageHandler(hub: GatewayHub): void {
   // goes, so a refresh does not leave the session in the planning gate —
   // unless another connection of the user still holds it in voice mode.
   hub.setConnectionClosedHandler((context) => {
+    // Rooms and spaces it was in show it gone (coworking §6.6).
+    presenceAfterClose(context);
     const sessionId = context.voiceSessionId;
     if (!sessionId) return;
     context.voiceSessionId = undefined;
@@ -176,6 +186,11 @@ export function wireMessageHandler(hub: GatewayHub): void {
         break;
 
       default:
+        // Spaces and rooms (coworking §6.6): access-checked per frame.
+        if (isRoomFrame(message)) {
+          await handleRoomFrame(hub, connectionId, context, message);
+          break;
+        }
         // ping, subscribe, unsubscribe handled by hub itself
         break;
     }
@@ -303,7 +318,7 @@ async function handleChatSend(
       if (message.attachments.length + (message.fileRefs?.length ?? 0) > 10) throw new Error('Attach at most 10 files per message.');
       const { sessionRepository } = await import('@/db/repositories/session-repository');
       const session = await sessionRepository.findById(message.sessionId);
-      if (!session || session.userId !== userId) throw new Error('Session not found');
+      if (!session || !(await canActInSession(session, userId, 'chat'))) throw new Error('Session not found');
       const uploaded = await storeChatUploads(WorkspaceFS.forSession(session), message.attachments.map(decodeChatAttachment));
       message.fileRefs = [...(message.fileRefs ?? []), ...uploaded.map(file => ({ path: file.path }))];
       message.content += '\n\n' + uploaded.map(file => `Attached file: ${file.path}`).join('\n');

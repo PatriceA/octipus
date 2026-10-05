@@ -1,5 +1,6 @@
 import { index, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { sessions } from './sessions';
+import { users } from './users';
 
 export const messageRoleEnum = pgEnum('message_role', ['system', 'user', 'assistant', 'tool']);
 
@@ -12,6 +13,12 @@ export const messages = pgTable('messages', {
   toolCallId: text('tool_call_id'),
   toolName: text('tool_name'),
   agentId: text('agent_id'),
+  /**
+   * The member who wrote a room post (coworking §6.3). Required on every
+   * `user` row of a room (the repositories refuse one without it); NULL in
+   * personal chats, whose user rows are the session owner's.
+   */
+  authorUserId: uuid('author_user_id').references(() => users.id, { onDelete: 'set null' }),
   metadata: jsonb('metadata').$type<MessageMetadata>().default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
@@ -46,6 +53,14 @@ export interface MessageMetadata {
    * so the schema does not import core. The web chat renders it as a card.
    */
   limit?: { code: 'SPEND_BUDGET_EXCEEDED' | 'QUOTA_EXCEEDED'; reason: object };
+  /** A room post (coworking §6.3): the client's id for the optimistic copy, echoed on `room.message`. */
+  clientId?: string;
+  /** A room post asked Octipus (the composer toggle, or `@octipus`). */
+  addressed?: boolean;
+  /** A room answer: the post it answers. */
+  replyTo?: string;
+  /** A room answer: the member it answers (the turn's requester). */
+  requesterId?: string;
 }
 
 export interface AttachmentData {

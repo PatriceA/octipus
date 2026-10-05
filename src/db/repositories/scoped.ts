@@ -41,6 +41,7 @@ import { ACTIVE_TASK_STATUSES, isActiveStatus, isTaskStatus } from '@/core/tasks
 import { toLookup, type WaitingOn, waitingOn } from '@/core/tasks/structure';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import { getConfig } from '@/config';
+import { messageEvents } from './message-events';
 import { sessionsRemoved } from './session-lifecycle';
 import { getDb } from '../postgres';
 import { type AgentRecord, agents, type NewAgentRecord } from '../schema/agents';
@@ -225,6 +226,24 @@ export function personalScope(principal: Principal): RepoScope {
 // Sessions
 // ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Personal session paths see chats only (coworking §6.2, D7): a room is a
+ * session of its creator (`user_id`), and still invisible to every personal
+ * path — the creator's included. Rooms are read through the rooms service,
+ * after `roomAccess`.
+ */
+export const personalChat: SQL = sql`${sessions.kind} = 'chat'`;
+
+/**
+ * A personal create path never makes a room: `kind: 'room'` and the
+ * `room` channel type are the rooms service's alone.
+ */
+export function assertNotRoomCreate(data: { kind?: string | null; channelType?: string | null; roomVisibility?: string | null }): void {
+  if (data.kind === 'room' || data.channelType === 'room' || data.roomVisibility != null) {
+    throw new Error('Rooms are created in a space (POST /api/spaces/:id/rooms), not as a chat');
+  }
+}
+
 export class ScopedSessionRepo {
   private readonly scope: RepoScope;
 
@@ -248,7 +267,7 @@ export class ScopedSessionRepo {
     const row = await this.db
       .select()
       .from(sessions)
-      .where(and(eq(sessions.id, id), ...this.scope.own(sessions, { byId: true })))
+      .where(and(eq(sessions.id, id), ...this.scope.own(sessions, { byId: true }), personalChat))
       .limit(1);
     return row[0] ?? null;
   }
@@ -258,7 +277,7 @@ export class ScopedSessionRepo {
     return this.db
       .select()
       .from(sessions)
-      .where(and(...this.scope.own(sessions)))
+      .where(and(...this.scope.own(sessions), personalChat))
       .orderBy(desc(sessions.updatedAt))
       .limit(limit);
   }
@@ -272,7 +291,7 @@ export class ScopedSessionRepo {
     const row = await this.db
       .select({ count: sql<number>`count(*)::int` })
       .from(sessions)
-      .where(and(...this.scope.own(sessions)));
+      .where(and(...this.scope.own(sessions), personalChat));
     return row[0]?.count ?? 0;
   }
 
@@ -286,7 +305,7 @@ export class ScopedSessionRepo {
     return this.db
       .select()
       .from(sessions)
-      .where(notInSharedWorkspace(sessions.workspaceId))
+      .where(and(notInSharedWorkspace(sessions.workspaceId), personalChat))
       .orderBy(desc(sessions.updatedAt))
       .limit(limit);
   }
@@ -301,6 +320,8 @@ export class ScopedSessionRepo {
    * the space must not be archived. A personal create never lands in a space.
    */
   async create(data: Omit<NewSession, 'userId'>): Promise<Session> {
+    // Rooms are created by the rooms service only (§6.1).
+    assertNotRoomCreate(data);
     this.scope.can('run_agent');
     const stamp = this.scope.stamp();
     const workspaceId = await this.scope.writeWorkspace(data.workspaceId);
@@ -318,13 +339,16 @@ export class ScopedSessionRepo {
     this.scope.assertOpen();
     // Strip user_id (re-owning a row is never legitimate) and workspace_id
     // (moving a chat into or out of a space is not an edit).
-    const { userId: _drop, workspaceId: _ws, ...safe } = patch;
+    // ... and `kind` / `room_visibility` (a chat never becomes a room).
+    const { userId: _drop, workspaceId: _ws, kind: _kind, roomVisibility: _vis, ...safe } = patch;
     void _drop;
     void _ws;
+    void _kind;
+    void _vis;
     const result = await this.db
       .update(sessions)
       .set({ ...safe, updatedAt: new Date() })
-      .where(and(eq(sessions.id, id), ...this.scope.own(sessions, { byId: true })))
+      .where(and(eq(sessions.id, id), ...this.scope.own(sessions, { byId: true }), personalChat))
       .returning();
     // Archived: its live state (the gateway replay buffer) goes.
     if (result[0] && safe.status === 'completed') sessionsRemoved([id]);
@@ -337,7 +361,7 @@ export class ScopedSessionRepo {
     this.scope.assertOpen();
     const result = await this.db
       .delete(sessions)
-      .where(and(eq(sessions.id, id), ...this.scope.own(sessions, { byId: true })))
+      .where(and(eq(sessions.id, id), ...this.scope.own(sessions, { byId: true }), personalChat))
       .returning();
     sessionsRemoved(result.map((row) => row.id));
     return result.length > 0;
@@ -367,9 +391,9 @@ export class ScopedMessageRepo {
    */
   private sessionFilter(): SQL[] {
     if (this.scope.kind === 'space') {
-      return [eq(sessions.workspaceId, this.scope.spaceId as string), eq(sessions.userId, this.principal.userId)];
+      return [eq(sessions.workspaceId, this.scope.spaceId as string), eq(sessions.userId, this.principal.userId), personalChat];
     }
-    const filters: SQL[] = [notInSharedWorkspace(sessions.workspaceId)];
+    const filters: SQL[] = [notInSharedWorkspace(sessions.workspaceId), personalChat];
     if (!isAdmin(this.principal)) filters.push(eq(sessions.userId, this.principal.userId));
     return filters;
   }
@@ -450,6 +474,7 @@ export class ScopedMessageRepo {
       .limit(1);
     if (owns.length === 0) return null;
     const result = await this.db.insert(messages).values(data).returning();
+    messageEvents.announce(result);
     return result[0];
   }
 }

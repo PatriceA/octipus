@@ -47,9 +47,11 @@ import { buildChildEnv } from './cli-child-env';
 import { getConfig } from '@/config';
 import { isRootAgent } from './types';
 import type { AgentContext, AgentMessage } from './types';
-import { readSessionHistory, toContextMessage, withSessionConversation } from './session-history';
+import { readSessionHistory, roomRequestOf, toContextMessage, withSessionConversation } from './session-history';
+import { isRoomSession } from '@/db/repositories/session-kind';
 import { VOLATILE_MARKER } from '@/models/providers/prompt-cache';
 import { isLongTailHandler, TOOL_DISCOVERY_TOOL_ID } from './agent/tool-split';
+import { canActInSession } from '@/core/rooms/access';
 
 /**
  * Whether this session's cwd is a directory someone ELSE owns — a dev-mode
@@ -360,8 +362,10 @@ When a task matches one of these skills, load it with get_skill before starting 
 
   async addUserMessage(content: string): Promise<void> {
     this.messages.push({ role: 'user', content, timestamp: new Date() });
-    // Only persist for the root agent — sub-workers use handleMessage for persistence
-    if (isRootAgent(this.context)) {
+    // Only persist for the root agent — sub-workers use handleMessage for
+    // persistence — and never in a room, where the member's post is the
+    // request's one user row (§6.3).
+    if (isRootAgent(this.context) && !(await isRoomSession(this.context.sessionId))) {
       const row = await messageRepository.create({
         sessionId: this.context.sessionId,
         role: 'user',
@@ -375,7 +379,7 @@ When a task matches one of these skills, load it with get_skill before starting 
 
   private async fetchHistory(): Promise<AgentMessage[]> {
     if (!isRootAgent(this.context)) return [];
-    const history = await readSessionHistory(this.context.sessionId);
+    const history = await readSessionHistory(this.context.sessionId, { room: roomRequestOf(this.context) });
     this.generation = history.generation;
     this.clearedAt = history.session?.context?.clearedAt;
     return history.messages;
@@ -427,7 +431,7 @@ When a task matches one of these skills, load it with get_skill before starting 
 
       const session = await sessionRepository.findById(this.context.sessionId);
       if (this.aborted) throw new Error('Agent was aborted before bridge startup');
-      if (!session || session.userId !== this.context.userId) throw new Error('CLI session ownership mismatch');
+      if (!session || !(await canActInSession(session, this.context.userId, 'requester'))) throw new Error('CLI session ownership mismatch');
       // A child never loads root history, so it takes the generation once per
       // run, here: its cold retries and merge turns reuse it, and a /clear
       // mid-run then rejects its save like any stale root write.
@@ -851,7 +855,10 @@ When a task matches one of these skills, load it with get_skill before starting 
     // that one starts cold rather than share a vendor conversation.
     const root = isRootAgent(this.context);
     let storeKey: string | undefined;
-    if (canResume(adapterKey)) {
+    // Never in a room (§6.4): a vendor session would carry one requester's
+    // conversation into the next requester's turn; each room turn starts
+    // cold from the fenced transcript.
+    if (canResume(adapterKey) && !(await isRoomSession(this.context.sessionId))) {
       const childResumeKey = root ? undefined : this.context.metadata?.resumeKey;
       if (root) storeKey = adapterKey;
       else if (typeof childResumeKey === 'string' && childResumeKey) {

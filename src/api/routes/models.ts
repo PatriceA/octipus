@@ -33,6 +33,7 @@ import {
   searchOpenRouterModels,
   testModelConnection,
 } from '@/services/provider-service';
+import { canActInSession } from '@/core/rooms/access';
 
 export const modelRoutes = new Elysia({ prefix: '/models' })
   .use(apiContext)
@@ -512,7 +513,7 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
     if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
     const { sessionRepository } = await import('@/db/repositories/session-repository');
     const session = await sessionRepository.findById(params.sessionId);
-    if (!session || session.userId !== user.id) { set.status = 404; return { error: 'Session not found' }; }
+    if (!(await canActInSession(session, user.id, 'settings'))) { set.status = 404; return { error: 'Session not found' }; }
     const { getCostTracker } = await import('@/models/cost-tracker');
     return { stats: await getCostTracker().getSessionStats(params.sessionId) };
   }, {

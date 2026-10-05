@@ -262,6 +262,9 @@ export async function createSpace(actor: SpaceActor, input: { name: string }): P
       }))
       .returning();
     await tx.insert(workspaceMembers).values({ workspaceId: created.id, userId: actor.userId, role: 'owner' });
+    // Every space starts with an open room, "General" (§5.3, S2).
+    const { createRoomInTx, DEFAULT_ROOM_TITLE } = await import('@/core/rooms/service');
+    await createRoomInTx(tx, { workspaceId: created.id, createdBy: actor.userId, title: DEFAULT_ROOM_TITLE, visibility: 'space' });
     await writeSpaceAudit(tx, { ...auditActor(actor), action: 'space_created', workspaceId: created.id, details: { name } });
     return created;
   });

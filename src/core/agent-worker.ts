@@ -9,7 +9,8 @@ import type { ChatCompletionTool } from 'openai/resources/chat/completions';
 import { homedir } from 'os';
 import { join as joinPath } from 'path';
 import { recordAgentCompletion } from '@/core/agent-task-recorder';
-import { capNativeSnapshot, readSessionHistory, toContextMessage, withSessionConversation } from './session-history';
+import { capNativeSnapshot, readSessionHistory, roomRequestOf, toContextMessage, withSessionConversation } from './session-history';
+import { isRoomSession } from '@/db/repositories/session-kind';
 import { VOLATILE_MARKER } from '@/models/providers/prompt-cache';
 import { agentRepository } from '@/db/repositories/agent-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
@@ -551,11 +552,14 @@ export class AgentWorker extends BaseAgentWorker {
       return;
     }
 
-    const history = await readSessionHistory(this.context.sessionId);
+    const history = await readSessionHistory(this.context.sessionId, { room: roomRequestOf(this.context) });
     this.messages = history.messages;
     this.cacheGeneration = history.generation;
     this.checkpointId = history.checkpoint?.entryId;
-    const saved = history.session?.context?.nativeConversation;
+    // A room's history is the fenced, attributed transcript every turn: no
+    // native conversation snapshot is read (or written, see run()) there (§6.4).
+    this.inRoom = history.session?.kind === 'room';
+    const saved = this.inRoom ? undefined : history.session?.context?.nativeConversation;
     if (saved && saved.generation === history.generation && saved.checkpointId === this.checkpointId) {
       const unseen = await messageRepository.findContextMessages(this.context.sessionId, history.session?.context?.clearedAt, saved.acknowledged, history.generation);
       this.messages = [...saved.messages.map(m => ({ ...m, providerRaw: saved.model === this.context.model ? m.providerRaw : undefined, timestamp: new Date(m.timestamp) })), ...unseen.map(toContextMessage)];
@@ -565,6 +569,8 @@ export class AgentWorker extends BaseAgentWorker {
   }
 
   private pendingPromptContext = '';
+  /** The session is a room: its user row is the member's post, stored once by the room (§6.3). */
+  private inRoom = false;
   private cacheGeneration = '';
   private checkpointId?: string;
   private userCursor?: { id: string; createdAt: string };
@@ -593,8 +599,9 @@ export class AgentWorker extends BaseAgentWorker {
     const message: AgentMessage = { role: 'user', content: [promptContext, content].filter(Boolean).join('\n\n'), timestamp: new Date() };
     this.messages.push(message);
 
-    // Only persist for the root agent
-    if (isRootAgent(this.context)) {
+    // Only persist for the root agent — and never in a room, where the
+    // member's post is the request's one user row (§6.3).
+    if (isRootAgent(this.context) && !this.inRoom && !(await isRoomSession(this.context.sessionId))) {
       const row = await messageRepository.create({
         sessionId: this.context.sessionId,
         role: 'user',
@@ -761,7 +768,7 @@ export class AgentWorker extends BaseAgentWorker {
         throw new CascadedCancellationError({ agentId: this.context.id, reason: String(this.abortController.signal.reason) });
       }
       this.context.status = 'completed';
-      if (isRootAgent(this.context) && this.userCursor) {
+      if (isRootAgent(this.context) && this.userCursor && !this.inRoom) {
         const last = this.messages.at(-1);
         if (last?.role === 'assistant' && !last.toolCalls?.length) last.content = finalResult;
         else this.messages.push({ role: 'assistant', content: finalResult, timestamp: new Date() });

@@ -1175,6 +1175,43 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
     envVar: 'SPACES_PURGE_AFTER_ARCHIVE_DAYS',
   },
+  {
+    key: 'spaces.memoryMaxItems',
+    category: 'spaces',
+    valueType: 'number',
+    defaultValue: 50,
+    description: 'Most space-memory entries given to the agent in one turn of a space session (newest first).',
+    isSecret: false,
+    envVar: 'SPACES_MEMORY_MAX_ITEMS',
+  },
+  // ── Rooms ──
+  {
+    key: 'rooms.maxQueuedPerMember',
+    category: 'rooms',
+    valueType: 'number',
+    defaultValue: 3,
+    description: 'Requests to Octipus one member may have waiting in a room at once.',
+    isSecret: false,
+    envVar: 'ROOMS_MAX_QUEUED_PER_MEMBER',
+  },
+  {
+    key: 'rooms.approvalTimeoutMinutes',
+    category: 'rooms',
+    valueType: 'number',
+    defaultValue: 30,
+    description: 'Minutes a room turn waits for its requester to answer an approval before it gives up and frees the room.',
+    isSecret: false,
+    envVar: 'ROOMS_APPROVAL_TIMEOUT_MINUTES',
+  },
+  {
+    key: 'rooms.transcriptWindowChars',
+    category: 'rooms',
+    valueType: 'number',
+    defaultValue: 6000,
+    description: 'Characters of room transcript kept verbatim after the last summary; past this the room is compacted.',
+    isSecret: false,
+    envVar: 'ROOMS_TRANSCRIPT_WINDOW_CHARS',
+  },
   // ── Gateway ──
   {
     key: 'gateway.maxConnectionsPerUser',

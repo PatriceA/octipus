@@ -273,7 +273,7 @@ export async function ensureSharedAudienceKnown(sessionId: string | undefined): 
   const { isUuid } = await import('@/db/repositories/scoped');
   if (!isUuid(sessionId)) { rememberLookup(sessionId); return; }
   const { sessionRepository } = await import('@/db/repositories/session-repository');
-  let session: { groupChannelId?: string | null } | null;
+  let session: { groupChannelId?: string | null; kind?: string | null } | null;
   try {
     session = await sessionRepository.findById(sessionId);
   } catch {
@@ -287,7 +287,8 @@ export async function ensureSharedAudienceKnown(sessionId: string | undefined): 
   }
   uncertain.delete(sessionId);
   rememberLookup(sessionId);
-  if (session?.groupChannelId) markSharedAudience(sessionId);
+  // A group thread, or a room (coworking §6.4): replies everyone reads.
+  if (session?.groupChannelId || session?.kind === 'room') markSharedAudience(sessionId);
 }
 
 /** Why a private read in a shared-audience session needs a human, or undefined. Pure. */

@@ -84,13 +84,13 @@ export const swarmRoutes = new Elysia({ prefix: '/swarm' })
   // to rebuild the tree before subscribing to new events.
   .get(
     '/nodes',
-    async ({ user, principal, query }) => {
+    async ({ user, principal, query, set }) => {
       if (!user || !principal) return { error: 'Not authenticated' };
       const rootSessionId = query.rootSessionId;
       if (!rootSessionId) return { error: 'rootSessionId is required' };
 
       const allowed = await canAccessRootSession(principal, rootSessionId);
-      if (!allowed) return { error: 'Not authorized' };
+      if (!allowed) { set.status = 404; return { error: 'Not authorized' }; }
 
       try {
         const nodes = await swarmNodeRepository.findByRootSession(rootSessionId);
@@ -109,7 +109,7 @@ export const swarmRoutes = new Elysia({ prefix: '/swarm' })
   // ── Single-node detail (full result jsonb) ──────────────────────────
   .get(
     '/nodes/:id',
-    async ({ user, principal, params }) => {
+    async ({ user, principal, params, set }) => {
       if (!user || !principal) return { error: 'Not authenticated' };
 
       try {
@@ -117,7 +117,7 @@ export const swarmRoutes = new Elysia({ prefix: '/swarm' })
         if (!node) return { error: 'Swarm node not found' };
 
         const allowed = await canAccessRootSession(principal, node.rootSessionId);
-        if (!allowed) return { error: 'Not authorized' };
+        if (!allowed) { set.status = 404; return { error: 'Not authorized' }; }
 
         return {
           node: {
@@ -145,7 +145,7 @@ export const swarmRoutes = new Elysia({ prefix: '/swarm' })
   // flipped to `cancelled` by the stop path).
   .post(
     '/nodes/:id/cancel',
-    async ({ user, principal, params }) => {
+    async ({ user, principal, params, set }) => {
       if (!user || !principal) return { error: 'Not authenticated' };
 
       try {
@@ -153,7 +153,7 @@ export const swarmRoutes = new Elysia({ prefix: '/swarm' })
         if (!node) return { error: 'Swarm node not found' };
 
         const allowed = await canAccessRootSession(principal, node.rootSessionId);
-        if (!allowed) return { error: 'Not authorized' };
+        if (!allowed) { set.status = 404; return { error: 'Not authorized' }; }
 
         const agentManager = getAgentManager();
 

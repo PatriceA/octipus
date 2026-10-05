@@ -60,7 +60,8 @@ describe('SPACE_ROUTES classification', () => {
 
   test('the spec’s space routes are listed', () => {
     for (const path of ['/api/notes', '/api/tasks/x/comments', '/api/documents/upload', '/api/artifacts/x', '/a/slug', '/__artifacts__/a/slug',
-      '/api/knowledge/search', '/api/sessions/x/messages', '/api/spaces/x/members', '/api/notifications']) {
+      '/api/knowledge/search', '/api/sessions/x/messages', '/api/spaces/x/members', '/api/notifications',
+      '/api/spaces/x/rooms', '/api/spaces/x/rooms/r/messages', '/api/spaces/x/rooms/r/members/u', '/api/spaces/x/memory/e']) {
       expect(isSpaceRoute(path), path).toBe(true);
     }
     for (const path of ['/api/chat/approve', '/api/models', '/api/search', '/api/settings', '/api/notesx', '/api/memory']) {
@@ -128,6 +129,12 @@ const SPACE_ACTING = [
   'POST /api/spaces/:id/unarchive', 'DELETE /api/spaces/:id', 'GET /api/spaces/:id/members', 'PATCH /api/spaces/:id/members/:userId',
   'DELETE /api/spaces/:id/members/:userId', 'GET /api/spaces/:id/invites', 'POST /api/spaces/:id/invites',
   'DELETE /api/spaces/:id/invites/:inviteId', 'GET /api/spaces/:id/activity',
+  // Rooms and space memory (S2): every handler checks `roomAccess` / the membership itself.
+  'GET /api/spaces/:id/rooms', 'POST /api/spaces/:id/rooms', 'GET /api/spaces/:id/rooms/:roomId/messages',
+  'POST /api/spaces/:id/rooms/:roomId/messages', 'PATCH /api/spaces/:id/rooms/:roomId', 'GET /api/spaces/:id/rooms/:roomId/members',
+  'POST /api/spaces/:id/rooms/:roomId/members/:userId', 'DELETE /api/spaces/:id/rooms/:roomId/members/:userId',
+  'PATCH /api/spaces/:id/rooms/:roomId/me', 'GET /api/spaces/:id/memory', 'POST /api/spaces/:id/memory',
+  'DELETE /api/spaces/:id/memory/:entryId',
   'GET /api/sessions/:id/learning', 'POST /api/sessions/:id/learning', 'POST /api/sessions/:id/monitors/events',
   'GET /api/sessions/:id/monitors', 'POST /api/sessions/:id/monitors/:monitorId/control', 'GET /api/sessions', 'GET /api/sessions/:id',
   'GET /api/sessions/:id/plan', 'POST /api/sessions/:id/plan/feedback', 'POST /api/sessions', 'PATCH /api/sessions/:id',

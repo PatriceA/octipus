@@ -35,7 +35,7 @@ export const SPACE_ROUTES: readonly SpaceRoute[] = [
   { prefix: '/__artifacts__', what: 'hosted artifact pages (path fallback)' },
   { prefix: '/api/knowledge', what: 'the knowledge base, in the space scope' },
   { prefix: '/api/sessions', what: "the member's private chats in the space, and their files" },
-  { prefix: '/api/spaces', what: 'the space itself: members, invites, activity' },
+  { prefix: '/api/spaces', what: 'the space itself: members, invites, activity; its rooms and space memory (S2)' },
   { prefix: '/api/notifications', what: "the member's notifications from the space" },
 ];
 

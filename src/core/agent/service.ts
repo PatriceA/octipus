@@ -5,7 +5,7 @@ import { getConfig } from '@/config';
 import { getAgentManager } from '@/core/agent-manager';
 import { handleCommand } from '@/core/commands';
 import { renderMemoriesBlock, retrieveForContext, updateMemoriesAfterTurn } from '@/core/memory';
-import { markNotSharedAudience, markSharedAudience } from '@/security/flow-guard';
+import { clearFlowLabel, markNotSharedAudience, markSharedAudience, observeFlow } from '@/security/flow-guard';
 import { bareReply, type GroupTurn, groupTurnContext } from '@/core/channels/group-context';
 import { generateRunId, runWithContext } from '@/core/run-context';
 import { type AttachedFileRef, buildAttachedFilesContext } from '@/core/session-files';
@@ -14,6 +14,7 @@ import { TrajectoryRecorder } from '@/core/trajectories/recorder';
 import type { AgentContext, AgentTrigger } from '@/core/types';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
+import type { Session } from '@/db/schema/sessions';
 import { getModelRegistry } from '@/models/model-registry';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
@@ -33,6 +34,7 @@ import { maybeCompactSession } from './session-compaction';
 import { resolveSession } from './session-resolver';
 import { type AgentScope, resolveAgentScope, triggerForChannel } from './context';
 import { sessionAudience } from './audience';
+import { canActInSession } from '@/core/rooms/access';
 import { bindProviderUsageContext, withProviderUsageContext } from '@/models/providers/instrumented';
 import { appendSources, type MessageClassification, type ResponseMetadata } from './types';
 import { spawnWorker } from './worker-spawner';
@@ -65,6 +67,28 @@ export type TurnOutcome = 'success' | 'failed' | 'cancelled';
 export interface TurnResult {
   response: string; sessionId?: string; agentId?: string; classification: MessageClassification; metadata?: ResponseMetadata; outcome?: TurnOutcome;
 }
+
+/** What `runTurn` needs once the entry gate (personal or room) let the turn in. */
+interface TurnInput {
+  session: Session;
+  /** Who asked: the session's owner, or a room's requester. */
+  requesterId: string;
+  message: string;
+  channel?: string;
+  attachedFiles?: AttachedFileRef[];
+  forcedOutputMode?: 'inline' | 'file';
+  bypassVoiceGate?: boolean;
+  groupTurn?: GroupTurn;
+  trigger: AgentTrigger;
+  /** A room turn: the member's post it answers (already stored, §6.3). */
+  postedMessageId?: string;
+}
+
+/** What `handleRoomMessage` did with an addressed post. */
+export type RoomMessageOutcome =
+  | { kind: 'queued'; position: number }
+  /** The post was the requester's bare yes/no to their own pending approval in the room. */
+  | { kind: 'approval' };
 
 /** The voice-mode key: a session and the user whose turns it gates. */
 function voiceKey(sessionId: string, userId: string): string {
@@ -214,7 +238,7 @@ export class AgentService {
       if (control || approvals.length === 1) {
         const resolvedId = await resolveSession(sessionId, userId, channel ?? 'api');
         const session = await sessionRepository.findById(resolvedId);
-        if (!session || session.userId !== userId) throw new Error('Session not found');
+        if (!session || !(await canActInSession(session, userId, 'chat'))) throw new Error('Session not found');
         // In a group-thread session members also talk to each other: only a
         // bare yes/no answers an approval there, whatever the entry point.
         const reply = approvalReplyFor(message, !!session.groupChannelId);
@@ -249,6 +273,118 @@ export class AgentService {
     return !!id && pending.length === 1 && pending[0].id === id && pending[0].sessionId === sessionId;
   }
 
+  // ── Rooms (coworking §6.2–§6.4) ─────────────────────────────────
+
+  /**
+   * The only entry of room turns: an addressed post of `requesterId` in
+   * `roomId` (the `room.post` gateway message, or its REST fallback). Checks
+   * `roomAccess` and the role (`run_agent`) now, then hands the turn to the
+   * room queue; the queue runs it — after the room's earlier turns — through
+   * `runTurn`, never through the personal gate. A bare yes/no of the
+   * requester while their own turn waits on an approval in the room answers
+   * that approval instead.
+   */
+  async handleRoomMessage(roomId: string, requesterId: string, postedMessageId: string): Promise<RoomMessageOutcome> {
+    const [{ roomAccess }, { can, SpaceError }] = await Promise.all([
+      import('@/core/rooms/access'), import('@/security/space-access'),
+    ]);
+    const access = await roomAccess(requesterId, roomId);
+    if (!access) throw new SpaceError('not_found', 'Room not found');
+    if (!can(access.role, 'run_agent')) throw new SpaceError('forbidden_role', `Your role (${access.role}) cannot ask Octipus in this room`);
+    const posted = await messageRepository.findById(postedMessageId);
+    if (!posted || posted.sessionId !== roomId || posted.role !== 'user' || posted.authorUserId !== requesterId) {
+      throw new SpaceError('invalid_input', 'That post is not yours in this room');
+    }
+    // Approvals in a room are bare yes/no only, like a group thread, and only
+    // the requester's own, raised in this room.
+    const reply = approvalReplyFor(posted.content, true);
+    const pending = this.approvalManager.getPendingApprovals(requesterId).filter((a) => a.sessionId === roomId);
+    if (reply && pending.length === 1 && await this.approvalManager.tryResolveFromMessage(reply, requesterId)) {
+      return { kind: 'approval' };
+    }
+    const { displayNames } = await import('@/core/session-history');
+    const requesterName = (await displayNames([requesterId])).get(requesterId) ?? 'A member';
+    const { enqueueRoomTurn } = await import('@/core/rooms/queue');
+    const { position } = enqueueRoomTurn(
+      roomId,
+      access.room.workspaceId,
+      { requesterId, requesterName, messageId: postedMessageId, enqueuedAt: new Date() },
+      (request) => this.runRoomTurn(roomId, request.requesterId, request.messageId),
+    );
+    return { kind: 'queued', position };
+  }
+
+  /**
+   * Run one queued room turn, handed over by the room queue. The requester's
+   * access is checked again (they may have been removed while waiting); the
+   * turn runs as them, under `withSessionTurn`, with their workspace and
+   * funding as the usage context. Throws when the turn failed, so the queue
+   * reports it to the room.
+   */
+  private async runRoomTurn(roomId: string, requesterId: string, postedMessageId: string): Promise<void> {
+    const [{ roomAccess }, { can }, { RoomTurnDropped }] = await Promise.all([
+      import('@/core/rooms/access'), import('@/security/space-access'), import('@/core/rooms/queue'),
+    ]);
+    const access = await roomAccess(requesterId, roomId);
+    if (!access || !can(access.role, 'run_agent')) throw new RoomTurnDropped('The requester can no longer ask Octipus in this room');
+    const posted = await messageRepository.findById(postedMessageId);
+    if (!posted || posted.sessionId !== roomId) throw new RoomTurnDropped('The post is gone');
+    await withSessionTurn(roomId, async () => {
+      const session = await sessionRepository.findById(roomId);
+      if (!session || session.kind !== 'room') throw new RoomTurnDropped('The room is gone');
+      const runId = generateRunId();
+      const result = await runWithContext(
+        { runId, sessionId: roomId, userId: requesterId, channel: 'room', origin: 'room' },
+        () => withProviderUsageContext({ userId: requesterId }, async () => {
+          const noModel = await this.noModelAnswer(requesterId);
+          if (noModel) throw new Error(noModel.response);
+          return this.runTurn({ session, requesterId, message: posted.content, channel: 'room', trigger: 'room', postedMessageId });
+        }),
+      );
+      if (result.outcome === 'failed' && !result.metadata?.limit) throw new Error(result.response);
+    });
+  }
+
+  /**
+   * Per-turn context of a space session: the space memory (§6.5) and, in a
+   * private session opened as a room's side panel (`context.linkedRoomId`,
+   * §6.7), the linked room's recent transcript — only while the requester
+   * may still enter that room of the same space, re-checked every turn. The
+   * injected transcript is other members' text: the session is marked
+   * `suspicious` for the turn.
+   */
+  private async spaceTurnContext(session: Session, userId: string, workspaceId: string): Promise<string> {
+    const { getSpace } = await import('@/core/spaces/service');
+    const { name } = await getSpace({ userId }, workspaceId);
+    const { spaceMemoryBlock } = await import('@/core/spaces/memory');
+    let block = await spaceMemoryBlock(workspaceId, name);
+    const linkedRoomId = session.kind === 'chat' ? session.context?.linkedRoomId : undefined;
+    if (typeof linkedRoomId === 'string') {
+      const { roomAccess } = await import('@/core/rooms/access');
+      const access = await roomAccess(userId, linkedRoomId);
+      if (access && access.room.workspaceId === workspaceId) {
+        block += await this.linkedRoomTranscript(linkedRoomId, access.room.title);
+        observeFlow(session.id, { toolId: 'room', action: 'linked_transcript' }, { taints: ['suspicious'] });
+      }
+    }
+    return block;
+  }
+
+  /** The newest posts of a room that fit in `rooms.transcriptWindowChars`, fenced, for a side panel. */
+  private async linkedRoomTranscript(roomId: string, title: string): Promise<string> {
+    const [{ readSessionHistory }, { renderRoomTranscript, transcriptChars }] = await Promise.all([
+      import('@/core/session-history'), import('@/core/rooms/room-context'),
+    ]);
+    const history = await readSessionHistory(roomId);
+    const window = getConfig().rooms.transcriptWindowChars;
+    let start = history.rows.length;
+    while (start > 0 && transcriptChars(history.rows.slice(start - 1)) <= window) start--;
+    const rows = history.rows.slice(start);
+    return `\n\nLINKED ROOM — the member opened this private session from the room "${title}". `
+      + 'Its recent transcript follows; refer to it when they ask about the room.\n'
+      + renderRoomTranscript({ roomTitle: title, rows, summary: start === 0 ? history.checkpoint?.summary : null, privateView: true });
+  }
+
   /** Publish a background reply through the same event stream as interactive replies. */
   publishResponse(sessionId: string, userId: string, result: TurnResult): void {
     this.emit({ type: 'chat_response', sessionId, userId, data: result, timestamp: new Date() });
@@ -281,55 +417,89 @@ export class AgentService {
     groupTurn?: GroupTurn,
     trigger: AgentTrigger = 'user',
   ): Promise<TurnResult> {
+    // The personal ownership gate (coworking §6.2): the session must be the
+    // user's own chat — never a room, whose turns enter only through
+    // `handleRoomMessage`. Everything after it is `runTurn`, shared by both.
+    let session: Session;
+    try {
+      const noModel = await this.noModelAnswer(userId);
+      if (noModel) return noModel;
+      const resolvedSessionId = await resolveSession(sessionId, userId, channel || 'api');
+      const row = await sessionRepository.findById(resolvedSessionId);
+      if (!row) throw new Error('Session not found');
+      session = row;
+    } catch (error) {
+      return this.turnFailed(error, { sessionId, channel, message, trajectory: null, turnSessionId: undefined, userMessageSaved: false, isRoom: false });
+    }
+    return this.runTurn({
+      session, requesterId: userId, message, channel, attachedFiles, forcedOutputMode, bypassVoiceGate, groupTurn, trigger,
+    });
+  }
+
+  /**
+   * "No engine" — answered before any session or turn exists when no model
+   * is configured at all. Null when a model is there.
+   */
+  private async noModelAnswer(userId: string): Promise<TurnResult | null> {
+    const registry = getModelRegistry();
+    const defaultModel = await registry.getDefaultModel();
+    if (defaultModel) return null;
+    const allModels = await registry.getAllModels();
+    if (allModels.length > 0) return null;
+    // No model. Speak in the active persona's voice. Fall back to
+    // the dry default if the persona system isn't loaded yet —
+    // this codepath fires on first-boot before settings exist.
+    let name = 'Octipus';
+    try {
+      const { resolvePersonaForUser } = await import('@/core/personas/resolver');
+      const persona = await resolvePersonaForUser(userId);
+      name = persona.name;
+    } catch { /* registry not ready yet — base name is fine */ }
+    const text =
+      `${name} has no engine. The arms are idle.\n\n` +
+      'To wire one up, run one of:\n' +
+      '  • `npm run setup`   (interactive — picks Ollama / LiteLLM / direct provider)\n' +
+      '  • `octi doctor`     (shows what is missing)\n' +
+      '  • open the Models page in the web UI\n\n' +
+      'Once a model is bound to the `general` topic, every turn after this one works.';
+    return {
+      response: text,
+      classification: { type: 'casual', confidence: 0 },
+    };
+  }
+
+  /**
+   * One turn, after its entry gate: the personal path (`handleMessageInner`,
+   * owner checked by `resolveSession`) or a room (`handleRoomMessage`,
+   * `roomAccess` checked). Resolves the workspace and audience, applies the
+   * memory gates, persists, compacts (coworking §6.2).
+   */
+  private async runTurn(input: TurnInput): Promise<TurnResult> {
+    const {
+      session, requesterId: userId, message, channel, attachedFiles = [], forcedOutputMode,
+      bypassVoiceGate = false, groupTurn, trigger, postedMessageId,
+    } = input;
+    const sessionId = session.id;
+    // A room (§6.4): the request is the member's post, stored once already;
+    // the turn writes no user row of its own.
+    const isRoom = session.kind === 'room';
     // Trajectory recorder — observes this run for later eval/fine-tuning.
-    // Constructed early so the sessionId below can overwrite it.
     let trajectory: TrajectoryRecorder | null = null;
     // The session the turn resolved to, for the failure path below.
-    let turnSessionId: string | undefined;
+    const turnSessionId: string | undefined = sessionId;
     // Whether this turn's user message is already stored (the plan-execute
-    // path saves it before running), so the refusal path does not save it twice.
-    let userMessageSaved = false;
+    // path saves it before running; a room post always is), so the refusal
+    // path does not save it twice.
+    let userMessageSaved = isRoom;
     try {
-      const registry = getModelRegistry();
-      const defaultModel = await registry.getDefaultModel();
-      if (!defaultModel) {
-        const allModels = await registry.getAllModels();
-        if (allModels.length === 0) {
-          // No model. Speak in the active persona's voice. Fall back to
-          // the dry default if the persona system isn't loaded yet —
-          // this codepath fires on first-boot before settings exist.
-          let name = 'Octipus';
-          try {
-            const { resolvePersonaForUser } = await import('@/core/personas/resolver');
-            const persona = await resolvePersonaForUser(userId);
-            name = persona.name;
-          } catch { /* registry not ready yet — base name is fine */ }
-          const text =
-            `${name} has no engine. The arms are idle.\n\n` +
-            'To wire one up, run one of:\n' +
-            '  • `npm run setup`   (interactive — picks Ollama / LiteLLM / direct provider)\n' +
-            '  • `octi doctor`     (shows what is missing)\n' +
-            '  • open the Models page in the web UI\n\n' +
-            'Once a model is bound to the `general` topic, every turn after this one works.';
-          return {
-            response: text,
-            classification: { type: 'casual', confidence: 0 },
-          };
-        }
-      }
+      const resolvedSessionId = sessionId;
 
-      const resolvedSessionId = await resolveSession(sessionId, userId, channel || 'api');
-      turnSessionId = resolvedSessionId;
-
-      // Auto-title sessions with generic names
-      const session = await sessionRepository.findById(resolvedSessionId);
       // The turn runs in the session's workspace (the user's default when the
       // session has none), resolved once and threaded through every spawn,
       // task, artifact, file and memory call below via the agent scope. A
       // workspace the user neither owns nor may run the agent in (a viewer,
       // a removed member, an archived space), or a failed resolution, fails
       // the turn: it never runs unscoped (§5.6).
-      if (!session) throw new Error('Session not found');
       const scope = await resolveAgentScope({ session, userId, trigger });
       const workspaceId = scope.workspaceId as string;
       bindProviderUsageContext({ workspaceId: scope.workspaceId, funding: scope.funding });
@@ -354,8 +524,16 @@ export class AgentService {
       // The flow guard's group rule keys on the session; set it from the stored
       // session on every turn, whichever entry point (channel, web chat,
       // background wake-up) the turn came through, and after any restart.
+      // In a room each turn starts from a clean label (§6.4): another
+      // member's consent to a private or secret read never carries over to
+      // this requester. Safe because room turns are serialized and no work of
+      // a room turn outlives it (`rooms/queue.ts` stops leftovers).
+      if (isRoom) clearFlowLabel(resolvedSessionId);
       if (sharedAudience) markSharedAudience(resolvedSessionId);
       else markNotSharedAudience(resolvedSessionId);
+      // Space memory (§6.5) and, for a private side panel, the linked room's
+      // transcript (§6.7): per turn, read now.
+      const spaceContext = scope.space ? await this.spaceTurnContext(session, userId, scope.space.workspaceId) : '';
       // Delivered as per-turn context beside the message (stored in the
       // message's metadata, not as its text), on every turn in a group thread:
       // monitors, wake-ups and plan runs too, whose replies land in the thread.
@@ -366,7 +544,8 @@ export class AgentService {
       const groupContextBlock = groupThread
         ? groupTurnContext({ requester: groupTurn?.requester, context: groupTurn?.context, take: groupTurn?.take }) + takenTasks.block
         : '';
-      if (session) {
+      // Auto-title sessions with generic names (never a room: its title is the room's).
+      if (!isRoom) {
         const genericTitles = ['new chat', 'untitled', 'webchat conversation', 'telegram conversation', 'api conversation', 'slack conversation', 'teams conversation'];
         const currentTitle = (session.title || '').toLowerCase().trim();
         if (!currentTitle || genericTitles.includes(currentTitle) || currentTitle.endsWith(' conversation')) {
@@ -405,7 +584,7 @@ export class AgentService {
       if (inputGuard.action === 'block') {
         coreLogger.warn({ flags: inputGuard.flags, sessionId }, 'Input guard blocked message');
         const blockResponse = `I can't process this request: ${inputGuard.blockReason}`;
-        await messageRepository.create({ sessionId: resolvedSessionId, role: 'user', content: message });
+        if (!isRoom) await messageRepository.create({ sessionId: resolvedSessionId, role: 'user', content: message });
         await messageRepository.create({ sessionId: resolvedSessionId, role: 'assistant', content: blockResponse });
         return {
           response: blockResponse,
@@ -433,8 +612,9 @@ export class AgentService {
         };
       }
 
-      // Command interception (works across all channels)
-      try {
+      // Command interception (works across all channels; a room's commands
+      // are answered by the room handler before any turn).
+      if (!isRoom) try {
         // Provide a notify callback so commands can send intermediate messages
         const commandNotify = async (msg: string) => {
           this.emit({
@@ -463,7 +643,7 @@ export class AgentService {
       const freshSessionForPlan = await sessionRepository.findById(resolvedSessionId);
       const sessionCtx = (freshSessionForPlan?.context as Record<string, any>) || {};
       const planState = sessionCtx.planningState;
-      if (planState?.brief && !planState.active && !planState.executed && /^(go|start|execute|run|do it|let'?s ?go)$/i.test(message.trim())) {
+      if (!isRoom && planState?.brief && !planState.active && !planState.executed && /^(go|start|execute|run|do it|let'?s ?go)$/i.test(message.trim())) {
         // Check if a root agent is already running for this session
         const agentManager = getAgentManager();
         const sessionAgents = agentManager.getBySession(resolvedSessionId);
@@ -523,7 +703,7 @@ export class AgentService {
 
         const { response, agentId, sources: _planSources, outcome, limit: planLimit } = await this.runRootAgent(
           resolvedSessionId, userId, planMessage, classification, inputGuard.flags, channel,
-          planMemoryBlock + groupContextBlock,
+          planMemoryBlock + spaceContext + groupContextBlock,
           scope,
           undefined,
           { takenTasks: takenTasks.tasks },
@@ -601,7 +781,7 @@ export class AgentService {
       // ambiguous and follow-ups such as "Yes, look it up online". Tool-level
       // approval policy still applies; the transport is not a planning mode.
       const voiceGateKey = voiceKey(resolvedSessionId, userId);
-      if (!bypassVoiceGate && channel !== 'mobile-voice' && this.voiceSessions.has(voiceGateKey)) {
+      if (!isRoom && !bypassVoiceGate && channel !== 'mobile-voice' && this.voiceSessions.has(voiceGateKey)) {
         // Gate vague requests too, not just cleanly-scored 'task'. Spoken input is
         // usually under-specified → the classifier falls to 'ambiguous', which would
         // otherwise reach the raw root agent and get blind-dispatched or dryly told
@@ -620,9 +800,10 @@ export class AgentService {
           // (router-turn), so a cold request shows once from the propose turn and
           // once here — cosmetic transcript dup. Thread a skip-persist flag through
           // runRootAgent if it ever bloats context enough to matter.
-          return this.handleMessageInner(
-            resolvedSessionId, userId, action.workMessage, channel, action.attachedFiles, forcedOutputMode, true, groupTurn, trigger,
-          );
+          return this.runTurn({
+            session, requesterId: userId, message: action.workMessage, channel, attachedFiles: action.attachedFiles,
+            forcedOutputMode, bypassVoiceGate: true, groupTurn, trigger,
+          });
         }
         if (action.kind === 'propose') {
           // Plan out loud on the fast voice model; the user's actual utterance is
@@ -678,7 +859,7 @@ export class AgentService {
       // Combine long-term memory with the attached-file block built above
       // (before the expert bypass). Both are self-separating, so the casual and
       // root agent paths get the live file contents in their system context.
-      const turnContext = memoryBlock + attachedFilesBlock;
+      const turnContext = memoryBlock + spaceContext + attachedFilesBlock;
       const memoryCadence = getConfig().memory?.extractionCadence ?? 'per_turn';
       const fireMemoryUpdate = () => {
         // Cadence gate. `off` short-circuits before any work; the
@@ -739,7 +920,10 @@ export class AgentService {
         turnContext + groupContextBlock,
         scope,
         { mode: effectiveOutputMode, forced: outputForced },
-        { takenTasks: takenTasks.tasks },
+        {
+          takenTasks: takenTasks.tasks,
+          ...(isRoom && postedMessageId ? { room: { postedMessageId, title: session.title ?? 'Room' } } : {}),
+        },
       );
 
       const outputCheck = guardOutput(response, inputGuard.flags);
@@ -762,19 +946,25 @@ export class AgentService {
 
       const persistedAnswer = await messageRepository.createForGeneration({
         sessionId: resolvedSessionId, role: 'assistant', content: finalResponse, agentId,
-        // A refused turn keeps its structured reason so the chat card survives a reload.
-        ...(limit && { metadata: { limit: limit } }),
+        metadata: {
+          // A refused turn keeps its structured reason so the chat card survives a reload.
+          ...(limit && { limit: limit }),
+          // A room answer names the post and the member it answers.
+          ...(isRoom && { requesterId: userId, ...(postedMessageId && { replyTo: postedMessageId }) }),
+        },
       }, turnGeneration);
       if (!persistedAnswer) return { response: 'Conversation was cleared while this turn was running.', sessionId: resolvedSessionId, classification };
       // If the output guard replaced the answer, the vendor must receive the
       // corrected Octipus text on its next turn rather than acknowledging it.
-      if (outputCheck.action !== 'replace') {
+      if (outputCheck.action !== 'replace' && !isRoom) {
         const { acknowledgeProviderTurn } = await import('@/core/cli-session-store');
         await acknowledgeProviderTurn(resolvedSessionId, agentId, persistedAnswer);
       }
       await sessionRepository.incrementMessageCount(resolvedSessionId);
 
-      maybeCompactSession(resolvedSessionId).catch(err =>
+      // A room is compacted by its transcript's size, as the requester of
+      // this turn, funded by the install (§6.4).
+      maybeCompactSession(resolvedSessionId, isRoom ? { requesterId: userId } : {}).catch(err =>
         coreLogger.error({ err, sessionId: resolvedSessionId }, 'Session compaction failed'),
       );
 
@@ -804,62 +994,85 @@ export class AgentService {
         metadata: { latencyMs: Date.now() - startTime, ...(limit && { limit }) },
       };
     } catch (error) {
-      recordRootRun(channel, undefined, 'error');
-      // A spend budget or quota refusal at spawn (the budget was already
-      // paused) says which cap, how much, and when it resets — not "error".
-      const limit = limitRefusalOf(error);
-      // Pulled apart explicitly: an Error's `message` and `stack` are
-      // non-enumerable, so `{ error }` serialises to `{}` and hides the very
-      // thing the line exists to report. A cap is logged at warn: it is the
-      // system working as configured.
-      (limit ? coreLogger.warn : coreLogger.error).call(
-        coreLogger,
-        {
-          err: error instanceof Error
-            ? { name: error.name, message: error.message, stack: error.stack }
-            : { value: String(error) },
-          sessionId,
-          channel,
-        },
-        'handleMessage failed',
-      );
-      if (trajectory) {
-        trajectory.finalize({
-          finalResponse: '',
-          outcome: 'failure',
-          failureReason: (error as Error).message,
-        }).catch(err => coreLogger.error({ err }, 'Trajectory finalize (failure path) failed'));
-      }
-      if (limit) {
-        // Refused at spawn: no worker ran, so the answer (and, unless the
-        // path already stored it, the question) was not persisted. Store them
-        // so the transcript and the budget card survive a reload.
-        if (turnSessionId) {
-          try {
-            if (!userMessageSaved) {
-              await messageRepository.create({ sessionId: turnSessionId, role: 'user', content: message });
-            }
-            await messageRepository.create({
-              sessionId: turnSessionId, role: 'assistant', content: limit.text,
-              metadata: { limit: limit.refusal },
-            });
-          } catch (err) {
-            coreLogger.warn({ err, sessionId: turnSessionId }, 'Could not persist the limit refusal');
+      return this.turnFailed(error, { sessionId, channel, message, trajectory, turnSessionId, userMessageSaved, isRoom });
+    }
+  }
+
+  /**
+   * The failure path of a turn: logged, the trajectory closed, a spend or
+   * quota refusal stored with its reason (the question too, unless already
+   * stored — always, for a room post), anything else answered with the error.
+   */
+  private async turnFailed(
+    error: unknown,
+    info: {
+      sessionId: string;
+      channel: string | undefined;
+      message: string;
+      trajectory: TrajectoryRecorder | null;
+      turnSessionId: string | undefined;
+      userMessageSaved: boolean;
+      isRoom: boolean;
+    },
+  ): Promise<TurnResult> {
+    const { sessionId, channel, message, trajectory, turnSessionId, userMessageSaved } = info;
+    recordRootRun(channel, undefined, 'error');
+    // A spend budget or quota refusal at spawn (the budget was already
+    // paused) says which cap, how much, and when it resets — not "error".
+    const limit = limitRefusalOf(error);
+    // Pulled apart explicitly: an Error's `message` and `stack` are
+    // non-enumerable, so `{ error }` serialises to `{}` and hides the very
+    // thing the line exists to report. A cap is logged at warn: it is the
+    // system working as configured.
+    (limit ? coreLogger.warn : coreLogger.error).call(
+      coreLogger,
+      {
+        err: error instanceof Error
+          ? { name: error.name, message: error.message, stack: error.stack }
+          : { value: String(error) },
+        sessionId,
+        channel,
+      },
+      'handleMessage failed',
+    );
+    if (trajectory) {
+      trajectory.finalize({
+        finalResponse: '',
+        outcome: 'failure',
+        failureReason: (error as Error).message,
+      }).catch(err => coreLogger.error({ err }, 'Trajectory finalize (failure path) failed'));
+    }
+    if (limit) {
+      // Refused at spawn: no worker ran, so the answer (and, unless the
+      // path already stored it, the question) was not persisted. Store them
+      // so the transcript and the budget card survive a reload.
+      if (turnSessionId) {
+        try {
+          if (!userMessageSaved) {
+            await messageRepository.create({ sessionId: turnSessionId, role: 'user', content: message });
           }
+          await messageRepository.create({
+            sessionId: turnSessionId, role: 'assistant', content: limit.text,
+            metadata: { limit: limit.refusal },
+          });
+        } catch (err) {
+          coreLogger.warn({ err, sessionId: turnSessionId }, 'Could not persist the limit refusal');
         }
-        return {
-          response: limit.text,
-          sessionId: turnSessionId ?? sessionId,
-          outcome: 'failed',
-          classification: { type: 'casual', confidence: 0 },
-          metadata: { limit: limit.refusal },
-        };
       }
       return {
-        response: `I encountered an error processing your message: ${(error as Error).message}`,
+        response: limit.text,
+        sessionId: turnSessionId ?? sessionId,
+        outcome: 'failed',
         classification: { type: 'casual', confidence: 0 },
+        metadata: { limit: limit.refusal },
       };
     }
+    return {
+      response: `I encountered an error processing your message: ${(error as Error).message}`,
+      classification: { type: 'casual', confidence: 0 },
+      // A room turn's runner reports it to the room (`room.turn` done, failed).
+      ...(info.isRoom ? { outcome: 'failed' as const } : {}),
+    };
   }
 
   // ── Root agent agent ───────────────────────────────────────────

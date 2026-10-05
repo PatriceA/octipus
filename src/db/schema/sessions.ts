@@ -25,6 +25,15 @@ export const sessions = pgTable('sessions', {
    * enrolment, so a removed channel's threads stay group sessions.
    */
   groupChannelId: uuid('group_channel_id'),
+  /**
+   * `room` for a room — a shared chat of a space (coworking §6, D7) — and
+   * `chat` for every other session. The only room discriminator: personal
+   * paths filter `kind = 'chat'`, so a room is invisible to them, its
+   * creator (`user_id`) included.
+   */
+  kind: text('kind').$type<SessionKind>().default('chat').notNull(),
+  /** Rooms only (CHECK): `space` — every member — or `private` — the `room_members` rows. */
+  roomVisibility: text('room_visibility').$type<RoomVisibility>(),
   title: text('title'),
   status: sessionStatusEnum('status').default('active').notNull(),
   context: jsonb('context').$type<SessionContext>().default({}),
@@ -94,6 +103,12 @@ export interface SessionContext {
     entryId?: string;
   };
   workspaceId?: string;
+  /**
+   * A private session in a space opened as a room's side panel ("Ask
+   * privately", coworking §6.7): its turns get the room's recent transcript
+   * while the member may still enter the room (re-checked every turn).
+   */
+  linkedRoomId?: string;
   currentTopic?: string;
   activeAgentId?: string;
   /**
@@ -148,6 +163,9 @@ export interface SessionContext {
     acknowledged?: { id: string; createdAt: string };
   }>;
 }
+
+export type SessionKind = 'chat' | 'room';
+export type RoomVisibility = 'space' | 'private';
 
 export type Session = typeof sessions.$inferSelect;
 export type NewSession = typeof sessions.$inferInsert;

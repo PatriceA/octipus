@@ -368,6 +368,10 @@ async function main() {
     // Wire gateway message handler and bridge root agent/agent events
     wireMessageHandler(gatewayHub);
     const disconnectBridge = await connectEventBridge(gatewayHub);
+    // Rooms (coworking §6.4): every stored room message reaches the room's
+    // members, and the turn strip follows the running turn.
+    const { startRoomFanout } = await import('@/core/rooms/fanout');
+    const stopRoomFanout = await startRoomFanout();
 
     // Start API server. The returned Elysia app MUST stay referenced for the
     // lifetime of the process: Bun finalizes the underlying server when its JS
@@ -532,6 +536,7 @@ async function main() {
         // scheduler may not have been started
       }
       disconnectBridge();
+      stopRoomFanout();
       await gatewayHub.stop();
       await mcpBridge.disconnectAll();
       await gateway.stop();

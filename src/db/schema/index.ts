@@ -39,6 +39,7 @@ export * from './profiles';
 export * from './recurring-tasks';
 export * from './retention-policies';
 export * from './roles';
+export * from './rooms';
 export * from './sessions';
 export * from './settings';
 export * from './skill-proposals';

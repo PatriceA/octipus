@@ -124,6 +124,12 @@ export const defaultConfig: Partial<Config> = {
     maxMembers: 50,
     inviteMaxTtlHours: 720,
     purgeAfterArchiveDays: 7,
+    memoryMaxItems: 50,
+  },
+  rooms: {
+    maxQueuedPerMember: 3,
+    approvalTimeoutMinutes: 30,
+    transcriptWindowChars: 6000,
   },
   compaction: {
     minSavingsRatio: 0.10,

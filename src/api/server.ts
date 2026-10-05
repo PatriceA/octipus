@@ -54,6 +54,7 @@ import { permissionRequestRoutes } from './routes/permission-requests';
 import { oauthRoutes } from './routes/oauth';
 import { orgAdminRoutes, orgMeRoutes, workspaceMeRoutes } from './routes/orgs';
 import { inviteRoutes, spaceRoutes } from './routes/spaces';
+import { roomRoutes } from './routes/rooms';
 import { samlRoutes } from './routes/saml';
 import { scimRoutes } from './routes/scim';
 import { pipelineRoutes } from './routes/pipelines';
@@ -412,6 +413,7 @@ export function createServer() {
         .use(orgMeRoutes)
         .use(workspaceMeRoutes)
         .use(spaceRoutes)
+        .use(roomRoutes)
         .use(inviteRoutes)
         .use(scimRoutes)
         .use(samlRoutes)

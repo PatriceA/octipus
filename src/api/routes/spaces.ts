@@ -34,7 +34,7 @@ import { SpaceError, spaceErrorStatus } from '@/security/space-access';
  * `not_purgeable` 409.
  */
 
-type RouteCtx = {
+export type RouteCtx = {
   set: { status?: number | string };
   principal: Principal;
 };
@@ -52,8 +52,8 @@ function actorOf(ctx: RouteCtx): SpaceActor | null {
   return { userId: ctx.principal.userId, impersonatedBy: by && by !== ctx.principal.userId ? by : null };
 }
 
-/** Run a space operation, mapping `SpaceError` to its status. */
-async function handle<T>(ctx: RouteCtx, run: (actor: SpaceActor) => Promise<T>): Promise<T | { error: string; code?: string }> {
+/** Run a space operation, mapping `SpaceError` to its status. Shared by the rooms routes. */
+export async function handle<T>(ctx: RouteCtx, run: (actor: SpaceActor) => Promise<T>): Promise<T | { error: string; code?: string }> {
   const actor = actorOf(ctx);
   if (!actor) return { error: 'Authentication required' };
   try {
