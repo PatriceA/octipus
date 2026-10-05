@@ -63,6 +63,11 @@ export interface SaveNoteInput {
   id?: string;
   slug?: string;
   title: string;
+  /**
+   * The new body. Omitted on an existing space note: its body is left as it
+   * is (a title or tag change from the live editor, whose text is saved by
+   * the document hub).
+   */
   body?: string;
   noteKind?: string;
   noteDate?: string | null;
@@ -165,7 +170,10 @@ export class NoteService {
     // what is saved is the writer's change merged into the current text.
     let merged = false;
     let spaceBodyChanged = false;
-    if (existing && scope.kind === 'space') {
+    if (existing && scope.kind === 'space' && input.body === undefined) {
+      body = existing.body;
+      bodySha = existing.bodySha256;
+    } else if (existing && scope.kind === 'space') {
       const write = await this.writeSpaceBody(scope, existing.id, {
         base: { sha256: input.baseSha256 ?? existing.bodySha256, text: input.baseBody },
         next: body,

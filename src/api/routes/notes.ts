@@ -106,7 +106,8 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
           id: body.id,
           slug: body.slug,
           title: body.title,
-          body: body.body ?? '',
+          // Omitted on an existing space note: a metadata-only save.
+          body: body.body,
           noteKind: body.noteKind,
           tags: body.tags,
           frontmatter: body.frontmatter,

@@ -74,9 +74,11 @@ export class NotesTool extends BaseTool {
         slug: { type: 'string', description: 'Explicit slug (defaults to a slug of the title)' },
         note_kind: { type: 'string', description: 'note (default) | moc | literature | …' },
         tags: { type: 'array', description: 'Explicit tags (unioned with #tags from the body)', items: { type: 'string' } },
+        base_sha256: { type: 'string', description: 'When editing a shared-space note: the sha256 read_note returned. Your change is merged with what others wrote since; a clash is refused — read the note again and reapply.' },
       }),
       async (args, context) => {
         const result = await getNoteService().save({
+          baseSha256: typeof args.base_sha256 === 'string' && args.base_sha256 ? args.base_sha256 : undefined,
           scope: notesScope(context),
           id: (args.id as string) || undefined,
           slug: (args.slug as string) || undefined,
@@ -128,6 +130,9 @@ export class NotesTool extends BaseTool {
           body: note.body,
           tags: note.tags,
           noteKind: note.noteKind,
+          // A shared-space note's live text has this sha: pass it back as
+          // write_note's base_sha256 so the edit merges (§7.3).
+          sha256: note.bodySha256,
           backlinks: backlinks.map((b) => ({ from: { type: b.fromType, id: b.fromId }, linkType: b.linkType, label: b.label })),
         };
       },

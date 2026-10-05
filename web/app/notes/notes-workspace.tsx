@@ -10,11 +10,14 @@ import { cn } from '@/lib/utils';
 import { KnowledgeGraph } from './knowledge-graph';
 import { NoteContext } from './note-context';
 import { type EditorMode, NoteEditor } from './note-editor';
+import { NoteHistory } from './note-history';
+import { NoteProposals } from './note-proposals';
+import { useLiveNote } from './use-live-note';
 import { NotesNavigator } from './notes-navigator';
 import type {
   NoteDetail, NoteFilter, NoteIndexEntry, NoteListResponse, NoteRow, Suggestion, TagCount,
 } from './types';
-import { useWorkspaceAccess, useWorkspaceId } from '@/lib/workspace-context';
+import { useWorkspace, useWorkspaceAccess, useWorkspaceId } from '@/lib/workspace-context';
 
 function sameTags(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
@@ -32,6 +35,9 @@ export function NotesWorkspace() {
   const workspaceId = useWorkspaceId();
   // Commenters and viewers in a space (and everyone in an archived one) read.
   const { canWrite } = useWorkspaceAccess();
+  // Space notes are live documents (§7.6): edited together, saved by the hub.
+  const isSpace = useWorkspace().activeWorkspace?.kind === 'shared';
+  const [ctxTab, setCtxTab] = useState<'links' | 'history' | 'proposals'>('links');
   const qc = useQueryClient();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -81,6 +87,25 @@ export function NotesWorkspace() {
     queryFn: () => api.get<{ tags: TagCount[] }>('/notes/tags'),
   });
 
+  const live = useLiveNote(selectedId, isSpace);
+  const liveSession = live?.session ?? null;
+  const liveVersion = live?.version ?? 0;
+  const liveSynced = live?.synced ?? false;
+  // The live text drives the preview and is never "unsaved" here: the hub
+  // saves it. Draft and baseline both follow it.
+  useEffect(() => {
+    if (!liveSession || !liveSynced) return;
+    const text = liveSession.text;
+    const sync = () => {
+      const body = text.toString();
+      setDraftBody(body);
+      setSavedBody(body);
+    };
+    sync();
+    text.observe(sync);
+    return () => text.unobserve(sync);
+  }, [liveSession, liveVersion, liveSynced]);
+
   const notes = list.data?.notes ?? [];
   const noteIndex = noteIndexQ.data?.notes ?? [];
   const tags = tagsQ.data?.tags ?? [];
@@ -106,12 +131,12 @@ export function NotesWorkspace() {
   };
 
   const save = useMutation({
-    mutationFn: (payload: { id?: string; title: string; body: string; tags: string[]; noteKind: string; slug?: string }) =>
+    mutationFn: (payload: { id?: string; title: string; body?: string; tags: string[]; noteKind: string; slug?: string }) =>
       api.post<{ note: NoteRow }>('/notes', payload),
     onSuccess: (res, vars) => {
       setSelectedId(res.note.id);
       loadedRef.current = res.note.id;
-      setSavedTitle(vars.title); setSavedBody(vars.body); setSavedTags(vars.tags); setSavedKind(vars.noteKind);
+      setSavedTitle(vars.title); if (vars.body !== undefined) setSavedBody(vars.body); setSavedTags(vars.tags); setSavedKind(vars.noteKind);
       setDraftFolder('');
       invalidateAll();
       qc.invalidateQueries({ queryKey: ['note', res.note.id] });
@@ -180,12 +205,20 @@ export function NotesWorkspace() {
     if (!draftTitle || !dirty || save.isPending) return;
     const isNew = !selectedId;
     const slug = isNew && draftFolder.trim() ? `${draftFolder.trim()}/${draftTitle}` : undefined;
-    save.mutate({ id: selectedId ?? undefined, title: draftTitle, body: draftBody, tags: draftTags, noteKind: draftKind, slug });
+    // A live note's text saves itself: Save stores the title, tags and kind.
+    const body = isSpace && !isNew ? undefined : draftBody;
+    save.mutate({ id: selectedId ?? undefined, title: draftTitle, body, tags: draftTags, noteKind: draftKind, slug });
   }
 
   function addLink(s: Suggestion) {
     const title = s.title ?? s.id;
     if (hasLink(draftBody, title)) return;
+    if (liveSession && liveSynced) {
+      // Into the shared document, like typing it.
+      const text = liveSession.text;
+      text.insert(text.length, text.length > 0 ? `\n\n[[${title}]]` : `[[${title}]]`);
+      return;
+    }
     const next = draftBody.trim() ? `${draftBody.trimEnd()}\n\n[[${title}]]` : `[[${title}]]`;
     setDraftBody(next);
     if (selectedId && draftTitle) {
@@ -327,13 +360,39 @@ export function NotesWorkspace() {
               onOpenSlug={openSlug}
               onTagClick={(t) => { setActiveTag(t); setFilter('all'); }}
               readOnly={!canWrite}
+              live={live}
+              liveLoading={isSpace && !!selectedId && !liveSynced}
             />
           </main>
 
           {!ctxCollapsed && (
             <>
               <div onPointerDown={startResize('ctx')} className={resizerClass} role="separator" aria-orientation="vertical" />
-              <aside style={{ width: safeCtxWidth }} className="shrink-0 border-l border-outline-variant/30 bg-surface-container-lowest/40">
+              <aside style={{ width: safeCtxWidth }} className="shrink-0 border-l border-outline-variant/30 bg-surface-container-lowest/40 flex flex-col">
+                {isSpace && selectedId && (
+                  <div role="tablist" className="flex shrink-0 border-b border-outline-variant/30 text-[11px] font-mono">
+                    {(['links', 'history', 'proposals'] as const).map((tab) => (
+                      <button
+                        key={tab}
+                        type="button"
+                        role="tab"
+                        aria-selected={ctxTab === tab}
+                        onClick={() => setCtxTab(tab)}
+                        className={cn('flex-1 px-2 py-1.5', ctxTab === tab ? 'text-primary border-b border-primary' : 'text-on-surface-variant hover:bg-surface-container-high')}
+                      >
+                        {tab}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {isSpace && selectedId && ctxTab === 'history' && (
+                  <div className="flex-1 min-h-0 overflow-y-auto p-3"><NoteHistory noteId={selectedId} canWrite={canWrite} /></div>
+                )}
+                {isSpace && selectedId && ctxTab === 'proposals' && (
+                  <div className="flex-1 min-h-0 overflow-y-auto p-3"><NoteProposals noteId={selectedId} canWrite={canWrite} /></div>
+                )}
+                {(!isSpace || !selectedId || ctxTab === 'links') && (
+                <div className="flex-1 min-h-0">
                 <NoteContext
                   detail={selectedId ? detail.data : undefined}
                   suggestions={suggestions.data?.suggestions ?? []}
@@ -344,6 +403,8 @@ export function NotesWorkspace() {
                   onTagClick={(t) => { setActiveTag(t); setFilter('all'); }}
                   onCollapse={toggleCtx}
                 />
+                </div>
+                )}
               </aside>
             </>
           )}
