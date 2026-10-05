@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-481 mounted routes across 67 route files. The path is the full one, group prefix included — what a client actually calls.
+482 mounted routes across 67 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -277,6 +277,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/notes` | `src/api/routes/notes.ts` |
 | DELETE | `/api/notes/:id` | `src/api/routes/notes.ts` |
 | GET | `/api/notes/:id` | `src/api/routes/notes.ts` |
+| POST | `/api/notes/:id/merge` | `src/api/routes/notes.ts` |
 | PATCH | `/api/notes/:id/pin` | `src/api/routes/notes.ts` |
 | GET | `/api/notes/:id/revisions` | `src/api/routes/notes.ts` |
 | GET | `/api/notes/:id/revisions/:revisionId` | `src/api/routes/notes.ts` |
@@ -502,7 +503,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `capabilities` | 1 |
 | `(root)` | `channels` | 1 |
 | `(root)` | `config` | 4 |
-| `(root)` | `core` | 28 |
+| `(root)` | `core` | 29 |
 | `(root)` | `db` | 11 |
 | `(root)` | `extensions` | 2 |
 | `(root)` | `hooks` | 3 |
@@ -514,14 +515,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `utils` | 1 |
 | `api` | `capabilities` | 1 |
 | `api` | `channels` | 22 |
-| `api` | `config` | 20 |
+| `api` | `config` | 21 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 111 |
-| `api` | `db` | 108 |
+| `api` | `core` | 112 |
+| `api` | `db` | 109 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 3 |
-| `api` | `models` | 34 |
+| `api` | `models` | 35 |
 | `api` | `plugins` | 1 |
 | `api` | `security` | 111 |
 | `api` | `services` | 5 |
@@ -559,14 +560,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `connectors` | `utils` | 5 |
 | `core` | `capabilities` | 2 |
 | `core` | `channels` | 7 |
-| `core` | `config` | 44 |
+| `core` | `config` | 45 |
 | `core` | `connectors` | 3 |
-| `core` | `db` | 283 |
+| `core` | `db` | 282 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 5 |
 | `core` | `models` | 103 |
-| `core` | `security` | 115 |
+| `core` | `security` | 121 |
 | `core` | `services` | 2 |
 | `core` | `shared` | 15 |
 | `core` | `skills` | 10 |
@@ -583,7 +584,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `eval` | `config` | 3 |
 | `eval` | `core` | 6 |
 | `eval` | `db` | 8 |
-| `eval` | `models` | 7 |
+| `eval` | `models` | 8 |
 | `eval` | `security` | 2 |
 | `eval` | `utils` | 5 |
 | `extensions` | `core` | 2 |
@@ -599,25 +600,25 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `mcp` | `security` | 3 |
 | `mcp` | `utils` | 4 |
 | `models` | `config` | 10 |
-| `models` | `core` | 27 |
+| `models` | `core` | 29 |
 | `models` | `db` | 12 |
-| `models` | `security` | 19 |
+| `models` | `security` | 20 |
 | `models` | `services` | 1 |
 | `models` | `shared` | 4 |
-| `models` | `utils` | 41 |
+| `models` | `utils` | 42 |
 | `plugins` | `security` | 1 |
 | `plugins` | `tools` | 1 |
 | `plugins` | `utils` | 3 |
 | `security` | `api` | 1 |
 | `security` | `config` | 12 |
 | `security` | `connectors` | 3 |
-| `security` | `core` | 10 |
-| `security` | `db` | 68 |
+| `security` | `core` | 11 |
+| `security` | `db` | 73 |
 | `security` | `tools` | 1 |
-| `security` | `utils` | 23 |
+| `security` | `utils` | 24 |
 | `services` | `capabilities` | 5 |
 | `services` | `config` | 3 |
-| `services` | `core` | 4 |
+| `services` | `core` | 5 |
 | `services` | `db` | 11 |
 | `services` | `models` | 19 |
 | `services` | `security` | 4 |
@@ -730,7 +731,7 @@ Every member of the `GatewayEventType` union in `src/core/gateway/protocol.ts`, 
 | `artifact.version_updated` | yes | `src/core/artifacts/events.ts` | `*` |
 | `audit` | yes | `src/core/gateway/hub.ts` | `*` |
 | `chat.delta` | yes | `src/core/gateway/event-bridge.ts` | `*` |
-| `chat.error` | yes | `src/core/gateway/message-handler.ts` | `*` |
+| `chat.error` | yes | `src/core/agent/service.ts`, `src/core/gateway/message-handler.ts` | `*` |
 | `chat.message` | yes | `src/channels/webchat/index.ts`, `src/core/gateway/message-handler.ts` | `*` |
 | `chat.response` | yes | `src/core/gateway/message-handler.ts` | `*` |
 | `document.completed` | yes | `src/core/gateway/event-bridge.ts` | `*` |

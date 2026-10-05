@@ -11,7 +11,7 @@ import { generateRunId, runWithContext } from '@/core/run-context';
 import { type AttachedFileRef, buildAttachedFilesContext } from '@/core/session-files';
 import { recordClassification, recordRootRun } from '@/core/telemetry';
 import { TrajectoryRecorder } from '@/core/trajectories/recorder';
-import type { AgentContext, AgentTrigger } from '@/core/types';
+import type { AgentContext, AgentSpace, AgentTrigger } from '@/core/types';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import type { Session } from '@/db/schema/sessions';
@@ -83,6 +83,13 @@ interface TurnInput {
   trigger: AgentTrigger;
   /** A room turn: the member's post it answers (already stored, §6.3). */
   postedMessageId?: string;
+  /** A room turn: fires when the turn is stopped (`/stop`, removal, approval timeout). */
+  signal?: AbortSignal;
+}
+
+/** A room turn that failed; its message is for the requester only. */
+class RoomTurnFailed extends Error {
+  override name = 'RoomTurnFailed';
 }
 
 /** What `handleRoomMessage` did with an addressed post. */
@@ -159,9 +166,9 @@ export class AgentService {
   }
 
   /** The fast model mapped to the `voice` topic for this user, or undefined if none is mapped. */
-  private async resolveVoiceModel(userId: string): Promise<SelectedModel | undefined> {
+  private async resolveVoiceModel(userId: string, space: AgentSpace | null): Promise<SelectedModel | undefined> {
     try {
-      const routing = await this.modelSelector.selectForWorker('voice', false, { userId });
+      const routing = await this.modelSelector.selectForWorker('voice', false, { userId, inSpace: !!space, spaceRole: space?.role });
       return routing.model ? { modelId: routing.model, name: routing.name } : undefined; // '' ⇒ topic unmapped ⇒ fall back to complexity routing
     } catch {
       return undefined;
@@ -309,9 +316,12 @@ export class AgentService {
     }
     // Approvals in a room are bare yes/no only, like a group thread, and only
     // the requester's own, raised in this room.
+    // Resolved by id: an approval of theirs waiting elsewhere does not make
+    // this `yes` ambiguous.
     const reply = approvalReplyFor(posted.content, true);
     const pending = this.approvalManager.getPendingApprovals(requesterId).filter((a) => a.sessionId === roomId);
-    if (reply && pending.length === 1 && await this.approvalManager.tryResolveFromMessage(reply, requesterId)) {
+    if (reply && pending.length === 1
+      && await this.approvalManager.resolveApproval(pending[0].id, reply === 'yes', posted.content, { forUserId: requesterId, resolvedBy: requesterId })) {
       return { kind: 'approval' };
     }
     const { displayNames } = await import('@/core/session-history');
@@ -321,7 +331,7 @@ export class AgentService {
       roomId,
       access.room.workspaceId,
       { requesterId, requesterName, messageId: postedMessageId, enqueuedAt: new Date() },
-      (request) => this.runRoomTurn(roomId, request.requesterId, request.messageId, bridged),
+      (request, signal) => this.runRoomTurn(roomId, request.requesterId, request.requesterName, request.messageId, signal, bridged),
     );
     return { kind: 'queued', position };
   }
@@ -330,10 +340,16 @@ export class AgentService {
    * Run one queued room turn, handed over by the room queue. The requester's
    * access is checked again (they may have been removed while waiting); the
    * turn runs as them, under `withSessionTurn`, with their workspace and
-   * funding as the usage context. Throws when the turn failed, so the queue
-   * reports it to the room.
+   * funding as the usage context. `signal` (the queue's stop) is checked at
+   * each handover and passed down to the root agent's spawn. Before the
+   * turn, a transcript past `rooms.transcriptWindowChars` is compacted, so
+   * the turn's history stays in the window and no row is skipped. Throws
+   * when the turn failed, so the queue reports it to the room; the error's
+   * details go to the requester only.
    */
-  private async runRoomTurn(roomId: string, requesterId: string, postedMessageId: string, bridged?: GroupTurn): Promise<void> {
+  private async runRoomTurn(
+    roomId: string, requesterId: string, requesterName: string, postedMessageId: string, signal: AbortSignal, bridged?: GroupTurn,
+  ): Promise<void> {
     const [{ roomAccess }, { can }, { RoomTurnDropped }] = await Promise.all([
       import('@/core/rooms/access'), import('@/security/space-access'), import('@/core/rooms/queue'),
     ]);
@@ -341,19 +357,40 @@ export class AgentService {
     if (!access || !can(access.role, 'run_agent')) throw new RoomTurnDropped('The requester can no longer ask Octipus in this room');
     const posted = await messageRepository.findById(postedMessageId);
     if (!posted || posted.sessionId !== roomId) throw new RoomTurnDropped('The post is gone');
-    await withSessionTurn(roomId, async () => {
-      const session = await sessionRepository.findById(roomId);
-      if (!session || session.kind !== 'room') throw new RoomTurnDropped('The room is gone');
-      const runId = generateRunId();
-      const result = await runWithContext(
-        { runId, sessionId: roomId, userId: requesterId, channel: 'room', origin: 'room' },
-        () => withProviderUsageContext({ userId: requesterId }, async () => {
-          const noModel = await this.noModelAnswer(requesterId);
-          if (noModel) throw new Error(noModel.response);
-          return this.runTurn({ session, requesterId, message: posted.content, channel: 'room', trigger: 'room', postedMessageId, groupTurn: bridged });
-        }),
-      );
-      if (result.outcome === 'failed' && !result.metadata?.limit) throw new Error(result.response);
+    signal.throwIfAborted();
+    try {
+      await withSessionTurn(roomId, async () => {
+        signal.throwIfAborted();
+        const session = await sessionRepository.findById(roomId);
+        if (!session || session.kind !== 'room') throw new RoomTurnDropped('The room is gone');
+        const runId = generateRunId();
+        const result = await runWithContext(
+          { runId, sessionId: roomId, userId: requesterId, channel: 'room', origin: 'room' },
+          () => withProviderUsageContext({ userId: requesterId }, async () => {
+            const noModel = await this.noModelAnswer(requesterId);
+            if (noModel) throw new Error(noModel.response);
+            await maybeCompactSession(roomId, { requesterId, before: { id: posted.id, createdAt: posted.createdAt.toISOString() } });
+            signal.throwIfAborted();
+            return this.runTurn({ session, requesterId, message: posted.content, channel: 'room', trigger: 'room', postedMessageId, signal, groupTurn: bridged });
+          }),
+        );
+        if (result.outcome === 'failed' && !result.metadata?.limit) throw new RoomTurnFailed(result.response);
+      });
+    } catch (err) {
+      if (signal.aborted || err instanceof RoomTurnDropped) throw err;
+      // The room reads only that the turn failed (`room.turn`); the requester gets why.
+      const detail = err instanceof RoomTurnFailed ? err.message : `I encountered an error processing your message: ${(err as Error).message}`;
+      await this.notifyRoomRequester(roomId, requesterId, detail);
+      throw new RoomTurnFailed(`Octipus could not answer ${requesterName}`);
+    }
+  }
+
+  /** A room turn's private detail (a failure, a limit), to its requester only. */
+  private async notifyRoomRequester(roomId: string, requesterId: string, error: string, limit?: LimitRefusal): Promise<void> {
+    const { getGatewayHub } = await import('@/core/gateway/hub');
+    getGatewayHub().publishEvent({
+      type: 'chat.error', source: 'rooms', userId: requesterId, sessionId: roomId,
+      payload: { roomId, error, ...(limit ? { limit } : {}) },
     });
   }
 
@@ -363,10 +400,14 @@ export class AgentService {
    * §6.7), the linked room's recent transcript — only while the requester
    * may still enter that room of the same space, re-checked every turn. The
    * injected transcript is other members' text: the session is marked
-   * `suspicious` for the turn.
+   * `suspicious` for the turn. Fenced by `fenceSpaceTurnContext`, so no
+   * stored turn keeps a copy (a removed member's next turn has none, a
+   * retracted entry is gone from every later turn).
    */
   private async spaceTurnContext(session: Session, userId: string, workspaceId: string): Promise<string> {
-    const { getSpace } = await import('@/core/spaces/service');
+    const [{ getSpace }, { fenceSpaceTurnContext }] = await Promise.all([
+      import('@/core/spaces/service'), import('@/core/spaces/turn-context'),
+    ]);
     const { name } = await getSpace({ userId }, workspaceId);
     const { spaceMemoryBlock } = await import('@/core/spaces/memory');
     let block = await spaceMemoryBlock(workspaceId, name);
@@ -379,22 +420,20 @@ export class AgentService {
         observeFlow(session.id, { toolId: 'room', action: 'linked_transcript' }, { taints: ['suspicious'] });
       }
     }
-    return block;
+    // For this turn only: never stored with the turn, never replayed (I5, §6.5).
+    return fenceSpaceTurnContext(block);
   }
 
   /** The newest posts of a room that fit in `rooms.transcriptWindowChars`, fenced, for a side panel. */
   private async linkedRoomTranscript(roomId: string, title: string): Promise<string> {
-    const [{ readSessionHistory }, { renderRoomTranscript, transcriptChars }] = await Promise.all([
+    const [{ readSessionHistory }, { renderRoomTranscript, windowRows }] = await Promise.all([
       import('@/core/session-history'), import('@/core/rooms/room-context'),
     ]);
     const history = await readSessionHistory(roomId);
-    const window = getConfig().rooms.transcriptWindowChars;
-    let start = history.rows.length;
-    while (start > 0 && transcriptChars(history.rows.slice(start - 1)) <= window) start--;
-    const rows = history.rows.slice(start);
+    const { rows, omitted } = windowRows(history.rows, getConfig().rooms.transcriptWindowChars);
     return `\n\nLINKED ROOM — the member opened this private session from the room "${title}". `
       + 'Its recent transcript follows; refer to it when they ask about the room.\n'
-      + renderRoomTranscript({ roomTitle: title, rows, summary: start === 0 ? history.checkpoint?.summary : null, privateView: true });
+      + renderRoomTranscript({ roomTitle: title, rows, summary: omitted === 0 ? history.checkpoint?.summary : null, privateView: true });
   }
 
   /** Publish a background reply through the same event stream as interactive replies. */
@@ -489,7 +528,7 @@ export class AgentService {
   private async runTurn(input: TurnInput): Promise<TurnResult> {
     const {
       session, requesterId: userId, message, channel, attachedFiles = [], forcedOutputMode,
-      bypassVoiceGate = false, groupTurn, trigger, postedMessageId,
+      bypassVoiceGate = false, groupTurn, trigger, postedMessageId, signal,
     } = input;
     const sessionId = session.id;
     // A room (§6.4): the request is the member's post, stored once already;
@@ -577,11 +616,14 @@ export class AgentService {
         }
       }
 
-      // Token budget check
+      // Token budget check. Not in a room: its token count is every member's,
+      // so one member would exhaust it for all, and "start a new session" is
+      // impossible there; each requester's own spend budgets and quotas
+      // apply, and the room's history is bounded by its compaction window.
       const config = getConfig();
       const tokenBudget = (session?.context as Record<string, unknown>)?.tokenBudget as number || config.agent.maxTokenBudget;
       const sessionTokens = session?.tokenCount || 0;
-      if (tokenBudget > 0) {
+      if (tokenBudget > 0 && !isRoom) {
         if (sessionTokens >= tokenBudget) {
           return {
             response: `Session token budget (${tokenBudget.toLocaleString()}) exhausted. Start a new session to continue.`,
@@ -829,11 +871,11 @@ export class AgentService {
         if (action.kind === 'propose') {
           // Plan out loud on the fast voice model; the user's actual utterance is
           // persisted, the accumulated task rides in the planning directive.
-          const voiceModel = await this.resolveVoiceModel(userId);
+          const voiceModel = await this.resolveVoiceModel(userId, scope.space);
           const { response, metadata } = await directResponse(
             message, resolvedSessionId, userId, this.modelSelector,
             classification.complexity ?? 'moderate', inputGuard.flags,
-            VOICE_PLANNING_DIRECTIVE + action.workMessage, voiceModel,
+            VOICE_PLANNING_DIRECTIVE + action.workMessage, voiceModel, scope.space,
           );
           // Carry this turn's files (cold) or the ones already accumulated (refinement).
           this.planGate.recordProposal(
@@ -936,6 +978,8 @@ export class AgentService {
 
       const startTime = Date.now();
       const turnGeneration = sessionGeneration((await sessionRepository.findById(resolvedSessionId))?.context);
+      // A stopped room turn spawns nothing (the root agent checks again at its spawn).
+      signal?.throwIfAborted();
       const { response, agentId, sources, outcome, limit } = await this.runRootAgent(
         resolvedSessionId, userId, message, classification, inputGuard.flags, channel,
         turnContext + groupContextBlock,
@@ -944,20 +988,27 @@ export class AgentService {
         {
           takenTasks: takenTasks.tasks,
           ...(isRoom && postedMessageId ? { room: { postedMessageId, title: session.title ?? 'Room' } } : {}),
+          ...(signal ? { signal } : {}),
         },
       );
+      // …and a turn stopped while it ran stores no answer.
+      signal?.throwIfAborted();
 
       const outputCheck = guardOutput(response, inputGuard.flags);
       let finalResponse = outputCheck.action === 'replace' ? outputCheck.response : response;
       if (outputCheck.action === 'replace') {
         coreLogger.warn({ flags: outputCheck.flags, sessionId }, 'Output guard replaced rootAgent response');
       }
+      // A room member's own limit (their cap, their spend) is theirs: the
+      // room gets a neutral line, the requester the details.
+      if (isRoom && limit) finalResponse = await this.roomLimitRefusal(sessionId, userId, finalResponse, limit);
       // Strip internal swarm relay markup (<CollectChildren>/<ChildResult>/…) a
       // weak root agent sometimes echoes verbatim — the user must never see it.
       finalResponse = stripSwarmScaffolding(finalResponse);
 
       const activeSession = await sessionRepository.findById(resolvedSessionId);
       if (sessionGeneration(activeSession?.context) !== turnGeneration) {
+        if (isRoom) await this.roomCleared();
         return { response: 'Conversation was cleared while this turn was running.', sessionId: resolvedSessionId, classification };
       }
       const showSources = (activeSession?.metadata as Record<string, unknown> | undefined)?.showSources !== false;
@@ -968,13 +1019,17 @@ export class AgentService {
       const persistedAnswer = await messageRepository.createForGeneration({
         sessionId: resolvedSessionId, role: 'assistant', content: finalResponse, agentId,
         metadata: {
-          // A refused turn keeps its structured reason so the chat card survives a reload.
-          ...(limit && { limit: limit }),
+          // A refused turn keeps its structured reason so the chat card
+          // survives a reload — not in a room, where every member reads it.
+          ...(limit && !isRoom && { limit: limit }),
           // A room answer names the post and the member it answers.
           ...(isRoom && { requesterId: userId, ...(postedMessageId && { replyTo: postedMessageId }) }),
         },
       }, turnGeneration);
-      if (!persistedAnswer) return { response: 'Conversation was cleared while this turn was running.', sessionId: resolvedSessionId, classification };
+      if (!persistedAnswer) {
+        if (isRoom) await this.roomCleared();
+        return { response: 'Conversation was cleared while this turn was running.', sessionId: resolvedSessionId, classification };
+      }
       // If the output guard replaced the answer, the vendor must receive the
       // corrected Octipus text on its next turn rather than acknowledging it.
       if (outputCheck.action !== 'replace' && !isRoom) {
@@ -1015,8 +1070,29 @@ export class AgentService {
         metadata: { latencyMs: Date.now() - startTime, ...(limit && { limit }) },
       };
     } catch (error) {
-      return this.turnFailed(error, { sessionId, channel, message, trajectory, turnSessionId, userMessageSaved, isRoom });
+      // A stopped or dropped room turn ends here; the queue announces it.
+      if (isRoom && (signal?.aborted || (error as Error)?.name === 'RoomTurnDropped')) throw error;
+      return this.turnFailed(error, { sessionId, channel, message, trajectory, turnSessionId, userMessageSaved, isRoom, requesterId: userId });
     }
+  }
+
+  /** A room turn whose room was cleared while it ran: dropped, so the room's `room.turn` says why. */
+  private async roomCleared(): Promise<never> {
+    const { RoomTurnDropped } = await import('@/core/rooms/queue');
+    throw new RoomTurnDropped('The room\'s conversation was cleared while Octipus was answering');
+  }
+
+  /**
+   * The room's text for a requester's limit refusal: a neutral line naming
+   * them. The refusal text and its structured reason go to them only.
+   */
+  private async roomLimitRefusal(roomId: string, requesterId: string, text: string, refusal: LimitRefusal): Promise<string> {
+    const [{ displayNames }, { roomRefusalText }] = await Promise.all([
+      import('@/core/session-history'), import('@/core/errors/limit-refusal'),
+    ]);
+    const name = (await displayNames([requesterId])).get(requesterId) ?? 'A member';
+    await this.notifyRoomRequester(roomId, requesterId, text, refusal);
+    return roomRefusalText(name);
   }
 
   /**
@@ -1034,6 +1110,8 @@ export class AgentService {
       turnSessionId: string | undefined;
       userMessageSaved: boolean;
       isRoom: boolean;
+      /** Who asked (a room's limit refusal names them). */
+      requesterId?: string;
     },
   ): Promise<TurnResult> {
     const { sessionId, channel, message, trajectory, turnSessionId, userMessageSaved } = info;
@@ -1072,10 +1150,10 @@ export class AgentService {
           if (!userMessageSaved) {
             await messageRepository.create({ sessionId: turnSessionId, role: 'user', content: message });
           }
-          await messageRepository.create({
-            sessionId: turnSessionId, role: 'assistant', content: limit.text,
-            metadata: { limit: limit.refusal },
-          });
+          await messageRepository.create(info.isRoom && info.requesterId
+            // A room stores a neutral line; the requester gets the details.
+            ? { sessionId: turnSessionId, role: 'assistant', content: await this.roomLimitRefusal(turnSessionId, info.requesterId, limit.text, limit.refusal) }
+            : { sessionId: turnSessionId, role: 'assistant', content: limit.text, metadata: { limit: limit.refusal } });
         } catch (err) {
           coreLogger.warn({ err, sessionId: turnSessionId }, 'Could not persist the limit refusal');
         }

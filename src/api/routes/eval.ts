@@ -183,6 +183,15 @@ export const evalRoutes = new Elysia({ prefix: '/eval' })
       return { error: `An eval is already running (started ${running.startedAt.toISOString()})`, running: true };
     }
 
+    // An operator's run never spends a user's personal key (coworking spec §8.1).
+    if (model) {
+      const { getModelRegistry } = await import('@/models');
+      if (await getModelRegistry().isPersonalModelName(model)) {
+        set.status = 400;
+        return { error: `Model '${model}' is a personal model; evaluation runs use install models only` };
+      }
+    }
+
     // Fail loud if no model is selected AND no DB default exists, instead of
     // crashing mid-run inside the CLI runner.
     if (!model) {

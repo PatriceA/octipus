@@ -7,6 +7,7 @@ import { getGatewayHub } from '@/core/gateway/hub';
 import { membershipVersion } from '@/core/spaces/membership';
 import { getMembership } from '@/core/spaces/service';
 import { insertRevision, loadSpaceNote, writeBodyIfUnchanged } from '@/db/repositories/live-documents';
+import { userRepository } from '@/db/repositories/user-repository';
 import { coreLogger } from '@/utils/logger';
 import { DocumentHub } from './hub';
 import { leaseViews, listLeases, setLeaseChangeListener } from './file-leases';
@@ -28,10 +29,11 @@ export function getDocHub(): DocumentHub {
     writeBody: async (noteId, workspaceId, expectedSha, body, sha) =>
       (await writeBodyIfUnchanged(noteId, workspaceId, expectedSha, body, sha)) !== null,
     insertRevision,
-    reindex: async (noteId, editorUserId) => {
+    reindex: async (noteId, editorUserId, previousBody) => {
       const { getNoteService } = await import('@/core/knowledge/notes');
-      await getNoteService().refreshSpaceNote(noteId, editorUserId);
+      return getNoteService().refreshSpaceNote(noteId, editorUserId, previousBody);
     },
+    userName: async (userId) => (await userRepository.findById(userId))?.username ?? null,
     membership: async (userId, workspaceId) => (await getMembership(userId, workspaceId))?.role ?? null,
     membershipVersion,
     send: (connectionId, message) => gateway().connectionManager.sendToConnection(connectionId, message),

@@ -50,8 +50,14 @@ test('refuses another owner but permits an administrator', async () => {
   expect(fixture.update).toHaveBeenCalledOnce();
 });
 
-test('preserves existing authenticated editing of system skills', async () => {
+test('only an administrator edits a system skill', async () => {
   fixture.findSkill.mockResolvedValue({ userId: null, isSystem: true });
+  await expect(updateSkill('skill', { description: 'New description' }, OWNER)).rejects.toMatchObject({ status: 403 });
+  expect(fixture.update).not.toHaveBeenCalled();
+  // Not even a system skill row that happens to carry the user's id.
+  fixture.findSkill.mockResolvedValue({ userId: OWNER, isSystem: true });
+  await expect(updateSkill('skill', { description: 'New description' }, OWNER)).rejects.toMatchObject({ status: 403 });
+  fixture.findUser.mockResolvedValue({ id: OWNER, isAdmin: true });
   await updateSkill('skill', { description: 'New description' }, OWNER);
   expect(fixture.update).toHaveBeenCalledOnce();
 });

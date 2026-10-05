@@ -351,7 +351,7 @@ export async function spawnWorker(
   const routing = await deps.modelSelector.selectForWorker(
     lane,
     roleTools.length > 0,
-    { userId: context.userId, inSpace },
+    { userId: context.userId, inSpace, spaceRole: context.space?.role },
   );
   const agentCfg = getConfig().agent;
   let isSmall = false;
@@ -1384,7 +1384,7 @@ async function handleWorkerFailure(
   try {
     // Personal bindings have no backup: this is the install lane's (§8.2).
     const inSpace = !!context.space;
-    const backup = await resolveModel({ userId: context.userId, topic: lane, backup: true, inSpace });
+    const backup = await resolveModel({ userId: context.userId, topic: lane, backup: true, inSpace, spaceRole: context.space?.role });
     if (backup && backup.modelId !== failedModel) {
       coreLogger.info(
         { failedModel, backupModel: backup.modelId, topic: lane, role: agentRole },

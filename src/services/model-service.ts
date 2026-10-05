@@ -86,12 +86,17 @@ function validateOutputLimits(maxTokens: unknown, defaultMaxTokens: unknown): st
   return null;
 }
 
-/** Get one model by name, with derived capabilities. */
-export async function getModelByName(name: string, userId: string) {
+/**
+ * Get one model by name, with derived capabilities. An admin reads any
+ * install row (disabled, any org), as the admin registry lists them; anyone
+ * else an enabled row they may use. Both read their own personal rows, and
+ * another user's personal row is "not found" to everyone.
+ */
+export async function getModelByName(name: string, userId: string, isAdmin: boolean) {
   const registry = getModelRegistry();
-  // Only a row the caller may see: another user's personal row is "not found".
-  const model = await registry.getModelVisibleTo(name, userId);
-  if (!model?.isEnabled) return { error: 'Model not found' as const };
+  const model = isAdmin ? await registry.getModelAnyState(name) : await registry.getModelVisibleTo(name, userId);
+  if (!model || (model.ownerUserId && model.ownerUserId !== userId)) return { error: 'Model not found' as const };
+  if (!isAdmin && !model.isEnabled) return { error: 'Model not found' as const };
   return { ...model, capabilities: getCapabilitiesForModel(model) };
 }
 

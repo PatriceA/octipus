@@ -40,6 +40,9 @@ export interface PersonalModelSummary {
   endpoint: string | null;
   isEnabled: boolean;
   hasKey: boolean;
+  /** Token window and output limit (compaction thresholds derive from the window). */
+  contextWindow: number;
+  maxTokens: number;
   /** Text lanes this row runs for its owner. */
   topics: string[];
 }

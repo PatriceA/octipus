@@ -458,24 +458,29 @@ export class LiteLLMClient {
   private async applyModelOverrides(options: CompletionOptions): Promise<CompletionOptions> {
     if (options.endpoint && options.apiKey) return options;
     const { getModelRegistry } = await import('@/models/model-registry');
-    const { resolveModelKey, PersonalModelKeyMissingError } = await import('@/models/model-key');
+    const { assertModelRowOwner, resolveModelKey, PersonalModelKeyMissingError, PersonalModelOwnerError } = await import('@/models/model-key');
+    const { providerUsageUserId } = await import('./providers/instrumented');
+    const requesterId = providerUsageUserId(options);
     try {
       const registry = getModelRegistry();
       const entry = options.modelConfigName
         ? await registry.getModel(options.modelConfigName)
-        : await registry.getModelByModelId(options.model, { userId: options.userId });
+        : await registry.getModelByModelId(options.model, { userId: requesterId });
       if (!entry) return options;
 
+      // Another user's personal row never runs, whatever key the caller brought.
+      assertModelRowOwner(entry, requesterId);
       const next: CompletionOptions = entry.ownerUserId ? { ...options, modelConfigName: entry.name } : { ...options };
       if (!next.endpoint && entry.endpoint) next.endpoint = entry.endpoint;
       if (!next.apiKey) {
-        const key = await resolveModelKey(entry);
+        const key = await resolveModelKey(entry, requesterId);
         if (key) next.apiKey = key;
       }
       return next;
     } catch (err) {
-      // A personal row without its key must not run on the install's env key.
-      if (err instanceof PersonalModelKeyMissingError) throw err;
+      // A personal row without its key must not run on the install's env key,
+      // and another user's personal row must not run at all.
+      if (err instanceof PersonalModelKeyMissingError || err instanceof PersonalModelOwnerError) throw err;
       modelLogger.warn({ err, model: options.model }, 'Failed to resolve per-model overrides; using caller options as-is');
       return options;
     }

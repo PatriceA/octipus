@@ -540,6 +540,14 @@ async function main() {
       disconnectBridge();
       stopRoomFanout();
       await gatewayHub.stop();
+      // No more document frames: save what members typed into open notes
+      // since the last debounced persist (§7.3), before the process goes.
+      try {
+        const { getDocHub } = await import('@/core/docs');
+        await getDocHub().flushAll();
+      } catch (err) {
+        logger.error({ err }, 'Saving open live notes at shutdown failed');
+      }
       await mcpBridge.disconnectAll();
       await gateway.stop();
       // Force-closes active connections (idle keep-alives, the permission WS)

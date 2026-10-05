@@ -147,6 +147,12 @@ export interface RootRunExtras {
    * user row of its own.
    */
   room?: { postedMessageId: string; title: string };
+  /**
+   * A room turn's stop (`/stop`, a removal, an approval timeout): checked
+   * right before the spawn, and once the root agent exists it stops it — a
+   * stop that lands before the agent is registered is not lost.
+   */
+  signal?: AbortSignal;
 }
 
 export async function runRootAgent(
@@ -189,7 +195,7 @@ export async function runRootAgent(
   // The requester's own choices first (their `/model`, their personal lane
   // binding), then the install's (coworking spec §8.2).
   const inSpace = !!space;
-  const selectedModel = await deps.modelSelector.selectForRootAgent(sessionId, classification.type, { message, classification }, { userId, inSpace });
+  const selectedModel = await deps.modelSelector.selectForRootAgent(sessionId, classification.type, { message, classification }, { userId, inSpace, spaceRole: space?.role });
   const modelName = selectedModel.modelId;
 
   // Resolve the root agent mode for THIS turn. 'auto' (default) re-derives
@@ -656,6 +662,7 @@ export async function runRootAgent(
     ? agentConfig.hookTurnTimeoutMs
     : agentConfig.turnTimeoutMs;
 
+  extras.signal?.throwIfAborted();
   const worker = await agentManager.spawn({
     sessionId,
     userId,
@@ -697,6 +704,9 @@ export async function runRootAgent(
   });
 
   const agentId = worker.getContext().id;
+  const stopOnAbort = () => { agentManager.stop(agentId, { cascade: true }); };
+  if (extras.signal?.aborted) stopOnAbort();
+  else extras.signal?.addEventListener('abort', stopOnAbort, { once: true });
   parentNode.signal = worker.getAbortSignal();
   // Spend proxy — the swarm pool this feeds is a cost pool (see spawn-budget.ts).
   parentNode.ownTokenUsage = () => worker.getBillableTokens();
@@ -954,5 +964,7 @@ export async function runRootAgent(
       ? 'Task was stopped. Would you like to adjust the request or start something new?'
       : `I encountered an error while processing your request: ${humanizeProviderError(errMsg)}`;
     return { response, agentId, sources, outcome: wasStopped || isCancellationError(error) ? 'cancelled' : 'failed' };
+  } finally {
+    extras.signal?.removeEventListener('abort', stopOnAbort);
   }
 }

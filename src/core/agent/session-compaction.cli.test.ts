@@ -14,14 +14,14 @@ test('automatic compaction never summarizes or rotates a root CLI history', asyn
 });
 test('manual compaction delegates without publishing an Octipus checkpoint', async () => {
   mocks.compact.mockResolvedValue('Same CLI conversation compacted.');
-  expect(await compactSessionCommand('session', ' keep decisions ')).toBe('Same CLI conversation compacted.');
-  expect(mocks.compact).toHaveBeenCalledWith(expect.objectContaining({ id: 'session' }), 'keep decisions');
+  expect(await compactSessionCommand('session', ' keep decisions ', 'requester')).toBe('Same CLI conversation compacted.');
+  expect(mocks.compact).toHaveBeenCalledWith(expect.objectContaining({ id: 'session' }), 'keep decisions', 'requester');
   expect(mocks.history).not.toHaveBeenCalled();
   expect(mocks.patch).not.toHaveBeenCalled();
 });
 test('native failure does not fall back to the thinner Octipus history', async () => {
   mocks.compact.mockRejectedValue(new Error('native compact failed'));
-  expect(await compactSessionCommand('session', '')).toContain('Compaction failed');
+  expect(await compactSessionCommand('session', '', 'requester')).toContain('Compaction failed');
   expect(mocks.history).not.toHaveBeenCalled();
   expect(mocks.patch).not.toHaveBeenCalled();
 });

@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { ApiError, api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { useGateway } from '@/lib/gateway-context';
-import { LiveNoteSession, type LiveNoteState } from '@/lib/live-note';
+import { type LiveMerge, LiveNoteSession, type LiveNoteState } from '@/lib/live-note';
 
 export interface LiveNote {
   session: LiveNoteSession;
@@ -12,6 +13,19 @@ export interface LiveNote {
   version: number;
   /** The first `doc.sync` arrived: the document holds the note. */
   synced: boolean;
+}
+
+/** Merge an editor's text the server never got, through the hub (`POST /notes/:id/merge`). */
+function mergeThroughServer(noteId: string): LiveMerge {
+  return async (base, text) => {
+    try {
+      await api.post(`/notes/${noteId}/merge`, { base, text });
+      return 'merged';
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) return 'conflict';
+      throw err;
+    }
+  };
 }
 
 /**
@@ -28,16 +42,17 @@ export function useLiveNote(noteId: string | null, enabled: boolean): LiveNote |
 
   useEffect(() => {
     if (!enabled || !noteId || !userId) return;
-    const session = new LiveNoteSession(gateway, noteId, { id: userId, name: userName });
+    const session = new LiveNoteSession(gateway, noteId, { id: userId, name: userName }, mergeThroughServer(noteId));
     let version = 0;
-    let synced = false;
+    // Only a doc.sync makes the document the note: offline at open, or a
+    // refused join, leaves it empty (the editor shows the REST copy).
     const offState = session.onState((state) => {
-      if (state.status !== 'connecting') synced = true;
-      setLive({ session, state, version, synced });
+      setLive({ session, state, version, synced: state.synced });
     });
     const offReset = session.onReset(() => {
       version++;
-      setLive({ session, state: session.getState(), version, synced });
+      const state = session.getState();
+      setLive({ session, state, version, synced: state.synced });
     });
     return () => {
       offState();

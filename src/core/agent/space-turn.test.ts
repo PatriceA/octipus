@@ -8,19 +8,29 @@
  * model calls), and the memory module is observed rather than run.
  *
  *   - every spawner builds its context through `buildAgentContext`
- *     (source-shape), and `routeApproval(` is called only by
- *     `routeApprovalFor`;
+ *     (source-shape: no AgentContext literal that does not derive from a
+ *     context, in any typed form), every spawn passes a scope, and
+ *     `routeApproval(` is called only by `routeApprovalFor`;
  *   - a member's private space session runs with the space scope; a viewer
  *     cannot run the agent (turn and `POST /api/agents`), a stranger gets 404;
  *   - the role cap holds on all six approval paths and for a CLI model;
- *   - personal memories are not loaded in a space turn (children included),
- *     and the requester's profile stays out;
+ *   - personal memories are not loaded in a space turn (children included,
+ *     run through `spawnWorker`), and the requester's profile stays out;
+ *   - personal-only tools (global ones such as `update_skill` included) are
+ *     neither offered nor run; writes through personal connections (OAuth
+ *     connectors, MCP servers, the real browser) are refused, their reads
+ *     mark the session private; a coding agent's configuration (`.claude/`)
+ *     is never written in a space;
  *   - I6: after a private read, a write into the space asks — the flow
- *     guard switched off — on the base-tool and MCP paths;
- *   - a removed member's running agent stops and their next turn fails; an
- *     archived space runs no agent;
- *   - cost rows of the turn carry the space and its funding, install-topic
- *     calls `install`;
+ *     guard switched off — on the base-tool, tool-executor and CLI relay
+ *     paths, with the label produced by a real read and kept across a
+ *     restart (stored on the session);
+ *   - a removed member's running agent stops mid-turn, and the spawn of a
+ *     child fails; their next turn fails; an archived space runs no agent;
+ *   - cost rows of the turn — and of a worker's own calls — carry the space
+ *     and its funding, install-topic calls `install`;
+ *   - a pipeline's verify command, a pipeline resume and an artifact's data
+ *     sources follow the space rules too;
  *   - permission requests carry the space, and an admin who is not a member
  *     cannot see or answer them.
  */
@@ -41,6 +51,11 @@ const fx = vi.hoisted(() => ({
   turns: [] as Array<{ sessionId: string; userId: string; scope: { workspaceId: string | null; space: { workspaceId: string; role: string } | null; trigger: string; funding: string } }>,
   retrieve: [] as Array<{ userId: string; workspaceId?: string | null }>,
   update: [] as Array<{ userId: string }>,
+  /** Registry rows of CLI models an operator marked for shared use (D14). */
+  cliModels: {
+    'cli/claude': { modelId: 'cli/claude', provider: 'cli', metadata: { cliAgent: { sharedUse: true } } },
+    'cli/vibe': { modelId: 'cli/vibe', provider: 'cli', metadata: { cliAgent: { sharedUse: true } } },
+  } as Record<string, unknown>,
 }));
 
 vi.mock('@/models/model-registry', () => ({
@@ -48,7 +63,8 @@ vi.mock('@/models/model-registry', () => ({
     getDefaultModel: async () => ({ modelId: 'test-model' }),
     getAllModels: async () => [],
     getModelForTopic: async () => null,
-    getModelByModelId: async () => null,
+    getUserBinding: async () => null,
+    getModelByModelId: async (id: string) => fx.cliModels[id] ?? null,
     getModel: async () => null,
   }),
 }));
@@ -133,6 +149,25 @@ async function notesHandlers() {
   return (tool as unknown as { tools: Map<string, import('@/core/agent-base').ToolHandler> }).tools;
 }
 
+/** A worker of `userId` in the space, spawned the way every agent is (scope resolved, membership re-read). */
+async function spaceWorker(userId: string, sessionId: string) {
+  const { getAgentManager } = await import('@/core/agent-manager');
+  const { resolveAgentScope } = await import('./context');
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const scope = await resolveAgentScope({ session: await sessionRepository.findById(sessionId), userId, trigger: 'user' });
+  return getAgentManager().spawn({ sessionId, userId, ...scope, model: 'test-model', topic: 'general' });
+}
+
+type Completion = import('@/models/litellm-client').CompletionResult;
+const completion = (content: string, toolCalls: Completion['toolCalls'] = []): Completion => ({
+  content, toolCalls, finishReason: toolCalls.length ? 'tool_calls' : 'stop',
+  usage: { inputTokens: 5, outputTokens: 5, totalTokens: 10 }, model: 'test-model', latencyMs: 1,
+});
+/** Stand in for the worker's model: `next` answers each call. */
+function scriptModel(worker: unknown, next: () => Promise<Completion>): void {
+  (worker as { getCompletion: () => Promise<Completion> }).getCompletion = next;
+}
+
 beforeAll(async () => {
   process.env.STORAGE_MODE = 'embedded';
   process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'octipus-space-turn-'));
@@ -163,6 +198,11 @@ beforeAll(async () => {
       await getPermissionManager().setPermission(id, tool, action, 'ALLOW');
     }
     await getPermissionManager().setPermission(id, 'mcp', '*', 'ALLOW');
+  }
+  // What the editor's stored permissions allow, so a refusal below is the space's, not the policy's.
+  for (const [tool, action] of [['filesystem', 'write'], ['filesystem', 'read'], ['connector', 'connector_call_tool'],
+    ['cli-native:Write', 'Write'], ['artifacts', 'write'], ['artifacts', 'read']] as const) {
+    await getPermissionManager().setPermission(editorId, tool, action, 'ALLOW');
   }
   const { createServer } = await import('@/api/server');
   app = createServer();
@@ -200,27 +240,75 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
 }
 const SRC = join(import.meta.dirname, '..', '..');
 
+/** Index of the brace that closes the one opening at `open`. */
+function closingBrace(src: string, open: number): number {
+  let depth = 0;
+  for (let j = open; j < src.length; j++) {
+    if (src[j] === '{') depth++;
+    else if (src[j] === '}' && --depth === 0) return j;
+  }
+  return -1;
+}
+
+/** Index of the brace that opens the one closing at `close`. */
+function openingBrace(src: string, close: number): number {
+  let depth = 0;
+  for (let j = close; j >= 0; j--) {
+    if (src[j] === '}') depth++;
+    else if (src[j] === '{' && --depth === 0) return j;
+  }
+  return -1;
+}
+
+/**
+ * Object literals typed as an `AgentContext` in any form — annotated
+ * (`: AgentContext = {`), cast (`{ … } as AgentContext`), checked
+ * (`satisfies AgentContext`), or returned (`(): AgentContext => ({`,
+ * `): AgentContext { return {`) — that do not derive from an existing
+ * context: a literal whose first member spreads one (`{ ...context, … }`)
+ * keeps its scope and is allowed.
+ */
+function handBuiltContexts(src: string): string[] {
+  const opens: number[] = [];
+  for (const m of src.matchAll(/:\s*(?:import\([^)]*\)\.)?AgentContext\s*=\s*\{/g)) opens.push(m.index + m[0].length - 1);
+  for (const m of src.matchAll(/\)\s*:\s*(?:import\([^)]*\)\.)?AgentContext\s*=>\s*\(\s*\{/g)) opens.push(m.index + m[0].length - 1);
+  for (const m of src.matchAll(/\)\s*:\s*(?:import\([^)]*\)\.)?AgentContext\s*\{\s*return\s*\{/g)) opens.push(m.index + m[0].length - 1);
+  for (const m of src.matchAll(/\}\s*(?:as|satisfies)\s+(?:import\([^)]*\)\.)?AgentContext\b/g)) opens.push(openingBrace(src, m.index));
+  return opens
+    .filter((open) => open >= 0 && !/^\{\s*(?:\/\/[^\n]*\n\s*|\/\*[\s\S]*?\*\/\s*)*\.\.\./.test(src.slice(open, closingBrace(src, open) + 1)))
+    .map((open) => src.slice(open, open + 60).replace(/\s+/g, ' '));
+}
+
 describe('one place builds agent contexts, one function decides tool calls', () => {
+  test('the hand-built context check catches every typed literal form, and lets derived ones through', () => {
+    const forms = [
+      'const c: AgentContext = { id: "x", userId: "u" };',
+      'const c = { id: "x", userId: "u" } as AgentContext;',
+      'const c = { id: "x" } satisfies AgentContext;',
+      'const make = (): AgentContext => ({ id: "x", userId: "u" });',
+      'function make(): AgentContext {\n  return { id: "x", userId: "u" };\n}',
+      'const c: import("@/core/types").AgentContext = { id: "x" };',
+    ];
+    for (const form of forms) expect(handBuiltContexts(form), form).toHaveLength(1);
+    expect(handBuiltContexts('run({ ...context, stageName: "a", metadata: {} } as AgentContext);')).toEqual([]);
+    expect(handBuiltContexts('const c: AgentContext = {\n  // the parent, plus a stage\n  ...parent, role: "qa" };')).toEqual([]);
+    expect(handBuiltContexts('function make(): AgentContext { return buildAgentContext(input); }')).toEqual([]);
+  });
+
   test('no AgentContext literal is hand-built outside context.ts', () => {
     const offenders = sourceFiles(SRC)
       .filter((f) => !f.endsWith(join('core', 'agent', 'context.ts')))
-      .filter((f) => /:\s*(import\([^)]*\)\.)?AgentContext\s*=\s*\{/.test(readFileSync(f, 'utf8')))
-      .map((f) => relative(SRC, f));
+      .flatMap((f) => handBuiltContexts(readFileSync(f, 'utf8')).map((at) => `${relative(SRC, f)}: ${at}`));
     expect(offenders, 'build the context with buildAgentContext (src/core/agent/context.ts)').toEqual([]);
   });
 
-  test('every agentManager.spawn passes a space scope', () => {
+  test('every agent spawn passes a space scope', () => {
     const calls: string[] = [];
     for (const f of sourceFiles(SRC)) {
       const src = readFileSync(f, 'utf8');
-      for (let i = src.indexOf('agentManager.spawn({'); i >= 0; i = src.indexOf('agentManager.spawn({', i + 1)) {
-        let depth = 0;
-        let j = src.indexOf('(', i);
-        for (; j < src.length; j++) {
-          if ('([{'.includes(src[j])) depth++;
-          else if (')]}'.includes(src[j]) && --depth === 0) break;
-        }
-        calls.push(`${relative(SRC, f)}: ${src.slice(i, j)}`);
+      for (const m of src.matchAll(/\b(?:agentManager|getAgentManager\(\)|manager)\.spawn\(\{/g)) {
+        const open = m.index + m[0].length - 1;
+        calls.push(`${relative(SRC, f)}: ${src.slice(m.index, closingBrace(src, open) + 1)}`);
       }
     }
     expect(calls.length).toBeGreaterThanOrEqual(6);
@@ -417,8 +505,9 @@ describe('I6: personal data reaches the space only with consent', () => {
     // Reads still run; the write needs a human, and this run cannot ask one.
     await expect(tools.get('list_notes')!.execute({}, ctx)).resolves.toBeDefined();
     await expect(tools.get('write_note')!.execute({ title: 'From my inbox' }, ctx)).rejects.toBeInstanceOf(ApprovalBlockedError);
+    // An MCP server is the requester's own: its writes are refused outright in a space.
     const { authorizeMcpDispatch } = await import('@/security/mcp-authorization');
-    await expect(authorizeMcpDispatch(ctx, 'tracker.create_issue', {})).rejects.toBeInstanceOf(ApprovalBlockedError);
+    await expect(authorizeMcpDispatch(ctx, 'tracker.create_issue', {})).rejects.toThrow(/writes through your personal connection/);
 
     const { routeApprovalFor } = await import('@/security/approval-route');
     const decision = await routeApprovalFor({ ...ctx, attended: true }, { toolId: 'notes', action: 'write', toolName: 'write_note' }, { level: 'ALLOW' });
@@ -440,6 +529,306 @@ describe('I6: personal data reaches the space only with consent', () => {
     const offered = withoutPersonalOnlyTools([...(await notesHandlers()).values()]).map((h) => h.name);
     expect(offered).toContain('notes__write_note');
     expect(offered).not.toContain('notes__sync_vault');
+  });
+});
+
+// ── Children, globals, CLI and personal connections ───────────────────
+
+describe('children and workers of a space turn', () => {
+  test('a child worker loads neither personal memories nor the profile (spawnWorker run in the space)', async () => {
+    const { getAgentManager } = await import('@/core/agent-manager');
+    const { ProfileRepository } = await import('@/db/repositories/profile-repository');
+    const profile = vi.spyOn(ProfileRepository.prototype, 'findUserProfile');
+    const search = vi.spyOn(ProfileRepository.prototype, 'search');
+    // Stop at the spawn: everything a child's prompt loads is loaded before it.
+    const spawn = vi.spyOn(getAgentManager(), 'spawn').mockRejectedValue(new Error('stop: prompt assembled'));
+    const { getAgentService } = await import('./service');
+    try {
+      const run = async (ctx: AgentContext) => {
+        const retrieved = fx.retrieve.length;
+        await expect(getAgentService().spawnWorker('research', 'Who is my wife?', 'Find out about my wife', ctx, { model: 'test-model' }))
+          .rejects.toThrow(/stop: prompt assembled/);
+        return fx.retrieve.slice(retrieved);
+      };
+      const inSpace = await run(await spaceContext(editorId, editorSession, 'editor'));
+      expect(inSpace.filter((r) => r.userId === editorId)).toEqual([]);
+      expect(profile).not.toHaveBeenCalled();
+      expect(search).not.toHaveBeenCalled();
+      expect(spawn).toHaveBeenCalledWith(expect.objectContaining({ space: expect.objectContaining({ workspaceId: spaceId }) }));
+      // Control: the same child in the member's personal session loads both.
+      const { buildAgentContext, resolveAgentScope } = await import('./context');
+      const { sessionRepository } = await import('@/db/repositories/session-repository');
+      const scope = await resolveAgentScope({ session: await sessionRepository.findById(editorPersonalSession), userId: editorId, trigger: 'user' });
+      const personal = buildAgentContext({ sessionId: editorPersonalSession, userId: editorId, scope, topic: 'general', model: 'test-model', role: 'general', root: true, status: 'running' });
+      expect((await run(personal)).some((r) => r.userId === editorId)).toBe(true);
+      expect(profile).toHaveBeenCalled();
+    } finally {
+      spawn.mockRestore();
+      profile.mockRestore();
+      search.mockRestore();
+    }
+  });
+
+  test("a worker's own model calls are accounted to the space (AgentWorker's usage context)", async () => {
+    const sessionId = await spaceSession(editorId);
+    const worker = await spaceWorker(editorId, sessionId);
+    const { recordProviderUsage } = await import('@/models/providers/instrumented');
+    scriptModel(worker, async () => {
+      await recordProviderUsage({ model: 'worker-model', messages: [] }, 'test', { model: 'worker-model', usage: { inputTokens: 4, outputTokens: 2, totalTokens: 6 } });
+      return completion('Done.');
+    });
+    // No usage context around the run: the worker's own must stamp the rows.
+    expect(await worker.run('Summarise')).toBe('Done.');
+    const { queryRaw } = await import('@/db/postgres');
+    const { rows } = await queryRaw("SELECT workspace_id, funding, session_id FROM cost_log WHERE user_id = $1 AND model_name = 'worker-model'", [editorId]);
+    expect(rows).toContainEqual({ workspace_id: spaceId, funding: 'own', session_id: sessionId });
+  });
+
+  test('global tools: update_skill is not offered in a space, and the executor refuses it there', async () => {
+    const { getAgentManager } = await import('@/core/agent-manager');
+    const { buildSkillLoaderHandlers } = await import('@/tools/skill-loader');
+    const { buildTestContainerHandlers } = await import('@/tools/test-container');
+    for (const handler of [...buildSkillLoaderHandlers(), ...buildTestContainerHandlers()]) getAgentManager().registerGlobalTool(handler);
+    const tools = (w: unknown) => [...(w as { toolExecutor: { getTools(): Map<string, unknown> } }).toolExecutor.getTools().keys()];
+    const editor = await spaceWorker(editorId, editorSession);
+    const commenter = await spaceWorker(commenterId, commenterSession);
+    const personal = await spaceWorker(editorId, editorPersonalSession);
+    try {
+      expect(tools(personal)).toContain('update_skill');
+      expect(tools(editor)).not.toContain('update_skill');
+      expect(tools(editor)).toContain('get_skill');
+      expect(tools(commenter)).not.toContain('update_skill');
+      expect(tools(commenter)).toEqual(expect.arrayContaining(['list_skills', 'get_skill']));
+      // Registered anyway (a path that skips the filter): the executor refuses it in a space.
+      const { ToolExecutor } = await import('@/core/tool-executor');
+      const exec = new ToolExecutor(await spaceContext(commenterId, commenterSession, 'commenter'), () => {});
+      const update = vi.fn();
+      exec.registerTool({ name: 'update_skill', description: '', parameters: { type: 'object' }, execute: update });
+      const [result] = await exec.handleToolCalls([{ id: 'u1', name: 'update_skill', arguments: { skill_id: 'x', content: 'pwned' } }]);
+      expect(String(result.content)).toMatch(/Permission denied: update_skill acts on your personal account/);
+      expect(update).not.toHaveBeenCalled();
+    } finally {
+      for (const w of [editor, commenter, personal]) getAgentManager().stop(w.getContext().id);
+    }
+  });
+
+  test('CLI models: an editor runs a CLI model marked for shared use; one with no space mode is refused', async () => {
+    const { getAgentManager } = await import('@/core/agent-manager');
+    const { CLIAgentWorker } = await import('@/core/cli-agent-worker');
+    const spawn = (model: string) => getAgentManager().spawn({
+      sessionId: editorSession, userId: editorId, workspaceId: spaceId, space: { workspaceId: spaceId, role: 'editor', scope: null }, trigger: 'user', funding: 'own',
+      model, topic: 'general',
+    });
+    const worker = await spawn('cli/claude');
+    try {
+      expect(worker).toBeInstanceOf(CLIAgentWorker);
+      expect(worker.getContext()).toMatchObject({ workspaceId: spaceId, space: { workspaceId: spaceId, role: 'editor' } });
+    } finally {
+      getAgentManager().stop(worker.getContext().id);
+    }
+    await expect(spawn('cli/vibe')).rejects.toThrow(/cannot run in a shared space/);
+  });
+});
+
+describe('personal connections and agent configuration in a space', () => {
+  test('writes through personal connections are refused; their reads run and mark the session private', async () => {
+    const { routeApprovalFor } = await import('@/security/approval-route');
+    const { getFlowLabel } = await import('@/security/flow-guard');
+    const sessionId = await spaceSession(editorId);
+    const ctx = await spaceContext(editorId, sessionId, 'editor', { attended: true });
+    const decide = (toolId: string, action: string, toolName?: string, args?: Record<string, unknown>) =>
+      routeApprovalFor(ctx, { toolId, action, toolName, args }, { level: 'ALLOW' });
+    const writes: Array<[string, string, string, Record<string, unknown>?]> = [
+      ['connector', 'connector_call_tool', 'connector_call_tool', { connector_id: 'atlassian', tool_name: 'createJiraIssue' }],
+      ['browser-ext', 'navigate', 'navigate'],
+      ['browser-ext', 'cookies', 'cookies'],
+      ['mcp', 'tracker.create_issue', 'tracker.create_issue'],
+      ['github', 'write', 'create_issue'],
+    ];
+    for (const [toolId, action, toolName, args] of writes) {
+      expect(await decide(toolId, action, toolName, args), `${toolId}.${action}`)
+        .toMatchObject({ route: 'deny', reason: expect.stringMatching(/personal connection/) });
+    }
+    for (const [toolId, action] of [['mcp_admin', 'configure'], ['skill-distill', 'distill']] as const) {
+      expect(await decide(toolId, action, action)).toMatchObject({ route: 'deny', reason: expect.stringMatching(/personal account/) });
+    }
+    // An unknown container (a plugin) does not write into a space.
+    expect(await decide('acme_plugin', 'publish', 'publish')).toMatchObject({ route: 'deny', reason: expect.stringMatching(/not known to act only on the space/) });
+    expect(getFlowLabel(sessionId).private).toBe(false);
+    // A read through a personal connection runs, and the session now holds private data.
+    expect(await decide('connector', 'connector_call_tool', 'connector_call_tool', { connector_id: 'atlassian', tool_name: 'searchJiraIssuesUsingJql' }))
+      .toMatchObject({ route: 'execute' });
+    expect(getFlowLabel(sessionId)).toMatchObject({ private: true, sources: { private: 'connector:connector_call_tool' } });
+    for (const [toolId, action] of [['browser-ext', 'extract'], ['mcp', 'tracker.search_issues'], ['acme_plugin', 'read']] as const) {
+      const fresh = await spaceSession(editorId);
+      expect(await routeApprovalFor({ ...ctx, sessionId: fresh }, { toolId, action, toolName: action }, { level: 'ALLOW' })).toMatchObject({ route: 'execute' });
+      expect(getFlowLabel(fresh).private, `${toolId}.${action}`).toBe(true);
+    }
+    // A read of the space's own content does not.
+    const clean = await spaceSession(editorId);
+    expect(await routeApprovalFor({ ...ctx, sessionId: clean }, { toolId: 'notes', action: 'read', toolName: 'list_notes' }, { level: 'ALLOW' })).toMatchObject({ route: 'execute' });
+    expect(getFlowLabel(clean).private).toBe(false);
+  });
+
+  test('what a space session is offered: no personal-only container, argument-dependent tools kept for their reads', async () => {
+    const { withoutPersonalOnlyTools } = await import('@/security/space-tools');
+    const h = (name: string, toolId: string | undefined, extra: Partial<import('@/core/agent-base').ToolHandler> = {}) =>
+      ({ name, toolId, description: '', parameters: { type: 'object' }, execute: async () => null, ...extra });
+    const offered = withoutPersonalOnlyTools([
+      h('connector_list_tools', 'connector', { replaySafety: 'read_only' }), h('connector_call_tool', 'connector'),
+      h('mcp_call_tool', 'mcp', { permissionAction: (a) => `${a.server_id}.${a.tool_name}` }), h('mcp_list_tools', 'mcp', { replaySafety: 'read_only' }),
+      h('browser-ext__navigate', 'browser-ext', { permissionAction: 'navigate' }), h('browser-ext__extract', 'browser-ext', { permissionAction: 'extract' }),
+      h('mcp_admin__register_mcp_server', 'mcp_admin', { permissionAction: 'configure' }), h('skill-distill__distill_skill', 'skill-distill', { permissionAction: 'distill' }),
+      h('update_skill', undefined), h('spawn_child', undefined), h('acme_plugin__publish', 'acme_plugin'),
+    ]).map((t) => t.name);
+    expect(offered.sort()).toEqual(['browser-ext__extract', 'connector_call_tool', 'connector_list_tools', 'mcp_call_tool', 'mcp_list_tools', 'spawn_child']);
+  });
+
+  test("a coding agent's configuration is never written in a space: file tools and native CLI writes", async () => {
+    const { FilesystemTool } = await import('@/tools/filesystem');
+    const tool = new FilesystemTool();
+    await tool.initialize();
+    const fsTools = (tool as unknown as { tools: Map<string, import('@/core/agent-base').ToolHandler> }).tools;
+    const ctx = await spaceContext(editorId, editorSession, 'editor');
+    const { WorkspaceFS } = await import('@/security/workspace-fs');
+    const root = WorkspaceFS.forSpace(spaceId).root;
+    const { existsSync } = await import('node:fs');
+    for (const path of ['.claude/settings.json', '.claude/settings.local.json', 'sub/.codex/config.toml', '.gemini/settings.json', '.agents/hooks.json', '.mcp.json', join(root, '.claude', 'hooks.json')]) {
+      await expect(fsTools.get('write_file')!.execute({ path, content: '{"permissions":{"allow":["Bash"]}}' }, ctx), path)
+        .rejects.toThrow(/coding agent's configuration/);
+    }
+    expect(existsSync(join(root, '.claude'))).toBe(false);
+    await fsTools.get('write_file')!.execute({ path: 'plan.md', content: 'ok' }, ctx);
+    await expect(fsTools.get('move_file')!.execute({ source: 'plan.md', destination: '.claude/commands/plan.md' }, ctx)).rejects.toThrow(/coding agent's configuration/);
+    await expect(fsTools.get('create_directory')!.execute({ path: '.codex' }, ctx)).rejects.toThrow(/coding agent's configuration/);
+    // Only a space's root refuses them.
+    expect(WorkspaceFS.withRoot(root).isSpace).toBe(false);
+
+    const { answerCliPermissionRequest } = await import('@/core/cli-permissions');
+    const native = (file_path: string) => answerCliPermissionRequest(
+      { type: 'control_request', request_id: 'w1', request: { subtype: 'can_use_tool', tool_name: 'Write', input: { file_path, content: '{}' }, tool_use_id: 't' } },
+      { ...ctx, attended: false }, () => {}) as Promise<{ response: { response: { behavior: string; message?: string } } }>;
+    const refused = await native(join(root, '.claude', 'settings.json'));
+    expect(refused.response.response).toMatchObject({ behavior: 'deny', message: expect.stringMatching(/coding agent's configuration/) });
+    expect((await native(join(root, 'notes.md'))).response.response.behavior).toBe('allow');
+  });
+});
+
+// ── I6 on every path, from a real read, across a restart ──────────────
+
+describe('I6 from a real read, on the tool-executor and CLI relay paths', () => {
+  test('a connector read marks the session; the next space write asks on every path; a restart keeps the label', async () => {
+    const { refreshConfigKey } = await import('@/config');
+    refreshConfigKey('agent.flowGuard', 'off');
+    try {
+      const sessionId = await spaceSession(editorId);
+      const ctx = await spaceContext(editorId, sessionId, 'editor');
+      const { ToolExecutor } = await import('@/core/tool-executor');
+      const exec = new ToolExecutor(ctx, () => {});
+      const remote = vi.fn(async (args: Record<string, unknown>) => ({ called: args.tool_name, issues: [{ key: 'PRIV-1', summary: 'salary review' }] }));
+      exec.registerTool({ name: 'connector_call_tool', toolId: 'connector', description: '', parameters: { type: 'object' }, execute: remote });
+      exec.registerTool((await notesHandlers()).get('write_note')!);
+      const { answerCliPermissionRequest } = await import('@/core/cli-permissions');
+      const cli = (sid: string) => answerCliPermissionRequest(
+        { type: 'control_request', request_id: 'w', request: { subtype: 'can_use_tool', tool_name: 'Write', input: { file_path: 'summary.md', content: 'x' }, tool_use_id: 't' } },
+        { ...ctx, sessionId: sid, attended: false }, () => {}) as Promise<{ response: { response: { behavior: string; message?: string } } }>;
+
+      // Before any personal read: the CLI write goes ahead.
+      expect((await cli(sessionId)).response.response.behavior).toBe('allow');
+      // The connector's write is refused; its read runs.
+      const [write] = await exec.handleToolCalls([{ id: 'c1', name: 'connector_call_tool', arguments: { connector_id: 'atlassian', tool_name: 'createJiraIssue' } }]);
+      expect(String(write.content)).toMatch(/writes through your personal connection/);
+      const [read] = await exec.handleToolCalls([{ id: 'c2', name: 'connector_call_tool', arguments: { connector_id: 'atlassian', tool_name: 'searchJiraIssuesUsingJql' } }]);
+      expect(String(read.content)).toContain('PRIV-1');
+      expect(remote).toHaveBeenCalledTimes(1);
+
+      // Tool executor: the space write now needs a human, and this run cannot ask one.
+      const [note] = await exec.handleToolCalls([{ id: 'c3', name: 'notes__write_note', arguments: { title: 'Jira summary' } }]);
+      expect(String(note.content)).toMatch(/Approval required: notes\.write_note writes data from your personal sources \(connector:connector_call_tool\) into Launch room/);
+      // CLI relay: the native write is refused with the same reason.
+      expect((await cli(sessionId)).response.response).toMatchObject({ behavior: 'deny', message: expect.stringMatching(/writes data from your personal sources/) });
+
+      // The label is stored on the session: a restart (labels forgotten) still asks.
+      const { queryRaw } = await import('@/db/postgres');
+      await vi.waitFor(async () => {
+        const { rows } = await queryRaw('SELECT flow_label FROM sessions WHERE id = $1', [sessionId]);
+        expect(rows[0].flow_label).toMatchObject({ private: 'connector:connector_call_tool' });
+      });
+      const { resetFlowLabels, getFlowLabel } = await import('@/security/flow-guard');
+      resetFlowLabels();
+      expect(getFlowLabel(sessionId).private).toBe(false);
+      const { routeApprovalFor } = await import('@/security/approval-route');
+      expect(await routeApprovalFor({ ...ctx, attended: true }, { toolId: 'notes', action: 'write', toolName: 'write_note' }, { level: 'ALLOW' }))
+        .toMatchObject({ route: 'ask_human', source: 'space-flow' });
+      expect((await cli(sessionId)).response.response.behavior).toBe('deny');
+    } finally {
+      refreshConfigKey('agent.flowGuard', 'ask');
+    }
+  });
+});
+
+// ── Pipelines, artifacts, unseen spaces ───────────────────────────────
+
+describe('pipelines, artifact sources and an unseen space follow the space rules', () => {
+  test("a stage's verify command runs in the space's files under the space role cap", async () => {
+    const { runStageVerifyCommand } = await import('./pipeline-manager');
+    const { WorkspaceFS } = await import('@/security/workspace-fs');
+    const { mkdirSync, writeFileSync } = await import('node:fs');
+    const root = WorkspaceFS.forSpace(spaceId).root;
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, 'built.txt'), 'ok');
+    const editor = await spaceContext(editorId, editorSession, 'editor');
+    expect(await runStageVerifyCommand('ls built.txt', { userId: editorId, sessionId: editorSession, workspaceId: spaceId, space: editor.space, role: 'coding', toolIds: ['shell'] }))
+      .toMatch(/RESULT: exit 0/);
+    // A commenter's pipeline never runs the command (the role cap holds here too).
+    expect(await runStageVerifyCommand('ls built.txt', { userId: commenterId, sessionId: commenterSession, workspaceId: spaceId, space: { workspaceId: spaceId, role: 'commenter', scope: null }, role: 'coding', toolIds: ['shell'] }))
+      .toMatch(/RESULT: FAILED[\s\S]*commenter/);
+    // A context naming the space without its scope is refused, not run as personal.
+    expect(await runStageVerifyCommand('ls built.txt', { userId: editorId, sessionId: editorSession, workspaceId: spaceId, space: null, role: 'coding', toolIds: ['shell'] }))
+      .toMatch(/RESULT: FAILED[\s\S]*no space scope/);
+  });
+
+  test('a pipeline does not resume for a starter who can no longer write in the space', async () => {
+    const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+    const pipeline = await pipelineRepository.create({ rootAgentId: randomUUID(), sessionId: commenterSession, userId: commenterId,
+      title: 'Launch', type: 'general', status: 'paused', metadata: { trigger: 'user' } } as never);
+    await pipelineRepository.saveCheckpoint({ pipelineId: pipeline.id, nodeKey: 'stage-1', state: { cursor: 'stage-1' } });
+    const { getPipelineManager } = await import('./pipeline-manager');
+    await expect(getPipelineManager().resume(pipeline.id)).rejects.toThrow(/commenter.*cannot resume a pipeline/);
+  });
+
+  test('a space artifact takes no data source that runs as a personal agent', async () => {
+    const ctx = await spaceContext(editorId, editorSession, 'editor');
+    const { reposFor } = await import('@/db/repositories/content');
+    const artifact = await reposFor(ctx).artifacts.create({ slug: `launch-${rand(3)}`, createdByAgentId: ctx.id, title: 'Launch board', type: 'dashboard', visibility: 'workspace' });
+    const { ArtifactsTool } = await import('@/tools/artifacts');
+    const tool = new ArtifactsTool();
+    await tool.initialize();
+    const add = (tool as unknown as { tools: Map<string, import('@/core/agent-base').ToolHandler> }).tools.get('add_artifact_data_source')!;
+    for (const kind of ['tool', 'mcp']) {
+      expect(await add.execute({ artifact_id: artifact.id, name: `s-${kind}`, kind, config: { tool: 'websearch__search' } }, ctx))
+        .toMatchObject({ error: expect.stringMatching(/runs as your personal agent/) });
+    }
+    // A row attached another way is refused at refresh.
+    const { artifactsRepository } = await import('@/db/repositories/artifacts-repository');
+    const source = await artifactsRepository.createSource({ artifactId: artifact.id, name: 'legacy', kind: 'tool', configJson: { tool: 'websearch__search' }, refreshSeconds: 300, principalId: editorId });
+    const { refreshSource } = await import('@/core/artifacts/refresh');
+    expect(await refreshSource(source.id)).toMatchObject({ ok: false, error: expect.stringMatching(/runs as your personal agent/) });
+  });
+
+  test('a space this process has not seen yet is still recognised (database fallback)', async () => {
+    const { forgetWorkspaceRow, isKnownSharedWorkspace } = await import('@/security/workspace-fs');
+    forgetWorkspaceRow(spaceId);
+    expect(isKnownSharedWorkspace(spaceId)).toBe(false);
+    const { routeApprovalFor } = await import('@/security/approval-route');
+    const ctx = await spaceContext(editorId, editorSession, 'editor');
+    expect(await routeApprovalFor({ ...ctx, space: null }, { toolId: 'notes', action: 'read', toolName: 'list_notes' }, { level: 'ALLOW' }))
+      .toMatchObject({ route: 'deny', reason: expect.stringMatching(/no space scope/) });
+    expect(isKnownSharedWorkspace(spaceId)).toBe(true);
+    const { getAgentManager } = await import('@/core/agent-manager');
+    forgetWorkspaceRow(spaceId);
+    await expect(getAgentManager().spawn({ sessionId: editorSession, userId: editorId, workspaceId: spaceId, space: null, trigger: 'user', funding: 'own', model: 'test-model', topic: 'general' }))
+      .rejects.toThrow(/needs its space scope/);
   });
 });
 
@@ -489,6 +878,44 @@ describe('membership changes and archive', () => {
     const result = await getAgentService().handleMessage(sessionId, memberId, 'still there?', 'webchat');
     expect(fx.turns).toHaveLength(before);
     expect(result.outcome).not.toBe('success');
+  });
+
+  test("a removed member's turn in flight stops, and its next child cannot spawn", async () => {
+    const { getAgentManager } = await import('@/core/agent-manager');
+    const { removeMember } = await import('@/core/spaces/service');
+    const memberId = randomUUID();
+    const { seedUsers } = await import('@/test-helpers/multiuser-fixtures');
+    await seedUsers([{ id: memberId, username: `st-inflight-${rand(3)}` }]);
+    const { createInvite, acceptInvite } = await import('@/core/spaces/invites');
+    await acceptInvite({ userId: memberId }, (await createInvite({ userId: ownerId }, spaceId, { role: 'editor' })).token);
+    const sessionId = await spaceSession(memberId);
+    const worker = await spaceWorker(memberId, sessionId);
+    let started!: () => void;
+    const inTool = new Promise<void>((resolve) => { started = resolve; });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let childSpawn: Promise<unknown> | undefined;
+    worker.registerTool({ name: 'long_step', description: '', parameters: { type: 'object' }, execute: async () => {
+      started();
+      await gate;
+      // The turn reaches for a child after the removal.
+      const { inheritScope } = await import('./context');
+      childSpawn = getAgentManager().spawn({ sessionId, userId: memberId, ...inheritScope(worker.getContext()), model: 'test-model', topic: 'general' });
+      childSpawn.catch(() => undefined);
+      return 'done';
+    } });
+    let calls = 0;
+    scriptModel(worker, async () => (calls++ === 0 ? completion('', [{ id: 'l1', name: 'long_step', arguments: {} }]) : completion('Finished.')));
+    const run = worker.run('Do the long step');
+    await inTool;
+    expect(worker.getStatus()).toBe('running');
+    await removeMember({ userId: ownerId }, spaceId, memberId);
+    expect(worker.getStatus()).toBe('stopped');
+    release();
+    await run.catch(() => undefined);
+    await vi.waitFor(() => expect(childSpawn).toBeDefined());
+    await expect(childSpawn).rejects.toThrow(/no longer a member/);
+    expect(worker.getStatus()).toBe('stopped');
   });
 
   test('an archived space runs no agent and decides no tool call', async () => {

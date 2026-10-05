@@ -311,6 +311,25 @@ export function NoteEditor(props: EditorProps) {
             {status.icon} {status.text}
           </span>
         )}
+        {live && live.state.notice && live.state.status !== 'closed' && (
+          <span data-testid="live-notice" className="text-[11px] text-error max-w-[22rem] truncate" title={live.state.notice}>{live.state.notice}</span>
+        )}
+        {live && live.state.unmerged !== null && (
+          <button
+            type="button"
+            onClick={() => {
+              const text = live.state.unmerged ?? '';
+              navigator.clipboard.writeText(text).then(
+                () => live.session.dismissUnmerged(),
+                (err: unknown) => console.error('Copying the unmerged text failed', err),
+              );
+            }}
+            title="Copy the text you had, to redo what did not merge"
+            className="px-2 py-1 rounded-xs border border-outline-variant/40 text-[11px] hover:bg-surface-container-high"
+          >
+            Copy my version
+          </button>
+        )}
         {!isNew && (
           <button
             type="button"

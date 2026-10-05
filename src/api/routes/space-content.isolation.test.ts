@@ -113,7 +113,8 @@ describe('members share the space’s notes and tasks', () => {
     const budgetId = (await budget.json()).note.id;
     const detail = await (await call('viewer', 'GET', `/api/notes/${noteId}`)).json();
     expect(detail.outgoing.find((e: { endpoint: { id?: string } }) => e.endpoint.id === budgetId)).toBeDefined();
-    const edit = await call('owner', 'POST', '/api/notes', { body: { id: noteId, title: 'Launch plan', body: 'edited by the owner' } });
+    // A space note's body write names the text it was made from (§7.3).
+    const edit = await call('owner', 'POST', '/api/notes', { body: { id: noteId, title: 'Launch plan', body: 'edited by the owner', baseSha256: detail.bodySha256 } });
     expect(edit.status).toBe(200);
     expect((await edit.json()).note.userId).toBe(editorId);
   });

@@ -163,6 +163,8 @@ const SPACE_ACTING = [
   // Space notes (S3): revisions and the agent's edit proposals; 404 in a personal workspace.
   'GET /api/notes/proposals', 'POST /api/notes/proposals/:proposalId/accept', 'POST /api/notes/proposals/:proposalId/reject',
   'GET /api/notes/:id/revisions', 'GET /api/notes/:id/revisions/:revisionId', 'POST /api/notes/:id/revisions/:revisionId/restore',
+  // A live editor's text the server never got, merged through the hub (S3).
+  'POST /api/notes/:id/merge',
   'GET /a/:slug', 'GET /a/:slug/embed', 'GET /a/:slug/bundle.js', 'GET /a/:slug/export/:exportId',
   'GET /__artifacts__/a/:slug', 'GET /__artifacts__/a/:slug/embed', 'GET /__artifacts__/a/:slug/bundle.js',
   'GET /__artifacts__/a/:slug/export/:exportId',

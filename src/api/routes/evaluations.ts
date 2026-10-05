@@ -207,7 +207,7 @@ export const evaluationRoutes = new Elysia({ prefix: '/evaluations' })
 
       // Only a model this user may use (coworking spec §8.2).
       const modelConfig = await resolveModel({ userId: user.id, name: model });
-      if (!modelConfig && await isRegisteredModel(model)) {
+      if (!modelConfig && await isRegisteredModel(model, user.id)) {
         set.status = 400;
         return { error: `Model '${model}' is not available` };
       }
