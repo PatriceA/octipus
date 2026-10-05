@@ -180,7 +180,9 @@ export class DocumentProcessor {
       return;
     }
 
-    return withProviderUsageContext({ userId: doc.userId }, async () => {
+    // Document processing (OCR, vision, categorizing, summaries, embeddings)
+    // is install work: stamped `install` (coworking spec §9.1).
+    return withProviderUsageContext({ userId: doc.userId, funding: 'install' }, async () => {
     this.logger.info({ documentId, filename: doc.originalName, mimeType: doc.mimeType }, 'Processing document');
 
     try {

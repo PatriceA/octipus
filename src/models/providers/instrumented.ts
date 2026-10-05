@@ -11,6 +11,32 @@ export function withProviderUsageContext<T>(context: ProviderUsageContext, run: 
 }
 
 /**
+ * The sponsor paying for the calls underneath (coworking spec §9.1): a
+ * sponsored turn runs on the sponsor's own model rows, whose keys
+ * `assertModelRowOwner` releases to it only while this says so. Kept apart
+ * from the usage context, which is spread into provider options.
+ */
+const sponsorContext = new AsyncLocalStorage<{ userId: string; models: readonly string[] } | null>();
+export function withSponsor<T>(sponsor: { userId: string; models: readonly string[] } | null, run: () => T): T {
+  return sponsorContext.run(sponsor, run);
+}
+export function currentSponsor(): { userId: string; models: readonly string[] } | null {
+  return sponsorContext.getStore() ?? null;
+}
+
+/**
+ * Run an install-topic call (memory extraction and judging, learning,
+ * toolshim, link resolver, weekly review, chunk summaries, evaluators,
+ * embeddings, document processing, decision models, compaction, the listen
+ * gate probe): its `cost_log` rows say `install` whatever turn it runs in —
+ * a sponsored turn's helpers included (coworking spec §9.1, D13). The rest
+ * of the ambient context (user, session, workspace) is kept.
+ */
+export function withInstallUsage<T>(run: () => T): T {
+  return withProviderUsageContext({ funding: 'install' }, run);
+}
+
+/**
  * Fill in the current usage context once a turn has resolved its scope
  * (`AgentService.handleMessage` opens the context before it knows the
  * session's workspace). Only this turn's context object changes: each
@@ -68,14 +94,21 @@ async function prepare(options: CompletionOptions, provider: string): Promise<Co
  * The funding a call's cost row carries. An install-topic request type is
  * `install` (D13) — unless it ran on a personal row: a compaction (or any
  * install-type call) on the user's own model is paid with their own key, so
- * it is `own`. Personal-key spend still lands in `cost_log` and counts
- * against the user's budgets like any other `own` call.
+ * it is `own` — or `sponsor` when it is a sponsor model serving another
+ * member of the space (coworking spec §9.1). Personal-key spend still lands
+ * in `cost_log` and counts against the payer's budgets. Calls made inside
+ * `withInstallUsage` are install work too, whatever their request type.
  */
 async function fundingOf(options: CompletionOptions): Promise<NonNullable<CompletionOptions['funding']>> {
-  if (!options.requestType || !INSTALL_REQUEST_TYPES.has(options.requestType)) return options.funding ?? 'own';
+  // Install work is an install request type, or a call made inside
+  // `withInstallUsage` (learning, link resolver, document processing, …).
+  const install = options.funding === 'install' || (!!options.requestType && INSTALL_REQUEST_TYPES.has(options.requestType));
+  if (!install) return options.funding ?? 'own';
   if (options.modelConfigName) {
     const { getModelRegistry } = await import('../model-registry');
-    if ((await getModelRegistry().getModel(options.modelConfigName))?.ownerUserId) return 'own';
+    const owner = (await getModelRegistry().getModel(options.modelConfigName))?.ownerUserId;
+    // A sponsor model run for another member is the sponsor's key (§9.1).
+    if (owner) return owner === options.userId ? 'own' : 'sponsor';
   }
   return 'install';
 }

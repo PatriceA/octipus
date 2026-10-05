@@ -55,6 +55,7 @@ import { permissionRequestRoutes } from './routes/permission-requests';
 import { oauthRoutes } from './routes/oauth';
 import { orgAdminRoutes, orgMeRoutes, workspaceMeRoutes } from './routes/orgs';
 import { inviteRoutes, spaceRoutes } from './routes/spaces';
+import { meWorkRoutes } from './routes/me-work';
 import { roomRoutes } from './routes/rooms';
 import { samlRoutes } from './routes/saml';
 import { scimRoutes } from './routes/scim';
@@ -409,6 +410,7 @@ export function createServer() {
         .use(channelBindingRoutes)
         .use(groupChannelRoutes)
         .use(meModelRoutes)
+        .use(meWorkRoutes)
         .use(adminRoutes)
         .use(adminApprovalRoutes)
         .use(orgAdminRoutes)

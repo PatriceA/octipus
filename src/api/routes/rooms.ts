@@ -2,6 +2,7 @@ import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { postAndQueue } from '@/core/gateway/room-handlers';
 import { runRoomCommand } from '@/core/rooms/commands';
+import { getRoomMode, rateUnpromptedPost, setRoomMode } from '@/core/rooms/listen';
 import {
   addRoomMember,
   createRoom,
@@ -28,6 +29,8 @@ import { handle } from './spaces';
  * | GET         | /api/spaces/:id/rooms/:roomId/messages       | room access; paged (`before` / `after` / `limit`), with authors |
  * | POST        | /api/spaces/:id/rooms/:roomId/messages       | `can(role,'comment')`; the REST fallback of `room.post` |
  * | PATCH       | /api/spaces/:id/rooms/:roomId                | room creator or space owner: title, visibility |
+ * | GET/PUT     | /api/spaces/:id/rooms/:roomId/mode           | room access / room creator or space owner (§9.3) |
+ * | PUT         | /api/spaces/:id/rooms/:roomId/messages/:messageId/feedback | room access: 👍 / 👎 on an unprompted post |
  * | GET         | /api/spaces/:id/rooms/:roomId/members        | room access |
  * | POST/DELETE | /api/spaces/:id/rooms/:roomId/members/:userId| private rooms: room creator or space owner |
  * | PATCH       | /api/spaces/:id/rooms/:roomId/me             | room access: my mute and read position |
@@ -117,6 +120,34 @@ export const roomRoutes = new Elysia({ prefix: '/spaces' })
       title: t.Optional(t.String({ minLength: 1, maxLength: 120 })),
       visibility: t.Optional(t.Union([t.Literal('space'), t.Literal('private')])),
     }, { additionalProperties: false }),
+    detail: { tags: ['rooms'] },
+  })
+
+  // Room modes (§9.3): any member reads; the room's creator or a space owner changes.
+  .get('/:id/rooms/:roomId/mode', (ctx) => handle(ctx, (actor) => getRoomMode(actor, ctx.params.id, ctx.params.roomId)), {
+    params: roomParams,
+    detail: { tags: ['rooms'] },
+  })
+
+  .put('/:id/rooms/:roomId/mode', (ctx) => handle(ctx, (actor) => setRoomMode(actor, ctx.params.id, ctx.params.roomId, ctx.body)), {
+    params: roomParams,
+    body: t.Object({
+      mode: t.Optional(t.Union([t.Literal('mention'), t.Literal('listen'), t.Literal('proactive')])),
+      quietHoursStart: t.Optional(t.Union([t.Integer({ minimum: 0, maximum: 23 }), t.Null()])),
+      quietHoursEnd: t.Optional(t.Union([t.Integer({ minimum: 0, maximum: 23 }), t.Null()])),
+      timezone: t.Optional(t.String({ minLength: 1, maxLength: 64 })),
+      maxUnpromptedPerDay: t.Optional(t.Integer({ minimum: 1, maximum: 100 })),
+      minMinutesBetween: t.Optional(t.Integer({ minimum: 0, maximum: 1440 })),
+    }, { additionalProperties: false }),
+    detail: { tags: ['rooms'] },
+  })
+
+  // A member's 👍 / 👎 on one of the agent's unprompted posts; `value: null` withdraws it.
+  .put('/:id/rooms/:roomId/messages/:messageId/feedback', (ctx) => handle(ctx, async (actor) => ({
+    feedback: await rateUnpromptedPost(actor, ctx.params.id, ctx.params.roomId, ctx.params.messageId, ctx.body.value),
+  })), {
+    params: t.Object({ id: t.String(), roomId: t.String(), messageId: t.String() }),
+    body: t.Object({ value: t.Union([t.Literal(1), t.Literal(-1), t.Null()]) }, { additionalProperties: false }),
     detail: { tags: ['rooms'] },
   })
 

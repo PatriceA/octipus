@@ -6,6 +6,7 @@ import { memories } from '@/db/schema/memories';
 import { taskState } from '@/db/schema/task-state';
 import { SECURITY_PREAMBLE } from '@/core/agent/roles';
 import { type CompletionOptions, getLiteLLMClient } from '@/models/litellm-client';
+import { withInstallUsage } from '@/models/providers/instrumented';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
 import { getNoteService, type NoteService } from './notes';
@@ -118,7 +119,8 @@ export async function generateWeeklyReview(
     const m = await getModelRegistry().getModelForTopic('background');
     return m?.modelId ?? null;
   });
-  const complete = deps.complete ?? ((req) => getLiteLLMClient().complete(req));
+  // The weekly review is install work: stamped `install` (coworking spec §9.1).
+  const complete = deps.complete ?? ((req) => withInstallUsage(() => getLiteLLMClient().complete(req)));
 
   const modelId = await resolveModelId();
   if (!modelId) {

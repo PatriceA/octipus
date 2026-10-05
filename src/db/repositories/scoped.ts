@@ -33,6 +33,7 @@
 
 import { and, arrayContains, asc, count, desc, eq, getTableColumns, gte, inArray, ne, notExists, notInArray, or, type SQL, sql } from 'drizzle-orm';
 import { alias, type AnyPgColumn } from 'drizzle-orm/pg-core';
+import { afterSpaceTaskWrite, publishTaskChanged } from '@/core/tasks/team';
 import { dispatchWakeups, notifyTaskClosed, scheduleWakeup, type WakeupCause } from '@/core/tasks/wakeups';
 import { isAdmin, isAuthenticated, type Principal } from '@/security/principal';
 import { type SpaceAction, SpaceError } from '@/security/space-access';
@@ -1258,7 +1259,23 @@ export class TaskRepo {
       .insert(tasks)
       .values({ ...data, ...stamp })
       .returning();
+    this.afterWrite(result[0], null);
     return result[0];
+  }
+
+  /**
+   * A space task changed (§9.3): the board's subscribers hear of it, and a
+   * new assignee is notified. Nothing for personal tasks.
+   */
+  private afterWrite(task: Task, previous: Task | null): void {
+    if (this.taskScope.kind !== 'space') return;
+    afterSpaceTaskWrite(this.taskScope.spaceId as string, task, this.taskScope.stamp().userId, previous);
+  }
+
+  /** The event alone, for a write that cannot change the assignee (claim, comment, delete). */
+  private changed(taskId: string): void {
+    if (this.taskScope.kind !== 'space') return;
+    publishTaskChanged(this.taskScope.spaceId as string, taskId);
   }
 
   /**
@@ -1273,7 +1290,10 @@ export class TaskRepo {
     await this.checkAssignee(data.assigneeKind, data.assigneeRef, stamp.userId);
     const [created] = await this.db.insert(tasks).values({ ...data, ...stamp })
       .onConflictDoNothing({ target: tasks.id }).returning();
-    if (created) return { task: created, created: true };
+    if (created) {
+      this.afterWrite(created, null);
+      return { task: created, created: true };
+    }
     const existing = await this.findById(data.id);
     if (!existing) throw new Error('Source task conflicts with an inaccessible task');
     return { task: existing, created: false };
@@ -1310,6 +1330,14 @@ export class TaskRepo {
   async update(id: string, patch: Partial<NewTask>, opts: { asActor?: string } = {}): Promise<Task | null> {
     if (!isUuid(id)) return null;
     this.taskScope.can('write');
+    // In a space the row before the write tells whether the assignee changed.
+    const previous = this.taskScope.kind === 'space' ? await this.findById(id) : null;
+    const row = await this.updateRow(id, patch, opts);
+    if (row) this.afterWrite(row, previous);
+    return row;
+  }
+
+  private async updateRow(id: string, patch: Partial<NewTask>, opts: { asActor?: string }): Promise<Task | null> {
     // Neither the author nor the workspace changes on an edit.
     const { userId: _drop, workspaceId: _ws, ...safe } = patch;
     void _drop;
@@ -1418,7 +1446,10 @@ export class TaskRepo {
         or(eq(tasks.checkedOutBy, actor), and(this.leaseFree(actor), ...this.notWaiting())) as SQL,
       ))
       .returning();
-    if (claimed) return { ok: true, task: claimed };
+    if (claimed) {
+      this.changed(claimed.id);
+      return { ok: true, task: claimed };
+    }
     const current = await this.findById(id);
     if (!current) return { ok: false, reason: 'not_found' };
     if (!isActiveStatus(current.status)) return { ok: false, reason: 'conflict', holder: current.checkedOutBy, status: current.status };
@@ -1447,7 +1478,10 @@ export class TaskRepo {
       })
       .where(this.scopeWhere(id, sql`${tasks.checkedOutBy} IS NOT NULL`, ...holderCheck))
       .returning();
-    if (released) return { ok: true, task: released };
+    if (released) {
+      this.changed(released.id);
+      return { ok: true, task: released };
+    }
     const current = await this.findById(id);
     if (!current) return { ok: false, reason: 'not_found' };
     if (!current.checkedOutBy) return { ok: true, task: current };
@@ -1468,6 +1502,7 @@ export class TaskRepo {
       .insert(taskComments)
       .values({ ...comment, taskId: task.id, userId })
       .returning();
+    this.changed(task.id);
     return row;
   }
 
@@ -1574,7 +1609,10 @@ export class TaskRepo {
     const result = await this.db.delete(tasks).where(this.scopeWhere(id)).returning();
     const gone = result[0];
     // A delete ranks at the moment it happened in the sibling order.
-    if (gone) this.wakeAfter({ ...gone, updatedAt: new Date() }, gone.status, 'deleted');
+    if (gone) {
+      this.wakeAfter({ ...gone, updatedAt: new Date() }, gone.status, 'deleted');
+      this.changed(gone.id);
+    }
     return result.length > 0;
   }
 }

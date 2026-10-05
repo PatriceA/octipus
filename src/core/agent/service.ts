@@ -35,7 +35,7 @@ import { resolveSession } from './session-resolver';
 import { type AgentScope, resolveAgentScope, triggerForChannel } from './context';
 import { sessionAudience } from './audience';
 import { canActInSession } from '@/core/rooms/access';
-import { bindProviderUsageContext, withProviderUsageContext } from '@/models/providers/instrumented';
+import { bindProviderUsageContext, withProviderUsageContext, withSponsor } from '@/models/providers/instrumented';
 import { agentPrincipal, type Principal } from '@/security/principal';
 import { appendSources, type MessageClassification, type ResponseMetadata } from './types';
 import { spawnWorker } from './worker-spawner';
@@ -337,6 +337,32 @@ export class AgentService {
   }
 
   /**
+   * The turn after a positive listen probe in a `proactive` room (§9.3):
+   * the agent answers `questionMessageId`, a member's unanswered question,
+   * as a `listen` turn — run as that member (their role caps its tools, the
+   * room's rules hold), paid by the space's sponsor (`fundingFor`). Queued
+   * behind the room's other turns. Nothing when the member may no longer
+   * ask the agent there.
+   */
+  async handleRoomListen(roomId: string, requesterId: string, questionMessageId: string): Promise<RoomMessageOutcome | null> {
+    const [{ roomAccess }, { can }] = await Promise.all([import('@/core/rooms/access'), import('@/security/space-access')]);
+    const access = await roomAccess(requesterId, roomId);
+    if (!access || !can(access.role, 'run_agent')) return null;
+    const posted = await messageRepository.findById(questionMessageId);
+    if (!posted || posted.sessionId !== roomId || posted.role !== 'user' || posted.authorUserId !== requesterId) return null;
+    const { displayNames } = await import('@/core/session-history');
+    const requesterName = (await displayNames([requesterId])).get(requesterId) ?? 'A member';
+    const { enqueueRoomTurn } = await import('@/core/rooms/queue');
+    const { position } = enqueueRoomTurn(
+      roomId,
+      access.room.workspaceId,
+      { requesterId, requesterName, messageId: questionMessageId, enqueuedAt: new Date() },
+      (request, signal) => this.runRoomTurn(roomId, request.requesterId, request.requesterName, request.messageId, signal, undefined, 'listen'),
+    );
+    return { kind: 'queued', position };
+  }
+
+  /**
    * Run one queued room turn, handed over by the room queue. The requester's
    * access is checked again (they may have been removed while waiting); the
    * turn runs as them, under `withSessionTurn`, with their workspace and
@@ -349,6 +375,7 @@ export class AgentService {
    */
   private async runRoomTurn(
     roomId: string, requesterId: string, requesterName: string, postedMessageId: string, signal: AbortSignal, bridged?: GroupTurn,
+    trigger: 'room' | 'listen' = 'room',
   ): Promise<void> {
     const [{ roomAccess }, { can }, { RoomTurnDropped }] = await Promise.all([
       import('@/core/rooms/access'), import('@/security/space-access'), import('@/core/rooms/queue'),
@@ -371,7 +398,7 @@ export class AgentService {
             if (noModel) throw new Error(noModel.response);
             await maybeCompactSession(roomId, { requesterId, before: { id: posted.id, createdAt: posted.createdAt.toISOString() } });
             signal.throwIfAborted();
-            return this.runTurn({ session, requesterId, message: posted.content, channel: 'room', trigger: 'room', postedMessageId, signal, groupTurn: bridged });
+            return this.runTurn({ session, requesterId, message: posted.content, channel: 'room', trigger, postedMessageId, signal, groupTurn: bridged });
           }),
         );
         if (result.outcome === 'failed' && !result.metadata?.limit) throw new RoomTurnFailed(result.response);
@@ -1196,11 +1223,13 @@ export class AgentService {
     outputDirective: { mode: 'inline' | 'file'; forced: boolean } = { mode: 'inline', forced: false },
     extras: RootRunExtras = {},
   ): Promise<{ response: string; agentId: string; sources: string[]; outcome: TurnOutcome; limit?: LimitRefusal }> {
-    return runRootAgent(
+    // A sponsored turn runs on the sponsor's models: their keys are released
+    // to the calls underneath only (§9.1, `assertModelRowOwner`).
+    return withSponsor(scope.funding === 'sponsor' ? scope.sponsor ?? null : null, () => runRootAgent(
       this, this.deps,
       sessionId, userId, message, classification, guardFlags, channel,
       extraSystemContext, scope, outputDirective, extras,
-    );
+    ));
   }
 
   // ── Worker spawning (internal — used by pipeline stages only) ────

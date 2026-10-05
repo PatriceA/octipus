@@ -173,6 +173,8 @@ export type GatewayEventType =
   // Who is online in a space, and where (a room only when the recipient may
   // enter it, I3): to the resource `space:<id>`, one view per recipient.
   | 'space.presence'
+  // A task of a space changed (coworking §9.3): ids only, to `space:<id>`.
+  | 'task.changed'
   // Published only by the gateway's own tests, as a synthetic type to drive
   // subscription and replay. It shows up in the generated catalog's
   // never-published list because that scan deliberately excludes test files —
@@ -216,6 +218,8 @@ export const GLOBAL_EVENT_TYPES = {
     'Sent once, directly, to a connection whose room subscription was just pruned (it lost access); never broadcast.',
   'space.presence':
     'Belongs to a space, not a user: sent to connections in the resource space:<id> (space.subscribe passed the membership check), each with its own view.',
+  'task.changed':
+    'Belongs to a space, not a user: sent to connections in the resource space:<id> (space.subscribe passed the membership check); ids only, the board refetches through the space door.',
 } as const satisfies Partial<Record<GatewayEventType, string>>;
 
 export type GlobalEventType = keyof typeof GLOBAL_EVENT_TYPES;

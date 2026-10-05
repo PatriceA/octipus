@@ -767,7 +767,10 @@ When a task matches one of these skills, load it with get_skill before starting 
     // (DB hiccup) does not block the run, as in agent-worker.
     try {
       const { checkSpend } = await import('@/security/spend-budgets');
-      await checkSpend({ userId: this.context.userId, role: this.context.role, workspaceId: this.context.workspaceId, sessionId: this.context.sessionId });
+      await checkSpend({
+        userId: this.context.userId, role: this.context.role, workspaceId: this.context.workspaceId, sessionId: this.context.sessionId,
+        funding: this.context.funding, spaceId: this.context.space?.workspaceId ?? null,
+      });
     } catch (err) {
       if (err instanceof Error && err.name === 'SpendBudgetExceededError') throw err;
       agentLogger.debug({ err }, 'spend budget check unavailable (not blocking)');

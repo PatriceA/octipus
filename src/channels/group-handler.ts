@@ -99,7 +99,11 @@ export interface GroupDeps<Raw = unknown> {
   readMessage(channelId: string, messageId: string): Promise<GroupPost | null>;
   /** A link to a message, for the task notes; undefined when the platform gives none. */
   permalink(channelId: string, messageId: string): Promise<string | undefined>;
-  /** When the channel's spend budget is used up: when it resets. Null while it may run. */
+  /**
+   * When the budget the channel's turns run under is used up: when it resets.
+   * Null while it may run. A channel bound to a space answers to the space's
+   * budget (`groupBudgetPause`, coworking spec §9.2, §9.4).
+   */
   budgetPause(group: GroupChannel): Promise<{ resetsAt: string } | null>;
   shouldSendHint(key: string): boolean;
   /** Every message in an enrolled chat that reaches the bot, addressed or not (for adapters that keep a transcript). */
