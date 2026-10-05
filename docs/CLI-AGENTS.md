@@ -187,7 +187,16 @@ in a shared space only when its model row sets
 declared space mode (`CLI_SPACE_MODES` in `src/core/cli-adapters.ts`), where
 its native tools cannot act outside Octipus's decision path: Claude-binary
 tools (Claude Code, GLM, Kimi) use `--permission-mode default` with the stdio
-permission tool and drop pre-approved `allowedTools`; Codex runs in the
+permission tool, drop pre-approved `allowedTools`, and read no user, project
+or local settings file: `--setting-sources=` with a locked `--settings` file
+(no allow rules, bypass mode disabled, no project MCP servers, the shell guard
+as the only hook), so neither the host's `~/.claude/settings.json` nor a
+`.claude/settings.json` in the space's files can pre-approve a tool or add a
+hook. (A user-level `apiKeyHelper` or `env` in those files does not apply in a
+space either; log the CLI in, or set its environment on the model.) Octipus's
+file tools and native writes never write a coding agent's configuration
+(`.claude/`, `.codex/`, `.gemini/`, `.agents/`, `.vibe/`, `.mcp.json`) in a
+space. Codex runs in the
 `read-only` sandbox; Antigravity in `--mode plan`. Mistral Vibe declares no
 such mode and is refused in spaces. A commenter's turn uses API models only.
 See [SPACES.md](SPACES.md).

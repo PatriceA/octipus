@@ -407,6 +407,22 @@ mixed into it. Existing memories are not migrated.
   permission tool; Codex: read-only; Antigravity: plan); Mistral Vibe is
   refused, commenters use API models only, and an install CLI login serves
   spaces only when its model is marked `metadata.cliAgent.sharedUse: true`.
+- **Spaces: personal connections and agent configuration stay out.** In a
+  space, writes go only through tools known to act on the space; writes
+  through your OAuth connectors (`connector_call_tool`), MCP servers, real
+  browser (`browser-ext`), MCP server administration, skill distillation and
+  `update_skill` are refused and not offered, and their reads mark the
+  session private so writing that data into the space asks first. The flow
+  label is now stored on the session (`sessions.flow_label`, migration 0128),
+  so a restart keeps it. A Claude-binary CLI model in a space reads no user,
+  project or local settings file (`--setting-sources=` with a locked
+  `--settings` file), and nothing writes `.claude/`, `.codex/`, `.gemini/`,
+  `.agents/` or `.mcp.json` in a space's files. A pipeline's verify command
+  follows the space rules, a pipeline resumes only for a starter who can
+  still write, and a space artifact takes no `tool` or `mcp` data source.
+- **Only an administrator edits a system skill.** Before, any signed-in user
+  could change a skill shared by every user (`update_skill`, `PATCH
+  /api/skills/:id`).
 - **Cost rows name the space.** Every model call of a space turn writes
   `cost_log.workspace_id` and `funding`; compaction, embeddings, memory
   extraction, toolshim, decision, vision and OCR calls are stamped `install`.

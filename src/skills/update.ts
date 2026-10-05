@@ -20,7 +20,9 @@ export async function updateSkill(skillId: unknown, fields: Record<string, unkno
   if (isExternalSkillId(skillId)) throw new SkillUpdateError('Mounted skills are read-only in Octipus. Update the source SKILL.md and use Reload mounted skills.', 400);
   const existing = await skillRepository.findById(skillId);
   if (!existing) throw new SkillUpdateError('Skill not found', 404);
-  if (!existing.isSystem && !user.isAdmin && existing.userId !== ownerId) throw new SkillUpdateError('Not authorized to update this skill', 403);
+  // A system skill is shared by every user: only an administrator edits it.
+  // Any other skill only by its owner (or an administrator).
+  if (!user.isAdmin && (existing.isSystem || existing.userId !== ownerId)) throw new SkillUpdateError('Not authorized to update this skill', 403);
   const patch: SkillUpdate = {};
   for (const key of textFields) {
     if (fields[key] === undefined) continue;

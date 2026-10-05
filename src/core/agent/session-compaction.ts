@@ -171,6 +171,9 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
       return false;
     }
     const last = prefix[prefix.length - 1];
+    // Read before anything is written: a failed read must fail the pass,
+    // not reject after the checkpoint is already published.
+    const audience = await sessionAudience(history.session);
     // Persist the audit entry before publishing its checkpoint. A failed insert
     // cannot invalidate a vendor thread. A clear invalidates the CAS below.
     const entry = await compactionEntryRepository.insert({
@@ -193,7 +196,7 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
       nativeConversation: native && nativeTail ? { ...native, checkpointId: entry.id,
         messages: capNativeSnapshot([{ role: 'user', content: `[Conversation checkpoint]\n${summary}`, timestamp: last.createdAt.toISOString() }, ...nativeTail]) } : null,
     }, { keepCliSessionPrefixes: CHILD_CLI_SESSION_KEY_PREFIXES });
-    if (published && extractsMemoryOnCompaction(getConfig().memory?.extractionCadence, await sessionAudience(history.session))) {
+    if (published && extractsMemoryOnCompaction(getConfig().memory?.extractionCadence, audience)) {
       const { updateMemoriesAfterTurn } = await import('@/core/memory');
       const { turnWorkspaceId } = await import('./session-resolver');
       const { userId, workspaceId } = history.session;

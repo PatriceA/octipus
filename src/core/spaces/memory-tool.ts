@@ -1,6 +1,6 @@
 import type { ToolHandler } from '@/core/agent-base';
 import type { AgentService } from '@/core/agent/service';
-import { getFlowLabel } from '@/security/flow-guard';
+import { getFlowLabel, loadFlowLabel } from '@/security/flow-guard';
 import { requireCan } from '@/security/space-access';
 
 /**
@@ -8,8 +8,9 @@ import { requireCan } from '@/security/space-access';
  * records a fact in the space memory for its requester, who must have
  * `write` in the space (re-read at the call, D5). When the session has read
  * outsiders' text — its flow label is `suspicious`, which a room always is —
- * the requester is asked first: a fact injected into every later turn of
- * the space must not be planted by someone else's message.
+ * or the requester's private data (`private`, I6), the requester is asked
+ * first: a fact injected into every later turn of the space must not be
+ * planted by someone else's message, nor carry personal data unasked.
  */
 export function createRememberForSpaceTool(service: AgentService): ToolHandler {
   return {
@@ -34,7 +35,11 @@ export function createRememberForSpaceTool(service: AgentService): ToolHandler {
       // The role first (read now): a member who may not write is not asked.
       const { getMembership } = await import('./service');
       requireCan(await getMembership(context.userId, space.workspaceId), 'write');
-      if (getFlowLabel(context.sessionId).suspicious) {
+      // Also after a read of the requester's private data (I6): the fact would
+      // carry it into every member's sessions. The label is the stored one too.
+      await loadFlowLabel(context.sessionId);
+      const label = getFlowLabel(context.sessionId);
+      if (label.suspicious || label.private) {
         const answer = await service.requestApproval(
           'Octipus wants to add a fact to the space memory, which every member\'s sessions in this space will receive.',
           `Add this to the space memory?\n\n"${body}"`,

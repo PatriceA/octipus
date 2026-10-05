@@ -237,6 +237,28 @@ export function getClaudeShellGuardSettingsPath(): string {
   return path;
 }
 
+/**
+ * The whole Claude settings of a space run (§5.6), passed with
+ * `--setting-sources=` so no user, project or local settings file is read:
+ * a member's agent could otherwise write `<space>/.claude/settings.json`
+ * (pre-approved tools, hooks) and act in every other member's runs, and the
+ * host's own allow rules would skip the stdio permission tool. No
+ * pre-approved tool, bypass mode disabled, no project MCP servers; the shell
+ * guard hook is the only hook, when it is on. Managed (policy) settings
+ * still apply — they are the operator's.
+ */
+export function getClaudeSpaceSettingsPath(shellGuard: boolean): string {
+  const dir = shellGuard ? dirname(getShellGuardScriptPath()) : join(tmpdir(), 'octipus-cli');
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, shellGuard ? 'claude-space-guarded.json' : 'claude-space.json');
+  writeFileSync(path, JSON.stringify({
+    permissions: { allow: [], defaultMode: 'default', disableBypassPermissionsMode: 'disable' },
+    enableAllProjectMcpServers: false,
+    hooks: shellGuard ? { PreToolUse: [{ matcher: SHELL_GUARD_TOOL_MATCHER, hooks: [{ type: 'command', command: shellGuardHookCommand() }] }] } : {},
+  }), { mode: 0o600 });
+  return path;
+}
+
 /** Windows-only `.cmd` wrapper Codex's hook calls by bare path (see the Codex builder for why). */
 export function getCodexShellGuardWrapper(): string {
   // ponytail: a temp dir path with a space would need quotes again; add a no-space fallback dir if that ever occurs.
@@ -729,8 +751,11 @@ export class CLIArgumentBuilder {
     const { disallowed, rest } = splitClaudeDisallowedTools(settings.extraArgs ?? []);
     args.push('--disallowedTools', [...new Set([...disallowed, ...CLAUDE_NATIVE_SUBAGENT_TOOLS])].join(','));
 
-    // Per-launch settings layer; merges over the user's, never writes it.
-    if (connection?.shellGuard) args.push('--settings', getClaudeShellGuardSettingsPath());
+    // In a space: no settings file but ours (`getClaudeSpaceSettingsPath`).
+    // `=` form: an empty value survives a shell-wrapped Windows launch.
+    // Otherwise a per-launch layer that merges over the user's, never writes it.
+    if (connection?.space) args.push('--setting-sources=', '--settings', getClaudeSpaceSettingsPath(!!connection.shellGuard));
+    else if (connection?.shellGuard) args.push('--settings', getClaudeShellGuardSettingsPath());
 
     if (rest.length) {
       args.push(...rest);
