@@ -386,14 +386,17 @@ In a space, `POST /api/notes` takes `baseSha256` (the sha of the body the
 edit was made from — `GET /api/notes/:id` returns the live text and its sha
 as `bodySha256` while the note is open in an editor). The edit is merged with
 what others wrote since, or refused with 409 `{code: "stale",
-currentSha256}`; a note over `spaces.noteMaxBytes` is a 413. Omitting `body`
-on an existing space note saves only its title, tags and kind.
+currentSha256}`; a note over `spaces.noteMaxBytes` is a 413. A body write
+to an existing space note without `baseSha256` is a 400 `{code:
+"base_required"}`: read the note first. Omitting `body` on an existing space
+note saves only its title, tags and kind. Line endings are stored as `\n`.
 
 | Method | Endpoint | Who | Description |
 |--------|----------|-----|-------------|
 | GET | `/api/notes/:id/revisions` | member | Revisions, newest first: `{id, createdAt, origin, size, authors[], onBehalfOf}` |
 | GET | `/api/notes/:id/revisions/:revisionId` | member | One revision with its body |
 | POST | `/api/notes/:id/revisions/:revisionId/restore` | editor, owner | Write that revision's text as a new revision |
+| POST | `/api/notes/:id/merge` | editor, owner | `{base, text}`: merge a live editor's text the server never got (typed offline, or unsent when the document was rebuilt) from `base`, the last server text it synced, as the member's typing → `{changed, merged, sha256, revisionId}`; 409 `stale` on a clash (nothing applied) |
 | GET | `/api/notes/proposals?noteId=&status=` | member | The agent's edit proposals |
 | POST | `/api/notes/proposals/:proposalId/accept` | editor, owner | Apply it (merged through the live document); 409 `{status: "stale", base, current, proposed}` when it collides with a newer edit |
 | POST | `/api/notes/proposals/:proposalId/reject` | editor, owner | Close it |

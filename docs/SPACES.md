@@ -243,25 +243,46 @@ A member's private chat in a space runs the agent in the space.
   membership.
 - **Tools.** Content tools use `reposFor(context)` — `contentRepos` of the
   agent's principal, which carries the space and the role — so the agent
-  reads and writes exactly what the member may. Personal-only tools
-  (scheduling, monitors, pipelines and recipes, memory and profile tools,
-  `sync_vault`, `index_file`/`index_directory`, meeting notes, writes through
-  personal connectors) are not offered and are refused; the prompt says why.
+  reads and writes exactly what the member may. Writes go only through
+  containers known to act on the space (`SPACE_TOOL_IDS`, an allowlist in
+  `src/security/space-tools.ts`: content tools, files, shell, version control,
+  sandboxes); personal-only tools (scheduling, monitors, pipelines and
+  recipes, memory, profile and skill tools such as `update_skill`,
+  `sync_vault`, `index_file`/`index_directory`, meeting notes, MCP server
+  administration, skill distillation) and every write through the member's
+  personal connections (OAuth connectors and `connector_call_tool`, their MCP
+  servers, their real browser through `browser-ext`, the named connector
+  tools) are not offered and are refused; the prompt says why. Reads through
+  those connections run and mark the session `private` (I6). A coding agent's
+  configuration under the space's files (`.claude/`, `.codex/`, `.gemini/`,
+  `.agents/`, `.vibe/`, `.mcp.json`) is never written, by the file tools or a
+  CLI model's native writes: a CLI model run in the space would read it.
 - **Decisions.** `routeApprovalFor` (`src/security/approval-route.ts`) is the
   one decision for every tool call: it re-reads the membership, applies the
   role cap first (commenters and guests run only `COMMENTER_TOOLS`,
   `src/security/space-tools.ts`), then the I6 rule — after a private read
   (the session's flow label holds `private`), any call that is not a read
   asks, whatever `agent.flowGuard` says — then the stored ALLOW/ASK/DENY.
+  The flow label is stored on the session (`sessions.flow_label`), so a
+  restart or another process still asks. A space this process has not seen
+  yet is looked up in the database, so a context that names a space without
+  its scope is refused.
 - **Memories and profile.** `sessionAudience`
   (`src/core/agent/audience.ts`) switches the requester's personal memories,
   learning and profile facts off in a space session, child workers included.
 - **CLI models.** Each adapter declares the mode it runs in inside a space
   (`CLI_SPACE_MODES`): Claude-binary tools use `--permission-mode default`
-  with the stdio permission tool (pre-approved `allowedTools` are dropped),
+  with the stdio permission tool (pre-approved `allowedTools` are dropped)
+  and read no user, project or local settings file (`--setting-sources=`
+  plus a locked `--settings` file: no allow rules, bypass disabled, the shell
+  guard as the only hook),
   Codex the `read-only` sandbox, Antigravity `--mode plan`; Mistral Vibe has
   none and is refused. Commenters' turns use API models only, and an install
   CLI model serves spaces only when marked `metadata.cliAgent.sharedUse: true`.
+- **Pipelines and artifacts.** A stage's verify command runs in the space's
+  files under the space's role cap and I6; a pipeline resumes only while its
+  starter may still write there. A space artifact takes no `tool` or `mcp`
+  data source (they run as the member's personal agent).
 - **Cost.** Each turn runs inside one usage context: every `cost_log` row of
   a space turn carries the space's `workspace_id` and the turn's `funding`;
   install-topic calls (compaction and its chunk summaries, embeddings,
@@ -391,14 +412,33 @@ text change live but cannot edit (their updates are refused); so is
 everyone in an archived space.
 
 - **Other writers merge.** Everything else that writes a space note — a
-  REST save, quick capture, meeting notes, the agent, accepting a proposal,
-  restoring a revision — names the text it started from (its *base*). The
-  server merges that change into the live text (a three-way merge, lines
-  first, then words) or refuses it as stale; it never overwrites what
-  someone typed meanwhile. A read of an open note returns the live text and
-  its sha, which the server keeps as a base for `spaces.docBaseTtlMinutes`.
-  Archiving an open note saves what was typed first, then closes it for
-  everyone.
+  REST save, meeting notes, the agent, accepting a proposal, restoring a
+  revision — names the text it started from (its *base*); a body write to
+  an existing note without one is refused (it could not be told apart from
+  a revert of what changed since its read). The server merges that change
+  into the live text (a three-way merge, lines first, then words) or
+  refuses it as stale; it never overwrites what someone typed meanwhile. A
+  read of an open note returns the live text and its sha, which the server
+  keeps as a base for `spaces.docBaseTtlMinutes` (bases handed to a reader
+  outlive those only saved). Quick capture appends to the end of the live
+  text. A meeting re-import merges from the body it last rendered into the
+  note. Archiving an open note saves what was typed first, then closes it
+  for everyone; an archived note opens read-only.
+- **Reconnects.** After the last editor leaves, a note stays in memory for
+  a minute: a member whose connection blipped rejoins the same document and
+  what they typed offline merges in. When the server rebuilt the document
+  meanwhile (a restart — shutdown saves every open note first — or a change
+  made around it), the editor re-seeds and merges what it had beyond the
+  last server text it synced back in (`POST /api/notes/:id/merge`); if that
+  clashes with a change made meanwhile, nothing is applied and the editor
+  says so and offers "Copy my version".
+- **Integrity.** An editor's update may only insert or delete text of the
+  note (no other shared type, embed or format), and the server caps the
+  whole document's encoded size, not just the text. Cursors and avatars are
+  the server's: a connection announces at most two cursors, never another
+  connection's, and each names the member of its connection. Line endings
+  are `\n`: a note stored with `\r\n` is normalized (and saved) when
+  opened, and every writer's text is normalized.
 - **History.** Every save is a revision with its authors (and the member an
   agent wrote for). The notes page's right panel has a *history* tab: open a
   revision to read it, restore it as a new revision.

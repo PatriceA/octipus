@@ -5,6 +5,6 @@ registerCommand({
   name: 'compact',
   description: 'Summarize older context (/compact [focus instructions])',
   async execute(ctx) {
-    return { response: await compactSessionCommand(ctx.sessionId, ctx.args) };
+    return { response: await compactSessionCommand(ctx.sessionId, ctx.args, ctx.userId) };
   },
 });

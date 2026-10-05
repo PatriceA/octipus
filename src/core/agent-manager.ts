@@ -17,10 +17,12 @@ import { getCLIToolConfig, isCLIProvider, isResumableCliModel } from './cli-agen
 import { CLIAgentWorker } from './cli-agent-worker';
 import { getPermissionManager } from '@/security/permissions';
 import { isRealUserId } from '@/security/principal';
-import { isKnownSharedWorkspace } from '@/security/workspace-fs';
+import { isSharedWorkspaceId } from '@/security/workspace-fs';
+import { withoutPersonalOnlyTools } from '@/security/space-tools';
 import { getRouter } from './router';
 import type { AgentFunding, AgentSpace, AgentSponsor, AgentStatus, AgentTrigger } from './types';
 import { buildAgentContext, recheckSpace } from './agent/context';
+import { stripMutatingTools } from './agent/plan-mode';
 
 /** Union type for all agent worker implementations */
 export type AnyAgentWorker = AgentWorker | CLIAgentWorker;
@@ -175,7 +177,7 @@ export class AgentManager {
     // included, so a removed member's next turn fails and a running turn
     // cannot grow new workers. The current role replaces the snapshot.
     const space = options.space ? await recheckSpace(options.userId, options.space) : null;
-    if (!space && isKnownSharedWorkspace(options.workspaceId)) {
+    if (!space && await isSharedWorkspaceId(options.workspaceId)) {
       throw new Error('An agent in a space needs its space scope (resolveAgentScope / inheritScope)');
     }
 
@@ -194,7 +196,7 @@ export class AgentManager {
     if (!options.model) {
       // Only route if model isn't pre-determined
       const router = getRouter();
-      const routing = await router.route(options.topic || '', undefined, { userId: options.userId, inSpace: !!space, sponsor: options.sponsor });
+      const routing = await router.route(options.topic || '', undefined, { userId: options.userId, inSpace: !!space, spaceRole: space?.role, sponsor: options.sponsor });
       routedTopic = routing.topic;
       routedModel = routing.model;
       routedModelName = routing.modelName;
@@ -297,8 +299,16 @@ export class AgentManager {
       set.add(agentId);
     }
 
-    // Register global tools for native and CLI workers
-    for (const tool of this.globalTools.values()) {
+    // Register global tools for native and CLI workers. They are added after
+    // every spawner's tool filter has run, so a space worker gets the same
+    // filter here: no personal-only tool (`update_skill`), and for a role
+    // that cannot write, no file-changing tool (§5.6).
+    let globals = [...this.globalTools.values()];
+    if (space) {
+      globals = withoutPersonalOnlyTools(globals);
+      if (!can(space.role, 'run_agent_write')) globals = stripMutatingTools(globals);
+    }
+    for (const tool of globals) {
       worker.registerTool(tool);
     }
 

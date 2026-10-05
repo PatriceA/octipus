@@ -76,6 +76,12 @@ export const topicRoutes = new Elysia({ prefix: '/topics' })
         set.status = 404;
         return { error: `Unknown topic: ${params.topic}` };
       }
+      // An install lane's executor is an install row: a personal model
+      // (coworking spec §8.1) belongs to its owner and is refused here.
+      if (body.executorModel && await getModelRegistry().isPersonalModelName(body.executorModel)) {
+        set.status = 400;
+        return { error: `Model "${body.executorModel}" is a personal model and cannot be an install topic executor` };
+      }
       // True PATCH semantics: only fields present in the body change; omitted
       // fields keep their current value (a present `null` clears the field).
       const current = getTopicConfig(topic);

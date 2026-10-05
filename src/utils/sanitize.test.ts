@@ -102,6 +102,32 @@ describe('validateExternalUrl', () => {
     const r = await validateExternalUrl('http://[::ffff:127.0.0.1]/');
     expect(r.valid).toBe(false);
   });
+
+  test.each([
+    'fec0::1', // site-local
+    'ff02::1', // multicast
+    '::127.0.0.1', // IPv4-compatible, normalised to ::7f00:1
+    '::a00:1', // IPv4-compatible 10.0.0.1
+    '2002:7f00:1::', // 6to4 of 127.0.0.1
+    '2002:a9fe:a9fe::1', // 6to4 of 169.254.169.254
+    '64:ff9b::a9fe:a9fe', // NAT64 of 169.254.169.254
+    '64:ff9b:1::1', // local-use NAT64
+    '2001:0:4136:e378::1', // Teredo
+    '2001:db8::1', // documentation
+    'fe80::1', 'fd00::1', '::', '::1',
+  ])('rejects the IPv6 range of [%s]', async (ip) => {
+    expect((await validateExternalUrl(`https://[${ip}]/`)).valid).toBe(false);
+  });
+
+  test.each(['2606:4700:4700::1111', '2002:808:808::1'])('accepts the public IPv6 [%s]', async (ip) => {
+    expect((await validateExternalUrl(`https://[${ip}]/`)).valid).toBe(true);
+  });
+
+  test('assertPublicAddress checks every spelling of an embedded private IPv4', () => {
+    expect(assertPublicAddress('::ffff:7f00:1').ok).toBe(false);
+    expect(assertPublicAddress('2002:0a00:0001::').ok).toBe(false);
+    expect(assertPublicAddress('fe80::1%eth0').ok).toBe(false);
+  });
 });
 
 describe('safeRegExp', () => {

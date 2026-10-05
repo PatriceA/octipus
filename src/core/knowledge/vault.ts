@@ -155,7 +155,7 @@ export class VaultSync {
         if (bodySame && !metaSame) {
           // Body matches; only frontmatter (tags/kind/date/title) changed —
           // a safe metadata sync, not a content conflict.
-          await this.notes.save({ scope, id: existing.id, title: parsed.title, body: parsed.body, noteKind: parsed.noteKind, noteDate: parsed.noteDate, tags: parsed.tags });
+          await this.notes.save({ scope, id: existing.id, baseSha256: existing.bodySha256, title: parsed.title, body: parsed.body, noteKind: parsed.noteKind, noteDate: parsed.noteDate, tags: parsed.tags });
           result.updated++;
           continue;
         }
@@ -164,7 +164,7 @@ export class VaultSync {
           result.conflicts.push(parsed.slug);
           continue;
         }
-        await this.notes.save({ scope, id: existing.id, title: parsed.title, body: parsed.body, noteKind: parsed.noteKind, noteDate: parsed.noteDate, tags: parsed.tags });
+        await this.notes.save({ scope, id: existing.id, baseSha256: existing.bodySha256, title: parsed.title, body: parsed.body, noteKind: parsed.noteKind, noteDate: parsed.noteDate, tags: parsed.tags });
         result.updated++;
       } else {
         await this.notes.save({ scope, slug: parsed.slug, title: parsed.title, body: parsed.body, noteKind: parsed.noteKind, noteDate: parsed.noteDate, tags: parsed.tags });

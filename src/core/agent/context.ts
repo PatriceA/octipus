@@ -18,7 +18,7 @@
  */
 import type { AgentContext, AgentFunding, AgentSpace, AgentSponsor, AgentStatus, AgentTrigger } from '@/core/types';
 import type { AgentFundingMode } from '@/db/schema/organizations';
-import { type ProviderUsageContext, withProviderUsageContext } from '@/models/providers/instrumented';
+import { type ProviderUsageContext, withProviderUsageContext, withSponsor } from '@/models/providers/instrumented';
 import { isRealUserId } from '@/security/principal';
 import { can, SpaceError } from '@/security/space-access';
 import { generateId } from '@/utils/crypto';
@@ -265,5 +265,6 @@ export function usageContextOf(context: Pick<AgentContext, 'userId' | 'sessionId
  * unless it is an install-topic call, which stamps `install` itself.
  */
 export function withAgentUsage<T>(userId: string, scope: AgentScope, run: () => T): T {
-  return withProviderUsageContext({ userId, workspaceId: scope.workspaceId, funding: scope.funding }, run);
+  const sponsor = scope.funding === 'sponsor' ? scope.sponsor ?? null : null;
+  return withSponsor(sponsor, () => withProviderUsageContext({ userId, workspaceId: scope.workspaceId, funding: scope.funding }, run));
 }

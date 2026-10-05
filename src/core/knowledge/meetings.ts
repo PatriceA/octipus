@@ -51,9 +51,17 @@ export interface MeetingInput {
    * merged with what members typed, or refused as stale.
    */
   scope?: NoteScope;
-  /** Space notes: the sha of the meeting note's body this write was made from. */
+  /**
+   * Space notes: the sha of the meeting note's body this write was made
+   * from. Omitted on a re-save: the body this importer last rendered (kept
+   * in the note's frontmatter, `renderedBody`) is the base, so what members
+   * wrote since is merged, never reverted.
+   */
   baseSha256?: string;
 }
+
+/** Frontmatter key of a space meeting note: the body last rendered into it (the base of the next re-save). */
+export const MEETING_RENDERED_BODY_KEY = 'renderedBody';
 
 export interface MeetingResult {
   noteId: string;
@@ -152,12 +160,21 @@ export async function ingestMeeting(input: MeetingInput): Promise<MeetingResult>
   const tags = ['meeting'];
   if (input.source) tags.push(`source/${slugify(input.source)}`);
 
+  const scope = input.scope ?? personalNoteScope(input.userId, input.workspaceId ?? null);
+  const body = renderMeetingNote({ ...input, at }, names);
+  // A space note's re-save merges from the body last rendered into it.
+  let base: { baseSha256?: string; baseBody?: string } = { baseSha256: input.baseSha256 };
+  if (scope.kind === 'space' && input.baseSha256 === undefined) {
+    const existing = await getNoteService().store(scope).getBySlug(slug);
+    const rendered = existing?.frontmatter?.[MEETING_RENDERED_BODY_KEY];
+    if (typeof rendered === 'string') base = { baseBody: rendered };
+  }
   const saved = await getNoteService().save({
-    scope: input.scope ?? personalNoteScope(input.userId, input.workspaceId ?? null),
+    scope,
     slug,
-    baseSha256: input.baseSha256,
+    ...base,
     title: input.title,
-    body: renderMeetingNote({ ...input, at }, names),
+    body,
     noteKind: MEETING_NOTE_KIND,
     noteDate: at.slice(0, 10),
     tags,
@@ -166,6 +183,7 @@ export async function ingestMeeting(input: MeetingInput): Promise<MeetingResult>
       attendees: attendees.map((a) => ({ name: attendeeName(a), email: a.email ?? null })),
       ...(input.source ? { source: input.source } : {}),
       ...(input.externalId ? { externalId: input.externalId } : {}),
+      ...(scope.kind === 'space' ? { [MEETING_RENDERED_BODY_KEY]: body } : {}),
     },
     createdByAgentId: input.createdByAgentId ?? null,
   });

@@ -91,16 +91,32 @@ export function cliHomeFor(userId: string): string {
 }
 
 /**
+ * The working directory of a personal row's one-shot completion: a directory
+ * of its own under the owner's CLI home, never `workspace.rootPath` (which
+ * holds every user's data). The completion runs without tools, so nothing is
+ * meant to be read from it; it only keeps the vendor's per-project state
+ * (Claude indexes sessions by cwd) inside the owner's home.
+ */
+export function cliWorkDirFor(userId: string): string {
+  const dir = join(cliHomeFor(userId), 'one-shot');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return dir;
+}
+
+/**
  * The credential owner of a CLI model row: `null` for an install row, the
  * row's owner and their stored token for a personal one. A personal row
- * without a token fails loud — it must never fall back to the server login.
+ * without a token fails loud — it must never fall back to the server login —
+ * and runs only for its owner: `requesterId` is the user the run serves, and
+ * another user's personal row throws (`resolveModelKey`).
  */
 export async function cliCredentialOwnerFor(
   row: Pick<ModelConfigEntry, 'name' | 'apiKeyRef' | 'ownerUserId' | 'provider'> | null | undefined,
+  requesterId: string | null | undefined,
 ): Promise<CliCredentialOwner | null> {
   if (!row?.ownerUserId) return null;
   const { resolveModelKey, PersonalModelKeyMissingError } = await import('@/models/model-key');
-  const token = await resolveModelKey(row);
+  const token = await resolveModelKey(row, requesterId);
   if (!token) throw new PersonalModelKeyMissingError(row.name);
   return { userId: row.ownerUserId, token };
 }

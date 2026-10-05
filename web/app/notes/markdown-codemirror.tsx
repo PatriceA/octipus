@@ -11,7 +11,7 @@ import { languages } from '@codemirror/language-data';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { EditorView, keymap } from '@codemirror/view';
 import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror';
-import { forwardRef, useImperativeHandle, useMemo, useRef } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { yCollab } from 'y-codemirror.next';
 import * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
@@ -221,6 +221,20 @@ const NotesMarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function Not
   const getTagsRef = useRef(getTags);
   getTagsRef.current = getTags;
 
+  // The live document's undo history (only this member's edits). Made in an
+  // effect, so each remount's (and StrictMode's double mount's) manager is
+  // destroyed — it listens on the shared Y.Doc until then.
+  const [undoManager, setUndoManager] = useState<Y.UndoManager | null>(null);
+  useEffect(() => {
+    if (!collab) {
+      setUndoManager(null);
+      return;
+    }
+    const manager = new Y.UndoManager(collab.text);
+    setUndoManager(manager);
+    return () => manager.destroy();
+  }, [collab]);
+
   const extensions = useMemo(
     () => [
       markdown({ base: markdownLanguage, codeLanguages: languages }),
@@ -261,9 +275,12 @@ const NotesMarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function Not
       }),
       oneDark,
       editorTheme,
-      ...(collab ? [yCollab(collab.text, collab.awareness, { undoManager: new Y.UndoManager(collab.text) })] : []),
+      // Bound once this document's manager exists (never another's).
+      ...(collab && undoManager && undoManager.scope.includes(collab.text)
+        ? [yCollab(collab.text, collab.awareness, { undoManager })]
+        : []),
     ],
-    [collab],
+    [collab, undoManager],
   );
   // Bound to a live document, the editor starts from its text and is then
   // driven by yCollab alone: a changing `value` prop would fight it.

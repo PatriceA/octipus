@@ -19,8 +19,16 @@ export function rootCliConversation(session: Session) {
     .sort((a, b) => b[1].lastUsedAt.localeCompare(a[1].lastUsedAt))[0];
 }
 
-/** Called under the conversation lock. Never replaces or clears a vendor ID. */
-export async function compactCliConversation(session: Session, instructions: string): Promise<string | null> {
+/**
+ * Called under the conversation lock. Never replaces or clears a vendor ID.
+ *
+ * `requesterId` is who asked (`/compact`). The pass runs on the row the vendor
+ * conversation ran on — an install row, or the requester's own personal row —
+ * and never on another user's: in a space session the most recent root
+ * conversation can be another member's, on their own subscription, and
+ * compacting it would spend their login on the requester's command.
+ */
+export async function compactCliConversation(session: Session, instructions: string, requesterId: string): Promise<string | null> {
   const current = rootCliConversation(session);
   if (!current) return null;
   const [key, record] = current;
@@ -34,7 +42,10 @@ export async function compactCliConversation(session: Session, instructions: str
   // the vendor conversation (§8.5). A mismatch means the record was written
   // under another owner: refuse rather than compact it with the wrong login.
   const model = await resolveCliModelEntry(owner.model, { modelName: record.modelName, userId: owner.userId });
-  const credentialOwner = await cliCredentialOwnerFor(model);
+  if (model?.ownerUserId && model.ownerUserId !== requesterId) {
+    throw new Error('This CLI conversation runs on another member\'s personal model; only they can compact it.');
+  }
+  const credentialOwner = await cliCredentialOwnerFor(model, requesterId);
   if ((credentialOwner?.userId ?? undefined) !== record.credentialOwner) throw new Error('CLI session credentials no longer match its model.');
   const env = cliEnvFor(credentialOwner, tool, await tool.buildEnv?.(), model?.metadata?.cliAgent?.inheritApiKeys === true);
   const cwd = resolve(WorkspaceFS.forSession(session).root);
@@ -45,6 +56,8 @@ export async function compactCliConversation(session: Session, instructions: str
     if (adapter === 'Claude Code') {
       const output = await execCli(tool.binaryPath, ['--print', '--resume', record.id,
         '--output-format', 'stream-json', '--verbose', '--tools', '', '--strict-mcp-config',
+        // A personal row reads no settings file from the owner's cli-home (§8.4).
+        ...(credentialOwner ? ['--setting-sources='] : []),
         '--settings', JSON.stringify({ disableAllHooks: true })], {
         cwd, env, timeoutMs: 300_000, stdin: `/compact${instructions ? ` ${instructions}` : ''}`,
       });
@@ -61,7 +74,7 @@ export async function compactCliConversation(session: Session, instructions: str
       }
     } else if (adapter === 'Codex CLI') {
       if (instructions) throw new Error('Codex native compaction does not accept focus instructions; use /compact without arguments.');
-      const servers = await discoverCodexMcpServers(cwd);
+      const servers = await discoverCodexMcpServers(cwd, env);
       const args = ['app-server', ...servers.flatMap(server => ['-c', `mcp_servers.${JSON.stringify(server.name)}.enabled=false`])];
       usage = await compactCodexThread(tool.binaryPath, args, { cwd, env, threadId: record.id });
     } else {
@@ -71,7 +84,7 @@ export async function compactCliConversation(session: Session, instructions: str
     return `${adapter} conversation compacted. Continuing with the same CLI session.`;
   } finally {
     release();
-    await recordProviderUsage({ model: owner.model, messages: [], userId: session.userId, sessionId: session.id,
+    await recordProviderUsage({ model: owner.model, messages: [], userId: requesterId, sessionId: session.id,
       modelConfigName: model?.name, requestType: 'compaction', workspaceId: session.workspaceId ?? null,
       accountingMetadata: { purpose: 'cli_compaction' } }, 'cli', { usage, model: owner.model }, !completed);
   }

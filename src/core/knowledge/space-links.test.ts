@@ -82,7 +82,7 @@ describe('link resolution stays inside one scope', () => {
     expect(await outgoingTarget(personal, personalPlan.note.id)).toBe(personalBudget.note.id);
 
     // Saving the space "Budget" again does not reach into the personal edges.
-    await svc.save({ scope: bobInSpace, id: spaceBudget.note.id, title: 'Budget', body: 'updated' });
+    await svc.save({ scope: bobInSpace, id: spaceBudget.note.id, title: 'Budget', body: 'updated', baseSha256: spaceBudget.note.bodySha256 });
     expect(await outgoingTarget(personal, personalPlan.note.id)).toBe(personalBudget.note.id);
   });
 
@@ -121,7 +121,7 @@ describe('link resolution stays inside one scope', () => {
     const { getNoteService } = await import('./notes');
     const svc = getNoteService();
     const note = await svc.save({ scope: space, title: 'Shared', body: '[[A]] [[B]]' });
-    await svc.save({ scope: bobInSpace, id: note.note.id, title: 'Shared', body: '[[A]] [[C]]' });
+    await svc.save({ scope: bobInSpace, id: note.note.id, title: 'Shared', body: '[[A]] [[C]]', baseSha256: note.note.bodySha256 });
     const refs = (await getKnowledgeLinkRepository().getOutgoing(space, 'note', note.note.id))
       .filter((e) => e.linkType === 'references').map((e) => [e.toRef, e.userId]);
     expect(refs.sort()).toEqual([['a', alice], ['c', alice]]);

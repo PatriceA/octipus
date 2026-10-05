@@ -9,7 +9,7 @@
  * shared content — personal memories and profile facts stay out of all
  * three.
  */
-import { isKnownSharedWorkspace, noteSharedWorkspace } from '@/security/workspace-fs';
+import { isSharedWorkspaceId } from '@/security/workspace-fs';
 
 export type AudienceKind = 'personal' | 'group' | 'space' | 'room';
 
@@ -46,27 +46,11 @@ export async function sessionAudience(session: AudienceSession | null | undefine
   if (!session) return AUDIENCES.personal;
   if (session.kind === 'room') return AUDIENCES.room;
   if (session.groupChannelId) return AUDIENCES.group;
-  if (await isSharedWorkspace(session.workspaceId)) return AUDIENCES.space;
+  if (await isSharedWorkspaceId(session.workspaceId)) return AUDIENCES.space;
   return AUDIENCES.personal;
 }
 
 /** The audience of a known kind (tests, and callers that already resolved it). */
 export function audienceOf(kind: AudienceKind): SessionAudience {
   return AUDIENCES[kind];
-}
-
-async function isSharedWorkspace(workspaceId: string | null | undefined): Promise<boolean> {
-  if (!workspaceId) return false;
-  if (isKnownSharedWorkspace(workspaceId)) return true;
-  const { isUuid } = await import('@/db/repositories/scoped');
-  if (!isUuid(workspaceId)) return false;
-  const [{ getDb }, { workspaces }, { eq }] = await Promise.all([
-    import('@/db/postgres'), import('@/db/schema/organizations'), import('drizzle-orm'),
-  ]);
-  const [row] = await getDb().select({ kind: workspaces.kind }).from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
-  if (row?.kind === 'shared') {
-    noteSharedWorkspace(workspaceId);
-    return true;
-  }
-  return false;
 }

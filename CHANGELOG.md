@@ -7,6 +7,27 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### Fixed
+
+- **Rooms (review of S2).** `remember_for_space` goes through
+  `routeApprovalFor` as a space write (role cap, and an ASK after a private
+  read in a private space session). The space memory and a side panel's
+  linked-room transcript are injected per turn only, never stored with the
+  turn (`metadata.promptContext`, native snapshots) nor replayed. Room turns
+  carry a stop signal checked at handover, before the root agent spawns and
+  before the answer is stored; `/stop`, removal and the approval timeout
+  stop only the turn they decided about, and tool decisions in a room
+  re-check `roomAccess`. `/compact` refuses while a turn runs. Room history
+  and compaction page past the 400-row cap; a turn compacts first when its
+  transcript exceeds `rooms.transcriptWindowChars` and its history stays in
+  that window. A room `yes` resolves its approval by id. A requester's
+  limit refusal posts a neutral line in the room (details to the requester
+  only), and failed turns no longer broadcast error text. The swarm routes'
+  admin bypass never reaches rooms or space sessions. A room creator's
+  manage rights need a write role. Queue turns alternate between members;
+  `requester` checks the running turn's requester; pruned subscriptions
+  clear presence; `room.subscribe` re-checks access after joining.
+
 ### Added
 
 - **Space funding, budgets and the team surface** (coworking S5,
@@ -91,6 +112,27 @@ labels reflect blast radius, not contract guarantees.
   for space budgets (author only); a user's own budgets are still deleted
   with their account (a trigger replaces the cascade).
 
+- **Live space notes: review fixes** (coworking S3). Nothing typed is lost
+  on a reconnect: a closed note stays in memory for a minute (a member whose
+  connection blipped keeps the epoch and Yjs merges what they typed
+  offline), and after a rebuild (a restart, a reload) the editor merges its
+  unsent text back through the hub (`POST /api/notes/:id/merge`, three-way
+  from the last server text it synced) — a clash keeps the member's text
+  with a notice and a "Copy my version" button. Shutdown saves every open
+  note. A body write to an existing space note must name its base
+  (`baseSha256`; `write_note`'s `base_sha256`): without one it is refused
+  (400 `base_required`) instead of reverting what changed since its read;
+  meeting re-imports merge from the body they last rendered. The hub owns
+  awareness (a connection holds at most two client ids, never another's,
+  and its states name its member), refuses updates that write outside the
+  note's text (other root types, embeds, formats, `\r`) and caps the
+  encoded document, builds notes with `\n` line endings (CRLF bodies are
+  normalized and saved) and normalizes every writer's text. The live
+  reindex keeps explicit and meeting tags; capture appends to an open daily
+  note instead of merging; an archived note opens read-only; a membership
+  change during a join takes effect on the next frame; a failed save keeps
+  its authors; read bases outlive persist-only ones. See docs/SPACES.md.
+
 - **Model identity is the row name.** Agent contexts carry `modelName`
   beside the provider `model` id, and providers re-read rows by
   `modelConfigName`; a modelId lookup returns install rows first, then the
@@ -114,6 +156,34 @@ labels reflect blast radius, not contract guarantees.
 
 ### Security
 
+- **Own models: review fixes** (coworking S4). A personal CLI model's
+  one-shot completions (mail triage, reader, research, `/plan`, the casual
+  path) run without native tools (`--tools=`, no settings files) in a
+  directory under the owner's CLI home, never in the shared workspace root;
+  a CLI tool that cannot run tool-less (Codex, Antigravity) can no longer be
+  bound to a lane and serves agent runs only. A personal CLI agent run is
+  locked to its adapter's safe mode, as in a space (Claude: permission mode
+  `default` with the stdio permission tool and only a locked settings file;
+  Codex: read-only; Antigravity: plan mode); Mistral Vibe is refused for
+  personal rows. Codex MCP discovery reads the run's own `CODEX_HOME`. A
+  personal row's key is released only to its owner at the provider layer
+  (`resolveModelKey`), so another user's request on it fails whatever key it
+  brings; `/compact` never compacts another member's conversation on their
+  personal model. In a space a personal CLI binding a commenter (or an
+  adapter without a space mode) may not use falls through to the install
+  lane instead of failing the turn, and side questions and the voice plan
+  gate follow the same rules. `isRegisteredModel` only considers install
+  rows and the caller's own (plus the reserved `u/` namespace), so another
+  user's personal model id no longer blocks a passthrough. Red-team runs,
+  `POST /api/eval/run` and `PATCH /api/topics/:topic/config` refuse personal
+  rows. Admins see disabled and other orgs' install rows in
+  `GET /api/models/:name` again; install rows fall back to the env key when
+  the vault cannot be read (personal rows still fail loud). The SSRF guard
+  also refuses `fec0::/10`, `ff00::/8`, IPv4-compatible `::a.b.c.d`, 6to4 of
+  a private IPv4, local-use NAT64, Teredo and documentation ranges, and a
+  personal endpoint must be `https://`. Personal rows may set
+  `contextWindow` and `maxTokens` within bounds, and a compaction that runs
+  on a personal row is funded `own`.
 - **Shared spaces: review fixes to the access layer** (coworking S1).
   Admins no longer list, read or stream another user's agents in a space
   (history list, live list, live details, events, stop). Starting an agent or
@@ -429,6 +499,22 @@ mixed into it. Existing memories are not migrated.
   permission tool; Codex: read-only; Antigravity: plan); Mistral Vibe is
   refused, commenters use API models only, and an install CLI login serves
   spaces only when its model is marked `metadata.cliAgent.sharedUse: true`.
+- **Spaces: personal connections and agent configuration stay out.** In a
+  space, writes go only through tools known to act on the space; writes
+  through your OAuth connectors (`connector_call_tool`), MCP servers, real
+  browser (`browser-ext`), MCP server administration, skill distillation and
+  `update_skill` are refused and not offered, and their reads mark the
+  session private so writing that data into the space asks first. The flow
+  label is now stored on the session (`sessions.flow_label`, migration 0128),
+  so a restart keeps it. A Claude-binary CLI model in a space reads no user,
+  project or local settings file (`--setting-sources=` with a locked
+  `--settings` file), and nothing writes `.claude/`, `.codex/`, `.gemini/`,
+  `.agents/` or `.mcp.json` in a space's files. A pipeline's verify command
+  follows the space rules, a pipeline resumes only for a starter who can
+  still write, and a space artifact takes no `tool` or `mcp` data source.
+- **Only an administrator edits a system skill.** Before, any signed-in user
+  could change a skill shared by every user (`update_skill`, `PATCH
+  /api/skills/:id`).
 - **Cost rows name the space.** Every model call of a space turn writes
   `cost_log.workspace_id` and `funding`; compaction, embeddings, memory
   extraction, toolshim, decision, vision and OCR calls are stamped `install`.

@@ -3,6 +3,7 @@ import type { CustomProviderConfig, ModelConfigEntry, ModelMetadata } from '@/db
 import type { CompletionOptions } from '../../litellm-client';
 import { modelLogger } from '@/utils/logger';
 import { fetchGuarded } from '@/utils/sanitize';
+import { providerUsageUserId } from '../instrumented';
 
 /**
  * The fetch a personal row's endpoint is reached with (coworking spec §8.4).
@@ -10,10 +11,11 @@ import { fetchGuarded } from '@/utils/sanitize';
  * checks every address against private, loopback and link-local ranges, the
  * socket is pinned to the checked address (no second resolution to rebind),
  * and a redirect is returned, never followed — the provider then fails on the
- * 3xx like any other non-2xx answer.
+ * 3xx like any other non-2xx answer. Only https: the owner's key rides along.
  */
-export const personalEndpointFetch: typeof fetch = (input, init) => {
+export const personalEndpointFetch: typeof fetch = async (input, init) => {
   const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+  if (new URL(url).protocol !== 'https:') throw new Error('URL blocked (SSRF guard): a personal endpoint must use https');
   return fetchGuarded(url, { ...init, redirect: 'manual' }, 0);
 };
 
@@ -65,7 +67,7 @@ export abstract class BaseCustomProvider {
     // modelId, then the requester's own personal rows — never another user's.
     const model = options?.modelConfigName
       ? await registry.getModel(options.modelConfigName)
-      : await registry.getModelByModelId(modelId, { userId: options?.userId }) || await registry.getModel(modelId);
+      : await registry.getModelByModelId(modelId, { userId: providerUsageUserId(options ?? {}) }) || await registry.getModel(modelId);
 
     if (!model) {
       throw classifyError(
@@ -81,6 +83,10 @@ export abstract class BaseCustomProvider {
       );
     }
 
+    // A personal row serves its owner only, even with a caller-supplied key.
+    const { assertModelRowOwner } = await import('@/models/model-key');
+    assertModelRowOwner(model, providerUsageUserId(options ?? {}));
+
     const metadata = (model.metadata || {}) as ModelMetadata;
     const custom = metadata.customProvider;
     if (!custom) {
@@ -94,7 +100,7 @@ export abstract class BaseCustomProvider {
     // the key resolves under the ROW's owner — the system vault for an install
     // row, the owner's vault for a personal one — never under the requester.
     const apiKey = options?.apiKey || (model.ownerUserId
-      ? await this.resolvePersonalApiKey(model)
+      ? await this.resolvePersonalApiKey(model, providerUsageUserId(options ?? {}))
       : await this.resolveApiKey(model.apiKeyRef));
 
     return {
@@ -106,9 +112,9 @@ export abstract class BaseCustomProvider {
   }
 
   /** A personal row's key: its owner's vault only — no `env:` reference, no env fallback. */
-  private async resolvePersonalApiKey(model: ModelConfigEntry): Promise<string> {
+  private async resolvePersonalApiKey(model: ModelConfigEntry, requesterId: string | undefined): Promise<string> {
     const { resolveModelKey } = await import('@/models/model-key');
-    const key = await resolveModelKey(model);
+    const key = await resolveModelKey(model, requesterId);
     if (!key) throw classifyError(new Error(`Custom provider: personal model '${model.name}' has no API key`), this.providerName);
     return key;
   }

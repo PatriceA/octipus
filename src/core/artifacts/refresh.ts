@@ -124,8 +124,32 @@ export async function refreshSource(sourceId: string): Promise<RefreshResult> {
   return { ok: true, snapshotId: snapshot.id, payload };
 }
 
+/**
+ * Source kinds that run as their principal's personal agent: a registry tool
+ * with a synthetic personal context, or one of the principal's own MCP
+ * servers. Neither has a space scope (no membership re-read, no I6 consent,
+ * cost rows without the space), so a space artifact does not take them
+ * (docs/plans/coworking-spec.md §5.6): refused when one is attached, and
+ * again at refresh for a row attached before.
+ */
+const PERSONAL_SOURCE_KINDS: ReadonlySet<string> = new Set(['tool', 'mcp']);
+
+/** Why a source of `kind` cannot feed an artifact in a space, or undefined. */
+export function spaceSourceRefusal(kind: string, inSpace: boolean): string | undefined {
+  return inSpace && PERSONAL_SOURCE_KINDS.has(kind)
+    ? `a ${kind} data source runs as your personal agent, so it is not available on an artifact in a shared space`
+    : undefined;
+}
+
 async function dispatch(source: ArtifactDataSource): Promise<unknown> {
   const cfg = source.configJson ?? {};
+  if (PERSONAL_SOURCE_KINDS.has(source.kind)) {
+    const artifact = await artifactsRepository.getById(source.artifactId);
+    if (!artifact) throw new Error(`${source.kind} source ${source.id}: artifact missing`);
+    const { isSharedWorkspaceId } = await import('@/security/workspace-fs');
+    const refusal = spaceSourceRefusal(source.kind, await isSharedWorkspaceId(artifact.workspaceId));
+    if (refusal) throw new Error(refusal);
+  }
   switch (source.kind) {
     case 'tool':
       return runTool(cfg as ToolSourceConfig, source.principalId);

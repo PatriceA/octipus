@@ -45,6 +45,8 @@ export interface LinkEdge {
 
 export interface NoteDetail extends NoteRow {
   body: string;
+  /** sha256 of `body`: the base of a write made from it (space notes, §7.3). */
+  bodySha256: string;
   frontmatter: Record<string, unknown>;
   backlinks: LinkEdge[];
   outgoing: LinkEdge[];

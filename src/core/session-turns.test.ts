@@ -77,19 +77,19 @@ async function turn(n: number, inspect?: (messages: AgentMessage[]) => void) {
 
 describe('session lifecycle across ephemeral root workers', () => {
   test('manual compact forces a small session and reports real outcomes', async () => {
-    expect(await compactSessionCommand('session', '')).toContain('was not compacted');
+    expect(await compactSessionCommand('session', '', 'u1')).toContain('was not compacted');
     for (let i = 0; i < 4; i++) await turn(i);
     expect(await maybeCompactSession('session')).toBe(false);
-    expect(await compactSessionCommand('session', '')).toContain('Session compacted.');
+    expect(await compactSessionCommand('session', '', 'u1')).toContain('Session compacted.');
     expect(fixture.context.checkpoint).toBeDefined();
   });
   test('manual compact reports failures and invalidated checkpoints', async () => {
     for (let i = 0; i < 4; i++) await turn(i);
     fixture.failSummary = true;
-    expect(await compactSessionCommand('session', 'keep decisions')).toContain('Compaction failed: summary unavailable');
+    expect(await compactSessionCommand('session', 'keep decisions', 'u1')).toContain('Compaction failed: summary unavailable');
     fixture.failSummary = false;
     fixture.clearInSummary = true;
-    expect(await compactSessionCommand('session', '')).toContain('was not compacted');
+    expect(await compactSessionCommand('session', '', 'u1')).toContain('was not compacted');
   });
   test('retains native tool evidence and signed state and appends only unseen turns', async () => {
     await turn(1);

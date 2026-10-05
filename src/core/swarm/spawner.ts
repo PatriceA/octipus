@@ -20,11 +20,14 @@ import type { AgentContext } from '@/core/types';
 import { agentRepository } from '@/db/repositories/agent-repository';
 import { verificationEvidenceRepository } from '@/db/repositories/verification-evidence-repository';
 import { getModelRegistry } from '@/models/model-registry';
+import type { SpaceRole } from '@/db/schema/organizations';
 import { resolveModel } from '@/models/resolve-model';
 import { getTopicConfig } from '@/models/topic-config';
 import { premiseNoteFor } from '@/core/premise';
 import { isRealUserId } from '@/security/principal';
 import { WorkspaceFS } from '@/security/workspace-fs';
+import { can } from '@/security/space-access';
+import { withoutPersonalOnlyTools } from '@/security/space-tools';
 import { randomUUID } from 'node:crypto';
 import { getCLIToolConfig, isCLIProvider, resolveCliModelEntry } from '@/core/cli-agent-factory';
 import {
@@ -620,6 +623,14 @@ export class SwarmSpawner {
         );
       }
     }
+    // A space child: personal-only tools are withheld, and for a role that
+    // cannot write, the file-changing tools too (§5.6) — the same filters as
+    // the root and `worker-spawner`. `resolveChildTools` intersects by
+    // toolId, so a handler the root dropped would otherwise come back here.
+    if (parentContext.space) {
+      childTools = withoutPersonalOnlyTools(childTools);
+      if (!can(parentContext.space.role, 'run_agent_write')) childTools = stripMutatingTools(childTools);
+    }
 
     // Phase 2: register swarm meta-tools on Agent (depth 1) children so they
     // can in turn spawn Subagents. Subagent (depth 2) receives NEITHER —
@@ -640,6 +651,7 @@ export class SwarmSpawner {
         params.topic,
         parentContext.userId,
         childInSpace,
+        parentContext.space?.role,
         parentContext.sponsor,
       ));
 
@@ -1192,7 +1204,8 @@ export class SwarmSpawner {
     if (lastResult && (lastResult.status === 'provider_error' || lastResult.status === 'tool_error')) {
       try {
         // The install lane's backup — personal bindings have none (spec §8.2).
-        const backup = await resolveModel({ userId: opts.parentContext.userId, topic: opts.childLane, backup: true, inSpace: !!opts.parentContext.space, sponsor: opts.parentContext.sponsor });
+        const backup = await resolveModel({ userId: opts.parentContext.userId, topic: opts.childLane, backup: true,
+          inSpace: !!opts.parentContext.space, spaceRole: opts.parentContext.space?.role, sponsor: opts.parentContext.sponsor });
         if (backup && backup.modelId !== opts.childModel) {
           coreLogger.warn(
             { parentNodeId: opts.parent.id, failedModel: opts.childModel, backupModel: backup.modelId, topic: opts.childLane },
@@ -1947,6 +1960,7 @@ export class SwarmSpawner {
         buildScorerContext({
           userId: opts.parentContext.userId,
           sessionId: opts.parentContext.sessionId,
+          workspaceId: opts.parentContext.workspaceId ?? null,
           space: opts.parentContext.space,
           workspaceRoot: WorkspaceFS.forAgent(opts.parentContext).root,
           filesTouched,
@@ -2189,6 +2203,8 @@ export class SwarmSpawner {
     userId?: string,
     /** The parent runs in a shared space — D14 applies to install CLI rows. */
     inSpace = false,
+    /** The requester's role in that space (commenters: API models only). */
+    spaceRole?: SpaceRole,
     /** The parent is sponsored: the sponsor's models replace the requester's (§9.1). */
     sponsor: import('@/core/types').AgentSponsor | null = null,
   ): Promise<{ model: string; modelName: string; lane: string; systemPrompt?: string; stablePrompt?: string; skillContext: string; isSmall: boolean }> {
@@ -2309,7 +2325,7 @@ export class SwarmSpawner {
       if (executorName) {
         // An explicit name: only a row the requester may see (spec §8.2).
         const execModel = userId
-          ? await resolveModel({ userId, name: executorName, inSpace, sponsor })
+          ? await resolveModel({ userId, name: executorName, inSpace, spaceRole, sponsor })
           : (await registry.getModel(executorName).then((m) => (m && !m.ownerUserId ? m : null)))
             || (await registry.getModelByModelId(executorName));
         if (!execModel) {
@@ -2339,7 +2355,7 @@ export class SwarmSpawner {
     }
     if (!candidate) {
       // The requester's personal binding for the lane first, then the install's.
-      const topicModel = await resolveModel({ userId, topic: lane, inSpace, sponsor });
+      const topicModel = await resolveModel({ userId, topic: lane, inSpace, spaceRole, sponsor });
       candidate = topicModel?.modelId;
       candidateName = topicModel?.name ?? '';
     }
@@ -2637,6 +2653,7 @@ async function isCliModel(model: string, modelName?: string): Promise<boolean> {
 export function buildScorerContext(args: {
   userId?: string;
   sessionId?: string;
+  workspaceId?: string | null;
   space?: import('@/core/types').AgentSpace | null;
   /** The child's workspace root (`WorkspaceFS.forAgent` of the spawning context). */
   workspaceRoot?: string;
@@ -2658,6 +2675,7 @@ export function buildScorerContext(args: {
     canRunCommands: args.childTools.some((t) => t.toolId === 'shell' || t.name.startsWith('shell__')),
     role: args.childRole,
     sessionId: args.sessionId,
+    workspaceId: args.workspaceId ?? null,
     space: args.space ?? null,
     // So a command check dies with a cancelled run rather than outliving it
     // with the awaited spawn still pending.

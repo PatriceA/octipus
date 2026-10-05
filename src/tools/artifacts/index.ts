@@ -14,7 +14,7 @@ import type { ArtifactType, ArtifactVisibility } from '@/db/schema/artifacts';
 import { buildArtifactAppUrl, buildArtifactEmbedUrl, buildArtifactOuterUrl, pickShareableUrl } from '@/core/artifacts/host';
 import { buildAndStoreBundle, copyBundle, deleteArtifactBundles } from '@/core/artifacts/bundler';
 import { extractInteractiveScript } from '@/core/artifacts/render';
-import { refreshSource } from '@/core/artifacts/refresh';
+import { refreshSource, spaceSourceRefusal } from '@/core/artifacts/refresh';
 import { scheduleArtifactRefresh } from '@/core/artifacts/scheduler';
 import { publishArtifactVersionUpdated } from '@/core/artifacts/events';
 import { artifactLifecycleBus } from '@/core/artifacts/lifecycle-bus';
@@ -225,6 +225,10 @@ export class ArtifactsTool extends BaseTool {
           return { error: 'invalid slug (lowercase/digits/dashes, 1-64 chars)' };
         }
         requireWorkspaceId(context);
+        for (const s of (args.sources as Array<{ name: string; kind: string }> | undefined) ?? []) {
+          const refusal = spaceSourceRefusal(s.kind, !!context.space);
+          if (refusal) return { error: `source "${s.name}": ${refusal}` };
+        }
         const visibility = ((args.visibility as ArtifactVisibility | undefined) ?? 'workspace');
         // Through the agent's artifact store (§5.6): stamped with its
         // workspace — a space's in a space, by the member's role — and author.
@@ -421,6 +425,8 @@ export class ArtifactsTool extends BaseTool {
         if (!a) return { error: 'not found' };
 
         const kind = args.kind as ArtifactSourceKind;
+        const refusal = spaceSourceRefusal(kind, !!context.space);
+        if (refusal) return { error: refusal };
         const toolId = typeof args.tool_id === 'string' ? args.tool_id.trim() : '';
 
         if (kind === 'toolbox') {

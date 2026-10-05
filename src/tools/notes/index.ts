@@ -74,7 +74,7 @@ export class NotesTool extends BaseTool {
         slug: { type: 'string', description: 'Explicit slug (defaults to a slug of the title)' },
         note_kind: { type: 'string', description: 'note (default) | moc | literature | …' },
         tags: { type: 'array', description: 'Explicit tags (unioned with #tags from the body)', items: { type: 'string' } },
-        base_sha256: { type: 'string', description: 'When editing a shared-space note: the sha256 read_note returned. Your change is merged with what others wrote since; a clash is refused — read the note again and reapply.' },
+        base_sha256: { type: 'string', description: 'Required to change the body of an existing shared-space note: the sha256 read_note returned (read_note first). Your change is merged with what others wrote since; a clash is refused — read the note again and reapply.' },
       }),
       async (args, context) => {
         const result = await getNoteService().save({
@@ -83,7 +83,8 @@ export class NotesTool extends BaseTool {
           id: (args.id as string) || undefined,
           slug: (args.slug as string) || undefined,
           title: args.title as string,
-          body: (args.body as string) ?? '',
+          // No body: a new note is empty; an existing space note keeps its text.
+          body: typeof args.body === 'string' ? args.body : undefined,
           noteKind: (args.note_kind as string) || undefined,
           tags: Array.isArray(args.tags) ? (args.tags as string[]) : undefined,
           // A note the user asked Octipus for directly is the USER's note, so

@@ -26,7 +26,7 @@ import type { ConnectionContext } from '@/core/gateway/protocol';
 import { coreLogger } from '@/utils/logger';
 import { roomAccess } from './access';
 import { eventMessage, roomResource, spaceResource } from './events';
-import { publishRoomPresence, publishSpacePresence } from './presence';
+import { publishRoomPresence, publishSpacePresence, setPresenceWhere } from './presence';
 import { activeRoomsIn, dropRoomTurnsOf, roomQueueSnapshot } from './queue';
 
 const REMOVED = 'You no longer have access to this room.';
@@ -35,10 +35,16 @@ function connectionsWith(resource: string): ConnectionContext[] {
   return getGatewayHub().connectionManager.getActiveConnections().filter((ctx) => ctx.resources.has(resource));
 }
 
-/** Remove `ctx` from the room's resource and tell it so. */
+/**
+ * Remove `ctx` from the room's resource and tell it so. A connection shown
+ * "in" the room in `space.presence` is no longer (I3: the room's members
+ * must not keep seeing someone who cannot enter it there).
+ */
 export function pruneRoomSubscription(ctx: ConnectionContext, roomId: string, reason = REMOVED): void {
   const resource = roomResource(roomId);
   if (!ctx.resources.delete(resource)) return;
+  const where = ctx.metadata.presenceWhere as { kind?: string; id?: string; spaceId?: string | null } | undefined;
+  if (where?.kind === 'room' && where.id === roomId) setPresenceWhere(ctx, where.spaceId ?? null, null);
   getGatewayHub().connectionManager.sendToConnection(ctx.connectionId, eventMessage('room.removed', { roomId, reason }, roomId));
 }
 
