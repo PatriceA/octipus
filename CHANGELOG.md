@@ -42,9 +42,22 @@ labels reflect blast radius, not contract guarantees.
   closed note refreshes its links and index. Every file-changing
   filesystem tool now checks space file leases (prefix matching for a
   recursive delete or a directory move) and refuses a leased path with who
-  holds it and until when, the check and the write under one per-path
-  mutex. Shell, git, docker, skill scripts and CLI agents stay advisory
-  (docs/SPACES.md).
+  holds it and until when. Lease paths are canonical (a lease through a
+  symlinked directory names the real file) and the agent's write is checked
+  by both spellings; the check and the write hold the path locks of the
+  file and its directories, which taking a lease also takes, so no lease is
+  taken between an agent file tool's check and its write. Shell, git,
+  docker, skill scripts and CLI agents stay advisory (docs/SPACES.md).
+  A session's pending proposal is shown rebased onto the note's current
+  text (or `stale`), and a write from a newer read carries it forward, so
+  an accepted proposal never reverts a member's edit; agents sharing a
+  session merge into one proposal or are refused; a proposal is decided
+  only as it was read; archive and edits never silently replace each other;
+  a write that changes nothing proposes nothing; an archive proposal of a
+  note edited since turns stale; an agent's new note (or new daily note) is
+  created only while its slug is free. A capture refused for size leaves no
+  new daily note behind. Meeting notes stay personal-only in spaces and
+  `link_knowledge` edges are direct (documented deviations from §7.4).
 - **Space funding, budgets and the team surface** (coworking S5,
   `docs/SPACES.md` → "Funding and budgets", "The team surface"). A space's
   owners choose who pays for the agent — each member (`own`), members for

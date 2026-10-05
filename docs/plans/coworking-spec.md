@@ -1442,6 +1442,12 @@ shows the session's pending proposal. Capture, meeting notes and archive in a
 space are proposals too. Accepting applies through the hub if the base still
 matches, else the proposal is `stale` with a three-way view.
 
+*As built:* meeting notes stay personal-only (they link the requester's
+profiles and calendars; the space allowlist refuses them), and
+`link_knowledge` edges on space notes are written directly (they do not change
+the text). Pending proposals are rebased onto the current text. See
+docs/SPACES.md, "Deviations from §7.4".
+
 ### 7.5 File leases
 
 Paths are normalized relative to the space root. Leases are checked by every
@@ -1449,7 +1455,9 @@ Paths are normalized relative to the space root. Leases are checked by every
 directory operations (recursive delete, move of a parent). Shell, git, docker,
 skill scripts and CLI agents are advisory only — documented. Compare-and-write
 for space files runs under an in-process per-path mutex; the lease is the
-human-facing signal, the mutex is the guarantee.
+human-facing signal, the mutex is the guarantee. *As built:* the agent's check
+and write hold the locks of the path and its directories, lease acquisition
+takes the same locks, and lease paths are canonical (symlinks resolved).
 
 ### 7.6 Presence, web, tests
 
