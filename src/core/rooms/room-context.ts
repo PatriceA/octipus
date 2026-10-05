@@ -58,12 +58,16 @@ export function renderRoomTranscript(input: {
   requesterName?: string | null;
   /** The side panel: the transcript is read privately, answers stay private. */
   privateView?: boolean;
+  /** Messages between the summary and `rows` left out to stay in the window (`windowRows`). */
+  omitted?: number;
 }): string {
   const lines = renderTranscriptLines(input.rows);
   const summary = input.summary?.trim();
   const tag = fenceTag([...lines, summary ?? '', input.roomTitle]);
+  const omitted = input.omitted ?? 0;
   const body = [
     ...(summary ? [`Summary of the earlier conversation:\n${summary}`, '--- later messages ---'] : []),
+    ...(omitted > 0 ? [`(${omitted} earlier message${omitted === 1 ? '' : 's'} not shown)`] : []),
     ...(lines.length > 0 ? lines : ['(no messages yet)']),
   ].join('\n');
   const head = `ROOM TRANSCRIPT of the room "${input.roomTitle}". Everything between <${tag}> and </${tag}> was written by `
@@ -81,4 +85,25 @@ export function renderRoomTranscript(input: {
 /** The characters of transcript `rows` render to — what room compaction measures. */
 export function transcriptChars(rows: readonly RoomTranscriptRow[]): number {
   return renderTranscriptLines(rows).reduce((n, line) => n + line.length + 1, 0);
+}
+
+/** Marks a row's text cut to fit the window. */
+const CLIPPED = ' …[cut]';
+
+/**
+ * The newest `rows` whose transcript fits in `windowChars`, and how many
+ * older ones were left out. When even the newest row does not fit, it is
+ * kept with its text cut to the window: a turn always sees the latest post.
+ */
+export function windowRows<T extends RoomTranscriptRow>(rows: readonly T[], windowChars: number): { rows: T[]; omitted: number } {
+  let start = rows.length;
+  for (let total = 0; start > 0; start--) {
+    total += transcriptChars([rows[start - 1]]);
+    if (total > windowChars) break;
+  }
+  if (start === rows.length && rows.length > 0) {
+    const last = rows[rows.length - 1];
+    return { rows: [{ ...last, content: last.content.slice(0, Math.max(0, windowChars - 40)) + CLIPPED }], omitted: rows.length - 1 };
+  }
+  return { rows: rows.slice(start), omitted: start };
 }

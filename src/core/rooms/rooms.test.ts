@@ -5,7 +5,10 @@
  * (`createServer()`), the real gateway hub with its real message handler,
  * the real agent service and room queue; the model is the only stand-in:
  * `runRootAgent` records what each turn was handed, streams a delta to the
- * turn's user, and makes an accounted model call.
+ * turn's user, and makes an accounted model call. With `fx.realWorker` it
+ * runs a real root `AgentWorker` (prompt assembled by the real root-runner
+ * helpers, history loaded and the turn stored by the worker itself) whose
+ * model loop only records what it was shown.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
@@ -35,7 +38,12 @@ const fx = vi.hoisted(() => ({
   /** Runs inside the next turns before they answer (one per turn, in order). */
   during: [] as Array<(turn: RecordedTurn) => Promise<void> | void>,
   summaries: [] as Array<{ input: string; userId?: string }>,
+  /** Runs inside the next summary calls (one per call, in order). */
+  duringSummary: [] as Array<() => Promise<void> | void>,
   completions: [] as Array<Array<{ role: string; content: unknown }>>,
+  /** Run the turn on a real root AgentWorker; `modelSeen` gets what its model was shown. */
+  realWorker: false,
+  modelSeen: [] as string[],
 }));
 
 vi.mock('@/models/model-registry', () => ({
@@ -58,6 +66,7 @@ vi.mock('@/utils/context-compaction', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/utils/context-compaction')>()),
   createLLMSummary: async (messages: Array<{ content: string }>, _model: string, opts: { userId?: string }) => {
     fx.summaries.push({ input: messages.map((m) => m.content).join('\n'), userId: opts?.userId });
+    await fx.duringSummary.shift()?.();
     const { recordProviderUsage } = await import('@/models/providers/instrumented');
     await recordProviderUsage({ model: 'test-model', messages: [], requestType: 'compaction' }, 'test',
       { model: 'test-model', usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 } });
@@ -76,8 +85,11 @@ vi.mock('@/models/litellm-client', async (importOriginal) => ({
 vi.mock('@/core/agent/root-runner', () => ({
   runRootAgent: async (...args: unknown[]) => {
     const [, , sessionId, userId, message, , , , extraSystemContext, scope, , extras] = args as [
-      unknown, unknown, string, string, string, unknown, unknown, unknown, string, RecordedTurn['scope'], unknown, RecordedTurn['extras'],
+      unknown, unknown, string, string, string, unknown, unknown, unknown, string, RecordedTurn['scope'], unknown, RecordedTurn['extras'] & { signal?: AbortSignal },
     ];
+    // As the real one: a stopped turn spawns nothing.
+    extras?.signal?.throwIfAborted();
+    if (fx.realWorker) return realRootTurn(sessionId, userId, message, extraSystemContext, scope);
     const { getFlowLabel } = await import('@/security/flow-guard');
     const label = getFlowLabel(sessionId);
     const turn: RecordedTurn = { sessionId, userId, message, extraSystemContext, scope, extras: extras ?? {}, label: { suspicious: label.suspicious, private: label.private, secret: label.secret } };
@@ -92,6 +104,22 @@ vi.mock('@/core/agent/root-runner', () => ({
     return { response: `Answer for ${userId}`, agentId: randomUUID(), sources: [], outcome: 'success' };
   },
 }));
+
+/** One turn on a real root AgentWorker, its model loop replaced by a recorder. */
+async function realRootTurn(sessionId: string, userId: string, message: string, extraSystemContext: string, scope: unknown) {
+  const actual = await vi.importActual<typeof import('@/core/agent/root-runner')>('@/core/agent/root-runner');
+  const [{ AgentWorker }, { buildAgentContext }] = await Promise.all([import('@/core/agent-worker'), import('@/core/agent/context')]);
+  const ctx = buildAgentContext({ sessionId, userId, scope: scope as never, topic: 'general', model: 'test-model', role: 'general', root: true, attended: true });
+  const worker = new AgentWorker(ctx, { maxIterations: 1, maxTokenBudget: 1_000_000, contextWindowSize: 200_000, timeout: 30_000, toolOutputSoftCap: 100 } as never);
+  worker.addSystemMessage(actual.assembleSystemPrompt(['STATIC ROOT PROMPT'], actual.buildPreHookVolatileParts(extraSystemContext, [])));
+  const internals = worker as unknown as { messages: Array<{ content: string }>; loop(): Promise<string> };
+  internals.loop = async () => {
+    fx.modelSeen.push(internals.messages.map((m) => m.content).join('\n---\n'));
+    return `Answer for ${userId}`;
+  };
+  const response = await worker.run(message);
+  return { response, agentId: ctx.id, sources: [], outcome: 'success' };
+}
 
 const ownerId = randomUUID();
 const editorId = randomUUID();
@@ -234,7 +262,10 @@ beforeEach(() => {
   fx.turns.length = 0;
   fx.during.length = 0;
   fx.summaries.length = 0;
+  fx.duringSummary.length = 0;
   fx.completions.length = 0;
+  fx.realWorker = false;
+  fx.modelSeen.length = 0;
 });
 
 // ── Schema and creation ───────────────────────────────────────────────
@@ -472,10 +503,12 @@ describe('posting and turns', () => {
     const generation = sessionGeneration((await sessionRepository.findById(generalId))?.context);
     await messageRepository.create({ sessionId: generalId, role: 'assistant', content: 'writer: create' });
     await messageRepository.createForGeneration({ sessionId: generalId, role: 'assistant', content: 'writer: generation' }, generation);
-    const { saveProgressMessage } = await import('@/core/agent/progress-message');
-    await saveProgressMessage('writer: progress', await roomContext(editorId, generalId));
     // A rolled-back insert (cleared conversation) never broadcasts.
     expect(await messageRepository.createForGeneration({ sessionId: generalId, role: 'assistant', content: 'writer: stale' }, 'stale-generation')).toBeNull();
+    // Progress rows are the running turn's requester's (`requester`).
+    const { saveProgressMessage } = await import('@/core/agent/progress-message');
+    expect(await saveProgressMessage('writer: not now', await roomContext(editorId, generalId))).toBeNull();
+    fx.during.push(async () => { await saveProgressMessage('writer: progress', await roomContext(editorId, generalId)); });
     await postAndSettle('editor', generalId, 'and the turn answer', true);
     const seen = roomMessages(watcher, generalId).map((m) => m.content);
     for (const content of ['writer: create', 'writer: generation', 'writer: progress', `Answer for ${editorId}`]) {
@@ -795,5 +828,437 @@ describe('private side panel', () => {
     await call('editor', 'DELETE', `/api/spaces/${spaceId}/rooms/${privateId}/members/${carolId}`);
     await getAgentService().handleMessage(panel.id, carolId, 'And now?', 'webchat');
     expect(fx.turns.at(-1)!.extraSystemContext).not.toContain('LINKED ROOM');
+  });
+});
+
+// ── Space context is per turn: never stored, never replayed ───────────
+
+describe('the space turn context is never stored with a turn', () => {
+  test('a side panel removed from the room, and a retracted memory entry, are gone from the next turn (real root worker)', async () => {
+    fx.realWorker = true;
+    await call('editor', 'POST', `/api/spaces/${spaceId}/rooms/${privateId}/members/${carolId}`);
+    await call('editor', 'POST', `/api/spaces/${spaceId}/rooms/${privateId}/messages`, { content: 'The secret codename is HERON' });
+    const fact = await (await call('editor', 'POST', `/api/spaces/${spaceId}/memory`, { body: 'Launch city is Lisbon' })).json();
+    const { resolvedPrincipal } = await import('@/test-helpers/space-fixtures');
+    const { contentRepos } = await import('@/db/repositories/content');
+    const panel = await contentRepos(await resolvedPrincipal(carolId, spaceId)).sessions.create({
+      channelType: 'webchat', channelId: `panel-${rand(3)}`, title: 'Ask privately', status: 'active', context: { linkedRoomId: privateId },
+    });
+    const { getAgentService } = await import('@/core/agent');
+    await getAgentService().handleMessage(panel.id, carolId, 'What is the codename?', 'webchat');
+    // This turn's model saw both, fresh.
+    expect(fx.modelSeen.at(-1)).toContain('HERON');
+    expect(fx.modelSeen.at(-1)).toContain('Launch city is Lisbon');
+    // Neither was stored: not with the user row, not in the native snapshot.
+    const [row] = await q<{ metadata: { promptContext?: string } | null }>(
+      `SELECT metadata FROM messages WHERE session_id = $1 AND role = 'user' ORDER BY created_at DESC LIMIT 1`, [panel.id]);
+    expect(row.metadata?.promptContext ?? '').toContain('CURRENT DATE');
+    expect(JSON.stringify(row.metadata)).not.toMatch(/HERON|Lisbon|SPACE TURN CONTEXT/);
+    const [session] = await q<{ context: Record<string, unknown> }>(`SELECT context FROM sessions WHERE id = $1`, [panel.id]);
+    expect(session.context.nativeConversation).toBeTruthy();
+    expect(JSON.stringify(session.context.nativeConversation)).not.toMatch(/HERON|Lisbon/);
+
+    // Carol leaves the room and the entry is retracted: her next turn has
+    // neither, not even from the replayed history.
+    expect((await call('editor', 'DELETE', `/api/spaces/${spaceId}/rooms/${privateId}/members/${carolId}`)).status).toBe(200);
+    expect((await call('editor', 'DELETE', `/api/spaces/${spaceId}/memory/${fact.id}`)).status).toBe(200);
+    await getAgentService().handleMessage(panel.id, carolId, 'And now?', 'webchat');
+    const seen = fx.modelSeen.at(-1)!;
+    expect(seen).toContain('What is the codename?');
+    expect(seen).toContain(`Answer for ${carolId}`);
+    expect(seen).not.toMatch(/HERON|Lisbon|LINKED ROOM/);
+    // A cold launch from the stored rows (no snapshot) has neither either.
+    const { readSessionHistory } = await import('@/core/session-history');
+    await q(`UPDATE sessions SET context = context - 'nativeConversation' WHERE id = $1`, [panel.id]);
+    const history = await readSessionHistory(panel.id);
+    expect(JSON.stringify(history.messages)).not.toMatch(/HERON|Lisbon/);
+    await call('editor', 'POST', `/api/spaces/${spaceId}/rooms/${privateId}/members/${carolId}`);
+  });
+
+  test('a row stored before the fix is replayed without its space context', async () => {
+    const { fenceSpaceTurnContext, omitSpaceTurnContext } = await import('@/core/spaces/turn-context');
+    const stored = `\n\nCURRENT DATE & TIME: x${fenceSpaceTurnContext('\n\nSPACE MEMORY: - old fact')}\n\nOther context`;
+    expect(omitSpaceTurnContext(stored)).toBe('\n\nCURRENT DATE & TIME: x\n\nOther context');
+    expect(fenceSpaceTurnContext('')).toBe('');
+    const { toContextMessage } = await import('@/core/session-history');
+    const message = toContextMessage({ id: randomUUID(), role: 'user', content: 'hi', createdAt: new Date(), metadata: { promptContext: stored } } as never);
+    expect(message.content).not.toContain('old fact');
+  });
+});
+
+// ── remember_for_space goes through the one decision path ─────────────
+
+describe('remember_for_space in a private space session', () => {
+  test('after a private read it asks (I6), whatever the flow-guard mode; otherwise it stores', async () => {
+    const { resolvedPrincipal } = await import('@/test-helpers/space-fixtures');
+    const { contentRepos } = await import('@/db/repositories/content');
+    const own = await contentRepos(await resolvedPrincipal(editorId, spaceId)).sessions.create({
+      channelType: 'webchat', channelId: `own-${rand(3)}`, title: 'Mine', status: 'active',
+    });
+    const ctx = await chatContext(editorId, own.id);
+    const { getAgentService } = await import('@/core/agent');
+    const service = getAgentService();
+    const { createRememberForSpaceTool } = await import('@/core/spaces/memory-tool');
+    const tool = createRememberForSpaceTool(service);
+    const { clearFlowLabel, markNotSharedAudience, observeFlow } = await import('@/security/flow-guard');
+    clearFlowLabel(own.id);
+    markNotSharedAudience(own.id);
+    // No private read, nothing suspicious: stored without a question.
+    expect(await tool.execute({ body: 'Team lunch is on Thursdays' }, ctx)).toMatchObject({ stored: true });
+    expect(service.getPendingApprovals(editorId).filter((a) => a.sessionId === own.id)).toEqual([]);
+    // After a private read (the label is `private`, not `suspicious`): asked.
+    observeFlow(own.id, { toolId: 'google-workspace', action: 'email_read' });
+    const pending = tool.execute({ body: 'The bank balance is 12k' }, ctx);
+    const approval = await waitFor(() => service.getPendingApprovals(editorId).find((a) => a.sessionId === own.id), 'the I6 approval');
+    expect(JSON.stringify(approval)).toMatch(/personal sources/);
+    await service.resolveApprovalDetailed(approval.id, false, 'no', { forUserId: editorId });
+    expect(await pending).toMatchObject({ stored: false });
+    expect(await q(`SELECT 1 FROM space_memory WHERE body = 'The bank balance is 12k'`)).toEqual([]);
+  });
+});
+
+/** A root context of `userId` in their own session `sessionId` (of a space or not). */
+async function chatContext(userId: string, sessionId: string): Promise<AgentContext> {
+  const { buildAgentContext, resolveAgentScope } = await import('@/core/agent/context');
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const scope = await resolveAgentScope({ session: await sessionRepository.findById(sessionId), userId, trigger: 'user' });
+  return buildAgentContext({ sessionId, userId, scope, topic: 'general', model: 'test-model', role: 'general', root: true, attended: true, status: 'running' });
+}
+
+// ── Stopping, timeouts, removal of a running requester ────────────────
+
+describe('stopping room turns', () => {
+  const command = async (who: string, roomId: string, content: string) =>
+    (await (await call(who, 'POST', `/api/spaces/${spaceId}/rooms/${roomId}/messages`, { content })).json()).commandResult as string;
+  const turnDone = (t: Tab, messageId: string) => waitFor(
+    () => events(t, 'room.turn').find((e) => e.payload.state === 'done' && e.payload.messageId === messageId)?.payload, `turn ${messageId} done`);
+  const hold = () => {
+    const gate: { release: () => void } = { release: () => {} };
+    fx.during.push(() => new Promise<void>((r) => { gate.release = r; }));
+    return gate;
+  };
+
+  test('/stop: the requester or an editor+ stops it, another commenter cannot; /stop queue clears the queue', async () => {
+    const watcher = await tab(viewerId);
+    await subscribeRoom(watcher, generalId);
+    const before = (await roomRows(generalId)).length;
+    let gate = hold();
+    const first = await (await call('commenter', 'POST', `/api/spaces/${spaceId}/rooms/${generalId}/messages`, { content: 'hold on', addressed: true })).json();
+    await waitFor(() => fx.turns.length === 1, 'the turn');
+    // An editor stops a commenter's turn.
+    expect(await command('carol', generalId, '/stop')).toBe('Stopped.');
+    gate.release();
+    expect(await turnDone(watcher, first.messageId)).toMatchObject({ outcome: 'stopped' });
+    expect((await roomRows(generalId)).slice(before).map((r) => r.content)).toEqual(['hold on']);
+
+    // A member who is not the requester (and not editor+) cannot; the requester can.
+    gate = hold();
+    const second = await (await call('editor', 'POST', `/api/spaces/${spaceId}/rooms/${generalId}/messages`, { content: 'mine', addressed: true })).json();
+    await waitFor(() => fx.turns.length === 2, 'the second turn');
+    expect(await command('commenter', generalId, '/stop')).toMatch(/Only the member Octipus is answering/);
+    const queued = await (await call('commenter', 'POST', `/api/spaces/${spaceId}/rooms/${generalId}/messages`, { content: 'later', addressed: true })).json();
+    expect(queued.queuedPosition).toBe(1);
+    expect(await command('commenter', generalId, '/stop queue')).toMatch(/Only editors/);
+    expect(await command('editor', generalId, '/stop')).toBe('Stopped.');
+    gate.release();
+    expect(await turnDone(watcher, second.messageId)).toMatchObject({ outcome: 'stopped' });
+    await settle(generalId);
+    // The queued one ran.
+    expect(fx.turns.map((t) => t.message)).toEqual(['hold on', 'mine', 'later']);
+
+    // An editor's /stop queue stops the turn and clears the queue.
+    gate = hold();
+    const a = await (await call('editor', 'POST', `/api/spaces/${spaceId}/rooms/${generalId}/messages`, { content: 'a', addressed: true })).json();
+    await waitFor(() => fx.turns.length === 4, 'turn a');
+    await call('commenter', 'POST', `/api/spaces/${spaceId}/rooms/${generalId}/messages`, { content: 'b', addressed: true });
+    expect(await command('carol', generalId, '/stop queue')).toBe('Stopped. Cleared 1 waiting request(s).');
+    gate.release();
+    expect(await turnDone(watcher, a.messageId)).toMatchObject({ outcome: 'stopped' });
+    await settle(generalId);
+    expect(fx.turns).toHaveLength(4);
+    await closeTab(watcher);
+  });
+
+  test('a stop names its turn: a stop decided for one turn never ends the next', async () => {
+    const gate = hold();
+    const res = await (await call('editor', 'POST', `/api/spaces/${spaceId}/rooms/${generalId}/messages`, { content: 'keep going', addressed: true })).json();
+    await waitFor(() => fx.turns.length === 1, 'the turn');
+    const { stopRoomTurn, roomQueueSnapshot } = await import('./queue');
+    expect(await stopRoomTurn(generalId, randomUUID())).toBe(false);
+    expect(roomQueueSnapshot(generalId).running?.messageId).toBe(res.messageId);
+    gate.release();
+    await settle(generalId);
+    expect((await roomRows(generalId)).at(-1)).toMatchObject({ role: 'assistant', content: `Answer for ${editorId}` });
+  });
+
+  test('a stop before the root agent spawns: nothing spawns, nothing is posted', async () => {
+    const { refreshConfigKey } = await import('@/config');
+    const room = (await (await call('editor', 'POST', `/api/spaces/${spaceId}/rooms`, { title: 'Early stop', visibility: 'space' })).json()).id as string;
+    // A transcript past the window: the turn compacts before it spawns.
+    refreshConfigKey('rooms.transcriptWindowChars', 300);
+    try {
+      for (let i = 0; i < 6; i++) await call('commenter', 'POST', `/api/spaces/${spaceId}/rooms/${room}/messages`, { content: `note ${i} ${'x'.repeat(80)}` });
+      const gate: { release: () => void; entered: () => void } = { release: () => {}, entered: () => {} };
+      const inSummary = new Promise<void>((r) => { gate.entered = r; });
+      fx.duringSummary.push(() => { gate.entered(); return new Promise<void>((r) => { gate.release = r; }); });
+      const watcher = await tab(editorId);
+      await subscribeRoom(watcher, room);
+      const posted = await (await call('editor', 'POST', `/api/spaces/${spaceId}/rooms/${room}/messages`, { content: 'go', addressed: true })).json();
+      await inSummary;
+      expect(await command('editor', room, '/stop')).toBe('Stopped.');
+      gate.release();
+      expect(await turnDone(watcher, posted.messageId)).toMatchObject({ outcome: 'stopped' });
+      expect(fx.turns).toEqual([]);
+      expect((await roomRows(room)).filter((r) => r.role === 'assistant')).toEqual([]);
+      await closeTab(watcher);
+    } finally {
+      refreshConfigKey('rooms.transcriptWindowChars', 6000);
+    }
+  });
+
+  test('an approval left unanswered expires and frees the room', async () => {
+    const watcher = await tab(viewerId);
+    await subscribeRoom(watcher, generalId);
+    const { getAgentService } = await import('@/core/agent');
+    const service = getAgentService();
+    fx.during.push(async () => { await service.requestApproval('Need a yes', 'Go?', await roomContext(editorId, generalId)); });
+    const posted = await (await call('editor', 'POST', `/api/spaces/${spaceId}/rooms/${generalId}/messages`, { content: 'ask me', addressed: true })).json();
+    await waitFor(() => service.getPendingApprovals(editorId).find((a) => a.sessionId === generalId), 'the approval');
+    const { expireStaleRequests, roomQueueSnapshot } = await import('./queue');
+    // The check of an earlier turn expires the request but stops no other turn.
+    expect(await expireStaleRequests(generalId, editorId, 0, randomUUID())).toBe(1);
+    expect(await turnDone(watcher, posted.messageId)).toMatchObject({ outcome: 'success' });
+    // Raised again and expired for this turn: the turn is stopped, the room freed.
+    fx.during.push(async () => { await service.requestApproval('Need a yes', 'Go?', await roomContext(editorId, generalId)); });
+    const again = await (await call('editor', 'POST', `/api/spaces/${spaceId}/rooms/${generalId}/messages`, { content: 'ask again', addressed: true })).json();
+    await waitFor(() => service.getPendingApprovals(editorId).find((a) => a.sessionId === generalId), 'the second approval');
+    expect(await expireStaleRequests(generalId, editorId, 0, again.messageId)).toBe(1);
+    expect(await turnDone(watcher, again.messageId)).toMatchObject({ outcome: 'stopped' });
+    expect(roomQueueSnapshot(generalId).running).toBeNull();
+    await closeTab(watcher);
+  });
+
+  test('removing a private room member whose turn is running stops it; their next tool decision is refused', async () => {
+    const carol = await tab(carolId);
+    await subscribeRoom(carol, privateId);
+    const gate: { release: () => void; ctx?: AgentContext } = { release: () => {} };
+    fx.during.push(async () => {
+      gate.ctx = await roomContext(carolId, privateId);
+      await new Promise<void>((r) => { gate.release = r; });
+    });
+    const before = (await roomRows(privateId)).length;
+    const posted = await (await call('carol', 'POST', `/api/spaces/${spaceId}/rooms/${privateId}/messages`, { content: 'long work', addressed: true })).json();
+    const ctx = await waitFor(() => gate.ctx, 'carol\'s turn');
+    const { getGatewayHub } = await import('@/core/gateway/hub');
+    const conn = getGatewayHub().connectionManager.getActiveConnections().find((c) => c.connectionId === carol.id)!;
+    expect(conn.metadata.presenceWhere).toMatchObject({ kind: 'room', id: privateId });
+    expect((await call('editor', 'DELETE', `/api/spaces/${spaceId}/rooms/${privateId}/members/${carolId}`)).status).toBe(200);
+    // Still a member of the space, no longer of the room: no tool runs as her there.
+    const { routeApprovalFor } = await import('@/security/approval-route');
+    expect(await routeApprovalFor(ctx, { toolId: 'notes', action: 'read', toolName: 'read_note' }, { level: 'ALLOW' }))
+      .toMatchObject({ route: 'deny', reason: 'you no longer have access to this room' });
+    // The pruned connection no longer shows "in" the room.
+    expect(conn.metadata.presenceWhere).toBeUndefined();
+    gate.release();
+    await settle(privateId);
+    // Only her post stands: no answer was stored for her.
+    expect((await roomRows(privateId)).slice(before).map((r) => r.content)).toEqual(['long work']);
+    expect(await q(`SELECT 1 FROM messages WHERE session_id = $1 AND id = $2`, [privateId, posted.messageId])).toHaveLength(1);
+    await call('editor', 'POST', `/api/spaces/${spaceId}/rooms/${privateId}/members/${carolId}`);
+    await closeTab(carol);
+  });
+
+  test('/compact is refused while a turn runs (no deadlock with the turn\'s approval)', async () => {
+    const gate = hold();
+    await call('owner', 'POST', `/api/spaces/${spaceId}/rooms/${generalId}/messages`, { content: 'busy', addressed: true });
+    await waitFor(() => fx.turns.length === 1, 'the turn');
+    expect(await command('owner', generalId, '/compact')).toMatch(/answering right now/);
+    gate.release();
+    await settle(generalId);
+  });
+
+  test('the next turn goes to another member before a second request of the one just answered', async () => {
+    const gate = hold();
+    await call('editor', 'POST', `/api/spaces/${spaceId}/rooms/${generalId}/messages`, { content: 'e1', addressed: true });
+    await waitFor(() => fx.turns.length === 1, 'e1');
+    await call('editor', 'POST', `/api/spaces/${spaceId}/rooms/${generalId}/messages`, { content: 'e2', addressed: true });
+    await call('commenter', 'POST', `/api/spaces/${spaceId}/rooms/${generalId}/messages`, { content: 'c1', addressed: true });
+    gate.release();
+    await settle(generalId);
+    expect(fx.turns.map((t) => t.message)).toEqual(['e1', 'c1', 'e2']);
+  });
+});
+
+// ── Approvals, limits and failures in a room ──────────────────────────
+
+describe('room answers that are the requester\'s own', () => {
+  test('a bare yes answers the room approval by id, even with another approval pending elsewhere', async () => {
+    const { getAgentService } = await import('@/core/agent');
+    const service = getAgentService();
+    const { seedSession } = await import('@/test-helpers/multiuser-fixtures');
+    const own = await seedSession({ userId: editorId });
+    const elsewhere = service.requestApproval('Other thing', 'Other?', await chatContext(editorId, own.id));
+    await waitFor(() => service.getPendingApprovals(editorId).find((a) => a.sessionId === own.id), 'the other approval');
+    const outcome: { answer?: unknown } = {};
+    fx.during.push(async () => { outcome.answer = await service.requestApproval('Room thing', 'Go?', await roomContext(editorId, generalId)); });
+    await call('editor', 'POST', `/api/spaces/${spaceId}/rooms/${generalId}/messages`, { content: 'needs approval', addressed: true });
+    await waitFor(() => service.getPendingApprovals(editorId).find((a) => a.sessionId === generalId), 'the room approval');
+    expect(service.getPendingApprovals(editorId)).toHaveLength(2);
+    const yes = await (await call('editor', 'POST', `/api/spaces/${spaceId}/rooms/${generalId}/messages`, { content: 'yes', addressed: true })).json();
+    expect(yes.notQueued).toMatch(/approval/);
+    await settle(generalId);
+    expect(outcome.answer).toMatchObject({ approved: true });
+    // The other one is still waiting, untouched.
+    const left = service.getPendingApprovals(editorId);
+    expect(left.map((a) => a.sessionId)).toEqual([own.id]);
+    await service.resolveApprovalDetailed(left[0].id, false, 'no', { forUserId: editorId });
+    await elsewhere;
+    expect(fx.turns.map((t) => t.message)).toEqual(['needs approval']);
+  });
+
+  test('a requester\'s limit: the room reads a neutral line, the details go to the requester only', async () => {
+    const editor = await tab(editorId);
+    const viewer = await tab(viewerId);
+    await subscribeRoom(editor, generalId);
+    await subscribeRoom(viewer, generalId);
+    const { SpendBudgetExceededError } = await import('@/security/spend-budget-error');
+    fx.during.push(() => {
+      throw new SpendBudgetExceededError({ budgetId: randomUUID(), userId: editorId, scopeKind: 'user', scopeRef: null, period: 'month', spentUsd: 41.5, limitUsd: 40 });
+    });
+    await postAndSettle('editor', generalId, 'expensive one', true);
+    const last = (await roomRows(generalId)).at(-1)!;
+    expect(last).toMatchObject({ role: 'assistant', content: `${NAMES[editorId]}'s request could not run right now. The details went to ${NAMES[editorId]} only.` });
+    const [stored] = await q<{ metadata: unknown }>(`SELECT metadata FROM messages WHERE session_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1`, [generalId]);
+    expect(JSON.stringify(stored.metadata ?? {})).not.toMatch(/41\.5|limitUsd/);
+    const detail = await waitFor(() => events(editor, 'chat.error').find((e) => e.payload.roomId === generalId), 'the requester\'s detail');
+    expect(detail.payload.error).toMatch(/\$41\.50/);
+    expect(events(viewer, 'chat.error')).toEqual([]);
+    for (const t of [editor, viewer]) expect(JSON.stringify(roomMessages(t, generalId))).not.toMatch(/41\.50/);
+    await closeTab(editor);
+    await closeTab(viewer);
+  });
+
+  test('a failed turn tells the room only that it failed; the error goes to the requester', async () => {
+    const editor = await tab(editorId);
+    const viewer = await tab(viewerId);
+    await subscribeRoom(editor, generalId);
+    await subscribeRoom(viewer, generalId);
+    fx.during.push(() => { throw new Error('ECONNREFUSED 10.0.0.7:5432 internal detail'); });
+    const posted = await postAndSettle('editor', generalId, 'break please', true);
+    const done = await waitFor(() => events(viewer, 'room.turn').find((e) => e.payload.state === 'done' && e.payload.messageId === posted.messageId)?.payload, 'done');
+    expect(done).toMatchObject({ outcome: 'failed', error: `Octipus could not answer ${NAMES[editorId]}` });
+    expect(JSON.stringify(viewer.frames)).not.toContain('10.0.0.7');
+    await waitFor(() => events(editor, 'chat.error').find((e) => e.payload.roomId === generalId && /10\.0\.0\.7/.test(e.payload.error)), 'the detail');
+    await closeTab(editor);
+    await closeTab(viewer);
+  });
+});
+
+// ── Room history and compaction cover every row ───────────────────────
+
+describe('room history beyond the row cap', () => {
+  test('compaction summarizes every row past the 400-row cap, and the turn history stays in the window', async () => {
+    const { refreshConfigKey } = await import('@/config');
+    const room = (await (await call('editor', 'POST', `/api/spaces/${spaceId}/rooms`, { title: 'Busy', visibility: 'space' })).json()).id as string;
+    await q(
+      `INSERT INTO messages (session_id, role, content, author_user_id, created_at)
+       SELECT $1, 'user', 'post-' || g, $2::uuid, now() - interval '1 hour' + (g || ' milliseconds')::interval FROM generate_series(0, 449) g`,
+      [room, commenterId],
+    );
+    const { readSessionHistory } = await import('@/core/session-history');
+    expect((await readSessionHistory(room)).rows).toHaveLength(450);
+    refreshConfigKey('rooms.transcriptWindowChars', 2000);
+    try {
+      // The addressed post compacts first (by size, not forced), then runs.
+      const posted = await postAndSettle('editor', room, 'what happened?', true);
+      expect(fx.summaries.length).toBeGreaterThan(0);
+      const summarized = fx.summaries.map((s) => s.input).join('\n');
+      expect(summarized).toMatch(/: post-0\n/);
+      expect(summarized).toMatch(/: post-100\n/);
+      expect(summarized).not.toContain('what happened?');
+      expect(fx.turns).toHaveLength(1);
+      const history = await readSessionHistory(room, { room: { requesterId: editorId, postedMessageId: posted.messageId } });
+      expect(history.checkpoint?.summary).toContain('They agreed on Tuesday.');
+      expect(history.messages[0].content.length).toBeLessThan(2000 + 1500);
+      // The checkpoint ends right before the rows the turn saw: no gap.
+      const kept = history.rows.map((r) => r.content);
+      expect(kept.at(-1)).toBe('post-449');
+      const [{ content }] = await q<{ content: string }>(`SELECT content FROM messages WHERE id = $1`, [history.checkpoint!.through.id]);
+      expect(Number(content.slice(5)) + 1).toBe(Number(kept[0].slice(5)));
+    } finally {
+      refreshConfigKey('rooms.transcriptWindowChars', 6000);
+    }
+  });
+
+  test('a request already inside the checkpoint: posts made after it are never its history', async () => {
+    const room = (await (await call('editor', 'POST', `/api/spaces/${spaceId}/rooms`, { title: 'Cut', visibility: 'space' })).json()).id as string;
+    const post = async (who: string, content: string) => (await (await call(who, 'POST', `/api/spaces/${spaceId}/rooms/${room}/messages`, { content })).json()).messageId as string;
+    await post('commenter', 'before it');
+    const request = await post('editor', 'the request');
+    await post('commenter', 'after it');
+    const { maybeCompactSession } = await import('@/core/agent/session-compaction');
+    expect(await maybeCompactSession(room, { force: true, requesterId: editorId })).toBe(true);
+    await post('commenter', 'much later');
+    const { readSessionHistory } = await import('@/core/session-history');
+    const history = await readSessionHistory(room, { room: { requesterId: editorId, postedMessageId: request } });
+    expect(history.rows.map((r) => r.content)).toEqual([]);
+    expect(history.messages[0].content).not.toMatch(/after it|much later/);
+  });
+});
+
+// ── Rights that follow the role ───────────────────────────────────────
+
+describe('rights that follow the current role', () => {
+  test('a room creator downgraded to viewer keeps no manage rights', async () => {
+    const room = (await (await call('carol', 'POST', `/api/spaces/${spaceId}/rooms`, { title: 'Carol\'s', visibility: 'space' })).json()).id as string;
+    expect((await call('carol', 'PATCH', `/api/spaces/${spaceId}/rooms/${room}`, { title: 'Still mine' })).status).toBe(200);
+    await q(`UPDATE workspace_members SET role = 'viewer' WHERE workspace_id = $1 AND user_id = $2`, [spaceId, carolId]);
+    try {
+      expect((await call('carol', 'PATCH', `/api/spaces/${spaceId}/rooms/${room}`, { visibility: 'private' })).status).toBe(403);
+      const { canActInSession } = await import('./access');
+      expect(await canActInSession({ id: room, userId: carolId, kind: 'room' }, carolId, 'manage')).toBe(false);
+      expect(await canActInSession({ id: room, userId: carolId, kind: 'room' }, ownerId, 'manage')).toBe(true);
+    } finally {
+      await q(`UPDATE workspace_members SET role = 'editor' WHERE workspace_id = $1 AND user_id = $2`, [spaceId, carolId]);
+    }
+  });
+
+  test('`requester` is the running turn\'s requester only', async () => {
+    const { canActInSession } = await import('./access');
+    const room = { id: generalId, userId: ownerId, kind: 'room' as const };
+    expect(await canActInSession(room, editorId, 'requester')).toBe(false);
+    const seen: boolean[] = [];
+    fx.during.push(async () => {
+      seen.push(await canActInSession(room, editorId, 'requester'), await canActInSession(room, commenterId, 'requester'));
+    });
+    await postAndSettle('editor', generalId, 'mine now', true);
+    expect(seen).toEqual([true, false]);
+  });
+
+  test('an admin who is not a member reaches no room or space session through the swarm routes', async () => {
+    const adminId = randomUUID();
+    const { seedUsers, seedSession } = await import('@/test-helpers/multiuser-fixtures');
+    await seedUsers([{ id: adminId, username: `rm-admin-${rand(2)}`, isAdmin: true }]);
+    const { getSessionManager } = await import('@/security/auth/session');
+    tokens.admin = (await getSessionManager().create(adminId)).token;
+    const { resolvedPrincipal } = await import('@/test-helpers/space-fixtures');
+    const { contentRepos } = await import('@/db/repositories/content');
+    const spaceSession = await contentRepos(await resolvedPrincipal(editorId, spaceId)).sessions.create({ channelType: 'webchat', channelId: `sw-${rand(3)}`, status: 'active' });
+    const personal = await seedSession({ userId: editorId });
+    const { swarmNodeRepository } = await import('@/core/swarm/node-repository');
+    const nodes: Record<string, string> = {};
+    for (const [name, root] of [['room', privateId], ['space', spaceSession.id], ['personal', personal.id]] as const) {
+      nodes[name] = randomUUID();
+      await swarmNodeRepository.create({ id: nodes[name], rootSessionId: root, parentNodeId: null, depth: 0, kind: 'root', role: 'general',
+        expertId: null, topicPath: 'root', subtopic: null, model: 'test-model', status: 'completed', tokenCap: 1, wallClockCapMs: 1, fanOutCap: 1,
+        briefHash: 'x', taskBriefPreview: 'secret brief' });
+    }
+    for (const [root, id] of [[privateId, nodes.room], [spaceSession.id, nodes.space]]) {
+      expect((await call('admin', 'GET', `/api/swarm/nodes?rootSessionId=${root}`)).status).toBe(404);
+      expect((await call('admin', 'GET', `/api/swarm/nodes/${id}`)).status).toBe(404);
+      expect((await call('admin', 'POST', `/api/swarm/nodes/${id}/cancel`)).status).toBe(404);
+    }
+    // A personal session keeps the admin's support access.
+    expect((await call('admin', 'GET', `/api/swarm/nodes/${nodes.personal}`)).status).toBe(200);
   });
 });
