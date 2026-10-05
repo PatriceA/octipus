@@ -349,6 +349,30 @@ alike — then run on that model, on their key.
   while away.
 - Personal-only pages keep working with a space selected; the secrets page
   scopes to the default personal workspace, as the server does.
+- **Rooms** `/rooms?room=<id>` (the sidebar's *rooms*, shown with a space
+  selected, carries the unread count of the rooms not muted): the space's
+  rooms with unread badges, and the open room. Members' posts sit on the
+  left with name and initials, mine on the right; Octipus's answers stream
+  to the member who asked and appear for everyone once stored. The
+  composer's **Ask Octipus** toggle (or `@octipus` in the text) asks the
+  agent; `@` completes the room's members; a post starting with `/` is a
+  command, answered to me only. The **turn strip** says who Octipus is
+  answering ("Octipus — answering Anna", or "waiting for Anna to approve"),
+  and who is queued, with a cancel on my own requests. Side panels:
+  **members** (a private room's creator and the space's owners add and
+  remove them), **space memory** (members with `write` add and retract
+  entries), **settings** (title and visibility, for the room's creator and
+  owners). The bell mutes the room. **Ask privately** opens my private chat
+  in the space linked to the room (created once, then reopened). Editors
+  and owners create rooms (title, open or private, the members of a private
+  one). Commenters post and ask; viewers read only. The page subscribes to
+  the room on every reconnect with the newest message it holds
+  (`afterMessageId`) and so catches up from the messages table; when the
+  server takes the room away (`room.removed`) the page says so and drops
+  it from the list.
+- **Presence.** The header shows the other members online in the selected
+  space as avatars, each saying where they are (a room, or a note) when I
+  may see it (`space.subscribe` → `space.presence`).
 
 ## Live documents
 
