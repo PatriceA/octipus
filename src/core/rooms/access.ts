@@ -18,9 +18,9 @@
  *   | `turn`             | owner         | `can(role,'run_agent')` (and addressed) |
  *   | `stop`             | owner         | the running turn's requester, or editor+ |
  *   | `control`          | owner         | any member (/status, /help, /cancel)    |
- *   | `manage`           | owner         | room creator or space owner (/clear, title, visibility) |
+ *   | `manage`           | owner         | room creator while editor+, or space owner (/clear, title, visibility) |
  *   | `settings`         | owner         | refused (/model, skills: per requester) |
- *   | `requester`        | owner         | the turn's requester, within the role cap (plan tools, scripts, test containers, progress rows) |
+ *   | `requester`        | owner         | the running turn's requester, within the role cap (plan tools, scripts, test containers, progress rows) |
  *   | `personal_tool`    | owner         | not offered (monitors, scheduling)      |
  *   | `learning`, `voice`| owner         | refused                                 |
  *   | `chat`             | owner         | refused (personal chat paths: chat.send, /api/chat, replay, swarm) |
@@ -161,13 +161,27 @@ export async function canActInSession(
     case 'post':
       return can(access.role, 'comment');
     case 'turn':
-    case 'requester':
       return can(access.role, 'run_agent');
+    case 'requester': {
+      // The running turn's own requester: a member whose turn is not the one
+      // running acts in nobody's turn.
+      const { runningRequester } = await import('./queue');
+      return can(access.role, 'run_agent') && runningRequester(session.id) === userId;
+    }
     case 'stop':
       return (!!opts.turnRequesterId && opts.turnRequesterId === userId) || can(access.role, 'write');
     case 'control':
       return true;
     case 'manage':
-      return access.room.createdBy === userId || access.role === 'owner';
+      return mayManage(access, userId);
   }
+}
+
+/**
+ * Room creator or space owner — the creator only while their role still
+ * writes in the space: a creator downgraded to commenter or viewer keeps no
+ * rights over the room (I5).
+ */
+export function mayManage(access: RoomAccess, userId: string): boolean {
+  return access.role === 'owner' || (access.room.createdBy === userId && can(access.role, 'write'));
 }

@@ -21,6 +21,7 @@
  * user's — or no user's — request on a personal row throws.
  */
 import type { ModelConfigEntry } from '@/db/schema/models';
+import { currentSponsor } from '@/models/providers/instrumented';
 import { getVault } from '@/security/vault';
 import { modelLogger } from '@/utils/logger';
 
@@ -38,9 +39,16 @@ export class PersonalModelOwnerError extends Error {
   }
 }
 
-/** Throws unless `requesterId` may run on `row`: install rows serve anyone, a personal row only its owner. */
+/**
+ * Throws unless `requesterId` may run on `row`: install rows serve anyone, a
+ * personal row its owner — and, inside a sponsored turn (`withSponsor`,
+ * coworking spec §9.1), the sponsor's rows named among the sponsor models.
+ */
 export function assertModelRowOwner(row: Pick<ModelConfigEntry, 'name' | 'ownerUserId'>, requesterId: string | null | undefined): void {
-  if (row.ownerUserId && row.ownerUserId !== requesterId) throw new PersonalModelOwnerError(row.name);
+  if (!row.ownerUserId || row.ownerUserId === requesterId) return;
+  const sponsor = currentSponsor();
+  if (sponsor && sponsor.userId === row.ownerUserId && sponsor.models.includes(row.name)) return;
+  throw new PersonalModelOwnerError(row.name);
 }
 
 /** The vault namespace a row's key lives in. */

@@ -67,6 +67,15 @@ export function sharedRefusalText(refusal: LimitRefusal, requester: string): str
     + 'is reached. The details are in their Octipus conversation.';
 }
 
+/**
+ * What a room reads when a member's request was refused by one of their own
+ * limits: their caps and spend are theirs, so the room gets a neutral line
+ * and the details go to the requester only.
+ */
+export function roomRefusalText(requester: string): string {
+  return `${requester}'s request could not run right now. The details went to ${requester} only.`;
+}
+
 /** The chat text and structured payload for a limit error; null for anything else. */
 export function limitRefusalOf(err: unknown): { text: string; refusal: LimitRefusal } | null {
   if (isSpendError(err)) {

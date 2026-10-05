@@ -8,7 +8,8 @@
  *   1. deletes the rows keyed by the space's sessions that no cascading key
  *      reaches (agents, tool actions, run events, approvals, …), whatever
  *      their own `workspace_id` says;
- *   2. deletes, for every `WORKSPACE_TABLES` entry whose purge action is
+ *   2. detaches the rows of `detach` tables (a bound group channel forgets
+ *      the space) and deletes, for every `WORKSPACE_TABLES` entry whose purge action is
  *      `delete`, the rows with this `workspace_id` — sessions last, since
  *      other rows still point at them;
  *   3. counts what is left in those tables and aborts when anything is;
@@ -81,6 +82,7 @@ function rows<T>(result: unknown): T[] {
 export async function purgeSpace(actor: SpaceActor, workspaceId: string): Promise<PurgeResult> {
   const deleted: Record<string, number> = {};
   const removedSessions: string[] = [];
+  const detachedChannels: Array<{ id: string; channelType: string; channelId: string }> = [];
   await getDb().transaction(async (tx) => {
     requireCan(await getMembership(actor.userId, workspaceId, tx, { lock: 'share' }), 'manage_space');
     const [space] = await tx
@@ -103,6 +105,21 @@ export async function purgeSpace(actor: SpaceActor, workspaceId: string): Promis
       deleted[t.table] = (deleted[t.table] ?? 0) + rows(result).length;
     }
 
+    // Rows that outlive the space forget it first (a bound group channel, §9.4).
+    for (const t of WORKSPACE_TABLES.filter((w) => w.purge === 'detach')) {
+      if (t.table === 'group_channels') {
+        const result = await tx.execute(sql`
+          UPDATE group_channels SET workspace_id = NULL WHERE workspace_id = ${workspaceId}
+          RETURNING id::text AS id, channel_type AS "channelType", channel_id AS "channelId"
+        `);
+        detachedChannels.push(...rows<{ id: string; channelType: string; channelId: string }>(result));
+        deleted[`${t.table} (detached)`] = detachedChannels.length;
+        continue;
+      }
+      const result = await tx.execute(sql`UPDATE ${sql.identifier(t.table)} SET workspace_id = NULL WHERE workspace_id = ${workspaceId} RETURNING 1`);
+      deleted[`${t.table} (detached)`] = rows(result).length;
+    }
+
     const purged = WORKSPACE_TABLES.filter((t) => t.purge === 'delete');
     const ordered = [...purged.filter((t) => t.table !== 'sessions'), ...purged.filter((t) => t.table === 'sessions')];
     for (const t of ordered) {
@@ -117,7 +134,13 @@ export async function purgeSpace(actor: SpaceActor, workspaceId: string): Promis
       deleted[t.table] = (deleted[t.table] ?? 0) + rows(result).length;
     }
 
-    for (const t of purged) {
+    // The space's budgets (S5) are keyed by scope_ref, not workspace_id.
+    const budgets = await tx.execute(sql`
+      DELETE FROM spend_budgets WHERE scope_kind IN ('space','space_member') AND scope_ref = ${workspaceId} RETURNING 1
+    `);
+    deleted.spend_budgets = rows(budgets).length;
+
+    for (const t of WORKSPACE_TABLES.filter((w) => w.purge !== 'keep')) {
       const left = await tx.execute(sql`SELECT count(*)::int AS n FROM ${sql.identifier(t.table)} WHERE workspace_id = ${workspaceId}`);
       const n = Number(rows<{ n: number }>(left)[0]?.n ?? 0);
       if (n > 0) throw new Error(`purgeSpace: ${n} row(s) of ${t.table} still name space ${workspaceId}; aborting`);
@@ -132,8 +155,14 @@ export async function purgeSpace(actor: SpaceActor, workspaceId: string): Promis
     await tx.delete(workspaces).where(and(eq(workspaces.id, workspaceId), eq(workspaces.kind, 'shared')));
   });
   securityLogger.warn({ workspaceId, by: actor.userId, deleted }, 'Space purged');
-  // After the commit: the gateway drops the purged sessions' replay buffers.
+  // After the commit: the gateway drops the purged sessions' replay buffers,
+  // and the detached channels are read again (no cached binding to a space
+  // that is gone).
   sessionsRemoved(removedSessions);
+  if (detachedChannels.length > 0) {
+    const { invalidateGroupChannel } = await import('@/channels/group-channels');
+    for (const group of detachedChannels) invalidateGroupChannel(group);
+  }
 
   const leftoverDirectories: string[] = [];
   const dirs = spaceDirectories(workspaceId);

@@ -485,6 +485,16 @@ export class DocumentHub {
   }
 
   /**
+   * The text of a base this hub handed out for an open note (`readLive`, a
+   * write's result), by its sha; null when the note is closed or the base
+   * was evicted. An edit proposal keeps the text its writer read (§7.4).
+   */
+  baseText(noteId: string, sha256: string): string | null {
+    const doc = this.docs.get(noteId);
+    return doc ? this.lookupBase(doc, sha256) : null;
+  }
+
+  /**
    * Run `fn` holding the note's mutex — the one that covers the hub's init
    * and persist — with `open` true when the note has a live document. A
    * closed-note write runs inside it; an open one calls `applyExternalLocked`.

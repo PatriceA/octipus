@@ -1,6 +1,7 @@
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getOAuthManager } from '@/security/oauth';
+import { bindBrowser, callbackBrowser } from '@/api/oauth-browser';
 
 const SUPPORTED_PROVIDERS = ['google', 'microsoft'];
 
@@ -9,7 +10,7 @@ export const oauthRoutes = new Elysia({ prefix: '/auth/oauth' })
   // Generate authorization URL — requires authenticated user
   .get(
     '/:provider/authorize',
-    async ({ user, params, set }) => {
+    async ({ user, params, set, request }) => {
       if (!user) {
         set.status = 401;
         return { error: 'Authentication required' };
@@ -22,7 +23,10 @@ export const oauthRoutes = new Elysia({ prefix: '/auth/oauth' })
 
       try {
         const manager = getOAuthManager();
-        const result = await manager.generateAuthorizationUrl(user.id, params.provider);
+        // Bound to this browser: the callback checks the cookie.
+        const browser = bindBrowser(request);
+        const result = await manager.generateAuthorizationUrl(user.id, params.provider, { browserBinding: browser.binding });
+        set.headers['Set-Cookie'] = browser.setCookie;
         return result;
       } catch (err) {
         set.status = 400;
@@ -38,7 +42,7 @@ export const oauthRoutes = new Elysia({ prefix: '/auth/oauth' })
   // OAuth callback — public endpoint (state-based auth)
   .get(
     '/:provider/callback',
-    async ({ params, query, set }) => {
+    async ({ params, query, set, request }) => {
       if (!SUPPORTED_PROVIDERS.includes(params.provider)) {
         set.status = 400;
         set.headers['content-type'] = 'text/html';
@@ -58,7 +62,7 @@ export const oauthRoutes = new Elysia({ prefix: '/auth/oauth' })
 
       try {
         const manager = getOAuthManager();
-        await manager.exchangeCode(params.provider, query.code, query.state);
+        await manager.exchangeCode(params.provider, query.code, query.state, callbackBrowser(request));
 
         set.headers['content-type'] = 'text/html';
         return successPage(params.provider);
@@ -83,7 +87,7 @@ export const oauthRoutes = new Elysia({ prefix: '/auth/oauth' })
   // Connection status — requires authenticated user
   .get(
     '/:provider/status',
-    async ({ user, params, set }) => {
+    async ({ user, params, set, request }) => {
       if (!user) {
         set.status = 401;
         return { error: 'Authentication required' };
@@ -106,7 +110,7 @@ export const oauthRoutes = new Elysia({ prefix: '/auth/oauth' })
   // Disconnect — requires authenticated user
   .post(
     '/:provider/disconnect',
-    async ({ user, params, set }) => {
+    async ({ user, params, set, request }) => {
       if (!user) {
         set.status = 401;
         return { error: 'Authentication required' };

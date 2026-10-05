@@ -7,6 +7,49 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### Fixed
+
+- **Group-channel bridge and space connectors (review of S5).** The Git tool,
+  the shell, `gh` and CLI agents in a space run with a fresh per-run tool
+  home (`HOME`, `XDG_CONFIG_HOME`, `GH_CONFIG_DIR`, git's config) seeded only
+  with the space connector's GitHub login and removed after the run; the
+  host's SSH agent, askpass, git config and credential helpers are stripped
+  and every helper is reset (`credential.helper=`), so neither the host's
+  identity nor another member's planted config is ever used. In a space the
+  GitHub, Atlassian and `connector_*` tools act through the space's
+  connection and are space tools: writes follow the role, reads no longer
+  mark the session private. A bridged room cannot be made private while
+  bound and only open rooms are relayed; a binding ends (audited,
+  `owner_left`) when its owner stops owning the space; thread mappings count
+  only for rooms of the channel's current space (binding clears leftovers,
+  a stale cached binding is refused); permission prompts go to the platform
+  thread only for turns asked there and a room's prompt is never denied for
+  a paused channel; guests in a bound channel get a hint and no room; a
+  room held by another channel cannot be bound (400, not 500); a purge
+  drops the cached binding; superseded space secrets are deleted. OAuth
+  callbacks (connectors, space connectors, Google / Microsoft) must come from
+  the browser that started the flow (a `SameSite=Lax` binding cookie), and
+  `/api/connectors/:id/callback` is a public route like the other OAuth
+  callbacks.
+- **Rooms (review of S2).** `remember_for_space` goes through
+  `routeApprovalFor` as a space write (role cap, and an ASK after a private
+  read in a private space session). The space memory and a side panel's
+  linked-room transcript are injected per turn only, never stored with the
+  turn (`metadata.promptContext`, native snapshots) nor replayed. Room turns
+  carry a stop signal checked at handover, before the root agent spawns and
+  before the answer is stored; `/stop`, removal and the approval timeout
+  stop only the turn they decided about, and tool decisions in a room
+  re-check `roomAccess`. `/compact` refuses while a turn runs. Room history
+  and compaction page past the 400-row cap; a turn compacts first when its
+  transcript exceeds `rooms.transcriptWindowChars` and its history stays in
+  that window. A room `yes` resolves its approval by id. A requester's
+  limit refusal posts a neutral line in the room (details to the requester
+  only), and failed turns no longer broadcast error text. The swarm routes'
+  admin bypass never reaches rooms or space sessions. A room creator's
+  manage rights need a write role. Queue turns alternate between members;
+  `requester` checks the running turn's requester; pruned subscriptions
+  clear presence; `room.subscribe` re-checks access after joining.
+
 ### Added
 
 - **Guests and registration modes (coworking S6).** A guest's scope
@@ -32,6 +75,55 @@ labels reflect blast radius, not contract guarantees.
   CHECK). Remote rows never sign in (sessions, API tokens, impersonation,
   SAML, passkeys refuse them) and are left out of admin user lists and
   SCIM. See docs/SPACES.md → Across installs.
+- **The agent as co-editor, and file leases enforced (spaces).** In a space
+  whose agent edit mode is `suggest` (the default), the notes tool's
+  changes to existing notes — `write_note`, `capture_note`, `archive_note`
+  — become the session's pending edit proposal and answer
+  `{ proposed: true, proposalId, status: 'pending', baseSha256 }`;
+  `read_note` shows that pending proposal; new notes are still created.
+  `direct` mode writes through the live document as before. Members with
+  the note open hear of proposal changes live (`doc.proposals`; the
+  *proposals* tab shows the pending count). An accepted proposal on a
+  closed note refreshes its links and index. Every file-changing
+  filesystem tool now checks space file leases (prefix matching for a
+  recursive delete or a directory move) and refuses a leased path with who
+  holds it and until when, the check and the write under one per-path
+  mutex. Shell, git, docker, skill scripts and CLI agents stay advisory
+  (docs/SPACES.md).
+- **Space funding, budgets and the team surface** (coworking S5,
+  `docs/SPACES.md` → "Funding and budgets", "The team surface"). A space's
+  owners choose who pays for the agent — each member (`own`), members for
+  their own turns and a sponsor for unprompted work (`unattended`, the
+  default), or a sponsor for everything (`sponsored`, each member under a
+  per-member cap) — and an owner can sponsor the space with their own
+  models. Space budgets cap the sponsor's spend for the whole space and per
+  member (Space settings → Budget); a member at their cap is paused alone.
+  Sponsored spend never moves a member's personal budget or token quota.
+  "My work" lists my open tasks across my spaces; assigning a space task
+  notifies the assignee; the space's board updates live from `task.changed`
+  instead of polling. Rooms get `listen` and `proactive` modes with the
+  group channels' gate (quiet hours, caps, 👍/👎 feedback), paid by the
+  sponsor. Migration `0132_space_funding`.
+- **Group channels bound to a space** (coworking §9.4). A group channel's
+  owner who also owns a space can bind the channel to it (Settings →
+  Channels → *Bind to space room*, with the acknowledgement that everyone
+  in the channel can read what the room shows; audited). Each thread is then
+  a room of the space: members' requests run as room turns as themselves,
+  linked people outside the space get a private hint and no turn, the room
+  is posted back in the thread, taken tasks land on the space's board (one
+  per message) and the space's budget replaces the channel's. Binding closes
+  the members' own thread sessions of that channel. Migration
+  `0133_space_bridge_connectors`.
+- **Space connectors** (coworking §9.5). Space settings get *Connectors*:
+  owners connect GitHub (a token) and Atlassian / Linear (OAuth, with their
+  own connect, callback and refresh flows) for the whole space. Their
+  credentials are a new vault scope, `space`, keyed by the space
+  (`dekForRow`, also used by both rotation scripts), readable only through
+  the space access layer and never through `{{secret:}}`. In a space the
+  shell, the GitHub tool and CLI agents run with an empty per-space
+  `GH_CONFIG_DIR` (CLI agents also an empty `HOME`), so a space session
+  never acts with the host's GitHub login.
+
 - **Rooms in the web.** With a shared space selected, the sidebar gets
   *rooms* (with the unread count) and `/rooms` lists the space's rooms with
   unread badges. A room shows everyone's posts (others on the left with name
@@ -91,6 +183,13 @@ labels reflect blast radius, not contract guarantees.
   CLI home and the owner's token. See docs/SPACES.md ("Own models").
 
 ### Changed
+
+- Install-topic model calls (compaction and its chunk summaries, learning,
+  link resolver, weekly review, evaluators, document processing, the group
+  listen probe) are now stamped `install` in `cost_log` whatever turn they
+  run in, through `withInstallUsage`. Spend budgets' `user_id` is nullable
+  for space budgets (author only); a user's own budgets are still deleted
+  with their account (a trigger replaces the cascade).
 
 - **Live space notes: review fixes** (coworking S3). Nothing typed is lost
   on a reconnect: a closed note stays in memory for a minute (a member whose

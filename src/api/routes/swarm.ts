@@ -7,9 +7,12 @@
  * explicit per-node cancel.
  *
  * Authorization rules (all enforced here — no middleware magic):
- *  - Admin users see/act on any node.
- *  - Non-admins may only touch nodes whose `rootSessionId` is a session
- *    they own (checked via `sessionRepository.findById`).
+ *  - Anyone may touch nodes whose `rootSessionId` is a personal session
+ *    they own (the scoped session repo, which never returns a room).
+ *  - Admin users may also touch the nodes of other users' personal
+ *    sessions — never of a room or of a session in a shared space: a
+ *    space's content is reached through membership only (I2, D9), and a
+ *    room's turn tree is not a personal path at all (§6.2).
  *
  * Integration pattern mirrors `src/api/routes/agents.ts` — pure Elysia +
  * Drizzle, no new middleware, errors returned as `{ error }` bodies with a
@@ -20,25 +23,31 @@ import { apiContext } from '@/api/context';
 import { getAgentManager } from '@/core/agent-manager';
 import { swarmNodeRepository } from '@/core/swarm/node-repository';
 import { scopedRepos } from '@/db/repositories/scoped';
+import { sessionRepository } from '@/db/repositories/session-repository';
+import { isSharedWorkspace } from '@/core/spaces/service';
 import type { SwarmNodeRecord } from '@/db/schema/swarm-nodes';
 import { type Principal, isAdmin } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
 
 /**
- * Check the caller has permission to act on a given `rootSessionId`.
- * Admins bypass; non-admins must own the session. The lookup goes through
- * the scoped session repo so the SQL filter (`sessions.user_id = principal.userId`)
- * does the ownership check — keeps this aligned with `agents.ts` and avoids
- * the unscoped `sessionRepository` singleton.
+ * Check the caller has permission to act on a given `rootSessionId`. The
+ * owner's lookup goes through the scoped session repo so the SQL filter
+ * (`sessions.user_id = principal.userId`) does the ownership check — keeps
+ * this aligned with `agents.ts`. An admin's bypass reads the session row
+ * and stops at rooms and shared spaces.
  */
 async function canAccessRootSession(
   principal: Principal,
   rootSessionId: string,
 ): Promise<boolean> {
-  if (isAdmin(principal)) return true;
   try {
-    const session = await scopedRepos(principal).sessions.findById(rootSessionId);
-    return session !== null;
+    if (await scopedRepos(principal).sessions.findById(rootSessionId)) return true;
+    if (!isAdmin(principal)) return false;
+    // i2: admin bypass, by id — refused for rooms and space sessions below
+    const session = await sessionRepository.findById(rootSessionId);
+    if (!session || session.kind !== 'chat') return false;
+    if (session.workspaceId && await isSharedWorkspace(session.workspaceId)) return false;
+    return true;
   } catch (err) {
     apiLogger.error({ err, rootSessionId }, 'Failed to check session ownership for swarm node');
     return false;

@@ -3,15 +3,36 @@ import { isToolNotExecutedResult, ToolNotExecutedError } from '@/core/tool-execu
 import { isAbsolute, resolve } from 'path';
 import { WorkspaceFS, WorkspaceFsError } from '@/security/workspace-fs';
 import { isSensitiveEnvName } from '@/security/child-env';
+import { HOST_IDENTITY_ENV, openSpaceToolHome, type SpaceToolHome, withToolHome } from '@/security/space-tool-env';
 import type { AgentContext, ToolManifest } from '@/core/types';
 import { toolLogger } from '@/utils/logger';
 import { BaseTool, createParameterSchema } from '../base-tool';
 import { interpretExit } from './exit-code-semantics';
 import { LocalShellOperations } from './local-operations';
-import type { ShellOperations } from './operations';
+import type { ShellExecResult, ShellOperations } from './operations';
 import { commandPolicyViolation, matchDestructiveCommand, matchElevatedCommand } from './policy';
 
 const DEFAULT_TIMEOUT = 30000; // 30 seconds
+
+/**
+ * How a command runs: the caller's `env`, and in a space (coworking §9.5)
+ * the run's own tool home — `HOME`, `XDG_CONFIG_HOME`, `GH_CONFIG_DIR` and
+ * the version-control config at a fresh directory holding only the space
+ * connector's GitHub login, the host's identity variables removed from the
+ * inherited environment and from the call's `env` alike, and the home bound
+ * into the process sandbox. Exported for the tests.
+ */
+export function spaceRunOptions(env: Record<string, string> | undefined, home: SpaceToolHome | null): {
+  env?: Record<string, string>; unsetEnv?: readonly string[]; extraReadWrite?: string[];
+} {
+  if (!home) return { env };
+  return { env: withToolHome(env ?? {}, home), unsetEnv: HOST_IDENTITY_ENV, extraReadWrite: [home.dir] };
+}
+
+/** A fresh tool home for one run of a space agent, or null outside a space. */
+async function toolHomeFor(context: AgentContext | undefined): Promise<SpaceToolHome | null> {
+  return context?.space ? openSpaceToolHome({ ...context, space: context.space }) : null;
+}
 
 
 export class ShellTool extends BaseTool {
@@ -72,7 +93,6 @@ export class ShellTool extends BaseTool {
         const command = args.command;
         const cwd = this.resolveCwd(args.cwd, context);
         const timeout = (args.timeout as number) || DEFAULT_TIMEOUT;
-        const env = args.env as Record<string, string> | undefined;
         const unsafe = args.useShell === true;
         const allowNetwork = args.network === true;
 
@@ -87,7 +107,16 @@ export class ShellTool extends BaseTool {
           role: context?.role,
         }, 'Shell command executing');
 
-        const result = await this.ops.exec(command, cwd, { timeout, env, unsafe, allowNetwork, signal: getExecutionSignal(context) });
+        const home = await toolHomeFor(context);
+        let result: ShellExecResult;
+        try {
+          result = await this.ops.exec(command, cwd, {
+            timeout, unsafe, allowNetwork, signal: getExecutionSignal(context),
+            ...spaceRunOptions(args.env as Record<string, string> | undefined, home),
+          });
+        } finally {
+          home?.dispose();
+        }
 
         if (result.aborted) {
           if (isToolNotExecutedResult('shell', result)) throw new ToolNotExecutedError('shell', 'Shell command cancelled before execution');
@@ -147,7 +176,6 @@ export class ShellTool extends BaseTool {
         }
         const command = args.command;
         const cwd = this.resolveCwd(args.cwd, context);
-        const env = args.env as Record<string, string> | undefined;
         const unsafe = args.useShell === true;
         const allowNetwork = args.network === true;
 
@@ -165,7 +193,17 @@ export class ShellTool extends BaseTool {
           role: context?.role,
         }, 'Shell background command spawning');
 
-        const { pid } = await this.ops.spawnBackground(command, cwd, { env, unsafe, allowNetwork });
+        // The tool home lives as long as the background process.
+        const home = await toolHomeFor(context);
+        let pid: number | undefined;
+        try {
+          ({ pid } = await this.ops.spawnBackground(command, cwd, {
+            unsafe, allowNetwork, ...spaceRunOptions(args.env as Record<string, string> | undefined, home), onExit: () => home?.dispose(),
+          }));
+        } catch (err) {
+          home?.dispose();
+          throw err;
+        }
 
         return { pid, command, status: 'running' };
       },

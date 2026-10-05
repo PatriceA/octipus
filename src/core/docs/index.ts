@@ -11,6 +11,7 @@ import { userRepository } from '@/db/repositories/user-repository';
 import { noteInGuestScope, pathInGuestFolders } from '@/security/space-access';
 import { coreLogger } from '@/utils/logger';
 import { DocumentHub } from './hub';
+import { setProposalChangeListener } from './edit-proposals';
 import { leaseViews, listLeases, setLeaseChangeListener } from './file-leases';
 
 let instance: DocumentHub | null = null;
@@ -66,12 +67,17 @@ export function getDocHub(): DocumentHub {
 
 /**
  * Wire the hub into the gateway: closed connections leave their documents,
- * and file lease changes go to the space's `space:<id>` subscribers
- * (`file.leases`). Called once at startup with the message handler.
+ * file lease changes go to the space's `space:<id>` subscribers
+ * (`file.leases`), and a note's edit proposal changes to the members who
+ * have it open (`doc.proposals` on `doc:<noteId>`). Called once at startup
+ * with the message handler.
  */
 export function wireDocumentHub(): void {
   setLeaseChangeListener((workspaceId) => {
     void publishLeases(workspaceId);
+  });
+  setProposalChangeListener((workspaceId, noteId, pending) => {
+    getGatewayHub().publishToResource(`doc:${noteId}`, { type: 'doc.proposals', noteId, spaceId: workspaceId, pending });
   });
 }
 

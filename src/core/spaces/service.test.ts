@@ -88,7 +88,7 @@ describe('roles', () => {
   test('a space has no owning user row and its creator is its owner', async () => {
     const { createSpace, getMembership } = await import('./service');
     const space = await createSpace({ userId: owner }, { name: '  Team  ' });
-    expect(space).toMatchObject({ name: 'Team', role: 'owner', memberCount: 1, funding: 'own', archivedAt: null });
+    expect(space).toMatchObject({ name: 'Team', role: 'owner', memberCount: 1, funding: 'unattended', sponsorUserId: null, archivedAt: null });
     const [row] = await q(`SELECT kind, user_id, created_by, is_default FROM workspaces WHERE id = $1`, [space.id]);
     expect(row).toEqual({ kind: 'shared', user_id: null, created_by: owner, is_default: false });
     expect(await getMembership(owner, space.id)).toMatchObject({ role: 'owner', scope: null });

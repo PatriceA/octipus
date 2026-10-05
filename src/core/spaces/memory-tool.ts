@@ -1,16 +1,21 @@
 import type { ToolHandler } from '@/core/agent-base';
 import type { AgentService } from '@/core/agent/service';
+import { routeApprovalFor } from '@/security/approval-route';
 import { getFlowLabel, loadFlowLabel } from '@/security/flow-guard';
 import { requireCan } from '@/security/space-access';
 
 /**
  * `remember_for_space` (docs/plans/coworking-spec.md §6.5): the agent
  * records a fact in the space memory for its requester, who must have
- * `write` in the space (re-read at the call, D5). When the session has read
- * outsiders' text — its flow label is `suspicious`, which a room always is —
- * or the requester's private data (`private`, I6), the requester is asked
- * first: a fact injected into every later turn of the space must not be
- * planted by someone else's message, nor carry personal data unasked.
+ * `write` in the space (re-read at the call, D5).
+ *
+ * A meta-tool skips the executor's permission step, so the call is routed
+ * here through `routeApprovalFor` as a write into the space
+ * (`space_memory.write`): the role cap applies, and so does I6 — after a
+ * private read the requester is asked, whatever the flow-guard mode. When
+ * the session has read outsiders' text (`suspicious`, which a room always
+ * is) the requester is asked too: a fact injected into every later turn of
+ * the space must not be planted by someone else's message.
  */
 export function createRememberForSpaceTool(service: AgentService): ToolHandler {
   return {
@@ -35,13 +40,22 @@ export function createRememberForSpaceTool(service: AgentService): ToolHandler {
       // The role first (read now): a member who may not write is not asked.
       const { getMembership } = await import('./service');
       requireCan(await getMembership(context.userId, space.workspaceId), 'write');
-      // Also after a read of the requester's private data (I6): the fact would
-      // carry it into every member's sessions. The label is the stored one too.
+      // The stored label too (a restart, another process).
       await loadFlowLabel(context.sessionId);
-      const label = getFlowLabel(context.sessionId);
-      if (label.suspicious || label.private) {
+      const decision = await routeApprovalFor(
+        context,
+        { toolId: 'space_memory', action: 'write', toolName: 'remember_for_space' },
+        getFlowLabel(context.sessionId).suspicious
+          ? { level: 'ASK', reason: 'the session has read other people\'s text', source: 'space-memory' }
+          : { level: 'ALLOW' },
+      );
+      if (decision.route === 'deny' || decision.route === 'blocked') {
+        return { stored: false, error: decision.reason ?? 'Adding to the space memory is not allowed here' };
+      }
+      if (decision.route === 'ask_human') {
         const answer = await service.requestApproval(
-          'Octipus wants to add a fact to the space memory, which every member\'s sessions in this space will receive.',
+          'Octipus wants to add a fact to the space memory, which every member\'s sessions in this space will receive.'
+            + (decision.source === 'space-flow' ? ` ${decision.reason}.` : ''),
           `Add this to the space memory?\n\n"${body}"`,
           context,
           ['Yes', 'No'],

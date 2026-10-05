@@ -16,6 +16,17 @@ export type AgentTrigger = 'user' | 'room' | 'schedule' | 'monitor' | 'listen' |
 export type AgentFunding = 'own' | 'sponsor';
 
 /**
+ * Who pays a sponsored agent (`funding: 'sponsor'`, coworking spec §9.1):
+ * the space's sponsor, and the names of their own model rows the agent may
+ * run on (`workspaces.sponsor_models`). Snapshot of the scope; inherited by
+ * children.
+ */
+export interface AgentSponsor {
+  readonly userId: string;
+  readonly models: readonly string[];
+}
+
+/**
  * The space an agent works in: its session's workspace is shared and the
  * requester's membership was read when the context was built. `role` is that
  * snapshot; every tool decision re-reads it (`routeApprovalFor`, D5).
@@ -48,6 +59,8 @@ export interface AgentContext {
   trigger: AgentTrigger;
   /** Who pays for its model calls. Inherited by children. */
   funding: AgentFunding;
+  /** Set when `funding` is `sponsor`: who pays and on which of their models. Inherited by children. */
+  sponsor?: AgentSponsor | null;
   topic: string;
   /**
    * The provider-facing model id — what providers, CLI tool configs, toolshim

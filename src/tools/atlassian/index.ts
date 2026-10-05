@@ -1,5 +1,5 @@
 import { ATLASSIAN_CONNECTOR } from '@/connectors/atlassian/definition';
-import { getConnectorRegistry } from '@/connectors/registry';
+import { type ConnectorOwner, connectorOwnerOf, getConnectorRegistry } from '@/connectors/registry';
 import { ATLASSIAN_CAPABILITIES, CapabilityMappingError, type ConnectorCapability, mapArguments, matchRemoteTool } from '@/core/connectors/capabilities';
 import type { AgentContext, ToolManifest } from '@/core/types';
 import type { MCPToolDefinition } from '@/mcp/protocol';
@@ -25,12 +25,12 @@ export function _resetConnectorToolCache(): void {
   toolListCache.clear();
 }
 
-async function remoteTools(userId: string): Promise<MCPToolDefinition[]> {
-  const key = `${ATLASSIAN_CONNECTOR.id}:${userId}`;
+async function remoteTools(owner: ConnectorOwner): Promise<MCPToolDefinition[]> {
+  const key = `${ATLASSIAN_CONNECTOR.id}:${typeof owner === 'string' ? owner : `space:${owner.space.workspaceId}`}`;
   const cached = toolListCache.get(key);
   if (cached && Date.now() - cached.at < TOOL_LIST_TTL_MS) return cached.tools;
 
-  const tools = await getConnectorRegistry().fetchConnectorTools(ATLASSIAN_CONNECTOR, userId);
+  const tools = await getConnectorRegistry().fetchConnectorTools(ATLASSIAN_CONNECTOR, owner);
   toolListCache.set(key, { tools, at: Date.now() });
   return tools;
 }
@@ -103,7 +103,7 @@ export class AtlassianTool extends BaseTool {
 
     let tools: MCPToolDefinition[];
     try {
-      tools = await remoteTools(context.userId);
+      tools = await remoteTools(connectorOwnerOf(context));
     } catch (error) {
       return {
         error: `Could not reach Atlassian: ${(error as Error).message}. Connect the account on the Connectors page first.`,
@@ -134,7 +134,7 @@ export class AtlassianTool extends BaseTool {
     try {
       const result = await getConnectorRegistry().callConnectorTool(
         ATLASSIAN_CONNECTOR,
-        context.userId,
+        connectorOwnerOf(context),
         remote.name,
         mapped,
       );

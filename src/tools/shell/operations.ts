@@ -19,7 +19,7 @@ export interface ShellOperations {
       unsafe?: boolean;
     /** Grant the sandboxed command network access. No effect when the sandbox is off. */
     allowNetwork?: boolean;
-    },
+    } & ShellEnvOptions,
   ): Promise<ShellExecResult>;
 
   /**
@@ -31,12 +31,20 @@ export interface ShellOperations {
   spawnBackground(
     command: string,
     cwd: string,
-    options?: { env?: Record<string, string>; unsafe?: boolean; allowNetwork?: boolean },
+    options?: { env?: Record<string, string>; unsafe?: boolean; allowNetwork?: boolean; onExit?: () => void } & ShellEnvOptions,
   ): Promise<{ pid: number | undefined }>;
 
   which(command: string): Promise<string | null>;
 
   getEnv(filter?: string): Promise<Record<string, string>>;
+}
+
+/** How a run's environment and sandbox differ from the default (a space run's tool home, coworking §9.5). */
+export interface ShellEnvOptions {
+  /** Variables removed from the inherited environment (before `env` is laid over it). */
+  unsetEnv?: readonly string[];
+  /** Extra read-write paths for the process sandbox (the run's tool home). */
+  extraReadWrite?: string[];
 }
 
 export interface ShellExecResult {

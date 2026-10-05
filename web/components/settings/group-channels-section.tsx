@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Trash2, Users } from 'lucide-react';
 import { useState } from 'react';
 import { GroupChannelModeForm } from '@/components/group-channel-mode-form';
+import { GroupChannelBind } from './group-channel-bind';
 import { api } from '@/lib/api';
 import type { GroupChannelSummary } from '../../../src/shared/types';
 
@@ -14,7 +15,8 @@ import type { GroupChannelSummary } from '../../../src/shared/types';
  * the channel. Enrolment happens only there (it proves membership); here the
  * owner sets the mode (and, for listen / proactive, quiet hours and a rate
  * limit) or removes the bot. Each request runs as the member who asked, in
- * their own workspace, so there is no workspace to pick.
+ * their own workspace — unless the owner binds the channel to a space they
+ * own ("Bind to space room"), where its threads become the space's rooms.
  */
 export function GroupChannelsSection() {
   const queryClient = useQueryClient();
@@ -80,6 +82,7 @@ export function GroupChannelsSection() {
                 </button>
               </div>
               <GroupChannelModeForm key={g.updatedAt} group={g} endpoint={`/me/group-channels/${g.id}`} onSaved={invalidate} />
+              <GroupChannelBind group={g} onChanged={invalidate} />
             </li>
           ))}
         </ul>

@@ -1,6 +1,7 @@
-import type { ToolManifest } from '@/core/types';
-import { runGh } from '@/utils/gh';
-import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import type { AgentContext, ToolManifest } from '@/core/types';
+import { type RunGhOptions, runGh } from '@/utils/gh';
+import { BaseTool, createParameterSchema, type ToolAvailability, type ToolExecutionOptions } from '../base-tool';
 
 /**
  * Build a validated `repos/<owner>/<name>/contents/<path>` gh-api endpoint.
@@ -171,6 +172,50 @@ export class GitHubTool extends BaseTool {
       ],
       tools: [],
     };
+  }
+
+  /** The agent a `gh` call runs for: every handler runs inside it (see `registerTool`). */
+  private readonly caller = new AsyncLocalStorage<AgentContext>();
+
+  /**
+   * Every handler runs with its agent context in `caller`, so `gh` can tell a
+   * space session from a personal one without threading the context through
+   * thirty handlers.
+   */
+  protected override registerTool(
+    name: string,
+    description: string,
+    parameters: Record<string, unknown>,
+    execute: (args: Record<string, unknown>, context: AgentContext) => Promise<unknown>,
+    options?: ToolExecutionOptions,
+  ): void {
+    super.registerTool(name, description, parameters, (args, context) => this.caller.run(context, () => execute(args, context)), options);
+  }
+
+  /**
+   * Run `gh` for the current call. In a space (coworking §9.5) it never
+   * uses the host's GitHub identity: the run's own tool home, removed after
+   * it, and the space's own token when an owner connected GitHub to the
+   * space — or a refusal saying how to connect one. Personal sessions keep
+   * the host's gh.
+   */
+  private async runGhForCall(args: string[], opts: Omit<RunGhOptions, 'token' | 'toolHome'> = {}): Promise<string> {
+    const context = this.caller.getStore();
+    if (!context?.space) return runGh(args, opts);
+    const [{ agentPrincipal }, { spaceGithubToken }, { openSpaceToolHome }] = await Promise.all([
+      import('@/security/principal'), import('@/core/spaces/connectors'), import('@/security/space-tool-env'),
+    ]);
+    const token = await spaceGithubToken(agentPrincipal(context));
+    if (!token) {
+      throw new Error('This space has no GitHub connection. A space owner can connect one under the space\'s settings → Connectors; '
+        + 'the host\'s GitHub login is never used in a space.');
+    }
+    const toolHome = await openSpaceToolHome({ ...context, space: context.space });
+    try {
+      return await runGh(args, { ...opts, token, toolHome });
+    } finally {
+      toolHome.dispose();
+    }
   }
 
   protected async registerTools(): Promise<void> {
@@ -459,7 +504,7 @@ export class GitHubTool extends BaseTool {
       number: { type: 'number', description: 'PR number', required: true },
     }), async (args) => {
       // Exit 8 = checks pending, 1 = a check failed; both still print the JSON.
-      const raw = await runGh(
+      const raw = await this.runGhForCall(
         ['pr', 'checks', assertNumber(args.number, 'PR number'), '-R', args.repo as string, '--json', 'name,state,bucket,workflow,link,description,startedAt,completedAt'],
         { acceptExitCodes: [1, 8] },
       );
@@ -602,7 +647,7 @@ export class GitHubTool extends BaseTool {
   }
 
   private async gh(args: string[]): Promise<string> {
-    return (await runGh(args)).trim();
+    return (await this.runGhForCall(args)).trim();
   }
 }
 

@@ -123,6 +123,12 @@ const ALLOWLIST: Record<string, string> = {
   'src/core/rooms/service.ts': ACCESS_LAYER,
   'src/core/rooms/membership.ts': 'pending requests of one room, for an access change',
   'src/core/spaces/memory.ts': ACCESS_LAYER,
+  // S5: the listen gate reads rooms in listen mode and their recent posts for
+  // no caller; room settings and feedback follow `requireRoom`.
+  'src/core/rooms/listen.ts': ACCESS_LAYER,
+  // S5 "My work": tasks assigned to the caller, in spaces joined through
+  // their membership in the same query, and their own personal workspaces.
+  'src/core/tasks/team.ts': 'my tasks across my memberships, by assignee',
   'src/db/repositories/session-kind.ts': 'the kind of one session by id (no content)',
   'src/security/workspace-resolver.ts': 'workspace of a session/agent/pipeline the caller owns, by id',
   // Unscoped stores keyed by an id the caller already holds (MARKED: per read).
@@ -161,6 +167,9 @@ const ALLOWLIST: Record<string, string> = {
   // The vault: a user's secrets; workspace-scoped secrets follow transfer.
   'src/security/vault.ts': 'secret store',
   'src/security/oauth.ts': "a user's OAuth tokens in the secret store",
+  // Group channels (enrolments, not content): a bound one names its space (§9.4).
+  'src/channels/group-channels.ts': "channel enrolments; a binding grants nothing to the channel's owner",
+  'src/channels/group-bridge.ts': 'the bridge: bindings checked against the space membership',
   // Hooks are personal automation: never offered in space sessions (§5.6).
   'src/hooks/manager.ts': 'hooks, personal automation',
   'src/hooks/actions.ts': 'hooks, personal automation',

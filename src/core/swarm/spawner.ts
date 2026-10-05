@@ -594,8 +594,9 @@ export class SwarmSpawner {
 
     if (isRealUserId(parentContext.userId)) {
       try {
-        const { getConnectorRegistry } = await import('@/connectors');
-        const connectorHandlers = await getConnectorRegistry().getUserToolHandlers(parentContext.userId);
+        const { connectorOwnerOf, getConnectorRegistry } = await import('@/connectors');
+        // The child works where its parent does: in a space, the space's connectors (§9.5).
+        const connectorHandlers = await getConnectorRegistry().getUserToolHandlers(connectorOwnerOf(parentContext));
         roleTools.push(...connectorHandlers);
       } catch (err) {
         coreLogger.error({ err, userId: parentContext.userId }, 'Failed to load connector tools for swarm child');
@@ -652,6 +653,7 @@ export class SwarmSpawner {
         parentContext.userId,
         childInSpace,
         parentContext.space?.role,
+        parentContext.sponsor,
       ));
 
     // Small-tier child: cap the tool surface, mirroring the worker path. Role
@@ -1204,7 +1206,7 @@ export class SwarmSpawner {
       try {
         // The install lane's backup — personal bindings have none (spec §8.2).
         const backup = await resolveModel({ userId: opts.parentContext.userId, topic: opts.childLane, backup: true,
-          inSpace: !!opts.parentContext.space, spaceRole: opts.parentContext.space?.role });
+          inSpace: !!opts.parentContext.space, spaceRole: opts.parentContext.space?.role, sponsor: opts.parentContext.sponsor });
         if (backup && backup.modelId !== opts.childModel) {
           coreLogger.warn(
             { parentNodeId: opts.parent.id, failedModel: opts.childModel, backupModel: backup.modelId, topic: opts.childLane },
@@ -2204,6 +2206,8 @@ export class SwarmSpawner {
     inSpace = false,
     /** The requester's role in that space (commenters: API models only). */
     spaceRole?: SpaceRole,
+    /** The parent is sponsored: the sponsor's models replace the requester's (§9.1). */
+    sponsor: import('@/core/types').AgentSponsor | null = null,
   ): Promise<{ model: string; modelName: string; lane: string; systemPrompt?: string; stablePrompt?: string; skillContext: string; isSmall: boolean }> {
     const registry = getModelRegistry();
 
@@ -2322,7 +2326,7 @@ export class SwarmSpawner {
       if (executorName) {
         // An explicit name: only a row the requester may see (spec §8.2).
         const execModel = userId
-          ? await resolveModel({ userId, name: executorName, inSpace, spaceRole })
+          ? await resolveModel({ userId, name: executorName, inSpace, spaceRole, sponsor })
           : (await registry.getModel(executorName).then((m) => (m && !m.ownerUserId ? m : null)))
             || (await registry.getModelByModelId(executorName));
         if (!execModel) {
@@ -2352,7 +2356,7 @@ export class SwarmSpawner {
     }
     if (!candidate) {
       // The requester's personal binding for the lane first, then the install's.
-      const topicModel = await resolveModel({ userId, topic: lane, inSpace, spaceRole });
+      const topicModel = await resolveModel({ userId, topic: lane, inSpace, spaceRole, sponsor });
       candidate = topicModel?.modelId;
       candidateName = topicModel?.name ?? '';
     }

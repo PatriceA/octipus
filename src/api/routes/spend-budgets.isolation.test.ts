@@ -16,6 +16,7 @@ import { Elysia } from '@/api/http';
 
 type ElysiaLike = { handle: (req: Request) => Promise<Response> };
 
+const OWN = { funding: 'own' as const, spaceId: null };
 const rand = (n: number) => randomBytes(n).toString('hex');
 process.env.MASTER_KEY ??= `test-master-${rand(24)}`;
 process.env.JWT_SECRET ??= `test-jwt-${rand(24)}`;
@@ -188,7 +189,7 @@ describe('GET /api/spend-budgets/me', () => {
   test('a paused stamp in the current period reads as paused and carries pausedAt', async () => {
     const { checkSpend, _resetSpendBudgetsForTests } = await import('@/security/spend-budgets');
     _resetSpendBudgetsForTests();
-    await expect(checkSpend({ userId: bobId })).rejects.toThrow(/Spend budget exceeded/);
+    await expect(checkSpend({ userId: bobId, ...OWN })).rejects.toThrow(/Spend budget exceeded/);
     const day = ((await get(bobApp, '/api/spend-budgets/me')).body.budgets as View[]).find((b) => b.period === 'day')!;
     expect(day.state).toBe('paused');
     expect(day.pausedAt).not.toBeNull();

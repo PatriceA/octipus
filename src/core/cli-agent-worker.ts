@@ -43,7 +43,8 @@ import type { ChildResult, PendingChild } from './swarm/types';
 import { getCLIToolConfig, resolveCliModelEntry } from './cli-agent-factory';
 import { getSkillRegistry } from '@/skills/registry';
 import { fetchActiveSkillIdsForTopic } from '@/skills/discovery';
-import { type CliCredentialOwner, cliCredentialOwnerFor, cliEnvFor } from './cli-child-env';
+import { type CliCredentialOwner, cliCredentialOwnerFor, cliEnvFor, cliSpaceEnv } from './cli-child-env';
+import { openSpaceToolHome, type SpaceToolHome } from '@/security/space-tool-env';
 import { getConfig } from '@/config';
 import { isRootAgent } from './types';
 import type { AgentContext, AgentMessage } from './types';
@@ -767,7 +768,10 @@ When a task matches one of these skills, load it with get_skill before starting 
     // (DB hiccup) does not block the run, as in agent-worker.
     try {
       const { checkSpend } = await import('@/security/spend-budgets');
-      await checkSpend({ userId: this.context.userId, role: this.context.role, workspaceId: this.context.workspaceId, sessionId: this.context.sessionId });
+      await checkSpend({
+        userId: this.context.userId, role: this.context.role, workspaceId: this.context.workspaceId, sessionId: this.context.sessionId,
+        funding: this.context.funding, spaceId: this.context.space?.workspaceId ?? null,
+      });
     } catch (err) {
       if (err instanceof Error && err.name === 'SpendBudgetExceededError') throw err;
       agentLogger.debug({ err }, 'spend budget check unavailable (not blocking)');
@@ -1116,11 +1120,23 @@ When a task matches one of these skills, load it with get_skill before starting 
     // Cleanup helper — removes temp context files and any ephemeral per-spawn
     // VIBE_HOME the arg builder created for vibe's MCP registration.
     const tempVibeHome = toolEnv?.VIBE_HOME;
+    // In a space the CLI's tools run in the run's own tool home (§9.5),
+    // removed with the context files.
+    let toolHome: SpaceToolHome | null = null;
     const cleanupContextFiles = () => {
       if (tempVibeHome && tempVibeHome.includes('octipus-cli')) {
         try { rmSync(tempVibeHome, { recursive: true, force: true }); } catch { /* already gone */ }
       }
+      toolHome?.dispose();
     };
+    if (this.context.space) {
+      try {
+        toolHome = await openSpaceToolHome({ ...this.context, space: this.context.space });
+      } catch (err) {
+        cleanupContextFiles();
+        throw err;
+      }
+    }
 
     // On Windows: shell: true is required for .cmd wrappers, and prompts are piped
     // via stdin (set up by CLIArgumentBuilder) to avoid shell argument mangling.
@@ -1134,9 +1150,11 @@ When a task matches one of these skills, load it with get_skill before starting 
       // Minimal env allowlist (C6): a CLI child running with bypassed
       // permissions must NOT inherit the server's DB creds and all API keys.
       // Pass only PATH/HOME/locale/TERM, the CLI's own auth var, and toolEnv.
-      const env = cliEnvFor(this.credentialOwner, toolConfig, { ...toolEnv,
+      const baseEnv = cliEnvFor(this.credentialOwner, toolConfig, { ...toolEnv,
         ...(this.connection ? { OCTIPUS_AGENT_URL: this.connection.url, OCTIPUS_AGENT_KEY: this.connection.key } : {}),
       }, settings.inheritApiKeys === true);
+      // In a space the CLI's tools never find the host's logins (§9.5).
+      const env = toolHome ? cliSpaceEnv(baseEnv, toolHome) : baseEnv;
 
       if (this.aborted) { cleanupContextFiles(); reject(new Error('Agent was aborted before CLI spawn')); return; }
       try { assertWindowsCmdLineFits(binary, args, process.platform, useShellForSpawn); } catch (err) { cleanupContextFiles(); reject(err); return; }

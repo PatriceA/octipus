@@ -554,6 +554,19 @@ export class WorkspaceFS {
     }
   }
 
+  /**
+   * A space file's path relative to the space's files root, `/`-separated
+   * (`''` for the root itself) — what its file lease names (§7.5). Null
+   * outside a space or for a path not under the root.
+   */
+  spaceRelative(absolute: string): string | null {
+    if (!this.isSpace) return null;
+    for (const root of [this.root, this.realRoot()]) {
+      if (this.isUnder(absolute, root)) return relative(root, absolute).split(path.sep).join('/');
+    }
+    return null;
+  }
+
   /** Like `resolve`, but returns null instead of throwing. */
   resolveOptional(userPath: string): string | null {
     try { return this.resolve(userPath); }
