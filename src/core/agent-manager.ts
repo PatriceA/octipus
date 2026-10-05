@@ -191,7 +191,7 @@ export class AgentManager {
     if (!options.model) {
       // Only route if model isn't pre-determined
       const router = getRouter();
-      const routing = await router.route(options.topic || '', undefined, { userId: options.userId, inSpace: !!space });
+      const routing = await router.route(options.topic || '', undefined, { userId: options.userId, inSpace: !!space, spaceRole: space?.role });
       routedTopic = routing.topic;
       routedModel = routing.model;
       routedModelName = routing.modelName;

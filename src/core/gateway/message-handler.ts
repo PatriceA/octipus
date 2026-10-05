@@ -491,12 +491,19 @@ async function handleChatInterject(
 
     let reply: string;
     try {
+      // A side question in a space session follows the space's model rules
+      // (§5.6); resolving the scope also refuses a role that may not run the agent.
+      const { resolveAgentScope } = await import('@/core/agent/context');
+      const { sessionRepository } = await import('@/db/repositories/session-repository');
+      const session = await sessionRepository.findById(message.sessionId);
+      const scope = await resolveAgentScope({ session, userId, trigger: session?.kind === 'room' ? 'room' : 'user' });
       const result = await directResponse(
         message.content,
         message.sessionId,
         userId,
         selector,
         'simple',
+        [], '', undefined, scope.space,
       );
       reply = `${personaName} — side question: ${result.response}`;
     } catch (err) {

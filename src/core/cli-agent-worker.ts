@@ -739,7 +739,7 @@ When a task matches one of these skills, load it with get_skill before starting 
     // personal row reached by modelId (§8.1).
     const model = await resolveCliModelEntry(this.context.model, { modelName: this.context.modelName, userId: this.context.userId });
     this.accountingModelName = model?.name;
-    this.credentialOwner = await cliCredentialOwnerFor(model);
+    this.credentialOwner = await cliCredentialOwnerFor(model, this.context.userId);
     return model?.metadata?.cliAgent || {};
   }
 
@@ -944,8 +944,11 @@ When a task matches one of these skills, load it with get_skill before starting 
     // A space run needs the bridge: its adapter's space mode routes native
     // tools through Octipus's decision path over it (CLI_SPACE_MODES).
     if (this.context.space && !this.connection) throw new Error('A CLI model in a shared space needs the Octipus bridge, which did not start');
-    const codexMcpServers = this.connection && adapterKey === 'Codex CLI' ? await discoverCodexMcpServers(workspaceCwd) : undefined;
-    const built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, resumedChildSystem ?? this.systemMessages, resumedChildSystem ? resumedChildSystem.join('\n\n') : systemPrompt, Math.max(0, this.config.maxTokenBudget - this.billableTokensUsed), this.context.id, this.connection ? { ...this.connection, workingDirectory: workspaceCwd, codexMcpServers, shellGuard: getConfig().agent?.cliShellGuard !== false, maxIterations: Math.max(1, this.config.maxIterations - this.iteration), space: !!this.context.space } : undefined, resume);
+    // A personal row runs in the same locked mode (§8.4), which needs the bridge too.
+    if (this.credentialOwner && !this.connection) throw new Error('A personal CLI model needs the Octipus bridge, which did not start');
+    // Discovery reads the config.toml the run will read: the owner's CODEX_HOME for a personal row.
+    const codexMcpServers = this.connection && adapterKey === 'Codex CLI' ? await discoverCodexMcpServers(workspaceCwd, cliEnvFor(this.credentialOwner, toolConfig)) : undefined;
+    const built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, resumedChildSystem ?? this.systemMessages, resumedChildSystem ? resumedChildSystem.join('\n\n') : systemPrompt, Math.max(0, this.config.maxTokenBudget - this.billableTokensUsed), this.context.id, this.connection ? { ...this.connection, workingDirectory: workspaceCwd, codexMcpServers, shellGuard: getConfig().agent?.cliShellGuard !== false, maxIterations: Math.max(1, this.config.maxIterations - this.iteration), space: !!this.context.space, personal: !!this.credentialOwner } : undefined, resume);
     const { binary, args, stdinPrompt, useShell } = built;
     this.launchCleanup = () => {
       const configIndex = args.indexOf('--mcp-config');

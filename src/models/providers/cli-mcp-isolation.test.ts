@@ -49,13 +49,13 @@ describe('one-shot CLI provider — MCP isolation (Hole 1)', () => {
 
   it('Codex CLI: buildArgsAsync discovers the effective MCP servers and disables each by name', async () => {
     mockCodexList(JSON.stringify([{ name: 'fintus', enabled: true }, { name: 'other' }]));
-    const args = await codexCliConfig.buildArgsAsync!('', '/some/cwd');
+    const args = await codexCliConfig.buildArgsAsync!('', '/some/cwd', { CODEX_HOME: '/run/codex' });
     expect(args).toEqual(['exec', '--json', '-c', 'mcp_servers={"fintus"={enabled=false},"other"={enabled=false}}', '-']);
   });
 
   it('Codex CLI: buildArgsAsync omits the -c override entirely when nothing is configured', async () => {
     mockCodexList('[]');
-    const args = await codexCliConfig.buildArgsAsync!('', '/some/cwd');
+    const args = await codexCliConfig.buildArgsAsync!('', '/some/cwd', { CODEX_HOME: '/run/codex' });
     expect(args).toEqual(['exec', '--json', '-']);
   });
 
@@ -64,7 +64,7 @@ describe('one-shot CLI provider — MCP isolation (Hole 1)', () => {
       cb(new Error('boom'), '', '');
       return undefined as never;
     }) as never);
-    const args = await codexCliConfig.buildArgsAsync!('', '/some/cwd');
+    const args = await codexCliConfig.buildArgsAsync!('', '/some/cwd', { CODEX_HOME: '/run/codex' });
     expect(args).toEqual(['exec', '--json', '--ignore-user-config', '-']);
   });
 

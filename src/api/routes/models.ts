@@ -81,7 +81,7 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
     '/:name',
     async ({ user, params }) => {
       if (!user) return { error: 'Not authenticated' };
-      return getModelByName(params.name, user.id);
+      return getModelByName(params.name, user.id, !!user.isAdmin);
     },
     {
       params: t.Object({ name: t.String() }),

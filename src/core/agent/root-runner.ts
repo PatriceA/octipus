@@ -189,7 +189,7 @@ export async function runRootAgent(
   // The requester's own choices first (their `/model`, their personal lane
   // binding), then the install's (coworking spec §8.2).
   const inSpace = !!space;
-  const selectedModel = await deps.modelSelector.selectForRootAgent(sessionId, classification.type, { message, classification }, { userId, inSpace });
+  const selectedModel = await deps.modelSelector.selectForRootAgent(sessionId, classification.type, { message, classification }, { userId, inSpace, spaceRole: space?.role });
   const modelName = selectedModel.modelId;
 
   // Resolve the root agent mode for THIS turn. 'auto' (default) re-derives
