@@ -635,7 +635,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `channels` | 2 |
 | `tools` | `config` | 3 |
 | `tools` | `connectors` | 2 |
-| `tools` | `core` | 79 |
+| `tools` | `core` | 83 |
 | `tools` | `db` | 28 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |

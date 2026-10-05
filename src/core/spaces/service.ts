@@ -385,6 +385,17 @@ export async function setAgentEditMode(actor: SpaceActor, workspaceId: string, m
 }
 
 /**
+ * How the agent edits the space's notes now (§7.4), read at every write so
+ * an owner's change applies to running agents. Throws `not_found` for an
+ * id that names no space.
+ */
+export async function agentEditModeOf(workspaceId: string): Promise<AgentEditMode> {
+  const space = await loadSpace(workspaceId);
+  if (!space) throw new SpaceError('not_found', 'Space not found');
+  return space.agentEditMode;
+}
+
+/**
  * Whether the space is archived. Throws `not_found` for an id that names no
  * space. The access layer and the agent refuse writes and runs when true.
  */

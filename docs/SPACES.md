@@ -439,21 +439,47 @@ everyone in an archived space.
   agent wrote for). The notes page's right panel has a *history* tab: open a
   revision to read it, restore it as a new revision.
 - **Edit proposals.** In `suggest` mode (the default; owners switch with
-  `PUT /api/spaces/<id>/agent-edit-mode`), what the agent writes into a
-  space note becomes a proposal. The *proposals* tab shows each with a diff;
-  accept applies it through the same merge (if it collides with a newer
-  edit it turns stale and the three texts are shown), reject closes it.
-  (The agent's note tool switches to proposals in a later step; the
-  proposals table, the service and the accept/reject routes are in place.)
+  `PUT /api/spaces/<id>/agent-edit-mode`), the agent's changes to existing
+  space notes become proposals: `write_note` on an existing note,
+  `capture_note` into an existing daily note and `archive_note` create or
+  update the session's one pending proposal for that note and answer
+  `{ proposed: true, proposalId, status: 'pending', baseSha256 }` — the
+  note itself is unchanged. A new note (and a capture that starts the day's
+  note) is still created: nothing of anyone's is overwritten. `read_note`
+  shows the session's pending proposal beside the note's current text.
+  The mode is read at every write, so a switch applies to a running agent;
+  in `direct` mode the agent writes through the live document like any
+  other writer. The *proposals* tab shows each with a diff, and its count
+  updates live for members with the note open (`doc.proposals`); accept
+  applies it through the same merge (if it collides with a newer edit it
+  turns stale and the three texts are shown), reject closes it. Meeting
+  notes are not written by the agent in a space (they link the requester's
+  personal profiles and calendars), so there is nothing of them to propose.
 - **File leases.** A member editing a space file holds a lease on it
   (`POST /api/spaces/<id>/file-leases`, renewed while the editor is open,
   lapsing after `spaces.fileLeaseTtlSeconds`), so others see "Ben is
-  editing". A lease on a directory covers its files; a directory operation
-  conflicts with a lease anywhere under it. Changes are pushed as
-  `file.leases` to the space's gateway subscribers. Leases are the
-  human-facing signal; the guarantee for space files is a per-path
-  compare-and-write mutex. Shell, git, docker, skill scripts and CLI agents
-  do not check leases — they are advisory for them.
+  editing". Paths are relative to the space's files root. A lease on a
+  directory covers its files; a directory operation conflicts with a lease
+  anywhere under it. Changes are pushed as `file.leases` to the space's
+  gateway subscribers. The web has no space file editor yet: leases are
+  taken through the REST routes.
+- **The agent and leases.** Every filesystem tool that changes files
+  (`write_file`, `edit_file`, `append_file`, `delete_file`, `copy_file`,
+  `move_file`, `create_directory`) checks leases in a space: a write to a
+  path leased by someone else — a member, or another agent — or under a
+  leased directory is refused with who holds it and until when, before
+  anything touches the disk. A recursive delete or a move of a directory is
+  refused when a lease sits anywhere under it. The agent holds no lease of
+  its own: a lease taken by the member it works for refuses it too (they are
+  editing that file now). The check and the write run under one in-process
+  mutex per path, so they are a single compare-and-write for every writer
+  in the server; the lease is the human-facing signal, the mutex the
+  guarantee.
+- **Advisory for everything else.** Shell commands, git, docker, skill
+  scripts and CLI coding agents (Claude Code, Codex, …) write files
+  directly and do **not** check leases: for them a lease is only a sign
+  that someone is editing. Coordinate with the member, or use the
+  filesystem tools, when a file is leased.
 - **Limits.** A space note holds at most `spaces.noteMaxBytes`; a tab sends
   at most `spaces.docMaxUpdatesPerSecond` edits and 10 cursor updates per
   second. Live documents live in the server process (single process).

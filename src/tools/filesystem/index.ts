@@ -12,6 +12,7 @@ import { coreLogger } from '@/utils/logger';
 import { safeRegExp } from '@/utils/sanitize';
 import { BaseTool, createParameterSchema } from '../base-tool';
 import { ToolNotExecutedError } from '@/core/tool-execution-error';
+import { assertTargetsFree, describeLeaseConflict, FileLeaseConflictError, withPathLocks } from '@/core/docs/file-leases';
 
 /**
  * Cap on the file size we read back to build a work-stream diff. Past this we
@@ -314,7 +315,7 @@ export class FilesystemTool extends BaseTool {
         // in every other tool here.
         filePath = this.writable(fs, this.resolveSafe(fs, filePath));
 
-        return withFileMutationQueue(filePath, async () => {
+        return this.spaceWrite(context, fs, [{ path: filePath }], () => withFileMutationQueue(filePath, async () => {
           // Capture prior content (bounded) so the work stream can show a diff
           // of what changed. `null` ⇒ no diff (new file diffs against '' below;
           // too-large/unreadable skips the diff and falls back to a file result).
@@ -362,7 +363,7 @@ export class FilesystemTool extends BaseTool {
             result[WORK_STREAM_META_KEY] = { diff: { patch: d.patch, added: d.added, removed: d.removed } };
           }
           return result;
-        });
+        }));
       },
       { permissionAction: 'write' }
     );
@@ -393,7 +394,7 @@ export class FilesystemTool extends BaseTool {
         const refuse = (msg: string) => new ToolNotExecutedError(this.id, msg);
         if (oldString === newString) throw refuse('old_string and new_string are identical — nothing to change.');
 
-        return withFileMutationQueue(filePath, async () => {
+        return this.spaceWrite(context, fs, [{ path: filePath }], () => withFileMutationQueue(filePath, async () => {
           const before = await readFile(filePath, 'utf-8');
           const count = before.split(oldString).length - 1;
           if (count === 0) {
@@ -432,7 +433,7 @@ export class FilesystemTool extends BaseTool {
             result[WORK_STREAM_META_KEY] = { diff: { patch: d.patch, added: d.added, removed: d.removed } };
           }
           return result;
-        });
+        }));
       },
       { permissionAction: 'write' }
     );
@@ -451,7 +452,7 @@ export class FilesystemTool extends BaseTool {
         // so appending to a session-written file by relative path works.
         const filePath = this.writable(fs, this.resolveSessionAware(this.requireString(args, 'path'), context, fs));
 
-        return withFileMutationQueue(filePath, async () => {
+        return this.spaceWrite(context, fs, [{ path: filePath }], () => withFileMutationQueue(filePath, async () => {
           const existing = existsSync(filePath) ? await readFile(filePath, 'utf-8') : '';
           const content = args.content as string;
           const next = existing + content;
@@ -467,7 +468,7 @@ export class FilesystemTool extends BaseTool {
             result[WORK_STREAM_META_KEY] = { diff: { patch: d.patch, added: d.added, removed: d.removed } };
           }
           return result;
-        });
+        }));
       },
       { permissionAction: 'write' }
     );
@@ -529,8 +530,10 @@ export class FilesystemTool extends BaseTool {
         // the session dir.
         const dirPath = this.writable(fs, this.resolveSessionAware(args.path as string, context, fs, false));
 
-        await mkdir(dirPath, { recursive: args.recursive !== false });
-        return { success: true, path: dirPath };
+        return this.spaceWrite(context, fs, [{ path: dirPath }], async () => {
+          await mkdir(dirPath, { recursive: args.recursive !== false });
+          return { success: true, path: dirPath };
+        });
       },
       { permissionAction: 'write' }
     );
@@ -546,10 +549,11 @@ export class FilesystemTool extends BaseTool {
         const fs = this.workspaceFor(context);
         const filePath = this.writable(fs, this.resolveSessionAware(args.path as string, context, fs));
 
-        return withFileMutationQueue(filePath, async () => {
+        // A directory's delete crosses a lease anywhere under it.
+        return this.spaceWrite(context, fs, [{ path: filePath, recursive: true }], () => withFileMutationQueue(filePath, async () => {
           await rm(filePath, { recursive: args.recursive as boolean, force: false });
           return { success: true, path: filePath };
-        });
+        }));
       },
       { permissionAction: 'delete' }
     );
@@ -568,10 +572,10 @@ export class FilesystemTool extends BaseTool {
         // within a session lands in the session dir, not the workspace root.
         const destPath = this.writable(fs, this.resolveSessionAware(args.destination as string, context, fs, false));
 
-        return withFileMutationQueue(destPath, async () => {
+        return this.spaceWrite(context, fs, [{ path: destPath }], () => withFileMutationQueue(destPath, async () => {
           await copyFile(srcPath, destPath);
           return { success: true, source: srcPath, destination: destPath };
-        });
+        }));
       },
       { permissionAction: 'write' }
     );
@@ -590,10 +594,12 @@ export class FilesystemTool extends BaseTool {
         // within a session stays in the session dir, not the workspace root.
         const destPath = this.writable(fs, this.resolveSessionAware(args.destination as string, context, fs, false));
 
-        return withFileMutationQueue(destPath, async () => {
+        // Moving a directory moves everything under it: a lease anywhere
+        // under the source (or the destination it would replace) refuses it.
+        return this.spaceWrite(context, fs, [{ path: srcPath, recursive: true }, { path: destPath, recursive: true }], () => withFileMutationQueue(destPath, async () => {
           await rename(srcPath, destPath);
           return { success: true, source: srcPath, destination: destPath };
-        });
+        }));
       },
       { permissionAction: 'write' }
     );
@@ -734,6 +740,42 @@ export class FilesystemTool extends BaseTool {
       throw err;
     }
     return path;
+  }
+
+  /**
+   * A write to space files (§7.5): runs `fn` under the in-process mutex of
+   * each target path, and refuses — before anything touched the disk — when
+   * another holder (a member editing in the web, another agent) has a live
+   * lease on a target, a directory above it, or, for a directory operation
+   * (`recursive`), a path under it. The check runs inside the mutex, so it
+   * and the write are one compare-and-write for every writer in this
+   * process. Outside a space, `fn` just runs. Shell, git, docker, skill
+   * scripts and CLI agents do not come through here: leases are advisory
+   * for them (docs/SPACES.md).
+   */
+  private async spaceWrite<T>(
+    context: AgentContext,
+    fs: WorkspaceFS,
+    targets: Array<{ path: string; recursive?: boolean }>,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const workspaceId = context.space?.workspaceId;
+    if (!fs.isSpace || !workspaceId) return fn();
+    const leased = targets.flatMap((t) => {
+      const rel = fs.spaceRelative(t.path);
+      return rel === null ? [] : [{ path: rel, recursive: t.recursive }];
+    });
+    if (leased.length === 0) return fn();
+    const holder = { userId: context.userId, kind: 'agent' as const, agentId: context.id };
+    return withPathLocks(workspaceId, leased.map((t) => t.path), async () => {
+      try {
+        await assertTargetsFree(workspaceId, leased, holder);
+      } catch (err) {
+        if (err instanceof FileLeaseConflictError) throw new ToolNotExecutedError(this.id, await describeLeaseConflict(err.leases));
+        throw err;
+      }
+      return fn();
+    });
   }
 
   /**

@@ -86,6 +86,8 @@ const sameHolder = (lease: FileLease, holder: LeaseHolder) =>
  * directory operation) also anywhere under it.
  */
 export async function leaseConflicts(workspaceId: string, path: string, holder: LeaseHolder, opts: { recursive?: boolean } = {}): Promise<FileLease[]> {
+  // The space root itself (`''`): only an operation on all of it crosses a lease.
+  if (path === '') return opts.recursive ? (await liveLeases(workspaceId)).filter((l) => !sameHolder(l, holder)) : [];
   const exact = await liveLeases(workspaceId, [path, ...ancestorsOf(path)]);
   const under = opts.recursive ? await liveLeasesUnder(workspaceId, path) : [];
   const seen = new Set<string>();
@@ -102,12 +104,46 @@ export async function assertNoLeaseConflict(workspaceId: string, path: string, h
   if (conflicts.length > 0) throw new FileLeaseConflictError(conflicts);
 }
 
+/**
+ * What an agent is told when a lease refuses its write: who holds which
+ * path, and until when (their editor renews it while open).
+ */
+export async function describeLeaseConflict(leases: FileLease[]): Promise<string> {
+  const names = await userNames(leases.map((l) => l.holderUserId));
+  const held = leases.map((l) => {
+    const who = names.get(l.holderUserId) ?? 'another member';
+    const how = l.holderKind === 'human' ? `${who} is editing it` : `an agent working for ${who} holds it`;
+    return `${l.path}: ${how} until ${l.expiresAt.toISOString()} (renewed while they work)`;
+  });
+  return `Nothing was changed: this space file is leased by someone else. ${held.join('; ')}. `
+    + 'Wait until the lease is released or expires and try again, or ask them in the space.';
+}
+
+/** Refuse (`FileLeaseConflictError`) when a write by `holder` to any of `targets` crosses another holder's lease. */
+export async function assertTargetsFree(
+  workspaceId: string,
+  targets: ReadonlyArray<{ path: string; recursive?: boolean }>,
+  holder: LeaseHolder,
+): Promise<void> {
+  const conflicts: FileLease[] = [];
+  for (const target of targets) conflicts.push(...await leaseConflicts(workspaceId, target.path, holder, { recursive: target.recursive }));
+  const unique = [...new Map(conflicts.map((l) => [l.path, l])).values()];
+  if (unique.length > 0) throw new FileLeaseConflictError(unique);
+}
+
 const spaceLocks = new KeyedMutex();
 const pathLocks = new KeyedMutex();
 
 /** Run `fn` holding the in-process mutex of one space file (compare-and-write). */
 export function withPathLock<T>(workspaceId: string, path: string, fn: () => Promise<T>): Promise<T> {
   return pathLocks.run(`${workspaceId}:${path}`, fn);
+}
+
+/** `withPathLock` over several paths (a move's source and destination), taken in sorted order so two calls never wait on each other. */
+export function withPathLocks<T>(workspaceId: string, paths: readonly string[], fn: () => Promise<T>): Promise<T> {
+  const sorted = [...new Set(paths)].sort();
+  const take = (i: number): Promise<T> => (i === sorted.length ? fn() : withPathLock(workspaceId, sorted[i], () => take(i + 1)));
+  return take(0);
 }
 
 export type AcquireResult = { ok: true; lease: FileLease } | { ok: false; heldBy: FileLease[] };
