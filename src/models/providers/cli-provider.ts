@@ -1,5 +1,5 @@
 import { describeCliCapabilities } from '@/shared/cli-capabilities';
-import { buildChildEnv } from '@/core/cli-child-env';
+import { cliCredentialOwnerFor, cliEnvFor } from '@/core/cli-child-env';
 import { discoverCodexMcpServers, getEmptyMcpConfigPath, getEmptyVibeHome } from '@/core/cli-adapters';
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
@@ -8,7 +8,7 @@ import { getConfig } from '@/config';
 import { classifyError } from '@/core/errors/classification';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
-import { getQuotaTracker } from '../quota-tracker';
+import { cliQuotaKey, getQuotaTracker } from '../quota-tracker';
 import type { ModelProvider, ProviderHealthStatus, QuotaStatus } from './interface';
 import { foldCacheCounters } from './usage';
 
@@ -610,9 +610,21 @@ export class CLIProvider implements ModelProvider {
       );
     }
 
+    // The row this call runs on — exact by `modelConfigName`, else install rows
+    // first, then the requester's own (spec §8.1) — and whose CLI login it uses
+    // (§8.5). The quota key is per credential owner.
+    const { getModelRegistry } = await import('../model-registry');
+    const registry = getModelRegistry();
+    const row = options.modelConfigName
+      ? await registry.getModel(options.modelConfigName)
+      : await registry.getModel(options.model).then((m) => (m && !m.ownerUserId ? m : null))
+        ?? await registry.getModelByModelId(options.model, { userId: options.userId });
+    const credentialOwner = await cliCredentialOwnerFor(row);
+    const quotaKey = cliQuotaKey(tool.quotaProvider, credentialOwner);
+
     // Check quota before executing
     const quotaTracker = getQuotaTracker();
-    const quota = await quotaTracker.getStatus(tool.quotaProvider);
+    const quota = await quotaTracker.getStatus(quotaKey);
     if (quota.exhausted) {
       throw classifyError(new Error(`Quota exhausted for ${tool.name}. Resets at ${quota.resetsAt?.toISOString() || 'unknown'}`), 'cli');
     }
@@ -634,21 +646,18 @@ export class CLIProvider implements ModelProvider {
       // full environment (DB credentials, every provider key). The model row's
       // `cliAgent.inheritApiKeys` opts a key-mode CLI back into its own key,
       // exactly as it does for managed runs.
-      const { getModelRegistry } = await import('../model-registry');
-      const row = await getModelRegistry().getModel(options.model).catch(() => null)
-        ?? await getModelRegistry().getModelByModelId(options.model).catch(() => null);
       const inheritApiKeys = row?.metadata?.cliAgent?.inheritApiKeys === true;
       const release = await acquireCliSlot();
       let stdout: string;
       try {
-        stdout = await this.execCli(tool.binaryPath, args, { env: buildChildEnv(tool, env, inheritApiKeys), ...(viaStdin ? { stdin: prompt } : {}) });
+        stdout = await this.execCli(tool.binaryPath, args, { env: cliEnvFor(credentialOwner, tool, env, inheritApiKeys), ...(viaStdin ? { stdin: prompt } : {}) });
       } finally {
         release();
       }
       const result = tool.parseOutput(stdout, startTime);
 
       // Track usage
-      await quotaTracker.trackUsage(tool.quotaProvider, {
+      await quotaTracker.trackUsage(quotaKey, {
         inputTokens: result.usage.inputTokens,
         outputTokens: result.usage.outputTokens,
       });
@@ -665,7 +674,7 @@ export class CLIProvider implements ModelProvider {
 
       // Check if this is a quota error
       if (tool.isQuotaError(errMsg)) {
-        await quotaTracker.markExhausted(tool.quotaProvider);
+        await quotaTracker.markExhausted(quotaKey);
         modelLogger.warn({ tool: tool.name }, 'CLI tool quota exhausted');
         throw classifyError(new Error(`Quota exhausted for ${tool.name}: ${errMsg}`), 'cli');
       }

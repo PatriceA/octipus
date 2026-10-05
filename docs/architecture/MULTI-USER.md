@@ -2180,3 +2180,28 @@ Access to it is membership, never ownership:
 Still to come (see `docs/plans/coworking-spec.md`): the resolver and principal
 for a space selected in the header (`SPACE_ROUTES`), the space access layer for
 content, the agent inside a space, and the web screens.
+
+## 25. Own models (coworking S4)
+
+Users bring their own models: personal `model_config` rows
+(`owner_user_id`, named `u/<userId>/<slug>`, migration `0131_personal_models`)
+with their key in the owner's vault, bound to text lanes through
+`user_model_bindings`. The full contract is in `docs/SPACES.md` ("Own
+models"); the multi-user invariants it keeps:
+
+- **No cross-user reach.** Install-level registry queries filter
+  `owner_user_id IS NULL`; modelId lookups take `{ userId }` and fall back to
+  that user's own rows only; explicit names resolve through
+  `resolveModel({ userId, name })`. Another user's personal row is never
+  listed, routed, defaulted, cached or passed through.
+- **Row identity, not modelId.** `AgentContext.modelName` /
+  `CompletionOptions.modelConfigName` carry the row; providers re-read it by
+  name. Pricing by modelId reads install rows only.
+- **Keys under the row owner** (`resolveModelKey`), never under the
+  requester; the instrumented provider boundary injects a personal row's key
+  and fails loud without one.
+- **Admin surfaces stay install-level**: the admin model and topic routes
+  refuse personal rows; the owner manages them at `/api/me/models`.
+- **CLI credentials per owner** (`cliEnvFor`): per-user CLI home, server auth
+  stripped, the owner part of the session store key, resume fingerprint and
+  quota key. Same-OS-user limits are documented in `docs/SPACES.md`.

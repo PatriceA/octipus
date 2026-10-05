@@ -149,6 +149,7 @@ const testCases: ConformanceTestCase[] = [
       // resolving apiKeyRef against the calling user's vault entry).
       const streamOpts = {
         model: ctx.model.modelId,
+        modelConfigName: ctx.model.name,
         messages: [msg('user', 'Count from 1 to 5, one number per line.')],
         temperature: 0,
         maxTokens: 512,
@@ -327,6 +328,7 @@ const testCases: ConformanceTestCase[] = [
     async run(ctx) {
       const result = await ctx.client.completeVision({
         model: ctx.model.modelId,
+        modelConfigName: ctx.model.name,
         prompt: PROMPTS.vision,
         imageBase64: TINY_RED_PNG_BASE64,
         mimeType: 'image/png',

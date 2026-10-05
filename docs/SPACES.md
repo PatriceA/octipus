@@ -269,6 +269,60 @@ A member's private chat in a space runs the agent in the space.
   and its resolve routes never show or answer a request of a space the admin
   is not a member of.
 
+## Own models
+
+Any user can add their own models under **Settings → My models**
+(`/api/me/models`) and bind them to text lanes (`build`, `everyday`,
+`verify`, `research`). Their turns — in their own sessions and in spaces
+alike — then run on that model, on their key.
+
+- **Rows.** A personal model is a `model_config` row with `owner_user_id`
+  set, named `u/<userId>/<slug>`. Ownership is the column; the name is never
+  parsed. Bindings live in `user_model_bindings(user_id, topic, model_name)`,
+  apart from the install's `topic_roles`. A personal row may bind text lanes
+  only; `background`, `decision`, `embedding`, `vision`, `ocr` and compaction
+  stay install-level.
+- **Never anyone else's.** Every install-level registry query filters
+  `owner_user_id IS NULL`: a personal row is never a default, a lane binding,
+  a backup or a fallback for others, never enters a global cache, and never
+  appears in another user's lists (`/models`, `/model list`, `GET
+  /api/models`, `/v1/models`). The admin model and topic routes refuse
+  personal rows.
+- **Resolution.** `resolveModel` (`src/models/resolve-model.ts`) is the one
+  resolver: the user's binding, then the install binding, then (root agent
+  only) the default. An explicit model — `/model <name>`, `POST /api/agents`
+  `model`, `POST /api/agents/route` `preferredModel`, a pipeline stage model,
+  a lane's executor model, the `/v1` passthrough, an evaluation run —
+  resolves only to a row that user may see; another user's personal model is
+  "not available", never passed through. `/model` overrides are per
+  (session, user).
+- **Identity.** `AgentContext.model` stays the provider model id; the row is
+  `AgentContext.modelName`, passed to providers as
+  `CompletionOptions.modelConfigName`. A personal row and an install row can
+  share a model id without ever swapping.
+- **Keys.** `resolveModelKey` resolves a row's key under its owner (the
+  system vault for an install row, the owner's vault for a personal one),
+  never under the requester. A personal row whose key is missing fails loud;
+  it never runs on the install's env key. Providers that can back a personal
+  row (anthropic, openai, deepseek, gemini, grok, mistral, moonshot,
+  openrouter, zai and the custom providers) honour the per-request key.
+- **Safety.** The row is built from an allowlist (provider, model id, label,
+  endpoint for custom providers, key or CLI token, lanes) — no
+  `inheritApiKeys`, `extraArgs`, `mcpConfigPath`, `permissionMode` or
+  `extraHeaders`. A custom endpoint is resolved and checked against private,
+  loopback and link-local ranges on every request, the connection is pinned
+  to the checked address, and redirects are not followed.
+- **CLI logins.** A personal CLI row (Claude Code, Codex, Gemini, Vibe) runs
+  with `cliEnvFor(owner)`: `HOME`, `CLAUDE_CONFIG_DIR` and `CODEX_HOME` under
+  `<workspace.rootPath>/users/<id>/cli-home`, every server auth variable
+  stripped and only the owner's token injected. The credential owner is part
+  of the vendor-session store key, the resume fingerprint and the quota key,
+  so a resume never crosses owners and one person's exhausted subscription
+  blocks nobody else. **Limit:** the CLI still runs as the server's OS user;
+  this separates vendor state and credentials, not file permissions. In a
+  space, your own personal CLI model serves your turns; an install CLI model
+  still needs `sharedUse`.
+
 ## In the web
 
 - **Picker** (the header's workspace button): "my workspaces" (your own,

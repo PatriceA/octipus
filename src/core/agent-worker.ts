@@ -1181,6 +1181,7 @@ export class AgentWorker extends BaseAgentWorker {
           preserveSystemMessages: true,
           preserveRecentCount: 10,
           summaryModel: this.context.model,
+          summaryModelName: this.context.modelName,
           userId: this.context.userId,
         });
         if (proactiveRemoved > 0) {
@@ -1198,6 +1199,7 @@ export class AgentWorker extends BaseAgentWorker {
         preserveSystemMessages: true,
         preserveRecentCount: 20,
         summaryModel: this.context.model,
+        summaryModelName: this.context.modelName,
         userId: this.context.userId,
       });
 
@@ -1278,6 +1280,7 @@ export class AgentWorker extends BaseAgentWorker {
             preserveSystemMessages: true,
             preserveRecentCount: 6,
             summaryModel: this.context.model,
+            summaryModelName: this.context.modelName,
             userId: this.context.userId,
           });
           this.messages = compacted;
@@ -2052,15 +2055,10 @@ export class AgentWorker extends BaseAgentWorker {
         )
       : undefined;
 
-    let apiKey: string | undefined;
-    if (model.apiKeyRef) {
-      try {
-        const { getVault } = await import('@/security/vault');
-        apiKey = (await getVault().getByName('system', model.apiKeyRef)) || undefined;
-      } catch (err) {
-        coreLogger.error({ err }, 'toolshim: vault key lookup failed');
-      }
-    }
+    // Install-level lane (background): the key is the row owner's — the system
+    // vault for this install row (coworking spec §8.3).
+    const { resolveModelKey } = await import('@/models/model-key');
+    const apiKey = await resolveModelKey(model);
 
     const completionOpts = {
       model: model.modelId,
@@ -2161,9 +2159,13 @@ export class AgentWorker extends BaseAgentWorker {
     const client = getLiteLLMClient();
     const registry = getModelRegistry();
 
-    const model = await registry.getModel(this.context.model) || await registry.getModelByModelId(this.context.model);
+    // The row this agent was resolved to (`modelName`), never a modelId
+    // re-lookup that could land on another row sharing the id (spec §8.1).
+    const model = this.context.modelName
+      ? await registry.getModel(this.context.modelName)
+      : await registry.getModelByModelId(this.context.model, { userId: this.context.userId });
     if (!model) {
-      throw new Error(`Model not found: ${this.context.model}`);
+      throw new Error(`Model not found: ${this.context.modelName ?? this.context.model}`);
     }
 
     const litellmModel = model.modelId;
@@ -2202,14 +2204,11 @@ export class AgentWorker extends BaseAgentWorker {
       if (Object.keys(extraBody).length === 0) extraBody = undefined;
     }
 
-    // Resolve API key from vault for custom/direct providers
-    let apiKey: string | undefined;
-    if (model.apiKeyRef) {
-      try {
-        const { getVault } = await import('@/security/vault');
-        apiKey = await getVault().getByName('system', model.apiKeyRef) || undefined;
-      } catch (err) { coreLogger.error({ err }, 'silent failure in agent-worker'); }
-    }
+    // Resolve the API key under the row's owner — the system vault for an
+    // install row, the owner's vault for a personal one (spec §8.3). A
+    // personal row without its key throws rather than run on the install key.
+    const { resolveModelKey } = await import('@/models/model-key');
+    const apiKey = await resolveModelKey(model);
 
     // Per-topic overrides (W10) take precedence over the model's own defaults
     // when set on the Topics page — applied here so they reach the LLM call.

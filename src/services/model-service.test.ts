@@ -8,6 +8,7 @@ const registry = vi.hoisted(() => ({
   updateModel: vi.fn(),
   getAllModelsIncludeDisabled: vi.fn(),
   getModelsForUser: vi.fn(),
+  getPersonalModels: vi.fn(),
 }));
 vi.mock('@/models/model-registry', () => ({ getModelRegistry: () => registry }));
 vi.mock('@/models/capabilities', () => ({ getCapabilitiesForModel: () => ({}) }));
@@ -184,6 +185,7 @@ describe('direct provider settings validation', () => {
   it('returns effective provider controls with each listed model', async () => {
     vi.stubEnv('ANTHROPIC_NATIVE_MESSAGES', '0');
     registry.getAllModelsIncludeDisabled.mockResolvedValue([row]);
+    registry.getPersonalModels.mockResolvedValue([]);
     const result = await listModels('admin', true);
     expect(result.models[0].providerControls).toMatchObject({ reasoning: true, thinkingBudget: true, strictTools: false, cachePolicy: false, cachedContent: false });
   });

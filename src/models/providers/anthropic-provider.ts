@@ -53,7 +53,7 @@ export class AnthropicProvider implements ModelProvider {
 
   async complete(options: CompletionOptions): Promise<CompletionResult> {
     if (nativeMessagesEnabled()) return this.completeNative(options);
-    const client = await this.createClient();
+    const client = await this.createClient(options.apiKey);
     const startTime = Date.now();
 
     const formatted = this.formatMessages(options.messages);
@@ -149,7 +149,7 @@ export class AnthropicProvider implements ModelProvider {
       yield* this.streamNative(options);
       return;
     }
-    const client = await this.createClient();
+    const client = await this.createClient(options.apiKey);
 
     const params: ChatCompletionCreateParams = {
       model: options.model,
@@ -256,8 +256,8 @@ export class AnthropicProvider implements ModelProvider {
     return body;
   }
 
-  private async nativeHeaders(): Promise<Record<string, string>> {
-    const apiKey = await this.getApiKey();
+  private async nativeHeaders(apiKeyOverride?: string): Promise<Record<string, string>> {
+    const apiKey = apiKeyOverride || await this.getApiKey();
     if (!apiKey) {
       throw classifyError(new Error('Anthropic API key not available. Set ANTHROPIC_API_KEY or store it in the vault.'), 'anthropic');
     }
@@ -266,7 +266,7 @@ export class AnthropicProvider implements ModelProvider {
 
   private async completeNative(options: CompletionOptions): Promise<CompletionResult> {
     const startTime = Date.now();
-    const headers = await this.nativeHeaders();
+    const headers = await this.nativeHeaders(options.apiKey);
     const body = this.buildNativeBody(options, false);
 
     let res: Response;
@@ -295,7 +295,7 @@ export class AnthropicProvider implements ModelProvider {
   }
 
   private async *streamNative(options: CompletionOptions): AsyncGenerator<StreamChunk> {
-    const headers = await this.nativeHeaders();
+    const headers = await this.nativeHeaders(options.apiKey);
     const body = this.buildNativeBody(options, true);
 
     // Idle (per-chunk) timeout that resets on each streamed chunk — a long but
@@ -377,8 +377,10 @@ export class AnthropicProvider implements ModelProvider {
     }
   }
 
-  private async createClient(): Promise<OpenAI> {
-    const apiKey = await this.getApiKey();
+  private async createClient(apiKeyOverride?: string): Promise<OpenAI> {
+    // A personal model row (coworking spec §8.3) carries its owner's key in
+    // `options.apiKey`; it wins over the install's env/vault key.
+    const apiKey = apiKeyOverride || await this.getApiKey();
     if (!apiKey) {
       throw classifyError(new Error('Anthropic API key not available. Set ANTHROPIC_API_KEY or store it in the vault.'), 'anthropic');
     }

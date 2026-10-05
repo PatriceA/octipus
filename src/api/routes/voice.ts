@@ -178,15 +178,20 @@ async function handleVoiceWebhook(provider: string, body: Record<string, unknown
       const registry = getModelRegistry();
 
       // Model: voice topic routing → system default (ignore per-call overrides from LLM agents)
+      // A phone call has no signed-in requester: install lanes only (§8.2).
       let voiceModelId: string | undefined;
+      let voiceModelName: string | undefined;
       try {
         const { ModelSelector } = await import('@/core/agent/model-selector');
         const selector = new ModelSelector();
         const routing = await selector.selectForWorker('voice', false);
         voiceModelId = routing.model;
+        voiceModelName = routing.name || undefined;
       } catch { /* fallback below */ }
       if (!voiceModelId) {
-        voiceModelId = (await registry.getDefaultModel())?.modelId;
+        const fallback = await registry.getDefaultModel();
+        voiceModelId = fallback?.modelId;
+        voiceModelName = fallback?.name;
       }
       if (!voiceModelId) {
         throw new Error('No model configured for voice topic');
@@ -218,6 +223,7 @@ async function handleVoiceWebhook(provider: string, body: Record<string, unknown
       );
       const result = await client.complete({
         model: voiceModelId,
+        modelConfigName: voiceModelName,
         messages: [
           { role: 'system', content: expertPrompt, timestamp: new Date() },
           ...history.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content, timestamp: new Date() })),

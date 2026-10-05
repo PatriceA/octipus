@@ -49,7 +49,19 @@ export interface AgentContext {
   /** Who pays for its model calls. Inherited by children. */
   funding: AgentFunding;
   topic: string;
+  /**
+   * The provider-facing model id — what providers, CLI tool configs, toolshim
+   * statistics and clients read. Not unique across registry rows.
+   */
   model: string;
+  /**
+   * The registry row identity (`model_config.name`) the model was resolved
+   * from (coworking spec §8.1). Row re-lookups use this, never `model`: a
+   * personal row and an install row may share one modelId. Passed to providers
+   * as `CompletionOptions.modelConfigName`. Absent only for a model id with no
+   * registry row (an unregistered CLI tool).
+   */
+  modelName?: string;
   role: string;
   /**
    * This agent is the ROOT of the turn — the one the user is talking to, with

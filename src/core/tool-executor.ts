@@ -244,9 +244,10 @@ export class ToolExecutor {
     try {
       const { getModelRegistry } = await import('@/models/model-registry');
       const registry = getModelRegistry();
-      const model =
-        (await registry.getModel(this.context.model)) ||
-        (await registry.getModelByModelId(this.context.model));
+      // The agent's own row (spec §8.1), never another one sharing its modelId.
+      const model = this.context.modelName
+        ? await registry.getModel(this.context.modelName)
+        : await registry.getModelByModelId(this.context.model, { userId: this.context.userId });
       // A model we cannot find is not a model we can make claims about.
       this.visionSupport = model ? model.supportsVision : true;
     } catch (err) {

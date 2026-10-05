@@ -146,6 +146,7 @@ export async function extractFacts(input: ExtractorInput): Promise<CandidateFact
   try {
     result = await getLiteLLMClient().complete({
       model: model.modelId,
+      modelConfigName: model.name,
       // An install-topic call: stamped `install` in cost_log (D13).
       requestType: 'memory_extraction',
       messages: [

@@ -141,6 +141,7 @@ async function llmJudge(candidate: CandidateFact, closest: Memory, userId: strin
   try {
     const result = await getLiteLLMClient().complete({
       model: model.modelId,
+      modelConfigName: model.name,
       // An install-topic call: stamped `install` in cost_log (D13).
       requestType: 'memory_extraction',
       messages: [

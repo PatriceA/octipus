@@ -8,6 +8,12 @@ import { OpenRouterProvider } from './openrouter-provider';
 import { CLIProvider } from './cli-provider';
 import type { CompletionOptions } from '../litellm-client';
 
+// No database here: the CLI provider reads its model row (and its credential
+// owner) before it spawns; these models have none, so they run as install CLIs.
+vi.mock('@/models/model-registry', () => ({
+  getModelRegistry: () => ({ getModel: async () => null, getModelByModelId: async () => null }),
+}));
+
 /**
  * Integration tests verifying that every migrated provider surfaces errors
  * as `ClassifiedError` instances with a matching `FailoverReason`.

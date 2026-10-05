@@ -27,6 +27,28 @@ labels reflect blast radius, not contract guarantees.
   dependencies: `yjs`, `y-protocols`, `node-diff3` (server) and
   `y-codemirror.next` (web): a CRDT and a three-way merge are not 20 lines.
   See docs/SPACES.md.
+- **Own models.** Settings → My models (`/api/me/models`) adds a personal
+  model — provider, model id, your key or CLI token, a custom endpoint for
+  custom providers — and binds it to text lanes; your turns then run on it,
+  in your sessions and in spaces. Personal rows (`model_config.owner_user_id`,
+  `user_model_bindings`, migration `0131_personal_models`) never appear in
+  anyone else's lists, routing, defaults or caches; admin model and topic
+  routes refuse them. Keys resolve under the row's owner, a custom endpoint is
+  SSRF-checked on every request, and personal CLI rows run with a per-user
+  CLI home and the owner's token. See docs/SPACES.md ("Own models").
+
+### Changed
+
+- **Model identity is the row name.** Agent contexts carry `modelName`
+  beside the provider `model` id, and providers re-read rows by
+  `modelConfigName`; a modelId lookup returns install rows first, then the
+  requester's own. `/model` overrides are per (session, user). Explicit model
+  names (`/model`, `POST /api/agents`, `/api/agents/route`, pipeline stage and
+  executor models, `/v1/chat/completions`, evaluation runs) resolve only to a
+  model the caller may use; a registered model they may not use is refused
+  instead of passed through. `GET /api/models/:name` returns only models the
+  caller may see. Custom providers resolve an install row's key from the
+  system vault only (no longer the requester's vault first).
 
 - **Shared spaces in the web.** The workspace picker lists "my workspaces"
   and "shared spaces" (with role badges) and creates a space; a space has a

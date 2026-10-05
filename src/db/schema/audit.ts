@@ -53,6 +53,8 @@ export const auditActionEnum = pgEnum('audit_action', [
   'space_invite_revoked',
   'space_invite_accepted',
   'space_content_changed',
+  // Own models (coworking-spec §8.4): a user created, changed or deleted a personal model.
+  'personal_model_changed',
 ]);
 
 export const auditLog = pgTable('audit_log', {
