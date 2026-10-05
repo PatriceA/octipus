@@ -27,8 +27,19 @@
  */
 import * as Y from 'yjs';
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate, removeAwarenessStates } from 'y-protocols/awareness';
-import type { GatewayMessage } from '../../src/core/gateway/protocol';
-import type { WebGateway } from './gateway';
+import type { ClientMessage, GatewayMessage } from '../../src/core/gateway/protocol';
+
+/**
+ * The part of the tab's gateway connection (`WebGateway`, ./gateway) a live
+ * note uses. Stated structurally rather than imported, so this module stays
+ * free of the browser API client: the backend test suite drives it directly.
+ */
+export interface LiveNoteGateway {
+  getStatus(): string;
+  send(message: ClientMessage): boolean;
+  onMessage(listener: (message: GatewayMessage) => void): () => void;
+  onStatus(listener: (status: string) => void): () => void;
+}
 
 export type LiveNoteStatus = 'connecting' | 'saved' | 'unsaved' | 'offline' | 'closed';
 
@@ -98,7 +109,7 @@ export class LiveNoteSession {
   private joined = false;
 
   constructor(
-    private readonly gateway: WebGateway,
+    private readonly gateway: LiveNoteGateway,
     readonly noteId: string,
     private readonly user: { id: string; name: string },
     private readonly merge: LiveMerge,
