@@ -247,8 +247,10 @@ async function spendSince(budget: SpendBudget, start: Date, now: Date, memberId?
   };
   // Personal scopes: the user's rows a sponsor did not pay for.
   const base = and(eq(costLog.userId, budget.userId ?? ''), gte(costLog.createdAt, start), ne(costLog.funding, 'sponsor'));
+  // A plain equality on the uuid column, so `cost_log_ws_funding_idx`
+  // (workspace_id, funding, created_at) serves it (the id passed UUID_RE).
   const sponsoredIn = (spaceId: string) => and(
-    gte(costLog.createdAt, start), eq(costLog.funding, 'sponsor'), sql`${costLog.workspaceId}::text = ${spaceId}`,
+    eq(costLog.workspaceId, spaceId), eq(costLog.funding, 'sponsor'), gte(costLog.createdAt, start),
   );
   let rows: { s: number; est: number; unk: number }[];
   if (budget.scopeKind === 'space') {
@@ -330,14 +332,18 @@ async function notify(b: SpendBudget, type: string, title: string, body: string,
 
 /**
  * Who hears about a `space` budget: the sponsor, who pays, else the owner
- * who wrote the budget; null when there is neither (the pause still holds).
- * Any other budget: its user.
+ * who wrote the budget while they are still an owner of the space; null
+ * when there is neither (the pause still holds) — a person who left is
+ * never told the space's spend. Any other budget: its user.
  */
 async function recipientOf(b: SpendBudget): Promise<string | null> {
   if (b.scopeKind !== 'space') return b.userId;
   const { spaceFunding } = await import('@/core/spaces/funding');
   const funding = await spaceFunding(b.scopeRef ?? '');
-  return funding.sponsorUserId ?? b.userId;
+  if (funding.sponsorUserId) return funding.sponsorUserId;
+  if (!b.userId) return null;
+  const { getMembership } = await import('@/core/spaces/service');
+  return (await getMembership(b.userId, b.scopeRef ?? ''))?.role === 'owner' ? b.userId : null;
 }
 
 /**
@@ -607,11 +613,20 @@ export async function spaceBudgetStatuses(workspaceId: string, memberId: string,
   });
 }
 
+/** What `setSpaceBudget` did: the budget now (null: none), the one before, and whether it changed. */
+export interface SpaceBudgetChange {
+  budget: SpendBudget | null;
+  previous: { limitUsd: number; warnRatio: number } | null;
+  changed: boolean;
+}
+
 /**
  * Set (or, with `limitUsd: null`, remove) a space budget of `kind` and
- * `period`. `authorId` is filed as its user, author only. Changing it clears
- * the warning and the pause, as `upsertBudget` does; the per-member notices
- * of the period are cleared too.
+ * `period`. `authorId` is filed as its user, author only. Changing the
+ * limit or the warn ratio clears the warning and the pause, as
+ * `upsertBudget` does, and the per-member notices of the period; writing
+ * the same values again changes nothing (notices already sent this period
+ * are not sent again).
  */
 export async function setSpaceBudget(input: {
   workspaceId: string;
@@ -620,15 +635,20 @@ export async function setSpaceBudget(input: {
   period: SpendPeriod;
   limitUsd: number | null;
   warnRatio?: number;
-}, db: Pick<ReturnType<typeof getDb>, 'insert' | 'update' | 'delete'> = getDb()): Promise<SpendBudget | null> {
+}, db: Pick<ReturnType<typeof getDb>, 'select' | 'insert' | 'update' | 'delete'> = getDb()): Promise<SpaceBudgetChange> {
   if (!UUID_RE.test(input.workspaceId)) throw new Error('setSpaceBudget: not a space id');
   const scopeRef = input.workspaceId.toLowerCase();
   const where = and(eq(spendBudgets.scopeKind, input.kind), eq(spendBudgets.scopeRef, scopeRef), eq(spendBudgets.period, input.period));
+  const [existing] = await db.select().from(spendBudgets).where(where).limit(1);
+  const previous = existing ? { limitUsd: Number(existing.limitUsd), warnRatio: existing.warnRatio } : null;
   if (input.limitUsd === null) {
     const gone = await db.delete(spendBudgets).where(where)
       .returning({ userId: spendBudgets.userId, scopeKind: spendBudgets.scopeKind, scopeRef: spendBudgets.scopeRef });
     for (const r of gone) invalidateBudget(r);
-    return null;
+    return { budget: null, previous, changed: gone.length > 0 };
+  }
+  if (existing && previous && previous.limitUsd === input.limitUsd && (input.warnRatio === undefined || input.warnRatio === previous.warnRatio)) {
+    return { budget: existing, previous, changed: false };
   }
   const values = {
     userId: input.authorId,
@@ -651,7 +671,7 @@ export async function setSpaceBudget(input: {
       .where(and(eq(spaceMemberNotices.workspaceId, scopeRef), eq(spaceMemberNotices.period, input.period)));
   }
   invalidateBudget(row);
-  return row;
+  return { budget: row, previous, changed: true };
 }
 
 /**

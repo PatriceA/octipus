@@ -24,6 +24,9 @@ import { auditActor, type Executor, getMembership, type SpaceActor, writeSpaceAu
 
 export const AGENT_FUNDING_MODES: readonly AgentFundingMode[] = ['own', 'unattended', 'sponsored'];
 
+/** What a mode makes the sponsor pay for, in order: nothing, unprompted work, every turn. */
+const LIABILITY: Record<AgentFundingMode, number> = { own: 0, unattended: 1, sponsored: 2 };
+
 /** At most this many sponsor models. */
 const MAX_SPONSOR_MODELS = 20;
 
@@ -50,7 +53,9 @@ export interface SpaceFundingInput {
 /**
  * Change the space's funding (owners). Naming a sponsor names oneself;
  * clearing it pauses sponsored work. Only the sponsor lists sponsor models,
- * each one of their own enabled model rows. One audit row per change.
+ * each one of their own enabled API model rows, and only the sponsor raises
+ * the mode while one is named. Nothing of this while impersonating. One
+ * audit row per change.
  */
 export async function setSpaceFunding(actor: SpaceActor, workspaceId: string, input: SpaceFundingInput): Promise<SpaceFundingSettings & { warning?: string }> {
   if (input.mode !== undefined && !(AGENT_FUNDING_MODES as readonly string[]).includes(input.mode)) {
@@ -58,6 +63,10 @@ export async function setSpaceFunding(actor: SpaceActor, workspaceId: string, in
   }
   const models = input.sponsorModels === undefined ? undefined : [...new Set(input.sponsorModels.map((m) => m.trim()).filter(Boolean))];
   if (models && models.length > MAX_SPONSOR_MODELS) throw new SpaceError('invalid_input', `At most ${MAX_SPONSOR_MODELS} sponsor models`);
+  // Paying is the person's own consent: an admin acting as them gives none.
+  if (actor.impersonatedBy && (input.sponsor === 'me' || models !== undefined)) {
+    throw new SpaceError('forbidden_role', 'An admin acting as a member cannot make them the sponsor or choose their sponsor models');
+  }
   // Read before the transaction (the registry reads on its own connection):
   // the actor lists their own rows; that they are the sponsor is checked inside.
   if (models) await assertOwnModels(actor.userId, models);
@@ -83,6 +92,10 @@ export async function setSpaceFunding(actor: SpaceActor, workspaceId: string, in
       }
       sponsorModels = models;
     }
+    // More of the sponsor's money: theirs to give (nobody is made to pay by someone else).
+    if (sponsorUserId && LIABILITY[mode] > LIABILITY[space.mode] && (sponsorUserId !== actor.userId || actor.impersonatedBy)) {
+      throw new SpaceError('forbidden_role', 'Only the sponsor can make the space pay for more: ask them, or clear the sponsor first');
+    }
 
     const changes: Record<string, { previousValue: unknown; newValue: unknown }> = {};
     if (mode !== space.mode) changes.agentFunding = { previousValue: space.mode, newValue: mode };
@@ -107,7 +120,11 @@ export async function setSpaceFunding(actor: SpaceActor, workspaceId: string, in
   return warning ? { ...outcome.settings, warning } : outcome.settings;
 }
 
-/** Every name is an enabled model row of `userId`'s own (§8.1). */
+/**
+ * Every name is an enabled model row of `userId`'s own (§8.1), and an API
+ * row: a CLI row runs with its owner's credential in the child's
+ * environment, readable by the member driving the turn.
+ */
 async function assertOwnModels(userId: string, names: readonly string[]): Promise<void> {
   const { getModelRegistry } = await import('@/models/model-registry');
   const registry = getModelRegistry();
@@ -116,12 +133,16 @@ async function assertOwnModels(userId: string, names: readonly string[]): Promis
     if (!row || row.ownerUserId !== userId || !row.isEnabled) {
       throw new SpaceError('invalid_input', `"${name}" is not one of your own models`);
     }
+    if (row.provider === 'cli') {
+      throw new SpaceError('invalid_input', `"${name}" is a CLI subscription: its credential would reach the members' agents, so it cannot be a sponsor model`);
+    }
   }
 }
 
 /**
  * In the caller's membership transaction: when `userId` is the space's
- * sponsor and their new role (null: removed or left) is no longer owner,
+ * sponsor and their new role (null: removed, left, or their account is
+ * being deleted — `leaveAllSpaces`) is no longer owner,
  * clear the sponsor and the sponsor models, with an audit row. Returns
  * whether it did — the caller then runs `pauseSponsoredWork` after commit.
  */
@@ -131,6 +152,8 @@ export async function clearLostSponsorInTx(
   workspaceId: string,
   userId: string,
   newRole: SpaceRole | null,
+  /** Why, when it is more than the role change (the sponsor's account is being deleted). */
+  why?: 'sponsor_account_deleted',
 ): Promise<boolean> {
   if (newRole === 'owner') return false;
   const cleared = await tx.update(workspaces)
@@ -142,7 +165,7 @@ export async function clearLostSponsorInTx(
     ...auditActor(actor),
     action: 'space_updated',
     workspaceId,
-    details: { field: 'funding', reason: newRole ? 'sponsor_downgraded' : 'sponsor_removed', changes: { sponsor: { previousValue: userId, newValue: null } } },
+    details: { field: 'funding', reason: why ?? (newRole ? 'sponsor_downgraded' : 'sponsor_removed'), changes: { sponsor: { previousValue: userId, newValue: null } } },
   });
   return true;
 }

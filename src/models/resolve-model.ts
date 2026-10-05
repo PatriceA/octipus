@@ -60,10 +60,18 @@ export interface ResolveByName {
 /**
  * Whether a personal row (`ownerUserId` set) may run for `userId`: their
  * own row on their own money, or a sponsor model of a sponsored turn.
+ *
+ * A personal CLI row is never a sponsor model for anyone but the sponsor:
+ * a CLI child gets its row's credential in its environment (and the
+ * owner's vendor config directory), where the member driving the turn can
+ * read it (`env`, `/proc/self/environ`). An API row's key stays server-side.
  */
-export function personalRowAllowed(row: Pick<ModelConfigEntry, 'name' | 'ownerUserId'>, userId: string | undefined, sponsor: AgentSponsor | null | undefined): boolean {
+export function personalRowAllowed(row: Pick<ModelConfigEntry, 'name' | 'ownerUserId' | 'provider'>, userId: string | undefined, sponsor: AgentSponsor | null | undefined): boolean {
   if (!row.ownerUserId) return true;
-  if (sponsor) return row.ownerUserId === sponsor.userId && sponsor.models.includes(row.name);
+  if (sponsor) {
+    if (row.provider === 'cli' && sponsor.userId !== userId) return false;
+    return row.ownerUserId === sponsor.userId && sponsor.models.includes(row.name);
+  }
   return row.ownerUserId === userId;
 }
 

@@ -8,19 +8,28 @@
  *    @octipus to hand it to me"), never an answer.
  *  - `proactive`: a positive probe queues a `listen` turn that answers the
  *    question (`AgentService.handleRoomListen`), run as the member who asked
- *    and paid by the space's sponsor.
+ *    and paid by the space's sponsor. The turn only reads (nobody asked for
+ *    it, and it answers other members' untrusted text): its writing tools
+ *    are withheld and its writes refused (`writesWithheld`,
+ *    `routeApprovalFor`). The probe is not paid for a question whose author
+ *    may not ask the agent, or is at their share of the space budget.
  *
- * Who pays (§9.1): the probe is install work, stamped `install` and
- * attributed to the sponsor; the `listen` turn is sponsored. A room whose
- * space funds nothing unprompted (`agent_funding = 'own'`) or has no
+ * Who pays (§9.1): the probe is install work attributed to the space
+ * (`workspace_id`), to no person (user `system`), the same rule as a bound
+ * channel's (`group-listen.ts`); the `listen` turn is sponsored. A room
+ * whose space funds nothing unprompted (`agent_funding = 'own'`) or has no
  * sponsor is not probed at all, nor while the space's budget is used up.
+ * The probe is claimed in the database first (`claimRoomProbe`), so only
+ * one process pays for it.
  *
  * Settings are changed by the room's creator or a space owner, audited
- * (I10). Members rate the unprompted posts (👍 / 👎, `room_feedback`).
+ * (I10). Members rate the unprompted posts — the offers and the listen
+ * turns' answers (👍 / 👎, `room_feedback`); recent 👎 slow the room's gate
+ * down (`feedbackSlowdown`).
  */
 import { and, eq, inArray, isNull, lte, ne, or, sql } from 'drizzle-orm';
 import { BUFFER_BOT_ID } from '@/channels/group-buffer';
-import { type ListenCandidate, type ListenDeps, type ListenTarget, handover, MAX_AGE_MS } from '@/channels/group-listen';
+import { type ListenCandidate, type ListenDeps, type ListenTarget, handover, MAX_AGE_MS, PROBE_INTERVAL_MS } from '@/channels/group-listen';
 import type { ChannelMessage } from '@/core/channels/messages';
 import { localDayKey, localHour } from '@/core/heartbeat';
 import { getDb } from '@/db/postgres';
@@ -235,6 +244,60 @@ export async function roomThreads(roomId: string, now: number): Promise<Readonly
   return new Map([[roomId, thread]]);
 }
 
+/**
+ * Claim the probe of `candidate` before paying for it, across processes:
+ * one probe per room per `PROBE_INTERVAL_MS`, never twice for one question.
+ */
+async function claimRoomProbe(target: RoomListenTarget, candidate: ListenCandidate, now: Date): Promise<boolean> {
+  if (!isUuid(candidate.message.id)) return false;
+  const since = new Date(now.getTime() - PROBE_INTERVAL_MS);
+  const [row] = await getDb()
+    .update(roomModes)
+    .set({ lastProbeAt: now, lastProbedMessageId: candidate.message.id })
+    .where(and(
+      eq(roomModes.sessionId, target.id),
+      ne(roomModes.mode, 'mention'),
+      or(isNull(roomModes.lastProbeAt), lte(roomModes.lastProbeAt, since)),
+      sql`${roomModes.lastProbedMessageId} IS DISTINCT FROM ${candidate.message.id}::uuid`,
+    ))
+    .returning({ id: roomModes.sessionId });
+  return row !== undefined;
+}
+
+/** The 👍 / 👎 on the room's unprompted posts since `since`. */
+async function recentRoomFeedback(roomId: string, since: Date): Promise<{ up: number; down: number }> {
+  const [row] = await getDb()
+    .select({
+      up: sql<number>`count(*) FILTER (WHERE ${roomFeedback.value} = 1)::int`,
+      down: sql<number>`count(*) FILTER (WHERE ${roomFeedback.value} = -1)::int`,
+    })
+    .from(roomFeedback)
+    .where(and(eq(roomFeedback.sessionId, roomId), sql`${roomFeedback.createdAt} >= ${since}`));
+  return { up: Number(row?.up ?? 0), down: Number(row?.down ?? 0) };
+}
+
+/**
+ * Whether the listen turn a proactive room's probe would start can run:
+ * the question's author may still ask the agent in the room, and is not at
+ * their share of the space budget (the turn is sponsored, §9.2).
+ */
+async function authorMayAsk(target: RoomListenTarget, candidate: ListenCandidate): Promise<boolean> {
+  const authorId = candidate.message.authorId;
+  if (!authorId || authorId === BUFFER_BOT_ID) return false;
+  const [{ roomAccess }, { can }] = await Promise.all([import('./access'), import('@/security/space-access')]);
+  const access = await roomAccess(authorId, target.id);
+  if (!access || !can(access.role, 'run_agent')) return false;
+  const { checkSpend } = await import('@/security/spend-budgets');
+  const { SpendBudgetExceededError } = await import('@/security/spend-budget-error');
+  try {
+    await checkSpend({ userId: authorId, funding: 'sponsor', spaceId: target.workspaceId });
+    return true;
+  } catch (err) {
+    if (err instanceof SpendBudgetExceededError) return false;
+    throw err;
+  }
+}
+
 /** Claim one unprompted post (the cap and the gap), as `claimUnpromptedSlot` does for channels. */
 async function claimRoomSlot(target: RoomListenTarget, now: Date, day: string): Promise<boolean> {
   const since = new Date(now.getTime() - target.minMinutesBetween * 60_000);
@@ -283,30 +346,28 @@ export function roomListenDeps(): ListenDeps<RoomListenTarget> {
     isGroupActive: async () => true,
     localTime: (now, tz) => ({ hour: localHour(now, tz), day: localDayKey(now, tz) }),
     threads: (_type, roomId, now) => roomThreads(roomId, now),
-    mayRun: async (target) => {
-      const { checkSpend, spaceBudgetPause } = await import('@/security/spend-budgets');
-      const { SpendBudgetExceededError } = await import('@/security/spend-budget-error');
-      // Sponsored work of the space is paused: no probe either.
+    mayRun: async (target, _sessionId, candidate) => {
+      const { spaceBudgetPause } = await import('@/security/spend-budgets');
+      // The space budget gates the probe (never the sponsor's personal
+      // budgets, nor a member cap — the probe is nobody's spend).
       if (await spaceBudgetPause(target.workspaceId)) return false;
-      try {
-        // The probe is install work attributed to the sponsor: their own budget.
-        await checkSpend({ userId: target.ownerUserId, funding: 'own', spaceId: null });
-        return true;
-      } catch (err) {
-        if (err instanceof SpendBudgetExceededError) return false;
-        throw err;
-      }
+      // A proactive probe starts a turn as the question's author: not paid
+      // for when that turn could not run.
+      return target.mode !== 'proactive' || authorMayAsk(target, candidate);
     },
+    feedback: (target, since) => recentRoomFeedback(target.id, since),
+    claimProbe: claimRoomProbe,
     session: async (target) => target.id,
-    complete: async ({ system, user, ownerUserId, group: target }) => {
+    complete: async ({ system, user, group: target }) => {
       const sessionId = target.id;
-      const [{ getModelRegistry }, { getLiteLLMClient }, { withInstallUsage, withProviderUsageContext }] = await Promise.all([
-        import('@/models/model-registry'), import('@/models/litellm-client'), import('@/models/providers/instrumented'),
+      const [{ getModelRegistry }, { getLiteLLMClient }, { withInstallUsage, withProviderUsageContext }, { SYSTEM_USER_ID }] = await Promise.all([
+        import('@/models/model-registry'), import('@/models/litellm-client'), import('@/models/providers/instrumented'), import('@/security/principal'),
       ]);
       const model = await getModelRegistry().getModelForTopic('background');
       if (!model?.modelId) throw new Error('Unprompted room posts need a model bound to the "background" topic.');
-      // The gate probe is install work (§8.2): stamped `install`, in the room's space.
-      const result = await withProviderUsageContext({ userId: ownerUserId, sessionId, workspaceId: target.workspaceId }, () =>
+      // The gate probe is install work (§8.2) attributed to the room's
+      // space and to no person: stamped `install`, user `system`.
+      const result = await withProviderUsageContext({ userId: SYSTEM_USER_ID, sessionId, workspaceId: target.workspaceId }, () =>
         withInstallUsage(() => getLiteLLMClient().complete({
           model: model.modelId,
           modelConfigName: model.name,
@@ -316,7 +377,7 @@ export function roomListenDeps(): ListenDeps<RoomListenTarget> {
           ],
           temperature: 0.2,
           maxTokens: 120,
-          userId: ownerUserId,
+          userId: SYSTEM_USER_ID,
           sessionId,
         })));
       return result.content ?? undefined;

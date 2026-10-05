@@ -6,7 +6,7 @@
  * access layer: the callers (the hub, the services, the routes) check the
  * member's role before they get here.
  */
-import { and, asc, desc, eq, gt, inArray, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { getDb } from '../postgres';
 import {
   type FileLease,
@@ -269,12 +269,33 @@ export async function pendingProposalOf(workspaceId: string, noteId: string, ses
   return row ?? null;
 }
 
-/** Move a pending proposal to `status`; null when it was no longer pending (decided concurrently). */
-export async function decideProposal(workspaceId: string, proposalId: string, status: Exclude<NoteEditProposalStatus, 'pending'>, decidedBy: string): Promise<NoteEditProposal | null> {
+/**
+ * Move a pending proposal to `status`; null when it was no longer pending
+ * (decided concurrently) or, with `asRead`, no longer says what was read
+ * (the agent updated it since): nobody is marked as having decided a body
+ * they never saw.
+ */
+export async function decideProposal(
+  workspaceId: string,
+  proposalId: string,
+  status: Exclude<NoteEditProposalStatus, 'pending'>,
+  decidedBy: string,
+  asRead?: Pick<NoteEditProposal, 'action' | 'title' | 'baseSha256' | 'body'>,
+): Promise<NoteEditProposal | null> {
   const [row] = await getDb()
     .update(noteEditProposals)
     .set({ status, decidedBy, decidedAt: new Date(), updatedAt: new Date() })
-    .where(and(eq(noteEditProposals.id, proposalId), eq(noteEditProposals.workspaceId, workspaceId), eq(noteEditProposals.status, 'pending')))
+    .where(and(
+      eq(noteEditProposals.id, proposalId),
+      eq(noteEditProposals.workspaceId, workspaceId),
+      eq(noteEditProposals.status, 'pending'),
+      ...(asRead ? [
+        eq(noteEditProposals.action, asRead.action),
+        asRead.title === null ? isNull(noteEditProposals.title) : eq(noteEditProposals.title, asRead.title),
+        eq(noteEditProposals.baseSha256, asRead.baseSha256),
+        eq(noteEditProposals.body, asRead.body),
+      ] : []),
+    ))
     .returning();
   return row ?? null;
 }

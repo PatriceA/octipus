@@ -28,10 +28,11 @@ import type { NoteEditProposal, NoteEditProposalAction, NoteEditProposalStatus }
 import type { Note } from '@/db/schema/notes';
 import { assertNoteAccess } from '@/db/repositories/note-repository';
 import { SpaceError } from '@/security/space-access';
+import { ToolNotExecutedError } from '@/core/tool-execution-error';
 import { coreLogger } from '@/utils/logger';
 import { StaleWriteError, sha256Hex } from './hub';
-import { normalizeNewlines } from './text-merge';
 import { KeyedMutex } from './keyed-mutex';
+import { merge3, normalizeNewlines } from './text-merge';
 
 type SpaceScope = NoteScope & { kind: 'space' };
 
@@ -57,6 +58,14 @@ export interface ProposeInput {
 }
 
 /**
+ * One read-modify-write of a (note, session) proposal at a time: the
+ * agent's updates (swarm children and parallel workers share the root's
+ * session), and a member's accept or reject of it (single process, D16).
+ */
+const proposalLocks = new KeyedMutex();
+const proposalKey = (noteId: string, sessionId: string | null, proposalId?: string) => `${noteId}:${sessionId ?? proposalId ?? 'none'}`;
+
+/**
  * Create or update the session's pending proposal for a note of the space.
  * `scope.userId` is the member the agent works for; they must be able to
  * run the agent with write tools.
@@ -64,10 +73,17 @@ export interface ProposeInput {
 export async function proposeNoteEdit(scope: NoteScope, input: ProposeInput): Promise<NoteEditProposal> {
   const space = spaceScopeOf(scope);
   assertNoteAccess(space, 'run_agent_write');
+  const proposal = await proposalLocks.run(proposalKey(input.noteId, input.sessionId), () => writeProposal(space, input));
+  await proposalsChanged(space.workspaceId, input.noteId);
+  return proposal;
+}
+
+/** `proposeNoteEdit`'s write, under the caller's proposal lock. */
+async function writeProposal(space: SpaceScope, input: ProposeInput): Promise<NoteEditProposal> {
   if (sha256Hex(input.baseBody) !== input.baseSha256) throw new Error('proposeNoteEdit: baseSha256 is not the sha of baseBody');
   const { getNoteService } = await import('@/core/knowledge/notes');
   if (!(await getNoteService().store(space).getById(input.noteId))) throw new SpaceError('not_found', 'Note not found');
-  const proposal = await upsertPendingProposal({
+  return upsertPendingProposal({
     noteId: input.noteId,
     workspaceId: space.workspaceId,
     userId: space.userId,
@@ -79,8 +95,6 @@ export async function proposeNoteEdit(scope: NoteScope, input: ProposeInput): Pr
     baseSha256: input.baseSha256,
     body: input.body,
   });
-  await proposalsChanged(space.workspaceId, input.noteId);
-  return proposal;
 }
 
 /** The space's proposals, newest first (a note's, a status's). */
@@ -95,10 +109,33 @@ export async function listNoteProposals(scope: NoteScope, opts: { noteId?: strin
   return proposals.filter((p) => visible.has(p.noteId));
 }
 
-/** The session's pending proposal for the note (`read_note` shows it to the agent). */
+/** The session's pending proposal for the note. */
 export function sessionPendingProposal(scope: NoteScope, noteId: string, sessionId: string): Promise<NoteEditProposal | null> {
   const space = spaceScopeOf(scope);
   return pendingProposalOf(space.workspaceId, noteId, sessionId);
+}
+
+/**
+ * A pending proposal as the agent sees it beside the note's current text
+ * (`read_note`): rebased onto that text, so the agent edits from it and
+ * names the current sha as its base; or `stale` when its change collides
+ * with what members wrote since (it can only be replaced: written again
+ * from the current text).
+ */
+export interface RebasedProposal {
+  stale: boolean;
+  body: string;
+  /** The base to name when writing from `body` (stale: the proposal's own, outdated base). */
+  baseSha256: string;
+}
+
+export function rebaseOnto(proposal: NoteEditProposal, current: { body: string; bodySha256: string }): RebasedProposal {
+  if (proposal.action === 'archive' || proposal.baseSha256 === current.bodySha256) {
+    return { stale: false, body: proposal.action === 'archive' ? current.body : proposal.body, baseSha256: current.bodySha256 };
+  }
+  const merged = merge3(proposal.baseBody, current.body, proposal.body);
+  if (!merged.ok) return { stale: true, body: proposal.body, baseSha256: proposal.baseSha256 };
+  return { stale: false, body: merged.text, baseSha256: current.bodySha256 };
 }
 
 export type AcceptResult =
@@ -112,13 +149,34 @@ export type AcceptResult =
     proposed: string;
   };
 
-const decisions = new KeyedMutex();
-
 async function pendingIn(space: SpaceScope, proposalId: string): Promise<NoteEditProposal> {
   const proposal = await getProposal(space.workspaceId, proposalId);
   if (!proposal) throw new SpaceError('not_found', 'Proposal not found');
   if (proposal.status !== 'pending') throw new SpaceError('invalid_input', `This proposal is already ${proposal.status}`);
   return proposal;
+}
+
+/**
+ * Run a decision on a pending proposal under its (note, session) lock, so
+ * the agent cannot update it between the read and the decision; `fn` gets
+ * the proposal as read under the lock.
+ */
+async function deciding<T>(space: SpaceScope, proposalId: string, fn: (proposal: NoteEditProposal) => Promise<T>): Promise<T> {
+  const first = await pendingIn(space, proposalId);
+  return proposalLocks.run(proposalKey(first.noteId, first.sessionId, first.id), async () => fn(await pendingIn(space, proposalId)));
+}
+
+/**
+ * Mark `proposal` (as it was read) decided. Conditional on its content: a
+ * proposal the agent updated after it was read is not marked as decided
+ * with a body nobody reviewed.
+ */
+async function decide(space: SpaceScope, proposal: NoteEditProposal, status: 'accepted' | 'rejected' | 'stale'): Promise<NoteEditProposal> {
+  const decided = await decideProposal(space.workspaceId, proposal.id, status, space.userId, proposal);
+  if (decided) return decided;
+  const now = await getProposal(space.workspaceId, proposal.id);
+  if (now?.status === 'pending') throw new SpaceError('invalid_input', 'The agent updated this proposal meanwhile; review it again');
+  throw new SpaceError('invalid_input', 'This proposal was decided meanwhile');
 }
 
 /**
@@ -131,14 +189,15 @@ export async function acceptProposal(scope: NoteScope, proposalId: string): Prom
   assertNoteAccess(space, 'write');
   const { getNoteService } = await import('@/core/knowledge/notes');
   const notes = getNoteService();
-  const result = await decisions.run(proposalId, async (): Promise<AcceptResult> => {
-    const proposal = await pendingIn(space, proposalId);
+  const result = await deciding(space, proposalId, async (proposal): Promise<AcceptResult> => {
     if (proposal.action === 'archive') {
-      const archived = await notes.archive(space, proposal.noteId);
-      const decided = await decideProposal(space.workspaceId, proposalId, archived ? 'accepted' : 'stale', space.userId);
-      if (!decided) throw new SpaceError('invalid_input', 'This proposal was decided meanwhile');
+      // Archived only while the note still says what the agent read: a note
+      // edited since is not archived over that edit.
+      const archived = await notes.archive(space, proposal.noteId, { baseSha256: proposal.baseSha256 });
+      const decided = await decide(space, proposal, archived ? 'accepted' : 'stale');
       if (archived) return { status: 'accepted', proposal: decided, revisionId: null, merged: false };
-      return { status: 'stale', proposal: decided, base: proposal.baseBody, current: '', proposed: proposal.body };
+      const current = await notes.getById(space, proposal.noteId);
+      return { status: 'stale', proposal: decided, base: proposal.baseBody, current: current?.body ?? '', proposed: proposal.body };
     }
     const { getDocHub } = await import('./index');
     // A closed note's links, tags and index are refreshed here (an open
@@ -152,8 +211,7 @@ export async function acceptProposal(scope: NoteScope, proposalId: string): Prom
         ...(proposal.title ? { title: proposal.title } : {}),
         origin: { kind: 'proposal', userId: space.userId, onBehalfOfUserId: proposal.userId },
       });
-      const decided = await decideProposal(space.workspaceId, proposalId, 'accepted', space.userId);
-      if (!decided) throw new SpaceError('invalid_input', 'This proposal was decided meanwhile');
+      const decided = await decide(space, proposal, 'accepted');
       if (before && write.changed && !getDocHub().isOpen(proposal.noteId)) {
         // The change is saved and the proposal accepted: a failed refresh
         // leaves the note's links and index behind its text until its next
@@ -166,8 +224,7 @@ export async function acceptProposal(scope: NoteScope, proposalId: string): Prom
     } catch (err) {
       if (!(err instanceof StaleWriteError)) throw err;
       const current = await notes.getById(space, proposal.noteId);
-      const decided = await decideProposal(space.workspaceId, proposalId, 'stale', space.userId);
-      if (!decided) throw new SpaceError('invalid_input', 'This proposal was decided meanwhile');
+      const decided = await decide(space, proposal, 'stale');
       logger.info({ proposalId, noteId: proposal.noteId, reason: err.reason }, 'Edit proposal is stale');
       return { status: 'stale', proposal: decided, base: proposal.baseBody, current: current?.body ?? '', proposed: proposal.body };
     }
@@ -180,12 +237,7 @@ export async function acceptProposal(scope: NoteScope, proposalId: string): Prom
 export async function rejectProposal(scope: NoteScope, proposalId: string): Promise<NoteEditProposal> {
   const space = spaceScopeOf(scope);
   assertNoteAccess(space, 'write');
-  const decided = await decisions.run(proposalId, async () => {
-    await pendingIn(space, proposalId);
-    const row = await decideProposal(space.workspaceId, proposalId, 'rejected', space.userId);
-    if (!row) throw new SpaceError('invalid_input', 'This proposal was decided meanwhile');
-    return row;
-  });
+  const decided = await deciding(space, proposalId, (proposal) => decide(space, proposal, 'rejected'));
   await proposalsChanged(space.workspaceId, decided.noteId);
   return decided;
 }
@@ -204,52 +256,119 @@ export interface AgentProposer {
  * session's own pending proposal. Throws `StaleWriteError('unknown_base')`
  * when none is that text — the agent reads the note again.
  */
-async function baseTextOf(space: SpaceScope, noteId: string, sessionId: string, sha256: string): Promise<{ text: string; note: Note }> {
+async function baseTextOf(note: Note, pending: NoteEditProposal | null, sha256: string): Promise<string> {
+  if (note.bodySha256 === sha256) return note.body;
+  const { getDocHub } = await import('./index');
+  const pinned = getDocHub().baseText(note.id, sha256);
+  if (pinned !== null) return pinned;
+  if (pending?.baseSha256 === sha256) return pending.baseBody;
+  throw new StaleWriteError('unknown_base', note.bodySha256);
+}
+
+/**
+ * One pending proposal per (note, session) holds one action: an archive
+ * does not silently replace an edit, nor an edit an archive. The agent is
+ * told what is pending; a member accepts or rejects it first.
+ */
+function assertSameKind(pending: NoteEditProposal | null, action: 'archive' | 'change'): void {
+  if (!pending) return;
+  if (action === 'archive' && pending.action !== 'archive') {
+    throw new ToolNotExecutedError('notes', 'Nothing was proposed: you have a pending edit proposal for this note, which archiving would replace. A member accepts or rejects it first (read_note shows it).');
+  }
+  if (action === 'change' && pending.action === 'archive') {
+    throw new ToolNotExecutedError('notes', 'Nothing was proposed: you have a pending proposal to archive this note, which an edit would replace. A member accepts or rejects it first.');
+  }
+}
+
+async function liveNote(space: SpaceScope, noteId: string): Promise<Note> {
   const { getNoteService } = await import('@/core/knowledge/notes');
   const note = await getNoteService().getById(space, noteId);
   if (!note) throw new SpaceError('not_found', 'Note not found');
-  if (note.bodySha256 === sha256) return { text: note.body, note };
-  const { getDocHub } = await import('./index');
-  const pinned = getDocHub().baseText(noteId, sha256);
-  if (pinned !== null) return { text: pinned, note };
-  const pending = await pendingProposalOf(space.workspaceId, noteId, sessionId);
-  if (pending?.baseSha256 === sha256) return { text: pending.baseBody, note };
-  throw new StaleWriteError('unknown_base', note.bodySha256);
+  return note;
 }
+
+/** What an agent's write proposed: the proposal, or nothing (the write changed nothing; `pending` is the session's proposal, left as it is). */
+export type AgentProposal =
+  | { proposal: NoteEditProposal; unchanged?: undefined }
+  | { proposal?: undefined; unchanged: true; pending: NoteEditProposal | null };
 
 /**
  * `write_note` on an existing space note in suggest mode: the agent's body
  * (and title, when it changes it) becomes the session's pending proposal,
  * made from the text whose sha it read.
+ *
+ * The pending proposal is rebased: `read_note` shows it merged onto the
+ * note's current text, with the current sha as the base to name. A write
+ * naming a base other than the proposal's carries the proposal forward —
+ * merge3(the proposal's base, the text the agent read, its body) — so the
+ * accepted proposal never reverts what members wrote between the two
+ * reads; a collision refuses the write. A write that changes nothing
+ * proposes nothing.
  */
 export async function proposeAgentEdit(
   scope: NoteScope,
   proposer: AgentProposer,
   input: { noteId: string; baseSha256: string; body: string; title?: string },
-): Promise<NoteEditProposal> {
+): Promise<AgentProposal> {
   const space = spaceScopeOf(scope);
   assertNoteAccess(space, 'run_agent_write');
   const { assertSpaceNoteSize } = await import('@/core/knowledge/notes');
-  const body = normalizeNewlines(input.body);
+  let body = normalizeNewlines(input.body);
   assertSpaceNoteSize(body);
-  const base = await baseTextOf(space, input.noteId, proposer.sessionId, input.baseSha256);
-  return proposeNoteEdit(space, {
-    noteId: input.noteId,
-    sessionId: proposer.sessionId,
-    agentId: proposer.agentId,
-    action: 'edit',
-    title: input.title !== undefined && input.title !== base.note.title ? input.title : null,
-    baseBody: base.text,
-    baseSha256: input.baseSha256,
-    body,
+  const result = await proposalLocks.run(proposalKey(input.noteId, proposer.sessionId), async (): Promise<AgentProposal> => {
+    const note = await liveNote(space, input.noteId);
+    const pending = await pendingProposalOf(space.workspaceId, input.noteId, proposer.sessionId);
+    assertSameKind(pending, 'change');
+    const baseText = await baseTextOf(note, pending, input.baseSha256);
+    if (pending && (pending.agentId ?? null) !== proposer.agentId) {
+      // Another agent of the session (a swarm child, a parallel worker)
+      // made the pending proposal: both changes are kept, or the write is
+      // refused — never one silently replacing the other.
+      const theirs = pending.baseSha256 === input.baseSha256 ? { ok: true as const, text: pending.body } : merge3(pending.baseBody, baseText, pending.body);
+      const merged = theirs.ok ? merge3(baseText, theirs.text, body) : theirs;
+      if (!merged.ok) {
+        throw new ToolNotExecutedError('notes', 'Nothing was proposed: another agent of this session has a pending proposal for this note that changes the same text. '
+          + 'read_note shows it; write your change from that proposal body with the base_sha256 beside it.');
+      }
+      body = merged.text;
+      assertSpaceNoteSize(body);
+    } else if (pending && pending.baseSha256 !== input.baseSha256) {
+      const merged = merge3(pending.baseBody, baseText, body);
+      if (!merged.ok) {
+        throw new ToolNotExecutedError('notes', 'Nothing was proposed: your pending proposal collides with what members wrote since. '
+          + 'read_note, then write your change again from the note\'s current body with its sha256 as base_sha256; that replaces the proposal.');
+      }
+      body = merged.text;
+      assertSpaceNoteSize(body);
+    }
+    const newTitle = input.title !== undefined && input.title !== note.title ? input.title : null;
+    // Another agent's proposed title is kept unless this write names one.
+    const title = newTitle ?? (pending && (pending.agentId ?? null) !== proposer.agentId ? pending.title : null);
+    if (body === baseText && title === null) return { unchanged: true, pending };
+    if (pending && body === pending.body && title === pending.title && input.baseSha256 === pending.baseSha256) return { unchanged: true, pending };
+    return {
+      proposal: await writeProposal(space, {
+        noteId: input.noteId,
+        sessionId: proposer.sessionId,
+        agentId: proposer.agentId,
+        action: pending?.action === 'capture' ? 'capture' : 'edit',
+        title,
+        baseBody: baseText,
+        baseSha256: input.baseSha256,
+        body,
+      }),
+    };
   });
+  if (result.proposal) await proposalsChanged(space.workspaceId, input.noteId);
+  return result;
 }
 
 /**
  * `capture_note` in a space in suggest mode. The day's note does not
  * exist yet: it is created with the line (a new note, nobody's text
- * changes). Otherwise the line is appended to the session's pending
- * proposal for it, or to the note's current text as a new proposal.
+ * changes; created only while still missing, else the line is proposed).
+ * Otherwise the line is appended to the session's pending proposal for it,
+ * or to the note's current text as a new proposal.
  */
 export async function proposeAgentCapture(
   scope: NoteScope,
@@ -259,39 +378,56 @@ export async function proposeAgentCapture(
 ): Promise<{ proposal: NoteEditProposal; note?: undefined } | { proposal?: undefined; note: Note }> {
   const space = spaceScopeOf(scope);
   assertNoteAccess(space, 'run_agent_write');
-  const { assertSpaceNoteSize, getNoteService, normalizeDay } = await import('@/core/knowledge/notes');
+  const { assertSpaceNoteSize, getNoteService, normalizeDay, NoteExistsError } = await import('@/core/knowledge/notes');
   const notes = getNoteService();
   const date = normalizeDay(day ?? new Date().toISOString());
-  const daily = await notes.getBySlug(space, `daily/${date}`);
-  if (!daily) return { note: await notes.capture(space, text, date) };
+  let daily = await notes.getBySlug(space, `daily/${date}`);
+  if (!daily) {
+    try {
+      return { note: await notes.capture(space, text, date, { createOnly: true }) };
+    } catch (err) {
+      // A member started the day's note meanwhile: the line is proposed.
+      if (!(err instanceof NoteExistsError)) throw err;
+      daily = await liveNote(space, err.noteId);
+    }
+  }
+  const noteId = daily.id;
   const line = `- ${new Date().toISOString().slice(11, 16)} ${normalizeNewlines(text)}\n`;
   const append = (body: string) => `${body.replace(/\s+$/, '')}\n${line}`;
-  const pending = await pendingProposalOf(space.workspaceId, daily.id, proposer.sessionId);
-  const from = pending && pending.action !== 'archive'
-    ? { baseBody: pending.baseBody, baseSha256: pending.baseSha256, body: append(pending.body), action: pending.action, title: pending.title }
-    : { baseBody: daily.body, baseSha256: daily.bodySha256, body: append(daily.body), action: 'capture' as const, title: null };
-  assertSpaceNoteSize(from.body);
-  return {
-    proposal: await proposeNoteEdit(space, { noteId: daily.id, sessionId: proposer.sessionId, agentId: proposer.agentId, ...from }),
-  };
+  const proposal = await proposalLocks.run(proposalKey(noteId, proposer.sessionId), async () => {
+    // Read under the lock: two captures of one session each add their line.
+    const current = await liveNote(space, noteId);
+    const pending = await pendingProposalOf(space.workspaceId, noteId, proposer.sessionId);
+    assertSameKind(pending, 'change');
+    const from = pending
+      ? { baseBody: pending.baseBody, baseSha256: pending.baseSha256, body: append(pending.body), action: pending.action, title: pending.title }
+      : { baseBody: current.body, baseSha256: current.bodySha256, body: append(current.body), action: 'capture' as const, title: null };
+    assertSpaceNoteSize(from.body);
+    return writeProposal(space, { noteId, sessionId: proposer.sessionId, agentId: proposer.agentId, ...from });
+  });
+  await proposalsChanged(space.workspaceId, noteId);
+  return { proposal };
 }
 
 /** `archive_note` in a space in suggest mode: archiving becomes the session's pending proposal for the note. */
 export async function proposeAgentArchive(scope: NoteScope, proposer: AgentProposer, noteId: string): Promise<NoteEditProposal> {
   const space = spaceScopeOf(scope);
   assertNoteAccess(space, 'run_agent_write');
-  const { getNoteService } = await import('@/core/knowledge/notes');
-  const note = await getNoteService().getById(space, noteId);
-  if (!note) throw new SpaceError('not_found', 'Note not found');
-  return proposeNoteEdit(space, {
-    noteId,
-    sessionId: proposer.sessionId,
-    agentId: proposer.agentId,
-    action: 'archive',
-    baseBody: note.body,
-    baseSha256: note.bodySha256,
-    body: note.body,
+  const proposal = await proposalLocks.run(proposalKey(noteId, proposer.sessionId), async () => {
+    const note = await liveNote(space, noteId);
+    assertSameKind(await pendingProposalOf(space.workspaceId, noteId, proposer.sessionId), 'archive');
+    return writeProposal(space, {
+      noteId,
+      sessionId: proposer.sessionId,
+      agentId: proposer.agentId,
+      action: 'archive',
+      baseBody: note.body,
+      baseSha256: note.bodySha256,
+      body: note.body,
+    });
   });
+  await proposalsChanged(space.workspaceId, noteId);
+  return proposal;
 }
 
 // ── Change notification ─────────────────────────────────────────

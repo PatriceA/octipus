@@ -356,18 +356,24 @@ describe('presence', () => {
     const send = async (msg: Frame) => { await hub.connectionManager.handleMessage(id, JSON.stringify(msg)); };
     await send({ type: 'auth', method: 'session_token', credentials: { token: userId }, clientType: 'webchat' });
     expect(frames.at(-1)).toMatchObject({ type: 'auth_ok', userId });
+    await send({ type: 'subscribe', patterns: ['*'] });
     return { id, frames, send };
   }
   const lastPresence = (frames: Frame[]) => frames.filter((f) => f.type === 'event' && f.event.type === 'space.presence').at(-1)?.event.payload.members as Array<{ userId: string; where?: { kind: string; id: string } }> | undefined;
   const seen = (members: Array<{ userId: string }> | undefined) => (members ?? []).map((m) => m.userId).sort().join(',');
 
-  test('a guest\'s view of who is online holds the members of their rooms only, and their notes only', async () => {
+  beforeAll(async () => {
     const { getGatewayHub } = await import('@/core/gateway/hub');
     const hub = getGatewayHub();
     hub.setSessionValidator(async (token) => ({ userId: token, username: token, isAdmin: false }));
     hub.setWorkspaceResolver(async () => 'ws');
     const { wireMessageHandler } = await import('@/core/gateway/message-handler');
     wireMessageHandler(hub);
+  });
+
+  test('a guest\'s view of who is online holds the members of their rooms only, and their notes only', async () => {
+    const { getGatewayHub } = await import('@/core/gateway/hub');
+    const hub = getGatewayHub();
 
     const tabs: Tab[] = [];
     try {
@@ -395,6 +401,29 @@ describe('presence', () => {
       await publishSpacePresence(spaceId);
       await waitFor(() => whereOf(gina.frames, ids.viewer)?.id === briefId, 'gina to see the viewer in the brief');
       await getDocHub().leave(viewer.id, briefId);
+    } finally {
+      for (const t of tabs) hub.connectionManager.handleClose(t.id, 1000, 'test');
+    }
+  });
+
+  test('task.changed reaches a guest for the tasks of their rooms only', async () => {
+    const { getGatewayHub } = await import('@/core/gateway/hub');
+    const hub = getGatewayHub();
+    const { resolvedPrincipal } = await import('@/test-helpers/space-fixtures');
+    const { contentRepos } = await import('@/db/repositories/content');
+    const editor = contentRepos(await resolvedPrincipal(ids.editor, spaceId));
+    const tabs: Tab[] = [];
+    try {
+      const gina = await tab(ids.gina);
+      const viewer = await tab(ids.viewer);
+      tabs.push(gina, viewer);
+      for (const t of tabs) await t.send({ type: 'space.subscribe', spaceId });
+      // Creating a task publishes task.changed (detached, after the write).
+      const inScope = await editor.tasks.create({ title: 'client follow-up', sourceRef: { sessionId: clientId } });
+      const outOfScope = await editor.tasks.create({ title: 'internal follow-up' });
+      const changed = (t: Tab) => t.frames.filter((f) => f.type === 'event' && f.event.type === 'task.changed').map((f) => f.event.payload.taskId as string);
+      await waitFor(() => changed(viewer).includes(inScope.id) && changed(viewer).includes(outOfScope.id), 'the viewer hears both');
+      expect(changed(gina)).toEqual([inScope.id]);
     } finally {
       for (const t of tabs) hub.connectionManager.handleClose(t.id, 1000, 'test');
     }

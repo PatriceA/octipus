@@ -129,6 +129,14 @@ const SPACE_ACTING = [
   'POST /api/spaces/:id/unarchive', 'DELETE /api/spaces/:id', 'GET /api/spaces/:id/members', 'PATCH /api/spaces/:id/members/:userId',
   'DELETE /api/spaces/:id/members/:userId', 'GET /api/spaces/:id/invites', 'POST /api/spaces/:id/invites',
   'DELETE /api/spaces/:id/invites/:inviteId', 'GET /api/spaces/:id/activity',
+  // Funding and budgets (S5): read for members, writes owner-only (sponsor raises).
+  'PUT /api/spaces/:id/funding', 'GET /api/spaces/:id/budget', 'PUT /api/spaces/:id/budget',
+  // Space connectors (S5): listed for members, connect/disconnect owner-only.
+  'GET /api/spaces/:id/connectors', 'POST /api/spaces/:id/connectors/:connectorId',
+  'DELETE /api/spaces/:id/connectors/:connectorId',
+  // Room modes (S5): read for room members, set by room creator or space owner; feedback by room members.
+  'GET /api/spaces/:id/rooms/:roomId/mode', 'PUT /api/spaces/:id/rooms/:roomId/mode',
+  'PUT /api/spaces/:id/rooms/:roomId/messages/:messageId/feedback',
   // Live documents (S3): the agent's edit mode (owner), file leases (members, by role).
   'PUT /api/spaces/:id/agent-edit-mode', 'GET /api/spaces/:id/file-leases', 'POST /api/spaces/:id/file-leases',
   'DELETE /api/spaces/:id/file-leases',

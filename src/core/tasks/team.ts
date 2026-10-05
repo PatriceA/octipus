@@ -22,12 +22,39 @@ import { type Task, tasks } from '@/db/schema/tasks';
 import { coreLogger } from '@/utils/logger';
 import { ACTIVE_TASK_STATUSES } from './status';
 
-/** Tell the space's subscribers a task changed (created, edited, claimed, commented, deleted). */
+/**
+ * Tell the space's subscribers a task changed (created, edited, claimed,
+ * commented, deleted). Only to current members, read now — a removed
+ * member's still-open connection hears nothing — and of guests only those
+ * whose scope reaches the task (S6, `taskInGuestScope`: raised from one of
+ * their rooms). A deleted task's row is gone, so no guest hears of it.
+ */
 export async function taskChanged(workspaceId: string, taskId: string): Promise<void> {
-  const [{ eventMessage, spaceResource }, { getGatewayHub }] = await Promise.all([
-    import('@/core/rooms/events'), import('@/core/gateway/hub'),
+  const [{ eventMessage, spaceResource }, { getGatewayHub }, { storedGuestScope, taskInGuestScope }] = await Promise.all([
+    import('@/core/rooms/events'), import('@/core/gateway/hub'), import('@/security/space-access'),
   ]);
-  getGatewayHub().publishToResource(spaceResource(workspaceId), eventMessage('task.changed', { taskId, workspaceId }));
+  const rows = await getDb()
+    .select({ userId: workspaceMembers.userId, role: workspaceMembers.role, scope: workspaceMembers.scope })
+    .from(workspaceMembers)
+    .where(eq(workspaceMembers.workspaceId, workspaceId));
+  const guests = rows.filter((r) => r.role === 'guest');
+  const [task] = guests.length === 0 ? [] : await getDb()
+    .select({ sourceRef: tasks.sourceRef })
+    .from(tasks)
+    .where(and(eq(tasks.id, taskId), eq(tasks.workspaceId, workspaceId)))
+    .limit(1);
+  const told = new Set(rows
+    .filter((r) => {
+      if (r.role !== 'guest') return true;
+      const scope = storedGuestScope(r.role, r.scope);
+      return !!task && !!scope && taskInGuestScope(task.sourceRef, scope);
+    })
+    .map((r) => r.userId));
+  const resource = spaceResource(workspaceId);
+  getGatewayHub().connectionManager.broadcast(
+    eventMessage('task.changed', { taskId, workspaceId }),
+    (ctx) => ctx.resources.has(resource) && told.has(ctx.userId),
+  );
 }
 
 /** `taskChanged`, detached from the committed write; a failure is logged. */
@@ -88,8 +115,9 @@ export interface MyWorkGroup {
 }
 
 /**
- * The caller's open tasks: in every space they belong to (not as a guest),
- * the tasks assigned to them; in their personal workspaces, their own tasks
+ * The caller's open tasks: in every space they belong to (not as a guest)
+ * and that is not archived (its tasks can no longer move), the tasks
+ * assigned to them; in their personal workspaces, their own tasks
  * assigned to themselves. Grouped by workspace, spaces by name; tasks by
  * priority, then due date.
  */
@@ -99,7 +127,7 @@ export async function myWork(userId: string): Promise<MyWorkGroup[]> {
     .select({ id: workspaces.id, name: workspaces.name })
     .from(workspaceMembers)
     .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
-    .where(and(eq(workspaceMembers.userId, userId), eq(workspaces.kind, 'shared'), sql`${workspaceMembers.role} <> 'guest'`));
+    .where(and(eq(workspaceMembers.userId, userId), eq(workspaces.kind, 'shared'), isNull(workspaces.archivedAt), sql`${workspaceMembers.role} <> 'guest'`));
   const personal = await db
     .select({ id: workspaces.id, name: workspaces.name })
     .from(workspaces)

@@ -454,6 +454,8 @@ export interface ScorerContext {
   sessionId?: string;
   workspaceId?: string | null;
   space?: import('@/core/types').AgentSpace | null;
+  /** What started the run: a `listen` turn's gate commands are refused like its writes (§9.3). */
+  trigger?: import('@/core/types').AgentTrigger;
   /**
    * The dev-mode project directory the child's own tools operated in, when the
    * session has one. Absent for an ordinary session, where the workspace root
@@ -919,6 +921,7 @@ async function evaluate(
               attended: false,
               workspaceId: ctx.workspaceId ?? ctx.space?.workspaceId ?? null,
               space: ctx.space ?? null,
+              trigger: ctx.trigger,
             },
             // The SAME action the permission was read for. `matches()` builds
             // `${toolId}__${action}`, so passing `shell__run` here makes an

@@ -11,7 +11,8 @@
  *   literal; a test fails on a hand-built one anywhere else. Children get
  *   their parent's scope through `inheritScope`.
  * - `recheckSpace` re-reads the membership at every spawn (D5), so a removed
- *   member's next turn — and every child of a running one — fails.
+ *   member's next turn — and every child of a running one — fails;
+ *   `recheckSponsor` re-reads a sponsored agent's funding the same way.
  * - `withAgentUsage` / `usageContextOf` carry the user, workspace and funding
  *   to every model call of the turn, so each `cost_log` row of a space turn
  *   names the space and who paid.
@@ -202,6 +203,37 @@ export async function recheckSpace(userId: string, space: AgentSpace): Promise<A
   const current = await readSpace(userId, space.workspaceId);
   if (!current) throw new SpaceError('not_found', 'You are no longer a member of this space');
   return current;
+}
+
+/**
+ * Re-read the space's funding before sponsored work goes on (§9.1), as
+ * `recheckSpace` re-reads the membership: the scope's funding was decided
+ * when the turn started, and the sponsor may have gone since (removed,
+ * downgraded, cleared, account deleted) or the mode may pay for less. Throws
+ * `funding_off` when the mode no longer funds the trigger or the sponsor is
+ * not the one the work started under. Returns the sponsor as it is now —
+ * the sponsor models as listed now. Null for work that is not sponsored.
+ */
+export async function recheckSponsor(scope: Pick<AgentScope, 'space' | 'trigger' | 'funding' | 'sponsor'>): Promise<AgentSponsor | null> {
+  if (scope.funding !== 'sponsor') return null;
+  if (!scope.space || !scope.sponsor) throw new Error('A sponsored agent needs its space and sponsor (resolveAgentScope / inheritScope)');
+  const { spaceFunding } = await import('@/core/spaces/funding');
+  const settings = await spaceFunding(scope.space.workspaceId);
+  const funding = fundingFor(scope.trigger, scope.space, settings);
+  if (funding !== 'sponsor' || settings.sponsorUserId !== scope.sponsor.userId) {
+    throw new SpaceError('funding_off', 'The space\'s funding changed since this work started: its sponsor no longer pays for it');
+  }
+  return { userId: settings.sponsorUserId, models: [...settings.sponsorModels] };
+}
+
+/**
+ * Whether a space turn holds no writing tools: a role that cannot write
+ * (§5.6), or a `listen` turn — nobody asked for it, and the conversation it
+ * answers is other members' untrusted text (§9.3). Its writes are also
+ * refused at call time (`routeApprovalFor`).
+ */
+export function writesWithheld(space: Pick<AgentSpace, 'role'>, trigger: AgentTrigger | undefined): boolean {
+  return !can(space.role, 'run_agent_write') || trigger === 'listen';
 }
 
 export interface AgentContextInput {

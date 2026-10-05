@@ -548,20 +548,47 @@ everyone in an archived space.
   update the session's one pending proposal for that note and answer
   `{ proposed: true, proposalId, status: 'pending', baseSha256 }` — the
   note itself is unchanged. A new note (and a capture that starts the day's
-  note) is still created: nothing of anyone's is overwritten. `read_note`
-  shows the session's pending proposal beside the note's current text.
-  The mode is read at every write, so a switch applies to a running agent;
-  in `direct` mode the agent writes through the live document like any
-  other writer. The *proposals* tab shows each with a diff, and its count
-  updates live for members with the note open (`doc.proposals`); accept
-  applies it through the same merge (if it collides with a newer edit it
-  turns stale and the three texts are shown), reject closes it. Meeting
-  notes are not written by the agent in a space (they link the requester's
-  personal profiles and calendars), so there is nothing of them to propose.
+  note) is still created — only while its slug is free: a note a member
+  creates meanwhile is proposed to, never written over. `read_note` shows
+  the session's pending proposal beside the note's current text, *rebased*
+  onto it (merged with what members wrote since) with the base to name
+  when editing from it; a proposal that collides with a member's edit is
+  shown `stale: true` and can only be replaced (written again from the
+  current text). A write naming a newer base than the proposal's carries
+  the proposal forward (three-way merge of its base, the text the agent
+  read and its body), so an accepted proposal never reverts a member's
+  edit made between the agent's reads; a collision is refused. A write
+  that changes nothing proposes nothing (`{ unchanged: true }`). One
+  proposal holds one action: an archive while an edit is pending (or the
+  reverse) is refused until a member decides the pending one. Agents
+  sharing a session (swarm children, parallel workers) share its
+  proposal: a second agent's change is merged into it, or refused when it
+  touches the same text. The mode is read at every write, so a switch
+  applies to a running agent; in `direct` mode the agent writes through
+  the live document like any other writer (and `read_note` says that a
+  write no longer updates the old pending proposal). The *proposals* tab
+  shows each with a diff, and its count updates live for members with the
+  note open (`doc.proposals`); accept applies it through the same merge
+  (if it collides with a newer edit it turns stale and the three texts
+  are shown; an archive proposal turns stale when the note was edited
+  since), reject closes it. A decision is refused when the agent updated
+  the proposal after it was read ("review it again").
+- **Deviations from §7.4.** *Meeting notes* (`write_meeting_note`,
+  `import_calendar_meetings`) are not proposals in a space, unlike the
+  spec says: they link the requester's personal profiles and calendars,
+  so they stay personal-only and the space tool allowlist refuses them
+  there ("not available in a shared space"); the agent writes a space
+  meeting note with `write_note`. *Links* made with
+  `knowledge.link_knowledge` from or to a space note are written directly,
+  in suggest mode too: an edge does not change the note's text (what a
+  proposal reviews), the member's role is checked, and the edge is
+  attributed to the agent (`origin: 'agent'`).
 - **File leases.** A member editing a space file holds a lease on it
   (`POST /api/spaces/<id>/file-leases`, renewed while the editor is open,
   lapsing after `spaces.fileLeaseTtlSeconds`), so others see "Ben is
-  editing". Paths are relative to the space's files root. A lease on a
+  editing". Paths are relative to the space's files root and canonical: a
+  lease taken through a symlinked directory names the real file (the path
+  the agent's tools resolve to). A lease on a
   directory covers its files; a directory operation conflicts with a lease
   anywhere under it. Changes are pushed as `file.leases` to the space's
   gateway subscribers. The web has no space file editor yet: leases are
@@ -574,10 +601,14 @@ everyone in an archived space.
   anything touches the disk. A recursive delete or a move of a directory is
   refused when a lease sits anywhere under it. The agent holds no lease of
   its own: a lease taken by the member it works for refuses it too (they are
-  editing that file now). The check and the write run under one in-process
-  mutex per path, so they are a single compare-and-write for every writer
-  in the server; the lease is the human-facing signal, the mutex the
-  guarantee.
+  editing that file now). A write is checked by its canonical path and by
+  the spelling the agent used. The check and the write run under the
+  in-process locks of the path and of every directory above it, and taking
+  a lease takes the same locks: a lease is never taken between an agent
+  file tool's check and its write (single process). That holds for the
+  agent's filesystem tools only; the lease is the human-facing signal.
+  On a case-insensitive filesystem (macOS) two spellings of one file that
+  differ only in case are two lease paths.
 - **Advisory for everything else.** Shell commands, git, docker, skill
   scripts and CLI coding agents (Claude Code, Codex, …) write files
   directly and do **not** check leases: for them a lease is only a sign
@@ -669,16 +700,25 @@ owner under Space settings → Funding (`PUT /api/spaces/:id/funding`):
 - **The sponsor** is an owner who named themselves ("sponsor this space");
   nobody is made to pay by someone else. A cell that needs a sponsor when
   there is none is off: the turn is refused (`funding_off`, 409), never
-  charged to the member instead.
-- **Sponsor models.** The sponsor picks which of their own models
-  (Settings → My models) sponsored turns may run on. A sponsored turn never
-  runs on the requester's own models (their key would pay while the space
-  is billed); without sponsor models it runs on the install's.
+  charged to the member instead. While a sponsor is named, only the sponsor
+  raises the mode (`own` → `unattended` → `sponsored`); another owner may
+  lower it or clear the sponsor. An admin acting as an owner cannot name
+  them sponsor, choose their sponsor models or raise the mode for them.
+- **Sponsor models.** The sponsor picks which of their own API models
+  (Settings → My models) sponsored turns may run on. A personal CLI model
+  cannot be one: the CLI process holds its owner's credential in its
+  environment, where the member driving the turn could read it. A
+  sponsored turn never runs on the requester's own models (their key would
+  pay while the space is billed); without sponsor models it runs on the
+  install's.
 - **Losing the sponsor.** When the sponsor is removed, leaves, is demoted
-  below owner, or another owner removes them as sponsor, `sponsor_user_id`
-  and `sponsor_models` are cleared in the same transaction, an audit row is
-  written and the space's sponsored agents stop. Sponsored work does not
-  start again until an owner sponsors the space.
+  below owner, their account is deleted, or another owner removes them as
+  sponsor, `sponsor_user_id` and `sponsor_models` are cleared in the same
+  transaction, an audit row is written and the space's sponsored agents
+  stop. Sponsored work does not start again until an owner sponsors the
+  space: every sponsored spawn, and every running sponsored worker every 30
+  seconds, re-reads the funding and stops when the sponsor it started under
+  is gone or the mode no longer pays for it — in any process.
 - **Budgets** (Space settings → Budget, `PUT /api/spaces/:id/budget`, owners;
   `GET` for any member): `space` caps everything the sponsor pays in the
   space per day or month; `space_member` caps each member's share of it.
@@ -686,10 +726,12 @@ owner under Space settings → Funding (`PUT /api/spaces/:id/funding`):
   pauses all sponsored work of the space; the member cap is computed per
   member, so a member at their cap is paused alone, and their warning and
   pause notices are stamped once per period in `space_member_notices`. The
-  sponsor (else the budget's author) is told when the space cap warns or
-  pauses; each member is told about their own share. A budget's `user_id` is
-  its author only and survives their account. Admins' budget lists never
-  show space budgets.
+  sponsor (else the budget's author, while still an owner of the space) is
+  told when the space cap warns or pauses; each member is told about their
+  own share. A budget's `user_id` is its author only and survives their
+  account. Writing the same budget again changes nothing (no notice is sent
+  twice in a period); a change is audited with the previous value. Admins'
+  budget lists never show space budgets.
 - **Personal budgets and quotas** never count sponsored spend: `user`,
   `role` and `workspace` budgets add `funding <> 'sponsor'`, and the daily
   token quota sums only the user's own agents (the concurrency cap counts
@@ -700,27 +742,40 @@ owner under Space settings → Funding (`PUT /api/spaces/:id/funding`):
 ## The team surface
 
 - **My work** (`/my-work` in the web, `GET /api/me/work`): my open tasks
-  assigned to me, in every space I belong to (not as a guest) and in my
-  personal workspaces, grouped by space.
+  assigned to me, in every space I belong to (not as a guest, not archived)
+  and in my personal workspaces, grouped by space.
 - **Assignment notices.** Assigning a space task to a member sends them a
   `task_assigned` notification in the space (their membership re-read
   first; assigning yourself tells nobody).
 - **Live board.** Every write to a space task (create, edit, claim,
   release, comment, delete) sends `task.changed { taskId, workspaceId }` to
-  the space's gateway subscribers (`space.subscribe`); the board refetches on
-  it instead of polling. A personal board still re-reads every 30 seconds.
+  the space's gateway subscribers (`space.subscribe`) who are current
+  members other than guests (a guest's scope is not checked per task yet);
+  the board refetches on it, once per burst, instead of polling. A personal
+  board still re-reads every 30 seconds.
 - **Room modes** (room settings, `GET/PUT /api/spaces/:id/rooms/:roomId/mode`,
   the room's creator or an owner): `mention` (default) speaks only when
   asked; `listen` offers help on a question nobody answered ("I could look
   into … — mention @octipus to hand it to me"); `proactive` answers it, as a
-  `listen` turn run as the member who asked and paid by the sponsor. Both use
-  the group channels' gate (`src/channels/group-listen.ts`): quiet hours in
-  the room's zone, a daily cap, a minimum gap, a question unanswered for 10
-  minutes that came after the agent last spoke, and one cheap
-  `background`-topic probe stamped `install`. Rooms of a space that funds
-  nothing unprompted, or has no sponsor, are not probed, nor while the space
-  budget is used up. Members rate unprompted posts 👍 / 👎
-  (`PUT …/messages/:messageId/feedback`); the counts show in room settings.
+  `listen` turn run as the member who asked and paid by the sponsor. A
+  `listen` turn only reads: nobody asked for it and it answers other
+  members' text, so its writing tools are withheld and its writes refused.
+  Both use the group channels' gate (`src/channels/group-listen.ts`): quiet
+  hours in the room's zone, a daily cap, a minimum gap, a question
+  unanswered for 10 minutes that came after the agent last spoke, and one
+  cheap `background`-topic probe. The probe is install work attributed to
+  the space (user `system`): it moves no personal budget and no member cap.
+  Rooms of a space that funds nothing unprompted, or has no sponsor, are
+  not probed, nor while the space budget is used up; a proactive room's
+  question is not probed when its author may not ask the agent or is at
+  their member cap. With several instances running cron, a room's probe is
+  claimed on its row first, so only one instance pays for it. Members rate
+  unprompted posts — offers and proactive answers — 👍 / 👎
+  (`PUT …/messages/:messageId/feedback`); the counts show in room settings,
+  and when the 👎 of the last two weeks outnumber the 👍 the gate's minimum
+  gap (at least an hour) is multiplied and its daily cap divided by
+  2^(👎 − 👍), at most 16×. Group channels' ✅ / ❌ slow their gate the same
+  way.
 
 ## Space memory
 
@@ -774,9 +829,12 @@ one conversation.
 - **Taken tasks** (`take this`, 🐙) go on the space's board, linked to the
   thread's room — one task per message, whoever takes it. Editors and owners
   can take work on; a commenter is told privately.
-- **Budget.** The space's budget replaces the channel's. Unprompted posts
-  (listen / proactive modes) are funded by the space's sponsor and are off
-  while the space has none.
+- **Budget.** The space's budget replaces the channel's while the space
+  is `sponsored` (its room turns are the sponsor's); otherwise each
+  member's turn is their own and their own budgets apply. Unprompted posts
+  (listen / proactive modes) need the space to fund unprompted work and are
+  off while it has no sponsor; their probe is install work attributed to
+  the space, gated by the space budget, as a room's.
 
 ## Space connectors
 

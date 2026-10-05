@@ -182,6 +182,14 @@ export function storedGuestScope(role: SpaceRole, stored: unknown): GuestScope |
   return role === 'guest' ? parseGuestScope(stored) : null;
 }
 
+/**
+ * Whether a task is in the scope: raised from one of its rooms
+ * (`source_ref.sessionId`, the rule `guestTaskFilter` applies in SQL).
+ */
+export function taskInGuestScope(sourceRef: { sessionId?: string } | null | undefined, scope: GuestScope): boolean {
+  return typeof sourceRef?.sessionId === 'string' && scope.rooms.includes(sourceRef.sessionId.toLowerCase());
+}
+
 /** Whether `relPath` (relative to the space's file root) is, or lies under, a folder of the scope. */
 export function pathInGuestFolders(relPath: string, folders: readonly string[]): boolean {
   const path = relPath.split(/[\\/]+/).filter((s) => s && s !== '.').join('/');

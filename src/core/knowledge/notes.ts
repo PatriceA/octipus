@@ -90,6 +90,12 @@ export interface SaveNoteInput {
   baseBody?: string;
   /** Space notes: the member an agent writes for (revision attribution). */
   onBehalfOfUserId?: string | null;
+  /**
+   * Create only: a note already at the slug is left as it is and
+   * `NoteExistsError` is thrown (an agent in suggest mode, whose change to
+   * an existing note is a proposal).
+   */
+  createOnly?: boolean;
 }
 
 export interface SaveNoteResult {
@@ -119,6 +125,17 @@ export interface SpaceBodyWriteResult {
 }
 
 type SpaceScope = NoteScope & { kind: 'space' };
+
+/** A create-only write found a note at its slug (`SaveNoteInput.createOnly`); nothing was written. */
+export class NoteExistsError extends Error {
+  constructor(readonly noteId: string, readonly slug: string) {
+    super(`A note already exists at ${slug}`);
+    this.name = 'NoteExistsError';
+  }
+}
+
+/** A new daily note's text. */
+const dailyTemplate = (date: string) => `# ${date}\n\n## Notes\n\n## Tasks\n`;
 
 const byteLength = (text: string) => Buffer.byteLength(text, 'utf8');
 
@@ -174,6 +191,7 @@ export class NoteService {
     } else if (desiredSlug) {
       existing = await store.getBySlug(desiredSlug);
     }
+    if (existing && input.createOnly) throw new NoteExistsError(existing.id, existing.slug);
 
     // A space note's body goes through the hub (or the conditional write):
     // what is saved is the writer's change merged into the current text.
@@ -471,7 +489,7 @@ export class NoteService {
       scope,
       slug,
       title: date,
-      body: `# ${date}\n\n## Notes\n\n## Tasks\n`,
+      body: dailyTemplate(date),
       noteKind: 'daily',
       noteDate: date,
     });
@@ -481,16 +499,37 @@ export class NoteService {
   /**
    * Quick capture — append a timestamped bullet to today's daily note.
    * The capture/journal surface; goes through the same save pipeline so
-   * links/tags in the captured text are wired immediately.
+   * links/tags in the captured text are wired immediately. In a space, a
+   * day without a note gets one created with the line in it (one write: a
+   * refused line leaves no new note behind); with `createOnly` an existing
+   * daily note is left as it is (`NoteExistsError`).
    */
-  async capture(scope: NoteScope, text: string, day?: string): Promise<Note> {
+  async capture(scope: NoteScope, text: string, day?: string, opts: { createOnly?: boolean } = {}): Promise<Note> {
     const date = normalizeDay(day ?? new Date().toISOString());
     const time = new Date().toISOString().slice(11, 16);
     if (scope.kind === 'space') {
+      assertNoteAccess(scope, 'write');
+      const slug = `daily/${date}`;
+      let found = await this.store(scope).getBySlug(slug);
+      if (!found) {
+        try {
+          const created = await this.save({
+            scope, slug, title: date, body: `${dailyTemplate(date).replace(/\s+$/, '')}\n- ${time} ${text}\n`,
+            noteKind: 'daily', noteDate: date, createOnly: true,
+          });
+          return created.note;
+        } catch (err) {
+          // Someone created the day's note meanwhile: the line goes into it.
+          if (!(err instanceof NoteExistsError) || opts.createOnly) throw err;
+          found = await this.store(scope).getById(err.noteId);
+          if (!found) throw new Error(`Daily note ${slug} vanished while capturing`);
+        }
+      } else if (opts.createOnly) {
+        throw new NoteExistsError(found.id, slug);
+      }
       // An open daily note: appended at the end of the live text, which
       // never conflicts with someone typing there (a merge would).
-      assertNoteAccess(scope, 'write');
-      const opened = await this.getOrCreateDaily(scope, date);
+      const opened = found;
       const hub = this.hub();
       const line = `- ${time} ${text}\n`;
       const appended = await hub.exclusive(opened.id, (open) => (open
@@ -528,14 +567,17 @@ export class NoteService {
   /**
    * Soft delete. An open space note's pending edits are saved first (under
    * its mutex) and its editors are told it was archived: an archive never
-   * drops what someone typed.
+   * drops what someone typed. With `baseSha256` (an accepted archive
+   * proposal) a space note is archived only while its text is still that
+   * one: false otherwise, and nothing changes.
    */
-  async archive(scope: NoteScope, id: string): Promise<boolean> {
+  async archive(scope: NoteScope, id: string, opts: { baseSha256?: string } = {}): Promise<boolean> {
     if (scope.kind !== 'space') return this.store(scope).archive(id);
     assertNoteAccess(scope, 'write');
     const hub = this.hub();
     const archived = await hub.exclusive(id, async (open) => {
       if (open) await hub.flushLocked(id);
+      if (opts.baseSha256 !== undefined && (await this.store(scope).getById(id))?.bodySha256 !== opts.baseSha256) return false;
       return this.store(scope).archive(id);
     });
     if (archived) await hub.closeNote(id, 'archived');

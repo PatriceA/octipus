@@ -72,6 +72,9 @@ export const roomModes = pgTable('room_modes', {
   lastUnpromptedAt: timestamp('last_unprompted_at', { withTimezone: true }),
   unpromptedDay: text('unprompted_day'),
   unpromptedCount: smallint('unprompted_count').default(0).notNull(),
+  /** The gate's last probe and its question, claimed across processes before the probe is paid (migration 0134). */
+  lastProbeAt: timestamp('last_probe_at', { withTimezone: true }),
+  lastProbedMessageId: uuid('last_probed_message_id'),
   updatedBy: uuid('updated_by').references(() => users.id, { onDelete: 'set null' }),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });

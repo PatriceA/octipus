@@ -948,6 +948,13 @@
       "breakpoints": true
     },
     {
+      "idx": 135,
+      "version": "7",
+      "when": 1789619114572,
+      "tag": "0134_room_probe_claim",
+      "breakpoints": true
+    },
+    {
       "idx": 136,
       "version": "7",
       "when": 1789621114572,

@@ -50,6 +50,8 @@ const BOARD_COLUMNS: readonly TaskStatus[] = ['open', 'in_progress', 'done'];
 const VIEW_KEY = 'octipus.tasks.view';
 /** How often the list re-reads while the page is visible, so agent progress shows up. */
 const REFRESH_MS = 30_000;
+/** A burst of `task.changed` events re-reads the board once, this long after the last. */
+const TASK_CHANGED_DEBOUNCE_MS = 400;
 
 /** Patchable fields a row can edit inline (besides notes/status). */
 type TaskPatch = Partial<Pick<Task, 'priority' | 'category' | 'dueAt' | 'estimate' | 'assigneeKind' | 'assigneeRef'>>;
@@ -286,10 +288,21 @@ export default function TasksPage() {
   useEffect(() => {
     if (spaceId && gatewayStatus === 'connected') gateway.send({ type: 'space.subscribe', spaceId });
   }, [gateway, spaceId, gatewayStatus]);
+  // Debounced: an agent's bulk edit sends one event per task, and the
+  // board re-reads the whole list once after the burst, not once per task.
+  const changedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (changedTimer.current) clearTimeout(changedTimer.current);
+  }, []);
   useGatewayMessages((message) => {
     if (!spaceId || message.type !== 'event' || message.event.type !== 'task.changed') return;
     const payload = message.event.payload as { workspaceId?: string };
-    if (payload.workspaceId === spaceId) fetchTasks();
+    if (payload.workspaceId !== spaceId) return;
+    if (changedTimer.current) clearTimeout(changedTimer.current);
+    changedTimer.current = setTimeout(() => {
+      changedTimer.current = null;
+      fetchTasks();
+    }, TASK_CHANGED_DEBOUNCE_MS);
   });
   useEffect(() => {
     const tick = () => {

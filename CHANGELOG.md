@@ -9,6 +9,29 @@ labels reflect blast radius, not contract guarantees.
 
 ### Fixed
 
+- **Sponsor, budgets and team surface (review of S5a).** A personal CLI
+  model can no longer be a sponsor model, nor run or release its
+  credential for anyone but its owner. Only the sponsor makes the space pay
+  for more (raising `own` → `unattended` → `sponsored`); an impersonating
+  admin can neither name the owner sponsor nor choose their models.
+  Sponsored work re-reads the space's funding at every spawn and every 30s
+  of a running worker, so it stops once the sponsor is gone, in any
+  process; a sponsor's account deletion is audited as such; `POST
+  /api/agents/:id/message` re-checks the funding and runs inside the
+  sponsor context. Room and bound-channel listen probes are install work
+  attributed to the space, gated by the space budget only (never the
+  sponsor's personal budget nor a member cap); a room's probe is claimed
+  in the database before it is paid (migration 0134), and a proactive
+  probe is skipped when the question's author may not ask the agent.
+  `listen` turns only read. Their answers take 👍 / 👎, and recent 👎 slow
+  the gate of rooms and channels down. Space spend sums use the
+  `cost_log` workspace index. `task.changed` reaches non-guest members
+  only, and the board debounces its refetch. A bound channel's turns pause
+  on the space budget only when the space sponsors them. A sponsor's own
+  install-type calls on a sponsor model are stamped `sponsor`. Writing the
+  same space budget again no longer resets its notices; budget audits carry
+  the previous value; a budget author who left is not told the space's
+  spend. My work leaves out archived spaces.
 - **Group-channel bridge and space connectors (review of S5).** The Git tool,
   the shell, `gh` and CLI agents in a space run with a fresh per-run tool
   home (`HOME`, `XDG_CONFIG_HOME`, `GH_CONFIG_DIR`, git's config) seeded only
@@ -87,9 +110,22 @@ labels reflect blast radius, not contract guarantees.
   closed note refreshes its links and index. Every file-changing
   filesystem tool now checks space file leases (prefix matching for a
   recursive delete or a directory move) and refuses a leased path with who
-  holds it and until when, the check and the write under one per-path
-  mutex. Shell, git, docker, skill scripts and CLI agents stay advisory
-  (docs/SPACES.md).
+  holds it and until when. Lease paths are canonical (a lease through a
+  symlinked directory names the real file) and the agent's write is checked
+  by both spellings; the check and the write hold the path locks of the
+  file and its directories, which taking a lease also takes, so no lease is
+  taken between an agent file tool's check and its write. Shell, git,
+  docker, skill scripts and CLI agents stay advisory (docs/SPACES.md).
+  A session's pending proposal is shown rebased onto the note's current
+  text (or `stale`), and a write from a newer read carries it forward, so
+  an accepted proposal never reverts a member's edit; agents sharing a
+  session merge into one proposal or are refused; a proposal is decided
+  only as it was read; archive and edits never silently replace each other;
+  a write that changes nothing proposes nothing; an archive proposal of a
+  note edited since turns stale; an agent's new note (or new daily note) is
+  created only while its slug is free. A capture refused for size leaves no
+  new daily note behind. Meeting notes stay personal-only in spaces and
+  `link_knowledge` edges are direct (documented deviations from §7.4).
 - **Space funding, budgets and the team surface** (coworking S5,
   `docs/SPACES.md` → "Funding and budgets", "The team surface"). A space's
   owners choose who pays for the agent — each member (`own`), members for

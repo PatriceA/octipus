@@ -30,9 +30,11 @@
  *   the room shows — that is what the owner acknowledged.
  * - **Taken tasks** go on the space's board through the space access layer,
  *   one task per message whoever takes it (`takeChannelTask` with `space`).
- * - **Budget**: the space's budget replaces the channel's (`groupBudgetPause`);
- *   unprompted posts are funded by the space's sponsor and are off without
- *   one (`bridgeListenFunding`).
+ * - **Budget**: the space's budget replaces the channel's while the space
+ *   sponsors its turns (`groupBudgetPause`); unprompted posts run only while
+ *   the space funds unprompted work, and are off without a sponsor
+ *   (`bridgeListenFunding`) — their probe is install work attributed to the
+ *   space (`group-listen.ts`).
  */
 import { and, eq, notExists } from 'drizzle-orm';
 import { MAIN_THREAD } from '@/channels/group-handler';
@@ -355,22 +357,22 @@ export function bridgeHint(access: Exclude<BridgeAccess, 'ok'>): string {
 // ── Budget and funding ──────────────────────────────────────────────────────
 
 /**
- * The space budget (§9.2): when the bound space's `space` budget is used up,
- * when it resets (`spend-budgets.ts`). Member caps pause one member's
- * sponsored turns at `checkSpend`, never the channel.
- */
-export type SpaceBudgetPause = (workspaceId: string) => Promise<{ resetsAt: string } | null>;
-export const spaceBudgetPause: SpaceBudgetPause = async (workspaceId) =>
-  (await import('@/security/spend-budgets')).spaceBudgetPause(workspaceId);
-
-/**
- * The budget pause of a channel: for a bound channel the space's budget
- * replaces the channel's (§9.4 point 5) — its room turns run in room
- * sessions, which no channel budget covers — else the channel's own.
+ * The budget pause of a channel: for a bound channel the space's `space`
+ * budget replaces the channel's (§9.2, §9.4 point 5) — its room turns run
+ * in room sessions, which no channel budget covers — but only when the
+ * space pays for those turns (`sponsored`). In `own` and `unattended` a
+ * member's room turn is their own (`fundingFor('room')`): no channel-wide
+ * pause, each member's own budgets refuse it at `checkSpend`. Member caps
+ * pause one member's sponsored turns at `checkSpend`, never the channel.
+ * An unbound channel: its own budget.
  */
 export async function groupBudgetPause(group: GroupChannel): Promise<{ resetsAt: string } | null> {
-  if (group.workspaceId) return spaceBudgetPause(group.workspaceId);
   const { groupChannelPause } = await import('@/security/spend-budgets');
+  if (group.workspaceId) {
+    const { spaceFunding } = await import('@/core/spaces/funding');
+    if ((await spaceFunding(group.workspaceId)).mode !== 'sponsored') return null;
+    return groupChannelPause(group.id, { funding: 'sponsor', spaceId: group.workspaceId });
+  }
   return groupChannelPause(group.id);
 }
 
