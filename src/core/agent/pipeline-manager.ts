@@ -271,7 +271,7 @@ export function qaVerdictCorrectionInput(report: string, reason: string, handsOf
  */
 export async function runStageVerifyCommand(
   command: string,
-  ctx: { userId?: string; sessionId: string; role: string; toolIds?: string[] },
+  ctx: Pick<AgentContext, 'sessionId' | 'workspaceId' | 'space'> & { userId?: string; role: string; toolIds?: string[] },
 ): Promise<string> {
   const canRunCommands = (ctx.toolIds ?? []).includes('shell');
   if (!canRunCommands) {
@@ -285,10 +285,12 @@ export async function runStageVerifyCommand(
     const sessionCtx = session.context as { devMode?: boolean; projectPath?: string } | undefined;
     // The command runs where the stage's agents work: the session's
     // workspace (loaded into the file-root map by `turnWorkspaceId`), or
-    // its dev-mode project.
+    // its dev-mode project — never a project in a space, whose agents work
+    // in the space's files.
     const { turnWorkspaceId } = await import('./session-resolver');
-    const { WorkspaceFS } = await import('@/security/workspace-fs');
+    const { isSharedWorkspaceId, WorkspaceFS } = await import('@/security/workspace-fs');
     const workspaceId = await turnWorkspaceId(session.userId, session.workspaceId);
+    const inSpace = !!ctx.space || await isSharedWorkspaceId(workspaceId);
     const outcome = await runScorers(
       [{ kind: 'command_exit_zero', command }],
       { output: '', notes: '' },
@@ -296,7 +298,12 @@ export async function runStageVerifyCommand(
         userId: ctx.userId,
         role: ctx.role,
         canRunCommands: true,
-        projectPath: sessionCtx?.devMode === true ? sessionCtx.projectPath : undefined,
+        // The stage's session, workspace and space: the space role cap and
+        // I6 apply to the verify command as to the stage's own shell.
+        sessionId: ctx.sessionId,
+        workspaceId: ctx.workspaceId ?? workspaceId,
+        space: ctx.space ?? null,
+        projectPath: !inSpace && sessionCtx?.devMode === true ? sessionCtx.projectPath : undefined,
         workspaceRoot: WorkspaceFS.forSession({ ...session, workspaceId }).root,
       },
     );
@@ -1343,6 +1350,8 @@ export class PipelineManager {
             const evidence = await runStageVerifyCommand(command, {
               userId: context.userId,
               sessionId,
+              workspaceId: context.workspaceId,
+              space: context.space,
               role: b.role,
               toolIds: b.toolIds,
             });
@@ -1794,6 +1803,11 @@ export class PipelineManager {
     // with the trigger of the session that started it, recorded at creation.
     const startedBy = (pipeline.metadata as { trigger?: AgentTrigger } | null)?.trigger ?? 'user';
     const scope = await resolveAgentScope({ session: originSession, userId: pipeline.userId, trigger: startedBy });
+    // Its stages write, so the starter must still hold a write role: one
+    // downgraded since the pipeline started does not resume it (as `createAndRun`).
+    if (scope.space && !can(scope.space.role, 'run_agent_write')) {
+      throw new SpaceError('forbidden_role', `Your role (${scope.space.role}) cannot resume a pipeline in this space`);
+    }
     const context = buildAgentContext({
       attended: channelCanPrompt(originSession?.channelType),
       id: pipeline.rootAgentId,

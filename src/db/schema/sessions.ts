@@ -37,6 +37,13 @@ export const sessions = pgTable('sessions', {
    * auto-archive, so it lives until someone deletes it by hand.
    */
   pinned: boolean('pinned').default(false).notNull(),
+  /**
+   * The flow guard's label (security/flow-guard.ts): each flag the session
+   * gained — `private`, `suspicious`, `secret` — with its first source.
+   * Written through when a flag is first gained, so a restart or another
+   * process still knows what the conversation holds (the space I6 rule).
+   */
+  flowLabel: jsonb('flow_label').$type<Partial<Record<'suspicious' | 'private' | 'secret', string>>>(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   completedAt: timestamp('completed_at', { withTimezone: true }),

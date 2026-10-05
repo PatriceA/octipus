@@ -242,25 +242,46 @@ A member's private chat in a space runs the agent in the space.
   inherit all three, and every spawn re-reads the membership.
 - **Tools.** Content tools use `reposFor(context)` — `contentRepos` of the
   agent's principal, which carries the space and the role — so the agent
-  reads and writes exactly what the member may. Personal-only tools
-  (scheduling, monitors, pipelines and recipes, memory and profile tools,
-  `sync_vault`, `index_file`/`index_directory`, meeting notes, writes through
-  personal connectors) are not offered and are refused; the prompt says why.
+  reads and writes exactly what the member may. Writes go only through
+  containers known to act on the space (`SPACE_TOOL_IDS`, an allowlist in
+  `src/security/space-tools.ts`: content tools, files, shell, version control,
+  sandboxes); personal-only tools (scheduling, monitors, pipelines and
+  recipes, memory, profile and skill tools such as `update_skill`,
+  `sync_vault`, `index_file`/`index_directory`, meeting notes, MCP server
+  administration, skill distillation) and every write through the member's
+  personal connections (OAuth connectors and `connector_call_tool`, their MCP
+  servers, their real browser through `browser-ext`, the named connector
+  tools) are not offered and are refused; the prompt says why. Reads through
+  those connections run and mark the session `private` (I6). A coding agent's
+  configuration under the space's files (`.claude/`, `.codex/`, `.gemini/`,
+  `.agents/`, `.vibe/`, `.mcp.json`) is never written, by the file tools or a
+  CLI model's native writes: a CLI model run in the space would read it.
 - **Decisions.** `routeApprovalFor` (`src/security/approval-route.ts`) is the
   one decision for every tool call: it re-reads the membership, applies the
   role cap first (commenters and guests run only `COMMENTER_TOOLS`,
   `src/security/space-tools.ts`), then the I6 rule — after a private read
   (the session's flow label holds `private`), any call that is not a read
   asks, whatever `agent.flowGuard` says — then the stored ALLOW/ASK/DENY.
+  The flow label is stored on the session (`sessions.flow_label`), so a
+  restart or another process still asks. A space this process has not seen
+  yet is looked up in the database, so a context that names a space without
+  its scope is refused.
 - **Memories and profile.** `sessionAudience`
   (`src/core/agent/audience.ts`) switches the requester's personal memories,
   learning and profile facts off in a space session, child workers included.
 - **CLI models.** Each adapter declares the mode it runs in inside a space
   (`CLI_SPACE_MODES`): Claude-binary tools use `--permission-mode default`
-  with the stdio permission tool (pre-approved `allowedTools` are dropped),
+  with the stdio permission tool (pre-approved `allowedTools` are dropped)
+  and read no user, project or local settings file (`--setting-sources=`
+  plus a locked `--settings` file: no allow rules, bypass disabled, the shell
+  guard as the only hook),
   Codex the `read-only` sandbox, Antigravity `--mode plan`; Mistral Vibe has
   none and is refused. Commenters' turns use API models only, and an install
   CLI model serves spaces only when marked `metadata.cliAgent.sharedUse: true`.
+- **Pipelines and artifacts.** A stage's verify command runs in the space's
+  files under the space's role cap and I6; a pipeline resumes only while its
+  starter may still write there. A space artifact takes no `tool` or `mcp`
+  data source (they run as the member's personal agent).
 - **Cost.** Each turn runs inside one usage context: every `cost_log` row of
   a space turn carries the space's `workspace_id` and the turn's `funding`;
   install-topic calls (compaction, embeddings, memory extraction, toolshim,

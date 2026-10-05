@@ -91,7 +91,7 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
       const found = await getSkillRegistry().getAll(ownerId);
       return { skills: found.filter(skill => user || skill.isSystem).map(skill => ({ ...skill,
         mounted: isExternalSkillId(skill.id),
-        canEdit: !!user && !isExternalSkillId(skill.id) && (skill.isSystem || user.isAdmin || skill.userId === ownerId),
+        canEdit: !!user && !isExternalSkillId(skill.id) && (user.isAdmin || (!skill.isSystem && skill.userId === ownerId)),
         canDelete: !!user && (skill.isSystem || user.isAdmin || skill.userId === ownerId || !!skill.orgId),
         removeOnly: skill.isSystem || isExternalSkillId(skill.id) || (!!skill.orgId && skill.userId !== ownerId),
       })) };

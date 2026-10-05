@@ -12,6 +12,7 @@ import { withDispatchAuthorization } from '@/security/dispatch-authorization';
 import { routeApprovalFor } from '@/security/approval-route';
 import { applyFlowGuard, ensureSharedAudienceKnown, isVaultAuthenticated, observeFlow } from '@/security/flow-guard';
 import { getPermissionManager } from '@/security/permissions';
+import { withoutPersonalOnlyTools } from '@/security/space-tools';
 import { agentLogger, coreLogger } from '@/utils/logger';
 import { DEFAULT_MAX_LENGTH, sanitizeToolOutput } from '@/utils/sanitize';
 import type { AgentEvent, ToolHandler } from './agent-base';
@@ -537,6 +538,16 @@ export class ToolExecutor {
 
       const toolId = tool.toolId || 'agent';
 
+      // A meta-tool never reaches `routeApprovalFor`, so in a space one that is
+      // not offered there (a personal-only tool such as `update_skill`) is
+      // refused here, whoever registered it.
+      if (toolId === 'agent' && this.context.space && withoutPersonalOnlyTools([tool]).length === 0) {
+        this.counters.permissionDenials++;
+        results.push({ toolCallId: toolCall.id, result: null, errorCode: 'permission_denied',
+          error: `Permission denied: ${toolCall.name} acts on your personal account and automation, so it is not available in a shared space. Do NOT retry this action — it is blocked by policy.` });
+        continue;
+      }
+
       // Internal root agent meta-tools are always allowed
       if (toolId === 'agent') {
         try {
@@ -684,7 +695,7 @@ export class ToolExecutor {
       // each other to be kept in sync.
       const decision = await routeApprovalFor(
         this.context,
-        { toolId, action: permAction, toolName: bareName },
+        { toolId, action: permAction, toolName: bareName, args: toolCall.arguments },
         permResult,
         { unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions },
       );

@@ -210,6 +210,24 @@ export class SessionRepository {
     return result.length > 0;
   }
 
+  /**
+   * Add flags to the session's stored flow label (security/flow-guard.ts).
+   * The stored sources win, so the first source of a flag is kept across
+   * processes; labels only tighten. `updatedAt` is left alone: a label is
+   * not activity.
+   */
+  async addFlowLabel(id: string, flags: Partial<Record<'suspicious' | 'private' | 'secret', string>>): Promise<void> {
+    await this.db
+      .update(sessions)
+      .set({ flowLabel: sql`${JSON.stringify(flags)}::jsonb || coalesce(${sessions.flowLabel}, '{}'::jsonb)` as never })
+      .where(eq(sessions.id, id));
+  }
+
+  /** Drop the session's stored flow label. */
+  async clearFlowLabel(id: string): Promise<void> {
+    await this.db.update(sessions).set({ flowLabel: null }).where(eq(sessions.id, id));
+  }
+
   async incrementMessageCount(id: string, tokenDelta: number = 0): Promise<void> {
     await this.db
       .update(sessions)

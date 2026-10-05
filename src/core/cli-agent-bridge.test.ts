@@ -12,7 +12,8 @@ const fixture = vi.hoisted(() => ({ script: '', dir: '', plan: { revision: 0, cu
 const commentary = vi.hoisted(() => vi.fn().mockResolvedValue({ sent: true }));
 vi.mock('./agent/service', () => ({ getAgentService: () => ({ sendStatusUpdate: commentary }) }));
 // These process/bridge fixtures have no database; accounting is tested separately.
-vi.mock('@/models/providers/instrumented', () => ({ recordProviderUsage: async () => {} }));
+const usage = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock('@/models/providers/instrumented', () => ({ recordProviderUsage: usage }));
 vi.mock('@/db/repositories/tool-action-repository', () => ({ toolActionRepository: { pending: async () => [], start: async () => {}, finish: async () => {} } }));
 vi.mock('child_process', async importOriginal => {
   const actual = await importOriginal<typeof import('child_process')>();
@@ -180,6 +181,30 @@ it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('already-cancelled parent prevents any
     { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 }, { parentSignal: controller.signal });
   await expect(worker.run('sample')).rejects.toThrow('aborted before starting');
   expect(fixture.status).toHaveBeenCalledWith('a', expect.objectContaining({ status: 'stopped' }));
+});
+
+// Coworking §5.6: a Claude-binary run in a space runs in its space mode —
+// permission mode default behind the stdio permission tool, no settings file
+// but Octipus's — and its usage is accounted to the space.
+it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('a run in a space passes the space mode to the CLI and accounts usage to the space', async () => {
+  writeFileSync(fixture.script, `
+    import { readFileSync } from 'node:fs';
+    const argv = process.argv.slice(2);
+    const settings = JSON.parse(readFileSync(argv[argv.indexOf('--settings') + 1], 'utf8'));
+    console.log(JSON.stringify({type:'result',subtype:'success',result:JSON.stringify({argv, settings}),num_turns:1,usage:{input_tokens:3,output_tokens:2}}));
+  `);
+  const spaceId = '0b7a2a4e-7c1e-4d4e-9a55-2f1d9c3e8a10';
+  const worker = new CLIAgentWorker({ space: { workspaceId: spaceId, role: 'editor', scope: null }, trigger: 'user', funding: 'own', id: 'a', sessionId: 's', userId: 'u',
+    workspaceId: spaceId, root: true, model: 'cli/claude-code', role: 'general', topic: 'general', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+    { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
+  usage.mockClear();
+  const { argv, settings } = JSON.parse(await worker.run('Check it')) as { argv: string[]; settings: { permissions: unknown; hooks: Record<string, unknown> } };
+  expect(argv[argv.indexOf('--permission-mode') + 1]).toBe('default');
+  expect(argv[argv.indexOf('--permission-prompt-tool') + 1]).toBe('stdio');
+  expect(argv).toContain('--setting-sources=');
+  expect(argv).not.toContain('--allowedTools');
+  expect(settings.permissions).toEqual({ allow: [], defaultMode: 'default', disableBypassPermissionsMode: 'disable' });
+  expect(usage).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: spaceId, funding: 'own', requestType: 'cli' }), 'cli', expect.anything(), expect.anything());
 });
 
 function sampleWorker(): CLIAgentWorker {

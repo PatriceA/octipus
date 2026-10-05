@@ -27,8 +27,12 @@
  * Children share their root's `sessionId`, so the label is family-wide: a
  * child that read a secret taints the parent's later sends too (conservative).
  *
- * In-memory, LRU-bounded. A restart forgets labels — acceptable for a guard
- * whose failure mode is "asks less", never "asks for everything".
+ * In-memory, LRU-bounded, and written through to `sessions.flow_label`: a
+ * flag is persisted the first time a session gains it, and
+ * `loadFlowLabel` / `ensureSharedAudienceKnown` merge the stored label back
+ * after a restart or in another process. The space I6 rule (approval-route)
+ * reads the label after loading it, so data read before a restart still
+ * asks before it is written into a space.
  */
 import type { PermissionCheckResult } from './permissions';
 
@@ -182,14 +186,17 @@ export function observeFlow(sessionId: string | undefined, call: FlowCall, contr
   if (!sessionId || contract.taints.length === 0) return;
   const label = labels.get(sessionId) ?? empty();
   labels.delete(sessionId); // re-insert: Map order doubles as LRU order
+  const gained: StoredFlowLabel = {};
   for (const t of contract.taints) {
     if (!label[t]) {
       label[t] = true;
       label.sources[t] = `${call.toolId}:${call.action}`;
+      gained[t] = label.sources[t];
     }
   }
   labels.set(sessionId, label);
   if (labels.size > MAX_SESSIONS) labels.delete(labels.keys().next().value as string);
+  if (Object.keys(gained).length > 0) persistGained(sessionId, gained);
 }
 
 export function clearFlowLabel(sessionId: string): void {
@@ -197,6 +204,12 @@ export function clearFlowLabel(sessionId: string): void {
   sharedAudience.delete(sessionId);
   lookedUp.delete(sessionId);
   uncertain.delete(sessionId);
+  loaded.delete(sessionId);
+  if (isUuidShape(sessionId)) {
+    void import('@/db/repositories/session-repository')
+      .then(({ sessionRepository }) => sessionRepository.clearFlowLabel(sessionId))
+      .catch((err) => flowLogger().then((log) => log.error({ err, sessionId }, 'flow label: clearing the stored label failed')));
+  }
 }
 
 /** Test seam. */
@@ -205,6 +218,63 @@ export function resetFlowLabels(): void {
   sharedAudience.clear();
   lookedUp.clear();
   uncertain.clear();
+  loaded.clear();
+}
+
+// ── Stored labels ───────────────────────────────────────────────────────────
+
+/** `sessions.flow_label`: each flag a session gained, with its first source. */
+export type StoredFlowLabel = Partial<Record<'suspicious' | 'private' | 'secret', string>>;
+
+/** Sessions whose stored label this process has merged (bounded). */
+const loaded = new Set<string>();
+
+function isUuidShape(id: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+}
+
+async function flowLogger() {
+  return (await import('@/utils/logger')).securityLogger;
+}
+
+/** Write newly gained flags through to the session row (synthetic ids have none). */
+function persistGained(sessionId: string, gained: StoredFlowLabel): void {
+  if (!isUuidShape(sessionId)) return;
+  void import('@/db/repositories/session-repository')
+    .then(({ sessionRepository }) => sessionRepository.addFlowLabel(sessionId, gained))
+    .catch((err) => flowLogger().then((log) => log.error({ err, sessionId }, 'flow label: persisting the label failed')));
+}
+
+/** Merge a stored label into the in-memory one (labels only tighten). */
+function mergeStored(sessionId: string, stored: StoredFlowLabel | null | undefined): void {
+  loaded.add(sessionId);
+  if (loaded.size > MAX_SHARED_SESSIONS) loaded.delete(loaded.values().next().value as string);
+  if (!stored) return;
+  const label = labels.get(sessionId) ?? empty();
+  labels.delete(sessionId);
+  for (const t of ['suspicious', 'private', 'secret'] as const) {
+    const source = stored[t];
+    if (typeof source === 'string' && !label[t]) {
+      label[t] = true;
+      label.sources[t] = source;
+    }
+  }
+  labels.set(sessionId, label);
+  if (labels.size > MAX_SESSIONS) labels.delete(labels.keys().next().value as string);
+}
+
+/**
+ * Merge the session's stored label (`sessions.flow_label`) into this
+ * process, once per session. Throws when the row cannot be read: the
+ * caller is deciding whether a write needs consent and must not decide on
+ * a label it could not load.
+ */
+export async function loadFlowLabel(sessionId: string | undefined): Promise<void> {
+  if (!sessionId || loaded.has(sessionId)) return;
+  if (!isUuidShape(sessionId)) { mergeStored(sessionId, null); return; }
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const session = await sessionRepository.findById(sessionId);
+  mergeStored(sessionId, session?.flowLabel as StoredFlowLabel | null | undefined);
 }
 
 // ── Shared audience (group channels) ────────────────────────────────────────
@@ -273,7 +343,7 @@ export async function ensureSharedAudienceKnown(sessionId: string | undefined): 
   const { isUuid } = await import('@/db/repositories/scoped');
   if (!isUuid(sessionId)) { rememberLookup(sessionId); return; }
   const { sessionRepository } = await import('@/db/repositories/session-repository');
-  let session: { groupChannelId?: string | null } | null;
+  let session: { groupChannelId?: string | null; flowLabel?: unknown } | null;
   try {
     session = await sessionRepository.findById(sessionId);
   } catch {
@@ -287,6 +357,7 @@ export async function ensureSharedAudienceKnown(sessionId: string | undefined): 
   }
   uncertain.delete(sessionId);
   rememberLookup(sessionId);
+  if (!loaded.has(sessionId)) mergeStored(sessionId, session?.flowLabel as StoredFlowLabel | null | undefined);
   if (session?.groupChannelId) markSharedAudience(sessionId);
 }
 
