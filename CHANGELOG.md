@@ -30,6 +30,20 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **Rooms in the web.** With a shared space selected, the sidebar gets
+  *rooms* (with the unread count) and `/rooms` lists the space's rooms with
+  unread badges. A room shows everyone's posts (others on the left with name
+  and initials, mine on the right) and Octipus's answers; the composer has
+  an "Ask Octipus" toggle and `@` completion of the room's members; a turn
+  strip says "Octipus — answering Anna", "waiting for Anna to approve" and
+  who is queued (cancel for my own requests). Side panels: members (a
+  private room's creator and space owners add and remove), space memory
+  (add and retract with `write`), settings (title, visibility). Also mute,
+  "Ask privately" (opens my private chat in the space linked to the room),
+  new room for editors and owners, presence avatars in the header saying
+  where each member is, catch-up after a reconnect (`afterMessageId`), and
+  a notice when the room is taken away (`room.removed`). `/chat?session=<id>`
+  opens that chat.
 - **Rooms.** A space's shared chats (coworking S2, backend): sessions with
   `kind = 'room'` (`space` or `private`), every space starting with
   "General". Members post, `@mention` each other and ask Octipus; each turn
@@ -414,6 +428,22 @@ mixed into it. Existing memories are not migrated.
   permission tool; Codex: read-only; Antigravity: plan); Mistral Vibe is
   refused, commenters use API models only, and an install CLI login serves
   spaces only when its model is marked `metadata.cliAgent.sharedUse: true`.
+- **Spaces: personal connections and agent configuration stay out.** In a
+  space, writes go only through tools known to act on the space; writes
+  through your OAuth connectors (`connector_call_tool`), MCP servers, real
+  browser (`browser-ext`), MCP server administration, skill distillation and
+  `update_skill` are refused and not offered, and their reads mark the
+  session private so writing that data into the space asks first. The flow
+  label is now stored on the session (`sessions.flow_label`, migration 0128),
+  so a restart keeps it. A Claude-binary CLI model in a space reads no user,
+  project or local settings file (`--setting-sources=` with a locked
+  `--settings` file), and nothing writes `.claude/`, `.codex/`, `.gemini/`,
+  `.agents/` or `.mcp.json` in a space's files. A pipeline's verify command
+  follows the space rules, a pipeline resumes only for a starter who can
+  still write, and a space artifact takes no `tool` or `mcp` data source.
+- **Only an administrator edits a system skill.** Before, any signed-in user
+  could change a skill shared by every user (`update_skill`, `PATCH
+  /api/skills/:id`).
 - **Cost rows name the space.** Every model call of a space turn writes
   `cost_log.workspace_id` and `funding`; compaction, embeddings, memory
   extraction, toolshim, decision, vision and OCR calls are stamped `install`.

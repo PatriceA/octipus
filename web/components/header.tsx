@@ -9,6 +9,7 @@ import { useAuth } from '@/lib/auth-context';
 import { cn } from '@/lib/utils';
 import Link from 'next/link';
 import type { Notification } from '@/lib/types/notifications';
+import { SpacePresence } from './rooms/space-presence';
 import { WorkspacePicker } from './workspace-picker';
 import { useWorkspaceId } from '@/lib/workspace-context';
 
@@ -255,8 +256,9 @@ export function Header() {
         </div>
       </div>
 
-      {/* Right side — workspace picker, notifications, profile. */}
+      {/* Right side — who else is in the space, workspace picker, notifications, profile. */}
       <div className="flex items-center gap-1.5">
+        <SpacePresence />
         <WorkspacePicker />
 
         <div className="relative" ref={notifRef}>

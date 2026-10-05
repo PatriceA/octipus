@@ -550,7 +550,8 @@ export default function ChatPage() {
   useEffect(() => {
     if (!mounted) {
       setMounted(true);
-      const savedActive = localStorage.getItem(STORAGE_KEY_ACTIVE);
+      // `?session=<id>` opens that chat (a room's "Ask privately"), else the last one.
+      const savedActive = new URLSearchParams(window.location.search).get('session') ?? localStorage.getItem(STORAGE_KEY_ACTIVE);
 
       loadSessions().then((items) => {
         if (items.length > 0) {

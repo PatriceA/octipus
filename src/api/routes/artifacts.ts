@@ -13,7 +13,7 @@ import type { Principal } from '@/security/principal';
 import { SpaceError } from '@/security/space-access';
 import type { Artifact } from '@/db/schema/artifacts';
 import { mintShareLink } from '@/core/artifacts/share-link';
-import { refreshSource } from '@/core/artifacts/refresh';
+import { refreshSource, spaceSourceRefusal } from '@/core/artifacts/refresh';
 import { renderRssFeed } from '@/core/artifacts/render';
 import { buildArtifactAppUrl, buildArtifactEmbedUrl, buildArtifactOuterUrl, getArtifactsHostMode, pickShareableUrl } from '@/core/artifacts/host';
 import type { ArtifactVisibility as ArtifactVisibilityType } from '@/db/schema/artifacts';
@@ -376,6 +376,11 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
         return { error: 'not found' };
       }
       store.assertWrite();
+      const refusal = spaceSourceRefusal(body.kind, principal.workspaceKind === 'shared');
+      if (refusal) {
+        set.status = 400;
+        return { error: refusal };
+      }
       const s = await artifactsRepository.createSource({
         artifactId: a.id,
         name: body.name,

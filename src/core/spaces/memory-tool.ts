@@ -1,7 +1,7 @@
 import type { ToolHandler } from '@/core/agent-base';
 import type { AgentService } from '@/core/agent/service';
 import { routeApprovalFor } from '@/security/approval-route';
-import { getFlowLabel } from '@/security/flow-guard';
+import { getFlowLabel, loadFlowLabel } from '@/security/flow-guard';
 import { requireCan } from '@/security/space-access';
 
 /**
@@ -40,6 +40,8 @@ export function createRememberForSpaceTool(service: AgentService): ToolHandler {
       // The role first (read now): a member who may not write is not asked.
       const { getMembership } = await import('./service');
       requireCan(await getMembership(context.userId, space.workspaceId), 'write');
+      // The stored label too (a restart, another process).
+      await loadFlowLabel(context.sessionId);
       const decision = await routeApprovalFor(
         context,
         { toolId: 'space_memory', action: 'write', toolName: 'remember_for_space' },

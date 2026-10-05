@@ -25,6 +25,8 @@ import { getTopicConfig } from '@/models/topic-config';
 import { premiseNoteFor } from '@/core/premise';
 import { isRealUserId } from '@/security/principal';
 import { WorkspaceFS } from '@/security/workspace-fs';
+import { can } from '@/security/space-access';
+import { withoutPersonalOnlyTools } from '@/security/space-tools';
 import { randomUUID } from 'node:crypto';
 import { getCLIToolConfig, isCLIProvider, resolveCliModelEntry } from '@/core/cli-agent-factory';
 import {
@@ -619,6 +621,14 @@ export class SwarmSpawner {
           'Plan mode: file-mutating tools withheld from swarm child',
         );
       }
+    }
+    // A space child: personal-only tools are withheld, and for a role that
+    // cannot write, the file-changing tools too (§5.6) — the same filters as
+    // the root and `worker-spawner`. `resolveChildTools` intersects by
+    // toolId, so a handler the root dropped would otherwise come back here.
+    if (parentContext.space) {
+      childTools = withoutPersonalOnlyTools(childTools);
+      if (!can(parentContext.space.role, 'run_agent_write')) childTools = stripMutatingTools(childTools);
     }
 
     // Phase 2: register swarm meta-tools on Agent (depth 1) children so they
@@ -1946,6 +1956,7 @@ export class SwarmSpawner {
         buildScorerContext({
           userId: opts.parentContext.userId,
           sessionId: opts.parentContext.sessionId,
+          workspaceId: opts.parentContext.workspaceId ?? null,
           space: opts.parentContext.space,
           workspaceRoot: WorkspaceFS.forAgent(opts.parentContext).root,
           filesTouched,
@@ -2634,6 +2645,7 @@ async function isCliModel(model: string, modelName?: string): Promise<boolean> {
 export function buildScorerContext(args: {
   userId?: string;
   sessionId?: string;
+  workspaceId?: string | null;
   space?: import('@/core/types').AgentSpace | null;
   /** The child's workspace root (`WorkspaceFS.forAgent` of the spawning context). */
   workspaceRoot?: string;
@@ -2655,6 +2667,7 @@ export function buildScorerContext(args: {
     canRunCommands: args.childTools.some((t) => t.toolId === 'shell' || t.name.startsWith('shell__')),
     role: args.childRole,
     sessionId: args.sessionId,
+    workspaceId: args.workspaceId ?? null,
     space: args.space ?? null,
     // So a command check dies with a cancelled run rather than outliving it
     // with the awaited spawn still pending.

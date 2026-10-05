@@ -182,7 +182,7 @@ export abstract class BaseTool {
     const manifestPermission = this.getManifest().permissions.find(permission => permission.action === action);
     const check = await permissionManager.check(context.userId, this.id, action, args, context,
       { revalidate: !!priorAuthorization, defaultLevel: manifestPermission?.defaultLevel, dangerous: manifestPermission?.dangerous });
-    const decision = await routeApprovalFor(context, { toolId: this.id, action, toolName }, check);
+    const decision = await routeApprovalFor(context, { toolId: this.id, action, toolName, args }, check);
     let authorizationSource = decision.source ?? 'policy';
     if (decision.route === 'deny') {
       throw new Error(`Permission denied for ${this.id}.${action}: ${decision.reason}`);
