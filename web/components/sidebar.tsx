@@ -11,6 +11,7 @@ import {
   Fingerprint,
   FlaskConical,
   GitBranch,
+  Hash,
   KeyRound,
   LayoutDashboard,
   Bell,
@@ -32,14 +33,18 @@ import Link from 'next/link';
 import { useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
+import { useRooms } from '@/lib/rooms';
 import { useSidebarStore } from '@/lib/sidebar-store';
 import { cn } from '@/lib/utils';
+import { useWorkspace } from '@/lib/workspace-context';
 
 interface NavItem {
   name: string;
   href: string;
   icon: typeof LayoutDashboard;
   badge?: string;
+  /** Unread count (rooms), shown when above zero. */
+  count?: number;
 }
 
 interface NavGroup {
@@ -91,8 +96,22 @@ export function Sidebar() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const { collapsed, toggle } = useSidebarStore();
   const { user } = useAuth();
-  const groups = navGroups.map(group => group.label === 'Settings' && user?.isAdmin
-    ? { ...group, items: [...group.items, { name: 'users', href: '/admin/users', icon: Users }] } : group);
+  // In a shared space: its rooms, with what I have not read in them (muted rooms left out).
+  const { activeWorkspace } = useWorkspace();
+  const spaceId = activeWorkspace?.kind === 'shared' ? activeWorkspace.id : null;
+  const rooms = useRooms(spaceId);
+  const unread = (rooms.data ?? []).reduce((sum, r) => sum + (r.muted ? 0 : r.unreadCount), 0);
+  const groups = navGroups.map(group => {
+    if (group.label === 'Settings' && user?.isAdmin) {
+      return { ...group, items: [...group.items, { name: 'users', href: '/admin/users', icon: Users }] };
+    }
+    if (group.label === 'Work' && spaceId) {
+      const items = [...group.items];
+      items.splice(2, 0, { name: 'rooms', href: '/rooms', icon: Hash, count: unread });
+      return { ...group, items };
+    }
+    return group;
+  });
 
   return (
     <>
@@ -172,6 +191,11 @@ export function Sidebar() {
                     )}
                     <item.icon className="shrink-0 w-4 h-4" />
                     {!collapsed && <span className="truncate">{item.name}</span>}
+                    {!collapsed && !!item.count && (
+                      <span data-testid={`nav-unread-${item.name}`} className="ml-auto rounded-sm bg-primary px-1.5 text-[10px] font-semibold text-on-primary">
+                        {item.count}
+                      </span>
+                    )}
                     {!collapsed && item.badge && (
                       <span className="ml-auto rounded-sm border border-primary/40 bg-primary/10 px-1.5 py-0 text-[9px] font-semibold uppercase tracking-wider text-primary">
                         {item.badge}

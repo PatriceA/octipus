@@ -9,6 +9,20 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **Rooms in the web.** With a shared space selected, the sidebar gets
+  *rooms* (with the unread count) and `/rooms` lists the space's rooms with
+  unread badges. A room shows everyone's posts (others on the left with name
+  and initials, mine on the right) and Octipus's answers; the composer has
+  an "Ask Octipus" toggle and `@` completion of the room's members; a turn
+  strip says "Octipus — answering Anna", "waiting for Anna to approve" and
+  who is queued (cancel for my own requests). Side panels: members (a
+  private room's creator and space owners add and remove), space memory
+  (add and retract with `write`), settings (title, visibility). Also mute,
+  "Ask privately" (opens my private chat in the space linked to the room),
+  new room for editors and owners, presence avatars in the header saying
+  where each member is, catch-up after a reconnect (`afterMessageId`), and
+  a notice when the room is taken away (`room.removed`). `/chat?session=<id>`
+  opens that chat.
 - **Rooms.** A space's shared chats (coworking S2, backend): sessions with
   `kind = 'room'` (`space` or `private`), every space starting with
   "General". Members post, `@mention` each other and ask Octipus; each turn
