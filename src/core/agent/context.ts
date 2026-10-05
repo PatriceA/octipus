@@ -145,6 +145,8 @@ export interface AgentContextInput {
   scope: AgentScope;
   topic: string;
   model: string;
+  /** Registry row of `model` — see `AgentContext.modelName`. */
+  modelName?: string;
   role: string;
   root?: boolean;
   attended?: boolean;
@@ -166,6 +168,7 @@ export function buildAgentContext(input: AgentContextInput): AgentContext {
     funding: input.scope.funding,
     topic: input.topic,
     model: input.model,
+    modelName: input.modelName,
     role: input.role,
     root: input.root === true,
     attended: input.attended,

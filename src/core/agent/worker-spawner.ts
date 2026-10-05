@@ -346,8 +346,7 @@ export async function spawnWorker(
   // single-model / router case); an explicit expert modelPreference is a rare
   // override and still benefits from a leaner prompt.
   // The requester's personal lane binding first, then the install's (§8.2).
-  const { isSharedWorkspace } = await import('@/core/spaces/service');
-  const inSpace = !!context.workspaceId && await isSharedWorkspace(context.workspaceId);
+  const inSpace = !!context.space;
   const routing = await deps.modelSelector.selectForWorker(
     lane,
     roleTools.length > 0,
@@ -1383,8 +1382,7 @@ async function handleWorkerFailure(
   // would rerun the failed model.
   try {
     // Personal bindings have no backup: this is the install lane's (§8.2).
-    const { isSharedWorkspace } = await import('@/core/spaces/service');
-    const inSpace = !!context.workspaceId && await isSharedWorkspace(context.workspaceId);
+    const inSpace = !!context.space;
     const backup = await resolveModel({ userId: context.userId, topic: lane, backup: true, inSpace });
     if (backup && backup.modelId !== failedModel) {
       coreLogger.info(

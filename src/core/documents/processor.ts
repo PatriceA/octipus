@@ -402,6 +402,7 @@ export class DocumentProcessor {
       if (fallbackModel) {
         const result = await client.completeVision({
           model: fallbackModel.modelId,
+          modelConfigName: fallbackModel.name,
           prompt: 'Describe this image and extract any text content.',
           imageBase64: base64,
           mimeType,

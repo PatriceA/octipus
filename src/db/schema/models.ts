@@ -90,8 +90,6 @@ export interface CLIAgentConfig {
   extraArgs?: string[];
   /** Override the model the CLI uses (e.g. Codex — bypasses ~/.codex/config.toml default) */
   model?: string;
-  /** An install CLI model is a personal subscription unless marked shared; only then does it run in space sessions (coworking D14). */
-  sharedUse?: boolean;
 }
 
 export interface ModelMetadata {

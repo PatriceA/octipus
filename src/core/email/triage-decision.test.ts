@@ -13,7 +13,7 @@ vi.mock('@/models/decision', () => ({ recordShadow: vi.fn(), decide: vi.fn(() =>
 vi.mock('@/db/repositories/user-repository', () => ({ userRepository: { findById: async () => ({ preferences: {} }) } }));
 vi.mock('@/models/model-registry', async () => ({
   ...(await vi.importActual<typeof import('@/models/model-registry')>('@/models/model-registry')),
-  getModelRegistry: () => ({ getModelForTopic: async () => ({ modelId: 'chat-model' }) }),
+  getModelRegistry: () => ({ getModelForTopic: async () => ({ modelId: 'chat-model', name: 'chat-model' }), getUserBinding: async () => null }),
 }));
 vi.mock('@/models/litellm-client', async () => ({
   ...(await vi.importActual<typeof import('@/models/litellm-client')>('@/models/litellm-client')),

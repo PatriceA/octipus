@@ -629,8 +629,7 @@ export class SwarmSpawner {
     // placeholder id is mutated to the real one before any tool can fire.
 
     // ── Model resolution: the lane is authoritative ──
-    const { isSharedWorkspace } = await import('@/core/spaces/service');
-    const childInSpace = !!parentContext.workspaceId && await isSharedWorkspace(parentContext.workspaceId);
+    const childInSpace = !!parentContext.space;
     const { model: childModel, modelName: childModelName, lane: childLane, systemPrompt, stablePrompt, skillContext, isSmall } = await releaseOnThrow(() =>
       this.resolveChildModel(
         parent.model,

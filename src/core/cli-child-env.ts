@@ -112,7 +112,7 @@ export async function cliCredentialOwnerFor(
  * every server auth variable stripped (also from `toolEnv`), and only the
  * owner's token injected. Limits: the child still runs as the server's OS
  * user, so this separates vendor state and credentials, not file permissions
- * (docs/coworking.md, "Own models").
+ * (docs/SPACES.md, "Own models").
  */
 export function cliEnvFor(
   owner: CliCredentialOwner | null,

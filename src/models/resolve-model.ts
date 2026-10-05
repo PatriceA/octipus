@@ -67,6 +67,15 @@ export function usableInSpace(row: ModelConfigEntry): boolean {
   return row.metadata?.cliAgent?.sharedUse === true;
 }
 
+/**
+ * Whether `nameOrId` names a registry row at all. An explicit choice that
+ * `resolveModel` refused but that names a row is a row the requester may not
+ * use — it must be refused, not passed through to a provider as a raw id.
+ */
+export async function isRegisteredModel(nameOrId: string): Promise<boolean> {
+  return getModelRegistry().isRegistered(nameOrId);
+}
+
 export async function resolveModel(req: ResolveByTopic | ResolveByName): Promise<ModelConfigEntry | null> {
   const registry = getModelRegistry();
   if ('name' in req) {

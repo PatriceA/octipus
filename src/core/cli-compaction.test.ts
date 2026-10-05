@@ -10,7 +10,7 @@ vi.mock('@/models/providers/cli-provider', () => ({ acquireCliSlot: async () => 
 vi.mock('@/db/repositories/agent-repository', () => ({ agentRepository: { findById: mock.owner } }));
 vi.mock('./cli-agent-factory', () => ({ getCLIToolConfig: mock.tool, resolveCliModelEntry: async () => ({ metadata: {} }) }));
 vi.mock('./cli-adapters', () => ({ discoverCodexMcpServers: async () => [] }));
-vi.mock('./cli-session-store', () => ({ isChildCliSessionKey: (key: string) => key.includes('::') }));
+vi.mock('./cli-session-store', () => ({ isChildCliSessionKey: (key: string) => key.includes('::'), cliSessionKeyAdapter: (key: string) => key.split('@@')[0] }));
 vi.mock('@/security/workspace-fs', () => ({ WorkspaceFS: { forSession: () => ({ root: '/session-workspace' }) } }));
 import { compactCliConversation, compactCodexThread, rootCliConversation } from './cli-compaction';
 const record = { id: 'vendor-id', fingerprint: 'keep-this', generation: 'g', ownerAgentId: 'root', lastUsedAt: '2026-09-28' };

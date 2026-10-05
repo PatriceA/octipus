@@ -189,7 +189,7 @@ export class AgentManager {
     if (!options.model) {
       // Only route if model isn't pre-determined
       const router = getRouter();
-      const routing = await router.route(options.topic || '', undefined, { userId: options.userId });
+      const routing = await router.route(options.topic || '', undefined, { userId: options.userId, inSpace: !!space });
       routedTopic = routing.topic;
       routedModel = routing.model;
       routedModelName = routing.modelName;
@@ -205,7 +205,7 @@ export class AgentManager {
     if (routedModelName && !modelEntry) {
       throw new Error(`Model '${routedModelName}' is not registered or is disabled`);
     }
-    if (modelEntry && modelEntry.modelId !== routedModel) {
+    if (routedModelName && modelEntry && modelEntry.modelId !== routedModel) {
       throw new Error(`Model row '${modelEntry.name}' runs '${modelEntry.modelId}', not '${routedModel}'`);
     }
     if (modelEntry?.ownerUserId && modelEntry.ownerUserId !== options.userId) {
@@ -227,7 +227,6 @@ export class AgentManager {
       attended: options.attended,
       metadata: options.contextMetadata,
     });
-
 
     // The window belongs to the MODEL, not to the install. `agent.contextWindowSize`
     // is one number for every agent (32k by default), and every compaction
@@ -254,7 +253,10 @@ export class AgentManager {
       if (!can(space.role, 'run_agent_write')) {
         throw new SpaceError('forbidden_role', `Your role (${space.role}) runs the agent in this space with API models only; ${routedModel} is a CLI model`);
       }
-      if (modelEntry?.metadata?.cliAgent?.sharedUse !== true) {
+      // The requester's own personal CLI row is their subscription, used for
+      // their own turn (§8.5): D14 governs install rows only.
+      const ownRow = !!modelEntry?.ownerUserId && modelEntry.ownerUserId === options.userId;
+      if (!ownRow && modelEntry?.metadata?.cliAgent?.sharedUse !== true) {
         throw new SpaceError('forbidden_role', `${routedModel} is a personal CLI subscription and is not available in a shared space (an operator can mark it for shared use)`);
       }
       const tool = getCLIToolConfig(routedModel);

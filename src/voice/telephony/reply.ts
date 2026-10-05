@@ -46,14 +46,22 @@ export async function generatePhoneReply(
   const client = getLiteLLMClient();
   const registry = getModelRegistry();
 
+  // A phone call has no signed-in requester: install lanes only (§8.2).
   let modelId: string | undefined;
+  let modelName: string | undefined;
   try {
     const { ModelSelector } = await import('../../core/agent/model-selector');
-    modelId = (await new ModelSelector().selectForWorker('voice', false)).model;
+    const routing = await new ModelSelector().selectForWorker('voice', false);
+    modelId = routing.model;
+    modelName = routing.name || undefined;
   } catch {
     /* fall through to default */
   }
-  modelId ||= (await registry.getDefaultModel())?.modelId;
+  if (!modelId) {
+    const fallback = await registry.getDefaultModel();
+    modelId = fallback?.modelId;
+    modelName = fallback?.name;
+  }
   if (!modelId) throw new Error('No model configured for voice topic');
 
   history.push({ role: 'user', content: transcript });
@@ -64,6 +72,7 @@ export async function generatePhoneReply(
   const started = Date.now();
   const result = await client.complete({
     model: modelId,
+    modelConfigName: modelName,
     messages: [
       { role: 'system', content: await resolvePhonePrompt(), timestamp: new Date() },
       ...history.map((m) => ({ role: m.role, content: m.content, timestamp: new Date() })),

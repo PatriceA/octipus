@@ -182,8 +182,7 @@ export async function runRootAgent(
   const routedLane = laneChoice.lane;
   // The requester's own choices first (their `/model`, their personal lane
   // binding), then the install's (coworking spec §8.2).
-  const { isSharedWorkspace } = await import('@/core/spaces/service');
-  const inSpace = !!workspaceId && await isSharedWorkspace(workspaceId);
+  const inSpace = !!space;
   const selectedModel = await deps.modelSelector.selectForRootAgent(sessionId, classification.type, { message, classification }, { userId, inSpace });
   const modelName = selectedModel.modelId;
 

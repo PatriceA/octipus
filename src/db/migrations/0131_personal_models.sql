@@ -20,3 +20,6 @@ CREATE TABLE IF NOT EXISTS user_model_bindings (
 );
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS user_model_bindings_model_idx ON user_model_bindings(model_name);
+--> statement-breakpoint
+-- An owner created, changed or deleted a personal model (their audit trail).
+ALTER TYPE "audit_action" ADD VALUE IF NOT EXISTS 'personal_model_changed';

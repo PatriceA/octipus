@@ -549,7 +549,7 @@ interface StageModel {
  * back to the primary: a typo that silently costs full price is the failure
  * this whole declaration exists to end.
  */
-async function resolveStageModel(
+export async function resolveStageModel(
   declared: { model?: string; mechanical?: boolean } | undefined,
   topic: string,
   userId: string | undefined,

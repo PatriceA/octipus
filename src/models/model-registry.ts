@@ -152,6 +152,16 @@ export class ModelRegistry {
     return (await getUserOrgIds(userId)).includes(row.orgId);
   }
 
+  /** Is there any row (any owner, enabled or not) whose name or modelId is `nameOrId`? */
+  async isRegistered(nameOrId: string): Promise<boolean> {
+    const rows = await this.db
+      .select({ id: modelConfig.id })
+      .from(modelConfig)
+      .where(or(eq(modelConfig.name, nameOrId), eq(modelConfig.modelId, nameOrId)))
+      .limit(1);
+    return rows.length > 0;
+  }
+
   /** Does `name` name a personal row (anyone's)? Used before passing an unknown name through to a provider. */
   async isPersonalModelName(name: string): Promise<boolean> {
     const rows = await this.db
