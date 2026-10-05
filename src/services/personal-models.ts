@@ -7,7 +7,14 @@
  * label, an endpoint for the custom providers only, the key or CLI token, and
  * text-lane bindings. Nothing that changes how the server itself runs is
  * accepted — no `cliAgent.inheritApiKeys`, `extraArgs`, `mcpConfigPath`,
- * `permissionMode` or `extraHeaders`.
+ * `permissionMode` or `extraHeaders`. A row may size its own context window
+ * and output limit within bounds, so compaction thresholds fit the model.
+ *
+ * A CLI row runs only in its adapter's locked mode (`CLI_SPACE_MODES`): an
+ * adapter without one (Vibe) is refused. It binds a lane only when its tool
+ * can answer one-shot completions without native tools (`toolLessArgs`):
+ * lanes also serve the one-shot callers (mail triage, reader, research),
+ * whose input is other people's text.
  *
  * The row is named `u/<userId>/<slug>`; ownership is `owner_user_id`. The key
  * lives in the owner's vault and resolves only under the owner
@@ -18,7 +25,8 @@ import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { getDb } from '@/db/postgres';
-import { type ModelConfigEntry, type ModelMetadata, modelConfig, userModelBindings } from '@/db/schema/models';
+import { DEFAULT_MAX_OUTPUT_TOKENS, type ModelConfigEntry, type ModelMetadata, modelConfig, userModelBindings } from '@/db/schema/models';
+import { CLI_SPACE_MODES } from '@/core/cli-adapters';
 import { getCLIToolConfig } from '@/core/cli-agent-factory';
 import { PERSONAL_CLI_VENDORS } from '@/core/cli-child-env';
 import { getModelRegistry } from '@/models/model-registry';
@@ -50,6 +58,13 @@ export class PersonalModelError extends Error {
 }
 
 const topicsSchema = z.array(z.string()).max(PERSONAL_BINDABLE_TOPICS.length);
+/** Bounds a personal row may size itself within (tokens). */
+export const PERSONAL_CONTEXT_WINDOW = { min: 4_096, max: 2_000_000 } as const;
+export const PERSONAL_MAX_TOKENS = { min: 256, max: 256_000 } as const;
+/** `model_config.context_window`'s column default — what a row gets when it sets none. */
+const DEFAULT_CONTEXT_WINDOW = 128_000;
+const contextWindowSchema = z.number().int().min(PERSONAL_CONTEXT_WINDOW.min).max(PERSONAL_CONTEXT_WINDOW.max);
+const maxTokensSchema = z.number().int().min(PERSONAL_MAX_TOKENS.min).max(PERSONAL_MAX_TOKENS.max);
 
 export const createPersonalModelSchema = z.object({
   slug: z.string().regex(SLUG, 'slug must be 1–40 characters of a-z, 0-9 and -'),
@@ -59,6 +74,8 @@ export const createPersonalModelSchema = z.object({
   endpoint: z.string().trim().max(2048).optional(),
   key: z.string().min(1).max(8192),
   topics: topicsSchema.optional(),
+  contextWindow: contextWindowSchema.optional(),
+  maxTokens: maxTokensSchema.optional(),
 }).strict();
 
 export const updatePersonalModelSchema = z.object({
@@ -67,6 +84,8 @@ export const updatePersonalModelSchema = z.object({
   key: z.string().min(1).max(8192).optional(),
   isEnabled: z.boolean().optional(),
   topics: topicsSchema.optional(),
+  contextWindow: contextWindowSchema.optional(),
+  maxTokens: maxTokensSchema.optional(),
 }).strict();
 
 export type CreatePersonalModelInput = z.infer<typeof createPersonalModelSchema>;
@@ -90,6 +109,8 @@ async function checkEndpoint(provider: string, endpoint: string | undefined): Pr
     return null;
   }
   if (!endpoint) throw new PersonalModelError(400, 'A custom provider needs an endpoint');
+  // The owner's key travels with every request: never in cleartext.
+  if (!/^https:\/\//i.test(endpoint)) throw new PersonalModelError(400, 'Endpoint refused: a personal endpoint must use https://');
   const check = await validateExternalUrl(endpoint);
   if (!check.valid) throw new PersonalModelError(400, `Endpoint refused: ${check.reason}`);
   return endpoint.replace(/\/+$/, '');
@@ -106,10 +127,25 @@ function checkModelId(provider: string, modelId: string): void {
     if (!PERSONAL_CLI_VENDORS.includes(tool.modelProvider)) {
       throw new PersonalModelError(400, `${tool.name} cannot run on a personal token`);
     }
+    if (!CLI_SPACE_MODES[tool.adapter ?? tool.name]) {
+      throw new PersonalModelError(400, `${tool.name} cannot run on a personal token: it has no mode in which its own tools stay behind Octipus's permission checks`);
+    }
   }
 }
 
-function checkTopics(topics: string[] | undefined): string[] {
+/** The output limit and per-request default of a row whose maximum is `maxTokens`. */
+function outputLimits(maxTokens: number, currentDefault: number | null | undefined): { maxTokens: number; defaultMaxTokens: number } {
+  return { maxTokens, defaultMaxTokens: Math.min(currentDefault ?? DEFAULT_MAX_OUTPUT_TOKENS, maxTokens) };
+}
+
+function checkLimits(contextWindow: number, maxTokens: number): void {
+  if (maxTokens > contextWindow) throw new PersonalModelError(400, 'maxTokens must not exceed contextWindow');
+}
+
+function checkTopics(topics: string[] | undefined, row: { provider: string; modelId: string }): string[] {
+  if (row.provider === 'cli' && topics?.length && !getCLIToolConfig(row.modelId)?.toolLessArgs) {
+    throw new PersonalModelError(400, `${getCLIToolConfig(row.modelId)?.name ?? row.modelId} cannot bind a lane: lanes also serve one-shot completions, which it cannot run without its own tools. Pick it with /model instead.`);
+  }
   const out = new Set<string>();
   for (const raw of topics ?? []) {
     if (!isPersonalBindableTopic(raw)) {
@@ -169,6 +205,8 @@ export async function listPersonalModels(userId: string): Promise<PersonalModelV
     endpoint: row.endpoint,
     isEnabled: row.isEnabled,
     hasKey: !!row.apiKeyRef,
+    contextWindow: row.contextWindow,
+    maxTokens: row.maxTokens,
     topics: bindings.filter((b) => b.modelName === row.name).map((b) => b.topic).sort(),
   }));
 }
@@ -176,10 +214,12 @@ export async function listPersonalModels(userId: string): Promise<PersonalModelV
 export async function createPersonalModel(userId: string, input: CreatePersonalModelInput): Promise<PersonalModelView> {
   checkModelId(input.provider, input.modelId);
   const endpoint = await checkEndpoint(input.provider, input.endpoint);
-  const topics = checkTopics(input.topics);
+  const topics = checkTopics(input.topics, input);
+  const contextWindow = input.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+  if (input.maxTokens !== undefined) checkLimits(contextWindow, input.maxTokens);
   const name = personalModelName(userId, input.slug);
   const registry = getModelRegistry();
-  if (await registry.isRegistered(name)) throw new PersonalModelError(409, `You already have a model named "${input.slug}"`);
+  if (await registry.isNameTaken(name)) throw new PersonalModelError(409, `You already have a model named "${input.slug}"`);
 
   const metadata: ModelMetadata = {};
   if (input.label) metadata.description = input.label;
@@ -194,6 +234,8 @@ export async function createPersonalModel(userId: string, input: CreatePersonalM
     apiKeyRef,
     ownerUserId: userId,
     metadata,
+    ...(input.contextWindow !== undefined ? { contextWindow: input.contextWindow } : {}),
+    ...(input.maxTokens !== undefined ? outputLimits(input.maxTokens, undefined) : {}),
   });
   await setBindings(userId, name, topics);
   await auditRepository.log({ userId, action: 'personal_model_changed', resourceType: 'model', resourceId: name, details: { change: 'created',  provider: input.provider, modelId: input.modelId, topics } });
@@ -208,9 +250,17 @@ export async function updatePersonalModel(userId: string, slug: string, input: U
   if (input.endpoint !== undefined) patch.endpoint = await checkEndpoint(row.provider, input.endpoint);
   if (input.label !== undefined) patch.metadata = { ...(row.metadata ?? {}), description: input.label || undefined };
   if (input.isEnabled !== undefined) patch.isEnabled = input.isEnabled;
+  if (input.contextWindow !== undefined || input.maxTokens !== undefined) {
+    const contextWindow = input.contextWindow ?? row.contextWindow;
+    const maxTokens = input.maxTokens ?? row.maxTokens;
+    checkLimits(contextWindow, maxTokens);
+    if (input.contextWindow !== undefined) patch.contextWindow = contextWindow;
+    if (input.maxTokens !== undefined) Object.assign(patch, outputLimits(maxTokens, row.defaultMaxTokens));
+  }
+  const topics = input.topics !== undefined ? checkTopics(input.topics, row) : undefined;
   if (input.key !== undefined) patch.apiKeyRef = await storeKey(userId, row.name, input.key);
   if (Object.keys(patch).length > 0) await getModelRegistry().updateModel(row.name, patch);
-  if (input.topics !== undefined) await setBindings(userId, row.name, checkTopics(input.topics));
+  if (topics !== undefined) await setBindings(userId, row.name, topics);
   await auditRepository.log({ userId, action: 'personal_model_changed', resourceType: 'model', resourceId: row.name, details: { change: 'updated',  fields: Object.keys(input).filter((k) => k !== 'key').concat(input.key ? ['key'] : []) } });
   const view = (await listPersonalModels(userId)).find((m) => m.name === row.name);
   if (!view) throw new Error(`Personal model ${row.name} vanished after update`);

@@ -2066,7 +2066,7 @@ export class AgentWorker extends BaseAgentWorker {
     // Install-level lane (background): the key is the row owner's — the system
     // vault for this install row (coworking spec §8.3).
     const { resolveModelKey } = await import('@/models/model-key');
-    const apiKey = await resolveModelKey(model);
+    const apiKey = await resolveModelKey(model, this.context.userId);
 
     const completionOpts = {
       model: model.modelId,
@@ -2216,7 +2216,7 @@ export class AgentWorker extends BaseAgentWorker {
     // install row, the owner's vault for a personal one (spec §8.3). A
     // personal row without its key throws rather than run on the install key.
     const { resolveModelKey } = await import('@/models/model-key');
-    const apiKey = await resolveModelKey(model);
+    const apiKey = await resolveModelKey(model, this.context.userId);
 
     // Per-topic overrides (W10) take precedence over the model's own defaults
     // when set on the Topics page — applied here so they reach the LLM call.

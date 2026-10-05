@@ -1,5 +1,6 @@
 import { getModelRegistry } from '@/models/model-registry';
-import { resolveModel } from '@/models/resolve-model';
+import type { SpaceRole } from '@/db/schema/organizations';
+import { resolveModel, usableInSpace } from '@/models/resolve-model';
 import { coreLogger } from '@/utils/logger';
 import { selectLane } from './lane-intent';
 import { hasRecentShim } from './model-capability';
@@ -24,6 +25,8 @@ export interface ModelRequester {
   userId?: string;
   /** The session runs in a shared space (D14 applies to install CLI rows). */
   inSpace?: boolean;
+  /** The requester's role there: a commenter's turns use API models only (§5.6). */
+  spaceRole?: SpaceRole;
 }
 
 /**
@@ -110,7 +113,7 @@ export class ModelSelector {
     if (sessionId && requester.userId) {
       const overrideName = getSessionModel(sessionId, requester.userId);
       if (overrideName) {
-        const override = await resolveModel({ userId: requester.userId, name: overrideName, inSpace: requester.inSpace });
+        const override = await resolveModel({ userId: requester.userId, name: overrideName, inSpace: requester.inSpace, spaceRole: requester.spaceRole });
         if (override) {
           coreLogger.info(
             { sessionId, model: override.modelId },
@@ -132,7 +135,7 @@ export class ModelSelector {
     // message rather than per install.
     const routed = routing ? selectLane(routing.message, routing.classification) : null;
     if (routed) {
-      const routedModel = await resolveModel({ userId: requester.userId, topic: routed.lane, inSpace: requester.inSpace });
+      const routedModel = await resolveModel({ userId: requester.userId, topic: routed.lane, inSpace: requester.inSpace, spaceRole: requester.spaceRole });
       if (routedModel) {
         coreLogger.info(
           { lane: routed.lane, reason: routed.reason, model: routedModel.modelId, turnType },
@@ -204,7 +207,7 @@ export class ModelSelector {
    * Select the best model for a worker role's topic, with fallback for tool support.
    */
   async selectForWorker(topic: string, needsTools: boolean, requester: ModelRequester = {}): Promise<ModelRouting> {
-    const topicModel = await resolveModel({ userId: requester.userId, topic, inSpace: requester.inSpace });
+    const topicModel = await resolveModel({ userId: requester.userId, topic, inSpace: requester.inSpace, spaceRole: requester.spaceRole });
 
     if (!topicModel) {
       coreLogger.warn(
@@ -258,17 +261,26 @@ export class ModelSelector {
    * Select a model based on message complexity.
    * Simple messages use a cheaper/faster model if available. A requester who
    * bound a personal model to the `everyday` lane — the casual-chat lane —
-   * gets that row instead (spec §8.2).
+   * gets that row instead (spec §8.2). In a space session the space rules
+   * hold here too (side questions, the voice plan gate): a CLI row only when
+   * `usableInSpace` allows it for the requester's role.
    */
   async selectByComplexity(complexity: 'simple' | 'moderate' | 'complex' = 'moderate', requester: ModelRequester = {}): Promise<SelectedModel> {
     const registry = getModelRegistry();
+    const usable = (row: Parameters<typeof usableInSpace>[0]) => !requester.inSpace || usableInSpace(row, requester.spaceRole);
     if (requester.userId) {
       const personal = await registry.getUserBinding(requester.userId, 'everyday');
-      if (personal) return { modelId: personal.modelId, name: personal.name };
+      if (personal && usable(personal)) return { modelId: personal.modelId, name: personal.name };
     }
-    const defaultModel = await registry.getDefaultModel();
-    if (!defaultModel) {
+    const configuredDefault = await registry.getDefaultModel();
+    if (!configuredDefault) {
       throw new Error('No default model configured. Set one in the Models page.');
+    }
+    const defaultModel = usable(configuredDefault)
+      ? configuredDefault
+      : (await registry.getAllModels()).find((m) => m.provider !== 'cli');
+    if (!defaultModel) {
+      throw new Error(`The default model ${configuredDefault.name} cannot run in this space and no API model is configured.`);
     }
     const defaultModelId = defaultModel.modelId;
 

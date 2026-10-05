@@ -113,6 +113,34 @@ labels reflect blast radius, not contract guarantees.
 
 ### Security
 
+- **Own models: review fixes** (coworking S4). A personal CLI model's
+  one-shot completions (mail triage, reader, research, `/plan`, the casual
+  path) run without native tools (`--tools=`, no settings files) in a
+  directory under the owner's CLI home, never in the shared workspace root;
+  a CLI tool that cannot run tool-less (Codex, Antigravity) can no longer be
+  bound to a lane and serves agent runs only. A personal CLI agent run is
+  locked to its adapter's safe mode, as in a space (Claude: permission mode
+  `default` with the stdio permission tool and only a locked settings file;
+  Codex: read-only; Antigravity: plan mode); Mistral Vibe is refused for
+  personal rows. Codex MCP discovery reads the run's own `CODEX_HOME`. A
+  personal row's key is released only to its owner at the provider layer
+  (`resolveModelKey`), so another user's request on it fails whatever key it
+  brings; `/compact` never compacts another member's conversation on their
+  personal model. In a space a personal CLI binding a commenter (or an
+  adapter without a space mode) may not use falls through to the install
+  lane instead of failing the turn, and side questions and the voice plan
+  gate follow the same rules. `isRegisteredModel` only considers install
+  rows and the caller's own (plus the reserved `u/` namespace), so another
+  user's personal model id no longer blocks a passthrough. Red-team runs,
+  `POST /api/eval/run` and `PATCH /api/topics/:topic/config` refuse personal
+  rows. Admins see disabled and other orgs' install rows in
+  `GET /api/models/:name` again; install rows fall back to the env key when
+  the vault cannot be read (personal rows still fail loud). The SSRF guard
+  also refuses `fec0::/10`, `ff00::/8`, IPv4-compatible `::a.b.c.d`, 6to4 of
+  a private IPv4, local-use NAT64, Teredo and documentation ranges, and a
+  personal endpoint must be `https://`. Personal rows may set
+  `contextWindow` and `maxTokens` within bounds, and a compaction that runs
+  on a personal row is funded `own`.
 - **Shared spaces: review fixes to the access layer** (coworking S1).
   Admins no longer list, read or stream another user's agents in a space
   (history list, live list, live details, events, stop). Starting an agent or

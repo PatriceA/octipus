@@ -11,8 +11,10 @@
  *   - admin model and topic routes refuse them;
  *   - every explicit-name site refuses Alice's model name to Bob;
  *   - keys resolve under the row owner, never the requester;
- *   - CLI runs get the owner's env and per-owner session/quota keys;
- *   - a private endpoint is refused.
+ *   - CLI runs get the owner's env and per-owner session/quota keys, run in
+ *     the locked mode, and one-shots run tool-less in the owner's directory;
+ *   - a private or cleartext endpoint is refused;
+ *   - space turns skip a personal CLI binding they may not use.
  */
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
@@ -304,7 +306,9 @@ describe('/api/me/models (§8.4)', () => {
   });
 
   test('a private, loopback or link-local endpoint is refused', async () => {
-    for (const endpoint of ['http://127.0.0.1:8080', 'http://10.0.0.5', 'http://169.254.169.254', 'http://localhost:11434', 'http://[::1]/']) {
+    for (const endpoint of ['https://127.0.0.1:8080', 'https://10.0.0.5', 'https://169.254.169.254', 'https://localhost:11434', 'https://[::1]/',
+      'https://[fec0::1]/', 'https://[ff02::1]/', 'https://[::127.0.0.1]/', 'https://[2002:7f00:1::]/', 'https://[64:ff9b::a00:1]/',
+      'http://example.com']) {
       const r = await call(bobId, false, 'POST', '/api/me/models', { slug: 'c', provider: 'custom-openai', modelId: 'm', endpoint, key: 'k' });
       expect(r.status, endpoint).toBe(400);
       expect(r.body.error).toMatch(/Endpoint refused/);
@@ -313,34 +317,85 @@ describe('/api/me/models (§8.4)', () => {
 
   test('the endpoint is re-checked on every request and redirects are not followed', async () => {
     const { personalEndpointFetch } = await import('@/models/providers/custom/base-custom-provider');
-    await expect(personalEndpointFetch('http://169.254.169.254/latest/meta-data', {})).rejects.toThrow(/SSRF/);
+    await expect(personalEndpointFetch('https://169.254.169.254/latest/meta-data', {})).rejects.toThrow(/SSRF/);
+    await expect(personalEndpointFetch('http://example.com/v1', {})).rejects.toThrow(/must use https/);
     // A row whose stored endpoint now points inward (DNS changed, or written
     // before a check) still fails at request time.
     const { executeRaw } = await import('@/db/postgres');
     const { createPersonalModel } = await import('@/services/personal-models');
     await createPersonalModel(bobId, { slug: 'gw', provider: 'custom-openai', modelId: 'gw-model', endpoint: 'https://1.1.1.1', key: 'sk-bob' });
-    await executeRaw(`UPDATE model_config SET endpoint = 'http://127.0.0.1:9' WHERE name = 'u/${bobId}/gw'`);
+    await executeRaw(`UPDATE model_config SET endpoint = 'https://127.0.0.1:9' WHERE name = 'u/${bobId}/gw'`);
     const { getProviderRouter } = await import('@/models/providers');
     const provider = getProviderRouter().getProviderByName('custom-openai')!;
     const err = await provider.complete({ model: 'gw-model', modelConfigName: `u/${bobId}/gw`, userId: bobId, messages: [{ role: 'user', content: 'hi', timestamp: new Date() }] })
       .then(() => null, (e: unknown) => e);
-    // The SDK wraps the refusal as a connection error; the guard's reason is its cause.
-    const chain: string[] = [];
-    for (let e = err as { message?: string; cause?: unknown } | undefined; e; e = e.cause as typeof e) chain.push(String(e.message));
-    expect(chain.join(' | ')).toMatch(/SSRF guard/);
+    expect(errorChain(err)).toMatch(/SSRF guard/);
+  });
+
+  test('the streaming paths of the custom-anthropic and custom-gemini providers re-check the endpoint too', async () => {
+    const { executeRaw } = await import('@/db/postgres');
+    const { createPersonalModel } = await import('@/services/personal-models');
+    const { getProviderRouter } = await import('@/models/providers');
+    for (const provider of ['custom-anthropic', 'custom-gemini'] as const) {
+      await createPersonalModel(bobId, { slug: `s-${provider}`, provider, modelId: `${provider}-m`, endpoint: 'https://1.1.1.1', key: 'sk-bob' });
+      await executeRaw(`UPDATE model_config SET endpoint = 'https://169.254.169.254' WHERE name = 'u/${bobId}/s-${provider}'`);
+      const impl = getProviderRouter().getProviderByName(provider)!;
+      let err: unknown = null;
+      try {
+        for await (const _chunk of impl.stream({ model: `${provider}-m`, modelConfigName: `u/${bobId}/s-${provider}`, userId: bobId, messages: [{ role: 'user', content: 'hi', timestamp: new Date() }] })) { /* drain */ }
+      } catch (e) { err = e; }
+      expect(errorChain(err), provider).toMatch(/SSRF guard/);
+    }
+  });
+
+  test('a personal row may size its context window and output limit, within bounds', async () => {
+    const { createPersonalModel, updatePersonalModel } = await import('@/services/personal-models');
+    const created = await createPersonalModel(bobId, { slug: 'small', provider: 'openai', modelId: 'small-id', key: 'sk-b', contextWindow: 32_000, maxTokens: 4_096 });
+    expect(created).toMatchObject({ contextWindow: 32_000, maxTokens: 4_096 });
+    const { getModelRegistry } = await import('@/models/model-registry');
+    expect((await getModelRegistry().getModel(`u/${bobId}/small`))?.defaultMaxTokens).toBe(4_096);
+    await expect(updatePersonalModel(bobId, 'small', { maxTokens: 64_000 })).rejects.toThrow(/must not exceed contextWindow/);
+    expect((await call(bobId, false, 'PATCH', '/api/me/models/small', { contextWindow: 100 })).status).toBe(400);
+    expect((await call(bobId, false, 'PATCH', '/api/me/models/small', { maxTokens: 10_000_000 })).status).toBe(400);
+    expect(await updatePersonalModel(bobId, 'small', { contextWindow: 200_000 })).toMatchObject({ contextWindow: 200_000, maxTokens: 4_096 });
   });
 });
 
+function errorChain(err: unknown): string {
+  // The SDKs wrap the refusal as a connection error; the guard's reason is its cause.
+  const chain: string[] = [];
+  for (let e = err as { message?: string; cause?: unknown } | undefined; e; e = e.cause as typeof e) chain.push(String(e.message));
+  return chain.join(' | ');
+}
+
 describe('keys resolve under the row owner (§8.3)', () => {
-  test('resolveModelKey reads the owner\'s vault, whoever asks', async () => {
+  test('resolveModelKey reads the owner\'s vault, and releases it to the owner only', async () => {
     const { getModelRegistry } = await import('@/models/model-registry');
     const { resolveModelKey } = await import('@/models/model-key');
-    expect(await resolveModelKey((await getModelRegistry().getModel(MINE))!)).toBe('sk-alice-mine');
+    const mine = (await getModelRegistry().getModel(MINE))!;
+    expect(await resolveModelKey(mine, aliceId)).toBe('sk-alice-mine');
+    await expect(resolveModelKey(mine, bobId)).rejects.toThrow(/another user's personal model/);
+    await expect(resolveModelKey(mine, undefined)).rejects.toThrow(/another user's personal model/);
     // An install row never reads a user's vault, even a same-named entry.
     const { getVault } = await import('@/security/vault');
     await getVault().store(bobId, 'install-ref', 'sk-bob-shadow', { credentialType: 'api_key' });
     await getModelRegistry().updateModel('install-backup', { apiKeyRef: 'install-ref' });
-    expect(await resolveModelKey((await getModelRegistry().getModel('install-backup'))!)).toBeUndefined();
+    expect(await resolveModelKey((await getModelRegistry().getModel('install-backup'))!, bobId)).toBeUndefined();
+  });
+
+  test('a vault failure keeps the env fallback for an install row and fails loud for a personal one', async () => {
+    const { getModelRegistry } = await import('@/models/model-registry');
+    const { resolveModelKey } = await import('@/models/model-key');
+    const { getVault } = await import('@/security/vault');
+    const vault = getVault();
+    const original = vault.getByName.bind(vault);
+    vault.getByName = async () => { throw new Error('decrypt failed'); };
+    try {
+      expect(await resolveModelKey((await getModelRegistry().getModel('install-backup'))!, bobId)).toBeUndefined();
+      await expect(resolveModelKey((await getModelRegistry().getModel(MINE))!, aliceId)).rejects.toThrow(/decrypt failed/);
+    } finally {
+      vault.getByName = original;
+    }
   });
 
   test('every instrumented provider receives the owner\'s key for a personal row, and only for it', async () => {
@@ -355,14 +410,39 @@ describe('keys resolve under the row owner (§8.3)', () => {
         checkHealth: async () => ({ healthy: true }),
       } as never);
       const msg = [{ role: 'user' as const, content: 'hi', timestamp: new Date() }];
-      // Bob's request on Alice's row (e.g. a shared turn re-reading the row by name) carries Alice's key.
-      await provider.complete({ model: 'shared-id', modelConfigName: MINE, userId: bobId, messages: msg });
+      // Bob's request on Alice's row never runs — not even with a key of his own.
+      await expect(provider.complete({ model: 'shared-id', modelConfigName: MINE, userId: bobId, messages: msg }), name).rejects.toThrow(/another user's personal model/);
+      await expect(provider.complete({ model: 'shared-id', modelConfigName: MINE, userId: bobId, apiKey: 'sk-bob', messages: msg }), name).rejects.toThrow(/another user's personal model/);
+      // Nor does a request that serves no user at all.
+      await expect(provider.complete({ model: 'shared-id', modelConfigName: MINE, messages: msg }), name).rejects.toThrow(/another user's personal model/);
+      // Alice's request on her row carries her key.
+      await provider.complete({ model: 'shared-id', modelConfigName: MINE, userId: aliceId, messages: msg });
       // Bob's request by modelId lands on the install row: no personal key.
       await provider.complete({ model: 'shared-id', userId: bobId, messages: msg });
       // Alice's request by an id only she has resolves her row.
       await provider.complete({ model: 'alice-only-id', userId: aliceId, messages: msg });
       expect(seen, name).toEqual(['sk-alice-mine', undefined, 'sk-alice-solo']);
     }
+  });
+
+  test('the owner check holds in the LiteLLM path too', async () => {
+    const { getLiteLLMClient } = await import('@/models/litellm-client');
+    await expect(getLiteLLMClient().complete({ model: 'shared-id', modelConfigName: MINE, userId: bobId, messages: [{ role: 'user', content: 'hi', timestamp: new Date() }] }))
+      .rejects.toThrow(/another user's personal model/);
+  });
+
+  test('an install-type call on a personal row is funded `own`, on an install row `install`', async () => {
+    const { recordProviderUsage } = await import('@/models/providers/instrumented');
+    const { getDb } = await import('@/db/postgres');
+    const { costLog } = await import('@/db/schema');
+    const { eq } = await import('drizzle-orm');
+    const usage = { usage: { inputTokens: 10, outputTokens: 1, totalTokens: 11 }, model: 'shared-id' };
+    await recordProviderUsage({ model: 'shared-id', modelConfigName: MINE, userId: aliceId, requestType: 'compaction', messages: [], accountingMetadata: { probe: 'own-compaction' } }, 'openai', usage);
+    await recordProviderUsage({ model: 'shared-id', modelConfigName: 'install-shared', userId: aliceId, requestType: 'compaction', messages: [], accountingMetadata: { probe: 'install-compaction' } }, 'openai', usage);
+    const rows = await getDb().select().from(costLog).where(eq(costLog.userId, aliceId));
+    const funding = (probe: string) => rows.find((r) => (r.metadata as { probe?: string } | null)?.probe === probe)?.funding;
+    expect(funding('own-compaction')).toBe('own');
+    expect(funding('install-compaction')).toBe('install');
   });
 
   test('a personal row without a key fails loud instead of using the install key', async () => {
@@ -402,19 +482,34 @@ describe('CLI logins per user (§8.5)', () => {
     }
   });
 
-  test('the one-shot CLI provider spawns with the row owner\'s env and quota key', async () => {
+  test('the one-shot CLI provider spawns with the row owner\'s env and quota key, tool-less, in the owner\'s directory', async () => {
     const { CLIProvider } = await import('@/models/providers/cli-provider');
     const provider = new CLIProvider();
     let env: Record<string, string> | undefined;
+    let args: string[] = [];
+    let cwd: string | undefined;
+    let stdin: string | undefined;
     // biome-ignore lint/suspicious/noExplicitAny: stub the process boundary
-    (provider as any).execCli = async (_b: string, _a: string[], opts: { env: Record<string, string> }) => {
+    (provider as any).execCli = async (_b: string, a: string[], opts: { env: Record<string, string>; cwd?: string; stdin?: string }) => {
       env = opts.env;
+      args = a;
+      cwd = opts.cwd;
+      stdin = opts.stdin;
       return JSON.stringify({ result: 'ok', usage: { input_tokens: 1, output_tokens: 1 } });
     };
     const msg = [{ role: 'user' as const, content: 'hi', timestamp: new Date() }];
     await provider.complete({ model: 'cli/claude-code', modelConfigName: CLI, userId: aliceId, messages: msg });
     expect(env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('sk-ant-oat-alice');
     expect(env?.HOME).toContain(join('users', aliceId, 'cli-home'));
+    // No native tools, no settings file from the owner's cli-home, prompt on stdin.
+    expect(args).toEqual(expect.arrayContaining(['-p', '--tools=', '--setting-sources=', '--strict-mcp-config', '--settings']));
+    expect(stdin).toBe('hi');
+    // Never the shared workspace root, which holds every user's data.
+    expect(cwd).toBe(join(process.env.WORKSPACE_PATH!, 'users', aliceId, 'cli-home', 'one-shot'));
+    // Bob's request on Alice's CLI row is refused before anything spawns.
+    args = [];
+    await expect(provider.complete({ model: 'cli/claude-code', modelConfigName: CLI, userId: bobId, messages: msg })).rejects.toThrow(/another user's personal model/);
+    expect(args).toEqual([]);
     // Alice's exhausted subscription does not block the install's login.
     const { cliQuotaKey, getQuotaTracker } = await import('@/models/quota-tracker');
     await getQuotaTracker().markExhausted(cliQuotaKey('claude-code', { userId: aliceId }));
@@ -422,13 +517,34 @@ describe('CLI logins per user (§8.5)', () => {
     expect((await getQuotaTracker().getStatus('claude-code')).exhausted).toBe(false);
   });
 
-  test('all three spawn sites build their env through cliEnvFor', async () => {
+  test('all three spawn sites build their env through cliEnvFor, with the run\'s credential owner', async () => {
     const { readFileSync } = await import('node:fs');
     for (const file of ['src/core/cli-agent-worker.ts', 'src/models/providers/cli-provider.ts', 'src/core/cli-compaction.ts']) {
       const src = readFileSync(file, 'utf8');
-      expect(src, file).toMatch(/cliEnvFor\(/);
+      expect(src, file).toMatch(/cliEnvFor\((this\.)?credentialOwner,/);
+      expect(src, file).not.toMatch(/cliEnvFor\(null/);
       expect(src.replace(/export \{ buildChildEnv \}[^\n]*/, ''), file).not.toMatch(/\bbuildChildEnv\(/);
     }
+  });
+
+  test('personal CLI rows: Vibe is refused, and a tool that cannot run tool-less binds no lane', async () => {
+    const { createPersonalModel, updatePersonalModel } = await import('@/services/personal-models');
+    await expect(createPersonalModel(bobId, { slug: 'vibe', provider: 'cli', modelId: 'cli/vibe', key: 'k' })).rejects.toThrow(/permission checks/);
+    await expect(createPersonalModel(bobId, { slug: 'cx', provider: 'cli', modelId: 'cli/codex', key: 'sk-bob', topics: ['everyday'] })).rejects.toThrow(/cannot bind a lane/);
+    await createPersonalModel(bobId, { slug: 'cx', provider: 'cli', modelId: 'cli/codex', key: 'sk-bob' });
+    await expect(updatePersonalModel(bobId, 'cx', { topics: ['research'] })).rejects.toThrow(/cannot bind a lane/);
+    // Reached by name anyway (a passthrough), its one-shot is refused rather than run with tools.
+    const { CLIProvider } = await import('@/models/providers/cli-provider');
+    const provider = new CLIProvider();
+    let spawned = false;
+    // biome-ignore lint/suspicious/noExplicitAny: stub the process boundary
+    (provider as any).execCli = async () => { spawned = true; return ''; };
+    await expect(provider.complete({ model: 'cli/codex', modelConfigName: `u/${bobId}/cx`, userId: bobId, messages: [{ role: 'user', content: 'hi', timestamp: new Date() }] }))
+      .rejects.toThrow(/no mode without its own tools/);
+    expect(spawned).toBe(false);
+    // Claude Code can run tool-less, so it binds lanes.
+    expect((await updatePersonalModel(aliceId, 'cli', { topics: ['everyday'] })).topics).toEqual(['everyday']);
+    await updatePersonalModel(aliceId, 'cli', { topics: [] });
   });
 
   test('a resume never crosses credential owners', async () => {
@@ -480,5 +596,89 @@ describe('direct completion callers name their row', () => {
       });
     }
     expect(offenders).toEqual([]);
+  });
+});
+
+describe('personal CLI rows in a space (§5.6, §8.5)', () => {
+  test('resolveModel skips a personal CLI binding a commenter may not use, and falls back to the install lane', async () => {
+    const { updatePersonalModel } = await import('@/services/personal-models');
+    const { resolveModel } = await import('@/models/resolve-model');
+    await updatePersonalModel(aliceId, 'cli', { topics: ['everyday'] });
+    try {
+      expect((await resolveModel({ userId: aliceId, topic: 'everyday' }))?.name).toBe(CLI);
+      expect((await resolveModel({ userId: aliceId, topic: 'everyday', inSpace: true, spaceRole: 'editor' }))?.name).toBe(CLI);
+      expect((await resolveModel({ userId: aliceId, topic: 'everyday', inSpace: true, spaceRole: 'commenter' }))?.name).toBe('install-shared');
+      expect(await resolveModel({ userId: aliceId, name: CLI, inSpace: true, spaceRole: 'commenter' })).toBeNull();
+      // The side-question / voice path honours the same rules.
+      const { ModelSelector } = await import('@/core/agent/model-selector');
+      const selector = new ModelSelector();
+      expect((await selector.selectByComplexity('moderate', { userId: aliceId })).name).toBe(CLI);
+      expect((await selector.selectByComplexity('moderate', { userId: aliceId, inSpace: true, spaceRole: 'commenter' })).name).toBe('install-shared');
+    } finally {
+      await updatePersonalModel(aliceId, 'cli', { topics: [] });
+    }
+  });
+
+  test('an install CLI row whose adapter has no space mode is skipped in a space, even marked for shared use', async () => {
+    const { getModelRegistry } = await import('@/models/model-registry');
+    const { usableInSpace } = await import('@/models/resolve-model');
+    await getModelRegistry().registerModel({ name: 'install-vibe', provider: 'cli', modelId: 'cli/vibe', metadata: { cliAgent: { sharedUse: true } } });
+    const row = (await getModelRegistry().getModel('install-vibe'))!;
+    expect(usableInSpace(row, 'editor')).toBe(false);
+    const claude = { ...row, modelId: 'cli/claude-code' };
+    expect(usableInSpace(claude, 'editor')).toBe(true);
+    expect(usableInSpace(claude, 'commenter')).toBe(false);
+  });
+
+  test('spawn: another user\'s personal row throws; a commenter\'s CLI spawn in a space throws; an editor runs their own', async () => {
+    const { getAgentManager } = await import('@/core/agent-manager');
+    const manager = getAgentManager();
+    await expect(manager.spawn({ sessionId: bobSessionId, userId: bobId, model: 'shared-id', modelName: MINE } as never))
+      .rejects.toThrow(/another user's personal model/);
+    const { spaceWith } = await import('@/test-helpers/space-fixtures');
+    const spaceId = await spaceWith(bobId, [[aliceId, 'commenter']]);
+    await expect(manager.spawn({ sessionId: aliceSessionId, userId: aliceId, workspaceId: spaceId, trigger: 'user',
+      space: { workspaceId: spaceId, role: 'commenter', scope: null }, model: 'cli/claude-code', modelName: CLI } as never))
+      .rejects.toThrow(/API models only/);
+    const editorSpace = await spaceWith(bobId, [[aliceId, 'editor']]);
+    const worker = await manager.spawn({ sessionId: aliceSessionId, userId: aliceId, workspaceId: editorSpace, trigger: 'user',
+      space: { workspaceId: editorSpace, role: 'editor', scope: null }, model: 'cli/claude-code', modelName: CLI } as never);
+    expect(worker.getContext().modelName).toBe(CLI);
+    manager.remove(worker.getContext().id);
+  });
+});
+
+describe('cross-user effects of other users\' rows', () => {
+  test('isRegisteredModel considers install rows and the caller\'s own only', async () => {
+    const { createPersonalModel } = await import('@/services/personal-models');
+    const { isRegisteredModel } = await import('@/models/resolve-model');
+    await createPersonalModel(bobId, { slug: 'or', provider: 'openrouter', modelId: 'vendor/private-x', key: 'sk-bob' });
+    expect(await isRegisteredModel('vendor/private-x', bobId)).toBe(true);
+    expect(await isRegisteredModel('vendor/private-x', aliceId)).toBe(false);
+    // The personal namespace is refused as such, without telling whether the row exists.
+    expect(await isRegisteredModel(`u/${bobId}/or`, aliceId)).toBe(true);
+    expect(await isRegisteredModel(`u/${bobId}/nothing`, aliceId)).toBe(true);
+    expect(await isRegisteredModel('install-shared', aliceId)).toBe(true);
+  });
+
+  test('admin topic config and evaluation runs refuse personal rows', async () => {
+    const r = await call(adminId, true, 'PATCH', '/api/topics/build/config', { executorModel: MINE });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatch(/personal model/);
+    const { runRedTeam } = await import('@/eval/red-team');
+    await expect(runRedTeam({ model: MINE, plugins: ['prompt-injection'] })).rejects.toThrow(/personal model/);
+  });
+
+  test('GET /api/models/:name shows an admin disabled install rows again', async () => {
+    const { getModelRegistry } = await import('@/models/model-registry');
+    await getModelRegistry().registerModel({ name: 'install-off', provider: 'openai', modelId: 'off-id', isEnabled: false });
+    expect((await call(adminId, true, 'GET', '/api/models/install-off')).body.name).toBe('install-off');
+    expect((await call(bobId, false, 'GET', '/api/models/install-off')).body.error).toBe('Model not found');
+  });
+
+  test('pricing by row name never picks another user\'s personal row', async () => {
+    const { getCostTracker } = await import('@/models/cost-tracker');
+    const row = await getCostTracker().logUsageWithCost(bobId, 'install-shared', 1_000_000, 0, {});
+    expect(row.totalCost).toBe(1);
   });
 });

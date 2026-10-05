@@ -4,6 +4,7 @@ import { VOLATILE_MARKER } from '@/models/providers/prompt-cache';
 import { getResponseCache } from '@/core/response-cache';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
+import type { SpaceRole } from '@/db/schema/organizations';
 import type { SessionContext } from '@/db/schema/sessions';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
@@ -62,10 +63,15 @@ async function directResponseInternal(
    * passes the fast `voice`-topic model here so spoken planning turns stay snappy.
    */
   modelOverride?: SelectedModel,
+  /**
+   * The turn's space, when it runs in one: the model honours the space rules
+   * (a commenter gets API models only, a CLI row only with a space mode).
+   */
+  space?: { role: SpaceRole } | null,
 ): Promise<{ response: string; metadata: ResponseMetadata }> {
   const startTime = Date.now();
   const client = getLiteLLMClient();
-  const selected = modelOverride ?? (await modelSelector.selectByComplexity(complexity, { userId }));
+  const selected = modelOverride ?? (await modelSelector.selectByComplexity(complexity, { userId, inSpace: !!space, spaceRole: space?.role }));
   const modelName = selected.modelId;
 
   // In a room the request is the member's post, already stored: the

@@ -279,17 +279,69 @@ function looksLikeNonStandardIpLiteral(host: string): boolean {
   return false;
 }
 
-function isPrivateIP(ip: string): boolean {
-  // IPv6 loopback, unspecified, unique-local (fc00::/7), link-local (fe80::/10).
-  if (ip.includes(':')) {
-    if (ip === '::1' || ip === '::') return true;
-    if (/^f[cd]/i.test(ip)) return true; // fc00::/7
-    if (/^fe[89ab]/i.test(ip)) return true; // fe80::/10
-    // IPv4-mapped (::ffff:a.b.c.d, normalized to ::ffff:h:h) and NAT64
-    // (64:ff9b::/96) are common SSRF bypasses — disallow the whole class.
-    if (/^::ffff:/i.test(ip) || /^64:ff9b:/i.test(ip)) return true;
-    return false;
+/**
+ * An IPv6 address as its eight 16-bit groups, or null when it does not parse.
+ * Accepts `::` compression, a dotted IPv4 tail (`::ffff:1.2.3.4`) and a zone
+ * suffix (`fe80::1%eth0`), so every spelling of one address is checked alike.
+ */
+function ipv6Groups(ip: string): number[] | null {
+  let addr = ip.split('%')[0].toLowerCase();
+  const v4 = /(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(addr);
+  if (v4) {
+    const o = v4.slice(1).map(Number);
+    if (o.some((n) => n > 255)) return null;
+    addr = `${addr.slice(0, v4.index)}${((o[0] << 8) | o[1]).toString(16)}:${((o[2] << 8) | o[3]).toString(16)}`;
   }
+  const halves = addr.split('::');
+  if (halves.length > 2) return null;
+  const parse = (part: string): number[] | null => {
+    if (part === '') return [];
+    const groups = part.split(':');
+    if (groups.some((g) => !/^[0-9a-f]{1,4}$/.test(g))) return null;
+    return groups.map((g) => parseInt(g, 16));
+  };
+  const head = parse(halves[0]);
+  const tail = halves.length === 2 ? parse(halves[1]) : [];
+  if (!head || !tail) return null;
+  if (halves.length === 1) return head.length === 8 ? head : null;
+  const fill = 8 - head.length - tail.length;
+  if (fill < 1) return null;
+  return [...head, ...new Array<number>(fill).fill(0), ...tail];
+}
+
+/** The IPv4 address held in two IPv6 groups, dotted. */
+function embeddedIPv4(hi: number, lo: number): string {
+  return [hi >> 8, hi & 0xff, lo >> 8, lo & 0xff].join('.');
+}
+
+function isPrivateIPv6(ip: string): boolean {
+  const g = ipv6Groups(ip);
+  if (!g) return true; // unparseable: refuse rather than guess
+  const [a, b] = g;
+  const zeroPrefix = (n: number) => g.slice(0, n).every((x) => x === 0);
+  // ::/96 — unspecified, loopback and the deprecated IPv4-compatible
+  // `::a.b.c.d` (URL parsing turns `[::127.0.0.1]` into `::7f00:1`).
+  if (zeroPrefix(6)) return true;
+  // ::ffff:0:0/96 IPv4-mapped and ::ffff:0:0:0/96 IPv4-translated.
+  if (zeroPrefix(5) && g[5] === 0xffff) return true;
+  if (zeroPrefix(4) && g[4] === 0xffff && g[5] === 0) return true;
+  // NAT64 well-known 64:ff9b::/96 and local-use 64:ff9b:1::/48: the whole
+  // class, whatever IPv4 it embeds — a NAT64 gateway reaches the v4 side.
+  if (a === 0x64 && b === 0xff9b) return true;
+  if (a === 0x100 && b === 0 && g[2] === 0 && g[3] === 0) return true; // 100::/64 discard
+  if (a === 0x2001 && b === 0) return true; // 2001::/32 Teredo (tunnels to an embedded IPv4)
+  if (a === 0x2001 && b === 0xdb8) return true; // 2001:db8::/32 documentation
+  if (a === 0x2001 && (b & 0xfff0) === 0x10) return true; // 2001:10::/28 ORCHID
+  if (a === 0x2002) return isPrivateIP(embeddedIPv4(b, g[2])); // 2002::/16 6to4: its embedded IPv4
+  if ((a & 0xfe00) === 0xfc00) return true; // fc00::/7 unique local
+  if ((a & 0xffc0) === 0xfe80) return true; // fe80::/10 link-local
+  if ((a & 0xffc0) === 0xfec0) return true; // fec0::/10 site-local (deprecated)
+  if ((a & 0xff00) === 0xff00) return true; // ff00::/8 multicast
+  return false;
+}
+
+function isPrivateIP(ip: string): boolean {
+  if (ip.includes(':')) return isPrivateIPv6(ip);
 
   // IPv4 checks
   const parts = ip.split('.').map(Number);

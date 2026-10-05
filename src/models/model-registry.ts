@@ -133,6 +133,12 @@ export class ModelRegistry {
     return (await this.isVisibleTo(row, userId)) ? row : null;
   }
 
+  /** The row named `name`, enabled or not, any owner, uncached — for the admin registry routes, which apply their own owner rules. */
+  async getModelAnyState(name: string): Promise<ModelConfigEntry | null> {
+    const rows = await this.db.select().from(modelConfig).where(eq(modelConfig.name, name)).limit(1);
+    return rows[0] ?? null;
+  }
+
   /** Same as `getModelVisibleTo`, keyed by provider model id (install rows first). */
   async getModelByModelIdVisibleTo(modelId: string, userId: string): Promise<ModelConfigEntry | null> {
     const rows = await this.db
@@ -152,13 +158,26 @@ export class ModelRegistry {
     return (await getUserOrgIds(userId)).includes(row.orgId);
   }
 
-  /** Is there any row (any owner, enabled or not) whose name or modelId is `nameOrId`? */
-  async isRegistered(nameOrId: string): Promise<boolean> {
+  /**
+   * Is there an install row (any org, enabled or not) or one of `userId`'s own
+   * rows whose name or modelId is `nameOrId`? Other users' personal rows are
+   * never considered.
+   */
+  async isRegistered(nameOrId: string, userId: string): Promise<boolean> {
     const rows = await this.db
       .select({ id: modelConfig.id })
       .from(modelConfig)
-      .where(or(eq(modelConfig.name, nameOrId), eq(modelConfig.modelId, nameOrId)))
+      .where(and(
+        or(eq(modelConfig.name, nameOrId), eq(modelConfig.modelId, nameOrId)),
+        or(INSTALL_ROWS, eq(modelConfig.ownerUserId, userId)),
+      ))
       .limit(1);
+    return rows.length > 0;
+  }
+
+  /** Is `name` taken by any row at all (names are unique across owners)? */
+  async isNameTaken(name: string): Promise<boolean> {
+    const rows = await this.db.select({ id: modelConfig.id }).from(modelConfig).where(eq(modelConfig.name, name)).limit(1);
     return rows.length > 0;
   }
 

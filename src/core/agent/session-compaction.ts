@@ -286,14 +286,14 @@ export function extractsMemoryOnCompaction(
   return cadence === 'on_compaction' && !audience.personalMemoryOff;
 }
 
-/** Shared manual command for gateway and chat clients. */
-export async function compactSessionCommand(sessionId: string | undefined, args: string): Promise<string> {
+/** Shared manual command for gateway and chat clients. `requesterId` is who typed `/compact`. */
+export async function compactSessionCommand(sessionId: string | undefined, args: string, requesterId: string): Promise<string> {
   if (!sessionId) return 'No active session to compact.';
   try {
     const instructions = args.trim();
     const cliResult = await withSessionConversation(sessionId, async () => {
       const session = await sessionRepository.findById(sessionId);
-      return session ? compactCliConversation(session, instructions) : null;
+      return session ? compactCliConversation(session, instructions, requesterId) : null;
     });
     if (cliResult) return cliResult;
     const compacted = await maybeCompactSession(sessionId, {
