@@ -8,5 +8,5 @@ test('chat registers compact and forwards optional focus instructions', async ()
   expect(getAllCommands().some(command => command.name === 'compact')).toBe(true);
   expect(await getCommand('compact')!.execute({ sessionId: 's1', userId: 'u1', args: 'keep decisions' }))
     .toEqual({ response: 'Session compacted.' });
-  expect(compact).toHaveBeenCalledWith('s1', 'keep decisions');
+  expect(compact).toHaveBeenCalledWith('s1', 'keep decisions', 'u1');
 });
