@@ -261,6 +261,28 @@ function openingBrace(src: string, close: number): number {
 }
 
 /**
+ * Whether the object literal opening at `open` starts with a spread, past any
+ * whitespace and comments: a literal that spreads another context is derived,
+ * not hand-built.
+ * A scanner rather than a regex, which backtracks badly on comment runs.
+ */
+function opensWithSpread(src: string, open: number): boolean {
+  let i = open + 1;
+  for (;;) {
+    while (i < src.length && /\s/.test(src[i])) i++;
+    if (src.startsWith('//', i)) {
+      const end = src.indexOf('\n', i);
+      i = end < 0 ? src.length : end + 1;
+    } else if (src.startsWith('/*', i)) {
+      const end = src.indexOf('*/', i + 2);
+      i = end < 0 ? src.length : end + 2;
+    } else {
+      return src.startsWith('...', i);
+    }
+  }
+}
+
+/**
  * Object literals typed as an `AgentContext` in any form — annotated
  * (`: AgentContext = {`), cast (`{ … } as AgentContext`), checked
  * (`satisfies AgentContext`), or returned (`(): AgentContext => ({`,
@@ -275,7 +297,7 @@ function handBuiltContexts(src: string): string[] {
   for (const m of src.matchAll(/\)\s*:\s*(?:import\([^)]*\)\.)?AgentContext\s*\{\s*return\s*\{/g)) opens.push(m.index + m[0].length - 1);
   for (const m of src.matchAll(/\}\s*(?:as|satisfies)\s+(?:import\([^)]*\)\.)?AgentContext\b/g)) opens.push(openingBrace(src, m.index));
   return opens
-    .filter((open) => open >= 0 && !/^\{\s*(?:\/\/[^\n]*\n\s*|\/\*[\s\S]*?\*\/\s*)*\.\.\./.test(src.slice(open, closingBrace(src, open) + 1)))
+    .filter((open) => open >= 0 && !opensWithSpread(src, open))
     .map((open) => src.slice(open, open + 60).replace(/\s+/g, ' '));
 }
 
