@@ -73,7 +73,14 @@ Use `node bin/octi.mjs` instead of `octi` unless you install a PATH launcher. `n
 
 `npm run audit:all` checks backend, web, and MCP dependencies, including development/build packages. It checks every package even if an earlier audit fails and returns a nonzero status for vulnerabilities or registry errors. Installers show audit warnings and continue; they do not silently rewrite the lockfiles. Internet access to the npm audit registry is needed.
 
-Review reported fixes in the affected package. Do not blindly use `npm audit fix --force`: it can downgrade or break tooling. The current backend audit includes a development-only esbuild advisory through drizzle-kit for which npm suggests a breaking downgrade. Web and MCP receive compatible lockfile fixes when available.
+The Dependency Audit workflow runs the same check on pull requests, pushes to main, and daily, with no advisory allowlist. Dependabot proposes weekly dependency updates. Newly disclosed vulnerabilities can still appear between checks.
+
+Review reported fixes in the affected package. Do not blindly use `npm audit fix --force`: it can downgrade or break tooling. Two scoped backend overrides remove vulnerable legacy dependencies while retaining the current parent packages:
+
+- `@esbuild-kit/core-utils` uses the root esbuild version, removing the old esbuild pulled in by Drizzle Kit ([advisory](https://github.com/advisories/GHSA-67mh-4wv8-2f99)).
+- `mammoth` uses argparse 2, removing the unpatched sprintf-js dependency from its CLI ([advisory](https://github.com/advisories/GHSA-hp3w-g68c-fv3c)).
+
+Keep these overrides until the parent dependencies support safe versions themselves. When changing them, verify Drizzle's TypeScript transforms, Mammoth's CLI, and document conversion tests as well as `npm run audit:all`.
 
 The installer is also the update path for installations in `~/.octipus/app` (Windows: `%USERPROFILE%\.octipus\app`). From v0.6.0, `octi update` can also update a clean source checkout from its configured upstream and rebuild the backend, CLI, web, and MCP packages; `octi update --dry-run` previews the steps. Older installations should use the installer path below to obtain that command. On an existing checkout the installer fetches and fast-forwards the selected branch, reinstalls locked dependencies, and rebuilds the installed surfaces. It refuses local changes or a divergent branch rather than discarding them.
 

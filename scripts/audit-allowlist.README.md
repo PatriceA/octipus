@@ -1,8 +1,12 @@
 # Audit allowlist format
 
-`scripts/audit-allowlist.json` is a reviewable list of dependency advisories we
-have consciously accepted. It is consulted by `scripts/audit-check.ts`, which is
-run in CI (`.github/workflows/ci.yml`, backend job) as a **blocking** step:
+CI runs `npm run audit:all` in `.github/workflows/dependency-audit.yml` on pull
+requests, pushes to main, and daily. It checks all three npm lockfiles, including
+development dependencies, and fails on any reported vulnerability or audit error.
+It does not consult an allowlist.
+
+`scripts/audit-allowlist.json` is used only by the legacy local diagnostic
+`scripts/audit-check.ts`:
 
 ```
 npx tsx scripts/audit-check.ts

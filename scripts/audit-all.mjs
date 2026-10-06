@@ -10,7 +10,7 @@ for (const folder of ['.', 'web', 'mcp-server']) {
   // Invoke npm's JS entry through Node: no shell quoting or Windows .cmd ambiguity.
   const npmCli = process.env.npm_execpath;
   if (!npmCli) throw new Error('Run this command with npm run audit:all.');
-  const result = spawnSync(process.execPath, [npmCli, 'audit'], {
+  const result = spawnSync(process.execPath, [npmCli, 'audit', '--include=dev', '--audit-level=low'], {
     cwd: resolve(root, folder), stdio: 'inherit',
   });
   if (result.error || result.status !== 0) failed = true;

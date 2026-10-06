@@ -125,6 +125,12 @@
     "ws": "$ws",
     "file-type": "^21.3.4",
     "follow-redirects": "^1.15.12",
-    "qs": "^6.16.0"
+    "qs": "^6.16.0",
+    "@esbuild-kit/core-utils": {
+      "esbuild": "$esbuild"
+    },
+    "mammoth": {
+      "argparse": "^2.0.1"
+    }
   }
 }

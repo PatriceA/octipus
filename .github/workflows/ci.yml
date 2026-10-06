@@ -94,12 +94,6 @@ jobs:
           path: coverage/lcov.info
           retention-days: 7
 
-      # Blocking dependency audit. Accepted advisories are recorded in a
-      # reviewable allowlist (scripts/audit-allowlist.json); see the wrapper
-      # scripts/audit-check.ts and scripts/audit-allowlist.README.md.
-      - name: Audit dependencies
-        run: npx tsx scripts/audit-check.ts
-
   web:
     name: Web (typecheck · lint)
     runs-on: ubuntu-latest
