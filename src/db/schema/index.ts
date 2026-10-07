@@ -65,3 +65,4 @@ export * from './monitors';
 export * from './agent-approvals';
 export * from './spend-budgets';
 export * from './live-documents';
+export * from './federation';

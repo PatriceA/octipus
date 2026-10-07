@@ -163,6 +163,25 @@ function toBodyBuffer(body: BodyInit): Buffer {
 }
 
 /**
+ * A `lookup` for `node:net`/`node:http(s)` (and `ws`, which passes it through)
+ * that answers every resolution with `ip`, so the socket connects to the
+ * address that was vetted and the hostname is never re-resolved. SNI and the
+ * Host header still carry the hostname.
+ *
+ * `all: true` is not optional to support: Node's happy-eyeballs
+ * (autoSelectFamily, on by default since 20) asks for the whole list, and
+ * answering with a bare string there throws "Invalid IP address".
+ */
+export function pinnedLookup(ip: string): never {
+  return ((hostname: string, options: { all?: boolean }, cb: (...a: unknown[]) => void) => {
+    const family = ip.includes(':') ? 6 : 4;
+    void hostname;
+    if (options?.all) cb(null, [{ address: ip, family }]);
+    else cb(null, ip, family);
+  }) as never;
+}
+
+/**
  * One hop with the socket pinned to an already-vetted IP, while SNI, the Host
  * header and certificate verification all still use the real hostname.
  *
@@ -207,15 +226,7 @@ export async function fetchPinned(url: string, ip: string, init: RequestInit = {
       {
         method: init.method ?? 'GET',
         headers,
-        // `all: true` is not optional to support: Node's happy-eyeballs
-        // (autoSelectFamily, on by default since 20) asks for the whole list,
-        // and answering with a bare string there throws "Invalid IP address".
-        lookup: ((hostname: string, options: { all?: boolean }, cb: (...a: unknown[]) => void) => {
-          const family = ip.includes(':') ? 6 : 4;
-          void hostname;
-          if (options?.all) cb(null, [{ address: ip, family }]);
-          else cb(null, ip, family);
-        }) as never,
+        lookup: pinnedLookup(ip),
       },
       (res) => {
         const resHeaders = new Headers();
@@ -254,7 +265,7 @@ export async function fetchPinned(url: string, ip: string, init: RequestInit = {
 }
 
 /** True for a clean dotted-quad IPv4 or a hex-grouped IPv6 literal. */
-function isIpLiteral(host: string): boolean {
+export function isIpLiteral(host: string): boolean {
   if (/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.test(host)) {
     return host.split('.').every((p) => Number(p) <= 255 && !(p.length > 1 && p[0] === '0'));
   }
@@ -265,7 +276,7 @@ function isIpLiteral(host: string): boolean {
  * Detects integer/hex/octal IPv4 encodings and malformed dotted forms that are
  * not safe to hand to a private-range check (and that DNS won't resolve).
  */
-function looksLikeNonStandardIpLiteral(host: string): boolean {
+export function looksLikeNonStandardIpLiteral(host: string): boolean {
   if (host.includes(':')) return false; // IPv6 handled by isIpLiteral
   if (/^\d+$/.test(host)) return true; // pure decimal integer (e.g. 2130706433)
   if (/^0x[0-9a-f]+$/i.test(host)) return true; // hex (0x7f000001)
@@ -340,7 +351,7 @@ function isPrivateIPv6(ip: string): boolean {
   return false;
 }
 
-function isPrivateIP(ip: string): boolean {
+export function isPrivateIP(ip: string): boolean {
   if (ip.includes(':')) return isPrivateIPv6(ip);
 
   // IPv4 checks

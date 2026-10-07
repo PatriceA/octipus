@@ -200,6 +200,17 @@ export function loadFromEnvLegacy(): Partial<Config> {
       approvalTimeoutMinutes: parseInt(process.env.ROOMS_APPROVAL_TIMEOUT_MINUTES || '30', 10),
       transcriptWindowChars: parseInt(process.env.ROOMS_TRANSCRIPT_WINDOW_CHARS || '6000', 10),
     },
+    federation: {
+      // Passed through as written: the schema rejects anything but the four modes.
+      mode: (process.env.FEDERATION_MODE as 'off' | 'visit' | 'host' | 'both' | undefined) || defaultConfig.federation!.mode!,
+      lanCidrs: process.env.FEDERATION_LAN_CIDRS
+        ? process.env.FEDERATION_LAN_CIDRS.split(',').map((s) => s.trim()).filter(Boolean)
+        : defaultConfig.federation!.lanCidrs!,
+      heartbeatSeconds: parseInt(process.env.FEDERATION_HEARTBEAT_SECONDS || String(defaultConfig.federation!.heartbeatSeconds), 10),
+      maxVisitorsPerInstance: parseInt(process.env.FEDERATION_MAX_VISITORS_PER_INSTANCE || String(defaultConfig.federation!.maxVisitorsPerInstance), 10),
+      maxRemoteTurnsPerInstance: parseInt(process.env.FEDERATION_MAX_REMOTE_TURNS_PER_INSTANCE || String(defaultConfig.federation!.maxRemoteTurnsPerInstance), 10),
+      agentPostsPerHour: parseInt(process.env.FEDERATION_AGENT_POSTS_PER_HOUR || String(defaultConfig.federation!.agentPostsPerHour), 10),
+    },
     gateway: {
       maxConnectionsPerUser: parseInt(process.env.GATEWAY_MAX_CONNECTIONS_PER_USER || String(defaultConfig.gateway!.maxConnectionsPerUser), 10),
       maxFrameBytes: parseInt(process.env.GATEWAY_MAX_FRAME_BYTES || String(defaultConfig.gateway!.maxFrameBytes), 10),

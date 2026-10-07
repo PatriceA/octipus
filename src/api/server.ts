@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { cors, Elysia, listen, type RunningServer } from '@/api/http';
 import { getConfig } from '@/config';
+import { setupFederationWebSocket } from '@/core/federation/host-server';
 import { getDb } from '@/db/postgres';
 import { users } from '@/db/schema/users';
 import { getApiTokenManager, looksLikeApiToken } from '@/security/api-tokens';
@@ -499,6 +500,10 @@ export function createServer() {
 
   // Gateway WebSocket hub (/gateway): the web and the TUI
   setupGatewayWebSocket(app as any);
+
+  // Peer links from other installs (/federation), only when this one hosts
+  // spaces for them (docs/plans/federation-spec.md §5.1)
+  setupFederationWebSocket(app as any);
 
   return app;
 }

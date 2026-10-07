@@ -32,6 +32,14 @@ function normalizeAddress(address: string): string {
  * operator would believe a proxy is trusted when it is not.
  */
 export function parseTrustedProxies(entries: readonly string[]): BlockList {
+  return parseAddressList(entries, 'security.trustedProxies');
+}
+
+/**
+ * Parse a list of addresses and CIDR ranges into a matcher; `setting` names
+ * the config key in the error. Shared with `federation.lanCidrs`.
+ */
+export function parseAddressList(entries: readonly string[], setting: string): BlockList {
   const list = new BlockList();
   for (const raw of entries) {
     const entry = raw.trim();
@@ -39,7 +47,7 @@ export function parseTrustedProxies(entries: readonly string[]): BlockList {
     const address = normalizeAddress(slash === -1 ? entry : entry.slice(0, slash));
     const family = isIP(address);
     if (family === 0) {
-      throw new Error(`security.trustedProxies: "${raw}" is not an IP address or CIDR range`);
+      throw new Error(`${setting}: "${raw}" is not an IP address or CIDR range`);
     }
     const type = family === 4 ? 'ipv4' : 'ipv6';
     if (slash === -1) {
@@ -49,7 +57,7 @@ export function parseTrustedProxies(entries: readonly string[]): BlockList {
     const prefix = Number(entry.slice(slash + 1));
     const max = family === 4 ? 32 : 128;
     if (!Number.isInteger(prefix) || prefix < 0 || prefix > max) {
-      throw new Error(`security.trustedProxies: "${raw}" has an invalid prefix length`);
+      throw new Error(`${setting}: "${raw}" has an invalid prefix length`);
     }
     list.addSubnet(address, prefix, type);
   }
@@ -69,6 +77,16 @@ function isTrusted(list: BlockList, address: string): boolean {
   const family = isIP(address);
   if (family === 0) return false;
   return list.check(address, family === 4 ? 'ipv4' : 'ipv6');
+}
+
+/** Whether `address` (either socket family spelling) is in `list`. */
+export function addressInList(list: BlockList, address: string): boolean {
+  return isTrusted(list, normalizeAddress(address));
+}
+
+/** Whether the socket peer `address` is a trusted reverse proxy. */
+export function isTrustedProxy(address: string): boolean {
+  return addressInList(trustedProxies(), address);
 }
 
 /**

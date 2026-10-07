@@ -139,6 +139,14 @@ export const defaultConfig: Partial<Config> = {
     approvalTimeoutMinutes: 30,
     transcriptWindowChars: 6000,
   },
+  federation: {
+    mode: 'off',
+    lanCidrs: [],
+    heartbeatSeconds: 15,
+    maxVisitorsPerInstance: 50,
+    maxRemoteTurnsPerInstance: 5,
+    agentPostsPerHour: 20,
+  },
   compaction: {
     minSavingsRatio: 0.10,
     growthMultiplier: 2.0,

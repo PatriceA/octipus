@@ -740,6 +740,74 @@ export class Vault {
   }
 
   /**
+   * A system-level secret that tells **absent** apart from **error**: null
+   * only when no active system row has that name. A database or decryption
+   * failure throws instead of reading as "not set". `getSystemSecret` maps
+   * both to null, which is fine for an optional API key and wrong for a
+   * secret whose absence makes the caller mint a new one (the federation
+   * identity, docs/plans/federation-spec.md §4.1).
+   */
+  async getSystemSecretStrict(name: string): Promise<string | null> {
+    return this.getByName('system', name);
+  }
+
+  /**
+   * Store a system-level secret unless an active one of that name exists,
+   * deciding under a transaction-scoped advisory lock keyed by the name, so
+   * concurrent first callers (in this process or another) store exactly one.
+   * `makeValue` runs only when the row is absent. Returns whether this call
+   * stored it.
+   */
+  async createSystemSecretOnce(name: string, makeValue: () => string, options: {
+    credentialType: NewVaultEntry['credentialType'];
+    description: string;
+    tags?: string[];
+  }): Promise<boolean> {
+    const created = await this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`vault:system:${name}`}))`);
+      const [existing] = await tx
+        .select({ id: vault.id })
+        .from(vault)
+        .where(and(
+          eq(vault.name, name),
+          eq(vault.userId, 'system'),
+          eq(vault.scope, 'system'),
+          eq(vault.isActive, true),
+        ))
+        .limit(1);
+      if (existing) return null;
+      const encrypted = encrypt(trimSecret(makeValue()), dekFor({ scope: 'system', userId: 'system', workspaceId: null }));
+      const [row] = await tx.insert(vault).values({
+        userId: 'system',
+        scope: 'system',
+        workspaceId: null,
+        name,
+        credentialType: options.credentialType,
+        encryptedValue: encrypted.ciphertext,
+        encryptionIv: encrypted.iv,
+        encryptionAuthTag: encrypted.authTag,
+        keyVersion: CURRENT_KEY_VERSION,
+        description: options.description,
+        tags: options.tags ?? ['system'],
+        allowedTools: [],
+        allowedAgents: [],
+        metadata: {},
+      }).returning({ id: vault.id });
+      return row;
+    });
+    if (!created) return false;
+    await auditRepository.log({
+      userId: 'system',
+      action: 'credential_created',
+      resourceType: 'credential',
+      resourceId: created.id,
+      details: { name, credentialType: options.credentialType, scope: 'system' },
+    });
+    securityLogger.info({ name }, 'System secret created');
+    return true;
+  }
+
+  /**
    * Convenience method: store or update a system-level secret.
    */
   async setSystemSecret(name: string, value: string, options?: {
@@ -821,6 +889,18 @@ export class Vault {
     }
     return null;
   }
+}
+
+/**
+ * System secrets only the install itself reads or writes. The admin vault
+ * routes refuse to list, read, write, rotate or delete them: an admin who
+ * replaced or deleted the federation identity would silently become another
+ * install to every peer that pinned this one (federation-spec §4.1).
+ */
+export const RESERVED_SECRET_NAMES: ReadonlySet<string> = new Set(['federation.identity']);
+
+export function isReservedSecretName(name: string): boolean {
+  return RESERVED_SECRET_NAMES.has(name);
 }
 
 // Singleton instance

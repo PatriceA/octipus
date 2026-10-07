@@ -593,6 +593,28 @@ export const roomsConfigSchema = z.object({
 });
 
 /**
+ * Spaces across installs (docs/plans/federation-spec.md §4.2). Off by
+ * default: an install neither dials out nor accepts peer links until an
+ * admin picks a mode.
+ */
+export const federationConfigSchema = z.object({
+  /** `visit`: members join spaces on other installs; `host`: members of other installs join spaces here. */
+  mode: z.enum(['off', 'visit', 'host', 'both']).default('off'),
+  /** Private ranges (addresses or CIDR) a peer link may use over plain `ws://`, dialled or accepted. */
+  lanCidrs: z.array(z.string().refine(isAddressOrCidr, {
+    message: 'must be an IP address or a CIDR range (e.g. 192.168.1.0/24)',
+  })).default([]),
+  /** Seconds between link pings; three missed pings close the link. */
+  heartbeatSeconds: z.number().int().min(5).max(300).default(15),
+  /** Live memberships the members of one other install may hold here. */
+  maxVisitorsPerInstance: z.number().int().min(1).max(10_000).default(50),
+  /** Queued or running host agent turns started by one other install's members. */
+  maxRemoteTurnsPerInstance: z.number().int().min(1).max(100).default(5),
+  /** Agent-labelled posts from other installs per room per hour. */
+  agentPostsPerHour: z.number().int().min(0).max(1000).default(20),
+});
+
+/**
  * WS2 — heartbeat loop. A periodic per-user agent turn that reviews standing
  * context and acts or stays silent. Off by default; a cheap deterministic gate
  * (quiet hours, daily cap, quota, "anything pending?" probe) runs before any
@@ -734,6 +756,7 @@ export const configSchema = z.object({
   groupChannels: groupChannelsConfigSchema.prefault({}),
   spaces: spacesConfigSchema.prefault({}),
   rooms: roomsConfigSchema.prefault({}),
+  federation: federationConfigSchema.prefault({}),
   gateway: gatewayConfigSchema.prefault({}),
 });
 
@@ -742,6 +765,8 @@ export type HeartbeatConfig = z.infer<typeof heartbeatConfigSchema>;
 export type SessionsConfig = z.infer<typeof sessionsConfigSchema>;
 export type SpacesConfig = z.infer<typeof spacesConfigSchema>;
 export type RoomsConfig = z.infer<typeof roomsConfigSchema>;
+export type FederationConfig = z.infer<typeof federationConfigSchema>;
+export type FederationMode = FederationConfig['mode'];
 export type GatewayConfig = z.infer<typeof gatewayConfigSchema>;
 export type StorageMode = z.infer<typeof storageModeSchema>;
 export type DatabaseConfig = z.infer<typeof databaseConfigSchema>;

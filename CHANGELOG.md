@@ -9,6 +9,22 @@ labels reflect blast radius, not contract guarantees.
 
 ### Security
 
+- **Telnyx webhooks are verified with Ed25519.** The old check ran an HMAC
+  keyed with the (public) key, which anyone could compute, and passed every
+  webhook when no `telnyx_public_key` was set. Verification now uses the
+  Ed25519 signature over `timestamp|body`, and a missing key fails it.
+- **Spaces across installs: identity and peer link** (first slices of
+  `docs/plans/federation-spec.md`). Each install gets an Ed25519 identity,
+  stored as the reserved vault secret `federation.identity` (the vault API
+  refuses to list, change or delete it; a vault error refuses federation
+  rather than minting a new identity). New `federation.*` settings (mode off
+  by default). When hosting, `/federation` accepts mutually authenticated,
+  sealed peer links (X25519 + ChaCha20-Poly1305, per-direction keys and
+  sequence numbers) with per-address handshake budgets; outbound dials go
+  through a guarded dialer (public or `federation.lanCidrs` addresses only,
+  pinned IP, no redirects). Migration `0137_federation.sql` adds
+  `federation_instances`.
+
 - **Invited members no longer get the owner's models and install state.**
   Each account now has an install-models flag. Accounts created on the
   sign-in page (open registration or a space invite) start without it
