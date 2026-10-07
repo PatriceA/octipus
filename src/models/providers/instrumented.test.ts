@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ log: vi.fn(), lookup: vi.fn() }));
+const mocks = vi.hoisted(() => ({ log: vi.fn(), lookup: vi.fn(), access: vi.fn() }));
+// Install-model access has its own suite (install-access.isolation.test.ts); here it allows.
+vi.mock('../install-access', () => ({ assertInstallModelAccess: mocks.access }));
 vi.mock('../cost-tracker', () => ({ getCostTracker: () => ({ logUsageWithCost: mocks.log }) }));
 vi.mock('../model-registry', () => ({ getModelRegistry: () => ({ getModel: mocks.lookup, getModelByModelId: mocks.lookup }) }));
 import { instrumentProvider, SYSTEM_USAGE_USER, withProviderUsageContext } from './instrumented';
@@ -11,7 +13,7 @@ function provider(): ModelProvider {
   return { name: 'openai', type: 'direct', supportsModel: () => true, checkHealth: async () => ({ healthy: true }),
     complete: vi.fn(async () => result), stream: async function* () { yield { content: 'ok' }; yield { usage: result.usage }; } };
 }
-beforeEach(() => { vi.clearAllMocks(); mocks.lookup.mockResolvedValue({ metadata: { extraBody: { think: false } } }); mocks.log.mockResolvedValue({}); });
+beforeEach(() => { vi.clearAllMocks(); mocks.access.mockResolvedValue(undefined); mocks.lookup.mockResolvedValue({ metadata: { extraBody: { think: false } } }); mocks.log.mockResolvedValue({}); });
 describe('provider accounting boundary', () => {
   test('one completion row with session attribution and legitimate zero charge', async () => {
     const p = instrumentProvider(provider());
@@ -78,4 +80,11 @@ test('CLI completion inherits tool attribution and records once', async () => {
   expect(mocks.log).toHaveBeenCalledOnce();
   expect(mocks.log.mock.calls[0][0]).toBe(options.userId);
   expect(mocks.log.mock.calls[0][4]).toMatchObject({ sessionId: options.sessionId });
+});
+test('a call the install-model check refuses never reaches the provider', async () => {
+  mocks.access.mockRejectedValue(new Error('This account may not use the install\'s models'));
+  const p = provider(); const complete = p.complete;
+  await expect(instrumentProvider(p).complete(options)).rejects.toThrow(/may not use the install's models/);
+  expect(complete).not.toHaveBeenCalled();
+  expect(mocks.access).toHaveBeenCalledWith(expect.anything(), options.userId, 'own', undefined);
 });
