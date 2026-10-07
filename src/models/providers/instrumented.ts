@@ -76,6 +76,9 @@ async function prepare(options: CompletionOptions, provider: string): Promise<Co
   // here, and one that found no `apiKey` would fall back to the install's env
   // key. resolveModelKey throws when the owner stored none, and when the call
   // serves anyone but the row's owner — whatever key the caller brought.
+  // Nor does an install row (or a raw model id on the install's env keys)
+  // serve someone the install's models are not for (install-access.ts).
+  await assertRowServesCall(row, options);
   if (row?.ownerUserId) {
     const { assertModelRowOwner, resolveModelKey } = await import('../model-key');
     assertModelRowOwner(row, options.userId);
@@ -117,6 +120,25 @@ async function fundingOf(options: CompletionOptions): Promise<NonNullable<Comple
     }
   }
   return 'install';
+}
+
+/**
+ * Throws unless the call `options` describes (merged with the turn's usage
+ * context) may run on `row` (`null`: a raw model id on the install's env
+ * keys): an install row only for someone the install's models are for, or as
+ * install work, or in a turn whose sponsor may use them (install-access.ts).
+ * The API providers check here (`prepare`), the CLI spawn sites before they
+ * pick a login.
+ */
+export async function assertRowServesCall(
+  row: Pick<import('@/db/schema/models').ModelConfigEntry, 'ownerUserId'> | null,
+  options: Pick<CompletionOptions, 'userId' | 'funding' | 'requestType' | 'modelConfigName'>,
+  /** The turn's sponsor when the caller holds it (the CLI agent worker); else the ambient one. */
+  sponsorUserId?: string | null,
+): Promise<void> {
+  const merged = { ...usageContext.getStore(), ...Object.fromEntries(Object.entries(options).filter(([, value]) => value !== undefined)) } as CompletionOptions;
+  const { assertInstallModelAccess } = await import('../install-access');
+  await assertInstallModelAccess(row, merged.userId, await fundingOf(merged), sponsorUserId ?? currentSponsor()?.userId);
 }
 
 /** The user a provider call serves: the request's own, else the turn's usage context. */

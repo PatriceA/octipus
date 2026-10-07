@@ -13,6 +13,14 @@ const PUBLIC_PATH_PREFIXES = [
   '/api/settings/setup-status',
 ];
 
+/** Exact health paths that stay public; the rest of `/api/health` does not. */
+const PUBLIC_HEALTH_PATHS: ReadonlySet<string> = new Set([
+  '/api/health',
+  '/api/health/',
+  '/api/health/database',
+  '/api/health/storage',
+]);
+
 /**
  * Public routes matched by method AND exact shape — unlike the path-prefix
  * list above, which ignores the method. `GET /api/invites/<token>` previews an
@@ -34,8 +42,10 @@ export function isPublicPath(path: string): boolean {
   // which the SameSite=Strict session cookie does not survive.
   if (path.match(/^\/api\/auth\/oauth\/\w+\/callback/)) return true;
   if (/^\/api\/connectors\/[a-z0-9-]+\/callback$/.test(path)) return true;
-  // All health endpoints are public (used by monitoring, load balancers, k8s probes)
-  if (path.startsWith('/api/health')) return true;
+  // The probes monitoring, load balancers and k8s use are public (`/live` and
+  // `/ready` are in the prefix list below). The rest of /api/health is install
+  // state and needs a sign-in (routes/health.ts gates it further).
+  if (PUBLIC_HEALTH_PATHS.has(path)) return true;
   // Webhook endpoints use HMAC signature verification instead of bearer auth
   if (path.startsWith('/api/webhooks/')) return true;
   // Incoming webhooks use per-hook webhookSecret for authentication

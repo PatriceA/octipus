@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Bot } from 'lucide-react';
 import { api } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 
 interface TopicLite {
   value: string;
@@ -42,16 +43,22 @@ const ROUTED_LANES: ReadonlyArray<{ value: string; answers: string }> = [
 ];
 
 export function RootModelNote() {
+  // The lane bindings are install configuration: GET /topics gives a non-admin
+  // labels only, so the note is an admin's.
+  const { user } = useAuth();
+  const isAdmin = !!user?.isAdmin;
   const { data: topicsData } = useQuery({
     queryKey: ['topics-config'],
     queryFn: () => api.get<{ topics: TopicLite[] }>('/topics'),
+    enabled: isAdmin,
   });
   const { data: modelsData } = useQuery({
     queryKey: ['models'],
     queryFn: () => api.get<{ models: ModelLite[] }>('/models'),
+    enabled: isAdmin,
   });
 
-  if (!topicsData || !modelsData) return null;
+  if (!isAdmin || !topicsData || !modelsData) return null;
 
   // `?? []` because a 200 whose body lacks the array is not hypothetical — an
   // older backend, a partial deploy, or a proxy returning `{}` all produce it,

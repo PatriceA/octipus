@@ -7,6 +7,26 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### Security
+
+- **Invited members no longer get the owner's models and install state.**
+  Each account now has an install-models flag. Accounts created on the
+  sign-in page (open registration or a space invite) start without it
+  (`security.selfRegisteredInstallModels`, default off): they see and run on
+  only their own models and what a sponsored space provides, enforced at the
+  provider and CLI boundary. Existing, admin-created, SAML and SCIM accounts
+  keep access; an admin flips it per account under Users. **Upgrade note:**
+  accounts that already joined through an invite keep access until an admin
+  turns it off.
+- **Install-level routes are admin-only.** Running a tool directly
+  (`POST /api/tools/:id/tools/:name/execute`), reloading extensions, plugins
+  and mounted skills, and reading model configuration, provider lists, CLI
+  status, detailed health, tool/plugin/MCP/capability inventories,
+  evaluations, topic bindings and telephony state now need an admin
+  (`src/api/admin-guard.ts`); non-admins get a reduced view where the web
+  needs one. Skill import/export and skill-topic assignments no longer
+  reach other users' skills.
+
 ### Fixed
 
 - **Space invite links use the install's public URL.** The link was built from

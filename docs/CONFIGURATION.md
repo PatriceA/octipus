@@ -40,6 +40,7 @@ GATEWAY_REPLAY_MAX_SESSIONS=500        # sessions whose recent events are kept f
 CORS_ORIGINS=http://localhost:3007   # your web origin; code default is http://localhost:3001
 TRUSTED_PROXIES=                       # reverse proxies whose X-Forwarded-For is believed; see "Reverse proxy" below
 REGISTRATION_MODE=open                 # who may register: open | invite_only (with a space invite link) | closed; the first account always may (docs/SPACES.md → Guests)
+SELF_REGISTERED_INSTALL_MODELS=false   # may self-registered accounts use the install's models? (docs/SPACES.md → Who may use the install's models)
 
 # ─── Models ───────────────────────────────────────────────────
 LITELLM_URL=http://localhost:4000      # LiteLLM proxy (optional)
@@ -191,6 +192,7 @@ described in [SPACES.md → Settings](SPACES.md#settings).
 | Key | Default | Purpose |
 |---|---|---|
 | `security.registration` | `open` | Who may create an account: `open`, `invite_only` (only with a valid space invite, redeemed with the account) or `closed`. The install's first account may always register; SAML, SCIM and admin-created accounts are not affected. Env: `REGISTRATION_MODE`. |
+| `security.selfRegisteredInstallModels` | `false` | Whether accounts created on the sign-in page (open registration or a space invite link) may run on the install's models and keys. Off: they use only their own models (Settings → My models) and what a space sponsors, until an admin allows it under Users. Admins, SAML, SCIM and admin-created accounts may always. Env: `SELF_REGISTERED_INSTALL_MODELS`. |
 | `spaces.creation` | `any_user` | Who may create a space: `any_user` or `admins`. Env: `SPACES_CREATION`. |
 | `spaces.maxMembers` | 50 | Most members per space. Env: `SPACES_MAX_MEMBERS`. |
 | `spaces.inviteMaxTtlHours` | 720 | Longest invite lifetime, hours; longer requests are clamped. Env: `SPACES_INVITE_MAX_TTL_HOURS`. |

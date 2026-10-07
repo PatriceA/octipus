@@ -42,6 +42,7 @@ export const defaultConfig: Partial<Config> = {
     dockerIsolation: 'off',
     trustedProxies: [],
     registration: 'open',
+    selfRegisteredInstallModels: false,
   },
   api: {
     host: '0.0.0.0',

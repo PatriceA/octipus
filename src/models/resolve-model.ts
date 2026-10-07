@@ -22,12 +22,19 @@
  * sponsor, so the requester's own rows — billed to the requester's key — are
  * out: step 1 is the sponsor's personal binding instead, when that row is one
  * of the sponsor models, and an explicit choice may name a sponsor model.
+ *
+ * Someone the install's models are not for (install-access.ts — the payer:
+ * the sponsor in a sponsored turn) gets no install row on a text lane nor by
+ * name: steps 2 and 3 become their own first enabled model, and nothing when
+ * they have none. The provider layer refuses such a row anyway; this keeps
+ * the choice from landing on one.
  */
 import { CLI_SPACE_MODES } from '@/core/cli-adapters';
 import { getCLIToolConfig } from '@/core/cli-agent-factory';
 import type { AgentSponsor } from '@/core/types';
 import type { ModelConfigEntry } from '@/db/schema/models';
 import type { SpaceRole } from '@/db/schema/organizations';
+import { mayUseInstallModels } from '@/models/install-access';
 import { getModelRegistry } from '@/models/model-registry';
 import { canonicalTopic, TOPICS, type TopicKind } from '@/models/topics';
 import { can } from '@/security/space-access';
@@ -135,6 +142,7 @@ export async function resolveModel(req: ResolveByTopic | ResolveByName): Promise
     if (!row || !row.isEnabled) return null;
     if (!personalRowAllowed(row, req.userId, req.sponsor)) return null;
     if (req.inSpace && !usableInSpace(row, req.spaceRole)) return null;
+    if (!row.ownerUserId && !(await mayUseInstallModels(req.sponsor ? req.sponsor.userId : req.userId))) return null;
     return row;
   }
 
@@ -148,6 +156,13 @@ export async function resolveModel(req: ResolveByTopic | ResolveByName): Promise
   if (!req.backup && isRealUser(payer) && isPersonalBindableTopic(topic)) {
     const personal = await registry.getUserBinding(payer, topic);
     if (usable(personal) && personalRowAllowed(personal, userId, req.sponsor)) return personal;
+  }
+  // Text lanes for someone the install's models are not for: their own first
+  // enabled model instead of the install's (install work keeps its lanes).
+  if (isRealUser(payer) && isPersonalBindableTopic(topic) && !(await mayUseInstallModels(payer))) {
+    if (req.backup) return null;
+    const own = await registry.getPersonalModels(payer);
+    return own.find((row) => row.isEnabled && usable(row) && personalRowAllowed(row, userId, req.sponsor)) ?? null;
   }
   const install = req.backup ? await registry.getBackupModelForTopic(topic) : await registry.getModelForTopic(topic);
   if (usable(install)) return install;

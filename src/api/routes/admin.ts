@@ -5,6 +5,7 @@ import { auditRepository } from '@/db/repositories/audit-repository';
 import { userRepository } from '@/db/repositories/user-repository';
 import { recordedClientIp } from '@/security/client-ip';
 import { isAdmin, isAuthenticated } from '@/security/principal';
+import { forgetInstallAccess } from '@/models/install-access';
 import { onUserChanged, setUserActive } from '@/security/user-lifecycle';
 import { hashPassword } from '@/utils/crypto';
 import { assertLocalUsername, InvalidUsernameError } from '@/security/user-kinds';
@@ -57,6 +58,7 @@ function publicUser(u: import('@/db/schema/users').User) {
     email: u.email,
     isAdmin: u.isAdmin,
     isActive: u.isActive,
+    installModels: u.installModels,
     totpEnabled: u.totpEnabled,
     createdAt: u.createdAt,
     updatedAt: u.updatedAt,
@@ -106,6 +108,7 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
         isAdmin: body.isAdmin ?? false,
         isActive: body.isActive ?? true,
         deactivatedBy: body.isActive === false ? 'admin' : null,
+        installModels: body.installModels ?? true,
       });
 
       await auditRepository.log({
@@ -125,6 +128,7 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
         password: t.Optional(t.String({ minLength: 8 })),
         isAdmin: t.Optional(t.Boolean()),
         isActive: t.Optional(t.Boolean()),
+        installModels: t.Optional(t.Boolean()),
       }),
       detail: { tags: ['admin'] },
     },
@@ -155,6 +159,7 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
       const updates: Record<string, unknown> = {};
       if (body.email !== undefined) updates.email = body.email;
       if (body.isAdmin !== undefined) updates.isAdmin = body.isAdmin;
+      if (body.installModels !== undefined) updates.installModels = body.installModels;
       if (body.password) updates.passwordHash = await hashPassword(body.password);
 
       // `is_active` has one writer, which also ends the account's sessions,
@@ -181,6 +186,8 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
       }
       // Admin rights are fixed on a gateway connection at auth: reconnect it.
       if (body.isAdmin !== undefined && body.isAdmin !== before.isAdmin) await onUserChanged(params.id);
+      // Who may run on the install's models is cached for a few seconds.
+      if (body.isAdmin !== undefined || body.installModels !== undefined) forgetInstallAccess(params.id);
 
       await auditRepository.log({
         userId: principal.userId,
@@ -204,6 +211,7 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
         password: t.Optional(t.String({ minLength: 8 })),
         isAdmin: t.Optional(t.Boolean()),
         isActive: t.Optional(t.Boolean()),
+        installModels: t.Optional(t.Boolean()),
       }),
       detail: { tags: ['admin'] },
     },

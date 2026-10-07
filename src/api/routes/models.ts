@@ -1,4 +1,5 @@
 import { Elysia, t } from '@/api/http';
+import { adminDenied } from '@/api/admin-guard';
 import { apiContext } from '@/api/context';
 import { discoverModels, listPresets, probeHealth } from '@/models/providers/presets';
 import type { CustomProviderConfig } from '@/db/schema/models';
@@ -37,7 +38,7 @@ import { canActInSession } from '@/core/rooms/access';
 
 export const modelRoutes = new Elysia({ prefix: '/models' })
   .use(apiContext)
-  // List all models
+  // List all models (install rows redacted for a non-admin — listModels)
   .get(
     '/',
     async ({ user }) => {
@@ -62,8 +63,9 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
   // Autodiscover models from a local OpenAI-compatible endpoint + health probe.
   .post(
     '/discover',
-    async ({ user, body }) => {
-      if (!user?.isAdmin) return { error: 'Admin access required' };
+    async ({ user, principal, body, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
       const [models, healthy] = await Promise.all([
         discoverModels(body.endpoint, { apiKey: body.apiKey }),
         probeHealth(body.endpoint),
@@ -76,7 +78,7 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
     }
   )
 
-  // Get model by name
+  // Get model by name (an install row redacted for a non-admin)
   .get(
     '/:name',
     async ({ user, params }) => {
@@ -92,8 +94,9 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
   // Test model connection before registering
   .post(
     '/test',
-    async ({ user, body }) => {
-      if (!user?.isAdmin) return { error: 'Admin access required' };
+    async ({ user, principal, body, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied || !user) return denied;
       return testModelConnection({
         provider: body.provider,
         modelId: body.modelId,
@@ -193,8 +196,9 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
   // Delete model (admin only)
   .delete(
     '/:name',
-    async ({ user, params, set }) => {
-      if (!user?.isAdmin) return { error: 'Admin access required' };
+    async ({ user, principal, params, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
       const result = await deleteModel(params.name);
       if ('error' in result) set.status = 403;
       return result;
@@ -208,8 +212,9 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
   // Set default model (admin only)
   .post(
     '/:name/default',
-    async ({ user, params, set }) => {
-      if (!user?.isAdmin) return { error: 'Admin access required' };
+    async ({ user, principal, params, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
       const result = await setDefaultModel(params.name);
       if ('error' in result) set.status = 403;
       return result;
@@ -241,41 +246,45 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
     }
   )
 
-  // Get model health
+  // Get model health (admin only: install system state)
   .get(
     '/health',
-    async ({ user }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, principal, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
       return getSystemHealth();
     },
     { detail: { tags: ['models'] } }
   )
 
-  // Get CLI tools availability and quota
+  // Get CLI tools availability and quota (admin only)
   .get(
     '/cli/status',
-    async ({ user }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, principal, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
       return getCliStatus();
     },
     { detail: { tags: ['models'] } }
   )
 
-  // Get quota status for CLI providers
+  // Get quota status for CLI providers (admin only)
   .get(
     '/cli/quota',
-    async ({ user }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, principal, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
       return getCliQuotas();
     },
     { detail: { tags: ['models'] } }
   )
 
-  // Get quota usage history for a CLI provider
+  // Get quota usage history for a CLI provider (admin only)
   .get(
     '/cli/quota/:provider/history',
-    async ({ user, params, query }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, principal, params, query, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
       const days = query.days ? parseInt(query.days, 10) : 7;
       return getCliQuotaHistory(params.provider, days);
     },
@@ -289,8 +298,9 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
   // Clear quota exhaustion (admin only)
   .post(
     '/cli/quota/:provider/clear',
-    async ({ user, params }) => {
-      if (!user?.isAdmin) return { error: 'Admin access required' };
+    async ({ user, principal, params, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
       return clearCliQuota(params.provider);
     },
     {
@@ -299,11 +309,13 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
     }
   )
 
-  // List available Ollama models
+  // List available Ollama models (admin only, as are the provider listings
+  // below: they read the install's provider keys and endpoints)
   .get(
     '/providers/ollama/models',
-    async ({ user }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, principal, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
       return listOllamaModels();
     },
     { detail: { tags: ['models'] } }
@@ -374,8 +386,9 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
   // for known IDs while surfacing any new ones the account has access to.
   .get(
     '/providers/deepseek/models',
-    async ({ user }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, principal, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
       return listDeepSeekModels();
     },
     { detail: { tags: ['models'] } }
@@ -384,8 +397,9 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
   // List available LiteLLM models with provider info
   .get(
     '/providers/litellm/models',
-    async ({ user }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, principal, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
       return listLiteLLMModels();
     },
     { detail: { tags: ['models'] } }
@@ -394,8 +408,9 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
   // Search OpenRouter models (live API) — must be before :provider wildcard routes
   .get(
     '/providers/openrouter/search',
-    async ({ user, query }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, principal, query, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
       const limit = Math.min(Math.max(parseInt(query.limit || '20', 10) || 20, 1), 50);
       return searchOpenRouterModels(query.q || '', limit);
     },
@@ -416,10 +431,11 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
   // either shape (the default path is chosen by flavor, overridable).
   .post(
     '/custom/discover-models',
-    async ({ user, body }) => {
+    async ({ user, principal, body, set }) => {
       // Model management is admin-only: this triggers an authenticated outbound
       // fetch to a user-supplied URL, so it must not be reachable by non-admins.
-      if (!user?.isAdmin) return { configured: false, error: 'Admin access required', models: [] };
+      const denied = adminDenied({ set, user, principal });
+      if (denied || !user) return denied;
       return discoverCustomModels({ ...body, userId: user.id });
     },
     {
@@ -440,8 +456,9 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
   // Returns shortlist ids only, for legacy callers that just want a string[].
   .get(
     '/providers/:provider/known',
-    async ({ user, params }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, principal, params, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied || !user) return denied;
       return getKnownProviderModels(params.provider, user.id);
     },
     {
@@ -453,10 +470,13 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
   // List available models for a direct provider — live discovery + curation.
   // No hardcoded id arrays: every result comes from the vendor's list endpoint
   // (with Redis cache + stale-while-revalidate). See ./discovery/.
+  // Admin only: it uses the install's provider keys, and `?endpoint=` makes
+  // the server fetch a caller-chosen URL.
   .get(
     '/providers/:provider/available',
-    async ({ user, params, query }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, principal, params, query, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied || !user) return denied;
       return getAvailableProviderModels(params.provider, query, user.id);
     },
     {
@@ -474,8 +494,9 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
   // Update custom model catalog for a provider
   .put(
     '/providers/:provider/catalog',
-    async ({ user, params, body }) => {
-      if (!user?.isAdmin) return { error: 'Admin access required' };
+    async ({ user, principal, params, body, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied || !user) return denied;
       return updateProviderCatalog(params.provider, body.models, user.id);
     },
     {
@@ -538,8 +559,9 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
   // Get global usage (admin only)
   .get(
     '/usage/global',
-    async ({ user, query }) => {
-      if (!user?.isAdmin) return { error: 'Admin access required' };
+    async ({ user, principal, query, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
       const since = query.since ? new Date(query.since) : undefined;
       return getGlobalUsage(since);
     },

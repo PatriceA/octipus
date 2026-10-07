@@ -2,6 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { Plus, RefreshCw } from 'lucide-react';
+import Link from 'next/link';
 import { useCallback, useState } from 'react';
 import { AddModelModal } from '@/components/models/add-model-modal';
 import { CLIStatusPanel } from '@/components/models/cli-status-panel';
@@ -11,9 +12,15 @@ import { RootModelNote } from '@/components/models/root-model-note';
 import { RecommendedModelsPanel } from '@/components/models/recommended-models-panel';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 import type { CLITool, Model } from '@/lib/types/models';
 
 export default function ModelsPage() {
+  // Install models are an admin's to manage. Anyone else reads what GET
+  // /models gives them (install rows redacted) and manages their own models
+  // under Settings → My models.
+  const { user, isLoading: authLoading } = useAuth();
+  const isAdmin = !!user?.isAdmin;
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingModel, setEditingModel] = useState<Model | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
@@ -33,6 +40,7 @@ export default function ModelsPage() {
   const { data: cliData, refetch: refetchCLIStatus } = useQuery({
     queryKey: ['models', 'cli-status'],
     queryFn: () => api.get<{ tools: CLITool[] }>('/models/cli/status'),
+    enabled: isAdmin,
   });
   const cliTools = cliData?.tools ?? [];
 
@@ -101,10 +109,42 @@ export default function ModelsPage() {
     }
   };
 
-  if (loading) {
+  if (loading || authLoading) {
     return (
       <div className="flex items-center justify-center py-20">
         <RefreshCw className="w-6 h-6 animate-spin text-on-surface-variant" />
+      </div>
+    );
+  }
+
+  if (!isAdmin) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="models" description="The models available to you." />
+        {displayError && (
+          <div className="bg-error/10 border border-error/20 rounded-xs px-4 py-3 text-error text-sm">{displayError}</div>
+        )}
+        <p className="text-sm text-on-surface-variant">
+          The install&apos;s models are managed by an admin. Add and manage your own under{' '}
+          <Link href="/settings" className="text-primary underline">Settings → My models</Link>.
+        </p>
+        <div className="stagger grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {models.length === 0 ? (
+            <p className="col-span-full text-center py-8 text-on-surface-variant">No models available to you yet.</p>
+          ) : (
+            models.map((model) => (
+              <ModelCard
+                key={model.id}
+                model={model}
+                readOnly
+                onSetDefault={() => {}}
+                onEdit={() => {}}
+                onToggleEnabled={() => {}}
+                onDelete={() => {}}
+              />
+            ))
+          )}
+        </div>
       </div>
     );
   }

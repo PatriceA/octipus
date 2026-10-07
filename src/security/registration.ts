@@ -120,7 +120,7 @@ export async function registerUser(input: {
     // them taking the name meanwhile is a 409, not a 500.
     const [user] = await tx
       .insert(users)
-      .values({ username: input.username, email: input.email, passwordHash, isAdmin: isFirstUser })
+      .values({ username: input.username, email: input.email, passwordHash, isAdmin: isFirstUser, installModels: isFirstUser || getConfig().security.selfRegisteredInstallModels })
       .returning()
       .catch((err: unknown) => {
         const constraint = uniqueViolation(err);

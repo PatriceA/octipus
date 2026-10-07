@@ -253,8 +253,10 @@ function AssignAllPanel({ models, onApplied }: { models: ModelOption[]; onApplie
 }
 
 export default function TopicsPage() {
-  const { user } = useAuth();
+  const { user, isLoading: authLoading } = useAuth();
   const queryClient = useQueryClient();
+  // Topic routing is install configuration: GET /topics gives a non-admin the
+  // labels only, so the page is an admin's (the sidebar hides it already).
   const canEdit = !!user?.isAdmin;
 
   const { data: topicsData, isLoading, isError, error, refetch } = useQuery({
@@ -262,16 +264,19 @@ export default function TopicsPage() {
     // Let the fetch error propagate so the UI can show a real failure instead
     // of an empty "no topics" success when /topics is down or auth fails.
     queryFn: () => api.get<{ topics: TopicRow[] }>('/topics'),
+    enabled: canEdit,
   });
 
   const { data: rolesData } = useQuery({
     queryKey: ['roles-config'],
     queryFn: () => api.get<{ roles: RoleRow[] }>('/roles'),
+    enabled: canEdit,
   });
 
   const { data: toolsData } = useQuery({
     queryKey: ['tool-modules'],
     queryFn: () => api.get<{ tools: ToolOption[] }>('/tools'),
+    enabled: canEdit,
   });
 
   const { data: modelsData } = useQuery({
@@ -280,6 +285,7 @@ export default function TopicsPage() {
     // rather than masking a /models failure as "no models". This only feeds the
     // model/executor dropdowns, so the page still renders topics on failure.
     queryFn: () => api.get<{ models: ModelOption[] }>('/models'),
+    enabled: canEdit,
   });
 
   const topics = topicsData?.topics || [];
@@ -295,6 +301,19 @@ export default function TopicsPage() {
     queryClient.invalidateQueries({ queryKey: ['models'] });
   };
 
+  if (!canEdit) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="topics" badge={<Tags className="w-5 h-5 text-on-surface-variant" />} />
+        {!authLoading && (
+          <p className="text-sm text-on-surface-variant">
+            Topic routing is the install&apos;s configuration and is managed by an admin. Your own models are under Settings → My models.
+          </p>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -302,9 +321,6 @@ export default function TopicsPage() {
         badge={<Tags className="w-5 h-5 text-on-surface-variant" />}
         description="A topic binds a kind of work to a model, and every role listed under it runs on that binding. Start with one text model everywhere; override a lane when it needs a different one. Embedding, OCR and vision need compatible models."
       />
-      {!canEdit && (
-        <p className="text-sm text-warning">Read-only — admin access is required to change topic configuration.</p>
-      )}
 
       <RootModelNote />
 

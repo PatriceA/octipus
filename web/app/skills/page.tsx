@@ -24,6 +24,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Portal } from '@/components/ui/portal';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { api } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 import { cn } from '@/lib/utils';
 
 interface Skill {
@@ -235,6 +236,8 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
   // don't have to open the edit dialog as a second step.
   const [topics, setTopics] = useState<string[]>([]);
   const topicOptions = useTopicOptions();
+  // Topic assignments are install-wide; only an admin sets them.
+  const isAdmin = !!useAuth().user?.isAdmin;
 
   const toggleTopic = (t: string) => {
     setTopics((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
@@ -265,7 +268,7 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
       });
       // Attach selected topics. Failures here don't roll back skill creation —
       // the user can still adjust topics from the edit dialog.
-      if (created?.id && topics.length > 0) {
+      if (isAdmin && created?.id && topics.length > 0) {
         await Promise.all(
           topics.map((topic) =>
             api.post('/skills/topics', { skillId: created.id, topic, isActive: true }).catch(() => null),
@@ -331,7 +334,7 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
             </div>
           </div>
 
-          <div>
+          {isAdmin && <div>
             <label className="block text-sm font-medium text-on-surface/80 mb-1">
               Topics
               <span className="ml-2 text-xs font-normal text-on-surface-variant">
@@ -360,7 +363,7 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
                 );
               })}
             </div>
-          </div>
+          </div>}
 
           <div>
             <label className="block text-sm font-medium text-on-surface/80 mb-1">Description</label>
@@ -456,6 +459,8 @@ function TopicAssignmentsPanel({ skillId }: { skillId: string }) {
   });
   const [pending, setPending] = useState<string | null>(null);
   const topicOptions = useTopicOptions();
+  // Assignments apply to every user's workers: read-only unless admin.
+  const isAdmin = !!useAuth().user?.isAdmin;
 
   const assignments = data?.assignments ?? [];
   const byTopic = new Map(assignments.map((a) => [a.topic, a]));
@@ -513,7 +518,7 @@ function TopicAssignmentsPanel({ skillId }: { skillId: string }) {
             Active roles include this skill in worker prompts
           </span>
         </label>
-        <div className="flex gap-2">
+        {isAdmin ? <div className="flex gap-2">
           <button
             type="button"
             onClick={() => handleBulk(true)}
@@ -531,7 +536,7 @@ function TopicAssignmentsPanel({ skillId }: { skillId: string }) {
           >
             Disable all
           </button>
-        </div>
+        </div> : <span className="text-xs text-on-surface-variant">Only an admin can change role assignments.</span>}
       </div>
       {isLoading ? (
         <div className="text-xs text-on-surface-variant">Loading assignments...</div>
@@ -546,7 +551,7 @@ function TopicAssignmentsPanel({ skillId }: { skillId: string }) {
                 key={topic}
                 type="button"
                 onClick={() => handleToggle(topic)}
-                disabled={pending !== null}
+                disabled={!isAdmin || pending !== null}
                 title={
                   state === 'active' ? `${opt.label} — Active, click to deactivate`
                   : state === 'attached' ? `${opt.label} — Attached (inactive), click to remove`
@@ -977,6 +982,8 @@ function SkillCard({
 
 export default function SkillsPage() {
   const queryClient = useQueryClient();
+  // Reloading mounted skills rescans install folders: admin only.
+  const isAdmin = !!useAuth().user?.isAdmin;
   const [reloadingMounted, setReloadingMounted] = useState(false);
   const [reloadResult, setReloadResult] = useState('');
   const [reloadError, setReloadError] = useState('');
@@ -1082,12 +1089,12 @@ export default function SkillsPage() {
         }
         actions={
           <>
-          <button type="button" onClick={() => void reloadMounted()} disabled={reloadingMounted}
+          {isAdmin && <button type="button" onClick={() => void reloadMounted()} disabled={reloadingMounted}
             className="flex items-center gap-1.5 px-4 py-2 text-sm rounded-xs border border-outline-variant/30 disabled:opacity-50"
             title="Read mounted skills from their source folders again">
             <RefreshCw className={cn('w-4 h-4', reloadingMounted && 'animate-spin')} />
             {reloadingMounted ? 'Reloading mounted skills…' : 'Reload mounted skills'}
-          </button>
+          </button>}
           {/* The distillation pipeline files proposals here and nothing else
               linked to them, so they piled up unseen. */}
           <Link

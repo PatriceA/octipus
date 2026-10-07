@@ -1,18 +1,24 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
+import { adminDenied } from '@/api/admin-guard';
 import { getDb } from '@/db/postgres';
 import { skillTopicAssignments } from '@/db/schema/skill-topic-assignments';
 import { skills } from '@/db/schema/skills';
 import { getSkillRegistry } from '@/skills/registry';
+import { isAdmin, isAuthenticated } from '@/security/principal';
 
+// Assignments are install-global: they decide which skills every user's
+// workers get per topic. Anyone signed in reads those for skills they can
+// see; only an admin changes them.
 export const skillTopicAssignmentRoutes = new Elysia({ prefix: '/skills/topics' })
   .use(apiContext)
 
   // List all assignments, optionally filtered by topic or skill
   .get(
     '/',
-    async ({ query }) => {
+    async ({ user, principal, query, set }) => {
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       const db = getDb();
       let q = db
         .select({
@@ -32,7 +38,13 @@ export const skillTopicAssignmentRoutes = new Elysia({ prefix: '/skills/topics' 
         query.topic ? eq(skillTopicAssignments.topic, query.topic) : undefined,
         query.skillId ? inArray(skillTopicAssignments.skillId, registry.sourceIds(query.skillId)) : undefined,
       )) as typeof q;
-      return { assignments: (await q).map(row => ({ ...row,
+      let rows = await q;
+      if (!isAdmin(principal)) {
+        // Another user's private skill stays invisible, name included.
+        const visible = new Set((await registry.getAll(user.id)).flatMap(skill => registry.sourceIds(skill.id)));
+        rows = rows.filter(row => visible.has(row.skillId));
+      }
+      return { assignments: rows.map(row => ({ ...row,
         skillId: registry.canonicalId(row.skillId),
         skillName: row.skillName ?? registry.getExternalSkills().find(skill => skill.id === registry.canonicalId(row.skillId))?.name ?? row.skillId,
       })) };
@@ -49,8 +61,9 @@ export const skillTopicAssignmentRoutes = new Elysia({ prefix: '/skills/topics' 
   // Assign a skill to a topic
   .post(
     '/',
-    async ({ user, body }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, principal, body, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied || !user) return denied;
 
       const db = getDb();
 
@@ -96,8 +109,9 @@ export const skillTopicAssignmentRoutes = new Elysia({ prefix: '/skills/topics' 
   // Toggle active state or update an assignment
   .patch(
     '/:id',
-    async ({ user, params, body }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, principal, params, body, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
 
       const db = getDb();
       const updateData: Record<string, unknown> = { updatedAt: new Date() };
@@ -124,8 +138,9 @@ export const skillTopicAssignmentRoutes = new Elysia({ prefix: '/skills/topics' 
   // Bulk toggle: activate or deactivate a skill across all its topic assignments
   .patch(
     '/bulk/:skillId',
-    async ({ user, params, body }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, principal, params, body, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
 
       const db = getDb();
       const updated = await db
@@ -148,8 +163,9 @@ export const skillTopicAssignmentRoutes = new Elysia({ prefix: '/skills/topics' 
   // Delete an assignment
   .delete(
     '/:id',
-    async ({ user, params }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, principal, params, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
 
       const db = getDb();
       const result = await db

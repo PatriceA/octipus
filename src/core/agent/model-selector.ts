@@ -1,5 +1,6 @@
 import { getModelRegistry } from '@/models/model-registry';
 import type { SpaceRole } from '@/db/schema/organizations';
+import { InstallModelsDeniedError, mayUseInstallModels } from '@/models/install-access';
 import { resolveModel, usableInSpace } from '@/models/resolve-model';
 import { coreLogger } from '@/utils/logger';
 import { selectLane } from './lane-intent';
@@ -151,11 +152,28 @@ export class ModelSelector {
       );
     }
 
+    const own = await this.ownModelInsteadOfInstall(requester);
+    if (own) return this.validateRootModel(own);
     const defaultModel = await registry.getDefaultModel();
     if (!defaultModel) {
       throw new Error('No default model configured. Set one in the Models page.');
     }
     return this.validateRootModel(defaultModel);
+  }
+
+  /**
+   * For a requester the install's models are not for (install-access.ts —
+   * the payer: the sponsor in a sponsored turn): their own first usable model
+   * in place of the install default; `InstallModelsDeniedError` when they
+   * have none. Null for everyone else.
+   */
+  private async ownModelInsteadOfInstall(requester: ModelRequester) {
+    if (!requester.userId) return null;
+    const payer = requester.sponsor ? requester.sponsor.userId : requester.userId;
+    if (await mayUseInstallModels(payer)) return null;
+    const own = await resolveModel({ userId: requester.userId, topic: 'everyday', inSpace: requester.inSpace, spaceRole: requester.spaceRole, sponsor: requester.sponsor });
+    if (!own) throw new InstallModelsDeniedError();
+    return own;
   }
 
   /**
@@ -274,6 +292,8 @@ export class ModelSelector {
       const personal = await registry.getUserBinding(requester.userId, 'everyday');
       if (personal && usable(personal)) return { modelId: personal.modelId, name: personal.name };
     }
+    const own = await this.ownModelInsteadOfInstall(requester);
+    if (own) return { modelId: own.modelId, name: own.name };
     const configuredDefault = await registry.getDefaultModel();
     if (!configuredDefault) {
       throw new Error('No default model configured. Set one in the Models page.');
