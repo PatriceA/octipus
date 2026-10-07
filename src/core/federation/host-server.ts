@@ -56,6 +56,7 @@ import { addressInList, clientIp, isTrustedProxy, normalizeAddress, parseAddress
 import { logger } from '@/utils/logger';
 import { ipv6Groups } from '@/utils/sanitize';
 import { getAppVersion } from '@/utils/version';
+import { registerHostOps } from './host-ops';
 import { getInstanceIdentity, type InstanceIdentity, instanceIdOf, verifyEd25519 } from './identity';
 import { type LinkSocket, LinkRequestError, PeerLink, sealedWireLimit } from './link';
 import { federationHosts, onFederationModeChanged } from './mode';
@@ -119,11 +120,25 @@ export interface HostRequestContext {
   as?: string;
   /** The visitor-side client connection the frame names (`conn`). */
   conn?: string;
+  /** The source address the link came from (`clientIp`), for per-address budgets. */
+  ip: string;
 }
 
 export type HostHandler = (body: unknown, ctx: HostRequestContext) => Promise<unknown>;
 
 const handlers = new Map<string, HostHandler>();
+
+type LinkClosedListener = (link: PeerLink) => void;
+const linkClosedListeners = new Set<LinkClosedListener>();
+
+/**
+ * Be told when an inbound link closes (its virtual connections go with it,
+ * §7.2). Returns the unsubscribe.
+ */
+export function onInboundLinkClosed(listener: LinkClosedListener): () => void {
+  linkClosedListeners.add(listener);
+  return () => { linkClosedListeners.delete(listener); };
+}
 
 /**
  * Answer requests of `type` on every inbound link. One handler per type: a
@@ -139,7 +154,7 @@ registerHostHandler('ping', async () => ({}));
 /** What a link from an instance with no `federation_instances` row may ask. */
 const OPEN_TO_UNKNOWN: ReadonlySet<string> = new Set(['ping', 'space.join']);
 
-async function dispatchHostRequest(request: LinkRequest, link: PeerLink): Promise<unknown> {
+async function dispatchHostRequest(request: LinkRequest, link: PeerLink, ip: string): Promise<unknown> {
   if (unknownLinks.has(link) && !OPEN_TO_UNKNOWN.has(request.type)) {
     // A join since the handshake may have written the row: look again.
     if ((await instanceStatus(link.peerInstanceId)) !== 'active') throw new LinkRequestError('not_found');
@@ -147,7 +162,7 @@ async function dispatchHostRequest(request: LinkRequest, link: PeerLink): Promis
   }
   const handler = handlers.get(request.type);
   if (!handler) throw new LinkRequestError('unsupported', `unsupported request type ${request.type}`);
-  return handler(request.body, { instanceId: link.peerInstanceId, link, as: request.as, conn: request.conn });
+  return handler(request.body, { instanceId: link.peerInstanceId, link, as: request.as, conn: request.conn, ip });
 }
 
 async function instanceStatus(instanceId: string): Promise<string | undefined> {
@@ -342,6 +357,8 @@ function announceHosting(identity: () => Promise<InstanceIdentity>): void {
 export function setupFederationWebSocket(app: Elysia, deps: FederationEndpointDeps = {}): void {
   const cfg = getConfig();
   const identity = deps.identity ?? getInstanceIdentity;
+  // The visitor operations (§6–§7) answer on every link from here on.
+  registerHostOps();
 
   if (!followingMode) {
     followingMode = true;
@@ -540,9 +557,10 @@ async function acceptVisitor(conn: HostConn, raw: string, maxFrameBytes: number)
     channel,
     role: 'host',
     peerInstanceId: hello.instanceId,
+    peerPublicKey: hello.publicKey,
     maxFrameBytes,
     heartbeatSeconds: getConfig().federation.heartbeatSeconds,
-    onRequest: dispatchHostRequest,
+    onRequest: (request, l) => dispatchHostRequest(request, l, conn.ip),
     onClose: (code, reason, closed) => {
       if (inbound.get(closed.peerInstanceId) === closed) inbound.delete(closed.peerInstanceId);
       unknownLinks.delete(closed);
@@ -551,6 +569,13 @@ async function acceptVisitor(conn: HostConn, raw: string, maxFrameBytes: number)
         live.delete(conn);
       }
       log.info({ instanceId: closed.peerInstanceId, code, reason }, 'Federation inbound link closed');
+      for (const listener of linkClosedListeners) {
+        try {
+          listener(closed);
+        } catch (err) {
+          log.error({ err, instanceId: closed.peerInstanceId }, 'Federation link-closed listener failed');
+        }
+      }
     },
   });
   conn.link = link;

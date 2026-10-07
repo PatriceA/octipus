@@ -1963,6 +1963,7 @@ export class SwarmSpawner {
           workspaceId: opts.parentContext.workspaceId ?? null,
           space: opts.parentContext.space,
           trigger: opts.parentContext.trigger,
+          audienceFederated: opts.parentContext.audienceFederated,
           workspaceRoot: WorkspaceFS.forAgent(opts.parentContext).root,
           filesTouched,
           childTools: opts.childTools,
@@ -2657,6 +2658,7 @@ export function buildScorerContext(args: {
   workspaceId?: string | null;
   space?: import('@/core/types').AgentSpace | null;
   trigger?: import('@/core/types').AgentTrigger;
+  audienceFederated?: boolean;
   /** The child's workspace root (`WorkspaceFS.forAgent` of the spawning context). */
   workspaceRoot?: string;
   filesTouched: number | null;
@@ -2680,6 +2682,7 @@ export function buildScorerContext(args: {
     workspaceId: args.workspaceId ?? null,
     space: args.space ?? null,
     trigger: args.trigger,
+    audienceFederated: args.audienceFederated,
     // So a command check dies with a cancelled run rather than outliving it
     // with the awaited spawn still pending.
     signal: args.signal,

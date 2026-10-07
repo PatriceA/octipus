@@ -384,6 +384,37 @@ export function sharedAudienceReason(shared: boolean, call: FlowCall, contract: 
     + 'anything it returns may be posted where every member can read it, so it needs approval';
 }
 
+// ── Federated audience (docs/plans/federation-spec.md §7.5, FI5) ────────────
+
+/**
+ * Why a call is refused outright in a federated run — one whose output
+ * members of other installs read (a `remote` turn, or a room with a remote
+ * member) — or undefined. Wider than a room's audience, so stricter: no
+ * approval lets a host member's personal data or credential material go
+ * there.
+ *
+ *   - a read of the requester's private data (`private` taint, or a read
+ *     through a personal connection: `personalRead`) is refused, where a
+ *     room asks;
+ *   - a read of credential material (`secret` taint) is refused, and so is
+ *     any egress once the session holds a `secret` label.
+ */
+export function federatedAudienceReason(label: FlowLabel, call: FlowCall, contract: FlowContract, personalRead = false): string | undefined {
+  const name = `${call.toolId}:${call.action}`;
+  if (contract.taints.includes('private') || personalRead) {
+    return `flow guard: members of this room on other installs read what this run produces, and ${name} reads personal data; `
+      + 'personal data never goes to them';
+  }
+  if (contract.taints.includes('secret')) {
+    return `flow guard: members of this room on other installs read what this run produces, and ${name} reads credential material`;
+  }
+  if (label.secret && contract.egress) {
+    return `flow guard: this session read credential material (${label.sources.secret}), and members of this room on other installs `
+      + 'read what this run produces; nothing goes out';
+  }
+  return undefined;
+}
+
 // ── Decision ────────────────────────────────────────────────────────────────
 
 /** Why this call needs a human, or undefined when the label allows it. Pure given the label. */

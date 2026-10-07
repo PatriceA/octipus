@@ -1,0 +1,186 @@
+/**
+ * Virtual gateway connections of members of other installs
+ * (docs/plans/federation-spec.md §7.2, F-D7).
+ *
+ * A gateway connection is single-user and the document hub keys its peers
+ * by connection id, so the host keeps one virtual connection per (visitor,
+ * client connection on the visitor's install `conn`). Each is registered
+ * with the gateway (`ConnectionManager.registerVirtual`) as an ordinary
+ * active connection of the visitor's remote row, `clientType: 'peer'`:
+ * every server message it gets — room events, document updates, the
+ * visitor's own events (a requester error, a mention) — is sealed onto the
+ * link as `{ type: 'event', as, conn, body }`.
+ *
+ * Inbound, a frame of an allowlisted type (`GATEWAY_FRAME_ALLOWLIST`) goes
+ * through `ConnectionManager.handleMessage`, so the gateway's zod parsing
+ * and per-connection rate buckets apply unchanged, then to the same
+ * handlers a local member's frame reaches.
+ *
+ * Bounds: at most `MAX_VIRTUAL_PER_VISITOR` per visitor per link (apart
+ * from `gateway.maxConnectionsPerUser`). A virtual connection is dropped
+ * when its link closes, on `conn.close` from the visitor install, when the
+ * visitor's last membership here ends, or after `IDLE_MS` without a frame.
+ */
+import { getGatewayHub } from '@/core/gateway/hub';
+import type { GatewayMessage } from '@/core/gateway/protocol';
+import { logger } from '@/utils/logger';
+import { LinkRequestError, type PeerLink } from './link';
+import type { RemoteMember } from './remote-members';
+
+const log = logger.child({ component: 'federation-virtual' });
+
+/** Virtual connections one visitor may hold on one link. */
+export const MAX_VIRTUAL_PER_VISITOR = 5;
+/** A virtual connection without a frame for this long is dropped. */
+export const IDLE_MS = 10 * 60_000;
+const SWEEP_MS = 60_000;
+
+/** Close code of a dropped virtual connection (as a normal close: the visitor install reopens it when needed). */
+const DROPPED = 4000;
+
+interface VirtualConn {
+  connectionId: string;
+  link: PeerLink;
+  member: RemoteMember;
+  conn: string;
+}
+
+/** `${userId}\n${conn}` → the virtual connection. */
+const byKey = new Map<string, VirtualConn>();
+let sweeper: NodeJS.Timeout | null = null;
+
+const keyOf = (userId: string, conn: string) => `${userId}\n${conn}`;
+
+function startSweeper(): void {
+  if (sweeper) return;
+  sweeper = setInterval(sweepIdle, SWEEP_MS);
+  sweeper.unref();
+}
+
+/** Drop the virtual connections idle for `IDLE_MS` or more. */
+export function sweepIdle(now = Date.now()): number {
+  const cm = getGatewayHub().connectionManager;
+  let dropped = 0;
+  for (const v of [...byKey.values()]) {
+    const ctx = cm.getConnection(v.connectionId)?.context;
+    if (ctx && now - ctx.lastActivityAt < IDLE_MS) continue;
+    drop(v, 'idle');
+    dropped++;
+  }
+  return dropped;
+}
+
+function drop(v: VirtualConn, reason: string): void {
+  if (byKey.get(keyOf(v.member.userId, v.conn)) !== v) return;
+  byKey.delete(keyOf(v.member.userId, v.conn));
+  // Closes it through the gateway (rooms, documents and presence let go of
+  // it there); `onClose` below finds it already gone.
+  getGatewayHub().connectionManager.closeConnection(v.connectionId, DROPPED, reason);
+  log.debug({ instanceId: v.member.instanceId, userId: v.member.userId, conn: v.conn, reason }, 'Virtual peer connection dropped');
+}
+
+/**
+ * The virtual connection of `member` for its install's client connection
+ * `conn` on `link`, opened on first use. Throws `LinkRequestError('limit')`
+ * past `MAX_VIRTUAL_PER_VISITOR` on this link.
+ */
+export function virtualConnection(link: PeerLink, member: RemoteMember, conn: string): string {
+  const existing = byKey.get(keyOf(member.userId, conn));
+  if (existing) {
+    if (existing.link === link) return existing.connectionId;
+    // The member's install reconnected: the old link's connection is stale.
+    drop(existing, 'link replaced');
+  }
+  let mine = 0;
+  for (const v of byKey.values()) if (v.member.userId === member.userId && v.link === link) mine++;
+  if (mine >= MAX_VIRTUAL_PER_VISITOR) {
+    throw new LinkRequestError('limit', `At most ${MAX_VIRTUAL_PER_VISITOR} open connections per member`);
+  }
+  startSweeper();
+  let entry: VirtualConn | null = null;
+  const connectionId = getGatewayHub().connectionManager.registerVirtual({
+    userId: member.userId,
+    instanceId: member.instanceId,
+    conn,
+    sink: (message: GatewayMessage) => {
+      let sent: boolean;
+      try {
+        sent = link.sendEvent(member.handle, conn, message);
+      } catch (err) {
+        // Over the frame cap (`too_large`): this one event cannot travel.
+        log.warn({ err, instanceId: member.instanceId, userId: member.userId, type: message.type }, 'Event for a virtual peer connection not sent');
+        return;
+      }
+      if (!sent && entry) drop(entry, 'link closed');
+    },
+    onClose: () => {
+      if (entry && byKey.get(keyOf(member.userId, conn)) === entry) byKey.delete(keyOf(member.userId, conn));
+    },
+  });
+  entry = { connectionId, link, member, conn };
+  byKey.set(keyOf(member.userId, conn), entry);
+  return connectionId;
+}
+
+/** Drop the virtual connection of `userId` for `conn` (`conn.close`). Returns whether there was one. */
+export function closeVirtualConnection(userId: string, conn: string): boolean {
+  const v = byKey.get(keyOf(userId, conn));
+  if (!v) return false;
+  drop(v, 'closed by the visitor install');
+  return true;
+}
+
+/** Drop every virtual connection of `userId` (their last membership here ended). */
+export function closeVirtualConnectionsOf(userId: string, reason: string): number {
+  let n = 0;
+  for (const v of [...byKey.values()]) {
+    if (v.member.userId !== userId) continue;
+    drop(v, reason);
+    n++;
+  }
+  return n;
+}
+
+/** Drop every virtual connection carried on `link` (it closed). */
+export function closeVirtualConnectionsOfLink(link: PeerLink): number {
+  let n = 0;
+  for (const v of [...byKey.values()]) {
+    if (v.link !== link) continue;
+    drop(v, 'link closed');
+    n++;
+  }
+  return n;
+}
+
+/** Drop every virtual connection of install `instanceId` (blocked, or hosting off). */
+export function closeVirtualConnectionsOfInstance(instanceId: string, reason: string): number {
+  let n = 0;
+  for (const v of [...byKey.values()]) {
+    if (v.member.instanceId !== instanceId) continue;
+    drop(v, reason);
+    n++;
+  }
+  return n;
+}
+
+/** Drop every virtual connection (hosting turned off). */
+export function closeAllVirtualConnections(reason: string): number {
+  const all = [...byKey.values()];
+  for (const v of all) drop(v, reason);
+  return all.length;
+}
+
+/** How many virtual connections are open (all, or one install's). */
+export function virtualConnectionCount(instanceId?: string): number {
+  if (!instanceId) return byKey.size;
+  let n = 0;
+  for (const v of byKey.values()) if (v.member.instanceId === instanceId) n++;
+  return n;
+}
+
+/** Drop everything (tests). */
+export function _resetVirtualConnectionsForTests(): void {
+  for (const v of [...byKey.values()]) drop(v, 'reset');
+  if (sweeper) clearInterval(sweeper);
+  sweeper = null;
+}

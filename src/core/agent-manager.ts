@@ -42,6 +42,8 @@ export interface SpawnOptions {
   funding: AgentFunding;
   /** Who pays when `funding` is `sponsor` (inherited like the rest of the scope). */
   sponsor?: AgentSponsor | null;
+  /** Members of other installs read the run (`AgentContext.audienceFederated`; inherited like the rest of the scope). */
+  audienceFederated?: boolean;
   topic?: string;
   model?: string;
   /** Row identity of `model` (`model_config.name`) when the caller resolved one — see `AgentContext.modelName`. */
@@ -237,7 +239,7 @@ export class AgentManager {
       id: agentId,
       sessionId: options.sessionId,
       userId: options.userId,
-      scope: { workspaceId: options.workspaceId ?? null, space, trigger: options.trigger, funding: options.funding, sponsor },
+      scope: { workspaceId: options.workspaceId ?? null, space, trigger: options.trigger, funding: options.funding, sponsor, audienceFederated: options.audienceFederated === true },
       topic: routedTopic,
       model: routedModel,
       modelName: modelEntry?.name,

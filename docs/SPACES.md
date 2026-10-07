@@ -344,9 +344,11 @@ account through `POST /api/auth/register` (the sign-in page's register tab):
 
 ## Across installs (contract)
 
-A space has one host install. Members from other installs (S7) will reach it
-over the federation transport, which does not exist yet; what is fixed now
-is how such a member is represented on the host:
+A space has one host install. Members from other installs (S7) reach it over
+the sealed peer link (`/federation`, docs/plans/federation-spec.md). The
+host side is built (see "Hosting members of other installs" below); the
+visitor side (joining from your own install, its web views and its agent)
+follows. A member of another install is represented on the host as follows:
 
 - A **remote member** is a `users` row with `kind = 'remote'`,
   `remote_instance_id` (the fingerprint of their install),
@@ -374,6 +376,73 @@ is how such a member is represented on the host:
 - Each holds a normal `workspace_members` row and role. Work they cause on
   the host runs on the host's sponsored agent (`trigger: 'remote'`); its
   funding is `fundingFor`'s (§9.1 of the spec).
+
+### Hosting members of other installs
+
+With `federation.mode` `host` or `both` and a public URL:
+
+- **Invites carry the host.** `POST /api/spaces/:id/invites` also returns
+  `federatedUrl` — the invite link with `#octipus=<instance id>`. The join
+  page shows the fingerprint and how to join from one's own Octipus. Guest
+  invites federate too; their scope applies.
+- **Joining.** The visitor install redeems the token over its link
+  (`space.join`). In one transaction the host previews the invite (a dead
+  one answers `invite_invalid`), counts the install's live memberships
+  against `federation.maxVisitorsPerInstance`, writes its
+  `federation_instances` row (a blocked install is refused), creates or
+  reuses the member's remote row (`upsertRemoteMember`, the only writer of
+  `kind = 'remote'`: `~<name>@<8 chars of the install id>`, a numeric suffix
+  on collision), accepts the invite for it and audits `space_joined_remote`.
+  Joins are budgeted: 5 a minute per link, 20 an hour per address.
+  `space.leave` leaves through the normal path (`space_left_remote`).
+- **The data door.** `getMembership` accepts a remote row while its install
+  is `active` and this install hosts — one join, so it holds for every
+  caller (queued turns, approvals, presence, the document hub). Listen
+  turns, sponsorship, install models, channel bindings, organizations and
+  API tokens stay local-only. A remote member is at most an editor: the role
+  PATCH refuses `owner` for them, and a CHECK
+  (`workspace_members_remote_owner_chk`) does too.
+- **Frames act only for the link's own members.** A request names its
+  member (`as`, the handle); a handle of another install, an unknown one, a
+  removed member or a blocked install all get the same `not_found`.
+- **Gateway frames** (`room.subscribe`/`unsubscribe`/`post`/`typing`/`read`,
+  `space.subscribe`, `doc.join`/`update`/`awareness`/`leave`, `ping`) run on a
+  virtual gateway connection per (member, client connection of their
+  install) — at most 5 per member per link, dropped after 10 idle minutes,
+  when the link closes, on `conn.close`, or when the member's last
+  membership ends — through the gateway's own parsing, rate buckets and
+  handlers. Anything else, generic `subscribe` and `/commands` are refused.
+  Events for the connection, and the member's own events (a requester error,
+  a mention), go back over the link.
+- **Content operations** (`space.info`, `space.members` — display names only,
+  `space.rooms`, `room.page`, `note.list`/`read`/`propose`, `task.list`/
+  `read`/`create`/`checkout`/`release`/`comment`, `file.list`/`read` —
+  read-only, at most 1 MiB, guest folders —, `memory.list`) call the same
+  service functions as the routes, with the member's principal and the role
+  checked, so a remote member can do exactly what a local member of the same
+  role can. Note proposals are keyed `remote:<row id>` (`proposer_key`).
+- **Posts and mentions.** A remote post passes the input guard before it is
+  stored and may not be a room command. Posts made on the member install's
+  agent connection (`agent:<session>`) are labelled "anna's agent" and capped
+  per room (`federation.agentPostsPerHour`). Remote members are shown with
+  their install badge (`anna [B:abcd1234]`) in room messages, transcripts,
+  presence and the member list. Only `@~name@fp8` mentions a remote member —
+  delivered as `room.mention` over the link, never a local notification;
+  `@octipus@…` does not start the agent.
+- **Host turns.** A remote member's `@octipus` runs as a `remote` turn:
+  refused in an `own` space, sponsor-funded otherwise, with the cost row
+  naming `metadata.remoteInstance`, at most
+  `federation.maxRemoteTurnsPerInstance` queued or running per install, and
+  any approval it would ask is denied. A turn with a `remote` trigger, or in
+  a room with a remote member, has a *federated* audience: reads of personal
+  data and of credential material are refused, not asked.
+- **Revocation.** Removing or downgrading a remote member works as for anyone
+  (their install hears `space.revoked` when a membership is gone).
+  `POST /api/admin/federation/instances/:id/block` closes the install's link
+  (4403), refuses its rows at once and removes every membership it holds;
+  `unblock` restores the status only; `GET /api/admin/federation/instances`
+  lists installs, link state and memberships. Turning hosting off closes
+  every link and refuses remote rows at once.
 
 ### The agent in a space
 

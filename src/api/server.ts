@@ -19,6 +19,7 @@ import { authGuard } from './middleware/auth-guard';
 import { rateLimitMiddleware } from './middleware/rate-limit';
 import { adminRoutes } from './routes/admin';
 import { adminApprovalRoutes } from './routes/admin-approvals';
+import { federationAdminRoutes } from './routes/federation-admin';
 import { agentRoutes } from './routes/agents';
 import { apiTokenRoutes } from './routes/api-tokens';
 import { artifactPageRoutes, artifactPageRoutesFallback } from './routes/artifact-pages';
@@ -415,6 +416,7 @@ export function createServer() {
         .use(meWorkRoutes)
         .use(adminRoutes)
         .use(adminApprovalRoutes)
+        .use(federationAdminRoutes)
         .use(orgAdminRoutes)
         .use(orgMeRoutes)
         .use(workspaceMeRoutes)

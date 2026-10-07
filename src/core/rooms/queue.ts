@@ -39,6 +39,14 @@ export interface RoomRequest {
   requesterName: string;
   messageId: string;
   enqueuedAt: Date;
+  /**
+   * What started the turn: a member asked (`room`), a listen probe (`listen`),
+   * or a member of another install asked (`remote`, federation §7.5). Absent
+   * means `room`.
+   */
+  trigger?: 'room' | 'listen' | 'remote';
+  /** A `remote` turn: the install its requester acts through, for the per-install cap. */
+  remoteInstanceId?: string;
 }
 
 /**
@@ -131,18 +139,38 @@ function announce(roomId: string, state: RoomTurnState, request: RoomRequest, ex
   });
 }
 
+/** Queued and running turns, in every room, started by members of install `instanceId`. */
+export function remoteTurnsOf(instanceId: string): number {
+  let n = 0;
+  for (const state of rooms.values()) {
+    if (state.running?.remoteInstanceId === instanceId) n++;
+    for (const q of state.waiting) if (q.remoteInstanceId === instanceId) n++;
+  }
+  return n;
+}
+
 /**
  * Queue a turn for an addressed post. Returns the request's position (0 =
  * runs next). Throws `queue_full` when the member already has
- * `rooms.maxQueuedPerMember` requests waiting.
+ * `rooms.maxQueuedPerMember` requests waiting, or — for a `remote` turn —
+ * when the members of its install already have
+ * `federation.maxRemoteTurnsPerInstance` turns queued or running here.
  */
 export function enqueueRoomTurn(roomId: string, workspaceId: string, request: RoomRequest, run: RoomTurnRun): { position: number } {
+  if (request.trigger === 'remote' && !request.remoteInstanceId) throw new Error('A remote room turn names its install');
   const state = stateOf(roomId, workspaceId);
   const mine = state.waiting.filter((q) => q.requesterId === request.requesterId).length;
   const max = getConfig().rooms.maxQueuedPerMember;
   if (mine >= max) {
     forget(roomId);
     throw new RoomQueueError('queue_full', `You already have ${max} requests waiting in this room`);
+  }
+  if (request.remoteInstanceId) {
+    const cap = getConfig().federation.maxRemoteTurnsPerInstance;
+    if (remoteTurnsOf(request.remoteInstanceId) >= cap) {
+      forget(roomId);
+      throw new RoomQueueError('queue_full', `Members of your install already have ${cap} requests waiting or running on this install`);
+    }
   }
   state.waiting.push({ ...request, run });
   const position = state.waiting.length - 1 + (state.running ? 1 : 0);

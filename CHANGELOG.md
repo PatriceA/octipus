@@ -207,6 +207,27 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **Hosting members of other installs (federation, host side).** With
+  `federation.mode` `host`/`both`, invites also return `federatedUrl`
+  (`#octipus=<instance id>`), and another install can redeem them over its
+  peer link (`space.join`): the member becomes a remote row (at most an
+  editor), counted against `federation.maxVisitorsPerInstance`, and passes
+  `getMembership` only while its install is active and this install hosts.
+  Visitors use the gateway's room and live-note frames through virtual
+  connections (same parsing, rate buckets and handlers) and REST-shaped
+  operations for rooms, notes (edit proposals), tasks, files (read-only) and
+  space memory, checked as for a local member of the same role. Remote posts
+  pass the input guard; agent posts are labelled and capped per room;
+  remote members carry an `[B:xxxxxxxx]` badge; `@~name@fp8` mentions reach
+  them over the link. Their `@octipus` runs a sponsor-funded `remote` turn
+  (refused in `own` spaces, ASK denied, a per-install cap), and any turn in a
+  room with a remote member has a federated audience (personal and
+  credential reads refused). Admins block or unblock an install
+  (`/api/admin/federation/instances/:id/block|unblock`). Migration 0137 adds
+  the remote-owner guard, `note_edit_proposals.proposer_key` and four audit
+  actions. See docs/SPACES.md → Hosting members of other installs.
+- **Presence fails closed.** A space presence (or live-note awareness)
+  recipient whose membership reads null now sees nobody, not everyone.
 - **Guests and registration modes (coworking S6).** A guest's scope
   `{ rooms, folders }` lives on their membership and on guest invites
   (validated on write: shape, and rooms of the space). Guests now reach

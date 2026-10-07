@@ -70,6 +70,9 @@ export default function JoinPage() {
   };
 
   const notFound = preview.error instanceof ApiError && preview.error.status === 404;
+  // The host's fingerprint, when the link carries one (`#octipus=<id>`): the
+  // space may also be joined from the visitor's own Octipus.
+  const hostFingerprint = /(?:^#|&)octipus=([a-z2-7]{26})(?:&|$)/.exec(typeof window === 'undefined' ? '' : window.location.hash)?.[1] ?? null;
 
   return (
     <div className="relative min-h-screen bg-background flex items-center justify-center p-4 font-mono overflow-hidden">
@@ -151,6 +154,20 @@ export default function JoinPage() {
                   >
                     register
                   </RouterLink>
+                </div>
+              )}
+
+              {hostFingerprint && (
+                <div className="border-t border-outline-variant/40 pt-3 space-y-1.5" data-testid="join-from-own-install">
+                  <p className="text-[12px] text-on-surface">Join from your own Octipus</p>
+                  <p className="text-[11px] text-on-surface-variant">
+                    Have an Octipus of your own? Copy this whole link (with the part after #) and paste it into
+                    your install under spaces → join a space on another install. Your install checks that this one
+                    is the install below before it connects; your agent then works here on your own models.
+                  </p>
+                  <p className="text-[11px] text-outline-variant break-all">
+                    host fingerprint: {[hostFingerprint.slice(0, 7), hostFingerprint.slice(7, 14), hostFingerprint.slice(14, 20), hostFingerprint.slice(20)].join('-')}
+                  </p>
                 </div>
               )}
             </>

@@ -10,8 +10,10 @@
  *    `re` = its id, or times out;
  *  - the heartbeat: a `ping` request every `federation.heartbeatSeconds`,
  *    three missed and the link closes;
- *  - the inbound frame rate (60 per second) and the send queue: queued bytes
- *    (`ws.bufferedAmount` plus the link's own queue) above
+ *  - the inbound frame rate (60 per second, on the host: what a visitor asks
+ *    of it — a visitor does not count the host's events, which a busy room
+ *    produces faster than that and it subscribed to) and the send queue:
+ *    queued bytes (`ws.bufferedAmount` plus the link's own queue) above
  *    max(4 MiB, 2 × the largest sealed frame) close the link with 4429, so a
  *    peer that stops reading cannot grow our memory, while one frame at the
  *    configured cap always fits;
@@ -95,6 +97,8 @@ export interface PeerLinkOptions {
   role: LinkRole;
   /** The peer's verified instance id. */
   peerInstanceId: string;
+  /** The peer's Ed25519 public key (SPKI DER base64) the handshake verified; the host records it on a join. */
+  peerPublicKey?: string;
   /** Largest plaintext either way (`gateway.maxFrameBytes`). */
   maxFrameBytes: number;
   heartbeatSeconds: number;
@@ -115,6 +119,7 @@ interface Pending {
 export class PeerLink {
   readonly role: LinkRole;
   readonly peerInstanceId: string;
+  readonly peerPublicKey: string | null;
   private readonly socket: LinkSocket;
   private readonly channel: SealedChannel;
   private readonly opts: PeerLinkOptions;
@@ -135,6 +140,7 @@ export class PeerLink {
     this.opts = opts;
     this.role = opts.role;
     this.peerInstanceId = opts.peerInstanceId;
+    this.peerPublicKey = opts.peerPublicKey ?? null;
     this.socket = opts.socket;
     this.channel = opts.channel;
     this.queueCap = sendQueueCap(opts.maxFrameBytes);
@@ -193,7 +199,7 @@ export class PeerLink {
       this.rateWindowStart = now;
       this.rateCount = 0;
     }
-    if (++this.rateCount > MAX_FRAMES_PER_SECOND) {
+    if (this.role === 'host' && ++this.rateCount > MAX_FRAMES_PER_SECOND) {
       this.close(CLOSE.limit, 'frame rate exceeded');
       return;
     }

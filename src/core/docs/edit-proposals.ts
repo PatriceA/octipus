@@ -47,6 +47,12 @@ export interface ProposeInput {
   noteId: string;
   /** The agent session; one pending proposal per note and session. */
   sessionId: string | null;
+  /**
+   * A proposer without a session (a member of another install,
+   * `remote:<user id>`, docs/plans/federation-spec.md §7.3): one pending
+   * proposal per note and proposer. Never together with `sessionId`.
+   */
+  proposerKey?: string | null;
   agentId: string | null;
   action: NoteEditProposalAction;
   title?: string | null;
@@ -63,7 +69,8 @@ export interface ProposeInput {
  * session), and a member's accept or reject of it (single process, D16).
  */
 const proposalLocks = new KeyedMutex();
-const proposalKey = (noteId: string, sessionId: string | null, proposalId?: string) => `${noteId}:${sessionId ?? proposalId ?? 'none'}`;
+/** The lock of a (note, proposer) pair: its session, else its proposer key — the value the pending index is unique on. */
+const proposalKey = (noteId: string, proposer: string | null, proposalId?: string) => `${noteId}:${proposer ?? proposalId ?? 'none'}`;
 
 /**
  * Create or update the session's pending proposal for a note of the space.
@@ -73,7 +80,7 @@ const proposalKey = (noteId: string, sessionId: string | null, proposalId?: stri
 export async function proposeNoteEdit(scope: NoteScope, input: ProposeInput): Promise<NoteEditProposal> {
   const space = spaceScopeOf(scope);
   assertNoteAccess(space, 'run_agent_write');
-  const proposal = await proposalLocks.run(proposalKey(input.noteId, input.sessionId), () => writeProposal(space, input));
+  const proposal = await proposalLocks.run(proposalKey(input.noteId, input.sessionId ?? input.proposerKey ?? null), () => writeProposal(space, input));
   await proposalsChanged(space.workspaceId, input.noteId);
   return proposal;
 }
@@ -88,6 +95,7 @@ async function writeProposal(space: SpaceScope, input: ProposeInput): Promise<No
     workspaceId: space.workspaceId,
     userId: space.userId,
     sessionId: input.sessionId,
+    proposerKey: input.proposerKey ?? null,
     agentId: input.agentId,
     action: input.action,
     title: input.title ?? null,
@@ -163,7 +171,7 @@ async function pendingIn(space: SpaceScope, proposalId: string): Promise<NoteEdi
  */
 async function deciding<T>(space: SpaceScope, proposalId: string, fn: (proposal: NoteEditProposal) => Promise<T>): Promise<T> {
   const first = await pendingIn(space, proposalId);
-  return proposalLocks.run(proposalKey(first.noteId, first.sessionId, first.id), async () => fn(await pendingIn(space, proposalId)));
+  return proposalLocks.run(proposalKey(first.noteId, first.sessionId ?? first.proposerKey, first.id), async () => fn(await pendingIn(space, proposalId)));
 }
 
 /**

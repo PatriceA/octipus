@@ -27,7 +27,7 @@ import { type Message, messages } from '@/db/schema/messages';
 import { workspaceMembers } from '@/db/schema/organizations';
 import { roomMembers, roomReads } from '@/db/schema/rooms';
 import { type RoomVisibility, sessions } from '@/db/schema/sessions';
-import { users } from '@/db/schema/users';
+import { type UserKind, users } from '@/db/schema/users';
 import { can, requireCan, SpaceError } from '@/security/space-access';
 import { coreLogger } from '@/utils/logger';
 import { accessToRoom, loadRoom, mayManage, type Room, type RoomAccess, roomAccess, roomOf } from './access';
@@ -217,6 +217,8 @@ export interface RoomMessageView {
     requesterId?: string;
     /** Posted by the agent unprompted, in a listen room (§9.3); members rate it. */
     unprompted?: boolean;
+    /** Posted by a remote member's own agent (federation §7.4): `authorName` reads "anna's agent [B:…]". */
+    agent?: boolean;
   };
 }
 
@@ -238,14 +240,15 @@ export function messageView(row: Message, authorName: string | null): RoomMessag
       ...(typeof meta.replyTo === 'string' ? { replyTo: meta.replyTo } : {}),
       ...(typeof meta.requesterId === 'string' ? { requesterId: meta.requesterId } : {}),
       ...(meta.unprompted === true ? { unprompted: true } : {}),
+      ...(meta.agent === true ? { agent: true } : {}),
     },
   };
 }
 
 async function views(rows: Message[]): Promise<RoomMessageView[]> {
-  const { displayNames } = await import('@/core/session-history');
-  const names = await displayNames(rows.map((r) => r.authorUserId).filter((id): id is string => !!id));
-  return rows.map((row) => messageView(row, row.authorUserId ? names.get(row.authorUserId) ?? null : null));
+  const { authorNamesOf } = await import('@/core/session-history');
+  const names = await authorNamesOf(rows);
+  return rows.map((row, i) => messageView(row, names[i]));
 }
 
 /**
@@ -292,9 +295,37 @@ export async function readRoomMessages(
   return { messages: await views(page), hasMore: rows.length > limit };
 }
 
-/** Addressed in the text: `@octipus` anywhere. */
+/**
+ * Addressed in the text: `@octipus` anywhere — but not `@octipus@…`, which
+ * names someone on another install (federation §7.4) and never starts the
+ * agent here.
+ */
 export function mentionsOctipus(content: string): boolean {
-  return /(^|[^\w@])@octipus\b/i.test(content);
+  return /(^|[^\w@])@octipus\b(?!@)/i.test(content);
+}
+
+/**
+ * Throws `rate_limited` when the room already holds `federation.agentPostsPerHour`
+ * agent-labelled posts of the last hour (federation §7.4). The hard bound on
+ * a visitor is its `room.post` bucket; this bounds the agents of every
+ * visitor together, per room.
+ */
+async function assertAgentPostBudget(roomId: string): Promise<void> {
+  const { getConfig } = await import('@/config');
+  const max = getConfig().federation.agentPostsPerHour;
+  // i2: a count in a room the poster may enter
+  const [row] = await getDb()
+    .select({ n: sql<number>`count(*)::int` })
+    .from(messages)
+    .where(and(
+      eq(messages.sessionId, roomId),
+      eq(messages.role, 'user'),
+      sql`(${messages.metadata}->>'agent') = 'true'`,
+      sql`${messages.createdAt} > now() - interval '1 hour'`,
+    ));
+  if (Number(row?.n ?? 0) >= max) {
+    throw new SpaceError('rate_limited', `This room already has ${max} posts by members' own agents in the last hour`);
+  }
 }
 
 /**
@@ -311,6 +342,12 @@ export async function postRoomMessage(
     clientId?: string;
     /** Posted in the bound group channel (§9.4): the bridge does not post it back there. */
     bridged?: { channelType: string; messageId: string };
+    /**
+     * Posted by a remote member's own agent (federation §7.4, F-D10): labelled
+     * as theirs and counted against `federation.agentPostsPerHour`. A member
+     * of this install has no such label.
+     */
+    agent?: boolean;
   },
   opts: { workspaceId?: string } = {},
 ): Promise<{ message: RoomMessageView; access: RoomAccess; addressed: boolean }> {
@@ -320,6 +357,10 @@ export async function postRoomMessage(
   await assertSpaceOpen(access.room.workspaceId);
   const content = input.content.trim();
   if (!content) throw new SpaceError('invalid_input', 'A post needs text');
+  if (input.agent) {
+    if (!access.remote) throw new SpaceError('invalid_input', 'Only a member from another install posts as their own agent');
+    await assertAgentPostBudget(roomId);
+  }
   const addressed = input.addressed === true || mentionsOctipus(content);
   const { messageRepository } = await import('@/db/repositories/message-repository');
   const { sessionRepository } = await import('@/db/repositories/session-repository');
@@ -331,6 +372,7 @@ export async function postRoomMessage(
     metadata: {
       ...(input.clientId ? { clientId: input.clientId } : {}),
       ...(input.bridged ? { bridged: input.bridged } : {}),
+      ...(input.agent ? { agent: true } : {}),
       addressed,
     },
   });
@@ -563,11 +605,11 @@ export async function hasRoomAccess(userId: string, room: Room): Promise<boolean
 }
 
 /** Usernames of the space's members, for `@` completion and mention lookup. */
-export async function spaceMemberByUsername(workspaceId: string, usernames: readonly string[]): Promise<Array<{ userId: string; username: string }>> {
+export async function spaceMemberByUsername(workspaceId: string, usernames: readonly string[]): Promise<Array<{ userId: string; username: string; kind: UserKind }>> {
   const names = [...new Set(usernames.map((n) => n.toLowerCase()))];
   if (names.length === 0) return [];
   return getDb()
-    .select({ userId: users.id, username: users.username })
+    .select({ userId: users.id, username: users.username, kind: users.kind })
     .from(workspaceMembers)
     .innerJoin(users, eq(users.id, workspaceMembers.userId))
     .where(and(eq(workspaceMembers.workspaceId, workspaceId), inArray(sql`lower(${users.username})`, names), eq(users.isActive, true)));

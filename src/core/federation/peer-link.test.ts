@@ -9,7 +9,7 @@
  * Backed by ephemeral PGlite (the blocked-instance check reads
  * `federation_instances`) and the embedded key-value store (nonces).
  */
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -208,8 +208,11 @@ describe('handshake', () => {
     expect(await inbound.request('ping', {})).toEqual({});
 
     // An instance that joined nothing here (no row) may only ask space.join:
-    // anything else is `not_found` (FI1).
+    // anything else is `not_found` (FI1); a known operation with a
+    // malformed body is `bad_request` before that.
     await expect(link.request('no.such.thing', {})).rejects.toMatchObject({ code: 'not_found' });
+    await expect(link.request('space.info', { spaceId: randomUUID() })).rejects.toMatchObject({ code: 'not_found' });
+    await expect(link.request('space.info', {})).rejects.toMatchObject({ code: 'bad_request' });
     // A malformed body of a known type: `bad_request`, link stays up.
     await expect(link.request('ping', { extra: 1 })).rejects.toMatchObject({ code: 'bad_request' });
     expect(link.closed).toBe(false);

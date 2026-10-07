@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-490 mounted routes across 68 route files. The path is the full one, group prefix included — what a client actually calls.
+493 mounted routes across 69 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -21,6 +21,9 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/admin/approvals` | `src/api/routes/admin-approvals.ts` |
 | POST | `/api/admin/approvals/:id/resolve` | `src/api/routes/admin-approvals.ts` |
 | GET | `/api/admin/audit` | `src/api/routes/admin.ts` |
+| GET | `/api/admin/federation/instances` | `src/api/routes/federation-admin.ts` |
+| POST | `/api/admin/federation/instances/:id/block` | `src/api/routes/federation-admin.ts` |
+| POST | `/api/admin/federation/instances/:id/unblock` | `src/api/routes/federation-admin.ts` |
 | GET | `/api/admin/group-channels` | `src/api/routes/admin.ts` |
 | DELETE | `/api/admin/group-channels/:id` | `src/api/routes/admin.ts` |
 | PATCH | `/api/admin/group-channels/:id` | `src/api/routes/admin.ts` |
@@ -525,19 +528,19 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 22 |
 | `api` | `config` | 22 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 118 |
+| `api` | `core` | 121 |
 | `api` | `db` | 110 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 3 |
 | `api` | `models` | 39 |
 | `api` | `plugins` | 1 |
-| `api` | `security` | 127 |
+| `api` | `security` | 128 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 3 |
 | `api` | `skills` | 6 |
 | `api` | `tools` | 4 |
-| `api` | `utils` | 63 |
+| `api` | `utils` | 64 |
 | `api` | `voice` | 23 |
 | `capabilities` | `db` | 2 |
 | `capabilities` | `models` | 1 |
@@ -568,19 +571,19 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `connectors` | `utils` | 5 |
 | `core` | `capabilities` | 2 |
 | `core` | `channels` | 11 |
-| `core` | `config` | 48 |
+| `core` | `config` | 50 |
 | `core` | `connectors` | 3 |
-| `core` | `db` | 305 |
+| `core` | `db` | 316 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 5 |
 | `core` | `models` | 115 |
-| `core` | `security` | 141 |
+| `core` | `security` | 146 |
 | `core` | `services` | 2 |
 | `core` | `shared` | 15 |
 | `core` | `skills` | 10 |
 | `core` | `tools` | 16 |
-| `core` | `utils` | 182 |
+| `core` | `utils` | 184 |
 | `core` | `voice` | 1 |
 | `db` | `config` | 4 |
 | `db` | `core` | 18 |
@@ -751,6 +754,7 @@ Every member of the `GatewayEventType` union in `src/core/gateway/protocol.ts`, 
 | `permission.request` | yes | `src/core/gateway/event-bridge.ts` | `*` |
 | `permission.resolved` | yes | `src/core/gateway/event-bridge.ts` | `*` |
 | `pipeline.event` | yes | — | `*` |
+| `room.mention` | yes | `src/core/rooms/mentions.ts` | `*` |
 | `room.message` | yes | — | `*` |
 | `room.presence` | yes | — | `*` |
 | `room.read` | yes | — | `*` |

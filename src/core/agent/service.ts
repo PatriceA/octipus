@@ -327,11 +327,19 @@ export class AgentService {
     const { displayNames } = await import('@/core/session-history');
     const requesterName = (await displayNames([requesterId])).get(requesterId) ?? 'A member';
     const { enqueueRoomTurn } = await import('@/core/rooms/queue');
+    // A member of another install asks as a `remote` turn (federation §7.5):
+    // sponsor-funded or refused by `fundingFor`, never asking them for an
+    // approval, counted against their install's cap.
+    const remote = access.remote;
     const { position } = enqueueRoomTurn(
       roomId,
       access.room.workspaceId,
-      { requesterId, requesterName, messageId: postedMessageId, enqueuedAt: new Date() },
-      (request, signal) => this.runRoomTurn(roomId, request.requesterId, request.requesterName, request.messageId, signal, bridged),
+      {
+        requesterId, requesterName, messageId: postedMessageId, enqueuedAt: new Date(),
+        ...(remote ? { trigger: 'remote' as const, remoteInstanceId: remote.instanceId } : {}),
+      },
+      (request, signal) => this.runRoomTurn(roomId, request.requesterId, request.requesterName, request.messageId, signal, bridged,
+        request.trigger ?? 'room', request.remoteInstanceId),
     );
     return { kind: 'queued', position };
   }
@@ -347,7 +355,8 @@ export class AgentService {
   async handleRoomListen(roomId: string, requesterId: string, questionMessageId: string): Promise<RoomMessageOutcome | null> {
     const [{ roomAccess }, { can }] = await Promise.all([import('@/core/rooms/access'), import('@/security/space-access')]);
     const access = await roomAccess(requesterId, roomId);
-    if (!access || !can(access.role, 'run_agent')) return null;
+    // A member of another install never triggers a listen turn (federation §7.1).
+    if (!access || access.remote || !can(access.role, 'run_agent')) return null;
     const posted = await messageRepository.findById(questionMessageId);
     if (!posted || posted.sessionId !== roomId || posted.role !== 'user' || posted.authorUserId !== requesterId) return null;
     const { displayNames } = await import('@/core/session-history');
@@ -375,7 +384,9 @@ export class AgentService {
    */
   private async runRoomTurn(
     roomId: string, requesterId: string, requesterName: string, postedMessageId: string, signal: AbortSignal, bridged?: GroupTurn,
-    trigger: 'room' | 'listen' = 'room',
+    trigger: 'room' | 'listen' | 'remote' = 'room',
+    /** A `remote` turn: its requester's install, on every cost row of the turn (federation §7.5). */
+    remoteInstanceId?: string,
   ): Promise<void> {
     const [{ roomAccess }, { can }, { RoomTurnDropped }] = await Promise.all([
       import('@/core/rooms/access'), import('@/security/space-access'), import('@/core/rooms/queue'),
@@ -393,7 +404,7 @@ export class AgentService {
         const runId = generateRunId();
         const result = await runWithContext(
           { runId, sessionId: roomId, userId: requesterId, channel: 'room', origin: 'room' },
-          () => withProviderUsageContext({ userId: requesterId }, async () => {
+          () => withProviderUsageContext({ userId: requesterId, ...(remoteInstanceId ? { accountingMetadata: { remoteInstance: remoteInstanceId } } : {}) }, async () => {
             const noModel = await this.noModelAnswer(requesterId);
             if (noModel) throw new Error(noModel.response);
             await maybeCompactSession(roomId, { requesterId, before: { id: posted.id, createdAt: posted.createdAt.toISOString() } });

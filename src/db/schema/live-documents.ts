@@ -60,6 +60,12 @@ export const noteEditProposals = pgTable('note_edit_proposals', {
   /** The member the agent works for (its requester). */
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   sessionId: uuid('session_id'),
+  /**
+   * A proposer without a session: a member of another install (`remote:<user
+   * id>`, docs/plans/federation-spec.md §7.3). One pending proposal per note
+   * and `coalesce(session_id, proposer_key)`.
+   */
+  proposerKey: text('proposer_key'),
   agentId: text('agent_id'),
   action: text('action').$type<NoteEditProposalAction>().notNull().default('edit'),
   /** A new title, when the proposal changes it. */
@@ -75,7 +81,9 @@ export const noteEditProposals = pgTable('note_edit_proposals', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
-  pendingUidx: uniqueIndex('note_edit_proposals_pending_uidx').on(table.noteId, table.sessionId).where(sql`${table.status} = 'pending'`),
+  pendingUidx: uniqueIndex('note_edit_proposals_pending_key_uidx')
+    .on(table.noteId, sql`(coalesce(${table.sessionId}::text, ${table.proposerKey}))`)
+    .where(sql`${table.status} = 'pending'`),
   wsStatusIdx: index('note_edit_proposals_ws_status_idx').on(table.workspaceId, table.status),
 }));
 

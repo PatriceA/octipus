@@ -30,6 +30,7 @@ const IDLE_TIMEOUTS: Record<ClientType, number> = {
   tui: 0,                 // No timeout (local)
   channel: 0,             // No timeout (system adapter)
   agent: 5 * 60_000,      // 5 minutes
+  peer: 10 * 60_000,      // 10 minutes (a virtual connection of another install's member, federation §7.2)
 };
 
 // ── Presence Tracker ──────────────────────────────────────────────

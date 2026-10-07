@@ -50,6 +50,8 @@ export interface RoomAccess {
   space: AgentSpace;
   role: SpaceRole;
   room: Room;
+  /** A member of another install: the install it acts through (federation §7.1); null for a local member. */
+  remote: { instanceId: string } | null;
 }
 
 export function roomOf(row: Session): Room {
@@ -109,10 +111,12 @@ export async function accessToRoom(userId: string, room: Room): Promise<RoomAcce
   } else if (room.visibility === 'private') {
     if (!(await isRoomMember(room.id, userId))) return null;
   }
+  const remote = membership.remote ?? null;
   return {
-    space: { workspaceId: room.workspaceId, role: membership.role, scope: membership.scope },
+    space: { workspaceId: room.workspaceId, role: membership.role, scope: membership.scope, remote: remote !== null },
     role: membership.role,
     room,
+    remote,
   };
 }
 

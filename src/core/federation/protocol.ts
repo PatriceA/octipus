@@ -119,38 +119,79 @@ export const sealedFrameSchema = z.object({
 }).strict();
 export type SealedFrame = z.infer<typeof sealedFrameSchema>;
 
+const uuidSchema = z.string().uuid();
+const spaceRef = { spaceId: uuidSchema };
+/** A path relative to the space's files root ('' is the root). */
+const filePathSchema = z.string().max(4096).refine((p) => !p.includes('\0'), { message: 'path contains a null byte' });
+
+/**
+ * The gateway client frame types a visitor may send for its virtual
+ * connection (§7.2). Generic `subscribe`/`unsubscribe`, chat, commands and
+ * every other type are refused before the gateway sees them.
+ */
+export const GATEWAY_FRAME_ALLOWLIST = [
+  'room.subscribe', 'room.unsubscribe', 'room.post', 'room.typing', 'room.read',
+  'space.subscribe', 'doc.join', 'doc.update', 'doc.awareness', 'doc.leave', 'ping',
+] as const;
+
 /**
  * Request types and their bodies. `ping` is the heartbeat (either side asks,
- * the other answers). The `space.*`, content and gateway operations are named
- * here and filled with their bodies by the slices that build them (§6–§7);
- * until a handler is registered they are answered `unsupported`.
+ * the other answers). Every other type is a visitor's request to the host
+ * (§6–§7); all but `space.join` name the visitor in `as` (its member
+ * handle), and `gateway.frame` / `conn.close` name its client connection
+ * in `conn`. A type with no handler is answered `unsupported`.
  */
 export const requestBodySchemas = {
   'ping': z.object({}).strict(),
-  'space.join': z.unknown(),
-  'space.leave': z.unknown(),
-  'space.info': z.unknown(),
-  'space.members': z.unknown(),
-  'space.rooms': z.unknown(),
-  'room.page': z.unknown(),
-  'note.list': z.unknown(),
-  'note.read': z.unknown(),
-  'note.propose': z.unknown(),
-  'task.list': z.unknown(),
-  'task.read': z.unknown(),
-  'task.create': z.unknown(),
-  'task.checkout': z.unknown(),
-  'task.release': z.unknown(),
-  'task.comment': z.unknown(),
-  'file.list': z.unknown(),
-  'file.read': z.unknown(),
-  'memory.list': z.unknown(),
-  /** A gateway client frame for the visitor's virtual connection `conn` (§7.2). */
-  'gateway.frame': z.unknown(),
+  /** Redeem an invite (§6.2): `user.ref` is the user id on the visitor install, `name` its display name. */
+  'space.join': z.object({
+    token: z.string().regex(/^[0-9a-f]{64}$/),
+    user: z.object({ ref: z.string().min(1).max(200), name: z.string().trim().min(1).max(40) }).strict(),
+  }).strict(),
+  'space.leave': z.object(spaceRef).strict(),
+  'space.info': z.object(spaceRef).strict(),
+  'space.members': z.object(spaceRef).strict(),
+  'space.rooms': z.object(spaceRef).strict(),
+  'room.page': z.object({
+    ...spaceRef,
+    roomId: uuidSchema,
+    before: uuidSchema.optional(),
+    after: uuidSchema.optional(),
+    limit: z.number().int().min(1).max(200).optional(),
+  }).strict(),
+  'note.list': z.object(spaceRef).strict(),
+  'note.read': z.object({ ...spaceRef, noteId: uuidSchema }).strict(),
+  /** A proposed new body (and title) of a note, made from the text whose sha the visitor read. */
+  'note.propose': z.object({
+    ...spaceRef,
+    noteId: uuidSchema,
+    baseSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    body: z.string().max(1_000_000),
+    title: z.string().trim().min(1).max(500).optional(),
+  }).strict(),
+  'task.list': z.object({ ...spaceRef, status: z.enum(['open', 'in_progress', 'done', 'archived']).optional() }).strict(),
+  'task.read': z.object({ ...spaceRef, taskId: uuidSchema }).strict(),
+  'task.create': z.object({
+    ...spaceRef,
+    title: z.string().trim().min(1).max(500),
+    notes: z.string().max(10_000).optional(),
+    priority: z.number().int().min(0).max(3).optional(),
+  }).strict(),
+  'task.checkout': z.object({ ...spaceRef, taskId: uuidSchema }).strict(),
+  'task.release': z.object({ ...spaceRef, taskId: uuidSchema }).strict(),
+  'task.comment': z.object({ ...spaceRef, taskId: uuidSchema, body: z.string().min(1).max(10_000) }).strict(),
+  'file.list': z.object({ ...spaceRef, path: filePathSchema.optional() }).strict(),
+  'file.read': z.object({ ...spaceRef, path: filePathSchema.min(1) }).strict(),
+  'memory.list': z.object(spaceRef).strict(),
+  /** A gateway client frame for the visitor's virtual connection `conn` (§7.2); its type must be allowlisted. */
+  'gateway.frame': z.object({
+    frame: z.object({ type: z.enum(GATEWAY_FRAME_ALLOWLIST) }).passthrough(),
+  }).strict(),
   /** B's client connection `conn` closed: drop its virtual connection. */
-  'conn.close': z.unknown(),
+  'conn.close': z.object({}).strict(),
 } as const;
 export type FederationRequestType = keyof typeof requestBodySchemas;
+export type FederationRequestBody<T extends FederationRequestType> = z.infer<(typeof requestBodySchemas)[T]>;
 
 /**
  * Host event bodies, delivered as `{ type: 'event', as, conn, body }`. A

@@ -14,7 +14,12 @@ export type TrustLevel = 'user' | 'agent';
 
 // ── Client Types ──────────────────────────────────────────────────
 
-export type ClientType = 'webchat' | 'tui' | 'channel' | 'mobile' | 'acp' | 'agent';
+/**
+ * `peer` is a virtual connection of a member of another install, carried on
+ * its install's peer link (docs/plans/federation-spec.md §7.2); it never
+ * authenticates on a socket of its own (`ConnectionManager.registerVirtual`).
+ */
+export type ClientType = 'webchat' | 'tui' | 'channel' | 'mobile' | 'acp' | 'agent' | 'peer';
 
 // ── Connection Context ────────────────────────────────────────────
 
@@ -177,6 +182,10 @@ export type GatewayEventType =
   | 'room.typing'
   | 'room.read'
   | 'room.removed'
+  // A member of another install was mentioned (`@~name@fp8`) in a room
+  // (federation §7.4): to that member's own connections — its virtual
+  // connections on the peer link — never a local notification.
+  | 'room.mention'
   // Who is online in a space, and where (a room only when the recipient may
   // enter it, I3): to the resource `space:<id>`, one view per recipient.
   | 'space.presence'

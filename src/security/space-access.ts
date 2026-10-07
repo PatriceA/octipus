@@ -74,7 +74,9 @@ export type SpaceErrorCode =
   /** Purge asked before the space has been archived long enough. */
   | 'not_purgeable'
   /** Work the space's funding does not pay for: unprompted work without a sponsor (§9.1). */
-  | 'funding_off';
+  | 'funding_off'
+  /** A per-room or per-install bound on members of other installs (federation §7.4–7.5). */
+  | 'rate_limited';
 
 export class SpaceError extends Error {
   constructor(readonly code: SpaceErrorCode, message: string) {
@@ -99,6 +101,8 @@ export function spaceErrorStatus(err: SpaceError): number {
     case 'not_purgeable':
     case 'funding_off':
       return 409;
+    case 'rate_limited':
+      return 429;
   }
 }
 
@@ -109,6 +113,12 @@ export interface SpaceMembership {
   readonly role: SpaceRole;
   /** Guests only (S6): what they reach (never null for a guest); null for every other role. */
   readonly scope: GuestScope | null;
+  /**
+   * A member of another install (`users.kind = 'remote'`,
+   * docs/plans/federation-spec.md §7.1): the install it acts through. Null
+   * for a local member; `getMembership` always sets it.
+   */
+  readonly remote?: { readonly instanceId: string } | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────

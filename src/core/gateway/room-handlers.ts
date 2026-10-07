@@ -159,6 +159,7 @@ async function roomUnsubscribe(context: ConnectionContext, roomId: string): Prom
 
 async function roomPost(hub: GatewayHub, connectionId: string, context: ConnectionContext, message: Extract<RoomFrame, { type: 'room.post' }>): Promise<void> {
   const content = message.content.trim();
+  if (context.clientType === 'peer') return remoteRoomPost(hub, connectionId, context, message, content);
   if (content.startsWith('/')) {
     // A command: not a post — answered to the poster only (§6.2).
     const { runRoomCommand } = await import('@/core/rooms/commands');
@@ -178,6 +179,37 @@ async function roomPost(hub: GatewayHub, connectionId: string, context: Connecti
 }
 
 /**
+ * `room.post` from a member of another install, on their virtual connection
+ * (docs/plans/federation-spec.md §7.4). A post, never a moderation
+ * command; it passes the input guard before it is stored (a refused post is
+ * answered with an error and not stored); one made on their install's agent
+ * connection (`conn` = `agent:<session>`) is labelled as their agent's and
+ * counted against the room's hourly cap. Then the same path as a local post.
+ */
+async function remoteRoomPost(
+  hub: GatewayHub, connectionId: string, context: ConnectionContext, message: Extract<RoomFrame, { type: 'room.post' }>, content: string,
+): Promise<void> {
+  if (content.startsWith('/')) {
+    sendError(hub, connectionId, 'FORBIDDEN', 'Room commands are for members of this install');
+    return;
+  }
+  const { guardInput } = await import('@/core/agent/input-guard');
+  const guard = guardInput(content);
+  if (guard.action === 'block') {
+    coreLogger.warn({ connectionId, userId: context.userId, flags: guard.flags }, 'Input guard refused a post from another install');
+    sendError(hub, connectionId, 'POST_REFUSED', guard.blockReason ?? 'This post was refused');
+    return;
+  }
+  const federation = context.metadata.federation as { conn?: unknown } | undefined;
+  const agent = typeof federation?.conn === 'string' && federation.conn.startsWith('agent:');
+  const { message: _stored, ...outcome } = await postAndQueue(context.userId, message.roomId, {
+    content, addressed: message.addressed, clientId: message.clientId, ...(agent ? { agent: true } : {}),
+  });
+  void _stored;
+  hub.connectionManager.sendToConnection(connectionId, { type: 'room.posted', roomId: message.roomId, ...outcome });
+}
+
+/**
  * Store a post and, when it asks Octipus, queue the poster's turn — the
  * shared body of `room.post` and its REST fallback. A post that was stored
  * but could not queue a turn says why (`notQueued`): the post stands.
@@ -185,7 +217,7 @@ async function roomPost(hub: GatewayHub, connectionId: string, context: Connecti
 export async function postAndQueue(
   userId: string,
   roomId: string,
-  input: { content: string; addressed?: boolean; clientId?: string },
+  input: { content: string; addressed?: boolean; clientId?: string; agent?: boolean },
   opts: { workspaceId?: string } = {},
 ): Promise<{ messageId: string; clientId?: string; queuedPosition?: number; notQueued?: string; message: unknown }> {
   const { postRoomMessage } = await import('@/core/rooms/service');

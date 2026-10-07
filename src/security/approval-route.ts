@@ -34,7 +34,7 @@
  */
 import type { AgentSpace, AgentTrigger, PermissionLevel } from '@/core/types';
 import { type ApprovalDecision, routeApproval } from './approval-policy';
-import { classifyFlow, getFlowLabel, isSharedAudience, loadFlowLabel, observeFlow } from './flow-guard';
+import { classifyFlow, federatedAudienceReason, getFlowLabel, isSharedAudience, loadFlowLabel, observeFlow } from './flow-guard';
 import { can } from './space-access';
 import { agentConfigWriteReason, commenterMayRun, isReadCall, personalOnlyReason, personalSourceRead, type SpaceToolCall } from './space-tools';
 import { isSharedWorkspaceId } from './workspace-fs';
@@ -48,8 +48,14 @@ export interface ApprovalCaller {
   attended?: boolean;
   workspaceId?: string | null;
   space?: AgentSpace | null;
-  /** What started the agent: a `listen` turn (nobody asked, §9.3) only reads. */
+  /**
+   * What started the agent: a `listen` turn (nobody asked, §9.3) only reads;
+   * a `remote` turn (a member of another install asked, federation §7.5)
+   * never asks its requester — an approval would be denied.
+   */
   trigger?: AgentTrigger;
+  /** Members of other installs read the run (federation §7.5): the audience `federated`. */
+  audienceFederated?: boolean;
 }
 
 export interface ApprovalPermission {
@@ -109,6 +115,14 @@ export async function routeApprovalFor(
     const personal = personalOnlyReason(call) ?? agentConfigWriteReason(call);
     if (personal) return deny(personal);
     await loadFlowLabel(context.sessionId);
+    // A federated run (federation §7.5, FI5): personal data of host members
+    // and credential material never reach members of other installs —
+    // refused, where a room would ask.
+    if (context.audienceFederated && level !== 'DENY') {
+      const contract = classifyFlow({ toolId: call.toolId, action: call.action, args: call.args });
+      const federated = federatedAudienceReason(getFlowLabel(context.sessionId), call, contract, personalSourceRead(call));
+      if (federated) return { route: 'deny', level: 'DENY', reason: federated, source: 'space-federated' };
+    }
     // A read through a personal connection reads private data too (`personalSourceRead`).
     if (level !== 'DENY' && isSharedAudience(context.sessionId)
       && (classifyFlow({ toolId: call.toolId, action: call.action }).taints.includes('private') || personalSourceRead(call))) {
@@ -123,7 +137,8 @@ export async function routeApprovalFor(
       level = 'ASK';
       source = 'space-flow';
       reason = `${call.toolId}.${call.toolName ?? call.action} writes data from your personal sources `
-        + `(${getFlowLabel(context.sessionId).sources.private}) into ${name}`;
+        + `(${getFlowLabel(context.sessionId).sources.private}) into ${name}`
+        + (context.audienceFederated ? '; members of this room on other installs will read it' : '');
     }
   }
   const decision = routeApproval({
@@ -135,6 +150,11 @@ export async function routeApprovalFor(
     action: call.action,
     unattendedDenyActions: options.unattendedDenyActions,
   });
+  // A turn a member of another install asked for has nobody here to ask
+  // (federation §7.5, F-D9): what would wait for its requester is denied.
+  if (context.trigger === 'remote' && decision.route === 'ask_human') {
+    return deny(`${call.toolId}.${call.toolName ?? call.action} needs an approval, and this turn was asked for from another install: a host member must run this`);
+  }
   if (space && (decision.route === 'execute' || decision.route === 'ask_human') && personalSourceRead(call)) {
     observeFlow(context.sessionId, { toolId: call.toolId, action: call.action }, { taints: ['private'] });
   }

@@ -55,6 +55,13 @@ export const auditActionEnum = pgEnum('audit_action', [
   'space_content_changed',
   // Own models (coworking-spec §8.4): a user created, changed or deleted a personal model.
   'personal_model_changed',
+  // Spaces across installs (docs/plans/federation-spec.md §10): a member of
+  // another install joined or left a space here; an admin blocked or
+  // unblocked that install.
+  'space_joined_remote',
+  'space_left_remote',
+  'federation_instance_blocked',
+  'federation_instance_unblocked',
 ]);
 
 export const auditLog = pgTable('audit_log', {

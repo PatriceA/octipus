@@ -167,6 +167,71 @@ export class ConnectionManager {
   }
 
   /**
+   * Register a virtual connection: a member of another install, carried on
+   * its install's peer link (docs/plans/federation-spec.md §7.2). It is an
+   * ordinary authenticated connection from here on — in `connections` and
+   * `byUser`, so `getConnectionsByUser`, `closeUserConnections`,
+   * `publishEvent`, `publishToResource` and the room and document pruning
+   * all reach it, and its frames go through `handleMessage` (zod and the
+   * per-connection rate buckets) — except that it has no socket: what the
+   * manager sends it goes to `sink` (sealed onto the link by the caller),
+   * and closing it calls `onClose` once. It never counts against
+   * `gateway.maxConnectionsPerUser`; the federation layer bounds it.
+   */
+  registerVirtual(input: {
+    userId: string;
+    instanceId: string;
+    /** The visitor install's client connection this one stands for. */
+    conn: string;
+    sink: (message: GatewayMessage) => void;
+    onClose: () => void;
+  }): string {
+    const connectionId = randomBytes(16).toString('hex');
+    let closed = false;
+    const ws: ServerWebSocket<Record<string, unknown>> = {
+      data: {},
+      readyState: 1,
+      send: (payload) => {
+        if (closed) return;
+        const text = typeof payload === 'string' ? payload : Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength).toString('utf8');
+        input.sink(JSON.parse(text) as GatewayMessage);
+      },
+      close: () => {
+        if (closed) return;
+        closed = true;
+        input.onClose();
+      },
+    };
+    const now = Date.now();
+    const conn: GatewayConnection = {
+      ws,
+      ip: `peer:${input.instanceId}`,
+      state: 'active',
+      authTimer: null,
+      createdAt: now,
+      context: {
+        connectionId,
+        userId: input.userId,
+        clientType: 'peer',
+        trustLevel: 'user',
+        ip: `peer:${input.instanceId}`,
+        connectedAt: now,
+        lastActivityAt: now,
+        // The member's own events (a requester error from a room turn, a
+        // mention): `publishEvent` delivers by user id.
+        eventSubscriptions: new Set(['*']),
+        resources: new Set(),
+        metadata: { isAdmin: false, federation: { instanceId: input.instanceId, conn: input.conn } },
+      },
+    };
+    this.connections.set(connectionId, conn);
+    if (!this.byUser.has(input.userId)) this.byUser.set(input.userId, new Set());
+    this.byUser.get(input.userId)!.add(connectionId);
+    coreLogger.info({ connectionId, userId: input.userId, instanceId: input.instanceId }, 'Virtual peer connection registered');
+    return connectionId;
+  }
+
+  /**
    * Handle an incoming message from a connection.
    */
   async handleMessage(connectionId: string, raw: string): Promise<void> {
@@ -540,6 +605,11 @@ export class ConnectionManager {
    */
   closeArtifactViewers(artifactId: string, code: number, reason: string): number {
     return this.closeUserConnections(`artifact:${artifactId}`, code, reason);
+  }
+
+  /** Close one connection (a virtual peer connection the federation layer drops). */
+  closeConnection(connectionId: string, code: number, reason: string): void {
+    this.closeUserConnection(connectionId, code, reason);
   }
 
   /** Close one authenticated connection and drop its bookkeeping at once. */

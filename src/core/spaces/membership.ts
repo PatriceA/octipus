@@ -170,6 +170,13 @@ export async function onMembershipChanged(workspaceId: string, userId: string): 
       const { dropMemberLeases } = await import('@/core/docs/file-leases');
       await dropMemberLeases(workspaceId, userId);
     }],
+    // A member of another install (federation §7.6): their install hears
+    // `space.revoked`, and their virtual connections close once no
+    // membership is left here. Nothing for a local member.
+    ['other installs', async () => {
+      const { onRemoteMembershipChanged } = await import('@/core/federation/host-ops');
+      await onRemoteMembershipChanged(workspaceId, userId);
+    }],
   ]);
 }
 
