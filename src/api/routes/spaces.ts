@@ -12,6 +12,7 @@ import {
 } from '@/core/docs/file-leases';
 import { connectSpaceConnector, disconnectSpaceConnector, listSpaceConnectors } from '@/core/spaces/connectors';
 import { bindBrowser } from '@/api/oauth-browser';
+import { publicLinkBase } from '@/core/public-url';
 import { acceptInvite, createInvite, listInvites, previewInvite, revokeInvite } from '@/core/spaces/invites';
 import { setSpaceFunding } from '@/core/spaces/funding';
 import { purgeSpace } from '@/core/spaces/purge';
@@ -282,7 +283,11 @@ export const spaceRoutes = new Elysia({ prefix: '/spaces' })
     (ctx) => handle(ctx, async (actor) => {
       const invite = await createInvite(actor, ctx.params.id, ctx.body);
       ctx.set.status = 201;
-      return invite;
+      // The link to hand out, on the install's public URL when one is set:
+      // the address the owner's browser used (often localhost) is not one
+      // the invitee can reach. Null without one; the web then uses its own.
+      const base = publicLinkBase();
+      return { ...invite, url: base ? `${base}/join/${invite.token}` : null };
     }),
     {
       params: t.Object({ id: t.String() }),

@@ -85,7 +85,11 @@ role has one.
 - `maxUses` is 1–100 (default 1). Each accept takes one use with a single
   conditional update, so two people racing for a single-use link cannot both
   get in.
-- The link to share is `<your web origin>/join/<token>`. Octipus does not send
+- The link to share is `<public URL>/join/<token>`, returned as `url` when the
+  install's public URL is set (`oauth.publicUrl`, env `PUBLIC_URL` — the same
+  address OAuth callbacks and artifact links use); without one, `url` is
+  null and the web builds the link from the address it was opened on, which
+  only works for people who can reach that address. Octipus does not send
   mail.
 - `GET /api/invites/<token>` (no sign-in needed) previews it: space name,
   inviter, role, expiry — no member list, no content.

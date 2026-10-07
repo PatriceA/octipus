@@ -180,6 +180,23 @@ describe('roles', () => {
 });
 
 describe('invite links', () => {
+  test('the link is on the public URL when one is set, so other devices can open it', async () => {
+    const before = process.env.PUBLIC_URL;
+    try {
+      delete process.env.PUBLIC_URL;
+      const plain = await (await call('owner', 'POST', `/api/spaces/${spaceId}/invites`, { role: 'viewer' })).json();
+      expect(plain.url).toBeNull();
+      process.env.PUBLIC_URL = 'https://octi.example.net/';
+      const res = await call('owner', 'POST', `/api/spaces/${spaceId}/invites`, { role: 'viewer' });
+      expect(res.status).toBe(201);
+      const created = await res.json();
+      expect(created.url).toBe(`https://octi.example.net/join/${created.token}`);
+    } finally {
+      if (before === undefined) delete process.env.PUBLIC_URL;
+      else process.env.PUBLIC_URL = before;
+    }
+  });
+
   test('the preview is public; accepting needs a session; a revoked token 404s', async () => {
     const created = await (await call('owner', 'POST', `/api/spaces/${spaceId}/invites`, { role: 'viewer' })).json();
     const preview = await call(null, 'GET', `/api/invites/${created.token}`);
