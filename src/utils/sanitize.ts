@@ -295,7 +295,7 @@ export function looksLikeNonStandardIpLiteral(host: string): boolean {
  * Accepts `::` compression, a dotted IPv4 tail (`::ffff:1.2.3.4`) and a zone
  * suffix (`fe80::1%eth0`), so every spelling of one address is checked alike.
  */
-function ipv6Groups(ip: string): number[] | null {
+export function ipv6Groups(ip: string): number[] | null {
   let addr = ip.split('%')[0].toLowerCase();
   const v4 = /(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(addr);
   if (v4) {

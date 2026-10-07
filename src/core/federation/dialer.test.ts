@@ -44,6 +44,13 @@ describe('vetDialTarget', () => {
     expect((await refusal(vetDialTarget('ws://192.168.2.5/federation', { lanCidrs: ['192.168.1.0/24'] }))).code).toBe('address_refused');
   });
 
+  test('an IPv4-mapped IPv6 literal is the IPv4 address it maps', async () => {
+    // WHATWG URL parsing spells it `::ffff:7f00:1`.
+    expect((await refusal(vetDialTarget('ws://[::ffff:127.0.0.1]:4443/federation', { lanCidrs: [] }))).code).toBe('address_refused');
+    expect(await vetDialTarget('ws://[::ffff:127.0.0.1]:4443/federation', { lanCidrs: LAN })).toMatchObject({ address: '::ffff:7f00:1' });
+    expect(await vetDialTarget('ws://127.0.0.1:4443/federation', { lanCidrs: ['::ffff:127.0.0.1'] })).toMatchObject({ address: '127.0.0.1' });
+  });
+
   test('a name with any private address among its answers is refused', async () => {
     const resolve = async () => ['93.184.216.34', '10.0.0.7'];
     expect((await refusal(vetDialTarget('wss://peer.example/federation', { lanCidrs: [], resolve }))).code).toBe('address_refused');

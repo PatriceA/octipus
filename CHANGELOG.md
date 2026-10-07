@@ -13,6 +13,34 @@ labels reflect blast radius, not contract guarantees.
   keyed with the (public) key, which anyone could compute, and passed every
   webhook when no `telnyx_public_key` was set. Verification now uses the
   Ed25519 signature over `timestamp|body`, and a missing key fails it.
+- **Telephony webhooks are refused unless signed.** `/api/voice/webhook/:provider`
+  (and `/status`) logged a failed signature check and processed the call
+  anyway, and checked it over re-serialised JSON rather than the bytes
+  received, so no valid signature could pass. The check now runs over the
+  raw body against the public URL and path the provider called, and a
+  failure answers 403 and does nothing. Telnyx webhooks older or newer than
+  300 s are refused (replay). Plivo needs the V2 signature and nonce
+  (`X-Plivo-Signature-V2`); the legacy header is refused.
+- **The federation private key is unreachable from vault references.** The
+  vault itself now refuses reserved system secrets on `getByName`, `get`,
+  `store`, `setSystemSecret`, `update`, `rotate` and `delete`, and leaves them
+  out of `list`, so a model's `apiKeyRef` (Test, Fetch Models, real calls) or
+  a SCIM token reference named `federation.identity` resolves nothing.
+- **Peer link hardening.** Sealed links are capped per address (IPv6 per
+  /64) and in all, links from instances that joined nothing here are capped
+  and may only ask `space.join`, and a link answers at most 32 requests at
+  once (more get `busy`). Handshake budgets are swept every minute and capped
+  install-wide; a pre-handshake frame over 4 KiB is refused unparsed; the
+  host nonce lives in the socket instead of the key-value store. The keys
+  derive from a hash of the whole handshake transcript, which now signs the
+  protocol and both app versions, and the AEAD nonce is the sequence number.
+  The send-queue cap grows with `gateway.maxFrameBytes`. `/federation` is
+  always registered and refuses with 4403 while not hosting, so turning
+  hosting on needs no restart. The rightmost `X-Forwarded-Proto` decides
+  TLS, and a trusted proxy that names no client is not a LAN client. The
+  visitor pool stops redialling a host that refused it (4403/4409) until
+  asked again, resets its backoff only after a link stayed up 30 s, and
+  redials retained hosts when visiting is turned back on.
 - **Spaces across installs: identity and peer link** (first slices of
   `docs/plans/federation-spec.md`). Each install gets an Ed25519 identity,
   stored as the reserved vault secret `federation.identity` (the vault API

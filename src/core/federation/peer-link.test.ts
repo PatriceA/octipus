@@ -81,7 +81,7 @@ beforeAll(async () => {
 
   const app = new App();
   // biome-ignore lint/suspicious/noExplicitAny: the route builder type the server passes
-  expect(m.host.setupFederationWebSocket(app as any, { identity: async () => hostId })).toBe(true);
+  m.host.setupFederationWebSocket(app as any, { identity: async () => hostId });
   server = listen(app, { hostname: '127.0.0.1', port: 0 });
   await until(() => server.port !== 0);
   url =`ws://127.0.0.1:${server.port}/federation`;
@@ -92,6 +92,7 @@ beforeEach(() => {
   cfg.federation.mode = 'both';
   cfg.federation.lanCidrs = LAN;
   cfg.federation.heartbeatSeconds = 15;
+  cfg.security.trustedProxies = [];
   m.host._resetFederationHostForTests();
 });
 
@@ -128,8 +129,8 @@ interface RawClient {
 }
 
 /** Open a socket and wait for the host's hello, without answering it. */
-async function rawConnect(target = url): Promise<RawClient> {
-  const ws = new WebSocket(target);
+async function rawConnect(target = url, headers: Record<string, string> = {}): Promise<RawClient> {
+  const ws = new WebSocket(target, { headers });
   const messages: string[] = [];
   const closed = new Promise<{ code: number; reason: string }>((resolve) => {
     ws.on('close', (code, reason) => resolve({ code, reason: reason.toString() }));
@@ -150,8 +151,8 @@ interface HelloOverrides {
   nonceB?: string;
   /** Sign over this host ephemeral key instead of the one received. */
   signedHostEph?: string;
-  /** Burn the host nonce before answering (as if already used). */
-  consumeHostNonce?: boolean;
+  /** Sign with this key instead of the identity's own (a bad signature). */
+  signer?: Identity;
 }
 
 /** Answer the host hello as a visitor would, with one field bent. */
@@ -162,13 +163,10 @@ async function rawHandshake(o: HelloOverrides = {}): Promise<RawClient & { chann
   const nonceB = o.nonceB ?? randomBytes(32).toString('base64');
   const ts = o.ts ?? Date.now();
   const fields = {
-    nonceA: client.hostHello.nonce, nonceB, hostId: client.hostHello.instanceId, visitorId: who.instanceId,
+    protocol: o.protocol ?? 1, nonceA: client.hostHello.nonce, nonceB, hostId: client.hostHello.instanceId, visitorId: who.instanceId,
     hostEph: o.signedHostEph ?? client.hostHello.eph, visitorEph: eph.publicRawB64, ts,
+    hostAppVersion: client.hostHello.appVersion, visitorAppVersion: 'test',
   };
-  if (o.consumeHostNonce) {
-    const { getStorageProvider } = await import('@/db/storage');
-    await getStorageProvider().takeRaw(`federation:nonce:host:${client.hostHello.nonce}`);
-  }
   const welcome = new Promise<string | null>((resolve) => {
     client.ws.once('message', (d) => resolve(d.toString()));
     client.ws.once('close', () => resolve(null));
@@ -178,14 +176,14 @@ async function rawHandshake(o: HelloOverrides = {}): Promise<RawClient & { chann
     type: 'hello',
     body: {
       protocol: o.protocol ?? 1, instanceId: who.instanceId, publicKey: who.publicKeySpkiB64, nonce: nonceB, ts,
-      eph: eph.publicRawB64, appVersion: 'test', sig: who.sign(m.seal.handshakeTranscript('visitor', fields)).toString('base64'),
+      eph: eph.publicRawB64, appVersion: 'test', sig: (o.signer ?? who).sign(m.seal.handshakeTranscript('visitor', fields)).toString('base64'),
     },
   }));
   const w = await welcome;
   if (!w) return { ...client, nonceB };
   const sig = Buffer.from(JSON.parse(w).body.sig, 'base64');
   expect(m.identity.verifyEd25519(client.hostHello.publicKey, m.seal.handshakeTranscript('host', fields), sig)).toBe(true);
-  const channel = new m.seal.SealedChannel(m.seal.deriveLinkKeys(eph.privateKey, client.hostHello.eph, client.hostHello.nonce, nonceB), 'visitor');
+  const channel = new m.seal.SealedChannel(m.seal.deriveLinkKeys(eph.privateKey, client.hostHello.eph, fields), 'visitor');
   return { ...client, channel, nonceB };
 }
 
@@ -209,14 +207,23 @@ describe('handshake', () => {
     expect(inbound.peerInstanceId).toBe(visitorId.instanceId);
     expect(await inbound.request('ping', {})).toEqual({});
 
-    // A named but unbuilt operation, and an unknown one: `unsupported`.
-    await expect(link.request('space.info', {})).rejects.toMatchObject({ code: 'unsupported' });
-    await expect(link.request('no.such.thing', {})).rejects.toMatchObject({ code: 'unsupported' });
+    // An instance that joined nothing here (no row) may only ask space.join:
+    // anything else is `not_found` (FI1).
+    await expect(link.request('no.such.thing', {})).rejects.toMatchObject({ code: 'not_found' });
     // A malformed body of a known type: `bad_request`, link stays up.
     await expect(link.request('ping', { extra: 1 })).rejects.toMatchObject({ code: 'bad_request' });
     expect(link.closed).toBe(false);
-
     expect(await q('SELECT * FROM federation_instances')).toEqual([]);
+
+    // Once a join wrote its row, the same link gets past the gate: an
+    // unknown type is now `unsupported`.
+    await q(`INSERT INTO federation_instances (instance_id, public_key) VALUES ($1, $2)`, [visitorId.instanceId, visitorId.publicKeySpkiB64]);
+    try {
+      await expect(link.request('no.such.thing', {})).rejects.toMatchObject({ code: 'unsupported' });
+      expect(m.host._federationHostBudgetsForTests().unknownLinks).toBe(0);
+    } finally {
+      await q('DELETE FROM federation_instances');
+    }
     link.close(m.protocol.CLOSE.normal, 'done');
     await until(() => m.host.inboundLink(visitorId.instanceId) === undefined);
   });
@@ -246,10 +253,34 @@ describe('handshake', () => {
     expect(await replay.closed).toEqual({ code: 4401, reason: 'nonce replayed' });
   });
 
-  test('a host nonce is single-use (4401)', async () => {
-    const c = await rawHandshake({ consumeHostNonce: true });
-    expect(c.channel).toBeUndefined();
-    expect(await c.closed).toEqual({ code: 4401, reason: 'host nonce already used or expired' });
+  test('a visitor nonce is recorded only once its signature verified', async () => {
+    // A hello with a bad signature does not burn its nonce...
+    const nonceB = randomBytes(32).toString('base64');
+    const impostor = m.identity.identityFromPrivateKeyPem(m.identity.generateIdentityPem());
+    const forged = await rawHandshake({ nonceB, signer: impostor });
+    expect(await forged.closed).toEqual({ code: 4401, reason: 'bad signature' });
+    // ...so the real visitor can still use it, once.
+    const real = await rawHandshake({ nonceB });
+    expect(real.channel).toBeDefined();
+    real.ws.close();
+    const again = await rawHandshake({ nonceB });
+    expect(await again.closed).toEqual({ code: 4401, reason: 'nonce replayed' });
+  });
+
+  test('a handshake frame over 4 KiB is refused before it is parsed (4401)', async () => {
+    const c = await rawConnect();
+    c.ws.send(`{"v":1,"type":"hello","body":{"pad":"${'x'.repeat(5000)}"}}`);
+    expect(await c.closed).toEqual({ code: 4401, reason: 'handshake frame too large' });
+  });
+
+  test('a failure while opening the socket closes it (1011) instead of leaving it half open', async () => {
+    m.config.getConfig().security.trustedProxies = ['not-an-address'];
+    const ws = new WebSocket(url);
+    const closed = await new Promise<{ code: number; reason: string }>((resolve) => {
+      ws.on('close', (code, reason) => resolve({ code, reason: reason.toString() }));
+    });
+    expect(closed).toEqual({ code: 1011, reason: 'internal error' });
+    expect(m.host._federationHostBudgetsForTests().pendingTotal).toBe(0);
   });
 
   test('a stale timestamp is refused (4401)', async () => {
@@ -283,8 +314,8 @@ describe('handshake', () => {
     const nonceB = randomBytes(32).toString('base64');
     const ts = Date.now();
     const sig = impostor.sign(m.seal.handshakeTranscript('visitor', {
-      nonceA: client.hostHello.nonce, nonceB, hostId: hostId.instanceId, visitorId: visitorId.instanceId,
-      hostEph: client.hostHello.eph, visitorEph: eph.publicRawB64, ts,
+      protocol: 1, nonceA: client.hostHello.nonce, nonceB, hostId: hostId.instanceId, visitorId: visitorId.instanceId,
+      hostEph: client.hostHello.eph, visitorEph: eph.publicRawB64, ts, hostAppVersion: client.hostHello.appVersion, visitorAppVersion: 'test',
     }));
     client.ws.send(JSON.stringify({ v: 1, type: 'hello', body: {
       protocol: 1, instanceId: visitorId.instanceId, publicKey: visitorId.publicKeySpkiB64, nonce: nonceB, ts,
@@ -436,7 +467,7 @@ describe('sealed frames', () => {
     }
     expect(inbound.closed).toBe(true);
     expect(inbound.closeInfo).toEqual({ code: 4429, reason: 'send queue full' });
-    expect(maxQueued).toBeLessThanOrEqual(m.link.SEND_QUEUE_CAP_BYTES);
+    expect(maxQueued).toBeLessThanOrEqual(m.link.sendQueueCap(m.config.getConfig().gateway.maxFrameBytes));
     expect(m.host.inboundLink(visitorId.instanceId)).toBeUndefined();
   }, 30_000);
 
@@ -493,7 +524,131 @@ describe('per-address bounds on the endpoint', () => {
     });
     expect(closed).toEqual({ code: 4403, reason: 'wss required outside federation.lanCidrs' });
   });
+
+  test('at most so many sockets before the handshake on the whole install (4429)', async () => {
+    m.host._setFederationHostLimitsForTests({ pendingTotal: 2 });
+    const a = await rawConnect();
+    const b = await rawConnect();
+    expect(await closeOf(url)).toEqual({ code: 4429, reason: 'too many pending handshakes on this install' });
+    a.ws.close();
+    b.ws.close();
+  });
+
+  test('sealed links are bounded per address and in all, not counting the link a reconnect replaces (4429)', async () => {
+    const other = m.identity.identityFromPrivateKeyPem(m.identity.generateIdentityPem());
+    for (const over of [{ openLinksPerIp: 1 }, { openLinks: 1 }]) {
+      m.host._resetFederationHostForTests();
+      m.host._setFederationHostLimitsForTests(over);
+      const first = await dial();
+      const err = await dialRefusal(dial(url, hostId.instanceId, { identity: other }));
+      expect(err.closeCode, JSON.stringify(over)).toBe(4429);
+      expect(err.message).toMatch(/too many federation links/);
+      // The same install reconnecting replaces its link: allowed.
+      const again = await dial();
+      await until(() => first.closed);
+      again.close(4000, 'done');
+    }
+  });
+
+  test('links from instances that joined nothing here are bounded; a row lifts the bound (4429)', async () => {
+    const other = m.identity.identityFromPrivateKeyPem(m.identity.generateIdentityPem());
+    m.host._setFederationHostLimitsForTests({ unknownLinks: 1 });
+    const first = await dial();
+    const err = await dialRefusal(dial(url, hostId.instanceId, { identity: other }));
+    expect(err.closeCode).toBe(4429);
+    expect(err.message).toMatch(/joined nothing here/);
+    await q(`INSERT INTO federation_instances (instance_id, public_key) VALUES ($1, $2)`, [other.instanceId, other.publicKeySpkiB64]);
+    try {
+      const known = await dial(url, hostId.instanceId, { identity: other });
+      expect(await known.request('ping', {})).toEqual({});
+      known.close(4000, 'done');
+    } finally {
+      await q('DELETE FROM federation_instances');
+    }
+    first.close(4000, 'done');
+  });
+
+  test('the budgets are swept: quiet addresses drop out, pending sockets are recounted', async () => {
+    const done = await rawConnect();
+    done.ws.close();
+    await done.closed;
+    const pending = await rawConnect();
+    let budgets = m.host._federationHostBudgetsForTests();
+    expect(budgets.handshakes.get('127.0.0.1')).toHaveLength(2);
+    expect(budgets.pending.get('127.0.0.1')).toBe(1);
+    m.host.sweepFederationHostBudgets(Date.now() + 61_000);
+    budgets = m.host._federationHostBudgetsForTests();
+    expect(budgets.handshakes.size).toBe(0);
+    expect(budgets.pending.get('127.0.0.1')).toBe(1);
+    expect(budgets.pendingTotal).toBe(1);
+    pending.ws.close();
+    await pending.closed;
+    m.host.sweepFederationHostBudgets();
+    expect(m.host._federationHostBudgetsForTests().pending.size).toBe(0);
+  });
+
+  test('IPv6 addresses are counted per /64', () => {
+    const bucket = m.host.addressBucket;
+    expect(bucket('2001:db8:1:2::5')).toBe(bucket('2001:db8:1:2:ffff:ffff:ffff:1'));
+    expect(bucket('2001:db8:1:2::5')).toBe('2001:db8:1:2::/64');
+    expect(bucket('2001:db8:1:3::5')).not.toBe(bucket('2001:db8:1:2::5'));
+    expect(bucket('203.0.113.9')).toBe('203.0.113.9');
+  });
+
+  test('behind a trusted proxy: the rightmost X-Forwarded-Proto decides, and the proxy itself is no LAN client', async () => {
+    const cfg = m.config.getConfig();
+    cfg.security.trustedProxies = ['127.0.0.1'];
+    cfg.federation.lanCidrs = ['10.0.0.0/8'];
+    // The proxy appends its own value last; a client-written https before it counts for nothing.
+    const ok = await rawConnect(url, { 'x-forwarded-proto': 'http, https' });
+    ok.ws.close();
+    expect(await closeOf(url, { 'x-forwarded-proto': 'https, http' })).toEqual({ code: 4403, reason: 'wss required outside federation.lanCidrs' });
+
+    // The proxy is inside lanCidrs but names no client: no plain ws:// for it.
+    cfg.federation.lanCidrs = ['127.0.0.1/32', '10.0.0.0/8'];
+    expect(await closeOf(url)).toEqual({ code: 4403, reason: 'wss required outside federation.lanCidrs' });
+    // A LAN client the proxy names may use plain ws://.
+    const lan = await rawConnect(url, { 'x-forwarded-for': '10.1.2.3' });
+    lan.ws.close();
+  });
+
+  test('an IPv4-mapped literal in federation.lanCidrs admits the IPv4 peer, both ends', async () => {
+    const mapped = ['::ffff:127.0.0.1'];
+    m.config.getConfig().federation.lanCidrs = mapped;
+    const link = await dial(url, hostId.instanceId, { lanCidrs: mapped });
+    expect(await link.request('ping', {})).toEqual({});
+    link.close(4000, 'done');
+  });
+
+  test('registered while not hosting: refused with 4403, and turning hosting on applies without a restart', async () => {
+    const cfg = m.config.getConfig();
+    cfg.federation.mode = 'visit';
+    const app = new App();
+    // biome-ignore lint/suspicious/noExplicitAny: the route builder type the server passes
+    m.host.setupFederationWebSocket(app as any, { identity: async () => hostId });
+    const second = listen(app, { hostname: '127.0.0.1', port: 0 });
+    try {
+      await until(() => second.port !== 0);
+      const url2 = `ws://127.0.0.1:${second.port}/federation`;
+      expect(await closeOf(url2)).toEqual({ code: 4403, reason: 'federation off' });
+      cfg.federation.mode = 'both';
+      m.mode.emitFederationModeChanged('both', 'visit', (err) => { throw err; });
+      const link = await dial(url2);
+      expect(await link.request('ping', {})).toEqual({});
+      link.close(4000, 'done');
+    } finally {
+      second.stop();
+    }
+  });
 });
+
+/** Connect and wait for the host to close the socket. */
+function closeOf(target: string, headers: Record<string, string> = {}): Promise<{ code: number; reason: string }> {
+  const ws = new WebSocket(target, { headers });
+  return new Promise((resolve) => {
+    ws.on('close', (code, reason) => resolve({ code, reason: reason.toString() }));
+  });
+}
 
 describe('the dialer against a live host', () => {
   test('the connection is pinned to the address checked once', async () => {
@@ -568,6 +723,107 @@ describe('the visitor link pool', () => {
     await until(() => open.closed);
     expect(open.closeInfo?.code).toBe(4403);
     pool.dispose();
+  });
+
+  const pool = (extra: Partial<import('./visitor-client').VisitorLinkPoolOptions> = {}) =>
+    new m.visitor.VisitorLinkPool({ identity: async () => visitorId, dial: { lanCidrs: LAN }, reconnect: { baseMs: 20, maxMs: 100 }, ...extra });
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  test('closeAll keeps the retainers counted: releasing afterwards never goes negative', async () => {
+    const p = pool();
+    const release = p.retain(host());
+    await until(() => p.state(hostId.instanceId) === 'up');
+    p.closeAll(4000, 'done');
+    expect(p.retainerCount(hostId.instanceId)).toBe(1);
+    release();
+    release();
+    expect(p.retainerCount(hostId.instanceId)).toBe(0);
+    p.dispose();
+  });
+
+  test('visiting off then on: the links close, then every retained host is redialled', async () => {
+    const p = pool();
+    const release = p.retain(host());
+    await until(() => p.state(hostId.instanceId) === 'up');
+    const cfg = m.config.getConfig();
+    cfg.federation.mode = 'host';
+    m.mode.emitFederationModeChanged('host', 'both', (err) => { throw err; });
+    await until(() => p.state(hostId.instanceId) === 'down');
+    await sleep(150);
+    expect(p.state(hostId.instanceId)).toBe('down');
+    expect(p.retainerCount(hostId.instanceId)).toBe(1);
+
+    cfg.federation.mode = 'both';
+    m.mode.emitFederationModeChanged('both', 'host', (err) => { throw err; });
+    await until(() => p.state(hostId.instanceId) === 'up');
+    release();
+    p.dispose();
+  });
+
+  test('a dial that completes after closeAll is closed instead of handed out', async () => {
+    const p = pool();
+    const pending = p.link(host());
+    p.closeAll(4000, 'stop');
+    await expect(pending).rejects.toMatchObject({ code: 'federation_off' });
+    expect(p.state(hostId.instanceId)).toBe('down');
+    await until(() => m.host.inboundLink(visitorId.instanceId) === undefined);
+    // An explicit request afterwards dials again.
+    expect(await p.request(host(), 'ping', {})).toEqual({});
+    p.dispose();
+  });
+
+  test('a host that refuses with 4403 is not redialled until asked again', async () => {
+    const states: string[] = [];
+    const p = pool({ onLinkState: (_id, s) => states.push(s) });
+    const release = p.retain(host());
+    await until(() => p.state(hostId.instanceId) === 'up');
+    // The host stops hosting (this install still visits): its links close with 4403.
+    const cfg = m.config.getConfig();
+    cfg.federation.mode = 'visit';
+    m.mode.emitFederationModeChanged('visit', 'both', (err) => { throw err; });
+    await until(() => p.state(hostId.instanceId) === 'down');
+    cfg.federation.mode = 'both';
+    m.mode.emitFederationModeChanged('both', 'visit', (err) => { throw err; });
+    await sleep(200);
+    expect(states).toEqual(['up', 'down']);
+    expect(p.state(hostId.instanceId)).toBe('down');
+    // The next explicit request tries again.
+    expect(await p.request(host(), 'ping', {})).toEqual({});
+    expect(p.state(hostId.instanceId)).toBe('up');
+    release();
+    p.dispose();
+  });
+
+  test('the backoff starts over only after a link stayed up long enough', async () => {
+    // biome-ignore lint/suspicious/noExplicitAny: the entry's private backoff counter
+    const attempt = (p: any) => p.entries.get(hostId.instanceId).attempt as number;
+    // Each drop's backoff counter, read right after the pool handled the drop
+    // (the redial can bring the link back before a poll would see it down).
+    const run = async (stableMs: number): Promise<number[]> => {
+      const seen: number[] = [];
+      let ups = 0;
+      const p: import('./visitor-client').VisitorLinkPool = pool({
+        reconnect: { baseMs: 10, maxMs: 40, stableMs },
+        onLinkState: (_id, s) => {
+          if (s === 'up') ups++;
+          else queueMicrotask(() => seen.push(attempt(p)));
+        },
+      });
+      const release = p.retain(host());
+      for (let i = 1; i <= 2; i++) {
+        await until(() => ups === i);
+        m.host.inboundLink(visitorId.instanceId)!.close(4000, 'drop');
+        await until(() => seen.length === i);
+      }
+      await until(() => ups === 3);
+      release();
+      p.dispose();
+      return seen.slice(0, 2);
+    };
+    // Dropped right after coming up: the backoff keeps growing.
+    expect(await run(60_000)).toEqual([1, 2]);
+    // Up long enough (here: at once): every drop starts over.
+    expect(await run(0)).toEqual([0, 0]);
   });
 
   test('backoff grows to the cap with jitter', () => {

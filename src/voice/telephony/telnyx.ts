@@ -9,6 +9,9 @@ import type { CallSession, CallStatus, InitiateCallOptions, TelephonyProvider } 
 
 const log = logger.child({ component: 'telnyx-provider' });
 
+/** Largest distance, either way, between a webhook's `telnyx-timestamp` and now, in seconds. */
+export const TELNYX_WEBHOOK_TOLERANCE_SECONDS = 300;
+
 export class TelnyxProvider implements TelephonyProvider {
   readonly name = 'telnyx';
 
@@ -108,9 +111,11 @@ export class TelnyxProvider implements TelephonyProvider {
   /**
    * Telnyx signs `${timestamp}|${body}` with Ed25519; the signature header is
    * base64 and the account's public key is a raw 32-byte key in base64. No
-   * configured key means nothing can be verified, so the webhook fails.
+   * configured key means nothing can be verified, so the webhook fails. A
+   * `telnyx-timestamp` more than 300 s from now fails too, so a captured
+   * webhook cannot be replayed later.
    */
-  verifyWebhook(headers: Record<string, string>, body: string): boolean {
+  verifyWebhook(headers: Record<string, string>, body: string, _url?: string, now: number = Date.now()): boolean {
     if (!this.publicKey) {
       log.warn('Telnyx webhook refused: no telnyx_public_key configured to verify it');
       return false;
@@ -118,6 +123,10 @@ export class TelnyxProvider implements TelephonyProvider {
     const signature = headers['telnyx-signature-ed25519'];
     const timestamp = headers['telnyx-timestamp'];
     if (!signature || !timestamp) return false;
+    if (!/^\d{1,12}$/.test(timestamp) || Math.abs(now / 1000 - Number(timestamp)) > TELNYX_WEBHOOK_TOLERANCE_SECONDS) {
+      log.warn({ timestamp }, 'Telnyx webhook refused: timestamp outside the 300 s window');
+      return false;
+    }
 
     try {
       return verifyEd25519(this.publicKey, Buffer.from(`${timestamp}|${body}`), Buffer.from(signature, 'base64'));

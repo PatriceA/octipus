@@ -11,8 +11,12 @@
  *  - the heartbeat: a `ping` request every `federation.heartbeatSeconds`,
  *    three missed and the link closes;
  *  - the inbound frame rate (60 per second) and the send queue: queued bytes
- *    (`ws.bufferedAmount` plus the link's own queue) above 4 MiB close the
- *    link with 4429, so a peer that stops reading cannot grow our memory.
+ *    (`ws.bufferedAmount` plus the link's own queue) above
+ *    max(4 MiB, 2 × the largest sealed frame) close the link with 4429, so a
+ *    peer that stops reading cannot grow our memory, while one frame at the
+ *    configured cap always fits;
+ *  - the peer's requests in flight: at most 32 answered at once, any more
+ *    are answered `busy` without running, so a peer cannot pile up handlers.
  *
  * A frame that fails to open, or is not the next sequence number, closes the
  * link with 4401 (FI7). Nothing here knows what a request means: the side
@@ -21,6 +25,7 @@
 import { logger } from '@/utils/logger';
 import {
   CLOSE,
+  closeReason,
   type LinkError,
   type LinkEvent,
   type LinkMessage,
@@ -36,8 +41,10 @@ import { type LinkRole, SealError, type SealedChannel } from './seal';
 
 const log = logger.child({ component: 'federation-link' });
 
-/** Queued outbound bytes above which the link is closed (4429). */
+/** The floor of the send-queue cap: queued outbound bytes above which the link is closed (4429). */
 export const SEND_QUEUE_CAP_BYTES = 4 * 1024 * 1024;
+/** Requests from the peer being answered at once; one more is answered `busy`. */
+export const MAX_IN_FLIGHT_REQUESTS = 32;
 /** Frames written straight to the socket while its own buffer is below this; above it they wait in the link's queue. */
 const SOCKET_HIGH_WATER_BYTES = 1024 * 1024;
 /** Inbound frames per second one link may send. */
@@ -52,6 +59,15 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
  */
 export function sealedWireLimit(maxFrameBytes: number): number {
   return Math.ceil((maxFrameBytes + 16) / 3) * 4 + 256;
+}
+
+/**
+ * The send-queue cap for a plaintext cap: 4 MiB, or room for two of the
+ * largest sealed frames when `gateway.maxFrameBytes` is set high enough that
+ * one frame alone would pass 4 MiB.
+ */
+export function sendQueueCap(maxFrameBytes: number): number {
+  return Math.max(SEND_QUEUE_CAP_BYTES, 2 * sealedWireLimit(maxFrameBytes));
 }
 
 /** The subset of a `ws` WebSocket the link writes to. */
@@ -112,6 +128,8 @@ export class PeerLink {
   private heartbeat: NodeJS.Timeout | null = null;
   private awaitingPong = false;
   private missedPings = 0;
+  private inFlight = 0;
+  private readonly queueCap: number;
 
   constructor(opts: PeerLinkOptions) {
     this.opts = opts;
@@ -119,6 +137,7 @@ export class PeerLink {
     this.peerInstanceId = opts.peerInstanceId;
     this.socket = opts.socket;
     this.channel = opts.channel;
+    this.queueCap = sendQueueCap(opts.maxFrameBytes);
     this.heartbeat = setInterval(() => this.beat(), opts.heartbeatSeconds * 1000);
     this.heartbeat.unref();
   }
@@ -234,7 +253,7 @@ export class PeerLink {
     if (this.closedWith) return;
     this.finish(code, reason);
     try {
-      this.socket.close(code, reason.slice(0, 120));
+      this.socket.close(code, closeReason(reason));
     } catch (err) {
       log.warn({ err, peer: this.peerInstanceId }, 'Federation socket close failed');
     }
@@ -276,6 +295,11 @@ export class PeerLink {
   }
 
   private async answer(request: LinkRequest): Promise<void> {
+    if (this.inFlight >= MAX_IN_FLIGHT_REQUESTS) {
+      this.write({ id: this.newId(), type: 'result', re: request.id, ok: false, error: { code: 'busy', message: `more than ${MAX_IN_FLIGHT_REQUESTS} requests in flight` } });
+      return;
+    }
+    this.inFlight++;
     let reply: LinkMessage;
     try {
       const known = requestBodySchemas[request.type as keyof typeof requestBodySchemas];
@@ -290,6 +314,8 @@ export class PeerLink {
       }
       const error = err instanceof LinkRequestError ? err.toWire() : { code: 'internal' };
       reply = { id: this.newId(), type: 'result', re: request.id, ok: false, error };
+    } finally {
+      this.inFlight--;
     }
     if (this.closedWith) return;
     try {
@@ -314,7 +340,7 @@ export class PeerLink {
     }
     // Sealed now, in send order: the sequence number is the queue position.
     const wire = JSON.stringify(this.channel.seal(plaintext));
-    if (this.queuedBytes() + wire.length > SEND_QUEUE_CAP_BYTES) {
+    if (this.queuedBytes() + wire.length > this.queueCap) {
       this.close(CLOSE.limit, 'send queue full');
       return false;
     }

@@ -501,8 +501,8 @@ export function createServer() {
   // Gateway WebSocket hub (/gateway): the web and the TUI
   setupGatewayWebSocket(app as any);
 
-  // Peer links from other installs (/federation), only when this one hosts
-  // spaces for them (docs/plans/federation-spec.md §5.1)
+  // Peer links from other installs (/federation): always registered, refused
+  // with 4403 while this install does not host (docs/plans/federation-spec.md §5.1)
   setupFederationWebSocket(app as any);
 
   return app;

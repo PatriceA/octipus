@@ -55,11 +55,13 @@ export const ollamaConfigSchema = z.object({
 /** A `security.trustedProxies` entry: an IP address, or one with a valid prefix length. */
 function isAddressOrCidr(entry: string): boolean {
   const [address, prefix, extra] = entry.trim().split('/');
-  const family = isIP(address.replace(/^::ffff:(?=\d)/i, ''));
+  const unmapped = address.replace(/^::ffff:(?=\d)/i, '');
+  const family = isIP(unmapped);
   if (family === 0 || extra !== undefined) return false;
   if (prefix === undefined) return true;
-  const bits = Number(prefix);
-  return /^\d+$/.test(prefix) && bits <= (family === 4 ? 32 : 128);
+  // An IPv4-mapped range (`::ffff:10.0.0.0/104`) carries an IPv6 prefix of 96 or more.
+  const bits = Number(prefix) - (unmapped !== address ? 96 : 0);
+  return /^\d+$/.test(prefix) && bits >= 0 && bits <= (family === 4 ? 32 : 128);
 }
 
 // Security configuration schema

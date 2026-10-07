@@ -28,15 +28,17 @@ import { type InstanceIdentity, instanceIdOf, verifyEd25519 } from './identity';
 import { PeerLink, type PeerLinkOptions, sealedWireLimit } from './link';
 import {
   CLOSE,
+  closeReason,
   type HostHello,
   hostHelloSchema,
+  MAX_HANDSHAKE_FRAME_BYTES,
   NONCE_BYTES,
   PROTOCOL_VERSION,
   plainFrameSchema,
   type VisitorHello,
   welcomeSchema,
 } from './protocol';
-import { deriveLinkKeys, generateEphemeral, handshakeTranscript, SealedChannel } from './seal';
+import { deriveLinkKeys, generateEphemeral, type HandshakeFields, handshakeTranscript, SealedChannel } from './seal';
 
 /** How long the whole handshake may take, connect included. */
 export const DIAL_HANDSHAKE_TIMEOUT_MS = 10_000;
@@ -191,7 +193,7 @@ export async function dialPeer(url: string, expectedInstanceId: string, opts: Di
   return new Promise<PeerLink>((resolve, reject) => {
     let stage: 'hello' | 'welcome' | 'open' | 'failed' = 'hello';
     let hostHello: HostHello | null = null;
-    let sent: VisitorHello | null = null;
+    let fields: HandshakeFields | null = null;
     let eph: ReturnType<typeof generateEphemeral> | null = null;
     let link: PeerLink | null = null;
 
@@ -199,8 +201,12 @@ export async function dialPeer(url: string, expectedInstanceId: string, opts: Di
       if (stage === 'failed' || stage === 'open') return;
       stage = 'failed';
       clearTimeout(timer);
-      socket.close(closeCode, reason);
-      reject(new DialError('handshake_failed', `Handshake with ${url} failed: ${reason}`, closeCode));
+      try {
+        socket.close(closeCode, closeReason(reason));
+      } finally {
+        // Settle whatever the close does: the caller is never left waiting.
+        reject(new DialError('handshake_failed', `Handshake with ${url} failed: ${reason}`, closeCode));
+      }
     };
     const timer = setTimeout(() => fail(CLOSE.auth, 'handshake timeout'), timeoutMs);
 
@@ -210,6 +216,10 @@ export async function dialPeer(url: string, expectedInstanceId: string, opts: Di
         return;
       }
       if (stage === 'failed') return;
+      if (Buffer.byteLength(raw, 'utf8') > MAX_HANDSHAKE_FRAME_BYTES) {
+        fail(CLOSE.auth, 'handshake frame too large');
+        return;
+      }
       let frame: unknown;
       try {
         frame = JSON.parse(raw);
@@ -242,18 +252,20 @@ export async function dialPeer(url: string, expectedInstanceId: string, opts: Di
         eph = generateEphemeral();
         const nonceB = randomBytes(NONCE_BYTES).toString('base64');
         const ts = Date.now();
-        const sig = identity.sign(handshakeTranscript('visitor', {
-          nonceA: hostHello.nonce, nonceB, hostId: hostHello.instanceId, visitorId: identity.instanceId,
-          hostEph: hostHello.eph, visitorEph: eph.publicRawB64, ts,
-        }));
-        sent = {
+        const appVersion = getAppVersion().slice(0, 64);
+        fields = {
+          protocol: PROTOCOL_VERSION, nonceA: hostHello.nonce, nonceB, hostId: hostHello.instanceId, visitorId: identity.instanceId,
+          hostEph: hostHello.eph, visitorEph: eph.publicRawB64, ts, hostAppVersion: hostHello.appVersion, visitorAppVersion: appVersion,
+        };
+        const sig = identity.sign(handshakeTranscript('visitor', fields));
+        const sent: VisitorHello = {
           protocol: PROTOCOL_VERSION,
           instanceId: identity.instanceId,
           publicKey: identity.publicKeySpkiB64,
           nonce: nonceB,
           ts,
           eph: eph.publicRawB64,
-          appVersion: getAppVersion().slice(0, 64),
+          appVersion,
           sig: sig.toString('base64'),
         };
         stage = 'welcome';
@@ -263,21 +275,18 @@ export async function dialPeer(url: string, expectedInstanceId: string, opts: Di
 
       // stage === 'welcome'
       const welcome = plain.data.type === 'welcome' ? welcomeSchema.safeParse(plain.data.body) : null;
-      if (!welcome?.success || !hostHello || !sent || !eph) {
+      if (!welcome?.success || !hostHello || !fields || !eph) {
         fail(CLOSE.auth, 'expected the host welcome');
         return;
       }
-      const expected = handshakeTranscript('host', {
-        nonceA: hostHello.nonce, nonceB: sent.nonce, hostId: hostHello.instanceId, visitorId: identity.instanceId,
-        hostEph: hostHello.eph, visitorEph: sent.eph, ts: sent.ts,
-      });
+      const expected = handshakeTranscript('host', fields);
       if (!verifyEd25519(hostHello.publicKey, expected, Buffer.from(welcome.data.sig, 'base64'))) {
         fail(CLOSE.auth, 'host signature does not verify');
         return;
       }
       let channel: SealedChannel;
       try {
-        channel = new SealedChannel(deriveLinkKeys(eph.privateKey, hostHello.eph, hostHello.nonce, sent.nonce), 'visitor');
+        channel = new SealedChannel(deriveLinkKeys(eph.privateKey, hostHello.eph, fields), 'visitor');
       } catch (err) {
         fail(CLOSE.auth, (err as Error).message);
         return;

@@ -6,7 +6,7 @@
  * touch. The instance id is `base32(sha256(spki))` cut to 26 characters (130
  * bits); peers pin it, so it must never change behind their back:
  *
- *  - The read tells **absent** from **error** (`getSystemSecretStrict`). A
+ *  - The read tells **absent** from **error** (`getReservedSystemSecret`). A
  *    vault or decryption failure throws and federation stays off for this
  *    start, rather than minting a second identity that every peer would see
  *    as a stranger.
@@ -139,14 +139,14 @@ export function generateIdentityPem(): string {
  */
 export async function loadInstanceIdentity(): Promise<InstanceIdentity> {
   const vault = getVault();
-  let pem = await vault.getSystemSecretStrict(IDENTITY_SECRET_NAME);
+  let pem = await vault.getReservedSystemSecret(IDENTITY_SECRET_NAME);
   if (pem === null) {
     const created = await vault.createSystemSecretOnce(IDENTITY_SECRET_NAME, generateIdentityPem, {
       credentialType: 'certificate',
       description: 'Federation identity of this install (Ed25519). Peers pin it: never edit or delete.',
       tags: ['system', 'federation'],
     });
-    pem = await vault.getSystemSecretStrict(IDENTITY_SECRET_NAME);
+    pem = await vault.getReservedSystemSecret(IDENTITY_SECRET_NAME);
     if (pem === null) throw new Error(`${IDENTITY_SECRET_NAME} is absent right after it was stored`);
     if (created) log.info({ instanceId: identityFromPrivateKeyPem(pem).instanceId }, 'Federation identity created');
   }

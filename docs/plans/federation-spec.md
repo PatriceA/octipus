@@ -97,7 +97,7 @@ handlers are reused unchanged.
 |---|---|
 | F-D1 | **One host per space.** Access is live: no sync and no mirror. When the host is offline, so is the space. |
 | F-D2 | **Identity is an Ed25519 keypair per install.** The private key is the vault system secret `federation.identity`, created under an advisory lock. `instance_id` = `base32(sha256(spki))`, 26 characters (130 bits). It is displayed in four groups. |
-| F-D3 | **Own WebSocket endpoint** `/federation`, registered only when `federation.mode ∈ {host, both}`. It is separate from `/gateway`. |
+| F-D3 | **Own WebSocket endpoint** `/federation`, always registered and refusing every peer (4403) unless `federation.mode ∈ {host, both}`, so a mode change needs no restart. It is separate from `/gateway`. |
 | F-D4 | **Mutual signed handshake** binding an **ephemeral X25519 key exchange**. After the handshake, every frame is sealed with ChaCha20-Poly1305 using per-direction keys and a sequence number (§5.3). This holds over TLS as well: frames stay integrity-protected through TLS-terminating proxies. `ws://` is allowed only to or from addresses inside `federation.lanCidrs`. The visitor pins the host fingerprint carried in the invite. |
 | F-D5 | **The invite is the authority on the host.** A space owner's invite is enough to admit a member from another install. The host's admins control `federation.mode` and can block an instance. On B, joining is the user's own action; B's `federation.mode` must allow `visit`. |
 | F-D6 | **A visitor is a `users` row with `kind = 'remote'`.** It is created only when an invite is redeemed, bound to the redeeming instance, and acted for only by a link whose verified fingerprint is that instance. A remote row's role is at most **editor**. |
@@ -122,7 +122,7 @@ handlers are reused unchanged.
 | FI4 | Content from a peer is untrusted. Room posts are fenced as member content in host turns (as today). Remote posts also go through `guardInput` before they are stored. Frames are capped at `gateway.maxFrameBytes`. Yjs updates go through the hub's checks. |
 | FI5 | Only space content leaves the host, through the listed operations. Member lists sent to visitors carry display names, not usernames or e-mail addresses. A room with a remote member is a **federated audience** for every turn in it: personal data of host members and `secret` labels never go to it. |
 | FI6 | Every outbound dial passes the guarded dialer: a public address, or an address inside `federation.lanCidrs`; IP pinned; no redirects; re-checked on every reconnect. |
-| FI7 | Replay and tampering: handshake nonces are single-use (kept in `kv_store` with a TTL); timestamps must fall within ±60 s; after the handshake, AEAD with strictly increasing sequence numbers per direction. |
+| FI7 | Replay and tampering: handshake nonces are single-use (the host's per socket, the visitor's kept in `kv_store` with a TTL once its signature verified); timestamps must fall within ±60 s; after the handshake, AEAD with strictly increasing sequence numbers per direction. |
 | FI8 | B keeps no space content outside the visitor-agent session rows of F-D11. A test greps every text column on B, minus that allowlist. |
 | FI9 | Revocation (a membership, an instance block, or `federation.mode` turned off) ends live access within one round trip. No later frame for that space succeeds. |
 | FI10 | Both ends audit with `instanceId` and the member handle. |
@@ -135,11 +135,11 @@ handlers are reused unchanged.
 ### 4.1 Identity (`src/core/federation/identity.ts`)
 
 - `getInstanceIdentity()`:
-  - Reads `federation.identity` with a vault call that tells **absent** apart from **error**: a new `getSystemSecretStrict` that throws on a vault error instead of returning null.
+  - Reads `federation.identity` with a vault call that tells **absent** apart from **error**: `getReservedSystemSecret`, which throws on a vault error instead of returning null and is the only read that reaches a reserved name.
   - On error, it throws, and federation stays off for that start (logged loudly).
   - When the secret is absent, it takes a Postgres advisory lock, reads again, then generates an Ed25519 key (`crypto.generateKeyPairSync('ed25519')`) and stores the PKCS8 PEM.
   - Returns `{ instanceId, publicKeySpkiB64, sign(bytes), display }`.
-- The name `federation.identity` is reserved: the admin vault routes refuse to list, read, write or delete it.
+- The name `federation.identity` is reserved, enforced inside the vault: `getByName`, `get`, `store`, `setSystemSecret`, `update`, `rotate` and `delete` throw for it and `list` leaves it out, so no admin-supplied reference (a model's `apiKeyRef`, a SCIM token ref) can read it; only `getReservedSystemSecret` and `createSystemSecretOnce` reach it. The admin vault routes answer 403 for it.
 - `verifyEd25519(publicKey, bytes, sig)` is a thin wrapper over `crypto.verify(null, …)`. It accepts SPKI DER, or a raw 32-byte key, which it wraps in the Ed25519 SPKI prefix.
 - `instanceIdOf(spkiB64)` = `base32(sha256(spki)).slice(0, 26)`, lowercase.
 - `shortInstanceLabel(id)` = the first 8 characters, used only next to a badge (§7.4). Identity is always the full id.
@@ -169,10 +169,13 @@ handlers are reused unchanged.
 ### 5.1 Endpoint and dialer
 
 - **Host endpoint.**
-  - `app.ws('/federation')` sits next to `/gateway` in `api/http/serve.ts`. It is registered only when `mode ∈ {host, both}`.
-  - A mode change while the server runs is enforced after the upgrade: close code 4403.
-  - WS upgrades bypass HTTP hooks, so the endpoint does its own per-IP budget: at most 10 un-handshaken links per IP and 30 handshakes per IP per minute.
+  - `app.ws('/federation')` sits next to `/gateway` in `api/http/serve.ts`. It is always registered; while `mode ∉ {host, both}` every socket is refused right after the upgrade with close code 4403, so turning hosting on (or off) applies without a restart. Turning hosting off also closes every open inbound link (4403).
+  - WS upgrades bypass HTTP hooks, so the endpoint does its own budgets, counted per IPv4 address or per IPv6 /64:
+    - before the handshake: at most 10 sockets per address and 256 in all, 30 handshakes per address per minute; a plain frame over 4 KiB is refused (4401) before it is parsed;
+    - sealed links: at most 16 per address and 1024 in all; at most 64 from instances with no `federation_instances` row, which may only send `space.join` (and `ping`) until a join writes their row — anything else is `not_found` (FI1);
+    - the budgets are swept every minute.
   - The handshake must complete within 5 s.
+  - Plain `ws://` is accepted only from a client address inside `lanCidrs`; otherwise the socket must come from a trusted proxy whose rightmost `X-Forwarded-Proto` is `https`/`wss`. A trusted proxy that names no client (no `X-Forwarded-For`/`X-Real-IP`) is not a LAN client, whatever its own address.
 - **Dialer** (`src/core/federation/dialer.ts`): `dialPeer(url, expectedInstanceId)`.
   - `wss:` is required, unless the resolved address is inside `lanCidrs`.
   - The host is resolved and checked: a public address, or one inside `lanCidrs`. Loopback, link-local and metadata addresses are never allowed unless `lanCidrs` explicitly contains them (tests use `127.0.0.1/32`).
@@ -182,35 +185,36 @@ handlers are reused unchanged.
 ### 5.2 Frames
 
 - Before `welcome`, frames are plain JSON: `{ v: 1, type, body }`.
-- After `welcome`, every frame on the wire is `{ v: 1, s: seq, n: nonce, c: ciphertext }`.
+- After `welcome`, every frame on the wire is `{ v: 1, s: seq, c: ciphertext }`. The AEAD nonce is derived from `seq` (four zero bytes, then `seq` as 64-bit big-endian), so it is not sent: each direction has its own fresh key per link, so a (key, nonce) pair never repeats.
   - The plaintext is `{ id, type, as?, conn?, body }`.
   - Requests get `{ type: 'result', re: id, ok, body | error }`.
   - Host events are `{ type: 'event', as, conn, body: <gateway server message> }`.
 - Size: at most `gateway.maxFrameBytes` before sealing.
 - Unknown types get `unsupported`.
-- **Send queue.** Each link counts its queued bytes (`ws.bufferedAmount` plus its own queue). Above 4 MiB the link is closed with 4429.
+- **Send queue.** Each link counts its queued bytes (`ws.bufferedAmount` plus its own queue). Above max(4 MiB, 2 × the largest sealed frame for `gateway.maxFrameBytes`) the link is closed with 4429.
+- **Requests in flight.** A link answers at most 32 of the peer's requests at once; one more is answered `busy` without running.
 
 ### 5.3 Handshake
 
 1. **Host → B:** `hello { protocol: 1, instanceId: A, publicKey: A_pub, nonce: nA, ts, eph: xA_pub, appVersion }`.
 2. **B checks** that `instanceIdOf(A_pub)` equals the pinned id and that `protocol` matches.
-3. **B → host:** `hello { protocol: 1, instanceId: B, publicKey: B_pub, nonce: nB, ts, eph: xB_pub, appVersion, sig: sign_B(T("visitor", nA, nB, A, B, xA_pub, xB_pub, ts)) }`.
+3. **B → host:** `hello { protocol: 1, instanceId: B, publicKey: B_pub, nonce: nB, ts, eph: xB_pub, appVersion, sig: sign_B(T("visitor", protocol, nA, nB, A, B, xA_pub, xB_pub, ts, appVersionA, appVersionB)) }`.
 4. **Host checks:**
    - `instanceIdOf(B_pub) = B`;
-   - the signature;
    - ts within ±60 s;
-   - `nA` is its own and not yet used (kept in `kv_store`, TTL 120 s);
+   - the signature (over its own `nA`, which lives in the socket's state only: one hello per socket, so it cannot be used twice);
+   - only then, that `nB` is new for B (recorded in `kv_store`, TTL 120 s), so unsigned frames cannot fill the store;
    - B is not `blocked`.
-5. **Host → B:** `welcome { sig: sign_A(T("host", nA, nB, A, B, xA_pub, xB_pub, ts)) }`.
+5. **Host → B:** `welcome { sig: sign_A(T("host", protocol, nA, nB, A, B, xA_pub, xB_pub, ts, appVersionA, appVersionB)) }`.
 6. **B verifies** the host's signature.
-7. **Keys.** Both sides derive `HKDF-SHA256(X25519(x, x'), salt = nA‖nB, info = "octipus-fed-1")`, which gives 64 bytes split into two direction keys. Sequence numbers start at 0. A seal failure or an out-of-order sequence number closes the link with 4401.
+7. **Keys.** Both sides derive `HKDF-SHA256(X25519(x, x'), salt = nA‖nB, info = "octipus-fed-1" ‖ SHA-256(T("keys", protocol, nA, nB, A, B, xA_pub, xB_pub, ts, appVersionA, appVersionB)))`, which gives 64 bytes split into two direction keys. Sequence numbers start at 0. A seal failure or an out-of-order sequence number closes the link with 4401.
 
 `T(...)` is the canonical, length-prefixed concatenation of its fields. Failures close the link with 4401 and a reason. Instance rows are written only on the first successful `space.join` (§6.2), never on a bare handshake.
 
 ### 5.4 Heartbeat, limits, close
 
 - **Heartbeat.** `ping`/`pong` every `heartbeatSeconds`; 3 missed pings close the link.
-- **Reconnect.** B reconnects with exponential backoff (1 s up to 60 s, with jitter) while a local user has the space open or an agent turn needs the link.
+- **Reconnect.** B reconnects with exponential backoff (1 s up to 60 s, with jitter) while a local user has the space open or an agent turn needs the link. The backoff starts over only after a link stayed up 30 s. A host that refused the link (4403, 4409) is not redialled until the next explicit request or retain. Turning visiting off closes the links and stops the redials; turning it back on redials every host still retained. A dial that completes after visiting went off is closed, not used.
 - **Per-link limits.**
   - 60 frames per second.
   - `space.join`: 5 per minute per link, and 20 per hour per source IP.

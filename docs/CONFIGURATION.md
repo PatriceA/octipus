@@ -222,8 +222,9 @@ Spaces across installs (design: [plans/federation-spec.md](plans/federation-spec
 Off by default. Each install has an Ed25519 identity, created on first use and
 kept in the vault as the reserved system secret `federation.identity`, which
 the vault API does not list, change or delete: peers pin it. When this install
-hosts, other installs dial `/federation` on it; the endpoint exists only while
-`federation.mode` is `host` or `both`.
+hosts, other installs dial `/federation` on it; the endpoint is always
+registered and refuses every peer (close code 4403) unless `federation.mode`
+is `host` or `both`, so a mode change applies without a restart.
 
 | Key | Default | Purpose |
 |---|---|---|

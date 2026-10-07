@@ -4,16 +4,32 @@
  */
 import { randomBytes } from 'node:crypto';
 import { describe, expect, test } from 'vitest';
-import { deriveLinkKeys, generateEphemeral, SealError, SealedChannel, transcript } from './seal';
+import { deriveLinkKeys, generateEphemeral, type HandshakeFields, handshakeTranscript, SealError, SealedChannel, transcript } from './seal';
 
-function pair() {
+function fieldsFor(hostEph: string, visitorEph: string, over: Partial<HandshakeFields> = {}): HandshakeFields {
+  return {
+    protocol: 1,
+    nonceA: randomBytes(32).toString('base64'),
+    nonceB: randomBytes(32).toString('base64'),
+    hostId: 'a'.repeat(26),
+    visitorId: 'b'.repeat(26),
+    hostEph,
+    visitorEph,
+    ts: 1_790_000_000_000,
+    hostAppVersion: '1.0.0',
+    visitorAppVersion: '1.0.0',
+    ...over,
+  };
+}
+
+/** Both ends of one link; `visitorView` changes what the visitor believes the handshake was. */
+function pair(visitorView: Partial<HandshakeFields> = {}) {
   const host = generateEphemeral();
   const visitor = generateEphemeral();
-  const nA = randomBytes(32).toString('base64');
-  const nB = randomBytes(32).toString('base64');
+  const f = fieldsFor(host.publicRawB64, visitor.publicRawB64);
   return {
-    host: new SealedChannel(deriveLinkKeys(host.privateKey, visitor.publicRawB64, nA, nB), 'host'),
-    visitor: new SealedChannel(deriveLinkKeys(visitor.privateKey, host.publicRawB64, nA, nB), 'visitor'),
+    host: new SealedChannel(deriveLinkKeys(host.privateKey, visitor.publicRawB64, f), 'host'),
+    visitor: new SealedChannel(deriveLinkKeys(visitor.privateKey, host.publicRawB64, { ...f, ...visitorView }), 'visitor'),
   };
 }
 
@@ -59,16 +75,37 @@ describe('SealedChannel', () => {
   });
 
   test('a different nonce pair derives different keys', () => {
-    const host = generateEphemeral();
-    const visitor = generateEphemeral();
-    const nA = randomBytes(32).toString('base64');
-    const a = new SealedChannel(deriveLinkKeys(host.privateKey, visitor.publicRawB64, nA, randomBytes(32).toString('base64')), 'host');
-    const b = new SealedChannel(deriveLinkKeys(visitor.privateKey, host.publicRawB64, nA, randomBytes(32).toString('base64')), 'visitor');
-    expect(() => a.open(b.seal(Buffer.from('x')))).toThrow(SealError);
+    const { host, visitor } = pair({ nonceB: randomBytes(32).toString('base64') });
+    expect(() => host.open(visitor.seal(Buffer.from('x')))).toThrow(SealError);
+  });
+
+  test('the keys are bound to the whole transcript: protocol, ids, ts and app versions', () => {
+    for (const view of [{ protocol: 2 }, { hostId: 'c'.repeat(26) }, { ts: 1 }, { hostAppVersion: '0.9.0' }, { visitorAppVersion: '9' }]) {
+      const { host, visitor } = pair(view);
+      expect(() => host.open(visitor.seal(Buffer.from('x'))), JSON.stringify(view)).toThrow(SealError);
+    }
+  });
+
+  test('the signed transcript covers the protocol and both app versions', () => {
+    const f = fieldsFor('x', 'y');
+    for (const over of [{ protocol: 2 }, { hostAppVersion: '2' }, { visitorAppVersion: '2' }]) {
+      expect(handshakeTranscript('visitor', f).equals(handshakeTranscript('visitor', { ...f, ...over }))).toBe(false);
+    }
+    expect(handshakeTranscript('visitor', f).equals(handshakeTranscript('host', f))).toBe(false);
+  });
+
+  test('the AEAD nonce is the sequence number: no nonce on the wire, distinct ciphertexts per frame', () => {
+    const { host, visitor } = pair();
+    const f0 = visitor.seal(Buffer.from('same'));
+    const f1 = visitor.seal(Buffer.from('same'));
+    expect(Object.keys(f0).sort()).toEqual(['c', 's', 'v']);
+    expect(f0.c).not.toBe(f1.c);
+    expect(host.open(f0).toString()).toBe('same');
+    expect(host.open(f1).toString()).toBe('same');
   });
 
   test('refuses a degenerate peer key', () => {
     const own = generateEphemeral();
-    expect(() => deriveLinkKeys(own.privateKey, Buffer.alloc(32).toString('base64'), 'AA==', 'AA==')).toThrow();
+    expect(() => deriveLinkKeys(own.privateKey, Buffer.alloc(32).toString('base64'), fieldsFor('x', 'y'))).toThrow();
   });
 });

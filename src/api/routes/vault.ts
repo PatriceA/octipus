@@ -22,8 +22,7 @@ const RESERVED_ERROR = 'This secret is reserved for the install itself';
 
 /**
  * The name of credential `id` as `user` addresses it: their own row, or a
- * system row for an admin. Used to refuse the reserved names on the routes
- * that take an id.
+ * system row for an admin (cache invalidation after a rotate).
  */
 async function credentialName(user: { id: string; isAdmin: boolean }, id: string): Promise<string | undefined> {
   const vault = getVault();
@@ -161,8 +160,8 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
         return { error: 'Not authenticated' };
       }
 
-      const name = await credentialName(user, params.id);
-      if (name !== undefined && isReservedSecretName(name)) {
+      // The vault refuses it too; answering 403 here says why.
+      if (await getVault().isReservedSystemCredential(params.id)) {
         set.status = 403;
         return { error: RESERVED_ERROR };
       }
@@ -208,8 +207,8 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
         return { error: 'Not authenticated' };
       }
 
-      const name = await credentialName(user, params.id);
-      if (name !== undefined && isReservedSecretName(name)) {
+      // The vault refuses it too; answering 403 here says why.
+      if (await getVault().isReservedSystemCredential(params.id)) {
         set.status = 403;
         return { error: RESERVED_ERROR };
       }
@@ -244,11 +243,11 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
       const vault = getVault();
 
       // Look up the credential name before rotating (for cache invalidation)
-      const secretName = await credentialName(user, params.id);
-      if (secretName !== undefined && isReservedSecretName(secretName)) {
+      if (await vault.isReservedSystemCredential(params.id)) {
         set.status = 403;
         return { error: RESERVED_ERROR };
       }
+      const secretName = await credentialName(user, params.id);
 
       let rotated = await vault.rotate(user.id, params.id, body.value);
       if (!rotated && user.isAdmin) {

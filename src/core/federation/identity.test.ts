@@ -101,7 +101,7 @@ describe('instance identity', () => {
     const { getVault } = await import('@/security/vault');
     const vault = getVault();
     const before = await identityRows();
-    const read = vi.spyOn(vault, 'getSystemSecretStrict').mockRejectedValue(new Error('connection terminated'));
+    const read = vi.spyOn(vault, 'getReservedSystemSecret').mockRejectedValue(new Error('connection terminated'));
     const create = vi.spyOn(vault, 'createSystemSecretOnce');
     const { getInstanceIdentity } = await import('./identity');
     await expect(getInstanceIdentity()).rejects.toThrow('connection terminated');
@@ -112,12 +112,14 @@ describe('instance identity', () => {
     expect(await identityRows()).toEqual(before);
   });
 
-  test('the lenient read reports a vault error as absent; the strict one throws', async () => {
+  test('the lenient read reports a vault error as absent; the reserved one throws', async () => {
     const { getVault } = await import('@/security/vault');
     const vault = getVault();
-    vi.spyOn(vault, 'getByName').mockRejectedValue(new Error('db down'));
-    expect(await vault.getSystemSecret(NAME)).toBeNull();
-    await expect(vault.getSystemSecretStrict(NAME)).rejects.toThrow('db down');
+    // biome-ignore lint/suspicious/noExplicitAny: the private reader both go through
+    vi.spyOn(vault as any, 'readByName').mockRejectedValue(new Error('db down'));
+    expect(await vault.getSystemSecret('some_api_key')).toBeNull();
+    await expect(vault.getReservedSystemSecret(NAME)).rejects.toThrow('db down');
+    await expect(vault.getReservedSystemSecret('some_api_key')).rejects.toThrow(/not a reserved/);
   });
 });
 

@@ -321,6 +321,7 @@ export class Vault {
     const scope = options.scope ?? inferScope(userId);
     // Space secrets are written by the space access layer only (§9.5).
     if (scope === 'space') throw new Error('Space secrets are stored through the space access layer');
+    if (scope === 'system') refuseReserved(name);
     const workspaceId = scope === 'workspace' ? (options.workspaceId ?? null) : null;
     const dek = dekFor({ scope, userId, workspaceId });
     const encrypted = encrypt(trimSecret(value), dek);
@@ -379,6 +380,7 @@ export class Vault {
     if (!entry[0]) {
       return null;
     }
+    if (scope === 'system') refuseReserved(entry[0].name);
     return this.readEntry(userId, entry[0]);
   }
 
@@ -457,6 +459,16 @@ export class Vault {
     name: string,
     opts?: { workspaceId?: string | null },
   ): Promise<string | null> {
+    if (inferScope(userId) === 'system') refuseReserved(name);
+    return this.readByName(userId, name, opts);
+  }
+
+  /** `getByName` without the reserved-name refusal: the internal readers only. */
+  private async readByName(
+    userId: string,
+    name: string,
+    opts?: { workspaceId?: string | null },
+  ): Promise<string | null> {
     const scope = inferScope(userId);
     const workspaceId = opts?.workspaceId ?? null;
     // Broadened scope filter when caller supplies a workspace
@@ -530,7 +542,7 @@ export class Vault {
         eq(vault.isActive, true),
       ));
 
-    return entries;
+    return scope === 'system' ? entries.filter((e) => !isReservedSecretName(e.name)) : entries;
   }
 
   /**
@@ -549,6 +561,7 @@ export class Vault {
       metadata?: Record<string, unknown>;
     }
   ): Promise<VaultEntry | null> {
+    await this.refuseReservedId(userId, credentialId);
     const updateData: Partial<NewVaultEntry> = {};
 
     if (updates.value) {
@@ -593,6 +606,7 @@ export class Vault {
    * Delete (deactivate) a credential
    */
   async delete(userId: string, credentialId: string): Promise<boolean> {
+    await this.refuseReservedId(userId, credentialId);
     const scope = inferScope(userId);
     const result = await this.db
       .update(vault)
@@ -638,6 +652,7 @@ export class Vault {
     if (!entry[0]) {
       return false;
     }
+    if (scope === 'system' && isReservedSecretName(entry[0].name)) return false;
 
     // Check expiration
     if (entry[0].expiresAt && entry[0].expiresAt < new Date()) {
@@ -668,6 +683,7 @@ export class Vault {
     options: { toolId?: string; agentId?: string }
   ): Promise<boolean> {
     const scope = inferScope(userId);
+    if (scope === 'system' && isReservedSecretName(name)) return false;
     const entry = await this.db
       .select()
       .from(vault)
@@ -690,6 +706,7 @@ export class Vault {
    * Rotate a credential value
    */
   async rotate(userId: string, credentialId: string, newValue: string): Promise<boolean> {
+    await this.refuseReservedId(userId, credentialId);
     const scope = inferScope(userId);
     const dek = dekFor({ scope, userId, workspaceId: null });
     const encrypted = encrypt(newValue, dek);
@@ -740,15 +757,39 @@ export class Vault {
   }
 
   /**
-   * A system-level secret that tells **absent** apart from **error**: null
-   * only when no active system row has that name. A database or decryption
-   * failure throws instead of reading as "not set". `getSystemSecret` maps
-   * both to null, which is fine for an optional API key and wrong for a
-   * secret whose absence makes the caller mint a new one (the federation
-   * identity, docs/plans/federation-spec.md §4.1).
+   * A reserved system secret (`RESERVED_SECRET_NAMES`), the one read that
+   * reaches them. It tells **absent** apart from **error**: null only when no
+   * active system row has that name; a database or decryption failure throws
+   * instead of reading as "not set". `getSystemSecret` maps both to null,
+   * which is fine for an optional API key and wrong for a secret whose
+   * absence makes the caller mint a new one (the federation identity,
+   * docs/plans/federation-spec.md §4.1).
    */
-  async getSystemSecretStrict(name: string): Promise<string | null> {
-    return this.getByName('system', name);
+  async getReservedSystemSecret(name: string): Promise<string | null> {
+    if (!isReservedSecretName(name)) throw new Error(`${name} is not a reserved system secret`);
+    return this.readByName('system', name);
+  }
+
+  /** Whether `credentialId` is a reserved system row (the admin routes refuse it). */
+  async isReservedSystemCredential(credentialId: string): Promise<boolean> {
+    const name = await this.systemRowName(credentialId);
+    return name !== undefined && isReservedSecretName(name);
+  }
+
+  /** Throw when `userId` addresses a reserved system row by id. */
+  private async refuseReservedId(userId: string, credentialId: string): Promise<void> {
+    if (inferScope(userId) !== 'system') return;
+    const name = await this.systemRowName(credentialId);
+    if (name !== undefined) refuseReserved(name);
+  }
+
+  private async systemRowName(credentialId: string): Promise<string | undefined> {
+    const [row] = await this.db
+      .select({ name: vault.name })
+      .from(vault)
+      .where(and(eq(vault.id, credentialId), eq(vault.userId, 'system'), eq(vault.scope, 'system')))
+      .limit(1);
+    return row?.name;
   }
 
   /**
@@ -814,6 +855,7 @@ export class Vault {
     description?: string;
     tags?: string[];
   }): Promise<VaultEntry> {
+    refuseReserved(name);
     // Check if it already exists (system-scoped only)
     const existing = await this.db
       .select()
@@ -892,15 +934,32 @@ export class Vault {
 }
 
 /**
- * System secrets only the install itself reads or writes. The admin vault
- * routes refuse to list, read, write, rotate or delete them: an admin who
- * replaced or deleted the federation identity would silently become another
+ * System secrets only the install itself reads or writes. The vault enforces
+ * it: `getByName`, `get`, `store`, `setSystemSecret`, `update`, `rotate` and
+ * `delete` throw `ReservedSecretError` for a system row of one of these
+ * names, `list` leaves them out and `canAccess*` deny them; only
+ * `getReservedSystemSecret` and `createSystemSecretOnce` reach them. Any
+ * admin-supplied vault reference (a model's `apiKeyRef`, a SCIM token ref)
+ * resolves through `getByName`, so none can read the federation private key,
+ * and an admin who replaced or deleted it would silently become another
  * install to every peer that pinned this one (federation-spec §4.1).
  */
 export const RESERVED_SECRET_NAMES: ReadonlySet<string> = new Set(['federation.identity']);
 
 export function isReservedSecretName(name: string): boolean {
   return RESERVED_SECRET_NAMES.has(name);
+}
+
+/** A reserved system secret addressed through an ordinary vault method. */
+export class ReservedSecretError extends Error {
+  constructor(readonly secretName: string) {
+    super(`${secretName} is reserved for the install itself`);
+    this.name = 'ReservedSecretError';
+  }
+}
+
+function refuseReserved(name: string): void {
+  if (isReservedSecretName(name)) throw new ReservedSecretError(name);
 }
 
 // Singleton instance

@@ -4,25 +4,30 @@
  * The handshake binds an ephemeral X25519 exchange into both signatures, and
  * both ends derive
  *
- *     HKDF-SHA256(X25519(x, x'), salt = nA ‖ nB, info = "octipus-fed-1") → 64 bytes
+ *     HKDF-SHA256(X25519(x, x'), salt = nA ‖ nB,
+ *                 info = "octipus-fed-1" ‖ SHA-256(T("keys", …handshake fields))) → 64 bytes
  *
  * split into two direction keys: the first 32 bytes seal host → visitor, the
- * last 32 visitor → host. Every frame after `welcome` is ChaCha20-Poly1305
- * under its direction's key with a fresh random 96-bit nonce; the sequence
- * number (from 0, +1 per frame, per direction) is bound in the associated
- * data, so a frame that is tampered with, replayed, reordered or reflected
- * back at its sender fails to open. That holds over TLS too: frames stay
- * integrity-protected through a TLS-terminating proxy.
+ * last 32 visitor → host. The transcript hash in `info` ties the keys to
+ * everything both sides signed (protocol, ids, ephemeral keys, nonces, ts and
+ * both app versions), so keys from a handshake that differs in any field do
+ * not match. Every frame after `welcome` is ChaCha20-Poly1305 under its
+ * direction's key; the 96-bit nonce is the frame's sequence number (from 0,
+ * +1 per frame, per direction), which never repeats under one key because
+ * each direction has its own fresh key per link. The sequence number is also
+ * bound in the associated data, so a frame that is tampered with, replayed,
+ * reordered or reflected back at its sender fails to open. That holds over
+ * TLS too: frames stay integrity-protected through a TLS-terminating proxy.
  */
 import {
   createCipheriv,
   createDecipheriv,
+  createHash,
   createPublicKey,
   diffieHellman,
   generateKeyPairSync,
   hkdfSync,
   type KeyObject,
-  randomBytes,
 } from 'node:crypto';
 import { PROTOCOL_VERSION, type SealedFrame } from './protocol';
 
@@ -60,22 +65,40 @@ export function transcript(fields: readonly (string | number)[]): Buffer {
   return Buffer.concat(parts);
 }
 
-/**
- * What each side signs (§5.3): `T(role, nA, nB, A, B, xA_pub, xB_pub, ts)`.
- * The role label keeps the visitor's signature from being replayed as the
- * host's; both ephemeral keys inside it are what makes a relay that swaps
- * them fail.
- */
-export function handshakeTranscript(signer: LinkRole, f: {
+/** Everything a handshake binds: both hellos' fields that the two sides share. */
+export interface HandshakeFields {
+  protocol: number;
   nonceA: string;
   nonceB: string;
   hostId: string;
   visitorId: string;
   hostEph: string;
   visitorEph: string;
+  /** The visitor hello's timestamp. */
   ts: number;
-}): Buffer {
-  return transcript([signer, f.nonceA, f.nonceB, f.hostId, f.visitorId, f.hostEph, f.visitorEph, f.ts]);
+  hostAppVersion: string;
+  visitorAppVersion: string;
+}
+
+function handshakeFieldList(f: HandshakeFields): (string | number)[] {
+  return [f.protocol, f.nonceA, f.nonceB, f.hostId, f.visitorId, f.hostEph, f.visitorEph, f.ts, f.hostAppVersion, f.visitorAppVersion];
+}
+
+/**
+ * What each side signs (§5.3):
+ * `T(role, protocol, nA, nB, A, B, xA_pub, xB_pub, ts, appVersionA, appVersionB)`.
+ * The role label keeps the visitor's signature from being replayed as the
+ * host's; both ephemeral keys inside it are what makes a relay that swaps
+ * them fail; the protocol and app versions cannot be rewritten in transit
+ * (a downgrade or a forged version string).
+ */
+export function handshakeTranscript(signer: LinkRole, f: HandshakeFields): Buffer {
+  return transcript([signer, ...handshakeFieldList(f)]);
+}
+
+/** SHA-256 of the role-free transcript, mixed into the key derivation's `info`. */
+export function handshakeDigest(f: HandshakeFields): Buffer {
+  return createHash('sha256').update(transcript(['keys', ...handshakeFieldList(f)])).digest();
 }
 
 export interface EphemeralKey {
@@ -100,9 +123,10 @@ export interface LinkKeys {
 
 /**
  * Derive both direction keys from our ephemeral private key, the peer's raw
- * ephemeral public key and the two handshake nonces (base64, as on the wire).
+ * ephemeral public key and the handshake (its two nonces, base64 as on the
+ * wire, are the salt; the hash of its transcript is in `info`).
  */
-export function deriveLinkKeys(own: KeyObject, peerEphRawB64: string, nonceA: string, nonceB: string): LinkKeys {
+export function deriveLinkKeys(own: KeyObject, peerEphRawB64: string, f: HandshakeFields): LinkKeys {
   const peerRaw = Buffer.from(peerEphRawB64, 'base64');
   if (peerRaw.length !== 32) throw new SealError('peer ephemeral key must be 32 bytes');
   const peer = createPublicKey({ key: Buffer.concat([X25519_SPKI_PREFIX, peerRaw]), format: 'der', type: 'spki' });
@@ -110,9 +134,21 @@ export function deriveLinkKeys(own: KeyObject, peerEphRawB64: string, nonceA: st
   // A low-order peer point yields the all-zero secret: refuse it rather than
   // derive keys an attacker can compute too.
   if (shared.every((b) => b === 0)) throw new SealError('degenerate X25519 shared secret');
-  const salt = Buffer.concat([Buffer.from(nonceA, 'base64'), Buffer.from(nonceB, 'base64')]);
-  const okm = Buffer.from(hkdfSync('sha256', shared, salt, HKDF_INFO, KEY_BYTES * 2));
+  const salt = Buffer.concat([Buffer.from(f.nonceA, 'base64'), Buffer.from(f.nonceB, 'base64')]);
+  const info = Buffer.concat([Buffer.from(HKDF_INFO, 'utf8'), handshakeDigest(f)]);
+  const okm = Buffer.from(hkdfSync('sha256', shared, salt, info, KEY_BYTES * 2));
   return { hostToVisitor: okm.subarray(0, KEY_BYTES), visitorToHost: okm.subarray(KEY_BYTES) };
+}
+
+/**
+ * The AEAD nonce of frame `seq`: four zero bytes, then `seq` as a 64-bit
+ * big-endian integer. Unique per key because a key seals one direction of one
+ * link and `seq` only grows.
+ */
+function nonceFor(seq: number): Buffer {
+  const nonce = Buffer.alloc(NONCE_BYTES);
+  nonce.writeBigUInt64BE(BigInt(seq), NONCE_BYTES - 8);
+  return nonce;
 }
 
 /** Associated data of frame `seq` in direction `from`. */
@@ -142,11 +178,10 @@ export class SealedChannel {
   /** Seal `plaintext` as the next frame in our direction. */
   seal(plaintext: Buffer): SealedFrame {
     const s = this.sendSeq++;
-    const nonce = randomBytes(NONCE_BYTES);
-    const cipher = createCipheriv('chacha20-poly1305', this.sendKey, nonce, { authTagLength: TAG_BYTES });
+    const cipher = createCipheriv('chacha20-poly1305', this.sendKey, nonceFor(s), { authTagLength: TAG_BYTES });
     cipher.setAAD(aad(this.role, s), { plaintextLength: plaintext.length });
     const c = Buffer.concat([cipher.update(plaintext), cipher.final(), cipher.getAuthTag()]);
-    return { v: PROTOCOL_VERSION, s, n: nonce.toString('base64'), c: c.toString('base64') };
+    return { v: PROTOCOL_VERSION, s, c: c.toString('base64') };
   }
 
   /**
@@ -158,12 +193,11 @@ export class SealedChannel {
     if (frame.s !== this.recvSeq) {
       throw new SealError(`out-of-order frame: expected ${this.recvSeq}, got ${frame.s}`);
     }
-    const nonce = Buffer.from(frame.n, 'base64');
     const sealed = Buffer.from(frame.c, 'base64');
-    if (nonce.length !== NONCE_BYTES || sealed.length < TAG_BYTES) throw new SealError('malformed sealed frame');
+    if (sealed.length < TAG_BYTES) throw new SealError('malformed sealed frame');
     const body = sealed.subarray(0, sealed.length - TAG_BYTES);
     const tag = sealed.subarray(sealed.length - TAG_BYTES);
-    const decipher = createDecipheriv('chacha20-poly1305', this.recvKey, nonce, { authTagLength: TAG_BYTES });
+    const decipher = createDecipheriv('chacha20-poly1305', this.recvKey, nonceFor(frame.s), { authTagLength: TAG_BYTES });
     decipher.setAAD(aad(this.peer, frame.s), { plaintextLength: body.length });
     decipher.setAuthTag(tag);
     let plaintext: Buffer;

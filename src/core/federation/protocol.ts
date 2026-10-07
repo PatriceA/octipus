@@ -7,7 +7,7 @@
  *    `hello`s and the `welcome`. Nothing else is accepted before the link is
  *    sealed.
  *  - After `welcome`, every frame on the wire is a sealed envelope
- *    `{ v: 1, s, n, c }` (seal.ts). Its plaintext is a request, a result or a
+ *    `{ v: 1, s, c }` (seal.ts). Its plaintext is a request, a result or a
  *    host event.
  *
  * Everything is parsed strictly: an extra field is a malformed frame, and a
@@ -34,6 +34,30 @@ export const CLOSE = {
 } as const;
 
 export type CloseCode = (typeof CLOSE)[keyof typeof CLOSE];
+
+/** A WebSocket close reason is at most 123 bytes of UTF-8 (RFC 6455 §5.5); `ws` throws past that. */
+const MAX_CLOSE_REASON_BYTES = 123;
+
+/** `reason` cut to fit a close frame, never splitting a character. */
+export function closeReason(reason: string): string {
+  if (Buffer.byteLength(reason, 'utf8') <= MAX_CLOSE_REASON_BYTES) return reason;
+  let out = '';
+  let bytes = 0;
+  for (const ch of reason) {
+    const n = Buffer.byteLength(ch, 'utf8');
+    if (bytes + n > MAX_CLOSE_REASON_BYTES) break;
+    out += ch;
+    bytes += n;
+  }
+  return out;
+}
+
+/**
+ * Largest plain frame before `welcome`: a hello is well under 1 KiB, so a
+ * bigger one is refused before it is parsed (`maxPayload` alone would let an
+ * unauthenticated peer make us JSON-parse a full sealed-frame budget).
+ */
+export const MAX_HANDSHAKE_FRAME_BYTES = 4096;
 
 /** Base64 of exactly `bytes` bytes. */
 function b64Bytes(bytes: number) {
@@ -84,11 +108,13 @@ export const plainFrameSchema = z.object({
 }).strict();
 export type PlainFrame = z.infer<typeof plainFrameSchema>;
 
-/** A sealed frame on the wire (seal.ts): sequence number, AEAD nonce, ciphertext with tag. */
+/**
+ * A sealed frame on the wire (seal.ts): sequence number and ciphertext with
+ * tag. The AEAD nonce is derived from the sequence number, so it is not sent.
+ */
 export const sealedFrameSchema = z.object({
   v: z.literal(PROTOCOL_VERSION),
   s: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-  n: b64Bytes(12),
   c: z.string().min(1),
 }).strict();
 export type SealedFrame = z.infer<typeof sealedFrameSchema>;

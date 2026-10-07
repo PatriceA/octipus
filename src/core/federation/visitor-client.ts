@@ -7,14 +7,24 @@
  * a host retained — a local user with one of its spaces open, an agent turn
  * that needs it — a dropped link is redialled with exponential backoff (1 s
  * up to 60 s, with jitter); every redial goes through the dialer's checks
- * again. Turning visiting off closes every outbound link of the pool.
+ * again. The backoff starts over only once a link stayed up 30 s, so a host
+ * that accepts and drops at once is not redialled in a tight loop.
+ *
+ * A host that refuses us outright — blocked or federation off there (4403),
+ * another protocol version (4409) — is not redialled: retrying cannot help.
+ * The next explicit `retain` or request to it tries again.
+ *
+ * Turning visiting off closes every outbound link of the pool and stops the
+ * redials; the retainers stay counted, so turning it back on redials every
+ * host still retained. A dial that completes after visiting went off (or
+ * after `closeAll`) is closed instead of handed out.
  *
  * Frames name the visitor (`as`, the stored member handle) and the local
  * client connection (`conn`); the slices that build the visitor operations
  * fill them. Host events reach the callbacks subscribed for that host.
  */
 import { logger } from '@/utils/logger';
-import { type DialPeerOptions, dialPeer } from './dialer';
+import { DialError, type DialPeerOptions, dialPeer } from './dialer';
 import { getInstanceIdentity, type InstanceIdentity } from './identity';
 import { LinkRequestError, type PeerLink } from './link';
 import { federationVisits, onFederationModeChanged } from './mode';
@@ -35,6 +45,11 @@ export type HostEventListener = (event: LinkEvent) => void;
 
 export const RECONNECT_BASE_MS = 1_000;
 export const RECONNECT_MAX_MS = 60_000;
+/** A link up this long counts as stable: the backoff starts over after it drops. */
+export const STABLE_LINK_MS = 30_000;
+
+/** Close codes after which redialling cannot help: blocked or federation off (4403), another protocol (4409). */
+const FINAL_CLOSE_CODES: ReadonlySet<number> = new Set([CLOSE.forbidden, CLOSE.protocol]);
 
 /**
  * Delay before redial number `attempt` (0-based): exponential from `baseMs`,
@@ -54,6 +69,12 @@ interface Entry {
   attempt: number;
   retry: NodeJS.Timeout | null;
   listeners: Set<HostEventListener>;
+  /** When the current link came up. */
+  upSince: number;
+  /** The host refused us for good (4403, 4409): no redial until an explicit retain or request. */
+  refused: boolean;
+  /** `closeAll` stopped the redials: none until visiting comes back on or an explicit retain or request. */
+  halted: boolean;
 }
 
 export interface VisitorLinkPoolOptions {
@@ -61,8 +82,8 @@ export interface VisitorLinkPoolOptions {
   identity?: () => Promise<InstanceIdentity>;
   /** Dialer options other than the identity and callbacks (tests: lanCidrs, resolver, heartbeat). */
   dial?: Omit<Partial<DialPeerOptions>, 'identity' | 'onRequest' | 'onEvent' | 'onClose'>;
-  /** Backoff bounds for redials. */
-  reconnect?: { baseMs: number; maxMs: number };
+  /** Backoff bounds for redials, and how long a link must stay up to reset them. */
+  reconnect?: { baseMs: number; maxMs: number; stableMs?: number };
   /** Link up/down, per host. */
   onLinkState?: (hostInstanceId: string, state: LinkState) => void;
 }
@@ -71,16 +92,21 @@ export class VisitorLinkPool {
   private readonly entries = new Map<string, Entry>();
   private readonly opts: VisitorLinkPoolOptions;
   private readonly stopFollowingMode: () => void;
+  /** Bumped by `closeAll`: a dial started before it is closed when it completes. */
+  private generation = 0;
+  private disposed = false;
 
   constructor(opts: VisitorLinkPoolOptions = {}) {
     this.opts = opts;
-    this.stopFollowingMode = onFederationModeChanged((next) => {
+    this.stopFollowingMode = onFederationModeChanged((next, previous) => {
       if (!federationVisits(next)) this.closeAll(CLOSE.forbidden, 'federation off');
+      else if (!federationVisits(previous)) this.resume();
     });
   }
 
   /** Close every link and stop following mode changes. */
   dispose(): void {
+    this.disposed = true;
     this.stopFollowingMode();
     this.closeAll(CLOSE.normal, 'shutting down');
   }
@@ -93,13 +119,11 @@ export class VisitorLinkPool {
 
   /** The open link to `host`, dialling it when there is none. */
   link(host: HostAddress): Promise<PeerLink> {
-    if (!federationVisits()) {
-      return Promise.reject(new LinkRequestError('federation_off', 'This install does not visit spaces on other installs (federation.mode)'));
-    }
     const entry = this.entry(host);
-    if (entry.link && !entry.link.closed) return Promise.resolve(entry.link);
-    entry.connecting ??= this.dial(entry).finally(() => { entry.connecting = null; });
-    return entry.connecting;
+    // An explicit request tries again even after a refusal or `closeAll`.
+    entry.refused = false;
+    entry.halted = false;
+    return this.connect(entry);
   }
 
   /** Send a request to `host` and wait for its result. Rejects with `LinkRequestError` or a dial error. */
@@ -127,6 +151,8 @@ export class VisitorLinkPool {
   retain(host: HostAddress): () => void {
     const entry = this.entry(host);
     entry.retainers++;
+    entry.refused = false;
+    entry.halted = false;
     if (!entry.link || entry.link.closed) this.scheduleRedial(entry, 0, true);
     let released = false;
     return () => {
@@ -140,20 +166,51 @@ export class VisitorLinkPool {
     };
   }
 
-  /** Close every link and stop redialling (visiting turned off, shutdown). */
+  /** How many retainers hold `hostInstanceId` (tests, diagnostics). */
+  retainerCount(hostInstanceId: string): number {
+    return this.entries.get(hostInstanceId)?.retainers ?? 0;
+  }
+
+  /**
+   * Close every link and stop redialling (visiting turned off, shutdown).
+   * Retainers stay counted: their holders have not released them, and
+   * `resume` redials what they hold.
+   */
   closeAll(code: number, reason: string): void {
+    this.generation++;
     for (const entry of this.entries.values()) {
-      entry.retainers = 0;
+      entry.halted = true;
       if (entry.retry) clearTimeout(entry.retry);
       entry.retry = null;
       entry.link?.close(code, reason);
     }
   }
 
+  /** Visiting came back on: redial every host still retained. */
+  private resume(): void {
+    if (this.disposed) return;
+    for (const entry of this.entries.values()) {
+      entry.halted = false;
+      if (entry.retainers > 0 && (!entry.link || entry.link.closed)) this.scheduleRedial(entry, 0, true);
+    }
+  }
+
+  private connect(entry: Entry): Promise<PeerLink> {
+    if (!federationVisits() || this.disposed) {
+      return Promise.reject(new LinkRequestError('federation_off', 'This install does not visit spaces on other installs (federation.mode)'));
+    }
+    if (entry.link && !entry.link.closed) return Promise.resolve(entry.link);
+    entry.connecting ??= this.dial(entry).finally(() => { entry.connecting = null; });
+    return entry.connecting;
+  }
+
   private entry(host: HostAddress): Entry {
     let entry = this.entries.get(host.instanceId);
     if (!entry) {
-      entry = { host, link: null, connecting: null, retainers: 0, attempt: 0, retry: null, listeners: new Set() };
+      entry = {
+        host, link: null, connecting: null, retainers: 0, attempt: 0, retry: null, listeners: new Set(),
+        upSince: 0, refused: false, halted: false,
+      };
       this.entries.set(host.instanceId, entry);
     } else if (host.url) {
       entry.host = host;
@@ -163,45 +220,72 @@ export class VisitorLinkPool {
 
   private async dial(entry: Entry): Promise<PeerLink> {
     if (!entry.host.url) throw new LinkRequestError('unknown_host', `No address known for ${entry.host.instanceId}`);
+    const generation = this.generation;
     const identity = await (this.opts.identity ?? getInstanceIdentity)();
-    const link = await dialPeer(entry.host.url, entry.host.instanceId, {
-      ...this.opts.dial,
-      identity,
-      onRequest: answerHost,
-      onEvent: (event) => {
-        for (const listener of entry.listeners) {
-          try {
-            listener(event);
-          } catch (err) {
-            log.error({ err, host: entry.host.instanceId }, 'Federation event listener failed');
+    let link: PeerLink;
+    try {
+      link = await dialPeer(entry.host.url, entry.host.instanceId, {
+        ...this.opts.dial,
+        identity,
+        onRequest: answerHost,
+        onEvent: (event) => {
+          for (const listener of entry.listeners) {
+            try {
+              listener(event);
+            } catch (err) {
+              log.error({ err, host: entry.host.instanceId }, 'Federation event listener failed');
+            }
           }
-        }
-      },
-      onClose: (code, reason, closed) => {
-        if (entry.link !== closed) return;
-        entry.link = null;
-        this.opts.onLinkState?.(entry.host.instanceId, 'down');
-        log.info({ host: entry.host.instanceId, code, reason }, 'Federation outbound link down');
-        if (entry.retainers > 0 && federationVisits()) this.scheduleRedial(entry, 0);
-      },
-    });
+        },
+        onClose: (code, reason, closed) => this.linkClosed(entry, closed, code, reason),
+      });
+    } catch (err) {
+      if (err instanceof DialError && err.closeCode !== undefined && FINAL_CLOSE_CODES.has(err.closeCode)) {
+        entry.refused = true;
+        log.warn({ host: entry.host.instanceId, code: err.closeCode }, 'Federation host refused the link: not redialling until asked again');
+      }
+      throw err;
+    }
+    // Visiting went off, or `closeAll` ran, while this dial was in flight:
+    // the link is not wanted any more.
+    if (generation !== this.generation || !federationVisits() || this.disposed) {
+      link.close(CLOSE.normal, 'no longer wanted');
+      throw new LinkRequestError('federation_off', 'Visiting was turned off while the link was opening');
+    }
     entry.link = link;
-    entry.attempt = 0;
+    entry.upSince = Date.now();
     this.opts.onLinkState?.(entry.host.instanceId, 'up');
     log.info({ host: entry.host.instanceId }, 'Federation outbound link up');
     return link;
   }
 
+  private linkClosed(entry: Entry, closed: PeerLink, code: number, reason: string): void {
+    if (entry.link !== closed) return;
+    entry.link = null;
+    this.opts.onLinkState?.(entry.host.instanceId, 'down');
+    log.info({ host: entry.host.instanceId, code, reason }, 'Federation outbound link down');
+    // Closed by `closeAll` (whose own code may be 4403): no refusal by the host.
+    if (entry.halted) return;
+    if (FINAL_CLOSE_CODES.has(code)) {
+      entry.refused = true;
+      return;
+    }
+    const stableMs = this.opts.reconnect?.stableMs ?? STABLE_LINK_MS;
+    entry.attempt = Date.now() - entry.upSince >= stableMs ? 0 : entry.attempt + 1;
+    if (entry.retainers > 0 && federationVisits()) this.scheduleRedial(entry, entry.attempt);
+  }
+
   /** Dial again after the backoff for `attempt` (now, for a retainer's first dial). */
   private scheduleRedial(entry: Entry, attempt: number, now = false): void {
-    if (entry.retry || entry.retainers <= 0) return;
+    if (entry.retry || entry.retainers <= 0 || entry.refused || entry.halted || this.disposed) return;
     const backoff = this.opts.reconnect ?? { baseMs: RECONNECT_BASE_MS, maxMs: RECONNECT_MAX_MS };
     const delay = now ? 0 : reconnectDelay(attempt, Math.random, backoff.baseMs, backoff.maxMs);
     entry.retry = setTimeout(() => {
       entry.retry = null;
-      if (entry.retainers <= 0 || !federationVisits()) return;
+      if (entry.retainers <= 0 || entry.refused || entry.halted || !federationVisits()) return;
       if (entry.link && !entry.link.closed) return;
-      this.link(entry.host).catch((err: unknown) => {
+      this.connect(entry).catch((err: unknown) => {
+        if (entry.refused || entry.halted) return;
         entry.attempt = attempt + 1;
         log.warn({ err, host: entry.host.instanceId, attempt: entry.attempt }, 'Federation redial failed');
         this.scheduleRedial(entry, entry.attempt);
