@@ -9,6 +9,7 @@ import { addPlanFeedback, type WorkPlanState } from '@/shared/work-plan';
 
 const fixture = vi.hoisted(() => ({ script: '', dir: '', plan: { revision: 0, current: null, previous: [] } as WorkPlanState,
   check: vi.fn(), execute: vi.fn(), cancel: vi.fn(), readFailure: false, audit: vi.fn(), status: vi.fn(), requestApproval: vi.fn(),
+  wait: vi.fn(), waitListener: undefined as undefined | ((agentId: string, waiting: boolean) => void),
   sessionWorkspaceId: null as string | null }));
 const commentary = vi.hoisted(() => vi.fn().mockResolvedValue({ sent: true }));
 vi.mock('./agent/service', () => ({ getAgentService: () => ({ sendStatusUpdate: commentary }) }));
@@ -54,7 +55,7 @@ vi.mock('@/db/repositories/message-repository', () => ({ messageRepository: { cr
 vi.mock('@/db/repositories/agent-repository', () => ({ agentRepository: { updateStatus: fixture.status } }));
 vi.mock('@/db/repositories/audit-repository', () => ({ auditRepository: new Proxy({}, { get: (_target, property) => property === 'logAgentCompleted' ? fixture.audit : async () => {} }) }));
 vi.mock('@/security/permissions', () => ({ getPermissionManager: () => ({ check: fixture.check, cancelWaits: fixture.cancel,
-  requestApproval: fixture.requestApproval, waitForApproval: async () => false, onWaitStateChange: () => () => {} }) }));
+  requestApproval: fixture.requestApproval, waitForApproval: fixture.wait, onWaitStateChange: (listener: typeof fixture.waitListener) => { fixture.waitListener = listener; return () => { fixture.waitListener = undefined; }; } }) }));
 vi.mock('@/hooks/manager', () => ({ getHookManager: () => ({ triggerToolHooks: async () => ({ decision: 'allow' }) }) }));
 // A space run builds its tool home from the space's GitHub connection and the
 // member's name; this lane has no database, so both read as absent.
@@ -68,6 +69,8 @@ beforeEach(() => {
   fixture.plan = { revision: 0, current: null, previous: [] };
   fixture.check.mockReset().mockImplementation(async (_user: string, tool: string) => ({ level: tool === 'denied' ? 'DENY' : 'ALLOW' }));
   fixture.execute.mockReset();
+  fixture.cancel.mockReset();
+  fixture.wait.mockReset().mockResolvedValue(false);
   fixture.requestApproval.mockReset().mockResolvedValue('approval');
   fixture.readFailure = false;
   fixture.audit.mockReset().mockResolvedValue(undefined);
@@ -296,7 +299,7 @@ it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('guidance after the last bridge call g
   expect(worker.getStatus()).toBe('completed');
 });
 
-it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('late guidance with no turn budget keeps the result and reports what was not applied', async () => {
+it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('late guidance receives turn headroom and is not lost at the old budget limit', async () => {
   writeFileSync(fixture.script, lateGuidanceScript);
   const worker = new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own',  id: 'a', sessionId: 's', userId: 'u', model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     { maxIterations: 1, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
@@ -304,15 +307,14 @@ it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('late guidance with no turn budget kee
   worker.onEvent(event => { if (event.type === 'thought') thoughts.push(event.data); });
   worker.registerTool({ name: 'sample_write', description: '', parameters: { type: 'object' }, execute: async () => {
     fixture.execute();
-    setTimeout(() => worker.steer({ role: 'user', content: 'Also check labels', timestamp: new Date() }), 100);
+    if (fixture.execute.mock.calls.length === 1) setTimeout(() => worker.steer({ role: 'user', content: 'Also check labels', timestamp: new Date() }), 100);
     return { written: true };
   } });
   const result = await worker.run('sample');
-  expect(fixture.execute).toHaveBeenCalledTimes(1);
+  expect(fixture.execute).toHaveBeenCalledTimes(2);
   expect(result).toContain('written');
-  expect(result).toContain('[Octipus] 1 guidance/feedback item arrived');
-  expect(result).toContain('turn budget is exhausted');
-  expect(thoughts).toContainEqual(expect.objectContaining({ type: 'guidance_pending', count: 1 }));
+  expect(result).not.toContain('[Octipus]');
+  expect(thoughts).toContainEqual(expect.objectContaining({ type: 'steering_delivered' }));
   expect(worker.getStatus()).toBe('completed');
 });
 
@@ -405,3 +407,90 @@ it.skipIf(!!process.env.OCTIPUS_LIVE_CLI || process.platform === 'win32')('repor
   writeFileSync(fixture.script, `process.kill(process.pid, 'SIGTERM');`);
   await expect(sampleWorker().run('sample')).rejects.toThrow('signal SIGTERM');
 });
+
+
+it.each(['deadline', 'disconnect', 'premature-finish'] as const)('approval %s ends the CLI as failed without running the command', async mode => {
+  const nativeTimeout = globalThis.setTimeout;
+  const timerSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((callback: (...args: any[]) => void, ms?: number, ...args: any[]) =>
+    nativeTimeout(callback, mode === 'deadline' && ms === 300_000 ? 20 : ms, ...args)) as typeof setTimeout);
+  let release!: (approved: boolean) => void;
+  fixture.wait.mockImplementation(() => new Promise<boolean>(resolve => { release = resolve; }));
+  fixture.cancel.mockImplementation(() => { release?.(false); return 1; });
+  fixture.requestApproval.mockImplementation(async () => { fixture.waitListener?.('a', true); return 'approval'; });
+  fixture.check.mockResolvedValue({ level: 'ASK', route: 'ask_human' });
+  writeFileSync(fixture.script, `
+    const controller = new AbortController();
+    ${mode === 'disconnect' ? 'setTimeout(() => controller.abort(), 500);' : ''}
+    ${mode === 'premature-finish' ? `setTimeout(() => { console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:'done',num_turns:1})); process.exit(0); }, 500);` : ''}
+    await fetch(process.env.OCTIPUS_AGENT_URL + '/call', {method:'POST', signal:controller.signal,
+      headers:{Authorization:'Bearer '+process.env.OCTIPUS_AGENT_KEY},body:JSON.stringify({name:'approval_sample',arguments:{}})}).catch(()=>{});
+    setInterval(()=>{},1000);
+  `);
+  const worker = new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own', id: 'a', sessionId: 's', userId: 'u', root: true, model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+    { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
+  worker.registerTool({ name:'approval_sample', toolId:'sample', description:'', parameters:{type:'object'}, execute:fixture.execute });
+  try {
+    await expect(worker.run('sample')).rejects.toThrow(mode === 'deadline' ? 'Approval was not received within 5 minutes' : mode === 'disconnect' ? 'CLI disconnected while waiting for approval' : /CLI (finished|disconnected) while.*approval/);
+    expect(worker.getStatus()).toBe('failed');
+    expect(fixture.execute).not.toHaveBeenCalled();
+    expect(fixture.cancel).toHaveBeenCalled();
+    expect(fixture.status).not.toHaveBeenCalledWith('a', expect.objectContaining({status:'completed'}));
+  } finally { worker.stop(); timerSpy.mockRestore(); }
+});
+
+ it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('delivers steering over live stdin during native CLI work and observes its acknowledgement', async () => {
+   writeFileSync(fixture.script, `
+     import { createInterface } from 'node:readline';
+     let inputs = 0;
+     for await (const line of createInterface({input: process.stdin})) {
+       const event = JSON.parse(line);
+       if (event.type === 'control_response') {
+         console.log(JSON.stringify({type:'result',subtype:'success',result:'Received: Change root plan; decide about children',num_turns:1}));
+         continue;
+       }
+       if (event.type !== 'user') continue;
+       if (++inputs === 1) {
+         console.log(JSON.stringify({type:'assistant',message:{id:'native-work',content:[{type:'text',text:'Native work started.'},{type:'tool_use',id:'native',name:'Read',input:{}}]}}));
+       } else {
+         console.log(JSON.stringify({type:'result',subtype:'success',result:'Previous turn finished',num_turns:1}));
+         console.log(JSON.stringify(event));
+         console.log(JSON.stringify({type:'control_request',request_id:'after-guidance',request:{subtype:'can_use_tool',tool_name:'Bash',input:{command:'true'}}}));
+       }
+     }
+   `);
+   const worker = sampleWorker();
+   const thoughts: unknown[] = [];
+   let sent = false;
+   worker.onEvent(event => {
+     if (event.type === 'thought') thoughts.push(event.data);
+     if (!sent && event.type === 'action' && (event.data as {toolName?: string}).toolName === 'Read') {
+       sent = true;
+       worker.steer({role:'user',content:'Change root plan; decide about children',timestamp:new Date()});
+     }
+   });
+   expect(await worker.run('sample')).toContain('Received: Change root plan; decide about children');
+   expect(thoughts).toContainEqual(expect.objectContaining({type:'steering_submitted'}));
+   expect(thoughts).toContainEqual(expect.objectContaining({type:'steering_delivered',delivery:'CLI acknowledged input'}));
+ });
+
+ it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('steering interrupts a bridged collect and reaches the root in its response', async () => {
+   writeFileSync(fixture.script, `
+     const r = await fetch(process.env.OCTIPUS_AGENT_URL + '/call', {method:'POST',headers:{Authorization:'Bearer ' + process.env.OCTIPUS_AGENT_KEY},body:JSON.stringify({name:'collect_children',arguments:{}})});
+     console.log(JSON.stringify({type:'result',subtype:'success',result:JSON.stringify(await r.json()),num_turns:1}));
+   `);
+   const worker = sampleWorker();
+   let finish!: (r: import('./swarm/types').ChildResult) => void;
+   worker.registerPendingChild({childId:'child',startedAt:Date.now(),topic:'test',taskBrief:'test',promise:new Promise(resolve => {finish=resolve;})});
+   worker.registerTool({name:'collect_children',description:'',parameters:{type:'object'},execute:async () => {
+     setTimeout(() => worker.steer({role:'user',content:'Root must reconsider scope',timestamp:new Date()}),20);
+     const collected = await worker.collectAllDetached(60_000);
+     expect(worker.pendingDetachedCount()).toBe(1);
+     finish({nodeId:'child',kind:'subagent',status:'ok',output:'child finished normally',durationMs:1,usedTokens:1,spawnedChildren:[]});
+     await worker.collectAllDetached(60_000);
+     return collected;
+   }});
+   const result = await worker.run('sample');
+   expect(result).toContain('interrupted by new guidance');
+   expect(result).toContain('Root must reconsider scope');
+   expect(worker.getStatus()).toBe('completed');
+ });

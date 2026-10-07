@@ -766,7 +766,7 @@ export class CLIArgumentBuilder {
     args.push('--strict-mcp-config');
     if (connection) {
       if (Number.isFinite(connection.maxIterations)) args.push('--max-turns', String(connection.maxIterations));
-      args.push('--input-format', 'stream-json', '--permission-prompt-tool', 'stdio');
+      args.push('--input-format', 'stream-json', '--replay-user-messages', '--permission-prompt-tool', 'stdio');
     }
     if (mcpConfig) {
       args.push('--mcp-config', mcpConfig);

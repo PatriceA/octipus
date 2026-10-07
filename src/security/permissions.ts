@@ -1,3 +1,4 @@
+import { CLI_QUESTION_TOOL, parseCliAnswers } from '@/shared/cli-questions';
 import { and, eq, inArray, type SQL, sql } from 'drizzle-orm';
 import type { AgentContext, PermissionLevel } from '@/core/types';
 import { getDb } from '@/db/postgres';
@@ -623,6 +624,14 @@ export class PermissionManager {
     return (await this.settle(requestId, 'approved', resolvedBy, resolution, resolvedBy)) !== null;
   }
 
+  /** Read an answer only for the originating user after the durable approval. */
+  async getApprovedResolution(requestId: string, userId: string): Promise<string | undefined> {
+    const [request] = await this.db.select({ resolution: permissionRequests.resolution }).from(permissionRequests)
+      .where(and(eq(permissionRequests.id, requestId), eq(permissionRequests.userId, userId),
+        eq(permissionRequests.status, 'approved'))).limit(1);
+    return request?.resolution ?? undefined;
+  }
+
   /**
    * Deny a permission request. Same owner rule as `approve`.
    */
@@ -665,6 +674,12 @@ export class PermissionManager {
       filters.push(sql`(${permissionRequests.expiresAt} IS NULL OR ${permissionRequests.expiresAt} > NOW())`);
     }
     if (owner !== null) filters.push(eq(permissionRequests.userId, owner));
+
+    if (status === 'approved') {
+      const [pending] = await this.db.select().from(permissionRequests).where(and(...filters)).limit(1);
+      if (!pending) return null;
+      if (pending.toolId === CLI_QUESTION_TOOL) parseCliAnswers(pending.context?.toolArguments, resolution);
+    }
 
     const result = await this.db
       .update(permissionRequests)

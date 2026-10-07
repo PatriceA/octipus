@@ -456,6 +456,24 @@ export class ScopedMessageRepo {
     return rows.map((r) => r.m);
   }
 
+  /** Newest page, returned chronologically. The id cursor retains DB timestamp precision. */
+  async findHistoryPage(sessionIds: string[], limit: number, roles?: string[], before?: string): Promise<Message[]> {
+    if (!sessionIds.length) return [];
+    const filters = [inArray(messages.sessionId, sessionIds), ...this.sessionFilter()];
+    if (roles?.length) filters.push(inArray(messages.role, roles as Message['role'][]));
+    if (before) {
+      const cursor = alias(messages, 'history_cursor');
+      const cursorRow = this.db.select({ createdAt: cursor.createdAt, id: cursor.id })
+        .from(cursor).where(and(eq(cursor.id, before), inArray(cursor.sessionId, sessionIds)));
+      filters.push(sql`(${messages.createdAt}, ${messages.id}) < (${cursorRow})`);
+    }
+    const rows = await this.db.select({ m: messages }).from(messages)
+      .innerJoin(sessions, eq(messages.sessionId, sessions.id))
+      .where(and(...filters))
+      .orderBy(desc(messages.createdAt), desc(messages.id)).limit(limit);
+    return rows.map(r => r.m).reverse();
+  }
+
   async countBySessions(sessionIds: string[]): Promise<number> {
     if (sessionIds.length === 0) return 0;
     const rows = await this.db

@@ -215,3 +215,39 @@ describe('session monitor routes', () => {
     expect((await monitorRepository.get(row.id)).status).toBe('cancelled');
   });
 });
+
+
+describe('message history pagination', () => {
+  test('pages backward beyond 100 messages, filtering tools and surviving new arrivals', async () => {
+    const { seedMessage, seedSession } = await import('@/test-helpers/multiuser-fixtures');
+    const { executeRaw } = await import('@/db/postgres');
+    const session = await seedSession({ userId: aliceId, channelId: 'paged-history' });
+    const ids: string[] = [];
+    for (let i = 0; i < 105; i++) {
+      const message = await seedMessage({ sessionId: session.id, role: i % 2 ? 'assistant' : 'user', content: `message ${i}` });
+      ids.push(message.id);
+      // Include timestamp ties so the cursor must use the id as a tiebreaker.
+      await executeRaw(`UPDATE messages SET created_at = '2026-01-01'::timestamptz + interval '${Math.floor(i / 2)} seconds' WHERE id = '${message.id}'`);
+    }
+    await seedMessage({ sessionId: session.id, role: 'tool', content: 'hidden tool' });
+    const url = `/api/sessions/${session.id}/messages?page=true&limit=20&roles=user,assistant,system`;
+    const first = await get(aliceApp, url);
+    expect(first.body.messages).toHaveLength(20);
+    expect(first.body.hasMore).toBe(true);
+    expect(first.body.messages.at(-1).content).toBe('message 104');
+    await seedMessage({ sessionId: session.id, role: 'assistant', content: 'new arrival' });
+    const seen = first.body.messages.map((m: any) => m.id);
+    let cursor = first.body.nextCursor;
+    while (cursor) {
+      const page = await get(aliceApp, `${url}&before=${cursor}`);
+      expect(page.body, JSON.stringify(page.body)).toHaveProperty('messages');
+      expect(page.body.messages.length).toBeLessThanOrEqual(20);
+      seen.push(...page.body.messages.map((m: any) => m.id));
+      cursor = page.body.nextCursor;
+    }
+    expect(seen).toHaveLength(105);
+    expect(new Set(seen)).toEqual(new Set(ids));
+    const forbidden = await get(bobApp, url);
+    expect(forbidden.body).toEqual({ error: 'Session not found' });
+  });
+});

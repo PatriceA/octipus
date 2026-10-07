@@ -6,15 +6,14 @@ import { defineConfig, devices } from '@playwright/test';
  * The specs drive the web app (web/) with every `/api/**` call stubbed at the
  * browser (see tests/web/fixtures/), so no backend, database, or provider keys
  * are needed — just the front-end. `webServer` builds and serves a PRODUCTION
- * bundle on :3007 and Playwright waits for it before the run. See the
+ * bundle on :3017 and Playwright waits for it before the run. See the
  * `webServer` block below for why production, not dev.
  *
  * The unit runner excludes tests/web (see vitest.config.ts); this config is the
  * only thing that runs these specs.
  */
-// WEB_PORT is also what serve.mjs listens on. Override it when an installed
-// Octipus already owns 3007 — otherwise reuseExistingServer tests THAT bundle.
-const PORT = Number(process.env.WEB_PORT || 3007);
+// Tests own their server and output directory: never rebuild the live UI.
+const PORT = Number(process.env.WEB_PORT || 3017);
 const BASE_URL = `http://localhost:${PORT}`;
 
 export default defineConfig({
@@ -36,14 +35,13 @@ export default defineConfig({
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
-    // The built bundle, not the dev server: a dev server compiles lazily (slow,
-    // flaky first hits) and injects overlay elements that break keyboard-focus
-    // assertions. In CI the build is a separate step, so `start` is instant;
-    // locally the `&&` chain builds first.
-    command: process.env.CI ? 'npm run start' : 'npm run build && npm run start',
+    // Build a separate production bundle, including in CI, so tests cannot
+    // remove chunks referenced by tabs connected to the live server.
+    command: 'npm run build && npm run start',
+    env: { WEB_PORT: String(PORT), OCTIPUS_WEB_DIST_DIR: 'dist-test' },
     cwd: 'web',
     url: BASE_URL,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
     timeout: 300_000,
     stdout: 'pipe',
     stderr: 'pipe',

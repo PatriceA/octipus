@@ -24,6 +24,8 @@ export async function startCliToolBridge(options: {
   advertisedTools?: () => ToolHandler[];
   execute: (name: string, args: Record<string, unknown>) => Promise<BridgeResult>;
   active: () => boolean;
+  /** A live call lost its caller; cancel approval waits, never replay the call. */
+  abandoned?: (name: string) => void;
   /** Read-only tools that bypass the per-worker queue (safe to answer while a delegation blocks it). */
   unqueued?: ReadonlySet<string>;
   /** The caller dropped the connection before this tool's result could be sent. */
@@ -40,6 +42,13 @@ export async function startCliToolBridge(options: {
       res.end(JSON.stringify(value));
     };
     const socket = req.socket;
+    let started = false;
+    let settled = false;
+    let toolName: string | undefined;
+    const onClose = () => {
+      if (!res.writableEnded && started && !settled && toolName && !options.unqueued?.has(toolName)) options.abandoned?.(toolName);
+    };
+    res.on('close', onClose);
     try {
     const supplied = Buffer.from(req.headers.authorization ?? '');
     const expected = Buffer.from(`Bearer ${key}`);
@@ -69,7 +78,9 @@ export async function startCliToolBridge(options: {
         input.name = target.name;
         input.arguments = target.arguments;
       }
+      toolName = input.name;
       const run = async () => {
+        if (res.destroyed) throw new BridgeError('Tool caller disconnected before execution');
         if (closed || !options.active()) throw new BridgeError('Agent run is no longer active');
         // Exact membership check before ToolExecutor's fuzzy name recovery.
         if (!options.tools().some(t => t.name === input.name)) {
@@ -78,7 +89,9 @@ export async function startCliToolBridge(options: {
             ? `Tool ${input.name} is blocked for this run after failing the same way repeatedly; use other tools and report the failure`
             : 'Tool is not available to this agent');
         }
-        return options.execute(input.name, input.arguments);
+        started = true;
+        try { return await options.execute(input.name, input.arguments); }
+        finally { settled = true; }
       };
       // ponytail: one queue per worker; unqueued read-only tools keep context reads
       // responsive while an awaited delegation holds the queue. Parallel executor
@@ -99,7 +112,9 @@ export async function startCliToolBridge(options: {
         return;
       }
       agentLogger.error({ err }, 'CLI tool bridge request failed');
-      reply(500, { error: 'Tool call failed' });
+      if (!res.destroyed) reply(500, { error: 'Tool call failed' });
+    } finally {
+      res.removeListener('close', onClose);
     }
   });
   server.requestTimeout = 30_000;

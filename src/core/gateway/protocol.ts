@@ -342,6 +342,7 @@ export const PermissionRespondSchema = z.object({
   type: z.literal('permission.respond'),
   requestId: z.string(),
   approved: z.boolean(),
+  resolution: z.string().optional(),
 });
 
 export const ApprovalRespondSchema = z.object({

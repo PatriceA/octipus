@@ -1,3 +1,4 @@
+import { getConfig } from '@/config';
 import {
   BUDGET_RESERVE_FRACTION,
   BUDGET_WARN_FRACTION,
@@ -12,6 +13,17 @@ import {
  * a child spawns at all. Kept as pure functions (moved verbatim from
  * `spawner.ts`) so they stay unit-testable and free of `SwarmSpawner` state.
  */
+
+/** Snapshot the configured root pool for this turn, shared by spawning and the tree. */
+export function createRootBudget(): NodeBudget {
+  const defaults = getConfig().swarm.levelDefaults.root;
+  return {
+    tokens: { cap: defaults.tokens, used: 0 },
+    wallClockMs: { cap: defaults.wallMs, startedAt: Date.now() },
+    fanOut: { cap: defaults.fanOut, used: 0 },
+    depth: 0,
+  };
+}
 
 /**
  * Minimum child token pool: if parent's remaining tokens drop below this

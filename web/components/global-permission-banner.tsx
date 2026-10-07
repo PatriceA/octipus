@@ -1,5 +1,8 @@
 'use client';
 
+import { CLI_QUESTION_TOOL } from '../../src/shared/cli-questions';
+import { CliQuestionForm } from './cli-question-form';
+
 import { CheckCircle, ChevronDown, ChevronUp, Clock, ListChecks, Shield, Square, XCircle } from 'lucide-react';
 import { useState } from 'react';
 import { type ApprovalRequest, type PermissionRequest, usePermissions } from '@/lib/permission-context';
@@ -32,6 +35,7 @@ export function GlobalPermissionBanner({ inline = false }: { inline?: boolean } 
   }
 
   const totalCount = permissions.length + approvals.length;
+  const ordinaryPermissions = permissions.filter(p => p.skillId !== CLI_QUESTION_TOOL);
 
   // Inline mode (rendered by a page that wants the banner anchored to
   // its own bottom edge, e.g. /chat above the prompt input). Default
@@ -62,12 +66,12 @@ export function GlobalPermissionBanner({ inline = false }: { inline?: boolean } 
                 <span className="uppercase tracking-[0.12em] font-bold">{totalCount} pending</span>
                 {showQueue ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
               </button>
-              {permissions.length > 1 && (
+              {ordinaryPermissions.length > 1 && (
                 <button
-                  onClick={() => permissions.forEach((p) => approvePermission(p.requestId))}
+                  onClick={() => ordinaryPermissions.forEach((p) => approvePermission(p.requestId))}
                   className="text-xs px-2 py-1 rounded-xs border border-primary/50 text-primary hover:bg-primary-container/40 cursor-pointer"
                 >
-                  Allow all {permissions.length}
+                  Allow all {ordinaryPermissions.length}
                 </button>
               )}
             </div>
@@ -83,7 +87,7 @@ export function GlobalPermissionBanner({ inline = false }: { inline?: boolean } 
                       {p.action}
                     </span>
                     <span className="flex items-center gap-1 shrink-0">
-                      <button onClick={() => approvePermission(p.requestId)} className="text-primary hover:opacity-80 cursor-pointer" title="Allow">
+                      <button disabled={p.skillId === CLI_QUESTION_TOOL} onClick={() => approvePermission(p.requestId)} className="text-primary hover:opacity-80 cursor-pointer" title="Allow">
                         <CheckCircle className="w-3.5 h-3.5" />
                       </button>
                       <button onClick={() => denyPermission(p.requestId)} className="text-error hover:opacity-80 cursor-pointer" title="Deny">
@@ -128,14 +132,15 @@ export function GlobalPermissionBanner({ inline = false }: { inline?: boolean } 
         {/* Show permission banner if no approval is pending, or if there's also a permission */}
         {latestPermission && !latestApproval && (
           <PermissionBanner
+            key={latestPermission.requestId}
             permission={latestPermission}
             totalCount={totalCount}
             isExpanded={expandedId === latestPermission.requestId}
             onToggleExpand={() => setExpandedId(
               expandedId === latestPermission.requestId ? null : latestPermission.requestId
             )}
-            onAllow={() => {
-              approvePermission(latestPermission.requestId);
+            onAllow={(resolution) => {
+              approvePermission(latestPermission.requestId, resolution);
               setExpandedId(null);
             }}
             onDeny={() => {
@@ -161,9 +166,15 @@ function PermissionBanner({
   totalCount: number;
   isExpanded: boolean;
   onToggleExpand: () => void;
-  onAllow: () => void;
+  onAllow: (resolution?: string) => void;
   onDeny: () => void;
 }) {
+  if (permission.skillId === CLI_QUESTION_TOOL) return (
+    <div className="mx-4 mb-4 rounded-xs border border-warning/40 bg-surface-container shadow-lg">
+      <CliQuestionForm args={permission.args} onSubmit={onAllow} onCancel={onDeny} />
+    </div>
+  );
+  const isRecovery = permission.skillId === 'action_recovery';
   const argsEntries = permission.args
     ? Object.entries(permission.args).filter(([, v]) => v != null && String(v).length > 0)
     : [];
@@ -178,7 +189,7 @@ function PermissionBanner({
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <span className="text-[12px] font-bold uppercase tracking-[0.12em] text-warning">permission request</span>
+              <span className="text-[12px] font-bold uppercase tracking-[0.12em] text-warning">{isRecovery ? 'Review uncertain outcome' : 'permission request'}</span>
               {totalCount > 1 && (
                 <span className="text-[10px] text-on-surface-variant bg-surface-container-highest border border-outline-variant/60 px-1.5 py-0.5 rounded-xs">
                   +{totalCount - 1} more
@@ -188,13 +199,13 @@ function PermissionBanner({
             <p className="text-sm text-on-surface-variant truncate">
               <span className="font-mono font-medium">{permission.skillId}</span>
               {' \u00B7 '}
-              <span className="font-mono">{permission.action}</span>
+              <span className="font-mono">{isRecovery ? 'Check earlier effects before continuing' : permission.action}</span>
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          {argsEntries.length > 0 && (
+          {!isRecovery && argsEntries.length > 0 && (
             <button
               onClick={onToggleExpand}
               className="flex items-center gap-1 px-2 py-1 text-xs text-on-surface-variant hover:text-on-surface rounded-xs hover:bg-surface-container-highest transition-colors cursor-pointer"
@@ -204,7 +215,7 @@ function PermissionBanner({
             </button>
           )}
           <button
-            onClick={onAllow}
+            onClick={() => onAllow()}
             className="flex items-center gap-1 px-3 py-1.5 text-[13px] font-semibold bg-primary text-on-primary rounded-xs hover:bg-primary-dim transition-colors cursor-pointer"
           >
             <CheckCircle className="w-4 h-4" /> Allow
@@ -219,13 +230,13 @@ function PermissionBanner({
       </div>
 
       {/* Expandable details */}
-      {isExpanded && argsEntries.length > 0 && (
+      {(isExpanded || isRecovery) && argsEntries.length > 0 && (
         <div className="border-t border-outline-variant/10 px-4 py-3 bg-surface-container-low">
-          <div className="space-y-1">
-            {argsEntries.slice(0, 6).map(([key, value]) => (
+          <div className="space-y-1 max-h-[50vh] overflow-y-auto">
+            {argsEntries.map(([key, value]) => (
               <div key={key} className="flex gap-2 text-xs">
                 <span className="font-mono text-on-surface-variant shrink-0">{key}:</span>
-                <span className="font-mono text-on-surface truncate">{String(value).slice(0, 200)}</span>
+                <span className="font-mono text-on-surface whitespace-pre-wrap break-words">{typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)}</span>
               </div>
             ))}
           </div>

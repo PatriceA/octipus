@@ -329,3 +329,22 @@ describe('permission resolution notifications across clients', () => {
     } finally { unsubscribe(); }
   });
 });
+
+describe('CLI question answers', () => {
+  test('keeps a bare approval pending and delivers only the owner’s complete answer', async () => {
+    const { getPermissionManager } = await import('@/security/permissions');
+    const pm = getPermissionManager();
+    const id = await pm.requestApproval(bobId, 'question-agent', 'cli-native:AskUserQuestion', 'AskUserQuestion', {
+      questions: [{ question: 'Which model?', options: [{ label: 'Manual' }] }],
+    });
+    const waiting = pm.waitForApproval(id, { agentId: 'question-agent' });
+    await expect(pm.approve(id, bobId)).rejects.toThrow(/Answer every question/);
+    expect((await pm.getPendingRequests(bobId)).some(r => r.id === id)).toBe(true);
+    const resolution = JSON.stringify({ 'Which model?': 'Manual' });
+    expect(await pm.approve(id, aliceId, resolution)).toBe(false);
+    expect(await pm.approve(id, bobId, resolution)).toBe(true);
+    expect(await waiting).toBe(true);
+    expect(await pm.getApprovedResolution(id, bobId)).toBe(resolution);
+    expect(await pm.getApprovedResolution(id, aliceId)).toBeUndefined();
+  });
+});

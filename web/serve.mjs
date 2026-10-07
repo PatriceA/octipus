@@ -16,7 +16,7 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import { createServer, request as httpRequest } from 'node:http';
 import { extname, join, normalize, resolve } from 'node:path';
 
-const ROOT = resolve(import.meta.dirname, 'dist');
+const ROOT = resolve(import.meta.dirname, process.env.OCTIPUS_WEB_DIST_DIR || 'dist');
 const PORT = Number(process.env.WEB_PORT || process.argv[2] || 3007);
 const API = new URL(process.env.INTERNAL_API_URL || `http://localhost:${process.env.API_PORT || 3005}`);
 const PROXY_PREFIXES = ['/api/', '/a/', '/__artifacts__/'];
@@ -89,7 +89,15 @@ const server = createServer((req, res) => {
     return;
   }
 
-  const file = resolveFile(url.pathname) ?? join(ROOT, 'index.html');
+  const asset = resolveFile(url.pathname);
+  // Missing chunks are not SPA routes. Returning HTML as JavaScript hides the
+  // actual failure behind a misleading MIME/type error in the browser.
+  if (!asset && url.pathname.startsWith('/assets/')) {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+    res.end('Asset not found. Reload the page to load the current version.\n');
+    return;
+  }
+  const file = asset ?? join(ROOT, 'index.html');
   if (!existsSync(file)) {
     // The SPA fallback itself is missing — the bundle was never built, or was
     // built to the desktop `out/`. Say so instead of dying on a stream error.

@@ -1595,6 +1595,7 @@ export class SwarmSpawner {
         const { createLateBoundSpawnChildHooks, createSpawnChildTool } = await import('./swarm-tool');
         const { createEscalateTool } = await import('./escalate-tool');
         const { createCollectChildrenTool } = await import('./collect-tool');
+        const { createSteerChildTool } = await import('./steer-tool');
         tools.push(
           createSpawnChildTool(
             childNode,
@@ -1608,7 +1609,8 @@ export class SwarmSpawner {
           ),
         );
         tools.push(createEscalateTool(childNode, this));
-        tools.push(createCollectChildrenTool(childNode, workerRef));
+        tools.push(createCollectChildrenTool(childNode, workerRef), createSteerChildTool(workerRef));
+        childNode.allowedToolIds.add('steer_child');
         childNode.allowedToolIds.add('collect_children');
       } catch (err) {
         coreLogger.error({ err }, 'Failed to load swarm meta-tools — Agent will run without them');

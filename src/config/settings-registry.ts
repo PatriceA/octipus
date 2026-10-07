@@ -98,7 +98,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'litellm',
     valueType: 'number',
     defaultValue: 3,
-    description: 'LiteLLM max retries',
+    description: 'Maximum automatic retries for failed LiteLLM requests. Separate from recovery review for tool actions with uncertain outcomes.',
     isSecret: false,
     envVar: 'LITELLM_MAX_RETRIES',
   },
@@ -327,7 +327,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     valueType: 'number',
     defaultValue: 100000,
     description:
-      'Agent max token budget (0 = unlimited). Applies to NEW agents only — running agents keep their spawn-time budget. Open chat tabs need a page reload to show the updated cap.',
+      'General agent and session token budget (0 = unlimited). The root’s shared swarm pool is separately configured by swarm.levelDefaults.root.tokens. New agents use the updated cap; running agents keep their spawn-time budget.',
     isSecret: false,
     envVar: 'AGENT_MAX_TOKEN_BUDGET',
   },
@@ -517,7 +517,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'swarm',
     valueType: 'number',
     defaultValue: 200_000,
-    description: 'Root agent (depth 0) token cap',
+    description: 'Initial shared token pool for the root and its descendants per turn, recorded in the swarm tree. Separate from agent.maxTokenBudget. Applies to new root turns; existing tree nodes retain their original cap.',
     isSecret: false,
   },
   {
@@ -525,7 +525,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'swarm',
     valueType: 'number',
     defaultValue: 36_000_000,
-    description: 'Root agent (depth 0) wall-clock cap (ms)',
+    description: 'Root swarm wall-clock budget (ms), snapshotted for new turns. The root worker timeout is separately set by agent.turnTimeoutMs (or hookTurnTimeoutMs for hooks).',
     isSecret: false,
   },
   {

@@ -678,7 +678,7 @@ function TreeNode({
             </span>
           )}
           {(node.tokensUsed != null || node.tokenCap != null) && (
-            <span className="inline-flex items-center gap-0.5">
+            <span className="inline-flex items-center gap-0.5" title={node.kind === 'root' ? 'Recorded root swarm token cap. Set in Settings → Configuration → Swarm → root.tokens. New turns record the updated setting.' : 'Tokens used / token cap for this agent'}>
               <Coins className="w-2.5 h-2.5" />
               {node.tokensUsed ?? 0}
               {node.tokenCap ? `/${node.tokenCap}` : ''}

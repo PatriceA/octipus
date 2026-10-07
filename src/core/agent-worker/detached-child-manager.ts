@@ -22,10 +22,18 @@ export class DetachedChildManager {
   /** Children the last collectAll settled and removed — restorable if its answer never arrived. */
   private lastCollected: PendingChild[] = [];
 
+  private waiters = new Set<() => void>();
+
+  /** Wake the parent only; child promises and results remain intact. */
+  interruptWaits(): void {
+    for (const wake of this.waiters) wake();
+  }
+
   constructor(
     private readonly agentId: string,
     private readonly getTimeout: () => number,
     private readonly addPausedMs: (durationMs: number) => void,
+    private readonly hasGuidance: () => boolean = () => false,
   ) {}
 
   registerPendingChild(pc: PendingChild): void {
@@ -69,11 +77,19 @@ export class DetachedChildManager {
       this.pending.delete(childId);
       return settled;
     }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let wake: (() => void) | undefined;
     try {
+      const interrupted = new Promise<ChildResult>((_, reject) => {
+        wake = () => reject(new Error('collect_children interrupted by new guidance; child is still running. Review guidance and decide whether to steer_child or handle it after collection.'));
+        this.waiters.add(wake);
+        if (this.hasGuidance()) wake();
+      });
       const result = await Promise.race([
+        interrupted,
         pc.promise,
         new Promise<ChildResult>((_, reject) =>
-          setTimeout(() => reject(new Error(`collect_children timeout after ${timeoutMs}ms`)), timeoutMs),
+          { timer = setTimeout(() => reject(new Error(`collect_children timeout after ${timeoutMs}ms`)), timeoutMs); },
         ),
       ]);
       this.pending.delete(childId);
@@ -91,6 +107,9 @@ export class DetachedChildManager {
         spawnedChildren: [],
         notes: (err as Error).message,
       };
+    } finally {
+      clearTimeout(timer);
+      if (wake) this.waiters.delete(wake);
     }
   }
 

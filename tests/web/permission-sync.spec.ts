@@ -64,3 +64,62 @@ async function stubTab(tab: import('@playwright/test').Page): Promise<void> {
   await tab.route('**/api/auth/me', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(STUB_USER) }));
   await stubAllDefaults(tab);
 }
+
+test('CLI questions show all choices and submit answers instead of permission', async ({ authenticatedPage: page }) => {
+  const gateway = await stubGateway(page);
+  gateway.setPending({ requests: [{ requestId: 'questions', toolId: 'cli-native:AskUserQuestion', action: 'AskUserQuestion', toolName: 'CLI: AskUserQuestion', args: {
+    questions: [
+      { header: 'Rate limit', question: 'How should the suite handle the limit?', multiSelect: false, options: [
+        { label: 'Lift during run', description: 'Restarts the pod twice and affects real users.' },
+        { label: 'Measure as-is', description: 'Count the 429 responses.' },
+      ] },
+      { header: 'Model swap', question: 'How should the run switch models?', multiSelect: true, options: [
+        { label: 'Manual', description: 'Switch it yourself.' }, { label: 'Test header', description: 'Requires a deploy.' },
+      ] },
+    ],
+  } }] });
+  await page.goto('/settings');
+  await expect(page.getByText('How should the suite handle the limit?', { exact: false })).toBeVisible();
+  await expect(page.getByText('Restarts the pod twice and affects real users.')).toBeVisible();
+  await expect(page.getByText('How should the run switch models?', { exact: false })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Submit answers' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: /^allow$/i })).toHaveCount(0);
+  await page.getByRole('radio', { name: /Measure as-is/ }).check();
+  await page.getByRole('checkbox', { name: /Manual/ }).check();
+  await page.getByRole('checkbox', { name: /Test header/ }).check();
+  await page.getByRole('button', { name: 'Submit answers' }).click();
+  await expect.poll(() => gateway.sent.find(m => m.type === 'permission.respond')).toEqual({
+    type: 'permission.respond', requestId: 'questions', approved: true,
+    resolution: JSON.stringify({ 'How should the suite handle the limit?': 'Measure as-is', 'How should the run switch models?': 'Manual, Test header' }),
+  });
+  gateway.event('permission.resolved', { requestId: 'questions', status: 'approved' });
+  await expect(page.getByRole('button', { name: 'Submit answers' })).toHaveCount(0);
+});
+
+test('recovery warning is readable without expanding details', async ({ authenticatedPage: page }) => {
+  const gateway = await stubGateway(page);
+  gateway.setPending({ requests: [{ requestId: 'recovery', toolId: 'action_recovery', action: 'retry', toolName: 'Review', args: {
+    warning: 'This is not a request for more retries.', previousActions: 'Earlier write outcome unknown.',
+  } }] });
+  await page.goto('/settings');
+  await expect(page.getByText('Review uncertain outcome', { exact: true })).toBeVisible();
+  await expect(page.getByText('This is not a request for more retries.', { exact: true })).toBeVisible();
+  await expect(page.getByText('Earlier write outcome unknown.', { exact: true })).toBeVisible();
+});
+
+test('CLI custom answers work on a narrow screen and cancellation does not submit them', async ({ authenticatedPage: page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const gateway = await stubGateway(page);
+  gateway.setPending({ requests: [{ requestId: 'custom', toolId: 'cli-native:AskUserQuestion', action: 'AskUserQuestion', toolName: 'CLI: AskUserQuestion', args: {
+    questions: [{ question: 'Which limit?', options: [{ label: 'Unlimited', description: 'Turns the limit off for everyone.' }] }],
+  } }] });
+  await page.goto('/settings');
+  await page.getByRole('radio', { name: /Unlimited/ }).check();
+  await page.getByRole('textbox', { name: 'Your own answer' }).fill('Use a separate test tenant');
+  await expect(page.getByRole('radio', { name: /Unlimited/ })).not.toBeChecked();
+  await expect(page.getByRole('button', { name: 'Submit answers' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Cancel questions' }).click();
+  await expect.poll(() => gateway.sent.find(m => m.type === 'permission.respond')).toEqual({
+    type: 'permission.respond', requestId: 'custom', approved: false,
+  });
+});

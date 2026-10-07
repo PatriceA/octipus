@@ -32,3 +32,23 @@ describe('DetachedChildManager', () => {
     expect(m.count()).toBe(1);
   });
 });
+
+ it('wakes collection for steering without cancelling children or losing later results', async () => {
+   let finish!: (value: ChildResult) => void;
+   const m = new DetachedChildManager('parent', () => 0, () => {});
+   m.registerPendingChild({ childId: 'slow', startedAt: Date.now(), taskBrief: '', topic: 't', promise: new Promise(resolve => { finish = resolve; }) });
+   const waiting = m.collectAll(60_000);
+   m.interruptWaits();
+   expect((await waiting)[0].notes).toContain('interrupted by new guidance');
+   expect(m.count()).toBe(1);
+   finish(result('slow'));
+   expect(await m.collectAll(60_000)).toEqual([result('slow')]);
+   expect(m.count()).toBe(0);
+ });
+
+ it('does not begin another wait while guidance is queued', async () => {
+   const m = new DetachedChildManager('parent', () => 0, () => {}, () => true);
+   m.registerPendingChild({ childId: 'slow', startedAt: Date.now(), taskBrief: '', topic: 't', promise: new Promise(() => {}) });
+   expect((await m.collectAll(60_000))[0].notes).toContain('interrupted');
+   expect(m.count()).toBe(1);
+ });

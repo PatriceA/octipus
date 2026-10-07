@@ -1,7 +1,7 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { answerCliPermissionRequest } from './cli-permissions';
 import type { AgentContext } from './types';
-const mocks = vi.hoisted(() => ({ check: vi.fn(), requestApproval: vi.fn(), waitForApproval: vi.fn(), cancelWaits: vi.fn() }));
+const mocks = vi.hoisted(() => ({ check: vi.fn(), getApprovedResolution: vi.fn(), requestApproval: vi.fn(), waitForApproval: vi.fn(), cancelWaits: vi.fn() }));
 vi.mock('@/security/permissions', () => ({ getPermissionManager: () => mocks }));
 const request = { type: 'control_request', request_id: 'r', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'echo hello' }, tool_use_id: 't' } };
 const context = (): AgentContext => ({ space: null, trigger: 'user', funding: 'own',  id: 'a', sessionId: 's', userId: 'u', root: true, attended: true, role: 'general', model: 'cli/claude-code', topic: '', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} });
@@ -105,4 +105,37 @@ it('flow guard: turns an allowed native egress into an approval after a credenti
   const unattended = await answerCliPermissionRequest(fetch, { ...context(), attended: false }, vi.fn());
   expect(unattended).toMatchObject({ response: { response: { behavior: 'deny', message: expect.stringMatching(/flow guard/) } } });
   resetFlowLabels();
+});
+
+const questionInput = { questions: [
+  { header: 'Rate limit', question: 'How should the suite handle the limit?', options: [{ label: 'Measure as-is', description: 'Count 429s.' }], multiSelect: false },
+  { header: 'Model', question: 'How should models switch?', options: [{ label: 'Manual' }], multiSelect: false },
+] };
+it('asks for actual answers even when the native tool is allowed and returns them to Claude', async () => {
+  mocks.check.mockResolvedValue({ level: 'ALLOW' });
+  const answers = { 'How should the suite handle the limit?': 'Measure as-is', 'How should models switch?': 'Manual' };
+  mocks.getApprovedResolution.mockResolvedValue(JSON.stringify(answers));
+  expect(await answerCliPermissionRequest(mcpRequest('AskUserQuestion', questionInput), context(), vi.fn()))
+    .toMatchObject({ response: { response: { behavior: 'allow', updatedInput: { ...questionInput, answers } } } });
+  expect(mocks.requestApproval).toHaveBeenCalledOnce();
+  expect(mocks.getApprovedResolution).toHaveBeenCalledWith('approval', 'u');
+});
+it('never treats an empty approval as an answer', async () => {
+  mocks.getApprovedResolution.mockResolvedValue(undefined);
+  await expect(answerCliPermissionRequest(mcpRequest('AskUserQuestion', questionInput), context(), vi.fn())).rejects.toThrow(/Answer every question/);
+});
+it('does not ask questions unattended or when explicitly denied', async () => {
+  mocks.check.mockResolvedValue({ level: 'ALLOW' });
+  expect(await answerCliPermissionRequest(mcpRequest('AskUserQuestion', questionInput), { ...context(), attended: false }, vi.fn()))
+    .toMatchObject({ response: { response: { behavior: 'deny' } } });
+  mocks.check.mockResolvedValue({ level: 'DENY' });
+  expect(await answerCliPermissionRequest(mcpRequest('AskUserQuestion', questionInput), context(), vi.fn()))
+    .toMatchObject({ response: { response: { behavior: 'deny' } } });
+  expect(mocks.requestApproval).not.toHaveBeenCalled();
+});
+it('returns denial when the user cancels the questionnaire', async () => {
+  mocks.waitForApproval.mockResolvedValue(false);
+  expect(await answerCliPermissionRequest(mcpRequest('AskUserQuestion', questionInput), context(), vi.fn()))
+    .toMatchObject({ response: { response: { behavior: 'deny' } } });
+  expect(mocks.getApprovedResolution).not.toHaveBeenCalled();
 });

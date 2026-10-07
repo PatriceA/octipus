@@ -602,3 +602,68 @@ test.each(['native', 'text'] as const)('%s final-tool reporting distinguishes a 
   expect(executions).toBe(1);
   } finally { spies.forEach(spy => spy.mockRestore()); }
 });
+
+ test('steering during provider generation replans before executing stale tool calls', async () => {
+   const count = vi.spyOn(sessionRepository, 'incrementMessageCount').mockResolvedValue(undefined);
+   const worker = new AgentWorker(mkCtx({ root: true }), cfg());
+   const priv = worker as unknown as {
+     startTime: number;
+     messages: import('@/core/types').AgentMessage[];
+     loop: () => Promise<string>;
+     getCompletion: () => Promise<CompletionResult>;
+     toolExecutor: { handleToolCalls: () => Promise<import('@/core/types').AgentMessage[]> };
+   };
+   priv.startTime = Date.now();
+   const execute = vi.fn(async () => []);
+   priv.toolExecutor.handleToolCalls = execute;
+   let calls = 0;
+   priv.getCompletion = async () => {
+     if (++calls === 1) {
+       worker.steer({role:'user',content:'Change the root plan',timestamp:new Date()});
+       return {...completion(''),toolCalls:[{id:'old',name:'write_file',arguments:{}}]};
+     }
+     expect(priv.messages.at(-1)?.content).toBe('Change the root plan');
+     return completion('Updated the plan.');
+   };
+   expect(await priv.loop()).toBe('Updated the plan.');
+   expect(execute).not.toHaveBeenCalled();
+   count.mockRestore();
+ });
+
+test('guidance during native auto-collection reopens the root and preserves the child', async () => {
+  const spies = [
+    vi.spyOn(auditRepository, 'logAgentCompleted').mockResolvedValue(undefined as never),
+    vi.spyOn(agentRepository, 'updateStatus').mockResolvedValue(undefined as never),
+    vi.spyOn(messageRepository, 'create').mockResolvedValue({ id: 'message', createdAt: new Date() } as never),
+    vi.spyOn(sessionRepository, 'incrementMessageCount').mockResolvedValue(undefined as never),
+  ];
+  try {
+    const worker = new AgentWorker(mkCtx({ root: true }), cfg());
+    let finish!: (r: ChildResult) => void;
+    worker.registerPendingChild({ childId: 'child', startedAt: Date.now(), topic: 'test', taskBrief: 'test', promise: new Promise(resolve => { finish = resolve; }) });
+    const originalCollect = worker.collectAllDetached.bind(worker);
+    let waiting = false;
+    worker.collectAllDetached = timeout => {
+      const collection = originalCollect(timeout);
+      if (!waiting) {
+        waiting = true;
+        worker.steer({ role: 'user', content: 'Reconsider the root plan', timestamp: new Date() });
+      }
+      return collection;
+    };
+    const priv = worker as unknown as { messages: import('@/core/types').AgentMessage[]; getCompletion: () => Promise<CompletionResult> };
+    let calls = 0;
+    priv.getCompletion = async () => {
+      if (++calls === 2) {
+        expect(priv.messages.some(m => m.content === 'Reconsider the root plan')).toBe(true);
+        expect(worker.pendingDetachedCount()).toBe(1);
+        expect(worker.getAbortSignal().aborted).toBe(false);
+        finish({ nodeId: 'child', kind: 'subagent', status: 'ok', output: 'Preserved child result', durationMs: 1, usedTokens: 1, spawnedChildren: [] });
+      }
+      return completion(calls === 1 ? 'Initial answer' : 'Revised answer with Preserved child result');
+    };
+    expect(await worker.run('sample')).toContain('Preserved child result');
+    expect(worker.pendingDetachedCount()).toBe(0);
+    expect(calls).toBe(3);
+  } finally { spies.forEach(spy => spy.mockRestore()); }
+});

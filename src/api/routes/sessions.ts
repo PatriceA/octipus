@@ -367,6 +367,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
 
       let messages;
       let total;
+      let historySessionIds = [params.id];
       if (aggregate) {
         // Sibling sessions are filtered by (userId, channelType, channelId);
         // since `session` is already scoped to the principal, session.userId
@@ -377,13 +378,24 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
           session.channelId,
         );
         const siblingIds = siblings.map((s) => s.id);
-        messages = await repos.messages.findBySessions(siblingIds, limit, offset, roles);
+        historySessionIds = siblingIds;
+        messages = query.page === 'true' ? [] : await repos.messages.findBySessions(siblingIds, limit, offset, roles);
         total = await repos.messages.countBySessions(siblingIds);
       } else {
-        messages = await repos.messages.findBySession(params.id, limit, offset, roles);
+        messages = query.page === 'true' ? [] : await repos.messages.findBySession(params.id, limit, offset, roles);
         total = session.messageCount;
       }
 
+      if (query.page === 'true') {
+        if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+          set.status = 400;
+          return { error: 'Page limit must be between 1 and 100' };
+        }
+        const rows = await repos.messages.findHistoryPage(historySessionIds, limit + 1, roles, query.before);
+        const hasMore = rows.length > limit;
+        messages = hasMore ? rows.slice(1) : rows;
+        return { messages, hasMore, nextCursor: hasMore ? messages[0].id : null, aggregated: aggregate };
+      }
       return { messages, total, aggregated: aggregate };
     },
     {
@@ -393,6 +405,8 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
       query: t.Object({
         limit: t.Optional(t.String()),
         offset: t.Optional(t.String()),
+        page: t.Optional(t.String()),
+        before: t.Optional(t.String({ pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' })),
         roles: t.Optional(t.String()),
         aggregate: t.Optional(t.String()),
       }),

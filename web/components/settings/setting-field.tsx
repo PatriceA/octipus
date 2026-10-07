@@ -124,7 +124,9 @@ export function SettingField({
   isSaved: boolean;
 }) {
   const [showSecret, setShowSecret] = useState(false);
-  const shortKey = setting.key.split('.').pop() || setting.key;
+  const shortKey = setting.key.startsWith('swarm.levelDefaults.')
+    ? setting.key.slice('swarm.levelDefaults.'.length)
+    : setting.key.split('.').pop() || setting.key;
   const hint = constraintHint(setting.constraints);
   const validationError = validateConstraints(value, setting.valueType, setting.constraints);
 
@@ -138,7 +140,7 @@ export function SettingField({
     <div className="flex items-start gap-3 p-3 rounded-lg hover:bg-surface-container-high transition-colors">
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
-          <label className="text-xs font-bold text-on-surface-variant uppercase">{shortKey}</label>
+          <label htmlFor={`setting-${setting.key}`} className="text-xs font-bold text-on-surface-variant uppercase">{shortKey}</label>
           {setting.isSecret && (
             <span className="px-1.5 py-0.5 text-[10px] rounded bg-amber-900/30 text-warning">
               secret
@@ -221,6 +223,7 @@ export function SettingField({
         ) : setting.valueType === 'number' ? (
           <input
             type="number"
+            id={`setting-${setting.key}`}
             value={String(value ?? '')}
             min={setting.constraints?.min}
             max={setting.constraints?.max}

@@ -232,6 +232,8 @@ export class AgentWorker extends BaseAgentWorker {
   /** Inject a message into the agent's context mid-run. */
   steer(message: AgentMessage): void {
     this.steeringQueue.push(message);
+    this.detached.interruptWaits();
+    this.emit('thought', { type: 'steering_queued', delivery: 'next model call; child waits interrupted' });
     // Grant one iteration of headroom so a steer arriving as the loop is about
     // to finish (e.g. during the final synthesis turn) is still processed
     // rather than silently dropped when the iteration budget is exhausted.
@@ -260,6 +262,7 @@ export class AgentWorker extends BaseAgentWorker {
     this.context.id,
     () => this.config.timeout,
     (ms) => this.addPausedMs(ms),
+    () => this.steeringQueue.length > 0,
   );
 
   registerPendingChild(pc: PendingChild): void {
@@ -709,7 +712,7 @@ export class AgentWorker extends BaseAgentWorker {
       // synthesize with them. If that synthesis turn doesn't produce a
       // meaningful output we fall back to `result`.
       let finalResult = result;
-      if (this.detached.count() > 0) {
+      while (this.detached.count() > 0) {
         const autoTimeoutMs = this.detached.computeAutoCollectTimeoutMs();
         agentLogger.warn(
           { agentId: this.context.id, pending: this.detached.count(), autoTimeoutMs },
@@ -719,6 +722,7 @@ export class AgentWorker extends BaseAgentWorker {
           `auto-collecting ${this.detached.count()} detached ${this.detached.count() === 1 ? 'child' : 'children'}`,
           () => this.collectAllDetached(autoTimeoutMs),
         );
+        const interruptedForSteering = this.steeringQueue.length > 0;
         if (collected.length > 0) {
           // P1.2 — give each child a real relay budget instead of a 500-char
           // stub (which turned multi-thousand-char research summaries into two
@@ -738,8 +742,8 @@ export class AgentWorker extends BaseAgentWorker {
             })
             .join('\n\n');
           this.addSystemMessage(
-            `SYSTEM: ${collected.length} detached subagent${collected.length > 1 ? 's' : ''} finished, ` +
-              `but you did not call collect_children. Their full results are below:\n\n${summary}\n\n` +
+            `SYSTEM: ${collected.length} detached subagent${collected.length > 1 ? 's' : ''} reported a collection status, ` +
+              `but you did not call collect_children. A collection interrupted by guidance leaves the child running; decide whether to steer_child or handle the change after collection. Their results are below:\n\n${summary}\n\n` +
               `Write ONE unified final answer that merges these results into a single coherent reply for ` +
               `the user. Do NOT reproduce each child separately, label them ("Child 1…"), or repeat the ` +
               `same point once per child — deduplicate and combine. Include all substantive findings, code, ` +
@@ -767,8 +771,9 @@ export class AgentWorker extends BaseAgentWorker {
           const childText = collected
             .map((r) => (typeof r.output === 'string' ? r.output : JSON.stringify(r.output)))
             .join('\n\n');
-          finalResult = ensureChildRelay(finalResult, childText, formatCollectedResults(collected));
+          if (!interruptedForSteering) finalResult = ensureChildRelay(finalResult, childText, formatCollectedResults(collected));
         }
+        if (!interruptedForSteering) break;
       }
 
       if (this.abortController.signal.aborted) {
@@ -1046,6 +1051,8 @@ export class AgentWorker extends BaseAgentWorker {
           reason: typeof reason === 'string' ? reason : reason?.message,
         });
       }
+
+      this.drainSteeringQueue();
 
       // Feedback is user input, never a system instruction. A running tool is
       // allowed to finish; the next model call receives the new revision.
@@ -1377,6 +1384,12 @@ export class AgentWorker extends BaseAgentWorker {
         totalTokensUsed: this.totalTokensUsed,
         hasToolCalls: !!(completion.toolCalls?.length), finishReason: completion.finishReason,
       }, 'LLM call completed');
+
+      // Replan before executing actions selected without the new user input.
+      if (this.steeringQueue.length > 0) {
+        this.drainSteeringQueue();
+        continue;
+      }
 
       // Handle tool calls if present
       if (completion.toolCalls?.length && !this.toolExecutor.toolsDisabled) {
@@ -2383,14 +2396,13 @@ export class AgentWorker extends BaseAgentWorker {
   /** Drain the steering queue into the message context. */
   private drainSteeringQueue(): void {
     if (this.steeringQueue.length > 0) {
-      for (const msg of this.steeringQueue) {
-        this.messages.push(msg);
-      }
+      const guidance = this.steeringQueue.splice(0);
+      this.messages.push(...guidance);
       agentLogger.debug({
         agentId: this.context.id,
-        count: this.steeringQueue.length,
+        count: guidance.length,
       }, 'Steering messages injected');
-      this.steeringQueue = [];
+      this.emit('thought', { type: 'steering_delivered', delivery: 'model context', count: guidance.length });
     }
   }
 

@@ -28,3 +28,15 @@ test.describe('error handling', () => {
     await expect(page.locator('body')).toBeVisible();
   });
 });
+
+test('a missing lazy page shows recovery and reload keeps the requested URL', async ({ authenticatedPage: page }) => {
+  await page.route('**/assets/page-*.js', route => route.abort('failed'));
+  await page.goto('/settings?section=general');
+  await expect(page.getByRole('heading', { name: 'This page could not be loaded' })).toBeVisible();
+  await expect(page.getByText('Unexpected Application Error!', { exact: true })).toHaveCount(0);
+  await page.unroute('**/assets/page-*.js');
+  await page.getByRole('button', { name: 'Reload page' }).click();
+  await expect(page).toHaveURL(/\/settings\?section=general$/);
+  await expect(page.getByRole('heading', { name: 'This page could not be loaded' })).toHaveCount(0);
+  await expect(page.getByRole('img', { name: 'Octipus' }).first()).toBeVisible();
+});

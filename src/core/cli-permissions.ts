@@ -1,3 +1,4 @@
+import { cliQuestionsSchema, parseCliAnswers } from '@/shared/cli-questions';
 import { z } from 'zod';
 import type { AgentContext } from './types';
 import type { AgentEvent, ToolHandler } from './agent-base';
@@ -46,6 +47,9 @@ export async function answerCliPermissionRequest(
       ? { behavior: 'allow', updatedInput: request.input, toolUseID: request.tool_use_id }
       : { behavior: 'deny', message: 'Octipus tool is not available to this active agent. Do not bypass this decision.' } } };
   }
+  const isQuestion = request.tool_name === 'AskUserQuestion';
+  if (isQuestion) cliQuestionsSchema.parse(request.input);
+  let updatedInput = request.input;
   const manager = getPermissionManager();
   // One toolId per vendor tool so rules/grants can target `cli-native:Read` vs `cli-native:Bash`.
   const toolId = `cli-native:${request.tool_name}`;
@@ -55,8 +59,9 @@ export async function answerCliPermissionRequest(
   await ensureSharedAudienceKnown(context.sessionId);
   const permission = applyFlowGuard(getConfig().agent?.flowGuard, context.sessionId, flowCall,
     await manager.check(context.userId, toolId, request.tool_name, request.input, context));
+  // A stored ALLOW authorizes asking, but cannot invent the user's answers.
   const decision = await routeApprovalFor(context, { toolId, action: request.tool_name, toolName: request.tool_name, args: request.input },
-    permission, { unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions });
+    isQuestion && permission.level !== 'DENY' ? { ...permission, level: 'ASK' } : permission, { unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions });
   let allowed = decision.route === 'execute';
   if (decision.route === 'ask_human' && context.status === 'running' && !signal?.aborted) {
     const id = await manager.requestApproval(context.userId, context.id, toolId, request.tool_name,
@@ -65,6 +70,10 @@ export async function answerCliPermissionRequest(
     emit('permission_request', { requestId: id, toolName: `CLI: ${request.tool_name}`, args: request.input, toolId,
       ...(decision.source === 'flow-guard' || decision.source === 'space-flow' ? { reason: decision.reason } : {}) });
     allowed = await manager.waitForApproval(id, { agentId: context.id });
+    if (allowed && isQuestion) {
+      const answers = parseCliAnswers(request.input, await manager.getApprovedResolution(id, context.userId));
+      updatedInput = { ...request.input, answers };
+    }
   }
   if (allowed) {
     const current = await manager.check(context.userId, toolId, request.tool_name, request.input, context, { revalidate: true });
@@ -78,6 +87,6 @@ export async function answerCliPermissionRequest(
       ? `Octipus ${decision.reason}. Do not bypass this decision.`
       : 'Octipus permission was denied or not granted. Do not bypass this decision.';
   return { type: 'control_response', response: { subtype: 'success', request_id, response: allowed
-    ? { behavior: 'allow', updatedInput: request.input, toolUseID: request.tool_use_id }
+    ? { behavior: 'allow', updatedInput, toolUseID: request.tool_use_id }
     : { behavior: 'deny', message: denial } } };
 }

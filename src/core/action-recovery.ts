@@ -78,7 +78,7 @@ export class ActionRecovery {
         `Previous tool actions have uncertain outcomes. Check external state and obtain recovery approval before another mutation. ${describeActions(pending)}`);
       const manager = getPermissionManager();
       const id = await manager.requestApproval(context.userId, context.id, 'action_recovery', 'retry', {
-        warning: `The earlier actions listed below have no confirmed outcome. This is separate from permission to run ${toolName}. Check their external state: changes may already exist. Approving permits further changes and may repeat earlier effects; rejecting leaves read-only checks available.`,
+        warning: `The earlier actions listed below have no confirmed outcome. This is not a request for more retries and does not change the configured retry limit. This is separate from permission to run ${toolName}. Check their external state: changes may already exist. Approving permits further changes and may repeat earlier effects; rejecting leaves read-only checks available.`,
         previousActions: describeActions(pending), nextTool: toolName,
       }, context.sessionId, `Check earlier ${pending[0].toolName} outcome before continuing`, getExecutionSignal(context), context.workspaceId);
       const approved = await manager.waitForApproval(id, { agentId: context.id });

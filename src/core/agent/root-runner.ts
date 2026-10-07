@@ -6,9 +6,10 @@ import { type LimitRefusal, limitRefusalOf } from '@/core/errors/limit-refusal';
 import { isCancellationError } from '@/core/swarm/errors';
 import { swarmNodeRepository } from '@/core/swarm/node-repository';
 import { taskFingerprint } from '@/core/swarm/spawner';
+import { createRootBudget } from '@/core/swarm/spawn-budget';
 import type { AgentWorker } from '@/core/agent-worker';
 import type { ToolHandler } from '@/core/agent-base';
-import { type AgentNode, getLevelDefault, LEVEL_DEFAULT, type PendingChild } from '@/core/swarm/types';
+import type { AgentNode, PendingChild } from '@/core/swarm/types';
 import { agentPrincipal } from '@/security/principal';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { sessionRepository } from '@/db/repositories/session-repository';
@@ -256,13 +257,7 @@ export async function runRootAgent(
     role: ROOT_ROLE,
     topicPath: 'root',
     model: modelName,
-    budget: {
-      tokens: { cap: LEVEL_DEFAULT[0].tokens, used: 0 },
-      wallClockMs: { cap: LEVEL_DEFAULT[0].wallMs, startedAt: Date.now() },
-      // Configured, like maxPendingDetached: the hardcoded 6 ignored the setting.
-      fanOut: { cap: getLevelDefault(0).fanOut, used: 0 },
-      depth: 0,
-    },
+    budget: createRootBudget(),
     allowedToolIds: rootAllowedToolIds,
     signal: rootAbortController.signal,
   };

@@ -109,14 +109,17 @@ export function formatCollectedResults(results: ChildResult[]): string {
     // reads status="timeout" as failure and answers by spawning duplicate retry
     // children. A child that exhausted its OWN wall budget is terminal and keeps
     // its own notes, so gate on the collect-timeout signature specifically.
-    const stillRunning = r.status === 'timeout' && /collect_children timeout/i.test(r.notes ?? '');
+    const stillRunning = r.status === 'timeout' && /collect_children (?:timeout|interrupted)/i.test(r.notes ?? '');
     // Render it as status="running" (not "timeout") so a weak model doesn't
     // misparse the top-level attribute as failure before it reaches the notes.
     const displayStatus = stillRunning ? 'running' : r.status;
     const meta =
       `nodeId="${r.nodeId}" status="${displayStatus}" ` +
       `tokens="${r.usedTokens}" durationMs="${r.durationMs}"`;
-    const notes = stillRunning
+    const interrupted = /collect_children interrupted/i.test(r.notes ?? '');
+    const notes = interrupted
+      ? '\n  <notes>STILL RUNNING — collection was interrupted by new user guidance. The child was not cancelled or automatically steered. Review the guidance; use steer_child only if this child needs to change course, or handle the change after collecting its result.</notes>'
+      : stillRunning
       ? '\n  <notes>STILL RUNNING — did not finish within the wait window; it was NOT cancelled and is still working. Do NOT spawn a retry or duplicate child. Call collect_children again to keep waiting for it.</notes>'
       : r.notes ? `\n  <notes>${r.notes}</notes>` : '';
     // Mirror the await-path surface (formatChildResult): make a failed scorer

@@ -763,7 +763,7 @@ export class ToolExecutor {
             this.counters.approvalsDenied++;
             agentLogger.info(
               { agentId: this.context.id, tool: toolCall.name, requestId },
-              'Tool call denied by user — aborting agent'
+              'Tool approval not granted — aborting agent'
             );
 
             await auditRepository.logToolDenied(

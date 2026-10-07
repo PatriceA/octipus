@@ -177,3 +177,31 @@ it('reports a result the caller dropped before it was sent, instead of writing i
   expect((await ok).status).toBe(200);
   expect(lost).toEqual(['collect_children']);
 });
+
+
+it('never executes a queued write after its caller disconnects', async () => {
+  let release!: () => void;
+  const waiting = new Promise<void>(resolve => { release = resolve; });
+  let entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const writes = vi.fn();
+  const bridge = await startCliToolBridge({ active: () => true,
+    tools: () => ['wait', 'write'].map(name => ({name, description:'', parameters:{type:'object'}, execute:async()=>null})),
+    execute: async name => { if(name === 'wait') { entered(); await waiting; } else writes(); return {content:[]}; },
+  });
+  bridges.push(bridge);
+  const first = call(bridge.url, bridge.key, 'wait');
+  await started;
+  const controller = new AbortController();
+  const queued = fetch(`${bridge.url}/call`, {method:'POST', signal:controller.signal,
+    headers:{Authorization:`Bearer ${bridge.key}`}, body:JSON.stringify({name:'write'})});
+  const rejected = expect(queued).rejects.toThrow();
+  await new Promise(resolve => setTimeout(resolve, 30));
+  controller.abort();
+  await rejected;
+  await new Promise(resolve => setTimeout(resolve, 30));
+  release();
+  await first;
+  await new Promise(resolve => setTimeout(resolve, 20));
+  expect(writes).not.toHaveBeenCalled();
+});

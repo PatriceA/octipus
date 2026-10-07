@@ -44,3 +44,31 @@ test.describe('settings page', () => {
     });
   });
 });
+
+test('root and child swarm budgets have distinct labels and root tokens save to the correct key', async ({ authenticatedPage: page }) => {
+  let rootTokens = 200000;
+  const puts: unknown[] = [];
+  await page.route('**/api/settings', route => json(route, 200, {
+    categories: ['swarm'], settings: { swarm: ['root', 'agent', 'subagent'].map(level => ({
+      key: `swarm.levelDefaults.${level}.tokens`, value: level === 'root' ? rootTokens : 80000,
+      valueType: 'number', defaultValue: 200000, description: `${level} token pool`, isSecret: false, category: 'swarm',
+    })) },
+  }));
+  await page.route('**/api/settings/swarm.levelDefaults.root.tokens', route => {
+    const body = route.request().postDataJSON();
+    puts.push(body);
+    rootTokens = body.value;
+    return json(route, 200, { ok: true });
+  });
+  await page.goto('/settings');
+  await page.getByRole('button', { name: 'Configuration', exact: true }).click();
+  await expect(page.getByRole('spinbutton', { name: 'agent.tokens', exact: true })).toBeVisible();
+  await expect(page.getByRole('spinbutton', { name: 'subagent.tokens', exact: true })).toBeVisible();
+  const root = page.getByRole('spinbutton', { name: 'root.tokens', exact: true });
+  await root.fill('20000000');
+  await root.press('Enter');
+  await expect.poll(() => puts).toEqual([{ value: 20000000 }]);
+  await page.reload();
+  await page.getByRole('button', { name: 'Configuration', exact: true }).click();
+  await expect(page.getByRole('spinbutton', { name: 'root.tokens', exact: true })).toHaveValue('20000000');
+});

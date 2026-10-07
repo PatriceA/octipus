@@ -20,6 +20,7 @@ function stubDb(manager: PermissionManager, onExpire: () => void) {
     configurable: true,
     get: () => ({
       insert: () => ({ values: async () => {} }),
+      select: () => ({ from: () => ({ where: () => ({ limit: async () => [row] }) }) }),
       update: () => ({
         set: () => {
           const where = async () => { onExpire(); };

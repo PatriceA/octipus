@@ -613,7 +613,7 @@ async function handlePermissionRespond(
     // POST /api/admin/permission-requests/:id/resolve, never through here.
     // An unresolved request is reported instead of swallowed.
     const resolved = message.approved
-      ? await permissionManager.approve(message.requestId, context.userId)
+      ? await permissionManager.approve(message.requestId, context.userId, message.resolution)
       : await permissionManager.deny(message.requestId, context.userId);
 
     if (!resolved) {

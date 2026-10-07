@@ -72,3 +72,11 @@ describe('web/serve.mjs X-Forwarded-For', () => {
     expect(forged).toMatch(/^6\.6\.6\.6, (::ffff:)?127\.0\.0\.1$/);
   });
 });
+
+test('a missing hashed asset returns an uncached 404 instead of the SPA HTML', async () => {
+  const response = await fetch(`http://127.0.0.1:${webPort}/assets/missing-old-build.js`);
+  expect(response.status).toBe(404);
+  expect(response.headers.get('content-type')).toContain('text/plain');
+  expect(response.headers.get('cache-control')).toBe('no-store');
+  expect(await response.text()).toContain('Reload the page');
+});

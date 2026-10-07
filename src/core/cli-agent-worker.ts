@@ -96,6 +96,12 @@ export class CLIAgentWorker extends BaseAgentWorker {
   private pausedMs = 0;
   private pauseStartedAt: number | null = null;
   private pauseReasons = new Set<string>();
+  private approvalDeadline?: ReturnType<typeof setTimeout>;
+  private endApprovalWait(reason: string): void {
+    if (!this.pauseReasons.has('approval') || this.terminalEmitted || this.aborted) return;
+    this.runError = reason;
+    this.stop();
+  }
   private setPause(reason: string, on: boolean): void {
     if (on) this.pauseReasons.add(reason); else this.pauseReasons.delete(reason);
     if (this.pauseReasons.size && this.pauseStartedAt === null) this.pauseStartedAt = Date.now();
@@ -109,6 +115,9 @@ export class CLIAgentWorker extends BaseAgentWorker {
   }
   private bridgeErrors = new Map<string, boolean>();
   private steeringQueue: AgentMessage[] = [];
+  private liveGuidance = new Map<string, AgentMessage>();
+  private acceptsLiveGuidance = false;
+  private activeBridgeCalls = 0;
   /**
    * True once THIS run is confirmed to resume a vendor session (Task 6) — the
    * vendor already holds every earlier turn, so buildPrompt() sends only the
@@ -128,17 +137,41 @@ export class CLIAgentWorker extends BaseAgentWorker {
    * delegation pause around every collect (bridged or auto), so the manager's
    * own credit is a no-op here — crediting both would count the wait twice.
    */
-  private detached = new DetachedChildManager(this.context.id, () => this.config.timeout, () => {});
+  private detached = new DetachedChildManager(this.context.id, () => this.config.timeout, () => {},
+    () => this.steeringQueue.length > 0 || this.liveGuidance.size > 0);
   registerPendingChild(pc: PendingChild): void { this.detached.registerPendingChild(pc); }
   pendingDetachedCount(): number { return this.detached.count(); }
   listPendingDetached(): PendingChild[] { return this.detached.list(); }
   collectDetached(childId: string, timeoutMs: number): Promise<ChildResult | null> { return this.detached.collect(childId, timeoutMs); }
   collectAllDetached(timeoutMs: number): Promise<ChildResult[]> { return this.detached.collectAll(timeoutMs); }
 
-  /** Guidance is delivered at the next Octipus tool response or a follow-up CLI turn. */
+  /** User guidance stays with this worker; only its explicit tool call steers a child. */
   steer(message: AgentMessage): void {
     this.steeringQueue.push(message);
-    this.emit('thought', { type: 'steering_queued', delivery: 'next Octipus tool response or follow-up turn' });
+    this.config.maxIterations += 1;
+    this.detached.interruptWaits();
+    this.emit('thought', { type: 'steering_queued', delivery: this.acceptsLiveGuidance ? 'CLI input stream' : 'next Octipus tool response or follow-up turn' });
+    // A blocked collect returns the guidance in its tool response. Native CLI
+    // work has no such response, so use the bidirectional adapter protocol.
+    if (this.activeBridgeCalls === 0) this.submitLiveGuidance();
+  }
+
+  private submitLiveGuidance(): void {
+    const stdin = this.process?.stdin;
+    if (!this.acceptsLiveGuidance || !stdin?.writable || stdin.writableEnded || this.aborted) return;
+    for (const message of this.steeringQueue.splice(0)) {
+      const uuid = randomUUID();
+      this.liveGuidance.set(uuid, message);
+      const restore = () => {
+        if (this.liveGuidance.delete(uuid)) this.steeringQueue.push(message);
+      };
+      try {
+        stdin.write(JSON.stringify({ type: 'user', uuid, message: { role: 'user', content: message.content } }) + '\n', err => {
+          if (err) restore();
+        });
+        this.emit('thought', { type: 'steering_submitted', delivery: 'CLI input stream', id: uuid });
+      } catch { restore(); }
+    }
   }
 
   /**
@@ -187,6 +220,7 @@ When a task matches one of these skills, load it with get_skill before starting 
     const state = await workPlanRepository.read(this.context.sessionId, this.context.userId);
     const guidance = this.steeringQueue.splice(0);
     this.messages.push(...guidance);
+    if (guidance.length) this.emit('thought', { type: 'steering_delivered', delivery: 'CLI context', count: guidance.length });
     return JSON.stringify({
       agentId: this.context.id, sessionId: this.context.sessionId,
       workspaceId: this.context.workspaceId, planMode: this.connection?.planMode ?? false,
@@ -205,6 +239,7 @@ When a task matches one of these skills, load it with get_skill before starting 
   }
 
   private async executeBridgedTool(name: string, args: Record<string, unknown>): Promise<BridgeResult> {
+    this.activeBridgeCalls++;
     const id = randomUUID();
     const delegation = name === 'spawn_child' || name === 'escalate_to_other_lane' || name === 'collect_children' || this.toolExecutor.getTools().get(name)?.final === true;
     if (delegation) this.setPause('delegation', true);
@@ -238,7 +273,7 @@ When a task matches one of these skills, load it with get_skill before starting 
         ...(resent ? [{ type: 'text' as const, text: `[Octipus] Nothing was pending, so these ${resent} result(s) are from your previous collect_children call, re-sent in case its response did not reach you.` }] : []),
         { type: 'text', text: contextText },
       ], isError };
-    } finally { this.bridgeErrors.delete(id); if (delegation) this.setPause('delegation', false); }
+    } finally { this.activeBridgeCalls--; this.bridgeErrors.delete(id); if (delegation) this.setPause('delegation', false); }
   }
 
   private process: ChildProcess | null = null;
@@ -427,7 +462,19 @@ When a task matches one of these skills, load it with get_skill before starting 
     if (this.aborted) throw new Error('Agent was aborted before starting');
     this.runStartedAt = Date.now();
     permissionCleanup = getPermissionManager().onWaitStateChange((agentId, waiting) => {
-      if (agentId === this.context.id) this.setPause('approval', waiting);
+      if (agentId !== this.context.id) return;
+      this.setPause('approval', waiting);
+      clearTimeout(this.approvalDeadline);
+      this.approvalDeadline = undefined;
+      if (waiting) {
+        this.emit('thought', { type: 'blocked_progress', reason: 'waiting for approval', blockedForMs: 0 });
+        // Human approvals remain mandatory. A CLI subprocess cannot retain a
+        // serialized tool call indefinitely while its MCP client gives up.
+        this.approvalDeadline = setTimeout(() => this.endApprovalWait(
+          'Approval was not received within 5 minutes. The command was not run; retry after reviewing permissions.',
+        ), 5 * 60_000);
+      }
+
     });
     this.context.status = 'running';
     this.emit('status_change', { status: 'running' });
@@ -449,6 +496,7 @@ When a task matches one of these skills, load it with get_skill before starting 
         },
         active: () => this.context.status === 'running' && !this.aborted,
         execute: (name, args) => this.executeBridgedTool(name, args),
+        abandoned: () => this.endApprovalWait('The CLI disconnected while waiting for approval. The command was not run.'),
         unqueued: new Set(['get_cli_run_context', 'get_work_plan']),
         undelivered: name => {
           if (name !== 'collect_children') return;
@@ -474,6 +522,7 @@ When a task matches one of these skills, load it with get_skill before starting 
 ` +
         `Public unauthenticated curl GET/HEAD reads and package installation (including pip inside test containers) may run directly. For other external service or MCP access, use list_tools and describe_tool to find a suitable registered integration, then call_discovered_tool with its name and arguments. Do not create or reuse curl, Python or other shell clients when a suitable integration tool is available. Tools omitted from the initial tool list may still be discoverable. If no suitable tool exists or it is technically unavailable, use an allowed fallback and briefly state the reason; a permission denial is not technical unavailability.
 ` +
+        `Octipus shell tools isolate /tmp from the host. Put test virtual environments and reusable test files inside the project/workspace, not host /tmp. A host /tmp executable missing in the sandbox is an environment mismatch; do not escalate permissions just to inspect it.\n` +
         `Call get_cli_run_context before working and before the final answer. Every Octipus tool response also includes fresh plan feedback and queued user guidance. Respect permissions and do not bypass a refused Octipus tool through vendor tools.
 ` +
         `Use native MCP calls when supported. Only if your CLI lacks MCP support or loading this MCP server actually fails, use its terminal tool to run the bridge helper: ${quote(process.execPath)} ${quote(helper)} tools; or ${quote(process.execPath)} ${quote(helper)} call <tool-name> '<JSON arguments>'. Quote arguments safely. Credentials are supplied by the parent environment; never print them.
@@ -497,16 +546,18 @@ When a task matches one of these skills, load it with get_skill before starting 
           agentLogger.warn({ err, agentId: this.context.id }, 'Late plan feedback check failed');
         }
       };
+      const buffered = getCLIToolConfig(this.context.model)?.bufferOutput === true;
       await checkLateFeedback();
+      if (!this.aborted && this.detached.count() > 0) result = await this.settleDetachedChildren(result, buffered);
       // A plain CLI has no mid-turn input protocol. If guidance arrived after
       // its last bridge call, run a bounded follow-up instead of silently losing it.
-      const buffered = getCLIToolConfig(this.context.model)?.bufferOutput === true;
       let followups = 0;
       while (!this.aborted && this.steeringQueue.length > 0 && !buffered && followups < 2 && this.iteration < this.config.maxIterations) {
         followups++;
         this.messages.push({ role: 'assistant', content: result, timestamp: new Date() });
         this.messages.push({ role: 'user', content: `New guidance: ${await this.controlContext()}`, timestamp: new Date() });
         result = await this.executeCLI();
+        if (!this.aborted && this.detached.count() > 0) result = await this.settleDetachedChildren(result, buffered);
         await checkLateFeedback();
       }
       if (!this.aborted && this.steeringQueue.length > 0) {
@@ -519,9 +570,9 @@ When a task matches one of these skills, load it with get_skill before starting 
         result += `\n\n[Octipus] ${pending} guidance/feedback item${pending === 1 ? '' : 's'} arrived after this CLI's last Octipus tool call and ${pending === 1 ? 'was' : 'were'} not applied because ${reason}. Send another message to continue with it.`;
       }
 
-      if (!this.aborted && this.detached.count() > 0) result = await this.settleDetachedChildren(result, buffered);
-
       if (this.aborted) throw new Error(this.runError ?? this.abortReason ?? 'Agent was aborted by user');
+
+      if (this.pauseReasons.has('approval')) throw new Error('CLI finished while a tool was still waiting for approval. The command was not run.');
 
       this.context.status = 'completed';
       this.context.completedAt = new Date();
@@ -586,6 +637,7 @@ When a task matches one of these skills, load it with get_skill before starting 
       throw error;
     } finally {
       await this.commentaryDelivery;
+      clearTimeout(this.approvalDeadline);
       permissionCleanup();
       this.launchCleanup?.();
       this.launchCleanup = undefined;
@@ -669,6 +721,12 @@ When a task matches one of these skills, load it with get_skill before starting 
     let collected: ChildResult[] = [];
     try { collected = await this.collectAllDetached(autoTimeoutMs); } finally { this.setPause('delegation', false); }
     for (const r of collected) if (r.status !== 'timeout') swarmNodeRepository.markCollected(r.nodeId).catch(() => { /* reaper safety net */ });
+    if (this.steeringQueue.length > 0 && !this.aborted) {
+      this.messages.push({ role: 'assistant', content: result, timestamp: new Date() });
+      this.messages.push({ role: 'user', content: `Collection interrupted by new guidance. Children remain running; decide whether to steer_child or handle the change after collecting.\n${formatCollectedResults(collected)}\n${await this.controlContext()}`, timestamp: new Date() });
+      result = await this.executeCLI();
+      return this.detached.count() > 0 ? this.settleDetachedChildren(result, buffered) : result;
+    }
     if (collected.length > 0) {
       const block = formatCollectedResults(collected);
       const remainingMs = this.config.timeout - this.elapsed();
@@ -1206,6 +1264,8 @@ When a task matches one of these skills, load it with get_skill before starting 
       }
 
       this.process = proc;
+      this.acceptsLiveGuidance = built.keepStdinOpen === true;
+      this.submitLiveGuidance();
 
       // A caller-minted id (Claude: --session-id / --resume) is known before
       // the process even starts, so unlike a captured id there is nothing to
@@ -1261,7 +1321,21 @@ When a task matches one of these skills, load it with get_skill before starting 
               });
               continue;
             }
-            if (built.keepStdinOpen && event.type === 'result') proc.stdin?.end();
+            if (built.keepStdinOpen && event.type === 'user' && typeof event.uuid === 'string') {
+              const guidance = this.liveGuidance.get(event.uuid);
+              if (guidance) {
+                this.liveGuidance.delete(event.uuid);
+                this.messages.push(guidance);
+                this.emit('thought', { type: 'steering_delivered', delivery: 'CLI acknowledged input', id: event.uuid });
+              }
+            }
+            // A result can belong to the previous turn while submitted input
+            // is still queued. Keep stdin available for that turn's permission
+            // responses until the vendor acknowledges the guidance.
+            if (built.keepStdinOpen && event.type === 'result' && this.liveGuidance.size === 0) {
+              this.acceptsLiveGuidance = false;
+              proc.stdin?.end();
+            }
             consecutiveNonJson = 0;
             const result = parser.parse(event, adapterKey);
             if (result) {
@@ -1294,6 +1368,11 @@ When a task matches one of these skills, load it with get_skill before starting 
       });
 
       proc.on('close', async (code, signal) => {
+        this.acceptsLiveGuidance = false;
+        // A pipe write is not an acknowledgement. Retain unacknowledged input
+        // for the bridge/follow-up path if the vendor exited without reading it.
+        this.steeringQueue.unshift(...this.liveGuidance.values());
+        this.liveGuidance.clear();
         clearInterval(hardTimeout);
         this.process = null;
         // C5: any throw in this async handler used to leave the executeCLI

@@ -62,3 +62,15 @@ for (const status of ['failed', 'tool_error']) {
     await expect(row).not.toContainText('running');
   });
 }
+
+test('root tree displays the recorded configured pool instead of a fixed 200000', async ({ authenticatedPage: page }) => {
+  const node = { id: 'root-budget', rootSessionId: 'sess-1', parentNodeId: null, kind: 'root', depth: 0,
+    role: 'general', topicPath: 'root', model: 'root-budget-model', status: 'running', tokenCap: 20000000,
+    tokensUsed: 250000, createdAt: new Date().toISOString() };
+  await page.route('**/api/swarm/nodes?*', route => json(route, 200, { nodes: [node] }));
+  await stubGateway(page);
+  await page.goto('/chat');
+  await selectChatSession(page, 'sess-1');
+  const pool = page.getByTitle('Recorded root swarm token cap. Set in Settings → Configuration → Swarm → root.tokens. New turns record the updated setting.');
+  await expect(pool).toHaveText('250000/20000000');
+});

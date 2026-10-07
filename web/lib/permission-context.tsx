@@ -24,7 +24,7 @@ interface PermissionContextValue {
   /** Currently pending approval requests (pipeline/root agent approvals) */
   approvals: ApprovalRequest[];
   /** Approve a permission request */
-  approvePermission: (requestId: string) => void;
+  approvePermission: (requestId: string, resolution?: string) => void;
   /** Deny a permission request */
   denyPermission: (requestId: string) => void;
   /** Approve an approval request, optionally with a selected option */
@@ -134,8 +134,8 @@ export function PermissionProvider({ children }: { children: ReactNode }) {
 
   // The authoritative `permission.resolved` / `approval.resolved` removes the
   // row; a refusal comes back as an error frame and shows as the notice.
-  const respondPermission = useCallback((requestId: string, approved: boolean) => {
-    if (!client.send({ type: 'permission.respond', requestId, approved })) setApprovalNotice(OFFLINE_NOTICE);
+  const respondPermission = useCallback((requestId: string, approved: boolean, resolution?: string) => {
+    if (!client.send({ type: 'permission.respond', requestId, approved, ...(resolution === undefined ? {} : { resolution }) })) setApprovalNotice(OFFLINE_NOTICE);
   }, [client]);
 
   const respondApproval = useCallback((requestId: string, approved: boolean, response?: string) => {
@@ -143,7 +143,7 @@ export function PermissionProvider({ children }: { children: ReactNode }) {
     if (!sent) setApprovalNotice(OFFLINE_NOTICE);
   }, [client]);
 
-  const approvePermission = useCallback((requestId: string) => respondPermission(requestId, true), [respondPermission]);
+  const approvePermission = useCallback((requestId: string, resolution?: string) => respondPermission(requestId, true, resolution), [respondPermission]);
   const denyPermission = useCallback((requestId: string) => respondPermission(requestId, false), [respondPermission]);
   const approveApproval = useCallback((requestId: string, response?: string) => respondApproval(requestId, true, response), [respondApproval]);
   const denyApproval = useCallback((requestId: string) => respondApproval(requestId, false), [respondApproval]);

@@ -1,4 +1,5 @@
 import type { AgentWorker, ToolHandler } from '@/core/agent-worker';
+import { createSteerChildTool } from '@/core/swarm/steer-tool';
 import { createCollectChildrenTool } from '@/core/swarm/collect-tool';
 import { createLateBoundSpawnChildHooks, createSpawnChildTool } from '@/core/swarm/swarm-tool';
 import {
@@ -116,7 +117,8 @@ export function createMetaTools(
           lite ? { lite: true } : undefined,
         ),
       );
-      tools.push(createCollectChildrenTool(options.parentNode, refs.workerRef));
+      tools.push(createCollectChildrenTool(options.parentNode, refs.workerRef), createSteerChildTool(refs.workerRef));
+      options.parentNode.allowedToolIds.add('steer_child');
       options.parentNode.allowedToolIds.add('collect_children');
     } else {
       // No refs (legacy unit-test call-sites): await-only single spawn.
@@ -629,7 +631,7 @@ export function createMetaTools(
 
   if (lite) {
     return tools.filter(
-      (t) => t.name === 'spawn_child' || t.name === 'collect_children' || t.name === 'remember_this' || t.name === 'get_work_plan' || t.name === 'update_work_plan' || t.name === 'exit_plan_mode' || t.name === 'complete_taken_task',
+      (t) => t.name === 'spawn_child' || t.name === 'collect_children' || t.name === 'steer_child' || t.name === 'remember_this' || t.name === 'get_work_plan' || t.name === 'update_work_plan' || t.name === 'exit_plan_mode' || t.name === 'complete_taken_task',
     );
   }
   return tools;

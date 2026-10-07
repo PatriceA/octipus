@@ -6,7 +6,7 @@
  * forty-four screens.
  */
 import { lazy, Suspense } from 'react';
-import { createBrowserRouter, Outlet, RouterProvider } from 'react-router-dom';
+import { createBrowserRouter, Outlet, RouterProvider, useRouteError } from 'react-router-dom';
 import { AppShell } from '@/components/app-shell';
 import { Providers } from './app/providers';
 import AdminLayout from './app/admin/layout';
@@ -62,6 +62,22 @@ const MyWorkPage = lazy(() => import('./app/my-work/page'));
 const ToolsPage = lazy(() => import('./app/tools/page'));
 const TopicsPage = lazy(() => import('./app/topics/page'));
 
+/** Lazy imports can fail when a tab still references a previous build. */
+function RouteError() {
+  const error = useRouteError();
+  const message = error instanceof Error ? error.message : String(error);
+  const assetFailure = /dynamically imported module|module script|ChunkLoadError|Loading chunk|preload CSS/i.test(message);
+  return <main className="min-h-screen bg-surface text-on-surface flex items-center justify-center p-6">
+    <section role="alert" className="max-w-lg space-y-4">
+      <h1 className="text-xl font-semibold">{assetFailure ? 'This page could not be loaded' : 'Something went wrong'}</h1>
+      <p>{assetFailure
+        ? 'Octipus may have updated while this tab was open, or the connection was interrupted. Reload to try the current version.'
+        : 'The page encountered an error. Reload to try again.'}</p>
+      <button onClick={() => window.location.reload()} className="rounded-xs bg-primary text-on-primary px-4 py-2">Reload page</button>
+    </section>
+  </main>;
+}
+
 function Loading() {
   return <div className="p-8 font-mono text-on-surface-variant">loading…</div>;
 }
@@ -96,6 +112,7 @@ const router = createBrowserRouter([
   {
     path: '/',
     element: <Shell />,
+    errorElement: <RouteError />,
     children: [
       { index: true, element: <Home /> },
       { path: 'agents', element: <AgentsPage /> },

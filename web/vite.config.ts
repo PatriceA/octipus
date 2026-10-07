@@ -66,7 +66,7 @@ return {
     },
   },
   build: {
-    outDir: isDesktop ? 'out' : 'dist',
+    outDir: isDesktop ? 'out' : (process.env.OCTIPUS_WEB_DIST_DIR || 'dist'),
     emptyOutDir: true,
     sourcemap: true,
   },

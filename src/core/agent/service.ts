@@ -1355,14 +1355,14 @@ export class AgentService {
   steer(sessionId: string, message: import('@/core/types').AgentMessage): boolean {
     const agentManager = getAgentManager();
     const sessionAgents = agentManager.getBySession(sessionId);
-    const running = sessionAgents.find(a => a.getStatus() === 'running');
+    const running = sessionAgents.find(a => a.getStatus() === 'running' && a.getContext().root === true && !a.getContext().metadata?.room);
     if (!running) return false;
 
-    // Native workers steer before the next model call; CLI workers deliver at
-    // the next Octipus tool response or a bounded follow-up CLI turn.
+    // Only the root receives session steering and decides whether a child needs it.
+    // Workers wake collection and deliver at their next supported input boundary.
     if ('steer' in running && typeof running.steer === 'function') {
       running.steer(message);
-      coreLogger.info({ sessionId, agentId: running.getContext().id }, 'Steering message injected');
+      coreLogger.info({ sessionId, agentId: running.getContext().id }, 'Steering message queued for root');
       return true;
     }
     return false;

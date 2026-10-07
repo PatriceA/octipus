@@ -116,7 +116,7 @@ export function ConfigurationTab() {
       <div>
         <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">System Configuration</h2>
         <p className="text-sm text-on-surface-variant mt-1">
-          Runtime settings. Changes take effect immediately without restart.
+          Runtime settings update without restart. New agents and turns use saved budgets; existing swarm tree rows show their recorded caps.
         </p>
       </div>
 

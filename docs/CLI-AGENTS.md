@@ -85,11 +85,24 @@ root-only plan editing privileges merely by being CLI agents.
 guidance. Octipus tool responses also include fresh context when its repository is available.
 A failed context refresh does not turn a successful tool operation into an error. The CLI is
 instructed to check before further affected work and before its final answer.
-This is delivery at a tool boundary, not immediate interruption of a running
-vendor-native command.
+User steering targets the session's running root. It interrupts a pending
+`collect_children` wait (including automatic collection) without cancelling or
+automatically steering any child. The root decides whether to use `steer_child`
+on one of its own pending children or handle the change after collecting.
+
+Claude-based adapters also submit guidance through their stream-json stdin while
+native CLI work is running. `--replay-user-messages` acknowledges receipt; a pipe
+write emits `steering_submitted`, and replay emits `steering_delivered`. Inputs
+not acknowledged before process exit are retained for a follow-up. Acknowledged
+input does not prove the requested change was applied. See the
+[Claude CLI reference](https://code.claude.com/docs/en/cli-reference).
+Codex and other adapters without live stdin receive guidance through Octipus tool
+responses or follow-up invocations. A running command is allowed to finish;
+steering does not terminate commands or restart children.
 
 Claude/Codex can make up to two follow-up invocations when guidance or unhandled
-root-plan feedback remains, within the remaining run budget. When no follow-up
+root-plan feedback remains, within the remaining run budget. Each steering
+message grants one extra iteration, matching direct-provider workers. When no follow-up
 is possible (buffered adapters, an exhausted turn budget, or the follow-up
 limit), the run still completes with its result: Octipus appends a visible note
 naming how many guidance items were not applied and emits a `guidance_pending`
@@ -136,6 +149,22 @@ permissions are separate and vary by adapter. A vendor bypass/auto-approve mode
 still bypasses that vendor's prompts; it does not authorize an Octipus tool that
 Octipus denied. Prompt instructions tell the CLI not to work around denials, but
 are not an enforcement boundary for arbitrary vendor-native shell actions.
+
+Claude's `AskUserQuestion` is an interactive questionnaire, not a yes/no tool
+approval. In the web UI, every question and option description is shown in the
+answer form, with single/multiple selection and custom text. Submit answers
+returns them to Claude; Cancel returns a denial. A stored ALLOW still requires
+actual answers, while DENY and unattended-session restrictions remain effective.
+These native tools are not entries in the built-in tool settings; native policy
+uses the `cli-native:<Tool>` rules described above. Clients that only send a bare
+Allow cannot answer a questionnaire; use the web form.
+
+The `action_recovery · retry` prompt reviews earlier tool actions whose effects
+are uncertain. It does not indicate that the global retry counter was exceeded.
+Check whether those actions already took effect before allowing further changes.
+The `litellm.maxRetries` setting instead controls automatic LiteLLM request
+retries; `swarm.contractRetries` limits retries after a child fails its scorer
+gate. Approving recovery changes neither limit.
 
 The [flow guard](FLOW-GUARD.md) runs on top of these rules. If a session has
 read credentials, or has mixed private data with untrusted content, it turns an
@@ -427,3 +456,17 @@ mode is enabled. `list_tools`/`describe_tool` discover long-tail tools, and
 permission checks. MCP discovery returns bounded summaries; exact tool schemas,
 resources, URI templates and prompts are retrieved on demand. Catalog change
 notifications refresh metadata without preloading resource contents.
+
+
+### Approval waits in managed CLI runs
+
+An unanswered approval pauses the active-work budget, but a managed CLI run
+waits at most five minutes for it. Expiry fails the run and cancels its pending
+requests; it never grants permission or executes the waiting command. A tool
+caller disconnecting during approval also fails the run immediately. Queued
+calls whose callers disconnected are discarded before execution. Completion
+while an approval is still pending is recorded as failure, not success.
+
+Octipus shell tools use a separate `/tmp`. Keep test virtual environments in
+the project/workspace so both the CLI and sandboxed verification can use them;
+a missing host `/tmp` executable is not a reason to request elevated access.
