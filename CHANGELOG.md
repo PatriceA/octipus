@@ -9,6 +9,11 @@ labels reflect blast radius, not contract guarantees.
 
 ### Fixed
 
+- **Space invite links use the install's public URL.** The link was built from
+  the address the owner's browser used, so an owner on `localhost` handed out
+  a `localhost` link no other device could open. With a public URL set
+  (`PUBLIC_URL` / `oauth.publicUrl`, the address OAuth callbacks and artifact
+  links already use) the invite response carries `url` on it.
 - **A space session's files open only through the requester's access.**
   `WorkspaceFS.forSession` now takes the requester's space access (role and
   guest scope, from the turn's `AgentContext.space`, the request principal or

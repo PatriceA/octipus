@@ -525,7 +525,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 22 |
 | `api` | `config` | 21 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 116 |
+| `api` | `core` | 117 |
 | `api` | `db` | 110 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |

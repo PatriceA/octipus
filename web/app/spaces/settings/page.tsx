@@ -42,6 +42,8 @@ interface CreatedInvite {
   role: Invite['role'];
   expiresAt: string;
   maxUses: number;
+  /** On the install's public URL (`PUBLIC_URL`); null when none is set. */
+  url: string | null;
 }
 
 interface ActivityEntry {
@@ -409,7 +411,7 @@ function InviteForm({ spaceId, onCreated, onError }: { spaceId: string; onCreate
       ? { role, scope, expiresInHours: hours, maxUses }
       : { role, expiresInHours: hours, maxUses }),
     onSuccess: async (inv) => {
-      setLink(`${window.location.origin}/join/${inv.token}`);
+      setLink(inv.url ?? `${window.location.origin}/join/${inv.token}`);
       setCopied(false);
       await onCreated();
     },
