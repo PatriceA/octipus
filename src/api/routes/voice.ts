@@ -1,7 +1,9 @@
 import { Elysia, t } from '@/api/http';
 import { fetchWithTimeout } from '@/utils/http';
+import { adminDenied } from '@/api/admin-guard';
 import { apiContext } from '@/api/context';
 import { getConfig } from '@/config';
+import { isAdmin } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
 import { fileAt } from '@/utils/fs-file';
 
@@ -438,7 +440,7 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
 
   .get(
     '/status',
-    async ({ user }) => {
+    async ({ user, principal }) => {
       if (!user) return { error: 'Not authenticated' };
 
       const config = getConfig();
@@ -459,9 +461,10 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
         // Retained for compatibility with existing callers.
         sttEnabled: availability.stt.available,
         ttsEnabled: availability.tts.available,
-        ttsProvider: config.voice.ttsProvider,
+        // The engine choice and the host model path are install configuration.
+        ...(isAdmin(principal) ? { ttsProvider: config.voice.ttsProvider } : {}),
         localWhisper: availability.stt.local,
-        whisperModelPath: config.voice.whisperModelPath || null,
+        ...(isAdmin(principal) ? { whisperModelPath: config.voice.whisperModelPath || null } : {}),
         language: config.voice.language || 'en',
       };
     },
@@ -470,11 +473,10 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
 
   .post(
     '/install',
-    async ({ user, set }) => {
-      if (!user) {
-        set.status = 401;
-        return { error: 'Not authenticated' };
-      }
+    async ({ user, principal, set }) => {
+      // Builds and installs a host binary: an operator action.
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
       try {
         const { installWhisper } = await import('@/voice/whisper');
         const log: string[] = [];
@@ -548,11 +550,13 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
     }
   )
 
-  // Active calls list
+  // Active calls list. Admin-only: calls carry no owning user, so the list is
+  // every caller's phone numbers on the install.
   .get(
     '/calls',
-    async ({ user }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, principal, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
       const { getCallManager } = await import('@/voice/telephony');
       const calls = getCallManager().getActive();
       return { calls: calls.map(c => ({ id: c.id, status: c.status, direction: c.direction, from: c.from, to: c.to, provider: c.provider, startedAt: c.startedAt.toISOString() })) };
@@ -563,8 +567,9 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
   // Telephony health
   .get(
     '/telephony/health',
-    async ({ user }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, principal, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
       const { getTelephonyProvider } = await import('@/voice/telephony');
       const provider = await getTelephonyProvider();
       if (!provider) return { configured: false, provider: null };

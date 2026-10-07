@@ -67,6 +67,15 @@ an unauthorized request. Other errors are returned without authentication retrie
 backend calls require configured credentials. The transport key described below
 is separate from backend authentication.
 
+The direct tool bridge (`octipus_list_tools`, `octipus_execute_tool`, and the
+web search, page fetch, knowledge, messaging, notes, tasks, profiles and email
+tools built on it) calls `/api/tools/all` and
+`/api/tools/:id/tools/:name/execute`. With a non-admin token it lists and runs
+only the tools your own chat agent has (the general role's tools, without the
+install's MCP servers), under your tool permissions; anything that would ask
+for approval is refused. An admin token reaches every registered tool. The
+health, model and channel status tools need an admin token.
+
 The default transport is stdio, so `npm start` and `npm run start:stdio` are
 equivalent. A typical MCP client configuration — Claude Desktop, Claude Code,
 or anything else that speaks MCP over stdio — is:

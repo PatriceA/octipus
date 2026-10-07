@@ -1,4 +1,5 @@
 import { Elysia } from '@/api/http';
+import { adminDenied } from '@/api/admin-guard';
 import { apiContext } from '@/api/context';
 import { getGatewayHub } from '@/core/gateway/hub';
 
@@ -6,16 +7,18 @@ export const gatewayRoutes = new Elysia({ prefix: '/gateway' })
   .use(apiContext)
 
   // Gateway hub status
-  .get('/status', async ({ user }) => {
-    if (!user) return { error: 'Not authenticated' };
+  .get('/status', async ({ user, principal, set }) => {
+    const denied = adminDenied({ set, user, principal });
+    if (denied) return denied;
 
     const hub = getGatewayHub();
     return hub.getStatus();
   }, { detail: { tags: ['gateway'] } })
 
   // Active connections
-  .get('/connections', async ({ user }) => {
-    if (!user?.isAdmin) return { error: 'Admin required' };
+  .get('/connections', async ({ user, principal, set }) => {
+    const denied = adminDenied({ set, user, principal });
+    if (denied) return denied;
 
     const hub = getGatewayHub();
     const connections = hub.connectionManager.getActiveConnections();
@@ -36,16 +39,18 @@ export const gatewayRoutes = new Elysia({ prefix: '/gateway' })
   }, { detail: { tags: ['gateway'] } })
 
   // Event bus stats
-  .get('/events/stats', async ({ user }) => {
-    if (!user) return { error: 'Not authenticated' };
+  .get('/events/stats', async ({ user, principal, set }) => {
+    const denied = adminDenied({ set, user, principal });
+    if (denied) return denied;
 
     const hub = getGatewayHub();
     return hub.eventBus.getStats();
   }, { detail: { tags: ['gateway'] } })
 
   // Channel adapter status
-  .get('/adapters', async ({ user }) => {
-    if (!user) return { error: 'Not authenticated' };
+  .get('/adapters', async ({ user, principal, set }) => {
+    const denied = adminDenied({ set, user, principal });
+    if (denied) return denied;
 
     // Return status of known channel types
     try {

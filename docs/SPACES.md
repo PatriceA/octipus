@@ -533,8 +533,9 @@ install's configuration or state. The install-level routes are admin-only
 lists and CLI status/quotas, detailed health, tool, plugin, MCP and
 capability inventories, evaluations, topic bindings, telephony and voice
 installs, gateway adapters; reloading extensions, plugins and mounted
-skills; running a tool directly (`POST /api/tools/:id/tools/:name/execute`,
-the MCP bridge needs an admin token). The web hides the matching pages
+skills; running a tool directly (`POST /api/tools/:id/tools/:name/execute`)
+outside the tools a member's own chat agent has (the general role's, without
+the install's MCP servers). The web hides the matching pages
 (tools, topics, evaluations) for non-admins.
 
 ## In the web

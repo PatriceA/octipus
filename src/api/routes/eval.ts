@@ -1,6 +1,7 @@
 import { Elysia, } from '@/api/http';
 import { readdir, readFile, } from 'fs/promises';
 import { resolve, sep } from 'path';
+import { adminDenied } from '@/api/admin-guard';
 import { apiContext } from '@/api/context';
 import { type ChildProcessHandle, spawnProcess } from '@/utils/proc';
 
@@ -259,11 +260,10 @@ export const evalRoutes = new Elysia({ prefix: '/eval' })
   })
 
   // Check eval run status
-  .get('/status', async ({ user, set }) => {
-    if (!user) {
-      set.status = 401;
-      return { error: 'Not authenticated' };
-    }
+  .get('/status', async ({ user, principal, set }) => {
+    // Eval runs and their results are install state (operator-run suites).
+    const denied = adminDenied({ set, user, principal });
+    if (denied) return denied;
 
     if (runningEvals.size === 0) {
       // Return last completed run info if available
@@ -296,11 +296,10 @@ export const evalRoutes = new Elysia({ prefix: '/eval' })
   })
 
   // List all eval results
-  .get('/results', async ({ user, set }) => {
-    if (!user) {
-      set.status = 401;
-      return { error: 'Not authenticated' };
-    }
+  .get('/results', async ({ user, principal, set }) => {
+    // Eval runs and their results are install state (operator-run suites).
+    const denied = adminDenied({ set, user, principal });
+    if (denied) return denied;
 
     const results = await listResultFiles();
     return {
@@ -324,11 +323,10 @@ export const evalRoutes = new Elysia({ prefix: '/eval' })
   })
 
   // Get a specific eval result with full detail
-  .get('/results/:id', async ({ user, set, params }) => {
-    if (!user) {
-      set.status = 401;
-      return { error: 'Not authenticated' };
-    }
+  .get('/results/:id', async ({ user, principal, set, params }) => {
+    // Eval runs and their results are install state (operator-run suites).
+    const denied = adminDenied({ set, user, principal });
+    if (denied) return denied;
 
     const result = await getResultById(params.id);
     if (!result) {
@@ -340,11 +338,10 @@ export const evalRoutes = new Elysia({ prefix: '/eval' })
   })
 
   // Compare multiple eval results
-  .get('/compare', async ({ user, set, query }) => {
-    if (!user) {
-      set.status = 401;
-      return { error: 'Not authenticated' };
-    }
+  .get('/compare', async ({ user, principal, set, query }) => {
+    // Eval runs and their results are install state (operator-run suites).
+    const denied = adminDenied({ set, user, principal });
+    if (denied) return denied;
 
     const ids = ((query as any).ids || '').split(',').filter(Boolean);
     if (ids.length < 2) {

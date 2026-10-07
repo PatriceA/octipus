@@ -10,6 +10,7 @@ import {
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
 import { isRegisteredModel, resolveModel } from '@/models/resolve-model';
+import { isAdmin } from '@/security/principal';
 import {
   runConformanceTests,
 } from '@/models/testing';
@@ -71,7 +72,7 @@ export const evaluationRoutes = new Elysia({ prefix: '/evaluations' })
   // ── POST /evaluations/conformance/run ──────────────────────────
   .post(
     '/conformance/run',
-    async ({ user, body, set }) => {
+    async ({ user, principal, body, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
 
       // Check for already running job
@@ -86,7 +87,11 @@ export const evaluationRoutes = new Elysia({ prefix: '/evaluations' })
       const registry = getModelRegistry();
       const client = getLiteLLMClient();
 
-      let modelsToTest = await registry.getAllModels();
+      // An admin tests any install model; anyone else only the ones they may
+      // use (their orgs' install rows and their own personal rows).
+      let modelsToTest = isAdmin(principal)
+        ? await registry.getAllModels()
+        : (await registry.getModelsForUser(user.id)).filter((m) => m.isEnabled);
       if (modelNames && modelNames.length > 0) {
         modelsToTest = modelsToTest.filter((m) =>
           modelNames.includes(m.name) || modelNames.includes(m.modelId) || modelNames.includes(m.id)

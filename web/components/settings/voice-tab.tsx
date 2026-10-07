@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import { api } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 import {
   SecretsRedirectBanner,
   type SettingItem,
@@ -34,6 +35,8 @@ const PROVIDER_VAULT_KEYS: Record<string, { keys: string[]; labels: string[] }> 
 
 export function VoiceTab() {
   const workspaceId = useWorkspaceId();
+  // The telephony health check is an admin-only route.
+  const isAdmin = !!useAuth().user?.isAdmin;
   const { handleSave, handleReset, saving, saved } = useSettingActions();
   const [testingHealth, setTestingHealth] = useState(false);
   const [healthResult, setHealthResult] = useState<{ healthy: boolean; error?: string; provider?: string } | null>(null);
@@ -144,7 +147,10 @@ export function VoiceTab() {
       )}
 
       {/* Test Connection */}
-      {currentProvider !== 'disabled' && (
+      {currentProvider !== 'disabled' && !isAdmin && (
+        <p className="text-xs text-on-surface-variant">An administrator can test the telephony connection.</p>
+      )}
+      {currentProvider !== 'disabled' && isAdmin && (
         <div className="bg-surface-container rounded-xl p-4 space-y-3">
           <h3 className="text-sm font-semibold text-on-surface">Connection Test</h3>
           <div className="flex items-center gap-3">

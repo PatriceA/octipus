@@ -1,4 +1,5 @@
 import { Elysia, t } from '@/api/http';
+import { adminDenied } from '@/api/admin-guard';
 import { apiContext } from '@/api/context';
 import { getCapabilityService } from '@/capabilities/service';
 import { apiLogger } from '@/utils/logger';
@@ -7,10 +8,9 @@ import { apiLogger } from '@/utils/logger';
  * Capability routes — surface what optional tools are installed and
  * dispatch installs from the wizard / `octi capabilities` CLI.
  *
- * - GET  /capabilities                   admin or first-run wizard. Public-read
- *                                        intentionally: lets the wizard probe
- *                                        before login so the admin step can
- *                                        present accurate missing-tool hints.
+ * - GET  /capabilities                   admin-only. The install's tool
+ *                                        inventory (paths, versions) is
+ *                                        install state, not member data.
  * - POST /capabilities/:id/install       admin-only. Runs the tool's installer
  *                                        and re-probes.
  * - POST /capabilities/install-all-missing  admin-only. Installs every
@@ -24,7 +24,9 @@ import { apiLogger } from '@/utils/logger';
 export const capabilitiesRoutes = new Elysia({ prefix: '/capabilities' })
   .use(apiContext)
 
-  .get('/', async () => {
+  .get('/', async ({ user, principal, set }) => {
+    const denied = adminDenied({ set, user, principal });
+    if (denied) return denied;
     const rows = await getCapabilityService().list();
     return rows.map((r) => ({
       toolId: r.toolId,
@@ -40,11 +42,9 @@ export const capabilitiesRoutes = new Elysia({ prefix: '/capabilities' })
 
   .post(
     '/probe',
-    async ({ user, set }) => {
-      if (!user?.isAdmin) {
-        set.status = 403;
-        return { error: 'Admin access required' };
-      }
+    async ({ user, principal, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
       const rows = await getCapabilityService().probeAll();
       return { count: rows.length, available: rows.filter((r) => r.available).length };
     },
@@ -53,11 +53,9 @@ export const capabilitiesRoutes = new Elysia({ prefix: '/capabilities' })
 
   .post(
     '/install-all-missing',
-    async ({ user, set }) => {
-      if (!user?.isAdmin) {
-        set.status = 403;
-        return { error: 'Admin access required' };
-      }
+    async ({ user, principal, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
       try {
         return await getCapabilityService().installAllMissing();
       } catch (err) {
@@ -71,11 +69,9 @@ export const capabilitiesRoutes = new Elysia({ prefix: '/capabilities' })
 
   .post(
     '/:id/install',
-    async ({ params, user, set }) => {
-      if (!user?.isAdmin) {
-        set.status = 403;
-        return { error: 'Admin access required' };
-      }
+    async ({ params, user, principal, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
       try {
         const result = await getCapabilityService().install(params.id);
         if (!result.ok) set.status = 409;

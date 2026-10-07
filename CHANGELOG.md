@@ -19,7 +19,8 @@ labels reflect blast radius, not contract guarantees.
   accounts that already joined through an invite keep access until an admin
   turns it off.
 - **Install-level routes are admin-only.** Running a tool directly
-  (`POST /api/tools/:id/tools/:name/execute`), reloading extensions, plugins
+  (`POST /api/tools/:id/tools/:name/execute`) beyond the tools a member's own
+  chat agent has, reloading extensions, plugins
   and mounted skills, and reading model configuration, provider lists, CLI
   status, detailed health, tool/plugin/MCP/capability inventories,
   evaluations, topic bindings and telephony state now need an admin

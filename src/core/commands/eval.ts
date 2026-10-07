@@ -139,17 +139,29 @@ function formatCompareSummary(
 
 // ── Sub-command implementations ─────────────────────────────────────────────
 
+/**
+ * The enabled models `userId` may run: an admin, every install model; anyone
+ * else, the ones the models list shows them (their orgs' install rows and
+ * their own personal rows) — never another org's or another user's.
+ */
+async function enabledModelsFor(userId: string) {
+  const { isAdminInDatabase } = await import('@/core/gateway/commands');
+  const registry = getModelRegistry();
+  const models = (await isAdminInDatabase(userId))
+    ? await registry.getAllModels()
+    : await registry.getModelsForUser(userId);
+  return models.filter((m) => m.isEnabled);
+}
+
 async function runConformance(
   modelFilter: string | null,
   userId: string,
   notify?: (msg: string) => Promise<void>,
 ): Promise<string> {
-  const registry = getModelRegistry();
   const router = getProviderRouter();
   const client = getLiteLLMClient();
 
-  let models = await registry.getAllModels();
-  models = models.filter((m) => m.isEnabled);
+  let models = await enabledModelsFor(userId);
 
   if (modelFilter) {
     models = models.filter(
@@ -174,7 +186,7 @@ async function runConformance(
     providerMap.set(p.name, p);
   }
 
-  const report = await runConformanceTests(client, models, providerMap, { timeout: 30_000 });
+  const report = await runConformanceTests(client, models, providerMap, { timeout: 30_000, userId });
 
   // Persist to DB
   try {
@@ -195,8 +207,7 @@ async function runQuality(
     return 'Usage: `/eval quality <modelId>`\n\nExample: `/eval quality qwen3:14b`';
   }
 
-  const registry = getModelRegistry();
-  const allModels = await registry.getAllModels();
+  const allModels = await enabledModelsFor(userId);
   const modelEntry = allModels.find(
     (m) => m.modelId === modelId || m.name.toLowerCase() === modelId.toLowerCase(),
   );

@@ -88,3 +88,25 @@ describe('workspace routes — admin clears the gate', () => {
     expect(r.body.error).toMatch(/invalid repository name/i);
   });
 });
+
+describe('workspace routes — install paths stay with admins', () => {
+  test('GET /workspace sends additionalPaths to an admin only', async () => {
+    const member = await req(await appFor(false), 'GET', '/api/workspace');
+    expect(member.status).toBe(200);
+    expect(member.body).toHaveProperty('rootPath');
+    expect(member.body).not.toHaveProperty('additionalPaths');
+
+    const admin = await req(await appFor(true), 'GET', '/api/workspace');
+    expect(Array.isArray((admin.body as { additionalPaths?: unknown }).additionalPaths)).toBe(true);
+  });
+
+  test('POST /workspace/repositories checks parentPath against the allow-list before it touches the disk', async () => {
+    // A missing path outside the caller's roots gets the allow-list refusal,
+    // not "does not exist": the route is no existence oracle for host paths.
+    for (const parentPath of ['/octipus-no-such-dir-probe', '/root/.ssh', '/etc']) {
+      const r = await req(await appFor(false), 'POST', '/api/workspace/repositories', { name: 'x', parentPath });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/must be the workspace root/i);
+    }
+  });
+});
