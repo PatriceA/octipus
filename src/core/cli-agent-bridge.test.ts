@@ -14,7 +14,7 @@ const commentary = vi.hoisted(() => vi.fn().mockResolvedValue({ sent: true }));
 vi.mock('./agent/service', () => ({ getAgentService: () => ({ sendStatusUpdate: commentary }) }));
 // These process/bridge fixtures have no database; accounting is tested separately.
 const usage = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock('@/models/providers/instrumented', () => ({ recordProviderUsage: usage }));
+vi.mock('@/models/providers/instrumented', () => ({ recordProviderUsage: usage, assertRowServesCall: async () => {} }));
 vi.mock('@/db/repositories/tool-action-repository', () => ({ toolActionRepository: { pending: async () => [], start: async () => {}, finish: async () => {} } }));
 vi.mock('child_process', async importOriginal => {
   const actual = await importOriginal<typeof import('child_process')>();
