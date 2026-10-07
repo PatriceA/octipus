@@ -136,9 +136,14 @@ export async function resolveModel(req: ResolveByTopic | ResolveByName): Promise
   const registry = getModelRegistry();
   if ('name' in req) {
     const sponsorRow = req.sponsor?.models.includes(req.name) ? await registry.getModel(req.name) : null;
+    // An install row is visible by the payer's access (the sponsor in a
+    // sponsored turn); a personal row only to its owner, as before.
+    const viewer = req.sponsor && !(await mayUseInstallModels(req.userId)) ? req.sponsor.userId : req.userId;
     const row = (sponsorRow && personalRowAllowed(sponsorRow, req.userId, req.sponsor) ? sponsorRow : null)
       ?? (await registry.getModelVisibleTo(req.name, req.userId))
-      ?? (await registry.getModelByModelIdVisibleTo(req.name, req.userId));
+      ?? (viewer !== req.userId ? await registry.getModelVisibleTo(req.name, viewer).then((r) => (r && !r.ownerUserId ? r : null)) : null)
+      ?? (await registry.getModelByModelIdVisibleTo(req.name, req.userId))
+      ?? (viewer !== req.userId ? await registry.getModelByModelIdVisibleTo(req.name, viewer).then((r) => (r && !r.ownerUserId ? r : null)) : null);
     if (!row || !row.isEnabled) return null;
     if (!personalRowAllowed(row, req.userId, req.sponsor)) return null;
     if (req.inSpace && !usableInSpace(row, req.spaceRole)) return null;

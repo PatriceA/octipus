@@ -177,7 +177,6 @@ beforeEach(() => {
 });
 
 const GATED: Array<[string, string, unknown?]> = [
-  ['GET', '/tools'],
   ['GET', '/tools/role-map'],
   ['GET', '/tools/github'],
   ['POST', '/tools/reload', {}],
@@ -230,6 +229,15 @@ describe('install-state routes', () => {
     expect(fixture.pluginReload).not.toHaveBeenCalled();
     expect(fixture.toolExecute).not.toHaveBeenCalled();
     expect(fixture.installWhisper).not.toHaveBeenCalled();
+  });
+
+  test('GET /tools: a non-admin gets only the tools they may run, without status or permissions', async () => {
+    const res = await call('GET', '/tools');
+    expect(res.status).toBe(200);
+    // `github` is not one of the general agent's tools.
+    expect(res.body.tools).toEqual([]);
+    fixture.user = ADMIN;
+    expect((await call('GET', '/tools')).body.tools[0]).toMatchObject({ id: 'github', status: 'active' });
   });
 
   test('a non-admin runs and lists only the general agent\'s own tools, never MCP', async () => {

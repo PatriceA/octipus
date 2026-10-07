@@ -1,3 +1,4 @@
+import { mayUseInstallModels } from '@/models/install-access';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import type { AgentMessage } from '@/core/types';
@@ -181,6 +182,12 @@ export const evaluationRoutes = new Elysia({ prefix: '/evaluations' })
     '/eval/run',
     async ({ user, body, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+      // The LLM judge runs on the install's models (install work): not for
+      // an account they are not for (install-access.ts).
+      if (!(await mayUseInstallModels(user.id))) {
+        set.status = 403;
+        return { error: 'Evaluations are judged by the install\'s models, which this account may not use. Ask an admin.' };
+      }
 
       // Check for already running job
       for (const job of activeJobs.values()) {

@@ -19,15 +19,24 @@ function mayRunDirectly(toolId: string): boolean {
 export const toolRoutes = new Elysia({ prefix: '/tools' })
   .use(apiContext)
 
-  // List all registered tools with their sub-tools. Admin-only: the
-  // install's tool inventory is install state, not member data.
+  // List registered tools with their sub-tools. The install's full
+  // inventory (status, permissions) is install state: admins only. Anyone
+  // else gets the tools they may run directly (`mayRunDirectly`), names and
+  // schemas only — what the MCP bridge lists.
   .get(
     '/',
-    async ({ user, principal, set }) => {
-      const denied = adminDenied({ set, user, principal });
-      if (denied) return denied;
+    async ({ user, set }) => {
+      if (!user) {
+        set.status = 401;
+        return { error: 'Authentication required' };
+      }
 
       const registry = getToolRegistry();
+      if (!user.isAdmin) {
+        const own = registry.getManifests().filter((m) => mayRunDirectly(m.id) && registry.isInitialized(m.id));
+        return { tools: own.map((m) => ({ id: m.id, name: m.name, version: m.version, description: m.description,
+          tools: m.tools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })) })) };
+      }
       const manifests = registry.getManifests();
       const availability = await registry.checkAllAvailability();
 

@@ -96,7 +96,9 @@ beforeAll(async () => {
   ({ principalFromUser } = await import('@/security/principal'));
   const { modelRoutes } = await import('@/api/routes/models');
   const { adminRoutes } = await import('@/api/routes/admin');
-  routes = [modelRoutes, adminRoutes];
+  const { evaluationRoutes } = await import('@/api/routes/evaluations');
+  const { voiceRoutes } = await import('@/api/routes/voice');
+  routes = [modelRoutes, adminRoutes, evaluationRoutes, voiceRoutes];
 });
 
 afterAll(async () => {
@@ -150,6 +152,32 @@ describe('install-model access', () => {
     await expect(selector.selectForRootAgent(undefined, 'casual', undefined, { userId: daveId })).rejects.toThrow(/may not use the install's models/);
     expect((await selector.selectByComplexity('moderate', { userId: carolId })).name).toBe(OWN);
     expect((await selector.selectForRootAgent(undefined, 'casual', undefined, { userId: erinId })).name).toBe('install-main');
+  });
+
+  test('reroutes never hand an account without access an install row', async () => {
+    const { executeRaw } = await import('@/db/postgres');
+    const { ModelSelector } = await import('@/core/agent/model-selector');
+    await executeRaw(`UPDATE model_config SET supports_tools = false WHERE name = '${OWN}'`);
+    try {
+      // A no-tools own row stays (attempted anyway) rather than becoming the install default.
+      expect((await new ModelSelector().selectForRootAgent(undefined, 'casual', undefined, { userId: carolId })).name).toBe(OWN);
+    } finally {
+      await executeRaw(`UPDATE model_config SET supports_tools = true WHERE name = '${OWN}'`);
+    }
+  });
+
+  test('a sponsored turn may name an install row the sponsor may use', async () => {
+    const { resolveModel } = await import('@/models/resolve-model');
+    expect(await resolveModel({ userId: daveId, name: 'install-main' })).toBeNull();
+    expect((await resolveModel({ userId: daveId, name: 'install-main', sponsor: { userId: adminId, models: [] } }))?.name).toBe('install-main');
+    expect(await resolveModel({ userId: daveId, name: 'install-main', sponsor: { userId: carolId, models: [] } })).toBeNull();
+  });
+
+  test('install-paid side doors: the eval judge and hosted voice are refused', async () => {
+    const run = await call(carolId, false, 'POST', '/api/evaluations/eval/run', { model: OWN });
+    expect(run.status).toBe(403);
+    const stt = await call(carolId, false, 'POST', '/api/voice/transcribe', { audio: 'AAAA', model: 'whisper-1' });
+    expect(stt.body.error).toMatch(/install's keys/);
   });
 
   test('provider boundary: an install row or raw id never serves an account without access', async () => {

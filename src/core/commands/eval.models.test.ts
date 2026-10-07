@@ -33,6 +33,7 @@ vi.mock('@/models/providers', () => ({
   getProviderRouter: () => ({ getAllProviders: () => [], complete: (...a: unknown[]) => fixture.complete(...a) }),
 }));
 vi.mock('@/models/litellm-client', () => ({ getLiteLLMClient: () => ({}) }));
+vi.mock('@/models/install-access', () => ({ mayUseInstallModels: async () => true }));
 vi.mock('@/db/repositories/evaluation-repository', () => ({
   evaluationRepository: { saveConformanceRun: async () => ({}), saveEvalRunWithDataset: async () => ({}) },
 }));

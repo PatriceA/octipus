@@ -1,3 +1,4 @@
+import { mayUseInstallModels } from '@/models/install-access';
 import { Elysia, t } from '@/api/http';
 import { fetchWithTimeout } from '@/utils/http';
 import { adminDenied } from '@/api/admin-guard';
@@ -307,6 +308,9 @@ async function handleVoiceWebhook(provider: string, body: Record<string, unknown
   return telephonyProvider.generateHangupResponse();
 }
 
+/** TTS engines that call a hosted API on the install's keys. */
+const HOSTED_TTS = new Set(['mistral', 'openai']);
+
 export const voiceRoutes = new Elysia({ prefix: '/voice' })
   .use(apiContext)
 
@@ -320,6 +324,12 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
       try {
         const { audio, format, model } = body;
         const transcriptionModel = model || 'local';
+        // Hosted engines spend the install's keys: only local whisper for an
+        // account the install's models are not for (install-access.ts).
+        const installOk = await mayUseInstallModels(user.id);
+        if (!installOk && transcriptionModel !== 'local' && transcriptionModel !== 'whisper-cpp') {
+          return { error: 'Hosted transcription uses the install\'s keys, which this account may not use; use local whisper' };
+        }
 
         // Mistral (Voxtral) hosted transcription
         if (transcriptionModel.startsWith('voxtral')) {
@@ -338,7 +348,7 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
             return { text: result.text, model: 'whisper-cpp', language: result.language, duration: result.duration };
           }
           // Fall through to OpenAI if local not configured and model was 'local'
-          if (transcriptionModel === 'whisper-cpp') {
+          if (transcriptionModel === 'whisper-cpp' || !installOk) {
             return { error: 'Local whisper not configured (set voice.whisperModelPath)' };
           }
         }
@@ -403,6 +413,11 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
 
       try {
         const provider = config.voice.ttsProvider;
+        // Hosted engines spend the install's keys (install-access.ts).
+        if (HOSTED_TTS.has(provider) && !(await mayUseInstallModels(user.id))) {
+          set.status = 403;
+          return { error: 'Speech synthesis here uses the install\'s keys, which this account may not use' };
+        }
         const requested = body.format || 'mp3';
         // Engines with a fixed output format win over the request, so the
         // Content-Type always describes the bytes we actually return.

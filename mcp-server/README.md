@@ -69,7 +69,7 @@ is separate from backend authentication.
 
 The direct tool bridge (`octipus_list_tools`, `octipus_execute_tool`, and the
 web search, page fetch, knowledge, messaging, notes, tasks, profiles and email
-tools built on it) calls `/api/tools/all` and
+tools built on it) calls `/api/tools` and
 `/api/tools/:id/tools/:name/execute`. With a non-admin token it lists and runs
 only the tools your own chat agent has (the general role's tools, without the
 install's MCP servers), under your tool permissions; anything that would ask

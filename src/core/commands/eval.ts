@@ -206,6 +206,12 @@ async function runQuality(
   if (!modelId) {
     return 'Usage: `/eval quality <modelId>`\n\nExample: `/eval quality qwen3:14b`';
   }
+  // The judge runs on the install's models (install work): not for an
+  // account they are not for (install-access.ts).
+  const { mayUseInstallModels } = await import('@/models/install-access');
+  if (!(await mayUseInstallModels(userId))) {
+    return 'Quality evaluation is judged by the install\'s models, which this account may not use. Ask an admin.';
+  }
 
   const allModels = await enabledModelsFor(userId);
   const modelEntry = allModels.find(
