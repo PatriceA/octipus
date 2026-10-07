@@ -1,4 +1,5 @@
 import { Elysia, t } from '@/api/http';
+import { adminDenied } from '@/api/admin-guard';
 import { apiContext } from '@/api/context';
 import { getLoadedPlugin, getLoadedPlugins, PluginTool, reloadPlugin } from '@/plugins';
 import { getToolRegistry } from '@/tools/registry';
@@ -9,10 +10,9 @@ export const pluginRoutes = new Elysia({ prefix: '/plugins' })
   // List all loaded plugins
   .get(
     '/',
-    async ({ user }) => {
-      if (!user) {
-        return { error: 'Not authenticated' };
-      }
+    async ({ user, principal, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
 
       const plugins = getLoadedPlugins();
 
@@ -37,10 +37,9 @@ export const pluginRoutes = new Elysia({ prefix: '/plugins' })
   // Get a specific plugin's details
   .get(
     '/:name',
-    async ({ user, params }) => {
-      if (!user) {
-        return { error: 'Not authenticated' };
-      }
+    async ({ user, principal, set, params }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
 
       const plugin = getLoadedPlugin(params.name);
       if (!plugin) {
@@ -70,10 +69,9 @@ export const pluginRoutes = new Elysia({ prefix: '/plugins' })
   // Reload a specific plugin (for development)
   .post(
     '/:name/reload',
-    async ({ user, params }) => {
-      if (!user) {
-        return { error: 'Not authenticated' };
-      }
+    async ({ user, principal, set, params }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
 
       const registry = getToolRegistry();
       const oldToolId = `plugin-${params.name}`;

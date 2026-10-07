@@ -358,6 +358,8 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
         username: fullUser.username,
         email: fullUser.email,
         isAdmin: fullUser.isAdmin,
+        // Whether this account runs on the install's models (install-access.ts).
+        installModels: fullUser.isAdmin || fullUser.installModels,
         totpEnabled: fullUser.totpEnabled,
         preferences: fullUser.preferences,
         channelBindings: fullUser.channelBindings || [],

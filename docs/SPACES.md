@@ -495,6 +495,49 @@ alike — then run on that model, on their key.
   space, your own personal CLI model serves your turns; an install CLI model
   still needs `sharedUse`.
 
+## Who may use the install's models
+
+Joining a space does not hand someone the owner's models. Each account has
+an install-models flag (`users.install_models`, `src/models/install-access.ts`):
+
+- **On** — the account may run on the install's models and keys, like before.
+  Admins always are. Accounts that existed before the flag, admin-created
+  accounts and SAML/SCIM accounts start on.
+- **Off** — the account runs only on its own models (Settings → My models)
+  and, in a sponsored space turn, on what the sponsor may use. It sees only
+  its own rows in every model list (`GET /api/models`, `/model list`,
+  `/v1/models`); its text lanes and root agent resolve to its own first
+  enabled model, and without one a turn fails with "add your own under
+  Settings → My models". An account created on the sign-in page (open
+  registration or an invite link) starts **off** unless
+  `security.selfRegisteredInstallModels` (`SELF_REGISTERED_INSTALL_MODELS`)
+  is on.
+
+An admin flips it per account under **Users** (the "Models" column, or
+`PATCH /api/admin/users/:id { installModels }`); it applies within a few
+seconds. The check sits where every model call passes — the instrumented
+API providers and the CLI spawn sites — so a raw model id on the install's
+env key or an install CLI login is refused too. Install work (memory
+extraction, embeddings, compaction, vision/OCR helpers, the listen probe)
+stays on the install's models: it is billed `install`, as before.
+
+To let members of one space use your models without opening the whole
+install to them, make the space **sponsored** (Funding and budgets): a
+sponsored turn runs on what the sponsor may use.
+
+### What members see
+
+A non-admin account sees its own data and the spaces it belongs to — not the
+install's configuration or state. The install-level routes are admin-only
+(`adminDenied`, `src/api/admin-guard.ts`): model configuration, provider
+lists and CLI status/quotas, detailed health, tool, plugin, MCP and
+capability inventories, evaluations, topic bindings, telephony and voice
+installs, gateway adapters; reloading extensions, plugins and mounted
+skills; running a tool directly (`POST /api/tools/:id/tools/:name/execute`)
+outside the tools a member's own chat agent has (the general role's, without
+the install's MCP servers). The web hides the matching pages
+(tools, topics, evaluations) for non-admins.
+
 ## In the web
 
 - **Picker** (the header's workspace button): "my workspaces" (your own,
@@ -942,6 +985,7 @@ shell in a space can read the space's GitHub token from the tool home.
 | Key | Env | Default | Meaning |
 |---|---|---|---|
 | `security.registration` | `REGISTRATION_MODE` | `open` | `open`, `invite_only` or `closed`: who may register an account (see "Registration modes") |
+| `security.selfRegisteredInstallModels` | `SELF_REGISTERED_INSTALL_MODELS` | `false` | whether accounts created on the sign-in page may run on the install's models (see "Who may use the install's models") |
 | `spaces.creation` | `SPACES_CREATION` | `any_user` | `any_user` or `admins`: who may create a space |
 | `spaces.maxMembers` | `SPACES_MAX_MEMBERS` | `50` | most members per space |
 | `spaces.inviteMaxTtlHours` | `SPACES_INVITE_MAX_TTL_HOURS` | `720` | longest invite lifetime, hours |

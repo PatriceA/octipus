@@ -443,6 +443,13 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
       { name: 'server', required: false, description: 'Server id or name (omit for all enabled)' },
     ],
     handler: async (ctx) => {
+      // The server list (names, status, errors) is install state, and
+      // reconnecting rebinds a process-wide bridge every user's agents call:
+      // both need an admin — read from the database, not the connection.
+      if (!(await isAdminInDatabase(ctx.userId))) {
+        return { text: 'MCP server status and reconnects need an admin account.' };
+      }
+
       const { getMCPBridge } = await import('@/mcp/bridge');
       const bridge = getMCPBridge();
       const configs = bridge.getServerConfigs();
@@ -466,12 +473,6 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
 
       if (action !== 'reconnect') {
         return { text: `Unknown action "${action}". Use /mcp or /mcp reconnect [server].` };
-      }
-
-      // Reconnecting rebinds a process-wide bridge every user's agents call,
-      // so it needs an admin — read from the database, not the connection.
-      if (!(await isAdminInDatabase(ctx.userId))) {
-        return { text: 'Reconnecting an MCP server needs an admin account.' };
       }
 
       const wanted = (ctx.args.server || '').toLowerCase();

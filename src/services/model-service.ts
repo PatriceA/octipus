@@ -14,7 +14,7 @@
 import { z } from 'zod';
 import { getConfig } from '@/config';
 import { getCLIToolConfig } from '@/core/cli-agent-factory';
-import { DEFAULT_MAX_OUTPUT_TOKENS, type NewModelConfigEntry } from '@/db/schema/models';
+import { DEFAULT_MAX_OUTPUT_TOKENS, type ModelConfigEntry, type NewModelConfigEntry } from '@/db/schema/models';
 import { getCapabilitiesForModel } from '@/models/capabilities';
 import { checkModelCapabilities } from '@/models/capability-gate';
 import { getCostTracker } from '@/models/cost-tracker';
@@ -39,7 +39,9 @@ const PERSONAL_ROW_REFUSAL = 'This is a personal model; only its owner manages i
 /**
  * List models visible to the user: for an admin every install row (incl.
  * disabled), for anyone else the install/org rows they may use — plus, for
- * both, their own personal rows and never another user's.
+ * both, their own personal rows and never another user's. A non-admin gets
+ * the install rows redacted (`redactInstallRow`): enough to pick one, not the
+ * install's configuration.
  */
 export async function listModels(userId: string, isAdmin: boolean) {
   const registry = getModelRegistry();
@@ -49,7 +51,7 @@ export async function listModels(userId: string, isAdmin: boolean) {
 
   const anthropicNative = anthropicNativeMessagesEnabled(process.env.ANTHROPIC_NATIVE_MESSAGES);
   return {
-    models: models.map((m) => ({
+    models: models.map((m) => isAdmin || m.ownerUserId === userId ? {
       id: m.id,
       name: m.name,
       provider: m.provider,
@@ -70,7 +72,29 @@ export async function listModels(userId: string, isAdmin: boolean) {
       isDefault: m.isDefault,
       metadata: m.metadata,
       providerControls: providerControls(m.provider, m.modelId, anthropicNative),
-    })),
+    } : redactInstallRow(m, anthropicNative)),
+  };
+}
+
+/**
+ * What a non-admin sees of an install row: what it is and what it can do,
+ * never where it runs, whose key it uses, its topics, priority, costs or
+ * metadata — that is the install's configuration (docs/SPACES.md → What
+ * members see).
+ */
+function redactInstallRow(m: ModelConfigEntry, anthropicNative: boolean) {
+  return {
+    id: m.id,
+    name: m.name,
+    provider: m.provider,
+    modelId: m.modelId,
+    contextWindow: m.contextWindow,
+    supportsVision: m.supportsVision,
+    supportsTools: m.supportsTools,
+    supportsStreaming: m.supportsStreaming,
+    isEnabled: m.isEnabled,
+    isDefault: m.isDefault,
+    providerControls: providerControls(m.provider, m.modelId, anthropicNative),
   };
 }
 
@@ -97,6 +121,10 @@ export async function getModelByName(name: string, userId: string, isAdmin: bool
   const model = isAdmin ? await registry.getModelAnyState(name) : await registry.getModelVisibleTo(name, userId);
   if (!model || (model.ownerUserId && model.ownerUserId !== userId)) return { error: 'Model not found' as const };
   if (!isAdmin && !model.isEnabled) return { error: 'Model not found' as const };
+  if (!isAdmin && model.ownerUserId !== userId) {
+    const anthropicNative = anthropicNativeMessagesEnabled(process.env.ANTHROPIC_NATIVE_MESSAGES);
+    return { ...redactInstallRow(model, anthropicNative), capabilities: getCapabilitiesForModel(model) };
+  }
   return { ...model, capabilities: getCapabilitiesForModel(model) };
 }
 

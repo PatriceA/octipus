@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import { api } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 import { OAuthIntegrationsSection } from './oauth-section';
 import {
   SecretsRedirectBanner,
@@ -25,17 +26,24 @@ import { useWorkspaceId } from '@/lib/workspace-context';
 
 interface WorkspaceConfig {
   rootPath: string;
-  additionalPaths: string[];
+  /** Install-wide paths — the server sends them to admins only. */
+  additionalPaths?: string[];
 }
 
 export function IntegrationsTab() {
+  // The CLI integration status reads the install's tool inventory (admin-only).
+  const isAdmin = !!useAuth().user?.isAdmin;
   return (
     <div className="space-y-8">
       <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">Integrations</h2>
-      <WorkspaceSection />
+      <WorkspaceSection isAdmin={isAdmin} />
       <hr className="border-outline-variant/10" />
-      <CLIIntegrationsSection />
-      <hr className="border-outline-variant/10" />
+      {isAdmin && (
+        <>
+          <CLIIntegrationsSection />
+          <hr className="border-outline-variant/10" />
+        </>
+      )}
       <OAuthIntegrationsSection />
       <hr className="border-outline-variant/10" />
       <IntegrationSettingsSection />
@@ -43,7 +51,7 @@ export function IntegrationsTab() {
   );
 }
 
-function WorkspaceSection() {
+function WorkspaceSection({ isAdmin }: { isAdmin: boolean }) {
   const workspaceId = useWorkspaceId();
   const queryClient = useQueryClient();
   const { data: workspace, isLoading: wsLoading } = useQuery({
@@ -56,7 +64,7 @@ function WorkspaceSection() {
   const [error, setError] = useState('');
 
   const handleAddPath = async () => {
-    if (!newPath.trim() || !workspace) return;
+    if (!newPath.trim() || !workspace?.additionalPaths) return;
     setValidating(true);
     setError('');
 
@@ -68,7 +76,7 @@ function WorkspaceSection() {
         return;
       }
 
-      const updated = [...workspace.additionalPaths, validation.path];
+      const updated = [...(workspace.additionalPaths ?? []), validation.path];
       setSaving(true);
       await api.put<WorkspaceConfig>('/workspace', { additionalPaths: updated });
       queryClient.invalidateQueries({ queryKey: ['workspace'] });
@@ -81,7 +89,7 @@ function WorkspaceSection() {
   };
 
   const handleRemovePath = async (index: number) => {
-    if (!workspace) return;
+    if (!workspace?.additionalPaths) return;
     setSaving(true);
     setError('');
     try {
@@ -122,48 +130,55 @@ function WorkspaceSection() {
         </div>
       </div>
 
-      {/* Additional paths */}
-      <div className="mb-3">
-        <label className="text-xs font-bold text-on-surface-variant uppercase mb-2 block">Additional Paths</label>
-        <div className="space-y-2">
-          {workspace?.additionalPaths.length === 0 && (
-            <p className="text-xs text-on-surface-variant py-2">No additional paths configured.</p>
-          )}
-          {workspace?.additionalPaths.map((path, i) => (
-            <div key={i} className="flex items-center gap-2 bg-surface-container-low rounded-lg py-3 px-4">
-              <span className="flex-1 text-sm font-mono text-on-surface">{path}</span>
-              <button
-                onClick={() => handleRemovePath(i)}
-                disabled={saving}
-                className="p-1 text-on-surface-variant hover:text-error disabled:opacity-50"
-                title="Remove path"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
+      {!isAdmin && (
+        <p className="text-xs text-on-surface-variant mb-3">Additional paths are configured by an administrator.</p>
+      )}
+      {isAdmin && (
+        <>
+          {/* Additional paths */}
+          <div className="mb-3">
+            <label className="text-xs font-bold text-on-surface-variant uppercase mb-2 block">Additional Paths</label>
+            <div className="space-y-2">
+              {workspace?.additionalPaths?.length === 0 && (
+                <p className="text-xs text-on-surface-variant py-2">No additional paths configured.</p>
+              )}
+              {workspace?.additionalPaths?.map((path, i) => (
+                <div key={i} className="flex items-center gap-2 bg-surface-container-low rounded-lg py-3 px-4">
+                  <span className="flex-1 text-sm font-mono text-on-surface">{path}</span>
+                  <button
+                    onClick={() => handleRemovePath(i)}
+                    disabled={saving}
+                    className="p-1 text-on-surface-variant hover:text-error disabled:opacity-50"
+                    title="Remove path"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      </div>
+          </div>
 
-      {/* Add new path */}
-      <div className="flex gap-2">
-        <input
-          type="text"
-          value={newPath}
-          onChange={(e) => setNewPath(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && handleAddPath()}
-          placeholder="/path/to/directory"
-          className="flex-1 bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm font-mono focus:ring-1 focus:ring-primary"
-        />
-        <button
-          onClick={handleAddPath}
-          disabled={!newPath.trim() || validating || saving}
-          className="px-3 py-1.5 text-xs bg-primary text-[#0e0e0e] cursor-pointer rounded-lg hover:bg-primary-container disabled:opacity-50 flex items-center gap-1"
-        >
-          {validating || saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
-          Add
-        </button>
-      </div>
+          {/* Add new path */}
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={newPath}
+              onChange={(e) => setNewPath(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleAddPath()}
+              placeholder="/path/to/directory"
+              className="flex-1 bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm font-mono focus:ring-1 focus:ring-primary"
+            />
+            <button
+              onClick={handleAddPath}
+              disabled={!newPath.trim() || validating || saving}
+              className="px-3 py-1.5 text-xs bg-primary text-[#0e0e0e] cursor-pointer rounded-lg hover:bg-primary-container disabled:opacity-50 flex items-center gap-1"
+            >
+              {validating || saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
+              Add
+            </button>
+          </div>
+        </>
+      )}
 
       {error && (
         <div className="mt-2 flex items-center gap-1.5 text-sm text-error">

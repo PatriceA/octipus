@@ -953,6 +953,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'REGISTRATION_MODE',
   },
   {
+    key: 'security.selfRegisteredInstallModels',
+    category: 'security',
+    valueType: 'boolean',
+    defaultValue: false,
+    description:
+      'Whether accounts created on the sign-in page (open registration or a space invite link) may run on this install\'s models and keys. Off: they see and use only their own models (Settings → My models) and the models a space sponsors, until an admin allows it under Users. Admins, SAML, SCIM and admin-created accounts may always.',
+    isSecret: false,
+    envVar: 'SELF_REGISTERED_INSTALL_MODELS',
+  },
+  {
     key: 'security.totpIssuer',
     category: 'security',
     valueType: 'string',

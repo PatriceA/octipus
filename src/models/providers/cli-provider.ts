@@ -634,7 +634,10 @@ export class CLIProvider implements ModelProvider {
       ? await registry.getModel(options.modelConfigName)
       : await registry.getModel(options.model).then((m) => (m && !m.ownerUserId ? m : null))
         ?? await registry.getModelByModelId(options.model, { userId: requesterId });
-    // Throws for another user's personal row (the provider-layer owner check).
+    // Throws for another user's personal row (the provider-layer owner check),
+    // and for an install login the requester may not use (install-access.ts).
+    const { assertRowServesCall } = await import('./instrumented');
+    await assertRowServesCall(row, options);
     const credentialOwner = await cliCredentialOwnerFor(row, requesterId);
     // A personal row's one-shot runs tool-less, in the owner's own directory
     // (§8.4): its callers summarize external mail and fetched pages, and a

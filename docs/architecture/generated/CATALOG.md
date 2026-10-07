@@ -530,14 +530,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 3 |
-| `api` | `models` | 36 |
+| `api` | `models` | 39 |
 | `api` | `plugins` | 1 |
-| `api` | `security` | 119 |
+| `api` | `security` | 127 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 3 |
 | `api` | `skills` | 6 |
 | `api` | `tools` | 4 |
-| `api` | `utils` | 62 |
+| `api` | `utils` | 63 |
 | `api` | `voice` | 23 |
 | `capabilities` | `db` | 2 |
 | `capabilities` | `models` | 1 |
@@ -574,7 +574,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 5 |
-| `core` | `models` | 112 |
+| `core` | `models` | 115 |
 | `core` | `security` | 138 |
 | `core` | `services` | 2 |
 | `core` | `shared` | 15 |
@@ -609,7 +609,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `mcp` | `utils` | 4 |
 | `models` | `config` | 10 |
 | `models` | `core` | 29 |
-| `models` | `db` | 12 |
+| `models` | `db` | 14 |
 | `models` | `security` | 20 |
 | `models` | `services` | 1 |
 | `models` | `shared` | 4 |

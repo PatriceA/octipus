@@ -63,7 +63,8 @@ interface KnowledgeStats {
 interface KBReadiness {
   ready: boolean;
   reason?: string;
-  checks: {
+  /** Per-check details — sent to admins only. */
+  checks?: {
     db: { ok: boolean; detail?: string };
     embeddingModel: { ok: boolean; detail?: string; modelId?: string };
     vectorWrite: { ok: boolean; detail?: string };
@@ -583,7 +584,7 @@ export default function KnowledgePage() {
             Knowledge base is not ready
           </div>
           <div className="text-xs mt-1 opacity-90 wrap-break-word">{kbNotReadyMessage}</div>
-          {readiness && (
+          {readiness?.checks && (
             <ul className="text-xs mt-2 space-y-0.5 list-disc list-inside opacity-90">
               <li>Database: {readiness.checks.db.ok ? 'OK' : `FAIL — ${readiness.checks.db.detail || 'unknown'}`}</li>
               <li>Embedding model: {readiness.checks.embeddingModel.ok ? `OK (${readiness.checks.embeddingModel.modelId || 'resolved'})` : `FAIL — ${readiness.checks.embeddingModel.detail || 'unknown'}`}</li>

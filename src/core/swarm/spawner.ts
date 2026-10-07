@@ -2396,7 +2396,7 @@ export class SwarmSpawner {
         }
         if (childUsesTools && !bound.supportsTools && bound.provider !== 'cli') {
           const { findToolCapableFallback } = await import('@/core/agent/model-selector');
-          const alt = await findToolCapableFallback(candidate, { modelName: candidateName });
+          const alt = await findToolCapableFallback(candidate, { modelName: candidateName }, { userId, inSpace, spaceRole, sponsor });
           if (alt) {
             coreLogger.warn(
               { childRole, from: candidate, to: alt.model, reason: alt.reason },

@@ -1,4 +1,5 @@
 import { Elysia, t } from '@/api/http';
+import { adminDenied } from '@/api/admin-guard';
 import { apiContext } from '@/api/context';
 import type { MCPServer } from '@/core/types';
 import { getMCPBridge } from '@/mcp/bridge';
@@ -10,10 +11,9 @@ export const mcpRoutes = new Elysia({ prefix: '/mcp' })
   // List all MCP servers (configs + connection status)
   .get(
     '/servers',
-    async ({ user }) => {
-      if (!user?.isAdmin) {
-        return { error: 'Admin access required' };
-      }
+    async ({ user, principal, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
 
       const bridge = getMCPBridge();
       const configs = bridge.getServerConfigs();
@@ -48,10 +48,9 @@ export const mcpRoutes = new Elysia({ prefix: '/mcp' })
   // Add a new MCP server
   .post(
     '/servers',
-    async ({ user, body }) => {
-      if (!user?.isAdmin) {
-        return { error: 'Admin access required' };
-      }
+    async ({ user, principal, set, body }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
 
       const bridge = getMCPBridge();
 
@@ -107,10 +106,9 @@ export const mcpRoutes = new Elysia({ prefix: '/mcp' })
   // Toggle server enabled/disabled
   .post(
     '/servers/:id/toggle',
-    async ({ user, params, body }) => {
-      if (!user?.isAdmin) {
-        return { error: 'Admin access required' };
-      }
+    async ({ user, principal, set, params, body }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
 
       const bridge = getMCPBridge();
       const success = await bridge.toggleServer(params.id, body.enabled);
@@ -131,10 +129,9 @@ export const mcpRoutes = new Elysia({ prefix: '/mcp' })
   // Connect to a server
   .post(
     '/servers/:id/connect',
-    async ({ user, params }) => {
-      if (!user?.isAdmin) {
-        return { error: 'Admin access required' };
-      }
+    async ({ user, principal, set, params }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
 
       const bridge = getMCPBridge();
       const configs = bridge.getServerConfigs();
@@ -160,10 +157,9 @@ export const mcpRoutes = new Elysia({ prefix: '/mcp' })
   // Disconnect from a server
   .post(
     '/servers/:id/disconnect',
-    async ({ user, params }) => {
-      if (!user?.isAdmin) {
-        return { error: 'Admin access required' };
-      }
+    async ({ user, principal, set, params }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
 
       const bridge = getMCPBridge();
       await bridge.disconnect(params.id);
@@ -179,10 +175,9 @@ export const mcpRoutes = new Elysia({ prefix: '/mcp' })
   // Delete a server
   .delete(
     '/servers/:id',
-    async ({ user, params }) => {
-      if (!user?.isAdmin) {
-        return { error: 'Admin access required' };
-      }
+    async ({ user, principal, set, params }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
 
       const bridge = getMCPBridge();
       const deleted = await bridge.removeServer(params.id);
@@ -198,10 +193,9 @@ export const mcpRoutes = new Elysia({ prefix: '/mcp' })
   // List all tools from all connected servers
   .get(
     '/tools',
-    async ({ user }) => {
-      if (!user) {
-        return { error: 'Not authenticated' };
-      }
+    async ({ user, principal, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
 
       const bridge = getMCPBridge();
       const tools = bridge.getAllTools();
@@ -221,10 +215,9 @@ export const mcpRoutes = new Elysia({ prefix: '/mcp' })
   // Get tools for a specific server
   .get(
     '/servers/:id/tools',
-    async ({ user, params }) => {
-      if (!user) {
-        return { error: 'Not authenticated' };
-      }
+    async ({ user, principal, set, params }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
 
       const bridge = getMCPBridge();
       const connection = bridge.getConnection(params.id);
@@ -250,19 +243,18 @@ export const mcpRoutes = new Elysia({ prefix: '/mcp' })
   )
 
   // Circuit breaker state for all MCP servers
-  .get('/circuit', async ({ user }) => {
-    if (!user?.isAdmin) return { error: 'Admin access required' };
+  .get('/circuit', async ({ user, principal, set }) => {
+    const denied = adminDenied({ set, user, principal });
+    if (denied) return denied;
     return { circuits: getMcpCircuitBreaker().getAllStates() };
   })
 
   // Force-close a server's circuit breaker
   .post(
     '/circuit/:serverId/reset',
-    async ({ params, user, set }) => {
-      if (!user?.isAdmin) {
-        set.status = 403;
-        return { error: 'Admin access required' };
-      }
+    async ({ params, user, principal, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
       getMcpCircuitBreaker().reset(params.serverId);
       return { reset: true, state: getMcpCircuitBreaker().getState(params.serverId) };
     },

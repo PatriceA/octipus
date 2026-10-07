@@ -1,7 +1,10 @@
+import { mayUseInstallModels } from '@/models/install-access';
 import { Elysia, t } from '@/api/http';
 import { fetchWithTimeout } from '@/utils/http';
+import { adminDenied } from '@/api/admin-guard';
 import { apiContext } from '@/api/context';
 import { getConfig } from '@/config';
+import { isAdmin } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
 import { fileAt } from '@/utils/fs-file';
 
@@ -305,6 +308,9 @@ async function handleVoiceWebhook(provider: string, body: Record<string, unknown
   return telephonyProvider.generateHangupResponse();
 }
 
+/** TTS engines that call a hosted API on the install's keys. */
+const HOSTED_TTS = new Set(['mistral', 'openai']);
+
 export const voiceRoutes = new Elysia({ prefix: '/voice' })
   .use(apiContext)
 
@@ -318,6 +324,12 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
       try {
         const { audio, format, model } = body;
         const transcriptionModel = model || 'local';
+        // Hosted engines spend the install's keys: only local whisper for an
+        // account the install's models are not for (install-access.ts).
+        const installOk = await mayUseInstallModels(user.id);
+        if (!installOk && transcriptionModel !== 'local' && transcriptionModel !== 'whisper-cpp') {
+          return { error: 'Hosted transcription uses the install\'s keys, which this account may not use; use local whisper' };
+        }
 
         // Mistral (Voxtral) hosted transcription
         if (transcriptionModel.startsWith('voxtral')) {
@@ -336,7 +348,7 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
             return { text: result.text, model: 'whisper-cpp', language: result.language, duration: result.duration };
           }
           // Fall through to OpenAI if local not configured and model was 'local'
-          if (transcriptionModel === 'whisper-cpp') {
+          if (transcriptionModel === 'whisper-cpp' || !installOk) {
             return { error: 'Local whisper not configured (set voice.whisperModelPath)' };
           }
         }
@@ -401,6 +413,11 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
 
       try {
         const provider = config.voice.ttsProvider;
+        // Hosted engines spend the install's keys (install-access.ts).
+        if (HOSTED_TTS.has(provider) && !(await mayUseInstallModels(user.id))) {
+          set.status = 403;
+          return { error: 'Speech synthesis here uses the install\'s keys, which this account may not use' };
+        }
         const requested = body.format || 'mp3';
         // Engines with a fixed output format win over the request, so the
         // Content-Type always describes the bytes we actually return.
@@ -438,7 +455,7 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
 
   .get(
     '/status',
-    async ({ user }) => {
+    async ({ user, principal }) => {
       if (!user) return { error: 'Not authenticated' };
 
       const config = getConfig();
@@ -459,9 +476,10 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
         // Retained for compatibility with existing callers.
         sttEnabled: availability.stt.available,
         ttsEnabled: availability.tts.available,
-        ttsProvider: config.voice.ttsProvider,
+        // The engine choice and the host model path are install configuration.
+        ...(isAdmin(principal) ? { ttsProvider: config.voice.ttsProvider } : {}),
         localWhisper: availability.stt.local,
-        whisperModelPath: config.voice.whisperModelPath || null,
+        ...(isAdmin(principal) ? { whisperModelPath: config.voice.whisperModelPath || null } : {}),
         language: config.voice.language || 'en',
       };
     },
@@ -470,11 +488,10 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
 
   .post(
     '/install',
-    async ({ user, set }) => {
-      if (!user) {
-        set.status = 401;
-        return { error: 'Not authenticated' };
-      }
+    async ({ user, principal, set }) => {
+      // Builds and installs a host binary: an operator action.
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
       try {
         const { installWhisper } = await import('@/voice/whisper');
         const log: string[] = [];
@@ -548,11 +565,13 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
     }
   )
 
-  // Active calls list
+  // Active calls list. Admin-only: calls carry no owning user, so the list is
+  // every caller's phone numbers on the install.
   .get(
     '/calls',
-    async ({ user }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, principal, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
       const { getCallManager } = await import('@/voice/telephony');
       const calls = getCallManager().getActive();
       return { calls: calls.map(c => ({ id: c.id, status: c.status, direction: c.direction, from: c.from, to: c.to, provider: c.provider, startedAt: c.startedAt.toISOString() })) };
@@ -563,8 +582,9 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
   // Telephony health
   .get(
     '/telephony/health',
-    async ({ user }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, principal, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
       const { getTelephonyProvider } = await import('@/voice/telephony');
       const provider = await getTelephonyProvider();
       if (!provider) return { configured: false, provider: null };

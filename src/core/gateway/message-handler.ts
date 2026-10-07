@@ -533,7 +533,7 @@ async function handleChatInterject(
         userId,
         selector,
         'simple',
-        [], '', undefined, scope.space,
+        [], '', undefined, scope.space, scope.sponsor,
       );
       reply = `${personaName} — side question: ${result.response}`;
     } catch (err) {

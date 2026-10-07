@@ -20,6 +20,14 @@ export const users = pgTable('users', {
   remoteUserRef: text('remote_user_ref'),
   passwordHash: text('password_hash'),
   isAdmin: boolean('is_admin').default(false).notNull(),
+  /**
+   * Whether the account may run on the install's models and keys
+   * (`src/models/install-access.ts`). Without it, only on its own models and
+   * what a space sponsors. An admin always may. Off only for accounts
+   * created on the sign-in page (`security.selfRegisteredInstallModels`) or by
+   * an admin's choice.
+   */
+  installModels: boolean('install_models').default(true).notNull(),
   isActive: boolean('is_active').default(true).notNull(),
   /**
    * Who switched `isActive` off: 'admin' or 'scim:<orgId>'. Null while active.

@@ -960,6 +960,13 @@
       "when": 1789621114572,
       "tag": "0135_guests_remote",
       "breakpoints": true
+    },
+    {
+      "idx": 137,
+      "version": "7",
+      "when": 1789621115572,
+      "tag": "0136_install_model_access",
+      "breakpoints": true
     }
   ]
 }

@@ -270,15 +270,25 @@ export async function checkPostgres(): Promise<CheckResult> {
   };
 }
 
+/** An admin API token for the admin-only health routes (`OCTIPUS_TOKEN`), when set. */
+function adminAuthHeaders(): Record<string, string> {
+  const token = process.env.OCTIPUS_TOKEN;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 /**
- * Provider status straight from the running backend (`/api/health/models` is
- * unauthenticated). Doctor cannot read the DB, so this is the only truthful
- * view of what the wizard configured; the env-based Ollama/LiteLLM probes
- * above stay as a fallback for when nothing is running.
+ * Provider status straight from the running backend (`/api/health/models`,
+ * admin-only: set `OCTIPUS_TOKEN` to an admin API token). Doctor cannot read
+ * the DB, so this is the only truthful view of what the wizard configured;
+ * the env-based Ollama/LiteLLM probes above stay as a fallback for when
+ * nothing is running.
  */
 export async function checkModelProviders(): Promise<CheckResult> {
   try {
-    const res = await fetch(`${API_BASE()}/api/health/models`, { signal: AbortSignal.timeout(5000) });
+    const res = await fetch(`${API_BASE()}/api/health/models`, { headers: adminAuthHeaders(), signal: AbortSignal.timeout(5000) });
+    if (res.status === 401 || res.status === 403) {
+      return { name: 'Model providers', status: 'warn', detail: 'backend up; provider status needs an admin token', critical: false, hint: 'Set OCTIPUS_TOKEN to an admin API token (Settings → API Tokens) to check provider keys.' };
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const body = (await res.json()) as { providers?: Array<{ provider: string; status: string; models?: number }> };
     const rows = body.providers ?? [];
@@ -421,6 +431,7 @@ export async function checkBrowserExtension(): Promise<CheckResult> {
   try {
     const port = process.env.PORT || process.env.OCTIPUS_PORT || '3005';
     const res = await fetch(`http://localhost:${port}/api/health/browser-bridge`, {
+      headers: adminAuthHeaders(),
       signal: AbortSignal.timeout(750),
     });
     if (res.ok) {

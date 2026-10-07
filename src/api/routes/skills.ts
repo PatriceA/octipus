@@ -1,6 +1,7 @@
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
+import { adminDenied } from '@/api/admin-guard';
 import { getDb } from '@/db/postgres';
 import { skillRepository, type SkillUpdate } from '@/db/repositories/skill-repository';
 import { type Skill, skills } from '@/db/schema/skills';
@@ -12,7 +13,7 @@ import { updateSkill, SkillUpdateError } from '@/skills/update';
 import { getSkillModes } from '@/skills/selection';
 import { skillSelectionRepository } from '@/db/repositories/skill-selection-repository';
 import { scopedRepos } from '@/db/repositories/scoped';
-import { isAuthenticated } from '@/security/principal';
+import { isAdmin, isAuthenticated } from '@/security/principal';
 import {
   markdownToSkills,
   type PortableSkill,
@@ -25,8 +26,10 @@ import { canActInSession } from '@/core/rooms/access';
 export const skillRoutes = new Elysia({ prefix: '/skills' })
   .use(apiContext)
 
+  // Rescans the install's mounted skill folders: install state, admin only.
   .post('/reload-mounted', ({ user, principal, set }) => {
-    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    const denied = adminDenied({ set, user, principal });
+    if (denied) return denied;
     try {
       getSkillRegistry().reloadExternal();
       return { reloaded: true };
@@ -104,14 +107,19 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
 
   .get(
     '/export',
-    async ({ user, query }) => {
+    async ({ user, principal, query }) => {
       const db = getDb();
       const format = query.format ?? 'json';
 
-      let rows;
+      let rows: Skill[];
       if (query.ids) {
         const idList = query.ids.split(',').map((s: string) => s.trim()).filter(Boolean);
-        rows = await db.select().from(skills).where(inArray(skills.id, idList));
+        // Same rule as GET /:id/export: an admin exports any row, a user only
+        // what they can see (system, own, their orgs'), anonymous only system.
+        if (user && isAdmin(principal)) rows = await skillRepository.findByIds(idList);
+        else if (user) rows = await skillRepository.findVisibleByIds(user.id, idList);
+        else if (idList.length === 0) rows = [];
+        else rows = await db.select().from(skills).where(and(inArray(skills.id, idList), eq(skills.isSystem, true)));
       } else {
         // Export all custom (non-system) skills visible to the user
         if (user) {
@@ -149,10 +157,11 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
 
   .post(
     '/import',
-    async ({ user, body }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, principal, body, set }) => {
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
 
       const db = getDb();
+      const admin = isAdmin(principal);
       const overwrite = body.overwrite ?? false;
       let incoming: PortableSkill[] = [];
 
@@ -171,13 +180,24 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
         }
       }
 
-      // Look up existing skills by name for conflict detection
-      const existingRows = await db.select().from(skills);
-      const existingByName = new Map<string, Skill>(existingRows.map((r) => [r.name.toLowerCase(), r]));
+      // Look up existing skills by name for conflict detection. An admin
+      // matches every row (and may overwrite any of them); anyone else only
+      // the skills they can see, so another user's private skill neither
+      // conflicts nor leaks its name. Their own copy wins a name clash.
+      const owns = (row: Skill) => !row.isSystem && row.userId === user.id;
+      const existingRows = admin ? await db.select().from(skills) : await skillRepository.findAll(user.id);
+      const existingByName = new Map<string, Skill>();
+      for (const row of existingRows) {
+        const key = row.name.toLowerCase();
+        if (!existingByName.has(key) || (!admin && owns(row))) existingByName.set(key, row);
+      }
 
       const createdIds: string[] = [];
       const skipped: string[] = [];
       const updated: string[] = [];
+      // Visible but not the caller's (system, org, shared): never overwritten
+      // by a non-admin, and not duplicated either — reported here instead.
+      const notOwned: string[] = [];
 
       for (const portable of incoming) {
         const existing = existingByName.get(portable.name.toLowerCase());
@@ -185,6 +205,11 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
         if (existing) {
           if (!overwrite) {
             skipped.push(portable.name);
+            continue;
+          }
+          if (!admin && !owns(existing)) {
+            skipped.push(portable.name);
+            notOwned.push(portable.name);
             continue;
           }
 
@@ -224,7 +249,7 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
         createdIds.push(id);
       }
 
-      return { created: createdIds, updated, skipped };
+      return { created: createdIds, updated, skipped, notOwned };
     },
     {
       body: t.Object({
@@ -253,16 +278,14 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
 
   .get(
     '/:id/export',
-    async ({ user, params, query }) => {
-      const db = getDb();
+    async ({ user, principal, params, query, set }) => {
       const format = query.format ?? 'json';
-      const [skill] = await db.select().from(skills).where(eq(skills.id, params.id)).limit(1);
+      // Admin: any row; user: system, own and their orgs'; anonymous: system only.
+      const [skill] = user && isAdmin(principal) ? await skillRepository.findByIds([params.id])
+        : user ? await skillRepository.findVisibleByIds(user.id, [params.id])
+        : (await skillRepository.findByIds([params.id])).filter(row => row.isSystem);
 
-      if (!skill) return { error: 'Skill not found' };
-
-      if (!skill.isSystem && user && !user.isAdmin && skill.userId !== user.id) {
-        return { error: 'Not authorized' };
-      }
+      if (!skill) { set.status = 404; return { error: 'Skill not found' }; }
 
       if (format === 'markdown') {
         return new Response(skillToMarkdown(skill), {

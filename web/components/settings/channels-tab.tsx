@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import { api } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 import type { UserProfile } from '@/lib/types/settings';
 import {
   SecretsRedirectBanner,
@@ -183,8 +184,13 @@ export function ChannelsTab() {
 }
 
 function ChannelStatusList() {
+  // Which channels the install runs is install state: /health/channels is
+  // admin-only, so anyone else gets a note instead of a list of "Not configured".
+  const { user } = useAuth();
+  const isAdmin = !!user?.isAdmin;
   const { data: channelData } = useQuery({
     queryKey: ['channelStatus'],
+    enabled: isAdmin,
     queryFn: async () => {
       try {
         return await api.get<{ channels: { type: string; name: string; connected: boolean }[] }>('/health/channels');
@@ -203,6 +209,10 @@ function ChannelStatusList() {
   ];
 
   const registeredTypes = new Set(channelData?.channels?.map((c) => c.type) || []);
+
+  if (!isAdmin) {
+    return <p className="text-sm text-on-surface-variant">The install&apos;s channel status is shown to an admin.</p>;
+  }
 
   return (
     <div className="space-y-2">

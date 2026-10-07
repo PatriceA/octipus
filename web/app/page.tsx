@@ -13,6 +13,7 @@ import { Card } from '@/components/ui/card';
 import { PageHeader } from '@/components/ui/page-header';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { api } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 import { useWorkspaceId } from '@/lib/workspace-context';
 
 interface ServiceHealth {
@@ -50,9 +51,15 @@ interface UsageData {
 
 export default function DashboardPage() {
   const workspaceId = useWorkspaceId();
+  // Install health (services, providers, the global agent count, feature
+  // bindings) is for an admin: /health/detailed gives anyone else only
+  // `{ status, version }` and /health/features refuses them.
+  const { user } = useAuth();
+  const isAdmin = !!user?.isAdmin;
   const healthQuery = useQuery({
     queryKey: ['health'],
     retry: false,
+    enabled: isAdmin,
     queryFn: async () => await api.get<HealthData>('/health/detailed'),
     refetchInterval: (query) => {
       const h = query.state.data?.health;
@@ -85,7 +92,7 @@ export default function DashboardPage() {
   const sessionData = sessionsQuery.data;
   const healthFetching = healthQuery.isFetching;
   const stats = [
-    { name: 'active agents', value: health?.agents?.running, icon: Bot, tone: 'text-primary', query: healthQuery },
+    ...(isAdmin ? [{ name: 'active agents', value: health?.agents?.running, icon: Bot, tone: 'text-primary', query: healthQuery }] : []),
     { name: 'your sessions', value: sessionData?.total, icon: MessageSquare, tone: 'text-tertiary', query: sessionsQuery },
     { name: 'api requests', value: usage?.stats?.requestCount, icon: Activity, tone: 'text-primary', query: usageQuery },
     { name: usage?.stats?.unknownCostRequests ? 'known cost (incomplete)' : 'recorded cost (may include estimates)', value: usage?.stats?.totalCost == null ? undefined : `$${usage.stats.totalCost.toFixed(2)}`, icon: Zap, tone: 'text-warning', query: usageQuery },
@@ -102,7 +109,7 @@ export default function DashboardPage() {
       <PageHeader
         title="dashboard"
         description="live overview · agents · sessions · token usage · system health"
-        badge={
+        badge={isAdmin &&
           <StatusBadge variant={statusVariant} dot pulse={runningAgents != null && runningAgents > 0}>
             {statusLabel}
           </StatusBadge>
@@ -161,9 +168,9 @@ export default function DashboardPage() {
       </Card>}
       <BudgetsCard />
 
-      <HealthStatus health={health?.health} isFetching={healthFetching} />
+      {isAdmin && <HealthStatus health={health?.health} isFetching={healthFetching} />}
 
-      <FeatureStatus />
+      {isAdmin && <FeatureStatus />}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <UsageChart />

@@ -1,6 +1,8 @@
 import { getModelRegistry } from '@/models/model-registry';
+import type { ModelConfigEntry } from '@/db/schema/models';
 import type { SpaceRole } from '@/db/schema/organizations';
-import { resolveModel, usableInSpace } from '@/models/resolve-model';
+import { InstallModelsDeniedError, mayUseInstallModels } from '@/models/install-access';
+import { personalRowAllowed, resolveModel, usableInSpace } from '@/models/resolve-model';
 import { coreLogger } from '@/utils/logger';
 import { selectLane } from './lane-intent';
 import { hasRecentShim } from './model-capability';
@@ -42,6 +44,8 @@ export async function findToolCapableFallback(
   modelId: string,
   /** The row `modelId` was resolved from, when known; else the modelId lookup for `userId`. */
   row: { modelName?: string; userId?: string } = {},
+  /** Whom the call serves: the replacement comes from rows they may run (`rerouteCandidates`). */
+  requester: ModelRequester = { userId: row.userId },
 ): Promise<{ model: string; name: string; reason: string } | null> {
   const registry = getModelRegistry();
   const model = row.modelName ? await registry.getModel(row.modelName) : await registry.getModelByModelId(modelId, { userId: row.userId });
@@ -51,7 +55,7 @@ export async function findToolCapableFallback(
 
   const localProviders = ['ollama'];
 
-  const defaultModel = await registry.getDefaultModel();
+  const { defaultModel, rows: allModels } = await rerouteCandidates(requester);
   if (
     defaultModel && defaultModel.supportsTools
     && defaultModel.modelId !== modelId
@@ -60,7 +64,6 @@ export async function findToolCapableFallback(
     return { model: defaultModel.modelId, name: defaultModel.name, reason: 'routed model does not support tool calling' };
   }
 
-  const allModels = await registry.getAllModels();
   const toolModel = allModels.find((m) =>
     m.supportsTools
     && m.provider !== 'cli'
@@ -72,6 +75,22 @@ export async function findToolCapableFallback(
   }
 
   return null;
+}
+
+/**
+ * The rows a reroute may pick from for `requester`: the install's default and
+ * rows, or — for a payer the install's models are not for (install-access.ts;
+ * the sponsor in a sponsored turn) — only rows the requester may run of the
+ * payer's own, and no install default.
+ */
+async function rerouteCandidates(requester: ModelRequester): Promise<{ defaultModel: ModelConfigEntry | null; rows: ModelConfigEntry[] }> {
+  const registry = getModelRegistry();
+  const payer = requester.sponsor ? requester.sponsor.userId : requester.userId;
+  if (await mayUseInstallModels(payer)) {
+    return { defaultModel: await registry.getDefaultModel(), rows: await registry.getAllModels() };
+  }
+  const own = payer ? await registry.getPersonalModels(payer) : [];
+  return { defaultModel: null, rows: own.filter((m) => m.isEnabled && personalRowAllowed(m, requester.userId, requester.sponsor)) };
 }
 
 /**
@@ -121,7 +140,7 @@ export class ModelSelector {
             { sessionId, model: override.modelId },
             'Session model override active',
           );
-          return this.validateRootModel(override);
+          return this.validateRootModel(override, requester);
         }
         coreLogger.warn(
           { sessionId, overrideName },
@@ -143,7 +162,7 @@ export class ModelSelector {
           { lane: routed.lane, reason: routed.reason, model: routedModel.modelId, turnType },
           'Request routed to a model lane',
         );
-        return this.validateRootModel(routedModel);
+        return this.validateRootModel(routedModel, requester);
       }
       coreLogger.info(
         { lane: routed.lane },
@@ -151,11 +170,28 @@ export class ModelSelector {
       );
     }
 
+    const own = await this.ownModelInsteadOfInstall(requester);
+    if (own) return this.validateRootModel(own, requester);
     const defaultModel = await registry.getDefaultModel();
     if (!defaultModel) {
       throw new Error('No default model configured. Set one in the Models page.');
     }
-    return this.validateRootModel(defaultModel);
+    return this.validateRootModel(defaultModel, requester);
+  }
+
+  /**
+   * For a requester the install's models are not for (install-access.ts —
+   * the payer: the sponsor in a sponsored turn): their own first usable model
+   * in place of the install default; `InstallModelsDeniedError` when they
+   * have none. Null for everyone else.
+   */
+  private async ownModelInsteadOfInstall(requester: ModelRequester) {
+    if (!requester.userId) return null;
+    const payer = requester.sponsor ? requester.sponsor.userId : requester.userId;
+    if (await mayUseInstallModels(payer)) return null;
+    const own = await resolveModel({ userId: requester.userId, topic: 'everyday', inSpace: requester.inSpace, spaceRole: requester.spaceRole, sponsor: requester.sponsor });
+    if (!own) throw new InstallModelsDeniedError();
+    return own;
   }
 
   /**
@@ -165,9 +201,9 @@ export class ModelSelector {
    */
   private async validateRootModel(
     modelMeta: { modelId: string; name: string; supportsTools: boolean; provider: string },
+    requester: ModelRequester,
   ): Promise<SelectedModel> {
     const chosen: SelectedModel = { modelId: modelMeta.modelId, name: modelMeta.name };
-    const registry = getModelRegistry();
     const isReasoner = modelMeta.modelId.includes('reasoner') || modelMeta.modelId.includes('thinking');
     const noTools = !modelMeta.supportsTools && modelMeta.provider !== 'cli';
     // Capability floor (Phase 2.1): a model that recently needed the toolshim
@@ -188,8 +224,7 @@ export class ModelSelector {
 
     // Prefer the configured default when it clears the floor, else the first
     // tool-reliable model.
-    const defaultModel = await registry.getDefaultModel();
-    const allModels = await registry.getAllModels();
+    const { defaultModel, rows: allModels } = await rerouteCandidates(requester);
     const suitable = defaultModel && isSuitable(defaultModel) ? defaultModel : allModels.find(isSuitable);
     if (suitable) {
       coreLogger.warn(
@@ -227,7 +262,7 @@ export class ModelSelector {
 
     // If the worker needs tools, verify the routed model supports them
     if (needsTools) {
-      const resolved = await this.ensureToolSupport(routing);
+      const resolved = await this.ensureToolSupport(routing, requester);
       if (resolved) return resolved;
     }
 
@@ -237,14 +272,14 @@ export class ModelSelector {
   /**
    * If the routed model lacks tool support, find a local alternative.
    */
-  private async ensureToolSupport(routing: ModelRouting): Promise<ModelRouting | null> {
+  private async ensureToolSupport(routing: ModelRouting, requester: ModelRequester): Promise<ModelRouting | null> {
     const registry = getModelRegistry();
     const model = await registry.getModel(routing.name);
     // Only the "can't do tools" case is interesting — a supported/CLI model
     // short-circuits with no log (findToolCapableFallback returns null too).
     if (!model || model.supportsTools || model.provider === 'cli') return null;
 
-    const alt = await findToolCapableFallback(routing.model, { modelName: routing.name });
+    const alt = await findToolCapableFallback(routing.model, { modelName: routing.name }, requester);
     if (!alt) {
       coreLogger.warn(
         { model: routing.model },
@@ -274,6 +309,8 @@ export class ModelSelector {
       const personal = await registry.getUserBinding(requester.userId, 'everyday');
       if (personal && usable(personal)) return { modelId: personal.modelId, name: personal.name };
     }
+    const own = await this.ownModelInsteadOfInstall(requester);
+    if (own) return { modelId: own.modelId, name: own.name };
     const configuredDefault = await registry.getDefaultModel();
     if (!configuredDefault) {
       throw new Error('No default model configured. Set one in the Models page.');

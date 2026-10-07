@@ -9,6 +9,9 @@ export interface ModelCardProps {
   onEdit: (model: Model) => void;
   onToggleEnabled: (model: Model) => void;
   onDelete: (name: string) => void;
+  /** A non-admin's view: no install management, and the redacted install row
+   *  (GET /models) carries no costs, priority or metadata. */
+  readOnly?: boolean;
 }
 
 function HealthBadge({ health }: { health?: Model['health'] }) {
@@ -50,14 +53,14 @@ function ProviderBadge({ provider }: { provider: string }) {
 
 export { HealthBadge, ProviderBadge };
 
-export function ModelCard({ model, onSetDefault, onEdit, onToggleEnabled, onDelete }: ModelCardProps) {
+export function ModelCard({ model, onSetDefault, onEdit, onToggleEnabled, onDelete, readOnly = false }: ModelCardProps) {
   return (
     <div
       className={`bg-surface-container rounded-xs border ${
         model.isDefault ? 'border-primary/40' : 'border-outline-variant/10'
       }${model.isEnabled ? '' : ' opacity-60'} p-4 relative group`}
     >
-      <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+      {!readOnly && <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
         {!model.isDefault && (
           <button
             onClick={() => onSetDefault(model.name)}
@@ -92,7 +95,7 @@ export function ModelCard({ model, onSetDefault, onEdit, onToggleEnabled, onDele
         >
           <Trash2 className="w-4 h-4" />
         </button>
-      </div>
+      </div>}
 
       <div className="mb-3 pr-20">
         <div className="flex items-center gap-2">
@@ -137,10 +140,12 @@ export function ModelCard({ model, onSetDefault, onEdit, onToggleEnabled, onDele
             <span className="text-tertiary text-xs font-medium">Subscription/Provider pricing</span>
           </div>
         )}
-        <div className="flex justify-between">
-          <span className="text-on-surface-variant">Priority</span>
-          <span className="text-on-surface">{model.priority}</span>
-        </div>
+        {model.priority != null && (
+          <div className="flex justify-between">
+            <span className="text-on-surface-variant">Priority</span>
+            <span className="text-on-surface">{model.priority}</span>
+          </div>
+        )}
         {model.metadata?.paramCount ? (
           <div className="flex justify-between">
             <span className="text-on-surface-variant">Params</span>

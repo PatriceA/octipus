@@ -30,7 +30,7 @@ const app = new App().use(skillRoutes);
 const request = () => app.handle(new Request('http://test/skills/reload-mounted', { method: 'POST' }));
 let source: string;
 beforeEach(() => {
-  fixture.user = { id: 'user', username: 'user', isAdmin: false };
+  fixture.user = { id: 'user', username: 'user', isAdmin: true };
   fixture.fail = false;
   fixture.root = mkdtempSync(join(tmpdir(), 'octipus-reload-test-'));
   const directory = join(fixture.root, '.claude', 'skills', 'sample');
@@ -64,5 +64,12 @@ test('unauthenticated requests cannot trigger a scan', async () => {
   fixture.user = null;
   const scan = vi.spyOn(fixture.registry!, 'reloadExternal');
   expect((await request()).status).toBe(401);
+  expect(scan).not.toHaveBeenCalled();
+});
+
+test('non-admins cannot trigger a scan', async () => {
+  fixture.user = { id: 'user', username: 'user', isAdmin: false };
+  const scan = vi.spyOn(fixture.registry!, 'reloadExternal');
+  expect((await request()).status).toBe(403);
   expect(scan).not.toHaveBeenCalled();
 });

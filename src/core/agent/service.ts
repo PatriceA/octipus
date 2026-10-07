@@ -11,7 +11,7 @@ import { generateRunId, runWithContext } from '@/core/run-context';
 import { type AttachedFileRef, buildAttachedFilesContext } from '@/core/session-files';
 import { recordClassification, recordRootRun } from '@/core/telemetry';
 import { TrajectoryRecorder } from '@/core/trajectories/recorder';
-import type { AgentContext, AgentSpace, AgentTrigger } from '@/core/types';
+import type { AgentContext, AgentSpace, AgentSponsor, AgentTrigger } from '@/core/types';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import type { Session } from '@/db/schema/sessions';
@@ -166,9 +166,9 @@ export class AgentService {
   }
 
   /** The fast model mapped to the `voice` topic for this user, or undefined if none is mapped. */
-  private async resolveVoiceModel(userId: string, space: AgentSpace | null): Promise<SelectedModel | undefined> {
+  private async resolveVoiceModel(userId: string, space: AgentSpace | null, sponsor: AgentSponsor | null | undefined): Promise<SelectedModel | undefined> {
     try {
-      const routing = await this.modelSelector.selectForWorker('voice', false, { userId, inSpace: !!space, spaceRole: space?.role });
+      const routing = await this.modelSelector.selectForWorker('voice', false, { userId, inSpace: !!space, spaceRole: space?.role, sponsor });
       return routing.model ? { modelId: routing.model, name: routing.name } : undefined; // '' ⇒ topic unmapped ⇒ fall back to complexity routing
     } catch {
       return undefined;
@@ -901,11 +901,11 @@ export class AgentService {
         if (action.kind === 'propose') {
           // Plan out loud on the fast voice model; the user's actual utterance is
           // persisted, the accumulated task rides in the planning directive.
-          const voiceModel = await this.resolveVoiceModel(userId, scope.space);
+          const voiceModel = await this.resolveVoiceModel(userId, scope.space, scope.sponsor);
           const { response, metadata } = await directResponse(
             message, resolvedSessionId, userId, this.modelSelector,
             classification.complexity ?? 'moderate', inputGuard.flags,
-            VOICE_PLANNING_DIRECTIVE + action.workMessage, voiceModel, scope.space,
+            VOICE_PLANNING_DIRECTIVE + action.workMessage, voiceModel, scope.space, scope.sponsor,
           );
           // Carry this turn's files (cold) or the ones already accumulated (refinement).
           this.planGate.recordProposal(

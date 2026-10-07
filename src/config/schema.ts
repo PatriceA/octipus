@@ -122,6 +122,15 @@ export const securityConfigSchema = z.object({
    * or an admin and are not subject to it.
    */
   registration: z.enum(['open', 'invite_only', 'closed']).default('open'),
+  /**
+   * Whether an account created on the sign-in page (open registration or a
+   * space invite) may run on the install's models and keys
+   * (`users.install_models`, docs/SPACES.md → Who may use the install's
+   * models). Off: it runs only on its own models and what a space sponsors,
+   * until an admin allows it. Admins, SAML, SCIM and admin-created accounts
+   * are not affected.
+   */
+  selfRegisteredInstallModels: z.boolean().default(false),
 });
 
 // API server configuration schema
