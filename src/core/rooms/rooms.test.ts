@@ -789,6 +789,36 @@ describe('space memory', () => {
   });
 });
 
+describe('room message notifications', () => {
+  test('notifies private-room members and pushes deep links, respecting mute and excluding the author', async () => {
+    const { createRoom, postRoomMessage, setRoomMuted } = await import('./service');
+    const { roomDeliveries } = await import('./fanout');
+    const { getPushService } = await import('@/core/push/fcm');
+    const { messageRepository } = await import('@/db/repositories/message-repository');
+    const push = vi.spyOn(getPushService(), 'sendToUser').mockResolvedValue(1);
+    try {
+      const room = await createRoom({ userId: editorId }, spaceId, { title: 'Mobile notifications', visibility: 'private', memberIds: [carolId] });
+      const first = await postRoomMessage({ userId: editorId }, room.id, { content: 'Hello from mobile' });
+      await roomDeliveries(room.id);
+      const rows = await q<{ user_id: string }>(`SELECT user_id FROM notifications WHERE metadata->>'messageId' = '${first.message.id}' AND type = 'room_message'`);
+      expect(rows).toEqual([{ user_id: carolId }]);
+      await vi.waitFor(() => expect(push).toHaveBeenCalledWith(carolId, expect.objectContaining({
+        data: expect.objectContaining({ kind: 'room_message', roomId: room.id, spaceId }),
+      })));
+      await setRoomMuted({ userId: carolId }, spaceId, room.id, true);
+      const second = await postRoomMessage({ userId: editorId }, room.id, { content: 'Muted message' });
+      await roomDeliveries(room.id);
+      expect(await q(`SELECT 1 FROM notifications WHERE metadata->>'messageId' = '${second.message.id}'`)).toHaveLength(0);
+      const reply = await messageRepository.create({ sessionId: room.id, role: 'assistant', content: 'An answer' });
+      await roomDeliveries(room.id);
+      expect(await q(`SELECT user_id FROM notifications WHERE metadata->>'messageId' = '${reply.id}'`)).toEqual([{ user_id: editorId }]);
+      const progress = await messageRepository.create({ sessionId: room.id, role: 'assistant', content: 'Working', metadata: { kind: 'progress' } });
+      await roomDeliveries(room.id);
+      expect(await q(`SELECT 1 FROM notifications WHERE metadata->>'messageId' = '${progress.id}'`)).toHaveLength(0);
+    } finally { push.mockRestore(); }
+  });
+});
+
 describe('mentions', () => {
   test('@username notifies a member of the room, in the space, unless muted; never a non-member', async () => {
     await q(`DELETE FROM notifications WHERE type = 'room_mention'`);

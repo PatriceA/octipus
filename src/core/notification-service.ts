@@ -48,14 +48,14 @@ export class NotificationService {
         metadata: metadata || {},
       });
 
-      // Paired phones: approvals are the interrupts a person must not miss.
-      if (type.startsWith('approval')) {
+      // Paired phones receive approvals and access-checked room notifications.
+      if (type.startsWith('approval') || type === 'room_message' || type === 'room_mention') {
         import('@/core/push/fcm')
           .then(({ getPushService }) =>
             getPushService().sendToUser(userId, {
               title,
               body,
-              data: stringValues({ kind: 'approval', type, ...(metadata ?? {}) }),
+              data: stringValues({ ...(metadata ?? {}), kind: type.startsWith('approval') ? 'approval' : type, type }),
             }),
           )
           .catch((err) => coreLogger.error({ err, userId, type }, 'Push delivery failed'));

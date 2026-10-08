@@ -23,6 +23,7 @@ import { sessionKindOf } from '@/db/repositories/session-kind';
 import type { Message } from '@/db/schema/messages';
 import { coreLogger } from '@/utils/logger';
 import { publishRoomEvent } from './events';
+import { notifyRoomMessage } from './notifications';
 import { markRoomTurnWaiting, setRoomTurnModel } from './queue';
 
 /** Per-room delivery chain: `room.message` events leave in commit order. */
@@ -38,6 +39,7 @@ async function deliver(row: Message): Promise<void> {
     message,
     ...(message.metadata.clientId ? { clientId: message.metadata.clientId } : {}),
   });
+  await notifyRoomMessage(row, name);
 }
 
 /** Queue `row` for delivery behind the room's earlier rows. */

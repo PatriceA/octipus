@@ -572,3 +572,15 @@ export async function spaceMemberByUsername(workspaceId: string, usernames: read
     .innerJoin(users, eq(users.id, workspaceMembers.userId))
     .where(and(eq(workspaceMembers.workspaceId, workspaceId), inArray(sql`lower(${users.username})`, names), eq(users.isActive, true)));
 }
+
+/** Active members eligible for a room notification, after access and mute checks. */
+export async function roomNotificationRecipients(room: Room): Promise<Array<{ userId: string; username: string }>> {
+  const members = await getDb().select({ userId: users.id, username: users.username })
+    .from(workspaceMembers).innerJoin(users, eq(users.id, workspaceMembers.userId))
+    .where(and(eq(workspaceMembers.workspaceId, room.workspaceId), eq(users.isActive, true)));
+  const recipients: Array<{ userId: string; username: string }> = [];
+  for (const member of members) {
+    if (await hasRoomAccess(member.userId, room) && !await isRoomMuted(room.id, member.userId)) recipients.push(member);
+  }
+  return recipients;
+}
