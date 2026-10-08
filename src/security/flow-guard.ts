@@ -389,17 +389,20 @@ export function sharedAudienceReason(shared: boolean, call: FlowCall, contract: 
 /**
  * Why a call is refused outright in a federated run — one whose output
  * members of other installs read (a `remote` turn, or a room with a remote
- * member) — or undefined. Wider than a room's audience, so stricter: no
- * approval lets a host member's personal data or credential material go
- * there.
+ * member, read again at every decision) — or undefined. Wider than a
+ * room's audience, so stricter: no approval lets a host member's personal
+ * data or credential material go there.
  *
  *   - a read of the requester's private data (`private` taint, or a read
  *     through a personal connection: `personalRead`) is refused, where a
  *     room asks;
- *   - a read of credential material (`secret` taint) is refused, and so is
- *     any egress once the session holds a `secret` label.
+ *   - a read of credential material (`secret` taint) is refused;
+ *   - once the session holds a `private` or `secret` label (read before the
+ *     run became federated), any egress is refused — a send out of the
+ *     install, or a write into the space (`spaceWrite`: notes, files,
+ *     memory, tasks), which the space's remote members read.
  */
-export function federatedAudienceReason(label: FlowLabel, call: FlowCall, contract: FlowContract, personalRead = false): string | undefined {
+export function federatedAudienceReason(label: FlowLabel, call: FlowCall, contract: FlowContract, personalRead = false, spaceWrite = false): string | undefined {
   const name = `${call.toolId}:${call.action}`;
   if (contract.taints.includes('private') || personalRead) {
     return `flow guard: members of this room on other installs read what this run produces, and ${name} reads personal data; `
@@ -408,11 +411,23 @@ export function federatedAudienceReason(label: FlowLabel, call: FlowCall, contra
   if (contract.taints.includes('secret')) {
     return `flow guard: members of this room on other installs read what this run produces, and ${name} reads credential material`;
   }
-  if (label.secret && contract.egress) {
-    return `flow guard: this session read credential material (${label.sources.secret}), and members of this room on other installs `
-      + 'read what this run produces; nothing goes out';
+  if ((contract.egress || spaceWrite) && (label.secret || label.private)) {
+    const what = label.secret ? `credential material (${label.sources.secret})` : `personal data (${label.sources.private})`;
+    return `flow guard: this session read ${what}, and members of this room on other installs read what this run produces; nothing goes out`;
   }
   return undefined;
+}
+
+/**
+ * Why a write into a space that has members of other installs is refused
+ * outright, in a run whose own audience is not federated (a private
+ * session of the space): credential material never goes there. Personal
+ * data asks (the I6 consent, whose text names the other installs).
+ */
+export function federatedSpaceWriteReason(label: FlowLabel, call: FlowCall): string | undefined {
+  if (!label.secret) return undefined;
+  return `flow guard: this session read credential material (${label.sources.secret}), and ${call.toolId}:${call.action} writes into a space `
+    + 'that members on other installs read; nothing goes there';
 }
 
 // ── Decision ────────────────────────────────────────────────────────────────

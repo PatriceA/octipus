@@ -41,6 +41,27 @@ labels reflect blast radius, not contract guarantees.
   visitor pool stops redialling a host that refused it (4403/4409) until
   asked again, resets its backoff only after a link stayed up 30 s, and
   redials retained hosts when visiting is turned back on.
+- **Hosting members of other installs: review hardening.** A visitor's
+  virtual connections pass only room, space and live-note traffic, a
+  mention and a requester error to the link (`agent.*`, `swarm.*`,
+  `chat.delta`, permission prompts and other progress of a host turn, with
+  raw tool arguments and results, are dropped). A visitor's gateway rate
+  buckets are shared by all their connections on the link and survive
+  `conn.close`. Whether members of other installs read a run is read again
+  at every tool decision and before a room reply is posted (a remote member
+  may join mid-turn): such a run refuses any egress once the session holds
+  personal data, not only credential material, and an answer that drew on
+  personal data is not posted. Writes into a space with any remote member
+  (notes, files, memory, tasks) are federated egress for every turn there:
+  credential material is refused and the personal-data consent names the
+  other installs. Blocking an install removes each membership on its own
+  (failures reported, the block always audited, the admin as the removals'
+  actor). `file.read` reads at most 1 MiB through one handle and refuses an
+  answer over the link frame. Posts the input guard only warns about keep
+  their flags, and room transcripts mark them. The agent-post cap counts per
+  install per room, atomically. Badges show 12 characters of the instance
+  id, and member lists carry its full id. Member lists sent to visitors
+  carry the member-visible name (the username) and never an e-mail.
 - **Spaces across installs: identity and peer link** (first slices of
   `docs/plans/federation-spec.md`). Each install gets an Ed25519 identity,
   stored as the reserved vault secret `federation.identity` (the vault API
@@ -217,8 +238,8 @@ labels reflect blast radius, not contract guarantees.
   connections (same parsing, rate buckets and handlers) and REST-shaped
   operations for rooms, notes (edit proposals), tasks, files (read-only) and
   space memory, checked as for a local member of the same role. Remote posts
-  pass the input guard; agent posts are labelled and capped per room;
-  remote members carry an `[B:xxxxxxxx]` badge; `@~name@fp8` mentions reach
+  pass the input guard; agent posts are labelled and capped per install per
+  room; remote members carry an `[B:xxxxxxxxxxxx]` badge; `@~name@fp8` mentions reach
   them over the link. Their `@octipus` runs a sponsor-funded `remote` turn
   (refused in `own` spaces, ASK denied, a per-install cap), and any turn in a
   room with a remote member has a federated audience (personal and

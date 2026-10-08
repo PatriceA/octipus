@@ -5,7 +5,7 @@ import { getConfig } from '@/config';
 import { getAgentManager } from '@/core/agent-manager';
 import { handleCommand } from '@/core/commands';
 import { renderMemoriesBlock, retrieveForContext, updateMemoriesAfterTurn } from '@/core/memory';
-import { clearFlowLabel, markNotSharedAudience, markSharedAudience, observeFlow } from '@/security/flow-guard';
+import { clearFlowLabel, getFlowLabel, markNotSharedAudience, markSharedAudience, observeFlow } from '@/security/flow-guard';
 import { bareReply, type GroupTurn, groupTurnContext } from '@/core/channels/group-context';
 import { generateRunId, runWithContext } from '@/core/run-context';
 import { type AttachedFileRef, buildAttachedFilesContext } from '@/core/session-files';
@@ -1052,6 +1052,13 @@ export class AgentService {
         if (isRoom) await this.roomCleared();
         return { response: 'Conversation was cleared while this turn was running.', sessionId: resolvedSessionId, classification };
       }
+      // A member of another install joined the room while this turn ran
+      // (federation §7.5, FI5): an answer that drew on personal data or
+      // credential material is not posted where they read it. Read again
+      // here, as the approval route does at every tool decision.
+      if (isRoom && scope.space && !scope.audienceFederated) {
+        finalResponse = await this.withheldFromFederatedRoom(resolvedSessionId, scope.space.workspaceId, userId, finalResponse);
+      }
       const showSources = (activeSession?.metadata as Record<string, unknown> | undefined)?.showSources !== false;
       if (showSources) {
         finalResponse = appendSources(finalResponse, sources);
@@ -1130,6 +1137,25 @@ export class AgentService {
    * The room's text for a requester's limit refusal: a neutral line naming
    * them. The refusal text and its structured reason go to them only.
    */
+  /**
+   * The room answer to post, given who reads the room now: `text`, unless
+   * the session holds personal data or credential material and the room
+   * gained a member of another install since the turn spawned — then a
+   * neutral line, and the requester hears why.
+   */
+  private async withheldFromFederatedRoom(roomId: string, workspaceId: string, requesterId: string, text: string): Promise<string> {
+    const label = getFlowLabel(roomId);
+    if (!label.private && !label.secret) return text;
+    const { roomHasRemoteMember } = await import('@/core/federation/audience');
+    if (!(await roomHasRemoteMember(roomId, workspaceId))) return text;
+    await this.notifyRoomRequester(roomId, requesterId,
+      'Your answer was not posted: a member from another install joined this room while it was written, and it drew on '
+      + `${label.secret ? 'credential material' : 'your personal data'}. Ask again in a private session.`);
+    const { displayNames } = await import('@/core/session-history');
+    const name = (await displayNames([requesterId])).get(requesterId) ?? 'a member';
+    return `Octipus could not post its answer to ${name} here: the room's audience changed while it was written.`;
+  }
+
   private async roomLimitRefusal(roomId: string, requesterId: string, text: string, refusal: LimitRefusal): Promise<string> {
     const [{ displayNames }, { roomRefusalText }] = await Promise.all([
       import('@/core/session-history'), import('@/core/errors/limit-refusal'),

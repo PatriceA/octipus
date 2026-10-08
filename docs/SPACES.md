@@ -412,21 +412,36 @@ With `federation.mode` `host` or `both` and a public URL:
   when the link closes, on `conn.close`, or when the member's last
   membership ends — through the gateway's own parsing, rate buckets and
   handlers. Anything else, generic `subscribe` and `/commands` are refused.
-  Events for the connection, and the member's own events (a requester error,
-  a mention), go back over the link.
-- **Content operations** (`space.info`, `space.members` — display names only,
-  `space.rooms`, `room.page`, `note.list`/`read`/`propose`, `task.list`/
-  `read`/`create`/`checkout`/`release`/`comment`, `file.list`/`read` —
-  read-only, at most 1 MiB, guest folders —, `memory.list`) call the same
+  A member's rate buckets are shared by all their virtual connections on the
+  link and outlive `conn.close`. Only room, space and live-note traffic
+  (and of the member's own events, a requester error and a mention) goes
+  back over the link; a host turn's progress (`agent.*`, `swarm.*`,
+  `chat.delta`, permission prompts), which carries raw tool arguments and
+  results, never does.
+- **Content operations** (`space.info`, `space.members` — the member-visible
+  name, role and install id, never an e-mail —, `space.rooms`, `room.page`,
+  `note.list`/`read`/`propose`, `task.list`/`read`/`create`/`checkout`/
+  `release`/`comment`, `file.list`/`read` — read-only, guest folders, at
+  most 1 MiB and one link frame (`gateway.maxFrameBytes`; binary content is
+  sent as base64) —, `memory.list`) call the same
   service functions as the routes, with the member's principal and the role
   checked, so a remote member can do exactly what a local member of the same
   role can. Note proposals are keyed `remote:<row id>` (`proposer_key`).
+- **What visitors see of local members.** Member lists, room pages and
+  presence carry the member-visible name — the username, as local members
+  and guests already see it — and never an e-mail field or a user setting.
+  **SAML/SCIM installs whose usernames are e-mail addresses:** those
+  addresses are the names visitors from other installs see too.
 - **Posts and mentions.** A remote post passes the input guard before it is
-  stored and may not be a room command. Posts made on the member install's
-  agent connection (`agent:<session>`) are labelled "anna's agent" and capped
-  per room (`federation.agentPostsPerHour`). Remote members are shown with
-  their install badge (`anna [B:abcd1234]`) in room messages, transcripts,
-  presence and the member list. Only `@~name@fp8` mentions a remote member —
+  stored and may not be a room command; one it only warns about is stored
+  with its flags, and room turns read it marked `[flagged: …]` under a
+  security alert. Posts made on the member install's agent connection
+  (`agent:<session>`) are labelled "anna's agent" and capped per install per
+  room (`federation.agentPostsPerHour`, counted and stored atomically).
+  Remote members are shown with their install badge (`anna [B:abcd1234efgh]`,
+  12 characters of the install id; the member list's hover and Admin →
+  Federation show the full id) in room messages, transcripts, presence and
+  the member list. Only `@~name@fp8` mentions a remote member —
   delivered as `room.mention` over the link, never a local notification;
   `@octipus@…` does not start the agent.
 - **Host turns.** A remote member's `@octipus` runs as a `remote` turn:
@@ -435,11 +450,21 @@ With `federation.mode` `host` or `both` and a public URL:
   `federation.maxRemoteTurnsPerInstance` queued or running per install, and
   any approval it would ask is denied. A turn with a `remote` trigger, or in
   a room with a remote member, has a *federated* audience: reads of personal
-  data and of credential material are refused, not asked.
+  data and of credential material are refused, not asked, and once the
+  session holds either, so is any egress. The room's audience is read again
+  at every tool decision and before the reply is posted, so a member of
+  another install joining mid-turn counts at once (an answer that drew on
+  personal data is then not posted; its requester hears why). In a space with
+  any remote member, writes into its notes, files, memory and tasks are
+  federated egress for every turn there, private sessions included:
+  credential material is refused, and the personal-data consent says members
+  on other installs will read it.
 - **Revocation.** Removing or downgrading a remote member works as for anyone
   (their install hears `space.revoked` when a membership is gone).
   `POST /api/admin/federation/instances/:id/block` closes the install's link
-  (4403), refuses its rows at once and removes every membership it holds;
+  (4403), refuses its rows at once and removes every membership it holds,
+  each on its own (one that fails is reported and the rest go on; the block
+  is audited whatever happens, and each removal names the admin as actor);
   `unblock` restores the status only; `GET /api/admin/federation/instances`
   lists installs, link state and memberships. Turning hosting off closes
   every link and refuses remote rows at once.

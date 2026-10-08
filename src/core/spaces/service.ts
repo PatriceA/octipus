@@ -480,6 +480,8 @@ export interface SpaceMemberView {
   displayName?: string;
   /** A member of another install (federation §7.1). Set by `listMembers`. */
   remote?: boolean;
+  /** The full id of a remote member's install (its badge shows the first characters). */
+  instanceId?: string;
 }
 
 /** What a committed membership change reports: a failed follow-up (§5.9), logged. */
@@ -601,6 +603,7 @@ export async function listMembers(actor: SpaceActor, workspaceId: string): Promi
       joinedAt: workspaceMembers.joinedAt,
       scope: workspaceMembers.scope,
       kind: users.kind,
+      remoteInstanceId: users.remoteInstanceId,
     })
     .from(workspaceMembers)
     .innerJoin(users, eq(users.id, workspaceMembers.userId))
@@ -612,9 +615,12 @@ export async function listMembers(actor: SpaceActor, workspaceId: string): Promi
   const managing = can(membership.role, 'manage_members');
   const { displayNames } = await import('@/core/session-history');
   const names = await displayNames(rows.map((r) => r.userId));
-  return rows.map(({ scope, kind, ...row }) => {
+  return rows.map(({ scope, kind, remoteInstanceId, ...row }) => {
     const guestScope = managing ? storedGuestScope(row.role, scope, { workspaceId, userId: row.userId }) : null;
-    const view = { ...row, displayName: names.get(row.userId) ?? row.username, remote: kind === 'remote' };
+    const view = {
+      ...row, displayName: names.get(row.userId) ?? row.username, remote: kind === 'remote',
+      ...(kind === 'remote' && remoteInstanceId ? { instanceId: remoteInstanceId } : {}),
+    };
     return guestScope ? { ...view, scope: guestScope } : view;
   });
 }
@@ -750,13 +756,16 @@ export async function removeMember(actor: SpaceActor, workspaceId: string, targe
 /**
  * Leave a space. The last owner cannot. `action` names the audit row: a
  * member of another install leaving over its link writes
- * `space_left_remote` (federation §6.3).
+ * `space_left_remote` (federation §6.3). `removedBy` names who made them
+ * leave when it is not their own doing (an admin blocking their install,
+ * federation §7.6): the audit row's actor.
  */
 export async function leaveSpace(
   actor: SpaceActor,
   workspaceId: string,
   details: Record<string, unknown> = {},
   action: Extract<SpaceAuditAction, 'space_member_removed' | 'space_left_remote'> = 'space_member_removed',
+  opts: { removedBy?: SpaceActor } = {},
 ): Promise<MembershipChangeResult> {
   const sponsorLost = await getDb().transaction(async (tx) => {
     // An account being deleted may be deactivated already, and the members of
@@ -771,12 +780,12 @@ export async function leaveSpace(
       .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, actor.userId)));
     await revokeInvitesBy(tx, actor, workspaceId, actor.userId);
     await writeSpaceAudit(tx, {
-      ...auditActor(actor),
+      ...auditActor(opts.removedBy ?? actor),
       action,
       workspaceId,
       resourceType: 'space_member',
       resourceId: actor.userId,
-      details: { previousValue: membership.role, left: true, ...details },
+      details: { previousValue: membership.role, left: !opts.removedBy, ...details },
     });
     const { clearLostSponsorInTx } = await import('./funding');
     return clearLostSponsorInTx(tx, actor, workspaceId, actor.userId, null, details.accountDeleted ? 'sponsor_account_deleted' : undefined);

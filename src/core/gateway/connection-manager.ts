@@ -38,6 +38,12 @@ export interface GatewayConnection {
   createdAt: number;
   /** The socket URL's `?workspace=` (id or slug), resolved for the user at auth. */
   workspaceHint?: string;
+  /**
+   * The key of the connection's rate buckets when it is not its own id: a
+   * virtual peer connection shares its visitor's buckets on the link
+   * (`registerVirtual`), so opening another `conn` buys no fresh budget.
+   */
+  rateKey?: string;
 }
 
 /**
@@ -177,12 +183,22 @@ export class ConnectionManager {
    * manager sends it goes to `sink` (sealed onto the link by the caller),
    * and closing it calls `onClose` once. It never counts against
    * `gateway.maxConnectionsPerUser`; the federation layer bounds it.
+   *
+   * Its rate buckets are keyed by `rateKey` (the visitor on its link), not
+   * by the connection: every virtual connection of one visitor draws on
+   * the same buckets, which outlive any one of them. Its event
+   * subscriptions are `eventPatterns` only — the visitor's own events the
+   * federation layer lets out — never `*`.
    */
   registerVirtual(input: {
     userId: string;
     instanceId: string;
     /** The visitor install's client connection this one stands for. */
     conn: string;
+    /** The key of the rate buckets this connection shares with the visitor's others. */
+    rateKey: string;
+    /** The visitor's own event types (`publishEvent`) this connection receives. */
+    eventPatterns: readonly string[];
     sink: (message: GatewayMessage) => void;
     onClose: () => void;
   }): string {
@@ -209,6 +225,7 @@ export class ConnectionManager {
       state: 'active',
       authTimer: null,
       createdAt: now,
+      rateKey: input.rateKey,
       context: {
         connectionId,
         userId: input.userId,
@@ -217,9 +234,11 @@ export class ConnectionManager {
         ip: `peer:${input.instanceId}`,
         connectedAt: now,
         lastActivityAt: now,
-        // The member's own events (a requester error from a room turn, a
-        // mention): `publishEvent` delivers by user id.
-        eventSubscriptions: new Set(['*']),
+        // The member's own events the federation layer lets out (a
+        // requester error from a room turn, a mention): `publishEvent`
+        // delivers by user id. Never `*`: a host turn's progress events
+        // carry raw tool arguments and results.
+        eventSubscriptions: new Set(input.eventPatterns),
         resources: new Set(),
         metadata: { isAdmin: false, federation: { instanceId: input.instanceId, conn: input.conn } },
       },
@@ -263,7 +282,7 @@ export class ConnectionManager {
     }
 
     // Rate limit check
-    const rateCheck = this.rateLimiter.check(connectionId, parsed.message.type, conn.context.trustLevel);
+    const rateCheck = this.rateLimiter.check(conn.rateKey ?? connectionId, parsed.message.type, conn.context.trustLevel);
     if (!rateCheck.allowed) {
       this.send(conn, {
         type: 'error',
@@ -325,7 +344,9 @@ export class ConnectionManager {
     // A connection that never authenticated still holds its pre-auth slot.
     if (conn.state === 'authenticating') this.releasePreAuth(conn.ip);
 
-    this.rateLimiter.removeConnection(connectionId);
+    // A shared key (a visitor's buckets on its link) outlives the connection;
+    // its windows age out in the limiter's own sweep.
+    if (!conn.rateKey) this.rateLimiter.removeConnection(connectionId);
     this.connections.delete(connectionId);
   }
 

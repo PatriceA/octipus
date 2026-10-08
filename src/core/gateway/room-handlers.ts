@@ -182,7 +182,8 @@ async function roomPost(hub: GatewayHub, connectionId: string, context: Connecti
  * `room.post` from a member of another install, on their virtual connection
  * (docs/plans/federation-spec.md §7.4). A post, never a moderation
  * command; it passes the input guard before it is stored (a refused post is
- * answered with an error and not stored); one made on their install's agent
+ * answered with an error and not stored, a post it only warns about is
+ * stored with its flags); one made on their install's agent
  * connection (`conn` = `agent:<session>`) is labelled as their agent's and
  * counted against the room's hourly cap. Then the same path as a local post.
  */
@@ -204,6 +205,9 @@ async function remoteRoomPost(
   const agent = typeof federation?.conn === 'string' && federation.conn.startsWith('agent:');
   const { message: _stored, ...outcome } = await postAndQueue(context.userId, message.roomId, {
     content, addressed: message.addressed, clientId: message.clientId, ...(agent ? { agent: true } : {}),
+    // Let through with a warning: the flags stay with the post, and every
+    // room turn's transcript names them beside it.
+    ...(guard.action === 'warn' ? { guardFlags: guard.flags } : {}),
   });
   void _stored;
   hub.connectionManager.sendToConnection(connectionId, { type: 'room.posted', roomId: message.roomId, ...outcome });
@@ -217,7 +221,7 @@ async function remoteRoomPost(
 export async function postAndQueue(
   userId: string,
   roomId: string,
-  input: { content: string; addressed?: boolean; clientId?: string; agent?: boolean },
+  input: { content: string; addressed?: boolean; clientId?: string; agent?: boolean; guardFlags?: string[] },
   opts: { workspaceId?: string } = {},
 ): Promise<{ messageId: string; clientId?: string; queuedPosition?: number; notQueued?: string; message: unknown }> {
   const { postRoomMessage } = await import('@/core/rooms/service');

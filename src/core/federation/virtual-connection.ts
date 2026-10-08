@@ -11,6 +11,14 @@
  * visitor's own events (a requester error, a mention) — is sealed onto the
  * link as `{ type: 'event', as, conn, body }`.
  *
+ * Outbound, only what a local member of the space would see of the space
+ * leaves on the link (FI5): the answers and pushes of the allowlisted frames
+ * (`PEER_MESSAGE_TYPES`) and room and space events plus the visitor's own
+ * mention and requester error (`PEER_EVENT_TYPES`). Everything else the
+ * gateway would send a connection of that user — a host turn's
+ * `agent.*` / `swarm.*` / `chat.delta` progress with raw tool arguments and
+ * observations, permission prompts, session stats — is dropped in the sink.
+ *
  * Inbound, a frame of an allowlisted type (`GATEWAY_FRAME_ALLOWLIST`) goes
  * through `ConnectionManager.handleMessage`, so the gateway's zod parsing
  * and per-connection rate buckets apply unchanged, then to the same
@@ -21,8 +29,9 @@
  * when its link closes, on `conn.close` from the visitor install, when the
  * visitor's last membership here ends, or after `IDLE_MS` without a frame.
  */
+import { randomBytes } from 'node:crypto';
 import { getGatewayHub } from '@/core/gateway/hub';
-import type { GatewayMessage } from '@/core/gateway/protocol';
+import type { GatewayEventType, GatewayMessage } from '@/core/gateway/protocol';
 import { logger } from '@/utils/logger';
 import { LinkRequestError, type PeerLink } from './link';
 import type { RemoteMember } from './remote-members';
@@ -37,6 +46,60 @@ const SWEEP_MS = 60_000;
 
 /** Close code of a dropped virtual connection (as a normal close: the visitor install reopens it when needed). */
 const DROPPED = 4000;
+
+/**
+ * Server messages (other than `event`) a virtual connection passes to the
+ * link: the answers and pushes of the gateway frames a visitor may send
+ * (rooms, live notes, the space's file leases), errors and pongs.
+ */
+export const PEER_MESSAGE_TYPES: ReadonlySet<GatewayMessage['type']> = new Set<GatewayMessage['type']>([
+  'error', 'pong', 'subscribed',
+  'room.catchup', 'room.posted',
+  'doc.sync', 'doc.update', 'doc.awareness', 'doc.saved', 'doc.status', 'doc.closed', 'doc.error', 'doc.proposals',
+  'file.leases',
+]);
+
+/**
+ * Event types (`{ type: 'event' }`) a virtual connection passes to the link:
+ * the room and space events every member of a room or space reads, and of
+ * the visitor's own events only a mention and a room turn's requester
+ * error. Nothing of a host turn's progress (`agent.*`, `swarm.*`,
+ * `chat.delta`, `chat.response`, permission prompts).
+ */
+export const PEER_EVENT_TYPES: ReadonlySet<GatewayEventType> = new Set<GatewayEventType>([
+  'room.message', 'room.turn', 'room.presence', 'room.typing', 'room.read', 'room.removed',
+  'space.presence', 'task.changed',
+  'room.mention', 'chat.error',
+]);
+
+/** The visitor's own event types its virtual connections subscribe to (`publishEvent` delivers them by user id). */
+const PEER_USER_EVENTS = ['room.mention', 'chat.error'] as const;
+
+/** Whether `message` may leave on the link (FI5). */
+export function peerMayReceive(message: GatewayMessage): boolean {
+  if (message.type === 'event') return PEER_EVENT_TYPES.has(message.event.type);
+  return PEER_MESSAGE_TYPES.has(message.type);
+}
+
+/** A per-process id of each link, for the visitor's shared rate buckets. */
+const linkIds = new WeakMap<PeerLink, string>();
+function linkId(link: PeerLink): string {
+  let id = linkIds.get(link);
+  if (!id) {
+    id = randomBytes(8).toString('hex');
+    linkIds.set(link, id);
+  }
+  return id;
+}
+
+/**
+ * The key of a visitor's gateway rate buckets on `link`: every virtual
+ * connection of theirs on the link draws on the same buckets, and the
+ * buckets outlive `conn.close`, so rotating `conn` buys no fresh budget.
+ */
+export function peerRateKey(link: PeerLink, userId: string): string {
+  return `peer:${linkId(link)}:${userId}`;
+}
 
 interface VirtualConn {
   connectionId: string;
@@ -102,7 +165,13 @@ export function virtualConnection(link: PeerLink, member: RemoteMember, conn: st
     userId: member.userId,
     instanceId: member.instanceId,
     conn,
+    rateKey: peerRateKey(link, member.userId),
+    eventPatterns: PEER_USER_EVENTS,
     sink: (message: GatewayMessage) => {
+      if (!peerMayReceive(message)) {
+        log.debug({ instanceId: member.instanceId, userId: member.userId, type: message.type === 'event' ? message.event.type : message.type }, 'Server message kept from a virtual peer connection');
+        return;
+      }
       let sent: boolean;
       try {
         sent = link.sendEvent(member.handle, conn, message);

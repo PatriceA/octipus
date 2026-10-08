@@ -199,31 +199,10 @@ async function resolveRoomScope(
   const resolved = await resolveTurnWorkspace(userId, access.room.workspaceId);
   if (!resolved.space) throw new Error('A room lives in a space');
   const scope = await scopeIn(resolved.workspaceId, resolved.space, trigger);
+  // Read at spawn; the approval route and the room reply read it again,
+  // since a member of another install may join while the turn runs.
+  const { roomHasRemoteMember } = await import('@/core/federation/audience');
   return { ...scope, audienceFederated: trigger === 'remote' || await roomHasRemoteMember(session.id, access.room.workspaceId) };
-}
-
-/**
- * Whether a member of another install may enter the room (federation
- * §7.5): a remote member of the space for an open room, a remote
- * `room_members` row for a private one, or a remote guest whose scope names
- * the room. Whatever the state of their install — a blocked one still read
- * what was there: the run is federated either way, the stricter answer.
- */
-async function roomHasRemoteMember(roomId: string, workspaceId: string): Promise<boolean> {
-  const { queryRaw } = await import('@/db/postgres');
-  const { rows } = await queryRaw(
-    `SELECT EXISTS (
-       SELECT 1 FROM workspace_members m
-       JOIN users u ON u.id = m.user_id AND u.kind = 'remote'
-       JOIN sessions s ON s.id = $1 AND s.kind = 'room'
-       WHERE m.workspace_id = $2
-         AND CASE WHEN m.role = 'guest' THEN coalesce(m.scope->'rooms', '[]'::jsonb) ? $1::text
-                  WHEN s.room_visibility = 'private' THEN EXISTS (SELECT 1 FROM room_members rm WHERE rm.session_id = s.id AND rm.user_id = m.user_id)
-                  ELSE true END
-     ) AS federated`,
-    [roomId, workspaceId],
-  );
-  return (rows[0] as { federated: boolean } | undefined)?.federated === true;
 }
 
 /** A child's scope: its parent's workspace, space, trigger, funding, sponsor and audience, unchanged. */

@@ -22,6 +22,10 @@ interface Member {
   joinedAt: string;
   /** A guest's scope; sent to owners only. */
   scope?: GuestScope;
+  /** How the member is shown: a member of another install carries its instance badge (`anna [B:…]`). */
+  displayName?: string;
+  /** The full id of a member of another install's install (the badge shows its first characters). */
+  instanceId?: string;
 }
 
 interface Invite {
@@ -216,8 +220,11 @@ export default function SpaceSettingsPage() {
             return (
               <div key={m.userId} data-testid="space-member">
               <div className="flex items-center gap-3 px-3 py-2">
-                <span className="text-[13px] text-on-surface flex-1 min-w-0 truncate">
-                  {m.username}
+                <span
+                  className="text-[13px] text-on-surface flex-1 min-w-0 truncate"
+                  title={m.instanceId ? `${m.username} — from another install: ${m.instanceId}` : undefined}
+                >
+                  {m.displayName ?? m.username}
                   {self && <span className="ml-1.5 text-outline-variant">(you)</span>}
                 </span>
                 <span className="text-[11px] text-on-surface-variant hidden sm:inline">

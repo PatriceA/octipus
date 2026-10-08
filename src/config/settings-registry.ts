@@ -1365,7 +1365,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'federation',
     valueType: 'number',
     defaultValue: 20,
-    description: 'Posts labelled as a visitor\'s agent that one room accepts per hour.',
+    description: 'Posts labelled as a visitor\'s agent that one room accepts per hour from the visitors of one install.',
     isSecret: false,
     envVar: 'FEDERATION_AGENT_POSTS_PER_HOUR',
   },

@@ -34,7 +34,7 @@
  */
 import type { AgentSpace, AgentTrigger, PermissionLevel } from '@/core/types';
 import { type ApprovalDecision, routeApproval } from './approval-policy';
-import { classifyFlow, federatedAudienceReason, getFlowLabel, isSharedAudience, loadFlowLabel, observeFlow } from './flow-guard';
+import { classifyFlow, federatedAudienceReason, federatedSpaceWriteReason, getFlowLabel, isSharedAudience, loadFlowLabel, observeFlow } from './flow-guard';
 import { can } from './space-access';
 import { agentConfigWriteReason, commenterMayRun, isReadCall, personalOnlyReason, personalSourceRead, type SpaceToolCall } from './space-tools';
 import { isSharedWorkspaceId } from './workspace-fs';
@@ -98,10 +98,12 @@ export async function routeApprovalFor(
     if (await isSpaceArchived(space.workspaceId)) return deny('this space is archived');
     if (!can(membership.role, 'run_agent')) return deny(`your role (${membership.role}) cannot run the agent in this space`);
     // In a room, the room's own door too (a private room's member list, I5).
+    let roomId: string | null = null;
     if (context.sessionId) {
       const { accessToRoom, loadRoom } = await import('@/core/rooms/access');
       const room = await loadRoom(context.sessionId);
       if (room && !(await accessToRoom(context.userId, room))) return deny('you no longer have access to this room');
+      roomId = room?.id ?? null;
     }
     if (!can(membership.role, 'run_agent_write') && !commenterMayRun(call)) {
       return deny(`your role (${membership.role}) can only read and comment in this space; ${call.toolId}.${call.toolName ?? call.action} is not allowed`);
@@ -115,12 +117,22 @@ export async function routeApprovalFor(
     const personal = personalOnlyReason(call) ?? agentConfigWriteReason(call);
     if (personal) return deny(personal);
     await loadFlowLabel(context.sessionId);
-    // A federated run (federation §7.5, FI5): personal data of host members
-    // and credential material never reach members of other installs —
-    // refused, where a room would ask.
-    if (context.audienceFederated && level !== 'DENY') {
+    // Members of other installs (federation §7.5, FI5), read now — one may
+    // have joined since the run spawned: the run's own audience (a `remote`
+    // turn, a room with a remote member), and the space's (its notes,
+    // files, memory and tasks, which every remote member reads).
+    const { roomHasRemoteMember, spaceHasRemoteMember } = await import('@/core/federation/audience');
+    const runFederated = context.audienceFederated === true || (roomId !== null && await roomHasRemoteMember(roomId, space.workspaceId));
+    const spaceFederated = runFederated || await spaceHasRemoteMember(space.workspaceId);
+    // A federated run: personal data of host members and credential
+    // material never reach members of other installs — refused, where a
+    // room would ask.
+    if (runFederated && level !== 'DENY') {
       const contract = classifyFlow({ toolId: call.toolId, action: call.action, args: call.args });
-      const federated = federatedAudienceReason(getFlowLabel(context.sessionId), call, contract, personalSourceRead(call));
+      const federated = federatedAudienceReason(getFlowLabel(context.sessionId), call, contract, personalSourceRead(call), !isReadCall(call));
+      if (federated) return { route: 'deny', level: 'DENY', reason: federated, source: 'space-federated' };
+    } else if (spaceFederated && level !== 'DENY' && !isReadCall(call)) {
+      const federated = federatedSpaceWriteReason(getFlowLabel(context.sessionId), call);
       if (federated) return { route: 'deny', level: 'DENY', reason: federated, source: 'space-federated' };
     }
     // A read through a personal connection reads private data too (`personalSourceRead`).
@@ -138,7 +150,7 @@ export async function routeApprovalFor(
       source = 'space-flow';
       reason = `${call.toolId}.${call.toolName ?? call.action} writes data from your personal sources `
         + `(${getFlowLabel(context.sessionId).sources.private}) into ${name}`
-        + (context.audienceFederated ? '; members of this room on other installs will read it' : '');
+        + (spaceFederated ? '; members of this space on other installs will read it' : '');
     }
   }
   const decision = routeApproval({

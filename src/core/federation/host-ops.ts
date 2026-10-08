@@ -14,7 +14,7 @@
  * (`memberPrincipal`) — and check the role here, because `contentRepos`,
  * `spaceRepos` and `WorkspaceFS` trust their caller:
  *
- *   space.info, space.members (display names only, FI5), space.rooms,
+ *   space.info, space.members (member-visible names, no e-mail, FI5), space.rooms,
  *   room.page (`roomAccess`, ≤ 200), note.list / note.read, note.propose
  *   (`run_agent_write`, keyed `remote:<row id>`), task.list / read / create
  *   / checkout / release / comment (the tasks routes' repository calls),
@@ -34,7 +34,7 @@
  * membership is left; `blockInstance` closes the install's link (4403) and
  * removes every membership of its rows through the normal path.
  */
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { type FileHandle, open, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { eq, sql } from 'drizzle-orm';
 import { getConfig } from '@/config';
@@ -80,6 +80,26 @@ export const FILE_READ_MAX_BYTES = 1024 * 1024;
 
 const joinsByLink = new WeakMap<PeerLink, number[]>();
 const joinsByIp = new Map<string, number[]>();
+const JOIN_IP_WINDOW_MS = 3_600_000;
+let lastIpPrune = 0;
+
+/** Forget the addresses with no join left in the window (at most once a minute): the map holds live budgets only. */
+export function pruneJoinBudgets(now = Date.now()): number {
+  lastIpPrune = now;
+  let pruned = 0;
+  for (const [ip, times] of joinsByIp) {
+    if (times.every((t) => now - t >= JOIN_IP_WINDOW_MS)) {
+      joinsByIp.delete(ip);
+      pruned++;
+    }
+  }
+  return pruned;
+}
+
+/** Addresses with a join budget in use (tests). */
+export function joinBudgetAddresses(): number {
+  return joinsByIp.size;
+}
 
 /** Record a join attempt within `windowMs`; false when `max` were already made. */
 function takeBudget(times: number[], now: number, windowMs: number, max: number): number[] | null {
@@ -91,9 +111,10 @@ function takeBudget(times: number[], now: number, windowMs: number, max: number)
 
 function admitJoin(link: PeerLink, ip: string): void {
   const now = Date.now();
+  if (now - lastIpPrune >= 60_000) pruneJoinBudgets(now);
   const perLink = takeBudget(joinsByLink.get(link) ?? [], now, 60_000, JOINS_PER_LINK_PER_MINUTE);
   if (!perLink) throw new LinkRequestError('rate_limited', `At most ${JOINS_PER_LINK_PER_MINUTE} joins a minute on one link`);
-  const perIp = takeBudget(joinsByIp.get(ip) ?? [], now, 3_600_000, JOINS_PER_IP_PER_HOUR);
+  const perIp = takeBudget(joinsByIp.get(ip) ?? [], now, JOIN_IP_WINDOW_MS, JOINS_PER_IP_PER_HOUR);
   if (!perIp) throw new LinkRequestError('rate_limited', `At most ${JOINS_PER_IP_PER_HOUR} joins an hour from one address`);
   joinsByLink.set(link, perLink);
   joinsByIp.set(ip, perIp);
@@ -160,12 +181,14 @@ async function joinSpace(body: FederationRequestBody<'space.join'>, ctx: HostReq
         .returning({ status: federationInstances.status, publicKey: federationInstances.publicKey });
       if (instance.status === 'blocked') throw new LinkRequestError('forbidden', 'This install is blocked here');
       if (instance.publicKey !== publicKey) throw new Error(`federation_instances holds another key for ${ctx.instanceId}`);
-      const max = getConfig().federation.maxVisitorsPerInstance;
-      if ((await liveMembershipsOf(ctx.instanceId, tx)) >= max) {
-        throw new LinkRequestError('limit', `Members of your install already hold ${max} memberships here`);
-      }
       const member = await upsertRemoteMember(tx, ctx.instanceId, body.user.ref, body.user.name);
       const accepted = await acceptInviteInTx(tx, { userId: member.userId }, body.token);
+      // The cap counts live memberships, the new one included; a re-join of
+      // a space the member already belongs to adds none and always passes.
+      const max = getConfig().federation.maxVisitorsPerInstance;
+      if (!accepted.alreadyMember && (await liveMembershipsOf(ctx.instanceId, tx)) > max) {
+        throw new LinkRequestError('limit', `Members of your install already hold ${max} memberships here`);
+      }
       if (!accepted.alreadyMember) {
         await writeSpaceAudit(tx, {
           actorId: member.userId,
@@ -216,6 +239,49 @@ async function proposalBase(noteId: string, current: { body: string; bodySha256:
   return pinned;
 }
 
+/** Room left in a result frame around its body (`{ id, type, re, ok, body }`). */
+const RESULT_FRAME_OVERHEAD = 512;
+
+/**
+ * `file.read`'s answer for the file at `absolute`: read through one open
+ * handle, at most `FILE_READ_MAX_BYTES + 1` bytes — a file that grew past
+ * the cap after it was looked at is refused, never read whole — and refused
+ * when its encoded answer would not fit in one link frame
+ * (`gateway.maxFrameBytes`; base64 grows binary content by a third).
+ */
+export async function readFileForLink(absolute: string, path: string): Promise<{ path: string; size: number; encoding: 'utf8' | 'base64'; content: string }> {
+  let handle: FileHandle;
+  try {
+    handle = await open(absolute, 'r');
+  } catch {
+    throw new SpaceError('not_found', 'File not found');
+  }
+  let bytes: Buffer;
+  try {
+    if (!(await handle.stat()).isFile()) throw new SpaceError('not_found', 'File not found');
+    const buffer = Buffer.alloc(FILE_READ_MAX_BYTES + 1);
+    let filled = 0;
+    while (filled < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, filled, buffer.length - filled, filled);
+      if (bytesRead === 0) break;
+      filled += bytesRead;
+    }
+    if (filled > FILE_READ_MAX_BYTES) throw new LinkRequestError('too_large', `Files over ${FILE_READ_MAX_BYTES} bytes are not read over the link`);
+    bytes = buffer.subarray(0, filled);
+  } finally {
+    await handle.close();
+  }
+  const text = bytes.toString('utf8');
+  const isText = Buffer.from(text, 'utf8').equals(bytes);
+  const answer = { path, size: bytes.length, encoding: isText ? 'utf8' as const : 'base64' as const, content: isText ? text : bytes.toString('base64') };
+  const frameCap = getConfig().gateway.maxFrameBytes;
+  const encoded = Buffer.byteLength(JSON.stringify(answer), 'utf8') + RESULT_FRAME_OVERHEAD;
+  if (encoded > frameCap) {
+    throw new LinkRequestError('too_large', `This file (${bytes.length} bytes, ${encoded} encoded) does not fit in one link frame of ${frameCap} bytes (gateway.maxFrameBytes)`);
+  }
+  return answer;
+}
+
 interface FileEntry { name: string; type: 'file' | 'dir'; size: number }
 
 async function listDir(absolute: string): Promise<FileEntry[]> {
@@ -248,11 +314,17 @@ function registerOps(): void {
     };
   });
 
-  // FI5: display names and roles — never usernames or e-mail addresses.
+  // FI5: the member-visible name (`displayName`: the username, badged for
+  // a member of another install, as local members see it), the role and
+  // the install's full id — never an e-mail address or a user setting.
   op('space.members', async ({ spaceId }, member) => {
     const { listMembers } = await import('@/core/spaces/service');
     const members = await listMembers({ userId: member.userId }, spaceId);
-    return { members: members.map((m) => ({ userId: m.userId, displayName: m.displayName ?? '', role: m.role, remote: m.remote === true })) };
+    return {
+      members: members.map((m) => ({
+        userId: m.userId, displayName: m.displayName ?? '', role: m.role, remote: m.remote === true, instanceId: m.instanceId ?? null,
+      })),
+    };
   });
 
   op('space.rooms', async ({ spaceId }, member) => {
@@ -370,14 +442,7 @@ function registerOps(): void {
   op('file.read', async ({ spaceId, path }, member) => {
     const membership = requireCan(await membershipIn(member, spaceId), 'read');
     const fs = WorkspaceFS.forSpace(spaceId, { guestFolders: membership.scope?.folders });
-    const absolute = fs.resolve(path.replace(/^\/+/, ''));
-    const info = await stat(absolute).catch(() => null);
-    if (!info?.isFile()) throw new SpaceError('not_found', 'File not found');
-    if (info.size > FILE_READ_MAX_BYTES) throw new LinkRequestError('too_large', `Files over ${FILE_READ_MAX_BYTES} bytes are not read over the link`);
-    const bytes = await readFile(absolute);
-    const text = bytes.toString('utf8');
-    const isText = Buffer.from(text, 'utf8').equals(bytes);
-    return { path, size: info.size, encoding: isText ? 'utf8' : 'base64', content: isText ? text : bytes.toString('base64') };
+    return readFileForLink(fs.resolve(path.replace(/^\/+/, '')), path);
   });
 
   op('memory.list', async ({ spaceId }, member) => {
@@ -458,9 +523,11 @@ async function auditInstance(adminId: string, action: 'federation_instance_block
 /**
  * Block install `instanceId` (an admin): its rows stop passing the data
  * door at once, its link closes (4403), and every membership its members
- * hold here is removed through the normal path (one audit row each, and
- * `onMembershipChanged`). Returns how many memberships went, and the
- * follow-ups that failed.
+ * hold here is removed through the normal path, the admin as the actor of
+ * each removal's audit row (FI10), and `onMembershipChanged`. A removal
+ * that fails is reported and the others go on; the block is audited
+ * whatever happened to them. Returns how many memberships went, and what
+ * failed (a removal, or a follow-up of one).
  */
 export async function blockInstance(adminId: string, instanceId: string): Promise<{ removed: number; warnings: string[] }> {
   const [row] = await getDb()
@@ -469,22 +536,30 @@ export async function blockInstance(adminId: string, instanceId: string): Promis
     .where(eq(federationInstances.instanceId, instanceId))
     .returning({ id: federationInstances.instanceId });
   if (!row) throw new FederationAdminError('not_found', 'Unknown instance');
-  inboundLink(instanceId)?.close(CLOSE.forbidden, 'instance blocked');
-  closeVirtualConnectionsOfInstance(instanceId, 'instance blocked');
-  const { leaveSpace } = await import('@/core/spaces/service');
   let removed = 0;
   const warnings: string[] = [];
-  for (const member of await remoteMembersOf(instanceId)) {
-    for (const workspaceId of await spacesOfRemote(member.userId)) {
-      const result = await leaveSpace({ userId: member.userId }, workspaceId, {
-        instanceBlocked: true, blockedBy: adminId, instanceId, memberHandle: member.handle,
-      });
-      removed++;
-      if (result.warning) warnings.push(result.warning);
+  try {
+    inboundLink(instanceId)?.close(CLOSE.forbidden, 'instance blocked');
+    closeVirtualConnectionsOfInstance(instanceId, 'instance blocked');
+    const { leaveSpace } = await import('@/core/spaces/service');
+    for (const member of await remoteMembersOf(instanceId)) {
+      for (const workspaceId of await spacesOfRemote(member.userId)) {
+        try {
+          const result = await leaveSpace({ userId: member.userId }, workspaceId, {
+            instanceBlocked: true, blockedBy: adminId, instanceId, memberHandle: member.handle,
+          }, 'space_member_removed', { removedBy: { userId: adminId } });
+          removed++;
+          if (result.warning) warnings.push(`${member.handle} in ${workspaceId}: ${result.warning}`);
+        } catch (err) {
+          log.error({ err, instanceId, workspaceId, member: member.handle }, 'A membership of a blocked install could not be removed');
+          warnings.push(`${member.handle} in ${workspaceId}: not removed (${err instanceof Error ? err.message : String(err)})`);
+        }
+      }
     }
+  } finally {
+    await auditInstance(adminId, 'federation_instance_blocked', instanceId, { membershipsRemoved: removed, ...(warnings.length > 0 ? { warnings } : {}) });
+    log.warn({ instanceId, by: adminId, removed, failed: warnings.length }, 'Federation instance blocked');
   }
-  await auditInstance(adminId, 'federation_instance_blocked', instanceId, { membershipsRemoved: removed });
-  log.warn({ instanceId, by: adminId, removed }, 'Federation instance blocked');
   return { removed, warnings };
 }
 
@@ -538,4 +613,5 @@ export async function listInstances(): Promise<FederationInstanceView[]> {
 /** Forget the join budgets (tests). */
 export function _resetHostOpsForTests(): void {
   joinsByIp.clear();
+  lastIpPrune = 0;
 }

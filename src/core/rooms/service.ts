@@ -305,27 +305,40 @@ export function mentionsOctipus(content: string): boolean {
 }
 
 /**
- * Throws `rate_limited` when the room already holds `federation.agentPostsPerHour`
- * agent-labelled posts of the last hour (federation §7.4). The hard bound on
- * a visitor is its `room.post` bucket; this bounds the agents of every
- * visitor together, per room.
+ * Store an agent-labelled post of a member of install `instanceId`
+ * (federation §7.4): refused `rate_limited` when that install's agents
+ * already made `federation.agentPostsPerHour` posts in the room in the last
+ * hour. The count and the insert run in one transaction under an advisory
+ * lock of (room, install), so concurrent posts cannot both take the last
+ * one. The hard bound on a visitor is its `room.post` bucket; this bounds
+ * the agents of one install together, per room.
  */
-async function assertAgentPostBudget(roomId: string): Promise<void> {
+async function createAgentPost(roomId: string, instanceId: string, row: typeof messages.$inferInsert): Promise<Message> {
   const { getConfig } = await import('@/config');
   const max = getConfig().federation.agentPostsPerHour;
-  // i2: a count in a room the poster may enter
-  const [row] = await getDb()
-    .select({ n: sql<number>`count(*)::int` })
-    .from(messages)
-    .where(and(
-      eq(messages.sessionId, roomId),
-      eq(messages.role, 'user'),
-      sql`(${messages.metadata}->>'agent') = 'true'`,
-      sql`${messages.createdAt} > now() - interval '1 hour'`,
-    ));
-  if (Number(row?.n ?? 0) >= max) {
-    throw new SpaceError('rate_limited', `This room already has ${max} posts by members' own agents in the last hour`);
-  }
+  const created = await getDb().transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`federation:agent-posts:${roomId}:${instanceId}`}))`);
+    // i2: a count in a room the poster may enter
+    const [counted] = await tx
+      .select({ n: sql<number>`count(*)::int` })
+      .from(messages)
+      .innerJoin(users, eq(users.id, messages.authorUserId))
+      .where(and(
+        eq(messages.sessionId, roomId),
+        eq(messages.role, 'user'),
+        sql`(${messages.metadata}->>'agent') = 'true'`,
+        sql`${messages.createdAt} > now() - interval '1 hour'`,
+        eq(users.remoteInstanceId, instanceId),
+      ));
+    if (Number(counted?.n ?? 0) >= max) {
+      throw new SpaceError('rate_limited', `Members' own agents from your install already made ${max} posts in this room in the last hour`);
+    }
+    const [inserted] = await tx.insert(messages).values(row).returning();
+    return inserted;
+  });
+  const { messageEvents } = await import('@/db/repositories/message-events');
+  messageEvents.announce([created]);
+  return created;
 }
 
 /**
@@ -348,6 +361,12 @@ export async function postRoomMessage(
      * of this install has no such label.
      */
     agent?: boolean;
+    /**
+     * What the input guard flagged in a post of a member of another install
+     * that it let through (`warn`, federation §7.4): kept with the post, and
+     * named beside it in every room turn's transcript.
+     */
+    guardFlags?: string[];
   },
   opts: { workspaceId?: string } = {},
 ): Promise<{ message: RoomMessageView; access: RoomAccess; addressed: boolean }> {
@@ -357,25 +376,28 @@ export async function postRoomMessage(
   await assertSpaceOpen(access.room.workspaceId);
   const content = input.content.trim();
   if (!content) throw new SpaceError('invalid_input', 'A post needs text');
-  if (input.agent) {
-    if (!access.remote) throw new SpaceError('invalid_input', 'Only a member from another install posts as their own agent');
-    await assertAgentPostBudget(roomId);
+  if ((input.agent || input.guardFlags) && !access.remote) {
+    throw new SpaceError('invalid_input', 'Only a post from another install carries an agent label or input guard flags');
   }
   const addressed = input.addressed === true || mentionsOctipus(content);
   const { messageRepository } = await import('@/db/repositories/message-repository');
   const { sessionRepository } = await import('@/db/repositories/session-repository');
-  const row = await messageRepository.create({
+  const values = {
     sessionId: roomId,
-    role: 'user',
+    role: 'user' as const,
     content,
     authorUserId: actor.userId,
     metadata: {
       ...(input.clientId ? { clientId: input.clientId } : {}),
       ...(input.bridged ? { bridged: input.bridged } : {}),
       ...(input.agent ? { agent: true } : {}),
+      ...(input.guardFlags && input.guardFlags.length > 0 ? { guardFlags: input.guardFlags } : {}),
       addressed,
     },
-  });
+  };
+  const row = input.agent && access.remote
+    ? await createAgentPost(roomId, access.remote.instanceId, { ...values, createdAt: new Date() })
+    : await messageRepository.create(values);
   await sessionRepository.incrementMessageCount(roomId);
   // The poster has read everything up to their own post.
   await setReadPosition(roomId, actor.userId, row.id);
@@ -476,11 +498,18 @@ export async function updateRoom(
       },
     });
   });
+  if (visibilityChanged) await roomAudienceChanged(workspaceId);
   const warning = visibilityChanged ? await settleRoomFollowUp(roomId) : null;
   const room = await loadRoom(roomId);
   if (!room) throw new SpaceError('not_found', 'Room not found');
   const view: RoomView = { ...room, unreadCount: 0, muted: await isRoomMuted(roomId, actor.userId) };
   return warning ? { ...view, warning } : view;
+}
+
+/** Who may enter a room of the space changed: what keys its audience moves on (federation §7.5). */
+async function roomAudienceChanged(workspaceId: string): Promise<void> {
+  const { bumpSpaceMembershipVersion } = await import('@/core/spaces/membership');
+  bumpSpaceMembershipVersion(workspaceId);
 }
 
 async function settleRoomFollowUp(roomId: string): Promise<string | null> {
@@ -557,6 +586,7 @@ export async function addRoomMember(actor: RoomActor, workspaceId: string, roomI
     }
     return inserted.length > 0;
   });
+  if (added) await roomAudienceChanged(workspaceId);
   return { added };
 }
 
@@ -587,6 +617,7 @@ export async function removeRoomMember(actor: RoomActor, workspaceId: string, ro
     return deleted.length > 0;
   });
   if (!removed) return { removed: false };
+  await roomAudienceChanged(workspaceId);
   const warning = await settleRoomFollowUp(roomId);
   return warning ? { removed, warning } : { removed };
 }
