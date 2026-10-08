@@ -25,6 +25,30 @@ import { buildAgentContext, recheckSponsor, recheckSpace, writesWithheld } from 
 import { contentStorageOffFor } from './agent/audience';
 import { stripMutatingTools } from './agent/plan-mode';
 import { isSmallModel } from './agent/small-model';
+import { getMCPBridge } from '@/mcp/bridge';
+
+/**
+ * Put `section` at the end of the prompt's static (cacheable) part, before the
+ * volatile tier that starts at VOLATILE_MARKER; appended when there is none.
+ */
+export function withStaticSection(prompt: string, section: string): string {
+  if (!prompt) return section;
+  const index = prompt.match(VOLATILE_MARKER)?.index;
+  return index === undefined
+    ? `${prompt}\n\n${section}`
+    : `${prompt.slice(0, index)}\n\n${section}${prompt.slice(index)}`;
+}
+
+/**
+ * A worker that can reach MCP tools (it holds `mcp_list_tools`) is told which
+ * servers exist and how it reaches them (src/mcp/servers-section.ts), at the
+ * end of the cacheable prefix. Anyone else gets the prompt unchanged.
+ */
+export function withMcpServersSection(systemPrompt: string | undefined, tools: ToolHandler[] | undefined, codemode: boolean): string | undefined {
+  if (!tools?.some((t) => t.name === 'mcp_list_tools')) return systemPrompt;
+  const section = getMCPBridge().serversSection({ codemode });
+  return section ? withStaticSection(systemPrompt ?? '', section) : systemPrompt;
+}
 
 /** Union type for all agent worker implementations */
 export type AnyAgentWorker = AgentWorker | CLIAgentWorker;
@@ -394,10 +418,11 @@ export class AgentManager {
     // session-selected skills into that volatile tail: a resumed run re-sends
     // them, and a selection change does not touch the stable part its vendor
     // session is fingerprinted on. Everyone else keeps them as their own message.
+    const systemPrompt = withMcpServersSection(options.systemPrompt, options.tools, workerConfig.codemode === true);
     const intoTail = !context.root && typeof context.metadata.resumeKey === 'string' && isCLI && isResumableCliModel(routedModel)
-      && !!selectedSkills && !!options.systemPrompt && VOLATILE_MARKER.test(options.systemPrompt);
-    if (options.systemPrompt) {
-      worker.addSystemMessage(intoTail ? `${options.systemPrompt}${selectedSkills}` : options.systemPrompt);
+      && !!selectedSkills && !!systemPrompt && VOLATILE_MARKER.test(systemPrompt);
+    if (systemPrompt) {
+      worker.addSystemMessage(intoTail ? `${systemPrompt}${selectedSkills}` : systemPrompt);
     }
     if (selectedSkills && !intoTail) worker.addSystemMessage(selectedSkills);
 

@@ -72,6 +72,7 @@ export function buildServerConfig(args: Record<string, unknown>): { server: MCPS
       // Any transport: a slow tool (a UI scenario, a crawl) outlives the 30 s protocol default.
       requestTimeoutMs: typeof args.requestTimeoutMs === 'number' && args.requestTimeoutMs >= 1 && args.requestTimeoutMs <= 3_600_000 ? args.requestTimeoutMs : undefined,
       exposure: isMcpExposure(exposure) ? exposure : undefined,
+      description: typeof args.description === 'string' && args.description.trim() ? args.description.trim().slice(0, 500) : undefined,
       toolExposure: toolExposure as Record<string, McpExposure> | undefined,
       isEnabled: true,
     },
@@ -178,6 +179,7 @@ export class McpAdminTool extends BaseTool {
                 "How its tools reach agents: 'deferred' (default, via mcp_list_tools), 'direct' (declared on every request — " +
                 "only for a few tools used constantly), 'codemode' (codemode scripts only), or 'hidden'",
             },
+            description: { type: 'string', description: 'What the server offers, in one sentence — shown to agents so they know when to use it' },
             toolExposure: {
               type: 'object',
               description: "Per-tool overrides: tool name or * pattern → exposure, e.g. { \"delete_*\": \"hidden\" }",

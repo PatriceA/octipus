@@ -23,6 +23,16 @@ function stubBridge(existing: Array<{ id: string }> = []) {
 }
 
 describe('buildServerConfig', () => {
+  test('a description is trimmed, capped, and left unset when blank', () => {
+    const base = { name: 'Docs', transport: 'streamable-http', url: 'https://docs.example.com/mcp' };
+    const described = buildServerConfig({ ...base, description: '  Search the docs  ' });
+    expect('server' in described && described.server.description).toBe('Search the docs');
+    const long = buildServerConfig({ ...base, description: 'x'.repeat(900) });
+    expect('server' in long && long.server.description?.length).toBe(500);
+    const blank = buildServerConfig({ ...base, description: '   ' });
+    expect('server' in blank && blank.server.description).toBeUndefined();
+  });
+
   test('exposure: null counts as unset, toolExposure is kept, and a bad value names itself', () => {
     const base = { name: 'Docs', transport: 'streamable-http', url: 'https://docs.example.com/mcp' };
     const unset = buildServerConfig({ ...base, exposure: null, toolExposure: null });

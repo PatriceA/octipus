@@ -646,11 +646,14 @@ export async function spaceMemberByUsername(workspaceId: string, usernames: read
     .where(and(eq(workspaceMembers.workspaceId, workspaceId), inArray(sql`lower(${users.username})`, names), eq(users.isActive, true)));
 }
 
-/** Active members eligible for a room notification, after access and mute checks. */
+/** Active local members eligible for a room notification, after access and mute checks. */
 export async function roomNotificationRecipients(room: Room): Promise<Array<{ userId: string; username: string }>> {
+  // Local members only. A remote member never signs in here, so a row in this
+  // install's notifications table reaches nobody; its install hears about the
+  // room over the link (federation §9), as a mention does in notifyRoomMentions.
   const members = await getDb().select({ userId: users.id, username: users.username })
     .from(workspaceMembers).innerJoin(users, eq(users.id, workspaceMembers.userId))
-    .where(and(eq(workspaceMembers.workspaceId, room.workspaceId), eq(users.isActive, true)));
+    .where(and(eq(workspaceMembers.workspaceId, room.workspaceId), eq(users.isActive, true), eq(users.kind, 'local')));
   const recipients: Array<{ userId: string; username: string }> = [];
   for (const member of members) {
     if (await hasRoomAccess(member.userId, room) && !await isRoomMuted(room.id, member.userId)) recipients.push(member);

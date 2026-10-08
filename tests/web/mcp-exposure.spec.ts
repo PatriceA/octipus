@@ -97,3 +97,21 @@ test('a new server is added with the chosen exposure', async ({ authenticatedPag
   await dialog.getByRole('button', { name: 'Add & Connect' }).click();
   await expect.poll(() => posted?.exposure).toBe('codemode');
 });
+
+test('a server description is saved from the expanded server', async ({ authenticatedPage: page }) => {
+  await stubServer(page, {});
+  let saved: unknown;
+  await page.route('**/api/mcp/servers/gh/description', route => {
+    saved = route.request().postDataJSON();
+    return json(route, 200, { success: true });
+  });
+  await page.goto('/mcp');
+  await page.getByRole('button', { name: 'Tools and permissions for GitHub' }).click();
+  const input = page.getByRole('textbox', { name: 'Description for GitHub' });
+  const save = page.getByRole('button', { name: 'Save', exact: true });
+  await expect(save).toBeDisabled();
+  await input.fill('  Issues, pull requests and code search  ');
+  await save.click();
+  await expect(page.getByText('Description saved.')).toBeVisible();
+  expect(saved).toEqual({ description: 'Issues, pull requests and code search' });
+});
