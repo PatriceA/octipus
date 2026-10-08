@@ -144,3 +144,13 @@ describe('codemode MCP script tools', () => {
     expect(msg.content).toContain('ok');
   });
 });
+
+test('a codemode tool blocked after repeated failures clears AgentContext.codemode', async () => {
+  const context = makeContext();
+  context.codemode = true;
+  const exec = new ToolExecutor(context, () => {});
+  exec.registerTool(buildCodemodeHandler({ tools: () => [], call: (c) => exec.runNestedCall(c) }));
+  for (let i = 0; i < 3; i++) await exec.handleToolCalls(script('throw new Error("same failure")').map((c) => ({ ...c, id: `cm-${i}` })));
+  expect(exec.isToolBlocked('codemode')).toBe(true);
+  expect(context.codemode).toBe(false);
+});

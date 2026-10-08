@@ -8,7 +8,7 @@ import type { AgentContext, MCPServer, MCPTool } from '@/core/types';
 import { exposureConfigError, type McpExposure, type McpExposureConfig, resolveToolExposure } from '@/shared/mcp-exposure';
 import { coreLogger } from '@/utils/logger';
 import { getMcpCircuitBreaker } from './circuit-breaker';
-import { mcpToolNames } from './exposure';
+import { mcpToolKey, mcpToolNames } from './exposure';
 import { type MCPCapabilities, MCPMethods, type MCPPrompt, MCPProtocol, type MCPResource, type MCPToolDefinition } from './protocol';
 import type { MCPTransport } from './transports/interface';
 import { SSETransport } from './transports/sse';
@@ -28,6 +28,14 @@ export interface MCPServerConnection {
   prompts: MCPPrompt[];
   status: 'connecting' | 'connected' | 'disconnected' | 'error';
   error?: string;
+}
+
+/**
+ * A server's input schema as a tool declaration needs it: providers require an
+ * object schema, and some reject one without `properties`.
+ */
+function objectSchema(inputSchema: Record<string, unknown> | undefined): Record<string, unknown> {
+  return { ...inputSchema, type: 'object', properties: inputSchema?.properties ?? {} };
 }
 
 /** Hard stop so a server that keeps handing back cursors can't loop forever. */
@@ -833,7 +841,12 @@ export class MCPBridge extends EventEmitter {
             const selected = matched.slice(offset, offset + remaining);
             offset = Math.max(0, offset - matched.length);
             remaining -= selected.length;
-            if (!selected.length && (listed.length || scriptOnly.length)) continue;
+            // Nothing selected: skip a server that has tools (all-hidden ones
+            // included, so they are not even named) and any hidden server. A
+            // server with no tools is still shown as connected, and one whose
+            // only tools are codemode ones is shown with that count, so the
+            // model knows they exist.
+            if (!selected.length && (bridge.isServerHidden(connection.id) || (connection.tools.length && !(scriptOnly.length && !exact)))) continue;
             result.push({
               server_id: connection.id,
               server_name: connection.server.name,
@@ -892,15 +905,18 @@ export class MCPBridge extends EventEmitter {
 
   /** Connected servers with each tool's model-facing name and exposure. */
   private exposedTools(): Array<{ connection: MCPServerConnection; tool: MCPToolDefinition; name: string; exposure: McpExposure }> {
-    const out: Array<{ connection: MCPServerConnection; tool: MCPToolDefinition; name: string; exposure: McpExposure }> = [];
-    for (const connection of [...this.connections.values()].sort((a, b) => a.id.localeCompare(b.id))) {
-      if (connection.status !== 'connected') continue;
-      const names = mcpToolNames(connection.id, connection.tools.map((t) => t.name));
-      for (const tool of connection.tools) {
-        out.push({ connection, tool, name: names.get(tool.name) as string, exposure: resolveToolExposure(connection.server, tool.name) });
-      }
-    }
-    return out;
+    const connected = [...this.connections.values()]
+      .filter((c) => c.status === 'connected')
+      .sort((a, b) => a.id.localeCompare(b.id));
+    // Named across ALL servers at once: two server ids that sanitise alike
+    // must not hand out the same handler name.
+    const names = mcpToolNames(connected.flatMap((c) => c.tools.map((t) => ({ serverId: c.id, toolName: t.name }))));
+    return connected.flatMap((connection) => connection.tools.map((tool) => ({
+      connection,
+      tool,
+      name: names.get(mcpToolKey({ serverId: connection.id, toolName: tool.name })) as string,
+      exposure: resolveToolExposure(connection.server, tool.name),
+    })));
   }
 
   /**
@@ -918,11 +934,14 @@ export class MCPBridge extends EventEmitter {
         return {
           name,
           description: `[MCP:${connection.server.name}] ${tool.description ?? tool.name}`,
-          // Providers require an object schema, and some reject one without `properties`.
-          parameters: { ...tool.inputSchema, type: 'object', properties: tool.inputSchema?.properties ?? {} },
+          parameters: objectSchema(tool.inputSchema),
           toolId: 'mcp',
           permissionAction: () => action,
-          execute: async (args: Record<string, unknown>, context: AgentContext) => this.callTool(serverId, tool.name, args, context),
+          // Authorized in mcp_call_tool's wrapped shape: authorizeMcpDispatch
+          // unwraps a top-level `arguments` key, which for a tool whose own
+          // schema has an `arguments` field would check the wrong object.
+          execute: async (args: Record<string, unknown>, context: AgentContext) =>
+            this.callTool(serverId, tool.name, args, context, { server_id: serverId, tool_name: tool.name, arguments: args }),
         } satisfies ToolHandler;
       });
   }
@@ -940,7 +959,7 @@ export class MCPBridge extends EventEmitter {
       .map(({ connection, tool, name }) => ({
         name,
         description: `[MCP:${connection.server.name}] ${tool.description ?? tool.name}`,
-        parameters: tool.inputSchema ?? { type: 'object' },
+        parameters: objectSchema(tool.inputSchema),
         via: 'mcp_call_tool',
         wrap: (args: Record<string, unknown>) => ({ server_id: connection.id, tool_name: tool.name, arguments: args }),
       }));

@@ -6,7 +6,7 @@
 import { describe, expect, test, vi } from 'vitest';
 import type { AgentContext, MCPServer } from '@/core/types';
 import { MCPBridge } from './bridge';
-import { mcpToolNames } from './exposure';
+import { mcpToolKey, mcpToolNames } from './exposure';
 
 const ctx = (codemode?: boolean): AgentContext => ({
   space: null, trigger: 'user', funding: 'own',
@@ -39,22 +39,33 @@ async function listed(bridge: MCPBridge, codemode?: boolean) {
 }
 
 describe('mcpToolNames', () => {
+  const names = (refs: Array<[string, string]>) => {
+    const out = mcpToolNames(refs.map(([serverId, toolName]) => ({ serverId, toolName })));
+    return (serverId: string, toolName: string) => out.get(mcpToolKey({ serverId, toolName })) as string;
+  };
+
   test('mcp__<server>__<tool> with characters outside [A-Za-z0-9_] replaced', () => {
-    expect(mcpToolNames('dev-radius', ['search.v2']).get('search.v2')).toBe('mcp__dev_radius__search_v2');
+    expect(names([['dev-radius', 'search.v2']])('dev-radius', 'search.v2')).toBe('mcp__dev_radius__search_v2');
   });
 
   test('tools that collide after sanitising each get a distinct hashed name', () => {
-    const names = mcpToolNames('s', ['a-b', 'a.b', 'c']);
-    expect(names.get('a-b')).not.toBe(names.get('a.b'));
-    expect(names.get('a-b')).toMatch(/^mcp__s__a_b_[0-9a-f]{8}$/);
-    expect(names.get('c')).toBe('mcp__s__c');
+    const name = names([['s', 'a-b'], ['s', 'a.b'], ['s', 'c']]);
+    expect(name('s', 'a-b')).not.toBe(name('s', 'a.b'));
+    expect(name('s', 'a-b')).toMatch(/^mcp__s__a_b_[0-9a-f]{8}$/);
+    expect(name('s', 'c')).toBe('mcp__s__c');
+  });
+
+  test('two servers whose ids sanitise alike do not share a name', () => {
+    const name = names([['my-srv', 'search'], ['my_srv', 'search'], ['my_srv', 'fetch']]);
+    expect(name('my-srv', 'search')).not.toBe(name('my_srv', 'search'));
+    expect(name('my_srv', 'fetch')).toBe('mcp__my_srv__fetch');
   });
 
   test('names stay within the 64-character provider limit, stably', () => {
     const long = 'x'.repeat(80);
-    const name = mcpToolNames('server', [long]).get(long) as string;
+    const name = names([['server', long]])('server', long);
     expect(name.length).toBe(64);
-    expect(mcpToolNames('server', [long]).get(long)).toBe(name);
+    expect(names([['server', long]])('server', long)).toBe(name);
   });
 });
 
@@ -73,7 +84,7 @@ describe('MCP exposure in the bridge', () => {
     expect(direct.parameters).toMatchObject({ type: 'object', properties: { q: { type: 'string' } } });
     const call = vi.spyOn(bridge, 'callTool').mockResolvedValue({ content: [] });
     await direct.execute({ q: 'x' }, ctx());
-    expect(call).toHaveBeenCalledWith('gh', 'search', { q: 'x' }, expect.anything());
+    expect(call).toHaveBeenCalledWith('gh', 'search', { q: 'x' }, expect.anything(), { server_id: 'gh', tool_name: 'search', arguments: { q: 'x' } });
   });
 
   test('codemode tools are left out of mcp_list_tools only for a worker running codemode', async () => {
@@ -148,5 +159,54 @@ describe('MCP exposure in the bridge', () => {
     (bridge as unknown as { saveConfig: unknown }).saveConfig = vi.fn().mockRejectedValue(new Error('disk full'));
     await expect(bridge.setExposure('gh', { exposure: 'hidden' })).rejects.toThrow('disk full');
     expect(bridge.toolExposure('gh', 'search')).toBe('deferred');
+  });
+});
+
+describe('exposure review fixes', () => {
+  test('a tool named after an Object.prototype member is still hidden', async () => {
+    const bridge = bridgeWith({ exposure: 'hidden' }, ['constructor', 'toString', 'search']);
+    expect(bridge.toolExposure('gh', 'constructor')).toBe('hidden');
+    expect(await handler(bridge, 'mcp_list_tools').execute({}, ctx())).toEqual({ message: 'No MCP servers connected.' });
+    await expect(bridge.callTool('gh', 'constructor', {}, ctx())).rejects.toThrow(/hidden/);
+  });
+
+  test('two direct servers whose ids sanitise alike keep separate handlers', () => {
+    const bridge = new MCPBridge();
+    const connections = (bridge as unknown as { connections: Map<string, unknown> }).connections;
+    for (const id of ['my-srv', 'my_srv']) {
+      const server = { id, name: id, command: '', isEnabled: true, exposure: 'direct' } as MCPServer;
+      connections.set(id, { id, server, status: 'connected', tools: [tool('search')], resources: [], prompts: [] });
+    }
+    const direct = bridge.getLazyToolHandlers().filter((h) => h.name.startsWith('mcp__'));
+    expect(direct).toHaveLength(2);
+    expect(new Set(direct.map((h) => h.name)).size).toBe(2);
+    expect(direct.map((h) => typeof h.permissionAction === 'function' && h.permissionAction({})).sort()).toEqual(['my-srv.search', 'my_srv.search']);
+  });
+
+  test('a direct tool is authorized in the wrapped shape, so its own `arguments` field is not mistaken for the wrapper', async () => {
+    const bridge = bridgeWith({ toolExposure: { search: 'direct' } });
+    const call = vi.spyOn(bridge, 'callTool').mockResolvedValue({ content: [] });
+    const args = { query: 'secret', arguments: { page: 2 } };
+    await handler(bridge, 'mcp__gh__search').execute(args, ctx());
+    expect(call).toHaveBeenCalledWith('gh', 'search', args, expect.anything(), { server_id: 'gh', tool_name: 'search', arguments: args });
+  });
+
+  test('a server whose tools are all hidden, or that is hidden itself, is not named by mcp_list_tools', async () => {
+    const allHidden = bridgeWith({ toolExposure: { '*': 'hidden' } });
+    expect(await handler(allHidden, 'mcp_list_tools').execute({}, ctx())).toEqual({ message: 'No MCP servers connected.' });
+    const emptyHidden = bridgeWith({ exposure: 'hidden' }, []);
+    expect(await handler(emptyHidden, 'mcp_list_tools').execute({}, ctx())).toEqual({ message: 'No MCP servers connected.' });
+    // A codemode-only server is still named, with its count, so the model knows to script it.
+    const scripted = bridgeWith({ exposure: 'codemode' });
+    expect(await listed(scripted, true)).toEqual({ names: [], codemodeOnly: 4 });
+  });
+
+  test('script tools get the same normalized object schema as direct handlers', () => {
+    const bridge = new MCPBridge();
+    const server = { id: 's', name: 'S', command: '', isEnabled: true, exposure: 'codemode' } as MCPServer;
+    (bridge as unknown as { connections: Map<string, unknown> }).connections.set('s', {
+      id: 's', server, status: 'connected', tools: [{ name: 'bare', description: 'no schema', inputSchema: {} }], resources: [], prompts: [],
+    });
+    expect(bridge.getScriptTools()[0].parameters).toEqual({ type: 'object', properties: {} });
   });
 });

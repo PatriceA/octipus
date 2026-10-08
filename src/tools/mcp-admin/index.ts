@@ -9,7 +9,7 @@
  * Nothing here is auto-approvable: `requiresPermission: true` with no
  * ALLOW default in the manifest.
  */
-import { exposureConfigError, isMcpExposure } from '@/shared/mcp-exposure';
+import { exposureConfigError, isMcpExposure, type McpExposure } from '@/shared/mcp-exposure';
 import type { MCPServer, ToolManifest } from '@/core/types';
 import { userRepository } from '@/db/repositories/user-repository';
 import { getMCPBridge } from '@/mcp/bridge';
@@ -36,7 +36,10 @@ export function buildServerConfig(args: Record<string, unknown>): { server: MCPS
   const command = String(args.command ?? '').trim();
   const url = String(args.url ?? '').trim();
 
-  const exposureError = exposureConfigError({ exposure: args.exposure });
+  // Models fill optional fields with null; null means "not set".
+  const exposure = args.exposure ?? undefined;
+  const toolExposure = args.toolExposure ?? undefined;
+  const exposureError = exposureConfigError({ exposure, toolExposure });
   if (exposureError) return { error: exposureError };
 
   if (transport === 'stdio' && !command) {
@@ -68,7 +71,8 @@ export function buildServerConfig(args: Record<string, unknown>): { server: MCPS
       postUrl: transport === 'streamable-http' ? url : undefined,
       // Any transport: a slow tool (a UI scenario, a crawl) outlives the 30 s protocol default.
       requestTimeoutMs: typeof args.requestTimeoutMs === 'number' && args.requestTimeoutMs >= 1 && args.requestTimeoutMs <= 3_600_000 ? args.requestTimeoutMs : undefined,
-      exposure: isMcpExposure(args.exposure) ? args.exposure : undefined,
+      exposure: isMcpExposure(exposure) ? exposure : undefined,
+      toolExposure: toolExposure as Record<string, McpExposure> | undefined,
       isEnabled: true,
     },
   };
@@ -173,6 +177,10 @@ export class McpAdminTool extends BaseTool {
               description:
                 "How its tools reach agents: 'deferred' (default, via mcp_list_tools), 'direct' (declared on every request — " +
                 "only for a few tools used constantly), 'codemode' (codemode scripts only), or 'hidden'",
+            },
+            toolExposure: {
+              type: 'object',
+              description: "Per-tool overrides: tool name or * pattern → exposure, e.g. { \"delete_*\": \"hidden\" }",
             },
           },
           returns: 'The registered server and how many tools it exposed on connect',

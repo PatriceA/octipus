@@ -23,6 +23,15 @@ function stubBridge(existing: Array<{ id: string }> = []) {
 }
 
 describe('buildServerConfig', () => {
+  test('exposure: null counts as unset, toolExposure is kept, and a bad value names itself', () => {
+    const base = { name: 'Docs', transport: 'streamable-http', url: 'https://docs.example.com/mcp' };
+    const unset = buildServerConfig({ ...base, exposure: null, toolExposure: null });
+    expect('server' in unset && unset.server.exposure).toBeUndefined();
+    const set = buildServerConfig({ ...base, exposure: 'codemode', toolExposure: { 'delete_*': 'hidden' } });
+    expect('server' in set && set.server).toMatchObject({ exposure: 'codemode', toolExposure: { 'delete_*': 'hidden' } });
+    expect(buildServerConfig({ ...base, toolExposure: { search: 'visible' } })).toEqual({ error: expect.stringContaining('toolExposure["search"]') });
+  });
+
   test('stdio needs a command', () => {
     expect(buildServerConfig({ name: 'X', transport: 'stdio' })).toEqual({ error: expect.stringContaining('`command`') });
   });

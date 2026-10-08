@@ -39,15 +39,33 @@ export function isMcpExposure(value: unknown): value is McpExposure {
   return typeof value === 'string' && (MCP_EXPOSURES as readonly string[]).includes(value);
 }
 
+/** Compiled `*` patterns; exposure is resolved per tool on every listing and call. */
+const compiledPatterns = new Map<string, RegExp>();
+
 function patternMatches(pattern: string, name: string): boolean {
-  const escaped = pattern.split('*').map((part) => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&'));
-  return new RegExp(`^${escaped.join('.*')}$`).test(name);
+  let regex = compiledPatterns.get(pattern);
+  if (!regex) {
+    const escaped = pattern.split('*').map((part) => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&'));
+    regex = new RegExp(`^${escaped.join('.*')}$`);
+    compiledPatterns.set(pattern, regex);
+  }
+  return regex.test(name);
+}
+
+/**
+ * A tool's own exact-name override, if it has one. Own keys only: a plain
+ * `overrides[name]` lookup finds `Object.prototype` members, so a tool named
+ * `constructor` or `toString` would read back a function instead of an
+ * exposure — and a function is not `'hidden'`.
+ */
+export function ownToolExposure(overrides: Record<string, McpExposure> | undefined, toolName: string): McpExposure | undefined {
+  return overrides && Object.prototype.hasOwnProperty.call(overrides, toolName) ? overrides[toolName] : undefined;
 }
 
 /** The exposure one tool of a server actually gets. */
 export function resolveToolExposure(server: McpExposureConfig, toolName: string): McpExposure {
   const overrides = server.toolExposure ?? {};
-  const exact = overrides[toolName];
+  const exact = ownToolExposure(overrides, toolName);
   if (exact) return exact;
   for (const [pattern, exposure] of Object.entries(overrides)) {
     if (pattern.includes('*') && patternMatches(pattern, toolName)) return exposure;

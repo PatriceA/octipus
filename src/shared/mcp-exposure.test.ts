@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { exposureConfigError, resolveToolExposure } from './mcp-exposure';
+import { exposureConfigError, ownToolExposure, resolveToolExposure } from './mcp-exposure';
 
 describe('resolveToolExposure', () => {
   test('a server without settings keeps the pre-exposure behaviour (deferred)', () => {
@@ -21,6 +21,14 @@ describe('resolveToolExposure', () => {
     expect(resolveToolExposure(server, 'delete_issue')).toBe('direct');
     expect(resolveToolExposure(server, 'delete_repo')).toBe('deferred');
     expect(resolveToolExposure(server, 'search')).toBe('hidden');
+  });
+
+  test('a tool named after an Object.prototype member gets the server exposure, not the prototype member', () => {
+    for (const name of ['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__']) {
+      expect(resolveToolExposure({ exposure: 'hidden' }, name)).toBe('hidden');
+      expect(ownToolExposure({}, name)).toBeUndefined();
+    }
+    expect(ownToolExposure({ constructor: 'direct' as const }, 'constructor')).toBe('direct');
   });
 
   test('regex characters in a pattern are literal', () => {

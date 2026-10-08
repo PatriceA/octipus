@@ -6,6 +6,7 @@ import { api } from '@/lib/api';
 import {
   MCP_EXPOSURES,
   type McpExposure,
+  ownToolExposure,
   resolveToolExposure,
 } from '../../../src/shared/mcp-exposure';
 
@@ -85,7 +86,8 @@ export function ToolExposureControl({ serverId, toolName, exposure, toolExposure
   toolExposure: Record<string, McpExposure>;
 }) {
   const { busy, error, save } = useSave(serverId);
-  const { [toolName]: own, ...others } = toolExposure;
+  const own = ownToolExposure(toolExposure, toolName);
+  const others = Object.fromEntries(Object.entries(toolExposure).filter(([key]) => key !== toolName));
   const inherited = resolveToolExposure({ exposure, toolExposure: others }, toolName);
 
   function change(value: McpExposure | 'INHERIT') {

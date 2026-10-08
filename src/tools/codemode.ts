@@ -272,7 +272,10 @@ export function buildCodemodeHandler(host: CodemodeHost): ToolHandler {
 
       if (!result.ok) {
         const error = result.error.stack ?? `${result.error.name ?? 'Error'}: ${result.error.message}`;
-        throw new Error(`Script failed (${result.error.kind}, ${header}): ${error}${output ? `\nOutput before the failure:\n${output}` : ''}`);
+        // No timing here, unlike the success header: the executor blocks a
+        // tool after the SAME error three times running, and a wall time in the
+        // message made every repeat of one failure look different.
+        throw new Error(`Script failed (${result.error.kind}, ${calls} tool call${calls === 1 ? '' : 's'}): ${error}${output ? `\nOutput before the failure:\n${output}` : ''}`);
       }
       for (const key of result.storeWrites.delete) delete store[key];
       Object.assign(store, result.storeWrites.set);

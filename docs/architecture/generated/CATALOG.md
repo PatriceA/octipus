@@ -603,7 +603,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `services` | 2 |
 | `core` | `shared` | 15 |
 | `core` | `skills` | 10 |
-| `core` | `tools` | 18 |
+| `core` | `tools` | 19 |
 | `core` | `utils` | 186 |
 | `core` | `voice` | 1 |
 | `db` | `config` | 4 |
