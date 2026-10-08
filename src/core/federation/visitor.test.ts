@@ -179,7 +179,28 @@ async function restartVisitor(): Promise<void> {
     import('./visitor-ops'), import('./visitor-client'), import('@/core/gateway/hub'),
   ]);
   _resetVisitorOpsForTests();
-  startVisitorOps(new VisitorLinkPool(), getGatewayHub());
+  // Short backoff: a host retained for its leaves is redialled within the test.
+  startVisitorOps(new VisitorLinkPool({ reconnect: { baseMs: 50, maxMs: 200 } }), getGatewayHub());
+}
+
+/** Anna's remote rows on A that are members of `spaceId`. */
+function remoteMembersOf(spaceId: string) {
+  return q(`SELECT 1 FROM workspace_members m JOIN users u ON u.id = m.user_id WHERE m.workspace_id = $1 AND u.kind = 'remote'`, [spaceId]);
+}
+
+type PoolRequest = import('./visitor-client').VisitorLinkPool['request'];
+
+/** Run `body` with the pool's requests going through `wrap` (then restored). */
+async function withRequests<T>(wrap: (original: PoolRequest) => PoolRequest, body: () => Promise<T>): Promise<T> {
+  const { visitorPool } = await import('./visitor-ops');
+  const pool = visitorPool();
+  const original = pool.request.bind(pool);
+  pool.request = wrap(original);
+  try {
+    return await body();
+  } finally {
+    pool.request = original;
+  }
 }
 
 beforeAll(async () => {
@@ -280,6 +301,28 @@ describe('joining from B', () => {
     expect((await one.json()).info).toMatchObject({ name: 'Visit join', role: 'commenter' });
   });
 
+  test('the member is named to the host by a per-host HMAC of their id, stable across joins', async () => {
+    const x = await newSpace('Ref one');
+    const y = await newSpace('Ref two');
+    await joinFromB(annaId, x.id);
+    await joinFromB(annaId, y.id);
+    const refs = await q<{ ref: string; id: string }>(
+      `SELECT DISTINCT u.remote_user_ref AS ref, u.id FROM users u JOIN workspace_members m ON m.user_id = u.id
+        WHERE u.kind = 'remote' AND m.workspace_id = ANY($1)`, [[x.id, y.id]],
+    );
+    // One remote row for both spaces: the same ref each time.
+    expect(refs).toHaveLength(1);
+    const { memberRef } = await import('./visitor-ops');
+    expect(refs[0].ref).toBe(await memberRef(hostId.instanceId, annaId));
+    expect(refs[0].ref).not.toContain(annaId);
+    expect(refs[0].ref).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    // Another host gets another value; another member another one.
+    const identity = await import('./identity');
+    const other = identity.identityFromPrivateKeyPem(identity.generateIdentityPem()).instanceId;
+    expect(await memberRef(other, annaId)).not.toBe(refs[0].ref);
+    expect(await memberRef(hostId.instanceId, bobId)).not.toBe(refs[0].ref);
+  });
+
   test('visiting off refuses the join', async () => {
     const { getConfig } = await import('@/config');
     const x = await newSpace('Visit off');
@@ -359,6 +402,48 @@ describe('/api/remote-spaces: a pointer row is its user\'s only', () => {
     // A command is refused by the host and comes back as an error.
     const command = await call(annaId, 'POST', `/api/remote-spaces/${id}/rooms/${x.general}/messages`, { content: '/clear' });
     expect(command.status).toBe(403);
+  });
+
+  test('a REST post that asks the host\'s agent needs the chat scope', async () => {
+    const x = await newSpace('Scoped post');
+    const id = await joinFromB(annaId, x.id);
+    const { getApiTokenManager } = await import('@/security/api-tokens');
+    const { plaintext } = await getApiTokenManager().issue(annaId, { name: `rw-${randomUUID().slice(0, 8)}`, scopes: ['api:read', 'api:write'] });
+    const post = (body: unknown) => app.handle(new Request(`http://localhost/api/remote-spaces/${id}/rooms/${x.general}/messages`, {
+      method: 'POST', headers: { authorization: `Bearer ${plaintext}`, 'content-type': 'application/json' }, body: JSON.stringify(body),
+    }));
+    for (const body of [{ content: 'please answer', addressed: true }, { content: '@octipus what is next?' }]) {
+      const refused = await post(body);
+      expect(refused.status).toBe(403);
+      expect(await refused.json()).toMatchObject({ code: 'missing_scope' });
+    }
+    const before = await q('SELECT 1 FROM messages WHERE session_id = $1', [x.general]);
+    // A post among members is not an agent request: it goes.
+    expect((await post({ content: 'just a note for the room' })).status).toBe(200);
+    expect(await q('SELECT 1 FROM messages WHERE session_id = $1', [x.general])).toHaveLength(before.length + 1);
+  });
+
+  test('a post is answered only by the room.posted carrying its clientId', async () => {
+    const x = await newSpace('Correlated post');
+    const id = await joinFromB(annaId, x.id);
+    const { inboundLink } = await import('./host-server');
+    const { getInstanceIdentity } = await import('./identity');
+    const visitorInstance = (await getInstanceIdentity()).instanceId;
+    const forged = randomUUID();
+    const res = await withRequests((original) => (async (host, type, body, opts) => {
+      const frame = (body as { frame?: { type?: string; roomId?: string } }).frame;
+      if (type === 'gateway.frame' && frame?.type === 'room.post' && opts?.as && opts.conn) {
+        // Another post's answer arrives first on the same connection.
+        inboundLink(visitorInstance)?.sendEvent(opts.as, opts.conn, { type: 'room.posted', roomId: frame.roomId, messageId: forged, clientId: 'someone-else' });
+        await pause(100);
+      }
+      return original(host, type, body, opts);
+    }) as PoolRequest, () => call(annaId, 'POST', `/api/remote-spaces/${id}/rooms/${x.general}/messages`, { content: 'mine, correlated' }));
+    expect(res.status).toBe(200);
+    const { messageId } = await res.json();
+    expect(messageId).not.toBe(forged);
+    const [stored] = await q<{ content: string }>('SELECT content FROM messages WHERE id = $1', [messageId]);
+    expect(stored.content).toBe('mine, correlated');
   });
 });
 
@@ -493,18 +578,21 @@ describe('leaving (§6.3, §11 item 16)', () => {
     expect(list.pendingLeaves.map((r: { id: string }) => r.id)).toContain(id);
     expect(await members()).toHaveLength(1);
 
-    // B restarts while the host is still away: the tombstone is a row, it stays.
+    // B restarts while the host is still away: the tombstone is a row, it stays,
+    // and the host is retained for it (redialled with backoff).
     await restartVisitor();
+    const { visitorPool } = await import('./visitor-ops');
+    await waitFor(() => visitorPool().retainerCount(hostId.instanceId) === 1, 'the host to be retained for its leave');
     await pause(300);
     expect(await q('SELECT left_at FROM remote_spaces WHERE id = $1', [id])).toHaveLength(1);
 
-    // The host comes back; the next link open delivers the leave.
+    // The host comes back: a redial (nothing else asks for the host) delivers
+    // the leave, and the host is let go.
     await listenEndpoint();
     getConfig().federation.mode = 'both';
-    const other = await newSpace('Wakes the link');
-    await joinFromB(bobId, other.id);
     await waitFor(async () => (await q('SELECT 1 FROM remote_spaces WHERE id = $1', [id])).length === 0, 'the tombstone to be delivered');
     expect(await members()).toHaveLength(0);
+    await waitFor(() => visitorPool().retainerCount(hostId.instanceId) === 0, 'the host to be released');
   }, 30_000);
 
   test('at start, B delivers the leaves pending since the last run', async () => {
@@ -515,6 +603,57 @@ describe('leaving (§6.3, §11 item 16)', () => {
     await restartVisitor();
     await waitFor(async () => (await q('SELECT 1 FROM remote_spaces WHERE id = $1', [id])).length === 0, 'the pending leave to be delivered at start');
     expect(await q(`SELECT 1 FROM workspace_members m JOIN users u ON u.id = m.user_id WHERE m.workspace_id = $1 AND u.kind = 'remote'`, [x.id])).toHaveLength(0);
+  });
+
+  test('a leave being delivered and a rejoin never interleave: the rejoin keeps its membership', async () => {
+    const x = await newSpace('Rejoin race');
+    const first = await joinFromB(annaId, x.id, 'viewer');
+    await q('UPDATE remote_spaces SET left_at = now() WHERE id = $1', [first]);
+    const { deliverTombstones } = await import('./visitor-ops');
+    const order: string[] = [];
+    const second = await withRequests((original) => (async (host, type, body, opts) => {
+      if (type === 'space.leave') {
+        order.push('leave');
+        // The leave is slow to go: a rejoin meanwhile must wait for it.
+        await pause(300);
+      }
+      if (type === 'space.join') order.push('join');
+      return original(host, type, body, opts);
+    }) as PoolRequest, async () => {
+      const delivering = deliverTombstones(hostId.instanceId);
+      await waitFor(() => order.includes('leave'), 'the leave to start');
+      const rejoined = await joinFromB(annaId, x.id, 'viewer');
+      await delivering;
+      return rejoined;
+    });
+    expect(order).toEqual(['leave', 'join']);
+    expect(await q('SELECT id, left_at FROM remote_spaces WHERE space_id = $1 AND user_id = $2', [x.id, annaId])).toEqual([{ id: second, left_at: null }]);
+    expect(await remoteMembersOf(x.id)).toHaveLength(1);
+  });
+
+  test('a delivery that waited for a rejoin re-reads the tombstone and sends no leave', async () => {
+    const x = await newSpace('Rejoin first');
+    const first = await joinFromB(annaId, x.id, 'viewer');
+    await q('UPDATE remote_spaces SET left_at = now() WHERE id = $1', [first]);
+    const { deliverTombstones } = await import('./visitor-ops');
+    const order: string[] = [];
+    let joining = false;
+    await withRequests((original) => (async (host, type, body, opts) => {
+      if (type === 'space.join') {
+        joining = true;
+        order.push('join');
+        await pause(300);
+      }
+      if (type === 'space.leave') order.push('leave');
+      return original(host, type, body, opts);
+    }) as PoolRequest, async () => {
+      const rejoin = joinFromB(annaId, x.id, 'viewer');
+      await waitFor(() => joining, 'the join to start');
+      await Promise.all([rejoin, deliverTombstones(hostId.instanceId)]);
+    });
+    expect(order).toEqual(['join']);
+    expect(await q('SELECT left_at FROM remote_spaces WHERE space_id = $1 AND user_id = $2', [x.id, annaId])).toEqual([{ left_at: null }]);
+    expect(await remoteMembersOf(x.id)).toHaveLength(1);
   });
 
   test('a rejoin drops a pending leave of the same space', async () => {

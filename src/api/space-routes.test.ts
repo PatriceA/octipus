@@ -31,6 +31,9 @@ const PERSONAL_PREFIXES = [
   '/api/runs', '/api/saml', '/api/scim', '/api/search', '/api/settings', '/api/skills', '/api/spend-budgets',
   '/api/swarm', '/api/tools', '/api/topics', '/api/trajectories', '/api/vault', '/api/verification',
   '/api/voice', '/api/webhooks', '/api/workspace', '/v1',
+  // Spaces joined on other installs (federation §8.2): the caller's own
+  // pointer rows here, forwarded to the host; nothing of a space on this install.
+  '/api/remote-spaces',
   // The artifact SDK script, served beside the hosted pages: no content.
   '/octipus-artifact-client.js',
 ];

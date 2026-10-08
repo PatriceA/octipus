@@ -15,7 +15,11 @@
  * read), and its transcript is the only place this install keeps that
  * space's text (F-D11) — so memory extraction and recall, learning, the
  * profile, knowledge indexing and compaction (whose summary would be one
- * more copy) are all off.
+ * more copy) are all off. So are trajectories, the agent event log, the
+ * prompt dumps, the tool-output spill, file auto-indexing and the text of approval
+ * notifications: every writer of a turn's text outside the session's own
+ * rows checks `contentStorageOff` (or, holding only an agent context,
+ * `contentStorageOffFor`).
  */
 import { isSharedWorkspaceId } from '@/security/workspace-fs';
 
@@ -71,4 +75,18 @@ export async function sessionAudience(session: AudienceSession | null | undefine
 /** The audience of a known kind (tests, and callers that already resolved it). */
 export function audienceOf(kind: AudienceKind): SessionAudience {
   return AUDIENCES[kind];
+}
+
+/**
+ * The agent-context metadata key a turn of a `contentStorageOff` session
+ * carries (set by the root runner, inherited by nothing: such a turn has no
+ * children). The writers that see an `AgentContext` and not the session —
+ * the agent event log, the prompt dumps, the tool-output spill, file
+ * auto-indexing, approval notifications — read it with `contentStorageOffFor`.
+ */
+export const CONTENT_STORAGE_OFF_KEY = 'contentStorageOff';
+
+/** Whether the agent context belongs to a session whose text must not be copied anywhere (federation F-D11). */
+export function contentStorageOffFor(context: { metadata?: Record<string, unknown> | null } | null | undefined): boolean {
+  return context?.metadata?.[CONTENT_STORAGE_OFF_KEY] === true;
 }

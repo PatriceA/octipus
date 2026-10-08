@@ -78,7 +78,7 @@ export const JOINS_PER_IP_PER_HOUR = 20;
 /** Largest file `file.read` returns. */
 export const FILE_READ_MAX_BYTES = 1024 * 1024;
 
-const joinsByLink = new WeakMap<PeerLink, number[]>();
+let joinsByLink = new WeakMap<PeerLink, number[]>();
 const joinsByIp = new Map<string, number[]>();
 const JOIN_IP_WINDOW_MS = 3_600_000;
 let lastIpPrune = 0;
@@ -612,6 +612,7 @@ export async function listInstances(): Promise<FederationInstanceView[]> {
 
 /** Forget the join budgets (tests). */
 export function _resetHostOpsForTests(): void {
+  joinsByLink = new WeakMap();
   joinsByIp.clear();
   lastIpPrune = 0;
 }

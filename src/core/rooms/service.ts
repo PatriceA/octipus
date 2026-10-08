@@ -403,7 +403,7 @@ export async function postRoomMessage(
   await setReadPosition(roomId, actor.userId, row.id);
   const [view] = await views([row]);
   const { notifyRoomMentions } = await import('./mentions');
-  await notifyRoomMentions(access.room, actor.userId, row.id, content).catch((err: unknown) =>
+  await notifyRoomMentions(access.room, actor.userId, row.id, content, row.createdAt).catch((err: unknown) =>
     coreLogger.error({ err, roomId, messageId: row.id }, 'Room mention notifications failed'));
   return { message: view, access, addressed };
 }

@@ -41,6 +41,32 @@ labels reflect blast radius, not contract guarantees.
   visitor pool stops redialling a host that refused it (4403/4409) until
   asked again, resets its backoff only after a link stayed up 30 s, and
   redials retained hosts when visiting is turned back on.
+- **Spaces on other installs, the visitor side: review hardening.** The
+  visitor's agent: an addressed turn checks that its conversation still
+  exists, is active, is the member's and names that room (a deleted one is
+  never revived: its channel cannot create a session), and deleting or
+  archiving the conversation closes its listener; mentions are dated by the
+  post and the host's event, the older (10-minute window, none ahead of the clock, no replay) and
+  limited to 6 an hour and 30 a day per conversation and per member, before
+  the room is read; the mention reaches the agent inside the room context's
+  fence, never as the member's words; an unattended turn writes nothing to
+  the space, whatever was approved before; the member's panel text counts
+  as private, so attended writes ask every time; every task op asks; page
+  fetch is gone (web search stays); tool arguments are checked (UUID ids,
+  normalised paths inside the space, enum ops); tool descriptions name no
+  host string, approval summaries quote host names on one cleaned line.
+  Residency: trajectories, the agent event log, prompt dumps, the
+  tool-output spill, file auto-indexing, memory, learning and the text of approval notifications
+  are off for such a conversation. Host answers are checked against schemas
+  (`bad_answer`, 502). A rejoin and a pending leave of the same member and
+  host never interleave, and the leave is re-read before it is sent; a host
+  with pending leaves is retained and redialled with backoff. The pool keeps
+  a host's handshake-confirmed address. A post is answered only by the
+  `room.posted` with its `clientId`, and the agent posts on its own
+  connection. The host knows a member by a per-host HMAC of their user id.
+  The REST post asks `api:chat` for an addressed post. The web encodes
+  every path segment, drops non-UUID ids from host data, and loads no image
+  from a remote room or note.
 - **Hosting members of other installs: review hardening.** A visitor's
   virtual connections pass only room, space and live-note traffic, a
   mention and a requester error to the link (`agent.*`, `swarm.*`,
@@ -241,7 +267,7 @@ labels reflect blast radius, not contract guarantees.
   `remote_space_left`.
 - **Your own agent in a space on another install.** "Ask my agent" in a
   remote room opens a conversation that reads the room live each turn,
-  holds only the remote space tools plus web search and page fetch, and
+  holds only the remote space tools plus web search, and
   never feeds memory, learning, the profile, indexing or compaction. Its
   posts are asked: every time after a private read, the first time in a
   conversation otherwise. "Let my agent answer when addressed" is opt-in.

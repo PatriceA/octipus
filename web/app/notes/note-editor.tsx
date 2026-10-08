@@ -264,7 +264,7 @@ export function NoteEditor(props: EditorProps) {
   );
 
   const preview = draftBody.trim() ? (
-    <Markdown content={draftBody} className="max-w-none px-1" onWikilink={onOpenSlug} onTag={onTagClick} />
+    <Markdown content={draftBody} className="max-w-none px-1" onWikilink={onOpenSlug} onTag={onTagClick} untrusted={textOnly} />
   ) : (
     <p className="text-[13px] text-on-surface-variant/60">
       {readOnly ? (isNew ? 'Pick a note to read.' : 'This note is empty.') : 'Nothing to preview yet — switch to Edit to start writing.'}

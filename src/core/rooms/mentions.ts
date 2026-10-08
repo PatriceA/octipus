@@ -39,8 +39,12 @@ export function mentionedRemoteHandles(content: string): string[] {
   return [...handles];
 }
 
-/** Notify the members `content` mentions. Returns who was notified (locally or over their link). */
-export async function notifyRoomMentions(room: Room, posterId: string, messageId: string, content: string): Promise<string[]> {
+/**
+ * Notify the members `content` mentions. Returns who was notified (locally or
+ * over their link). `createdAt` is the post's: a remote member's install
+ * answers a mention only while it is recent (federation §9).
+ */
+export async function notifyRoomMentions(room: Room, posterId: string, messageId: string, content: string, createdAt: Date = new Date()): Promise<string[]> {
   const names = mentionedUsernames(content);
   const handles = mentionedRemoteHandles(content);
   if (names.length === 0 && handles.length === 0) return [];
@@ -75,7 +79,7 @@ export async function notifyRoomMentions(room: Room, posterId: string, messageId
     const { getGatewayHub } = await import('@/core/gateway/hub');
     getGatewayHub().publishEvent({
       type: 'room.mention', source: 'rooms', userId, sessionId: room.id,
-      payload: { roomId: room.id, spaceId: room.workspaceId, messageId, roomTitle: room.title, poster, excerpt },
+      payload: { roomId: room.id, spaceId: room.workspaceId, messageId, roomTitle: room.title, poster, excerpt, createdAt: createdAt.toISOString() },
     });
     notified.push(userId);
   }

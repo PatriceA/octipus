@@ -21,6 +21,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { restrictToOwnerAsync } from '@/utils/file-acl';
 import { dirname } from 'node:path';
 import { WorkspaceFS } from '@/security/workspace-fs';
+import { contentStorageOffFor } from '@/core/agent/audience';
 import type { AgentContext } from '@/core/types';
 import { DEFAULT_MAX_LENGTH } from '@/utils/sanitize';
 import { coreLogger } from '@/utils/logger';
@@ -92,6 +93,9 @@ export async function spillToolOutput(
   },
 ): Promise<string | null> {
   if (text.length <= opts.threshold) return null;
+  // A session whose text stays in its own rows (a space on another install,
+  // federation F-D11) writes no copy into the workspace: plain truncation.
+  if (contentStorageOffFor(opts.context)) return null;
 
   // ponytail: spilled files are never swept. They live under the workspace the
   // user can see and delete, and one file per oversized call is a rounding

@@ -37,6 +37,13 @@ export async function processLearningJob(job: Pick<BackgroundJob, 'id' | 'userId
     // prompts (learning from it could file their words as the requester's
     // facts), and a space session never feeds personal learning (I7).
     const audience = await sessionAudience(session);
+    // "Ask my agent" in a space on another install keeps that space's text in
+    // its own rows only (federation F-D11): nothing of it is learned.
+    if (audience.contentStorageOff) {
+      await backgroundJobRepository.finish(job.id, { status: 'done', stage: 'skipped_remote_space', result: {
+        reason: 'Conversations about a space on another install are not used for learning.', outputs } });
+      return;
+    }
     if (audience.personalMemoryOff) {
       const space = audience.kind === 'space' || audience.kind === 'room';
       await backgroundJobRepository.finish(job.id, { status: 'done', stage: space ? 'skipped_space' : 'skipped_group_channel', result: {

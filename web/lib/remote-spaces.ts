@@ -20,6 +20,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useSyncExternalStore } from 'react';
 import { api } from './api';
+import { remoteFilePath, remotePath, withUuidIds } from './remote-paths';
 import type { ClientMessage, GatewayMessage, GatewayStatus, WebGateway } from './gateway';
 import type { LiveNoteGateway } from './live-note';
 import type { Room, RoomMessage } from './rooms';
@@ -64,9 +65,7 @@ export function useRemoteSpaces(enabled = true) {
   });
 }
 
-export function remotePath(remoteSpaceId: string, rest = ''): string {
-  return `/remote-spaces/${encodeURIComponent(remoteSpaceId)}${rest}`;
-}
+export { remotePath } from './remote-paths';
 
 /** A member of a space on another install, as the host lists it: display names only (FI5). */
 export interface RemoteMember {
@@ -191,9 +190,11 @@ export function remoteRoomSource(remoteSpaceId: string, gateway: WebGateway): Ro
   return {
     kind: 'remote',
     roomsKey: ['remote-rooms', remoteSpaceId],
-    listRooms: () => api.get<{ rooms: Room[] }>(remotePath(remoteSpaceId, '/rooms')).then((r) => r.rooms),
-    messages: (roomId, query) => api.get(remotePath(remoteSpaceId, `/rooms/${roomId}/messages?${pageQuery(query)}`)),
-    post: (roomId, body) => api.post(remotePath(remoteSpaceId, `/rooms/${roomId}/messages`), body),
+    // Ids from the host: only UUIDs are kept (they key, link and page the views).
+    listRooms: () => api.get<{ rooms: Room[] }>(remotePath(remoteSpaceId, ['rooms'])).then((r) => withUuidIds(r.rooms)),
+    messages: (roomId, query) => api.get<{ messages: RoomMessage[]; hasMore: boolean }>(remotePath(remoteSpaceId, ['rooms', roomId, 'messages'], pageQuery(query)))
+      .then((page) => ({ messages: withUuidIds(page.messages), hasMore: page.hasMore === true })),
+    post: (roomId, body) => api.post(remotePath(remoteSpaceId, ['rooms', roomId, 'messages']), body),
     gateway: remoteSpaceGateway(gateway, remoteSpaceId),
   };
 }
@@ -224,9 +225,9 @@ export interface NotesSource {
 
 export function remoteNotesSource(remoteSpaceId: string, gateway: WebGateway): NotesSource {
   return {
-    list: () => api.get<{ notes: RemoteNoteRow[] }>(remotePath(remoteSpaceId, '/notes')).then((r) => r.notes),
-    read: (noteId) => api.get<RemoteNote>(remotePath(remoteSpaceId, `/notes/${noteId}`)),
-    propose: (noteId, body) => api.post(remotePath(remoteSpaceId, `/notes/${noteId}/proposals`), body),
+    list: () => api.get<{ notes: RemoteNoteRow[] }>(remotePath(remoteSpaceId, ['notes'])).then((r) => withUuidIds(r.notes)),
+    read: (noteId) => api.get<RemoteNote>(remotePath(remoteSpaceId, ['notes', noteId])),
+    propose: (noteId, body) => api.post(remotePath(remoteSpaceId, ['notes', noteId, 'proposals']), body),
     gateway: remoteSpaceGateway(gateway, remoteSpaceId),
   };
 }
@@ -252,10 +253,11 @@ export interface TasksSource {
 
 export function remoteTasksSource(remoteSpaceId: string): TasksSource {
   return {
-    list: () => api.get<{ tasks: RemoteTask[] }>(remotePath(remoteSpaceId, '/tasks')).then((r) => r.tasks),
-    read: (taskId) => api.get(remotePath(remoteSpaceId, `/tasks/${taskId}`)),
-    create: (body) => api.post(remotePath(remoteSpaceId, '/tasks'), body),
-    op: (taskId, op, body) => api.post(remotePath(remoteSpaceId, `/tasks/${taskId}/${op}`), body ?? {}),
+    list: () => api.get<{ tasks: RemoteTask[] }>(remotePath(remoteSpaceId, ['tasks'])).then((r) => withUuidIds(r.tasks)),
+    read: (taskId) => api.get<{ task: RemoteTask; comments: RemoteTaskComment[] }>(remotePath(remoteSpaceId, ['tasks', taskId]))
+      .then((r) => ({ task: r.task, comments: withUuidIds(r.comments) })),
+    create: (body) => api.post(remotePath(remoteSpaceId, ['tasks']), body),
+    op: (taskId, op, body) => api.post(remotePath(remoteSpaceId, ['tasks', taskId, op]), body ?? {}),
   };
 }
 
@@ -273,7 +275,7 @@ export interface FilesSource {
 export function remoteFilesSource(remoteSpaceId: string): FilesSource {
   return {
     key: `remote:${remoteSpaceId}`,
-    list: (path) => api.get(remotePath(remoteSpaceId, `/files${path ? `?path=${encodeURIComponent(path)}` : ''}`)),
-    read: (path) => api.get(remotePath(remoteSpaceId, `/files/${path.split('/').map(encodeURIComponent).join('/')}`)),
+    list: (path) => api.get(remotePath(remoteSpaceId, ['files'], path ? new URLSearchParams({ path }).toString() : undefined)),
+    read: (path) => api.get(remoteFilePath(remoteSpaceId, path)),
   };
 }

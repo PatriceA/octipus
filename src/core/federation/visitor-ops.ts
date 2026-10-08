@@ -37,11 +37,24 @@
  *    it does after its own gateway reconnects.
  *  - **Leaving** (§6.3) sets `left_at`, a tombstone: `space.leave` is sent
  *    at once and again every time the link to that host opens (and at
- *    startup), until the host acknowledges it; then the row is deleted. A
- *    rejoin of the same space drops a pending tombstone first.
+ *    startup), until the host acknowledges it; then the row is deleted.
+ *    While a host has tombstones this install retains its link, so an
+ *    unreachable host is redialled with backoff until they are delivered.
+ *    A join and the delivery of a leave of the same member on the same host
+ *    never overlap (`withMemberHostLock`): a rejoin drops the pending
+ *    tombstone of that space while it holds the lock, and a delivery
+ *    re-reads the tombstone right before it sends `space.leave`, so a leave
+ *    never removes the membership a rejoin just made.
+ *  - **Host answers** are another install's data: each is parsed against
+ *    its schema (host-answers.ts) before it is used or forwarded; one that
+ *    does not fit is a 502 `bad_answer`.
+ *  - **Who the member is** on the host: `space.join` names them by an HMAC of
+ *    their user id under a key derived from this install's identity, per
+ *    host (`memberRef`): stable for that host, meaningless to any other.
  *
  * Logs name frame types, sizes and ids, never bodies.
  */
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { and, eq, isNotNull, isNull } from 'drizzle-orm';
 import { z } from 'zod';
 import type { ConnectionContext } from '@/core/gateway/protocol';
@@ -51,7 +64,8 @@ import { type RemoteSpace, type RemoteSpaceRole, remoteSpaces } from '@/db/schem
 import { instanceBadge } from '@/security/user-kinds';
 import { logger } from '@/utils/logger';
 import { DialError } from './dialer';
-import { displayInstanceId, instanceIdOf, isInstanceId } from './identity';
+import { type HostAnswer, parseHostAnswer } from './host-answers';
+import { displayInstanceId, getInstanceIdentity, instanceIdOf, isInstanceId } from './identity';
 import { LinkRequestError } from './link';
 import { federationVisits } from './mode';
 import { type FederationRequestType, GATEWAY_FRAME_ALLOWLIST, type LinkEvent } from './protocol';
@@ -210,18 +224,71 @@ function requireVisiting(): void {
   }
 }
 
+/** The host answered `type` with something that does not fit its schema (host-answers.ts). */
+function badAnswer(type: string): RemoteSpaceError {
+  return new RemoteSpaceError('bad_answer', `The host answered ${type} with data this install does not accept`, 502);
+}
+
+/** `raw`, the host's answer to `type`, checked (host-answers.ts); a misfit is a 502 `bad_answer`. */
+export function checkedAnswer<T extends FederationRequestType>(type: T, raw: unknown): HostAnswer<T> {
+  try {
+    return parseHostAnswer(type, raw);
+  } catch (err) {
+    if (!(err instanceof z.ZodError)) throw err;
+    log.warn({ type, issues: err.issues.slice(0, 3).map((i) => `${i.path.join('.')}: ${i.code}`) }, 'The host answered with data this install does not accept');
+    throw badAnswer(type);
+  }
+}
+
 /**
- * Forward request `type` for the pointer row `row` (its handle as `as`).
- * Refusals become `RemoteSpaceError`s. Logs the type and ids only.
+ * Forward request `type` for the pointer row `row` (its handle as `as`) and
+ * return the host's answer, checked against its schema. Refusals and
+ * misfits become `RemoteSpaceError`s. Logs the type and ids only.
  */
-export async function forward(row: RemoteSpace, type: FederationRequestType, body: Record<string, unknown>, conn?: string): Promise<unknown> {
+export async function forward<T extends FederationRequestType>(row: RemoteSpace, type: T, body: Record<string, unknown>, conn?: string): Promise<HostAnswer<T>> {
   requireVisiting();
   log.debug({ type, remoteSpaceId: row.id, host: row.hostInstanceId }, 'Forwarding a request to the host');
+  let raw: unknown;
   try {
-    return await visitorPool().request(hostOf(row), type, { spaceId: row.spaceId, ...body }, { as: row.memberHandle, ...(conn ? { conn } : {}) });
+    raw = await visitorPool().request(hostOf(row), type, { spaceId: row.spaceId, ...body }, { as: row.memberHandle, ...(conn ? { conn } : {}) });
   } catch (err) {
     throw remoteError(err);
   }
+  return checkedAnswer(type, raw);
+}
+
+/**
+ * How member `userId` of this install is named to host `hostInstanceId`
+ * (`space.join`'s `user.ref`): an HMAC of the user id, keyed by a hash of
+ * this install's identity signature over a fixed label (Ed25519 signs
+ * deterministically, so the key is stable while the identity is), and
+ * bound to the host. Stable per host; another host gets another value, and
+ * none of them is this install's user id.
+ */
+export async function memberRef(hostInstanceId: string, userId: string): Promise<string> {
+  const identity = await getInstanceIdentity();
+  const key = createHash('sha256').update(identity.sign(Buffer.from('octipus/federation/member-ref/v1'))).digest();
+  return createHmac('sha256', key).update(`${hostInstanceId}\n${userId}`).digest('base64url');
+}
+
+/** `${user}\n${host}` → the tail of the work holding that member's lock on that host. */
+const memberHostLocks = new Map<string, Promise<unknown>>();
+
+/**
+ * Run `run` alone among the joins and leave deliveries of member `userId` on
+ * host `hostInstanceId` (§6.3): a join's `space.join` and its tombstone
+ * cleanup, and a delivery's re-read and `space.leave`, never interleave.
+ * The space a join is for is known only from the host's answer, so the lock
+ * is per member and host (one process: the install runs one).
+ */
+function withMemberHostLock<T>(userId: string, hostInstanceId: string, run: () => Promise<T>): Promise<T> {
+  const key = `${userId}\n${hostInstanceId}`;
+  const previous = memberHostLocks.get(key) ?? Promise.resolve();
+  const current = previous.then(run, run);
+  const tail = current.then(() => undefined, () => undefined);
+  memberHostLocks.set(key, tail);
+  void tail.then(() => { if (memberHostLocks.get(key) === tail) memberHostLocks.delete(key); });
+  return current;
 }
 
 async function auditVisitor(userId: string, action: 'remote_space_joined' | 'remote_space_left', row: RemoteSpace, extra: Record<string, unknown> = {}): Promise<void> {
@@ -233,16 +300,6 @@ async function auditVisitor(userId: string, action: 'remote_space_joined' | 'rem
 
 // ── Joining (§6.2) ───────────────────────────────────────────────────
 
-const joinAnswerSchema = z.object({
-  space: z.object({
-    id: z.string().uuid(),
-    name: z.string().min(1).max(500),
-    role: z.enum(['editor', 'commenter', 'viewer', 'guest']),
-    scope: z.unknown(),
-  }).passthrough(),
-  member: z.object({ handle: z.string().min(1).max(200) }).passthrough(),
-}).passthrough();
-
 /**
  * Join the space the invite `link` names, as `user` (§6.2). The user saw
  * and confirmed the host fingerprint (`joinPreview`); the link is pinned to
@@ -251,22 +308,27 @@ const joinAnswerSchema = z.object({
 export async function joinRemoteSpace(user: { id: string; username: string }, link: string): Promise<RemoteSpaceView> {
   requireVisiting();
   const parsed = parseFederatedLink(link);
+  // Alone with any leave delivery of this member on this host (§6.3).
+  return withMemberHostLock(user.id, parsed.instanceId, () => joinLocked(user, parsed));
+}
+
+async function joinLocked(user: { id: string; username: string }, parsed: FederatedLink): Promise<RemoteSpaceView> {
   const host: HostAddress = { instanceId: parsed.instanceId, url: parsed.hostUrl };
   const pool = visitorPool();
-  let answer: z.infer<typeof joinAnswerSchema>;
+  let raw: unknown;
   let hostPublicKey: string;
   try {
-    const raw = await pool.request(host, 'space.join', { token: parsed.token, user: { ref: user.id, name: user.username.slice(0, 40) } });
-    answer = joinAnswerSchema.parse(raw);
+    const ref = await memberRef(parsed.instanceId, user.id);
+    raw = await pool.request(host, 'space.join', { token: parsed.token, user: { ref, name: user.username.slice(0, 40) } });
     const link = await pool.link(host);
     if (!link.peerPublicKey || instanceIdOf(link.peerPublicKey) !== parsed.instanceId) {
       throw new Error('The link to the host carries no verified key for its pinned id');
     }
     hostPublicKey = link.peerPublicKey;
   } catch (err) {
-    if (err instanceof z.ZodError) throw new RemoteSpaceError('bad_answer', 'The host answered the join with something this install does not read', 502);
     throw remoteError(err);
   }
+  const answer = checkedAnswer('space.join', raw);
   ensureHostWired(parsed.instanceId);
   const row = await getDb().transaction(async (tx) => {
     // A rejoin supersedes a leave still waiting for the host: its `space.leave`
@@ -299,10 +361,7 @@ export async function joinRemoteSpace(user: { id: string; username: string }, li
 /** Refresh the pointer row from the host (`space.info`): the space's name and the member's role. */
 export async function refreshRemoteSpace(userId: string, id: string): Promise<{ remoteSpace: RemoteSpaceView; info: Record<string, unknown> }> {
   const row = await ownRemoteSpace(userId, id);
-  const info = z.object({
-    name: z.string().min(1).max(500),
-    role: z.enum(['editor', 'commenter', 'viewer', 'guest']),
-  }).passthrough().parse(await forward(row, 'space.info', {}));
+  const info = await forward(row, 'space.info', {});
   let current = row;
   if (info.name !== row.spaceName || info.role !== row.role) {
     [current] = await getDb().update(remoteSpaces).set({ spaceName: info.name, role: info.role }).where(eq(remoteSpaces.id, row.id)).returning();
@@ -357,31 +416,68 @@ export function deliverTombstones(hostInstanceId: string): Promise<number> {
   return pass;
 }
 
+const tombstonesOf = (hostInstanceId: string) => getDb().select().from(remoteSpaces)
+  .where(and(eq(remoteSpaces.hostInstanceId, hostInstanceId), isNotNull(remoteSpaces.leftAt)));
+
 async function deliverPass(hostInstanceId: string): Promise<number> {
   if (!federationVisits()) return 0;
-  const tombs = await getDb().select().from(remoteSpaces)
-    .where(and(eq(remoteSpaces.hostInstanceId, hostInstanceId), isNotNull(remoteSpaces.leftAt)));
   let delivered = 0;
-  for (const tomb of tombs) {
-    try {
-      await visitorPool().request(hostOf(tomb), 'space.leave', { spaceId: tomb.spaceId }, { as: tomb.memberHandle });
-    } catch (err) {
-      if (!(err instanceof LinkRequestError && err.code === 'not_found')) {
-        log.warn({ err: err instanceof Error ? err.message : String(err), remoteSpaceId: tomb.id, host: hostInstanceId }, 'Leave not delivered yet: retried when the link next opens');
-        if (err instanceof DialError || (err instanceof LinkRequestError && (err.code === 'link_closed' || err.code === 'timeout'))) break;
-        continue;
+  for (const tomb of await tombstonesOf(hostInstanceId)) {
+    const outcome = await withMemberHostLock(tomb.userId, hostInstanceId, async (): Promise<'delivered' | 'gone' | 'later' | 'unreachable'> => {
+      // Read again right before sending: a rejoin may have dropped it since
+      // the list was read, and its `space.leave` would end the new membership.
+      const [still] = await getDb().select({ id: remoteSpaces.id }).from(remoteSpaces)
+        .where(and(eq(remoteSpaces.id, tomb.id), isNotNull(remoteSpaces.leftAt)));
+      if (!still) return 'gone';
+      try {
+        await visitorPool().request(hostOf(tomb), 'space.leave', { spaceId: tomb.spaceId }, { as: tomb.memberHandle });
+      } catch (err) {
+        if (!(err instanceof LinkRequestError && err.code === 'not_found')) {
+          log.warn({ err: err instanceof Error ? err.message : String(err), remoteSpaceId: tomb.id, host: hostInstanceId }, 'Leave not delivered yet: retried when the link next opens');
+          return err instanceof DialError || (err instanceof LinkRequestError && (err.code === 'link_closed' || err.code === 'timeout')) ? 'unreachable' : 'later';
+        }
       }
-    }
-    await getDb().delete(remoteSpaces).where(and(eq(remoteSpaces.id, tomb.id), isNotNull(remoteSpaces.leftAt)));
+      await getDb().delete(remoteSpaces).where(and(eq(remoteSpaces.id, tomb.id), isNotNull(remoteSpaces.leftAt)));
+      return 'delivered';
+    });
+    if (outcome === 'unreachable') break;
+    if (outcome !== 'delivered') continue;
     delivered++;
     log.info({ remoteSpaceId: tomb.id, host: hostInstanceId }, 'Leave delivered to the host');
   }
+  await holdForTombstones(hostInstanceId);
   return delivered;
+}
+
+/** Host → the release of the retain held while it has tombstones. */
+const tombstoneRetains = new Map<string, () => void>();
+
+/**
+ * Keep the link to `hostInstanceId` retained while it has tombstones: the
+ * pool dials it, redials it with backoff after every failure or drop, and
+ * each time it comes up the leaves are delivered (`onLinkState`). Released
+ * once none is left.
+ */
+async function holdForTombstones(hostInstanceId: string): Promise<void> {
+  const [tomb] = await tombstonesOf(hostInstanceId).limit(1);
+  const held = tombstoneRetains.get(hostInstanceId);
+  if (!tomb) {
+    if (held) {
+      tombstoneRetains.delete(hostInstanceId);
+      held();
+    }
+    return;
+  }
+  if (held || !federationVisits()) return;
+  ensureHostWired(hostInstanceId);
+  tombstoneRetains.set(hostInstanceId, visitorPool().retain(hostOf(tomb)));
 }
 
 // ── Forwarded posts (REST, the visitor's agent) ──────────────────────
 
 interface PostWaiter {
+  /** The post's `clientId`: only a `room.posted` naming it answers the post. */
+  clientId: string;
   resolve: (posted: PostedAnswer) => void;
   reject: (err: RemoteSpaceError) => void;
 }
@@ -400,9 +496,13 @@ const postChains = new Map<string, Promise<unknown>>();
 
 /**
  * Post `content` in room `roomId` of `row`'s space as a gateway frame on
- * connection `conn` (`rest:<user>` for REST, `agent:<session>` for the
- * member's agent — the host labels that one the agent's), and wait for the
- * host's `room.posted` or error on that connection.
+ * connection `conn` (`rest:<user>` for REST, `agentPostConn(session)` for
+ * the member's agent: the host labels an `agent:` connection the agent's),
+ * and wait for the host's answer on that connection: the `room.posted`
+ * carrying the post's `clientId` (one is made when the caller gave none),
+ * or an error. Such a connection carries nothing but posts, one at a time,
+ * so an error on it is the post's; an addressed agent's listener
+ * (`agent:<session>`) is another connection.
  */
 export function postThroughConn(
   row: RemoteSpace, conn: string, roomId: string, input: { content: string; addressed?: boolean; clientId?: string },
@@ -420,13 +520,14 @@ async function postOnce(
 ): Promise<PostedAnswer> {
   requireVisiting();
   ensureHostWired(row.hostInstanceId);
-  const answer = new Promise<PostedAnswer>((resolve, reject) => { postWaiters.set(key, { resolve, reject }); });
+  const clientId = input.clientId ?? randomUUID();
+  const answer = new Promise<PostedAnswer>((resolve, reject) => { postWaiters.set(key, { clientId, resolve, reject }); });
   const timer = setTimeout(() => {
     postWaiters.get(key)?.reject(new RemoteSpaceError('timeout', 'The host did not answer the post', 504));
   }, POST_ANSWER_MS);
   timer.unref();
   try {
-    const frame = { type: 'room.post', roomId, content: input.content, ...(input.addressed !== undefined ? { addressed: input.addressed } : {}), ...(input.clientId ? { clientId: input.clientId } : {}) };
+    const frame = { type: 'room.post', roomId, content: input.content, ...(input.addressed !== undefined ? { addressed: input.addressed } : {}), clientId };
     log.debug({ type: 'room.post', size: input.content.length, remoteSpaceId: row.id, roomId, conn }, 'Forwarding a post to the host');
     await visitorPool().request(hostOf(row), 'gateway.frame', { frame }, { as: row.memberHandle, conn });
     return await answer;
@@ -443,8 +544,14 @@ function answerPost(hostInstanceId: string, conn: string, body: Record<string, u
   const waiter = postWaiters.get(`${hostInstanceId}\n${conn}`);
   if (!waiter) return false;
   if (body.type === 'room.posted') {
+    // Another post's answer (or a made-up one): not this post's.
+    if (body.clientId !== waiter.clientId) return false;
+    if (typeof body.messageId !== 'string' || !z.string().uuid().safeParse(body.messageId).success) {
+      waiter.reject(badAnswer('room.post'));
+      return true;
+    }
     waiter.resolve({
-      messageId: String(body.messageId),
+      messageId: body.messageId,
       ...(typeof body.clientId === 'string' ? { clientId: body.clientId } : {}),
       ...(typeof body.queuedPosition === 'number' ? { queuedPosition: body.queuedPosition } : {}),
       ...(typeof body.notQueued === 'string' ? { notQueued: body.notQueued } : {}),
@@ -711,14 +818,9 @@ export function startVisitorOps(withPool: VisitorLinkPool = getVisitorLinkPool()
     const hosts = await getDb().selectDistinct({ host: remoteSpaces.hostInstanceId, url: remoteSpaces.hostUrl }).from(remoteSpaces);
     for (const { host } of hosts) ensureHostWired(host);
     const pending = await getDb().selectDistinct({ host: remoteSpaces.hostInstanceId }).from(remoteSpaces).where(isNotNull(remoteSpaces.leftAt));
-    for (const { host } of pending) {
-      const [{ url }] = await getDb().select({ url: remoteSpaces.hostUrl }).from(remoteSpaces).where(eq(remoteSpaces.hostInstanceId, host)).limit(1);
-      // The pool learns the host's address from a request; a delivery pass makes one.
-      visitorPool().link({ instanceId: host, url }).then(
-        () => deliverTombstones(host),
-        (err: unknown) => log.warn({ err: err instanceof Error ? err.message : String(err), host }, 'Host unreachable at start: its leaves wait for the next link'),
-      ).catch((err: unknown) => log.error({ err, host }, 'Delivering leaves at start failed'));
-    }
+    // Retained while they have leaves to deliver: dialled now, redialled with
+    // backoff, and each time the link comes up the leaves go (`onLinkState`).
+    for (const { host } of pending) await holdForTombstones(host);
     const { reopenAllAgentListeners } = await import('./visitor-agent');
     await reopenAllAgentListeners();
   })().catch((err: unknown) => log.error({ err }, 'Visitor start-up pass failed'));
@@ -727,6 +829,9 @@ export function startVisitorOps(withPool: VisitorLinkPool = getVisitorLinkPool()
 /** Forget every connection and the pool (tests: a restart of this install). */
 export function _resetVisitorOpsForTests(): void {
   for (const conn of tracked.values()) for (const use of conn.hosts.values()) use.release();
+  for (const release of tombstoneRetains.values()) release();
+  tombstoneRetains.clear();
+  memberHostLocks.clear();
   tracked.clear();
   postWaiters.clear();
   postChains.clear();

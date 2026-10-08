@@ -5,6 +5,7 @@ import { Plus, Trash2, UserMinus } from 'lucide-react';
 import { useState } from 'react';
 import { api } from '@/lib/api';
 import { initials, type Room, type RoomMember, roomsKey, type SpaceMemoryEntry, type RoomVisibility, useSpaceMembers } from '@/lib/rooms';
+import { isUuid } from '@/lib/remote-paths';
 import { type RemoteMember, remotePath } from '@/lib/remote-spaces';
 import type { RoomModeName, RoomModeView } from '../../../src/shared/types';
 
@@ -26,7 +27,9 @@ export function useRoomMembers(spaceId: string, roomId: string, enabled = true) 
 export function useRemoteMembers(remoteSpaceId: string | null) {
   return useQuery({
     queryKey: ['remote-members', remoteSpaceId],
-    queryFn: () => api.get<{ members: RemoteMember[] }>(remotePath(remoteSpaceId as string, '/members')).then((r) => r.members),
+    queryFn: () => api.get<{ members: RemoteMember[] }>(remotePath(remoteSpaceId as string, ['members']))
+      // Ids from the host: only UUIDs key the list.
+      .then((r) => r.members.filter((m) => isUuid(m.userId))),
     enabled: !!remoteSpaceId,
   });
 }

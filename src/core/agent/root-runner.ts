@@ -1,5 +1,6 @@
 import { resolve } from 'path';
 import { getConfig } from '@/config';
+import { CONTENT_STORAGE_OFF_KEY } from './audience';
 import { getAgentManager } from '@/core/agent-manager';
 import { humanizeProviderError } from '@/core/errors/humanize';
 import { type LimitRefusal, limitRefusalOf } from '@/core/errors/limit-refusal';
@@ -333,10 +334,13 @@ export async function runRootAgent(
   // writer, and no child that could be granted more.
   const remoteRoom = await remoteRoomOfSession(planSessionCtx);
   if (remoteRoom) {
-    const [{ remoteSpaceTools, REMOTE_SPACE_EXTRA_TOOL_IDS, REMOTE_SPACE_TOOL_NAMES }, { getToolRegistry }] = await Promise.all([
+    const [{ remoteSpaceTools, REMOTE_SPACE_EXTRA_TOOL_IDS, REMOTE_SPACE_EXTRA_TOOL_NAMES, REMOTE_SPACE_TOOL_NAMES }, { getToolRegistry }] = await Promise.all([
       import('@/core/federation/visitor-agent'), import('@/tools/registry'),
     ]);
-    rootTools = getToolRegistry().getToolHandlersForTools([...REMOTE_SPACE_EXTRA_TOOL_IDS]);
+    // Web search only: a page fetch would send to a URL the space's text
+    // chose (an exfiltration channel past the egress approval).
+    const extra = new Set<string>(REMOTE_SPACE_EXTRA_TOOL_NAMES);
+    rootTools = getToolRegistry().getToolHandlersForTools([...REMOTE_SPACE_EXTRA_TOOL_IDS]).filter((tool) => extra.has(tool.name));
     metaTools = remoteSpaceTools(service, remoteRoom);
     rootAllowedToolIds.clear();
     for (const id of [...REMOTE_SPACE_EXTRA_TOOL_IDS, ...REMOTE_SPACE_TOOL_NAMES]) rootAllowedToolIds.add(id);
@@ -720,7 +724,9 @@ export async function runRootAgent(
       ...(isDevMode ? { projectPath: sessionCtx!.projectPath! } : {}),
       ...(extras.room ? { room: { postedMessageId: extras.room.postedMessageId } } : {}),
       // A CLI agent brings its own tools: refused for a remote room (agent-manager).
-      ...(remoteRoom ? { remoteRoom: true } : {}),
+      // Its text stays in the session's rows (F-D11): no prompt dump, spill,
+      // auto-index or notification text (`contentStorageOffFor`).
+      ...(remoteRoom ? { remoteRoom: true, [CONTENT_STORAGE_OFF_KEY]: true } : {}),
     },
   });
 

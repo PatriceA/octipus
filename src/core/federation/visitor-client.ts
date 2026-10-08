@@ -19,6 +19,12 @@
  * host still retained. A dial that completes after visiting went off (or
  * after `closeAll`) is closed instead of handed out.
  *
+ * A host's address is learned from requests, but only an address a
+ * handshake completed on is kept (`goodUrl`): once one is known, a request
+ * naming another address (a forged invite naming the host's fingerprint,
+ * say) may try it while the link is down, and it replaces the known one only
+ * if the pinned host answers there. Redials always use the last good one.
+ *
  * Frames name the visitor (`as`, the stored member handle) and the local
  * client connection (`conn`); visitor-ops.ts fills them. Host events reach
  * the callbacks subscribed for that host, link up/down the `onLinkState`
@@ -63,7 +69,10 @@ export function reconnectDelay(attempt: number, rand: () => number = Math.random
 }
 
 interface Entry {
+  /** The pinned id, and the address redials use: the last good one once known. */
   host: HostAddress;
+  /** The last address a handshake completed on, if any. */
+  goodUrl: string | null;
   link: PeerLink | null;
   connecting: Promise<PeerLink> | null;
   retainers: number;
@@ -139,13 +148,17 @@ export class VisitorLinkPool {
     return link && !link.closed ? 'up' : 'down';
   }
 
-  /** The open link to `host`, dialling it when there is none. */
+  /**
+   * The open link to `host`, dialling it when there is none. An address
+   * other than the last good one is tried for this call only: it becomes the
+   * host's address once the pinned host completed a handshake there.
+   */
   link(host: HostAddress): Promise<PeerLink> {
     const entry = this.entry(host);
     // An explicit request tries again even after a refusal or `closeAll`.
     entry.refused = false;
     entry.halted = false;
-    return this.connect(entry);
+    return this.connect(entry, host.url || undefined);
   }
 
   /** Send a request to `host` and wait for its result. Rejects with `LinkRequestError` or a dial error. */
@@ -188,6 +201,11 @@ export class VisitorLinkPool {
     };
   }
 
+  /** The address redials of `hostInstanceId` use (tests, diagnostics). */
+  hostUrl(hostInstanceId: string): string | null {
+    return this.entries.get(hostInstanceId)?.host.url || null;
+  }
+
   /** How many retainers hold `hostInstanceId` (tests, diagnostics). */
   retainerCount(hostInstanceId: string): number {
     return this.entries.get(hostInstanceId)?.retainers ?? 0;
@@ -217,12 +235,22 @@ export class VisitorLinkPool {
     }
   }
 
-  private connect(entry: Entry): Promise<PeerLink> {
+  private async connect(entry: Entry, candidate?: string): Promise<PeerLink> {
     if (!federationVisits() || this.disposed) {
-      return Promise.reject(new LinkRequestError('federation_off', 'This install does not visit spaces on other installs (federation.mode)'));
+      throw new LinkRequestError('federation_off', 'This install does not visit spaces on other installs (federation.mode)');
     }
-    if (entry.link && !entry.link.closed) return Promise.resolve(entry.link);
-    entry.connecting ??= this.dial(entry).finally(() => { entry.connecting = null; });
+    if (entry.link && !entry.link.closed) return entry.link;
+    // Another address than the known good one: tried on its own, once the
+    // dial to the good one (if any is under way) has settled.
+    if (candidate && entry.goodUrl && candidate !== entry.goodUrl) {
+      const running = entry.connecting;
+      if (running) {
+        const link = await running.catch(() => null);
+        if (link && !link.closed) return link;
+      }
+      return this.dial(entry, candidate);
+    }
+    entry.connecting ??= this.dial(entry, entry.host.url).finally(() => { entry.connecting = null; });
     return entry.connecting;
   }
 
@@ -230,23 +258,24 @@ export class VisitorLinkPool {
     let entry = this.entries.get(host.instanceId);
     if (!entry) {
       entry = {
-        host, link: null, connecting: null, retainers: 0, attempt: 0, retry: null, listeners: new Set(),
+        host, goodUrl: null, link: null, connecting: null, retainers: 0, attempt: 0, retry: null, listeners: new Set(),
         upSince: 0, refused: false, halted: false,
       };
       this.entries.set(host.instanceId, entry);
-    } else if (host.url) {
+    } else if (host.url && !entry.goodUrl) {
+      // No handshake completed yet: the newest address is as good as any.
       entry.host = host;
     }
     return entry;
   }
 
-  private async dial(entry: Entry): Promise<PeerLink> {
-    if (!entry.host.url) throw new LinkRequestError('unknown_host', `No address known for ${entry.host.instanceId}`);
+  private async dial(entry: Entry, url: string): Promise<PeerLink> {
+    if (!url) throw new LinkRequestError('unknown_host', `No address known for ${entry.host.instanceId}`);
     const generation = this.generation;
     const identity = await (this.opts.identity ?? getInstanceIdentity)();
     let link: PeerLink;
     try {
-      link = await dialPeer(entry.host.url, entry.host.instanceId, {
+      link = await dialPeer(url, entry.host.instanceId, {
         ...this.opts.dial,
         identity,
         onRequest: answerHost,
@@ -262,7 +291,9 @@ export class VisitorLinkPool {
         onClose: (code, reason, closed) => this.linkClosed(entry, closed, code, reason),
       });
     } catch (err) {
-      if (err instanceof DialError && err.closeCode !== undefined && FINAL_CLOSE_CODES.has(err.closeCode)) {
+      // Only the host's known address can refuse for it: whatever answers at
+      // an untried one proved nothing.
+      if (err instanceof DialError && err.closeCode !== undefined && FINAL_CLOSE_CODES.has(err.closeCode) && (!entry.goodUrl || url === entry.goodUrl)) {
         entry.refused = true;
         log.warn({ host: entry.host.instanceId, code: err.closeCode }, 'Federation host refused the link: not redialling until asked again');
       }
@@ -274,6 +305,15 @@ export class VisitorLinkPool {
       link.close(CLOSE.normal, 'no longer wanted');
       throw new LinkRequestError('federation_off', 'Visiting was turned off while the link was opening');
     }
+    // Another dial (at the other address) won meanwhile: keep that link.
+    if (entry.link && !entry.link.closed) {
+      link.close(CLOSE.normal, 'a link is already open');
+      return entry.link;
+    }
+    // The pinned host answered here: this is its address now.
+    if (url !== entry.goodUrl) log.info({ host: entry.host.instanceId }, 'Federation host address confirmed by a handshake');
+    entry.goodUrl = url;
+    entry.host = { instanceId: entry.host.instanceId, url };
     entry.link = link;
     entry.upSince = Date.now();
     this.announce(entry.host.instanceId, 'up');

@@ -469,12 +469,14 @@ export class AgentService {
    * newest posts, fetched now with `room.page`, windowed to
    * `rooms.transcriptWindowChars` and fenced as other members' words; the
    * session is marked `suspicious`. For this turn only — stored nowhere
-   * (`fenceSpaceTurnContext`). Throws when the member left the space or the
-   * host is unreachable: the turn says so rather than answer blind.
+   * (`fenceSpaceTurnContext`). An addressed turn (`remote-room`) also gets
+   * the mention that started it, in the same fence. Throws when the member
+   * left the space or the host is unreachable: the turn says so rather than
+   * answer blind.
    */
-  private async remoteRoomTurnContext(session: Session, userId: string): Promise<string> {
+  private async remoteRoomTurnContext(session: Session, userId: string, addressed: boolean): Promise<string> {
     const { remoteRoomTurnContext } = await import('@/core/federation/visitor-agent');
-    return remoteRoomTurnContext(session, userId);
+    return remoteRoomTurnContext(session, userId, { addressed });
   }
 
   /** The newest posts of a room that fit in `rooms.transcriptWindowChars`, fenced, for a side panel. */
@@ -618,6 +620,9 @@ export class AgentService {
         channel,
         workspaceId: scope.workspaceId,
         spaceId: scope.space?.workspaceId ?? null,
+        // "Ask my agent" in a space on another install (federation F-D11):
+        // its text stays in the session's own rows, so nothing is recorded.
+        contentStorageOff: audience.contentStorageOff,
       });
 
       // A group-channel thread or a room: the reply is posted where every
@@ -625,7 +630,9 @@ export class AgentService {
       // a space session the requester's personal memories are neither
       // injected nor learned from (`audience.personalMemoryOff`).
       const sharedAudience = audience.shared;
-      const memoryOff = audience.personalMemoryOff;
+      // A session whose text may not be copied anywhere (federation F-D11)
+      // neither recalls nor extracts memories either.
+      const memoryOff = audience.personalMemoryOff || audience.contentStorageOff;
       const groupThread = audience.kind === 'group';
       // The flow guard's group rule keys on the session; set it from the stored
       // session on every turn, whichever entry point (channel, web chat,
@@ -637,13 +644,20 @@ export class AgentService {
       if (isRoom) clearFlowLabel(resolvedSessionId);
       if (sharedAudience) markSharedAudience(resolvedSessionId);
       else markNotSharedAudience(resolvedSessionId);
+      // In "ask my agent" for a space on another install (federation §9) the
+      // member's own words in the panel are theirs, not the space's: like a
+      // private read, every write the agent then sends to the space asks
+      // first. An addressed turn (`remote-room`) carries no words of theirs.
+      if (audience.kind === 'remote-space' && channel !== 'remote-room') {
+        observeFlow(resolvedSessionId, { toolId: 'remote-space', action: 'panel_message' }, { taints: ['private'] });
+      }
       // Space memory (§6.5) and, for a private side panel, the linked room's
       // transcript (§6.7): per turn, read now.
       // …or, in "ask my agent" for a room of a space on another install, that
       // room's recent transcript, read live from the host (federation §9).
       const spaceContext = scope.space
         ? await this.spaceTurnContext(session, userId, scope.space.workspaceId)
-        : session.context?.remoteRoom ? await this.remoteRoomTurnContext(session, userId) : '';
+        : session.context?.remoteRoom ? await this.remoteRoomTurnContext(session, userId, channel === 'remote-room') : '';
       // Delivered as per-turn context beside the message (stored in the
       // message's metadata, not as its text), on every turn in a group thread:
       // monitors, wake-ups and plan runs too, whose replies land in the thread.

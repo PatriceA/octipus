@@ -22,6 +22,7 @@ import { withoutPersonalOnlyTools } from '@/security/space-tools';
 import { getRouter } from './router';
 import type { AgentFunding, AgentSpace, AgentSponsor, AgentStatus, AgentTrigger } from './types';
 import { buildAgentContext, recheckSponsor, recheckSpace, writesWithheld } from './agent/context';
+import { contentStorageOffFor } from './agent/audience';
 import { stripMutatingTools } from './agent/plan-mode';
 
 /** Union type for all agent worker implementations */
@@ -332,6 +333,7 @@ export class AgentManager {
     }
 
     // Subscribe to events: buffer for polling + persist to DB + forward to manager handlers
+    const contentStorageOff = contentStorageOffFor(context);
     worker.onEvent((event) => {
       // Streamed text deltas are transient: forward them, never buffer or
       // persist (one row per token would swamp agent_events).
@@ -352,8 +354,10 @@ export class AgentManager {
         buf.splice(0, buf.length - AgentManager.MAX_BUFFERED_EVENTS);
       }
 
-      // Persist to DB (fire-and-forget) — survives server restarts
-      agentEventRepository.create({
+      // Persist to DB (fire-and-forget) — survives server restarts. Not for a
+      // session whose text stays in its own rows (a space on another install,
+      // federation F-D11): these rows outlive the session.
+      if (!contentStorageOff) agentEventRepository.create({
         agentId: event.agentId,
         sessionId: context.sessionId,
         userId: context.userId,

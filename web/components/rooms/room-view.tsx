@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import MessageTimeline, { type ChatMessageData } from '@/components/chat/message-timeline';
 import { api } from '@/lib/api';
 import type { GatewayMessage } from '@/lib/gateway';
+import { isUuid, withUuidIds } from '@/lib/remote-paths';
 import { remotePath, type RoomSource, useSpaceGatewayStatus } from '@/lib/remote-spaces';
 import {
   EMPTY_QUEUE,
@@ -171,7 +172,8 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
   const handleMessage = (message: GatewayMessage) => {
     if (message.type === 'room.catchup') {
       if (message.roomId !== roomId) return;
-      const caught = message.messages as RoomMessage[];
+      // A host's rows keep only UUID ids (they key and page the view).
+      const caught = remote ? withUuidIds(message.messages as RoomMessage[]) : message.messages as RoomMessage[];
       setMessages((current) => merge(current, caught));
       const last = caught.at(-1)?.id;
       if (message.hasMore && last) void catchUpFrom(last).catch((err: Error) => notify(`Could not load the missed messages: ${err.message}`));
@@ -205,8 +207,9 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
     switch (event.type) {
       case 'room.message': {
         const row = payload.message as RoomMessage;
+        if (remote && !isUuid(row?.id)) break;
         setMessages((current) => merge(current, [row]));
-        dropPending(payload.clientId ?? row.metadata.clientId);
+        dropPending(payload.clientId ?? row.metadata?.clientId);
         if (row.role === 'assistant' && row.metadata.requesterId === myId && row.metadata.kind !== 'progress') setStreaming(null);
         if (row.authorUserId) {
           setTyping((t) => {
@@ -358,7 +361,7 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
   const askMyAgent = async () => {
     setAsking(true);
     try {
-      const { session } = await api.post<{ session: { id: string } }>(remotePath(spaceId, `/rooms/${roomId}/agent`), {});
+      const { session } = await api.post<{ session: { id: string } }>(remotePath(spaceId, ['rooms', roomId, 'agent']), {});
       router.push(`/chat?session=${encodeURIComponent(session.id)}`);
     } catch (err) {
       notify(`Could not open your agent: ${(err as Error).message}`);
@@ -483,6 +486,7 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
               statusMessage="Octipus is answering you"
               streamingText={myTurnRunning ? streaming?.text ?? null : null}
               emptyLabel="No messages yet — say hello, or ask Octipus"
+              untrusted={remote}
             />
           </>
         )}

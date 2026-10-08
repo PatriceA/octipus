@@ -1,6 +1,7 @@
 import { apiContext } from '@/api/context';
 import { Elysia, t } from '@/api/http';
-import { isAuthenticated, type Principal } from '@/security/principal';
+import { isAuthenticated, type Principal, requireScope } from '@/security/principal';
+import { API_SCOPES } from '@/security/scopes';
 
 /**
  * Spaces this install's users joined on other installs
@@ -173,7 +174,14 @@ export const remoteSpaceRoutes = new Elysia({ prefix: '/remote-spaces' })
     const marker = `/remote-spaces/${ctx.params.id}/files/`;
     const pathname = new URL(ctx.request.url).pathname;
     const at = pathname.indexOf(marker);
-    const path = at >= 0 ? decodeURIComponent(pathname.slice(at + marker.length)) : '';
+    let path = '';
+    try {
+      path = at >= 0 ? decodeURIComponent(pathname.slice(at + marker.length)) : '';
+    } catch (err) {
+      if (!(err instanceof URIError)) throw err;
+      ctx.set.status = 400;
+      return { error: 'The file path is not validly encoded' };
+    }
     if (!path) {
       ctx.set.status = 400;
       return { error: 'A file path is required' };
@@ -199,6 +207,15 @@ export const remoteSpaceRoutes = new Elysia({ prefix: '/remote-spaces' })
   .post('/:id/rooms/:roomId/messages', (ctx) => handle(ctx, async (user) => {
     const { closeHostConn, ownRemoteSpace, postThroughConn } = await ops();
     const row = await ownRemoteSpace(user.id, ctx.params.id);
+    // A post that asks the host's agent drives it: the token needs the chat
+    // scope, as for a room here (`rooms.ts`) and the gateway's `remote.frame`
+    // (`frameScopeError`).
+    const content = ctx.body.content.trim();
+    const { mentionsOctipus } = await import('@/core/rooms/service');
+    if (!content.startsWith('/') && (ctx.body.addressed === true || mentionsOctipus(content)) && !requireScope(ctx.principal, API_SCOPES.CHAT)) {
+      ctx.set.status = 403;
+      return { error: `API token missing required scope "${API_SCOPES.CHAT}"`, code: 'missing_scope' };
+    }
     // One host-side connection per user for REST posts, closed after each.
     const conn = `rest:${user.id}`;
     try {

@@ -389,13 +389,19 @@ are in [CONFIGURATION.md](CONFIGURATION.md).
    the host proves the pinned fingerprint, redeems the invite and keeps a
    pointer row (`remote_spaces`): the host, the space's id and name, the
    member's role and handle there — metadata only. Audited
-   `remote_space_joined`.
+   `remote_space_joined`. The host knows the member by a per-host HMAC of
+   their user id (keyed from the install's identity): stable for that host,
+   never the user id itself.
 
 The space then appears in the picker under **on other installs** with the
 host's badge (`[B:…]`). Selecting it never sends its id as the workspace
 header: its data comes through `/api/remote-spaces/:id/...`, which forwards
 each read and write to the host as that member, live. Every route reads the
-caller's own pointer row; another user's (or a left one) is a 404.
+caller's own pointer row; another user's (or a left one) is a 404. Every
+answer of the host is checked against its schema before it is used or
+passed on (UUID ids, bounded strings and lists); one that does not fit is a
+502 `bad_answer`. A REST post that asks the host's agent (`addressed`, or
+`@octipus`) needs an API token's `api:chat` scope, as on the gateway.
 
 What a visitor can do there is what a local member of the same role can
 (the host checks it with the same functions): rooms (read, post, typing,
@@ -416,13 +422,28 @@ its room subscriptions (from the newest message it holds, paging while there
 is more) and its `doc.join`s (with its epoch and state vector). Closing the
 browser connection closes its connection on the host.
 
+The web views treat what the host sends as another install's data: every
+id goes into a URL as one encoded path segment, rows whose id is not a
+UUID are dropped, and the rooms' and notes' markdown loads no image (an
+external one shows as a link, one of this install's as text) and links
+nothing of this install.
+
+The install learns a host's address from the invite, but keeps only an
+address the pinned host completed a handshake on: a later link naming the
+same fingerprint at another address is tried for that request only, and
+replaces the known one only if the host answers there.
+
 **Leaving.** `DELETE /api/remote-spaces/:id` (the leave dialog: *what your
 agent already read stays in its session history*) marks the row left — a
 tombstone — audits `remote_space_left` and sends `space.leave` to the host.
 A host that cannot be reached keeps it pending (Settings lists pending
-leaves); it is sent again every time the link to that host opens, and at
-startup, until the host acknowledges it, then the row is deleted. Rejoining
-the same space drops a pending leave first.
+leaves); while a host has pending leaves the install keeps redialling it
+with backoff, sends them every time the link opens (and at startup) until
+the host acknowledges them, then deletes the rows and lets the host go.
+Rejoining the same space drops a pending leave: a join and the delivery of a
+leave of the same member on the same host never overlap, and a delivery
+re-reads the leave right before it sends it, so it never ends the
+membership a rejoin just made.
 
 ### Your agent in a space on another install
 
@@ -435,27 +456,44 @@ the sessions routes). That conversation:
   (`room.page`), fenced as other members' words, for that turn only — never
   stored; the conversation counts as having read outsiders' text;
 - holds only `remote_space_read`, `remote_space_post`,
-  `remote_space_propose_note`, `remote_space_task_op`, web search and page
-  fetch — no mail, calendar, notes, memory, files, shell, connectors,
-  delegation or memory tools; a CLI agent model (which brings its own tools)
-  is refused;
+  `remote_space_propose_note`, `remote_space_task_op` and web search — no
+  page fetch (it would send to an address the space's text chose), mail,
+  calendar, notes, memory, files, shell, connectors, delegation or memory
+  tools; a CLI agent model (which brings its own tools) is refused. The
+  tools check their arguments (UUID ids, a path that stays inside the
+  space's files, a known task op) before anything is sent, and their
+  descriptions name nothing the host chose;
 - never feeds memory (extraction or recall), learning, the profile,
-  knowledge indexing or compaction: its own messages are the only place the
-  install keeps the space's text, deleted with the conversation;
+  knowledge indexing or compaction, and writes no trajectory, agent event log row,
+  prompt dump or spilled tool output; an approval's notification carries its summary only:
+  its own messages are the only place the install keeps the space's text,
+  deleted with the conversation;
 - runs on the visitor install's models, at the visitor's cost.
 
-A post (and a note proposal, a task or comment with text) leaves the
-visitor's install for the space, so it is asked: **every time** once the
-conversation read the member's private data or credentials, and **the first
-time** in each conversation otherwise. The host shows it as "anna's agent
-[B:…]" and caps such posts per room.
+A post, a note proposal and every task op change the space on the host, so
+they are asked: **every time** once the conversation read the member's
+private data or credentials — and what the member types in the panel counts
+as private, so in practice every write the member's turn makes asks — and
+**the first time** in a conversation otherwise. The approval quotes the
+room and space names on one line, cleaned of control characters and
+shortened. The host shows a post as "anna's agent [B:…]" and caps such
+posts per room.
 
 **Answer when addressed** (off by default, per space, in the space's page
 or Settings): the install keeps a connection to each room the member opened
 an agent conversation for; a mention of the member's handle there
-(`@~anna@fp8`) starts a turn in that conversation (at most 10 minutes after
-the mention). It runs unattended, so it posts only once the member approved
-a post in that conversation before.
+(`@~anna@fp8`) starts a turn in that conversation when it is dated (by the
+post and by the event that carries it: the older) at most 10 minutes before
+the turn starts (and not ahead of this install's clock), was not delivered
+before, and the conversation and the member are within
+6 addressed turns an hour and 30 a day (checked before the room is read).
+The mention reaches the agent inside the room context's fence, as the
+room's data; the turn's own message is fixed text. The conversation must
+still exist, be active and name that room: deleting or archiving it (or the
+retention sweep) closes its connection, and a mention never brings a
+deleted conversation back. The turn runs unattended, with nobody to ask:
+it answers in the conversation, and any write to the space is refused,
+whatever the member approved before.
 
 ### Revocation and limits
 

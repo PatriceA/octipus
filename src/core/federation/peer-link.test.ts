@@ -829,6 +829,38 @@ describe('the visitor link pool', () => {
     expect(await run(0)).toEqual([0, 0]);
   });
 
+  test('a request naming another address never replaces the address a handshake confirmed', async () => {
+    const states: string[] = [];
+    const p = pool({ onLinkState: (_id, s) => states.push(s) });
+    const release = p.retain(host());
+    await until(() => p.state(hostId.instanceId) === 'up');
+    expect(p.hostUrl(hostId.instanceId)).toBe(url);
+    // A forged invite names the host's fingerprint at another address.
+    const elsewhere = { instanceId: hostId.instanceId, url: 'ws://127.0.0.1:9/federation' };
+    // While the link is up the request goes over it; the address stays.
+    expect(await p.request(elsewhere, 'ping', {})).toEqual({});
+    expect(p.hostUrl(hostId.instanceId)).toBe(url);
+    // While it is down, the other address is tried for that request only,
+    // fails, and the redials still go to the confirmed one.
+    m.host.inboundLink(visitorId.instanceId)!.close(4000, 'drop');
+    await until(() => states.length >= 2);
+    const failed = await p.request(elsewhere, 'ping', {}).then(() => null, (err: unknown) => err);
+    if (failed === null) expect(p.state(hostId.instanceId)).toBe('up');
+    expect(p.hostUrl(hostId.instanceId)).toBe(url);
+    await until(() => p.state(hostId.instanceId) === 'up');
+    expect(p.hostUrl(hostId.instanceId)).toBe(url);
+    release();
+    p.dispose();
+  });
+
+  test('before any handshake, the newest address is used; the one that answers is kept', async () => {
+    const p = pool();
+    expect(await p.request({ instanceId: hostId.instanceId, url: 'ws://127.0.0.1:9/federation' }, 'ping', {}).then(() => 'answered', () => 'failed')).toBe('failed');
+    expect(await p.request(host(), 'ping', {})).toEqual({});
+    expect(p.hostUrl(hostId.instanceId)).toBe(url);
+    p.dispose();
+  });
+
   test('backoff grows to the cap with jitter', () => {
     expect(m.visitor.reconnectDelay(0, () => 0)).toBe(500);
     expect(m.visitor.reconnectDelay(0, () => 1)).toBe(1000);

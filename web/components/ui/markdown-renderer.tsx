@@ -6,6 +6,7 @@ import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markd
 import remarkGfm from 'remark-gfm';
 import { AuthedImage } from '@/components/ui/authed-image';
 import { remarkWikilink } from '@/lib/remark-wikilink';
+import { pointsHere, remoteImage } from '@/lib/remote-content';
 import { cn } from '@/lib/utils';
 
 // ---------------------------------------------------------------------------
@@ -48,19 +49,33 @@ export function CodeBlock({ language, code }: { language: string; code: string }
   );
 }
 
+/** This page's origin: what text from another install may not point into. */
+function here(): string {
+  return typeof window === 'undefined' ? '' : window.location.origin;
+}
+
 /**
  * Render a markdown string. `className` is applied to the wrapper so callers
  * can tune spacing/typography for their surface (e.g. a denser chat bubble vs
  * a roomier document preview).
+ *
+ * `untrusted`: the text comes from another install (a space hosted there).
+ * Its images are never loaded — an external one would tell its server who
+ * read it and when, one of this install's would be fetched with the
+ * member's session — but shown as a link (external) or as text (here); its
+ * links to this install render as text.
  */
 export function Markdown({
   content,
   className,
   onWikilink,
   onTag,
+  untrusted = false,
 }: {
   content: string;
   className?: string;
+  /** Text from another install: no image loads, nothing links into this install. */
+  untrusted?: boolean;
   /** When set, `[[wikilinks]]` render as clickable links that open a note by slug. */
   onWikilink?: (slug: string) => void;
   /** When set, inline `#tags` render as clickable chips. */
@@ -170,6 +185,7 @@ export function Markdown({
                 </button>
               );
             }
+            if (untrusted && (!href || pointsHere(href, here()))) return <span>{children}</span>;
             return (
               <a
                 href={href ?? '#'}
@@ -183,6 +199,15 @@ export function Markdown({
           },
           img({ src, alt, title }) {
             if (typeof src !== 'string' || !src) return null;
+            if (untrusted) {
+              const { label, href } = remoteImage(src, alt, here());
+              if (!href) return <span className="text-on-surface-variant">{label}</span>;
+              return (
+                <a href={href} target="_blank" rel="noopener noreferrer nofollow" referrerPolicy="no-referrer" className="text-primary underline hover:opacity-80">
+                  {label}
+                </a>
+              );
+            }
             return <AuthedImage src={src} alt={alt} title={title} />;
           },
           ul({ children }) {
@@ -191,7 +216,7 @@ export function Markdown({
           ol({ children }) {
             return <ol className="list-decimal pl-5 space-y-0.5">{children}</ol>;
           },
-  }), [onWikilink, onTag]);
+  }), [onWikilink, onTag, untrusted]);
   return (
     <div className={cn('space-y-2 text-sm leading-relaxed', className)}>
       <ReactMarkdown
