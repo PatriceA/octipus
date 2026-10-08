@@ -254,6 +254,18 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **MCP servers in the system prompt.** An agent that can reach MCP tools gets
+  an `MCP SERVERS` section, after pi's `mcp_servers` section. It lists every
+  enabled server whose tools are not declared, says how this agent reaches
+  them (`mcp_list_tools`, or codemode scripts for `codemode` servers when the
+  agent runs codemode), and gives one line on what each offers. That line is
+  the server's new `description` field (settable when adding a server, on the
+  MCP page, with `PUT /api/mcp/servers/:id/description`, or with
+  `mcp_add_server`). Without a description, the first line of the server's own
+  `instructions` is used, reduced to one safe line. The section has a
+  4,096-character budget and sits in the cacheable prefix. See
+  [Server list in the system prompt](docs/MCP-INTEGRATION.md#server-list-in-the-system-prompt).
+
 - **MCP tool exposure.** Each MCP server sets how its tools reach the model,
   after pi's exposure modes:
   - `deferred`, the default and the previous behaviour: tools are found through

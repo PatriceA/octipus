@@ -6,6 +6,9 @@ import { getMCPBridge } from '@/mcp/bridge';
 import { getMcpCircuitBreaker } from '@/mcp/circuit-breaker';
 import { exposureConfigError, type McpExposure, resolveToolExposure } from '@/shared/mcp-exposure';
 
+/** A sentence, not a manual: the section shows at most 250 characters of it. */
+const MAX_DESCRIPTION_CHARS = 500;
+
 export const mcpRoutes = new Elysia({ prefix: '/mcp' })
   .use(apiContext)
 
@@ -33,6 +36,7 @@ export const mcpRoutes = new Elysia({ prefix: '/mcp' })
           transport: cfg.transport || 'stdio',
           sseUrl: cfg.sseUrl,
           isEnabled: cfg.isEnabled,
+          description: cfg.description ?? '',
           exposure: cfg.exposure ?? 'deferred',
           toolExposure: cfg.toolExposure ?? {},
           status: conn?.status || 'disconnected',
@@ -79,6 +83,7 @@ export const mcpRoutes = new Elysia({ prefix: '/mcp' })
         headers: body.headers,
         exposure: body.exposure as McpExposure | undefined,
         toolExposure: body.toolExposure as Record<string, McpExposure> | undefined,
+        description: body.description?.trim() || undefined,
       };
 
       await bridge.addServer(server);
@@ -111,6 +116,7 @@ export const mcpRoutes = new Elysia({ prefix: '/mcp' })
         isEnabled: t.Optional(t.Boolean()),
         exposure: t.Optional(t.String()),
         toolExposure: t.Optional(t.Record(t.String(), t.String())),
+        description: t.Optional(t.String({ maxLength: MAX_DESCRIPTION_CHARS })),
       }),
       detail: { tags: ['mcp'] },
     }
@@ -169,6 +175,27 @@ export const mcpRoutes = new Elysia({ prefix: '/mcp' })
         exposure: t.Optional(t.String()),
         toolExposure: t.Optional(t.Record(t.String(), t.String())),
       }),
+      detail: { tags: ['mcp'] },
+    }
+  )
+
+  // What the server offers, in a sentence — shown to agents in the MCP SERVERS
+  // system-prompt section. An empty string clears it.
+  .put(
+    '/servers/:id/description',
+    async ({ user, principal, set, params, body }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
+      const updated = await getMCPBridge().setDescription(params.id, body.description);
+      if (!updated) {
+        set.status = 404;
+        return { error: 'Server not found' };
+      }
+      return { success: true };
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      body: t.Object({ description: t.String({ maxLength: MAX_DESCRIPTION_CHARS }) }),
       detail: { tags: ['mcp'] },
     }
   )

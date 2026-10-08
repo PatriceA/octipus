@@ -412,6 +412,12 @@ export interface MCPServer extends McpExposureConfig {
   /** Some stdio servers use stderr for routine logs rather than failures. */
   stderrAsError?: boolean;
   isEnabled: boolean;
+  /**
+   * What the server offers, in a sentence. Lists the server in the
+   * `MCP SERVERS` system-prompt section (src/mcp/servers-section.ts); without
+   * it the first line of the server's own `instructions` is used.
+   */
+  description?: string;
   transport?: 'stdio' | 'sse' | 'streamable-http';
   sseUrl?: string;
   postUrl?: string;

@@ -25,6 +25,7 @@ import { Portal } from '@/components/ui/portal';
 import { ConnectorsTab } from '@/components/mcp/connectors-tab';
 import { McpBulkPermissionControl, McpToolPermissionControl } from '@/components/mcp/tool-permission-control';
 import { EXPOSURE_HELP, EXPOSURE_LABELS, ServerExposureControl, ToolExposureControl } from '@/components/mcp/exposure-control';
+import { DESCRIPTION_HELP, ServerDescriptionControl } from '@/components/mcp/server-description';
 import { DEFAULT_MCP_EXPOSURE, MCP_EXPOSURES, type McpExposure } from '../../../src/shared/mcp-exposure';
 
 interface MCPServer {
@@ -35,6 +36,7 @@ interface MCPServer {
   transport: 'stdio' | 'sse';
   sseUrl?: string;
   isEnabled: boolean;
+  description?: string;
   /** Absent from servers saved before exposure existed: those are `deferred`. */
   exposure?: McpExposure;
   toolExposure?: Record<string, McpExposure>;
@@ -72,6 +74,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
   const [showAuth, setShowAuth] = useState(false);
   const [envVars, setEnvVars] = useState('');
   const [exposure, setExposure] = useState<McpExposure>(DEFAULT_MCP_EXPOSURE);
+  const [description, setDescription] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
 
@@ -89,6 +92,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
         isEnabled: true,
         exposure,
       };
+      if (description.trim()) body.description = description.trim();
 
       const timeout = Number(requestTimeoutSeconds);
       if (!Number.isFinite(timeout) || timeout < 1 || timeout > 3600) {
@@ -156,6 +160,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
       setAuthHeader('');
       setEnvVars('');
       setExposure(DEFAULT_MCP_EXPOSURE);
+      setDescription('');
       setError('');
     } catch (err) {
       setError((err as Error).message);
@@ -319,6 +324,12 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
           )}
 
           <label className="block text-sm text-on-surface/80">
+            Description (optional)
+            <input value={description} maxLength={500} onChange={event => setDescription(event.target.value)} placeholder="e.g. Search and read the product documentation" className="mt-1 w-full px-3 py-2 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm text-on-surface" />
+            <span className="mt-1 block text-xs text-on-surface-variant">{DESCRIPTION_HELP}</span>
+          </label>
+
+          <label className="block text-sm text-on-surface/80">
             Tool exposure
             <select value={exposure} onChange={event => setExposure(event.target.value as McpExposure)} className="mt-1 w-full px-3 py-2 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm text-on-surface">
               {MCP_EXPOSURES.map(mode => <option key={mode} value={mode}>{EXPOSURE_LABELS[mode]}</option>)}
@@ -384,6 +395,7 @@ function ServerToolList({ server }: { server: MCPServer }) {
       <p className="section-label mb-2">
         available tools ({tools.length})
       </p>
+      <ServerDescriptionControl serverId={serverId} serverName={server.name} description={server.description ?? ''} />
       <ServerExposureControl serverId={serverId} serverName={server.name} exposure={exposure} />
       <p className="text-xs text-on-surface-variant mb-3">
         Permissions are saved for your account, per server and tool, across sessions.

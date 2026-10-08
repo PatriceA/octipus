@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-514 mounted routes across 70 route files. The path is the full one, group prefix included — what a client actually calls.
+515 mounted routes across 70 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -221,6 +221,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/mcp/servers` | `src/api/routes/mcp.ts` |
 | DELETE | `/api/mcp/servers/:id` | `src/api/routes/mcp.ts` |
 | POST | `/api/mcp/servers/:id/connect` | `src/api/routes/mcp.ts` |
+| PUT | `/api/mcp/servers/:id/description` | `src/api/routes/mcp.ts` |
 | POST | `/api/mcp/servers/:id/disconnect` | `src/api/routes/mcp.ts` |
 | PUT | `/api/mcp/servers/:id/exposure` | `src/api/routes/mcp.ts` |
 | POST | `/api/mcp/servers/:id/toggle` | `src/api/routes/mcp.ts` |
@@ -597,7 +598,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `db` | 326 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
-| `core` | `mcp` | 6 |
+| `core` | `mcp` | 7 |
 | `core` | `models` | 115 |
 | `core` | `security` | 151 |
 | `core` | `services` | 2 |
@@ -630,7 +631,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `hooks` | `utils` | 7 |
 | `mcp` | `config` | 2 |
 | `mcp` | `security` | 3 |
-| `mcp` | `shared` | 1 |
+| `mcp` | `shared` | 2 |
 | `mcp` | `utils` | 4 |
 | `models` | `config` | 10 |
 | `models` | `core` | 29 |

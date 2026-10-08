@@ -9,6 +9,7 @@ import { exposureConfigError, type McpExposure, type McpExposureConfig, resolveT
 import { coreLogger } from '@/utils/logger';
 import { getMcpCircuitBreaker } from './circuit-breaker';
 import { mcpToolKey, mcpToolNames } from './exposure';
+import { configuredExposures, renderServersSection, type ServerListing } from './servers-section';
 import { type MCPCapabilities, MCPMethods, type MCPPrompt, MCPProtocol, type MCPResource, type MCPToolDefinition } from './protocol';
 import type { MCPTransport } from './transports/interface';
 import { SSETransport } from './transports/sse';
@@ -22,6 +23,8 @@ export interface MCPServerConnection {
   transport: MCPTransport;
   protocol: MCPProtocol;
   capabilities: MCPCapabilities;
+  /** The server's `instructions` from its initialize result, if it sent any. */
+  instructions?: string;
   tools: MCPToolDefinition[];
   resources: MCPResource[];
   templates?: Array<{ uriTemplate: string; name: string; description?: string }>;
@@ -222,9 +225,10 @@ export class MCPBridge extends EventEmitter {
           name: 'assistant',
           version: '1.0.0',
         },
-      }) as { capabilities: MCPCapabilities };
+      }) as { capabilities: MCPCapabilities; instructions?: unknown };
 
       connection.capabilities = initResult.capabilities || {};
+      if (typeof initResult.instructions === 'string') connection.instructions = initResult.instructions;
 
       // Send initialized notification
       protocol.sendNotification(send, MCPMethods.Initialized);
@@ -563,6 +567,30 @@ export class MCPBridge extends EventEmitter {
   }
 
   /**
+   * The `MCP SERVERS` system-prompt section for an agent that does or does
+   * not run codemode (src/mcp/servers-section.ts). Lists enabled servers, a
+   * connected one by the exposures its tools actually get, one not connected
+   * yet by its configuration — `mcp_list_tools` with its server_id reconnects it.
+   */
+  serversSection(opts: { codemode: boolean }): string | undefined {
+    const listings: ServerListing[] = this.serverConfigs
+      .filter((server) => server.isEnabled)
+      .map((server) => {
+        const connection = this.connections.get(server.id);
+        const live = connection?.status === 'connected' && connection.tools.length > 0;
+        return {
+          id: server.id,
+          description: server.description,
+          instructions: connection?.instructions,
+          exposures: live
+            ? new Set(connection.tools.map((t) => resolveToolExposure(connection.server, t.name)))
+            : configuredExposures(server),
+        };
+      });
+    return renderServersSection(listings, opts);
+  }
+
+  /**
    * Get connection status
    */
   getConnection(serverId: string): MCPServerConnection | undefined {
@@ -687,6 +715,25 @@ export class MCPBridge extends EventEmitter {
     return this.updateExposure(serverId, (server) => {
       const { [toolName]: _removed, ...rest } = server.toolExposure ?? {};
       return { toolExposure: exposure === null ? rest : { ...rest, [toolName]: exposure } };
+    });
+  }
+
+  /** Set (or with an empty string, clear) the server's description. */
+  async setDescription(serverId: string, description: string): Promise<boolean> {
+    return this.withConfigMutation(async () => {
+      const server = this.serverConfigs.find((s) => s.id === serverId);
+      if (!server) return false;
+      const previous = server.description;
+      server.description = description.trim() || undefined;
+      try {
+        await this.saveConfig();
+      } catch (error) {
+        server.description = previous;
+        throw error;
+      }
+      const live = this.connections.get(serverId);
+      if (live && live.server !== server) live.server.description = server.description;
+      return true;
     });
   }
 
