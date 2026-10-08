@@ -305,7 +305,10 @@ export class AgentManager {
       // it keeps intermediate tool results out of the conversation. Small
       // models stay off — they chain multi-step discovery badly already, the
       // same reason they keep the full schema in `shouldUseLazyDiscovery`.
+      // A room of a space on another install (federation §9, §11 item 14)
+      // offers its fixed tool set and nothing else, so no codemode there.
       workerConfig.codemode =
+        !options.contextMetadata?.remoteRoom &&
         (options.tools?.length ?? 0) > 0 &&
         modelEntry?.supportsTools === true &&
         !isSmallModel({ modelId: routedModel, metadata: modelEntry.metadata }, config.agent.smallModelMaxParams);
