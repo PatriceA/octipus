@@ -149,3 +149,38 @@ describe('scriptableTools', () => {
     expect(kept).toEqual(['filesystem__read_file', 'mcp_call_tool']);
   });
 });
+
+describe('routed script tools', () => {
+  const routed = [{
+    name: 'mcp__gh__get_pr',
+    description: '[MCP:GitHub] Get a pull request',
+    parameters: { type: 'object', properties: { number: { type: 'number' } } },
+    via: 'mcp_call_tool',
+    wrap: (args: Record<string, unknown>) => ({ server_id: 'gh', tool_name: 'get_pr', arguments: args }),
+  }];
+
+  test('a call is re-addressed to the handler it routes through, with wrapped arguments', async () => {
+    const calls: ToolCall[] = [];
+    const h = host({
+      tools: () => [handler('mcp_call_tool', { toolId: 'mcp' })],
+      routedTools: () => routed,
+      call: async (call) => { calls.push(call); return { toolCallId: call.id, result: { content: [{ type: 'text', text: 'PR 7' }] } }; },
+    });
+    const out = await run(h, `
+      const found = await searchTools("pull request");
+      const decl = await describeTool("mcp__gh__get_pr");
+      const res = await tools.mcp__gh__get_pr({ number: 7 });
+      return { found: found.map((t) => t.name), decl, text: res.content[0].text };
+    `);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ name: 'mcp_call_tool', arguments: { server_id: 'gh', tool_name: 'get_pr', arguments: { number: 7 } } });
+    expect(out).toContain('"mcp__gh__get_pr"');
+    expect(out).toContain('mcp__gh__get_pr(args');
+    expect(out).toContain('PR 7');
+  });
+
+  test('without the handler it routes through, a routed tool does not exist', async () => {
+    const out = await run(host({ routedTools: () => routed }), `return "mcp__gh__get_pr" in tools;`);
+    expect(out).toContain('false');
+  });
+});

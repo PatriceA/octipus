@@ -33,6 +33,7 @@ import { recordModelToolCall } from './agent/model-capability';
 import { ensureChildRelay } from './agent/output-guard';
 import { isLongTailHandler } from './agent/tool-split';
 import { buildCodemodeHandler } from '@/tools/codemode';
+import { getMCPBridge } from '@/mcp/bridge';
 import { ClassifiedError, isFatalConnectionError, isTransientDnsError } from './errors/classification';
 import { formatCollectedResults } from './swarm/collect-tool';
 import {
@@ -378,6 +379,7 @@ export class AgentWorker extends BaseAgentWorker {
       const executor = this.toolExecutor;
       this.toolExecutor.registerTool(buildCodemodeHandler({
         tools: () => Array.from(executor.getTools().values()),
+        routedTools: () => getMCPBridge().getScriptTools(),
         call: (call) => executor.runNestedCall(call),
         signal: this.abortController.signal,
       }));

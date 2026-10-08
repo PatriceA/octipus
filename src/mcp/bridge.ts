@@ -2,10 +2,13 @@ import { EventEmitter } from 'events';
 import { resourceHandlers } from './resource-tools';
 import { getConfig } from '@/config';
 import { getSettingsService } from '@/config/settings-service';
+import type { RoutedScriptTool } from '@/core/agent-base';
 import type { ToolHandler } from '@/core/agent-worker';
 import type { AgentContext, MCPServer, MCPTool } from '@/core/types';
+import { exposureConfigError, type McpExposure, type McpExposureConfig, resolveToolExposure } from '@/shared/mcp-exposure';
 import { coreLogger } from '@/utils/logger';
 import { getMcpCircuitBreaker } from './circuit-breaker';
+import { mcpToolKey, mcpToolNames } from './exposure';
 import { type MCPCapabilities, MCPMethods, type MCPPrompt, MCPProtocol, type MCPResource, type MCPToolDefinition } from './protocol';
 import type { MCPTransport } from './transports/interface';
 import { SSETransport } from './transports/sse';
@@ -25,6 +28,14 @@ export interface MCPServerConnection {
   prompts: MCPPrompt[];
   status: 'connecting' | 'connected' | 'disconnected' | 'error';
   error?: string;
+}
+
+/**
+ * A server's input schema as a tool declaration needs it: providers require an
+ * object schema, and some reject one without `properties`.
+ */
+function objectSchema(inputSchema: Record<string, unknown> | undefined): Record<string, unknown> {
+  return { ...inputSchema, type: 'object', properties: inputSchema?.properties ?? {} };
 }
 
 /** Hard stop so a server that keeps handing back cursors can't loop forever. */
@@ -426,6 +437,10 @@ export class MCPBridge extends EventEmitter {
    * Call a tool on an MCP server
    */
   async callTool(serverId: string, toolName: string, args: Record<string, unknown>, context: AgentContext, authorizationArgs = args): Promise<unknown> {
+    // Every path to a server's tool ends here, so `hidden` is enforced here.
+    if (this.toolExposure(serverId, toolName) === 'hidden') {
+      throw new Error(`MCP tool '${toolName}' on server '${serverId}' is hidden by the server's exposure setting.`);
+    }
     // Every caller, including artifact refreshes, reaches this boundary before transport.
     const { authorizeMcpDispatch } = await import('@/security/mcp-authorization');
     await authorizeMcpDispatch(context, `${serverId}.${toolName}`, authorizationArgs);
@@ -464,6 +479,7 @@ export class MCPBridge extends EventEmitter {
    * Read a resource from an MCP server
    */
   async readResource(serverId: string, uri: string): Promise<unknown> {
+    this.assertServerNotHidden(serverId);
     await this.ensureConnected(serverId);
     const connection = this.connections.get(serverId);
     if (!connection || connection.status !== 'connected') {
@@ -483,6 +499,7 @@ export class MCPBridge extends EventEmitter {
    * Get a prompt from an MCP server
    */
   async getPrompt(serverId: string, name: string, args?: Record<string, string>): Promise<unknown> {
+    this.assertServerNotHidden(serverId);
     await this.ensureConnected(serverId);
     const connection = this.connections.get(serverId);
     if (!connection || connection.status !== 'connected') {
@@ -515,12 +532,34 @@ export class MCPBridge extends EventEmitter {
             name: tool.name,
             description: tool.description,
             inputSchema: tool.inputSchema,
+            exposure: resolveToolExposure(connection.server, tool.name),
           });
         }
       }
     }
 
     return tools;
+  }
+
+  /** The config a server's exposure is read from: its live connection's, else the stored one. */
+  private exposureConfig(serverId: string): McpExposureConfig | undefined {
+    return this.connections.get(serverId)?.server ?? this.serverConfigs.find((s) => s.id === serverId);
+  }
+
+  /** Effective exposure of one tool; a server we know nothing about has the default. */
+  toolExposure(serverId: string, toolName: string): McpExposure {
+    return resolveToolExposure(this.exposureConfig(serverId) ?? {}, toolName);
+  }
+
+  /** A server whose own exposure is `hidden` offers no resources or prompts either. */
+  isServerHidden(serverId: string): boolean {
+    return this.exposureConfig(serverId)?.exposure === 'hidden';
+  }
+
+  private assertServerNotHidden(serverId: string): void {
+    if (this.isServerHidden(serverId)) {
+      throw new Error(`MCP server '${serverId}' is hidden by its exposure setting.`);
+    }
   }
 
   /**
@@ -626,6 +665,59 @@ export class MCPBridge extends EventEmitter {
   }
 
   /**
+   * Change how a server's tools reach the model. Applies to workers spawned
+   * from now on; persisted like the rest of the server config. Pass
+   * `toolExposure: {}` to clear the per-tool overrides.
+   */
+  async setExposure(serverId: string, change: McpExposureConfig): Promise<boolean> {
+    const invalid = exposureConfigError(change);
+    if (invalid) throw new Error(invalid);
+    return this.updateExposure(serverId, () => change);
+  }
+
+  /**
+   * Set (or with `null`, remove) one tool's exact-name override. The map is
+   * read inside the config mutation queue, so two tools changed back to back
+   * both land — a caller sending the whole map would race.
+   */
+  async setToolExposure(serverId: string, toolName: string, exposure: McpExposure | null): Promise<boolean> {
+    if (!toolName.trim()) throw new Error('A tool name is required');
+    const invalid = exposure === null ? null : exposureConfigError({ exposure });
+    if (invalid) throw new Error(invalid);
+    return this.updateExposure(serverId, (server) => {
+      const { [toolName]: _removed, ...rest } = server.toolExposure ?? {};
+      return { toolExposure: exposure === null ? rest : { ...rest, [toolName]: exposure } };
+    });
+  }
+
+  private updateExposure(serverId: string, compute: (server: MCPServer) => McpExposureConfig): Promise<boolean> {
+    return this.withConfigMutation(async () => {
+      const server = this.serverConfigs.find((s) => s.id === serverId);
+      if (!server) return false;
+      const change = compute(server);
+      const previous = { exposure: server.exposure, toolExposure: server.toolExposure };
+      if (change.exposure !== undefined) server.exposure = change.exposure;
+      if (change.toolExposure !== undefined) {
+        server.toolExposure = Object.keys(change.toolExposure).length ? change.toolExposure : undefined;
+      }
+      try {
+        await this.saveConfig();
+      } catch (error) {
+        Object.assign(server, previous);
+        throw error;
+      }
+      // A live connection may hold an older copy of the config (addServer replaces it).
+      const live = this.connections.get(serverId);
+      if (live && live.server !== server) {
+        live.server.exposure = server.exposure;
+        live.server.toolExposure = server.toolExposure;
+      }
+      coreLogger.info({ serverId, exposure: server.exposure, toolExposure: server.toolExposure }, 'MCP server exposure changed');
+      return true;
+    });
+  }
+
+  /**
    * Persist current server configs to JSON file (if configured) or database.
    */
   private async saveConfig(): Promise<void> {
@@ -693,6 +785,7 @@ export class MCPBridge extends EventEmitter {
     if (!hasConnected) return [];
 
     return [
+      ...this.directToolHandlers(),
       ...resourceHandlers(bridge),
       {
         name: 'mcp_list_tools',
@@ -715,7 +808,7 @@ export class MCPBridge extends EventEmitter {
         },
         toolId: 'mcp',
         replaySafety: 'read_only',
-        execute: async (args) => {
+        execute: async (args, context) => {
           const serverId = args.server_id as string | undefined;
           const query = typeof args.query === 'string' ? args.query.toLowerCase().split(/\s+/).filter(Boolean) : [];
           const exact = typeof args.tool_name === 'string' ? args.tool_name : undefined;
@@ -726,6 +819,7 @@ export class MCPBridge extends EventEmitter {
           const result: Array<{
             server_id: string;
             server_name: string;
+            codemode_only_tools?: number;
             tools: Array<{ name: string; description: string; parameters?: unknown }>;
           }> = [];
 
@@ -734,15 +828,29 @@ export class MCPBridge extends EventEmitter {
             if (connection.status !== 'connected') continue;
             if (serverId && connection.id !== serverId) continue;
 
-            const matched = connection.tools.filter(t => exact ? t.name === exact : query.every(q => `${t.name} ${t.description}`.toLowerCase().includes(q)))
+            // `hidden` tools are never listed. `codemode` tools are listed only
+            // to a worker without codemode — with it, scripts reach them as
+            // `tools.mcp__<server>__<tool>` and their schemas stay out of the
+            // conversation. An exact lookup still answers for a codemode tool.
+            const exposureOf = (name: string) => resolveToolExposure(connection.server, name);
+            const visible = connection.tools.filter(t => exposureOf(t.name) !== 'hidden');
+            const scriptOnly = context?.codemode ? visible.filter(t => exposureOf(t.name) === 'codemode') : [];
+            const listed = exact ? visible : visible.filter(t => !scriptOnly.includes(t));
+            const matched = listed.filter(t => exact ? t.name === exact : query.every(q => `${t.name} ${t.description}`.toLowerCase().includes(q)))
               .sort((a, b) => a.name.localeCompare(b.name));
             const selected = matched.slice(offset, offset + remaining);
             offset = Math.max(0, offset - matched.length);
             remaining -= selected.length;
-            if (!selected.length && connection.tools.length) continue;
+            // Nothing selected: skip a server that has tools (all-hidden ones
+            // included, so they are not even named) and any hidden server. A
+            // server with no tools is still shown as connected, and one whose
+            // only tools are codemode ones is shown with that count, so the
+            // model knows they exist.
+            if (!selected.length && (bridge.isServerHidden(connection.id) || (connection.tools.length && !(scriptOnly.length && !exact)))) continue;
             result.push({
               server_id: connection.id,
               server_name: connection.server.name,
+              ...(scriptOnly.length && !exact ? { codemode_only_tools: scriptOnly.length } : {}),
               tools: selected.map(t => ({
                 name: t.name,
                 description: exact ? t.description : t.description.slice(0, 240),
@@ -793,6 +901,68 @@ export class MCPBridge extends EventEmitter {
         },
       },
     ];
+  }
+
+  /** Connected servers with each tool's model-facing name and exposure. */
+  private exposedTools(): Array<{ connection: MCPServerConnection; tool: MCPToolDefinition; name: string; exposure: McpExposure }> {
+    const connected = [...this.connections.values()]
+      .filter((c) => c.status === 'connected')
+      .sort((a, b) => a.id.localeCompare(b.id));
+    // Named across ALL servers at once: two server ids that sanitise alike
+    // must not hand out the same handler name.
+    const names = mcpToolNames(connected.flatMap((c) => c.tools.map((t) => ({ serverId: c.id, toolName: t.name }))));
+    return connected.flatMap((connection) => connection.tools.map((tool) => ({
+      connection,
+      tool,
+      name: names.get(mcpToolKey({ serverId: connection.id, toolName: tool.name })) as string,
+      exposure: resolveToolExposure(connection.server, tool.name),
+    })));
+  }
+
+  /**
+   * One declared handler per `direct` tool, named `mcp__<server>__<tool>`. Its
+   * permission action is the one `mcp_call_tool` checks (`<server>.<tool>`),
+   * and as a function, so a space filters it exactly as it filters
+   * `mcp_call_tool` (`withoutPersonalOnlyTools`).
+   */
+  private directToolHandlers(): ToolHandler[] {
+    return this.exposedTools()
+      .filter((t) => t.exposure === 'direct')
+      .map(({ connection, tool, name }) => {
+        const serverId = connection.id;
+        const action = `${serverId}.${tool.name}`;
+        return {
+          name,
+          description: `[MCP:${connection.server.name}] ${tool.description ?? tool.name}`,
+          parameters: objectSchema(tool.inputSchema),
+          toolId: 'mcp',
+          permissionAction: () => action,
+          // Authorized in mcp_call_tool's wrapped shape: authorizeMcpDispatch
+          // unwraps a top-level `arguments` key, which for a tool whose own
+          // schema has an `arguments` field would check the wrong object.
+          execute: async (args: Record<string, unknown>, context: AgentContext) =>
+            this.callTool(serverId, tool.name, args, context, { server_id: serverId, tool_name: tool.name, arguments: args }),
+        } satisfies ToolHandler;
+      });
+  }
+
+  /**
+   * The MCP tools a codemode script calls as `tools.mcp__<server>__<tool>`:
+   * every `codemode` and `deferred` tool, routed through `mcp_call_tool` so
+   * each call takes that handler's permission path. Nothing is registered, so
+   * none of them is advertised. `direct` tools are registered handlers already
+   * and `hidden` ones are unreachable.
+   */
+  getScriptTools(): RoutedScriptTool[] {
+    return this.exposedTools()
+      .filter((t) => t.exposure === 'codemode' || t.exposure === 'deferred')
+      .map(({ connection, tool, name }) => ({
+        name,
+        description: `[MCP:${connection.server.name}] ${tool.description ?? tool.name}`,
+        parameters: objectSchema(tool.inputSchema),
+        via: 'mcp_call_tool',
+        wrap: (args: Record<string, unknown>) => ({ server_id: connection.id, tool_name: tool.name, arguments: args }),
+      }));
   }
 }
 

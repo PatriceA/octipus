@@ -524,6 +524,8 @@ in its body.
 | GET | `/api/mcp/servers` | List MCP servers with connection status (admin). |
 | POST | `/api/mcp/servers` | Add a server (admin). |
 | POST | `/api/mcp/servers/:id/toggle` | Enable/disable. |
+| PUT | `/api/mcp/servers/:id/exposure` | Set `exposure` and/or the whole `toolExposure` map ([Tool exposure](MCP-INTEGRATION.md#tool-exposure)). |
+| PUT | `/api/mcp/servers/:id/tools/:tool/exposure` | Set one tool's exposure override; `{ "exposure": null }` removes it. |
 | POST | `/api/mcp/servers/:id/connect` | Connect manually. |
 | POST | `/api/mcp/servers/:id/disconnect` | Disconnect. |
 | DELETE | `/api/mcp/servers/:id` | Remove. |

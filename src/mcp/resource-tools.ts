@@ -10,7 +10,7 @@ export function resourceHandlers(bridge: MCPBridge): ToolHandler[] {
       parameters: { type: 'object', properties: { server_id: { type: 'string' }, query: { type: 'string' }, offset: { type: 'integer', minimum: 0 } } },
       execute: async args => {
         const query = String(args.query ?? '').toLowerCase();
-        const items = bridge.getAllConnections().filter(c => c.status === 'connected' && (!args.server_id || args.server_id === c.id))
+        const items = bridge.getAllConnections().filter(c => c.status === 'connected' && !bridge.isServerHidden(c.id) && (!args.server_id || args.server_id === c.id))
           .flatMap(c => [
             ...(c.resources ?? []).map(r => ({ ...r, kind: 'resource', server_id: c.id })),
             ...(c.templates ?? []).map(r => ({ ...r, kind: 'template', server_id: c.id })),

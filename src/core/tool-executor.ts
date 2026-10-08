@@ -5,6 +5,7 @@ import { type SideEffectCounters, emptyCounters } from '@/core/swarm/receipt';
 import { renderToolActivity } from '@/core/work-stream/renderers';
 import { stripWorkStreamMeta } from '@/shared/work-stream';
 import { spillToolOutput } from './tool-output-spill';
+import { CODEMODE_TOOL_NAME } from '@/tools/codemode';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { getConfig } from '@/config';
@@ -1004,7 +1005,14 @@ export class ToolExecutor {
       const prev = this.failStreaks.get(name);
       const n = prev?.error === r.error ? prev.n + 1 : 1;
       this.failStreaks.set(name, { error: r.error, n });
-      if (n >= MAX_CONSECUTIVE_TOOL_ERRORS) { this.blockedTools.add(name); newlyBlocked.push(name); }
+      if (n >= MAX_CONSECUTIVE_TOOL_ERRORS) {
+        this.blockedTools.add(name);
+        newlyBlocked.push(name);
+        // A blocked codemode means this worker no longer runs scripts, so its
+        // `codemode`-exposed MCP tools go back into mcp_list_tools (see
+        // AgentContext.codemode) instead of staying reachable by no path.
+        if (name === CODEMODE_TOOL_NAME) this.context.codemode = false;
+      }
     }
     if (newlyBlocked.length) {
       agentLogger.warn({ agentId: this.context.id, tools: newlyBlocked }, 'Too many consecutive failures — blocking tools');

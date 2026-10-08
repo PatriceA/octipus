@@ -106,3 +106,51 @@ describe('codemode nested calls run through the executor pipeline', () => {
     expect(msg.content).toContain('refused: Permission denied');
   });
 });
+
+describe('codemode MCP script tools', () => {
+  test('a routed MCP call is checked as mcp_call_tool is: the mcp group, <server>.<tool>, the inner arguments', async () => {
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }] });
+    const exec = new ToolExecutor(makeContext(), () => {});
+    exec.registerTool({
+      name: 'mcp_call_tool',
+      toolId: 'mcp',
+      description: 'Call an MCP tool',
+      parameters: { type: 'object' },
+      permissionAction: (args) => `${args.server_id}.${args.tool_name}`,
+      execute,
+    });
+    exec.registerTool(buildCodemodeHandler({
+      tools: () => Array.from(exec.getTools().values()),
+      routedTools: () => [{
+        name: 'mcp__gh__get_pr',
+        description: 'Get a PR',
+        parameters: { type: 'object' },
+        via: 'mcp_call_tool',
+        wrap: (args) => ({ server_id: 'gh', tool_name: 'get_pr', arguments: args }),
+      }],
+      call: (c) => exec.runNestedCall(c),
+    }));
+
+    const [msg] = await exec.handleToolCalls(script(`return (await tools.mcp__gh__get_pr({ number: 7 })).content[0].text;`));
+
+    // The policy check, then the re-validation every mutating call gets
+    // before it runs (actionRecovery) — the same two a direct call gets.
+    expect(check).toHaveBeenCalledTimes(2);
+    expect(check.mock.calls[0]?.[1]).toBe('mcp');
+    expect(check.mock.calls[0]?.[2]).toBe('gh.get_pr');
+    expect(check.mock.calls[0]?.[3]).toEqual({ number: 7 });
+    expect(check.mock.calls[1]?.[5]).toEqual({ revalidate: true });
+    expect(execute).toHaveBeenCalledWith({ server_id: 'gh', tool_name: 'get_pr', arguments: { number: 7 } }, expect.anything());
+    expect(msg.content).toContain('ok');
+  });
+});
+
+test('a codemode tool blocked after repeated failures clears AgentContext.codemode', async () => {
+  const context = makeContext();
+  context.codemode = true;
+  const exec = new ToolExecutor(context, () => {});
+  exec.registerTool(buildCodemodeHandler({ tools: () => [], call: (c) => exec.runNestedCall(c) }));
+  for (let i = 0; i < 3; i++) await exec.handleToolCalls(script('throw new Error("same failure")').map((c) => ({ ...c, id: `cm-${i}` })));
+  expect(exec.isToolBlocked('codemode')).toBe(true);
+  expect(context.codemode).toBe(false);
+});
