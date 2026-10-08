@@ -13,6 +13,8 @@ interface AdminUser {
   email: string | null;
   isAdmin: boolean;
   isActive: boolean;
+  /** May run on the install's models (an admin always may). */
+  installModels: boolean;
   totpEnabled: boolean;
   createdAt: string;
   lastLoginAt: string | null;
@@ -154,13 +156,14 @@ export default function AdminUsersPage() {
               <th className="text-left px-4 py-2 font-medium">Email</th>
               <th className="text-left px-4 py-2 font-medium">Role</th>
               <th className="text-left px-4 py-2 font-medium">Status</th>
+              <th className="text-left px-4 py-2 font-medium" title="Whether the account may run on this install's models and keys, or only on its own (Settings → My models) and what a space sponsors">Models</th>
               <th className="text-left px-4 py-2 font-medium">Last login</th>
               <th className="text-right px-4 py-2 font-medium">Actions</th>
             </tr>
           </thead>
           <tbody className="stagger">
             {isLoading && (
-              <tr><td colSpan={6} className="px-4 py-3 text-on-surface-variant">Loading…</td></tr>
+              <tr><td colSpan={7} className="px-4 py-3 text-on-surface-variant">Loading…</td></tr>
             )}
             {!isLoading && users.map((u) => {
               const isSelf = u.id === currentUser?.id;
@@ -176,6 +179,21 @@ export default function AdminUsersPage() {
                     <StatusBadge variant={u.isActive ? 'success' : 'neutral'} dot>
                       {u.isActive ? 'active' : 'disabled'}
                     </StatusBadge>
+                  </td>
+                  <td className="px-4 py-3">
+                    {u.isAdmin ? (
+                      <span className="text-on-surface-variant">install</span>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={patchMutation.isPending}
+                        onClick={() => patchMutation.mutate({ id: u.id, body: { installModels: !u.installModels } })}
+                        className="px-2 py-1 text-xs bg-surface-container-high border border-outline-variant/60 rounded-xs hover:bg-surface-container-highest text-on-surface-variant hover:text-on-surface disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                        title={u.installModels ? 'Runs on the install\'s models — click to limit to their own models' : 'Runs only on their own models and what a space sponsors — click to allow the install\'s models'}
+                      >
+                        {u.installModels ? 'install' : 'own only'}
+                      </button>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-on-surface-variant">{formatRelative(u.lastLoginAt)}</td>
                   <td className="px-4 py-3 text-right space-x-2">

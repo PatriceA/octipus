@@ -68,6 +68,13 @@ describe('space task wakeups', () => {
       assigneeRef: carol,
     });
     expect(dependent.workspaceId).toBe(spaceId);
+    // Assigning Carol the task notifies her (`task_assigned`), detached from
+    // the create: wait for it, so the rows below are the wakeup's alone.
+    const assignedTo = () => q(`SELECT user_id FROM notifications WHERE metadata->>'taskId' = $1 AND type = 'task_assigned'`, [dependent.id]);
+    for (const until = Date.now() + 5_000; (await assignedTo()).length === 0;) {
+      if (Date.now() > until) throw new Error('the assignment notice never came');
+      await new Promise((r) => setTimeout(r, 20));
+    }
 
     const events: TaskWakeupEvent[] = [];
     const off = onTaskWakeup((e) => { events.push(e); });
@@ -80,7 +87,9 @@ describe('space task wakeups', () => {
     }
     expect(events).toEqual([expect.objectContaining({ type: 'task.unblocked', taskId: dependent.id, userId: bob, workspaceId: spaceId, triggeredBy: blocker.id })]);
 
-    const notes = await q(`SELECT user_id, workspace_id, type FROM notifications WHERE metadata->>'taskId' = $1 ORDER BY user_id`, [dependent.id]);
+    // One assignment notice (to Carol), and the wakeup's: one per recipient.
+    expect((await assignedTo()).map((n) => n.user_id)).toEqual([carol]);
+    const notes = await q(`SELECT user_id, workspace_id, type FROM notifications WHERE metadata->>'taskId' = $1 AND type <> 'task_assigned' ORDER BY user_id`, [dependent.id]);
     expect(notes.map((n) => n.user_id).sort()).toEqual([bob, carol].sort());
     expect(new Set(notes.map((n) => n.workspace_id))).toEqual(new Set([spaceId]));
     expect(notes.every((n) => n.type === 'task_unblocked')).toBe(true);

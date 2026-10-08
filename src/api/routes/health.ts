@@ -1,4 +1,6 @@
 import { Elysia } from '@/api/http';
+import { adminDenied } from '@/api/admin-guard';
+import { apiContext } from '@/api/context';
 import { getUMI } from '@/channels/interface';
 import { getGateway } from '@/core/gateway';
 import { checkDbHealth } from '@/db/postgres';
@@ -7,18 +9,32 @@ import { getAppVersion } from '@/utils/version';
 import { getHealthChecker } from '@/models/health-checker';
 import { getModelRegistry } from '@/models/model-registry';
 import { getProviderRouter } from '@/models/providers';
+import { isAdmin } from '@/security/principal';
+import { apiLogger } from '@/utils/logger';
 
+/**
+ * Public here: `/`, `/live`, `/ready`, `/database` and `/storage` (monitoring,
+ * load balancers, k8s probes — auth-guard.ts lists them). Everything else is
+ * install state: `/detailed`, `/models`, `/channels` and `/features` are for
+ * an admin, `/time` and `/browser-bridge` for anyone signed in.
+ */
 export const healthRoutes = new Elysia({ prefix: '/health' })
+  .use(apiContext)
   // Basic health check
   .get('/', async () => {
     return { status: 'ok', timestamp: new Date().toISOString() };
   })
 
-  // Detailed health check — requires authentication to avoid leaking infrastructure info
-  .get('/detailed', async (ctx: any) => {
-    if (!ctx.user) {
-      ctx.set.status = 401;
+  // Detailed health check — requires authentication to avoid leaking
+  // infrastructure info. The per-service breakdown is for an admin; anyone
+  // else gets whether it runs and which build answers.
+  .get('/detailed', async ({ user, principal, set }) => {
+    if (!user) {
+      set.status = 401;
       return { error: 'Authentication required' };
+    }
+    if (!isAdmin(principal)) {
+      return { status: getGateway().isRunning() ? 'ok' : 'degraded', version: getAppVersion() };
     }
     try {
       const gateway = getGateway();
@@ -213,12 +229,13 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
   // Database health
   .get('/database', async () => {
     const result = await checkDbHealth();
+    // Public route: the raw error (hosts, driver messages) goes to the log only.
+    if (result.error) apiLogger.warn({ error: result.error }, 'database health check failed');
 
     return {
       service: 'database',
       status: result.healthy ? 'healthy' : 'unhealthy',
       latency: result.latency,
-      error: result.error,
     };
   })
 
@@ -228,17 +245,20 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
   // longer runs.
   .get('/storage', async () => {
     const result = await checkCacheHealth();
+    // Public route: the raw error (hosts, driver messages) goes to the log only.
+    if (result.error) apiLogger.warn({ error: result.error }, 'storage health check failed');
 
     return {
       service: 'storage',
       status: result.healthy ? 'healthy' : 'unhealthy',
       latency: result.latency,
-      error: result.error,
     };
   })
 
   // Model providers health
-  .get('/models', async () => {
+  .get('/models', async ({ user, principal, set }) => {
+    const denied = adminDenied({ set, user, principal });
+    if (denied) return denied;
     const healthChecker = getHealthChecker();
     const providers = await healthChecker.checkAllProviders();
 
@@ -281,7 +301,11 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
   })
 
   // Server time and timezone — for schedule/calendar UI to show server context
-  .get('/time', async () => {
+  .get('/time', async ({ user, set }) => {
+    if (!user) {
+      set.status = 401;
+      return { error: 'Authentication required' };
+    }
     const now = new Date();
     return {
       serverTime: now.toISOString(),
@@ -294,7 +318,11 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
   // detect store-installed extensions (which don't drop a copy under
   // ~/.octipus). Returns `{ connected: true }` only when a browser
   // is actively holding the bridge WS open.
-  .get('/browser-bridge', async () => {
+  .get('/browser-bridge', async ({ user, set }) => {
+    if (!user) {
+      set.status = 401;
+      return { error: 'Authentication required' };
+    }
     try {
       const { getBrowserBridge } = await import('@/api/browser-bridge');
       const bridge = getBrowserBridge();
@@ -305,7 +333,9 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
   })
 
   // Channel status
-  .get('/channels', async () => {
+  .get('/channels', async ({ user, principal, set }) => {
+    const denied = adminDenied({ set, user, principal });
+    if (denied) return denied;
     try {
       const umi = getUMI();
       const allChannels = umi.getAllChannels();
@@ -327,7 +357,9 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
   // unbound vs. a soft one that falls back to the default model) and `help`
   // (hover text explaining the feature). Only topics a feature actually depends
   // on are listed. OCR and Vision are separate rows (distinct models/roles).
-  .get('/features', async () => {
+  .get('/features', async ({ user, principal, set }) => {
+    const denied = adminDenied({ set, user, principal });
+    if (denied) return denied;
     const FEATURE_TOPICS = [
       { key: 'chat', name: 'Chat', topic: 'general', required: true,
         help: 'The base chat brain — every message that is not delegated runs on your default model.',

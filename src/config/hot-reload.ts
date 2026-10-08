@@ -4,7 +4,8 @@ import { resetLiteLLMClient } from '@/models/litellm-client';
 import { getVault } from '@/security/vault';
 import { logger } from '@/utils/logger';
 import { resetTelephonyProvider } from '@/voice/telephony';
-import { refreshConfigKey } from './index';
+import { getConfig, refreshConfigKey } from './index';
+import type { FederationMode } from './schema';
 import { getSettingDefinition } from './settings-registry';
 import { getSettingsService } from './settings-service';
 
@@ -27,6 +28,9 @@ export function initializeHotReload(): void {
         // Fall through with original value
       }
     }
+
+    // Read before the refresh: the federation mode event carries both ends.
+    const previousFederationMode = getConfig().federation.mode;
 
     // Always update the cached config object
     refreshConfigKey(key, resolvedValue);
@@ -86,6 +90,18 @@ export function initializeHotReload(): void {
           resetArtifactSettingsCache();
           _resetArtifactTokenKey();
           logger.info({ key }, 'Artifact settings cache reset');
+          break;
+        }
+
+        case 'federation': {
+          if (key !== 'federation.mode') break;
+          const { emitFederationModeChanged } = await import('@/core/federation/mode');
+          emitFederationModeChanged(
+            newValue as FederationMode,
+            previousFederationMode,
+            (err) => logger.error({ err, key }, 'A federation mode subscriber failed'),
+          );
+          logger.info({ key, value: newValue }, 'Federation mode changed');
           break;
         }
 

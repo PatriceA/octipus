@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, WORKSPACE_DENIED_EVENT, type WorkspaceDeniedDetail } from './api';
 import { useAuth } from './auth-context';
+import type { RemoteSpace } from './remote-spaces';
 
 export interface Workspace {
   id: string;
@@ -38,8 +39,16 @@ export interface Space {
 
 export type AgentFundingMode = 'own' | 'unattended' | 'sponsored';
 
-/** The selected workspace: one of the caller's own, or a space. */
-export type ActiveWorkspace = ({ kind: 'personal' } & Workspace) | ({ kind: 'shared' } & Space);
+/**
+ * The selected workspace: one of the caller's own, a space, or a space on
+ * another install (federation §8.3) — `id` is then the pointer row here,
+ * never sent as `X-Octipus-Workspace`; its data comes through
+ * `/api/remote-spaces/:id/...`.
+ */
+export type ActiveWorkspace =
+  | ({ kind: 'personal' } & Workspace)
+  | ({ kind: 'shared' } & Space)
+  | ({ kind: 'remote'; name: string } & RemoteSpace);
 
 /**
  * What the caller may do in the selected workspace (docs/SPACES.md → Roles).
@@ -82,6 +91,8 @@ interface WorkspaceContextValue {
   workspaces: Workspace[];
   /** The shared spaces the caller is a member of. */
   spaces: Space[];
+  /** The spaces the caller joined on other installs (federation §8.3). */
+  remoteSpaces: RemoteSpace[];
   orgs: Org[];
   activeWorkspace: ActiveWorkspace | null;
   /**
@@ -129,6 +140,7 @@ function lastSpace(): { id: string; name: string } | null {
 const WorkspaceContext = createContext<WorkspaceContextValue>({
   workspaces: [],
   spaces: [],
+  remoteSpaces: [],
   orgs: [],
   activeWorkspace: null,
   personalWorkspace: null,
@@ -170,6 +182,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [spaces, setSpaces] = useState<Space[]>([]);
+  const [remoteSpaces, setRemoteSpaces] = useState<RemoteSpace[]>([]);
   const [orgs, setOrgs] = useState<Org[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -184,10 +197,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
    * just-joined space and switch away from it.
    */
   const refreshSeq = useRef(0);
+  /** Pointer rows known now: a selection of one never goes out as the workspace header. */
+  const remoteIdsRef = useRef<Set<string>>(new Set());
 
   const select = useCallback((id: string | null) => {
     // The header follows at once, before any request of the new render.
-    api.setWorkspaceId(id);
+    api.setWorkspaceId(id, id && remoteIdsRef.current.has(id) ? 'remote' : 'local');
     activeIdRef.current = id;
     setActiveId(id);
     if (typeof window !== 'undefined') {
@@ -203,6 +218,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       activeIdRef.current = null;
       setWorkspaces([]);
       setSpaces([]);
+      setRemoteSpaces([]);
       setOrgs([]);
       setActiveId(null);
       setIsLoading(false);
@@ -212,7 +228,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     try {
       // `/me/workspaces` and `GET /spaces` answer whatever the workspace
       // header names (a removed member's client recovers through them).
-      const [wsRes, orgRes, spaceRes] = await Promise.all([
+      const [wsRes, orgRes, spaceRes, remoteRes] = await Promise.all([
         api.get<{ workspaces: Workspace[] }>('/me/workspaces').catch((err) => {
           if (String(err?.message || '').includes('404')) {
             setDisabled(true);
@@ -222,10 +238,20 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         }),
         api.get<{ orgs: Org[] }>('/me/orgs').catch(() => ({ orgs: [] })),
         api.get<{ spaces: Space[] }>('/spaces'),
+        // Spaces on other installs: none when this install does not visit.
+        api.get<{ remoteSpaces: RemoteSpace[] }>('/remote-spaces').catch((err) => {
+          console.warn('Could not read the spaces on other installs', err);
+          return { remoteSpaces: [] as RemoteSpace[] };
+        }),
       ]);
       if (seq !== refreshSeq.current) return;
       setWorkspaces(wsRes.workspaces);
       setSpaces(spaceRes.spaces);
+      // An install that predates federation (or a proxy) can answer without
+      // the list: treat that as no spaces elsewhere rather than crashing.
+      const remoteList = Array.isArray(remoteRes?.remoteSpaces) ? remoteRes.remoteSpaces : [];
+      setRemoteSpaces(remoteList);
+      remoteIdsRef.current = new Set(remoteList.map((r) => r.id));
       setOrgs(orgRes.orgs);
 
       // The selection survives a refresh while it still exists: one of the
@@ -235,6 +261,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       const next =
         wsRes.workspaces.find((w) => w.id === stored) ??
         spaceRes.spaces.find((sp) => sp.id === stored) ??
+        remoteList.find((r) => r.id === stored) ??
         wsRes.workspaces.find((w) => w.isDefault) ??
         wsRes.workspaces[0] ??
         null;
@@ -292,6 +319,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   const activePersonal = workspaces.find((w) => w.id === activeId) ?? null;
   const listedSpace = activePersonal ? null : (spaces.find((sp) => sp.id === activeId) ?? null);
+  const activeRemote = activePersonal || listedSpace ? null : (remoteSpaces.find((r) => r.id === activeId) ?? null);
 
   // The caller's role in the selected space, read again on every switch and
   // when the window regains focus, so a role change shows without a reload.
@@ -311,13 +339,19 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     ? { kind: 'personal', ...activePersonal }
     : activeSpace
       ? { kind: 'shared', ...activeSpace }
-      : null;
+      : activeRemote
+        ? { kind: 'remote', ...activeRemote, name: activeRemote.spaceName }
+        : null;
   useEffect(() => {
     if (activeSpace) localStorage.setItem(SPACE_KEY, JSON.stringify({ id: activeSpace.id, name: activeSpace.name }));
   }, [activeSpace]);
 
   const personalWorkspace = activePersonal ?? workspaces.find((w) => w.isDefault) ?? workspaces[0] ?? null;
-  const access = activeSpace ? accessFor(activeSpace) : PERSONAL_ACCESS;
+  const access = activeSpace
+    ? accessFor(activeSpace)
+    : activeRemote
+      ? accessFor({ role: activeRemote.role, archivedAt: null })
+      : PERSONAL_ACCESS;
 
   // A space the caller is no longer a member of: the server answers 404
   // `workspace_denied` to any request naming it (lib/api.ts raises the
@@ -352,6 +386,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       value={{
         workspaces,
         spaces,
+        remoteSpaces,
         orgs,
         activeWorkspace,
         personalWorkspace,

@@ -7,7 +7,7 @@ import { getGatewayHub } from '@/core/gateway/hub';
 import { membershipVersion } from '@/core/spaces/membership';
 import { getMembership, membersVisibleToGuest } from '@/core/spaces/service';
 import { insertRevision, loadSpaceNote, loadSpaceNoteSlug, writeBodyIfUnchanged } from '@/db/repositories/live-documents';
-import { userRepository } from '@/db/repositories/user-repository';
+import { displayNames } from '@/core/session-history';
 import type { FileLeaseView } from '@/core/gateway/protocol';
 import { noteInGuestScope } from '@/security/space-access';
 import { coreLogger } from '@/utils/logger';
@@ -36,7 +36,8 @@ export function getDocHub(): DocumentHub {
       const { getNoteService } = await import('@/core/knowledge/notes');
       return getNoteService().refreshSpaceNote(noteId, editorUserId, previousBody);
     },
-    userName: async (userId) => (await userRepository.findById(userId))?.username ?? null,
+    // The display name: a member of another install with its instance badge (federation §7.4).
+    userName: async (userId) => (await displayNames([userId])).get(userId) ?? null,
     membership: async (userId, workspaceId, noteId) => {
       const membership = await getMembership(userId, workspaceId);
       if (!membership) return null;
@@ -47,7 +48,9 @@ export function getDocHub(): DocumentHub {
     },
     audience: async (userId, workspaceId) => {
       const membership = await getMembership(userId, workspaceId);
-      return membership?.scope ? membersVisibleToGuest(workspaceId, userId, membership.scope) : null;
+      // No membership (removed, a blocked install): nobody, never everyone.
+      if (!membership) return new Set<string>();
+      return membership.scope ? membersVisibleToGuest(workspaceId, userId, membership.scope) : null;
     },
     membershipVersion,
     send: (connectionId, message) => gateway().connectionManager.sendToConnection(connectionId, message),

@@ -1,5 +1,6 @@
 import { Elysia, t } from '@/api/http';
 import { buildAgentContext, fundingFor, withAgentUsage } from '@/core/agent/context';
+import { adminDenied } from '@/api/admin-guard';
 import { apiContext } from '@/api/context';
 import { ROLE_CONFIGS } from '@/core/agent/roles';
 import { getExtensionRegistry } from '@/extensions/registry';
@@ -10,18 +11,32 @@ import { getPermissionManager } from '@/security/permissions';
 import { getToolRegistry } from '@/tools/registry';
 import { apiLogger } from '@/utils/logger';
 
+/** Whether a non-admin may run `toolId` directly: one of the general agent's own tools, MCP excluded. */
+function mayRunDirectly(toolId: string): boolean {
+  return toolId !== 'mcp' && !toolId.startsWith('mcp') && ROLE_CONFIGS.general.toolIds.includes(toolId);
+}
+
 export const toolRoutes = new Elysia({ prefix: '/tools' })
   .use(apiContext)
 
-  // List all registered tools with their sub-tools
+  // List registered tools with their sub-tools. The install's full
+  // inventory (status, permissions) is install state: admins only. Anyone
+  // else gets the tools they may run directly (`mayRunDirectly`), names and
+  // schemas only — what the MCP bridge lists.
   .get(
     '/',
-    async ({ user }) => {
+    async ({ user, set }) => {
       if (!user) {
-        return { error: 'Not authenticated' };
+        set.status = 401;
+        return { error: 'Authentication required' };
       }
 
       const registry = getToolRegistry();
+      if (!user.isAdmin) {
+        const own = registry.getManifests().filter((m) => mayRunDirectly(m.id) && registry.isInitialized(m.id));
+        return { tools: own.map((m) => ({ id: m.id, name: m.name, version: m.version, description: m.description,
+          tools: m.tools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })) })) };
+      }
       const manifests = registry.getManifests();
       const availability = await registry.checkAllAvailability();
 
@@ -58,11 +73,10 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
   // startup and plugins reload via /plugins/:name/reload.
   .post(
     '/reload',
-    async ({ user, set }) => {
-      if (!user) {
-        set.status = 401;
-        return { error: 'Not authenticated' };
-      }
+    async ({ user, principal, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
+      if (!user) throw new Error('adminDenied passed without a user');
       try {
         const result = await getExtensionRegistry().reload();
         apiLogger.info({ userId: user.id, count: result.count }, 'Extensions reloaded via WebUI');
@@ -80,9 +94,16 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
   // MUST be before /:id to avoid matching "all" as an id
   .get(
     '/all',
-    async ({ user }) => {
+    async ({ user, principal, set }) => {
       if (!user) {
-        return { error: 'Not authenticated' };
+        set.status = 401;
+        return { error: 'Authentication required' };
+      }
+      // A non-admin sees what they may run directly: the general agent's
+      // own tools (`mayRunDirectly`), never the install's MCP inventory.
+      if (!user.isAdmin) {
+        const own = getToolRegistry().getToolHandlersForTools(ROLE_CONFIGS.general.toolIds.filter((id) => id !== 'mcp'));
+        return { tools: own.map((h) => ({ name: h.name, description: h.description, parameters: h.parameters, source: 'tool' as const, toolId: h.toolId })) };
       }
 
       const registry = getToolRegistry();
@@ -117,10 +138,9 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
   // "I see the tool but not which topics can use them"). MUST be before /:id.
   .get(
     '/role-map',
-    async ({ user }) => {
-      if (!user) {
-        return { error: 'Not authenticated' };
-      }
+    async ({ user, principal, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
 
       // toolId -> roles that grant it (reverse index for the per-tool view).
       const byTool: Record<string, string[]> = {};
@@ -248,10 +268,9 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
   // Get a specific tool's details
   .get(
     '/:id',
-    async ({ user, params }) => {
-      if (!user) {
-        return { error: 'Not authenticated' };
-      }
+    async ({ user, principal, set, params }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
 
       const registry = getToolRegistry();
       const tool = registry.get(params.id);
@@ -283,12 +302,22 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
     }
   )
 
-  // Execute a tool directly via API (used by MCP server bridge)
+  // Execute a tool directly via API (used by MCP server bridge). Admin-only:
+  // it runs an install tool outside any agent's role tool list, so the
+  // bridge's direct-tool calls need an admin token (mcp-server/README.md).
   .post(
     '/:toolId/tools/:toolName/execute',
     async ({ user, principal, params, body, set }) => {
       if (!user) {
-        return { error: 'Not authenticated' };
+        set.status = 401;
+        return { error: 'Authentication required' };
+      }
+      // An admin may run any registered tool; anyone else only the general
+      // agent's own tools — what their chat could run — and never the
+      // install's MCP tools. The permission manager decides either way.
+      if (!user.isAdmin && !mayRunDirectly(params.toolId)) {
+        set.status = 403;
+        return { error: 'Admin access required' };
       }
 
       const registry = getToolRegistry();

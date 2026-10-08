@@ -3,6 +3,7 @@
 import {
   Bell,
   Cpu,
+  Globe,
   Key,
   MessageSquare,
   Phone,
@@ -22,6 +23,7 @@ import { IntegrationsTab } from '@/components/settings/integrations-tab';
 import { MobileTab } from '@/components/settings/mobile-tab';
 import { MyModelsTab } from '@/components/settings/my-models-tab';
 import { NotificationsTab } from '@/components/settings/notifications-tab';
+import { RemoteSpacesTab } from '@/components/settings/remote-spaces-tab';
 import { SecurityTab } from '@/components/settings/security-tab';
 import { VoiceTab } from '@/components/settings/voice-tab';
 
@@ -36,6 +38,7 @@ export default function SettingsPage() {
     { id: 'security', label: 'Security', icon: Shield },
     { id: 'api-tokens', label: 'API Tokens', icon: Key },
     { id: 'my-models', label: 'My models', icon: Cpu },
+    { id: 'remote-spaces', label: 'Spaces on other installs', icon: Globe },
     { id: 'voice', label: 'Voice & Calls', icon: Phone },
     { id: 'notifications', label: 'Notifications', icon: Bell },
     { id: 'mobile', label: 'Mobile App', icon: Smartphone },
@@ -82,6 +85,7 @@ export default function SettingsPage() {
           {activeTab === 'security' && <SecurityTab />}
           {activeTab === 'api-tokens' && <ApiTokensTab />}
           {activeTab === 'my-models' && <MyModelsTab />}
+          {activeTab === 'remote-spaces' && <RemoteSpacesTab />}
           {activeTab === 'voice' && <VoiceTab />}
           {activeTab === 'notifications' && <NotificationsTab />}
           {activeTab === 'mobile' && <MobileTab />}

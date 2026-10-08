@@ -12,6 +12,7 @@ import {
 } from '@/core/docs/file-leases';
 import { connectSpaceConnector, disconnectSpaceConnector, listSpaceConnectors } from '@/core/spaces/connectors';
 import { bindBrowser } from '@/api/oauth-browser';
+import { publicLinkBase } from '@/core/public-url';
 import { acceptInvite, createInvite, listInvites, previewInvite, revokeInvite } from '@/core/spaces/invites';
 import { setSpaceFunding } from '@/core/spaces/funding';
 import { purgeSpace } from '@/core/spaces/purge';
@@ -33,6 +34,7 @@ import {
 } from '@/core/spaces/service';
 import { isAuthenticated, type Principal } from '@/security/principal';
 import { requireCan, type SpaceAction, SpaceError, spaceErrorStatus } from '@/security/space-access';
+import { apiLogger } from '@/utils/logger';
 
 /**
  * Shared spaces (docs/plans/coworking-spec.md §5.7).
@@ -101,6 +103,28 @@ const scopeSchema = t.Object({
   rooms: t.Optional(t.Array(t.String())),
   folders: t.Optional(t.Array(t.String())),
 }, { additionalProperties: false });
+
+/**
+ * The invite link with the host's fingerprint (docs/plans/federation-spec.md
+ * §6.1): `<publicUrl>/join/<token>#octipus=<instanceId>`, the full id in the
+ * fragment (never sent to a server), so a member of another install can
+ * redeem it from their own Octipus, which pins this install's identity.
+ * Null when this install does not host spaces for other installs, or has
+ * no identity this start (that failure is logged where it happened, and
+ * federation is off until it is fixed).
+ */
+async function federatedInviteUrl(url: string): Promise<string | null> {
+  const [{ federationHosts }, { getInstanceIdentity }] = await Promise.all([
+    import('@/core/federation/mode'), import('@/core/federation/identity'),
+  ]);
+  if (!federationHosts()) return null;
+  try {
+    return `${url}#octipus=${(await getInstanceIdentity()).instanceId}`;
+  } catch (err) {
+    apiLogger.error({ err }, 'Invite created without its federation part: this install has no federation identity');
+    return null;
+  }
+}
 
 /**
  * The actor may `action` in the space (membership read now, D5); anything
@@ -282,7 +306,12 @@ export const spaceRoutes = new Elysia({ prefix: '/spaces' })
     (ctx) => handle(ctx, async (actor) => {
       const invite = await createInvite(actor, ctx.params.id, ctx.body);
       ctx.set.status = 201;
-      return invite;
+      // The link to hand out, on the install's public URL when one is set:
+      // the address the owner's browser used (often localhost) is not one
+      // the invitee can reach. Null without one; the web then uses its own.
+      const base = publicLinkBase();
+      const url = base ? `${base}/join/${invite.token}` : null;
+      return { ...invite, url, federatedUrl: url ? await federatedInviteUrl(url) : null };
     }),
     {
       params: t.Object({ id: t.String() }),

@@ -119,13 +119,20 @@ export class PlivoProvider implements TelephonyProvider {
     return map[data.call_status] || 'failed';
   }
 
-  verifyWebhook(headers: Record<string, string>, body: string, url: string): boolean {
-    const signature = headers['x-plivo-signature-v2'] || headers['x-plivo-signature'];
-    if (!signature) return false;
+  /**
+   * Plivo's V2 signature: base64 HMAC-SHA256, keyed with the auth token, of
+   * the called URL without its query string followed by the
+   * `X-Plivo-Signature-V2-Nonce`. A request without the V2 signature and its
+   * nonce is refused: the legacy header is another scheme (HMAC-SHA1 over the
+   * URL and sorted parameters) that the old fallback never computed.
+   */
+  verifyWebhook(headers: Record<string, string>, _body: string, url: string): boolean {
+    const signature = headers['x-plivo-signature-v2'];
+    const nonce = headers['x-plivo-signature-v2-nonce'];
+    if (!signature || !nonce || !this.authToken) return false;
 
-    const nonce = headers['x-plivo-signature-v2-nonce'] || '';
-    const payload = nonce ? `${url}${nonce}` : `${url}${body}`;
-    const expected = createHmac('sha256', this.authToken).update(payload).digest('base64');
+    const u = new URL(url);
+    const expected = createHmac('sha256', this.authToken).update(`${u.origin}${u.pathname}${nonce}`).digest('base64');
 
     try {
       return timingSafeEqual(Buffer.from(signature), Buffer.from(expected));

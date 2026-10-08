@@ -131,6 +131,13 @@ const ALLOWLIST: Record<string, string> = {
   'src/core/tasks/team.ts': 'my tasks across my memberships, by assignee',
   'src/db/repositories/session-kind.ts': 'the kind of one session by id (no content)',
   'src/security/workspace-resolver.ts': 'workspace of a session/agent/pipeline the caller owns, by id',
+  // Federation (docs/plans/federation-spec.md §7.5, §9): whether a room or
+  // space has a member of another install (an EXISTS, no content), the
+  // remote member rows' own door, and the visitor's own agent sessions of a
+  // pointer row (the member's own, by user id and `context.remoteRoom`).
+  'src/core/federation/audience.ts': 'whether a room or space has a remote member (EXISTS only, keyed by the space id the caller holds)',
+  'src/core/federation/remote-members.ts': 'memberships of remote rows: a count and space ids, no content',
+  'src/core/federation/visitor-agent.ts': "the member's own agent sessions of their pointer row, by user id",
   // Unscoped stores keyed by an id the caller already holds (MARKED: per read).
   'src/db/repositories/session-repository.ts': 'system-side session store',
   'src/db/repositories/message-repository.ts': 'system-side message store',

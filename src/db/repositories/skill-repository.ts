@@ -68,6 +68,12 @@ export class SkillRepository {
     return this.db.select().from(skills).where(inArray(skills.id, skillIds));
   }
 
+  /** The rows among `skillIds` that `userId` can see (system, own, their orgs'). */
+  async findVisibleByIds(userId: string, skillIds: string[]): Promise<Skill[]> {
+    if (skillIds.length === 0) return [];
+    return this.db.select().from(skills).where(and(inArray(skills.id, skillIds), await visibleTo(userId)));
+  }
+
   /**
    * Update a skill row. If any embedding-relevant field (name/description)
    * is in the input AND differs from the current row, NULL out

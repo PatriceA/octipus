@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { api } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 import type { HealthStatus, UserProfile } from '@/lib/types/settings';
 
 export function GeneralTab() {
@@ -20,8 +21,13 @@ export function GeneralTab() {
   // Fetched once per visit, deliberately NOT polled: `/health/detailed` fans out
   // to a live probe of every configured provider, so an interval here would fire
   // that whole sweep for as long as the tab stays open.
+  // The per-service breakdown is for an admin; anyone else gets
+  // `{ status, version }` from it, so the panel is not shown to them.
+  const { user } = useAuth();
+  const isAdmin = !!user?.isAdmin;
   const { data: health } = useQuery({
     queryKey: ['health', 'detailed'],
+    enabled: isAdmin,
     queryFn: async () => {
       try {
         return await api.get<HealthStatus>('/health/detailed');
@@ -38,7 +44,7 @@ export function GeneralTab() {
       <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">General Settings</h2>
 
       {/* Service Status */}
-      <section>
+      {isAdmin && <section>
         <h3 className="text-xs font-bold text-on-surface-variant uppercase mb-2">Service Status</h3>
         {services.length === 0 ? (
           <p className="text-sm text-on-surface-variant border border-outline-variant rounded-md px-3 py-2">
@@ -70,7 +76,7 @@ export function GeneralTab() {
             ))}
           </div>
         )}
-      </section>
+      </section>}
 
       {/* Profile */}
       <div>

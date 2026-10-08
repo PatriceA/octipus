@@ -9,7 +9,7 @@ import { getFileIndexer } from '@/core/rag/indexer';
 import { type KnowledgeScope, principalKnowledgeOwner, principalKnowledgeScope } from '@/core/rag/knowledge-scope';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { contentRepos } from '@/db/repositories/content';
-import type { Principal } from '@/security/principal';
+import { isAdmin, type Principal } from '@/security/principal';
 import { WorkspaceFS, WorkspaceFsError } from '@/security/workspace-fs';
 import { apiLogger } from '@/utils/logger';
 
@@ -73,7 +73,7 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
   .use(apiContext)
 
   // Readiness endpoint — lets the web UI show a clear banner
-  .get('/readiness', async ({ user, set }) => {
+  .get('/readiness', async ({ user, principal, set }) => {
     if (!user) {
       set.status = 401;
       return { error: 'Authentication required' };
@@ -82,6 +82,15 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
     // the user fixes model mapping or starts Ollama.
     const report = await runKBSelfCheck();
     if (!report.ready) set.status = 503;
+    // The per-check details (database errors, embedding model id) are
+    // install state: a non-admin learns only whether the KB works.
+    if (!isAdmin(principal)) {
+      return {
+        ready: report.ready,
+        reason: report.ready ? undefined : 'Knowledge base is not ready. Ask an administrator to check it.',
+        lastCheckedAt: report.lastCheckedAt,
+      };
+    }
     return report;
   }, {
     detail: { tags: ['knowledge'] },

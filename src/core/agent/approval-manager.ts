@@ -6,6 +6,7 @@ import { getDb } from '@/db/postgres';
 import { isUuid } from '@/db/repositories/scoped';
 import { agentApprovals, type AgentApproval } from '@/db/schema/agent-approvals';
 import { coreLogger } from '@/utils/logger';
+import { contentStorageOffFor } from './audience';
 import type { TurnEvent } from './service';
 
 /** Stamped on every row this process writes, so a waiter lost here is told apart from one lost to a restart. */
@@ -194,7 +195,10 @@ export class ApprovalManager {
       context.userId,
       'approval_required',
       'Approval Required',
-      `${summary}\n\n${question}`,
+      // A session whose text stays in its own rows (a space on another
+      // install, federation F-D11): the question quotes that text, so the
+      // stored notification (and the phone push) carries the summary only.
+      contentStorageOffFor(context) ? summary : `${summary}\n\n${question}`,
       { requestId, sessionId: context.sessionId },
     ).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in approval-manager'));
 

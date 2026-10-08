@@ -15,6 +15,13 @@ export async function turnWorkspaceId(userId: string, workspaceId: string | null
 }
 
 /**
+ * Channels whose turns only ever continue a session that exists: the
+ * addressed turns of the visitor's own agent in a space on another install
+ * (`remote-room`, federation §9), which name the session they listen for.
+ */
+const EXISTING_ONLY_CHANNELS: ReadonlySet<string> = new Set(['remote-room']);
+
+/**
  * Resolve a session ID to an existing session or create a new one.
  * Handles both UUID-based and channel-based session identifiers.
  *
@@ -26,6 +33,11 @@ export async function turnWorkspaceId(userId: string, workspaceId: string | null
  * ("Session not found", the same answer as a missing row, so ownership is
  * not disclosed): every caller passes the acting user, and sessions.user_id is
  * NOT NULL, so there is no legitimate cross-user resolution.
+ *
+ * A turn of an internal path that names a session it was handed earlier
+ * (`EXISTING_ONLY_CHANNELS`: the addressed turns of the visitor's own agent,
+ * federation §9) never creates one: a session deleted since is "Session not
+ * found", not a fresh personal chat under the same id.
  */
 export async function resolveSession(
   sessionId: string,
@@ -33,6 +45,7 @@ export async function resolveSession(
   channel: string,
   workspaceId?: string | null,
 ): Promise<string> {
+  const mayCreate = !EXISTING_ONLY_CHANNELS.has(channel);
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (uuidRegex.test(sessionId)) {
     const existing = await sessionRepository.findById(sessionId);
@@ -42,6 +55,7 @@ export async function resolveSession(
       if (existing.kind === 'room' || existing.userId !== userId) throw new Error('Session not found');
       return sessionId;
     }
+    if (!mayCreate) throw new Error('Session not found');
 
     const wsId = await turnWorkspaceId(userId, workspaceId);
     const session = await sessionRepository.create({
@@ -63,6 +77,7 @@ export async function resolveSession(
   // `room` is not a channel a personal chat can live on (§6.1).
   if (channelType === 'room' || channel === 'room') throw new Error('Session not found');
 
+  if (!mayCreate) throw new Error('Session not found');
   const existing = await sessionRepository.findByUserAndChannel(userId, channelType, channelId);
   if (existing) return existing.id;
 

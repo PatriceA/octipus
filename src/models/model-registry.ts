@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { getConfig } from '@/config';
+import { mayUseInstallModels } from '@/models/install-access';
 import { getDb } from '@/db/postgres';
 import { Cache } from '@/db/cache';
 import { type ModelConfigEntry, modelConfig, type NewModelConfigEntry, userModelBindings } from '@/db/schema/models';
@@ -154,6 +155,7 @@ export class ModelRegistry {
 
   private async isVisibleTo(row: ModelConfigEntry, userId: string): Promise<boolean> {
     if (row.ownerUserId) return row.ownerUserId === userId;
+    if (!(await mayUseInstallModels(userId))) return false;
     if (!row.orgId) return true;
     return (await getUserOrgIds(userId)).includes(row.orgId);
   }
@@ -329,9 +331,11 @@ export class ModelRegistry {
   /**
    * List models visible to a specific user: system-wide install rows
    * (`org_id IS NULL`), org-scoped install rows of the user's orgs, and the
-   * user's own personal rows. Enabled and disabled alike.
+   * user's own personal rows. Enabled and disabled alike. Someone the
+   * install's models are not for (install-access.ts) sees only their own.
    */
   async getModelsForUser(userId: string): Promise<ModelConfigEntry[]> {
+    if (!(await mayUseInstallModels(userId))) return this.getPersonalModels(userId);
     const orgIds = await getUserOrgIds(userId);
     const orgVisible = orgIds.length > 0
       ? or(isNull(modelConfig.orgId), inArray(modelConfig.orgId, orgIds))

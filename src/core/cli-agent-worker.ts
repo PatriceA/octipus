@@ -798,6 +798,10 @@ When a task matches one of these skills, load it with get_skill before starting 
     // personal row reached by modelId (§8.1).
     const model = await resolveCliModelEntry(this.context.model, { modelName: this.context.modelName, userId: this.context.userId });
     this.accountingModelName = model?.name;
+    // An install login serves only someone the install's models are for
+    // (install-access.ts); the turn's usage context carries its funding.
+    const { assertRowServesCall } = await import('@/models/providers/instrumented');
+    await assertRowServesCall(model ?? null, { userId: this.context.userId, funding: this.context.funding }, this.context.sponsor?.userId);
     this.credentialOwner = await cliCredentialOwnerFor(model, this.context.userId);
     return model?.metadata?.cliAgent || {};
   }

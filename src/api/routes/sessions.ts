@@ -234,6 +234,12 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
           return { error: 'Room not found' };
         }
       }
+      // "Ask my agent" in a space on another install (federation §9) is made
+      // by its own route, which checks the pointer row and the room.
+      if ((body.context as Record<string, unknown> | undefined)?.remoteRoom !== undefined) {
+        set.status = 400;
+        return { error: 'An agent session for a space on another install is opened from its room (POST /api/remote-spaces/:id/rooms/:roomId/agent)' };
+      }
       if (EXTERNAL_CHANNELS.has(channelType)) {
         const resolved = await resolveTarget(await loadNotifyScope(user.id), channelType, channelId);
         if (!resolved.allowed) {
@@ -276,7 +282,24 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
       // Only the declared fields: a session's channelType / channelId is its
       // outbound address and is fixed at creation (see POST).
       // `pinned` marks the session to keep: exempt from the retention sweep.
-      const { title, status, context, metadata, pinned } = body;
+      const { title, status, metadata, pinned } = body;
+      let context = body.context as Record<string, unknown> | undefined;
+      // `remoteRoom` (federation §9) is fixed at creation: it makes the session
+      // one whose text never reaches memory, learning or compaction, so a
+      // whole-context write keeps it, and nothing sets or changes it here.
+      if (context !== undefined) {
+        const current = await contentRepos(principal).sessions.findById(params.id);
+        if (!current) {
+          set.status = 404;
+          return { error: 'Session not found' };
+        }
+        const kept = (current.context as Record<string, unknown> | null)?.remoteRoom;
+        if (context.remoteRoom !== undefined && JSON.stringify(context.remoteRoom) !== JSON.stringify(kept)) {
+          set.status = 400;
+          return { error: 'remoteRoom cannot be set or changed' };
+        }
+        context = kept === undefined ? context : { ...context, remoteRoom: kept };
+      }
       const patch = Object.fromEntries(
         Object.entries({ title, status, context, metadata, pinned }).filter(([, v]) => v !== undefined),
       ) as Partial<import('@/db/schema/sessions').NewSession>;

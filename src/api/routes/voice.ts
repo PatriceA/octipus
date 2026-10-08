@@ -1,7 +1,10 @@
+import { mayUseInstallModels } from '@/models/install-access';
 import { Elysia, t } from '@/api/http';
 import { fetchWithTimeout } from '@/utils/http';
+import { adminDenied } from '@/api/admin-guard';
 import { apiContext } from '@/api/context';
 import { getConfig } from '@/config';
+import { isAdmin } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
 import { fileAt } from '@/utils/fs-file';
 
@@ -67,32 +70,74 @@ async function getLocalWhisper() {
 }
 
 /**
- * Handle telephony provider webhook events (call answered, speech gathered, hangup).
+ * The URL a telephony provider signed: the public base (`voice.publicUrl`)
+ * with the path and query this request arrived on — `request.url` is the
+ * internal one (localhost) behind a proxy.
  */
-async function handleVoiceWebhook(provider: string, body: Record<string, unknown>, headers: Record<string, string>, rawUrl: string): Promise<string> {
-  // Resolve the public webhook URL — request.url is the internal URL (localhost),
-  // but Twilio needs the public URL for callbacks.
+function signedWebhookUrl(publicBase: string, rawUrl: string): string {
+  if (!publicBase) return rawUrl;
+  const u = new URL(rawUrl);
+  return `${publicBase.replace(/\/+$/, '')}${u.pathname}${u.search}`;
+}
+
+/** The webhook's fields: form-encoded (Twilio, Plivo) or JSON (Telnyx). */
+function webhookFields(raw: string, contentType: string): Record<string, unknown> {
+  if (contentType.includes('x-www-form-urlencoded')) return Object.fromEntries(new URLSearchParams(raw).entries());
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Handle telephony provider webhook events (call answered, speech gathered, hangup).
+ *
+ * The signature is checked over the exact bytes the provider sent (`raw`)
+ * before anything is parsed; a webhook that does not verify is refused with
+ * 403 and does nothing.
+ */
+async function handleVoiceWebhook(
+  provider: string,
+  raw: string,
+  request: Request,
+): Promise<{ status: 403 } | { status: 200; xml: string }> {
+  const headers: Record<string, string> = {};
+  request.headers.forEach((v, k) => { headers[k] = v; });
   const { getSettingsService } = await import('@/config/settings-service');
   const settingsSvc = getSettingsService();
   const publicBase = (await settingsSvc.get('voice.publicUrl') as string) || '';
-  const url = publicBase ? `${publicBase}/api/voice/webhook/${provider}` : rawUrl;
+  const url = signedWebhookUrl(publicBase, request.url);
   const { getTelephonyProvider, getCallManager } = await import('@/voice/telephony');
   const telephonyProvider = await getTelephonyProvider(provider);
 
   if (!telephonyProvider) {
-    return '<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>';
+    return { status: 200, xml: '<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>' };
   }
 
-  // Verify webhook signature
-  if (!telephonyProvider.verifyWebhook(headers, JSON.stringify(body), url)) {
-    apiLogger.warn({ provider }, 'Voice webhook signature verification failed');
-    // Continue anyway for now — some dev setups don't have signing configured
+  if (!telephonyProvider.verifyWebhook(headers, raw, url)) {
+    apiLogger.warn({ provider }, 'Voice webhook refused: signature verification failed');
+    return { status: 403 };
   }
+  const body = webhookFields(raw, headers['content-type'] ?? '');
+  return { status: 200, xml: await answerVoiceWebhook(provider, body, url, telephonyProvider, getCallManager(), publicBase) };
+}
 
+/** Act on a verified webhook; returns the provider's XML answer. */
+async function answerVoiceWebhook(
+  provider: string,
+  body: Record<string, unknown>,
+  url: string,
+  telephonyProvider: import('@/voice/telephony').TelephonyProvider,
+  callManager: import('@/voice/telephony').CallManager,
+  publicBase: string,
+): Promise<string> {
+  const { getSettingsService } = await import('@/config/settings-service');
+  const settingsSvc = getSettingsService();
   // Debug: log all webhook fields to diagnose speech recognition issues
   apiLogger.info({ provider, bodyKeys: Object.keys(body), callStatus: body.CallStatus, speechResult: body.SpeechResult ? 'present' : 'absent', callSid: body.CallSid }, 'Voice webhook received');
 
-  const callManager = getCallManager();
   const providerCallId = (body.CallSid || body.call_control_id || body.RequestUUID || '') as string;
   let session = callManager.getByProviderCallId(providerCallId);
 
@@ -305,6 +350,9 @@ async function handleVoiceWebhook(provider: string, body: Record<string, unknown
   return telephonyProvider.generateHangupResponse();
 }
 
+/** TTS engines that call a hosted API on the install's keys. */
+const HOSTED_TTS = new Set(['mistral', 'openai']);
+
 export const voiceRoutes = new Elysia({ prefix: '/voice' })
   .use(apiContext)
 
@@ -318,6 +366,12 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
       try {
         const { audio, format, model } = body;
         const transcriptionModel = model || 'local';
+        // Hosted engines spend the install's keys: only local whisper for an
+        // account the install's models are not for (install-access.ts).
+        const installOk = await mayUseInstallModels(user.id);
+        if (!installOk && transcriptionModel !== 'local' && transcriptionModel !== 'whisper-cpp') {
+          return { error: 'Hosted transcription uses the install\'s keys, which this account may not use; use local whisper' };
+        }
 
         // Mistral (Voxtral) hosted transcription
         if (transcriptionModel.startsWith('voxtral')) {
@@ -336,7 +390,7 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
             return { text: result.text, model: 'whisper-cpp', language: result.language, duration: result.duration };
           }
           // Fall through to OpenAI if local not configured and model was 'local'
-          if (transcriptionModel === 'whisper-cpp') {
+          if (transcriptionModel === 'whisper-cpp' || !installOk) {
             return { error: 'Local whisper not configured (set voice.whisperModelPath)' };
           }
         }
@@ -401,6 +455,11 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
 
       try {
         const provider = config.voice.ttsProvider;
+        // Hosted engines spend the install's keys (install-access.ts).
+        if (HOSTED_TTS.has(provider) && !(await mayUseInstallModels(user.id))) {
+          set.status = 403;
+          return { error: 'Speech synthesis here uses the install\'s keys, which this account may not use' };
+        }
         const requested = body.format || 'mp3';
         // Engines with a fixed output format win over the request, so the
         // Content-Type always describes the bytes we actually return.
@@ -438,7 +497,7 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
 
   .get(
     '/status',
-    async ({ user }) => {
+    async ({ user, principal }) => {
       if (!user) return { error: 'Not authenticated' };
 
       const config = getConfig();
@@ -459,9 +518,10 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
         // Retained for compatibility with existing callers.
         sttEnabled: availability.stt.available,
         ttsEnabled: availability.tts.available,
-        ttsProvider: config.voice.ttsProvider,
+        // The engine choice and the host model path are install configuration.
+        ...(isAdmin(principal) ? { ttsProvider: config.voice.ttsProvider } : {}),
         localWhisper: availability.stt.local,
-        whisperModelPath: config.voice.whisperModelPath || null,
+        ...(isAdmin(principal) ? { whisperModelPath: config.voice.whisperModelPath || null } : {}),
         language: config.voice.language || 'en',
       };
     },
@@ -470,11 +530,10 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
 
   .post(
     '/install',
-    async ({ user, set }) => {
-      if (!user) {
-        set.status = 401;
-        return { error: 'Not authenticated' };
-      }
+    async ({ user, principal, set }) => {
+      // Builds and installs a host binary: an operator action.
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
       try {
         const { installWhisper } = await import('@/voice/whisper');
         const log: string[] = [];
@@ -494,31 +553,24 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
   )
 
   // Telephony webhook — receives call events from Twilio/Telnyx/Plivo.
-  // Twilio sends application/x-www-form-urlencoded which Elysia doesn't auto-parse.
-  // Use a custom `parse` hook to handle both form-urlencoded and JSON.
+  // The body stays raw text: the signature covers the exact bytes, and the
+  // fields (form-urlencoded or JSON) are parsed only once it verifies.
   .post(
     '/webhook/:provider',
-    async ({ params, body, request }) => {
-      const headers: Record<string, string> = {};
-      request.headers.forEach((v, k) => { headers[k] = v; });
-
-      const xml = await handleVoiceWebhook(params.provider, body as Record<string, unknown>, headers, request.url);
-
-      return new Response(xml, {
+    async ({ params, body, request, set }) => {
+      const out = await handleVoiceWebhook(params.provider, body as string, request);
+      if (out.status === 403) {
+        set.status = 403;
+        return { error: 'Webhook signature verification failed' };
+      }
+      return new Response(out.xml, {
         headers: { 'Content-Type': 'application/xml' },
       });
     },
     {
       params: t.Object({ provider: t.String() }),
-      type: 'text',  // Accept raw text so we can parse it ourselves
-      async parse({ request }) {
-        const ct = request.headers.get('content-type') || '';
-        const raw = await request.text();
-        if (ct.includes('x-www-form-urlencoded')) {
-          return Object.fromEntries(new URLSearchParams(raw).entries());
-        }
-        try { return JSON.parse(raw); } catch { return {}; }
-      },
+      type: 'text',
+      parse: ({ request }) => request.text(),
       detail: { tags: ['voice'] },
     }
   )
@@ -526,33 +578,29 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
   // Telephony webhook status callback
   .post(
     '/webhook/:provider/status',
-    async ({ params, body, request }) => {
-      const headers: Record<string, string> = {};
-      request.headers.forEach((v, k) => { headers[k] = v; });
-
-      await handleVoiceWebhook(params.provider, body as Record<string, unknown>, headers, request.url);
+    async ({ params, body, request, set }) => {
+      const out = await handleVoiceWebhook(params.provider, body as string, request);
+      if (out.status === 403) {
+        set.status = 403;
+        return { error: 'Webhook signature verification failed' };
+      }
       return { ok: true };
     },
     {
       params: t.Object({ provider: t.String() }),
       type: 'text',
-      async parse({ request }) {
-        const ct = request.headers.get('content-type') || '';
-        const raw = await request.text();
-        if (ct.includes('x-www-form-urlencoded')) {
-          return Object.fromEntries(new URLSearchParams(raw).entries());
-        }
-        try { return JSON.parse(raw); } catch { return {}; }
-      },
+      parse: ({ request }) => request.text(),
       detail: { tags: ['voice'] },
     }
   )
 
-  // Active calls list
+  // Active calls list. Admin-only: calls carry no owning user, so the list is
+  // every caller's phone numbers on the install.
   .get(
     '/calls',
-    async ({ user }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, principal, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
       const { getCallManager } = await import('@/voice/telephony');
       const calls = getCallManager().getActive();
       return { calls: calls.map(c => ({ id: c.id, status: c.status, direction: c.direction, from: c.from, to: c.to, provider: c.provider, startedAt: c.startedAt.toISOString() })) };
@@ -563,8 +611,9 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
   // Telephony health
   .get(
     '/telephony/health',
-    async ({ user }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, principal, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
       const { getTelephonyProvider } = await import('@/voice/telephony');
       const provider = await getTelephonyProvider();
       if (!provider) return { configured: false, provider: null };

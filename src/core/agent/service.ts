@@ -5,13 +5,13 @@ import { getConfig } from '@/config';
 import { getAgentManager } from '@/core/agent-manager';
 import { handleCommand } from '@/core/commands';
 import { renderMemoriesBlock, retrieveForContext, updateMemoriesAfterTurn } from '@/core/memory';
-import { clearFlowLabel, markNotSharedAudience, markSharedAudience, observeFlow } from '@/security/flow-guard';
+import { clearFlowLabel, getFlowLabel, markNotSharedAudience, markSharedAudience, observeFlow } from '@/security/flow-guard';
 import { bareReply, type GroupTurn, groupTurnContext } from '@/core/channels/group-context';
 import { generateRunId, runWithContext } from '@/core/run-context';
 import { type AttachedFileRef, buildAttachedFilesContext } from '@/core/session-files';
 import { recordClassification, recordRootRun } from '@/core/telemetry';
 import { TrajectoryRecorder } from '@/core/trajectories/recorder';
-import type { AgentContext, AgentSpace, AgentTrigger } from '@/core/types';
+import type { AgentContext, AgentSpace, AgentSponsor, AgentTrigger } from '@/core/types';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import type { Session } from '@/db/schema/sessions';
@@ -166,9 +166,9 @@ export class AgentService {
   }
 
   /** The fast model mapped to the `voice` topic for this user, or undefined if none is mapped. */
-  private async resolveVoiceModel(userId: string, space: AgentSpace | null): Promise<SelectedModel | undefined> {
+  private async resolveVoiceModel(userId: string, space: AgentSpace | null, sponsor: AgentSponsor | null | undefined): Promise<SelectedModel | undefined> {
     try {
-      const routing = await this.modelSelector.selectForWorker('voice', false, { userId, inSpace: !!space, spaceRole: space?.role });
+      const routing = await this.modelSelector.selectForWorker('voice', false, { userId, inSpace: !!space, spaceRole: space?.role, sponsor });
       return routing.model ? { modelId: routing.model, name: routing.name } : undefined; // '' ⇒ topic unmapped ⇒ fall back to complexity routing
     } catch {
       return undefined;
@@ -327,11 +327,19 @@ export class AgentService {
     const { displayNames } = await import('@/core/session-history');
     const requesterName = (await displayNames([requesterId])).get(requesterId) ?? 'A member';
     const { enqueueRoomTurn } = await import('@/core/rooms/queue');
+    // A member of another install asks as a `remote` turn (federation §7.5):
+    // sponsor-funded or refused by `fundingFor`, never asking them for an
+    // approval, counted against their install's cap.
+    const remote = access.remote;
     const { position } = enqueueRoomTurn(
       roomId,
       access.room.workspaceId,
-      { requesterId, requesterName, messageId: postedMessageId, enqueuedAt: new Date() },
-      (request, signal) => this.runRoomTurn(roomId, request.requesterId, request.requesterName, request.messageId, signal, bridged),
+      {
+        requesterId, requesterName, messageId: postedMessageId, enqueuedAt: new Date(),
+        ...(remote ? { trigger: 'remote' as const, remoteInstanceId: remote.instanceId } : {}),
+      },
+      (request, signal) => this.runRoomTurn(roomId, request.requesterId, request.requesterName, request.messageId, signal, bridged,
+        request.trigger ?? 'room', request.remoteInstanceId),
     );
     return { kind: 'queued', position };
   }
@@ -347,7 +355,8 @@ export class AgentService {
   async handleRoomListen(roomId: string, requesterId: string, questionMessageId: string): Promise<RoomMessageOutcome | null> {
     const [{ roomAccess }, { can }] = await Promise.all([import('@/core/rooms/access'), import('@/security/space-access')]);
     const access = await roomAccess(requesterId, roomId);
-    if (!access || !can(access.role, 'run_agent')) return null;
+    // A member of another install never triggers a listen turn (federation §7.1).
+    if (!access || access.remote || !can(access.role, 'run_agent')) return null;
     const posted = await messageRepository.findById(questionMessageId);
     if (!posted || posted.sessionId !== roomId || posted.role !== 'user' || posted.authorUserId !== requesterId) return null;
     const { displayNames } = await import('@/core/session-history');
@@ -375,7 +384,9 @@ export class AgentService {
    */
   private async runRoomTurn(
     roomId: string, requesterId: string, requesterName: string, postedMessageId: string, signal: AbortSignal, bridged?: GroupTurn,
-    trigger: 'room' | 'listen' = 'room',
+    trigger: 'room' | 'listen' | 'remote' = 'room',
+    /** A `remote` turn: its requester's install, on every cost row of the turn (federation §7.5). */
+    remoteInstanceId?: string,
   ): Promise<void> {
     const [{ roomAccess }, { can }, { RoomTurnDropped }] = await Promise.all([
       import('@/core/rooms/access'), import('@/security/space-access'), import('@/core/rooms/queue'),
@@ -393,7 +404,7 @@ export class AgentService {
         const runId = generateRunId();
         const result = await runWithContext(
           { runId, sessionId: roomId, userId: requesterId, channel: 'room', origin: 'room' },
-          () => withProviderUsageContext({ userId: requesterId }, async () => {
+          () => withProviderUsageContext({ userId: requesterId, ...(remoteInstanceId ? { accountingMetadata: { remoteInstance: remoteInstanceId } } : {}) }, async () => {
             const noModel = await this.noModelAnswer(requesterId);
             if (noModel) throw new Error(noModel.response);
             await maybeCompactSession(roomId, { requesterId, before: { id: posted.id, createdAt: posted.createdAt.toISOString() } });
@@ -450,6 +461,22 @@ export class AgentService {
     }
     // For this turn only: never stored with the turn, never replayed (I5, §6.5).
     return fenceSpaceTurnContext(block);
+  }
+
+  /**
+   * Per-turn context of the member's own agent in a room of a space on
+   * another install (`context.remoteRoom`, federation §9): the room's
+   * newest posts, fetched now with `room.page`, windowed to
+   * `rooms.transcriptWindowChars` and fenced as other members' words; the
+   * session is marked `suspicious`. For this turn only — stored nowhere
+   * (`fenceSpaceTurnContext`). An addressed turn (`remote-room`) also gets
+   * the mention that started it, in the same fence. Throws when the member
+   * left the space or the host is unreachable: the turn says so rather than
+   * answer blind.
+   */
+  private async remoteRoomTurnContext(session: Session, userId: string, addressed: boolean): Promise<string> {
+    const { remoteRoomTurnContext } = await import('@/core/federation/visitor-agent');
+    return remoteRoomTurnContext(session, userId, { addressed });
   }
 
   /** The newest posts of a room that fit in `rooms.transcriptWindowChars`, fenced, for a side panel. */
@@ -593,6 +620,9 @@ export class AgentService {
         channel,
         workspaceId: scope.workspaceId,
         spaceId: scope.space?.workspaceId ?? null,
+        // "Ask my agent" in a space on another install (federation F-D11):
+        // its text stays in the session's own rows, so nothing is recorded.
+        contentStorageOff: audience.contentStorageOff,
       });
 
       // A group-channel thread or a room: the reply is posted where every
@@ -600,7 +630,9 @@ export class AgentService {
       // a space session the requester's personal memories are neither
       // injected nor learned from (`audience.personalMemoryOff`).
       const sharedAudience = audience.shared;
-      const memoryOff = audience.personalMemoryOff;
+      // A session whose text may not be copied anywhere (federation F-D11)
+      // neither recalls nor extracts memories either.
+      const memoryOff = audience.personalMemoryOff || audience.contentStorageOff;
       const groupThread = audience.kind === 'group';
       // The flow guard's group rule keys on the session; set it from the stored
       // session on every turn, whichever entry point (channel, web chat,
@@ -612,9 +644,20 @@ export class AgentService {
       if (isRoom) clearFlowLabel(resolvedSessionId);
       if (sharedAudience) markSharedAudience(resolvedSessionId);
       else markNotSharedAudience(resolvedSessionId);
+      // In "ask my agent" for a space on another install (federation §9) the
+      // member's own words in the panel are theirs, not the space's: like a
+      // private read, every write the agent then sends to the space asks
+      // first. An addressed turn (`remote-room`) carries no words of theirs.
+      if (audience.kind === 'remote-space' && channel !== 'remote-room') {
+        observeFlow(resolvedSessionId, { toolId: 'remote-space', action: 'panel_message' }, { taints: ['private'] });
+      }
       // Space memory (§6.5) and, for a private side panel, the linked room's
       // transcript (§6.7): per turn, read now.
-      const spaceContext = scope.space ? await this.spaceTurnContext(session, userId, scope.space.workspaceId) : '';
+      // …or, in "ask my agent" for a room of a space on another install, that
+      // room's recent transcript, read live from the host (federation §9).
+      const spaceContext = scope.space
+        ? await this.spaceTurnContext(session, userId, scope.space.workspaceId)
+        : session.context?.remoteRoom ? await this.remoteRoomTurnContext(session, userId, channel === 'remote-room') : '';
       // Delivered as per-turn context beside the message (stored in the
       // message's metadata, not as its text), on every turn in a group thread:
       // monitors, wake-ups and plan runs too, whose replies land in the thread.
@@ -901,11 +944,11 @@ export class AgentService {
         if (action.kind === 'propose') {
           // Plan out loud on the fast voice model; the user's actual utterance is
           // persisted, the accumulated task rides in the planning directive.
-          const voiceModel = await this.resolveVoiceModel(userId, scope.space);
+          const voiceModel = await this.resolveVoiceModel(userId, scope.space, scope.sponsor);
           const { response, metadata } = await directResponse(
             message, resolvedSessionId, userId, this.modelSelector,
             classification.complexity ?? 'moderate', inputGuard.flags,
-            VOICE_PLANNING_DIRECTIVE + action.workMessage, voiceModel, scope.space,
+            VOICE_PLANNING_DIRECTIVE + action.workMessage, voiceModel, scope.space, scope.sponsor,
           );
           // Carry this turn's files (cold) or the ones already accumulated (refinement).
           this.planGate.recordProposal(
@@ -1041,6 +1084,13 @@ export class AgentService {
         if (isRoom) await this.roomCleared();
         return { response: 'Conversation was cleared while this turn was running.', sessionId: resolvedSessionId, classification };
       }
+      // A member of another install joined the room while this turn ran
+      // (federation §7.5, FI5): an answer that drew on personal data or
+      // credential material is not posted where they read it. Read again
+      // here, as the approval route does at every tool decision.
+      if (isRoom && scope.space && !scope.audienceFederated) {
+        finalResponse = await this.withheldFromFederatedRoom(resolvedSessionId, scope.space.workspaceId, userId, finalResponse);
+      }
       const showSources = (activeSession?.metadata as Record<string, unknown> | undefined)?.showSources !== false;
       if (showSources) {
         finalResponse = appendSources(finalResponse, sources);
@@ -1119,6 +1169,25 @@ export class AgentService {
    * The room's text for a requester's limit refusal: a neutral line naming
    * them. The refusal text and its structured reason go to them only.
    */
+  /**
+   * The room answer to post, given who reads the room now: `text`, unless
+   * the session holds personal data or credential material and the room
+   * gained a member of another install since the turn spawned — then a
+   * neutral line, and the requester hears why.
+   */
+  private async withheldFromFederatedRoom(roomId: string, workspaceId: string, requesterId: string, text: string): Promise<string> {
+    const label = getFlowLabel(roomId);
+    if (!label.private && !label.secret) return text;
+    const { roomHasRemoteMember } = await import('@/core/federation/audience');
+    if (!(await roomHasRemoteMember(roomId, workspaceId))) return text;
+    await this.notifyRoomRequester(roomId, requesterId,
+      'Your answer was not posted: a member from another install joined this room while it was written, and it drew on '
+      + `${label.secret ? 'credential material' : 'your personal data'}. Ask again in a private session.`);
+    const { displayNames } = await import('@/core/session-history');
+    const name = (await displayNames([requesterId])).get(requesterId) ?? 'a member';
+    return `Octipus could not post its answer to ${name} here: the room's audience changed while it was written.`;
+  }
+
   private async roomLimitRefusal(roomId: string, requesterId: string, text: string, refusal: LimitRefusal): Promise<string> {
     const [{ displayNames }, { roomRefusalText }] = await Promise.all([
       import('@/core/session-history'), import('@/core/errors/limit-refusal'),

@@ -4,7 +4,7 @@
  * flip modes from the UI without a restart.
  */
 
-import { getSettingsService } from '@/config/settings-service';
+import { publicLinkBase } from '@/core/public-url';
 import { coreLogger } from '@/utils/logger';
 import { resolveArtifactSettings } from './settings';
 
@@ -24,19 +24,11 @@ export function _resetArtifactsHostMode(): void {
 }
 
 /**
- * Absolute base for links handed to a human (`oauth.publicUrl`, env
- * `PUBLIC_URL`). Empty string when neither is configured — callers then
- * emit a root-relative path, which only works inside the web app.
+ * Absolute base for links handed to a human (`publicLinkBase`). Empty when
+ * no public URL is configured — callers then emit a root-relative path,
+ * which only works inside the web app.
  */
-function publicBase(): string {
-  try {
-    const raw = getSettingsService().getSync('oauth.publicUrl');
-    if (typeof raw === 'string' && raw) return raw.replace(/\/$/, '');
-  } catch {
-    // settings service not initialised (e.g. test boot order) — fall through.
-  }
-  return process.env.PUBLIC_URL?.replace(/\/$/, '') ?? '';
-}
+const publicBase = publicLinkBase;
 
 /**
  * Build the public URL for a hosted artifact slug. In path-prefix mode this

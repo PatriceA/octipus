@@ -5,6 +5,7 @@ import { getProviderRouter } from '@/models/providers';
 import { SINGLE_MODEL_CHAT_TOPICS } from '@/models/single-model-binding';
 import { getTopicConfig, setTopicConfig } from '@/models/topic-config';
 import { canonicalTopic, TOPICS } from '@/models/topics';
+import { isAdmin } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
 
 /**
@@ -17,13 +18,24 @@ import { apiLogger } from '@/utils/logger';
 export const topicRoutes = new Elysia({ prefix: '/topics' })
   .use(apiContext)
 
-  // List every canonical topic with its current binding + extras.
+  // List every canonical topic with its current binding + extras. The binding
+  // and extras are install configuration: a non-admin gets the labels only.
   .get(
     '/',
-    async ({ user, set }) => {
+    async ({ user, principal, set }) => {
       if (!user) {
         set.status = 401;
         return { error: 'Not authenticated' };
+      }
+      if (!isAdmin(principal)) {
+        return {
+          topics: TOPICS.map((tdef) => ({
+            value: tdef.value,
+            label: tdef.label,
+            description: tdef.description,
+            kind: tdef.kind,
+          })),
+        };
       }
       const models = await getModelRegistry().getAllModelsIncludeDisabled();
 

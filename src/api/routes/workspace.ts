@@ -72,7 +72,9 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
       // so "Projects are subfolders of your workspace root" matches what the
       // agent can actually read/write.
       rootPath: userWorkspaceRoot(principal),
-      additionalPaths: config.workspace.additionalPaths.map(p => resolve(p)),
+      // The additional paths are install-wide host paths an admin configures;
+      // a non-admin can neither use nor change them, so they are not sent.
+      ...(user.isAdmin ? { additionalPaths: config.workspace.additionalPaths.map(p => resolve(p)) } : {}),
     };
   }, { detail: { tags: ['workspace'] } })
 
@@ -259,7 +261,15 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
       ...(user.isAdmin && !inSpace ? config.workspace.additionalPaths.map((p) => resolve(p)) : []),
     ];
     let parentPath = rootPath;
+    const outsideAllowed = { error: 'Parent folder must be the workspace root or an additional path (or a subfolder of one)' };
+    const isWithinAllowed = (path: string) => allowedRoots.some((r) => path === r || path.startsWith(r + '/'));
     if (body.parentPath) {
+      // Lexical containment first: never stat a caller-chosen path outside
+      // the caller's roots, or the route answers "does /x exist?" for any /x.
+      if (!isWithinAllowed(resolve(body.parentPath))) {
+        set.status = 400;
+        return outsideAllowed;
+      }
       if (!existsSync(body.parentPath) || !statSync(body.parentPath).isDirectory()) {
         set.status = 400;
         return { error: 'Parent folder does not exist or is not a directory' };
@@ -275,12 +285,9 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
         set.status = 400;
         return { error: 'Parent folder could not be resolved' };
       }
-      const withinAllowed = allowedRoots.some(
-        (r) => candidate === r || candidate.startsWith(r + '/'),
-      );
-      if (!withinAllowed || isPathDenied(candidate)) {
+      if (!isWithinAllowed(candidate) || isPathDenied(candidate)) {
         set.status = 400;
-        return { error: 'Parent folder must be the workspace root or an additional path (or a subfolder of one)' };
+        return outsideAllowed;
       }
       parentPath = candidate;
     }

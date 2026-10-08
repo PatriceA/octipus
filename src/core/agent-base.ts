@@ -31,6 +31,11 @@ export interface AgentWorkerConfig {
   /** Defaults to `{ mode: 'full' }` when omitted. */
   toolAdvertisement?: ToolAdvertisement;
   /**
+   * Register the `codemode` tool (src/tools/codemode.ts) on this worker.
+   * Decided by `AgentManager.spawn` from the bound model; omitted ⇒ off.
+   */
+  codemode?: boolean;
+  /**
    * Soft cap on the number of full tool-result messages kept in context. Once
    * exceeded, the OLDEST tool outputs are truncated (recent ones kept full) —
    * cheaper + less destructive than whole-history compaction, and it triggers
@@ -99,6 +104,22 @@ export interface ToolHandler {
    */
   discoverOnly?: boolean;
   execute: (args: Record<string, unknown>, context: AgentContext) => Promise<unknown>;
+}
+
+/**
+ * A tool a codemode script can call that is NOT a registered handler: the
+ * call is re-addressed to the registered handler named `via`, with
+ * `wrap(args)` as its arguments, so it takes that handler's permission path.
+ * The MCP bridge uses it to give scripts each `codemode`/`deferred` MCP tool
+ * as `tools.mcp__<server>__<tool>` routed through `mcp_call_tool`, without
+ * registering (and so advertising) a handler per tool.
+ */
+export interface RoutedScriptTool {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  via: string;
+  wrap: (args: Record<string, unknown>) => Record<string, unknown>;
 }
 
 export abstract class BaseAgentWorker {

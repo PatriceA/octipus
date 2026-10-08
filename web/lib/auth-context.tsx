@@ -10,6 +10,8 @@ interface User {
   id: string;
   username: string;
   isAdmin: boolean;
+  /** Runs on the install's models; else only on its own (Settings → My models). */
+  installModels?: boolean;
 }
 
 interface AuthContextValue {
@@ -90,7 +92,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Try to get current user — works with both Bearer token and HttpOnly cookie
     api.get<User>('/auth/me')
       .then((data) => {
-        setUser({ id: data.id, username: data.username, isAdmin: data.isAdmin });
+        setUser({ id: data.id, username: data.username, isAdmin: data.isAdmin, installModels: data.installModels });
       })
       .catch(() => {
         // Token invalid/expired

@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-490 mounted routes across 68 route files. The path is the full one, group prefix included — what a client actually calls.
+514 mounted routes across 70 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -21,6 +21,9 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/admin/approvals` | `src/api/routes/admin-approvals.ts` |
 | POST | `/api/admin/approvals/:id/resolve` | `src/api/routes/admin-approvals.ts` |
 | GET | `/api/admin/audit` | `src/api/routes/admin.ts` |
+| GET | `/api/admin/federation/instances` | `src/api/routes/federation-admin.ts` |
+| POST | `/api/admin/federation/instances/:id/block` | `src/api/routes/federation-admin.ts` |
+| POST | `/api/admin/federation/instances/:id/unblock` | `src/api/routes/federation-admin.ts` |
 | GET | `/api/admin/group-channels` | `src/api/routes/admin.ts` |
 | DELETE | `/api/admin/group-channels/:id` | `src/api/routes/admin.ts` |
 | PATCH | `/api/admin/group-channels/:id` | `src/api/routes/admin.ts` |
@@ -219,8 +222,10 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | DELETE | `/api/mcp/servers/:id` | `src/api/routes/mcp.ts` |
 | POST | `/api/mcp/servers/:id/connect` | `src/api/routes/mcp.ts` |
 | POST | `/api/mcp/servers/:id/disconnect` | `src/api/routes/mcp.ts` |
+| PUT | `/api/mcp/servers/:id/exposure` | `src/api/routes/mcp.ts` |
 | POST | `/api/mcp/servers/:id/toggle` | `src/api/routes/mcp.ts` |
 | GET | `/api/mcp/servers/:id/tools` | `src/api/routes/mcp.ts` |
+| PUT | `/api/mcp/servers/:id/tools/:tool/exposure` | `src/api/routes/mcp.ts` |
 | GET | `/api/mcp/tools` | `src/api/routes/mcp.ts` |
 | GET | `/api/me/group-channels` | `src/api/routes/group-channels.ts` |
 | DELETE | `/api/me/group-channels/:id` | `src/api/routes/group-channels.ts` |
@@ -338,6 +343,25 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/recurring-tasks/:id` | `src/api/routes/recurring-tasks.ts` |
 | PATCH | `/api/recurring-tasks/:id` | `src/api/routes/recurring-tasks.ts` |
 | GET | `/api/recurring-tasks/:id/executions` | `src/api/routes/recurring-tasks.ts` |
+| GET | `/api/remote-spaces` | `src/api/routes/remote-spaces.ts` |
+| DELETE | `/api/remote-spaces/:id` | `src/api/routes/remote-spaces.ts` |
+| GET | `/api/remote-spaces/:id` | `src/api/routes/remote-spaces.ts` |
+| PATCH | `/api/remote-spaces/:id` | `src/api/routes/remote-spaces.ts` |
+| GET | `/api/remote-spaces/:id/files` | `src/api/routes/remote-spaces.ts` |
+| GET | `/api/remote-spaces/:id/files/*` | `src/api/routes/remote-spaces.ts` |
+| GET | `/api/remote-spaces/:id/members` | `src/api/routes/remote-spaces.ts` |
+| GET | `/api/remote-spaces/:id/notes` | `src/api/routes/remote-spaces.ts` |
+| GET | `/api/remote-spaces/:id/notes/:noteId` | `src/api/routes/remote-spaces.ts` |
+| POST | `/api/remote-spaces/:id/notes/:noteId/proposals` | `src/api/routes/remote-spaces.ts` |
+| GET | `/api/remote-spaces/:id/rooms` | `src/api/routes/remote-spaces.ts` |
+| POST | `/api/remote-spaces/:id/rooms/:roomId/agent` | `src/api/routes/remote-spaces.ts` |
+| GET | `/api/remote-spaces/:id/rooms/:roomId/messages` | `src/api/routes/remote-spaces.ts` |
+| POST | `/api/remote-spaces/:id/rooms/:roomId/messages` | `src/api/routes/remote-spaces.ts` |
+| GET | `/api/remote-spaces/:id/tasks` | `src/api/routes/remote-spaces.ts` |
+| POST | `/api/remote-spaces/:id/tasks` | `src/api/routes/remote-spaces.ts` |
+| GET | `/api/remote-spaces/:id/tasks/:taskId` | `src/api/routes/remote-spaces.ts` |
+| POST | `/api/remote-spaces/:id/tasks/:taskId/:op` | `src/api/routes/remote-spaces.ts` |
+| POST | `/api/remote-spaces/join` | `src/api/routes/remote-spaces.ts` |
 | POST | `/api/research` | `src/api/routes/research.ts` |
 | GET | `/api/research/:jobId` | `src/api/routes/research.ts` |
 | GET | `/api/roles` | `src/api/routes/roles.ts` |
@@ -511,7 +535,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `capabilities` | 1 |
 | `(root)` | `channels` | 1 |
 | `(root)` | `config` | 4 |
-| `(root)` | `core` | 29 |
+| `(root)` | `core` | 31 |
 | `(root)` | `db` | 11 |
 | `(root)` | `extensions` | 2 |
 | `(root)` | `hooks` | 3 |
@@ -523,21 +547,21 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `utils` | 1 |
 | `api` | `capabilities` | 1 |
 | `api` | `channels` | 22 |
-| `api` | `config` | 21 |
+| `api` | `config` | 22 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 116 |
+| `api` | `core` | 126 |
 | `api` | `db` | 110 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 3 |
-| `api` | `models` | 36 |
+| `api` | `models` | 39 |
 | `api` | `plugins` | 1 |
-| `api` | `security` | 119 |
+| `api` | `security` | 130 |
 | `api` | `services` | 5 |
-| `api` | `shared` | 3 |
+| `api` | `shared` | 4 |
 | `api` | `skills` | 6 |
 | `api` | `tools` | 4 |
-| `api` | `utils` | 62 |
+| `api` | `utils` | 64 |
 | `api` | `voice` | 23 |
 | `capabilities` | `db` | 2 |
 | `capabilities` | `models` | 1 |
@@ -553,7 +577,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `channels` | `utils` | 24 |
 | `channels` | `voice` | 2 |
 | `config` | `channels` | 1 |
-| `config` | `core` | 3 |
+| `config` | `core` | 4 |
 | `config` | `db` | 3 |
 | `config` | `models` | 1 |
 | `config` | `security` | 3 |
@@ -568,19 +592,19 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `connectors` | `utils` | 5 |
 | `core` | `capabilities` | 2 |
 | `core` | `channels` | 11 |
-| `core` | `config` | 46 |
+| `core` | `config` | 52 |
 | `core` | `connectors` | 3 |
-| `core` | `db` | 302 |
+| `core` | `db` | 326 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
-| `core` | `mcp` | 5 |
-| `core` | `models` | 112 |
-| `core` | `security` | 138 |
+| `core` | `mcp` | 6 |
+| `core` | `models` | 115 |
+| `core` | `security` | 151 |
 | `core` | `services` | 2 |
 | `core` | `shared` | 16 |
 | `core` | `skills` | 10 |
-| `core` | `tools` | 16 |
-| `core` | `utils` | 174 |
+| `core` | `tools` | 19 |
+| `core` | `utils` | 186 |
 | `core` | `voice` | 1 |
 | `db` | `config` | 4 |
 | `db` | `core` | 18 |
@@ -606,10 +630,11 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `hooks` | `utils` | 7 |
 | `mcp` | `config` | 2 |
 | `mcp` | `security` | 3 |
+| `mcp` | `shared` | 1 |
 | `mcp` | `utils` | 4 |
 | `models` | `config` | 10 |
 | `models` | `core` | 29 |
-| `models` | `db` | 12 |
+| `models` | `db` | 14 |
 | `models` | `security` | 20 |
 | `models` | `services` | 1 |
 | `models` | `shared` | 4 |
@@ -620,11 +645,11 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `security` | `api` | 1 |
 | `security` | `config` | 13 |
 | `security` | `connectors` | 3 |
-| `security` | `core` | 19 |
+| `security` | `core` | 20 |
 | `security` | `db` | 76 |
 | `security` | `shared` | 1 |
 | `security` | `tools` | 1 |
-| `security` | `utils` | 27 |
+| `security` | `utils` | 28 |
 | `services` | `capabilities` | 5 |
 | `services` | `config` | 3 |
 | `services` | `core` | 5 |
@@ -650,7 +675,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `channels` | 2 |
 | `tools` | `config` | 3 |
 | `tools` | `connectors` | 2 |
-| `tools` | `core` | 86 |
+| `tools` | `core` | 88 |
 | `tools` | `db` | 29 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |
@@ -658,9 +683,9 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `plugins` | 1 |
 | `tools` | `security` | 33 |
 | `tools` | `services` | 1 |
-| `tools` | `shared` | 2 |
+| `tools` | `shared` | 4 |
 | `tools` | `skills` | 5 |
-| `tools` | `utils` | 35 |
+| `tools` | `utils` | 36 |
 | `tools` | `visual` | 2 |
 | `tools` | `voice` | 3 |
 | `tui-editor` | `mcp` | 2 |
@@ -676,7 +701,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `visual` | `utils` | 2 |
 | `voice` | `capabilities` | 1 |
 | `voice` | `config` | 2 |
-| `voice` | `core` | 1 |
+| `voice` | `core` | 2 |
 | `voice` | `db` | 2 |
 | `voice` | `models` | 9 |
 | `voice` | `security` | 1 |
@@ -752,6 +777,7 @@ Every member of the `GatewayEventType` union in `src/core/gateway/protocol.ts`, 
 | `permission.request` | yes | `src/core/gateway/event-bridge.ts` | `*` |
 | `permission.resolved` | yes | `src/core/gateway/event-bridge.ts` | `*` |
 | `pipeline.event` | yes | — | `*` |
+| `room.mention` | yes | `src/core/rooms/mentions.ts` | `*` |
 | `room.message` | yes | — | `*` |
 | `room.presence` | yes | — | `*` |
 | `room.read` | yes | — | `*` |

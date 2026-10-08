@@ -7,8 +7,125 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### Security
+
+- **Telnyx webhooks are verified with Ed25519.** The old check ran an HMAC
+  keyed with the (public) key, which anyone could compute, and passed every
+  webhook when no `telnyx_public_key` was set. Verification now uses the
+  Ed25519 signature over `timestamp|body`, and a missing key fails it.
+- **Telephony webhooks are refused unless signed.** `/api/voice/webhook/:provider`
+  (and `/status`) logged a failed signature check and processed the call
+  anyway, and checked it over re-serialised JSON rather than the bytes
+  received, so no valid signature could pass. The check now runs over the
+  raw body against the public URL and path the provider called, and a
+  failure answers 403 and does nothing. Telnyx webhooks older or newer than
+  300 s are refused (replay). Plivo needs the V2 signature and nonce
+  (`X-Plivo-Signature-V2`); the legacy header is refused.
+- **The federation private key is unreachable from vault references.** The
+  vault itself now refuses reserved system secrets on `getByName`, `get`,
+  `store`, `setSystemSecret`, `update`, `rotate` and `delete`, and leaves them
+  out of `list`, so a model's `apiKeyRef` (Test, Fetch Models, real calls) or
+  a SCIM token reference named `federation.identity` resolves nothing.
+- **Peer link hardening.** Sealed links are capped per address (IPv6 per
+  /64) and in all, links from instances that joined nothing here are capped
+  and may only ask `space.join`, and a link answers at most 32 requests at
+  once (more get `busy`). Handshake budgets are swept every minute and capped
+  install-wide; a pre-handshake frame over 4 KiB is refused unparsed; the
+  host nonce lives in the socket instead of the key-value store. The keys
+  derive from a hash of the whole handshake transcript, which now signs the
+  protocol and both app versions, and the AEAD nonce is the sequence number.
+  The send-queue cap grows with `gateway.maxFrameBytes`. `/federation` is
+  always registered and refuses with 4403 while not hosting, so turning
+  hosting on needs no restart. The rightmost `X-Forwarded-Proto` decides
+  TLS, and a trusted proxy that names no client is not a LAN client. The
+  visitor pool stops redialling a host that refused it (4403/4409) until
+  asked again, resets its backoff only after a link stayed up 30 s, and
+  redials retained hosts when visiting is turned back on.
+- **Spaces on other installs, the visitor side: review hardening.** The
+  visitor's agent: an addressed turn checks that its conversation still
+  exists, is active, is the member's and names that room (a deleted one is
+  never revived: its channel cannot create a session), and deleting or
+  archiving the conversation closes its listener; mentions are dated by the
+  post and the host's event, the older (10-minute window, none ahead of the clock, no replay) and
+  limited to 6 an hour and 30 a day per conversation and per member, before
+  the room is read; the mention reaches the agent inside the room context's
+  fence, never as the member's words; an unattended turn writes nothing to
+  the space, whatever was approved before; the member's panel text counts
+  as private, so attended writes ask every time; every task op asks; page
+  fetch is gone (web search stays); tool arguments are checked (UUID ids,
+  normalised paths inside the space, enum ops); tool descriptions name no
+  host string, approval summaries quote host names on one cleaned line.
+  Residency: trajectories, the agent event log, prompt dumps, the
+  tool-output spill, file auto-indexing, memory, learning and the text of approval notifications
+  are off for such a conversation. Host answers are checked against schemas
+  (`bad_answer`, 502). A rejoin and a pending leave of the same member and
+  host never interleave, and the leave is re-read before it is sent; a host
+  with pending leaves is retained and redialled with backoff. The pool keeps
+  a host's handshake-confirmed address. A post is answered only by the
+  `room.posted` with its `clientId`, and the agent posts on its own
+  connection. The host knows a member by a per-host HMAC of their user id.
+  The REST post asks `api:chat` for an addressed post. The web encodes
+  every path segment, drops non-UUID ids from host data, and loads no image
+  from a remote room or note.
+- **Hosting members of other installs: review hardening.** A visitor's
+  virtual connections pass only room, space and live-note traffic, a
+  mention and a requester error to the link (`agent.*`, `swarm.*`,
+  `chat.delta`, permission prompts and other progress of a host turn, with
+  raw tool arguments and results, are dropped). A visitor's gateway rate
+  buckets are shared by all their connections on the link and survive
+  `conn.close`. Whether members of other installs read a run is read again
+  at every tool decision and before a room reply is posted (a remote member
+  may join mid-turn): such a run refuses any egress once the session holds
+  personal data, not only credential material, and an answer that drew on
+  personal data is not posted. Writes into a space with any remote member
+  (notes, files, memory, tasks) are federated egress for every turn there:
+  credential material is refused and the personal-data consent names the
+  other installs. Blocking an install removes each membership on its own
+  (failures reported, the block always audited, the admin as the removals'
+  actor). `file.read` reads at most 1 MiB through one handle and refuses an
+  answer over the link frame. Posts the input guard only warns about keep
+  their flags, and room transcripts mark them. The agent-post cap counts per
+  install per room, atomically. Badges show 12 characters of the instance
+  id, and member lists carry its full id. Member lists sent to visitors
+  carry the member-visible name (the username) and never an e-mail.
+- **Spaces across installs: identity and peer link** (first slices of
+  `docs/plans/federation-spec.md`). Each install gets an Ed25519 identity,
+  stored as the reserved vault secret `federation.identity` (the vault API
+  refuses to list, change or delete it; a vault error refuses federation
+  rather than minting a new identity). New `federation.*` settings (mode off
+  by default). When hosting, `/federation` accepts mutually authenticated,
+  sealed peer links (X25519 + ChaCha20-Poly1305, per-direction keys and
+  sequence numbers) with per-address handshake budgets; outbound dials go
+  through a guarded dialer (public or `federation.lanCidrs` addresses only,
+  pinned IP, no redirects). Migration `0137_federation.sql` adds
+  `federation_instances`.
+
+- **Invited members no longer get the owner's models and install state.**
+  Each account now has an install-models flag. Accounts created on the
+  sign-in page (open registration or a space invite) start without it
+  (`security.selfRegisteredInstallModels`, default off): they see and run on
+  only their own models and what a sponsored space provides, enforced at the
+  provider and CLI boundary. Existing, admin-created, SAML and SCIM accounts
+  keep access; an admin flips it per account under Users. **Upgrade note:**
+  accounts that already joined through an invite keep access until an admin
+  turns it off.
+- **Install-level routes are admin-only.** Running a tool directly
+  (`POST /api/tools/:id/tools/:name/execute`) beyond the tools a member's own
+  chat agent has, reloading extensions, plugins
+  and mounted skills, and reading model configuration, provider lists, CLI
+  status, detailed health, tool/plugin/MCP/capability inventories,
+  evaluations, topic bindings and telephony state now need an admin
+  (`src/api/admin-guard.ts`); non-admins get a reduced view where the web
+  needs one. Skill import/export and skill-topic assignments no longer
+  reach other users' skills.
+
 ### Fixed
 
+- **Space invite links use the install's public URL.** The link was built from
+  the address the owner's browser used, so an owner on `localhost` handed out
+  a `localhost` link no other device could open. With a public URL set
+  (`PUBLIC_URL` / `oauth.publicUrl`, the address OAuth callbacks and artifact
+  links already use) the invite response carries `url` on it.
 - **A space session's files open only through the requester's access.**
   `WorkspaceFS.forSession` now takes the requester's space access (role and
   guest scope, from the turn's `AgentContext.space`, the request principal or
@@ -137,6 +254,79 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **MCP tool exposure.** Each MCP server sets how its tools reach the model,
+  after pi's exposure modes:
+  - `deferred`, the default and the previous behaviour: tools are found through
+    `mcp_list_tools`.
+  - `direct`: each tool is declared as `mcp__<server>__<tool>` on every request.
+  - `codemode`: tools are left out of `mcp_list_tools`; codemode scripts call
+    them as `tools.mcp__<server>__<tool>` and find them with `searchTools()`.
+  - `hidden`: the bridge refuses every call.
+
+  `toolExposure` overrides it per tool, by exact name or `*` pattern. Set it on
+  the MCP page, through `PUT /api/mcp/servers/:id/exposure` and
+  `PUT /api/mcp/servers/:id/tools/:tool/exposure`, or with `mcp_add_server`.
+  Exposure changes only what the model sees: every call still passes the same
+  permission checks, and script calls are routed through `mcp_call_tool`. An
+  agent without codemode treats `codemode` tools as `deferred`. See
+  [Tool exposure](docs/MCP-INTEGRATION.md#tool-exposure).
+
+- **Codemode.** Agents get a `codemode` tool: the model writes one JavaScript
+  script that calls its tools (`await tools.<name>(args)`), and only what the
+  script outputs comes back. Chained calls, parallel calls and large results
+  that only need filtering no longer re-enter the conversation on every later
+  request. Scripts run in a QuickJS/WebAssembly sandbox
+  (`@earendil-works/pi-codemode`) with no network, filesystem, timers or
+  modules; every call a script makes goes through the same permission, flow
+  guard, approval, hook and audit pipeline as a direct call, and a refused
+  approval ends the script. Scripts reach real tools only — not
+  `spawn_child`, plans or other orchestration meta-tools — and find them with
+  `searchTools()`, `describeTool()` and `ALL_TOOLS`, so the tool description
+  stays fixed and cacheable. On for every tool-calling worker whose model
+  supports tools and is not a small model (`agent.smallModelMaxParams`).
+
+- **Join spaces on other installs.** With `federation.mode` `visit` or
+  `both`, a user pastes an invite link with a host fingerprint into
+  "join a space on another install" (picker, Settings, or "open there" on the
+  host's `/join` page); the fingerprint is shown before anything connects.
+  The space appears under "on other installs" with the host's badge, and the
+  rooms, notes (live co-editing), tasks and files views work on it through
+  `/api/remote-spaces/...` and the gateway's `remote.frame` /
+  `remote.event` / `remote.link`. Only a pointer row (`remote_spaces`, in
+  migration 0137) is kept; leaving is a tombstone delivered whenever the
+  link to the host next opens. Audited `remote_space_joined` /
+  `remote_space_left`.
+- **Your own agent in a space on another install.** "Ask my agent" in a
+  remote room opens a conversation that reads the room live each turn,
+  holds only the remote space tools plus web search, and
+  never feeds memory, learning, the profile, indexing or compaction. Its
+  posts are asked: every time after a private read, the first time in a
+  conversation otherwise. "Let my agent answer when addressed" is opt-in.
+- **Admin → Federation** lists the installs whose members joined spaces
+  here, with block and unblock; **Settings → Spaces on other installs**
+  lists yours, their link state and pending leaves. Space member lists mark
+  members of other installs.
+- **Hosting members of other installs (federation, host side).** With
+  `federation.mode` `host`/`both`, invites also return `federatedUrl`
+  (`#octipus=<instance id>`), and another install can redeem them over its
+  peer link (`space.join`): the member becomes a remote row (at most an
+  editor), counted against `federation.maxVisitorsPerInstance`, and passes
+  `getMembership` only while its install is active and this install hosts.
+  Visitors use the gateway's room and live-note frames through virtual
+  connections (same parsing, rate buckets and handlers) and REST-shaped
+  operations for rooms, notes (edit proposals), tasks, files (read-only) and
+  space memory, checked as for a local member of the same role. Remote posts
+  pass the input guard; agent posts are labelled and capped per install per
+  room; remote members carry an `[B:xxxxxxxxxxxx]` badge; `@~name@fp8` mentions reach
+  them over the link. Their `@octipus` runs a sponsor-funded `remote` turn
+  (refused in `own` spaces, ASK denied, a per-install cap), and any turn in a
+  room with a remote member has a federated audience (personal and
+  credential reads refused). Admins block or unblock an install
+  (`/api/admin/federation/instances/:id/block|unblock`). Migration 0137 adds
+  the remote-owner guard, `note_edit_proposals.proposer_key` and four audit
+  actions. See docs/SPACES.md → Hosting members of other installs.
+- **Presence fails closed.** A space presence (or live-note awareness)
+  recipient whose membership reads null now sees nobody, not everyone.
 - **Guests and registration modes (coworking S6).** A guest's scope
   `{ rooms, folders }` lives on their membership and on guest invites
   (validated on write: shape, and rooms of the space). Guests now reach

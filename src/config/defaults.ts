@@ -42,6 +42,7 @@ export const defaultConfig: Partial<Config> = {
     dockerIsolation: 'off',
     trustedProxies: [],
     registration: 'open',
+    selfRegisteredInstallModels: false,
   },
   api: {
     host: '0.0.0.0',
@@ -137,6 +138,14 @@ export const defaultConfig: Partial<Config> = {
     maxQueuedPerMember: 3,
     approvalTimeoutMinutes: 30,
     transcriptWindowChars: 6000,
+  },
+  federation: {
+    mode: 'off',
+    lanCidrs: [],
+    heartbeatSeconds: 15,
+    maxVisitorsPerInstance: 50,
+    maxRemoteTurnsPerInstance: 5,
+    agentPostsPerHour: 20,
   },
   compaction: {
     minSavingsRatio: 0.10,

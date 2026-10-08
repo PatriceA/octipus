@@ -46,6 +46,8 @@ interface NavItem {
   badge?: string;
   /** Unread count (rooms), shown when above zero. */
   count?: number;
+  /** Install configuration: shown to admins only (the routes behind it are admin-only). */
+  adminOnly?: boolean;
 }
 
 interface NavGroup {
@@ -81,14 +83,14 @@ const navGroups: NavGroup[] = [
   ] },
   { label: 'Settings', items: [
     { name: 'settings & channels', href: '/settings', icon: Settings },
-    { name: 'tools', href: '/tools', icon: Wrench },
+    { name: 'tools', href: '/tools', icon: Wrench, adminOnly: true },
     { name: 'scoped permissions', href: '/permissions', icon: KeyRound },
     { name: 'persona', href: '/persona', icon: Fingerprint },
     { name: 'people & profiles', href: '/profiles', icon: Users },
     { name: 'memory', href: '/memory', icon: Brain },
     { name: 'skills', href: '/skills', icon: BookOpen },
-    { name: 'topics', href: '/topics', icon: Tags },
-    { name: 'evaluations', href: '/eval', icon: FlaskConical },
+    { name: 'topics', href: '/topics', icon: Tags, adminOnly: true },
+    { name: 'evaluations', href: '/eval', icon: FlaskConical, adminOnly: true },
     { name: 'secrets', href: '/secrets', icon: KeyRound },
   ] },
 ];
@@ -103,13 +105,19 @@ export function Sidebar() {
   const spaceId = activeWorkspace?.kind === 'shared' ? activeWorkspace.id : null;
   const rooms = useRooms(spaceId);
   const unread = (rooms.data ?? []).reduce((sum, r) => sum + (r.muted ? 0 : r.unreadCount), 0);
-  const groups = navGroups.map(group => {
+  const groups = navGroups.map(g => ({ ...g, items: g.items.filter(item => !item.adminOnly || user?.isAdmin) })).map(group => {
     if (group.label === 'Settings' && user?.isAdmin) {
       return { ...group, items: [...group.items, { name: 'users', href: '/admin/users', icon: Users }] };
     }
     if (group.label === 'Work' && spaceId) {
       const items = [...group.items];
       items.splice(2, 0, { name: 'rooms', href: '/rooms', icon: Hash, count: unread });
+      return { ...group, items };
+    }
+    // A space on another install (federation §8.3): its rooms and its files.
+    if (group.label === 'Work' && activeWorkspace?.kind === 'remote') {
+      const items = [...group.items];
+      items.splice(2, 0, { name: 'rooms', href: '/rooms', icon: Hash }, { name: 'space files', href: '/spaces/remote', icon: FileText });
       return { ...group, items };
     }
     return group;

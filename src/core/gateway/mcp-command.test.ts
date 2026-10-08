@@ -2,7 +2,7 @@
  * `/mcp` — the terminal's only way to see MCP servers and to reconnect one
  * after restarting it (the bridge's auto-reconnect gives up after 6 attempts,
  * ~1 minute, and a longer outage leaves the server dead until someone asks).
- * Pins the admin gate and that reconnect really re-dials.
+ * Pins the admin gate (listing and reconnect) and that reconnect really re-dials.
  */
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import * as bridgeModule from '@/mcp/bridge';
@@ -69,10 +69,11 @@ describe('/mcp', () => {
     expect(bridge.connect).toHaveBeenCalledWith(expect.objectContaining({ id: 'files' }));
   });
 
-  test('a non-admin user can look but not reconnect', async () => {
+  test('a non-admin user can neither list the servers nor reconnect', async () => {
     const bridge = stubBridge();
     const list = await registry.execute('/mcp', plainUser);
-    expect(list!.text).toContain('Filesystem');
+    expect(list!.text).toContain('admin');
+    expect(list!.text).not.toContain('Filesystem');
 
     const denied = await registry.execute('/mcp reconnect files', plainUser);
     expect(denied!.text).toContain('admin');

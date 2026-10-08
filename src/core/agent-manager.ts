@@ -22,7 +22,9 @@ import { withoutPersonalOnlyTools } from '@/security/space-tools';
 import { getRouter } from './router';
 import type { AgentFunding, AgentSpace, AgentSponsor, AgentStatus, AgentTrigger } from './types';
 import { buildAgentContext, recheckSponsor, recheckSpace, writesWithheld } from './agent/context';
+import { contentStorageOffFor } from './agent/audience';
 import { stripMutatingTools } from './agent/plan-mode';
+import { isSmallModel } from './agent/small-model';
 
 /** Union type for all agent worker implementations */
 export type AnyAgentWorker = AgentWorker | CLIAgentWorker;
@@ -42,6 +44,8 @@ export interface SpawnOptions {
   funding: AgentFunding;
   /** Who pays when `funding` is `sponsor` (inherited like the rest of the scope). */
   sponsor?: AgentSponsor | null;
+  /** Members of other installs read the run (`AgentContext.audienceFederated`; inherited like the rest of the scope). */
+  audienceFederated?: boolean;
   topic?: string;
   model?: string;
   /** Row identity of `model` (`model_config.name`) when the caller resolved one — see `AgentContext.modelName`. */
@@ -237,7 +241,7 @@ export class AgentManager {
       id: agentId,
       sessionId: options.sessionId,
       userId: options.userId,
-      scope: { workspaceId: options.workspaceId ?? null, space, trigger: options.trigger, funding: options.funding, sponsor },
+      scope: { workspaceId: options.workspaceId ?? null, space, trigger: options.trigger, funding: options.funding, sponsor, audienceFederated: options.audienceFederated === true },
       topic: routedTopic,
       model: routedModel,
       modelName: modelEntry?.name,
@@ -282,6 +286,12 @@ export class AgentManager {
       assertCliSpaceMode(tool?.adapter ?? tool?.name ?? routedModel);
     }
 
+    // A room of a space on another install (federation §9) holds the remote
+    // space tools and web reads only; a CLI agent brings its own tools.
+    if (isCLI && options.contextMetadata?.remoteRoom) {
+      throw new Error(`${routedModel} is a CLI agent, which brings its own tools: your agent in a space on another install runs on API models only`);
+    }
+
     let worker: AnyAgentWorker;
 
     if (isCLI) {
@@ -291,6 +301,18 @@ export class AgentManager {
         'Spawning CLI sub-agent (autonomous mode)',
       );
     } else {
+      // Codemode on every tool-calling worker whose model can write a script:
+      // it keeps intermediate tool results out of the conversation. Small
+      // models stay off — they chain multi-step discovery badly already, the
+      // same reason they keep the full schema in `shouldUseLazyDiscovery`.
+      // A room of a space on another install (federation §9, §11 item 14)
+      // offers its fixed tool set and nothing else, so no codemode there.
+      workerConfig.codemode =
+        !options.contextMetadata?.remoteRoom &&
+        (options.tools?.length ?? 0) > 0 &&
+        modelEntry?.supportsTools === true &&
+        !isSmallModel({ modelId: routedModel, metadata: modelEntry.metadata }, config.agent.smallModelMaxParams);
+      context.codemode = workerConfig.codemode;
       // Swarm Phase 2: chain parent AbortSignal into the worker.
       worker = new AgentWorker(context, workerConfig, { parentSignal: options.parentSignal });
     }
@@ -324,6 +346,7 @@ export class AgentManager {
     }
 
     // Subscribe to events: buffer for polling + persist to DB + forward to manager handlers
+    const contentStorageOff = contentStorageOffFor(context);
     worker.onEvent((event) => {
       // Streamed text deltas are transient: forward them, never buffer or
       // persist (one row per token would swamp agent_events).
@@ -344,8 +367,10 @@ export class AgentManager {
         buf.splice(0, buf.length - AgentManager.MAX_BUFFERED_EVENTS);
       }
 
-      // Persist to DB (fire-and-forget) — survives server restarts
-      agentEventRepository.create({
+      // Persist to DB (fire-and-forget) — survives server restarts. Not for a
+      // session whose text stays in its own rows (a space on another install,
+      // federation F-D11): these rows outlive the session.
+      if (!contentStorageOff) agentEventRepository.create({
         agentId: event.agentId,
         sessionId: context.sessionId,
         userId: context.userId,

@@ -69,10 +69,12 @@ async function directResponseInternal(
    * (a commenter gets API models only, a CLI row only with a space mode).
    */
   space?: { role: SpaceRole } | null,
+  /** The turn's sponsor when it is sponsored: the model is one the sponsor pays for. */
+  sponsor?: import('@/core/types').AgentSponsor | null,
 ): Promise<{ response: string; metadata: ResponseMetadata }> {
   const startTime = Date.now();
   const client = getLiteLLMClient();
-  const selected = modelOverride ?? (await modelSelector.selectByComplexity(complexity, { userId, inSpace: !!space, spaceRole: space?.role }));
+  const selected = modelOverride ?? (await modelSelector.selectByComplexity(complexity, { userId, inSpace: !!space, spaceRole: space?.role, sponsor }));
   const modelName = selected.modelId;
 
   // In a room the request is the member's post, already stored: the

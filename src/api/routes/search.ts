@@ -10,6 +10,7 @@ import { skillRepository } from '@/db/repositories/skill-repository';
 import { hooks } from '@/db/schema/hooks';
 import { sessions } from '@/db/schema/sessions';
 import { getModelRegistry } from '@/models/model-registry';
+import { isAdmin } from '@/security/principal';
 import { getToolRegistry } from '@/tools/registry';
 
 interface SearchResult {
@@ -94,8 +95,10 @@ export const searchRoutes = new Elysia({ prefix: '/search' })
           }
         })(),
 
-        // Tools — in-memory search
+        // Tools — in-memory search over the install's tool inventory, which
+        // is admin-only (GET /tools): a non-admin gets no tool section.
         (async () => {
+          if (!isAdmin(principal)) return [];
           const registry = getToolRegistry();
           const allTools = registry.getAll();
           const lower = searchTerm.toLowerCase();

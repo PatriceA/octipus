@@ -4,11 +4,12 @@ import { useQueryClient } from '@tanstack/react-query';
 import { BellOff, Hash, Lock, Plus, X } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { CreateRoomDialog } from '@/components/rooms/create-room-dialog';
 import { RoomView } from '@/components/rooms/room-view';
 import { useAuth } from '@/lib/auth-context';
-import { roomsKey, useRooms } from '@/lib/rooms';
+import { useGateway } from '@/lib/gateway-context';
+import { localRoomSource, remoteRoomSource, useSourceRooms } from '@/lib/remote-spaces';
 import { cn } from '@/lib/utils';
 import { useWorkspace } from '@/lib/workspace-context';
 
@@ -16,7 +17,9 @@ import { useWorkspace } from '@/lib/workspace-context';
  * `/rooms?room=<id>`: the rooms of the selected shared space — the list
  * with unread badges (new room for editors and owners), and the open room.
  * Rooms exist in shared spaces only; in a personal workspace the page says
- * so.
+ * so. A space on another install (federation §8.3) shows the same views
+ * through its remote data source: this install forwards every read, post
+ * and frame to the host.
  */
 export default function RoomsPage() {
   const { activeWorkspace, access, isLoading } = useWorkspace();
@@ -24,13 +27,19 @@ export default function RoomsPage() {
   const router = useRouter();
   const params = useSearchParams();
   const qc = useQueryClient();
-  const space = activeWorkspace?.kind === 'shared' ? activeWorkspace : null;
-  const rooms = useRooms(space?.id ?? null);
+  const gateway = useGateway();
+  const space = activeWorkspace?.kind === 'shared' || activeWorkspace?.kind === 'remote' ? activeWorkspace : null;
+  const remote = activeWorkspace?.kind === 'remote' ? activeWorkspace : null;
+  const source = useMemo(
+    () => (!space ? null : space.kind === 'remote' ? remoteRoomSource(space.id, gateway) : localRoomSource(space.id, gateway)),
+    [space?.id, space?.kind, gateway], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const rooms = useSourceRooms(source);
   const [creating, setCreating] = useState(false);
   const [removed, setRemoved] = useState<{ roomId: string; title: string; reason: string } | null>(null);
 
   if (isLoading) return <div className="p-8 font-mono text-on-surface-variant">loading…</div>;
-  if (!space) {
+  if (!space || !source) {
     return (
       <div className="p-8 font-mono text-[13px] text-on-surface-variant space-y-2" data-testid="rooms-no-space">
         <p>Rooms are shared chats of a space: members talk to each other and ask Octipus together.</p>
@@ -43,21 +52,29 @@ export default function RoomsPage() {
   const list = (rooms.data ?? []).filter((r) => r.id !== removed?.roomId);
   const wanted = params.get('room');
   const room = (wanted ? list.find((r) => r.id === wanted) : undefined) ?? (wanted ? undefined : list[0]);
-  const canManage = (r: { createdBy: string }) => r.createdBy === user?.id || space.role === 'owner';
+  // Nothing of a space on another install is managed from here.
+  const canManage = (r: { createdBy: string }) => !remote && (r.createdBy === user?.id || space.role === 'owner');
   const open = (id: string) => router.replace(`/rooms?room=${encodeURIComponent(id)}`);
 
   const onRemoved = (roomId: string, title: string) => (reason: string) => {
     setRemoved({ roomId, title, reason });
     router.replace('/rooms');
-    void qc.invalidateQueries({ queryKey: roomsKey(space.id) });
+    void qc.invalidateQueries({ queryKey: source.roomsKey });
   };
 
   return (
     <div className="flex h-full min-h-0">
       <nav aria-label="Rooms" className="w-56 shrink-0 border-r border-outline-variant/40 flex flex-col min-h-0 font-mono bg-surface-container-lowest">
         <div className="flex items-center justify-between px-3 h-11 border-b border-outline-variant/40">
-          <h2 className="text-[12px] text-on-surface">rooms</h2>
-          {access.canWrite && (
+          <h2 className="text-[12px] text-on-surface flex items-center gap-1.5 min-w-0">
+            rooms
+            {remote && (
+              <span className="text-[10px] text-outline-variant truncate" title={`Hosted by another install: ${remote.hostFingerprint}`} data-testid="rooms-host-badge">
+                {remote.hostBadge}
+              </span>
+            )}
+          </h2>
+          {access.canWrite && !remote && (
             <button
               type="button"
               onClick={() => setCreating(true)}
@@ -117,6 +134,7 @@ export default function RoomsPage() {
         {room ? (
           <RoomView
             key={room.id}
+            source={source}
             spaceId={space.id}
             room={room}
             myId={user?.id}
@@ -133,13 +151,13 @@ export default function RoomsPage() {
         )}
       </div>
 
-      <CreateRoomDialog
+      {!remote && <CreateRoomDialog
         spaceId={space.id}
         myId={user?.id}
         open={creating}
         onClose={() => setCreating(false)}
         onCreated={(r) => { setCreating(false); open(r.id); }}
-      />
+      />}
     </div>
   );
 }

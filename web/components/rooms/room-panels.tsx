@@ -5,6 +5,8 @@ import { Plus, Trash2, UserMinus } from 'lucide-react';
 import { useState } from 'react';
 import { api } from '@/lib/api';
 import { initials, type Room, type RoomMember, roomsKey, type SpaceMemoryEntry, type RoomVisibility, useSpaceMembers } from '@/lib/rooms';
+import { isUuid } from '@/lib/remote-paths';
+import { type RemoteMember, remotePath } from '@/lib/remote-spaces';
 import type { RoomModeName, RoomModeView } from '../../../src/shared/types';
 
 const inputClass = 'w-full px-2 py-1 bg-surface-container-low border border-outline-variant/60 rounded-xs text-[12px] text-on-surface focus:outline-none focus:border-primary';
@@ -13,11 +15,46 @@ const buttonClass = 'inline-flex items-center gap-1.5 px-2 py-1 text-[11px] roun
 export const roomMembersKey = (roomId: string) => ['room', roomId, 'members'] as const;
 
 /** The room's members (`GET …/rooms/:roomId/members`): every member for an open room. */
-export function useRoomMembers(spaceId: string, roomId: string) {
+export function useRoomMembers(spaceId: string, roomId: string, enabled = true) {
   return useQuery({
     queryKey: roomMembersKey(roomId),
     queryFn: () => api.get<{ members: RoomMember[] }>(`/spaces/${spaceId}/rooms/${roomId}/members`).then((r) => r.members),
+    enabled,
   });
+}
+
+/** The members of a space on another install, as its host lists them (display names, roles). */
+export function useRemoteMembers(remoteSpaceId: string | null) {
+  return useQuery({
+    queryKey: ['remote-members', remoteSpaceId],
+    queryFn: () => api.get<{ members: RemoteMember[] }>(remotePath(remoteSpaceId as string, ['members']))
+      // Ids from the host: only UUIDs key the list.
+      .then((r) => r.members.filter((m) => isUuid(m.userId))),
+    enabled: !!remoteSpaceId,
+  });
+}
+
+/**
+ * The members of a space on another install: display names and roles, as
+ * the host sends them (never usernames or e-mail, FI5). Members who are on
+ * yet another install say so; nothing here can be managed.
+ */
+export function RemoteMembersPanel({ members, error }: { members: RemoteMember[]; error: string | null }) {
+  return (
+    <div className="space-y-2" data-testid="remote-members">
+      <PanelError error={error} />
+      <ul className="space-y-1">
+        {members.map((m) => (
+          <li key={m.userId} className="flex items-center gap-2 text-[12px]">
+            <span className="h-5 w-5 rounded-full bg-surface-container-highest flex items-center justify-center text-[8px] font-semibold">{initials(m.displayName)}</span>
+            <span className="truncate flex-1">{m.displayName || 'a member'}</span>
+            {m.remote && <span className="text-[10px] text-outline-variant" title="A member from another install">other install</span>}
+            <span className="text-[10px] text-on-surface-variant">{m.role}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 function PanelError({ error }: { error: string | null }) {

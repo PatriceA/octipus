@@ -2,7 +2,7 @@ import { afterEach, expect, test, vi } from 'vitest';
 
 const config = vi.hoisted(() => ({ trustedProxies: [] as string[] }));
 vi.mock('@/config', () => ({ getConfig: () => ({ security: config }) }));
-import { clientIp, parseTrustedProxies, recordedClientIp } from './client-ip';
+import { addressInList, clientIp, normalizeAddress, parseAddressList, parseTrustedProxies, recordedClientIp } from './client-ip';
 
 const req = (headers: Record<string, string> = {}) => new Request('http://localhost/', { headers });
 afterEach(() => { config.trustedProxies = []; });
@@ -30,4 +30,16 @@ test('a malformed trustedProxies entry fails loudly', () => {
   expect(() => parseTrustedProxies(['10.0.0.0/33'])).toThrow(/invalid prefix/);
   expect(() => parseTrustedProxies(['proxy.local'])).toThrow(/not an IP address/);
   expect(() => parseTrustedProxies(['fd00::/8', '192.168.1.1'])).not.toThrow();
+});
+
+test('IPv4-mapped spellings match the IPv4 entry, and a mapped range is the IPv4 range', () => {
+  const list = parseAddressList(['::ffff:127.0.0.1', '::ffff:10.0.0.0/104'], 'federation.lanCidrs');
+  for (const address of ['127.0.0.1', '::ffff:127.0.0.1', '::ffff:7f00:1', '10.9.8.7', '::ffff:a09:807']) {
+    expect(addressInList(list, address), address).toBe(true);
+  }
+  expect(addressInList(list, '127.0.0.2')).toBe(false);
+  expect(addressInList(list, '11.0.0.1')).toBe(false);
+  expect(normalizeAddress('::ffff:c0a8:101')).toBe('192.168.1.1');
+  expect(normalizeAddress('::1')).toBe('::1');
+  expect(() => parseAddressList(['::ffff:10.0.0.0/95'], 'federation.lanCidrs')).toThrow(/invalid prefix/);
 });

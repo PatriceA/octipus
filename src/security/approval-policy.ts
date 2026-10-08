@@ -63,7 +63,10 @@ export function canPromptHuman(caller: { role?: string; root?: boolean; attended
  * `mobile`, `acp`, and the messaging adapters, which relay the prompt and read
  * the yes/no reply — all prompt.
  */
-const UNPROMPTABLE_CHANNELS = new Set(['api', 'hook', 'heartbeat', 'monitor', 'cron', 'agent', 'qa-demo']);
+// `remote-room`: a turn of a member's own agent answering a room post that
+// addressed it, in a space on another install (federation §9) — nobody is
+// waiting at a prompt.
+const UNPROMPTABLE_CHANNELS = new Set(['api', 'hook', 'heartbeat', 'monitor', 'cron', 'agent', 'qa-demo', 'remote-room']);
 
 /** Can an approval raised on this channel actually reach a person? */
 export function channelCanPrompt(channel: string | undefined): boolean {

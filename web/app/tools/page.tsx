@@ -358,6 +358,9 @@ export default function ToolsPage() {
   const [reloading, setReloading] = useState(false);
   const [reloadMessage, setReloadMessage] = useState('');
   const queryClient = useQueryClient();
+  const { user } = useAuth();
+  // The tool inventory, MCP tools, role map and reload are admin-only routes.
+  const isAdmin = !!user?.isAdmin;
 
   const handleReload = useCallback(async () => {
     setReloading(true);
@@ -381,6 +384,7 @@ export default function ToolsPage() {
 
   const { data: toolsData, isLoading } = useQuery({
     queryKey: ['tools'],
+    enabled: isAdmin,
     queryFn: async () => {
       try {
         return await api.get<{ tools: ToolModule[] }>('/tools');
@@ -403,6 +407,7 @@ export default function ToolsPage() {
 
   const { data: mcpData } = useQuery({
     queryKey: ['mcp-tools'],
+    enabled: isAdmin,
     queryFn: async () => {
       try {
         return await api.get<{ tools: MCPTool[] }>('/mcp/tools');
@@ -412,11 +417,11 @@ export default function ToolsPage() {
     },
   });
 
-  const { user } = useAuth();
   const [pendingRoleToggle, setPendingRoleToggle] = useState<string | null>(null);
 
   const { data: roleMapData } = useQuery({
     queryKey: ['tool-role-map'],
+    enabled: isAdmin,
     queryFn: async () => {
       try {
         return await api.get<{ byTool: Record<string, string[]>; roles: RoleBinding[] }>('/tools/role-map');
@@ -432,7 +437,7 @@ export default function ToolsPage() {
   const roleByTool = roleMapData?.byTool || {};
   const roleBindings = useMemo(() => roleMapData?.roles || [], [roleMapData]);
   const allRoles = useMemo(() => roleBindings.map((r) => r.role), [roleBindings]);
-  const canEditRoles = !!user?.isAdmin;
+  const canEditRoles = isAdmin;
 
   const handleRoleToggle = useCallback(
     async (toolId: string, role: string, assigned: boolean) => {
@@ -502,6 +507,15 @@ export default function ToolsPage() {
     (sum, m) => sum + Math.max(m.tools.length, m.permissions.length),
     0
   ) + mcpTools.length;
+
+  if (!isAdmin) {
+    return (
+      <div className="space-y-6">
+        <h1 className="text-base font-semibold lowercase"><span className="text-outline">octi:</span><span className="text-on-surface">~/tools</span><span className="text-primary font-bold"> $</span></h1>
+        <p className="text-sm text-on-surface-variant">The tool inventory is visible to administrators only.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

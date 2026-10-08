@@ -87,6 +87,14 @@ class ApiClient {
    * cleared, so no request leaves with the previous workspace's header.
    */
   private workspaceId: string | null = null;
+  /**
+   * The selection is a space on another install (federation §8.3): its id
+   * names a pointer row here, not a workspace, so no request carries it as
+   * `X-Octipus-Workspace` — the server would refuse the unknown workspace.
+   * Its data goes through `/api/remote-spaces/:id/...`; every other request
+   * runs in the default personal workspace.
+   */
+  private remote = false;
   private readPauseUntil = 0;
 
   setToken(token: string | null) {
@@ -107,12 +115,18 @@ class ApiClient {
     return this.token;
   }
 
-  setWorkspaceId(id: string | null) {
+  setWorkspaceId(id: string | null, kind: 'local' | 'remote' = 'local') {
     this.workspaceId = id;
+    this.remote = kind === 'remote';
   }
 
   getWorkspaceId(): string | null {
     return this.workspaceId;
+  }
+
+  /** The header value: the selected workspace, never a space on another install. */
+  private workspaceHeader(): string | null {
+    return this.remote ? null : this.workspaceId;
   }
 
   private async request<T>(
@@ -132,8 +146,9 @@ class ApiClient {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    if (this.workspaceId) {
-      headers['X-Octipus-Workspace'] = this.workspaceId;
+    const workspace = this.workspaceHeader();
+    if (workspace) {
+      headers['X-Octipus-Workspace'] = workspace;
     }
 
     const apiUrl = getApiUrl();
@@ -225,7 +240,8 @@ class ApiClient {
     const headers: Record<string, string> = {};
     const token = this.getToken();
     if (token) headers.Authorization = `Bearer ${token}`;
-    if (this.workspaceId) headers['X-Octipus-Workspace'] = this.workspaceId;
+    const workspace = this.workspaceHeader();
+    if (workspace) headers['X-Octipus-Workspace'] = workspace;
     return headers;
   }
 

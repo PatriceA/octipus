@@ -374,6 +374,11 @@ async function main() {
     // members, and the turn strip follows the running turn.
     const { startRoomFanout } = await import('@/core/rooms/fanout');
     const stopRoomFanout = await startRoomFanout();
+    // Spaces joined on other installs (federation §8.2): link state, host
+    // events, and the leaves still waiting for their host.
+    const { startVisitorOps } = await import('@/core/federation/visitor-ops');
+    const { getVisitorLinkPool } = await import('@/core/federation/visitor-client');
+    startVisitorOps(getVisitorLinkPool(), gatewayHub);
 
     // Start API server. The returned Elysia app MUST stay referenced for the
     // lifetime of the process: Bun finalizes the underlying server when its JS

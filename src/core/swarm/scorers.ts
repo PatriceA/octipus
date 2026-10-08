@@ -456,6 +456,8 @@ export interface ScorerContext {
   space?: import('@/core/types').AgentSpace | null;
   /** What started the run: a `listen` turn's gate commands are refused like its writes (§9.3). */
   trigger?: import('@/core/types').AgentTrigger;
+  /** Members of other installs read the run (federation §7.5): its gate commands follow the federated rules. */
+  audienceFederated?: boolean;
   /**
    * The dev-mode project directory the child's own tools operated in, when the
    * session has one. Absent for an ordinary session, where the workspace root
@@ -922,6 +924,7 @@ async function evaluate(
               workspaceId: ctx.workspaceId ?? ctx.space?.workspaceId ?? null,
               space: ctx.space ?? null,
               trigger: ctx.trigger,
+              audienceFederated: ctx.audienceFederated,
             },
             // The SAME action the permission was read for. `matches()` builds
             // `${toolId}__${action}`, so passing `shell__run` here makes an

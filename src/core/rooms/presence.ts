@@ -118,12 +118,15 @@ export async function publishSpacePresence(spaceId: string): Promise<void> {
     const visible = new Map<string, boolean>();
     const hub = getGatewayHub();
     const { getMembership, membersVisibleToGuest } = await import('@/core/spaces/service');
-    // Per recipient: everyone online, or for a guest the members of their rooms (S6).
+    // Per recipient: everyone online, or for a guest the members of their
+    // rooms (S6). A recipient whose membership reads null (removed, blocked
+    // install, hosting off) sees nobody: fail closed, never "everyone".
     const audiences = new Map<string, Set<string> | null>();
     for (const recipient of conns) {
       if (!audiences.has(recipient.userId)) {
         const membership = await getMembership(recipient.userId, spaceId);
-        audiences.set(recipient.userId, membership?.scope ? await membersVisibleToGuest(spaceId, recipient.userId, membership.scope) : null);
+        audiences.set(recipient.userId, !membership ? new Set<string>()
+          : membership.scope ? await membersVisibleToGuest(spaceId, recipient.userId, membership.scope) : null);
       }
       const audience = audiences.get(recipient.userId) ?? null;
       const members: Array<{ userId: string; username: string | null; where?: PresenceWhere }> = [];

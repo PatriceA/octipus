@@ -1,25 +1,26 @@
 'use client';
 
 import { useQueryClient } from '@tanstack/react-query';
-import { Bell, BellOff, Hash, Lock, MessageSquareLock, PanelRight, WifiOff, X } from 'lucide-react';
+import { Bell, BellOff, Bot, Hash, Lock, MessageSquareLock, PanelRight, WifiOff, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import MessageTimeline, { type ChatMessageData } from '@/components/chat/message-timeline';
 import { api } from '@/lib/api';
-import { useGateway, useGatewayMessages, useGatewayStatus } from '@/lib/gateway-context';
+import type { GatewayMessage } from '@/lib/gateway';
+import { isUuid, withUuidIds } from '@/lib/remote-paths';
+import { remotePath, type RoomSource, useSpaceGatewayStatus } from '@/lib/remote-spaces';
 import {
   EMPTY_QUEUE,
   initials,
   type Room,
   type RoomMessage,
   type RoomQueue,
-  roomsKey,
   type RoomTurnPayload,
 } from '@/lib/rooms';
 import { cn } from '@/lib/utils';
 import type { WorkspaceAccess } from '@/lib/workspace-context';
 import { RoomComposer } from './room-composer';
-import { MembersPanel, MemoryPanel, SettingsPanel, useRoomMembers } from './room-panels';
+import { MembersPanel, MemoryPanel, RemoteMembersPanel, SettingsPanel, useRemoteMembers, useRoomMembers } from './room-panels';
 import { TurnStrip } from './turn-strip';
 
 const PAGE = 50;
@@ -36,6 +37,13 @@ interface Pending {
 }
 
 interface RoomViewProps {
+  /**
+   * Where the room's data comes from: this install's space, or a space on
+   * another install (federation §8.3) through this install's
+   * `/api/remote-spaces` and `remote.frame`.
+   */
+  source: RoomSource;
+  /** The space's id here, or the pointer row's for a space on another install. */
   spaceId: string;
   room: Room;
   myId: string | undefined;
@@ -71,13 +79,16 @@ function clientId(): string {
  * replaces them. The requester sees Octipus's answer stream in; everyone
  * else sees the turn strip, then the stored answer.
  */
-export function RoomView({ spaceId, room, myId, access, canManage, onRemoved }: RoomViewProps) {
+export function RoomView({ source, spaceId, room, myId, access, canManage, onRemoved }: RoomViewProps) {
   const roomId = room.id;
-  const gateway = useGateway();
-  const status = useGatewayStatus();
+  const remote = source.kind === 'remote';
+  const gateway = source.gateway;
+  // A remote room is offline while its host's link is down, too.
+  const status = useSpaceGatewayStatus(gateway);
   const qc = useQueryClient();
   const router = useRouter();
-  const members = useRoomMembers(spaceId, roomId);
+  const localMembers = useRoomMembers(spaceId, roomId, !remote);
+  const remoteMembers = useRemoteMembers(remote ? spaceId : null);
 
   const [messages, setMessages] = useState<RoomMessage[]>([]);
   const [pending, setPending] = useState<Pending[]>([]);
@@ -109,7 +120,7 @@ export function RoomView({ spaceId, room, myId, access, canManage, onRemoved }: 
   // First page from REST; live updates follow the subscribe below.
   useEffect(() => {
     let cancelled = false;
-    api.get<{ messages: RoomMessage[]; hasMore: boolean }>(`/spaces/${spaceId}/rooms/${roomId}/messages?limit=${PAGE}`)
+    source.messages(roomId, { limit: PAGE })
       .then((page) => {
         if (cancelled) return;
         setMessages((current) => merge(current, page.messages));
@@ -120,7 +131,7 @@ export function RoomView({ spaceId, room, myId, access, canManage, onRemoved }: 
         if (!cancelled) setLoad({ state: 'error', error: err.message });
       });
     return () => { cancelled = true; };
-  }, [spaceId, roomId]);
+  }, [source, roomId]);
 
   // Subscribe on every (re)connect once the first page is in, asking for
   // what was missed since the newest message held.
@@ -136,12 +147,11 @@ export function RoomView({ spaceId, room, myId, access, canManage, onRemoved }: 
   const catchUpFrom = useCallback(async (after: string) => {
     let cursor: string | undefined = after;
     while (cursor) {
-      const page: { messages: RoomMessage[]; hasMore: boolean } = await api.get(
-        `/spaces/${spaceId}/rooms/${roomId}/messages?after=${cursor}&limit=200`);
+      const page: { messages: RoomMessage[]; hasMore: boolean } = await source.messages(roomId, { after: cursor, limit: 200 });
       setMessages((current) => merge(current, page.messages));
       cursor = page.hasMore ? page.messages.at(-1)?.id : undefined;
     }
-  }, [spaceId, roomId]);
+  }, [source, roomId]);
 
   const dropPending = useCallback((id: string | undefined) => {
     if (!id) return;
@@ -158,10 +168,12 @@ export function RoomView({ spaceId, room, myId, access, canManage, onRemoved }: 
     if (outcome.notQueued) notify(`Octipus was not asked: ${outcome.notQueued}`);
   }, [dropPending, notify]);
 
-  useGatewayMessages((message) => {
+  // The space's messages: this tab's own, or the host's unwrapped from `remote.event`.
+  const handleMessage = (message: GatewayMessage) => {
     if (message.type === 'room.catchup') {
       if (message.roomId !== roomId) return;
-      const caught = message.messages as RoomMessage[];
+      // A host's rows keep only UUID ids (they key and page the view).
+      const caught = remote ? withUuidIds(message.messages as RoomMessage[]) : message.messages as RoomMessage[];
       setMessages((current) => merge(current, caught));
       const last = caught.at(-1)?.id;
       if (message.hasMore && last) void catchUpFrom(last).catch((err: Error) => notify(`Could not load the missed messages: ${err.message}`));
@@ -195,8 +207,9 @@ export function RoomView({ spaceId, room, myId, access, canManage, onRemoved }: 
     switch (event.type) {
       case 'room.message': {
         const row = payload.message as RoomMessage;
+        if (remote && !isUuid(row?.id)) break;
         setMessages((current) => merge(current, [row]));
-        dropPending(payload.clientId ?? row.metadata.clientId);
+        dropPending(payload.clientId ?? row.metadata?.clientId);
         if (row.role === 'assistant' && row.metadata.requesterId === myId && row.metadata.kind !== 'progress') setStreaming(null);
         if (row.authorUserId) {
           setTyping((t) => {
@@ -234,7 +247,12 @@ export function RoomView({ spaceId, room, myId, access, canManage, onRemoved }: 
       default:
         break;
     }
+  };
+  const onMessageRef = useRef(handleMessage);
+  useEffect(() => {
+    onMessageRef.current = handleMessage;
   });
+  useEffect(() => gateway.onMessage((message) => onMessageRef.current(message)), [gateway]);
 
   // Typing lines fade on their own.
   useEffect(() => {
@@ -254,13 +272,14 @@ export function RoomView({ spaceId, room, myId, access, canManage, onRemoved }: 
     if (!newestId || readSentRef.current === newestId || document.visibilityState !== 'visible') return;
     readSentRef.current = newestId;
     const sent = gateway.send({ type: 'room.read', roomId, messageId: newestId });
-    const done = sent
+    // A space on another install is marked read through the frame only.
+    const done = sent || remote
       ? Promise.resolve()
       : api.patch(`/spaces/${spaceId}/rooms/${roomId}/me`, { lastReadMessageId: newestId }).then(() => undefined);
     done
-      .then(() => qc.invalidateQueries({ queryKey: roomsKey(spaceId) }))
+      .then(() => qc.invalidateQueries({ queryKey: source.roomsKey }))
       .catch((err: Error) => console.warn('Could not mark the room read', err));
-  }, [gateway, newestId, qc, roomId, spaceId]);
+  }, [gateway, newestId, qc, roomId, spaceId, source, remote]);
 
   const post = (content: string, addressed: boolean) => {
     const id = clientId();
@@ -272,8 +291,7 @@ export function RoomView({ spaceId, room, myId, access, canManage, onRemoved }: 
       return;
     }
     // The socket is down: the REST fallback stores the same post.
-    api.post<{ messageId: string; clientId?: string; notQueued?: string; commandResult?: string; message?: RoomMessage }>(
-      `/spaces/${spaceId}/rooms/${roomId}/messages`, { content, addressed, clientId: id })
+    source.post(roomId, { content, addressed, clientId: id })
       .then((outcome) => {
         if (outcome.message) setMessages((current) => merge(current, [outcome.message!]));
         dropPending(id);
@@ -286,6 +304,10 @@ export function RoomView({ spaceId, room, myId, access, canManage, onRemoved }: 
   };
 
   const cancelQueued = (messageId: string) => {
+    if (remote) {
+      notify('Only members of the install that hosts this space can cancel a queued request.');
+      return;
+    }
     if (gateway.send({ type: 'room.cancel_queued', roomId, messageId })) lastFrameAtRef.current = Date.now();
     else notify('Not connected: the request cannot be cancelled right now.');
   };
@@ -294,7 +316,7 @@ export function RoomView({ spaceId, room, myId, access, canManage, onRemoved }: 
     const first = messages[0]?.id;
     if (!first) return;
     try {
-      const page = await api.get<{ messages: RoomMessage[]; hasMore: boolean }>(`/spaces/${spaceId}/rooms/${roomId}/messages?before=${first}&limit=${PAGE}`);
+      const page = await source.messages(roomId, { before: first, limit: PAGE });
       setMessages((current) => merge(current, page.messages));
       setHasOlder(page.hasMore);
     } catch (err) {
@@ -305,7 +327,7 @@ export function RoomView({ spaceId, room, myId, access, canManage, onRemoved }: 
   const toggleMute = async () => {
     try {
       await api.patch(`/spaces/${spaceId}/rooms/${roomId}/me`, { muted: !room.muted });
-      await qc.invalidateQueries({ queryKey: roomsKey(spaceId) });
+      await qc.invalidateQueries({ queryKey: source.roomsKey });
     } catch (err) {
       notify(`Could not change the mute: ${(err as Error).message}`);
     }
@@ -327,6 +349,22 @@ export function RoomView({ spaceId, room, myId, access, canManage, onRemoved }: 
       router.push(`/chat?session=${encodeURIComponent(session.id)}`);
     } catch (err) {
       notify(`Could not open your private chat: ${(err as Error).message}`);
+      setAsking(false);
+    }
+  };
+
+  /**
+   * My own agent, here on my install, about this room of a space on another
+   * install (federation §9): its session gets the room's recent messages
+   * each turn, and posts only through its remote space tools, asking me first.
+   */
+  const askMyAgent = async () => {
+    setAsking(true);
+    try {
+      const { session } = await api.post<{ session: { id: string } }>(remotePath(spaceId, ['rooms', roomId, 'agent']), {});
+      router.push(`/chat?session=${encodeURIComponent(session.id)}`);
+    } catch (err) {
+      notify(`Could not open your agent: ${(err as Error).message}`);
       setAsking(false);
     }
   };
@@ -357,7 +395,9 @@ export function RoomView({ spaceId, room, myId, access, canManage, onRemoved }: 
   const lastUnprompted = lastAssistant?.metadata.unprompted ? lastAssistant : null;
   const myTurnRunning = !!myId && queue.running?.requesterId === myId && !queue.running.waiting;
   const typers = Object.values(typing).map((t) => t.name);
-  const memberNames = (members.data ?? []).map((m) => m.username);
+  const memberNames = remote
+    ? (remoteMembers.data ?? []).map((m) => m.displayName)
+    : (localMembers.data ?? []).map((m) => m.username);
 
   return (
     <div className="flex flex-1 min-w-0 min-h-0" data-testid="room-view" data-room-id={roomId}>
@@ -378,7 +418,19 @@ export function RoomView({ spaceId, room, myId, access, canManage, onRemoved }: 
                 <WifiOff className="w-3.5 h-3.5" /> live updates paused — reconnecting
               </span>
             )}
-            {access.role !== 'viewer' && (
+            {remote && access.role !== 'viewer' && (
+              <button
+                type="button"
+                onClick={() => void askMyAgent()}
+                disabled={asking}
+                data-testid="ask-my-agent"
+                title="Ask your own agent, on this install and your models, with this room's recent messages as context; it posts only after you approve"
+                className="inline-flex items-center gap-1.5 px-2 py-1 text-[11px] rounded-xs border border-outline-variant/60 text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high disabled:opacity-50 cursor-pointer"
+              >
+                <Bot className="w-3.5 h-3.5" /> Ask my agent
+              </button>
+            )}
+            {!remote && access.role !== 'viewer' && (
               <button
                 type="button"
                 onClick={() => void askPrivately()}
@@ -389,7 +441,7 @@ export function RoomView({ spaceId, room, myId, access, canManage, onRemoved }: 
                 <MessageSquareLock className="w-3.5 h-3.5" /> Ask privately
               </button>
             )}
-            <button
+            {!remote && <button
               type="button"
               onClick={() => void toggleMute()}
               aria-pressed={room.muted}
@@ -398,7 +450,7 @@ export function RoomView({ spaceId, room, myId, access, canManage, onRemoved }: 
               className="p-1.5 rounded-xs text-on-surface-variant hover:text-on-surface hover:bg-surface-container cursor-pointer"
             >
               {room.muted ? <BellOff className="w-4 h-4" /> : <Bell className="w-4 h-4" />}
-            </button>
+            </button>}
             <button
               type="button"
               onClick={() => setPanel((p) => (p ? null : 'members'))}
@@ -434,11 +486,12 @@ export function RoomView({ spaceId, room, myId, access, canManage, onRemoved }: 
               statusMessage="Octipus is answering you"
               streamingText={myTurnRunning ? streaming?.text ?? null : null}
               emptyLabel="No messages yet — say hello, or ask Octipus"
+              untrusted={remote}
             />
           </>
         )}
 
-        {lastUnprompted && <UnpromptedFeedback key={lastUnprompted.id} spaceId={spaceId} roomId={roomId} messageId={lastUnprompted.id} />}
+        {lastUnprompted && !remote && <UnpromptedFeedback key={lastUnprompted.id} spaceId={spaceId} roomId={roomId} messageId={lastUnprompted.id} />}
 
         <div className="h-5 px-4 text-[11px] font-mono text-on-surface-variant" aria-live="polite" data-testid="room-typing">
           {typers.length > 0 && `${typers.join(', ')} ${typers.length === 1 ? 'is' : 'are'} typing…`}
@@ -463,7 +516,7 @@ export function RoomView({ spaceId, room, myId, access, canManage, onRemoved }: 
       {panel && (
         <aside className="w-72 shrink-0 border-l border-outline-variant/40 flex flex-col min-h-0 font-mono bg-surface-container-lowest" aria-label="Room panel">
           <div className="flex items-center border-b border-outline-variant/40" role="tablist">
-            {(['members', 'memory', 'settings'] as const).map((p) => (
+            {(remote ? (['members'] as const) : (['members', 'memory', 'settings'] as const)).map((p) => (
               <button
                 key={p}
                 type="button"
@@ -480,7 +533,9 @@ export function RoomView({ spaceId, room, myId, access, canManage, onRemoved }: 
             </button>
           </div>
           <div className="flex-1 overflow-y-auto p-3">
-            {panel === 'members' && <MembersPanel spaceId={spaceId} room={room} canManage={canManage && !access.archived} />}
+            {panel === 'members' && (remote
+              ? <RemoteMembersPanel members={remoteMembers.data ?? []} error={remoteMembers.error ? (remoteMembers.error as Error).message : null} />
+              : <MembersPanel spaceId={spaceId} room={room} canManage={canManage && !access.archived} />)}
             {panel === 'memory' && <MemoryPanel spaceId={spaceId} canWrite={access.canWrite} />}
             {panel === 'settings' && <SettingsPanel key={`${room.id}:${room.updatedAt}`} spaceId={spaceId} room={room} canManage={canManage && !access.archived} />}
           </div>

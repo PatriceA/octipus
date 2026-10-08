@@ -31,8 +31,8 @@ const chains = new Map<string, Promise<void>>();
 
 async function deliver(row: Message): Promise<void> {
   if ((await sessionKindOf(row.sessionId)) !== 'room') return;
-  const [{ messageView }, { displayNames }] = await Promise.all([import('./service'), import('@/core/session-history')]);
-  const name = row.authorUserId ? (await displayNames([row.authorUserId])).get(row.authorUserId) ?? null : null;
+  const [{ messageView }, { authorNamesOf }] = await Promise.all([import('./service'), import('@/core/session-history')]);
+  const [name] = await authorNamesOf([row]);
   const message = messageView(row, name);
   publishRoomEvent(row.sessionId, 'room.message', {
     roomId: row.sessionId,

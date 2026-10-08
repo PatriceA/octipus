@@ -1,6 +1,6 @@
 'use client';
 
-import { Archive, Briefcase, Check, ChevronDown, Plus, Send, Settings, Users, UsersRound } from 'lucide-react';
+import { Archive, Briefcase, Check, ChevronDown, Globe, Link2, Plus, Send, Settings, Users, UsersRound } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
@@ -26,7 +26,7 @@ export function RoleBadge({ role }: { role: SpaceRole }) {
 export function WorkspacePicker() {
   const router = useRouter();
   const { user, isAuthenticated } = useAuth();
-  const { workspaces, spaces, activeWorkspace, switchWorkspace, disabled, isLoading, createWorkspace, createSpace, refresh } =
+  const { workspaces, spaces, remoteSpaces, activeWorkspace, switchWorkspace, disabled, isLoading, createWorkspace, createSpace, refresh } =
     useWorkspace();
   const [isOpen, setIsOpen] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
@@ -132,9 +132,12 @@ export function WorkspacePicker() {
       >
         {activeWorkspace?.kind === 'shared'
           ? <UsersRound className="w-3.5 h-3.5 text-on-surface-variant" />
-          : <Briefcase className="w-3.5 h-3.5 text-on-surface-variant" />}
+          : activeWorkspace?.kind === 'remote'
+            ? <Globe className="w-3.5 h-3.5 text-on-surface-variant" />
+            : <Briefcase className="w-3.5 h-3.5 text-on-surface-variant" />}
         <span className="max-w-[140px] truncate">{label}</span>
-        {activeWorkspace?.kind === 'shared' && <RoleBadge role={activeWorkspace.role} />}
+        {activeWorkspace?.kind === 'remote' && <span className="text-[10px] text-outline-variant" data-testid="picker-host-badge">{activeWorkspace.hostBadge}</span>}
+        {(activeWorkspace?.kind === 'shared' || activeWorkspace?.kind === 'remote') && <RoleBadge role={activeWorkspace.role} />}
         <ChevronDown className="w-3 h-3 text-outline-variant" />
       </button>
 
@@ -335,7 +338,67 @@ export function WorkspacePicker() {
                   })
                 )}
               </div>
+              {/* Spaces on other installs (federation §8.3): hosted elsewhere,
+                  reached through this install; each with its host's badge. */}
+              {remoteSpaces.length > 0 && (
+                <>
+                  <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-outline-variant px-3 pt-2 pb-1 border-y border-outline-variant/40 bg-surface-container-low">
+                    <span className="text-primary/70">{"// "}</span><span>on other installs</span>
+                    <span className="ml-auto normal-case text-outline-variant">{remoteSpaces.length}</span>
+                  </div>
+                  <div className="max-h-72 overflow-y-auto" data-testid="remote-spaces">
+                    {remoteSpaces.map((rs) => {
+                      const isActive = rs.id === activeWorkspace?.id;
+                      return (
+                        <div
+                          key={rs.id}
+                          className={cn(
+                            'group w-full flex items-center gap-2 pl-2 pr-2 py-1.5 border-l-2 border-transparent hover:bg-surface-container-high hover:border-primary transition-colors',
+                            isActive && 'border-primary bg-primary-container/30'
+                          )}
+                        >
+                          <button
+                            onClick={() => { switchWorkspace(rs.id); setIsOpen(false); }}
+                            className="flex items-center gap-2 min-w-0 flex-1 cursor-pointer text-left"
+                          >
+                            <span aria-hidden className={cn('w-3 text-center text-primary', isActive ? 'opacity-100' : 'opacity-0')}>
+                              ❯
+                            </span>
+                            <Globe className="w-3.5 h-3.5 text-on-surface-variant shrink-0" />
+                            <div className="min-w-0 flex-1">
+                              <p className="text-[13px] text-on-surface truncate">{rs.spaceName}</p>
+                              <p className="text-[11px] text-on-surface-variant truncate flex items-center gap-1" title={`hosted by ${rs.hostFingerprint}`}>
+                                hosted by {rs.hostBadge}
+                                {rs.link === 'down' && <span className="text-outline-variant">· not connected</span>}
+                              </p>
+                            </div>
+                            <RoleBadge role={rs.role} />
+                            {isActive && <Check className="w-3.5 h-3.5 text-primary shrink-0" />}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { switchWorkspace(rs.id); router.push('/spaces/remote'); setIsOpen(false); }}
+                            title="This space on another install"
+                            aria-label={`About ${rs.spaceName}`}
+                            className="p-1 rounded-xs text-outline-variant hover:text-primary opacity-0 group-hover:opacity-100 focus:opacity-100 cursor-pointer transition-opacity"
+                          >
+                            <Settings className="w-3 h-3" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
               <div className="border-t border-outline-variant/40 py-0.5">
+                <button
+                  onClick={() => { router.push('/spaces/join-remote'); setIsOpen(false); }}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high cursor-pointer transition-colors"
+                  data-testid="join-remote-open"
+                >
+                  <Link2 className="w-3.5 h-3.5" />
+                  join a space on another install…
+                </button>
                 <button
                   onClick={() => { setShowCreateSpace(true); setCreateError(null); }}
                   className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high cursor-pointer transition-colors"

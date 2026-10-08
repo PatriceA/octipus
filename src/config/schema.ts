@@ -55,11 +55,13 @@ export const ollamaConfigSchema = z.object({
 /** A `security.trustedProxies` entry: an IP address, or one with a valid prefix length. */
 function isAddressOrCidr(entry: string): boolean {
   const [address, prefix, extra] = entry.trim().split('/');
-  const family = isIP(address.replace(/^::ffff:(?=\d)/i, ''));
+  const unmapped = address.replace(/^::ffff:(?=\d)/i, '');
+  const family = isIP(unmapped);
   if (family === 0 || extra !== undefined) return false;
   if (prefix === undefined) return true;
-  const bits = Number(prefix);
-  return /^\d+$/.test(prefix) && bits <= (family === 4 ? 32 : 128);
+  // An IPv4-mapped range (`::ffff:10.0.0.0/104`) carries an IPv6 prefix of 96 or more.
+  const bits = Number(prefix) - (unmapped !== address ? 96 : 0);
+  return /^\d+$/.test(prefix) && bits >= 0 && bits <= (family === 4 ? 32 : 128);
 }
 
 // Security configuration schema
@@ -122,6 +124,15 @@ export const securityConfigSchema = z.object({
    * or an admin and are not subject to it.
    */
   registration: z.enum(['open', 'invite_only', 'closed']).default('open'),
+  /**
+   * Whether an account created on the sign-in page (open registration or a
+   * space invite) may run on the install's models and keys
+   * (`users.install_models`, docs/SPACES.md → Who may use the install's
+   * models). Off: it runs only on its own models and what a space sponsors,
+   * until an admin allows it. Admins, SAML, SCIM and admin-created accounts
+   * are not affected.
+   */
+  selfRegisteredInstallModels: z.boolean().default(false),
 });
 
 // API server configuration schema
@@ -584,6 +595,28 @@ export const roomsConfigSchema = z.object({
 });
 
 /**
+ * Spaces across installs (docs/plans/federation-spec.md §4.2). Off by
+ * default: an install neither dials out nor accepts peer links until an
+ * admin picks a mode.
+ */
+export const federationConfigSchema = z.object({
+  /** `visit`: members join spaces on other installs; `host`: members of other installs join spaces here. */
+  mode: z.enum(['off', 'visit', 'host', 'both']).default('off'),
+  /** Private ranges (addresses or CIDR) a peer link may use over plain `ws://`, dialled or accepted. */
+  lanCidrs: z.array(z.string().refine(isAddressOrCidr, {
+    message: 'must be an IP address or a CIDR range (e.g. 192.168.1.0/24)',
+  })).default([]),
+  /** Seconds between link pings; three missed pings close the link. */
+  heartbeatSeconds: z.number().int().min(5).max(300).default(15),
+  /** Live memberships the members of one other install may hold here. */
+  maxVisitorsPerInstance: z.number().int().min(1).max(10_000).default(50),
+  /** Queued or running host agent turns started by one other install's members. */
+  maxRemoteTurnsPerInstance: z.number().int().min(1).max(100).default(5),
+  /** Agent-labelled posts from other installs per room per hour. */
+  agentPostsPerHour: z.number().int().min(0).max(1000).default(20),
+});
+
+/**
  * WS2 — heartbeat loop. A periodic per-user agent turn that reviews standing
  * context and acts or stays silent. Off by default; a cheap deterministic gate
  * (quiet hours, daily cap, quota, "anything pending?" probe) runs before any
@@ -725,6 +758,7 @@ export const configSchema = z.object({
   groupChannels: groupChannelsConfigSchema.prefault({}),
   spaces: spacesConfigSchema.prefault({}),
   rooms: roomsConfigSchema.prefault({}),
+  federation: federationConfigSchema.prefault({}),
   gateway: gatewayConfigSchema.prefault({}),
 });
 
@@ -733,6 +767,8 @@ export type HeartbeatConfig = z.infer<typeof heartbeatConfigSchema>;
 export type SessionsConfig = z.infer<typeof sessionsConfigSchema>;
 export type SpacesConfig = z.infer<typeof spacesConfigSchema>;
 export type RoomsConfig = z.infer<typeof roomsConfigSchema>;
+export type FederationConfig = z.infer<typeof federationConfigSchema>;
+export type FederationMode = FederationConfig['mode'];
 export type GatewayConfig = z.infer<typeof gatewayConfigSchema>;
 export type StorageMode = z.infer<typeof storageModeSchema>;
 export type DatabaseConfig = z.infer<typeof databaseConfigSchema>;

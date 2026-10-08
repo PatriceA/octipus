@@ -1,5 +1,12 @@
 # Workroom and Octipus Swarm Federation — Plan
 
+> **Superseded for spaces.** For spaces shared across installs,
+> [federation-spec.md](federation-spec.md) replaces the peer transport of
+> Part 2 (its own `/federation` endpoint, signed handshake, sealed frames,
+> remote members, visitor link pool); it is built, and documented in
+> [SPACES.md → Across installs](../SPACES.md#across-installs). Part 2's
+> pooled inference and delegation between installs remain a plan.
+
 **Status:** Draft — planning only, no implementation yet
 **Created:** 2026-09-02
 **Scope:** Two features that share one spine. Part 1 is the **Workroom**: several

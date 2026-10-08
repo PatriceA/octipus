@@ -24,6 +24,8 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Portal } from '@/components/ui/portal';
 import { ConnectorsTab } from '@/components/mcp/connectors-tab';
 import { McpBulkPermissionControl, McpToolPermissionControl } from '@/components/mcp/tool-permission-control';
+import { EXPOSURE_HELP, EXPOSURE_LABELS, ServerExposureControl, ToolExposureControl } from '@/components/mcp/exposure-control';
+import { DEFAULT_MCP_EXPOSURE, MCP_EXPOSURES, type McpExposure } from '../../../src/shared/mcp-exposure';
 
 interface MCPServer {
   id: string;
@@ -33,6 +35,9 @@ interface MCPServer {
   transport: 'stdio' | 'sse';
   sseUrl?: string;
   isEnabled: boolean;
+  /** Absent from servers saved before exposure existed: those are `deferred`. */
+  exposure?: McpExposure;
+  toolExposure?: Record<string, McpExposure>;
   status: 'connecting' | 'connected' | 'disconnected' | 'error';
   error?: string;
   toolCount: number;
@@ -66,6 +71,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
   const [authHeader, setAuthHeader] = useState('');
   const [showAuth, setShowAuth] = useState(false);
   const [envVars, setEnvVars] = useState('');
+  const [exposure, setExposure] = useState<McpExposure>(DEFAULT_MCP_EXPOSURE);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
 
@@ -81,6 +87,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
         name,
         transport,
         isEnabled: true,
+        exposure,
       };
 
       const timeout = Number(requestTimeoutSeconds);
@@ -148,6 +155,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
       setServerUrl('');
       setAuthHeader('');
       setEnvVars('');
+      setExposure(DEFAULT_MCP_EXPOSURE);
       setError('');
     } catch (err) {
       setError((err as Error).message);
@@ -311,6 +319,14 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
           )}
 
           <label className="block text-sm text-on-surface/80">
+            Tool exposure
+            <select value={exposure} onChange={event => setExposure(event.target.value as McpExposure)} className="mt-1 w-full px-3 py-2 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm text-on-surface">
+              {MCP_EXPOSURES.map(mode => <option key={mode} value={mode}>{EXPOSURE_LABELS[mode]}</option>)}
+            </select>
+            <span className="mt-1 block text-xs text-on-surface-variant">{EXPOSURE_HELP} You can change it per tool later.</span>
+          </label>
+
+          <label className="block text-sm text-on-surface/80">
             Request timeout (seconds)
             <input type="number" min="1" max="3600" value={requestTimeoutSeconds} onChange={event => setRequestTimeoutSeconds(event.target.value)} className="mt-1 w-full px-3 py-2 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm text-on-surface" />
           </label>
@@ -340,7 +356,9 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
   );
 }
 
-function ServerToolList({ serverId }: { serverId: string }) {
+function ServerToolList({ server }: { server: MCPServer }) {
+  const serverId = server.id;
+  const exposure = server.exposure ?? DEFAULT_MCP_EXPOSURE;
   const { data, isLoading } = useQuery({
     queryKey: ['mcp-tools', serverId],
     queryFn: () => api.get<{ tools: MCPTool[] }>(`/mcp/servers/${serverId}/tools`),
@@ -366,6 +384,7 @@ function ServerToolList({ serverId }: { serverId: string }) {
       <p className="section-label mb-2">
         available tools ({tools.length})
       </p>
+      <ServerExposureControl serverId={serverId} serverName={server.name} exposure={exposure} />
       <p className="text-xs text-on-surface-variant mb-3">
         Permissions are saved for your account, per server and tool, across sessions.
         Allow skips confirmation; Ask requests it each time. Administrative deny rules still apply.
@@ -377,6 +396,7 @@ function ServerToolList({ serverId }: { serverId: string }) {
           <div>
             <p className="text-sm font-mono font-medium text-on-surface/80">{tool.name}</p>
             <p className="text-xs text-on-surface-variant leading-tight">{tool.description}</p>
+            <ToolExposureControl serverId={serverId} toolName={tool.name} exposure={exposure} toolExposure={server.toolExposure ?? {}} />
             <McpToolPermissionControl serverId={serverId} toolName={tool.name} />
           </div>
         </div>
@@ -578,6 +598,11 @@ export default function MCPPage() {
                         <span className="px-1.5 py-0.5 text-[10px] text-on-surface-variant bg-surface-container-high rounded font-mono shrink-0">
                           {server.transport}
                         </span>
+                        {server.exposure && server.exposure !== DEFAULT_MCP_EXPOSURE && (
+                          <span className="px-1.5 py-0.5 text-[10px] text-on-surface-variant bg-surface-container-high rounded font-mono shrink-0" title={EXPOSURE_LABELS[server.exposure]}>
+                            {server.exposure}
+                          </span>
+                        )}
                         {server.status === 'connected' && server.toolCount > 0 && (
                           <span className="flex items-center gap-0.5 text-[10px] text-on-surface-variant shrink-0">
                             <Wrench className="w-3 h-3" />
@@ -662,7 +687,7 @@ export default function MCPPage() {
 
               {expanded.has(server.id) && server.status === 'connected' && (
                 <div className="border-t border-outline-variant/10">
-                  <ServerToolList serverId={server.id} />
+                  <ServerToolList server={server} />
                 </div>
               )}
               {expanded.has(server.id) && server.status !== 'connected' && (
