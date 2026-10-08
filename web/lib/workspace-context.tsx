@@ -247,8 +247,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       if (seq !== refreshSeq.current) return;
       setWorkspaces(wsRes.workspaces);
       setSpaces(spaceRes.spaces);
-      setRemoteSpaces(remoteRes.remoteSpaces);
-      remoteIdsRef.current = new Set(remoteRes.remoteSpaces.map((r) => r.id));
+      // An install that predates federation (or a proxy) can answer without
+      // the list: treat that as no spaces elsewhere rather than crashing.
+      const remoteList = Array.isArray(remoteRes?.remoteSpaces) ? remoteRes.remoteSpaces : [];
+      setRemoteSpaces(remoteList);
+      remoteIdsRef.current = new Set(remoteList.map((r) => r.id));
       setOrgs(orgRes.orgs);
 
       // The selection survives a refresh while it still exists: one of the
@@ -258,7 +261,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       const next =
         wsRes.workspaces.find((w) => w.id === stored) ??
         spaceRes.spaces.find((sp) => sp.id === stored) ??
-        remoteRes.remoteSpaces.find((r) => r.id === stored) ??
+        remoteList.find((r) => r.id === stored) ??
         wsRes.workspaces.find((w) => w.isDefault) ??
         wsRes.workspaces[0] ??
         null;
