@@ -37,6 +37,8 @@ const ALLOWED: Record<string, string> = {
   'core/monitors/delivery.ts': 'monitor owner vs its session',
   // An auth session (login), not a chat.
   'security/auth/session.ts': 'auth session',
+  // A visitor-agent listener against its own personal session (never a room).
+  'core/federation/visitor-agent.ts': 'listener owner vs its personal remote-room session',
 };
 
 describe('canActInSession', () => {

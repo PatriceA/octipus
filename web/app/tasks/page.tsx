@@ -1,5 +1,6 @@
 'use client';
 
+import { RemoteTasks } from '@/components/tasks/remote-tasks';
 import { ArrowLeft, ArrowRight, Columns3, CornerDownRight, List, Lock, NotebookPen, Pencil, Plus, RefreshCw, Ruler, Sparkles, Tag, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -185,6 +186,13 @@ function groupOpenTasks(tasks: Task[], by: GroupBy): { key: string; title: strin
 }
 
 export default function TasksPage() {
+  // A space on another install: its tasks through the remote source (federation §8.3).
+  const { activeWorkspace } = useWorkspace();
+  if (activeWorkspace?.kind === 'remote') return <RemoteTasks key={activeWorkspace.id} remote={activeWorkspace} />;
+  return <LocalTasksPage />;
+}
+
+function LocalTasksPage() {
   const workspaceId = useWorkspaceId();
   const { activeWorkspace } = useWorkspace();
   // A space's board is live (coworking §9.3): `task.changed` from the gateway.

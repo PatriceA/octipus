@@ -288,7 +288,8 @@ async function authorMayAsk(target: RoomListenTarget, candidate: ListenCandidate
   if (!authorId || authorId === BUFFER_BOT_ID) return false;
   const [{ roomAccess }, { can }] = await Promise.all([import('./access'), import('@/security/space-access')]);
   const access = await roomAccess(authorId, target.id);
-  if (!access || !can(access.role, 'run_agent')) return false;
+  // A member of another install never triggers a listen turn (federation §7.1).
+  if (!access || access.remote || !can(access.role, 'run_agent')) return false;
   const { checkSpend } = await import('@/security/spend-budgets');
   const { SpendBudgetExceededError } = await import('@/security/spend-budget-error');
   try {

@@ -186,8 +186,8 @@ function ElapsedTimer({ startTime, active = true }: { startTime: number; active?
 // notes all render markdown identically.
 // ---------------------------------------------------------------------------
 
-function MessageContent({ content }: { content: string }) {
-  return <Markdown content={content} />;
+function MessageContent({ content, untrusted }: { content: string; untrusted?: boolean }) {
+  return <Markdown content={content} untrusted={untrusted} />;
 }
 
 // ---------------------------------------------------------------------------
@@ -227,7 +227,7 @@ function LimitRefusalCard({ limit, fallback }: { limit: LimitRefusal; fallback: 
 // MessageBubble
 // ---------------------------------------------------------------------------
 
-function MessageBubble({ message }: { message: ChatMessageData }) {
+function MessageBubble({ message, untrusted }: { message: ChatMessageData; untrusted?: boolean }) {
   const { role, content, timestamp, classification, metadata } = message;
   const timeStr = new Date(timestamp).toLocaleTimeString();
 
@@ -235,7 +235,7 @@ function MessageBubble({ message }: { message: ChatMessageData }) {
     return (
       <div className="flex justify-center py-2">
         <div className="text-center text-sm italic text-on-surface-variant max-w-lg px-4 py-2 rounded-lg bg-surface-container/60">
-          <MessageContent content={content} />
+          <MessageContent content={content} untrusted={untrusted} />
           <p className="text-[10px] mt-1 text-on-surface-variant/60">{timeStr}</p>
         </div>
       </div>
@@ -311,7 +311,7 @@ function MessageBubble({ message }: { message: ChatMessageData }) {
           <LimitRefusalCard limit={metadata.limit} fallback={content} />
         ) : (
           <div className="bg-surface-container border border-outline-variant/10 px-4 py-3 rounded-2xl rounded-tl-md shadow-xs text-on-surface">
-            <MessageContent content={content} />
+            <MessageContent content={content} untrusted={untrusted} />
           </div>
         )}
 
@@ -816,6 +816,12 @@ interface MessageTimelineProps {
   onOpenFile?: (path: string) => void;
   /** The empty state's text (default "Start a conversation"). */
   emptyLabel?: string;
+  /**
+   * The messages come from another install (a room of a space hosted
+   * there): their markdown loads no image and links nothing of this
+   * install (`Markdown`'s `untrusted`).
+   */
+  untrusted?: boolean;
 }
 
 type TimelineEntry =
@@ -834,6 +840,7 @@ export default function MessageTimeline({
   streamingText,
   onOpenFile,
   emptyLabel = 'Start a conversation',
+  untrusted = false,
 }: MessageTimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -961,7 +968,7 @@ export default function MessageTimeline({
       {timeline.map((entry, idx) => {
         switch (entry.kind) {
           case 'message':
-            return <MessageBubble key={`msg-${entry.data.id}`} message={entry.data} />;
+            return <MessageBubble key={`msg-${entry.data.id}`} message={entry.data} untrusted={untrusted} />;
           case 'agent':
             return <AgentActivityInline key={`agent-${entry.data.id}`} agent={entry.data} onOpenFile={onOpenFile} />;
           case 'team':

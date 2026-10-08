@@ -97,7 +97,7 @@ handlers are reused unchanged.
 |---|---|
 | F-D1 | **One host per space.** Access is live: no sync and no mirror. When the host is offline, so is the space. |
 | F-D2 | **Identity is an Ed25519 keypair per install.** The private key is the vault system secret `federation.identity`, created under an advisory lock. `instance_id` = `base32(sha256(spki))`, 26 characters (130 bits). It is displayed in four groups. |
-| F-D3 | **Own WebSocket endpoint** `/federation`, registered only when `federation.mode ∈ {host, both}`. It is separate from `/gateway`. |
+| F-D3 | **Own WebSocket endpoint** `/federation`, always registered and refusing every peer (4403) unless `federation.mode ∈ {host, both}`, so a mode change needs no restart. It is separate from `/gateway`. |
 | F-D4 | **Mutual signed handshake** binding an **ephemeral X25519 key exchange**. After the handshake, every frame is sealed with ChaCha20-Poly1305 using per-direction keys and a sequence number (§5.3). This holds over TLS as well: frames stay integrity-protected through TLS-terminating proxies. `ws://` is allowed only to or from addresses inside `federation.lanCidrs`. The visitor pins the host fingerprint carried in the invite. |
 | F-D5 | **The invite is the authority on the host.** A space owner's invite is enough to admit a member from another install. The host's admins control `federation.mode` and can block an instance. On B, joining is the user's own action; B's `federation.mode` must allow `visit`. |
 | F-D6 | **A visitor is a `users` row with `kind = 'remote'`.** It is created only when an invite is redeemed, bound to the redeeming instance, and acted for only by a link whose verified fingerprint is that instance. A remote row's role is at most **editor**. |
@@ -120,9 +120,9 @@ handlers are reused unchanged.
 | FI2 | The host checks every visitor operation with the same functions it uses for a local member of the same role and guest scope: gateway frames through `handleMessage`, REST-shaped operations through the same service calls with `memberPrincipal`. A remote member has no path that a local member of that role lacks. |
 | FI3 | A visitor never causes a host tool run, except through the host's sponsored agent (F-D9) under the requester's role. That run gets ASK denied, a federated audience, and a per-instance turn cap. |
 | FI4 | Content from a peer is untrusted. Room posts are fenced as member content in host turns (as today). Remote posts also go through `guardInput` before they are stored. Frames are capped at `gateway.maxFrameBytes`. Yjs updates go through the hub's checks. |
-| FI5 | Only space content leaves the host, through the listed operations. Member lists sent to visitors carry display names, not usernames or e-mail addresses. A room with a remote member is a **federated audience** for every turn in it: personal data of host members and `secret` labels never go to it. |
+| FI5 | Only space content leaves the host, through the listed operations and the outbound allowlist of virtual connections (§7.2). Member lists and room events carry the member-visible name (the username, as local members and guests see it) and never an e-mail field or user settings. A room with a remote member is a **federated audience** for every turn in it, read again at every tool decision: personal data of host members and `secret` labels never go to it. Writes into a space with any remote member are federated egress for every turn in it. |
 | FI6 | Every outbound dial passes the guarded dialer: a public address, or an address inside `federation.lanCidrs`; IP pinned; no redirects; re-checked on every reconnect. |
-| FI7 | Replay and tampering: handshake nonces are single-use (kept in `kv_store` with a TTL); timestamps must fall within ±60 s; after the handshake, AEAD with strictly increasing sequence numbers per direction. |
+| FI7 | Replay and tampering: handshake nonces are single-use (the host's per socket, the visitor's kept in `kv_store` with a TTL once its signature verified); timestamps must fall within ±60 s; after the handshake, AEAD with strictly increasing sequence numbers per direction. |
 | FI8 | B keeps no space content outside the visitor-agent session rows of F-D11. A test greps every text column on B, minus that allowlist. |
 | FI9 | Revocation (a membership, an instance block, or `federation.mode` turned off) ends live access within one round trip. No later frame for that space succeeds. |
 | FI10 | Both ends audit with `instanceId` and the member handle. |
@@ -135,14 +135,14 @@ handlers are reused unchanged.
 ### 4.1 Identity (`src/core/federation/identity.ts`)
 
 - `getInstanceIdentity()`:
-  - Reads `federation.identity` with a vault call that tells **absent** apart from **error**: a new `getSystemSecretStrict` that throws on a vault error instead of returning null.
+  - Reads `federation.identity` with a vault call that tells **absent** apart from **error**: `getReservedSystemSecret`, which throws on a vault error instead of returning null and is the only read that reaches a reserved name.
   - On error, it throws, and federation stays off for that start (logged loudly).
   - When the secret is absent, it takes a Postgres advisory lock, reads again, then generates an Ed25519 key (`crypto.generateKeyPairSync('ed25519')`) and stores the PKCS8 PEM.
   - Returns `{ instanceId, publicKeySpkiB64, sign(bytes), display }`.
-- The name `federation.identity` is reserved: the admin vault routes refuse to list, read, write or delete it.
+- The name `federation.identity` is reserved, enforced inside the vault: `getByName`, `get`, `store`, `setSystemSecret`, `update`, `rotate` and `delete` throw for it and `list` leaves it out, so no admin-supplied reference (a model's `apiKeyRef`, a SCIM token ref) can read it; only `getReservedSystemSecret` and `createSystemSecretOnce` reach it. The admin vault routes answer 403 for it.
 - `verifyEd25519(publicKey, bytes, sig)` is a thin wrapper over `crypto.verify(null, …)`. It accepts SPKI DER, or a raw 32-byte key, which it wraps in the Ed25519 SPKI prefix.
 - `instanceIdOf(spkiB64)` = `base32(sha256(spki)).slice(0, 26)`, lowercase.
-- `shortInstanceLabel(id)` = the first 8 characters, used only next to a badge (§7.4). Identity is always the full id.
+- `shortInstanceLabel(id)` = the first 8 characters, used only in a handle's `@<fp8>` (§6.2). Badges show 12 characters (§7.4). Identity is always the full id.
 
 ### 4.2 Config (the usual five places)
 
@@ -153,7 +153,7 @@ handlers are reused unchanged.
 | `federation.heartbeatSeconds` | `FEDERATION_HEARTBEAT_SECONDS` | `15` | ping interval; 3 missed pings close the link |
 | `federation.maxVisitorsPerInstance` | `FEDERATION_MAX_VISITORS_PER_INSTANCE` | `50` | live memberships one instance may hold here |
 | `federation.maxRemoteTurnsPerInstance` | `FEDERATION_MAX_REMOTE_TURNS_PER_INSTANCE` | `5` | queued or running host turns started by one instance's visitors |
-| `federation.agentPostsPerHour` | `FEDERATION_AGENT_POSTS_PER_HOUR` | `20` | agent-labelled posts per room per hour |
+| `federation.agentPostsPerHour` | `FEDERATION_AGENT_POSTS_PER_HOUR` | `20` | agent-labelled posts per install per room per hour |
 
 - `mode ∈ {host, both}` needs `PUBLIC_URL` / `oauth.publicUrl`. If it is missing, startup logs an error and invites carry no federation part.
 - A change to `mode` applies at once: turning `host` off closes every inbound link, and turning `visit` off closes every outbound one.
@@ -169,10 +169,13 @@ handlers are reused unchanged.
 ### 5.1 Endpoint and dialer
 
 - **Host endpoint.**
-  - `app.ws('/federation')` sits next to `/gateway` in `api/http/serve.ts`. It is registered only when `mode ∈ {host, both}`.
-  - A mode change while the server runs is enforced after the upgrade: close code 4403.
-  - WS upgrades bypass HTTP hooks, so the endpoint does its own per-IP budget: at most 10 un-handshaken links per IP and 30 handshakes per IP per minute.
+  - `app.ws('/federation')` sits next to `/gateway` in `api/http/serve.ts`. It is always registered; while `mode ∉ {host, both}` every socket is refused right after the upgrade with close code 4403, so turning hosting on (or off) applies without a restart. Turning hosting off also closes every open inbound link (4403).
+  - WS upgrades bypass HTTP hooks, so the endpoint does its own budgets, counted per IPv4 address or per IPv6 /64:
+    - before the handshake: at most 10 sockets per address and 256 in all, 30 handshakes per address per minute; a plain frame over 4 KiB is refused (4401) before it is parsed;
+    - sealed links: at most 16 per address and 1024 in all; at most 64 from instances with no `federation_instances` row, which may only send `space.join` (and `ping`) until a join writes their row — anything else is `not_found` (FI1);
+    - the budgets are swept every minute.
   - The handshake must complete within 5 s.
+  - Plain `ws://` is accepted only from a client address inside `lanCidrs`; otherwise the socket must come from a trusted proxy whose rightmost `X-Forwarded-Proto` is `https`/`wss`. A trusted proxy that names no client (no `X-Forwarded-For`/`X-Real-IP`) is not a LAN client, whatever its own address.
 - **Dialer** (`src/core/federation/dialer.ts`): `dialPeer(url, expectedInstanceId)`.
   - `wss:` is required, unless the resolved address is inside `lanCidrs`.
   - The host is resolved and checked: a public address, or one inside `lanCidrs`. Loopback, link-local and metadata addresses are never allowed unless `lanCidrs` explicitly contains them (tests use `127.0.0.1/32`).
@@ -182,35 +185,36 @@ handlers are reused unchanged.
 ### 5.2 Frames
 
 - Before `welcome`, frames are plain JSON: `{ v: 1, type, body }`.
-- After `welcome`, every frame on the wire is `{ v: 1, s: seq, n: nonce, c: ciphertext }`.
+- After `welcome`, every frame on the wire is `{ v: 1, s: seq, c: ciphertext }`. The AEAD nonce is derived from `seq` (four zero bytes, then `seq` as 64-bit big-endian), so it is not sent: each direction has its own fresh key per link, so a (key, nonce) pair never repeats.
   - The plaintext is `{ id, type, as?, conn?, body }`.
   - Requests get `{ type: 'result', re: id, ok, body | error }`.
   - Host events are `{ type: 'event', as, conn, body: <gateway server message> }`.
 - Size: at most `gateway.maxFrameBytes` before sealing.
 - Unknown types get `unsupported`.
-- **Send queue.** Each link counts its queued bytes (`ws.bufferedAmount` plus its own queue). Above 4 MiB the link is closed with 4429.
+- **Send queue.** Each link counts its queued bytes (`ws.bufferedAmount` plus its own queue). Above max(4 MiB, 2 × the largest sealed frame for `gateway.maxFrameBytes`) the link is closed with 4429.
+- **Requests in flight.** A link answers at most 32 of the peer's requests at once; one more is answered `busy` without running.
 
 ### 5.3 Handshake
 
 1. **Host → B:** `hello { protocol: 1, instanceId: A, publicKey: A_pub, nonce: nA, ts, eph: xA_pub, appVersion }`.
 2. **B checks** that `instanceIdOf(A_pub)` equals the pinned id and that `protocol` matches.
-3. **B → host:** `hello { protocol: 1, instanceId: B, publicKey: B_pub, nonce: nB, ts, eph: xB_pub, appVersion, sig: sign_B(T("visitor", nA, nB, A, B, xA_pub, xB_pub, ts)) }`.
+3. **B → host:** `hello { protocol: 1, instanceId: B, publicKey: B_pub, nonce: nB, ts, eph: xB_pub, appVersion, sig: sign_B(T("visitor", protocol, nA, nB, A, B, xA_pub, xB_pub, ts, appVersionA, appVersionB)) }`.
 4. **Host checks:**
    - `instanceIdOf(B_pub) = B`;
-   - the signature;
    - ts within ±60 s;
-   - `nA` is its own and not yet used (kept in `kv_store`, TTL 120 s);
+   - the signature (over its own `nA`, which lives in the socket's state only: one hello per socket, so it cannot be used twice);
+   - only then, that `nB` is new for B (recorded in `kv_store`, TTL 120 s), so unsigned frames cannot fill the store;
    - B is not `blocked`.
-5. **Host → B:** `welcome { sig: sign_A(T("host", nA, nB, A, B, xA_pub, xB_pub, ts)) }`.
+5. **Host → B:** `welcome { sig: sign_A(T("host", protocol, nA, nB, A, B, xA_pub, xB_pub, ts, appVersionA, appVersionB)) }`.
 6. **B verifies** the host's signature.
-7. **Keys.** Both sides derive `HKDF-SHA256(X25519(x, x'), salt = nA‖nB, info = "octipus-fed-1")`, which gives 64 bytes split into two direction keys. Sequence numbers start at 0. A seal failure or an out-of-order sequence number closes the link with 4401.
+7. **Keys.** Both sides derive `HKDF-SHA256(X25519(x, x'), salt = nA‖nB, info = "octipus-fed-1" ‖ SHA-256(T("keys", protocol, nA, nB, A, B, xA_pub, xB_pub, ts, appVersionA, appVersionB)))`, which gives 64 bytes split into two direction keys. Sequence numbers start at 0. A seal failure or an out-of-order sequence number closes the link with 4401.
 
 `T(...)` is the canonical, length-prefixed concatenation of its fields. Failures close the link with 4401 and a reason. Instance rows are written only on the first successful `space.join` (§6.2), never on a bare handshake.
 
 ### 5.4 Heartbeat, limits, close
 
 - **Heartbeat.** `ping`/`pong` every `heartbeatSeconds`; 3 missed pings close the link.
-- **Reconnect.** B reconnects with exponential backoff (1 s up to 60 s, with jitter) while a local user has the space open or an agent turn needs the link.
+- **Reconnect.** B reconnects with exponential backoff (1 s up to 60 s, with jitter) while a local user has the space open or an agent turn needs the link. The backoff starts over only after a link stayed up 30 s. A host that refused the link (4403, 4409) is not redialled until the next explicit request or retain. Turning visiting off closes the links and stops the redials; turning it back on redials every host still retained. A dial that completes after visiting went off is closed, not used.
 - **Per-link limits.**
   - 60 frames per second.
   - `space.join`: 5 per minute per link, and 20 per hour per source IP.
@@ -264,14 +268,15 @@ When the host has `mode ∈ {host, both}` and a public URL:
 3. **The host, in one transaction:**
    1. Previews the invite. A dead invite throws `SpaceError('not_found')`, which is answered as `invite_invalid`.
    2. Refuses an `owner` role (invites never grant it).
-   3. Counts this instance's **live memberships** against `maxVisitorsPerInstance`.
-   4. Upserts `federation_instances` (status `active`; first and last seen). A `blocked` row refuses the join.
-   5. Upserts the remote `users` row with `upsertRemoteMember(tx, instanceId, ref, name)`:
+   3. Upserts `federation_instances` (status `active`; first and last seen). A `blocked` row refuses the join. The row lock serialises joins of one instance.
+   4. Upserts the remote `users` row with `upsertRemoteMember(tx, instanceId, ref, name)`:
       - username `~<slug(name)>@<instanceId[:8]>`, with a numeric suffix on collision;
       - `remote_instance_id = B`;
       - this is the **only** writer of `kind = 'remote'`.
-   6. Calls `acceptInviteInTx(tx, { userId }, token)`.
+   5. Calls `acceptInviteInTx(tx, { userId }, token)`.
+   6. Counts this instance's **live memberships** against `maxVisitorsPerInstance`, the new one included. A re-join of a space the member already belongs to adds none and always passes.
    7. Audits `space_joined_remote`.
+   - Join budgets: 5 a minute per link, 20 an hour per source address; addresses with no join left in the window are pruned once a minute.
 4. **After commit,** `afterInviteAccepted` runs, as it does for local members.
 5. **The host replies** `{ space: { id, name, role, scope }, member: { handle } }`.
 6. **B stores** `remote_spaces(id, user_id, host_instance_id, host_public_key, host_url, space_id, space_name, role, member_handle, joined_at, left_at)`. The row is unique on `(user_id, host_instance_id, space_id)` while `left_at IS NULL`.
@@ -313,7 +318,8 @@ Presence: `publishSpacePresence` already filters by the reader's scope. With the
   - `ConnectionManager.registerVirtual({ userId, instanceId, conn, sink })` creates a `GatewayConnection` with `state: 'active'`.
   - Its fake `ws` has `readyState: 1`, a `send` that hands the message to `sink` (which seals an `event` frame with `as`/`conn`), and a `close` that drops the connection.
   - It is put into `connections` and `byUser` like a real connection, so `getConnectionsByUser`, `closeUserConnections`, `publishToResource` and room/doc pruning all see it.
-  - Context: `clientType: 'peer'` (added to `ClientType`), `trustLevel: 'user'`, `ip: 'peer:<instanceId>'`, no workspace hint, empty `resources` and `eventSubscriptions` = the user's own (so `publishEvent` to the visitor reaches it).
+  - Context: `clientType: 'peer'` (added to `ClientType`), `trustLevel: 'user'`, `ip: 'peer:<instanceId>'`, no workspace hint, empty `resources` and `eventSubscriptions` = `room.mention` and `chat.error` only (never `*`).
+  - Its rate buckets are keyed by (link, visitor), not by connection: every virtual connection of a visitor on a link draws on the same buckets, which outlive `conn.close`.
   - At most 5 per visitor per link, separate from `maxPerUser`. It is dropped when its link closes, on `conn.close` from B, when the visitor's last membership ends, or after 10 idle minutes.
 - **Inbound frames.**
   - A gateway frame from the visitor is checked against an **allowlist of client message types**: `room.subscribe`, `room.unsubscribe`, `room.post`, `room.typing`, `room.read`, `space.subscribe`, `doc.join`, `doc.update`, `doc.awareness`, `doc.leave`, `ping`.
@@ -321,7 +327,7 @@ Presence: `publishSpacePresence` already filters by the reader's scope. With the
   - `room.post` content that starts with `/` is refused for a remote sender, so visitors get no moderation commands.
   - Generic `subscribe`/`unsubscribe` are not on the list. B unsubscribes by sending `conn.close` (or `doc.leave`/`room.unsubscribe`, as listed).
 - **Events.**
-  - Server events for the virtual connection go out on the link, tagged with its `conn`.
+  - Server events for the virtual connection go out on the link, tagged with its `conn`, through an **outbound allowlist** enforced in the sink: the answers and pushes of the allowlisted frames (`error`, `pong`, `subscribed`, `room.catchup`, `room.posted`, `doc.*`, `file.leases`) and the events `room.message`, `room.turn`, `room.presence`, `room.typing`, `room.read`, `room.removed`, `space.presence`, `task.changed`, `room.mention`, `chat.error`. Everything else — `agent.*`, `swarm.*`, `chat.delta`, `chat.response`, permission prompts and other progress of a host turn, which carry raw tool arguments and observations — is dropped. `space.revoked` is sent on the link directly (§7.6).
   - Events published to the visitor's user id (`publishEvent`, such as a requester error from a room turn, `room.mention` or `task.changed`) reach the visitor's virtual connections in the same way.
 
 ### 7.3 REST-shaped operations
@@ -331,7 +337,7 @@ The principal is `memberPrincipal(membership)`. The role is checked here, becaus
 | Frame | Calls | Check |
 |---|---|---|
 | `space.info` | `getSpace` | member |
-| `space.members` | `listMembers` | member; guests see only their rooms' members; **display names only** (FI5) |
+| `space.members` | `listMembers` | member; guests see only their rooms' members; the member-visible name (the username, badged for a remote member), role, `remote` and the install's full id; never an e-mail field (FI5) |
 | `space.rooms` | `listRooms` | membership, private rooms, guest scope |
 | `room.page` | `listRoomMessages` | `roomAccess`; at most 200 per page |
 | `note.list` / `note.read` | `contentRepos(memberPrincipal).notes` | role, scope |
@@ -339,17 +345,17 @@ The principal is `memberPrincipal(membership)`. The role is checked here, becaus
 | `task.list` / `task.read` | `contentRepos(…).tasks` | role, guest rooms |
 | `task.create` | the task create path, status `open` | role may create tasks (editor), as for a local member |
 | `task.checkout` / `task.release` / `task.comment` | the same functions as `/tasks/:id/checkout`, `/release`, `/comments` | as for a local member of that role |
-| `file.list` / `file.read` | `WorkspaceFS.forSpace(workspaceId, { guestFolders })` | role at least viewer; guest folders; read-only; at most 1 MiB per read |
+| `file.list` / `file.read` | `WorkspaceFS.forSpace(workspaceId, { guestFolders })` | role at least viewer; guest folders; read-only; at most 1 MiB per read, read through one handle (at most 1 MiB + 1 bytes, so a growing file is refused), and refused when the encoded answer (base64 for binary) would not fit one link frame |
 | `memory.list` | the space memory read | member, not a guest |
 
 Note proposals key on `session_id` (a uuid). Migration `0137` therefore adds `note_edit_proposals.proposer_key text` with a unique pending index on `(note_id, coalesce(session_id::text, proposer_key))`, and the lock key uses the same value.
 
 ### 7.4 Posts, mentions, display
 
-- **Posts.** A remote post passes `guardInput` before `postRoomMessage`. A refused post returns an `error` result and is not stored.
-  - An agent-labelled post (`agent: true`) is stored with `metadata.agent = true` and counts against `federation.agentPostsPerHour` for the room. The 10-minute "answer only when addressed" rule is cooperative; B's agent loop enforces it (§9).
+- **Posts.** A remote post passes `guardInput` before `postRoomMessage`. A refused post returns an `error` result and is not stored. A post it only warns about is stored with `metadata.guardFlags`; the room transcript marks it `[flagged: …]` and adds a security alert, as for a flagged request.
+  - An agent-labelled post (`agent: true`) is stored with `metadata.agent = true` and counts against `federation.agentPostsPerHour` for its install in the room, counted and inserted under one advisory lock. The 10-minute "answer only when addressed" rule is cooperative; B's agent loop enforces it (§9).
   - The per-visitor `room.post` bucket is the hard bound.
-- **Display.** Everywhere a remote row is shown (`displayNames` in `session-history.ts`, the room transcript in `room-context.ts`, the members list), the name is followed by a host-side **instance badge** (`[B:abcd1234]`, from the verified instance id). An agent-labelled post reads "anna's agent [B:abcd1234]". Local usernames that look like `name@xxxx` get no badge, so the two cannot be confused.
+- **Display.** Everywhere a remote row is shown (`displayNames` in `session-history.ts`, the room transcript in `room-context.ts`, the members list), the name is followed by a host-side **instance badge** (`[B:abcd1234efgh]`, 12 base32 characters of the verified instance id). An agent-labelled post reads "anna's agent [B:abcd1234efgh]". The full id is shown where a badge is listed (the member list's hover, Admin → Federation). Local usernames that look like `name@xxxx` get no badge, so the two cannot be confused.
 - **Mentions.**
   - Only `@~name@fp8` resolves to a remote member.
   - `@name@fp8` keeps its current meaning (a local user whose name contains `@`).
@@ -361,16 +367,18 @@ Note proposals key on `session_id` (a uuid). Migration `0137` therefore adds `no
 - **Trigger.** `postAndQueue` → `handleRoomMessage` passes `trigger: 'remote'` when the author is a remote row. `RoomRequest` stores the trigger, and `runRoomTurn` accepts `'room' | 'listen' | 'remote'`. `fundingFor` decides: in `own` spaces it refuses, and the visitor gets the existing "funding off" error event.
 - **Turn cap.** `enqueueRoomTurn` also counts queued and running turns per instance against `maxRemoteTurnsPerInstance`.
 - **Approvals.** `routeApprovalFor` denies `ask_human` when `trigger === 'remote'`, and the room strip shows "a host member must run this".
-- **Federated audience.** `AgentContext` gains `audienceFederated: boolean`. It is true when the run's trigger is `remote`, **or** when the room has any remote member (one `EXISTS` read at spawn). It is carried on the run, not the session, because a room session is shared by local and remote turns. The flow guard and the consent prompt treat a federated run as audience `federated`, which is wider than `space`:
+- **Federated audience.** `AgentContext` gains `audienceFederated: boolean`. It is true when the run's trigger is `remote`, **or** when the room has any remote member (one `EXISTS` read at spawn). It is carried on the run, not the session, because a room session is shared by local and remote turns. A member of another install may join while a turn runs, so `routeApprovalFor` reads it again at every tool decision, and the room reply reads it again before it is posted (a cached `EXISTS`, keyed on the space's membership version and at most 30 s old). The flow guard treats a federated run as audience `federated`, which is wider than `space`:
   - personal reads of host members are refused;
-  - `secret` labels are refused;
-  - the I6 consent text reads "members of this room on other installs will read it".
+  - `secret` reads are refused;
+  - once the session holds a `private` or `secret` label, any egress (a send out, or a write into the space) is refused;
+  - a room answer that drew on personal data or credential material is not posted when the room gained a remote member during the turn; the requester hears why.
+- **Space-wide stores.** When the space has any remote member, a write into its notes, files, memory or tasks is federated egress for every turn in that space, private sessions and room turns alike: with a `secret` label it is refused, and the I6 consent text adds "members of this space on other installs will read it".
 - **Accounting.** The turn's cost row carries `funding: 'sponsor'` and `metadata.remoteInstance`.
 
 ### 7.6 Revocation and blocking
 
 - **Membership changes.** `onMembershipChanged(workspaceId, userId)` gets one more step for a remote row: send `space.revoked { spaceId }` on the visitor's link. The existing steps prune room sockets, doc hub peers and leases of that space for the virtual connections, because they are ordinary connections. The virtual connections are closed only when the visitor has no membership left on this host.
-- **Blocking an instance.** `POST /api/admin/federation/instances/:id/block` sets `status = 'blocked'`, closes the link (4403), removes every membership of that instance's rows through the normal path, and audits. The data door (§7.1) refuses its rows at once, even before removal finishes. `unblock` restores the status only.
+- **Blocking an instance.** `POST /api/admin/federation/instances/:id/block` sets `status = 'blocked'`, closes the link (4403), removes every membership of that instance's rows through the normal path — each removal on its own, the admin as its audit actor (FI10), a failure reported as a warning while the others go on — and audits the block whatever happened to the removals. The data door (§7.1) refuses its rows at once, even before removal finishes. `unblock` restores the status only.
 - **Federation turned off.** `federation.mode` without `host` closes inbound links, and the data door refuses remote rows at once.
 
 ---
@@ -503,7 +511,7 @@ The suite runs two in-process installs with separate data dirs and identities. T
     - `@anna@fp8` stays local.
     - `@octipus@B` does not start the host agent.
     - Badges render.
-    - Member lists sent to visitors carry no usernames or emails.
+    - Member lists, room pages and presence sent to visitors carry no e-mail field.
 14. **The visitor's agent.**
     - The `remote-space` audience turns memory, learning, indexing and compaction off.
     - Only the remote tools and non-personal reads are offered.

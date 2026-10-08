@@ -140,6 +140,11 @@ export function wireMessageHandler(hub: GatewayHub): void {
   hub.setConnectionClosedHandler((context) => {
     // Rooms and spaces it was in show it gone (coworking §6.6).
     presenceAfterClose(context);
+    // Spaces on other installs it used: their hosts drop its connections
+    // there (`conn.close`, federation §8.2).
+    import('@/core/federation/visitor-ops')
+      .then(({ remoteConnectionClosed }) => remoteConnectionClosed(context))
+      .catch((err: unknown) => coreLogger.error({ err, connectionId: context.connectionId }, 'Could not close the remote connections of a closed connection'));
     // Live documents the connection had open: it leaves them (the last one
     // out persists the note).
     import('@/core/docs')
@@ -224,6 +229,14 @@ export function wireMessageHandler(hub: GatewayHub): void {
         break;
       }
 
+      // A frame for a space on another install (federation §8.2): the
+      // pointer row must be this user's; the host checks the rest.
+      case 'remote.frame': {
+        const { handleRemoteFrame } = await import('@/core/federation/visitor-ops');
+        await handleRemoteFrame(hub, connectionId, context, message);
+        break;
+      }
+
       default:
         // Spaces and rooms (coworking §6.6): access-checked per frame.
         if (isRoomFrame(message)) {
@@ -254,6 +267,13 @@ const CHAT_FRAMES: ReadonlySet<string> = new Set([
  */
 export function frameScopeError(context: Pick<ConnectionContext, 'scopes'>, message: ClientMessage): string | null {
   if (scopesSatisfy(context.scopes, API_SCOPES.CHAT)) return null;
+  // A frame for a space on another install: judged as the frame it carries.
+  if (message.type === 'remote.frame') {
+    const inner = message.frame as { type: string; content?: unknown; addressed?: unknown };
+    const asks = inner.type === 'room.post' && typeof inner.content === 'string' && !inner.content.trim().startsWith('/')
+      && (inner.addressed === true || mentionsOctipus(inner.content));
+    return asks ? `API token missing required scope "${API_SCOPES.CHAT}"` : null;
+  }
   const drives = CHAT_FRAMES.has(message.type)
     || (message.type === 'room.post' && !message.content.trim().startsWith('/') && (message.addressed === true || mentionsOctipus(message.content)));
   return drives ? `API token missing required scope "${API_SCOPES.CHAT}"` : null;

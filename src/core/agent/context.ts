@@ -32,6 +32,8 @@ export interface AgentScope {
   readonly funding: AgentFunding;
   /** Who pays when `funding` is `sponsor` (§9.1); null or absent otherwise. */
   readonly sponsor?: AgentSponsor | null;
+  /** Members of other installs read the run (federation §7.5, `AgentContext.audienceFederated`). Absent means no. */
+  readonly audienceFederated?: boolean;
 }
 
 /** Triggers that have a producer inside a space (S1: private sessions; rooms and listen from S2/S5). */
@@ -136,7 +138,7 @@ async function readSpace(userId: string, workspaceId: string): Promise<AgentSpac
     throw new SpaceError('forbidden_role', `Your role (${membership.role}) cannot run the agent in this space`);
   }
   if (await isSpaceArchived(workspaceId)) throw new SpaceError('archived', 'This space is archived');
-  return { workspaceId, role: membership.role, scope: membership.scope };
+  return { workspaceId, role: membership.role, scope: membership.scope, remote: !!membership.remote };
 }
 
 /**
@@ -164,6 +166,12 @@ export async function resolveAgentScope(input: {
   if (resolved.space && !SPACE_TRIGGERS.has(trigger)) {
     throw new SpaceError('forbidden_role', `A ${trigger} run cannot start in a space`);
   }
+  // A member of another install starts host turns only in rooms, and only
+  // as `remote` turns (federation §7.5): no private session, agent or
+  // pipeline of theirs runs here.
+  if (resolved.space?.remote || trigger === 'remote') {
+    throw new SpaceError('forbidden_role', 'A member from another install asks Octipus only in rooms');
+  }
   // A guest's `run_agent` holds in the rooms of their scope only (S6): no
   // private session, agent or pipeline of theirs runs in the space.
   if (resolved.space?.scope) {
@@ -177,20 +185,32 @@ async function resolveRoomScope(
   userId: string,
   trigger: AgentTrigger,
 ): Promise<AgentScope> {
-  // A room turn someone asked for, or the turn after a positive listen probe (§9.3).
-  if (trigger !== 'room' && trigger !== 'listen') throw new Error('Session not found');
+  // A room turn someone asked for, the turn after a positive listen probe
+  // (§9.3), or a turn a member of another install asked for (federation §7.5).
+  if (trigger !== 'room' && trigger !== 'listen' && trigger !== 'remote') throw new Error('Session not found');
   if (!session.id || !isRealUserId(userId)) throw new Error('Session not found');
   const { roomAccess } = await import('@/core/rooms/access');
   const access = await roomAccess(userId, session.id);
   if (!access) throw new SpaceError('not_found', 'Room not found');
+  // A remote member's turns are `remote` turns, and only theirs are.
+  if ((trigger === 'remote') !== (access.remote !== null)) {
+    throw new SpaceError('forbidden_role', trigger === 'remote' ? 'Only a member from another install starts a remote turn' : 'A member from another install starts remote turns only');
+  }
   const resolved = await resolveTurnWorkspace(userId, access.room.workspaceId);
   if (!resolved.space) throw new Error('A room lives in a space');
-  return scopeIn(resolved.workspaceId, resolved.space, trigger);
+  const scope = await scopeIn(resolved.workspaceId, resolved.space, trigger);
+  // Read at spawn; the approval route and the room reply read it again,
+  // since a member of another install may join while the turn runs.
+  const { roomHasRemoteMember } = await import('@/core/federation/audience');
+  return { ...scope, audienceFederated: trigger === 'remote' || await roomHasRemoteMember(session.id, access.room.workspaceId) };
 }
 
-/** A child's scope: its parent's workspace, space, trigger, funding and sponsor, unchanged. */
-export function inheritScope(parent: Pick<AgentContext, 'workspaceId' | 'space' | 'trigger' | 'funding' | 'sponsor'>): AgentScope {
-  return { workspaceId: parent.workspaceId ?? null, space: parent.space, trigger: parent.trigger, funding: parent.funding, sponsor: parent.sponsor ?? null };
+/** A child's scope: its parent's workspace, space, trigger, funding, sponsor and audience, unchanged. */
+export function inheritScope(parent: Pick<AgentContext, 'workspaceId' | 'space' | 'trigger' | 'funding' | 'sponsor' | 'audienceFederated'>): AgentScope {
+  return {
+    workspaceId: parent.workspaceId ?? null, space: parent.space, trigger: parent.trigger, funding: parent.funding, sponsor: parent.sponsor ?? null,
+    audienceFederated: parent.audienceFederated === true,
+  };
 }
 
 /**
@@ -266,6 +286,7 @@ export function buildAgentContext(input: AgentContextInput): AgentContext {
     trigger: input.scope.trigger,
     funding: input.scope.funding,
     sponsor: input.scope.funding === 'sponsor' ? requireSponsor(input.scope) : null,
+    audienceFederated: input.scope.audienceFederated === true,
     topic: input.topic,
     model: input.model,
     modelName: input.modelName,

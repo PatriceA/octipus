@@ -70,32 +70,74 @@ async function getLocalWhisper() {
 }
 
 /**
- * Handle telephony provider webhook events (call answered, speech gathered, hangup).
+ * The URL a telephony provider signed: the public base (`voice.publicUrl`)
+ * with the path and query this request arrived on — `request.url` is the
+ * internal one (localhost) behind a proxy.
  */
-async function handleVoiceWebhook(provider: string, body: Record<string, unknown>, headers: Record<string, string>, rawUrl: string): Promise<string> {
-  // Resolve the public webhook URL — request.url is the internal URL (localhost),
-  // but Twilio needs the public URL for callbacks.
+function signedWebhookUrl(publicBase: string, rawUrl: string): string {
+  if (!publicBase) return rawUrl;
+  const u = new URL(rawUrl);
+  return `${publicBase.replace(/\/+$/, '')}${u.pathname}${u.search}`;
+}
+
+/** The webhook's fields: form-encoded (Twilio, Plivo) or JSON (Telnyx). */
+function webhookFields(raw: string, contentType: string): Record<string, unknown> {
+  if (contentType.includes('x-www-form-urlencoded')) return Object.fromEntries(new URLSearchParams(raw).entries());
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Handle telephony provider webhook events (call answered, speech gathered, hangup).
+ *
+ * The signature is checked over the exact bytes the provider sent (`raw`)
+ * before anything is parsed; a webhook that does not verify is refused with
+ * 403 and does nothing.
+ */
+async function handleVoiceWebhook(
+  provider: string,
+  raw: string,
+  request: Request,
+): Promise<{ status: 403 } | { status: 200; xml: string }> {
+  const headers: Record<string, string> = {};
+  request.headers.forEach((v, k) => { headers[k] = v; });
   const { getSettingsService } = await import('@/config/settings-service');
   const settingsSvc = getSettingsService();
   const publicBase = (await settingsSvc.get('voice.publicUrl') as string) || '';
-  const url = publicBase ? `${publicBase}/api/voice/webhook/${provider}` : rawUrl;
+  const url = signedWebhookUrl(publicBase, request.url);
   const { getTelephonyProvider, getCallManager } = await import('@/voice/telephony');
   const telephonyProvider = await getTelephonyProvider(provider);
 
   if (!telephonyProvider) {
-    return '<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>';
+    return { status: 200, xml: '<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>' };
   }
 
-  // Verify webhook signature
-  if (!telephonyProvider.verifyWebhook(headers, JSON.stringify(body), url)) {
-    apiLogger.warn({ provider }, 'Voice webhook signature verification failed');
-    // Continue anyway for now — some dev setups don't have signing configured
+  if (!telephonyProvider.verifyWebhook(headers, raw, url)) {
+    apiLogger.warn({ provider }, 'Voice webhook refused: signature verification failed');
+    return { status: 403 };
   }
+  const body = webhookFields(raw, headers['content-type'] ?? '');
+  return { status: 200, xml: await answerVoiceWebhook(provider, body, url, telephonyProvider, getCallManager(), publicBase) };
+}
 
+/** Act on a verified webhook; returns the provider's XML answer. */
+async function answerVoiceWebhook(
+  provider: string,
+  body: Record<string, unknown>,
+  url: string,
+  telephonyProvider: import('@/voice/telephony').TelephonyProvider,
+  callManager: import('@/voice/telephony').CallManager,
+  publicBase: string,
+): Promise<string> {
+  const { getSettingsService } = await import('@/config/settings-service');
+  const settingsSvc = getSettingsService();
   // Debug: log all webhook fields to diagnose speech recognition issues
   apiLogger.info({ provider, bodyKeys: Object.keys(body), callStatus: body.CallStatus, speechResult: body.SpeechResult ? 'present' : 'absent', callSid: body.CallSid }, 'Voice webhook received');
 
-  const callManager = getCallManager();
   const providerCallId = (body.CallSid || body.call_control_id || body.RequestUUID || '') as string;
   let session = callManager.getByProviderCallId(providerCallId);
 
@@ -511,31 +553,24 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
   )
 
   // Telephony webhook — receives call events from Twilio/Telnyx/Plivo.
-  // Twilio sends application/x-www-form-urlencoded which Elysia doesn't auto-parse.
-  // Use a custom `parse` hook to handle both form-urlencoded and JSON.
+  // The body stays raw text: the signature covers the exact bytes, and the
+  // fields (form-urlencoded or JSON) are parsed only once it verifies.
   .post(
     '/webhook/:provider',
-    async ({ params, body, request }) => {
-      const headers: Record<string, string> = {};
-      request.headers.forEach((v, k) => { headers[k] = v; });
-
-      const xml = await handleVoiceWebhook(params.provider, body as Record<string, unknown>, headers, request.url);
-
-      return new Response(xml, {
+    async ({ params, body, request, set }) => {
+      const out = await handleVoiceWebhook(params.provider, body as string, request);
+      if (out.status === 403) {
+        set.status = 403;
+        return { error: 'Webhook signature verification failed' };
+      }
+      return new Response(out.xml, {
         headers: { 'Content-Type': 'application/xml' },
       });
     },
     {
       params: t.Object({ provider: t.String() }),
-      type: 'text',  // Accept raw text so we can parse it ourselves
-      async parse({ request }) {
-        const ct = request.headers.get('content-type') || '';
-        const raw = await request.text();
-        if (ct.includes('x-www-form-urlencoded')) {
-          return Object.fromEntries(new URLSearchParams(raw).entries());
-        }
-        try { return JSON.parse(raw); } catch { return {}; }
-      },
+      type: 'text',
+      parse: ({ request }) => request.text(),
       detail: { tags: ['voice'] },
     }
   )
@@ -543,24 +578,18 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
   // Telephony webhook status callback
   .post(
     '/webhook/:provider/status',
-    async ({ params, body, request }) => {
-      const headers: Record<string, string> = {};
-      request.headers.forEach((v, k) => { headers[k] = v; });
-
-      await handleVoiceWebhook(params.provider, body as Record<string, unknown>, headers, request.url);
+    async ({ params, body, request, set }) => {
+      const out = await handleVoiceWebhook(params.provider, body as string, request);
+      if (out.status === 403) {
+        set.status = 403;
+        return { error: 'Webhook signature verification failed' };
+      }
       return { ok: true };
     },
     {
       params: t.Object({ provider: t.String() }),
       type: 'text',
-      async parse({ request }) {
-        const ct = request.headers.get('content-type') || '';
-        const raw = await request.text();
-        if (ct.includes('x-www-form-urlencoded')) {
-          return Object.fromEntries(new URLSearchParams(raw).entries());
-        }
-        try { return JSON.parse(raw); } catch { return {}; }
-      },
+      parse: ({ request }) => request.text(),
       detail: { tags: ['voice'] },
     }
   )

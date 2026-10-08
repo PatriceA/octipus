@@ -1,6 +1,6 @@
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
-import { getVault } from '@/security/vault';
+import { getVault, isReservedSecretName } from '@/security/vault';
 import { apiLogger, coreLogger } from '@/utils/logger';
 
 /** Secret names that, when changed, require a telephony provider cache reset. */
@@ -16,6 +16,20 @@ function resetTelephonyIfNeeded(secretName: string): void {
     import('@/voice/telephony').then(m => m.resetTelephonyProvider()).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in vault'));
     apiLogger.info({ secretName }, 'Telephony provider cache reset after credential change');
   }
+}
+
+const RESERVED_ERROR = 'This secret is reserved for the install itself';
+
+/**
+ * The name of credential `id` as `user` addresses it: their own row, or a
+ * system row for an admin (cache invalidation after a rotate).
+ */
+async function credentialName(user: { id: string; isAdmin: boolean }, id: string): Promise<string | undefined> {
+  const vault = getVault();
+  const own = (await vault.list(user.id)).find((e) => e.id === id);
+  if (own) return own.name;
+  if (!user.isAdmin) return undefined;
+  return (await vault.list('system')).find((e) => e.id === id)?.name;
 }
 
 export const vaultRoutes = new Elysia({ prefix: '/vault' })
@@ -34,7 +48,7 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
       });
       // Admins also see system-level credentials, but avoid duplicates if user IS system
       const systemEntries = (user.isAdmin && user.id !== 'system') ? await vault.list('system') : [];
-      return { credentials: [...entries, ...systemEntries] };
+      return { credentials: [...entries, ...systemEntries].filter((e) => !isReservedSecretName(e.name)) };
     },
     {
       query: t.Object({
@@ -58,6 +72,11 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
       if ((body.systemLevel || body.scope === 'system') && !user.isAdmin) {
         set.status = 403;
         return { error: 'Admin access required to write a system-scoped secret' };
+      }
+
+      if (isReservedSecretName(body.name)) {
+        set.status = 403;
+        return { error: RESERVED_ERROR };
       }
 
       const vault = getVault();
@@ -136,9 +155,15 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
   // Update credential
   .patch(
     '/:id',
-    async ({ user, params, body }) => {
+    async ({ user, params, body, set }) => {
       if (!user) {
         return { error: 'Not authenticated' };
+      }
+
+      // The vault refuses it too; answering 403 here says why.
+      if (await getVault().isReservedSystemCredential(params.id)) {
+        set.status = 403;
+        return { error: RESERVED_ERROR };
       }
 
       const vault = getVault();
@@ -177,9 +202,15 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
   // Delete credential
   .delete(
     '/:id',
-    async ({ user, params }) => {
+    async ({ user, params, set }) => {
       if (!user) {
         return { error: 'Not authenticated' };
+      }
+
+      // The vault refuses it too; answering 403 here says why.
+      if (await getVault().isReservedSystemCredential(params.id)) {
+        set.status = 403;
+        return { error: RESERVED_ERROR };
       }
 
       const vault = getVault();
@@ -204,7 +235,7 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
   // Rotate credential
   .post(
     '/:id/rotate',
-    async ({ user, params, body }) => {
+    async ({ user, params, body, set }) => {
       if (!user) {
         return { error: 'Not authenticated' };
       }
@@ -212,11 +243,11 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
       const vault = getVault();
 
       // Look up the credential name before rotating (for cache invalidation)
-      const entries = await vault.list(user.id);
-      const credEntry = entries.find(e => e.id === params.id);
-      const systemEntries = user.isAdmin ? await vault.list('system') : [];
-      const systemEntry = systemEntries.find(e => e.id === params.id);
-      const secretName = credEntry?.name || systemEntry?.name;
+      if (await vault.isReservedSystemCredential(params.id)) {
+        set.status = 403;
+        return { error: RESERVED_ERROR };
+      }
+      const secretName = await credentialName(user, params.id);
 
       let rotated = await vault.rotate(user.id, params.id, body.value);
       if (!rotated && user.isAdmin) {

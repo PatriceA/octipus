@@ -181,6 +181,8 @@ export interface ProposalInput {
   workspaceId: string;
   userId: string;
   sessionId: string | null;
+  /** A proposer without a session (`remote:<user id>`); one of the two keys the pending proposal. */
+  proposerKey?: string | null;
   agentId: string | null;
   action: NoteEditProposalAction;
   title: string | null;
@@ -190,21 +192,26 @@ export interface ProposalInput {
 }
 
 /**
- * Create the session's pending proposal for the note, or update it (its
- * base stays the one it was first made from only when the new write names
- * the same base; a write from a newer read replaces the base too).
+ * Create the session's (or the proposer's) pending proposal for the note,
+ * or update it (its base stays the one it was first made from only when the
+ * new write names the same base; a write from a newer read replaces the
+ * base too).
  */
 export async function upsertPendingProposal(input: ProposalInput): Promise<NoteEditProposal> {
   const db = getDb();
+  if (input.sessionId && input.proposerKey) throw new Error('A proposal is keyed by its session or its proposer, not both');
   return db.transaction(async (tx) => {
-    if (input.sessionId) {
+    const keyed = input.sessionId ? eq(noteEditProposals.sessionId, input.sessionId)
+      : input.proposerKey ? and(isNull(noteEditProposals.sessionId), eq(noteEditProposals.proposerKey, input.proposerKey))
+      : null;
+    if (keyed) {
       const [existing] = await tx
         .select()
         .from(noteEditProposals)
         .where(and(
           eq(noteEditProposals.noteId, input.noteId),
           eq(noteEditProposals.workspaceId, input.workspaceId),
-          eq(noteEditProposals.sessionId, input.sessionId),
+          keyed,
           eq(noteEditProposals.status, 'pending'),
         ))
         .for('update')
@@ -226,7 +233,7 @@ export async function upsertPendingProposal(input: ProposalInput): Promise<NoteE
         return updated;
       }
     }
-    const [created] = await tx.insert(noteEditProposals).values({ ...input, status: 'pending' }).returning();
+    const [created] = await tx.insert(noteEditProposals).values({ ...input, proposerKey: input.proposerKey ?? null, status: 'pending' }).returning();
     return created;
   });
 }

@@ -98,6 +98,14 @@ ROOMS_MAX_QUEUED_PER_MEMBER=3         # Requests one member may have waiting in 
 ROOMS_APPROVAL_TIMEOUT_MINUTES=30     # A room turn waiting this long on an approval gives up
 ROOMS_TRANSCRIPT_WINDOW_CHARS=6000    # Room transcript after the summary before the room is compacted
 
+# ─── Spaces across installs (federation) ─────────────────────
+FEDERATION_MODE=off                   # off | visit | host | both (host needs PUBLIC_URL)
+FEDERATION_LAN_CIDRS=                 # Ranges a peer link may use over plain ws:// (e.g. 192.168.1.0/24)
+FEDERATION_HEARTBEAT_SECONDS=15       # Link ping interval; three missed pings close the link
+FEDERATION_MAX_VISITORS_PER_INSTANCE=50     # Live memberships one other install may hold here
+FEDERATION_MAX_REMOTE_TURNS_PER_INSTANCE=5  # Host agent turns one other install's members may have queued or running
+FEDERATION_AGENT_POSTS_PER_HOUR=20    # Agent-labelled posts from other installs per room per hour
+
 WORKSPACE_PATH=./workspace
 SEARXNG_URL=http://localhost:8888         # SearXNG meta-search (optional)
 
@@ -207,6 +215,25 @@ described in [SPACES.md → Settings](SPACES.md#settings).
 | `rooms.maxQueuedPerMember` | 3 | Requests one member may have waiting in a room. Env: `ROOMS_MAX_QUEUED_PER_MEMBER`. |
 | `rooms.approvalTimeoutMinutes` | 30 | A room turn waiting this long on its requester's approval gives up. Env: `ROOMS_APPROVAL_TIMEOUT_MINUTES`. |
 | `rooms.transcriptWindowChars` | 6000 | Room transcript kept verbatim after the summary before the room is compacted. Env: `ROOMS_TRANSCRIPT_WINDOW_CHARS`. |
+
+## Federation Config
+
+Spaces across installs (design: [plans/federation-spec.md](plans/federation-spec.md)).
+Off by default. Each install has an Ed25519 identity, created on first use and
+kept in the vault as the reserved system secret `federation.identity`, which
+the vault API does not list, change or delete: peers pin it. When this install
+hosts, other installs dial `/federation` on it; the endpoint is always
+registered and refuses every peer (close code 4403) unless `federation.mode`
+is `host` or `both`, so a mode change applies without a restart.
+
+| Key | Default | Purpose |
+|---|---|---|
+| `federation.mode` | `off` | `off`, `visit` (members here join spaces on other installs), `host` (members of other installs join spaces here) or `both`. Hosting needs `PUBLIC_URL`; without it startup logs an error and invites carry no federation part. A change applies at once: turning hosting off closes every inbound link, turning visiting off every outbound one. Env: `FEDERATION_MODE`. |
+| `federation.lanCidrs` | `[]` | Addresses or CIDR ranges a peer link may use over plain `ws://`, dialled or accepted. Everything else needs `wss://` to a public address (or, inbound, a trusted proxy that terminated TLS). Loopback, link-local and private addresses are never dialled unless listed here. Env: `FEDERATION_LAN_CIDRS` (comma-separated). |
+| `federation.heartbeatSeconds` | 15 | Ping interval on a peer link; three missed pings close it. Env: `FEDERATION_HEARTBEAT_SECONDS`. |
+| `federation.maxVisitorsPerInstance` | 50 | Live space memberships the members of one other install may hold here. Env: `FEDERATION_MAX_VISITORS_PER_INSTANCE`. |
+| `federation.maxRemoteTurnsPerInstance` | 5 | Host agent turns, queued or running, that one other install's members may have started here. Env: `FEDERATION_MAX_REMOTE_TURNS_PER_INSTANCE`. |
+| `federation.agentPostsPerHour` | 20 | Posts labelled as a visitor's agent that one room accepts per hour. Env: `FEDERATION_AGENT_POSTS_PER_HOUR`. |
 
 ## Reverse proxy
 

@@ -2375,7 +2375,7 @@ Details: [docs/SPACES.md](../SPACES.md), "Guests" and "Registration modes"
 
 S7 itself is a contract on the unbuilt federation transport; only the member
 representation is built (migration `0135_guests_remote`; see
-[docs/SPACES.md](../SPACES.md), "Across installs (contract)").
+[docs/SPACES.md](../SPACES.md), "Across installs").
 
 - **Remote users are rows that cannot sign in.** `users.kind = 'remote'` with
   `remote_instance_id` and `remote_user_ref`; sessions, API tokens,

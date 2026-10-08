@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { cors, Elysia, listen, type RunningServer } from '@/api/http';
 import { getConfig } from '@/config';
+import { setupFederationWebSocket } from '@/core/federation/host-server';
 import { getDb } from '@/db/postgres';
 import { users } from '@/db/schema/users';
 import { getApiTokenManager, looksLikeApiToken } from '@/security/api-tokens';
@@ -18,6 +19,7 @@ import { authGuard } from './middleware/auth-guard';
 import { rateLimitMiddleware } from './middleware/rate-limit';
 import { adminRoutes } from './routes/admin';
 import { adminApprovalRoutes } from './routes/admin-approvals';
+import { federationAdminRoutes } from './routes/federation-admin';
 import { agentRoutes } from './routes/agents';
 import { apiTokenRoutes } from './routes/api-tokens';
 import { artifactPageRoutes, artifactPageRoutesFallback } from './routes/artifact-pages';
@@ -57,6 +59,7 @@ import { orgAdminRoutes, orgMeRoutes, workspaceMeRoutes } from './routes/orgs';
 import { inviteRoutes, spaceRoutes } from './routes/spaces';
 import { meWorkRoutes } from './routes/me-work';
 import { roomRoutes } from './routes/rooms';
+import { remoteSpaceRoutes } from './routes/remote-spaces';
 import { samlRoutes } from './routes/saml';
 import { scimRoutes } from './routes/scim';
 import { pipelineRoutes } from './routes/pipelines';
@@ -414,11 +417,13 @@ export function createServer() {
         .use(meWorkRoutes)
         .use(adminRoutes)
         .use(adminApprovalRoutes)
+        .use(federationAdminRoutes)
         .use(orgAdminRoutes)
         .use(orgMeRoutes)
         .use(workspaceMeRoutes)
         .use(spaceRoutes)
         .use(roomRoutes)
+        .use(remoteSpaceRoutes)
         .use(inviteRoutes)
         .use(scimRoutes)
         .use(samlRoutes)
@@ -499,6 +504,10 @@ export function createServer() {
 
   // Gateway WebSocket hub (/gateway): the web and the TUI
   setupGatewayWebSocket(app as any);
+
+  // Peer links from other installs (/federation): always registered, refused
+  // with 4403 while this install does not host (docs/plans/federation-spec.md §5.1)
+  setupFederationWebSocket(app as any);
 
   return app;
 }

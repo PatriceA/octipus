@@ -14,15 +14,26 @@
 import { BlockList, isIP } from 'node:net';
 import { getConfig } from '@/config';
 import { securityLogger } from '@/utils/logger';
+import { ipv6Groups } from '@/utils/sanitize';
 
 /** What `clientIp` answers when there is no socket (an in-process `app.handle` call). */
 export const UNKNOWN_CLIENT_IP = 'unknown';
 
-/** `::ffff:10.0.0.1` → `10.0.0.1`, so one entry matches both socket families. */
-function normalizeAddress(address: string): string {
+/** The IPv4 address an IPv4-mapped IPv6 address (`::ffff:0:0/96`) carries, in any spelling. */
+function mappedIPv4(address: string): string | null {
+  if (isIP(address) !== 6) return null;
+  const g = ipv6Groups(address);
+  if (!g || !g.slice(0, 5).every((x) => x === 0) || g[5] !== 0xffff) return null;
+  return [g[6] >> 8, g[6] & 0xff, g[7] >> 8, g[7] & 0xff].join('.');
+}
+
+/**
+ * `::ffff:10.0.0.1` (or `::ffff:a00:1`, as a URL spells it) → `10.0.0.1`,
+ * so one entry matches both socket families.
+ */
+export function normalizeAddress(address: string): string {
   const trimmed = address.trim();
-  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(trimmed);
-  return mapped ? mapped[1] : trimmed;
+  return mappedIPv4(trimmed) ?? trimmed;
 }
 
 /**
@@ -32,24 +43,36 @@ function normalizeAddress(address: string): string {
  * operator would believe a proxy is trusted when it is not.
  */
 export function parseTrustedProxies(entries: readonly string[]): BlockList {
+  return parseAddressList(entries, 'security.trustedProxies');
+}
+
+/**
+ * Parse a list of addresses and CIDR ranges into a matcher; `setting` names
+ * the config key in the error. Shared with `federation.lanCidrs`.
+ */
+export function parseAddressList(entries: readonly string[], setting: string): BlockList {
   const list = new BlockList();
   for (const raw of entries) {
     const entry = raw.trim();
     const slash = entry.indexOf('/');
-    const address = normalizeAddress(slash === -1 ? entry : entry.slice(0, slash));
+    const written = slash === -1 ? entry : entry.slice(0, slash);
+    const address = normalizeAddress(written);
+    // An IPv4-mapped range (`::ffff:10.0.0.0/104`) is the IPv4 range it maps.
+    const mapped = address !== written.trim();
     const family = isIP(address);
     if (family === 0) {
-      throw new Error(`security.trustedProxies: "${raw}" is not an IP address or CIDR range`);
+      throw new Error(`${setting}: "${raw}" is not an IP address or CIDR range`);
     }
     const type = family === 4 ? 'ipv4' : 'ipv6';
     if (slash === -1) {
       list.addAddress(address, type);
       continue;
     }
-    const prefix = Number(entry.slice(slash + 1));
+    const written6 = Number(entry.slice(slash + 1));
+    const prefix = mapped ? written6 - 96 : written6;
     const max = family === 4 ? 32 : 128;
     if (!Number.isInteger(prefix) || prefix < 0 || prefix > max) {
-      throw new Error(`security.trustedProxies: "${raw}" has an invalid prefix length`);
+      throw new Error(`${setting}: "${raw}" has an invalid prefix length`);
     }
     list.addSubnet(address, prefix, type);
   }
@@ -69,6 +92,16 @@ function isTrusted(list: BlockList, address: string): boolean {
   const family = isIP(address);
   if (family === 0) return false;
   return list.check(address, family === 4 ? 'ipv4' : 'ipv6');
+}
+
+/** Whether `address` (either socket family spelling) is in `list`. */
+export function addressInList(list: BlockList, address: string): boolean {
+  return isTrusted(list, normalizeAddress(address));
+}
+
+/** Whether the socket peer `address` is a trusted reverse proxy. */
+export function isTrustedProxy(address: string): boolean {
+  return addressInList(trustedProxies(), address);
 }
 
 /**

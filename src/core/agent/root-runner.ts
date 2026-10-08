@@ -1,5 +1,6 @@
 import { resolve } from 'path';
 import { getConfig } from '@/config';
+import { CONTENT_STORAGE_OFF_KEY } from './audience';
 import { getAgentManager } from '@/core/agent-manager';
 import { humanizeProviderError } from '@/core/errors/humanize';
 import { type LimitRefusal, limitRefusalOf } from '@/core/errors/limit-refusal';
@@ -132,6 +133,13 @@ export function buildPreHookVolatileParts(extraSystemContext: string, guardFlags
   if (extraSystemContext) parts.push(extraSystemContext);
   if (guardFlags.length > 0) parts.push(buildSecurityReminder(guardFlags));
   return parts;
+}
+
+/** The session's `context.remoteRoom` (federation §9), validated; null for every other session. */
+async function remoteRoomOfSession(ctx: unknown) {
+  if (!(ctx as { remoteRoom?: unknown } | undefined)?.remoteRoom) return null;
+  const { remoteRoomOf } = await import('@/core/federation/visitor-agent');
+  return remoteRoomOf(ctx);
 }
 
 /** Per-turn additions to the root agent's own tools. */
@@ -292,7 +300,7 @@ export async function runRootAgent(
     lite: isLite,
     takenTasks: extras.takenTasks,
   });
-  const metaTools = space ? withoutPersonalOnlyTools(allMetaTools) : allMetaTools;
+  let metaTools = space ? withoutPersonalOnlyTools(allMetaTools) : allMetaTools;
   // Space memory (§6.5): the agent may record a fact for the space.
   if (space) {
     const { createRememberForSpaceTool } = await import('@/core/spaces/memory-tool');
@@ -319,6 +327,23 @@ export async function runRootAgent(
   if (space) {
     rootTools = withoutPersonalOnlyTools(rootTools);
     if (writesWithheld(space, scope.trigger)) rootTools = stripMutatingTools(rootTools);
+  }
+  // "Ask my agent" in a room of a space on another install (federation §9):
+  // the remote space tools and the non-personal web reads, nothing else —
+  // no meta-tools (no delegation, no memory), no personal tool, no file
+  // writer, and no child that could be granted more.
+  const remoteRoom = await remoteRoomOfSession(planSessionCtx);
+  if (remoteRoom) {
+    const [{ remoteSpaceTools, REMOTE_SPACE_EXTRA_TOOL_IDS, REMOTE_SPACE_EXTRA_TOOL_NAMES, REMOTE_SPACE_TOOL_NAMES }, { getToolRegistry }] = await Promise.all([
+      import('@/core/federation/visitor-agent'), import('@/tools/registry'),
+    ]);
+    // Web search only: a page fetch would send to a URL the space's text
+    // chose (an exfiltration channel past the egress approval).
+    const extra = new Set<string>(REMOTE_SPACE_EXTRA_TOOL_NAMES);
+    rootTools = getToolRegistry().getToolHandlersForTools([...REMOTE_SPACE_EXTRA_TOOL_IDS]).filter((tool) => extra.has(tool.name));
+    metaTools = remoteSpaceTools(service, remoteRoom);
+    rootAllowedToolIds.clear();
+    for (const id of [...REMOTE_SPACE_EXTRA_TOOL_IDS, ...REMOTE_SPACE_TOOL_NAMES]) rootAllowedToolIds.add(id);
   }
   // The small-model answer to "what runs the loop now": the same loop, a reduced
   // tool set, and a hard iteration cap (below). Gated on `isSmallModel` — the
@@ -350,7 +375,7 @@ export async function runRootAgent(
     });
 
   let turnTools = [...rootTools, ...metaTools];
-  turnTools = [...turnTools, selfReport(turnTools)];
+  if (!remoteRoom) turnTools = [...turnTools, selfReport(turnTools)];
 
   // Lazy tool discovery, same gate every worker goes through
   // (`worker-spawner.ts`): on local Ollama the per-request tool schema is
@@ -368,6 +393,7 @@ export async function runRootAgent(
     ? undefined
     : selectCoreToolIds(message, rootRoleConfig.coreToolIds);
   if (
+    !remoteRoom &&
     rootCoreToolIds !== undefined &&
     shouldUseLazyDiscovery({
       hasCoreToolIds: true,
@@ -697,6 +723,10 @@ export async function runRootAgent(
       inputGuardFlags: guardFlags,
       ...(isDevMode ? { projectPath: sessionCtx!.projectPath! } : {}),
       ...(extras.room ? { room: { postedMessageId: extras.room.postedMessageId } } : {}),
+      // A CLI agent brings its own tools: refused for a remote room (agent-manager).
+      // Its text stays in the session's rows (F-D11): no prompt dump, spill,
+      // auto-index or notification text (`contentStorageOffFor`).
+      ...(remoteRoom ? { remoteRoom: true, [CONTENT_STORAGE_OFF_KEY]: true } : {}),
     },
   });
 

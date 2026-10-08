@@ -36,6 +36,8 @@ export interface AgentSpace {
   readonly role: import('@/db/schema/organizations').SpaceRole;
   /** Guests only (S6): the rooms and folders they reach; null for every other role. */
   readonly scope: import('@/db/schema/organizations').GuestScope | null;
+  /** The requester is a member of another install (docs/plans/federation-spec.md §7.1). Absent means local. */
+  readonly remote?: boolean;
 }
 
 /**
@@ -61,6 +63,16 @@ export interface AgentContext {
   funding: AgentFunding;
   /** Set when `funding` is `sponsor`: who pays and on which of their models. Inherited by children. */
   sponsor?: AgentSponsor | null;
+  /**
+   * Members of other installs read what this run produces
+   * (docs/plans/federation-spec.md §7.5): its trigger is `remote`, or it
+   * runs in a room with a remote member. Carried on the run, not the
+   * session (a room session is shared by local and remote turns). The flow
+   * guard and the consent prompt treat it as the audience `federated`,
+   * wider than `space`. Inherited by children. `buildAgentContext` always
+   * sets it; absent reads as false.
+   */
+  audienceFederated?: boolean;
   topic: string;
   /**
    * The provider-facing model id — what providers, CLI tool configs, toolshim

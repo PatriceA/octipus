@@ -37,6 +37,8 @@ export default function JoinPage() {
   const { refresh, switchWorkspace } = useWorkspace();
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
+  /** The visitor's own install, to open its "join a space on another install" screen with this link. */
+  const [ownInstall, setOwnInstall] = useState('');
 
   const preview = useQuery({
     queryKey: ['invite', token],
@@ -70,6 +72,9 @@ export default function JoinPage() {
   };
 
   const notFound = preview.error instanceof ApiError && preview.error.status === 404;
+  // The host's fingerprint, when the link carries one (`#octipus=<id>`): the
+  // space may also be joined from the visitor's own Octipus.
+  const hostFingerprint = /(?:^#|&)octipus=([a-z2-7]{26})(?:&|$)/.exec(typeof window === 'undefined' ? '' : window.location.hash)?.[1] ?? null;
 
   return (
     <div className="relative min-h-screen bg-background flex items-center justify-center p-4 font-mono overflow-hidden">
@@ -151,6 +156,50 @@ export default function JoinPage() {
                   >
                     register
                   </RouterLink>
+                </div>
+              )}
+
+              {hostFingerprint && (
+                <div className="border-t border-outline-variant/40 pt-3 space-y-1.5" data-testid="join-from-own-install">
+                  <p className="text-[12px] text-on-surface">Join from your own Octipus</p>
+                  <p className="text-[11px] text-on-surface-variant">
+                    Have an Octipus of your own? Copy this whole link (with the part after #) and paste it into
+                    your install under spaces → join a space on another install. Your install checks that this one
+                    is the install below before it connects; your agent then works here on your own models.
+                  </p>
+                  <p className="text-[11px] text-outline-variant break-all">
+                    host fingerprint: {[hostFingerprint.slice(0, 7), hostFingerprint.slice(7, 14), hostFingerprint.slice(14, 20), hostFingerprint.slice(20)].join('-')}
+                  </p>
+                  {/* Opens the visitor's own install on its join screen with this
+                      link in the fragment: it never reaches a server log there,
+                      and that install still shows the fingerprint and asks. */}
+                  <form
+                    className="flex items-center gap-1.5 pt-1"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const raw = ownInstall.trim();
+                      if (!raw) return;
+                      let base: URL;
+                      try {
+                        base = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+                      } catch {
+                        setJoinError('That is not an address');
+                        return;
+                      }
+                      window.location.assign(`${base.origin}/spaces/join-remote#link=${encodeURIComponent(window.location.href)}`);
+                    }}
+                  >
+                    <input
+                      value={ownInstall}
+                      onChange={(e) => setOwnInstall(e.target.value)}
+                      placeholder="your Octipus address"
+                      aria-label="Your Octipus address"
+                      className="flex-1 min-w-0 px-2 py-1 bg-surface-container-low border border-outline-variant/60 rounded-xs text-[12px] text-on-surface placeholder-outline-variant focus:outline-none focus:border-primary"
+                    />
+                    <button type="submit" disabled={!ownInstall.trim()} className="px-2 py-1 text-[11px] border border-outline-variant/60 rounded-xs text-on-surface hover:bg-surface-container-high disabled:opacity-50 cursor-pointer">
+                      open there
+                    </button>
+                  </form>
                 </div>
               )}
             </>

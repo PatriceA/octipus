@@ -27,6 +27,7 @@ import type { ModelConfigEntry } from '@/db/schema/models';
 import { compactMessagesWithSummary, CONTEXT_OVERFLOW_TRUNCATED_MARKER, DEFAULT_TOOL_OUTPUT_SOFT_CAP, shouldCompactToolOutputs, truncateOldestToolOutputs } from '@/utils/context-compaction';
 import { agentLogger, coreLogger } from '@/utils/logger';
 import { BaseAgentWorker } from './agent-base';
+import { contentStorageOffFor } from './agent/audience';
 import type { ToolHandler } from './agent-base';
 import { recordModelToolCall } from './agent/model-capability';
 import { ensureChildRelay } from './agent/output-guard';
@@ -678,7 +679,9 @@ export class AgentWorker extends BaseAgentWorker {
 
     // Owner-only files, swept after 7 days, gated by `agent.promptDumps` —
     // this path used to write unbounded, world-readable dumps on every run.
-    if (getConfig().agent?.promptDumps !== false) try {
+    // Never for a session whose text stays in its own rows (a space on
+    // another install, federation F-D11).
+    if (getConfig().agent?.promptDumps !== false && !contentStorageOffFor(this.context)) try {
       const dumpDir = joinPath(homedir(), '.octipus', 'prompts');
       mkdirSync(dumpDir, { recursive: true });
       sweepStaleFiles(dumpDir, '', 7 * 24 * 3600_000);

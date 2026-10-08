@@ -38,6 +38,12 @@ export interface GatewayConnection {
   createdAt: number;
   /** The socket URL's `?workspace=` (id or slug), resolved for the user at auth. */
   workspaceHint?: string;
+  /**
+   * The key of the connection's rate buckets when it is not its own id: a
+   * virtual peer connection shares its visitor's buckets on the link
+   * (`registerVirtual`), so opening another `conn` buys no fresh budget.
+   */
+  rateKey?: string;
 }
 
 /**
@@ -167,6 +173,84 @@ export class ConnectionManager {
   }
 
   /**
+   * Register a virtual connection: a member of another install, carried on
+   * its install's peer link (docs/plans/federation-spec.md §7.2). It is an
+   * ordinary authenticated connection from here on — in `connections` and
+   * `byUser`, so `getConnectionsByUser`, `closeUserConnections`,
+   * `publishEvent`, `publishToResource` and the room and document pruning
+   * all reach it, and its frames go through `handleMessage` (zod and the
+   * per-connection rate buckets) — except that it has no socket: what the
+   * manager sends it goes to `sink` (sealed onto the link by the caller),
+   * and closing it calls `onClose` once. It never counts against
+   * `gateway.maxConnectionsPerUser`; the federation layer bounds it.
+   *
+   * Its rate buckets are keyed by `rateKey` (the visitor on its link), not
+   * by the connection: every virtual connection of one visitor draws on
+   * the same buckets, which outlive any one of them. Its event
+   * subscriptions are `eventPatterns` only — the visitor's own events the
+   * federation layer lets out — never `*`.
+   */
+  registerVirtual(input: {
+    userId: string;
+    instanceId: string;
+    /** The visitor install's client connection this one stands for. */
+    conn: string;
+    /** The key of the rate buckets this connection shares with the visitor's others. */
+    rateKey: string;
+    /** The visitor's own event types (`publishEvent`) this connection receives. */
+    eventPatterns: readonly string[];
+    sink: (message: GatewayMessage) => void;
+    onClose: () => void;
+  }): string {
+    const connectionId = randomBytes(16).toString('hex');
+    let closed = false;
+    const ws: ServerWebSocket<Record<string, unknown>> = {
+      data: {},
+      readyState: 1,
+      send: (payload) => {
+        if (closed) return;
+        const text = typeof payload === 'string' ? payload : Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength).toString('utf8');
+        input.sink(JSON.parse(text) as GatewayMessage);
+      },
+      close: () => {
+        if (closed) return;
+        closed = true;
+        input.onClose();
+      },
+    };
+    const now = Date.now();
+    const conn: GatewayConnection = {
+      ws,
+      ip: `peer:${input.instanceId}`,
+      state: 'active',
+      authTimer: null,
+      createdAt: now,
+      rateKey: input.rateKey,
+      context: {
+        connectionId,
+        userId: input.userId,
+        clientType: 'peer',
+        trustLevel: 'user',
+        ip: `peer:${input.instanceId}`,
+        connectedAt: now,
+        lastActivityAt: now,
+        // The member's own events the federation layer lets out (a
+        // requester error from a room turn, a mention): `publishEvent`
+        // delivers by user id. Never `*`: a host turn's progress events
+        // carry raw tool arguments and results.
+        eventSubscriptions: new Set(input.eventPatterns),
+        resources: new Set(),
+        metadata: { isAdmin: false, federation: { instanceId: input.instanceId, conn: input.conn } },
+      },
+    };
+    this.connections.set(connectionId, conn);
+    if (!this.byUser.has(input.userId)) this.byUser.set(input.userId, new Set());
+    this.byUser.get(input.userId)!.add(connectionId);
+    coreLogger.info({ connectionId, userId: input.userId, instanceId: input.instanceId }, 'Virtual peer connection registered');
+    return connectionId;
+  }
+
+  /**
    * Handle an incoming message from a connection.
    */
   async handleMessage(connectionId: string, raw: string): Promise<void> {
@@ -198,7 +282,7 @@ export class ConnectionManager {
     }
 
     // Rate limit check
-    const rateCheck = this.rateLimiter.check(connectionId, parsed.message.type, conn.context.trustLevel);
+    const rateCheck = this.rateLimiter.check(conn.rateKey ?? connectionId, parsed.message.type, conn.context.trustLevel);
     if (!rateCheck.allowed) {
       this.send(conn, {
         type: 'error',
@@ -260,7 +344,9 @@ export class ConnectionManager {
     // A connection that never authenticated still holds its pre-auth slot.
     if (conn.state === 'authenticating') this.releasePreAuth(conn.ip);
 
-    this.rateLimiter.removeConnection(connectionId);
+    // A shared key (a visitor's buckets on its link) outlives the connection;
+    // its windows age out in the limiter's own sweep.
+    if (!conn.rateKey) this.rateLimiter.removeConnection(connectionId);
     this.connections.delete(connectionId);
   }
 
@@ -540,6 +626,11 @@ export class ConnectionManager {
    */
   closeArtifactViewers(artifactId: string, code: number, reason: string): number {
     return this.closeUserConnections(`artifact:${artifactId}`, code, reason);
+  }
+
+  /** Close one connection (a virtual peer connection the federation layer drops). */
+  closeConnection(connectionId: string, code: number, reason: string): void {
+    this.closeUserConnection(connectionId, code, reason);
   }
 
   /** Close one authenticated connection and drop its bookkeeping at once. */

@@ -41,15 +41,33 @@ import { getMembership, writeSpaceAudit } from './service';
 
 const versions = new Map<string, number>();
 const versionKey = (workspaceId: string, userId: string) => `${workspaceId}:${userId}`;
+const spaceVersions = new Map<string, number>();
 
 /** The in-process version of `userId`'s membership of `workspaceId`; changes on every membership change. */
 export function membershipVersion(workspaceId: string, userId: string): number {
   return versions.get(versionKey(workspaceId, userId)) ?? 0;
 }
 
+/**
+ * The in-process version of who is in `workspaceId` and its rooms: changes
+ * on every membership change of anyone in the space, and on every change
+ * of a private room's members or a room's visibility
+ * (`bumpSpaceMembershipVersion`). What a space's audience is keyed on
+ * (`core/federation/audience.ts`).
+ */
+export function spaceMembershipVersion(workspaceId: string): number {
+  return spaceVersions.get(workspaceId) ?? 0;
+}
+
+/** Who may enter a room of `workspaceId` changed (a private room's members, a room's visibility). */
+export function bumpSpaceMembershipVersion(workspaceId: string): void {
+  spaceVersions.set(workspaceId, (spaceVersions.get(workspaceId) ?? 0) + 1);
+}
+
 function bumpVersion(workspaceId: string, userId: string): void {
   const key = versionKey(workspaceId, userId);
   versions.set(key, (versions.get(key) ?? 0) + 1);
+  bumpSpaceMembershipVersion(workspaceId);
 }
 
 /** Why a data source is paused when its principal lost write access to the space. */
@@ -169,6 +187,13 @@ export async function onMembershipChanged(workspaceId: string, userId: string): 
       if (can(membership?.role, 'write')) return;
       const { dropMemberLeases } = await import('@/core/docs/file-leases');
       await dropMemberLeases(workspaceId, userId);
+    }],
+    // A member of another install (federation §7.6): their install hears
+    // `space.revoked`, and their virtual connections close once no
+    // membership is left here. Nothing for a local member.
+    ['other installs', async () => {
+      const { onRemoteMembershipChanged } = await import('@/core/federation/host-ops');
+      await onRemoteMembershipChanged(workspaceId, userId);
     }],
   ]);
 }
@@ -306,4 +331,5 @@ export async function settleFollowUp(what: string, context: Record<string, unkno
 /** Test hook. */
 export function _resetMembershipVersionsForTests(): void {
   versions.clear();
+  spaceVersions.clear();
 }

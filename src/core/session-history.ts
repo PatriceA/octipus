@@ -104,20 +104,56 @@ export function roomRequestOf(context: { userId: string; metadata?: Record<strin
   return { requesterId: context.userId, ...(typeof room.postedMessageId === 'string' ? { postedMessageId: room.postedMessageId } : {}) };
 }
 
-/** Display names (usernames) of `userIds`. */
-export async function displayNames(userIds: readonly string[]): Promise<Map<string, string>> {
+interface UserLabel {
+  /** The display name: the username, or for a member of another install `anna [B:abcd1234]`. */
+  name: string;
+  /** For a member of another install, how a post of their own agent reads: `anna's agent [B:abcd1234]`. */
+  agentName: string | null;
+}
+
+async function userLabels(userIds: readonly string[]): Promise<Map<string, UserLabel>> {
   const ids = [...new Set(userIds.filter(Boolean))];
   if (ids.length === 0) return new Map();
-  const [{ getDb }, { users }, { inArray }] = await Promise.all([
-    import('@/db/postgres'), import('@/db/schema/users'), import('drizzle-orm'),
+  const [{ getDb }, { users }, { inArray }, { remoteAgentLabel, remoteMemberLabel }] = await Promise.all([
+    import('@/db/postgres'), import('@/db/schema/users'), import('drizzle-orm'), import('@/security/user-kinds'),
   ]);
-  const rows = await getDb().select({ id: users.id, username: users.username }).from(users).where(inArray(users.id, ids));
-  return new Map(rows.map((row) => [row.id, row.username]));
+  const rows = await getDb()
+    .select({ id: users.id, username: users.username, kind: users.kind, remoteInstanceId: users.remoteInstanceId })
+    .from(users)
+    .where(inArray(users.id, ids));
+  return new Map(rows.map((row) => [row.id, row.kind === 'remote' && row.remoteInstanceId
+    // A member of another install carries the badge of its verified install
+    // (federation §7.4); a local username never does.
+    ? { name: remoteMemberLabel(row.username, row.remoteInstanceId), agentName: remoteAgentLabel(row.username, row.remoteInstanceId) }
+    : { name: row.username, agentName: null }]));
+}
+
+/**
+ * Display names of `userIds`: the username, and for a member of another
+ * install the name with its instance badge (`anna [B:abcd1234]`).
+ */
+export async function displayNames(userIds: readonly string[]): Promise<Map<string, string>> {
+  const labels = await userLabels(userIds);
+  return new Map([...labels].map(([id, label]) => [id, label.name]));
+}
+
+/**
+ * The author shown for each row: its author's display name — and for a post
+ * a remote member's own agent made (`metadata.agent`, federation §7.4),
+ * "anna's agent [B:abcd1234]". Null for a row without an author.
+ */
+export async function authorNamesOf(rows: ReadonlyArray<Pick<Message, 'authorUserId' | 'metadata'>>): Promise<Array<string | null>> {
+  const labels = await userLabels(rows.map((row) => row.authorUserId).filter((id): id is string => !!id));
+  return rows.map((row) => {
+    const label = row.authorUserId ? labels.get(row.authorUserId) : undefined;
+    if (!label) return null;
+    return (row.metadata as Record<string, unknown> | null)?.agent === true && label.agentName ? label.agentName : label.name;
+  });
 }
 
 async function withAuthorNames(rows: Message[]): Promise<HistoryRow[]> {
-  const names = await displayNames(rows.map((row) => row.authorUserId).filter((id): id is string => !!id));
-  return rows.map((row) => ({ ...row, authorName: row.authorUserId ? names.get(row.authorUserId) ?? null : null }));
+  const names = await authorNamesOf(rows);
+  return rows.map((row, i) => ({ ...row, authorName: names[i] }));
 }
 
 export function toContextMessage(row: Message): AgentMessage {

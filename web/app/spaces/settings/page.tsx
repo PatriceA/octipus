@@ -22,6 +22,10 @@ interface Member {
   joinedAt: string;
   /** A guest's scope; sent to owners only. */
   scope?: GuestScope;
+  /** How the member is shown: a member of another install carries its instance badge (`anna [B:…]`). */
+  displayName?: string;
+  /** The full id of a member of another install's install (the badge shows its first characters). */
+  instanceId?: string;
 }
 
 interface Invite {
@@ -44,6 +48,12 @@ interface CreatedInvite {
   maxUses: number;
   /** On the install's public URL (`PUBLIC_URL`); null when none is set. */
   url: string | null;
+  /**
+   * `url` with this install's fingerprint (`#octipus=<id>`) when it hosts
+   * spaces for other installs: the same link also lets someone join from
+   * their own Octipus.
+   */
+  federatedUrl: string | null;
 }
 
 interface ActivityEntry {
@@ -210,8 +220,11 @@ export default function SpaceSettingsPage() {
             return (
               <div key={m.userId} data-testid="space-member">
               <div className="flex items-center gap-3 px-3 py-2">
-                <span className="text-[13px] text-on-surface flex-1 min-w-0 truncate">
-                  {m.username}
+                <span
+                  className="text-[13px] text-on-surface flex-1 min-w-0 truncate"
+                  title={m.instanceId ? `${m.username} — from another install: ${m.instanceId}` : undefined}
+                >
+                  {m.displayName ?? m.username}
                   {self && <span className="ml-1.5 text-outline-variant">(you)</span>}
                 </span>
                 <span className="text-[11px] text-on-surface-variant hidden sm:inline">
@@ -225,7 +238,7 @@ export default function SpaceSettingsPage() {
                     onChange={(e) => setRole.mutate({ userId: m.userId, role: e.target.value as SpaceRole })}
                     className={inputClass}
                   >
-                    {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+                    {ROLES.filter((r) => !m.instanceId || r !== 'owner').map((r) => <option key={r} value={r}>{r}</option>)}
                   </select>
                 ) : (
                   <RoleBadge role={m.role} />
@@ -402,6 +415,7 @@ function InviteForm({ spaceId, onCreated, onError }: { spaceId: string; onCreate
   const [hours, setHours] = useState(24 * 7);
   const [maxUses, setMaxUses] = useState(1);
   const [link, setLink] = useState<string | null>(null);
+  const [federated, setFederated] = useState(false);
   const [copied, setCopied] = useState(false);
   // A guest joins with the rooms and folders picked here (S6).
   const [scope, setScope] = useState<GuestScope>({ rooms: [], folders: [] });
@@ -411,7 +425,8 @@ function InviteForm({ spaceId, onCreated, onError }: { spaceId: string; onCreate
       ? { role, scope, expiresInHours: hours, maxUses }
       : { role, expiresInHours: hours, maxUses }),
     onSuccess: async (inv) => {
-      setLink(inv.url ?? `${window.location.origin}/join/${inv.token}`);
+      setLink(inv.federatedUrl ?? inv.url ?? `${window.location.origin}/join/${inv.token}`);
+      setFederated(inv.federatedUrl !== null);
       setCopied(false);
       await onCreated();
     },
@@ -465,6 +480,7 @@ function InviteForm({ spaceId, onCreated, onError }: { spaceId: string; onCreate
           <p className="text-[11px] text-on-surface-variant">
             share this link — it is shown only now. anyone who opens it can join as {role} until it expires or is used up
             {role === 'guest' && <>, and will see {describeScope(scope)}</>}.
+            {federated && ' people on another Octipus install can paste it into their own to join from there.'}
           </p>
           <div className="flex items-center gap-2">
             <input readOnly value={link} aria-label="Invite link" onFocus={(e) => e.target.select()} className={`${inputClass} flex-1 text-[12px]`} />

@@ -6,6 +6,10 @@
  * - The recorder is a passive observer: it is fed events by the root agent
  *   and does NOT rewrite orchestration. This file owns the write path only.
  * - Set env `TRAJECTORY_LOGGING=false` to make every recorder a no-op.
+ * - A turn of a session whose audience keeps its text in the session's own
+ *   rows only (`contentStorageOff`: "ask my agent" in a space on another
+ *   install, federation F-D11) gets an inert recorder: no JSONL line, no
+ *   pointer row.
  * - PII (emails, phone numbers) is stripped from `userMessage` and
  *   `finalResponse` before writing. The full `filter_pii` PII filter covers
  *   additional categories (SSN, credit cards, API keys, IPs).
@@ -119,6 +123,12 @@ export interface TrajectoryRecorderOptions {
   workspaceRootOverride?: string;
   /** When true, suppress DB writes (useful from tests that don't spin up Postgres). */
   skipDbPointer?: boolean;
+  /**
+   * The session's audience has `contentStorageOff` (federation F-D11): its
+   * text may not be copied out of the session's rows, so nothing is
+   * recorded.
+   */
+  contentStorageOff?: boolean;
 }
 
 /**
@@ -161,13 +171,13 @@ export class TrajectoryRecorder {
 
   constructor(opts: TrajectoryRecorderOptions) {
     this.opts = opts;
-    this.disabled = isTrajectoryLoggingDisabled();
+    this.disabled = isTrajectoryLoggingDisabled() || opts.contentStorageOff === true;
     this.startedAt = new Date();
     this.classification = toClassification(opts.classification, opts.expertId);
     if (opts.expertId) this.expertsUsed.add(opts.expertId);
   }
 
-  /** True when recorder is inert (opt-out). */
+  /** True when recorder is inert (opt-out, or a session whose text stays in its own rows). */
   isDisabled(): boolean {
     return this.disabled;
   }

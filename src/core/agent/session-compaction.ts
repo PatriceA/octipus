@@ -99,6 +99,9 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
   return withSessionConversation(sessionId, async () => {
     const session = await sessionRepository.findById(sessionId);
     if (session?.kind === 'room') return compactRoom(sessionId, options);
+    // A space on another install (federation §9, F-D11): its text stays in
+    // the session's own rows only — a summary would be one more copy.
+    if (session && (await sessionAudience(session)).contentStorageOff) return false;
     // Vendor histories are richer than the Octipus transcript. Automatic
     // maintenance must never rotate them onto a lossy Octipus checkpoint.
     if (session && rootCliConversation(session)) return false;

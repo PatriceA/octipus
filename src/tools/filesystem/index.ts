@@ -3,6 +3,7 @@ import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'path';
 import { getConfig } from '@/config';
 import { agentKnowledgeOwner, type KnowledgeOwner } from '@/core/rag/knowledge-scope';
+import { contentStorageOffFor } from '@/core/agent/audience';
 import type { AgentContext, ToolManifest } from '@/core/types';
 import { isInside, WorkspaceFS, WorkspaceFsError } from '@/security/workspace-fs';
 import { computeLineDiff } from '@/shared/diff';
@@ -165,6 +166,8 @@ function autoIndexFile(filePath: string, context: AgentContext): void {
   try {
     const config = getConfig();
     if (!config.workspace.autoIndexFiles) return;
+    // A session whose text stays in its own rows (federation F-D11) indexes nothing.
+    if (contentStorageOffFor(context)) return;
 
     const purpose = autoIndexPurpose(filePath);
     if (!purpose) return;

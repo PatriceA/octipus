@@ -212,6 +212,7 @@ export function clearFlowLabel(sessionId: string): void {
 /** Test seam. */
 export function resetFlowLabels(): void {
   labels.clear();
+  remoteConsented.clear();
   sharedAudience.clear();
   lookedUp.clear();
   uncertain.clear();
@@ -382,6 +383,95 @@ export function sharedAudienceReason(shared: boolean, call: FlowCall, contract: 
     : 'this conversation is in a shared group channel';
   return `flow guard: ${where} and ${call.toolId}:${call.action} reads private data; `
     + 'anything it returns may be posted where every member can read it, so it needs approval';
+}
+
+// ── Federated audience (docs/plans/federation-spec.md §7.5, FI5) ────────────
+
+/**
+ * Why a call is refused outright in a federated run — one whose output
+ * members of other installs read (a `remote` turn, or a room with a remote
+ * member, read again at every decision) — or undefined. Wider than a
+ * room's audience, so stricter: no approval lets a host member's personal
+ * data or credential material go there.
+ *
+ *   - a read of the requester's private data (`private` taint, or a read
+ *     through a personal connection: `personalRead`) is refused, where a
+ *     room asks;
+ *   - a read of credential material (`secret` taint) is refused;
+ *   - once the session holds a `private` or `secret` label (read before the
+ *     run became federated), any egress is refused — a send out of the
+ *     install, or a write into the space (`spaceWrite`: notes, files,
+ *     memory, tasks), which the space's remote members read.
+ */
+export function federatedAudienceReason(label: FlowLabel, call: FlowCall, contract: FlowContract, personalRead = false, spaceWrite = false): string | undefined {
+  const name = `${call.toolId}:${call.action}`;
+  if (contract.taints.includes('private') || personalRead) {
+    return `flow guard: members of this room on other installs read what this run produces, and ${name} reads personal data; `
+      + 'personal data never goes to them';
+  }
+  if (contract.taints.includes('secret')) {
+    return `flow guard: members of this room on other installs read what this run produces, and ${name} reads credential material`;
+  }
+  if ((contract.egress || spaceWrite) && (label.secret || label.private)) {
+    const what = label.secret ? `credential material (${label.sources.secret})` : `personal data (${label.sources.private})`;
+    return `flow guard: this session read ${what}, and members of this room on other installs read what this run produces; nothing goes out`;
+  }
+  return undefined;
+}
+
+/**
+ * Why a write into a space that has members of other installs is refused
+ * outright, in a run whose own audience is not federated (a private
+ * session of the space): credential material never goes there. Personal
+ * data asks (the I6 consent, whose text names the other installs).
+ */
+export function federatedSpaceWriteReason(label: FlowLabel, call: FlowCall): string | undefined {
+  if (!label.secret) return undefined;
+  return `flow guard: this session read credential material (${label.sources.secret}), and ${call.toolId}:${call.action} writes into a space `
+    + 'that members on other installs read; nothing goes there';
+}
+
+// ── Spaces on other installs (docs/plans/federation-spec.md §9) ─────────────
+
+/**
+ * Sessions whose member approved a write of their own agent into a space
+ * on another install (a post, a note proposal, a task with text). Bounded
+ * like the shared-audience marks; losing one only asks again.
+ */
+const remoteConsented = new Set<string>();
+
+/**
+ * Why a write of the member's own agent into a space on another install
+ * (`remote_space_post` and the other writes that carry text there) needs
+ * the member, or undefined. Treated like a post to a shared audience,
+ * stricter: once the session read private data or credential material,
+ * EVERY such write asks (labels only tighten); a clean session asks the
+ * first time, then not again in that session. Whatever the flow-guard
+ * mode. Pure given the label and the consent set.
+ */
+export function remoteSpaceWriteReason(sessionId: string | undefined, call: FlowCall): string | undefined {
+  const label = getFlowLabel(sessionId);
+  const name = `${call.toolId}:${call.action}`;
+  if (label.secret) {
+    return `flow guard: this session read credential material (${label.sources.secret}), and ${name} sends text to a space on another install; `
+      + 'every such write needs approval';
+  }
+  if (label.private) {
+    return `flow guard: this session read your private data (${label.sources.private}), and ${name} sends text to a space on another install `
+      + 'whose members read it; every such write needs approval';
+  }
+  if (!sessionId || !remoteConsented.has(sessionId)) {
+    return `${name} sends text to a space on another install, where its members read it: the first write of this conversation needs approval`;
+  }
+  return undefined;
+}
+
+/** The member approved a write into a space on another install in `sessionId`: later clean writes there go ahead. */
+export function markRemoteSpaceWriteConsented(sessionId: string | undefined): void {
+  if (!sessionId) return;
+  remoteConsented.delete(sessionId);
+  remoteConsented.add(sessionId);
+  if (remoteConsented.size > MAX_SHARED_SESSIONS) remoteConsented.delete(remoteConsented.values().next().value as string);
 }
 
 // ── Decision ────────────────────────────────────────────────────────────────

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { ApiError, api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { useGateway } from '@/lib/gateway-context';
-import { type LiveMerge, LiveNoteSession, type LiveNoteState } from '@/lib/live-note';
+import { type LiveMerge, type LiveNoteGateway, LiveNoteSession, type LiveNoteState } from '@/lib/live-note';
 
 export interface LiveNote {
   session: LiveNoteSession;
@@ -32,9 +32,15 @@ function mergeThroughServer(noteId: string): LiveMerge {
  * The live session of a space note while it is shown (§7.6): joined on
  * mount, left on unmount or when another note is opened. Null when
  * `noteId` is null or live editing is off (personal notes).
+ *
+ * `via` is a space on another install (federation §8.3): its frames go
+ * through `remote.frame`, and a text that cannot be merged after a rebuild
+ * stays the member's to copy (the host has no merge route for visitors).
  */
-export function useLiveNote(noteId: string | null, enabled: boolean): LiveNote | null {
-  const gateway = useGateway();
+export function useLiveNote(noteId: string | null, enabled: boolean, via?: { gateway: LiveNoteGateway; merge: LiveMerge }): LiveNote | null {
+  const tabGateway = useGateway();
+  const gateway = via?.gateway ?? tabGateway;
+  const viaMerge = via?.merge;
   const { user } = useAuth();
   const [live, setLive] = useState<LiveNote | null>(null);
   const userId = user?.id ?? null;
@@ -42,7 +48,7 @@ export function useLiveNote(noteId: string | null, enabled: boolean): LiveNote |
 
   useEffect(() => {
     if (!enabled || !noteId || !userId) return;
-    const session = new LiveNoteSession(gateway, noteId, { id: userId, name: userName }, mergeThroughServer(noteId));
+    const session = new LiveNoteSession(gateway, noteId, { id: userId, name: userName }, viaMerge ?? mergeThroughServer(noteId));
     let version = 0;
     // Only a doc.sync makes the document the note: offline at open, or a
     // refused join, leaves it empty (the editor shows the REST copy).
@@ -60,7 +66,7 @@ export function useLiveNote(noteId: string | null, enabled: boolean): LiveNote |
       session.destroy();
       setLive(null);
     };
-  }, [gateway, noteId, enabled, userId, userName]);
+  }, [gateway, noteId, enabled, userId, userName, viaMerge]);
 
   // Until its first state change, a session of another note is not this one's.
   return enabled && live && live.session.noteId === noteId ? live : null;

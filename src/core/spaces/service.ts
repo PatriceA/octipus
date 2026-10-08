@@ -14,11 +14,13 @@
  * Non-members get `SpaceError('not_found')` for every space id, existing or
  * not (I3); members whose role lacks the action get `forbidden_role`.
  */
-import { and, count, desc, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { getConfig } from '@/config';
+import { federationHosts } from '@/core/federation/mode';
 import { getDb, queryRaw } from '@/db/postgres';
 import { isUuid } from '@/db/repositories/scoped';
 import { type AuditDetails, auditLog } from '@/db/schema/audit';
+import { federationInstances } from '@/db/schema/federation';
 import { type AgentEditMode, type AgentFundingMode, newWorkspaceRow, type SpaceRole, type Workspace, workspaceInvites, workspaceMembers, workspaces } from '@/db/schema/organizations';
 import { roomMembers } from '@/db/schema/rooms';
 import { sessions } from '@/db/schema/sessions';
@@ -71,7 +73,10 @@ export type SpaceAuditAction =
   | 'space_invite_created'
   | 'space_invite_revoked'
   | 'space_invite_accepted'
-  | 'space_content_changed';
+  | 'space_content_changed'
+  /** A member of another install joined or left (docs/plans/federation-spec.md §6). */
+  | 'space_joined_remote'
+  | 'space_left_remote';
 
 /** Write one audit row of a space change (I10). Pass the transaction the change runs in. */
 export async function writeSpaceAudit(
@@ -108,14 +113,23 @@ function assertName(name: string): string {
 /**
  * `userId`'s membership of the shared workspace `workspaceId`, or null when
  * they are not a member, the workspace is not shared, either id is not a
- * uuid, or the account is deactivated or not a local account. The only read
+ * uuid, or the account is deactivated or may not act here. The only read
  * of `workspace_members`.
  *
  * A deactivated account passes no space door (§4.1): its queued room turns,
- * listen turns, data sources and wake-ups all re-read this and stop. A
- * remote account (`kind = 'remote'`) is refused too: remote members get
- * their membership through the federation transport (S7), which does not
- * exist yet — until it does, no remote row may pass here.
+ * listen turns, data sources and wake-ups all re-read this and stop.
+ *
+ * The data door of members from other installs
+ * (docs/plans/federation-spec.md §7.1): a row passes when it is a local
+ * account, or a remote one (`kind = 'remote'`) whose install is `active` in
+ * `federation_instances` while this install hosts (`federation.mode` host
+ * or both). One join and a config read, here, so it holds for every caller
+ * in whatever context it runs — a queued room turn, an approval routed on a
+ * loopback request, a presence publish another member triggered. Blocking
+ * the install or turning hosting off refuses its rows at once. The result
+ * names the install (`remote`); the checks that are local-only on purpose
+ * (listen, funding, install access, channel bindings, orgs, API tokens,
+ * sign-in) read `users.kind` themselves and stay closed.
  *
  * `lock` (inside a transaction) locks the membership row: `share` for an
  * actor's own rights, so a demotion or removal committing meanwhile waits
@@ -131,17 +145,21 @@ export async function getMembership(
   opts: { lock?: 'share' | 'update'; anyAccount?: boolean } = {},
 ): Promise<SpaceMembership | null> {
   if (!isUuid(userId) || !isUuid(workspaceId)) return null;
+  const mayAct = federationHosts()
+    ? or(eq(users.kind, 'local'), and(eq(users.kind, 'remote'), eq(federationInstances.status, 'active')))
+    : eq(users.kind, 'local');
   const query = db
-    .select({ role: workspaceMembers.role, scope: workspaceMembers.scope })
+    .select({ role: workspaceMembers.role, scope: workspaceMembers.scope, kind: users.kind, remoteInstanceId: users.remoteInstanceId })
     .from(workspaceMembers)
     .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
     .innerJoin(users, eq(users.id, workspaceMembers.userId))
+    .leftJoin(federationInstances, eq(federationInstances.instanceId, users.remoteInstanceId))
     .where(and(
       eq(workspaceMembers.workspaceId, workspaceId),
       eq(workspaceMembers.userId, userId),
       eq(workspaces.kind, 'shared'),
       opts.anyAccount ? undefined : eq(users.isActive, true),
-      opts.anyAccount ? undefined : eq(users.kind, 'local'),
+      opts.anyAccount ? undefined : mayAct,
     ))
     .limit(1);
   const [row] = opts.lock ? await query.for(opts.lock, { of: workspaceMembers }) : await query;
@@ -149,7 +167,8 @@ export async function getMembership(
   // The synchronous file-root lookups (`WorkspaceFS.forAgent` / `forSession`)
   // learn the space from here: every path into a space reads a membership.
   noteSharedWorkspace(workspaceId);
-  return { workspaceId, userId, role: row.role, scope: storedGuestScope(row.role, row.scope, { workspaceId, userId }) };
+  const remote = row.kind === 'remote' ? { instanceId: row.remoteInstanceId as string } : null;
+  return { workspaceId, userId, role: row.role, scope: storedGuestScope(row.role, row.scope, { workspaceId, userId }), remote };
 }
 
 /** Whether `workspaceId` names a shared workspace (read from the database). */
@@ -454,6 +473,15 @@ export interface SpaceMemberView {
   joinedAt: Date;
   /** A guest's scope (S6), shown to those who manage members; absent otherwise. */
   scope?: GuestScope;
+  /**
+   * How the member is shown (`displayNames`): a member of another install
+   * carries its instance badge (federation §7.4). Set by `listMembers`.
+   */
+  displayName?: string;
+  /** A member of another install (federation §7.1). Set by `listMembers`. */
+  remote?: boolean;
+  /** The full id of a remote member's install (its badge shows the first characters). */
+  instanceId?: string;
 }
 
 /** What a committed membership change reports: a failed follow-up (§5.9), logged. */
@@ -574,6 +602,8 @@ export async function listMembers(actor: SpaceActor, workspaceId: string): Promi
       role: workspaceMembers.role,
       joinedAt: workspaceMembers.joinedAt,
       scope: workspaceMembers.scope,
+      kind: users.kind,
+      remoteInstanceId: users.remoteInstanceId,
     })
     .from(workspaceMembers)
     .innerJoin(users, eq(users.id, workspaceMembers.userId))
@@ -583,9 +613,15 @@ export async function listMembers(actor: SpaceActor, workspaceId: string): Promi
     ))
     .orderBy(workspaceMembers.joinedAt);
   const managing = can(membership.role, 'manage_members');
-  return rows.map(({ scope, ...row }) => {
+  const { displayNames } = await import('@/core/session-history');
+  const names = await displayNames(rows.map((r) => r.userId));
+  return rows.map(({ scope, kind, remoteInstanceId, ...row }) => {
     const guestScope = managing ? storedGuestScope(row.role, scope, { workspaceId, userId: row.userId }) : null;
-    return guestScope ? { ...row, scope: guestScope } : row;
+    const view = {
+      ...row, displayName: names.get(row.userId) ?? row.username, remote: kind === 'remote',
+      ...(kind === 'remote' && remoteInstanceId ? { instanceId: remoteInstanceId } : {}),
+    };
+    return guestScope ? { ...view, scope: guestScope } : view;
   });
 }
 
@@ -634,6 +670,11 @@ export async function setRole(
     // Locked: a target leaving meanwhile waits, or is already gone here.
     const target = await getMembership(targetUserId, workspaceId, tx, { lock: 'update', anyAccount: true });
     if (!target) throw new SpaceError('not_found', 'Member not found');
+    // A member of another install is at most an editor (federation §7.1): no
+    // promotion, and so no ownership handed over, to a remote row.
+    if (role === 'owner' && target.remote) {
+      throw new SpaceError('forbidden_role', 'A member from another install cannot be an owner of this space');
+    }
     const scope = role !== 'guest' ? null
       : input.scope != null ? await guestScopeForWrite(tx, workspaceId, input.scope)
       : target.scope ?? parseGuestScope(null);
@@ -712,11 +753,26 @@ export async function removeMember(actor: SpaceActor, workspaceId: string, targe
   return warnings ? { warning: warnings } : {};
 }
 
-/** Leave a space. The last owner cannot. */
-export async function leaveSpace(actor: SpaceActor, workspaceId: string, details: Record<string, unknown> = {}): Promise<MembershipChangeResult> {
+/**
+ * Leave a space. The last owner cannot. `action` names the audit row: a
+ * member of another install leaving over its link writes
+ * `space_left_remote` (federation §6.3). `removedBy` names who made them
+ * leave when it is not their own doing (an admin blocking their install,
+ * federation §7.6): the audit row's actor.
+ */
+export async function leaveSpace(
+  actor: SpaceActor,
+  workspaceId: string,
+  details: Record<string, unknown> = {},
+  action: Extract<SpaceAuditAction, 'space_member_removed' | 'space_left_remote'> = 'space_member_removed',
+  opts: { removedBy?: SpaceActor } = {},
+): Promise<MembershipChangeResult> {
   const sponsorLost = await getDb().transaction(async (tx) => {
-    // An account being deleted may be deactivated already: its rows still go.
-    const membership = await getMembership(actor.userId, workspaceId, tx, { lock: 'update', anyAccount: details.accountDeleted === true });
+    // An account being deleted may be deactivated already, and the members of
+    // a blocked install no longer pass the data door: their rows still go.
+    const membership = await getMembership(actor.userId, workspaceId, tx, {
+      lock: 'update', anyAccount: details.accountDeleted === true || details.instanceBlocked === true,
+    });
     if (!membership) throw new SpaceError('not_found', 'Space not found');
     if (membership.role === 'owner') await assertNotLastOwner(tx, workspaceId, actor.userId);
     await tx
@@ -724,12 +780,12 @@ export async function leaveSpace(actor: SpaceActor, workspaceId: string, details
       .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, actor.userId)));
     await revokeInvitesBy(tx, actor, workspaceId, actor.userId);
     await writeSpaceAudit(tx, {
-      ...auditActor(actor),
-      action: 'space_member_removed',
+      ...auditActor(opts.removedBy ?? actor),
+      action,
       workspaceId,
       resourceType: 'space_member',
       resourceId: actor.userId,
-      details: { previousValue: membership.role, left: true, ...details },
+      details: { previousValue: membership.role, left: !opts.removedBy, ...details },
     });
     const { clearLostSponsorInTx } = await import('./funding');
     return clearLostSponsorInTx(tx, actor, workspaceId, actor.userId, null, details.accountDeleted ? 'sponsor_account_deleted' : undefined);

@@ -39,7 +39,7 @@ async function mayReachLive(user: { id: string; isAdmin: boolean }, context: Liv
  * space agent built without its scope never runs. The scope to run under
  * (the sponsor as it is now), or null.
  */
-async function mayRunLive(userId: string, context: LiveContext & Pick<AgentContext, 'workspaceId' | 'space' | 'trigger' | 'funding' | 'sponsor'>): Promise<AgentScope | null> {
+async function mayRunLive(userId: string, context: LiveContext & Pick<AgentContext, 'workspaceId' | 'space' | 'trigger' | 'funding' | 'sponsor' | 'audienceFederated'>): Promise<AgentScope | null> {
   if (context.space) {
     try {
       await recheckSpace(userId, context.space);
