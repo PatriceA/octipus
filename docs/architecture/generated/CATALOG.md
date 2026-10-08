@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-493 mounted routes across 69 route files. The path is the full one, group prefix included — what a client actually calls.
+512 mounted routes across 70 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -341,6 +341,25 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/recurring-tasks/:id` | `src/api/routes/recurring-tasks.ts` |
 | PATCH | `/api/recurring-tasks/:id` | `src/api/routes/recurring-tasks.ts` |
 | GET | `/api/recurring-tasks/:id/executions` | `src/api/routes/recurring-tasks.ts` |
+| GET | `/api/remote-spaces` | `src/api/routes/remote-spaces.ts` |
+| DELETE | `/api/remote-spaces/:id` | `src/api/routes/remote-spaces.ts` |
+| GET | `/api/remote-spaces/:id` | `src/api/routes/remote-spaces.ts` |
+| PATCH | `/api/remote-spaces/:id` | `src/api/routes/remote-spaces.ts` |
+| GET | `/api/remote-spaces/:id/files` | `src/api/routes/remote-spaces.ts` |
+| GET | `/api/remote-spaces/:id/files/*` | `src/api/routes/remote-spaces.ts` |
+| GET | `/api/remote-spaces/:id/members` | `src/api/routes/remote-spaces.ts` |
+| GET | `/api/remote-spaces/:id/notes` | `src/api/routes/remote-spaces.ts` |
+| GET | `/api/remote-spaces/:id/notes/:noteId` | `src/api/routes/remote-spaces.ts` |
+| POST | `/api/remote-spaces/:id/notes/:noteId/proposals` | `src/api/routes/remote-spaces.ts` |
+| GET | `/api/remote-spaces/:id/rooms` | `src/api/routes/remote-spaces.ts` |
+| POST | `/api/remote-spaces/:id/rooms/:roomId/agent` | `src/api/routes/remote-spaces.ts` |
+| GET | `/api/remote-spaces/:id/rooms/:roomId/messages` | `src/api/routes/remote-spaces.ts` |
+| POST | `/api/remote-spaces/:id/rooms/:roomId/messages` | `src/api/routes/remote-spaces.ts` |
+| GET | `/api/remote-spaces/:id/tasks` | `src/api/routes/remote-spaces.ts` |
+| POST | `/api/remote-spaces/:id/tasks` | `src/api/routes/remote-spaces.ts` |
+| GET | `/api/remote-spaces/:id/tasks/:taskId` | `src/api/routes/remote-spaces.ts` |
+| POST | `/api/remote-spaces/:id/tasks/:taskId/:op` | `src/api/routes/remote-spaces.ts` |
+| POST | `/api/remote-spaces/join` | `src/api/routes/remote-spaces.ts` |
 | POST | `/api/research` | `src/api/routes/research.ts` |
 | GET | `/api/research/:jobId` | `src/api/routes/research.ts` |
 | GET | `/api/roles` | `src/api/routes/roles.ts` |
@@ -514,7 +533,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `capabilities` | 1 |
 | `(root)` | `channels` | 1 |
 | `(root)` | `config` | 4 |
-| `(root)` | `core` | 29 |
+| `(root)` | `core` | 31 |
 | `(root)` | `db` | 11 |
 | `(root)` | `extensions` | 2 |
 | `(root)` | `hooks` | 3 |
@@ -528,14 +547,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 22 |
 | `api` | `config` | 22 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 121 |
+| `api` | `core` | 125 |
 | `api` | `db` | 110 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 3 |
 | `api` | `models` | 39 |
 | `api` | `plugins` | 1 |
-| `api` | `security` | 128 |
+| `api` | `security` | 129 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 3 |
 | `api` | `skills` | 6 |
@@ -571,19 +590,19 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `connectors` | `utils` | 5 |
 | `core` | `capabilities` | 2 |
 | `core` | `channels` | 11 |
-| `core` | `config` | 50 |
+| `core` | `config` | 51 |
 | `core` | `connectors` | 3 |
-| `core` | `db` | 317 |
+| `core` | `db` | 324 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 5 |
 | `core` | `models` | 115 |
-| `core` | `security` | 146 |
+| `core` | `security` | 150 |
 | `core` | `services` | 2 |
 | `core` | `shared` | 15 |
 | `core` | `skills` | 10 |
-| `core` | `tools` | 16 |
-| `core` | `utils` | 184 |
+| `core` | `tools` | 17 |
+| `core` | `utils` | 186 |
 | `core` | `voice` | 1 |
 | `db` | `config` | 4 |
 | `db` | `core` | 18 |
