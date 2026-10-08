@@ -31,6 +31,11 @@ export interface AgentWorkerConfig {
   /** Defaults to `{ mode: 'full' }` when omitted. */
   toolAdvertisement?: ToolAdvertisement;
   /**
+   * Register the `codemode` tool (src/tools/codemode.ts) on this worker.
+   * Decided by `AgentManager.spawn` from the bound model; omitted ⇒ off.
+   */
+  codemode?: boolean;
+  /**
    * Soft cap on the number of full tool-result messages kept in context. Once
    * exceeded, the OLDEST tool outputs are truncated (recent ones kept full) —
    * cheaper + less destructive than whole-history compaction, and it triggers

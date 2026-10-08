@@ -32,6 +32,7 @@ import type { ToolHandler } from './agent-base';
 import { recordModelToolCall } from './agent/model-capability';
 import { ensureChildRelay } from './agent/output-guard';
 import { isLongTailHandler } from './agent/tool-split';
+import { buildCodemodeHandler } from '@/tools/codemode';
 import { ClassifiedError, isFatalConnectionError, isTransientDnsError } from './errors/classification';
 import { formatCollectedResults } from './swarm/collect-tool';
 import {
@@ -373,6 +374,14 @@ export class AgentWorker extends BaseAgentWorker {
       (ms) => this.addPausedMs(ms),
       this.abortController.signal,
     );
+    if (config.codemode) {
+      const executor = this.toolExecutor;
+      this.toolExecutor.registerTool(buildCodemodeHandler({
+        tools: () => Array.from(executor.getTools().values()),
+        call: (call) => executor.runNestedCall(call),
+        signal: this.abortController.signal,
+      }));
+    }
 
     this.subscribePermissionWait();
 
