@@ -57,6 +57,12 @@ interface EditorProps {
   live?: LiveNote | null;
   /** A space note whose live session has not synced yet: no editor until it has. */
   liveLoading?: boolean;
+  /**
+   * Only the text is edited here — a note of a space on another install
+   * (federation §8.3): its title, tags, kind, pin and archive are the
+   * host's to manage, so none of those controls show.
+   */
+  textOnly?: boolean;
 }
 
 const KINDS = ['note', 'daily', 'moc', 'literature'];
@@ -181,6 +187,7 @@ export function NoteEditor(props: EditorProps) {
     mode: requestedMode, setMode, dirty, saving, onSave, onArchive, noteIndex, tags, onOpenSlug, onTagClick, live,
   } = props;
   const readOnly = (props.readOnly ?? false) || (live?.synced === true && live.state.readOnly);
+  const textOnly = props.textOnly ?? false;
   const mode: EditorMode = readOnly ? 'preview' : requestedMode;
   const peers = usePeers(live);
   const collab = useMemo(
@@ -301,6 +308,7 @@ export function NoteEditor(props: EditorProps) {
       <div className="flex items-center gap-2 px-5 pt-4 shrink-0">
         <input
           value={draftTitle}
+          readOnly={textOnly}
           onChange={(e) => setDraftTitle(e.target.value)}
           placeholder="Untitled note"
           className="flex-1 min-w-0 text-xl font-semibold bg-transparent outline-none placeholder:text-on-surface-variant/40"
@@ -330,7 +338,7 @@ export function NoteEditor(props: EditorProps) {
             Copy my version
           </button>
         )}
-        {!isNew && (
+        {!isNew && !textOnly && (
           <button
             type="button"
             onClick={onTogglePin}
@@ -340,7 +348,7 @@ export function NoteEditor(props: EditorProps) {
             <Star size={16} className={pinned ? 'fill-warning/40' : ''} />
           </button>
         )}
-        <button
+        {!textOnly && <button
           type="button"
           disabled={!draftTitle || !dirty || saving}
           onClick={onSave}
@@ -351,8 +359,8 @@ export function NoteEditor(props: EditorProps) {
           )}
         >
           {saving ? <Loader2 className="animate-spin" size={14} /> : <Save size={14} />} {live ? 'Save details' : 'Save'}
-        </button>
-        {!isNew && (
+        </button>}
+        {!isNew && !textOnly && (
           <button
             type="button"
             onClick={onArchive}
@@ -365,7 +373,7 @@ export function NoteEditor(props: EditorProps) {
       </div>
 
       {/* Properties bar: tags · kind · location/date */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-5 pt-2 pb-2 shrink-0 text-[12px]">
+      <div className={cn('flex flex-wrap items-center gap-x-3 gap-y-1.5 px-5 pt-2 pb-2 shrink-0 text-[12px]', textOnly && 'hidden')}>
         <div className="flex flex-wrap items-center gap-1">
           {draftTags.map((t) => (
             <span key={t} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-primary-container/60 text-primary text-[11px]">

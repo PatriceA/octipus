@@ -44,6 +44,14 @@ const DEFAULT_LIMITS: Record<string, Record<TrustLevel, RateLimitConfig>> = {
     user: { limit: 1000, windowMs: 1000 },
     agent: { limit: 1000, windowMs: 1000 },
   },
+  // Frames for a space on another install (federation §8.2): live notes
+  // through them run at keystroke rate. The host's own per-link and
+  // per-visitor buckets are the hard bounds; this keeps one tab from
+  // flooding the shared link.
+  'remote.frame': {
+    user: { limit: 60, windowMs: 1000 },
+    agent: { limit: 60, windowMs: 1000 },
+  },
   default: {
     user: { limit: 60, windowMs: 60_000 },
     agent: { limit: 60, windowMs: 60_000 },

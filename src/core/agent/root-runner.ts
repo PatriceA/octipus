@@ -134,6 +134,13 @@ export function buildPreHookVolatileParts(extraSystemContext: string, guardFlags
   return parts;
 }
 
+/** The session's `context.remoteRoom` (federation §9), validated; null for every other session. */
+async function remoteRoomOfSession(ctx: unknown) {
+  if (!(ctx as { remoteRoom?: unknown } | undefined)?.remoteRoom) return null;
+  const { remoteRoomOf } = await import('@/core/federation/visitor-agent');
+  return remoteRoomOf(ctx);
+}
+
 /** Per-turn additions to the root agent's own tools. */
 export interface RootRunExtras {
   /**
@@ -292,7 +299,7 @@ export async function runRootAgent(
     lite: isLite,
     takenTasks: extras.takenTasks,
   });
-  const metaTools = space ? withoutPersonalOnlyTools(allMetaTools) : allMetaTools;
+  let metaTools = space ? withoutPersonalOnlyTools(allMetaTools) : allMetaTools;
   // Space memory (§6.5): the agent may record a fact for the space.
   if (space) {
     const { createRememberForSpaceTool } = await import('@/core/spaces/memory-tool');
@@ -319,6 +326,20 @@ export async function runRootAgent(
   if (space) {
     rootTools = withoutPersonalOnlyTools(rootTools);
     if (writesWithheld(space, scope.trigger)) rootTools = stripMutatingTools(rootTools);
+  }
+  // "Ask my agent" in a room of a space on another install (federation §9):
+  // the remote space tools and the non-personal web reads, nothing else —
+  // no meta-tools (no delegation, no memory), no personal tool, no file
+  // writer, and no child that could be granted more.
+  const remoteRoom = await remoteRoomOfSession(planSessionCtx);
+  if (remoteRoom) {
+    const [{ remoteSpaceTools, REMOTE_SPACE_EXTRA_TOOL_IDS, REMOTE_SPACE_TOOL_NAMES }, { getToolRegistry }] = await Promise.all([
+      import('@/core/federation/visitor-agent'), import('@/tools/registry'),
+    ]);
+    rootTools = getToolRegistry().getToolHandlersForTools([...REMOTE_SPACE_EXTRA_TOOL_IDS]);
+    metaTools = remoteSpaceTools(service, remoteRoom);
+    rootAllowedToolIds.clear();
+    for (const id of [...REMOTE_SPACE_EXTRA_TOOL_IDS, ...REMOTE_SPACE_TOOL_NAMES]) rootAllowedToolIds.add(id);
   }
   // The small-model answer to "what runs the loop now": the same loop, a reduced
   // tool set, and a hard iteration cap (below). Gated on `isSmallModel` — the
@@ -350,7 +371,7 @@ export async function runRootAgent(
     });
 
   let turnTools = [...rootTools, ...metaTools];
-  turnTools = [...turnTools, selfReport(turnTools)];
+  if (!remoteRoom) turnTools = [...turnTools, selfReport(turnTools)];
 
   // Lazy tool discovery, same gate every worker goes through
   // (`worker-spawner.ts`): on local Ollama the per-request tool schema is
@@ -368,6 +389,7 @@ export async function runRootAgent(
     ? undefined
     : selectCoreToolIds(message, rootRoleConfig.coreToolIds);
   if (
+    !remoteRoom &&
     rootCoreToolIds !== undefined &&
     shouldUseLazyDiscovery({
       hasCoreToolIds: true,
@@ -697,6 +719,8 @@ export async function runRootAgent(
       inputGuardFlags: guardFlags,
       ...(isDevMode ? { projectPath: sessionCtx!.projectPath! } : {}),
       ...(extras.room ? { room: { postedMessageId: extras.room.postedMessageId } } : {}),
+      // A CLI agent brings its own tools: refused for a remote room (agent-manager).
+      ...(remoteRoom ? { remoteRoom: true } : {}),
     },
   });
 

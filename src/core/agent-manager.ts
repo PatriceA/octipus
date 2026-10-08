@@ -284,6 +284,12 @@ export class AgentManager {
       assertCliSpaceMode(tool?.adapter ?? tool?.name ?? routedModel);
     }
 
+    // A room of a space on another install (federation §9) holds the remote
+    // space tools and web reads only; a CLI agent brings its own tools.
+    if (isCLI && options.contextMetadata?.remoteRoom) {
+      throw new Error(`${routedModel} is a CLI agent, which brings its own tools: your agent in a space on another install runs on API models only`);
+    }
+
     let worker: AnyAgentWorker;
 
     if (isCLI) {

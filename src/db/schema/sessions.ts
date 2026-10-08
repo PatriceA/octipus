@@ -116,6 +116,16 @@ export interface SessionContext {
    * while the member may still enter the room (re-checked every turn).
    */
   linkedRoomId?: string;
+  /**
+   * "Ask my agent" in a room of a space on another install
+   * (docs/plans/federation-spec.md §9): the pointer row here
+   * (`remote_spaces.id`), the room's id on the host and its title. Set
+   * once, at creation (`POST /api/remote-spaces/:id/rooms/:roomId/agent`),
+   * never changed. Makes the session the audience `remote-space`: memory,
+   * learning, profile, indexing and compaction off, and only the remote
+   * space tools and web reads offered.
+   */
+  remoteRoom?: { remoteSpaceId: string; roomId: string; roomTitle: string };
   currentTopic?: string;
   activeAgentId?: string;
   /**

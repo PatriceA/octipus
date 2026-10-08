@@ -228,6 +228,27 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **Join spaces on other installs.** With `federation.mode` `visit` or
+  `both`, a user pastes an invite link with a host fingerprint into
+  "join a space on another install" (picker, Settings, or "open there" on the
+  host's `/join` page); the fingerprint is shown before anything connects.
+  The space appears under "on other installs" with the host's badge, and the
+  rooms, notes (live co-editing), tasks and files views work on it through
+  `/api/remote-spaces/...` and the gateway's `remote.frame` /
+  `remote.event` / `remote.link`. Only a pointer row (`remote_spaces`, in
+  migration 0137) is kept; leaving is a tombstone delivered whenever the
+  link to the host next opens. Audited `remote_space_joined` /
+  `remote_space_left`.
+- **Your own agent in a space on another install.** "Ask my agent" in a
+  remote room opens a conversation that reads the room live each turn,
+  holds only the remote space tools plus web search and page fetch, and
+  never feeds memory, learning, the profile, indexing or compaction. Its
+  posts are asked: every time after a private read, the first time in a
+  conversation otherwise. "Let my agent answer when addressed" is opt-in.
+- **Admin → Federation** lists the installs whose members joined spaces
+  here, with block and unblock; **Settings → Spaces on other installs**
+  lists yours, their link state and pending leaves. Space member lists mark
+  members of other installs.
 - **Hosting members of other installs (federation, host side).** With
   `federation.mode` `host`/`both`, invites also return `federatedUrl`
   (`#octipus=<instance id>`), and another install can redeem them over its

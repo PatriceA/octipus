@@ -212,6 +212,7 @@ export function clearFlowLabel(sessionId: string): void {
 /** Test seam. */
 export function resetFlowLabels(): void {
   labels.clear();
+  remoteConsented.clear();
   sharedAudience.clear();
   lookedUp.clear();
   uncertain.clear();
@@ -428,6 +429,49 @@ export function federatedSpaceWriteReason(label: FlowLabel, call: FlowCall): str
   if (!label.secret) return undefined;
   return `flow guard: this session read credential material (${label.sources.secret}), and ${call.toolId}:${call.action} writes into a space `
     + 'that members on other installs read; nothing goes there';
+}
+
+// ── Spaces on other installs (docs/plans/federation-spec.md §9) ─────────────
+
+/**
+ * Sessions whose member approved a write of their own agent into a space
+ * on another install (a post, a note proposal, a task with text). Bounded
+ * like the shared-audience marks; losing one only asks again.
+ */
+const remoteConsented = new Set<string>();
+
+/**
+ * Why a write of the member's own agent into a space on another install
+ * (`remote_space_post` and the other writes that carry text there) needs
+ * the member, or undefined. Treated like a post to a shared audience,
+ * stricter: once the session read private data or credential material,
+ * EVERY such write asks (labels only tighten); a clean session asks the
+ * first time, then not again in that session. Whatever the flow-guard
+ * mode. Pure given the label and the consent set.
+ */
+export function remoteSpaceWriteReason(sessionId: string | undefined, call: FlowCall): string | undefined {
+  const label = getFlowLabel(sessionId);
+  const name = `${call.toolId}:${call.action}`;
+  if (label.secret) {
+    return `flow guard: this session read credential material (${label.sources.secret}), and ${name} sends text to a space on another install; `
+      + 'every such write needs approval';
+  }
+  if (label.private) {
+    return `flow guard: this session read your private data (${label.sources.private}), and ${name} sends text to a space on another install `
+      + 'whose members read it; every such write needs approval';
+  }
+  if (!sessionId || !remoteConsented.has(sessionId)) {
+    return `${name} sends text to a space on another install, where its members read it: the first write of this conversation needs approval`;
+  }
+  return undefined;
+}
+
+/** The member approved a write into a space on another install in `sessionId`: later clean writes there go ahead. */
+export function markRemoteSpaceWriteConsented(sessionId: string | undefined): void {
+  if (!sessionId) return;
+  remoteConsented.delete(sessionId);
+  remoteConsented.add(sessionId);
+  if (remoteConsented.size > MAX_SHARED_SESSIONS) remoteConsented.delete(remoteConsented.values().next().value as string);
 }
 
 // ── Decision ────────────────────────────────────────────────────────────────

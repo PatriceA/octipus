@@ -531,6 +531,27 @@ export const DocLeaveSchema = z.object({
   noteId: z.string().uuid(),
 });
 
+// ── Spaces on other installs (docs/plans/federation-spec.md §8.2) ──
+
+/**
+ * `remote.frame` — a gateway frame for a space this user joined on another
+ * install: `remoteSpaceId` is the pointer row here (`remote_spaces.id`,
+ * the caller's own), `frame` one of the types a visitor may send there
+ * (`GATEWAY_FRAME_ALLOWLIST`). It travels on the peer link with this
+ * connection's id as `conn`; the host's answers come back as
+ * `remote.event` to this connection only.
+ */
+export const RemoteFrameSchema = z.object({
+  type: z.literal('remote.frame'),
+  remoteSpaceId: z.string().uuid(),
+  frame: z.object({
+    type: z.enum([
+      'room.subscribe', 'room.unsubscribe', 'room.post', 'room.typing', 'room.read',
+      'space.subscribe', 'doc.join', 'doc.update', 'doc.awareness', 'doc.leave', 'ping',
+    ]),
+  }).passthrough(),
+});
+
 // Union of all client messages
 export const ClientMessageSchema = z.discriminatedUnion('type', [
   AuthMessageSchema,
@@ -557,6 +578,7 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   DocUpdateSchema,
   DocAwarenessSchema,
   DocLeaveSchema,
+  RemoteFrameSchema,
 ]);
 
 export type AuthMessage = z.infer<typeof AuthMessageSchema>;
@@ -792,6 +814,30 @@ export interface FileLeasesMessage {
   leases: FileLeaseView[];
 }
 
+/**
+ * A message the host of a space on another install sent to this
+ * connection (federation §8.2): a gateway server message for the frames
+ * this connection sent with `remote.frame`, or a link notice such as
+ * `space.revoked`. Host content: shown, never stored here.
+ */
+export interface RemoteEventMessage {
+  type: 'remote.event';
+  remoteSpaceId: string;
+  event: unknown;
+}
+
+/**
+ * The link to the host of `remoteSpaceId` went down or came back (§8.2).
+ * After `up`, the client re-issues its room subscriptions (with
+ * `afterMessageId`, paging while `hasMore`) and its `doc.join`s (with its
+ * epoch and state vector); this install re-issues `space.subscribe`.
+ */
+export interface RemoteLinkMessage {
+  type: 'remote.link';
+  remoteSpaceId: string;
+  state: 'up' | 'down';
+}
+
 export type GatewayMessage =
   | AuthOkMessage
   | AuthErrorMessage
@@ -813,7 +859,9 @@ export type GatewayMessage =
   | DocClosedMessage
   | DocErrorMessage
   | DocProposalsMessage
-  | FileLeasesMessage;
+  | FileLeasesMessage
+  | RemoteEventMessage
+  | RemoteLinkMessage;
 
 // ── Protocol Version ──────────────────────────────────────────────
 

@@ -298,6 +298,9 @@ export async function dialPeer(url: string, expectedInstanceId: string, opts: Di
         channel,
         role: 'visitor',
         peerInstanceId: hostHello.instanceId,
+        // The pinned host's key (its id was checked against it above): the
+        // visitor records it with the spaces it joins there.
+        peerPublicKey: hostHello.publicKey,
         maxFrameBytes,
         heartbeatSeconds: opts.heartbeatSeconds ?? cfg.federation.heartbeatSeconds,
         requestTimeoutMs: opts.requestTimeoutMs,

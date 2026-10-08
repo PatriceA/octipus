@@ -114,6 +114,12 @@ export function Sidebar() {
       items.splice(2, 0, { name: 'rooms', href: '/rooms', icon: Hash, count: unread });
       return { ...group, items };
     }
+    // A space on another install (federation §8.3): its rooms and its files.
+    if (group.label === 'Work' && activeWorkspace?.kind === 'remote') {
+      const items = [...group.items];
+      items.splice(2, 0, { name: 'rooms', href: '/rooms', icon: Hash }, { name: 'space files', href: '/spaces/remote', icon: FileText });
+      return { ...group, items };
+    }
     return group;
   });
 

@@ -463,6 +463,20 @@ export class AgentService {
     return fenceSpaceTurnContext(block);
   }
 
+  /**
+   * Per-turn context of the member's own agent in a room of a space on
+   * another install (`context.remoteRoom`, federation §9): the room's
+   * newest posts, fetched now with `room.page`, windowed to
+   * `rooms.transcriptWindowChars` and fenced as other members' words; the
+   * session is marked `suspicious`. For this turn only — stored nowhere
+   * (`fenceSpaceTurnContext`). Throws when the member left the space or the
+   * host is unreachable: the turn says so rather than answer blind.
+   */
+  private async remoteRoomTurnContext(session: Session, userId: string): Promise<string> {
+    const { remoteRoomTurnContext } = await import('@/core/federation/visitor-agent');
+    return remoteRoomTurnContext(session, userId);
+  }
+
   /** The newest posts of a room that fit in `rooms.transcriptWindowChars`, fenced, for a side panel. */
   private async linkedRoomTranscript(roomId: string, title: string): Promise<string> {
     const [{ readSessionHistory }, { renderRoomTranscript, windowRows }] = await Promise.all([
@@ -625,7 +639,11 @@ export class AgentService {
       else markNotSharedAudience(resolvedSessionId);
       // Space memory (§6.5) and, for a private side panel, the linked room's
       // transcript (§6.7): per turn, read now.
-      const spaceContext = scope.space ? await this.spaceTurnContext(session, userId, scope.space.workspaceId) : '';
+      // …or, in "ask my agent" for a room of a space on another install, that
+      // room's recent transcript, read live from the host (federation §9).
+      const spaceContext = scope.space
+        ? await this.spaceTurnContext(session, userId, scope.space.workspaceId)
+        : session.context?.remoteRoom ? await this.remoteRoomTurnContext(session, userId) : '';
       // Delivered as per-turn context beside the message (stored in the
       // message's metadata, not as its text), on every turn in a group thread:
       // monitors, wake-ups and plan runs too, whose replies land in the thread.

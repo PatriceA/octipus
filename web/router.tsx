@@ -15,6 +15,7 @@ const Home = lazy(() => import('./app/page'));
 const AdminPage = lazy(() => import('./app/admin/page'));
 const AdminAuditPage = lazy(() => import('./app/admin/audit/page'));
 const AdminDestinationsPage = lazy(() => import('./app/admin/destinations/page'));
+const AdminFederationPage = lazy(() => import('./app/admin/federation/page'));
 const AdminGroupChannelsPage = lazy(() => import('./app/admin/group-channels/page'));
 const AdminOrgsPage = lazy(() => import('./app/admin/orgs/page'));
 const AdminOrgsSsoPage = lazy(() => import('./app/admin/orgs/sso/page'));
@@ -56,6 +57,8 @@ const SettingsPage = lazy(() => import('./app/settings/page'));
 const SetupPage = lazy(() => import('./app/setup/page'));
 const SkillsPage = lazy(() => import('./app/skills/page'));
 const SpaceSettingsPage = lazy(() => import('./app/spaces/settings/page'));
+const JoinRemoteSpacePage = lazy(() => import('./app/spaces/join-remote/page'));
+const RemoteSpacePage = lazy(() => import('./app/spaces/remote/page'));
 const SkillsProposalsPage = lazy(() => import('./app/skills/proposals/page'));
 const TasksPage = lazy(() => import('./app/tasks/page'));
 const MyWorkPage = lazy(() => import('./app/my-work/page'));
@@ -134,6 +137,8 @@ const router = createBrowserRouter([
       { path: 'skills', element: <SkillsPage /> },
       { path: 'skills/proposals', element: <SkillsProposalsPage /> },
       { path: 'spaces/:id/settings', element: <SpaceSettingsPage /> },
+      { path: 'spaces/join-remote', element: <JoinRemoteSpacePage /> },
+      { path: 'spaces/remote', element: <RemoteSpacePage /> },
       { path: 'tasks', element: <TasksPage /> },
       { path: 'my-work', element: <MyWorkPage /> },
       { path: 'tools', element: <ToolsPage /> },
@@ -146,6 +151,7 @@ const router = createBrowserRouter([
         { index: true, element: <AdminPage /> },
         { path: 'audit', element: <AdminAuditPage /> },
         { path: 'destinations', element: <AdminDestinationsPage /> },
+        { path: 'federation', element: <AdminFederationPage /> },
         { path: 'group-channels', element: <AdminGroupChannelsPage /> },
         { path: 'orgs', element: <AdminOrgsPage /> },
         { path: 'orgs/sso', element: <AdminOrgsSsoPage /> },

@@ -20,8 +20,9 @@
  * after `closeAll`) is closed instead of handed out.
  *
  * Frames name the visitor (`as`, the stored member handle) and the local
- * client connection (`conn`); the slices that build the visitor operations
- * fill them. Host events reach the callbacks subscribed for that host.
+ * client connection (`conn`); visitor-ops.ts fills them. Host events reach
+ * the callbacks subscribed for that host, link up/down the `onLinkState`
+ * listeners.
  */
 import { logger } from '@/utils/logger';
 import { DialError, type DialPeerOptions, dialPeer } from './dialer';
@@ -91,6 +92,7 @@ export interface VisitorLinkPoolOptions {
 export class VisitorLinkPool {
   private readonly entries = new Map<string, Entry>();
   private readonly opts: VisitorLinkPoolOptions;
+  private readonly stateListeners = new Set<(hostInstanceId: string, state: LinkState) => void>();
   private readonly stopFollowingMode: () => void;
   /** Bumped by `closeAll`: a dial started before it is closed when it completes. */
   private generation = 0;
@@ -109,6 +111,26 @@ export class VisitorLinkPool {
     this.disposed = true;
     this.stopFollowingMode();
     this.closeAll(CLOSE.normal, 'shutting down');
+  }
+
+  /**
+   * Follow link up/down for every host (the visitor operations: tombstones,
+   * `remote.link`, resubscription). Returns the unsubscribe.
+   */
+  onLinkState(listener: (hostInstanceId: string, state: LinkState) => void): () => void {
+    this.stateListeners.add(listener);
+    return () => { this.stateListeners.delete(listener); };
+  }
+
+  private announce(hostInstanceId: string, state: LinkState): void {
+    this.opts.onLinkState?.(hostInstanceId, state);
+    for (const listener of this.stateListeners) {
+      try {
+        listener(hostInstanceId, state);
+      } catch (err) {
+        log.error({ err, host: hostInstanceId, state }, 'Federation link-state listener failed');
+      }
+    }
   }
 
   /** Whether the link to `hostInstanceId` is open. */
@@ -254,7 +276,7 @@ export class VisitorLinkPool {
     }
     entry.link = link;
     entry.upSince = Date.now();
-    this.opts.onLinkState?.(entry.host.instanceId, 'up');
+    this.announce(entry.host.instanceId, 'up');
     log.info({ host: entry.host.instanceId }, 'Federation outbound link up');
     return link;
   }
@@ -262,7 +284,7 @@ export class VisitorLinkPool {
   private linkClosed(entry: Entry, closed: PeerLink, code: number, reason: string): void {
     if (entry.link !== closed) return;
     entry.link = null;
-    this.opts.onLinkState?.(entry.host.instanceId, 'down');
+    this.announce(entry.host.instanceId, 'down');
     log.info({ host: entry.host.instanceId, code, reason }, 'Federation outbound link down');
     // Closed by `closeAll` (whose own code may be 4403): no refusal by the host.
     if (entry.halted) return;

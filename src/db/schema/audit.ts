@@ -62,6 +62,10 @@ export const auditActionEnum = pgEnum('audit_action', [
   'space_left_remote',
   'federation_instance_blocked',
   'federation_instance_unblocked',
+  // The visitor side: a user of this install joined or left a space on
+  // another install.
+  'remote_space_joined',
+  'remote_space_left',
 ]);
 
 export const auditLog = pgTable('audit_log', {

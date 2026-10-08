@@ -238,7 +238,7 @@ export default function SpaceSettingsPage() {
                     onChange={(e) => setRole.mutate({ userId: m.userId, role: e.target.value as SpaceRole })}
                     className={inputClass}
                   >
-                    {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+                    {ROLES.filter((r) => !m.instanceId || r !== 'owner').map((r) => <option key={r} value={r}>{r}</option>)}
                   </select>
                 ) : (
                   <RoleBadge role={m.role} />
