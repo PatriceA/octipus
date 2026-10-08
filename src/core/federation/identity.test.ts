@@ -140,8 +140,8 @@ describe('verifyEd25519', () => {
 
   test('throws for a key that is not Ed25519', async () => {
     const { verifyEd25519 } = await import('./identity');
-    const rsa = generateKeyPairSync('rsa', { modulusLength: 1024 }).publicKey.export({ format: 'der', type: 'spki' });
-    expect(() => verifyEd25519(rsa, Buffer.from('x'), Buffer.alloc(64))).toThrow();
+    const notEd25519 = generateKeyPairSync('ec', { namedCurve: 'P-256' }).publicKey.export({ format: 'der', type: 'spki' });
+    expect(() => verifyEd25519(notEd25519, Buffer.from('x'), Buffer.alloc(64))).toThrow();
     expect(() => verifyEd25519(Buffer.alloc(31), Buffer.from('x'), Buffer.alloc(64))).toThrow();
   });
 });
