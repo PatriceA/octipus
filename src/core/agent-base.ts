@@ -106,6 +106,22 @@ export interface ToolHandler {
   execute: (args: Record<string, unknown>, context: AgentContext) => Promise<unknown>;
 }
 
+/**
+ * A tool a codemode script can call that is NOT a registered handler: the
+ * call is re-addressed to the registered handler named `via`, with
+ * `wrap(args)` as its arguments, so it takes that handler's permission path.
+ * The MCP bridge uses it to give scripts each `codemode`/`deferred` MCP tool
+ * as `tools.mcp__<server>__<tool>` routed through `mcp_call_tool`, without
+ * registering (and so advertising) a handler per tool.
+ */
+export interface RoutedScriptTool {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  via: string;
+  wrap: (args: Record<string, unknown>) => Record<string, unknown>;
+}
+
 export abstract class BaseAgentWorker {
   protected context: AgentContext;
   protected config: AgentWorkerConfig;

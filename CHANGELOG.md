@@ -254,6 +254,23 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **MCP tool exposure.** Each MCP server sets how its tools reach the model,
+  after pi's exposure modes:
+  - `deferred`, the default and the previous behaviour: tools are found through
+    `mcp_list_tools`.
+  - `direct`: each tool is declared as `mcp__<server>__<tool>` on every request.
+  - `codemode`: tools are left out of `mcp_list_tools`; codemode scripts call
+    them as `tools.mcp__<server>__<tool>` and find them with `searchTools()`.
+  - `hidden`: the bridge refuses every call.
+
+  `toolExposure` overrides it per tool, by exact name or `*` pattern. Set it on
+  the MCP page, through `PUT /api/mcp/servers/:id/exposure` and
+  `PUT /api/mcp/servers/:id/tools/:tool/exposure`, or with `mcp_add_server`.
+  Exposure changes only what the model sees: every call still passes the same
+  permission checks, and script calls are routed through `mcp_call_tool`. An
+  agent without codemode treats `codemode` tools as `deferred`. See
+  [Tool exposure](docs/MCP-INTEGRATION.md#tool-exposure).
+
 - **Codemode.** Agents get a `codemode` tool: the model writes one JavaScript
   script that calls its tools (`await tools.<name>(args)`), and only what the
   script outputs comes back. Chained calls, parallel calls and large results

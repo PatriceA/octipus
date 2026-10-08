@@ -30,7 +30,7 @@ import {
   parseCodemodeSource,
   renderDeclarations,
 } from '@earendil-works/pi-codemode';
-import type { ToolHandler } from '@/core/agent-base';
+import type { RoutedScriptTool, ToolHandler } from '@/core/agent-base';
 import { TOOL_DISCOVERY_TOOL_ID } from '@/core/agent/tool-split';
 import type { ToolCall, ToolResult } from '@/core/types';
 import { stripWorkStreamMeta } from '@/shared/work-stream';
@@ -49,6 +49,12 @@ const SEARCH_LIMIT = 8;
 export interface CodemodeHost {
   /** The worker's callable tools right now (blocked tools already removed). */
   tools(): ToolHandler[];
+  /**
+   * Script-only tools that are not registered handlers (the MCP bridge's
+   * `codemode`/`deferred` tools). Each is offered only while the worker holds
+   * the handler it routes through.
+   */
+  routedTools?(): RoutedScriptTool[];
   /** Run one call through the worker's full tool pipeline. */
   call(call: ToolCall): Promise<ToolResult>;
   /** The worker's abort signal. */
@@ -81,6 +87,14 @@ export function scriptableTools(handlers: ToolHandler[]): ToolHandler[] {
       h.toolId !== TOOL_DISCOVERY_TOOL_ID &&
       h.final !== true,
   );
+}
+
+interface ScriptEntry {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  /** The registered call this script call becomes. */
+  address: (input: Record<string, unknown>) => Pick<ToolCall, 'name' | 'arguments'>;
 }
 
 function firstLine(text: string): string {
@@ -141,7 +155,27 @@ export function buildCodemodeHandler(host: CodemodeHost): ToolHandler {
       }
 
       const handlers = scriptableTools(host.tools());
-      const byName = new Map(handlers.map((h) => [h.name, h]));
+      const handlerNames = new Set(handlers.map((h) => h.name));
+      // One entry per name a script can call: the worker's own handlers, then
+      // routed tools — re-addressed to the handler they route through, so they
+      // can never reach past what the worker itself may call.
+      const entries: ScriptEntry[] = [
+        ...handlers.map((h) => ({
+          name: h.name,
+          description: h.description,
+          parameters: h.parameters,
+          address: (input: Record<string, unknown>) => ({ name: h.name, arguments: input }),
+        })),
+        ...(host.routedTools?.() ?? [])
+          .filter((r) => handlerNames.has(r.via) && !handlerNames.has(r.name))
+          .map((r) => ({
+            name: r.name,
+            description: r.description,
+            parameters: r.parameters,
+            address: (input: Record<string, unknown>) => ({ name: r.via, arguments: r.wrap(input) }),
+          })),
+      ];
+      const byName = new Map(entries.map((e) => [e.name, e]));
       const runId = randomUUID().slice(0, 8);
       let seq = 0;
       // A call the pipeline THROWS on (a refused approval aborts the agent) must
@@ -152,15 +186,14 @@ export function buildCodemodeHandler(host: CodemodeHost): ToolHandler {
       const onHostAbort = () => abort.abort();
       host.signal?.addEventListener('abort', onHostAbort, { once: true });
 
-      const tools: CodemodeTool[] = handlers.map((h) => ({
-        name: h.name,
-        description: firstLine(h.description),
-        inputSchema: h.parameters as CodemodeJsonSchema,
+      const tools: CodemodeTool[] = entries.map((e) => ({
+        name: e.name,
+        description: firstLine(e.description),
+        inputSchema: e.parameters as CodemodeJsonSchema,
         execute: async (input) => {
           const call: ToolCall = {
             id: `codemode-${runId}-${++seq}`,
-            name: h.name,
-            arguments: (input ?? {}) as Record<string, unknown>,
+            ...e.address((input ?? {}) as Record<string, unknown>),
           };
           let result: ToolResult;
           try {
@@ -175,7 +208,7 @@ export function buildCodemodeHandler(host: CodemodeHost): ToolHandler {
         },
       }));
 
-      const summaries = (): ToolSummary[] => handlers.map((h) => ({ name: h.name, description: firstLine(h.description) }));
+      const summaries = (): ToolSummary[] => entries.map((e) => ({ name: e.name, description: firstLine(e.description) }));
       const globals: CodemodeTool[] = [
         {
           name: 'searchTools',
@@ -196,10 +229,10 @@ export function buildCodemodeHandler(host: CodemodeHost): ToolHandler {
           signature: '(name: string): Promise<string | undefined>',
           execute: (callArgs) => {
             const [name] = callArgs as [unknown];
-            const handler = typeof name === 'string' ? byName.get(name) : undefined;
-            if (!handler) return undefined;
+            const entry = typeof name === 'string' ? byName.get(name) : undefined;
+            if (!entry) return undefined;
             return renderDeclarations({
-              tools: [{ name: handler.name, description: handler.description, inputSchema: handler.parameters as CodemodeJsonSchema, execute: () => undefined }],
+              tools: [{ name: entry.name, description: entry.description, inputSchema: entry.parameters as CodemodeJsonSchema, execute: () => undefined }],
             });
           },
         },

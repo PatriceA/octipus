@@ -76,6 +76,49 @@ MCP_AUTO_START=true
 | **stdio** | Local MCP servers (npm packages, local scripts) | `command`, `args`, `env` |
 | **sse** | Remote/containerized MCP servers (n8n, web services) | `sseUrl`, `postUrl`, `headers` |
 
+### Tool exposure
+
+Each server decides how its tools reach the model, after
+[pi's MCP exposure modes](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/mcp.md#control-tool-exposure).
+Exposure only changes what the model **sees**. Every call, however it arrives,
+still passes the permission checks in [Execution permissions](#execution-permissions).
+
+| `exposure` | What the model gets | Use it for |
+|---|---|---|
+| `deferred` (default) | Nothing up front. `mcp_list_tools` lists the tools; `mcp_call_tool` calls them. | Most servers. This is how every server behaved before exposure existed. |
+| `direct` | Each tool declared as its own tool, `mcp__<server>__<tool>`, with its full schema, on every request. | A few tools the agent uses constantly. Each one costs prompt tokens on every request. |
+| `codemode` | Left out of `mcp_list_tools`. Codemode scripts call each tool as `tools.mcp__<server>__<tool>(args)` and find it with `searchTools()`, so neither the schema nor the results enter the conversation. | Large servers, and tools whose results need filtering. |
+| `hidden` | Nothing. The bridge refuses the call, from any path. A hidden server also offers no resources or prompts. | Servers or tools that must stay unavailable. |
+
+Codemode scripts can call `deferred` tools the same way. An agent that does
+not run codemode (a small model, or a room of a space on another install)
+treats `codemode` tools as `deferred`, so it can still reach them.
+
+`toolExposure` overrides the server's exposure per tool. Keys are exact tool
+names or patterns where `*` matches any characters. An exact name wins over
+patterns; among patterns, the first match wins. A `hidden` server can expose
+only the tools you pick:
+
+```json
+{
+  "id": "github",
+  "name": "GitHub",
+  "transport": "streamable-http",
+  "sseUrl": "https://api.githubcopilot.com/mcp/",
+  "isEnabled": true,
+  "exposure": "codemode",
+  "toolExposure": {
+    "search_code": "direct",
+    "delete_*": "hidden"
+  }
+}
+```
+
+Tool names in `mcp__<server>__<tool>` replace every character outside
+`[A-Za-z0-9_]` with `_`. Tools that then collide, or names longer than 64
+characters, get a short hash suffix. An exposure change applies to agents
+started after it.
+
 ### Which roles get MCP access?
 
 MCP meta-tools are available to these roles: **research**, **coding**, **general**, **devops**, **security**, **data**, **ai**, **automation**, **architecture**. The root runs as `general` and therefore has MCP access. Other roles (qa, design, review, communication, finance, pm, writing) don't include MCP by default — add `'mcp'` to their `toolIds` in `src/core/agent/roles/<name>/config.ts` if needed.
@@ -98,6 +141,7 @@ not the internal behavior or isolation of an external MCP server.
 ### Via Web UI
 
 Go to **Settings → MCP** to add, enable/disable, connect, and disconnect MCP servers.
+Expand a connected server to set its exposure, and the exposure of each tool.
 
 ### Via API
 
@@ -117,6 +161,15 @@ POST /api/mcp/servers/:id/toggle
 POST /api/mcp/servers/:id/connect
 POST /api/mcp/servers/:id/disconnect
 
+# Set how a server's tools reach the model (both fields optional;
+# toolExposure replaces the whole override map, {} clears it)
+PUT /api/mcp/servers/:id/exposure
+{ "exposure": "codemode", "toolExposure": { "search_code": "direct" } }
+
+# Set (or with null, remove) one tool's override
+PUT /api/mcp/servers/:id/tools/:tool/exposure
+{ "exposure": "hidden" }
+
 # Remove
 DELETE /api/mcp/servers/:id
 
@@ -130,6 +183,9 @@ When an agent with MCP access needs external tools, it follows this pattern:
 
 1. **Discover** — calls `mcp_list_tools` to see available servers and tools with their parameter schemas
 2. **Call** — calls `mcp_call_tool` with `server_id`, `tool_name`, and `arguments`
+
+`direct` tools skip both steps, and `codemode` tools are called from codemode
+scripts instead; see [Tool exposure](#tool-exposure).
 
 The agent decides autonomously whether MCP tools are relevant. If no MCP servers are connected, the meta-tools are not injected at all (zero overhead).
 

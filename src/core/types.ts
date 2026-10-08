@@ -1,3 +1,4 @@
+import type { McpExposure, McpExposureConfig } from '@/shared/mcp-exposure';
 
 
 // Agent Types
@@ -108,6 +109,12 @@ export interface AgentContext {
    *  UI doesn't render "0ms" before the agent is moved to the historical bucket. */
   completedAt?: Date;
   metadata: Record<string, unknown>;
+  /**
+   * This agent runs the `codemode` tool (decided at spawn, see
+   * `AgentManager.spawn`). MCP tools with `codemode` exposure are left out of
+   * `mcp_list_tools` only when it does; without it they behave as `deferred`.
+   */
+  codemode?: boolean;
 }
 
 /** Is this the root agent of a turn? See `AgentContext.root`. */
@@ -392,7 +399,7 @@ export interface ToolParameter {
 }
 
 // MCP Types
-export interface MCPServer {
+export interface MCPServer extends McpExposureConfig {
   id: string;
   name: string;
   command: string;
@@ -416,6 +423,8 @@ export interface MCPTool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  /** Effective exposure (server setting + per-tool overrides). */
+  exposure?: McpExposure;
 }
 
 // Voice Types

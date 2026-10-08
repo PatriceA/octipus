@@ -312,6 +312,7 @@ export class AgentManager {
         (options.tools?.length ?? 0) > 0 &&
         modelEntry?.supportsTools === true &&
         !isSmallModel({ modelId: routedModel, metadata: modelEntry.metadata }, config.agent.smallModelMaxParams);
+      context.codemode = workerConfig.codemode;
       // Swarm Phase 2: chain parent AbortSignal into the worker.
       worker = new AgentWorker(context, workerConfig, { parentSignal: options.parentSignal });
     }

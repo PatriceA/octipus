@@ -9,6 +9,7 @@
  * Nothing here is auto-approvable: `requiresPermission: true` with no
  * ALLOW default in the manifest.
  */
+import { exposureConfigError, isMcpExposure } from '@/shared/mcp-exposure';
 import type { MCPServer, ToolManifest } from '@/core/types';
 import { userRepository } from '@/db/repositories/user-repository';
 import { getMCPBridge } from '@/mcp/bridge';
@@ -34,6 +35,9 @@ export function buildServerConfig(args: Record<string, unknown>): { server: MCPS
 
   const command = String(args.command ?? '').trim();
   const url = String(args.url ?? '').trim();
+
+  const exposureError = exposureConfigError({ exposure: args.exposure });
+  if (exposureError) return { error: exposureError };
 
   if (transport === 'stdio' && !command) {
     return { error: "transport='stdio' needs a `command` to run." };
@@ -64,6 +68,7 @@ export function buildServerConfig(args: Record<string, unknown>): { server: MCPS
       postUrl: transport === 'streamable-http' ? url : undefined,
       // Any transport: a slow tool (a UI scenario, a crawl) outlives the 30 s protocol default.
       requestTimeoutMs: typeof args.requestTimeoutMs === 'number' && args.requestTimeoutMs >= 1 && args.requestTimeoutMs <= 3_600_000 ? args.requestTimeoutMs : undefined,
+      exposure: isMcpExposure(args.exposure) ? args.exposure : undefined,
       isEnabled: true,
     },
   };
@@ -163,6 +168,12 @@ export class McpAdminTool extends BaseTool {
             env: { type: 'object', description: 'Environment variables for a stdio server' },
             headers: { type: 'object', description: 'HTTP headers for an http transport' },
             requestTimeoutMs: { type: 'number', description: 'Per-call timeout in ms (default 30000), any transport' },
+            exposure: {
+              type: 'string',
+              description:
+                "How its tools reach agents: 'deferred' (default, via mcp_list_tools), 'direct' (declared on every request — " +
+                "only for a few tools used constantly), 'codemode' (codemode scripts only), or 'hidden'",
+            },
           },
           returns: 'The registered server and how many tools it exposed on connect',
         },

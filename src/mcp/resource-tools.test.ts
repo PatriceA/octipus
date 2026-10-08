@@ -8,7 +8,7 @@ const context = {} as AgentContext;
 describe('on-demand MCP resources and prompts', () => {
   test('catalog pagination does not read resource contents', async () => {
     const read = vi.fn();
-    const bridge = { readResource: read, getAllConnections: () => [{ status: 'connected', id: 's',
+    const bridge = { readResource: read, isServerHidden: () => false, getAllConnections: () => [{ status: 'connected', id: 's',
       resources: Array.from({ length: 25 }, (_, i) => ({ name: `r${i}`, uri: `test://${i}` })),
       templates: [{ name: 'file', uriTemplate: 'test://{path}' }], prompts: [{ name: 'review' }] }] } as unknown as MCPBridge;
     const handler = resourceHandlers(bridge)[0];
