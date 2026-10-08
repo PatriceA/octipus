@@ -601,7 +601,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `services` | 2 |
 | `core` | `shared` | 15 |
 | `core` | `skills` | 10 |
-| `core` | `tools` | 17 |
+| `core` | `tools` | 18 |
 | `core` | `utils` | 186 |
 | `core` | `voice` | 1 |
 | `db` | `config` | 4 |
@@ -671,7 +671,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `channels` | 2 |
 | `tools` | `config` | 3 |
 | `tools` | `connectors` | 2 |
-| `tools` | `core` | 87 |
+| `tools` | `core` | 88 |
 | `tools` | `db` | 29 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |
@@ -679,9 +679,9 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `plugins` | 1 |
 | `tools` | `security` | 33 |
 | `tools` | `services` | 1 |
-| `tools` | `shared` | 2 |
+| `tools` | `shared` | 3 |
 | `tools` | `skills` | 5 |
-| `tools` | `utils` | 35 |
+| `tools` | `utils` | 36 |
 | `tools` | `visual` | 2 |
 | `tools` | `voice` | 3 |
 | `tui-editor` | `mcp` | 2 |

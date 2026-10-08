@@ -32,6 +32,7 @@ import type { ToolHandler } from './agent-base';
 import { recordModelToolCall } from './agent/model-capability';
 import { ensureChildRelay } from './agent/output-guard';
 import { isLongTailHandler } from './agent/tool-split';
+import { buildCodemodeHandler } from '@/tools/codemode';
 import { ClassifiedError, isFatalConnectionError, isTransientDnsError } from './errors/classification';
 import { formatCollectedResults } from './swarm/collect-tool';
 import {
@@ -373,6 +374,14 @@ export class AgentWorker extends BaseAgentWorker {
       (ms) => this.addPausedMs(ms),
       this.abortController.signal,
     );
+    if (config.codemode) {
+      const executor = this.toolExecutor;
+      this.toolExecutor.registerTool(buildCodemodeHandler({
+        tools: () => Array.from(executor.getTools().values()),
+        call: (call) => executor.runNestedCall(call),
+        signal: this.abortController.signal,
+      }));
+    }
 
     this.subscribePermissionWait();
 
@@ -2091,37 +2100,39 @@ export class AgentWorker extends BaseAgentWorker {
         )
       : undefined;
 
-    // Install-level lane (background): the key is the row owner's — the system
-    // vault for this install row (coworking spec §8.3).
-    const { resolveModelKey } = await import('@/models/model-key');
-    const apiKey = await resolveModelKey(model, this.context.userId);
-
-    const completionOpts = {
-      model: model.modelId,
-      messages,
-      temperature: 0,
-      maxTokens: model.defaultMaxTokens || 1024,
-      endpoint: model.endpoint || undefined,
-      apiKey,
-      userId: this.context.userId,
-      sessionId: this.context.sessionId,
-      agentId: this.context.id,
-      modelConfigName: model.name,
-      requestType: 'toolshim',
-      signal: deadline.signal,
-    };
-
     let result: CompletionResult;
     try {
-      if (model.provider && model.provider !== 'litellm') {
-        const { getProviderRouter } = await import('@/models/providers');
-        const directProvider = getProviderRouter().getProviderByName(model.provider);
-        result = directProvider
-          ? await directProvider.complete(completionOpts)
-          : await getLiteLLMClient().complete(completionOpts);
-      } else {
-        result = await getLiteLLMClient().complete(completionOpts);
-      }
+      // Install-level lane (background): the key is the row owner's — the system
+      // vault for this install row (coworking spec §8.3). Inside the try so a
+      // failed lookup still clears the timer and the parent-abort listener.
+      const { resolveModelKey } = await import('@/models/model-key');
+      const apiKey = await resolveModelKey(model, this.context.userId);
+
+      const completionOpts = {
+        model: model.modelId,
+        messages,
+        temperature: 0,
+        maxTokens: model.defaultMaxTokens || 1024,
+        endpoint: model.endpoint || undefined,
+        apiKey,
+        userId: this.context.userId,
+        sessionId: this.context.sessionId,
+        agentId: this.context.id,
+        modelConfigName: model.name,
+        requestType: 'toolshim',
+        signal: deadline.signal,
+      };
+
+      // The ceiling covers the lookups too. Spent already ⇒ fail now: a
+      // request sent with a signal that is ALREADY aborted gets no abort event,
+      // so a provider that only listens for one would run unbounded.
+      const directProvider = model.provider && model.provider !== 'litellm'
+        ? (await import('@/models/providers')).getProviderRouter().getProviderByName(model.provider)
+        : undefined;
+      deadline.signal.throwIfAborted();
+      result = directProvider
+        ? await directProvider.complete(completionOpts)
+        : await getLiteLLMClient().complete(completionOpts);
     } finally {
       if (timer) clearTimeout(timer);
       this.abortController.signal.removeEventListener('abort', onParentAbort);

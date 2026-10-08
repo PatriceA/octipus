@@ -24,6 +24,7 @@ import type { AgentFunding, AgentSpace, AgentSponsor, AgentStatus, AgentTrigger 
 import { buildAgentContext, recheckSponsor, recheckSpace, writesWithheld } from './agent/context';
 import { contentStorageOffFor } from './agent/audience';
 import { stripMutatingTools } from './agent/plan-mode';
+import { isSmallModel } from './agent/small-model';
 
 /** Union type for all agent worker implementations */
 export type AnyAgentWorker = AgentWorker | CLIAgentWorker;
@@ -300,6 +301,17 @@ export class AgentManager {
         'Spawning CLI sub-agent (autonomous mode)',
       );
     } else {
+      // Codemode on every tool-calling worker whose model can write a script:
+      // it keeps intermediate tool results out of the conversation. Small
+      // models stay off — they chain multi-step discovery badly already, the
+      // same reason they keep the full schema in `shouldUseLazyDiscovery`.
+      // A room of a space on another install (federation §9, §11 item 14)
+      // offers its fixed tool set and nothing else, so no codemode there.
+      workerConfig.codemode =
+        !options.contextMetadata?.remoteRoom &&
+        (options.tools?.length ?? 0) > 0 &&
+        modelEntry?.supportsTools === true &&
+        !isSmallModel({ modelId: routedModel, metadata: modelEntry.metadata }, config.agent.smallModelMaxParams);
       // Swarm Phase 2: chain parent AbortSignal into the worker.
       worker = new AgentWorker(context, workerConfig, { parentSignal: options.parentSignal });
     }

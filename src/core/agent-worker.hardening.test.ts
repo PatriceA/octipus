@@ -17,6 +17,7 @@ import { AgentWorker, TOOLSHIM_TIMEOUT_MS } from '@/core/agent-worker';
 import type { AgentEvent } from '@/core/agent-worker';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
+import * as modelKey from '@/models/model-key';
 import type { AgentContext } from '@/core/types';
 import { agentRepository } from '@/db/repositories/agent-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
@@ -479,6 +480,27 @@ describe('AgentWorker toolshim gate (native tool-caller ⇒ no translator)', () 
     // The deadline fired and tore the request DOWN — a stuck provider can no
     // longer pin the turn for its own (15 min) timeout.
     expect(seen?.aborted).toBe(true);
+    completeSpy.mockRestore();
+  });
+
+  test('a deadline spent during the key lookup fails the call instead of sending it', async () => {
+    // The lookup outlasts the ceiling. The request must not go out with an
+    // already-aborted signal: such a signal never fires `abort`, so a provider
+    // that only listens for the event would run unbounded.
+    const worker = new AgentWorker(mkCtx({ id: 'shim-3' }), { ...cfg(), toolShimTimeoutMs: 20 });
+    const priv = worker as unknown as {
+      runToolTranslator: (m: unknown, p: string) => Promise<string>;
+    };
+    const keySpy = vi.spyOn(modelKey, 'resolveModelKey').mockImplementation(
+      () => new Promise((resolve) => setTimeout(() => resolve(undefined), 60)),
+    );
+    const completeSpy = vi.spyOn(getLiteLLMClient(), 'complete');
+
+    await expect(
+      priv.runToolTranslator({ modelId: 'slow-local', provider: 'litellm' }, 'prose'),
+    ).rejects.toThrow(/20ms/);
+    expect(completeSpy).not.toHaveBeenCalled();
+    keySpy.mockRestore();
     completeSpy.mockRestore();
   });
 

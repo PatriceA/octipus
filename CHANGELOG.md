@@ -254,6 +254,20 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **Codemode.** Agents get a `codemode` tool: the model writes one JavaScript
+  script that calls its tools (`await tools.<name>(args)`), and only what the
+  script outputs comes back. Chained calls, parallel calls and large results
+  that only need filtering no longer re-enter the conversation on every later
+  request. Scripts run in a QuickJS/WebAssembly sandbox
+  (`@earendil-works/pi-codemode`) with no network, filesystem, timers or
+  modules; every call a script makes goes through the same permission, flow
+  guard, approval, hook and audit pipeline as a direct call, and a refused
+  approval ends the script. Scripts reach real tools only — not
+  `spawn_child`, plans or other orchestration meta-tools — and find them with
+  `searchTools()`, `describeTool()` and `ALL_TOOLS`, so the tool description
+  stays fixed and cacheable. On for every tool-calling worker whose model
+  supports tools and is not a small model (`agent.smallModelMaxParams`).
+
 - **Join spaces on other installs.** With `federation.mode` `visit` or
   `both`, a user pastes an invite link with a host fingerprint into
   "join a space on another install" (picker, Settings, or "open there" on the
