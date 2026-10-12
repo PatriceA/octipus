@@ -3,6 +3,12 @@
  * validateRootModel reroute they drive.
  */
 import { afterEach, describe, expect, test, vi } from 'vitest';
+// Not under test here: the install-model gate (install-access.isolation.test.ts) lets these fake ids through.
+vi.mock('@/models/install-access', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/models/install-access')>()),
+  mayUseInstallModels: async () => true,
+  assertInstallModelAccess: async () => {},
+}));
 import * as modelRegistry from '@/models/model-registry';
 import {
   hasRecentShim,

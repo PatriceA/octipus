@@ -29,6 +29,7 @@ import { roomMembers, roomReads } from '@/db/schema/rooms';
 import { type RoomVisibility, sessions } from '@/db/schema/sessions';
 import { type UserKind, users } from '@/db/schema/users';
 import { can, requireCan, SpaceError } from '@/security/space-access';
+import { mapLimit } from '@/utils/concurrency';
 import { coreLogger } from '@/utils/logger';
 import { accessToRoom, loadRoom, mayManage, type Room, type RoomAccess, roomAccess, roomOf } from './access';
 
@@ -305,33 +306,39 @@ export function mentionsOctipus(content: string): boolean {
 }
 
 /**
- * Store an agent-labelled post of a member of install `instanceId`
- * (federation §7.4): refused `rate_limited` when that install's agents
- * already made `federation.agentPostsPerHour` posts in the room in the last
- * hour. The count and the insert run in one transaction under an advisory
- * lock of (room, install), so concurrent posts cannot both take the last
- * one. The hard bound on a visitor is its `room.post` bucket; this bounds
- * the agents of one install together, per room.
+ * Store a post of a member of install `instanceId` (federation §7.4):
+ * refused `rate_limited` when that install's members already made
+ * `federation.remotePostsPerHour` posts in the room in the last hour, or —
+ * for an `agent`-labelled post — its agents `federation.agentPostsPerHour`.
+ * The label is the visiting install's word, so the first cap is the one it
+ * cannot dodge by leaving it off. The counts and the insert run in one
+ * transaction under an advisory lock of (room, install), so concurrent posts
+ * cannot both take the last one.
  */
-async function createAgentPost(roomId: string, instanceId: string, row: typeof messages.$inferInsert): Promise<Message> {
+async function createRemotePost(roomId: string, instanceId: string, agent: boolean, row: typeof messages.$inferInsert): Promise<Message> {
   const { getConfig } = await import('@/config');
-  const max = getConfig().federation.agentPostsPerHour;
+  const { agentPostsPerHour, remotePostsPerHour } = getConfig().federation;
   const created = await getDb().transaction(async (tx) => {
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`federation:agent-posts:${roomId}:${instanceId}`}))`);
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`federation:posts:${roomId}:${instanceId}`}))`);
     // i2: a count in a room the poster may enter
     const [counted] = await tx
-      .select({ n: sql<number>`count(*)::int` })
+      .select({
+        all: sql<number>`count(*)::int`,
+        agents: sql<number>`count(*) FILTER (WHERE (${messages.metadata}->>'agent') = 'true')::int`,
+      })
       .from(messages)
       .innerJoin(users, eq(users.id, messages.authorUserId))
       .where(and(
         eq(messages.sessionId, roomId),
         eq(messages.role, 'user'),
-        sql`(${messages.metadata}->>'agent') = 'true'`,
         sql`${messages.createdAt} > now() - interval '1 hour'`,
         eq(users.remoteInstanceId, instanceId),
       ));
-    if (Number(counted?.n ?? 0) >= max) {
-      throw new SpaceError('rate_limited', `Members' own agents from your install already made ${max} posts in this room in the last hour`);
+    if (Number(counted?.all ?? 0) >= remotePostsPerHour) {
+      throw new SpaceError('rate_limited', `Members from your install already made ${remotePostsPerHour} posts in this room in the last hour`);
+    }
+    if (agent && Number(counted?.agents ?? 0) >= agentPostsPerHour) {
+      throw new SpaceError('rate_limited', `Members' own agents from your install already made ${agentPostsPerHour} posts in this room in the last hour`);
     }
     const [inserted] = await tx.insert(messages).values(row).returning();
     return inserted;
@@ -357,7 +364,8 @@ export async function postRoomMessage(
     bridged?: { channelType: string; messageId: string };
     /**
      * Posted by a remote member's own agent (federation §7.4, F-D10): labelled
-     * as theirs and counted against `federation.agentPostsPerHour`. A member
+     * as theirs and counted against `federation.agentPostsPerHour` (every
+     * remote post counts against `federation.remotePostsPerHour`). A member
      * of this install has no such label.
      */
     agent?: boolean;
@@ -395,8 +403,8 @@ export async function postRoomMessage(
       addressed,
     },
   };
-  const row = input.agent && access.remote
-    ? await createAgentPost(roomId, access.remote.instanceId, { ...values, createdAt: new Date() })
+  const row = access.remote
+    ? await createRemotePost(roomId, access.remote.instanceId, input.agent === true, { ...values, createdAt: new Date() })
     : await messageRepository.create(values);
   await sessionRepository.incrementMessageCount(roomId);
   // The poster has read everything up to their own post.
@@ -646,17 +654,17 @@ export async function spaceMemberByUsername(workspaceId: string, usernames: read
     .where(and(eq(workspaceMembers.workspaceId, workspaceId), inArray(sql`lower(${users.username})`, names), eq(users.isActive, true)));
 }
 
-/** Active local members eligible for a room notification, after access and mute checks. */
-export async function roomNotificationRecipients(room: Room): Promise<Array<{ userId: string; username: string }>> {
-  // Local members only. A remote member never signs in here, so a row in this
-  // install's notifications table reaches nobody; its install hears about the
-  // room over the link (federation §9), as a mention does in notifyRoomMentions.
-  const members = await getDb().select({ userId: users.id, username: users.username })
+/**
+ * Active members — of this install and of others — eligible for a room
+ * notification: not muted (one query), then may enter the room (accessToRoom,
+ * the one source of the access rules, 8 at a time).
+ */
+export async function roomNotificationRecipients(room: Room): Promise<Array<{ userId: string; username: string; kind: UserKind }>> {
+  const members = await getDb().select({ userId: users.id, username: users.username, kind: users.kind })
     .from(workspaceMembers).innerJoin(users, eq(users.id, workspaceMembers.userId))
-    .where(and(eq(workspaceMembers.workspaceId, room.workspaceId), eq(users.isActive, true), eq(users.kind, 'local')));
-  const recipients: Array<{ userId: string; username: string }> = [];
-  for (const member of members) {
-    if (await hasRoomAccess(member.userId, room) && !await isRoomMuted(room.id, member.userId)) recipients.push(member);
-  }
-  return recipients;
+    .leftJoin(roomReads, and(eq(roomReads.sessionId, room.id), eq(roomReads.userId, users.id)))
+    .where(and(eq(workspaceMembers.workspaceId, room.workspaceId), eq(users.isActive, true), sql`coalesce(${roomReads.muted}, false) = false`));
+  // Bounded: a post in a big space must not flood the pool with access queries.
+  const allowed = await mapLimit(members, 8, (m) => hasRoomAccess(m.userId, room));
+  return members.filter((_, i) => allowed[i]);
 }

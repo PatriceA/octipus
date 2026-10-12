@@ -305,6 +305,8 @@ async function sendViaProvider(
       maxTokens: 1024,
       extraBody: { ...modelConfig?.metadata?.extraBody, think: true },
       userId,
+      // A red-team run (admin) probes the install's models: install work.
+      funding: 'install' as const,
     };
 
     const isLiteLLMRouted = modelConfig?.provider === 'litellm';

@@ -614,6 +614,8 @@ export const federationConfigSchema = z.object({
   maxRemoteTurnsPerInstance: z.number().int().min(1).max(100).default(5),
   /** Agent-labelled posts from other installs per room per hour. */
   agentPostsPerHour: z.number().int().min(0).max(1000).default(20),
+  /** All posts from other installs per room per hour, labelled or not (the label is the visitor's word). */
+  remotePostsPerHour: z.number().int().min(0).max(10_000).default(120),
 });
 
 /**

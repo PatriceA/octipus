@@ -97,6 +97,25 @@ describe('codemode', () => {
     );
   });
 
+  test('a script stopped mid-call waits for that call and says its effects stand', async () => {
+    // The call stops the script itself (as a timeout or an abort would), so it is surely in flight then.
+    const stop = new AbortController();
+    let finished = false;
+    const h = host({
+      signal: stop.signal,
+      call: async (call) => {
+        stop.abort();
+        await new Promise((r) => setTimeout(r, 200));
+        finished = true;
+        return { toolCallId: call.id, result: 'done' };
+      },
+    });
+    const err = await run(h, `await tools.shell__run({ path: "x" });`).catch((e: Error) => e);
+    expect(finished).toBe(true);
+    expect((err as Error).message).toMatch(/Script failed \(aborted/);
+    expect((err as Error).message).toMatch(/1 tool call was still running when the script stopped and finished afterwards/);
+  });
+
   test('the sandbox has no reach of its own', async () => {
     const out = await run(host(), `return [typeof fetch, typeof process, typeof require, typeof setTimeout].join(",");`);
     expect(out).toContain('undefined,undefined,undefined,undefined');

@@ -7,11 +7,11 @@
  * are not declared (`deferred` or `codemode` exposure), how this agent
  * reaches them, and one line on what each offers.
  *
- * It sits in the cacheable prefix of the system prompt and depends only on
- * the server set, so it changes only when a server is added, removed,
- * re-exposed or connects with new instructions.
+ * It sits in the cacheable prefix of the system prompt and is built from the
+ * stored configuration only, so it changes only when a server is added,
+ * removed, re-exposed or re-described — never when one connects or drops.
  */
-import { DEFAULT_MCP_EXPOSURE, type McpExposure } from '@/shared/mcp-exposure';
+import { DEFAULT_MCP_EXPOSURE, type McpExposure, ownToolExposure } from '@/shared/mcp-exposure';
 
 export const MCP_SERVERS_HEADING = 'MCP SERVERS';
 /** Characters of one server summary, as pi and Codex allow. */
@@ -22,11 +22,9 @@ export const MAX_SERVERS_SECTION_CHARS = 4096;
 /** What the section needs to know about one server. */
 export interface ServerListing {
   id: string;
-  /** Admin-set; preferred over the server's own text. */
+  /** Admin-set one-line summary; a server without one is listed by name only. */
   description?: string;
-  /** The server's initialize `instructions` — external text, used only as a fallback. */
-  instructions?: string;
-  /** Exposures its tools actually get (or, before it connects, the configured ones). */
+  /** Exposures its configuration gives its tools (configuredExposures). */
   exposures: ReadonlySet<McpExposure>;
 }
 
@@ -58,7 +56,7 @@ function truncate(text: string, max: number): string {
 }
 
 function summaryOf(server: ServerListing): string {
-  return oneLine(server.description?.trim() || server.instructions || '');
+  return oneLine(server.description ?? '');
 }
 
 function intro(reaches: ReadonlySet<Reach>): string {
@@ -104,7 +102,11 @@ export function renderServersSection(servers: readonly ServerListing[], opts: { 
   return [head, ...lines, ...omitted(listed.length - kept)].join('\n');
 }
 
-/** Exposures a server's config can give its tools, for a server not yet connected. */
+/**
+ * Exposures a server's config can give its tools. A bare `*` pattern matches
+ * every tool, so the server's own exposure then reaches none of them.
+ */
 export function configuredExposures(config: { exposure?: McpExposure; toolExposure?: Record<string, McpExposure> }): Set<McpExposure> {
-  return new Set([config.exposure ?? DEFAULT_MCP_EXPOSURE, ...Object.values(config.toolExposure ?? {})]);
+  const all = ownToolExposure(config.toolExposure, '*');
+  return new Set([all ?? config.exposure ?? DEFAULT_MCP_EXPOSURE, ...Object.values(config.toolExposure ?? {})]);
 }

@@ -318,6 +318,8 @@ export class HealthChecker {
           ],
           maxTokens: 1,
           temperature: 0,
+          // A probe of the install's own models, for no requester.
+          funding: 'install',
         });
       }
 

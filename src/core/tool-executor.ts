@@ -161,6 +161,8 @@ export class ToolExecutor {
    * that gets refused and changes its call has a different error each time.
    */
   private failStreaks = new Map<string, { error: string; n: number }>();
+  /** Tools a codemode script's calls blocked: announced with the next batch's results. */
+  private blockedByNested: string[] = [];
   private blockedTools = new Set<string>();
   private _toolsDisabled: boolean = false;
 
@@ -480,8 +482,9 @@ export class ToolExecutor {
    * agent); the codemode tool turns that into a failed script, not a caught error.
    */
   async runNestedCall(call: ToolCall): Promise<ToolResult> {
-    const [result] = await this.runCalls([call]);
-    return result;
+    const results = await this.runCalls([call]);
+    this.blockedByNested.push(...this.trackFailures([call], results));
+    return results[0];
   }
 
   private async executeBatch(toolCalls: ToolCall[]): Promise<AgentMessage[]> {
@@ -984,15 +987,18 @@ export class ToolExecutor {
     return results;
   }
 
-  private async buildToolMessages(toolCalls: ToolCall[], results: ToolResult[]): Promise<AgentMessage[]> {
-    this.emitFn('observation', { results });
-
+  /**
+   * Extends the per-tool failure streaks with `results` and blocks each tool
+   * that failed the same way MAX_CONSECUTIVE_TOOL_ERRORS times in a row, for
+   * model-issued and script-issued (runNestedCall) calls alike. Returns the
+   * tools it newly blocked.
+   */
+  private trackFailures(toolCalls: ToolCall[], results: ToolResult[]): string[] {
     // Per-tool failure streaks. Only calls that did not run count: a command
     // that ran and exited non-zero (red tests) is a result, not a broken tool.
     // Only an identical error extends a streak, so three different refusals
     // (metacharacters, then a denied path, …) never block the shell.
     // Blocks just the failing tool — one broken shell must not take git with it.
-    const toolMessages: AgentMessage[] = [];
     const nameOf = new Map(toolCalls.map(tc => [tc.id, tc.name]));
     const newlyBlocked: string[] = [];
     for (const r of results) {
@@ -1014,8 +1020,16 @@ export class ToolExecutor {
         if (name === CODEMODE_TOOL_NAME) this.context.codemode = false;
       }
     }
+    if (newlyBlocked.length) agentLogger.warn({ agentId: this.context.id, tools: newlyBlocked }, 'Too many consecutive failures — blocking tools');
+    return newlyBlocked;
+  }
+
+  private async buildToolMessages(toolCalls: ToolCall[], results: ToolResult[]): Promise<AgentMessage[]> {
+    this.emitFn('observation', { results });
+
+    const toolMessages: AgentMessage[] = [];
+    const newlyBlocked = [...this.blockedByNested.splice(0), ...this.trackFailures(toolCalls, results)];
     if (newlyBlocked.length) {
-      agentLogger.warn({ agentId: this.context.id, tools: newlyBlocked }, 'Too many consecutive failures — blocking tools');
       toolMessages.push({
         role: 'system',
         content: `These tools failed the same way ${MAX_CONSECUTIVE_TOOL_ERRORS} times in a row and are now unavailable: ${newlyBlocked.join(', ')}. Continue with the remaining tools, and tell the user which tools failed and why.`,

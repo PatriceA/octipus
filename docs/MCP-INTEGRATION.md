@@ -138,11 +138,13 @@ Each summary is what the server says it offers — information, not instructions
 ```
 
 - The summary is the server's `description`, set when adding the server, on
-  the MCP page, or with `PUT /api/mcp/servers/:id/description`. Without one,
-  the first line of the server's own `instructions` (sent when it connects)
-  is used. That text comes from the server, so it is reduced to one line,
-  with control and direction-override characters removed, and capped at 250
-  characters.
+  the MCP page, or with `PUT /api/mcp/servers/:id/description`, reduced to
+  one line (control and direction-override characters removed) and capped at
+  250 characters. A server without one is listed by name only.
+- The section is built from the stored configuration alone, never from live
+  connection state: it sits in the cached part of the prompt, so a server
+  connecting, dropping or sending its own `instructions` must not change it
+  (that would miss the prompt cache and cold-start resumed CLI sessions).
 - A `codemode` server is listed as `mcp_list_tools` to an agent that does not
   run codemode. A server whose tools are all `direct` or `hidden` is not
   listed.

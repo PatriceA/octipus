@@ -210,6 +210,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
       maxVisitorsPerInstance: parseInt(process.env.FEDERATION_MAX_VISITORS_PER_INSTANCE || String(defaultConfig.federation!.maxVisitorsPerInstance), 10),
       maxRemoteTurnsPerInstance: parseInt(process.env.FEDERATION_MAX_REMOTE_TURNS_PER_INSTANCE || String(defaultConfig.federation!.maxRemoteTurnsPerInstance), 10),
       agentPostsPerHour: parseInt(process.env.FEDERATION_AGENT_POSTS_PER_HOUR || String(defaultConfig.federation!.agentPostsPerHour), 10),
+      remotePostsPerHour: parseInt(process.env.FEDERATION_REMOTE_POSTS_PER_HOUR || String(defaultConfig.federation!.remotePostsPerHour), 10),
     },
     gateway: {
       maxConnectionsPerUser: parseInt(process.env.GATEWAY_MAX_CONNECTIONS_PER_USER || String(defaultConfig.gateway!.maxConnectionsPerUser), 10),

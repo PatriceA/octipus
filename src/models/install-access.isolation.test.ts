@@ -114,9 +114,23 @@ describe('install-model access', () => {
     expect(await mayUseInstallModels(erinId)).toBe(true);
     expect(await mayUseInstallModels(carolId)).toBe(false);
     expect(await mayUseInstallModels('45555555-5555-4555-8555-555555555555')).toBe(false);
-    // Internal callers that serve no account.
+    // System jobs may; a call that lost its requester, or a non-UUID id, may not (fail closed).
     expect(await mayUseInstallModels('system')).toBe(true);
-    expect(await mayUseInstallModels(undefined)).toBe(true);
+    expect(await mayUseInstallModels(undefined)).toBe(false);
+    expect(await mayUseInstallModels('')).toBe(false);
+    expect(await mayUseInstallModels('not-a-user')).toBe(false);
+    // A deactivated account loses access, its flag notwithstanding.
+    const { getDb } = await import('@/db/postgres');
+    const { users } = await import('@/db/schema/users');
+    const { eq } = await import('drizzle-orm');
+    await getDb().update(users).set({ isActive: false }).where(eq(users.id, erinId));
+    try {
+      resetInstallAccessCache();
+      expect(await mayUseInstallModels(erinId)).toBe(false);
+    } finally {
+      await getDb().update(users).set({ isActive: true }).where(eq(users.id, erinId));
+      resetInstallAccessCache();
+    }
   });
 
   test('lists: an account without access sees only its own rows', async () => {

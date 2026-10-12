@@ -371,8 +371,8 @@ inbound link and refuses remote members immediately; turning visiting off
 closes every outbound link. Links run over `wss://` (the peer endpoint is
 `/federation`, next to `/gateway`); plain `ws://` only to and from addresses
 in `federation.lanCidrs`. The other keys (`heartbeatSeconds`,
-`maxVisitorsPerInstance`, `maxRemoteTurnsPerInstance`, `agentPostsPerHour`)
-are in [CONFIGURATION.md](CONFIGURATION.md).
+`maxVisitorsPerInstance`, `maxRemoteTurnsPerInstance`, `agentPostsPerHour`,
+`remotePostsPerHour`) are in [CONFIGURATION.md](CONFIGURATION.md).
 
 ### Joining a space on another install
 
@@ -504,7 +504,8 @@ Federation (its link closes, its memberships are removed). Bounds: per-link
 frame rate and request concurrency, per-member gateway buckets, at most
 `federation.maxVisitorsPerInstance` memberships and
 `federation.maxRemoteTurnsPerInstance` host turns per install,
-`federation.agentPostsPerHour` agent posts per room.
+`federation.agentPostsPerHour` agent posts and `federation.remotePostsPerHour`
+posts of any kind per room.
 
 **Threat model in short.** Both installs authenticate each other with their
 keys on every connection, and every frame after that is sealed; the visitor
@@ -609,6 +610,9 @@ With `federation.mode` `host` or `both` and a public URL:
   security alert. Posts made on the member install's agent connection
   (`agent:<session>`) are labelled "anna's agent" and capped per install per
   room (`federation.agentPostsPerHour`, counted and stored atomically).
+  The label is the member install's word, so every post from that install,
+  labelled or not, also counts against `federation.remotePostsPerHour`
+  (default 120): leaving the label off buys no more than that.
   Remote members are shown with their install badge (`anna [B:abcd1234efgh]`,
   12 characters of the install id; the member list's hover and Admin →
   Federation show the full id) in room messages, transcripts, presence and

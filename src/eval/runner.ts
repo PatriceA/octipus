@@ -112,6 +112,8 @@ async function runTestUnit(
             { role: 'system', content: systemContent, timestamp: new Date() },
             { role: 'user', content: test.input, timestamp: new Date() },
           ],
+          // An eval run (admin, `npm run eval`) tests the install's models: install work.
+          funding: 'install',
           temperature: 0.3,
           maxTokens: 1024,
         });
@@ -267,6 +269,7 @@ function createGraderFn(model: string): GraderFunction {
         { role: 'system', content: 'You are an evaluation grader. Always respond with valid JSON only.', timestamp: new Date() },
         { role: 'user', content: prompt, timestamp: new Date() },
       ],
+      funding: 'install',
       temperature: 0.1,
       maxTokens: 256,
       responseFormat: { type: 'json_object' },

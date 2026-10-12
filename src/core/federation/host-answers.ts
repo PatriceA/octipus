@@ -72,6 +72,7 @@ export const hostAnswerSchemas = {
   }).passthrough(),
   'space.rooms': z.object({ rooms: z.array(hostRoomSchema).max(2_000) }).passthrough(),
   'room.page': z.object({ messages: z.array(hostRoomMessageSchema).max(200), hasMore: z.boolean() }).passthrough(),
+  'room.mute': z.object({ muted: z.boolean() }).passthrough(),
   'note.list': z.object({
     notes: z.array(z.object({ id: uuid, title: text(500), slug: text(500), updatedAt: when }).passthrough()).max(5_000),
   }).passthrough(),

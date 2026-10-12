@@ -273,10 +273,12 @@ async function main(): Promise<void> {
   const timeout = args.timeout ? parseInt(String(args.timeout), 10) : 30_000;
 
   // Run tests
-  const report = await runConformanceTests(client, models, providerMap, {
+  // A conformance run tests the install's models: install work.
+  const { withInstallUsage } = await import('../providers/instrumented');
+  const report = await withInstallUsage(() => runConformanceTests(client, models, providerMap, {
     tests: testFilter,
     timeout,
-  });
+  }));
 
   // Output
   if (args.json) {

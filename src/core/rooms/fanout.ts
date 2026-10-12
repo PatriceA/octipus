@@ -21,13 +21,14 @@
 import { messageEvents } from '@/db/repositories/message-events';
 import { sessionKindOf } from '@/db/repositories/session-kind';
 import type { Message } from '@/db/schema/messages';
+import { serialPerKey } from '@/utils/concurrency';
 import { coreLogger } from '@/utils/logger';
 import { publishRoomEvent } from './events';
-import { notifyRoomMessage } from './notifications';
+import { queueRoomNotification } from './notifications';
 import { markRoomTurnWaiting, setRoomTurnModel } from './queue';
 
 /** Per-room delivery chain: `room.message` events leave in commit order. */
-const chains = new Map<string, Promise<void>>();
+const chains = serialPerKey((err, sessionId) => coreLogger.error({ err, sessionId }, 'Room message fan-out failed'));
 
 async function deliver(row: Message): Promise<void> {
   if ((await sessionKindOf(row.sessionId)) !== 'room') return;
@@ -39,24 +40,20 @@ async function deliver(row: Message): Promise<void> {
     message,
     ...(message.metadata.clientId ? { clientId: message.metadata.clientId } : {}),
   });
-  await notifyRoomMessage(row, name);
+  void queueRoomNotification(row, name);
 }
 
 /** Queue `row` for delivery behind the room's earlier rows. */
 export function fanOutMessage(row: Message): Promise<void> {
   if (row.role !== 'user' && row.role !== 'assistant') return Promise.resolve();
-  const previous = chains.get(row.sessionId) ?? Promise.resolve();
-  const next = previous
-    .then(() => deliver(row))
-    .catch((err: unknown) => coreLogger.error({ err, sessionId: row.sessionId, messageId: row.id }, 'Room message fan-out failed'));
-  chains.set(row.sessionId, next);
-  void next.finally(() => { if (chains.get(row.sessionId) === next) chains.delete(row.sessionId); });
-  return next;
+  return chains.run(row.sessionId, () => deliver(row).catch((err: unknown) => {
+    coreLogger.error({ err, sessionId: row.sessionId, messageId: row.id }, 'Room message fan-out failed');
+  }));
 }
 
 /** Wait until every queued delivery of `roomId` went out (tests). */
-export async function roomDeliveries(roomId: string): Promise<void> {
-  await chains.get(roomId);
+export function roomDeliveries(roomId: string): Promise<void> {
+  return chains.idle(roomId);
 }
 
 let started: (() => void) | null = null;

@@ -496,6 +496,48 @@ describe('remote.frame and remote.event', () => {
   }, 30_000);
 });
 
+describe('room notices (§9)', () => {
+  test('a host\'s notices are deduplicated and budgeted per member', async () => {
+    const { admitNotice } = await import('./visitor-ops');
+    const host = 'host-under-test';
+    expect(admitNotice(host, '~a@x', 'room_message', 'm1', 0)).toBe(true);
+    expect(admitNotice(host, '~a@x', 'room_message', 'm1', 1)).toBe(false); // replayed
+    expect(admitNotice(host, '~a@x', 'room_mention', 'm1', 1)).toBe(true); // another kind of the same post
+    for (let i = 2; i < 30; i++) expect(admitNotice(host, '~a@x', 'room_message', `m${i}`, i)).toBe(true);
+    expect(admitNotice(host, '~a@x', 'room_message', 'over', 31)).toBe(false); // 30 in the minute
+    expect(admitNotice(host, '~b@x', 'room_message', 'other-member', 31)).toBe(true);
+    expect(admitNotice(host, '~a@x', 'room_message', 'later', 60_001)).toBe(true); // the minute passed
+  });
+
+  test('with no connection open, a host post and a mention land as notifications of the member\'s own account', async () => {
+    const x = await newSpace('Notices');
+    const annaRow = await joinFromB(annaId, x.id);
+    const [{ member_handle: handle }] = await q('SELECT member_handle FROM remote_spaces WHERE id = $1', [annaRow]);
+    const { postRoomMessage } = await import('@/core/rooms/service');
+    await postRoomMessage({ userId: ownerId }, x.general, { content: 'news for everyone' });
+    const notice = async (type: string) => (await q(`SELECT title, body, metadata FROM notifications WHERE user_id = $1 AND type = $2`, [annaId, type]))
+      .find((n) => n.metadata.remoteSpaceId === annaRow);
+    const message = await waitFor(() => notice('room_message'), 'the room_message notification on B');
+    expect(message).toMatchObject({ body: 'news for everyone', metadata: { roomId: x.general } });
+    expect(message.title).toContain('Notices');
+    await postRoomMessage({ userId: ownerId }, x.general, { content: `hi @${handle}` });
+    expect(await waitFor(() => notice('room_mention'), 'the room_mention notification on B')).toMatchObject({ metadata: { roomId: x.general } });
+
+    // Muted from B (kept by the host): no more notices of the room.
+    const muted = await call(annaId, 'PATCH', `/api/remote-spaces/${annaRow}/rooms/${x.general}/me`, { muted: true });
+    expect(muted.status).toBe(200);
+    const rooms = await (await call(annaId, 'GET', `/api/remote-spaces/${annaRow}/rooms`)).json();
+    expect(rooms.rooms.find((r: { id: string }) => r.id === x.general).muted).toBe(true);
+    const bodies = async () => (await q(`SELECT body FROM notifications WHERE user_id = $1`, [annaId])).map((n) => n.body);
+    await postRoomMessage({ userId: ownerId }, x.general, { content: 'after the mute' });
+    // Then unmute and post again: once that notice has crossed the link, the muted one would have too.
+    await call(annaId, 'PATCH', `/api/remote-spaces/${annaRow}/rooms/${x.general}/me`, { muted: false });
+    await postRoomMessage({ userId: ownerId }, x.general, { content: 'after the unmute' });
+    await waitFor(async () => (await bodies()).includes('after the unmute') || undefined, 'the notice after unmuting');
+    expect(await bodies()).not.toContain('after the mute');
+  }, 30_000);
+});
+
 // ── §11 item 11: live notes through B ─────────────────────────────────
 
 describe('live note through remote.frame (§11 item 11)', () => {

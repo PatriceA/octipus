@@ -274,6 +274,8 @@ async function answerVoiceWebhook(
           ...history.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content, timestamp: new Date() })),
         ],
         ...voiceParams,
+        // A phone call has no signed-in requester: the install's phone line pays.
+        funding: 'install',
       });
 
       let spoken = result.content || 'I didn\'t catch that.';

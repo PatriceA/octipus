@@ -8,7 +8,8 @@
  *
  * The per-instance bounds (`federation.maxVisitorsPerInstance` on joins,
  * `federation.maxRemoteTurnsPerInstance` on queued host turns,
- * `federation.agentPostsPerHour` on agent-labelled posts) are read where the
+ * `federation.agentPostsPerHour` on agent-labelled posts,
+ * `federation.remotePostsPerHour` on all posts) are read where the
  * host operations enforce them, per call, so a change needs no event.
  */
 import { EventEmitter } from 'node:events';

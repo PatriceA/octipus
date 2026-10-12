@@ -568,25 +568,15 @@ export class MCPBridge extends EventEmitter {
 
   /**
    * The `MCP SERVERS` system-prompt section for an agent that does or does
-   * not run codemode (src/mcp/servers-section.ts). Lists enabled servers, a
-   * connected one by the exposures its tools actually get, one not connected
-   * yet by its configuration — `mcp_list_tools` with its server_id reconnects it.
+   * not run codemode (src/mcp/servers-section.ts). Built from the stored
+   * configuration only: it sits in the cached prefix, so a server connecting,
+   * dropping or sending `instructions` must not change it (that would miss the
+   * prompt cache and cold-start resumed CLI sessions).
    */
   serversSection(opts: { codemode: boolean }): string | undefined {
     const listings: ServerListing[] = this.serverConfigs
       .filter((server) => server.isEnabled)
-      .map((server) => {
-        const connection = this.connections.get(server.id);
-        const live = connection?.status === 'connected' && connection.tools.length > 0;
-        return {
-          id: server.id,
-          description: server.description,
-          instructions: connection?.instructions,
-          exposures: live
-            ? new Set(connection.tools.map((t) => resolveToolExposure(connection.server, t.name)))
-            : configuredExposures(server),
-        };
-      });
+      .map((server) => ({ id: server.id, description: server.description, exposures: configuredExposures(server) }));
     return renderServersSection(listings, opts);
   }
 

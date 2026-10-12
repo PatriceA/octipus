@@ -122,7 +122,15 @@ it('asks for actual answers even when the native tool is allowed and returns the
 });
 it('never treats an empty approval as an answer', async () => {
   mocks.getApprovedResolution.mockResolvedValue(undefined);
-  await expect(answerCliPermissionRequest(mcpRequest('AskUserQuestion', questionInput), context(), vi.fn())).rejects.toThrow(/Answer every question/);
+  expect(await answerCliPermissionRequest(mcpRequest('AskUserQuestion', questionInput), context(), vi.fn()))
+    .toMatchObject({ response: { response: { behavior: 'deny', message: expect.stringMatching(/could not read the answers/) } } });
+});
+it('denies a malformed question instead of failing the run, and asks nobody', async () => {
+  for (const input of [{}, { questions: [{ header: 'x', question: '', options: [], multiSelect: false }] }, { questions: [{ header: 'x', question: 'q?', options: [{ description: 'no label' }], multiSelect: false }] }]) {
+    expect(await answerCliPermissionRequest(mcpRequest('AskUserQuestion', input), context(), vi.fn()))
+      .toMatchObject({ response: { response: { behavior: 'deny', message: expect.stringMatching(/malformed/) } } });
+  }
+  expect(mocks.requestApproval).not.toHaveBeenCalled();
 });
 it('does not ask questions unattended or when explicitly denied', async () => {
   mocks.check.mockResolvedValue({ level: 'ALLOW' });

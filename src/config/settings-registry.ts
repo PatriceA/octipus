@@ -1369,6 +1369,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
     envVar: 'FEDERATION_AGENT_POSTS_PER_HOUR',
   },
+  {
+    key: 'federation.remotePostsPerHour',
+    category: 'federation',
+    valueType: 'number',
+    defaultValue: 120,
+    description: 'All posts, agent-labelled or not, that one room accepts per hour from the visitors of one install. The visiting install decides the agent label, so this is the bound it cannot dodge.',
+    isSecret: false,
+    envVar: 'FEDERATION_REMOTE_POSTS_PER_HOUR',
+  },
 
   // ── Group channels ──
   {

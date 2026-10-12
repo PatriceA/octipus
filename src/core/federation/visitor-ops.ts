@@ -736,8 +736,24 @@ function onHostEvent(hostInstanceId: string, event: LinkEvent): void {
   send(event.conn, { type: 'remote.event', remoteSpaceId: rowForEvent(use, body), event: body });
 }
 
-/** A notice for every connection of a member (`conn: '*'`): `space.revoked`. */
+/** A host's room notification (host-ops RoomNotice), as untrusted input: bounded strings only. */
+const roomNoticeSchema = z.object({
+  type: z.literal('room.notice'),
+  kind: z.enum(['room_message', 'room_mention']),
+  spaceId: z.string().uuid(),
+  roomId: z.string().uuid(),
+  messageId: z.string().uuid(),
+  title: z.string().max(400),
+  body: z.string().max(2000),
+});
+
+/**
+ * A notice for every connection of a member (`conn: '*'`): `space.revoked`,
+ * or `room.notice` — filed as a notification of the member's account here,
+ * which also reaches their paired phones.
+ */
 async function noticeForMember(hostInstanceId: string, handle: string, body: Record<string, unknown>): Promise<void> {
+  if (body.type === 'room.notice') return roomNoticeForMember(hostInstanceId, handle, body);
   if (body.type !== 'space.revoked' || typeof body.spaceId !== 'string') return;
   const rows = await getDb().select().from(remoteSpaces).where(and(
     eq(remoteSpaces.hostInstanceId, hostInstanceId), eq(remoteSpaces.memberHandle, handle), eq(remoteSpaces.spaceId, body.spaceId),
@@ -748,6 +764,59 @@ async function noticeForMember(hostInstanceId: string, handle: string, body: Rec
       if (conn.userId !== row.userId || !conn.hosts.get(hostInstanceId)?.spaces.has(row.id)) continue;
       send(connectionId, { type: 'remote.event', remoteSpaceId: row.id, event: body });
     }
+  }
+}
+
+/** Room notices one host may file for one member per minute; beyond it they are dropped. */
+const NOTICES_PER_MINUTE = 30;
+/** `${host}\n${handle}` → notice times in the last minute. */
+const noticeTimes = new Map<string, number[]>();
+/** Recently filed `${host}\n${kind}\n${messageId}`, so a replayed notice files nothing. */
+const recentNotices = new Set<string>();
+const RECENT_NOTICES_MAX = 2_000;
+
+/**
+ * Whether a host's notice may be filed now: not a replay of one already filed,
+ * and within the host's per-member budget. A host is a peer, not trusted to
+ * pace itself; each notice is a row and a phone push here.
+ */
+export function admitNotice(hostInstanceId: string, handle: string, kind: string, messageId: string, now = Date.now()): boolean {
+  const id = `${hostInstanceId}\n${kind}\n${messageId}`;
+  if (recentNotices.has(id)) return false;
+  const key = `${hostInstanceId}\n${handle}`;
+  const times = (noticeTimes.get(key) ?? []).filter((t) => now - t < 60_000);
+  if (times.length >= NOTICES_PER_MINUTE) {
+    noticeTimes.set(key, times);
+    return false;
+  }
+  times.push(now);
+  noticeTimes.set(key, times);
+  // ponytail: per-process memory, oldest-first eviction; a restart forgets it (a replay then files once more).
+  recentNotices.add(id);
+  if (recentNotices.size > RECENT_NOTICES_MAX) recentNotices.delete(recentNotices.values().next().value as string);
+  return true;
+}
+
+async function roomNoticeForMember(hostInstanceId: string, handle: string, body: Record<string, unknown>): Promise<void> {
+  const parsed = roomNoticeSchema.safeParse(body);
+  if (!parsed.success) {
+    log.warn({ host: hostInstanceId }, 'Malformed room notice from a host: dropped');
+    return;
+  }
+  const notice = parsed.data;
+  if (!admitNotice(hostInstanceId, handle, notice.kind, notice.messageId)) {
+    log.debug({ host: hostInstanceId, kind: notice.kind }, 'Room notice over budget or replayed: dropped');
+    return;
+  }
+  // Only the member it names, of a space they still hold a live pointer to on that host.
+  const rows = await getDb().select().from(remoteSpaces).where(and(
+    eq(remoteSpaces.hostInstanceId, hostInstanceId), eq(remoteSpaces.memberHandle, handle), eq(remoteSpaces.spaceId, notice.spaceId),
+    isNull(remoteSpaces.leftAt),
+  ));
+  const { getNotificationService } = await import('@/core/notification-service');
+  for (const row of rows) {
+    await getNotificationService().notify(row.userId, notice.kind, `${row.spaceName} · ${notice.title}`.slice(0, 200), notice.body.slice(0, 280),
+      { remoteSpaceId: row.id, roomId: notice.roomId, messageId: notice.messageId });
   }
 }
 
@@ -831,6 +900,8 @@ export function _resetVisitorOpsForTests(): void {
   for (const conn of tracked.values()) for (const use of conn.hosts.values()) use.release();
   for (const release of tombstoneRetains.values()) release();
   tombstoneRetains.clear();
+  noticeTimes.clear();
+  recentNotices.clear();
   memberHostLocks.clear();
   tracked.clear();
   postWaiters.clear();

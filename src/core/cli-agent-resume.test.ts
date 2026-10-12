@@ -16,6 +16,12 @@ import { mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+// Not under test here: the install-model gate (install-access.isolation.test.ts) lets these fake ids through.
+vi.mock('@/models/install-access', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/models/install-access')>()),
+  mayUseInstallModels: async () => true,
+  assertInstallModelAccess: async () => {},
+}));
 import { CLIAgentWorker } from './cli-agent-worker';
 import { childCliSessionKey, claimCliSession, cliSessionHolder, fingerprintRun, loadCliSession, releaseCliSessions } from './cli-session-store';
 import type { AgentContext } from './types';

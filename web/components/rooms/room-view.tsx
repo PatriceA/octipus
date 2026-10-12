@@ -326,7 +326,7 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
 
   const toggleMute = async () => {
     try {
-      await api.patch(`/spaces/${spaceId}/rooms/${roomId}/me`, { muted: !room.muted });
+      await source.setMuted(roomId, !room.muted);
       await qc.invalidateQueries({ queryKey: source.roomsKey });
     } catch (err) {
       notify(`Could not change the mute: ${(err as Error).message}`);
@@ -441,16 +441,16 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
                 <MessageSquareLock className="w-3.5 h-3.5" /> Ask privately
               </button>
             )}
-            {!remote && <button
+            <button
               type="button"
               onClick={() => void toggleMute()}
-              aria-pressed={room.muted}
+              aria-pressed={room.muted === true}
               aria-label={room.muted ? 'Unmute this room' : 'Mute this room'}
-              title={room.muted ? 'Muted: no mention notifications, no unread badge in the sidebar' : 'Mute mentions of you in this room'}
+              title={room.muted ? 'Muted: no notifications or phone pushes, no unread badge in the sidebar' : 'Mute this room: no notifications or phone pushes for its messages and mentions'}
               className="p-1.5 rounded-xs text-on-surface-variant hover:text-on-surface hover:bg-surface-container cursor-pointer"
             >
               {room.muted ? <BellOff className="w-4 h-4" /> : <Bell className="w-4 h-4" />}
-            </button>}
+            </button>
             <button
               type="button"
               onClick={() => setPanel((p) => (p ? null : 'members'))}

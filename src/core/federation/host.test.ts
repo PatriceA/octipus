@@ -290,6 +290,7 @@ beforeEach(async () => {
   cfg.federation.maxVisitorsPerInstance = 50;
   cfg.federation.maxRemoteTurnsPerInstance = 5;
   cfg.federation.agentPostsPerHour = 20;
+  cfg.federation.remotePostsPerHour = 120;
   const { _resetHostOpsForTests } = await import('./host-ops');
   _resetHostOpsForTests();
   // Every test dials its own links from 127.0.0.1: the per-address handshake
@@ -1105,6 +1106,13 @@ describe('posts from other installs', () => {
     const agentPosts = page.messages.filter((m: { metadata: { agent?: boolean } }) => m.metadata.agent);
     expect(agentPosts).toHaveLength(2);
     expect(agentPosts[0].authorName).toBe(`anna's agent [B:${visitorB.instanceId.slice(0, 12)}]`);
+    // Dropping the label (a plain conn) dodges the agent cap, not the cap on all of the install's posts:
+    // the 2 agent posts plus 1 plain one fill a cap of 3.
+    getConfig().federation.remotePostsPerHour = 3;
+    for (let i = 0; i < 2; i++) await b.frame(member.handle, 'plain', { type: 'room.post', roomId: x.general, content: `unlabelled ${i}` });
+    await waitFor(() => b.messages(member.handle, 'plain').filter((m) => m.type === 'room.posted' || m.type === 'error').length >= 2, 'two answers');
+    expect(b.messages(member.handle, 'plain').filter((m) => m.type === 'room.posted')).toHaveLength(1);
+    expect(b.messages(member.handle, 'plain').find((m) => m.type === 'error')?.code).toBe('RATE_LIMITED');
     // A local member cannot label a post as an agent's.
     const { postRoomMessage } = await import('@/core/rooms/service');
     await expect(postRoomMessage({ userId: ownerId }, x.general, { content: 'mine', agent: true })).rejects.toMatchObject({ code: 'invalid_input' });
@@ -1148,9 +1156,16 @@ describe('posts from other installs', () => {
     await call(ownerId, 'POST', `/api/spaces/${x.id}/rooms/${x.general}/messages`, { content: `ping ${member.handle.replace('~', '@~')} please` });
     const mention = await waitFor(() => b.messages(member.handle, 'm1').find((m) => m.type === 'event' && m.event.type === 'room.mention'), 'room.mention over the link');
     expect(mention.event.payload).toMatchObject({ roomId: x.general, spaceId: x.id, poster: 'fh-owner' });
-    // Not a local notification.
+    // Not a local notification: a room.notice to their install, which files it (and pushes).
     const row = await rowOf(member.handle);
     expect(await q(`SELECT 1 FROM notifications WHERE user_id = $1`, [row.id])).toHaveLength(0);
+    const notices = () => b.messages(member.handle, '*').filter((m) => m.type === 'room.notice');
+    expect((await waitFor(() => notices().find((m) => m.kind === 'room_mention'), 'room_mention notice'))).toMatchObject({ roomId: x.general, spaceId: x.id });
+    // A plain post reaches them as a room_message notice; the mention above got none (its own notice wins).
+    // Notices go out in order, so once the plain one is here the mention's would have been too.
+    await call(ownerId, 'POST', `/api/spaces/${x.id}/rooms/${x.general}/messages`, { content: 'plain news' });
+    await waitFor(() => notices().find((m) => m.kind === 'room_message'), 'room_message notice');
+    expect(notices().filter((m) => m.kind === 'room_message').map((m) => m.body)).toEqual(['plain news']);
 
     const localBefore = (await q(`SELECT 1 FROM notifications WHERE user_id = $1 AND type = 'room_mention'`, [annaLocalId])).length;
     const mark = b.messages(member.handle, 'm1').length;
@@ -1267,7 +1282,11 @@ describe('what leaves on the link (FI5)', () => {
     for (const type of [...kept, 'permission.pending', 'command.result']) expect(types, type).not.toContain(type);
     expect(JSON.stringify(sent)).not.toContain('raw tool output');
     const { peerMayReceive } = await import('./virtual-connection');
-    for (const m of sent) expect(peerMayReceive(m as never), JSON.stringify(m).slice(0, 120)).toBe(true);
+    const onConns = b.events.filter((e) => e.as === member.handle && e.conn !== '*').map((e) => e.body as Frame);
+    for (const m of onConns) expect(peerMayReceive(m as never), JSON.stringify(m).slice(0, 120)).toBe(true);
+    // Member-wide notices (`conn: '*'`) are only these.
+    const notices = b.events.filter((e) => e.as === member.handle && e.conn === '*').map((e) => (e.body as Frame).type);
+    for (const type of notices) expect(['space.revoked', 'room.notice']).toContain(type);
   });
 
   test('a visitor\'s rate buckets are shared by all their conns and outlive conn.close', async () => {

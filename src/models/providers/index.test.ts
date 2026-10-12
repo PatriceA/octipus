@@ -1,5 +1,11 @@
 import { randomBytes } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+// Not under test here: the install-model gate (install-access.isolation.test.ts) lets these fake ids through.
+vi.mock('@/models/install-access', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/models/install-access')>()),
+  mayUseInstallModels: async () => true,
+  assertInstallModelAccess: async () => {},
+}));
 
 // instrumentProvider (wrapping every registered provider) persists usage via
 // the real cost tracker, which needs a DB. Stub it out — this test is about

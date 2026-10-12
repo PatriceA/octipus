@@ -20,6 +20,7 @@ import {
 } from './normalize';
 import { detectProvider, gmailApi, graphApi } from './providers';
 import type { EmailMessage, EmailProvider, EmailTriage, InboxItem } from './types';
+import { mapLimit } from '@/utils/concurrency';
 
 /** The user's `everyday` model — their personal binding first, then the install's (coworking spec §8.2). */
 async function everydayModel(userId: string): Promise<{ model: string; modelConfigName: string }> {
@@ -28,19 +29,6 @@ async function everydayModel(userId: string): Promise<{ model: string; modelConf
   return { model: model.modelId, modelConfigName: model.name };
 }
 
-/** Map over items with a bounded number of concurrent workers. */
-async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const out: R[] = new Array(items.length);
-  let next = 0;
-  const worker = async () => {
-    while (next < items.length) {
-      const i = next++;
-      out[i] = await fn(items[i]);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return out;
-}
 
 /**
  * List the connected provider's inbox. Returns provider=null if none connected.

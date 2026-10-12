@@ -6,6 +6,7 @@ import { getPermissionManager } from '@/security/permissions';
 import { routeApprovalFor } from '@/security/approval-route';
 import { applyFlowGuard, ensureSharedAudienceKnown, observeFlow } from '@/security/flow-guard';
 import { getConfig } from '@/config';
+import { agentLogger } from '@/utils/logger';
 
 const requestSchema = z.object({
   type: z.literal('control_request'), request_id: z.string(),
@@ -48,7 +49,11 @@ export async function answerCliPermissionRequest(
       : { behavior: 'deny', message: 'Octipus tool is not available to this active agent. Do not bypass this decision.' } } };
   }
   const isQuestion = request.tool_name === 'AskUserQuestion';
-  if (isQuestion) cliQuestionsSchema.parse(request.input);
+  // A malformed question denies this one call; it must not end the whole run.
+  const deny = (message: string) => ({ type: 'control_response', response: { subtype: 'success', request_id, response: { behavior: 'deny', message } } });
+  if (isQuestion && !cliQuestionsSchema.safeParse(request.input).success) {
+    return deny('Octipus could not show this question: its input is malformed. Ask again with a non-empty question and labelled options.');
+  }
   let updatedInput = request.input;
   const manager = getPermissionManager();
   // One toolId per vendor tool so rules/grants can target `cli-native:Read` vs `cli-native:Bash`.
@@ -71,7 +76,14 @@ export async function answerCliPermissionRequest(
       ...(decision.source === 'flow-guard' || decision.source === 'space-flow' ? { reason: decision.reason } : {}) });
     allowed = await manager.waitForApproval(id, { agentId: context.id });
     if (allowed && isQuestion) {
-      const answers = parseCliAnswers(request.input, await manager.getApprovedResolution(id, context.userId));
+      let answers: ReturnType<typeof parseCliAnswers>;
+      try {
+        answers = parseCliAnswers(request.input, await manager.getApprovedResolution(id, context.userId));
+      } catch (err) {
+        // Malformed answers or a failed read of them: deny this call, keep the run, and say why in the log.
+        agentLogger.warn({ err, agentId: context.id, requestId: id }, 'CLI question answers could not be read');
+        return deny('Octipus could not read the answers to this question. Ask again.');
+      }
       updatedInput = { ...request.input, answers };
     }
   }

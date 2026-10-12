@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-515 mounted routes across 70 route files. The path is the full one, group prefix included — what a client actually calls.
+516 mounted routes across 70 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -356,6 +356,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/remote-spaces/:id/notes/:noteId/proposals` | `src/api/routes/remote-spaces.ts` |
 | GET | `/api/remote-spaces/:id/rooms` | `src/api/routes/remote-spaces.ts` |
 | POST | `/api/remote-spaces/:id/rooms/:roomId/agent` | `src/api/routes/remote-spaces.ts` |
+| PATCH | `/api/remote-spaces/:id/rooms/:roomId/me` | `src/api/routes/remote-spaces.ts` |
 | GET | `/api/remote-spaces/:id/rooms/:roomId/messages` | `src/api/routes/remote-spaces.ts` |
 | POST | `/api/remote-spaces/:id/rooms/:roomId/messages` | `src/api/routes/remote-spaces.ts` |
 | GET | `/api/remote-spaces/:id/tasks` | `src/api/routes/remote-spaces.ts` |
@@ -605,7 +606,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `shared` | 16 |
 | `core` | `skills` | 10 |
 | `core` | `tools` | 19 |
-| `core` | `utils` | 186 |
+| `core` | `utils` | 192 |
 | `core` | `voice` | 1 |
 | `db` | `config` | 4 |
 | `db` | `core` | 18 |
@@ -636,7 +637,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `models` | `config` | 10 |
 | `models` | `core` | 29 |
 | `models` | `db` | 14 |
-| `models` | `security` | 20 |
+| `models` | `security` | 21 |
 | `models` | `services` | 1 |
 | `models` | `shared` | 4 |
 | `models` | `utils` | 42 |

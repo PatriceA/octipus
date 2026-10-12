@@ -1,4 +1,10 @@
 import { beforeEach, expect, it, vi } from 'vitest';
+// Not under test here: the install-model gate (install-access.isolation.test.ts) lets these fake ids through.
+vi.mock('@/models/install-access', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/models/install-access')>()),
+  mayUseInstallModels: async () => true,
+  assertInstallModelAccess: async () => {},
+}));
 import { ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
 import { QuotaExceededError } from '@/security/quota-error';
 import { SpendBudgetExceededError } from '@/security/spend-budget-error';

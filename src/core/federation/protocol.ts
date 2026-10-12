@@ -159,6 +159,8 @@ export const requestBodySchemas = {
     after: uuidSchema.optional(),
     limit: z.number().int().min(1).max(200).optional(),
   }).strict(),
+  /** The member's own mute of a room: no room notices of it to their install. */
+  'room.mute': z.object({ ...spaceRef, roomId: uuidSchema, muted: z.boolean() }).strict(),
   'note.list': z.object(spaceRef).strict(),
   'note.read': z.object({ ...spaceRef, noteId: uuidSchema }).strict(),
   /** A proposed new body (and title) of a note, made from the text whose sha the visitor read. */

@@ -248,6 +248,8 @@ export async function testModelConnection(
           messages: [{ role: 'user', content: 'Say ok', timestamp: new Date() }],
           maxTokens: 16,
           temperature: 0,
+          // An admin's connection test of install config is install work.
+          funding: 'install',
           customProviderOverride: {
             baseUrl: endpoint,
             apiKey,
@@ -302,6 +304,8 @@ export async function testModelConnection(
             messages: [{ role: 'user', content: 'Say ok', timestamp: new Date() }],
             maxTokens: 5,
             temperature: 0,
+            // An admin's connection test of install config is install work.
+            funding: 'install',
           });
           const reply = result.content || '';
           return { success: true, message: `Model responded: "${reply.slice(0, 100)}"` };

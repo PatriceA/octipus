@@ -337,6 +337,12 @@ function registerOps(): void {
     return listRoomMessages({ userId: member.userId }, spaceId, roomId, { before, after, limit: Math.min(limit ?? 50, 200) });
   });
 
+  op('room.mute', async ({ spaceId, roomId, muted }, member) => {
+    const { setRoomMuted } = await import('@/core/rooms/service');
+    await setRoomMuted({ userId: member.userId }, spaceId, roomId, muted);
+    return { muted };
+  });
+
   op('note.list', async ({ spaceId }, member) => {
     requireCan(await membershipIn(member, spaceId), 'read');
     const notes = await contentRepos(await principalIn(member, spaceId)).notes.list({ limit: 500 });
@@ -507,6 +513,27 @@ export async function onRemoteMembershipChanged(workspaceId: string, userId: str
     inboundLink(member.instanceId)?.sendEvent(member.handle, '*', { type: 'space.revoked', spaceId: workspaceId });
   }
   if ((await spacesOfRemote(userId)).length === 0) closeVirtualConnectionsOf(userId, 'no membership left');
+}
+
+/** A room notification for a member of another install (`room.notice`, §9); their install files it. */
+export interface RoomNotice {
+  type: 'room.notice';
+  kind: 'room_message' | 'room_mention';
+  spaceId: string;
+  roomId: string;
+  messageId: string;
+  title: string;
+  body: string;
+}
+
+/**
+ * Send `notice` to remote member `userId`'s install on its link (`conn: '*'`,
+ * every connection of theirs or none open: their install notifies them).
+ * Dropped while no link is up; the unread still shows in `room.page`.
+ */
+export async function noticeRemoteMember(userId: string, notice: RoomNotice): Promise<boolean> {
+  const member = await remoteMemberById(userId);
+  return member ? inboundLink(member.instanceId)?.sendEvent(member.handle, '*', notice) ?? false : false;
 }
 
 export class FederationAdminError extends Error {

@@ -12,8 +12,8 @@
  * only as `@~name@fp8` — their full handle; `@name@fp8` keeps its local
  * meaning. Such a mention is not a local notification: it goes as
  * `room.mention` to that member's own connections (their virtual
- * connections on the peer link) and is dropped when none is open — their
- * install shows the unread from `room.page` when it next opens the room.
+ * connections on the peer link, for its agent), and as a `room.notice` to
+ * their install, which notifies them (visitor-ops noticeForMember).
  */
 import { coreLogger } from '@/utils/logger';
 import type { Room } from './access';
@@ -74,12 +74,20 @@ export async function notifyRoomMentions(room: Room, posterId: string, messageId
   for (const { userId } of remotes) {
     if (userId === posterId) continue;
     if (!(await hasRoomAccess(userId, room))) continue;
-    if (await isRoomMuted(room.id, userId)) continue;
-    // Their own connections only: the virtual connections on their link.
+    // Their own connections only: the virtual connections on their link,
+    // where their own agent answers when addressed — mute or not: muting
+    // silences notifications, not the agent they asked to answer.
     const { getGatewayHub } = await import('@/core/gateway/hub');
     getGatewayHub().publishEvent({
       type: 'room.mention', source: 'rooms', userId, sessionId: room.id,
       payload: { roomId: room.id, spaceId: room.workspaceId, messageId, roomTitle: room.title, poster, excerpt, createdAt: createdAt.toISOString() },
+    });
+    if (await isRoomMuted(room.id, userId)) continue;
+    // And, unless muted, their install, which notifies them with no connection open.
+    const { noticeRemoteMember } = await import('@/core/federation/host-ops');
+    await noticeRemoteMember(userId, {
+      type: 'room.notice', kind: 'room_mention', spaceId: room.workspaceId, roomId: room.id, messageId,
+      title: `${poster} mentioned you in ${room.title}`, body: excerpt,
     });
     notified.push(userId);
   }

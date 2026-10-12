@@ -146,6 +146,7 @@ export const defaultConfig: Partial<Config> = {
     maxVisitorsPerInstance: 50,
     maxRemoteTurnsPerInstance: 5,
     agentPostsPerHour: 20,
+    remotePostsPerHour: 120,
   },
   compaction: {
     minSavingsRatio: 0.10,

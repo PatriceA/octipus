@@ -165,6 +165,8 @@ export interface RoomSource {
   messages(roomId: string, query: { before?: string; after?: string; limit: number }): Promise<{ messages: RoomMessage[]; hasMore: boolean }>;
   /** The REST post (the socket is down, or a remote space). */
   post(roomId: string, body: { content: string; addressed: boolean; clientId: string }): Promise<PostOutcome>;
+  /** My mute of the room: no notifications of it. A remote room's is kept by its host. */
+  setMuted(roomId: string, muted: boolean): Promise<unknown>;
   gateway: SpaceGateway;
 }
 
@@ -182,6 +184,7 @@ export function localRoomSource(spaceId: string, gateway: WebGateway): RoomSourc
     listRooms: () => api.get<{ rooms: Room[] }>(`/spaces/${spaceId}/rooms`).then((r) => r.rooms),
     messages: (roomId, query) => api.get(`/spaces/${spaceId}/rooms/${roomId}/messages?${pageQuery(query)}`),
     post: (roomId, body) => api.post(`/spaces/${spaceId}/rooms/${roomId}/messages`, body),
+    setMuted: (roomId, muted) => api.patch(`/spaces/${spaceId}/rooms/${roomId}/me`, { muted }),
     gateway: localSpaceGateway(gateway),
   };
 }
@@ -195,6 +198,7 @@ export function remoteRoomSource(remoteSpaceId: string, gateway: WebGateway): Ro
     messages: (roomId, query) => api.get<{ messages: RoomMessage[]; hasMore: boolean }>(remotePath(remoteSpaceId, ['rooms', roomId, 'messages'], pageQuery(query)))
       .then((page) => ({ messages: withUuidIds(page.messages), hasMore: page.hasMore === true })),
     post: (roomId, body) => api.post(remotePath(remoteSpaceId, ['rooms', roomId, 'messages']), body),
+    setMuted: (roomId, muted) => api.patch(remotePath(remoteSpaceId, ['rooms', roomId, 'me']), { muted }),
     gateway: remoteSpaceGateway(gateway, remoteSpaceId),
   };
 }

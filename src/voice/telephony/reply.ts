@@ -78,6 +78,8 @@ export async function generatePhoneReply(
       ...history.map((m) => ({ role: m.role, content: m.content, timestamp: new Date() })),
     ],
     ...params,
+    // A phone call has no signed-in requester: the install's phone line pays.
+    funding: 'install',
   });
 
   let text = (result.content || "I didn't catch that.").trim();

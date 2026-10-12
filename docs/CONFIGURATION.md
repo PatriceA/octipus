@@ -105,6 +105,7 @@ FEDERATION_HEARTBEAT_SECONDS=15       # Link ping interval; three missed pings c
 FEDERATION_MAX_VISITORS_PER_INSTANCE=50     # Live memberships one other install may hold here
 FEDERATION_MAX_REMOTE_TURNS_PER_INSTANCE=5  # Host agent turns one other install's members may have queued or running
 FEDERATION_AGENT_POSTS_PER_HOUR=20    # Agent-labelled posts from other installs per room per hour
+FEDERATION_REMOTE_POSTS_PER_HOUR=120  # All posts from one other install per room per hour
 
 WORKSPACE_PATH=./workspace
 SEARXNG_URL=http://localhost:8888         # SearXNG meta-search (optional)
@@ -237,6 +238,7 @@ is `host` or `both`, so a mode change applies without a restart.
 | `federation.maxVisitorsPerInstance` | 50 | Live space memberships the members of one other install may hold here. Env: `FEDERATION_MAX_VISITORS_PER_INSTANCE`. |
 | `federation.maxRemoteTurnsPerInstance` | 5 | Host agent turns, queued or running, that one other install's members may have started here. Env: `FEDERATION_MAX_REMOTE_TURNS_PER_INSTANCE`. |
 | `federation.agentPostsPerHour` | 20 | Posts labelled as a visitor's agent that one room accepts per hour. Env: `FEDERATION_AGENT_POSTS_PER_HOUR`. |
+| `federation.remotePostsPerHour` | 120 | All posts, agent-labelled or not, that one room accepts per hour from the visitors of one install (the label is the visitor's word; this bound is not). Env: `FEDERATION_REMOTE_POSTS_PER_HOUR`. |
 
 ## Reverse proxy
 

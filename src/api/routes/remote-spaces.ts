@@ -16,6 +16,7 @@ import { API_SCOPES } from '@/security/scopes';
  *   GET    /api/remote-spaces/:id/rooms | members | notes | notes/:noteId | tasks | tasks/:taskId
  *          | files (?path=) | files/<path> | rooms/:roomId/messages (?before, after, limit)
  *   POST   /api/remote-spaces/:id/rooms/:roomId/messages    — { content, addressed?, clientId? }
+ *   PATCH  /api/remote-spaces/:id/rooms/:roomId/me          — { muted }: my mute of the room, kept by the host
  *   POST   /api/remote-spaces/:id/rooms/:roomId/agent       — my agent's session for the room ("ask my agent")
  *   POST   /api/remote-spaces/:id/notes/:noteId/proposals   — { baseSha256, body, title? }
  *   POST   /api/remote-spaces/:id/tasks                     — { title, notes?, priority? }
@@ -201,6 +202,15 @@ export const remoteSpaceRoutes = new Elysia({ prefix: '/remote-spaces' })
       after: t.Optional(uuid()),
       limit: t.Optional(t.Number({ minimum: 1, maximum: 200 })),
     }),
+    ...tag,
+  })
+
+  // The member's own mute of a remote room, kept by the host (it sends no room notices of a muted room).
+  .patch('/:id/rooms/:roomId/me', (ctx) => handle(ctx, (user) => forwardFor(user.id, ctx.params.id, 'room.mute', {
+    roomId: ctx.params.roomId, muted: ctx.body.muted,
+  })), {
+    params: t.Object({ id: t.String(), roomId: uuid() }),
+    body: t.Object({ muted: t.Boolean() }, { additionalProperties: false }),
     ...tag,
   })
 

@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { users } from '@/db/schema/users';
 import type { ModelConfigEntry } from '@/db/schema/models';
+import { SYSTEM_USER_ID } from '@/security/principal';
 
 /**
  * Who may run on the install's models and keys (docs/SPACES.md → Who may use
@@ -29,20 +30,24 @@ export class InstallModelsDeniedError extends Error {
 }
 
 /**
- * Whether `userId` may run on install rows. Ids that are not users of this
- * install (the system user, internal callers without a requester) may.
+ * Whether `userId` may run on install rows. System jobs (`SYSTEM_USER_ID`)
+ * may. Fails closed: no id, an id that is not a UUID, or an inactive account
+ * gets nothing of the install's — a call that lost its requester must not
+ * run as nobody. Install work says so (`funding: 'install'`,
+ * `withInstallUsage`) and is never checked here.
  */
 export async function mayUseInstallModels(userId: string | null | undefined): Promise<boolean> {
-  if (!userId || !UUID.test(userId)) return true;
+  if (userId === SYSTEM_USER_ID) return true;
+  if (!userId || !UUID.test(userId)) return false;
   const hit = cache.get(userId);
   if (hit && Date.now() - hit.at < TTL_MS) return hit.allowed;
   const [row] = await getDb()
-    .select({ isAdmin: users.isAdmin, installModels: users.installModels, kind: users.kind })
+    .select({ isAdmin: users.isAdmin, installModels: users.installModels, kind: users.kind, isActive: users.isActive })
     .from(users)
     .where(eq(users.id, userId))
     .limit(1);
-  // An id with no account (deleted meanwhile) gets nothing of the install's.
-  const allowed = !!row && row.kind === 'local' && (row.isAdmin || row.installModels);
+  // An id with no account (deleted meanwhile) or a deactivated one gets nothing of the install's.
+  const allowed = !!row && row.isActive && row.kind === 'local' && (row.isAdmin || row.installModels);
   cache.set(userId, { allowed, at: Date.now() });
   return allowed;
 }

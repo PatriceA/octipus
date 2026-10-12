@@ -1014,6 +1014,8 @@ export class EmbeddingService {
             { role: 'user' as const, content: contents[i].slice(0, 2000), timestamp: now },
           ],
           extraBody: { think: false },
+          // Index maintenance, like the embeddings beside it; often runs with no requester (boot, cron).
+          funding: 'install',
         });
 
         const abstract = response.content || '';

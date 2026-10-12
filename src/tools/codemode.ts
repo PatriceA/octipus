@@ -41,6 +41,8 @@ export const CODEMODE_TOOL_NAME = 'codemode';
 
 /** QuickJS heap cap. The VM runs inside the server process's worker pool. */
 const MEMORY_LIMIT_BYTES = 256 * 1024 * 1024;
+/** A script runs at most this long; `timeout_ms` may only shorten it. */
+const MAX_TIMEOUT_MS = 300_000;
 /** Matches the rough chars-per-token the rest of the codebase budgets with. */
 const CHARS_PER_TOKEN = 4;
 const SEARCH_LIMIT = 8;
@@ -183,6 +185,10 @@ export function buildCodemodeHandler(host: CodemodeHost): ToolHandler {
       // carry on past a human's "no".
       let fatal: unknown;
       const abort = new AbortController();
+      // Nested calls still running when the script ends (a timeout or an abort
+      // leaves them: an approval wait or a slow tool is not cancelled). Awaited
+      // below, so the model is never told a script failed while its calls go on.
+      const inFlight = new Map<string, Promise<unknown>>();
       const onHostAbort = () => abort.abort();
       host.signal?.addEventListener('abort', onHostAbort, { once: true });
 
@@ -196,12 +202,16 @@ export function buildCodemodeHandler(host: CodemodeHost): ToolHandler {
             ...e.address((input ?? {}) as Record<string, unknown>),
           };
           let result: ToolResult;
+          const pending = host.call(call);
+          inFlight.set(call.id, pending.then(() => undefined, () => undefined));
           try {
-            result = await host.call(call);
+            result = await pending;
           } catch (err) {
             fatal ??= err;
             abort.abort();
             throw err;
+          } finally {
+            inFlight.delete(call.id);
           }
           if (result.error) throw new Error(result.error);
           return stripWorkStreamMeta(result.result) ?? null;
@@ -244,13 +254,15 @@ export function buildCodemodeHandler(host: CodemodeHost): ToolHandler {
       try {
         result = await sandbox.execute(source.code, {
           signal: abort.signal,
-          timeoutMs: source.options.timeoutMs ?? Infinity,
+          timeoutMs: Math.min(source.options.timeoutMs ?? MAX_TIMEOUT_MS, MAX_TIMEOUT_MS),
           store,
         });
       } finally {
         host.signal?.removeEventListener('abort', onHostAbort);
         await sandbox.close();
       }
+      const lateCalls = [...inFlight.keys()];
+      await Promise.all(inFlight.values());
       if (fatal !== undefined) throw fatal;
 
       const parts: string[] = [];
@@ -275,7 +287,10 @@ export function buildCodemodeHandler(host: CodemodeHost): ToolHandler {
         // No timing here, unlike the success header: the executor blocks a
         // tool after the SAME error three times running, and a wall time in the
         // message made every repeat of one failure look different.
-        throw new Error(`Script failed (${result.error.kind}, ${calls} tool call${calls === 1 ? '' : 's'}): ${error}${output ? `\nOutput before the failure:\n${output}` : ''}`);
+        const late = lateCalls.length > 0
+          ? `\n${lateCalls.length} tool call${lateCalls.length === 1 ? ' was' : 's were'} still running when the script stopped and finished afterwards: their effects stand.`
+          : '';
+        throw new Error(`Script failed (${result.error.kind}, ${calls} tool call${calls === 1 ? '' : 's'}): ${error}${late}${output ? `\nOutput before the failure:\n${output}` : ''}`);
       }
       for (const key of result.storeWrites.delete) delete store[key];
       Object.assign(store, result.storeWrites.set);

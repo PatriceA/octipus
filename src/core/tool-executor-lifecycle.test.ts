@@ -131,6 +131,15 @@ describe('consecutive failures block only the failing tool', () => {
     expect(String(blocked.content)).toMatch(/blocked for this run/);
   });
 
+  test('script calls (runNestedCall) count too, and the block is announced with the next results', async () => {
+    const exec = new ToolExecutor(context(), () => {});
+    exec.registerTools([tool('shell__run', async () => { throw new Error('spawn npx ENOENT'); }), tool('git__diff', async () => 'diff')]);
+    for (const id of ['1', '2', '3']) await exec.runNestedCall(call(id, 'shell__run'));
+    expect(exec.isToolBlocked('shell__run')).toBe(true);
+    const messages = await exec.handleToolCalls([call('4', 'git__diff')]);
+    expect(messages.some((m) => m.role === 'system' && String(m.content).includes('shell__run'))).toBe(true);
+  });
+
   test('a server that is down never blocks the MCP dispatcher', async () => {
     let up = false;
     const exec = new ToolExecutor(context(), () => {});
