@@ -27,3 +27,18 @@ test('a row that came over the gateway (another tab\'s steer, a reply) is replac
   expect(reconcileChatMessages([msg('stored-before', 'hi', 500), msg('stored-steer', 'go left instead', 1500)], [msg('stored-before', 'hi', 500), steered])
     .map(m => m.id)).toEqual(['stored-before', 'stored-steer']);
 });
+
+test('an unchanged refetch hands back the rows, and the array, already shown', () => {
+  const shown = reconcileChatMessages([msg('a', 'one', 1000), msg('b', 'two', 2000)], []);
+  const again = reconcileChatMessages([msg('a', 'one', 1000), msg('b', 'two', 2000)], shown);
+  expect(again).toBe(shown);
+});
+
+test('only the row that changed is a new object', () => {
+  const shown = reconcileChatMessages([msg('a', 'one', 1000), msg('b', 'two', 2000)], []);
+  const next = reconcileChatMessages([msg('a', 'one', 1000), msg('b', 'two, edited', 2000), msg('c', 'three', 3000)], shown);
+  expect(next).not.toBe(shown);
+  expect(next[0]).toBe(shown[0]);
+  expect(next[1]).not.toBe(shown[1]);
+  expect(next.map(m => m.content)).toEqual(['one', 'two, edited', 'three']);
+});

@@ -321,3 +321,64 @@ describe('Scheduler (Unit)', () => {
     });
   });
 });
+
+describe('Scheduler (embedded storage)', () => {
+  let scheduler: Scheduler;
+
+  beforeAll(async () => {
+    const { initializeStorage } = await import('@/db/storage');
+    initializeStorage({ mode: 'embedded' });
+    const mod = await import('./scheduler');
+    scheduler = new mod.Scheduler();
+  });
+
+  afterAll(async () => {
+    await scheduler.stop();
+    const { closeStorage } = await import('@/db/storage');
+    await closeStorage();
+  });
+
+  beforeEach(async () => {
+    await scheduler.clearQueue();
+  });
+
+  test('a parked task is left in place until due, not popped and re-pushed', async () => {
+    await scheduler.schedule('agent-1', 'later', {}, { delayMs: 60_000 });
+    for (let i = 0; i < 5; i++) expect(await scheduler.getNextTask()).toBeNull();
+    expect((await scheduler.getStats()).queueLength).toBe(1);
+  });
+
+  test('a due task is not stuck behind a parked one', async () => {
+    await scheduler.schedule('agent-1', 'later', {}, { delayMs: 60_000 });
+    await scheduler.schedule('agent-1', 'now', {});
+    expect((await scheduler.getNextTask())?.type).toBe('now');
+  });
+
+  test('an idle worker is woken by schedule() instead of waiting out its sleep', async () => {
+    let ranAt = 0;
+    scheduler.registerHandler('wake-test', async () => {
+      ranAt = Date.now();
+    });
+    // Park a task far ahead so the worker settles into its longest idle sleep.
+    await scheduler.schedule('agent-1', 'parked', {}, { delayMs: 60 * 60_000 });
+    scheduler.start(1);
+    await new Promise((r) => setTimeout(r, 200));
+
+    const scheduledAt = Date.now();
+    await scheduler.schedule('agent-1', 'wake-test', {});
+    const deadline = Date.now() + 3000;
+    while (!ranAt && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+    await scheduler.stop();
+
+    expect(ranAt).toBeGreaterThan(0);
+    expect(ranAt - scheduledAt).toBeLessThan(1000);
+  });
+
+  test('stop() returns promptly while workers are idle', async () => {
+    scheduler.start(3);
+    await new Promise((r) => setTimeout(r, 200));
+    const t0 = Date.now();
+    await scheduler.stop();
+    expect(Date.now() - t0).toBeLessThan(500);
+  });
+});

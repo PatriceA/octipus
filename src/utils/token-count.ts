@@ -1,19 +1,27 @@
-import { getEncoding, type Tiktoken } from 'js-tiktoken';
+import { createRequire } from 'node:module';
+import { Tiktoken, type TiktokenBPE } from 'js-tiktoken/lite';
 import { coreLogger } from '@/utils/logger';
 
 // Real BPE tokenizer for budget estimation. o200k_base is the GPT-4o/o-series
 // vocabulary — the best single default across providers; true per-request
-// counts still come from provider `usage`. Lazily built (rank load is ~ms) and
-// memoized. Falls back to chars/4 if the encoder can't load (exotic runtime).
+// counts still come from provider `usage`. Lazily built and memoized. Falls
+// back to chars/4 if the encoder can't load (exotic runtime).
+//
+// The rank table is required on first use from `js-tiktoken/lite` + its own
+// ranks file. The package root bundles every encoding (gpt2 … o200k, ~5.5 MB
+// of source) and, imported statically, was parsed on every boot whether or
+// not anything counted a token.
 //
 // Standalone (only js-tiktoken + logger) so budget-aware call sites — context
 // compaction, memory injection, summarizer chunking — can import it without
 // pulling in the model-registry/litellm dependency chain.
+const requireRanks = createRequire(import.meta.url);
 let encoder: Tiktoken | null | undefined;
 function getEncoder(): Tiktoken | null {
   if (encoder === undefined) {
     try {
-      encoder = getEncoding('o200k_base');
+      const mod = requireRanks('js-tiktoken/ranks/o200k_base') as { default?: TiktokenBPE } & TiktokenBPE;
+      encoder = new Tiktoken(mod.default ?? mod);
     } catch (err) {
       coreLogger.warn({ err }, 'tiktoken encoder unavailable — falling back to chars/4');
       encoder = null;

@@ -26,8 +26,22 @@ export function reconcileChatMessages<T extends Message>(persisted: T[], visible
     return true;
   });
   // Keep the position already displayed; server/client clocks may differ.
-  const result = [...persisted.filter(message => message.id !== '0').map(message => ({
+  const shown = new Map(visible.map(message => [message.id, message]));
+  const result = [...persisted.filter(message => message.id !== '0').map(message => sameAsShown({
     ...message, timestamp: anchors.get(message.id) ?? message.timestamp,
-  })), ...retained];
-  return result.length ? result.sort((a, b) => +new Date(a.timestamp) - +new Date(b.timestamp)) : persisted;
+  }, shown)), ...retained];
+  if (!result.length) return persisted;
+  result.sort((a, b) => +new Date(a.timestamp) - +new Date(b.timestamp));
+  return result.length === visible.length && result.every((message, i) => message === visible[i]) ? visible : result;
+}
+
+/**
+ * The row already on screen when the refetched copy is identical. The chat
+ * re-fetches a session's history on a timer; handing back the same objects
+ * (and the same array when nothing changed) lets memoized rows skip a
+ * re-render and a markdown re-parse of the whole conversation.
+ */
+function sameAsShown<T extends Message>(message: T, shown: Map<string, T>): T {
+  const row = shown.get(message.id);
+  return row && JSON.stringify(row) === JSON.stringify(message) ? row : message;
 }

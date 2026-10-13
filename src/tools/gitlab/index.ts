@@ -11,8 +11,11 @@ export class GitLabTool extends BaseTool {
 
   override async checkAvailability(): Promise<ToolAvailability> {
     try {
-      const { execSync } = await import('child_process');
-      execSync('glab auth status', { stdio: 'ignore', timeout: 5000 });
+      // Async, so the boot-time probe of every tool runs these side by side
+      // instead of freezing the event loop on each in turn.
+      const { exec } = await import('node:child_process');
+      const { promisify } = await import('node:util');
+      await promisify(exec)('glab auth status', { timeout: 5000, windowsHide: true });
       return { available: true };
     } catch {
       return { available: false, reason: 'GitLab CLI (glab) not installed or not authenticated' };

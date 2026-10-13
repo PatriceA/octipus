@@ -113,6 +113,17 @@ describe.skipIf(!isIntegration)('PostgresStorageProvider (Integration)', () => {
       expect(await q.pop()).toEqual({ n: 'urgent' });
     });
 
+    test('a parked item is skipped by pop(dueBy) until it is due', async () => {
+      const q = provider.createQueue('jobs');
+      const now = Date.now();
+      await q.push({ n: 'later' }, 0, now + 60_000);
+      await q.push({ n: 'now' });
+      expect(await q.pop(Date.now())).toEqual({ n: 'now' });
+      expect(await q.pop(Date.now())).toBeNull();
+      expect(await q.length()).toBe(1);
+      expect(await q.pop(now + 60_000)).toEqual({ n: 'later' });
+    });
+
     test('two poppers take different items rather than the same one', async () => {
       const q = provider.createQueue('jobs');
       for (let i = 0; i < 20; i++) await q.push({ i });

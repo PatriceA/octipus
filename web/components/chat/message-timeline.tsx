@@ -17,7 +17,7 @@ import {
   Zap,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { compareTimelineEntries } from '../../../src/shared/timeline-order';
 import { agentCompletionLabel, type AgentCompletionReason } from '../../../src/shared/agent-completion';
 import type { ToolInputPreview, ToolResultPreview } from '../../../src/shared/work-stream';
@@ -824,6 +824,15 @@ interface MessageTimelineProps {
   untrusted?: boolean;
 }
 
+// The timeline re-renders on every streamed token (the streaming text is one
+// of its props). Memoized rows skip that render when their own data has not
+// changed, so a token costs one text node instead of a markdown re-parse of
+// every message in the conversation.
+const MemoMessageBubble = memo(MessageBubble);
+const MemoAgentActivityInline = memo(AgentActivityInline);
+const MemoTeamActivityInline = memo(TeamActivityInline);
+const MemoFileChangesInline = memo(FileChangesInline);
+
 type TimelineEntry =
   | { kind: 'message'; data: ChatMessageData; sortKey: number }
   | { kind: 'agent'; data: TrackedAgent; sortKey: number }
@@ -847,88 +856,91 @@ export default function MessageTimeline({
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const isNearBottomRef = useRef(true);
 
-  // Build unified timeline
-  const timeline: TimelineEntry[] = [];
+  // Build unified timeline — only when its inputs change, not per token.
+  const timeline = useMemo(() => {
+    const entries: TimelineEntry[] = [];
 
-  // Messages
-  for (const msg of messages) {
-    timeline.push({
-      kind: 'message',
-      data: msg,
-      sortKey: new Date(msg.timestamp).getTime(),
+    // Messages
+    for (const msg of messages) {
+      entries.push({
+        kind: 'message',
+        data: msg,
+        sortKey: new Date(msg.timestamp).getTime(),
+      });
+    }
+
+    // Agents that are not part of a team — positioned at their actual start time.
+    // The secondary sort (kindOrder: message=0, agent=1) ensures agents appear
+    // after any message with the same timestamp.
+    const teamMemberIds = new Set<string>();
+    Array.from(teams.values()).forEach((team) => {
+      for (const memberId of team.memberIds) {
+        teamMemberIds.add(memberId);
+      }
     });
-  }
 
-  // Agents that are not part of a team — positioned at their actual start time.
-  // The secondary sort (kindOrder: message=0, agent=1) ensures agents appear
-  // after any message with the same timestamp.
-  const teamMemberIds = new Set<string>();
-  Array.from(teams.values()).forEach((team) => {
-    for (const memberId of team.memberIds) {
-      teamMemberIds.add(memberId);
-    }
-  });
-
-  Array.from(trackedAgents.values()).forEach((agent) => {
-    if (!agent.teamId && !teamMemberIds.has(agent.id)) {
-      timeline.push({
-        kind: 'agent',
-        data: agent,
-        sortKey: agent.startTime,
-      });
-    }
-  });
-
-  // Teams
-  Array.from(teams.entries()).forEach(([teamId, team]) => {
-    const members = team.memberIds
-      .map((id: string) => trackedAgents.get(id))
-      .filter((a: TrackedAgent | undefined): a is TrackedAgent => a != null);
-
-    if (members.length > 0) {
-      const earliest = Math.min(...members.map((m: TrackedAgent) => m.startTime));
-      timeline.push({
-        kind: 'team',
-        data: {
-          teamId,
-          members,
-          status: team.status,
-          durationMs: team.durationMs,
-        },
-        sortKey: earliest,
-      });
-    }
-  });
-
-  // File changes grouped by agent
-  if (fileChanges && fileChanges.length > 0) {
-    const groups = new Map<string, FileChangeGroup>();
-    for (const fc of fileChanges) {
-      const key = fc.agentId;
-      if (!groups.has(key)) {
-        groups.set(key, {
-          agentId: fc.agentId,
-          agentRole: fc.agentRole,
-          changes: [],
-          timestamp: new Date(fc.timestamp).getTime(),
+    Array.from(trackedAgents.values()).forEach((agent) => {
+      if (!agent.teamId && !teamMemberIds.has(agent.id)) {
+        entries.push({
+          kind: 'agent',
+          data: agent,
+          sortKey: agent.startTime,
         });
       }
-      const group = groups.get(key)!;
-      group.changes.push(fc);
-      group.timestamp = Math.max(group.timestamp, new Date(fc.timestamp).getTime());
-    }
-    for (const group of Array.from(groups.values())) {
-      timeline.push({
-        kind: 'file_changes',
-        data: group,
-        // File summaries belong to their agent, not the latest file event.
-        // Live and restored events use different clocks and arrival orders.
-        sortKey: trackedAgents.get(group.agentId)?.startTime ?? group.timestamp,
-      });
-    }
-  }
+    });
 
-  timeline.sort(compareTimelineEntries);
+    // Teams
+    Array.from(teams.entries()).forEach(([teamId, team]) => {
+      const members = team.memberIds
+        .map((id: string) => trackedAgents.get(id))
+        .filter((a: TrackedAgent | undefined): a is TrackedAgent => a != null);
+
+      if (members.length > 0) {
+        const earliest = Math.min(...members.map((m: TrackedAgent) => m.startTime));
+        entries.push({
+          kind: 'team',
+          data: {
+            teamId,
+            members,
+            status: team.status,
+            durationMs: team.durationMs,
+          },
+          sortKey: earliest,
+        });
+      }
+    });
+
+    // File changes grouped by agent
+    if (fileChanges && fileChanges.length > 0) {
+      const groups = new Map<string, FileChangeGroup>();
+      for (const fc of fileChanges) {
+        const key = fc.agentId;
+        if (!groups.has(key)) {
+          groups.set(key, {
+            agentId: fc.agentId,
+            agentRole: fc.agentRole,
+            changes: [],
+            timestamp: new Date(fc.timestamp).getTime(),
+          });
+        }
+        const group = groups.get(key)!;
+        group.changes.push(fc);
+        group.timestamp = Math.max(group.timestamp, new Date(fc.timestamp).getTime());
+      }
+      for (const group of Array.from(groups.values())) {
+        entries.push({
+          kind: 'file_changes',
+          data: group,
+          // File summaries belong to their agent, not the latest file event.
+          // Live and restored events use different clocks and arrival orders.
+          sortKey: trackedAgents.get(group.agentId)?.startTime ?? group.timestamp,
+        });
+      }
+    }
+
+    entries.sort(compareTimelineEntries);
+    return entries;
+  }, [messages, trackedAgents, teams, fileChanges]);
 
   // Auto-scroll
   const scrollToBottom = useCallback(() => {
@@ -968,12 +980,12 @@ export default function MessageTimeline({
       {timeline.map((entry, idx) => {
         switch (entry.kind) {
           case 'message':
-            return <MessageBubble key={`msg-${entry.data.id}`} message={entry.data} untrusted={untrusted} />;
+            return <MemoMessageBubble key={`msg-${entry.data.id}`} message={entry.data} untrusted={untrusted} />;
           case 'agent':
-            return <AgentActivityInline key={`agent-${entry.data.id}`} agent={entry.data} onOpenFile={onOpenFile} />;
+            return <MemoAgentActivityInline key={`agent-${entry.data.id}`} agent={entry.data} onOpenFile={onOpenFile} />;
           case 'team':
             return (
-              <TeamActivityInline
+              <MemoTeamActivityInline
                 key={`team-${entry.data.teamId}`}
                 teamId={entry.data.teamId}
                 members={entry.data.members}
@@ -983,7 +995,7 @@ export default function MessageTimeline({
               />
             );
           case 'file_changes':
-            return <FileChangesInline key={`files-${entry.data.agentId}`} group={entry.data} />;
+            return <MemoFileChangesInline key={`files-${entry.data.agentId}`} group={entry.data} />;
         }
       })}
 

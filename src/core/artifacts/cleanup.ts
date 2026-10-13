@@ -10,6 +10,8 @@ import { artifactDataSources } from '@/db/schema/artifact-data-sources';
 import { artifacts } from '@/db/schema/artifacts';
 import { getDb } from '@/db/postgres';
 import { getScheduler, type ScheduledTask } from '@/core/scheduler';
+import { rawStore } from '@/db/cache';
+import { generateId } from '@/utils/crypto';
 import { coreLogger } from '@/utils/logger';
 
 export const ARTIFACT_CLEANUP_TASK = 'artifact:cleanup';
@@ -63,26 +65,45 @@ export async function runArtifactCleanup(): Promise<CleanupReport> {
   return { prunedSnapshots, purgedArtifacts, expiredShareLinks, prunedBundles };
 }
 
-export async function handleArtifactCleanupTask(_task: ScheduledTask): Promise<void> {
+/**
+ * Each boot starts a fresh hourly chain. With external storage the queue
+ * outlives the process, so the previous boot's chain is still queued; only the
+ * chain named here re-arms, and older ones end the next time they fire instead
+ * of piling up one extra cleanup per restart.
+ */
+const CLEANUP_CHAIN_KEY = 'artifact:cleanup:chain';
+
+interface CleanupPayload {
+  chain?: string;
+}
+
+export async function handleArtifactCleanupTask(task: ScheduledTask): Promise<void> {
+  const chain = (task.payload as CleanupPayload | undefined)?.chain;
+  const current = await rawStore().get(CLEANUP_CHAIN_KEY);
+  if (current && chain !== current) {
+    coreLogger.info({ chain, current }, 'artifact.cleanup.superseded_chain — not requeueing');
+    return;
+  }
   await runArtifactCleanup();
-  await getScheduler().schedule(
-    'artifact:cleanup',
-    ARTIFACT_CLEANUP_TASK,
-    {},
-    { delayMs: HOUR_MS },
-  );
+  await scheduleCleanup(chain);
 }
 
 export function registerArtifactCleanupHandler(): void {
   getScheduler().registerHandler(ARTIFACT_CLEANUP_TASK, handleArtifactCleanupTask);
 }
 
-/** First-run kickoff — call once at boot to seed the recurring task. */
-export async function bootstrapArtifactCleanup(): Promise<void> {
+async function scheduleCleanup(chain: string | undefined): Promise<void> {
   await getScheduler().schedule(
     'artifact:cleanup',
     ARTIFACT_CLEANUP_TASK,
-    {},
+    { chain } satisfies CleanupPayload,
     { delayMs: HOUR_MS },
   );
+}
+
+/** First-run kickoff — call once at boot to seed the recurring task. */
+export async function bootstrapArtifactCleanup(): Promise<void> {
+  const chain = generateId();
+  await rawStore().set(CLEANUP_CHAIN_KEY, chain);
+  await scheduleCleanup(chain);
 }

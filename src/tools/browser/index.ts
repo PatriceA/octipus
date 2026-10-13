@@ -5,7 +5,35 @@ import { coreLogger, toolLogger } from '@/utils/logger';
 import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 
 const DEFAULT_TIMEOUT = 30000;
+
 const _MAX_SCREENSHOT_SIZE = 5 * 1024 * 1024; // 5MB
+
+/**
+ * Where Playwright expects its Chromium, asked once of a short-lived child
+ * process. Importing `playwright` here costs ~0.3 s and ~80 MB that stay
+ * resident for the life of the server, and the boot-time availability probe
+ * would pay that on every install, whether or not an agent ever opens a
+ * browser. The browser itself still loads Playwright in-process, on first use.
+ * The path never moves while the server runs; only whether it exists does.
+ */
+let chromiumPath: Promise<string> | null = null;
+function chromiumExecutablePath(): Promise<string> {
+  chromiumPath ??= (async () => {
+    const { createRequire } = await import('node:module');
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const entry = createRequire(import.meta.url).resolve('playwright');
+    const program = `process.stdout.write(require(${JSON.stringify(entry)}).chromium.executablePath())`;
+    const { stdout } = await promisify(execFile)(process.execPath, ['-e', program], {
+      timeout: 15_000,
+      windowsHide: true,
+    });
+    return stdout.trim();
+  })();
+  // A failed lookup is not remembered; the next probe asks again.
+  chromiumPath.catch(() => { chromiumPath = null; });
+  return chromiumPath;
+}
 
 export class BrowserTool extends BaseTool {
   readonly id = 'browser';
@@ -16,8 +44,7 @@ export class BrowserTool extends BaseTool {
   override async checkAvailability(): Promise<ToolAvailability> {
     try {
       const { existsSync } = await import('node:fs');
-      const { chromium } = await import('playwright');
-      const hasPlaywright = existsSync(chromium.executablePath());
+      const hasPlaywright = existsSync(await chromiumExecutablePath());
       if (!hasPlaywright) {
         return { available: false, reason: 'Playwright browsers not installed (run: npx playwright install chromium)' };
       }
