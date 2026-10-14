@@ -1,7 +1,7 @@
 'use client';
 
 import { reconcileChatMessages } from '../../../src/shared/chat-reconciliation';
-import { CHAT_INBOX_RESOURCE, CHAT_MESSAGE_MAX_CHARS } from '../../../src/shared/chat-gateway';
+import { CHAT_INBOX_RESOURCE, CHAT_MESSAGE_MAX_CHARS, EXTERNAL_CHANNEL_TYPES } from '../../../src/shared/chat-gateway';
 import { SessionCost } from '@/components/chat/session-cost';
 import { SkillUsage } from '@/components/skills/skill-usage';
 
@@ -38,6 +38,7 @@ import type { AgentCompletionReason } from '../../../src/shared/agent-completion
  * follows them.
  */
 const REFUSED_SEND_CODES: ReadonlySet<string> = new Set(['INVALID_MESSAGE', 'RATE_LIMITED', 'SESSION_NOT_FOUND']);
+const EXTERNAL_CHANNELS: ReadonlySet<string> = new Set(EXTERNAL_CHANNEL_TYPES);
 
 interface ToolCallInfo {
   id: string;
@@ -366,18 +367,25 @@ export default function ChatPage() {
           return active(a.status) - active(b.status)
             || (agentHistoryCacheRef.current.get(a.id)?.fetchedAt ?? 0) - (agentHistoryCacheRef.current.get(b.id)?.fetchedAt ?? 0);
         });
+        // Up to four agents' event pages per load, in the order above; they
+        // don't depend on each other, so they're fetched side by side.
         let eventRequests = 0;
-        for (const a of sessionAgents) {
+        const eventPages = await Promise.all(sessionAgents.map((a) => {
+          const cachedHistory = agentHistoryCacheRef.current.get(a.id);
+          const finished = a.status !== 'running' && a.status !== 'idle';
+          if (eventRequests >= 4 || (finished && cachedHistory?.complete)) return null;
+          eventRequests++;
+          return fetchPersistedAgentEvents(a.id, cachedHistory?.cursor ?? 0, 1);
+        }));
+        for (const [agentIndex, a] of sessionAgents.entries()) {
           const cachedHistory = agentHistoryCacheRef.current.get(a.id);
           const toolCalls: ToolCallInfo[] = cachedHistory?.toolCalls.map((toolCall) => ({ ...toolCall })) ?? [];
           const agentFileChanges: FileChange[] = cachedHistory?.fileChanges.map((change) => ({ ...change })) ?? [];
           {
             const finished = a.status !== 'running' && a.status !== 'idle';
-            const fetchHistory = eventRequests < 4 && !(finished && cachedHistory?.complete);
-            if (fetchHistory) eventRequests++;
-            const evData = fetchHistory
-              ? await fetchPersistedAgentEvents(a.id, cachedHistory?.cursor ?? 0, 1)
-              : { events: [], nextCursor: cachedHistory?.cursor ?? 0, hasMore: true };
+            const fetched = eventPages[agentIndex];
+            const fetchHistory = fetched !== null;
+            const evData = fetched ?? { events: [], nextCursor: cachedHistory?.cursor ?? 0, hasMore: true };
             for (const rawEvent of evData.events) {
               const ev = { ...rawEvent, data: rawEvent.data as any };
               if (ev.type === 'action') {
@@ -602,16 +610,32 @@ export default function ChatPage() {
 
   useEffect(() => { loadModels(); }, [loadModels]);
 
-  // Poll for new messages (handles telegram/channel sessions that bypass WebSocket)
+  // Poll the open session's history only when the gateway can't deliver it:
+  // the connection is down, or the session belongs to an external channel
+  // (Telegram, Slack…) whose turns run outside any gateway connection. A
+  // live web session gets its messages as events, and a reconnect reloads.
+  const activeChannelType = sessions.find((s) => s.id === activeSessionId)?.channelType;
+  const pollHistory = gatewayStatus !== 'connected' || EXTERNAL_CHANNELS.has(activeChannelType ?? '');
   useEffect(() => {
-    if (!activeSessionId) return;
+    if (!activeSessionId || !pollHistory) return;
     const interval = setInterval(() => {
       if (document.visibilityState === 'hidden') return;
       void loadSessionMessages(activeSessionId);
       void loadSessions();
     }, 10_000); // Every 10 seconds
     return () => clearInterval(interval);
-  }, [activeSessionId, loadSessionMessages, loadSessions]);
+  }, [activeSessionId, pollHistory, loadSessionMessages, loadSessions]);
+
+  // The list still changes without this tab (a channel opens a session, a
+  // title is set): refresh it on its own, less often, while history is live.
+  useEffect(() => {
+    if (pollHistory) return;
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
+      void loadSessions();
+    }, 60_000);
+    return () => clearInterval(interval);
+  }, [pollHistory, loadSessions]);
 
   // On every (re)connect: the session list and the open session may have
   // moved while this tab was offline.
@@ -947,6 +971,9 @@ export default function ChatPage() {
       case 'chat.response': {
         const result = (payload.response ?? {}) as Record<string, any>;
         handleChatResponse({ ...result, sessionId: eventSessionId ?? result.sessionId }, { id: event.id, timestamp: event.timestamp });
+        // The turn set the session's title and counts; the list isn't polled
+        // as often while the gateway is live.
+        void loadSessions();
         break;
       }
 

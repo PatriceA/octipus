@@ -22,3 +22,10 @@ export const CHAT_INLINE_ATTACHMENT_MAX_CHARS = 262_144;
  * `chat.message`.
  */
 export const CHAT_INBOX_RESOURCE = 'chat:inbox';
+
+/**
+ * The external messaging channels: the only ones with outbound chat ids. A
+ * session of one of them takes its turns outside any gateway connection, so
+ * the web chat sees its new messages only by refetching them.
+ */
+export const EXTERNAL_CHANNEL_TYPES = ['telegram', 'slack', 'teams', 'whatsapp'] as const;
