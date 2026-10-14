@@ -153,6 +153,42 @@ function previewToolResult(result: unknown): string {
   return oneLine.length > 200 ? oneLine.slice(0, 197) + '...' : oneLine;
 }
 
+/**
+ * The most of one tool result (or error) an `observation` event carries. The
+ * event is persisted to `agent_events`, published to the owner's tabs and
+ * kept for replay; its readers show it (the agent timeline) or read an
+ * excerpt (learning evidence, 2400 chars), never the whole output — the
+ * model gets that through the tool messages, not this event.
+ */
+export const OBSERVATION_RESULT_CHARS = 2_400;
+
+function clipText(text: string): string {
+  return text.length > OBSERVATION_RESULT_CHARS
+    ? `${text.slice(0, OBSERVATION_RESULT_CHARS)}… [${text.length - OBSERVATION_RESULT_CHARS} more chars]`
+    : text;
+}
+
+/** `results` bounded for the `observation` event (`OBSERVATION_RESULT_CHARS`). */
+export function boundObservationResults(results: ToolResult[]): ToolResult[] {
+  return results.map((r) => {
+    let result = r.result;
+    if (typeof result === 'string') {
+      result = clipText(result);
+    } else if (result != null && typeof result === 'object') {
+      let text: string;
+      try {
+        text = JSON.stringify(result) ?? '';
+      } catch (err) {
+        agentLogger.debug({ err, toolCallId: r.toolCallId }, 'observation result not serializable — sent as text');
+        text = String(result);
+      }
+      // A small object keeps its shape; a large one becomes its clipped text.
+      if (text.length > OBSERVATION_RESULT_CHARS) result = clipText(text);
+    }
+    return { ...r, result, ...(r.error !== undefined ? { error: clipText(r.error) } : {}) };
+  });
+}
+
 export class ToolExecutor {
   private tools: Map<string, ToolHandler> = new Map();
   /**
@@ -1025,7 +1061,7 @@ export class ToolExecutor {
   }
 
   private async buildToolMessages(toolCalls: ToolCall[], results: ToolResult[]): Promise<AgentMessage[]> {
-    this.emitFn('observation', { results });
+    this.emitFn('observation', { results: boundObservationResults(results) });
 
     const toolMessages: AgentMessage[] = [];
     const newlyBlocked = [...this.blockedByNested.splice(0), ...this.trackFailures(toolCalls, results)];
