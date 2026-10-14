@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 import type { Message } from '@/db/schema/messages';
 import type { SessionContext } from '@/db/schema/sessions';
 import type { AgentMessage } from './types';
-const fixture = vi.hoisted(() => ({ context: {} as SessionContext, rows: [] as Message[], failSummary: false, failInsert: false, noSavings: false, clearInSummary: false, summaries: [] as AgentMessage[][] }));
+const fixture = vi.hoisted(() => ({ context: {} as SessionContext, rows: [] as Message[], sizeReads: 0, failSummary: false, failInsert: false, noSavings: false, clearInSummary: false, summaries: [] as AgentMessage[][] }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: {
   findById: async () => ({ id: 'session', userId: 'user', context: structuredClone(fixture.context) }),
   incrementMessageCount: async () => {},
@@ -24,6 +24,12 @@ vi.mock('@/db/repositories/message-repository', () => ({ messageRepository: {
   findContextMessages: async (_id: string, since?: string, after?: { id: string }) => {
     const index = after ? fixture.rows.findIndex(r => r.id === after.id) : -1;
     return fixture.rows.filter((r, i) => i > index && (!since || r.createdAt >= new Date(since)));
+  },
+  contextSize: async (_id: string, since?: string, after?: { id: string }) => {
+    fixture.sizeReads++;
+    const index = after ? fixture.rows.findIndex(r => r.id === after.id) : -1;
+    const rows = fixture.rows.filter((r, i) => i > index && (!since || r.createdAt >= new Date(since)));
+    return { rows: rows.length, bytes: rows.reduce((n, r) => n + Buffer.byteLength(r.content), 0) };
   },
 } }));
 vi.mock('@/db/repositories/agent-repository', () => ({ agentRepository: { updateStatus: async () => {} } }));
@@ -47,12 +53,12 @@ vi.mock('@/utils/context-compaction', async original => ({ ...await original<typ
 import { AgentWorker } from './agent-worker';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { acknowledgeProviderTurn } from './cli-session-store';
-import { compactSessionCommand, maybeCompactSession } from './agent/session-compaction';
+import { COMPACTION_FAILURE_BACKOFF_MAX_MS, COMPACTION_FAILURE_BACKOFF_MS, compactSessionCommand, compactionRetryAt, decideCompaction, maybeCompactSession } from './agent/session-compaction';
 import { readSessionHistory } from './session-history';
 import { OpenRouterProvider } from '@/models/providers/openrouter-provider';
 import { estimateTokens } from '@/utils/token-count';
 
-beforeEach(() => { fixture.context = {}; fixture.rows = []; fixture.failSummary = false; fixture.failInsert = false; fixture.noSavings = false; fixture.clearInSummary = false; fixture.summaries = []; });
+beforeEach(() => { fixture.context = {}; fixture.rows = []; fixture.sizeReads = 0; fixture.failSummary = false; fixture.failInsert = false; fixture.noSavings = false; fixture.clearInSummary = false; fixture.summaries = []; });
 function worker(turn: number, model = 'anthropic/claude-sonnet-4-6', root = true) {
   return new AgentWorker({ space: null, trigger: 'user', funding: 'own',  id: `agent-${turn}`, sessionId: 'session', userId: 'user', model, role: 'general', topic: 'test',
     status: 'idle', createdAt: new Date(), updatedAt: new Date(), root, metadata: {} },
@@ -139,6 +145,40 @@ describe('session lifecycle across ephemeral root workers', () => {
     expect(fixture.context.compactionState?.compactionIneffective).toBe(true);
     await maybeCompactSession('session');
     expect(fixture.summaries).toHaveLength(1);
+  });
+  test('a failed automatic summary backs off instead of retrying on every turn', async () => {
+    for (let i = 0; i < 12; i++) await turn(i);
+    fixture.failSummary = true;
+    await expect(maybeCompactSession('session')).rejects.toThrow('summary unavailable');
+    expect(fixture.context.compactionState).toMatchObject({ failedPasses: 1 });
+    // The next turn skips the pass (no second summary call)…
+    expect(await maybeCompactSession('session')).toBe(false);
+    expect(fixture.summaries).toHaveLength(1);
+    // …a manual /compact does not wait…
+    fixture.failSummary = false;
+    expect(await maybeCompactSession('session', { force: true })).toBe(true);
+    // …and a success clears the failure record.
+    expect(fixture.context.compactionState?.failedPasses).toBeUndefined();
+  });
+  test('the backoff doubles with each failure in a row, up to a ceiling', () => {
+    const at = Date.parse('2030-01-01T00:00:00Z');
+    const retry = (failedPasses: number) => compactionRetryAt({ lastFailedAt: new Date(at).toISOString(), failedPasses })! - at;
+    expect(retry(1)).toBe(COMPACTION_FAILURE_BACKOFF_MS);
+    expect(retry(3)).toBe(4 * COMPACTION_FAILURE_BACKOFF_MS);
+    expect(retry(30)).toBe(COMPACTION_FAILURE_BACKOFF_MAX_MS);
+    const config = { minSavingsRatio: 0.15, growthMultiplier: 1.5, hardCeiling: 100_000 };
+    const state = { lastFailedAt: new Date(at).toISOString(), failedPasses: 1 };
+    expect(decideCompaction({ currentTokens: 10_000_000, state, config, now: at + 1 })).toMatchObject({ allow: false, reason: 'failed-backing-off' });
+    expect(decideCompaction({ currentTokens: 10_000, state, config, now: at + COMPACTION_FAILURE_BACKOFF_MS })).toMatchObject({ allow: true });
+  });
+  test('a short session is settled without reading its transcript', async () => {
+    for (let i = 0; i < 2; i++) await turn(i);
+    fixture.context.nativeConversation = undefined;
+    const read = vi.spyOn(messageRepository, 'findContextMessages');
+    expect(await maybeCompactSession('session')).toBe(false);
+    expect(fixture.sizeReads).toBe(1);
+    expect(read).not.toHaveBeenCalled();
+    read.mockRestore();
   });
   test('a live root vendor session is never compacted onto an Octipus checkpoint', async () => {
     for (let i = 0; i < 6; i++) await turn(i);
