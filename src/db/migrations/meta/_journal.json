@@ -981,6 +981,13 @@
       "when": 1789621117572,
       "tag": "0138_hot_path_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 140,
+      "version": "7",
+      "when": 1789707517572,
+      "tag": "0139_inline_ui_blocks",
+      "breakpoints": true
     }
   ]
 }

@@ -66,3 +66,4 @@ export * from './agent-approvals';
 export * from './spend-budgets';
 export * from './live-documents';
 export * from './federation';
+export * from './inline-ui-blocks';

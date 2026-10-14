@@ -50,6 +50,9 @@ import { isRootAgent } from './types';
 import type { AgentMessage, ToolCall } from './types';
 import { omitGroupTranscripts } from '@/core/channels/group-context';
 import { omitSpaceTurnContext } from '@/core/spaces/turn-context';
+import { inlineUiRepairMessage, storeInlineUiBlocks, stubInlineUiFences } from '@/core/inline-ui/extract';
+import { getRunContext } from '@/core/run-context';
+import { transformOutsideInlineUiFences, withoutInlineUiFences } from '@/shared/inline-ui';
 
 // Re-export types for backward compatibility
 export type { AgentEvent, AgentEventHandler, AgentWorkerConfig, ToolHandler } from './agent-base';
@@ -206,6 +209,8 @@ export class AgentWorker extends BaseAgentWorker {
    * thinking can't starve the tool call a second time.
    */
   private lengthRetried: boolean = false;
+  /** The one repair round of an interactive answer that cannot be shown (spec G3) was used. */
+  private inlineUiRepaired = false;
   /** Set when the FINAL turn was cut off by the token limit — see `wasTruncated`. */
   private finishedTruncated: boolean = false;
   private lengthRetryBoost: number = 0;
@@ -621,12 +626,17 @@ export class AgentWorker extends BaseAgentWorker {
       // The space turn context (space memory, a linked room's transcript) is
       // read afresh each turn and never stored with it.
       const storedContext = omitSpaceTurnContext(promptContext).trim();
+      const provenance = getRunContext()?.inlineUiProvenance;
+      const metadata = {
+        ...(storedContext ? { promptContext: storedContext } : {}),
+        ...(provenance ? { inlineUiProvenance: { id: provenance } } : {}),
+      };
       const row = await messageRepository.create({
         sessionId: this.context.sessionId,
         role: 'user',
         content,
         agentId: this.context.id,
-        metadata: storedContext ? { promptContext: storedContext } : undefined,
+        metadata: Object.keys(metadata).length ? metadata : undefined,
       }, this.cacheGeneration);
       message.sourceMessageId = row.id;
       this.userCursor = row.id ? { id: row.id, createdAt: row.createdAt.toISOString() } : undefined;
@@ -784,10 +794,33 @@ export class AgentWorker extends BaseAgentWorker {
         throw new CascadedCancellationError({ agentId: this.context.id, reason: String(this.abortController.signal.reason) });
       }
       this.context.status = 'completed';
+      // Interactive answers leave the reply here, before anything keeps a copy
+      // of it: their source goes to `inline_ui_blocks`, a marker line stays
+      // (docs/plans/inline-ui-spec.md D12). The service runs the same pass on
+      // whatever reaches it (a child's result, a CLI root) — idempotent.
+      if (isRootAgent(this.context) && typeof finalResult === 'string') {
+        finalResult = (await storeInlineUiBlocks(finalResult, {
+          sessionId: this.context.sessionId,
+          agentId: this.context.id,
+          requesterId: this.context.userId,
+          contentStorageOff: contentStorageOffFor(this.context),
+        })).text;
+      }
       if (isRootAgent(this.context) && this.userCursor && !this.inRoom) {
         const last = this.messages.at(-1);
-        if (last?.role === 'assistant' && !last.toolCalls?.length) last.content = finalResult;
-        else this.messages.push({ role: 'assistant', content: finalResult, timestamp: new Date() });
+        if (last?.role === 'assistant' && !last.toolCalls?.length) {
+          // The provider's own blocks still hold the fence; replayed byte for
+          // byte (Anthropic, Gemini) they would bring the source back.
+          if (last.content !== finalResult) last.providerRaw = undefined;
+          last.content = finalResult;
+        } else this.messages.push({ role: 'assistant', content: finalResult, timestamp: new Date() });
+        // Fences in earlier iterations (text beside a tool call) never reach
+        // the user; keep only a line of them in the history.
+        for (const m of this.messages) {
+          if (m.role !== 'assistant' || typeof m.content !== 'string') continue;
+          const stubbed = stubInlineUiFences(m.content);
+          if (stubbed !== m.content) { m.content = stubbed; m.providerRaw = undefined; }
+        }
         await sessionRepository.patchContextIfGeneration(this.context.sessionId, this.cacheGeneration, {
           nativeConversation: { generation: this.cacheGeneration, model: this.context.model,
             ownerAgentId: this.context.id, checkpointId: this.checkpointId, acknowledged: this.userCursor,
@@ -1638,7 +1671,10 @@ export class AgentWorker extends BaseAgentWorker {
       // Some models (e.g. Gemma4 via LiteLLM) emit tool calls as JSON text instead of structured tool_calls.
       // Detect and parse these so they execute properly.
       if (!this.toolExecutor.toolsDisabled && completion.content && !completion.toolCalls?.length) {
-        const textToolCalls = this.parseTextToolCalls(completion.content);
+        // An interactive answer's markup and script are not tool calls: the
+        // recovery parsers only see the prose around `octi-ui` fences.
+        const prose = withoutInlineUiFences(completion.content);
+        const textToolCalls = prose.trim() ? this.parseTextToolCalls(prose) : [];
         if (textToolCalls.length > 0) {
           await this.executeRecoveredToolCalls(textToolCalls, 'text output');
           continue;
@@ -1647,7 +1683,7 @@ export class AgentWorker extends BaseAgentWorker {
         // Toolshim — last resort: ask a bound translator model to convert the
         // prose into a tool call. Only after the cheap text/JSON/XML fallbacks
         // above failed; gated + capped once per iteration inside tryToolShim.
-        const shimToolCalls = await this.tryToolShim(completion.content);
+        const shimToolCalls = prose.trim() ? await this.tryToolShim(prose) : null;
         if (shimToolCalls && shimToolCalls.length > 0) {
           await this.executeRecoveredToolCalls(shimToolCalls, 'toolshim');
           continue;
@@ -1731,18 +1767,24 @@ export class AgentWorker extends BaseAgentWorker {
 
       let response = completion.content || 'I was unable to generate a response.';
 
-      // Strip raw tool call JSON that some models (e.g. Ollama/qwen3) emit as text
-      response = response.replace(/\{"id":\s*"call_[^"]*",\s*"type":\s*"function",\s*"function":\s*\{[^}]*\}\s*\}/g, '').trim();
+      // The clean-ups below work on the prose only: an interactive answer's
+      // markup repeats by nature (table rows, grid cells) and would be
+      // corrupted by the loop stripper.
+      response = transformOutsideInlineUiFences(response, (prose) => {
+        let out = prose;
+        // Strip raw tool call JSON that some models (e.g. Ollama/qwen3) emit as text
+        out = out.replace(/\{"id":\s*"call_[^"]*",\s*"type":\s*"function",\s*"function":\s*\{[^}]*\}\s*\}/g, '');
 
-      // Strip thinking/reasoning blocks in various formats (gemma4, qwen3, etc.)
-      // XML-style: <think>...</think>, <thinking>...</thinking>
-      response = response.replace(/<(?:think|thinking|reasoning)>[\s\S]*?<\/(?:think|thinking|reasoning)>/g, '').trim();
-      // JSON-style: {"thought":"..."} or {"thinking":"..."}
-      response = response.replace(/\{"(?:thought|thinking|reasoning)"\s*:\s*"[\s\S]*?"\s*\}/g, '').trim();
+        // Strip thinking/reasoning blocks in various formats (gemma4, qwen3, etc.)
+        // XML-style: <think>...</think>, <thinking>...</thinking>
+        out = out.replace(/<(?:think|thinking|reasoning)>[\s\S]*?<\/(?:think|thinking|reasoning)>/g, '');
+        // JSON-style: {"thought":"..."} or {"thinking":"..."}
+        out = out.replace(/\{"(?:thought|thinking|reasoning)"\s*:\s*"[\s\S]*?"\s*\}/g, '');
 
-      // Strip repetitive text loops (e.g. "A task orchestrator. A task orchestrator. A task...")
-      // Detect any phrase repeated 5+ times and truncate
-      response = response.replace(/(.{10,}?)\1{4,}/g, '$1').trim();
+        // Strip repetitive text loops (e.g. "A task orchestrator. A task orchestrator. A task...")
+        // Detect any phrase repeated 5+ times and truncate
+        return out.replace(/(.{10,}?)\1{4,}/g, '$1');
+      }).trim();
 
       // Treat trivial JSON responses ({}, [], "") as empty — the model failed to produce text
       if (/^\s*(\{\s*\}|\[\s*\]|"\s*")\s*$/.test(response)) {
@@ -1776,6 +1818,19 @@ export class AgentWorker extends BaseAgentWorker {
         agentLogger.info({ agentId: this.context.id }, 'Draining steer before finalizing — continuing loop');
         this.drainSteeringQueue();
         continue;
+      }
+
+      // An interactive answer that cannot be shown as written goes back to the
+      // model once, in this turn, with what is wrong (spec G3) — the user
+      // would otherwise get a notice where the widget should be.
+      if (isRootAgent(this.context) && this.context.metadata?.inlineUiOffered === true && !this.inlineUiRepaired) {
+        const repair = await inlineUiRepairMessage(response);
+        if (repair) {
+          this.inlineUiRepaired = true;
+          agentLogger.info({ agentId: this.context.id, iteration: this.iteration }, 'Interactive answer needs repair — asking the model once');
+          this.messages.push({ role: 'user', content: repair, timestamp: new Date() });
+          continue;
+        }
       }
 
       // Track token usage for the root agent (response is saved by handleMessage with correct content)

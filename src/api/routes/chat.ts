@@ -10,6 +10,8 @@ import { swarmNodeRepository } from '@/core/swarm/node-repository';
 import { generateId } from '@/utils/crypto';
 import { apiLogger } from '@/utils/logger';
 import { stripSpeechSources } from '@/voice/speech-sources';
+import { inlineUiFallbackText, inlineUiSpeechText } from '@/shared/inline-ui/fence';
+import { messageRepository } from '@/db/repositories/message-repository';
 
 /**
  * The specialist roles this turn actually delegated to.
@@ -55,6 +57,16 @@ async function routedRolesForTurn(sessionId: string, since: Date): Promise<strin
     return [...new Set(fresh.reverse().map((n) => n.role))];
   } catch (err) {
     apiLogger.warn({ err, sessionId }, 'routed-role lookup failed — reply omits routedRoles');
+    return undefined;
+  }
+}
+
+/** Tools this turn ran, in first-use order: the session's tool rows written since the turn began. */
+async function toolsUsedForTurn(sessionId: string, since: Date): Promise<string[] | undefined> {
+  try {
+    return await messageRepository.toolNamesSince(sessionId, since);
+  } catch (err) {
+    apiLogger.warn({ err, sessionId }, 'tool-usage lookup failed — reply omits toolsUsed');
     return undefined;
   }
 }
@@ -171,13 +183,14 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
       // Only when asked for, and falling back to no boundary rather than
       // failing the turn: `routedRoles` is a diagnostic, and losing it must
       // never cost the user their answer.
-      const turnStartedAt = body.routedRoles
+      const turnStartedAt = body.routedRoles || body.toolsUsed
         ? await swarmNodeRepository.now().catch((err: unknown) => {
             apiLogger.warn({ err, sessionId }, 'turn-boundary clock read failed — reply omits routedRoles');
             return null;
           })
         : null;
       try {
+        const renders = body.renders?.filter((r: string) => r === 'inline_ui');
         const result = await rootAgent.handleMessage(
           sessionId,
           user.id,
@@ -185,17 +198,28 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
           channel,
           body.fileRefs,
           body.outputMode,
+          undefined,
+          undefined,
+          undefined,
+          renders?.length ? { renders } : undefined,
         );
 
         return {
-          // History has already retained the complete reply. Strip citations
-          // at the transport boundary so older mobile clients cannot speak them.
-          response: channel === 'mobile-voice' ? stripSpeechSources(result.response) : result.response,
+          // History has already retained the complete reply. At the transport
+          // boundary: no citations for older mobile clients to speak, and an
+          // interactive answer is a plain line for a client that did not say
+          // it renders them (MCP, scripts, the web's own REST fallback).
+          response: channel === 'mobile-voice'
+            ? stripSpeechSources(inlineUiSpeechText(result.response))
+            : renders?.length ? result.response : inlineUiFallbackText(result.response),
           sessionId: result.sessionId || sessionId,
           agentId: result.agentId,
           classification: result.classification,
-          routedRoles: turnStartedAt
+          routedRoles: turnStartedAt && body.routedRoles
             ? await routedRolesForTurn(result.sessionId || sessionId, turnStartedAt)
+            : undefined,
+          toolsUsed: turnStartedAt && body.toolsUsed
+            ? await toolsUsedForTurn(result.sessionId || sessionId, turnStartedAt)
             : undefined,
           metadata: result.metadata,
         };
@@ -218,6 +242,8 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
          * it.
          */
         routedRoles: t.Optional(t.Boolean()),
+        /** Report which tools this turn ran (the eval's `uses_tool`). Off by default, like `routedRoles`. */
+        toolsUsed: t.Optional(t.Boolean()),
         channel: t.Optional(t.String()),
         devMode: t.Optional(t.Boolean()),
         projectPath: t.Optional(t.String()),
@@ -229,6 +255,8 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
         }), { maxItems: 10 })),
         // Chat/work split (Thread 3): force the deliverable mode for this message.
         outputMode: t.Optional(t.Union([t.Literal('inline'), t.Literal('file')])),
+        // What the client renders beyond text (`inline_ui`: interactive answers, docs/plans/inline-ui-spec.md D14).
+        renders: t.Optional(t.Array(t.String({ maxLength: 32 }), { maxItems: 4 })),
       }),
       detail: { tags: ['chat'] },
     },

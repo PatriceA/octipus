@@ -79,6 +79,14 @@ describe('tool usage', () => {
     expect((await evaluateAssertion({ type: 'uses_tool', value: 'filesystem' }, c)).passed).toBe(true);
   });
 
+  test('unobserved tool usage fails both assertions instead of reading as "none"', async () => {
+    const unobserved = ctx({});
+    expect((await evaluateAssertion({ type: 'uses_tool', value: 'shell' }, unobserved)).passed).toBe(false);
+    const r = await evaluateAssertion({ type: 'not_uses_tool', value: 'shell' }, unobserved);
+    expect(r.passed).toBe(false);
+    expect(r.actual).toBe('unobserved');
+  });
+
   test('not_uses_tool is the exact inverse', async () => {
     expect((await evaluateAssertion({ type: 'not_uses_tool', value: 'shell' }, c)).passed).toBe(true);
     expect((await evaluateAssertion({ type: 'not_uses_tool', value: 'filesystem' }, c)).passed).toBe(false);

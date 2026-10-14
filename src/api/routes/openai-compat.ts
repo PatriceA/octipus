@@ -10,6 +10,7 @@ import { isAuthenticated, requireScope } from '@/security/principal';
 import { API_SCOPES } from '@/security/scopes';
 import { generateId } from '@/utils/crypto';
 import { apiLogger } from '@/utils/logger';
+import { inlineUiFallbackText } from '@/shared/inline-ui/fence';
 
 /**
  * OpenAI-compatible HTTP API (WS6) — mounted at `/v1`, alongside `/api`.
@@ -213,7 +214,8 @@ export const openaiCompatRoutes = new Elysia()
             prompt,
             'api',
           );
-          const content = result.response;
+          // Interactive answers render only in the web app: a plain line here.
+          const content = inlineUiFallbackText(result.response);
           // The root agent exposes only a total token count; report it as
           // total (and completion) with prompt unknown. Passthrough mode below
           // reports the provider's exact split.

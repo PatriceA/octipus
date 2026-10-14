@@ -9,6 +9,7 @@ import {
 import { getAgentManager } from '@/core/agent-manager';
 import type { Hook } from '@/core/types';
 import { coreLogger } from '@/utils/logger';
+import { inlineUiFallbackText } from '@/shared/inline-ui/fence';
 import type { TriggerContext } from './triggers';
 import { summarizeWebhookPayload } from './webhook-summary';
 import { canActInSession } from '@/core/rooms/access';
@@ -681,8 +682,9 @@ async function notifyOwnerWithResult(userId: string, result: string): Promise<vo
   const targets = ownerTargets(scope);
   if (targets.length === 0) return;
 
-  // Truncate very long results for messaging
-  const truncated = result.length > 3000 ? result.slice(0, 3000) + '\n\n…(truncated)' : result;
+  // Interactive answers render only in the web app; then truncate very long results for messaging.
+  const text = inlineUiFallbackText(result);
+  const truncated = text.length > 3000 ? text.slice(0, 3000) + '\n\n…(truncated)' : text;
 
   for (const t of targets) {
     const r = await deliver(scope, t.channelType, t.channelId, { content: truncated });

@@ -1,5 +1,6 @@
 /** Session presentation shared by both terminal surfaces. */
 import type { TUI } from '@mariozechner/pi-tui';
+import { inlineUiFallbackText } from '@/shared/inline-ui/fence';
 import type { AgentSessionEvent, GatewayAdapter } from './gateway-adapter';
 import type { MessagesPane } from './components/messages-pane';
 import type { StatusBar, CumulativeStats } from './components/status-bar';
@@ -94,7 +95,8 @@ export class ChatSessionPresenter {
           this.streamIteration = event.iteration;
         }
         this.streamText += event.delta;
-        this.messages.setLive(this.streamText);
+        // A streaming interactive answer shows as its plain line, not as markup.
+        this.messages.setLive(inlineUiFallbackText(this.streamText));
         this.tui.requestRender();
         return true;
       case 'message':

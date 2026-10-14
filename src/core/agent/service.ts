@@ -28,6 +28,7 @@ import { ModelSelector, type SelectedModel } from './model-selector';
 import { type RootRunExtras, runRootAgent } from './root-runner';
 import { type LimitRefusal, limitRefusalOf } from '@/core/errors/limit-refusal';
 import { guardOutput, stripSwarmScaffolding } from './output-guard';
+import { type InlineUiStoreContext, storeInlineUiBlocks } from '@/core/inline-ui/extract';
 import { saveProgressMessage } from './progress-message';
 import { filterPII } from './pii-filter';
 import { maybeCompactSession } from './session-compaction';
@@ -241,6 +242,11 @@ export class AgentService {
      * every interactive channel is `user`.
      */
     trigger?: AgentTrigger,
+    /**
+     * Interactive answers (docs/plans/inline-ui-spec.md): what the client
+     * renders, and model-facing notes already checked against the session.
+     */
+    inlineUi?: { renders?: readonly string[]; notes?: readonly string[]; provenanceId?: string },
   ): Promise<TurnResult> {
     const turnTrigger = trigger ?? triggerForChannel(channel, !!groupTurn);
     // Controls must reach a running turn; queuing /stop behind it defeats cancellation.
@@ -273,7 +279,12 @@ export class AgentService {
       // workspace and funding once it has resolved them, so every model call
       // underneath is attributed to the space and its funding (§5.6).
       return runWithContext(
-        { runId, sessionId, userId, channel: channel ?? 'api', origin: channel ?? 'api' },
+        {
+          runId, sessionId, userId, channel: channel ?? 'api', origin: channel ?? 'api',
+          ...(inlineUi?.renders?.length ? { renders: inlineUi.renders } : {}),
+          ...(inlineUi?.notes?.length ? { inlineUiNotes: inlineUi.notes } : {}),
+          ...(inlineUi?.provenanceId ? { inlineUiProvenance: inlineUi.provenanceId } : {}),
+        },
         () => withProviderUsageContext({ userId }, () =>
           this.handleMessageInner(sessionId, userId, message, channel, attachedFiles, forcedOutputMode, false, groupTurn, turnTrigger)),
       );
@@ -846,7 +857,10 @@ export class AgentService {
         );
         void _planSources;
         const outputCheck = guardOutput(response, inputGuard.flags);
-        const finalResponse = outputCheck.action === 'replace' ? outputCheck.response : response;
+        const finalResponse = await this.withInlineUiStored(
+          outputCheck.action === 'replace' ? outputCheck.response : response,
+          { sessionId: resolvedSessionId, agentId, requesterId: userId, contentStorageOff: audience.contentStorageOff },
+        );
         await messageRepository.create({
           sessionId: resolvedSessionId, role: 'assistant', content: finalResponse,
           // A refused plan run keeps its structured reason, as on the main path.
@@ -1095,6 +1109,13 @@ export class AgentService {
       if (showSources) {
         finalResponse = appendSources(finalResponse, sources);
       }
+      // Interactive answers: the worker already stored the root's own fences;
+      // this catches what reached the reply another way (a child's result, a
+      // CLI root). Before the row is written, so a room's members never get a
+      // marker whose block does not exist yet.
+      finalResponse = await this.withInlineUiStored(finalResponse, {
+        sessionId: resolvedSessionId, agentId, requesterId: userId, contentStorageOff: audience.contentStorageOff,
+      });
 
       const persistedAnswer = await messageRepository.createForGeneration({
         sessionId: resolvedSessionId, role: 'assistant', content: finalResponse, agentId,
@@ -1157,6 +1178,11 @@ export class AgentService {
       if (isRoom && (signal?.aborted || (error as Error)?.name === 'RoomTurnDropped')) throw error;
       return this.turnFailed(error, { sessionId, channel, message, trajectory, turnSessionId, userMessageSaved, isRoom, requesterId: userId });
     }
+  }
+
+  /** Store the `octi-ui` fences of a reply and return it with marker lines (src/core/inline-ui/extract.ts). */
+  private async withInlineUiStored(text: string, ctx: InlineUiStoreContext): Promise<string> {
+    return (await storeInlineUiBlocks(text, ctx)).text;
   }
 
   /** A room turn whose room was cleared while it ran: dropped, so the room's `room.turn` says why. */

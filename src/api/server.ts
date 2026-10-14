@@ -68,6 +68,7 @@ import { recurringTaskRoutes } from './routes/recurring-tasks';
 import { researchRoutes } from './routes/research';
 import { searchRoutes } from './routes/search';
 import { sessionRoutes } from './routes/sessions';
+import { inlineUiRoutes } from './routes/inline-ui';
 import { capabilitiesRoutes } from './routes/capabilities';
 import { roleRoutes } from './routes/roles';
 import { topicRoutes } from './routes/topics';
@@ -429,6 +430,7 @@ export function createServer() {
         .use(samlRoutes)
         .use(agentRoutes)
         .use(sessionRoutes)
+        .use(inlineUiRoutes)
         .use(modelRoutes)
         .use(hookRoutes)
         .use(taskRoutes)

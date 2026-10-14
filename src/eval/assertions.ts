@@ -107,9 +107,18 @@ register('routes_to_role', (assertion, ctx) => {
 
 // ── Tool usage ───────────────────────────────────────────────────────
 
+/** Tool usage that was never observed (unit mode, an older backend) fails either assertion: it is not "none". */
+function unobservedTools(type: 'uses_tool' | 'not_uses_tool', expected: string) {
+  return {
+    type, passed: false, expected, actual: 'unobserved', score: 0,
+    message: 'Tool usage was not reported for this turn (integration mode against a backend that reports toolsUsed)',
+  };
+}
+
 register('uses_tool', (assertion, ctx) => {
   const expected = String(assertion.value);
-  const tools = ctx.toolsUsed || [];
+  if (!ctx.toolsUsed) return unobservedTools('uses_tool', expected);
+  const tools = ctx.toolsUsed;
   const passed = tools.some(t => t === expected || t.startsWith(expected + '/'));
   return {
     type: 'uses_tool',
@@ -125,7 +134,8 @@ register('uses_tool', (assertion, ctx) => {
 
 register('not_uses_tool', (assertion, ctx) => {
   const expected = String(assertion.value);
-  const tools = ctx.toolsUsed || [];
+  if (!ctx.toolsUsed) return unobservedTools('not_uses_tool', `NOT ${expected}`);
+  const tools = ctx.toolsUsed;
   const passed = !tools.some(t => t === expected || t.startsWith(expected + '/'));
   return {
     type: 'not_uses_tool',
