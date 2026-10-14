@@ -39,6 +39,19 @@ describe('forwardPermissionRequestToChannel', () => {
     expect(deny).not.toHaveBeenCalled();
   });
 
+  test('a CLI question is shown with its questions, not as a yes/no permission', async () => {
+    stubSession('telegram');
+    const send = vi.spyOn(getUMI(), 'send').mockResolvedValue('ok');
+    await forwardPermissionRequestToChannel({
+      ...request, requestId: 'r-question', toolId: 'cli-native:AskUserQuestion', toolName: 'CLI: AskUserQuestion',
+      args: { questions: [{ question: 'Which database?', options: [{ label: 'Postgres' }, { label: 'SQLite' }] }] },
+    });
+    const content = (send.mock.calls[0]?.[2] as { content: string }).content;
+    expect(content).toContain('Which database? (Postgres / SQLite)');
+    expect(content).toContain('Answer in the Octipus web app, or reply "no"');
+    expect(content).not.toContain('Reply "yes" to allow');
+  });
+
   test('messaging channel that fails to send IS denied', async () => {
     stubSession('telegram');
     const deny = vi.spyOn(getPermissionManager(), 'deny').mockResolvedValue(true);

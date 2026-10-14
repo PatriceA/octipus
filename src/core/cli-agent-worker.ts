@@ -174,10 +174,15 @@ export class CLIAgentWorker extends BaseAgentWorker {
       };
       try {
         stdin.write(JSON.stringify({ type: 'user', uuid, message: { role: 'user', content: message.content } }) + '\n', err => {
-          if (err) restore();
+          if (!err) return;
+          agentLogger.warn({ agentId: this.context.id, err }, 'Live guidance could not be written to the CLI input stream; queued for the next tool response instead');
+          restore();
         });
         this.emit('thought', { type: 'steering_submitted', delivery: 'CLI input stream', id: uuid });
-      } catch { restore(); }
+      } catch (err) {
+        agentLogger.warn({ agentId: this.context.id, err }, 'Live guidance could not be written to the CLI input stream; queued for the next tool response instead');
+        restore();
+      }
     }
   }
 
@@ -730,7 +735,10 @@ When a task matches one of these skills, load it with get_skill before starting 
     this.setPause('delegation', true);
     let collected: ChildResult[] = [];
     try { collected = await this.collectAllDetached(autoTimeoutMs); } finally { this.setPause('delegation', false); }
-    for (const r of collected) if (r.status !== 'timeout') swarmNodeRepository.markCollected(r.nodeId).catch(() => { /* reaper safety net */ });
+    for (const r of collected) if (r.status !== 'timeout') swarmNodeRepository.markCollected(r.nodeId).catch(err => {
+      // The orphan reaper settles the node later; say why it has to.
+      agentLogger.warn({ agentId: this.context.id, nodeId: r.nodeId, err }, 'Could not mark an auto-collected child as collected');
+    });
     if (this.steeringQueue.length > 0 && !this.aborted) {
       this.messages.push({ role: 'assistant', content: result, timestamp: new Date() });
       this.messages.push({ role: 'user', content: `Collection interrupted by new guidance. Children remain running; decide whether to steer_child or handle the change after collecting.\n${formatCollectedResults(collected)}\n${await this.controlContext()}`, timestamp: new Date() });

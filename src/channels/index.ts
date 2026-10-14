@@ -15,6 +15,7 @@ import type { Attachment, ChannelType, UnifiedMessage } from '@/core/types';
 import type { GroupChannel } from '@/db/schema/group-channels';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { ApprovalNeedsAnswersError, getPermissionManager, type PermissionRequestEvent } from '@/security/permissions';
+import { CLI_QUESTION_TOOL, cliQuestionsSchema } from '@/shared/cli-questions';
 import { channelLogger } from '@/utils/logger';
 import { attendChat, newestApprovalPostedAt, startApprovalPrompts, tryResolveApprovalFromChannel } from './approval-prompts';
 import { processChannelAttachments } from './attachment-handler';
@@ -667,7 +668,12 @@ export async function forwardPermissionRequestToChannel(request: PermissionReque
       detail = `\nTo: ${target}\nMessage: ${msg.length > 100 ? msg.slice(0, 100) + '…' : msg}`;
     }
   }
-  const fullPrompt = `🔒 Permission required: the agent wants to use "${toolName}".${detail}\n\nReply "yes" to allow or "no" to deny.`;
+  // A CLI question is answered, not allowed: a typed "yes" cannot carry the
+  // answers (see ApprovalNeedsAnswersError), so don't invite one.
+  const questions = request.toolId === CLI_QUESTION_TOOL ? cliQuestionsSchema.safeParse(args) : null;
+  const fullPrompt = questions?.success
+    ? `❓ The agent has ${questions.data.questions.length === 1 ? 'a question' : 'questions'} for you:\n${questions.data.questions.map(q => `• ${q.question}${q.options.length ? ` (${q.options.map(o => o.label).join(' / ')})` : ''}`).join('\n')}\n\nAnswer in the Octipus web app, or reply "no" to decline.`
+    : `🔒 Permission required: the agent wants to use "${toolName}".${detail}\n\nReply "yes" to allow or "no" to deny.`;
   try {
     if (session.groupChannelId) {
       // Everyone in the channel reads the thread, and the tool arguments are
