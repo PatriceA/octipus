@@ -3,11 +3,13 @@ import type { HealthStatus } from '@/core/types';
 import { Cache } from '@/db/cache';
 import { modelLogger } from '@/utils/logger';
 import { type CircuitBreakerStatus, getCircuitBreakerRegistry } from './circuit-breaker';
-import { getLiteLLMClient } from './litellm-client';
 import { getModelRegistry } from './model-registry';
 import { getRateLimitManager, type RateLimitStats } from './rate-limiter';
 
-const HEALTH_CHECK_INTERVAL = 60000; // 1 minute
+// Every provider is checked at this pace; the dashboard and the health API
+// check on demand (cached HEALTH_CACHE_TTL), so it only sets how stale the
+// pushed `onHealthUpdate` view may get.
+const HEALTH_CHECK_INTERVAL = 5 * 60_000;
 const HEALTH_CACHE_TTL = 30; // 30 seconds
 
 export interface ProviderHealth {
@@ -25,6 +27,9 @@ export interface ModelHealth {
   latency?: number;
   error?: string;
 }
+
+/** One provider's health, shared by its models (`HealthChecker.probeProvider`). */
+export type ProviderProbe = Omit<ModelHealth, 'name'>;
 
 /**
  * Shape of the LiteLLM proxy `/health` response. Each endpoint's `model` is
@@ -60,12 +65,9 @@ export class HealthChecker {
       providerModels.get(model.provider)!.push(model);
     }
 
-    const results: ProviderHealth[] = [];
-
-    for (const [provider, providerModelList] of providerModels) {
-      const health = await this.checkProvider(provider, providerModelList);
-      results.push(health);
-    }
+    const results = await Promise.all(
+      [...providerModels].map(([provider, providerModelList]) => this.checkProvider(provider, providerModelList)),
+    );
 
     await this.cache.set('health:all', results);
 
@@ -97,43 +99,22 @@ export class HealthChecker {
       return this.checkLiteLLMRoutes(models);
     }
 
-    const modelResults: ModelHealth[] = [];
-    let overallLatency = 0;
-    let healthyCount = 0;
-
-    for (const model of models.slice(0, 3)) {
-      // Check up to 3 models per provider — use modelId (LiteLLM-facing name)
-      const isEmbedding = model.topics?.includes('embedding') ||
-        model.modelId.includes('embed') || model.name.includes('embed');
-      const health = await this.checkModel(model.modelId, provider, isEmbedding);
-      modelResults.push(health);
-
-      if (health.status === 'healthy') {
-        healthyCount++;
-        overallLatency += health.latency || 0;
-      }
-    }
-
-    const avgLatency = healthyCount > 0 ? overallLatency / healthyCount : undefined;
-
-    let status: 'healthy' | 'degraded' | 'unhealthy';
-    if (healthyCount === modelResults.length) {
-      status = 'healthy';
-    } else if (healthyCount > 0) {
-      status = 'degraded';
-    } else {
-      status = 'unhealthy';
-    }
+    // One check for the provider: what it says (key present, endpoint up,
+    // binary installed) holds for each of its models alike. Listed for up to
+    // 3 models, by modelId (the LiteLLM-facing name), as before.
+    const probe = await this.probeProvider(provider);
+    const modelResults: ModelHealth[] = models.slice(0, 3).map((model) => ({ name: model.modelId, ...probe }));
 
     const result: ProviderHealth = {
       provider,
-      status,
-      latency: avgLatency,
+      status: probe.status,
+      latency: probe.status === 'healthy' ? probe.latency : undefined,
       models: modelResults,
       lastChecked: new Date(),
+      ...(probe.error ? { error: probe.error } : {}),
     };
 
-    modelLogger.debug({ provider, status, modelsChecked: modelResults.length }, 'Provider health check completed');
+    modelLogger.debug({ provider, status: probe.status, modelsChecked: modelResults.length }, 'Provider health check completed');
 
     return result;
   }
@@ -235,114 +216,52 @@ export class HealthChecker {
   }
 
   /**
-   * Providers that cannot be health-checked via a LiteLLM completion call.
-   * CLI tools are local subprocess wrappers; direct providers have their own
-   * health endpoints (and probing free-tier OpenRouter models every 60s
-   * burns through rate limits — the user sees 429s for no reason).
+   * The health of `provider` as a whole — every one of its models shares it —
+   * cached for HEALTH_CACHE_TTL (10 s after a failure). Never a completion or
+   * an embedding: a probe that bills tokens every few minutes is a cost, and
+   * on free tiers a rate-limit hit, for no information real traffic does not
+   * already give (`classifyError` + circuit breaker).
+   *
+   * A provider with its own client asks that client (`checkHealth`: key
+   * present, a models list, Ollama's `/api/tags`, CLI binaries). One without
+   * is served through the LiteLLM proxy: it is as healthy as the proxy is
+   * reachable and its circuit breaker is closed.
    */
-  private static SKIP_LITELLM_PROVIDERS = new Set([
-    'cli', 'ollama', 'openai', 'anthropic', 'gemini', 'deepseek', 'mistral', 'zai', 'moonshot', 'voyage', 'typesafe', 'openrouter',
-    // Custom (per-model) providers use their free checkHealth() like the native
-    // ones — without this they got a real billed "Hi" completion every 60s.
-    // Per-model reachability still surfaces lazily via classifyError + circuit breaker.
-    'custom-openai', 'custom-anthropic', 'custom-gemini',
-  ]);
-
-  /**
-   * Model-name patterns that indicate a non-chat model — OCR, vision-only,
-   * TTS, transcription, and embedding models. These don't answer "Hi" with
-   * a sensible chat response; probing them wastes tokens and pollutes logs.
-   * Embeddings are already handled via the `isEmbedding` branch.
-   */
-  private static NON_CHAT_PATTERNS = /ocr|tts|whisper|transcrib|dall-?e|vision-preview/i;
-
-  /**
-   * Check health of a specific model
-   */
-  async checkModel(modelName: string, provider?: string, isEmbedding?: boolean): Promise<ModelHealth> {
-    const cacheKey = `health:model:${modelName}`;
-    const cached = await this.cache.get<ModelHealth>(cacheKey);
+  async probeProvider(provider: string): Promise<ProviderProbe> {
+    const cacheKey = `health:provider:${provider}`;
+    const cached = await this.cache.get<ProviderProbe>(cacheKey);
     if (cached) return cached;
 
-    // Skip LiteLLM completion check for CLI and direct providers — but still
-    // ask the provider itself whether it is configured (e.g. API key present).
-    // Without this, a provider with no credentials reports healthy, lying to
-    // the dashboard.
-    const providerPrefix = provider || modelName.split('/')[0];
-    if (HealthChecker.SKIP_LITELLM_PROVIDERS.has(providerPrefix)) {
-      let status: ModelHealth['status'] = 'healthy';
-      let error: string | undefined;
+    let probe: ProviderProbe;
+    const { getProviderRouter } = await import('@/models/providers');
+    const client = getProviderRouter().getProviderByName(provider);
+    if (client) {
+      const startTime = Date.now();
       try {
-        const { getProviderRouter } = await import('@/models/providers');
-        const p = getProviderRouter().getProviderByName(providerPrefix);
-        if (p) {
-          const h = await p.checkHealth();
-          if (!h.healthy) {
-            status = 'unhealthy';
-            error = h.error;
-          }
-        }
+        const h = await client.checkHealth();
+        const latency = h.latencyMs ?? Date.now() - startTime;
+        probe = h.healthy
+          ? { status: latency < 5000 ? 'healthy' : 'degraded', latency }
+          : { status: 'unhealthy', error: h.error };
       } catch (err) {
-        modelLogger.debug({ err, providerPrefix }, 'Direct-provider health check failed');
+        probe = { status: 'unhealthy', error: (err as Error).message };
       }
-      const result: ModelHealth = { name: modelName, status, error };
-      await this.cache.set(cacheKey, result);
-      return result;
-    }
-
-    // Skip non-chat models (OCR, TTS, transcription, vision-only) — they
-    // don't answer "Hi" sensibly and shouldn't be chat-probed.
-    if (!isEmbedding && HealthChecker.NON_CHAT_PATTERNS.test(modelName)) {
-      const result: ModelHealth = { name: modelName, status: 'healthy' };
-      await this.cache.set(cacheKey, result);
-      return result;
-    }
-
-    const client = getLiteLLMClient();
-    const startTime = Date.now();
-
-    try {
-      if (isEmbedding) {
-        // Embedding models use the /v1/embeddings endpoint, not /v1/completions
-        await client.embed('health check', modelName);
+    } else {
+      const breakerOpen = getCircuitBreakerRegistry()
+        .getAllStatuses()
+        .some((cb) => (cb.provider === provider || cb.provider === 'litellm') && cb.state === 'open');
+      if (breakerOpen) {
+        probe = { status: 'unhealthy', error: 'circuit breaker open' };
       } else {
-        // Send a minimal test request
-        await client.complete({
-          model: modelName,
-          messages: [
-            {
-              role: 'user',
-              content: 'Hi',
-              timestamp: new Date(),
-            },
-          ],
-          maxTokens: 1,
-          temperature: 0,
-          // A probe of the install's own models, for no requester.
-          funding: 'install',
-        });
+        const proxy = await this.checkLiteLLMProxy();
+        probe = proxy.status === 'healthy'
+          ? { status: 'healthy' }
+          : { status: 'unhealthy', error: `LiteLLM proxy: ${proxy.message ?? proxy.status}` };
       }
-
-      const latency = Date.now() - startTime;
-
-      const result: ModelHealth = {
-        name: modelName,
-        status: latency < 5000 ? 'healthy' : 'degraded',
-        latency,
-      };
-
-      await this.cache.set(cacheKey, result);
-      return result;
-    } catch (error) {
-      const result: ModelHealth = {
-        name: modelName,
-        status: 'unhealthy',
-        error: (error as Error).message,
-      };
-
-      await this.cache.set(cacheKey, result, 10); // Shorter cache for errors
-      return result;
     }
+
+    await this.cache.set(cacheKey, probe, probe.status === 'unhealthy' ? 10 : undefined);
+    return probe;
   }
 
   /**
@@ -404,6 +323,24 @@ export class HealthChecker {
 
     if (!url) {
       return { service: 'ollama', status: 'not_configured', message: 'Not configured', lastChecked: new Date() };
+    }
+
+    // The `ollama` provider's own check is this same `/api/tags` call: share
+    // its cached result (probeProvider) instead of fetching it twice.
+    const { getProviderRouter } = await import('@/models/providers');
+    if (getProviderRouter().getProviderByName('ollama')) {
+      const probe = await this.probeProvider('ollama');
+      if (probe.status !== 'unhealthy') {
+        return { service: 'ollama', status: probe.status, latency: probe.latency, lastChecked: new Date() };
+      }
+      const msg = probe.error ?? 'unhealthy';
+      const isNetworkError = msg.includes('Unable to connect') || msg.includes('ECONNREFUSED') || msg.includes('fetch failed');
+      return {
+        service: 'ollama',
+        status: isNetworkError ? 'not_configured' : 'unhealthy',
+        message: isNetworkError ? 'Not configured' : msg,
+        lastChecked: new Date(),
+      };
     }
 
     const startTime = Date.now();

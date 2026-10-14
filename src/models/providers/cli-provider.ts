@@ -25,6 +25,8 @@ import { foldCacheCounters } from './usage';
  * ponytail: single global gate; per-tool gates only if mixing CLIs matters.
  */
 const MAX_CONCURRENT_CLI = Math.max(1, Number(process.env.OCTIPUS_CLI_MAX_CONCURRENT ?? 2));
+/** How long a CLI binary's presence (`which`/`where`) is trusted. */
+export const CLI_BINARY_CHECK_TTL_MS = 10 * 60_000;
 let activeCliRuns = 0;
 const cliWaiters: Array<() => void> = [];
 
@@ -592,6 +594,8 @@ export class CLIProvider implements ModelProvider {
   readonly type = 'cli' as const;
 
   private toolAvailability = new Map<string, boolean>();
+  /** When each tool's binary was last looked up (`which`/`where`). */
+  private toolCheckedAt = new Map<string, number>();
 
   supportsModel(modelName: string): boolean {
     return CLI_TOOLS.some(tool =>
@@ -719,13 +723,8 @@ export class CLIProvider implements ModelProvider {
 
   async checkHealth(): Promise<ProviderHealthStatus> {
     // Check which CLI tools are available
-    const available: string[] = [];
-
-    for (const tool of CLI_TOOLS) {
-      const isAvailable = await this.checkToolAvailable(tool);
-      this.toolAvailability.set(tool.name, isAvailable);
-      if (isAvailable) available.push(tool.name);
-    }
+    const checked = await Promise.all(CLI_TOOLS.map(async (tool) => ({ tool, ok: await this.toolAvailable(tool) })));
+    const available = checked.filter((c) => c.ok).map((c) => c.tool.name);
 
     if (available.length === 0) {
       return { healthy: false, error: 'No CLI tools available' };
@@ -781,7 +780,7 @@ export class CLIProvider implements ModelProvider {
   }[]> {
     const results = [];
     for (const tool of CLI_TOOLS) {
-      const available = this.toolAvailability.get(tool.name) ?? await this.checkToolAvailable(tool);
+      const available = await this.toolAvailable(tool);
       results.push({
         name: tool.name,
         available,
@@ -815,6 +814,21 @@ export class CLIProvider implements ModelProvider {
       }
     }
     return parts.join('\n\n');
+  }
+
+  /**
+   * Whether `tool`'s binary is installed, looked up at most once per
+   * `CLI_BINARY_CHECK_TTL_MS`: health checks ask on a timer, and an install
+   * or uninstall is rare enough to be seen within that window.
+   */
+  private async toolAvailable(tool: CLIToolConfig): Promise<boolean> {
+    const known = this.toolAvailability.get(tool.name);
+    const at = this.toolCheckedAt.get(tool.name);
+    if (known !== undefined && at !== undefined && Date.now() - at < CLI_BINARY_CHECK_TTL_MS) return known;
+    const ok = await this.checkToolAvailable(tool);
+    this.toolAvailability.set(tool.name, ok);
+    this.toolCheckedAt.set(tool.name, Date.now());
+    return ok;
   }
 
   private async checkToolAvailable(tool: CLIToolConfig): Promise<boolean> {
