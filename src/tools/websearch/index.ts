@@ -1,4 +1,5 @@
 import type { Browser, } from 'playwright';
+import { sharedChromium } from '../browser/shared-chromium';
 import { extractPageText, apiDocumentUrl, fetchApiDocument } from './page-content';
 import type { ToolManifest } from '@/core/types';
 import { coreLogger, toolLogger } from '@/utils/logger';
@@ -35,7 +36,6 @@ export class WebSearchTool extends BaseTool {
   readonly version = '2.0.0';
   readonly description = 'Search the web and fetch pages (SearXNG or browser-based)';
 
-  private browser: Browser | null = null;
   private searxngAvailable: boolean | null = null; // null = not checked yet
 
   private get searxngUrl(): string {
@@ -407,21 +407,13 @@ export class WebSearchTool extends BaseTool {
     }
   }
 
-  private async getOrCreateBrowser(): Promise<Browser> {
-    if (!this.browser || !this.browser.isConnected()) {
-      const { chromium } = await import('playwright');
-      this.browser = await chromium.launch({ headless: true });
-      toolLogger.info('Browser launched for web search');
-    }
-    return this.browser;
+  /** The headless browser shared with the `browser` tool (closed when idle). */
+  private getOrCreateBrowser(): Promise<Browser> {
+    return sharedChromium.get();
   }
 
   override async shutdown(): Promise<void> {
-    if (this.browser) {
-      await this.browser.close().catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
-      this.browser = null;
-      toolLogger.info('Web search browser closed');
-    }
+    await sharedChromium.close();
   }
 }
 
