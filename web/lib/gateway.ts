@@ -275,7 +275,9 @@ export class WebGateway {
   private scheduleReconnect(): void {
     this.setStatus('disconnected');
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    const delay = this.backoffMs;
+    // ±30% jitter: after a server restart every open tab would otherwise
+    // reconnect in lockstep, wave after wave.
+    const delay = this.backoffMs * (0.7 + Math.random() * 0.6);
     this.backoffMs = Math.min(this.backoffMs * 1.5, MAX_BACKOFF_MS);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;

@@ -2,6 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { Activity, Bot, MessageSquare, Zap } from 'lucide-react';
+import { useRef } from 'react';
 import { ActiveAgents } from '@/components/dashboard/active-agents';
 import { AwayDigestCard } from '@/components/dashboard/away-digest';
 import { BudgetsCard } from '@/components/dashboard/budgets-card';
@@ -56,6 +57,9 @@ export default function DashboardPage() {
   // `{ status, version }` and /health/features refuses them.
   const { user } = useAuth();
   const isAdmin = !!user?.isAdmin;
+  // Consecutive answers that were not all-healthy (or no answer), counted
+  // once per fetch: the interval below is evaluated on every render too.
+  const unhealthy = useRef({ fetchedAt: 0, polls: 0 });
   const healthQuery = useQuery({
     queryKey: ['health'],
     retry: false,
@@ -63,12 +67,19 @@ export default function DashboardPage() {
     queryFn: async () => await api.get<HealthData>('/health/detailed'),
     refetchInterval: (query) => {
       const h = query.state.data?.health;
-      if (!h) return 3000;
-      const statuses = [h.database, h.storage, h.litellm, h.ollama, h.openai, h.anthropic, h.gemini, h.deepseek, h.grok, h.mistral, h.zai, h.moonshot, h.voyage, h.openrouter, h.custom]
+      const allHealthy = !!h && [h.database, h.storage, h.litellm, h.ollama, h.openai, h.anthropic, h.gemini, h.deepseek, h.grok, h.mistral, h.zai, h.moonshot, h.voyage, h.openrouter, h.custom]
         .map(s => s?.status)
-        .filter(s => s && s !== 'not_configured');
-      const allHealthy = statuses.every(s => s === 'healthy');
-      return allHealthy ? 30000 : 5000;
+        .filter(s => s && s !== 'not_configured')
+        .every(s => s === 'healthy');
+      if (allHealthy) {
+        unhealthy.current = { fetchedAt: 0, polls: 0 };
+        return 30000;
+      }
+      // Something is down: look again soon, then less often while it stays
+      // down (a provider without a key stays down) — 5 s doubling to 60 s.
+      const fetchedAt = Math.max(query.state.dataUpdatedAt, query.state.errorUpdatedAt);
+      if (fetchedAt !== unhealthy.current.fetchedAt) unhealthy.current = { fetchedAt, polls: unhealthy.current.polls + 1 };
+      return Math.min(5000 * 2 ** Math.max(0, unhealthy.current.polls - 1), 60000);
     },
   });
 
