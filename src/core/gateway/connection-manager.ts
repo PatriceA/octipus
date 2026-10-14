@@ -676,6 +676,15 @@ export class ConnectionManager {
     }
   }
 
+  /** `send` for a frame already serialized — one fan-out stringifies once. */
+  private sendRaw(conn: GatewayConnection, frame: string): void {
+    try {
+      if (conn.ws.readyState === 1) conn.ws.send(frame); // OPEN
+    } catch (err) {
+      coreLogger.debug({ err, connectionId: conn.context?.connectionId }, 'Failed to send to connection');
+    }
+  }
+
   sendToConnection(connectionId: string, msg: GatewayMessage): void {
     const conn = this.connections.get(connectionId);
     if (conn) this.send(conn, msg);
@@ -688,10 +697,30 @@ export class ConnectionManager {
   }
 
   broadcast(msg: GatewayMessage, filter?: (ctx: ConnectionContext) => boolean): void {
+    let frame: string | undefined;
     for (const conn of this.connections.values()) {
       if (conn.state !== 'active' || !conn.context) continue;
       if (filter && !filter(conn.context)) continue;
-      this.send(conn, msg);
+      frame ??= JSON.stringify(msg);
+      this.sendRaw(conn, frame);
+    }
+  }
+
+  /**
+   * `broadcast` narrowed to one user's connections: walks that user's index
+   * entry rather than every connection of the install, which matters on the
+   * hot path (every event a turn publishes goes through here).
+   */
+  broadcastToUser(userId: string, msg: GatewayMessage, filter?: (ctx: ConnectionContext) => boolean): void {
+    const ids = this.byUser.get(userId);
+    if (!ids) return;
+    let frame: string | undefined;
+    for (const id of ids) {
+      const conn = this.connections.get(id);
+      if (!conn || conn.state !== 'active' || !conn.context) continue;
+      if (filter && !filter(conn.context)) continue;
+      frame ??= JSON.stringify(msg);
+      this.sendRaw(conn, frame);
     }
   }
 

@@ -4,10 +4,10 @@
  * (`voice.speak`), the per-user connection cap, and the replay buffers —
  * capped per process (LRU) and dropped when a session is deleted or archived.
  */
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { sessionsRemoved } from '@/db/repositories/session-lifecycle';
 import { ConnectionManager } from './connection-manager';
-import { GatewayEventBus } from './event-bus';
+import { GatewayEventBus, MAX_REPLAY_PAYLOAD_CHARS, REPLAY_IDLE_TTL_MS } from './event-bus';
 import { GatewayHub } from './hub';
 import type { PermissionPendingMessage, UserGatewayEvent } from './protocol';
 
@@ -60,13 +60,13 @@ describe('permission.pending', () => {
     // Raised and resolved while the snapshot is read; an unrelated event is not held.
     hub.publishEvent({ type: 'permission.request', source: 't', userId: 'alice', payload: { requestId: 'req-1' } });
     hub.publishEvent({ type: 'permission.resolved', source: 't', userId: 'alice', payload: { requestId: 'req-1', status: 'expired' } });
-    hub.publishEvent({ type: 'chat.delta', source: 't', userId: 'alice', payload: { delta: 'x' } });
-    expect(events(alice.frames).map((e) => e.type)).toEqual(['chat.delta']);
+    hub.publishEvent({ type: 'agent.iteration', source: 't', userId: 'alice', payload: { iteration: 1 } });
+    expect(events(alice.frames).map((e) => e.type)).toEqual(['agent.iteration']);
 
     release({ requests: [{ requestId: 'req-1', toolId: 'shell', action: 'execute', toolName: 'shell', args: {} }], approvals: [] });
     await subscribing;
     const order = alice.frames.filter((f) => f.type !== 'auth_ok').map((f) => f.type === 'event' ? f.event.type : f.type);
-    expect(order).toEqual(['chat.delta', 'permission.pending', 'permission.resolved']);
+    expect(order).toEqual(['agent.iteration', 'permission.pending', 'permission.resolved']);
   });
 
   test('a failed snapshot is reported and the held events still delivered', async () => {
@@ -125,7 +125,7 @@ describe('delivery', () => {
 
 describe('replay buffers', () => {
   const event = (sessionId: string, id: string): UserGatewayEvent => ({
-    id, type: 'chat.delta', source: 't', userId: 'alice', sessionId, timestamp: Date.now(), payload: {},
+    id, type: 'agent.event', source: 't', userId: 'alice', sessionId, timestamp: Date.now(), payload: {},
   });
 
   test('events after a known id; a gap when the id is gone', () => {
@@ -154,12 +154,102 @@ describe('replay buffers', () => {
 
   test('a deleted or archived session\'s buffer is dropped', () => {
     const hub = makeHub();
-    hub.publishEvent({ type: 'chat.delta', source: 't', userId: 'alice', sessionId: 'gone', payload: {} });
+    hub.publishEvent({ type: 'agent.event', source: 't', userId: 'alice', sessionId: 'gone', payload: {} });
     hub.publishEvent({ type: 'swarm.node_spawned', source: 't', userId: 'alice', sessionId: 'gone', payload: {} });
-    hub.publishEvent({ type: 'chat.delta', source: 't', userId: 'alice', sessionId: 'kept', payload: {} });
+    hub.publishEvent({ type: 'agent.event', source: 't', userId: 'alice', sessionId: 'kept', payload: {} });
     sessionsRemoved(['gone']);
     expect(hub.eventBus.replaySince('gone').events).toEqual([]);
     expect(hub.eventBus.getReplayByPattern('swarm.*', 'gone')).toEqual([]);
     expect(hub.eventBus.replaySince('kept').events).toHaveLength(1);
+  });
+});
+
+describe('streamed text', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  const delta = (text: string, iteration = 1, sessionId = 's1') =>
+    ({ type: 'chat.delta' as const, source: 'agent:a1', userId: 'alice', sessionId, payload: { agentId: 'a1', delta: text, iteration } });
+
+  test('deltas are merged and sent after a short wait; clients append them, so the text is the same', async () => {
+    const hub = makeHub();
+    const alice = await tab(hub, 'alice');
+    vi.useFakeTimers();
+    for (const t of ['Hel', 'lo', ' wor', 'ld']) hub.publishEvent(delta(t));
+    expect(events(alice.frames)).toEqual([]);
+    vi.advanceTimersByTime(50);
+    expect(events(alice.frames).map((e) => e.payload)).toEqual([{ agentId: 'a1', delta: 'Hello world', iteration: 1 }]);
+  });
+
+  test('another event of the user flushes the held text first; a new iteration starts a new delta', async () => {
+    const hub = makeHub();
+    const alice = await tab(hub, 'alice');
+    hub.publishEvent(delta('Let me check'));
+    hub.publishEvent(delta(' the file', 1));
+    hub.publishEvent(delta('Done', 2));
+    hub.publishEvent({ type: 'chat.response', source: 't', userId: 'alice', sessionId: 's1', payload: { response: 'Done.' } });
+    expect(events(alice.frames).map((e) => [e.type, (e.payload as { delta?: string }).delta])).toEqual([
+      ['chat.delta', 'Let me check the file'],
+      ['chat.delta', 'Done'],
+      ['chat.response', undefined],
+    ]);
+  });
+
+  test('a long run of text goes out without waiting; another user\'s event does not flush it', async () => {
+    const hub = makeHub();
+    const alice = await tab(hub, 'alice');
+    hub.publishEvent(delta('x'.repeat(300)));
+    hub.publishEvent({ type: 'chat.response', source: 't', userId: 'bob', sessionId: 's9', payload: {} });
+    expect(events(alice.frames)).toEqual([]);
+    hub.publishEvent(delta('y'.repeat(300)));
+    expect(events(alice.frames)).toHaveLength(1);
+    expect((events(alice.frames)[0].payload as { delta: string }).delta).toHaveLength(600);
+  });
+
+  test('a resource message flushes held text, and deltas are not kept for replay', async () => {
+    const hub = makeHub();
+    const alice = await tab(hub, 'alice');
+    hub.publishEvent(delta('Ans'));
+    hub.publishToResource('room:r1', { type: 'pong', serverTime: 'now' });
+    expect(events(alice.frames)).toHaveLength(1);
+    expect(hub.eventBus.replaySince('s1').events).toEqual([]);
+  });
+
+  test('one event is serialized once for all of the user\'s tabs', async () => {
+    const hub = makeHub();
+    await tab(hub, 'alice');
+    await tab(hub, 'alice');
+    const spy = vi.spyOn(JSON, 'stringify');
+    hub.publishEvent({ type: 'chat.response', source: 't', userId: 'alice', sessionId: 's1', payload: { response: 'hi' } });
+    const frames = spy.mock.calls.filter(([v]) => (v as { type?: string } | null)?.type === 'event');
+    spy.mockRestore();
+    expect(frames).toHaveLength(1);
+  });
+});
+
+describe('replay retention', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  const event = (sessionId: string, id: string, payload: unknown = {}): UserGatewayEvent => ({
+    id, type: 'swarm.node_spawned', source: 't', userId: 'alice', sessionId, timestamp: Date.now(), payload,
+  });
+
+  test('a session idle past the TTL loses its buffer at the next publish', () => {
+    vi.useFakeTimers();
+    const bus = new GatewayEventBus();
+    bus.publish(event('idle', 'a'));
+    vi.advanceTimersByTime(REPLAY_IDLE_TTL_MS + 1);
+    bus.publish(event('live', 'b'));
+    expect(bus.replaySince('idle').events).toEqual([]);
+    expect(bus.getReplayByPattern('swarm.*', 'idle')).toEqual([]);
+    expect(bus.replaySince('live').events.map((e) => e.id)).toEqual(['b']);
+  });
+
+  test('an oversized payload is not stored, and a client resuming from before it gets a gap', () => {
+    const bus = new GatewayEventBus();
+    bus.publish(event('s1', 'a'));
+    bus.publish(event('s1', 'big', { text: 'x'.repeat(MAX_REPLAY_PAYLOAD_CHARS + 1) }));
+    bus.publish(event('s1', 'c'));
+    expect(bus.replaySince('s1').events.map((e) => e.id)).toEqual(['c']);
+    expect(bus.replaySince('s1', 'a').gap).toBe(true);
+    expect(bus.getReplayByPattern('swarm.*', 's1').map((e) => e.id)).toEqual(['c']);
   });
 });
