@@ -303,11 +303,11 @@ export class SessionRepository {
       const { pipelines, pipelineNodes } = await import('../schema/pipelines');
       const { agents } = await import('../schema/agents');
 
-      // Delete pipeline stages first (FK to pipelines)
-      // i2: by session id (or the caller's own channel key), for the runtime that owns the session; user routes use ScopedSessionRepo
-      // One statement for every pipeline of the session, not one per pipeline.
+      // Delete pipeline stages first (FK to pipelines): one statement for
+      // every pipeline of the session, not one per pipeline.
       await this.db.delete(pipelineNodes).where(inArray(
         pipelineNodes.pipelineId,
+        // i2: by session id (or the caller's own channel key), for the runtime that owns the session; user routes use ScopedSessionRepo
         this.db.select({ id: pipelines.id }).from(pipelines).where(eq(pipelines.sessionId, id)),
       ));
       await this.db.delete(pipelines).where(eq(pipelines.sessionId, id));
