@@ -1,5 +1,4 @@
 import { getConfig, loadConfig } from '@/config';
-import { runKBSelfCheck } from '@/core/rag/health';
 import { runMigrations } from '@/db/migrate';
 import { checkDbHealth, closeDb, initializeDb, initializeExtensions } from '@/db/postgres';
 import { checkCacheHealth } from '@/db/cache';
@@ -88,15 +87,8 @@ export class Gateway {
         coreLogger.error({ err }, 'Swarm orphan reaper failed to start (non-fatal)');
       }
 
-      // Knowledge-base self-check: verify DB + embedding provider + vector
-      // store write path before marking the gateway ready. Never blocks
-      // startup — a failure here surfaces via LOUD log + KB endpoints return
-      // 503 until the user fixes the config.
-      try {
-        await runKBSelfCheck();
-      } catch (err) {
-        coreLogger.error({ err }, 'KB self-check threw unexpectedly — continuing startup; KB endpoints will 503');
-      }
+      // The knowledge-base self-check runs later, off the boot path, once
+      // the runtime config is loaded (src/index.ts).
 
       // Set up graceful shutdown
       this.setupShutdownHandlers();

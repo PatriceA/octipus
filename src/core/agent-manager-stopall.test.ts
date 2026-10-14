@@ -76,3 +76,32 @@ test('removed workers remain visible to shutdown until they settle', async () =>
   expect(Date.now() - started).toBeGreaterThanOrEqual(100);
   expect(result.stillRunning).toBe(0);
 });
+
+describe('AgentManager.cleanup', () => {
+  function worker(id: string, status: string, ageMs: number): FakeWorker {
+    return {
+      getStatus: () => status,
+      isSettling: () => false,
+      stop: () => {},
+      getContext: () => ({ id, updatedAt: new Date(Date.now() - ageMs) }),
+    } as FakeWorker;
+  }
+  const index = (mgr: AgentManager) => (mgr as unknown as { childrenByParent: Map<string, Set<string>> }).childrenByParent;
+
+  test('drops finished workers after the retention window, with their cascade edges', () => {
+    const mgr = new AgentManager();
+    withWorkers(mgr, {
+      parent: worker('parent', 'running', 0),
+      old: worker('old', 'completed', AgentManager.FINISHED_RETENTION_MS + 1_000),
+      fresh: worker('fresh', 'completed', 1_000),
+    });
+    index(mgr).set('parent', new Set(['old', 'fresh']));
+    index(mgr).set('old', new Set(['grandchild']));
+    expect(mgr.cleanup()).toBe(1);
+    expect(mgr.get('old')).toBeUndefined();
+    expect(mgr.get('fresh')).toBeDefined();
+    expect([...index(mgr).get('parent')!]).toEqual(['fresh']);
+    // A cleaned-up parent keeps its edges while a child may still be in memory.
+    expect(index(mgr).has('old')).toBe(true);
+  });
+});

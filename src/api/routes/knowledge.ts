@@ -4,7 +4,7 @@ import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { CODE_NOT_INDEXED_MESSAGE, isCodeFile } from '@/core/rag/code-detection';
 import { type EmbeddingPurpose, getEmbeddingService } from '@/core/rag/embeddings';
-import { type getKBReadiness, isKBReady, kbNotReadyResponse, runKBSelfCheck } from '@/core/rag/health';
+import { awaitKBReadiness, type getKBReadiness, isKBReady, kbNotReadyResponse, runKBSelfCheck } from '@/core/rag/health';
 import { getFileIndexer } from '@/core/rag/indexer';
 import { type KnowledgeScope, principalKnowledgeOwner, principalKnowledgeScope } from '@/core/rag/knowledge-scope';
 import { auditRepository } from '@/db/repositories/audit-repository';
@@ -25,8 +25,9 @@ const logger = apiLogger.child({ component: 'knowledge-route' });
  * because Elysia's status type is a union with string literals.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function ensureKBReady(set: any): { error: string; kb: ReturnType<typeof getKBReadiness> } | null {
-  if (isKBReady()) return null;
+async function ensureKBReady(set: any): Promise<{ error: string; kb: ReturnType<typeof getKBReadiness> } | null> {
+  // At boot the self-check runs in the background: wait for its verdict.
+  if (isKBReady() || (await awaitKBReadiness())) return null;
   set.status = 503;
   const body = kbNotReadyResponse();
   logger.warn({ kb: body.kb }, 'KB endpoint rejected with 503 — KB not ready');
@@ -175,7 +176,7 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
     // Search needs the embedding provider for semantic/hybrid modes.
     // For keyword-only search we could technically run without it, but we
     // still want a loud signal — gate all search behind the self-check.
-    const notReady = ensureKBReady(set);
+    const notReady = await ensureKBReady(set);
     if (notReady) return notReady;
 
     const { query, mode = 'hybrid', limit = 10, purpose, minSimilarity, repoIds } = body;
@@ -413,7 +414,7 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
       throw err;
     }
 
-    const notReady = ensureKBReady(set);
+    const notReady = await ensureKBReady(set);
     if (notReady) return notReady;
 
     try {

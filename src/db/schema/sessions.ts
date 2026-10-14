@@ -90,6 +90,13 @@ export interface CompactionState {
    * Cleared on an effective pass (>= 15% savings).
    */
   compactionIneffective?: boolean;
+  /**
+   * An automatic pass whose summary failed (threw or came back empty): when,
+   * and how many in a row. The next automatic pass waits out a backoff that
+   * doubles with each failure; a successful pass replaces the whole state.
+   */
+  lastFailedAt?: string;
+  failedPasses?: number;
 }
 
 export interface SessionContext {

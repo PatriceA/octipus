@@ -53,6 +53,21 @@ export class MessageRepository {
       .orderBy(asc(messages.createdAt), asc(messages.id)).limit(limit);
   }
 
+  /**
+   * How big the {@link findContextMessages} transcript is — rows, and UTF-8
+   * bytes of content plus prompt context (an upper bound on its tokens) —
+   * from one aggregate, without reading the rows. Not capped.
+   */
+  async contextSize(sessionId: string, since: string | undefined, after: { id: string; createdAt: string } | undefined, generation: string | undefined): Promise<{ rows: number; bytes: number }> {
+    const totals = {
+      rows: sql<number>`count(*)::int`,
+      bytes: sql<string>`coalesce(sum(octet_length(${messages.content}) + coalesce(octet_length(${messages.metadata}->>'promptContext'), 0)), 0)::text`,
+    };
+    // i2: by session id, for the agent runtime that owns the session; user routes use ScopedMessageRepo
+    const [row] = await this.db.select(totals).from(messages).where(and(...contextFilters(sessionId, since, after, generation)));
+    return { rows: Number(row?.rows ?? 0), bytes: Number(row?.bytes ?? 0) };
+  }
+
   async findById(id: string): Promise<Message | null> {
     // i2: by session id, for the agent runtime that owns the session; user routes use ScopedMessageRepo
     const result = await this.db.select().from(messages).where(eq(messages.id, id)).limit(1);

@@ -10,13 +10,18 @@ import {
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useState } from 'react';
-import { AssertionBreakdown, LatencyHistogram, PassRateDonut } from '@/components/eval/EvalCharts';
+import { lazy, Suspense, useState } from 'react';
 import { ResultsTable } from '@/components/eval/ResultsTable';
 import { ScoreBar } from '@/components/eval/ScoreBar';
 import { Card, CardContent } from '@/components/ui/card';
 import { api } from '@/lib/api';
 import { cn, formatDate } from '@/lib/utils';
+
+// The charts are recharts (most of this page's weight): they load in their
+// own chunk, after the results they summarise are on screen.
+const PassRateDonut = lazy(() => import('@/components/eval/EvalCharts').then((m) => ({ default: m.PassRateDonut })));
+const AssertionBreakdown = lazy(() => import('@/components/eval/EvalCharts').then((m) => ({ default: m.AssertionBreakdown })));
+const LatencyHistogram = lazy(() => import('@/components/eval/EvalCharts').then((m) => ({ default: m.LatencyHistogram })));
 
 interface AssertionResult {
   type: string;
@@ -197,11 +202,13 @@ export default function EvalDetailPage() {
 
       {/* Charts */}
       {currentSuite && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <PassRateDonut passed={currentSuite.passed} failed={currentSuite.failed} />
-          <AssertionBreakdown results={allResults} />
-          <LatencyHistogram results={allResults} />
-        </div>
+        <Suspense fallback={null}>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <PassRateDonut passed={currentSuite.passed} failed={currentSuite.failed} />
+            <AssertionBreakdown results={allResults} />
+            <LatencyHistogram results={allResults} />
+          </div>
+        </Suspense>
       )}
 
       {/* Suite tabs (if multiple) */}

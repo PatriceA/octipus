@@ -402,8 +402,9 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         );
         const siblingIds = siblings.map((s) => s.id);
         historySessionIds = siblingIds;
+        // A page carries no total: skip counting every sibling's messages.
         messages = query.page === 'true' ? [] : await repos.messages.findBySessions(siblingIds, limit, offset, roles);
-        total = await repos.messages.countBySessions(siblingIds);
+        total = query.page === 'true' ? undefined : await repos.messages.countBySessions(siblingIds);
       } else {
         messages = query.page === 'true' ? [] : await repos.messages.findBySession(params.id, limit, offset, roles);
         total = session.messageCount;

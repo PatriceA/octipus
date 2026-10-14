@@ -3,6 +3,7 @@ import { getConfig } from '@/config';
 import { onSessionsRemoved } from '@/db/repositories/session-lifecycle';
 import { coreLogger } from '@/utils/logger';
 import { type ConnectionWorkspaceResolver, ConnectionManager } from './connection-manager';
+import { DeltaCoalescer } from './delta-coalescer';
 import { GatewayEventBus } from './event-bus';
 import type { ClientMessage, ConnectionContext, GatewayMessage, PermissionPendingMessage, UserGatewayEvent } from './protocol';
 import { PROTOCOL_VERSION } from './protocol';
@@ -21,6 +22,16 @@ const HYDRATED_EVENT_TYPES: ReadonlySet<string> = new Set([
   'approval.resolved',
 ]);
 
+/**
+ * Event ids: unique per process (a random prefix, so ids from before a
+ * restart never collide) without a CSPRNG read per streamed event.
+ */
+const EVENT_ID_PREFIX = randomBytes(6).toString('hex');
+let eventSeq = 0;
+function nextEventId(): string {
+  return `${EVENT_ID_PREFIX}${(++eventSeq).toString(36)}`;
+}
+
 /** Reads a user's open permission requests and root-agent approvals for `permission.pending`. */
 export type PendingSnapshotProvider = (userId: string) => Promise<Omit<PermissionPendingMessage, 'type'>>;
 
@@ -31,6 +42,8 @@ export type PendingSnapshotProvider = (userId: string) => Promise<Omit<Permissio
 export class GatewayHub {
   readonly connectionManager: ConnectionManager;
   readonly eventBus: GatewayEventBus;
+  /** Merges streamed `chat.delta` text into fewer events (`delta-coalescer.ts`). */
+  private readonly deltas = new DeltaCoalescer((event) => this.deliver(event));
   private started = false;
 
   // External handlers set by the server that integrates the hub
@@ -82,6 +95,7 @@ export class GatewayHub {
   async stop(): Promise<void> {
     if (!this.started) return;
 
+    this.deltas.flushAll();
     await this.connectionManager.drain();
     this.eventBus.destroy();
     this.started = false;
@@ -127,23 +141,42 @@ export class GatewayHub {
    * `only` narrows delivery further, to some of the user's connections
    * (`voice.speak` goes to the voice-mode connection only); it can never
    * widen it past the user.
+   *
+   * `chat.delta` text is held briefly and merged (`DeltaCoalescer`); any
+   * other event of the user first flushes what is held, so it never
+   * overtakes the text that preceded it.
    */
   publishEvent(event: Omit<UserGatewayEvent, 'id' | 'timestamp'>, only?: (ctx: ConnectionContext) => boolean): void {
+    if (event.type === 'chat.delta' && !only) {
+      this.deltas.push(event);
+      return;
+    }
+    this.deltas.flushUser(event.userId);
+    this.deliver(event, only);
+  }
+
+  /** Send whatever streamed text is held now (tests, shutdown). */
+  flushDeltas(): void {
+    this.deltas.flushAll();
+  }
+
+  private deliver(event: Omit<UserGatewayEvent, 'id' | 'timestamp'>, only?: (ctx: ConnectionContext) => boolean): void {
     const fullEvent: UserGatewayEvent = {
       ...event,
-      id: randomBytes(12).toString('hex'),
+      id: nextEventId(),
       timestamp: Date.now(),
     };
 
     // Publish to event bus (internal subscribers)
     this.eventBus.publish(fullEvent);
 
-    // Fan out to WebSocket connections that match
-    this.connectionManager.broadcast(
+    // Fan out to the user's WebSocket connections that match. Security: an
+    // event reaches its own user's connections only. No trust level or admin
+    // right widens this.
+    this.connectionManager.broadcastToUser(
+      fullEvent.userId,
       { type: 'event', event: fullEvent },
       (ctx) => {
-        // Security: an event reaches its own user's connections only. No
-        // trust level or admin right widens this.
         if (fullEvent.userId !== ctx.userId) return false;
         if (only && !only(ctx)) return false;
         // Check subscription patterns
@@ -210,6 +243,9 @@ export class GatewayHub {
    * a connection is in a resource only after `canSubscribeToResource` let it in.
    */
   publishToResource(resource: string, message: GatewayMessage): void {
+    // A room's reply clears the streamed text its members were shown: the
+    // text held for them goes out first.
+    this.deltas.flushAll();
     this.connectionManager.broadcast(message, (ctx) => ctx.resources.has(resource));
   }
 
@@ -315,7 +351,7 @@ export class GatewayHub {
     // the payload so subscribers can filter; the bus type is the catch-all
     // 'audit' so the GatewayEventType union stays closed.
     this.eventBus.publish({
-      id: randomBytes(12).toString('hex'),
+      id: nextEventId(),
       type: 'audit',
       source: 'gateway',
       userId: data.userId as string | undefined,

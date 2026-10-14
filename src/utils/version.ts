@@ -12,26 +12,20 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
+import { logger } from '@/utils/logger';
+import { octipusRoot } from '@/utils/install-root';
 
 let cached: string | null = null;
 
 export function getAppVersion(): string {
   if (cached) return cached;
-  // dist/index.js → repo root; src/utils/version.ts → src/utils, ../.. → root.
-  const here = import.meta.dirname;
-  for (const candidate of [join(here, '..', 'package.json'), join(here, '..', '..', 'package.json'), join(dirname(here), 'package.json')]) {
-    try {
-      const pkg = JSON.parse(readFileSync(candidate, 'utf-8')) as { name?: string; version?: string };
-      // Guard against picking up a dependency's or a workspace's package.json.
-      if (pkg.name === 'octipus' && pkg.version) {
-        cached = pkg.version;
-        return cached;
-      }
-    } catch {
-      // Next candidate.
-    }
+  try {
+    const pkg = JSON.parse(readFileSync(join(octipusRoot(), 'package.json'), 'utf-8')) as { version?: string };
+    cached = pkg.version || '0.0.0';
+  } catch (err) {
+    logger.warn({ err }, 'Could not read the Octipus version from package.json');
+    cached = '0.0.0';
   }
-  cached = '0.0.0';
   return cached;
 }

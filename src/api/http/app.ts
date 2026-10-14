@@ -21,6 +21,7 @@
  * runs in registration order, broad to narrow, as it did.
  */
 import { Hono } from 'hono';
+import { apiLogger } from '@/utils/logger';
 import type { TSchema } from './t';
 import { checkValue, ValidationError } from './validate';
 
@@ -371,7 +372,12 @@ export class App {
     const pathname = new URL(ctx.request.url).pathname;
     for (const hook of this.hooks.after) {
       if (!inScope(hook.prefixes, pathname)) continue;
-      try { await hook.fn(ctx); } catch { /* an after-hook must never fail a request */ }
+      try {
+        await hook.fn(ctx);
+      } catch (err) {
+        // An after-hook must never fail a request, but its failure is still said.
+        apiLogger.warn({ err, pathname }, 'After-request hook failed');
+      }
     }
   }
 

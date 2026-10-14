@@ -17,8 +17,6 @@ import { existsSync } from 'fs';
 import { apiContext } from '@/api/context';
 import { artifactsRepository } from '@/db/repositories/artifacts-repository';
 import { findViewableArtifactBySlug } from '@/db/repositories/space';
-import { workspaces } from '@/db/schema/organizations';
-import { getDb } from '@/db/postgres';
 import { buildEmbedCsp } from '@/core/artifacts/csp';
 import { buildDataBus } from '@/core/artifacts/pipeline';
 import { BUILTIN_TEMPLATES, escapeHtml, renderTemplate } from '@/core/artifacts/render';
@@ -79,14 +77,9 @@ async function authorizeForRequest(opts: {
   }
 
   if (!artifact) {
-    const db = getDb();
-    const allWorkspaces = await db.select({ id: workspaces.id }).from(workspaces);
-    for (const ws of allWorkspaces) {
-      const a = await artifactsRepository.getBySlug(ws.id, opts.slug);
-      if (a && a.visibility === 'public') {
-        return { artifact: a, scope: 'view' };
-      }
-    }
+    // One query, not a slug lookup per workspace on the install.
+    const a = await artifactsRepository.findPublicBySlug(opts.slug);
+    if (a) return { artifact: a, scope: 'view' };
   }
 
   return null;

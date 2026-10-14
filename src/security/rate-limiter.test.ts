@@ -85,3 +85,50 @@ describe('checkUserFanOutBudget adapter (Unit)', () => {
     expect(rejection.notes.startsWith('user_rate_limit')).toBe(true);
   });
 });
+
+describe('RateLimiter.check over the in-memory provider (Unit)', () => {
+  beforeAll(async () => {
+    const { initializeStorage } = await import('@/db/storage');
+    initializeStorage({ mode: 'embedded' });
+  });
+
+  afterAll(async () => {
+    const { closeStorage } = await import('@/db/storage');
+    await closeStorage();
+  });
+
+  test('a burst of concurrent requests lets exactly `limit` through', async () => {
+    // The read-then-write this replaced let concurrent requests read the same
+    // count and all pass.
+    const { RateLimiter } = await import('./rate-limiter');
+    const limiter = new RateLimiter();
+    const results = await Promise.all(Array.from({ length: 12 }, () => limiter.check('burst', 5, 60)));
+    expect(results.filter((r) => r.allowed)).toHaveLength(5);
+    const denied = results.find((r) => !r.allowed);
+    expect(denied?.remaining).toBe(0);
+    expect(denied?.retryAfter).toBeGreaterThan(0);
+    expect(denied?.retryAfter).toBeLessThanOrEqual(60);
+  });
+
+  test('remaining counts down, and the window reopens once it expires', async () => {
+    const { RateLimiter } = await import('./rate-limiter');
+    const { Cache } = await import('@/db/cache');
+    const limiter = new RateLimiter();
+    expect(await limiter.check('reopen', 2, 60)).toEqual({ allowed: true, remaining: 1 });
+    expect(await limiter.check('reopen', 2, 60)).toEqual({ allowed: true, remaining: 0 });
+    expect((await limiter.check('reopen', 2, 60)).allowed).toBe(false);
+    await new Cache(0).expire('ratecount:reopen', 0);
+    expect(await limiter.check('reopen', 2, 60)).toEqual({ allowed: true, remaining: 1 });
+  });
+
+  test('a counter left without an expiry is given one instead of refusing forever', async () => {
+    const { RateLimiter } = await import('./rate-limiter');
+    const { Cache } = await import('@/db/cache');
+    const cache = new Cache(0);
+    await cache.increment('ratecount:orphan', 5);
+    expect(await cache.ttl('ratecount:orphan')).toBe(-1);
+    const denied = await new RateLimiter().check('orphan', 3, 30);
+    expect(denied).toEqual({ allowed: false, remaining: 0, retryAfter: 30 });
+    expect(await cache.ttl('ratecount:orphan')).toBeGreaterThan(0);
+  });
+});

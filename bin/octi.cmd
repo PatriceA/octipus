@@ -41,6 +41,9 @@ set "STATE_DIR=%USERPROFILE%\.octipus"
 set "PID_FILE_BACKEND=%STATE_DIR%\backend.pid"
 set "PID_FILE_WEB=%STATE_DIR%\web.pid"
 set "LOG_FILE=%STATE_DIR%\backend.log"
+:: The backend logs JSON when its stdout is not a terminal (src/utils/logger.ts);
+:: this launcher's log file is read as it is, so ask for the readable format.
+if not defined LOG_FORMAT set "LOG_FORMAT=pretty"
 set "WEB_LOG_FILE=%STATE_DIR%\web.log"
 
 :: Match the backend's precedence: caller environment, checkout .env, default.
@@ -239,28 +242,40 @@ if "!TARGET!"=="tui" goto :launch_tui_after_start
 if "!TARGET!"=="desktop" goto :launch_desktop_after_start
 if not "!TARGET!"=="web" goto :backend_ready
 
+:: Start web UI only after backend is confirmed healthy. The bundle is
+:: rebuilt only when scripts\needs-build.mjs finds it stale (shared with the
+:: POSIX CLI); rebuilding on every start cost a full Vite build each time.
+if "!DEV_MODE!"=="true" goto :start_web_dev
+node "%PROJECT_DIR%\scripts\needs-build.mjs" web
+if errorlevel 1 goto :start_web_build
+echo   %GREEN%v%NC% Web UI build is current
+set "WEB_LOG_MODE="
+goto :start_web_serve
+
+:start_web_build
 :: Clear the web build output so code changes take effect
 echo   %BLUE%-%NC% Clearing web UI cache...
 if exist "%PROJECT_DIR%\web\dist" rmdir /s /q "%PROJECT_DIR%\web\dist"
 if exist "%PROJECT_DIR%\web\node_modules\.cache" rmdir /s /q "%PROJECT_DIR%\web\node_modules\.cache"
-
-:: Start web UI only after backend is confirmed healthy
-if "!DEV_MODE!"=="true" (
-    echo   %BLUE%-%NC% Starting web UI %DIM%(dev mode^)%NC%...
-    call :start_hidden "webui" "%PROJECT_DIR%\web" "npm run dev" "%WEB_LOG_FILE%"
-) else (
-    echo   %BLUE%-%NC% Building web UI...
-    cd /d "%PROJECT_DIR%\web"
-    call npm run build >"%WEB_LOG_FILE%" 2>&1
-    if errorlevel 1 (
-        echo   %YELLOW%^^!%NC% Production build failed, using dev mode instead
-        call :start_hidden "webui" "%PROJECT_DIR%\web" "npm run dev" "%WEB_LOG_FILE%"
-    ) else (
-        echo   %BLUE%-%NC% Starting web UI...
-        call :start_hidden "webui" "%PROJECT_DIR%\web" "npm run start" "%WEB_LOG_FILE%" append
-    )
+echo   %BLUE%-%NC% Building web UI...
+cd /d "%PROJECT_DIR%\web"
+call npm run build >"%WEB_LOG_FILE%" 2>&1
+if errorlevel 1 (
+    echo   %YELLOW%^^!%NC% Production build failed, using dev mode instead
+    goto :start_web_dev
 )
+set "WEB_LOG_MODE=append"
 
+:start_web_serve
+echo   %BLUE%-%NC% Starting web UI...
+call :start_hidden "webui" "%PROJECT_DIR%\web" "npm run start" "%WEB_LOG_FILE%" !WEB_LOG_MODE!
+goto :start_web_started
+
+:start_web_dev
+echo   %BLUE%-%NC% Starting web UI %DIM%(dev mode)%NC%...
+call :start_hidden "webui" "%PROJECT_DIR%\web" "npm run dev" "%WEB_LOG_FILE%"
+
+:start_web_started
 timeout /t 2 /nobreak >nul
 echo   %GREEN%v%NC% Web UI starting on port %WEB_PORT%
 

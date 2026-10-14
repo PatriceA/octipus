@@ -15,7 +15,7 @@ vi.mock('./group-channels', () => ({
   isGroupChannelActive: async () => enrolment.active,
 }));
 import { sessionRepository } from '@/db/repositories/session-repository';
-import { getPermissionManager } from '@/security/permissions';
+import { ApprovalNeedsAnswersError, getPermissionManager } from '@/security/permissions';
 import { _resetPendingChannelPermissionsForTests, forgetResolvedChannelPermission, forwardPermissionRequestToChannel, tryResolvePermissionFromChannel } from './index';
 
 const request = {
@@ -37,6 +37,19 @@ describe('forwardPermissionRequestToChannel', () => {
     const deny = vi.spyOn(getPermissionManager(), 'deny').mockResolvedValue(true);
     await forwardPermissionRequestToChannel(request);
     expect(deny).not.toHaveBeenCalled();
+  });
+
+  test('a CLI question is shown with its questions, not as a yes/no permission', async () => {
+    stubSession('telegram');
+    const send = vi.spyOn(getUMI(), 'send').mockResolvedValue('ok');
+    await forwardPermissionRequestToChannel({
+      ...request, requestId: 'r-question', toolId: 'cli-native:AskUserQuestion', toolName: 'CLI: AskUserQuestion',
+      args: { questions: [{ question: 'Which database?', options: [{ label: 'Postgres' }, { label: 'SQLite' }] }] },
+    });
+    const content = (send.mock.calls[0]?.[2] as { content: string }).content;
+    expect(content).toContain('Which database? (Postgres / SQLite)');
+    expect(content).toContain('Answer in the Octipus web app, or reply "no"');
+    expect(content).not.toContain('Reply "yes" to allow');
   });
 
   test('messaging channel that fails to send IS denied', async () => {
@@ -179,6 +192,22 @@ describe('permission prompts in a group channel thread', () => {
     approve.mockResolvedValue(true);
     expect(await tryResolvePermissionFromChannel(reply({}))).toBe(true);
     expect(approve).toHaveBeenLastCalledWith(requestId, 'u-anna');
+  });
+
+  test('a yes to a question asks for the answers, keeps the prompt, and a no still declines it', async () => {
+    const { requestId } = await ask({ thread: null });
+    const approve = vi.spyOn(getPermissionManager(), 'approve')
+      .mockRejectedValue(new ApprovalNeedsAnswersError('Answer every question before submitting.'));
+    const deny = vi.spyOn(getPermissionManager(), 'deny').mockResolvedValue(true);
+    const send = vi.spyOn(getUMI(), 'send').mockResolvedValue('ts');
+    const dm = { channelId: 'D-ANNA', threadId: undefined, metadata: {} };
+    expect(await tryResolvePermissionFromChannel(reply(dm))).toBe(true);
+    expect(approve).toHaveBeenCalledWith(requestId, 'u-anna');
+    expect(send).toHaveBeenCalledWith('slack', 'D-ANNA', expect.objectContaining({
+      content: expect.stringContaining('"yes" alone does not answer them'),
+    }));
+    expect(await tryResolvePermissionFromChannel(reply({ ...dm, content: 'no' }))).toBe(true);
+    expect(deny).toHaveBeenCalledWith(requestId, 'u-anna');
   });
 
   test('nothing is posted for a thread whose channel is paused (owner deactivated)', async () => {

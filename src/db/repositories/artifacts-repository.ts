@@ -64,6 +64,17 @@ export class ArtifactsRepository {
     return result[0] ?? null;
   }
 
+  /** A live public artifact with this slug, in whichever workspace (slugs are unique per workspace only). */
+  async findPublicBySlug(slug: string): Promise<Artifact | null> {
+    const result = await this.db
+      .select()
+      // i2: public artifacts only, the visibility is the access rule
+      .from(artifacts)
+      .where(and(eq(artifacts.slug, slug), eq(artifacts.visibility, 'public'), isNull(artifacts.deletedAt)))
+      .limit(1);
+    return result[0] ?? null;
+  }
+
   async getBySlug(workspaceId: string, slug: string): Promise<Artifact | null> {
     const result = await this.db
       .select()

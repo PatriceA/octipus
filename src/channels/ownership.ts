@@ -34,9 +34,9 @@ import { channelIdentities } from '@/db/schema/channel-identities';
 import { notificationDestinations } from '@/db/schema/notification-destinations';
 import { orgMembers } from '@/db/schema/organizations';
 import { users } from '@/db/schema/users';
+import { EXTERNAL_CHANNEL_TYPES } from '@/shared/chat-gateway';
 
-/** The external messaging channels: the only ones with outbound chat ids. */
-export const EXTERNAL_CHANNEL_TYPES = ['telegram', 'slack', 'teams', 'whatsapp'] as const;
+export { EXTERNAL_CHANNEL_TYPES };
 export const EXTERNAL_CHANNELS: ReadonlySet<string> = new Set(EXTERNAL_CHANNEL_TYPES);
 
 /** Channel types that address the user's own in-app surfaces. */

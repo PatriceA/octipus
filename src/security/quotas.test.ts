@@ -12,7 +12,7 @@
  *
  * Backed by ephemeral PGlite — no Docker.
  */
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -205,6 +205,47 @@ describe('willExceed', () => {
       expect(denied.reason.kind).toBe('concurrentAgents');
       expect(denied.reason.current).toBe(1);
       expect(denied.reason.max).toBe(1);
+    }
+  });
+
+  test('tokensPerDay reuses the day sum for a few seconds; getUsage and the cap stay live', async () => {
+    // The gate runs before every model call, so the sum is cached per user.
+    // It only moves when an agent finishes, so a short reuse is invisible.
+    const { getQuotaManager } = await import('@/security/quotas');
+    const { getDb } = await import('@/db/postgres');
+    const { agents } = await import('@/db/schema/agents');
+    const { seedUsers, seedSession } = await import('@/test-helpers/multiuser-fixtures');
+    const daveId = '44444444-4444-4444-4444-444444444444';
+    await seedUsers([{ id: daveId, username: 'dave' }]);
+    const session = await seedSession({ userId: daveId, channelId: 'q-d-1' });
+    const mgr = getQuotaManager();
+    await mgr.setOverride(daveId, { maxTokensPerDay: 1000 });
+    const finished = (n: number) => ({
+      id: `qm-dave-${n}`, sessionId: session.id, userId: daveId,
+      role: 'general', model: 'test', topic: 'test', status: 'completed' as const, totalTokens: 600, billableTokens: 600,
+    });
+
+    await getDb().insert(agents).values(finished(1));
+    expect((await mgr.willExceed(daveId, 'tokensPerDay', 0)).allowed).toBe(true);
+
+    await getDb().insert(agents).values(finished(2));
+    expect((await mgr.willExceed(daveId, 'tokensPerDay', 0)).allowed).toBe(true);
+    expect((await mgr.getUsage(daveId)).tokensToday).toBe(1200);
+
+    // An override write is seen at once, not after the cache window.
+    await mgr.setOverride(daveId, { maxTokensPerDay: 500 });
+    const lowered = await mgr.willExceed(daveId, 'tokensPerDay', 0);
+    expect(lowered.allowed).toBe(false);
+    if (!lowered.allowed) expect(lowered.reason).toEqual({ kind: 'tokensPerDay', current: 600, max: 500 });
+
+    const later = Date.now() + 6_000;
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(later);
+    try {
+      const denied = await mgr.willExceed(daveId, 'tokensPerDay', 0);
+      expect(denied.allowed).toBe(false);
+      if (!denied.allowed) expect(denied.reason.current).toBe(1200);
+    } finally {
+      clock.mockRestore();
     }
   });
 });

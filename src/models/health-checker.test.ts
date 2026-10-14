@@ -1,8 +1,19 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { Cache } from '@/db/cache';
 import { closeStorage, initializeStorage } from '@/db/storage';
 import { getHealthChecker, HealthChecker } from './health-checker';
+
+// A provider with its own client (`direct`) and none for anything else, so a
+// model of another provider is one served through the LiteLLM proxy.
+const direct = vi.hoisted(() => ({ calls: 0, healthy: true }));
+vi.mock('@/models/providers', () => ({
+  getProviderRouter: () => ({
+    getProviderByName: (name: string) => name === 'direct'
+      ? { checkHealth: async () => { direct.calls++; return direct.healthy ? { healthy: true, latencyMs: 12 } : { healthy: false, error: 'API key not configured' }; } }
+      : undefined,
+  }),
+}));
 
 // checkProvider('litellm', …) reaches getConfig() for the proxy URL/key, which
 // validates the full config schema (security secrets ≥32 chars). Seed them like
@@ -132,5 +143,58 @@ describe('HealthChecker — LiteLLM routes', () => {
 
   test('getHealthChecker returns a singleton', () => {
     expect(getHealthChecker()).toBe(getHealthChecker());
+  });
+});
+
+describe('HealthChecker — other providers', () => {
+  const MODELS = [
+    { name: 'a', modelId: 'a' },
+    { name: 'b', modelId: 'b' },
+    { name: 'c-embed', modelId: 'c-embed', topics: ['embedding'] },
+  ];
+  beforeEach(async () => {
+    direct.calls = 0;
+    direct.healthy = true;
+    for (const p of ['direct', 'routed']) await new Cache().delete(`health:provider:${p}`);
+  });
+
+  test('a provider with its own client is asked once, whatever its model count', async () => {
+    const checker = new HealthChecker();
+    const result = await checker.checkProvider('direct', MODELS);
+    expect(direct.calls).toBe(1);
+    expect(result.status).toBe('healthy');
+    expect(result.models.map((m) => [m.name, m.status, m.latency])).toEqual([['a', 'healthy', 12], ['b', 'healthy', 12], ['c-embed', 'healthy', 12]]);
+    // Cached: a second check (the next tick, another dashboard) asks nobody.
+    await checker.checkProvider('direct', MODELS);
+    expect(direct.calls).toBe(1);
+  });
+
+  test('a failing provider client marks every model with its error', async () => {
+    direct.healthy = false;
+    const result = await new HealthChecker().checkProvider('direct', MODELS);
+    expect(result.status).toBe('unhealthy');
+    expect(result.error).toBe('API key not configured');
+    expect(result.models.every((m) => m.status === 'unhealthy')).toBe(true);
+  });
+
+  test('a provider served through the proxy is never sent a completion or an embedding', async () => {
+    const calls: string[] = [];
+    stubFetch((url) => {
+      calls.push(url);
+      return jsonResponse({});
+    });
+    const result = await new HealthChecker().checkProvider('routed', MODELS);
+    expect(calls.every((u) => u.endsWith('/health/liveliness'))).toBe(true);
+    expect(calls.length).toBe(1);
+    expect(result.status).toBe('healthy');
+  });
+
+  test('…and is unhealthy when the proxy cannot be reached', async () => {
+    stubFetch(() => {
+      throw new Error('fetch failed');
+    });
+    const result = await new HealthChecker().checkProvider('routed', MODELS);
+    expect(result.status).toBe('unhealthy');
+    expect(result.models[0]?.error).toMatch(/LiteLLM proxy/);
   });
 });

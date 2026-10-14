@@ -4,8 +4,10 @@
  * cwd, so the discovery scan walks the real `collectors/` folder.
  */
 
+import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import { discoverToolbox } from './discovery';
+import { discoverToolbox, MODULES } from './discovery';
 import { _resetToolboxRegistryForTests, getToolboxRegistry } from './registry';
 
 describe('discoverToolbox', () => {
@@ -70,6 +72,16 @@ describe('discoverToolbox', () => {
       expect(d).not.toBeNull();
       expect(d!.description.length).toBeGreaterThan(0);
       expect(d!.returns.length).toBeGreaterThan(0);
+    }
+  });
+
+  test('every tool file in a family folder is listed in MODULES', () => {
+    const listed = new Set(MODULES.map((m) => m.file));
+    for (const folder of ['collectors', 'transforms', 'widgets', 'exports']) {
+      const files = readdirSync(join(import.meta.dirname, folder))
+        .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts') && !f.startsWith('_'))
+        .map((f) => `${folder}/${f.slice(0, -3)}`);
+      for (const file of files) expect(listed, file).toContain(file);
     }
   });
 });

@@ -537,8 +537,8 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `capabilities` | 1 |
 | `(root)` | `channels` | 1 |
 | `(root)` | `config` | 4 |
-| `(root)` | `core` | 31 |
-| `(root)` | `db` | 11 |
+| `(root)` | `core` | 32 |
+| `(root)` | `db` | 12 |
 | `(root)` | `extensions` | 2 |
 | `(root)` | `hooks` | 3 |
 | `(root)` | `mcp` | 1 |
@@ -552,7 +552,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `config` | 22 |
 | `api` | `connectors` | 3 |
 | `api` | `core` | 126 |
-| `api` | `db` | 110 |
+| `api` | `db` | 108 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 3 |
@@ -563,20 +563,20 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `shared` | 4 |
 | `api` | `skills` | 6 |
 | `api` | `tools` | 4 |
-| `api` | `utils` | 64 |
+| `api` | `utils` | 65 |
 | `api` | `voice` | 23 |
 | `capabilities` | `db` | 2 |
 | `capabilities` | `models` | 1 |
 | `capabilities` | `setup` | 1 |
-| `capabilities` | `tools` | 1 |
-| `capabilities` | `utils` | 7 |
+| `capabilities` | `tools` | 4 |
+| `capabilities` | `utils` | 6 |
 | `channels` | `config` | 7 |
 | `channels` | `core` | 38 |
 | `channels` | `db` | 41 |
 | `channels` | `models` | 6 |
 | `channels` | `security` | 22 |
-| `channels` | `shared` | 1 |
-| `channels` | `utils` | 24 |
+| `channels` | `shared` | 3 |
+| `channels` | `utils` | 23 |
 | `channels` | `voice` | 2 |
 | `config` | `channels` | 1 |
 | `config` | `core` | 4 |
@@ -596,17 +596,17 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `channels` | 11 |
 | `core` | `config` | 52 |
 | `core` | `connectors` | 3 |
-| `core` | `db` | 326 |
+| `core` | `db` | 338 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
-| `core` | `mcp` | 7 |
+| `core` | `mcp` | 9 |
 | `core` | `models` | 115 |
 | `core` | `security` | 151 |
 | `core` | `services` | 2 |
 | `core` | `shared` | 16 |
 | `core` | `skills` | 10 |
 | `core` | `tools` | 19 |
-| `core` | `utils` | 192 |
+| `core` | `utils` | 194 |
 | `core` | `voice` | 1 |
 | `db` | `config` | 4 |
 | `db` | `core` | 18 |
@@ -614,7 +614,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `db` | `security` | 14 |
 | `db` | `services` | 1 |
 | `db` | `shared` | 3 |
-| `db` | `utils` | 20 |
+| `db` | `utils` | 21 |
 | `eval` | `config` | 3 |
 | `eval` | `core` | 6 |
 | `eval` | `db` | 8 |
@@ -687,7 +687,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `services` | 1 |
 | `tools` | `shared` | 4 |
 | `tools` | `skills` | 5 |
-| `tools` | `utils` | 36 |
+| `tools` | `utils` | 37 |
 | `tools` | `visual` | 2 |
 | `tools` | `voice` | 3 |
 | `tui-editor` | `mcp` | 2 |
@@ -707,7 +707,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `voice` | `db` | 2 |
 | `voice` | `models` | 9 |
 | `voice` | `security` | 1 |
-| `voice` | `utils` | 22 |
+| `voice` | `utils` | 23 |
 
 ### Mutual imports
 

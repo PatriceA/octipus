@@ -33,10 +33,30 @@
  *                       `retrieval.ts`.
  */
 
-import { and, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
+import { withFilteredVectorScan } from '@/db/vector-indexes';
+import { and, desc, eq, getTableColumns, inArray, isNull, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import { type Memory, memories, type NewMemory, standingScoreSql } from '@/db/schema/memories';
+import { type Memory, type MemoryRecord, memories, type NewMemory, standingScoreSql } from '@/db/schema/memories';
 import { coreLogger } from '@/utils/logger';
+
+/** Every column but the vector: the widest one, and no read path uses it. */
+const { embedding: _embedding, ...memoryColumns } = getTableColumns(memories);
+
+/**
+ * Cosine distance to the query, for ORDER BY ascending. Not
+ * `ORDER BY 1 - (embedding <=> v) DESC`: the same order, but only the bare
+ * distance expression can be served by the HNSW index
+ * (src/db/vector-indexes.ts); the other form always sorts every row.
+ */
+function cosineDistance(vecLiteral: string) {
+  return sql<number>`${memories.embedding} <=> ${vecLiteral}::vector`;
+}
+
+/** Similarity from a distance; a NaN (zero vector) reads as no similarity. */
+function similarityOf(distance: number | string): number {
+  const similarity = 1 - Number(distance);
+  return Number.isFinite(similarity) ? similarity : 0;
+}
 
 export type MemoryAccessScope = {
   userId: string;
@@ -136,7 +156,7 @@ export class MemoryRepository {
   async searchSimilar(
     queryEmbedding: number[],
     scope: MemoryAccessScope & { factType: string; limit?: number },
-  ): Promise<Array<Memory & { similarity: number }>> {
+  ): Promise<Array<MemoryRecord & { similarity: number }>> {
     const limit = scope.limit ?? 5;
     const vecLiteral = this.vectorLiteral(queryEmbedding);
     if (vecLiteral === null) return [];
@@ -144,7 +164,7 @@ export class MemoryRepository {
     // pgvector casts it server-side. Earlier draft used sql.raw which
     // splices the literal directly; parameterising defeats the
     // splicing class of bug at the cost of one bind param.
-    const similarity = sql<number>`1 - (${memories.embedding} <=> ${vecLiteral}::vector)`;
+    const distance = cosineDistance(vecLiteral);
     const scopeFilter = scope.agentScope
       ? or(isNull(memories.agentScope), eq(memories.agentScope, scope.agentScope))
       : isNull(memories.agentScope);
@@ -154,10 +174,10 @@ export class MemoryRepository {
       ? or(isNull(memories.workspaceId), eq(memories.workspaceId, scope.workspaceId))
       : undefined;
 
-    const rows = await this.db
+    const rows = await withFilteredVectorScan('memories', (q) => q
       .select({
-        row: memories,
-        similarity,
+        row: memoryColumns,
+        distance,
       })
       .from(memories)
       .where(
@@ -169,10 +189,10 @@ export class MemoryRepository {
           workspaceScope,
         ),
       )
-      .orderBy(desc(similarity))
-      .limit(limit);
+      .orderBy(distance)
+      .limit(limit));
 
-    return rows.map((r) => ({ ...r.row, similarity: Number(r.similarity) || 0 }));
+    return rows.map((r) => ({ ...r.row, similarity: similarityOf(r.distance) }));
   }
 
   /**
@@ -190,19 +210,19 @@ export class MemoryRepository {
   async retrieveRelevant(
     queryEmbedding: number[],
     scope: MemoryAccessScope & { limit?: number },
-  ): Promise<Array<Memory & { similarity: number }>> {
+  ): Promise<Array<MemoryRecord & { similarity: number }>> {
     const vecLiteral = this.vectorLiteral(queryEmbedding);
     if (vecLiteral === null) return [];
-    const similarity = sql<number>`1 - (${memories.embedding} <=> ${vecLiteral}::vector)`;
-    const rows = await this.db
-      .select({ row: memories, similarity })
+    const distance = cosineDistance(vecLiteral);
+    const rows = await withFilteredVectorScan('memories', (q) => q
+      .select({ row: memoryColumns, distance })
       .from(memories)
       .where(and(...this.scopeConditions(scope)))
       // `id` for the same reason as in `retrieveTop`: equal similarity must
       // not mean arbitrary order.
-      .orderBy(desc(similarity), desc(memories.id))
-      .limit(scope.limit ?? 8);
-    return rows.map((r) => ({ ...r.row, similarity: Number(r.similarity) || 0 }));
+      .orderBy(distance, desc(memories.id))
+      .limit(scope.limit ?? 8));
+    return rows.map((r) => ({ ...r.row, similarity: similarityOf(r.distance) }));
   }
 
   /**
@@ -227,9 +247,9 @@ export class MemoryRepository {
    * it with `retrieveRelevant` — see the note there for why one ordering alone
    * is not enough.
    */
-  async retrieveTop(scope: MemoryAccessScope & { limit?: number }): Promise<Memory[]> {
+  async retrieveTop(scope: MemoryAccessScope & { limit?: number }): Promise<MemoryRecord[]> {
     return this.db
-      .select()
+      .select(memoryColumns)
       .from(memories)
       .where(and(...this.scopeConditions(scope)))
       .orderBy(desc(standingScoreSql), desc(memories.updatedAt), desc(memories.id))

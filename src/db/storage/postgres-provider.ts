@@ -25,7 +25,7 @@
 import { getConfig } from '@/config';
 import { queryRaw } from '@/db/postgres';
 import { dbLogger } from '@/utils/logger';
-import type { CacheProvider, PubSubProvider, QueueProvider, StorageProvider } from './types';
+import { type CacheProvider, type PubSubProvider, type QueueProvider, queueScore, type StorageProvider } from './types';
 
 const SWEEP_INTERVAL_MS = 60_000;
 
@@ -139,24 +139,22 @@ export class PostgresStorageProvider implements StorageProvider {
 
   createQueue(name: string): QueueProvider {
     return {
-      async push(item: unknown, priority = 0): Promise<void> {
-        // Same ordering key the previous backend used: time, pulled forward a
-        // second per priority point, so a higher priority sorts earlier.
-        const score = Date.now() - priority * 1000;
+      async push(item: unknown, priority = 0, notBefore?: number): Promise<void> {
+        const score = queueScore(priority, notBefore);
         await queryRaw(
           'INSERT INTO kv_queue (queue, score, payload) VALUES ($1, $2, $3)',
           [name, score, JSON.stringify(item)],
         );
       },
-      async pop(): Promise<unknown | null> {
+      async pop(dueBy?: number): Promise<unknown | null> {
         const { rows } = await queryRaw(
           `DELETE FROM kv_queue WHERE id = (
-             SELECT id FROM kv_queue WHERE queue = $1
+             SELECT id FROM kv_queue WHERE queue = $1 AND ($2::bigint IS NULL OR score <= $2::bigint)
              ORDER BY score ASC, seq ASC
              FOR UPDATE SKIP LOCKED
              LIMIT 1
            ) RETURNING payload`,
-          [name],
+          [name, dueBy ?? null],
         );
         if (rows.length === 0) return null;
         return parsePayload(rows[0].payload);

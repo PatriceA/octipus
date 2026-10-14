@@ -11,7 +11,8 @@
  * binaries at runtime and cannot be inlined.
  */
 import { build } from 'esbuild';
-import { readFileSync } from 'node:fs';
+import { copyFileSync, readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 const EXTERNAL = [
   'playwright',
@@ -53,3 +54,10 @@ const result = await build({
 });
 
 if (result.errors.length > 0) process.exit(1);
+
+// Python workers the voice modules spawn by path next to themselves
+// (`join(import.meta.dirname, '<worker>.py')`). Bundled, "next to themselves"
+// is `dist/`, so they have to be there too or local STT/TTS fails to start.
+for (const file of readdirSync('src/voice').filter((name) => name.endsWith('.py'))) {
+  copyFileSync(join('src/voice', file), join('dist', file));
+}

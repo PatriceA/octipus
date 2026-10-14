@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, desc, eq, isNull, lt, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lt, sql, type SQL } from 'drizzle-orm';
 import { dbLogger } from '@/utils/logger';
 import { getDb } from '../postgres';
 import { type NewSession, type Session, sessions } from '../schema/sessions';
@@ -303,12 +303,13 @@ export class SessionRepository {
       const { pipelines, pipelineNodes } = await import('../schema/pipelines');
       const { agents } = await import('../schema/agents');
 
-      // Delete pipeline stages first (FK to pipelines)
-      // i2: by session id (or the caller's own channel key), for the runtime that owns the session; user routes use ScopedSessionRepo
-      const pipelineRows = await this.db.select({ id: pipelines.id }).from(pipelines).where(eq(pipelines.sessionId, id));
-      for (const p of pipelineRows) {
-        await this.db.delete(pipelineNodes).where(eq(pipelineNodes.pipelineId, p.id));
-      }
+      // Delete pipeline stages first (FK to pipelines): one statement for
+      // every pipeline of the session, not one per pipeline.
+      await this.db.delete(pipelineNodes).where(inArray(
+        pipelineNodes.pipelineId,
+        // i2: by session id (or the caller's own channel key), for the runtime that owns the session; user routes use ScopedSessionRepo
+        this.db.select({ id: pipelines.id }).from(pipelines).where(eq(pipelines.sessionId, id)),
+      ));
       await this.db.delete(pipelines).where(eq(pipelines.sessionId, id));
       await this.db.delete(messages).where(eq(messages.sessionId, id));
       await this.db.delete(agents).where(eq(agents.sessionId, id));

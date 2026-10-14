@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { messageRepository } from '@/db/repositories/message-repository';
-import { ToolExecutor, resolvedFileChangePath } from './tool-executor';
+import { OBSERVATION_RESULT_CHARS, ToolExecutor, resolvedFileChangePath } from './tool-executor';
 import type { ToolHandler } from './agent-base';
 import type { AgentContext, ToolCall } from './types';
 
@@ -114,6 +114,28 @@ describe('ToolExecutor — per-tool completion events', () => {
     await exec.handleToolCalls([{ id: 'c1', name: 'echo', arguments: {} }]);
     const observations = emitted.filter((e) => e.type === 'observation');
     expect(observations).toHaveLength(1);
+  });
+
+  test('the observation event carries a bounded copy; the model still gets the whole result', async () => {
+    const tool: ToolHandler = {
+      name: 'huge',
+      toolId: 'agent',
+      description: '',
+      parameters: {},
+      execute: async () => ({ rows: Array.from({ length: 2000 }, (_, i) => `row-${i}`) }),
+    };
+    const small: ToolHandler = { ...tool, name: 'small', execute: async () => ({ ok: true }) };
+    const { exec, emitted } = setupExecutor(tool);
+    exec.registerTool(small);
+    const msgs = await exec.handleToolCalls([{ id: 'c1', name: 'huge', arguments: {} }, { id: 'c2', name: 'small', arguments: {} }]);
+    const [observation] = emitted.filter((e) => e.type === 'observation');
+    const [big, kept] = observation.data.results as Array<{ toolCallId: string; result: unknown }>;
+    expect(big.toolCallId).toBe('c1');
+    expect(typeof big.result).toBe('string');
+    expect((big.result as string).length).toBeLessThan(OBSERVATION_RESULT_CHARS + 40);
+    expect(big.result).toMatch(/more chars\]$/);
+    expect(kept.result).toEqual({ ok: true });
+    expect(JSON.stringify(msgs)).toContain('row-1999');
   });
 
   test('resultPreview trims long output to 200 chars', async () => {

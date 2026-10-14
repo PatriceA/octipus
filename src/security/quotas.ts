@@ -55,6 +55,28 @@ export interface QuotaUsage {
 }
 
 /**
+ * The effective cap is read on every authenticated API request (the per-user
+ * rate limit) and before every model call, and changes only when an operator
+ * edits it. An override write here drops the entry; another instance's write
+ * lands within this window.
+ */
+const QUOTA_TTL_MS = 10_000;
+/** See `willExceed` for why reusing the tokens-today sum loses nothing. */
+const TOKENS_TODAY_TTL_MS = 5_000;
+const CACHE_MAX = 5_000;
+const quotaCache = new Map<string, { value: EffectiveQuota; expires: number }>();
+const tokensTodayCache = new Map<string, { dayStart: number; value: number; expires: number }>();
+
+function remember<V extends { expires: number }>(cache: Map<string, V>, key: string, value: V): void {
+  if (cache.size >= CACHE_MAX) {
+    const now = Date.now();
+    for (const [k, v] of cache) if (v.expires <= now) cache.delete(k);
+    if (cache.size >= CACHE_MAX) cache.clear();
+  }
+  cache.set(key, value);
+}
+
+/**
  * Read the per-user override row. Returns null when the user has no
  * row (i.e. inherits every global default). Cheap PK lookup.
  */
@@ -68,9 +90,95 @@ async function readOverride(userId: string): Promise<UserQuota | null> {
   return row ?? null;
 }
 
+function startOfUtcDay(): Date {
+  const startOfDay = new Date();
+  startOfDay.setUTCHours(0, 0, 0, 0);
+  return startOfDay;
+}
+
+/**
+ * Concurrent: agents.user_id is `text` (a system job's agents carry a
+ * non-user id). Compare as text.
+ */
+async function countRunningAgents(userId: string): Promise<number> {
+  const rows = await getDb()
+    .select({ c: sql<number>`count(*)::int` })
+    .from(agents)
+    .where(and(eq(agents.userId, userId), eq(agents.status, 'running')));
+  return rows[0]?.c ?? 0;
+}
+
+/**
+ * Tokens today: sum the SPEND figure across agents created since 00:00 UTC.
+ *
+ * Not `total_tokens`: once prompt-cache counters were folded into
+ * `inputTokens`, that column became a grand total that re-counts the whole
+ * replayed context every turn — a 100k-context session costing ~2.5k/turn
+ * recorded ~102k/turn and hard-blocked a 500k/day cap after five turns,
+ * having spent ~5% of it. A daily cap is a cost control, so it sums
+ * `billable_tokens` (fresh input + output, cache reads excluded), the same
+ * figure the per-agent budget gate compares. Legacy rows predate the column
+ * and fall back to `total_tokens` rather than counting as free.
+ * Only the user's own agents: a sponsor paid for sponsored ones (coworking
+ * spec §9.2), so they count against the space's budgets, not this cap.
+ * Concurrency counts every running agent.
+ */
+async function sumTokensToday(userId: string, startOfDay: Date): Promise<number> {
+  const rows = await getDb()
+    .select({ s: sql<number>`COALESCE(SUM(COALESCE(${agents.billableTokens}, ${agents.totalTokens})), 0)::int` })
+    .from(agents)
+    .where(and(eq(agents.userId, userId), gte(agents.createdAt, startOfDay), eq(agents.funding, 'own')));
+  return rows[0]?.s ?? 0;
+}
+
+/**
+ * API calls last minute: audit_log row with action='api_request'.
+ * userId there is `text` and stores 'system' for unauth so the
+ * text comparison works.
+ */
+async function countApiCallsLastMinute(userId: string): Promise<number> {
+  const minuteAgo = new Date(Date.now() - 60_000);
+  const rows = await getDb()
+    .select({ c: sql<number>`count(*)::int` })
+    .from(auditLog)
+    .where(and(
+      eq(auditLog.userId, userId),
+      eq(auditLog.action, 'api_request'),
+      gte(auditLog.createdAt, minuteAgo),
+    ));
+  return rows[0]?.c ?? 0;
+}
+
+async function cachedTokensToday(userId: string): Promise<number> {
+  const dayStart = startOfUtcDay();
+  const now = Date.now();
+  const hit = tokensTodayCache.get(userId);
+  // A new UTC day starts from zero, whatever the entry's age.
+  if (hit && hit.dayStart === dayStart.getTime() && hit.expires > now) return hit.value;
+  const value = await sumTokensToday(userId, dayStart);
+  remember(tokensTodayCache, userId, { dayStart: dayStart.getTime(), value, expires: now + TOKENS_TODAY_TTL_MS });
+  return value;
+}
+
+function currentUsage(userId: string, kind: QuotaKind): Promise<number> {
+  switch (kind) {
+    case 'concurrentAgents': return countRunningAgents(userId);
+    case 'tokensPerDay': return cachedTokensToday(userId);
+    case 'apiCallsPerMinute': return countApiCallsLastMinute(userId);
+  }
+}
+
 export class QuotaManager {
   /** Resolve the effective limits for a user. */
   async getEffectiveQuota(userId: string): Promise<EffectiveQuota> {
+    const hit = quotaCache.get(userId);
+    if (hit && hit.expires > Date.now()) return hit.value;
+    const value = await this.readEffectiveQuota(userId);
+    remember(quotaCache, userId, { value, expires: Date.now() + QUOTA_TTL_MS });
+    return value;
+  }
+
+  private async readEffectiveQuota(userId: string): Promise<EffectiveQuota> {
     const cfg = getConfig();
     const defaults = {
       maxConcurrentAgents: cfg.agent.maxConcurrentAgents,
@@ -102,65 +210,31 @@ export class QuotaManager {
   /**
    * Compute the user's current usage straight from the canonical tables.
    *
-   * No cached counters: simpler to reason about, and the queries are
-   * cheap enough at the scale this targets (single-user → small org).
-   * If it ever becomes a hot path, swap to a Redis-backed counter +
-   * periodic reconciliation.
+   * No cached counters: this is what the admin console shows, so it reads
+   * the tables as they are now. The enforcement path (`willExceed`) reads
+   * only the dimension it gates; see the note there.
    */
   async getUsage(userId: string): Promise<QuotaUsage> {
-    const db = getDb();
-
-    // Concurrent: agents.user_id is `text` (a system job's agents carry a
-    // non-user id). Compare as text.
-    const concurrentRows = await db
-      .select({ c: sql<number>`count(*)::int` })
-      .from(agents)
-      .where(and(eq(agents.userId, userId), eq(agents.status, 'running')));
-
-    // Tokens today: sum the SPEND figure across agents created since 00:00 UTC.
-    //
-    // Not `total_tokens`: once prompt-cache counters were folded into
-    // `inputTokens`, that column became a grand total that re-counts the whole
-    // replayed context every turn — a 100k-context session costing ~2.5k/turn
-    // recorded ~102k/turn and hard-blocked a 500k/day cap after five turns,
-    // having spent ~5% of it. A daily cap is a cost control, so it sums
-    // `billable_tokens` (fresh input + output, cache reads excluded), the same
-    // figure the per-agent budget gate compares. Legacy rows predate the column
-    // and fall back to `total_tokens` rather than counting as free.
-    // Only the user's own agents: a sponsor paid for sponsored ones (coworking
-    // spec §9.2), so they count against the space's budgets, not this cap.
-    // Concurrency (above) counts every running agent.
-    const startOfDay = new Date();
-    startOfDay.setUTCHours(0, 0, 0, 0);
-    const tokenRows = await db
-      .select({ s: sql<number>`COALESCE(SUM(COALESCE(${agents.billableTokens}, ${agents.totalTokens})), 0)::int` })
-      .from(agents)
-      .where(and(eq(agents.userId, userId), gte(agents.createdAt, startOfDay), eq(agents.funding, 'own')));
-
-    // API calls last minute: audit_log row with action='api_request'.
-    // userId there is `text` and stores 'system' for unauth so the
-    // text comparison works.
-    const minuteAgo = new Date(Date.now() - 60_000);
-    const apiRows = await db
-      .select({ c: sql<number>`count(*)::int` })
-      .from(auditLog)
-      .where(and(
-        eq(auditLog.userId, userId),
-        eq(auditLog.action, 'api_request'),
-        gte(auditLog.createdAt, minuteAgo),
-      ));
-
-    return {
-      concurrentAgents: concurrentRows[0]?.c ?? 0,
-      tokensToday: tokenRows[0]?.s ?? 0,
-      apiCallsLastMinute: apiRows[0]?.c ?? 0,
-    };
+    const [concurrentAgents, tokensToday, apiCallsLastMinute] = await Promise.all([
+      countRunningAgents(userId),
+      sumTokensToday(userId, startOfUtcDay()),
+      countApiCallsLastMinute(userId),
+    ]);
+    return { concurrentAgents, tokensToday, apiCallsLastMinute };
   }
 
   /**
    * Pre-flight check — would `delta` more units of `kind` push the
-   * user over their effective cap? Reserved for 3c-2's enforcement
-   * sites (agent spawn, LLM call, API request).
+   * user over their effective cap? Called before an agent spawn
+   * (`concurrentAgents`) and before EVERY model call of a running agent
+   * (`tokensPerDay`), so it reads only the dimension asked for.
+   *
+   * Granularity: the tokens-today sum is reused per user for
+   * `TOKENS_TODAY_TTL_MS` (5 s). That loses nothing that matters: the sum
+   * only moves when an agent finishes (`billable_tokens` is written on
+   * completion), so a running agent's own spend is never in it, cached or
+   * not. The cap is cached for `QUOTA_TTL_MS`. Concurrency is always read
+   * live — a burst of spawns is exactly what it has to see.
    *
    * Returns `{ allowed: true }` when the operation is within budget.
    * Returns `{ allowed: false, reason }` with a structured reason
@@ -171,22 +245,19 @@ export class QuotaManager {
     kind: QuotaKind,
     delta: number,
   ): Promise<{ allowed: true } | { allowed: false; reason: { kind: QuotaKind; current: number; max: number } }> {
-    const [quota, usage] = await Promise.all([
+    const [quota, current] = await Promise.all([
       this.getEffectiveQuota(userId),
-      this.getUsage(userId),
+      currentUsage(userId, kind),
     ]);
-    const checks = {
-      concurrentAgents: { current: usage.concurrentAgents, max: quota.maxConcurrentAgents },
-      tokensPerDay: { current: usage.tokensToday, max: quota.maxTokensPerDay },
-      apiCallsPerMinute: { current: usage.apiCallsLastMinute, max: quota.maxApiCallsPerMinute },
-    };
-    const c = checks[kind];
-    if (c.current + delta > c.max) {
+    const max = kind === 'concurrentAgents' ? quota.maxConcurrentAgents
+      : kind === 'tokensPerDay' ? quota.maxTokensPerDay
+        : quota.maxApiCallsPerMinute;
+    if (current + delta > max) {
       securityLogger.warn(
-        { userId, kind, current: c.current, max: c.max, delta },
+        { userId, kind, current, max, delta },
         'Quota would be exceeded',
       );
-      return { allowed: false, reason: { kind, ...c } };
+      return { allowed: false, reason: { kind, current, max } };
     }
     return { allowed: true };
   }
@@ -204,9 +275,21 @@ export class QuotaManager {
       maxApiCallsPerMinute?: number | null;
     },
   ): Promise<UserQuota> {
-    const db = getDb();
     const existing = await readOverride(userId);
+    // Dropped after the write, so a read racing it cannot re-cache the old cap.
+    try {
+      return await this.writeOverride(userId, existing, patch);
+    } finally {
+      quotaCache.delete(userId);
+    }
+  }
 
+  private async writeOverride(
+    userId: string,
+    existing: UserQuota | null,
+    patch: Parameters<QuotaManager['setOverride']>[1],
+  ): Promise<UserQuota> {
+    const db = getDb();
     if (existing) {
       const [row] = await db
         .update(userQuotas)
@@ -237,6 +320,7 @@ export class QuotaManager {
       .delete(userQuotas)
       .where(eq(userQuotas.userId, userId))
       .returning();
+    quotaCache.delete(userId);
     return result.length > 0;
   }
 }
@@ -250,4 +334,6 @@ export function getQuotaManager(): QuotaManager {
 
 export function _resetQuotaManagerForTests(): void {
   instance = null;
+  quotaCache.clear();
+  tokensTodayCache.clear();
 }

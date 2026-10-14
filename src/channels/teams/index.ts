@@ -1,11 +1,7 @@
-import {
-  type Activity,
-  ActivityTypes,
-  CloudAdapter,
-  ConfigurationBotFrameworkAuthentication,
-  MessageFactory,
-  type TurnContext,
-} from 'botbuilder';
+// Values from botbuilder are imported where they are used, not here: discovery
+// imports every channel module, and botbuilder is the heaviest SDK in the tree
+// (~0.4 s and ~50 MB to load) while most installs never connect Teams.
+import type { Activity, CloudAdapter, TurnContext } from 'botbuilder';
 import { generateLinkCode } from '@/channels/linking';
 import { BUFFER_BOT_ID, findGroupMessageAnywhere, forgetGroupChat, groupMessages, recordGroupMessage } from '@/channels/group-buffer';
 import {
@@ -64,6 +60,7 @@ export class TeamsChannel extends BaseChannel {
       return;
     }
 
+    const { CloudAdapter, ConfigurationBotFrameworkAuthentication } = await import('botbuilder');
     const botFrameworkAuth = new ConfigurationBotFrameworkAuthentication({
       MicrosoftAppId: config.teams.appId,
       MicrosoftAppPassword: config.teams.appPassword,
@@ -187,6 +184,7 @@ export class TeamsChannel extends BaseChannel {
       await this.persistReference(base, baseReference);
     }
 
+    const { ActivityTypes } = await import('botbuilder');
     switch (activity.type) {
       case ActivityTypes.Message:
         await this.handleMessage(context);
@@ -383,8 +381,10 @@ export class TeamsChannel extends BaseChannel {
           name: att.filename,
         }));
 
+        const { MessageFactory } = await import('botbuilder');
         activity = MessageFactory.attachment(attachments[0], response.content);
       } else {
+        const { MessageFactory } = await import('botbuilder');
         activity = MessageFactory.text(response.content);
       }
 
@@ -441,6 +441,7 @@ export class TeamsChannel extends BaseChannel {
         };
         this.conversationReferences.set(context.activity.conversation.id, ref as Partial<Activity>);
         await this.persistReference(context.activity.conversation.id, ref);
+        const { MessageFactory } = await import('botbuilder');
         await context.sendActivity(MessageFactory.text(text));
         sent = true;
       });

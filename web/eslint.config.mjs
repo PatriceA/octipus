@@ -13,8 +13,9 @@ import tseslint from 'typescript-eslint';
 export default [
   {
     // `public/` holds the artifact SDK — a generated bundle and its plain-JS
-    // source, neither of which is application code.
-    ignores: ['dist/', 'out/', 'node_modules/', 'src-tauri/', 'public/', '**/*.d.ts'],
+    // source, neither of which is application code. `dist-test/` is the build
+    // the Playwright suite serves.
+    ignores: ['dist/', 'dist-test/', 'out/', 'node_modules/', 'src-tauri/', 'public/', '**/*.d.ts'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

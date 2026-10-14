@@ -11,6 +11,15 @@ const HEARTBEAT_KEY = 'scheduler:heartbeat';
 const HEARTBEAT_WRITE_INTERVAL_MS = 5_000;
 /** A heartbeat older than this means the ticker is wedged or dead. */
 export const HEARTBEAT_STALE_MS = 30_000;
+/**
+ * Longest an idle worker sleeps before looking at the queue again. Every
+ * schedule() in this process wakes the workers at once, so this only bounds
+ * how stale the heartbeat gets and how late a row written by another process
+ * is noticed. It must stay well under HEARTBEAT_STALE_MS.
+ */
+const IDLE_WAIT_MAX_MS = HEARTBEAT_WRITE_INTERVAL_MS;
+/** Shortest idle sleep: the head is due but another worker holds it. */
+const IDLE_WAIT_MIN_MS = 100;
 
 /**
  * Wake-gate config — evaluated JUST BEFORE a scheduled task runs.
@@ -175,6 +184,8 @@ export class Scheduler {
   private lastHeartbeatWrite = 0;
   private running = false;
   private workerLoops: Promise<void>[] = [];
+  /** Resolvers of idle workers; wake() releases them all. */
+  private idleWaiters = new Set<() => void>();
 
   constructor() {
     this.queue = new Queue(TASK_QUEUE);
@@ -219,7 +230,8 @@ export class Scheduler {
       ...(options?.missedGraceMs !== undefined ? { missedGraceMs: options.missedGraceMs } : {}),
     };
 
-    await this.queue.push(task, task.priority);
+    await this.queue.push(task, task.priority, task.scheduledAt.getTime());
+    this.wake();
 
     await this.publishEvent({
       type: 'created',
@@ -238,7 +250,9 @@ export class Scheduler {
    * Get the next task from the queue
    */
   async getNextTask(): Promise<ScheduledTask | null> {
-    const task = await this.queue.pop() as ScheduledTask | null;
+    // Only due rows: a parked task is never touched until its time comes, so
+    // an idle queue holding a future task costs nothing.
+    const task = await this.queue.pop(Date.now()) as ScheduledTask | null;
 
     if (!task) return null;
 
@@ -250,7 +264,9 @@ export class Scheduler {
 
     const dueness = classifyDueness(scheduledAt, new Date(), task.missedGraceMs);
     if (dueness === 'not_yet') {
-      await this.queue.push(task, task.priority - 1);
+      // Rows queued before parking existed sort by push time, so they can
+      // surface early; park them under their due time and they stay put.
+      await this.queue.push(task, task.priority, scheduledAt.getTime());
       return null;
     }
     if (dueness === 'missed') {
@@ -362,7 +378,8 @@ export class Scheduler {
 
     this.processing.delete(task.id);
 
-    await this.queue.push(task, task.priority);
+    await this.queue.push(task, task.priority, task.scheduledAt.getTime());
+    this.wake();
 
     await this.publishEvent({
       type: 'retried',
@@ -400,13 +417,14 @@ export class Scheduler {
   }
 
   /**
-   * Signal the worker loops to exit and await their in-flight iteration. The
-   * loops check `running` each pass and the idle wait is 100ms, so this resolves
-   * quickly. Idempotent.
+   * Signal the worker loops to exit and await their in-flight iteration. Idle
+   * loops are woken, so this resolves as soon as any running handler returns.
+   * Idempotent.
    */
   async stop(): Promise<void> {
     if (!this.running) return;
     this.running = false;
+    this.wake();
     await Promise.allSettled(this.workerLoops);
     this.workerLoops = [];
     coreLogger.info('Scheduler worker loop stopped');
@@ -430,8 +448,7 @@ export class Scheduler {
       const task = await this.getNextTask();
 
       if (!task) {
-        // No tasks available, wait a bit
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await this.idleWait();
         continue;
       }
 
@@ -480,7 +497,7 @@ export class Scheduler {
           });
           // Defer to next tick without counting as an attempt.
           task.scheduledAt = new Date(Date.now() + 30_000);
-          await this.queue.push(task, task.priority);
+          await this.queue.push(task, task.priority, task.scheduledAt.getTime());
           continue;
         }
         // decision === 'run' — drift already cleared to 0; fall through.
@@ -495,6 +512,40 @@ export class Scheduler {
         await this.failTask(task.id, (error as Error).message);
       }
     }
+  }
+
+  /**
+   * Sleep until the earliest queued task is due, a schedule() in this process
+   * wakes us, or IDLE_WAIT_MAX_MS passes — whichever comes first. Replaces a
+   * fixed 100ms poll that, across five loops, hit storage ~50 times a second
+   * while nothing was due.
+   */
+  private async idleWait(): Promise<void> {
+    let delay = IDLE_WAIT_MAX_MS;
+    try {
+      const head = await this.queue.peek() as ScheduledTask | null;
+      if (head?.scheduledAt) {
+        const dueIn = new Date(head.scheduledAt).getTime() - Date.now();
+        delay = Math.min(IDLE_WAIT_MAX_MS, Math.max(IDLE_WAIT_MIN_MS, dueIn));
+      }
+    } catch (err) {
+      coreLogger.warn({ err: (err as Error).message }, 'Scheduler queue peek failed');
+    }
+    if (!this.running) return;
+    await new Promise<void>((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        this.idleWaiters.delete(done);
+        resolve();
+      };
+      const timer = setTimeout(done, delay);
+      this.idleWaiters.add(done);
+    });
+  }
+
+  /** Release every idle worker so it re-checks the queue now. */
+  private wake(): void {
+    for (const done of [...this.idleWaiters]) done();
   }
 
   /**

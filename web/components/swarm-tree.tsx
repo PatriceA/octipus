@@ -289,11 +289,15 @@ export default function SwarmTree({
     };
   }, [sessionId]);
 
-  // Tick for live wall-clock on running nodes. Cheap — only re-renders numbers.
+  const anyRunning = Array.from(nodes.values()).some((n) => n.status === 'running');
+
+  // Tick for live wall-clock on running nodes, only while there is one: a
+  // finished node shows its stored duration.
   useEffect(() => {
+    if (!anyRunning) return;
     const interval = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(interval);
-  }, []);
+  }, [anyRunning]);
 
   // Self-heal poll: while any node is `running`, refetch the DB-authoritative
   // status every 4s. The WS stream is the fast path, but it can drop events
@@ -302,10 +306,10 @@ export default function SwarmTree({
   // showed up as a child whose `running` row in the tree never flipped to
   // `completed` even though chat already saw the agent finish. Polling is a
   // cheap safety net — it stops the moment everything is terminal.
+  // Keyed on `anyRunning`, not `nodes`: every WS update replaces the map, and
+  // restarting the interval on each one would keep pushing the poll back.
   useEffect(() => {
-    if (!sessionId) return;
-    const anyRunning = Array.from(nodes.values()).some((n) => n.status === 'running');
-    if (!anyRunning) return;
+    if (!sessionId || !anyRunning) return;
     const interval = setInterval(async () => {
       try {
         const data = await api.get<{ nodes?: ApiSwarmNode[] }>(`/swarm/nodes?rootSessionId=${sessionId}`);
@@ -330,7 +334,7 @@ export default function SwarmTree({
       }
     }, 4000);
     return () => clearInterval(interval);
-  }, [sessionId, nodes]);
+  }, [sessionId, anyRunning]);
 
   // Drain incoming WS events from the parent's queue. The parent always
   // appends, so on each render we process indices [processedIdxRef, length).

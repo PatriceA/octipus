@@ -503,6 +503,7 @@ describe('room notices (§9)', () => {
     expect(admitNotice(host, '~a@x', 'room_message', 'm1', 0)).toBe(true);
     expect(admitNotice(host, '~a@x', 'room_message', 'm1', 1)).toBe(false); // replayed
     expect(admitNotice(host, '~a@x', 'room_mention', 'm1', 1)).toBe(true); // another kind of the same post
+    expect(admitNotice(host, '~b@x', 'room_message', 'm1', 1)).toBe(true); // another member of this install, same post
     for (let i = 2; i < 30; i++) expect(admitNotice(host, '~a@x', 'room_message', `m${i}`, i)).toBe(true);
     expect(admitNotice(host, '~a@x', 'room_message', 'over', 31)).toBe(false); // 30 in the minute
     expect(admitNotice(host, '~b@x', 'room_message', 'other-member', 31)).toBe(true);

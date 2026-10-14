@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { getStats, ringBufferStream } from './log-stream';
 
 // Feed newline-delimited JSON the way pino's multistream does.
@@ -41,5 +41,26 @@ describe('getStats rollups', () => {
     const stats = getStats();
     const e = stats.topErrors.find((x) => x.msg === 'unit-test-unique-error');
     expect(e?.count).toBe(2);
+  });
+});
+
+describe('errors in the last minute', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  test('a storm is bounded as it is logged, with nobody reading the stats', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 120_000);
+    emit(Array.from({ length: 10_050 }, () => ({ level: 50, msg: 'unit-test-storm' })));
+    expect(getStats().errorsLastMinute).toBe(10_000);
+  });
+
+  test('errors older than a minute stop counting', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    // Past anything an earlier test logged.
+    vi.setSystemTime(Date.now() + 10 * 60_000);
+    emit(Array.from({ length: 50 }, () => ({ level: 50, msg: 'unit-test-storm' })));
+    vi.setSystemTime(Date.now() + 61_000);
+    emit([{ level: 50, msg: 'unit-test-storm' }]);
+    expect(getStats().errorsLastMinute).toBe(1);
   });
 });

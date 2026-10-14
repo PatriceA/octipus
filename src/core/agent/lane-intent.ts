@@ -22,7 +22,6 @@
 
 import { choiceOf, decide, type DecisionSite, recordShadow } from '@/models/decision';
 import { canonicalTopic } from '@/models/topics';
-import { coreLogger } from '@/utils/logger';
 import type { MessageClassification } from './types';
 
 /** Text lanes a request can be routed to. */

@@ -5,9 +5,9 @@ import { billableTokens } from '@/models/billable-tokens';
 import { assertWindowsCmdLineFits, windowsShellQuote, windowsShellQuoter } from '@/models/providers/cli-provider';
 import { randomUUID } from 'crypto';
 import { type ChildProcess, spawn } from 'child_process';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
-import { homedir } from 'os';
-import { join as joinPath, resolve as resolvePath } from 'path';
+import { existsSync, mkdirSync, rmSync } from 'fs';
+import { resolve as resolvePath } from 'path';
+import { contentStorageOffFor } from '@/core/agent/audience';
 import { recordAgentCompletion } from '@/core/agent-task-recorder';
 import { agentRepository } from '@/db/repositories/agent-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
@@ -21,7 +21,8 @@ import { agentLogger } from '@/utils/logger';
 import { killProcessTree } from '@/utils/proc';
 import type { AgentWorkerConfig, ToolHandler } from './agent-base';
 import { BaseAgentWorker } from './agent-base';
-import { CLIArgumentBuilder, CLIOutputParser, isCodexHookTrustWarning, discoverCodexMcpServers, resolveCliMcpEntry, sweepStaleFiles, type CliRunConnection } from './cli-adapters';
+import { CLIArgumentBuilder, CLIOutputParser, isCodexHookTrustWarning, discoverCodexMcpServers, resolveCliMcpEntry, type CliRunConnection } from './cli-adapters';
+import { writePromptDump } from './prompt-dumps';
 import { childCliSessionKey, claimCliSession, cliSessionHolder, dropCliSession, fingerprintRun, loadCliSession, ownedResumeKey, releaseCliSessions, rootCliSessionKey, saveCliSession } from './cli-session-store';
 import { canResume, CLI_RESUME } from '@/shared/cli-capabilities';
 import { startCliToolBridge, type BridgeResult } from './cli-tool-bridge';
@@ -116,6 +117,13 @@ export class CLIAgentWorker extends BaseAgentWorker {
   private bridgeErrors = new Map<string, boolean>();
   private steeringQueue: AgentMessage[] = [];
   private liveGuidance = new Map<string, AgentMessage>();
+  /**
+   * Unacknowledged live guidance an Octipus tool response has already gone
+   * back past. A vendor that reads queued input only at its turn end would
+   * otherwise see every later collect_children interrupted at once, in a loop,
+   * by guidance it already holds in its input stream.
+   */
+  private liveGuidancePassed = new Set<string>();
   private acceptsLiveGuidance = false;
   private activeBridgeCalls = 0;
   /**
@@ -138,7 +146,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
    * own credit is a no-op here — crediting both would count the wait twice.
    */
   private detached = new DetachedChildManager(this.context.id, () => this.config.timeout, () => {},
-    () => this.steeringQueue.length > 0 || this.liveGuidance.size > 0);
+    () => this.steeringQueue.length > 0 || [...this.liveGuidance.keys()].some(id => !this.liveGuidancePassed.has(id)));
   registerPendingChild(pc: PendingChild): void { this.detached.registerPendingChild(pc); }
   pendingDetachedCount(): number { return this.detached.count(); }
   listPendingDetached(): PendingChild[] { return this.detached.list(); }
@@ -167,10 +175,15 @@ export class CLIAgentWorker extends BaseAgentWorker {
       };
       try {
         stdin.write(JSON.stringify({ type: 'user', uuid, message: { role: 'user', content: message.content } }) + '\n', err => {
-          if (err) restore();
+          if (!err) return;
+          agentLogger.warn({ agentId: this.context.id, err }, 'Live guidance could not be written to the CLI input stream; queued for the next tool response instead');
+          restore();
         });
         this.emit('thought', { type: 'steering_submitted', delivery: 'CLI input stream', id: uuid });
-      } catch { restore(); }
+      } catch (err) {
+        agentLogger.warn({ agentId: this.context.id, err }, 'Live guidance could not be written to the CLI input stream; queued for the next tool response instead');
+        restore();
+      }
     }
   }
 
@@ -273,7 +286,10 @@ When a task matches one of these skills, load it with get_skill before starting 
         ...(resent ? [{ type: 'text' as const, text: `[Octipus] Nothing was pending, so these ${resent} result(s) are from your previous collect_children call, re-sent in case its response did not reach you.` }] : []),
         { type: 'text', text: contextText },
       ], isError };
-    } finally { this.activeBridgeCalls--; this.bridgeErrors.delete(id); if (delegation) this.setPause('delegation', false); }
+    } finally {
+      this.activeBridgeCalls--; this.bridgeErrors.delete(id); if (delegation) this.setPause('delegation', false);
+      for (const uuid of this.liveGuidance.keys()) this.liveGuidancePassed.add(uuid);
+    }
   }
 
   private process: ChildProcess | null = null;
@@ -720,7 +736,10 @@ When a task matches one of these skills, load it with get_skill before starting 
     this.setPause('delegation', true);
     let collected: ChildResult[] = [];
     try { collected = await this.collectAllDetached(autoTimeoutMs); } finally { this.setPause('delegation', false); }
-    for (const r of collected) if (r.status !== 'timeout') swarmNodeRepository.markCollected(r.nodeId).catch(() => { /* reaper safety net */ });
+    for (const r of collected) if (r.status !== 'timeout') swarmNodeRepository.markCollected(r.nodeId).catch(err => {
+      // The orphan reaper settles the node later; say why it has to.
+      agentLogger.warn({ agentId: this.context.id, nodeId: r.nodeId, err }, 'Could not mark an auto-collected child as collected');
+    });
     if (this.steeringQueue.length > 0 && !this.aborted) {
       this.messages.push({ role: 'assistant', content: result, timestamp: new Date() });
       this.messages.push({ role: 'user', content: `Collection interrupted by new guidance. Children remain running; decide whether to steer_child or handle the change after collecting.\n${formatCollectedResults(collected)}\n${await this.controlContext()}`, timestamp: new Date() });
@@ -1142,13 +1161,10 @@ When a task matches one of these skills, load it with get_skill before starting 
       'CLI agent context',
     );
 
-    if (getConfig().agent?.promptDumps !== false) try {
-      const dumpDir = joinPath(homedir(), '.octipus', 'prompts');
-      mkdirSync(dumpDir, { recursive: true });
-      // Cap retention — prompt dumps used to accumulate unboundedly (C13).
-      sweepStaleFiles(dumpDir, '', 7 * 24 * 3600_000);
+    // Retention is capped (C13, `writePromptDump`). Never for a session whose
+    // text stays in its own rows (federation F-D11), as in `AgentWorker`.
+    if (getConfig().agent?.promptDumps !== false && !contentStorageOffFor(this.context)) {
       const ts = new Date().toISOString().replace(/[:.]/g, '-');
-      const dumpPath = joinPath(dumpDir, `${ts}_${this.context.id}_${toolConfig.name.replace(/\s+/g, '-')}.md`);
       const body = [
         `# Agent ${this.context.id}`,
         `tool: ${toolConfig.name}`,
@@ -1173,10 +1189,7 @@ When a task matches one of these skills, load it with get_skill before starting 
         [binary, ...args.map((a) => (a.length > 400 ? `<${a.length} chars — see sections above>` : a))].join(' '),
         '```',
       ].join('\n');
-      writeFileSync(dumpPath, body, { encoding: 'utf-8', mode: 0o600 });
-      agentLogger.info({ agentId: this.context.id, path: dumpPath }, 'Dumped CLI agent prompt');
-    } catch (err) {
-      agentLogger.debug({ err, agentId: this.context.id }, 'Failed to dump CLI agent prompt');
+      writePromptDump(`${ts}_${this.context.id}_${toolConfig.name.replace(/\s+/g, '-')}.md`, body, { agentId: this.context.id, cli: toolConfig.name });
     }
 
     // Cleanup helper — removes temp context files and any ephemeral per-spawn
@@ -1329,6 +1342,7 @@ When a task matches one of these skills, load it with get_skill before starting 
               const guidance = this.liveGuidance.get(event.uuid);
               if (guidance) {
                 this.liveGuidance.delete(event.uuid);
+                this.liveGuidancePassed.delete(event.uuid);
                 this.messages.push(guidance);
                 this.emit('thought', { type: 'steering_delivered', delivery: 'CLI acknowledged input', id: event.uuid });
               }
@@ -1377,6 +1391,7 @@ When a task matches one of these skills, load it with get_skill before starting 
         // for the bridge/follow-up path if the vendor exited without reading it.
         this.steeringQueue.unshift(...this.liveGuidance.values());
         this.liveGuidance.clear();
+        this.liveGuidancePassed.clear();
         clearInterval(hardTimeout);
         this.process = null;
         // C5: any throw in this async handler used to leave the executeCLI

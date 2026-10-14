@@ -1,4 +1,4 @@
-import { App } from '@slack/bolt';
+import type { App } from '@slack/bolt';
 import type { WebClient } from '@slack/web-api';
 import { BUFFER_BOT_ID, forgetGroupChat, recordGroupMessage } from '@/channels/group-buffer';
 import { generateLinkCode } from '@/channels/linking';
@@ -69,6 +69,9 @@ export class SlackChannel extends BaseChannel {
       return;
     }
 
+    // Loaded here, not at module top: discovery imports every channel module,
+    // and Bolt is tens of MB that an install without Slack never needs.
+    const { App } = await import('@slack/bolt');
     this.app = new App({
       token: config.slack.botToken,
       appToken: config.slack.appToken,

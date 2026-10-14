@@ -12,7 +12,7 @@
  * This complements the repository-level isolation tests by exercising
  * the route handler's principal-derivation + scoped-repo wiring.
  */
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -249,5 +249,27 @@ describe('message history pagination', () => {
     expect(new Set(seen)).toEqual(new Set(ids));
     const forbidden = await get(bobApp, url);
     expect(forbidden.body).toEqual({ error: 'Session not found' });
+  });
+
+  test('a page of an aggregated channel chat does not count every sibling\'s messages', async () => {
+    const { seedMessage, seedSession } = await import('@/test-helpers/multiuser-fixtures');
+    const { ScopedMessageRepo } = await import('@/db/repositories/scoped');
+    const { executeRaw } = await import('@/db/postgres');
+    const older = await seedSession({ userId: aliceId, channelType: 'telegram', channelId: 'paged-aggregate' });
+    // A restart leaves the old row completed; only one chat row is active.
+    await executeRaw(`UPDATE sessions SET status = 'completed' WHERE id = '${older.id}'`);
+    const newer = await seedSession({ userId: aliceId, channelType: 'telegram', channelId: 'paged-aggregate' });
+    await seedMessage({ sessionId: older.id, role: 'user', content: 'before the restart' });
+    await seedMessage({ sessionId: newer.id, role: 'user', content: 'after the restart' });
+    const count = vi.spyOn(ScopedMessageRepo.prototype, 'countBySessions');
+    try {
+      const page = await get(aliceApp, `/api/sessions/${newer.id}/messages?page=true&limit=20`);
+      expect(page.body.aggregated).toBe(true);
+      expect(page.body.messages.map((m: { content: string }) => m.content).sort()).toEqual(['after the restart', 'before the restart']);
+      expect(count).not.toHaveBeenCalled();
+      const all = await get(aliceApp, `/api/sessions/${newer.id}/messages`);
+      expect(all.body.total).toBe(2);
+      expect(count).toHaveBeenCalledTimes(1);
+    } finally { count.mockRestore(); }
   });
 });

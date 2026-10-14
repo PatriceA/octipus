@@ -1,7 +1,7 @@
 'use client';
 
 import { reconcileChatMessages } from '../../../src/shared/chat-reconciliation';
-import { CHAT_INBOX_RESOURCE, CHAT_MESSAGE_MAX_CHARS } from '../../../src/shared/chat-gateway';
+import { CHAT_INBOX_RESOURCE, CHAT_MESSAGE_MAX_CHARS, EXTERNAL_CHANNEL_TYPES } from '../../../src/shared/chat-gateway';
 import { SessionCost } from '@/components/chat/session-cost';
 import { SkillUsage } from '@/components/skills/skill-usage';
 
@@ -38,6 +38,7 @@ import type { AgentCompletionReason } from '../../../src/shared/agent-completion
  * follows them.
  */
 const REFUSED_SEND_CODES: ReadonlySet<string> = new Set(['INVALID_MESSAGE', 'RATE_LIMITED', 'SESSION_NOT_FOUND']);
+const EXTERNAL_CHANNELS: ReadonlySet<string> = new Set(EXTERNAL_CHANNEL_TYPES);
 
 interface ToolCallInfo {
   id: string;
@@ -161,6 +162,8 @@ export default function ChatPage() {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [sessionListError, setSessionListError] = useState<string | null>(null);
   const [historyErrors, setHistoryErrors] = useState<Record<string, string>>({});
+  /** Sessions whose agents' durable history is still being paged in, a page per load. */
+  const [historyBackfill, setHistoryBackfill] = useState<ReadonlySet<string>>(() => new Set());
   const appliedMessageLoadsRef = useRef(new Map<string, number>());
   const messageLoadsRef = useRef(new Map<string, number>());
   const historyInFlightRef = useRef(new Set<string>());
@@ -359,6 +362,7 @@ export default function ChatPage() {
       // Restore agent activity and file changes for this session
       const restoredAgents = new Map<string, TrackedAgent>();
       const restoredFileChanges: FileChange[] = [];
+      let backfillPending = false;
       {
         const agentData = await api.get<{ agents: Array<{ id: string; sessionId: string; role: string; root?: boolean; model: string; status: string; completionReason?: AgentCompletionReason; createdAt: string; completedAt?: string; durationMs?: number; iteration: number }> }>(`/agents?sessionId=${encodeURIComponent(sessionId)}`);
         const sessionAgents = [...(agentData?.agents || [])].sort((a, b) => {
@@ -366,18 +370,25 @@ export default function ChatPage() {
           return active(a.status) - active(b.status)
             || (agentHistoryCacheRef.current.get(a.id)?.fetchedAt ?? 0) - (agentHistoryCacheRef.current.get(b.id)?.fetchedAt ?? 0);
         });
+        // Up to four agents' event pages per load, in the order above; they
+        // don't depend on each other, so they're fetched side by side.
         let eventRequests = 0;
-        for (const a of sessionAgents) {
+        const eventPages = await Promise.all(sessionAgents.map((a) => {
+          const cachedHistory = agentHistoryCacheRef.current.get(a.id);
+          const finished = a.status !== 'running' && a.status !== 'idle';
+          if (eventRequests >= 4 || (finished && cachedHistory?.complete)) return null;
+          eventRequests++;
+          return fetchPersistedAgentEvents(a.id, cachedHistory?.cursor ?? 0, 1);
+        }));
+        for (const [agentIndex, a] of sessionAgents.entries()) {
           const cachedHistory = agentHistoryCacheRef.current.get(a.id);
           const toolCalls: ToolCallInfo[] = cachedHistory?.toolCalls.map((toolCall) => ({ ...toolCall })) ?? [];
           const agentFileChanges: FileChange[] = cachedHistory?.fileChanges.map((change) => ({ ...change })) ?? [];
           {
             const finished = a.status !== 'running' && a.status !== 'idle';
-            const fetchHistory = eventRequests < 4 && !(finished && cachedHistory?.complete);
-            if (fetchHistory) eventRequests++;
-            const evData = fetchHistory
-              ? await fetchPersistedAgentEvents(a.id, cachedHistory?.cursor ?? 0, 1)
-              : { events: [], nextCursor: cachedHistory?.cursor ?? 0, hasMore: true };
+            const fetched = eventPages[agentIndex];
+            const fetchHistory = fetched !== null;
+            const evData = fetched ?? { events: [], nextCursor: cachedHistory?.cursor ?? 0, hasMore: true };
             for (const rawEvent of evData.events) {
               const ev = { ...rawEvent, data: rawEvent.data as any };
               if (ev.type === 'action') {
@@ -466,6 +477,12 @@ export default function ChatPage() {
               toolCalls,
               fileChanges: agentFileChanges,
             });
+            // More durable history to page in on a later load: an agent past
+            // this load's four, a page that said there is more, or a finished
+            // agent not yet confirmed complete. (A running agent's new events
+            // arrive live.)
+            const complete = agentHistoryCacheRef.current.get(a.id)?.complete === true;
+            if (fetchHistory ? evData.hasMore || (finished && !complete) : !(finished && complete)) backfillPending = true;
           }
           restoredFileChanges.push(...agentFileChanges);
           const startTime = new Date(a.createdAt).getTime();
@@ -535,6 +552,13 @@ export default function ChatPage() {
           : prev.fileChanges;
         return { ...prev, messages: prev.messages, trackedAgents: mergedAgents, fileChanges: mergedFileChanges };
       });
+      setHistoryBackfill((prev) => {
+        if (prev.has(sessionId) === backfillPending) return prev;
+        const next = new Set(prev);
+        if (backfillPending) next.add(sessionId);
+        else next.delete(sessionId);
+        return next;
+      });
       setHistoryErrors(prev => ({ ...prev, [sessionId]: '' }));
     } catch (error) {
       if (error instanceof ApiError && error.status === 429) {
@@ -602,16 +626,34 @@ export default function ChatPage() {
 
   useEffect(() => { loadModels(); }, [loadModels]);
 
-  // Poll for new messages (handles telegram/channel sessions that bypass WebSocket)
+  // Poll the open session's history only when the gateway can't deliver it:
+  // the connection is down, or the session belongs to an external channel
+  // (Telegram, Slack…) whose turns run outside any gateway connection. A
+  // live web session gets its messages as events, and a reconnect reloads;
+  // it polls only until its agents' earlier history is paged in.
+  const activeChannelType = sessions.find((s) => s.id === activeSessionId)?.channelType;
+  const pollHistory = gatewayStatus !== 'connected' || EXTERNAL_CHANNELS.has(activeChannelType ?? '')
+    || (!!activeSessionId && historyBackfill.has(activeSessionId));
   useEffect(() => {
-    if (!activeSessionId) return;
+    if (!activeSessionId || !pollHistory) return;
     const interval = setInterval(() => {
       if (document.visibilityState === 'hidden') return;
       void loadSessionMessages(activeSessionId);
       void loadSessions();
     }, 10_000); // Every 10 seconds
     return () => clearInterval(interval);
-  }, [activeSessionId, loadSessionMessages, loadSessions]);
+  }, [activeSessionId, pollHistory, loadSessionMessages, loadSessions]);
+
+  // The list still changes without this tab (a channel opens a session, a
+  // title is set): refresh it on its own, less often, while history is live.
+  useEffect(() => {
+    if (pollHistory) return;
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
+      void loadSessions();
+    }, 60_000);
+    return () => clearInterval(interval);
+  }, [pollHistory, loadSessions]);
 
   // On every (re)connect: the session list and the open session may have
   // moved while this tab was offline.
@@ -947,6 +989,9 @@ export default function ChatPage() {
       case 'chat.response': {
         const result = (payload.response ?? {}) as Record<string, any>;
         handleChatResponse({ ...result, sessionId: eventSessionId ?? result.sessionId }, { id: event.id, timestamp: event.timestamp });
+        // The turn set the session's title and counts; the list isn't polled
+        // as often while the gateway is live.
+        void loadSessions();
         break;
       }
 

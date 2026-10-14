@@ -4,10 +4,7 @@ import { limitKindOf } from '@/core/errors/limit-refusal';
 import type { AgentCompletionReason } from '@/shared/agent-completion';
 import { formatWorkPlanContext } from './agent/work-plan-context';
 import { workPlanRepository } from '@/db/repositories/work-plan-repository';
-import { mkdirSync, writeFileSync } from 'fs';
 import type { ChatCompletionTool } from 'openai/resources/chat/completions';
-import { homedir } from 'os';
-import { join as joinPath } from 'path';
 import { recordAgentCompletion } from '@/core/agent-task-recorder';
 import { capNativeSnapshot, readSessionHistory, roomRequestOf, toContextMessage, withSessionConversation } from './session-history';
 import { VOLATILE_MARKER } from '@/models/providers/prompt-cache';
@@ -22,7 +19,7 @@ import { getModelRegistry } from '@/models/model-registry';
 import { type ToolShimSchema, proseShowsToolIntent, translateToToolCall } from '@/models/toolshim';
 import { applyTopicParamOverrides, getTopicConfig } from '@/models/topic-config';
 import { getConfig } from '@/config';
-import { sweepStaleFiles } from './cli-adapters';
+import { writePromptDump } from './prompt-dumps';
 import type { ModelConfigEntry } from '@/db/schema/models';
 import { compactMessagesWithSummary, CONTEXT_OVERFLOW_TRUNCATED_MARKER, DEFAULT_TOOL_OUTPUT_SOFT_CAP, shouldCompactToolOutputs, truncateOldestToolOutputs } from '@/utils/context-compaction';
 import { agentLogger, coreLogger } from '@/utils/logger';
@@ -695,12 +692,8 @@ export class AgentWorker extends BaseAgentWorker {
     // this path used to write unbounded, world-readable dumps on every run.
     // Never for a session whose text stays in its own rows (a space on
     // another install, federation F-D11).
-    if (getConfig().agent?.promptDumps !== false && !contentStorageOffFor(this.context)) try {
-      const dumpDir = joinPath(homedir(), '.octipus', 'prompts');
-      mkdirSync(dumpDir, { recursive: true });
-      sweepStaleFiles(dumpDir, '', 7 * 24 * 3600_000);
+    if (getConfig().agent?.promptDumps !== false && !contentStorageOffFor(this.context)) {
       const ts = new Date().toISOString().replace(/[:.]/g, '-');
-      const dumpPath = joinPath(dumpDir, `${ts}_${this.context.id}_${this.context.role}.md`);
       const body = [
         `# Agent ${this.context.id}`,
         `role: ${this.context.role}`,
@@ -710,10 +703,7 @@ export class AgentWorker extends BaseAgentWorker {
         '',
         ...this.messages.map((m, i) => `## [${i}] ${m.role}\n${m.content || ''}`),
       ].join('\n');
-      writeFileSync(dumpPath, body, { encoding: 'utf-8', mode: 0o600 });
-      agentLogger.info({ agentId: this.context.id, path: dumpPath }, 'Dumped agent prompt');
-    } catch (err) {
-      agentLogger.debug({ err, agentId: this.context.id }, 'Failed to dump agent prompt');
+      writePromptDump(`${ts}_${this.context.id}_${this.context.role}.md`, body, { agentId: this.context.id });
     }
 
     try {

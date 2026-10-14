@@ -16,6 +16,7 @@
  */
 import { Counter, Gauge, Histogram, Registry } from 'prom-client';
 import { coreLogger } from '@/utils/logger';
+import { getAppVersion } from '@/utils/version';
 
 export const registry = new Registry();
 
@@ -219,7 +220,7 @@ export function recordChannelMessage(
  */
 export async function renderMetrics(dbUp: number, storageUp: number): Promise<string> {
   const mem = process.memoryUsage();
-  const version = process.env.npm_package_version || '0.0.0';
+  const version = getAppVersion();
 
   upGauge.set(1);
   buildInfo.reset();

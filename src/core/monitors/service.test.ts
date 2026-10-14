@@ -192,6 +192,29 @@ describe('persistent monitor lifecycle', () => {
     await service.check(row, at);
     expect((await repo.get(row.id)).status).toBe('ready');
   });
+  test('the tick gate: idle is remembered briefly, and a write here ends it at once', async () => {
+    const local = new MonitorRepository(() => drizzle(pg) as unknown as ReturnType<typeof getDb>);
+    const svc = new MonitorService(local);
+    const now = new Date();
+    expect(await local.hasWork(now)).toBe(false);
+
+    // Another instance's monitor: not re-read inside the idle window, seen after it.
+    await repo.create({ userId, sessionId, generation: '', role: 'general', name: 'elsewhere', continuation: 'c', source: browser, intervalSeconds: 30, deadline: new Date(Date.now() + 60_000) });
+    expect(await local.hasWork(now)).toBe(false);
+    expect(await local.hasWork(new Date(now.getTime() + 31_000))).toBe(true);
+
+    // A monitor created through this repository is due on the very next tick.
+    await pg.exec('TRUNCATE monitors');
+    expect(await local.hasWork(now)).toBe(false);
+    const row = await svc.create(config, context);
+    expect(await local.hasWork(now)).toBe(true);
+
+    // Paused is not work; resuming it is.
+    await svc.control(row.id, userId, sessionId, 'pause');
+    expect(await local.hasWork(new Date(now.getTime() + 62_000))).toBe(false);
+    await svc.control(row.id, userId, sessionId, 'resume');
+    expect(await local.hasWork(new Date(now.getTime() + 62_000))).toBe(true);
+  });
 });
 
 test('invalid configuration is rejected before persistence', () => {

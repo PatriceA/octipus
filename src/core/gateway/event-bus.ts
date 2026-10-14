@@ -20,12 +20,60 @@ const RECORDED_TYPE_PATTERNS = ['swarm.*'] as const;
 
 /**
  * Event types never kept for replay: a spoken line replayed after a
- * reconnect would be read aloud again, out of time.
+ * reconnect would be read aloud again, out of time; streamed text is
+ * superseded by the `chat.response` that ends the turn, and one long answer
+ * would otherwise push every meaningful event out of the buffer.
  */
-const UNRECORDED_TYPES: ReadonlySet<string> = new Set(['voice.speak']);
+const UNRECORDED_TYPES: ReadonlySet<string> = new Set(['voice.speak', 'chat.delta']);
 
 /** Default `gateway.replayMaxSessions`. */
 const DEFAULT_MAX_SESSIONS = 500;
+
+/** A session nothing was published to for this long loses its replay buffer. */
+export const REPLAY_IDLE_TTL_MS = 30 * 60_000;
+
+/**
+ * Largest payload (approximate characters) kept for replay. A bigger one is
+ * not stored, and the session's buffer is dropped with it: a client resuming
+ * from before it gets `gap: true` and reloads from REST, rather than a replay
+ * silently missing an event.
+ */
+export const MAX_REPLAY_PAYLOAD_CHARS = 64_000;
+
+/**
+ * Whether `value` serializes to more than `limit` characters, roughly
+ * (strings and keys counted, punctuation not). Stops walking as soon as the
+ * limit is passed, so a large payload costs no more than the limit.
+ */
+function exceedsChars(value: unknown, limit: number): boolean {
+  let remaining = limit;
+  const stack: unknown[] = [value];
+  while (stack.length > 0) {
+    const item = stack.pop();
+    if (typeof item === 'string') remaining -= item.length;
+    else if (Array.isArray(item)) {
+      // Check before queueing the elements: a spread of a very long array
+      // overflows the argument limit, and the length alone may decide it.
+      remaining -= item.length;
+      if (remaining < 0) return true;
+      for (const child of item) stack.push(child);
+    }
+    else if (item && typeof item === 'object') {
+      for (const [key, child] of Object.entries(item)) {
+        remaining -= key.length + 1;
+        stack.push(child);
+      }
+    } else remaining -= 8;
+    if (remaining < 0) return true;
+  }
+  return false;
+}
+
+interface SessionReplay {
+  events: GatewayEvent[];
+  /** When an event was last published to the session (idle eviction). */
+  lastAt: number;
+}
 
 export interface GatewayEventBusOptions {
   /**
@@ -42,7 +90,7 @@ export interface GatewayEventBusOptions {
  */
 export class GatewayEventBus {
   private handlers: Map<string, Set<EventHandler>> = new Map();
-  private replayBuffer: Map<string, GatewayEvent[]> = new Map();
+  private replayBuffer: Map<string, SessionReplay> = new Map();
   /**
    * Dedicated per-pattern replay buffer. Shape: `pattern -> sessionId -> events[]`.
    * Populated alongside the main session buffer on `publish()`. Read via
@@ -84,17 +132,27 @@ export class GatewayEventBus {
     // (re-inserted on every publish), so its first key is the least recently
     // active session — the one evicted when the cap is reached.
     if (event.sessionId && !UNRECORDED_TYPES.has(event.type)) {
-      let buffer = this.replayBuffer.get(event.sessionId);
-      if (buffer) {
+      const now = Date.now();
+      let entry = this.replayBuffer.get(event.sessionId);
+      if (entry) {
         this.replayBuffer.delete(event.sessionId);
       } else {
-        buffer = [];
+        entry = { events: [], lastAt: now };
       }
-      this.replayBuffer.set(event.sessionId, buffer);
+      entry.lastAt = now;
+      this.replayBuffer.set(event.sessionId, entry);
       this.evictOverCap();
-      buffer.push(event);
-      if (buffer.length > this.maxReplayPerSession) {
-        buffer.shift();
+      this.evictIdle(now);
+      const oversized = exceedsChars(event.payload, MAX_REPLAY_PAYLOAD_CHARS);
+      const buffer = entry.events;
+      if (oversized) {
+        // Not stored, and nothing before it can be replayed across it.
+        buffer.length = 0;
+      } else {
+        buffer.push(event);
+        if (buffer.length > this.maxReplayPerSession) {
+          buffer.shift();
+        }
       }
 
       // Mirror into dedicated per-pattern replay buffers for any pattern
@@ -112,6 +170,10 @@ export class GatewayEventBus {
         if (!patBuf) {
           patBuf = [];
           patternMap.set(event.sessionId, patBuf);
+        }
+        if (oversized) {
+          patBuf.length = 0;
+          continue;
         }
         patBuf.push(event);
         if (patBuf.length > this.maxReplayPerSession) {
@@ -143,7 +205,7 @@ export class GatewayEventBus {
    * The caller checks that the session is the requester's own.
    */
   replaySince(sessionId: string, afterEventId?: string): { events: GatewayEvent[]; gap: boolean } {
-    const buffer = this.replayBuffer.get(sessionId) ?? [];
+    const buffer = this.replayBuffer.get(sessionId)?.events ?? [];
     if (!afterEventId) return { events: [...buffer], gap: false };
     const idx = buffer.findIndex(e => e.id === afterEventId);
     if (idx < 0) return { events: [...buffer], gap: true };
@@ -154,7 +216,7 @@ export class GatewayEventBus {
    * Get replay buffer for a session (for reconnection).
    */
   getReplay(sessionId: string, afterEventId?: string): GatewayEvent[] {
-    const buffer = this.replayBuffer.get(sessionId);
+    const buffer = this.replayBuffer.get(sessionId)?.events;
     if (!buffer) return [];
 
     if (afterEventId) {
@@ -206,6 +268,17 @@ export class GatewayEventBus {
       const oldest = this.replayBuffer.keys().next().value;
       if (oldest === undefined) return;
       this.clearReplay(oldest);
+    }
+  }
+
+  /**
+   * Drop the sessions nothing was published to for `REPLAY_IDLE_TTL_MS`. The
+   * map is in recency order, so the walk stops at the first live session.
+   */
+  private evictIdle(now: number): void {
+    for (const [sessionId, entry] of this.replayBuffer) {
+      if (now - entry.lastAt <= REPLAY_IDLE_TTL_MS) return;
+      this.clearReplay(sessionId);
     }
   }
 

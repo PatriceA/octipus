@@ -388,9 +388,19 @@ export function createSpawnChildTool(
       }
       params.mode = 'detach';
       const childHandle = randomUUID();
+      // The handle is ours; the child's agent id only exists once the spawner
+      // creates its worker, so record it on the pending entry as it does.
+      const pending: Omit<PendingChild, 'promise'> = {
+        childId: childHandle,
+        startedAt: Date.now(),
+        taskBrief: params.taskBrief,
+        topic: params.topic,
+        subtopic: params.subtopic,
+      };
+      const onWorkerStarted = (agentId: string) => { pending.agentId = agentId; };
       const promise = (async () => {
         try {
-          return await spawner.spawnChild(parent, params, context, internal);
+          return await spawner.spawnChild(parent, params, context, { ...internal, onWorkerStarted });
         } catch (err) {
           coreLogger.error(
             { err, parentNodeId: parent.id, topic: params.topic, subtopic: params.subtopic },
@@ -408,14 +418,7 @@ export function createSpawnChildTool(
           };
         }
       })();
-      hooks.registerPending({
-        childId: childHandle,
-        startedAt: Date.now(),
-        taskBrief: params.taskBrief,
-        topic: params.topic,
-        subtopic: params.subtopic,
-        promise,
-      });
+      hooks.registerPending(Object.assign(pending, { promise }));
       return `<ChildResult nodeId="${childHandle}" status="pending" mode="detach">\n<output>Subagent started in the background. Result is NOT yet available — call collect_children (or let the framework auto-collect before your final answer) to retrieve it.</output>\n</ChildResult>`;
     }
 

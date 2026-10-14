@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, expect, test, vi } from 'vitest';
+import { eq } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -108,6 +109,21 @@ test('system skills can be personally removed; private owned skills are actually
   expect(await buildSelectedSkillPrompt(alice, sessionA)).toBe('');
   expect((await request('DELETE', 'private')).status).toBe(404);
   expect((await request('DELETE', 'missing')).status).toBe(404);
+});
+
+test('registry lookups by id keep the user visibility and never carry the embedding', async () => {
+  // get/getByIds used to load every skill the user can see (vector included)
+  // to pick one out; they now read the ids asked for under the same rules.
+  await getDb().update(skills).set({ descriptionEmbedding: [0.1, 0.2, 0.3] }).where(eq(skills.id, 'selected'));
+  const registry = getSkillRegistry();
+  const found = await registry.get('selected', alice);
+  expect(found).toMatchObject({ id: 'selected', content: expect.stringContaining('COMPLETE INSTRUCTIONS') });
+  expect(found).not.toHaveProperty('descriptionEmbedding');
+  expect(await registry.get('private', alice)).toBeUndefined();
+  expect(await registry.get('private', bob)).toMatchObject({ id: 'private' });
+  expect((await registry.getByIds(['selected', 'private', mountedId], alice)).map(skill => skill.id).sort())
+    .toEqual([mountedId, 'selected'].sort());
+  expect((await registry.getAll(alice)).every(skill => !('descriptionEmbedding' in skill) || skill.descriptionEmbedding === null)).toBe(true);
 });
 
 test('Always loads full content for this user across sessions; Automatic is a session override', async () => {

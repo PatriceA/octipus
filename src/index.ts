@@ -28,6 +28,10 @@ import { loadTopicConfigs } from '@/models/topic-config';
 import { initializeVault } from '@/security/vault';
 import { registerBuiltinTools } from '@/tools';
 import { logger } from '@/utils/logger';
+import { runKBSelfCheck } from '@/core/rag/health';
+
+/** How long the boot KB self-check waits on its embedding call. */
+const BOOT_KB_EMBED_TIMEOUT_MS = 20_000;
 
 async function main() {
   logger.info('Starting Octipus...');
@@ -38,10 +42,9 @@ async function main() {
   process.env.OCTIPUS_SIGNALS_OWNED = '1';
 
   try {
-    // Initialize vault first — gateway.start() runs the KB self-check which
-    // exercises the embedding provider, and that provider needs the vault to
-    // resolve API keys. If vault is not initialized yet, getByName throws and
-    // providers fall back with a misleading "API key not configured" error.
+    // Initialize vault first — providers resolve API keys through it. If the
+    // vault is not initialized yet, getByName throws and providers fall back
+    // with a misleading "API key not configured" error.
     await initializeVault();
     logger.info('Vault initialized');
 
@@ -94,8 +97,8 @@ async function main() {
     logger.info('Runtime configuration loaded');
 
     // Invalidate config-derived singletons built DURING earlier startup (e.g.
-    // the gateway KB self-check exercises the embedding provider, which lazily
-    // constructs the LiteLLMClient). Those captured the pre-load default config
+    // anything that reached a model provider lazily constructs the
+    // LiteLLMClient). Those captured the pre-load default config
     // — crucially an EMPTY litellm.apiKey, since vault secrets are only resolved
     // here in loadRuntimeConfig(). Without this reset the root agent keeps
     // using the 'sk-litellm' placeholder for the whole process and every
@@ -203,7 +206,16 @@ async function main() {
     // boot. Running it fire-and-forget lets the server reach ready immediately;
     // the index finishes in the background and stamps the files, so subsequent
     // boots skip unchanged docs (truly a one-time cost).
-    void import('@/db/seed-docs')
+    //
+    // It needs the knowledge-base self-check's verdict, so it follows it. That
+    // check (DB + a real embedding call + a vector write) runs here too: after
+    // the runtime config, so the embedding provider has its keys, and off the
+    // boot path, with a short wait on the embedding call — it used to run
+    // inside gateway.start() on the client's 120 s timeout and retries. KB
+    // write endpoints wait for its verdict (awaitKBReadiness) meanwhile.
+    void runKBSelfCheck({ embedTimeoutMs: BOOT_KB_EMBED_TIMEOUT_MS })
+      .catch((err) => logger.error({ err }, 'KB self-check threw unexpectedly — KB endpoints will 503 until /knowledge/readiness passes'))
+      .then(() => import('@/db/seed-docs'))
       .then(({ indexProductDocs }) => indexProductDocs())
       .catch((err) => logger.error({ err }, 'Product docs auto-index failed (non-fatal) — server continues'));
 
@@ -220,9 +232,10 @@ async function main() {
     }
 
     // Connect to MCP servers
+    // Not awaited: a slow MCP server must not hold up boot. Agent tool lists
+    // wait for it, bounded (MCPBridge.whenInitiallyConnected).
     const mcpBridge = getMCPBridge();
-    await mcpBridge.connectAll();
-    logger.info('MCP servers connected');
+    void mcpBridge.startConnectAll().then(() => logger.info('MCP servers connected'));
 
     // Load hooks
     const hookManager = getHookManager();
@@ -364,6 +377,15 @@ async function main() {
     } catch (err) {
       logger.debug({ err }, 'embedding drift check skipped (non-fatal)');
     }
+
+    // HNSW for the embedding columns once their rows share one dimension
+    // (src/db/vector-indexes.ts). Not awaited: a first build on a large table
+    // must not hold up boot. The cron runner repeats it daily for an install
+    // whose tables were still empty here.
+    void import('@/db/vector-indexes')
+      .then(({ ensureVectorIndexes }) => ensureVectorIndexes())
+      .then((outcomes) => { if (outcomes && Object.values(outcomes).includes('created')) logger.info({ outcomes }, 'Vector indexes built'); })
+      .catch((err) => logger.error({ err }, 'Vector index ensure failed (non-fatal; search falls back to a sequential scan)'));
 
     // Wire gateway message handler and bridge root agent/agent events
     wireMessageHandler(gatewayHub);

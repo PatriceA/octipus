@@ -1,11 +1,11 @@
 import { skillRepository } from '@/db/repositories/skill-repository';
 import { hiddenSkillRepository } from '@/db/repositories/hidden-skill-repository';
-import type { Skill } from '@/db/schema/skills';
+import type { SkillView } from '@/db/schema/skills';
 import { logger } from '@/utils/logger';
 import { isExternalSkillId, loadExternalSkills, type LoadExternalSkillsOptions, type ExternalSkill } from './external-loader';
 import { recordSkillUsage } from './usage-tracker';
 
-function buildPromptFragment(skill: Skill): string {
+function buildPromptFragment(skill: SkillView): string {
   // Prefer markdown content (Claude Code-style) over structured fields
   if (skill.content?.trim()) {
     return `## ${skill.name}\n\n${skill.content.trim()}`;
@@ -42,7 +42,7 @@ function buildPromptFragment(skill: Skill): string {
  * from 40–80k tokens of skill dumps down to a few hundred, and the
  * agent only loads what it actually needs.
  */
-function buildPromptSummary(skill: Skill): string {
+function buildPromptSummary(skill: SkillView): string {
   const desc = (skill.description || '').replace(/\s+/g, ' ').trim();
   // Cap each entry so a runaway description can't blow up the index.
   const capped = desc.length > 200 ? desc.slice(0, 197) + '…' : desc;
@@ -109,38 +109,41 @@ export class SkillRegistry {
     return skill ? skill.sources.map(source => source.id) : [id];
   }
 
-  async getAll(userId?: string): Promise<Skill[]> {
+  async getAll(userId?: string): Promise<SkillView[]> {
     this.ensureLoaded();
     const dbSkills = await skillRepository.findAll(userId === 'system' ? undefined : userId);
     const excluded = userId ? await hiddenSkillRepository.ids(userId) : new Set<string>();
     return [...dbSkills, ...this.external.values()].filter(skill => !this.sourceIds(skill.id).some(id => excluded.has(id)));
   }
 
-  async get(skillId: string, userId?: string): Promise<Skill | undefined> {
+  async get(skillId: string, userId?: string): Promise<SkillView | undefined> {
     this.ensureLoaded();
     skillId = this.canonicalId(skillId);
-    if (userId) return (await this.getAll(userId)).find(skill => skill.id === skillId);
+    if (userId) return (await this.getByIds([skillId], userId))[0];
     if (isExternalSkillId(skillId)) return this.external.get(skillId);
     return skillRepository.findById(skillId);
   }
 
-  async getByIds(skillIds: string[], userId?: string): Promise<Skill[]> {
+  /**
+   * The skills among `skillIds`, with the same visibility as `getAll(userId)`
+   * when a user is given — read by id, rather than loading every skill the
+   * user can see to pick a few out.
+   */
+  async getByIds(skillIds: string[], userId?: string): Promise<SkillView[]> {
     this.ensureLoaded();
     skillIds = [...new Set(skillIds.map(id => this.canonicalId(id)))];
-    if (userId) return (await this.getAll(userId)).filter(skill => skillIds.includes(skill.id));
     const externalIds = skillIds.filter(isExternalSkillId);
     const dbIds = skillIds.filter(id => !isExternalSkillId(id));
 
-    const [dbRows, externalRows] = await Promise.all([
-      skillRepository.findByIds(dbIds),
-      Promise.resolve(
-        externalIds
-          .map(id => this.external.get(id))
-          .filter((s): s is ExternalSkill => s !== undefined),
-      ),
+    const [dbRows, excluded] = await Promise.all([
+      !userId || userId === 'system' ? skillRepository.findByIds(dbIds) : skillRepository.findVisibleByIds(userId, dbIds),
+      userId ? hiddenSkillRepository.ids(userId) : Promise.resolve(new Set<string>()),
     ]);
+    const externalRows = externalIds
+      .map(id => this.external.get(id))
+      .filter((s): s is ExternalSkill => s !== undefined);
 
-    return [...dbRows, ...externalRows];
+    return [...dbRows, ...externalRows].filter(skill => !this.sourceIds(skill.id).some(id => excluded.has(id)));
   }
 
   async buildPromptFragment(skillIds: string[], userId?: string): Promise<string> {
@@ -192,7 +195,7 @@ For packaged scripts, use run_skill_script with this skill_id, the relative scri
 
   }
 
-  async getActiveSkillsForTopic(topic: string): Promise<Skill[]> {
+  async getActiveSkillsForTopic(topic: string): Promise<SkillView[]> {
     const { fetchActiveSkillIdsForTopic } = await import('./discovery');
     return (await this.getByIds(await fetchActiveSkillIdsForTopic(topic))).filter(skill => !skill.archivedAt);
   }

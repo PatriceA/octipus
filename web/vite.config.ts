@@ -68,7 +68,19 @@ return {
   build: {
     outDir: isDesktop ? 'out' : (process.env.OCTIPUS_WEB_DIST_DIR || 'dist'),
     emptyOutDir: true,
-    sourcemap: true,
+    // Web: maps are written for debugging a deployed build but not linked from
+    // the bundles, so browsers don't fetch them. Desktop: none — they would
+    // only make the installer bigger.
+    sourcemap: isDesktop ? false : 'hidden',
+    rolldownOptions: {
+      output: {
+        // React and the router change far less often than the app: in their
+        // own chunk they stay cached across releases.
+        codeSplitting: {
+          groups: [{ name: 'react-vendor', test: /[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom|scheduler)[\\/]/ }],
+        },
+      },
+    },
   },
 };
 });

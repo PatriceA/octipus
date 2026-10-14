@@ -32,6 +32,8 @@ const MAX_SESSIONS = 20;
  * reconnect loop without ever reaching a real user.
  */
 const MAX_EPHEMERAL_SESSIONS = 50;
+/** How stale `lastActivityAt` may get before a request rewrites it. */
+const ACTIVITY_WRITE_INTERVAL_MS = 60_000;
 
 /** One place resolves the lifetime, so the cap and the store cannot disagree. */
 function ttlMsFor(requested: number | undefined, fallback: number): number {
@@ -220,9 +222,16 @@ export class SessionManager {
     session.username = user.username;
     session.isAdmin = user.isAdmin;
 
-    // Update last activity
-    session.lastActivityAt = new Date();
-    await this.cache.set(`${SESSION_PREFIX}${tokenHash}`, session, this.remainingSec(session));
+    // Update last activity — at most once a minute. This runs on every
+    // authenticated request, and the stamp is only displayed (the devices
+    // list); nothing expires a session on it, so minute granularity is enough
+    // and saves a storage write per request.
+    const now = new Date();
+    const last = new Date(session.lastActivityAt).getTime();
+    if (Number.isNaN(last) || now.getTime() - last >= ACTIVITY_WRITE_INTERVAL_MS) {
+      session.lastActivityAt = now;
+      await this.cache.set(`${SESSION_PREFIX}${tokenHash}`, session, this.remainingSec(session));
+    }
 
     return session;
   }

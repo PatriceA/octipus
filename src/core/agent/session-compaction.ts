@@ -4,15 +4,21 @@ import { capNativeSnapshot, readSessionHistory, toContextMessage, withSessionCon
 import { getModelRegistry } from '@/models/model-registry';
 import { getGatewayHub } from '@/core/gateway/hub';
 import { compactionEntryRepository } from '@/db/repositories/compaction-entry-repository';
+import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { CHILD_CLI_SESSION_KEY_PREFIXES } from '@/core/cli-session-store';
-import type { CompactionState, } from '@/db/schema/sessions';
+import { type CompactionState, type Session, sessionGeneration } from '@/db/schema/sessions';
 import { calculateTotalTokens, createLLMSummary } from '@/utils/context-compaction';
 import { coreLogger } from '@/utils/logger';
 import { compactCliConversation, rootCliConversation } from '@/core/cli-compaction';
 
 const COMPACTION_MESSAGE_THRESHOLD = 20;
 const COMPACTION_TOKEN_THRESHOLD = 8000;
+
+/** Wait after the first failed automatic pass; doubles with each one in a row. */
+export const COMPACTION_FAILURE_BACKOFF_MS = 5 * 60_000;
+/** Longest wait between failed automatic passes. */
+export const COMPACTION_FAILURE_BACKOFF_MAX_MS = 6 * 60 * 60_000;
 
 /**
  * Inputs required by {@link decideCompaction}. Extracted so the decision can
@@ -26,11 +32,24 @@ export interface CompactionDecisionInput {
     growthMultiplier: number;
     hardCeiling: number;
   };
+  /** Defaults to `Date.now()`. */
+  now?: number;
 }
 
 export type CompactionDecision =
   | { allow: true; reason: 'first-pass' | 'growth-threshold' | 'hard-ceiling' | 'no-prior-stall' }
-  | { allow: false; reason: 'stalled-awaiting-growth'; nextEligibleTokens: number };
+  | { allow: false; reason: 'stalled-awaiting-growth'; nextEligibleTokens: number }
+  | { allow: false; reason: 'failed-backing-off'; retryAt: number };
+
+/**
+ * When an automatic pass may run again after `state`'s failed ones, or
+ * undefined when the last pass did not fail.
+ */
+export function compactionRetryAt(state: CompactionState | undefined): number | undefined {
+  if (!state?.lastFailedAt || !state.failedPasses) return undefined;
+  const wait = Math.min(COMPACTION_FAILURE_BACKOFF_MS * 2 ** (state.failedPasses - 1), COMPACTION_FAILURE_BACKOFF_MAX_MS);
+  return new Date(state.lastFailedAt).getTime() + wait;
+}
 
 /**
  * Pure decision function — should the next compaction pass run?
@@ -41,9 +60,18 @@ export type CompactionDecision =
  *   3. Stalled, currentTokens ≥ hardCeiling           → allow (hard-ceiling, safety valve)
  *   4. Stalled, currentTokens ≥ lastCompactTokens × growthMultiplier → allow (growth-threshold)
  *   5. Stalled, otherwise            → skip (stalled-awaiting-growth)
+ *
+ * Before all of these: a summary that failed (threw, or came back empty)
+ * skips passes until its backoff has passed (failed-backing-off) — a
+ * failure otherwise re-ran the whole map-reduce on every turn.
  */
 export function decideCompaction(input: CompactionDecisionInput): CompactionDecision {
   const { currentTokens, state, config } = input;
+
+  const retryAt = compactionRetryAt(state);
+  if (retryAt !== undefined && (input.now ?? Date.now()) < retryAt) {
+    return { allow: false, reason: 'failed-backing-off', retryAt };
+  }
 
   if (!state || state.lastCompactedAt === undefined || state.lastCompactTokens === undefined) {
     return { allow: true, reason: 'first-pass' };
@@ -105,6 +133,15 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
     // Vendor histories are richer than the Octipus transcript. Automatic
     // maintenance must never rotate them onto a lossy Octipus checkpoint.
     if (session && rootCliConversation(session)) return false;
+    const manual = Boolean(options.force || options.userInstructions);
+    // A pass that failed recently backs off whatever the size (decideCompaction
+    // checks it first too); answer that before reading and tokenizing the
+    // whole transcript.
+    const retryAt = compactionRetryAt(session?.context?.compactionState);
+    if (!manual && retryAt !== undefined && Date.now() < retryAt) return false;
+    // The common case — a short session — is settled from one aggregate
+    // query, not by reading and tokenizing the whole transcript every turn.
+    if (!manual && session && (await belowCompactionThreshold(session))) return false;
     const history = await readSessionHistory(sessionId);
     if (!history.session || history.rows.length < 2) return false;
     const savedNative = history.session.context?.nativeConversation;
@@ -113,7 +150,6 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
       ? [...savedNative.messages.map(m => ({ ...m, timestamp: new Date(m.timestamp) })), ...history.rows.slice(acknowledgedIndex + 1).map(toContextMessage)]
       : history.messages;
     const tokensBefore = calculateTotalTokens(activeMessages);
-    const manual = Boolean(options.force || options.userInstructions);
     if (!manual && history.rows.length < COMPACTION_MESSAGE_THRESHOLD && tokensBefore < COMPACTION_TOKEN_THRESHOLD) return false;
     const cfg = getConfig().compaction;
     const state = history.session.context?.compactionState;
@@ -148,14 +184,24 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
         ];
       }
     }
-    const result = await createLLMSummary(summaryInput, model.modelId, {
-      previousSummary: history.checkpoint?.summary,
-      previousFileOps: history.checkpoint?.fileOps,
-      userInstructions: options.userInstructions,
-      userId: history.session.userId,
-      requireSuccess: true,
-    });
-    if (!result.summaryText.trim()) return false;
+    const failed = () => manual ? Promise.resolve() : recordFailedPass(sessionId, history.generation, state, tokensBefore);
+    let result: Awaited<ReturnType<typeof createLLMSummary>>;
+    try {
+      result = await createLLMSummary(summaryInput, model.modelId, {
+        previousSummary: history.checkpoint?.summary,
+        previousFileOps: history.checkpoint?.fileOps,
+        userInstructions: options.userInstructions,
+        userId: history.session.userId,
+        requireSuccess: true,
+      });
+    } catch (err) {
+      await failed();
+      throw err;
+    }
+    if (!result.summaryText.trim()) {
+      await failed();
+      return false;
+    }
     const summary = result.message.content;
     const tokensAfter = calculateTotalTokens([
       { role: 'user', content: summary, timestamp: new Date() },
@@ -247,6 +293,12 @@ async function compactRoom(sessionId: string, options: MaybeCompactSessionOption
   const manual = Boolean(options.force || options.userInstructions);
   const chars = transcriptChars(rows);
   if (!manual && chars <= window) return false;
+  const state = history.session.context?.compactionState;
+  const retryAt = compactionRetryAt(state);
+  // A failed pass waits out its backoff: the turn runs on the windowed
+  // transcript meanwhile instead of failing on every post.
+  if (!manual && retryAt !== undefined && Date.now() < retryAt) return false;
+  const failed = () => manual ? Promise.resolve() : recordFailedPass(sessionId, history.generation, state, Math.ceil(chars / 4));
   // Keep the newest rows that fit in half the window verbatim (at least one),
   // summarize everything before them (at least one).
   let boundary = rows.length - 1;
@@ -264,17 +316,25 @@ async function compactRoom(sessionId: string, options: MaybeCompactSessionOption
   let result: Awaited<ReturnType<typeof createLLMSummary>> | undefined;
   for (const chunk of roomSummaryChunks(prefix, transcriptChars)) {
     const transcript = renderRoomTranscript({ roomTitle: history.session.title ?? 'Room', rows: chunk });
-    result = await withProviderUsageContext(
-      { userId: options.requesterId, sessionId, workspaceId: history.session.workspaceId, funding: 'install' },
-      () => createLLMSummary([{ role: 'user', content: transcript, timestamp: new Date() }], model.modelId, {
-        previousSummary,
-        previousFileOps,
-        userInstructions: options.userInstructions,
-        userId: options.requesterId,
-        requireSuccess: true,
-      }),
-    );
-    if (!result.summaryText.trim()) return false;
+    try {
+      result = await withProviderUsageContext(
+        { userId: options.requesterId, sessionId, workspaceId: history.session.workspaceId, funding: 'install' },
+        () => createLLMSummary([{ role: 'user', content: transcript, timestamp: new Date() }], model.modelId, {
+          previousSummary,
+          previousFileOps,
+          userInstructions: options.userInstructions,
+          userId: options.requesterId,
+          requireSuccess: true,
+        }),
+      );
+    } catch (err) {
+      await failed();
+      throw err;
+    }
+    if (!result.summaryText.trim()) {
+      await failed();
+      return false;
+    }
     previousSummary = result.message.content;
     previousFileOps = result.fileOps;
   }
@@ -299,6 +359,43 @@ async function compactRoom(sessionId: string, options: MaybeCompactSessionOption
   });
   if (published) coreLogger.info({ sessionId, chars, summarized: prefix.length }, 'Room checkpoint committed');
   return Boolean(published);
+}
+
+/**
+ * Whether a chat session is certainly too small to compact, read from one
+ * aggregate instead of its rows: fewer rows than the row threshold, and
+ * fewer UTF-8 bytes (an upper bound on tokens) than the token threshold
+ * across what `maybeCompactSession` would count — the transcript after the
+ * checkpoint, the checkpoint summary and the native snapshot.
+ */
+async function belowCompactionThreshold(session: Session): Promise<boolean> {
+  const context = session.context ?? {};
+  const generation = sessionGeneration(context);
+  const checkpoint = context.checkpoint?.generation === generation ? context.checkpoint : undefined;
+  const size = await messageRepository.contextSize(session.id, context.clearedAt, checkpoint?.through, generation);
+  if (size.rows >= COMPACTION_MESSAGE_THRESHOLD) return false;
+  let bytes = size.bytes + (checkpoint ? Buffer.byteLength(checkpoint.summary) + 64 : 0);
+  for (const m of context.nativeConversation?.messages ?? []) {
+    bytes += Buffer.byteLength(m.content) + (m.toolCalls ? Buffer.byteLength(JSON.stringify(m.toolCalls)) : 0);
+  }
+  return bytes < COMPACTION_TOKEN_THRESHOLD;
+}
+
+/**
+ * Record an automatic pass whose summary failed, so the next one waits out
+ * `compactionRetryAt` instead of re-running on the next turn. A failed
+ * write is logged: the caller's own outcome (the summary error) stands.
+ */
+async function recordFailedPass(sessionId: string, generation: string, state: CompactionState | undefined, tokens: number): Promise<void> {
+  const next: CompactionState = { ...state, lastFailedAt: new Date().toISOString(), failedPasses: (state?.failedPasses ?? 0) + 1 };
+  try {
+    await sessionRepository.patchContextIfGeneration(sessionId, generation, { compactionState: next });
+  } catch (err) {
+    coreLogger.warn({ err, sessionId }, 'Could not record a failed compaction pass');
+    return;
+  }
+  coreLogger.warn({ sessionId, failedPasses: next.failedPasses, tokens, retryAt: new Date(compactionRetryAt(next) ?? 0).toISOString() },
+    'Session compaction failed; automatic passes back off');
 }
 
 /** The most transcript one room summary call reads; a longer prefix is summarized in several. */
