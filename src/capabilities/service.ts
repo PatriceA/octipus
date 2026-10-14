@@ -15,8 +15,7 @@
  *   4. root agent reads `getAvailable()` when spawning agents
  */
 
-import { eq } from 'drizzle-orm';
-import { importModuleAt } from '@/utils/import-module';
+import { eq, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { capabilities, type CapabilityRow } from '@/db/schema/capabilities';
 import { getToolRegistry } from '@/tools/registry';
@@ -42,18 +41,23 @@ export interface InstallerModule {
 }
 
 /**
- * Map from capabilityId → dynamic import path. Installers are loaded
- * only on demand so the boot probe doesn't pay their import cost.
+ * Map from capabilityId → installer loader. Installers are loaded only on
+ * demand so the boot probe doesn't pay their import cost.
  * Tool installers live next to their tool (`src/tools/<name>/install.ts`);
  * non-tool installers (services like ollama, the MCP server build) live
  * under `src/capabilities/installers/<name>.ts`.
+ *
+ * Literal `import()` calls, not path strings: the bundler resolves the `@/`
+ * alias only in imports it can see. A string handed to a runtime import
+ * reached Node as `@/tools/browser/install`, which it cannot resolve, so in
+ * the built server every install failed as "capability installer not found".
  */
-const INSTALLER_PATHS: Record<string, string> = {
-  browser: '@/tools/browser/install',
-  'browser-ext': '@/tools/browser-ext/install',
-  docker: '@/tools/docker/install',
-  mcp: '@/capabilities/installers/mcp',
-  ollama: '@/capabilities/installers/ollama',
+const INSTALLERS: Record<string, () => Promise<unknown>> = {
+  browser: () => import('@/tools/browser/install'),
+  'browser-ext': () => import('@/tools/browser-ext/install'),
+  docker: () => import('@/tools/docker/install'),
+  mcp: () => import('@/capabilities/installers/mcp'),
+  ollama: () => import('@/capabilities/installers/ollama'),
 };
 
 /**
@@ -78,10 +82,10 @@ const STATIC_PROBES: Record<string, () => Promise<{ available: boolean; reason?:
 };
 
 async function loadInstaller(toolId: string): Promise<InstallerModule | null> {
-  const path = INSTALLER_PATHS[toolId];
-  if (!path) return null;
+  const load = INSTALLERS[toolId];
+  if (!load) return null;
   try {
-    const mod = (await importModuleAt(path)) as unknown as { default?: InstallerModule } & InstallerModule;
+    const mod = (await load()) as { default?: InstallerModule } & InstallerModule;
     return (mod.default ?? mod) as InstallerModule;
   } catch (err) {
     logger.warn({ toolId, err }, 'capability installer not found');
@@ -101,52 +105,46 @@ class CapabilityService {
     const registry = getToolRegistry();
     const toolProbes = await registry.checkAllAvailability();
     const db = getDb();
-    const rows: CapabilityRow[] = [];
 
-    const upsert = async (
-      capId: string,
-      probe: { available: boolean; degraded?: boolean; reason?: string | null; version?: string | null; path?: string | null },
-    ) => {
-      const installerKind = INSTALLER_PATHS[capId] ? 'node-exec' : 'manual';
-      const [row] = await db
-        .insert(capabilities)
-        .values({
-          toolId: capId,
-          available: probe.available,
-          degraded: probe.degraded ?? false,
-          reason: probe.reason ?? null,
-          version: probe.version ?? null,
-          path: probe.path ?? null,
-          installerKind,
-          checkedAt: new Date(),
-        })
-        .onConflictDoUpdate({
-          target: capabilities.toolId,
-          set: {
-            available: probe.available,
-            degraded: probe.degraded ?? false,
-            reason: probe.reason ?? null,
-            version: probe.version ?? null,
-            path: probe.path ?? null,
-            checkedAt: new Date(),
-            updatedAt: new Date(),
-          },
-        })
-        .returning();
-      rows.push(row);
-    };
-
-    for (const [toolId, probe] of toolProbes.entries()) {
-      await upsert(toolId, probe);
-    }
-    for (const [capId, probeFn] of Object.entries(STATIC_PROBES)) {
+    type Probe = { available: boolean; degraded?: boolean; reason?: string | null; version?: string | null; path?: string | null };
+    const probes: Array<[string, Probe]> = [...toolProbes.entries()];
+    // Static probes are independent (Ollama, binaries on PATH, …); run them
+    // side by side rather than one after another.
+    probes.push(...await Promise.all(Object.entries(STATIC_PROBES).map(async ([capId, probeFn]): Promise<[string, Probe]> => {
       try {
-        const probe = await probeFn();
-        await upsert(capId, probe);
+        return [capId, await probeFn()];
       } catch (err) {
-        await upsert(capId, { available: false, reason: err instanceof Error ? err.message : String(err) });
+        return [capId, { available: false, reason: err instanceof Error ? err.message : String(err) }];
       }
-    }
+    })));
+
+    // One multi-row upsert instead of a round trip per capability.
+    const checkedAt = new Date();
+    const rows: CapabilityRow[] = probes.length === 0 ? [] : await db
+      .insert(capabilities)
+      .values(probes.map(([capId, probe]) => ({
+        toolId: capId,
+        available: probe.available,
+        degraded: probe.degraded ?? false,
+        reason: probe.reason ?? null,
+        version: probe.version ?? null,
+        path: probe.path ?? null,
+        installerKind: INSTALLERS[capId] ? 'node-exec' : 'manual',
+        checkedAt,
+      })))
+      .onConflictDoUpdate({
+        target: capabilities.toolId,
+        set: {
+          available: sql`excluded.available`,
+          degraded: sql`excluded.degraded`,
+          reason: sql`excluded.reason`,
+          version: sql`excluded.version`,
+          path: sql`excluded.path`,
+          checkedAt: sql`excluded.checked_at`,
+          updatedAt: checkedAt,
+        },
+      })
+      .returning();
 
     // Warm the in-memory cache so the root agent's synchronous gate
     // doesn't have to hit the DB on its first agent spawn.
@@ -215,7 +213,7 @@ class CapabilityService {
         reason: probe.reason ?? null,
         version: probe.version ?? null,
         path: probe.path ?? null,
-        installerKind: INSTALLER_PATHS[toolId] ? 'node-exec' : 'manual',
+        installerKind: INSTALLERS[toolId] ? 'node-exec' : 'manual',
         checkedAt: new Date(),
       })
       .onConflictDoUpdate({
@@ -302,7 +300,7 @@ class CapabilityService {
   /** Install all currently-missing capabilities that have an installer. */
   async installAllMissing(): Promise<Record<string, InstallResult>> {
     const rows = await this.list();
-    const missing = rows.filter((r) => !r.available && INSTALLER_PATHS[r.toolId]);
+    const missing = rows.filter((r) => !r.available && INSTALLERS[r.toolId]);
     const out: Record<string, InstallResult> = {};
     for (const row of missing) {
       out[row.toolId] = await this.install(row.toolId);
