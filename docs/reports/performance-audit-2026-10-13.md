@@ -27,7 +27,8 @@ second start of the same data directory.
 | Scheduler queue calls while idle | ~50/s, each a pop + re-push (write) | ~2/s, no queue writes |
 
 The remaining idle RSS is mostly PGlite (≈220 MB of `external` WASM memory) and
-loaded code; see [Not changed](#found-not-changed-yet) for the next steps.
+loaded code. The first table is the first pass alone; the second pass's
+measurements are under [Final measurements](#final-measurements).
 
 ## Fixed on this branch
 
@@ -77,82 +78,116 @@ loaded code; see [Not changed](#found-not-changed-yet) for the next steps.
     nothing changed) keep their identity, so the memoized rows skip the render.
 11. **Unused Material Symbols font** removed from the Google Fonts import.
 
-## Found, not changed yet
+## Second pass: the rest of the findings, and bugs found on the way
 
-Ordered by expected payoff. File references are to the 2026-10-13 tree.
+Everything the first pass listed as "found, not changed yet" was then worked,
+together with a code review of the recent upstream commits and of this branch.
 
-### High
+### Database and API
 
-- **Per-iteration quota check: 4 queries before every model call.**
-  `agent-worker.ts:~1155` → `willExceed('tokensPerDay')` runs all of
-  `getUsage` (running agents, today's tokens, an `audit_log` count) plus an
-  override read, though only today's tokens matter. Compute only the requested
-  kind and cache per user for 5–30 s as `spend-budgets.ts` already does. This
-  changes enforcement granularity, so it needs an owner's call.
-- **Every authenticated `/api` request makes ~8 DB round trips before the
-  handler**: per-IP and per-user rate limits (GET + SET each), session
-  validation that UPSERTs `lastActivityAt` on every request, an uncached quota
-  read, an awaited audit insert with `.returning()`. Throttle the activity
-  write (e.g. once a minute), use one atomic increment per limit, cache quota
-  overrides briefly, don't await the audit insert. External mode only.
-- **Streaming deltas are broadcast one token at a time** (`event-bridge.ts`,
-  `connection-manager.ts`, `event-bus.ts`): a `JSON.stringify` per receiving
-  connection, a walk over every connection, and each delta enters the replay
-  buffer, so a long answer evicts the events that matter for reconnect replay.
-  Coalesce deltas every ~30–50 ms, keep `chat.delta` out of the replay buffer,
-  stringify once per event.
-- **Tool results are persisted and broadcast in full** (`tool-executor.ts:~1028`
-  → `agent_events` JSONB, WS, replay buffer). Send `previewToolResult` instead.
-- **Vector indexes are missing on every install that was empty at migration
-  0055** — it creates HNSW only if rows existed then, promises "HNSW will be
-  added on next migration run", but migrations are tracked by hash and nothing
-  later creates it (checked: no other `hnsw` after 0055). KB search then
-  seq-scans. Memory search orders by
-  `1 - (embedding <=> v) DESC`, which can't use HNSW even when present.
-- **`messages` lacks `(session_id, created_at DESC, id DESC)`** for the per-turn
-  context load (top-N with a sort over the whole session today).
-- **Launcher overhead** (`bin/octi`): `octi start web` rebuilds `mcp-server`
-  (tsc) and `web` (vite) on every start and leaves four Node processes (two are
-  idle `npm run` wrappers, ~40–60 MB each). Launch `node dist/index.js` and
-  `node web/serve.mjs` directly and rebuild only when stale.
+- Quota check before each model call: one query for the dimension it gates
+  (was 3 aggregates + an override read), tokens-today cached 5 s per user
+  (`billable_tokens` is only written when an agent finishes, so nothing is
+  lost), effective quota cached 10 s and dropped on override writes.
+- Per-request overhead (external mode): one atomic increment per rate-limit
+  window instead of GET+SET (which also raced); `lastActivityAt` written at
+  most once a minute; audit insert not awaited and without `RETURNING`.
+- Vector search: HNSW is built at runtime once a table's rows share one
+  dimension (migration 0055 only did it for tables that had rows then, so new
+  installs searched by sequential scan); memory search orders by bare distance
+  so the index can serve it; filtered searches run with
+  `hnsw.iterative_scan = strict_order` (pgvector 0.8+) so a user owning a
+  small share of the rows still gets `LIMIT` results — measured 0/10 without
+  it, 10/10 with it.
+- Migration 0138: `messages(session_id, created_at, id)` and
+  `cost_log(user_id, created_at)`.
+- Cron hooks claimed with compare-and-set (a hook could fire twice across
+  instances); agent cleanup deletes in batches (one `IN` list broke above
+  ~65k ids); daily batched pruning of old `api_request` audit rows, hook
+  executions, read notifications and settled permission requests (90 days,
+  `retention_policies` purpose `log_history`; billing/trace tables kept).
+- Skills looked up by id, without the embedding column (also no longer sent to
+  the browser); memory reads skip the embedding; monitors skip their 4 queries
+  per 5 s tick while no monitor is live; settings remember misses; three
+  per-item query loops replaced; skill seeding writes only changed rows; the
+  capability probe runs side by side and upserts in one statement.
 
-### Medium
+### Gateway, agent turn and background work
 
-- Monitors tick every 5 s with 4 queries even with no monitors
-  (`core/monitors/service.ts`); skip when none are armed.
-- Provider health checks every 60 s (`models/health-checker.ts`): CLI providers
-  spawn `which` per model, LiteLLM-routed providers outside the skip list get a
-  real billed "Hi" completion. Check per provider, less often, or on demand.
-- MCP stdio servers all start at boot, one after another, and never stop when
-  idle (`mcp/bridge.ts`). Connect in parallel and lazily; stop after idle.
-- Playwright Chromium, once launched, is never closed when idle, and contexts
-  opened without an id leak (`tools/browser`); websearch launches a second one.
-- Embedding self-check on the boot path makes a real network call with a 120 s
-  timeout and 3 retries, before vault credentials are loaded (`gateway.ts:96`).
-- A failed session compaction retries every turn, re-reading and re-tokenizing
-  the whole history (`session-compaction.ts`); record failures with a backoff.
-- Prompt dumps (`agent.promptDumps`, on by default) sweep the dump directory
-  with sync `readdirSync`/`statSync` and write the full prompt on every spawn.
-- Logger defaults to in-process `pino-pretty` (`utils/logger.ts`); default to
-  JSON when stdout isn't a TTY, or move pretty-printing to a transport thread.
-- Growing tables with no pruning: `audit_log`, `cost_log`, `hook_executions`,
-  `notifications`, `run_events`, `tool_actions`, `trajectory_runs`, …
-- Skill lookups `SELECT *` the whole `skills` table (with embeddings) to find
-  one row (`skills/registry.ts:112-123`).
-- Web: CodeMirror is pulled into every `/chat` load via `FileViewer`, recharts
-  into the dashboard; `serve.mjs` sends assets uncompressed and marks unhashed
-  `public/` files `immutable` for a year; production sourcemaps ship in the
-  desktop bundle; the chat page still refetches up to 10 000 messages every
-  10 s even while the WebSocket is live.
+- Streamed deltas coalesced per 40 ms / 512 chars (order kept: any other
+  event flushes first), each event serialized once and sent only over its
+  user's connections; `chat.delta` kept out of the replay buffer; idle
+  sessions' replay buffers expire after 30 min and oversized payloads are not
+  stored (resume gets `gap: true`).
+- Tool results on `observation` events clipped to 2,400 chars (the model still
+  gets full output); finished workers released after 10 min, not 1 h.
+- Failed session compaction backs off (5 min doubling to 6 h) instead of
+  re-running the whole map-reduce every turn; short sessions are settled from
+  one aggregate instead of reading and tokenizing the transcript.
+- Prompt dumps written asynchronously, swept at most hourly; spawn-time
+  `git status`/`git diff --stat` async and in parallel.
+- Logs are JSON when stdout is not a terminal (`octi logs` pretty-prints);
+  error timestamps pruned on push.
+- Provider health: no billed "Hi" completions as probes, one check per
+  provider, CLI binary presence cached, every 5 min instead of every minute.
+- MCP servers connect in parallel, off the boot path, with one shared 15 s
+  deadline for spawns that need them.
+- KB self-check after boot (no longer stalls startup for up to minutes on an
+  unreachable embedding endpoint), bounded, with a re-check when a slow cold
+  model answers late.
+- One headless Chromium shared by the browser and websearch tools, closed after
+  5 min idle; leaked contexts and SSRF-blocked pages are closed.
+- Token-count cache bounded by total characters (it could pin hundreds of MB
+  of history strings); several small per-key maps bounded.
 
-### Low
+### Web client and launcher
 
-- Seeds run a SELECT + UPDATE per row on every boot; hash the seed data and skip.
-- `errorTimestamps` in `utils/log-stream.ts` is only pruned when stats are read.
-- A few never-evicted maps (`file-mutation-queue`, `interjectHits`,
-  `projectRootCache`, …); small, but unbounded.
-- The orphan reaper runs every 120 s regardless of its configured interval.
-- `NODE_COMPILE_CACHE` was measured and did not help measurably (±0.3 s noise).
+- JS each page downloads on top of the app shell: `/` 380 → 32 kB, `/chat`
+  734 → 311 kB, `/eval/view` 399 → 16 kB (CodeMirror, recharts, qrcode load on
+  first use); React in its own long-cached vendor chunk; sourcemaps no longer
+  linked (web) or shipped (desktop).
+- `serve.mjs`: gzip/brotli, `immutable` only for hashed `/assets/`, ETag/304
+  for the rest (unhashed files were cached for a year), async stat.
+- Chat history polled only when the WebSocket can't deliver it (channel
+  sessions, disconnected); room view no longer defeats the timeline memo; row
+  identity kept without serializing every message.
+- Idle timers stop (swarm tree tick, unhealthy-provider poll backs off to
+  60 s, hidden-tab guard); reconnects jittered.
+- `octi start web` launches `node` directly (no idle npm wrappers) and
+  rebuilds `mcp-server` and the web bundle only when stale (also on Windows);
+  health polled every 0.25 s.
+
+### Bugs fixed along the way
+
+- **Built server (`npm start`) feature loss** — every place that found code by
+  path at runtime broke once bundled into `dist/`: chat channels (0
+  discovered), artifact toolbox (empty), capability installers (`@/…`
+  specifiers Node cannot resolve), local STT/TTS Python workers (not in
+  `dist/`), whisper.cpp install root (one directory above the install).
+- Upstream review: `steer_child` never reached a child (looked up by spawn
+  handle, not agent id); federated room notices reached only one member per
+  visiting install; a chat "yes" to a CLI question threw into nowhere (now
+  explained to the user, and the chat prompt shows the questions); unacknowledged
+  live guidance interrupted every `collect_children`; an agent was not told
+  where codemode servers went when codemode was blocked; paged history still
+  counted every sibling message.
+- `octi stop` killed every `node …dist/index.js` on the machine; `build_info`
+  reported version 0.0.0 under `node dist/index.js`; the project-root cache
+  cached `null` for parent directories (writes in a real repo could be
+  redirected); the CLI worker dumped prompts for sessions whose text must stay
+  in their own rows; channel tool emojis and stall resets never fired (the
+  handler matched on a session id agent events don't carry); silent catches
+  in the CLI worker and HTTP after-hooks now log; artifact cleanup chains piled
+  up per restart; eslint failed after a Playwright run.
+
+### Left as is, on purpose
+
+- The 5-minute cap on a CLI run waiting for approval is documented
+  (docs/CLI-AGENTS.md) and tested.
+- `bin/octi.cmd` still starts servers through `npm run` (only the rebuild
+  check was ported; it could not be exercised on Windows here).
+- Provider SDK retries behind the bounded boot embedding call still run in
+  the background.
 
 ## Method
 
