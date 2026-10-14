@@ -490,6 +490,10 @@ const interjectHits = new Map<string, number[]>();
 function allowInterject(sessionId: string): boolean {
   const now = Date.now();
   const cutoff = now - INTERJECT_WINDOW_MS;
+  // A session's entry outlives its window; drop the lapsed ones now and then.
+  if (interjectHits.size > 256) {
+    for (const [id, hits] of interjectHits) if ((hits.at(-1) ?? 0) <= cutoff) interjectHits.delete(id);
+  }
   const history = (interjectHits.get(sessionId) ?? []).filter((t) => t > cutoff);
   if (history.length >= INTERJECT_MAX) {
     interjectHits.set(sessionId, history);

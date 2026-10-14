@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { withFileMutationQueue } from './file-mutation-queue';
+import { pendingFileQueues, withFileMutationQueue } from './file-mutation-queue';
 
 describe('File Mutation Queue', () => {
   test('sequential execution for same file path', async () => {
@@ -78,5 +78,15 @@ describe('File Mutation Queue', () => {
 
     // Should be sequential (same normalized path), so order is deterministic
     expect(order).toEqual([1, 2]);
+  });
+
+  test('a file nobody waits on is forgotten', async () => {
+    const before = pendingFileQueues();
+    const op1 = withFileMutationQueue('/tmp/forget-a.txt', async () => 'a');
+    const op2 = withFileMutationQueue('/tmp/forget-a.txt', async () => 'b');
+    const op3 = withFileMutationQueue('/tmp/forget-b.txt', async () => { throw new Error('boom'); });
+    expect(pendingFileQueues()).toBe(before + 2);
+    await Promise.all([op1, op2, op3.catch(() => 'failed')]);
+    expect(pendingFileQueues()).toBe(before);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { getLastViewMs, recordArtifactView } from './scheduler';
+import { getLastViewMs, MAX_TRACKED_VIEWS, recordArtifactView } from './scheduler';
 
 describe('artifact view tracking', () => {
   test('recordArtifactView populates last-view', () => {
@@ -12,4 +12,13 @@ describe('artifact view tracking', () => {
   test('unseen artifact returns null', () => {
     expect(getLastViewMs('never-viewed')).toBeNull();
   });
+});
+
+test('the least recently viewed artifact is forgotten past the cap', () => {
+  recordArtifactView('cap-first');
+  recordArtifactView('cap-second');
+  recordArtifactView('cap-first'); // viewed again: now the newer of the two
+  for (let i = 0; i < MAX_TRACKED_VIEWS - 1; i++) recordArtifactView(`cap-filler-${i}`);
+  expect(getLastViewMs('cap-second')).toBeNull();
+  expect(getLastViewMs('cap-first')).not.toBeNull();
 });
