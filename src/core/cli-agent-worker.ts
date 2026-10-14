@@ -116,6 +116,13 @@ export class CLIAgentWorker extends BaseAgentWorker {
   private bridgeErrors = new Map<string, boolean>();
   private steeringQueue: AgentMessage[] = [];
   private liveGuidance = new Map<string, AgentMessage>();
+  /**
+   * Unacknowledged live guidance an Octipus tool response has already gone
+   * back past. A vendor that reads queued input only at its turn end would
+   * otherwise see every later collect_children interrupted at once, in a loop,
+   * by guidance it already holds in its input stream.
+   */
+  private liveGuidancePassed = new Set<string>();
   private acceptsLiveGuidance = false;
   private activeBridgeCalls = 0;
   /**
@@ -138,7 +145,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
    * own credit is a no-op here — crediting both would count the wait twice.
    */
   private detached = new DetachedChildManager(this.context.id, () => this.config.timeout, () => {},
-    () => this.steeringQueue.length > 0 || this.liveGuidance.size > 0);
+    () => this.steeringQueue.length > 0 || [...this.liveGuidance.keys()].some(id => !this.liveGuidancePassed.has(id)));
   registerPendingChild(pc: PendingChild): void { this.detached.registerPendingChild(pc); }
   pendingDetachedCount(): number { return this.detached.count(); }
   listPendingDetached(): PendingChild[] { return this.detached.list(); }
@@ -273,7 +280,10 @@ When a task matches one of these skills, load it with get_skill before starting 
         ...(resent ? [{ type: 'text' as const, text: `[Octipus] Nothing was pending, so these ${resent} result(s) are from your previous collect_children call, re-sent in case its response did not reach you.` }] : []),
         { type: 'text', text: contextText },
       ], isError };
-    } finally { this.activeBridgeCalls--; this.bridgeErrors.delete(id); if (delegation) this.setPause('delegation', false); }
+    } finally {
+      this.activeBridgeCalls--; this.bridgeErrors.delete(id); if (delegation) this.setPause('delegation', false);
+      for (const uuid of this.liveGuidance.keys()) this.liveGuidancePassed.add(uuid);
+    }
   }
 
   private process: ChildProcess | null = null;
@@ -1329,6 +1339,7 @@ When a task matches one of these skills, load it with get_skill before starting 
               const guidance = this.liveGuidance.get(event.uuid);
               if (guidance) {
                 this.liveGuidance.delete(event.uuid);
+                this.liveGuidancePassed.delete(event.uuid);
                 this.messages.push(guidance);
                 this.emit('thought', { type: 'steering_delivered', delivery: 'CLI acknowledged input', id: event.uuid });
               }
@@ -1377,6 +1388,7 @@ When a task matches one of these skills, load it with get_skill before starting 
         // for the bridge/follow-up path if the vendor exited without reading it.
         this.steeringQueue.unshift(...this.liveGuidance.values());
         this.liveGuidance.clear();
+        this.liveGuidancePassed.clear();
         clearInterval(hardTimeout);
         this.process = null;
         // C5: any throw in this async handler used to leave the executeCLI

@@ -494,3 +494,44 @@ it.each(['deadline', 'disconnect', 'premature-finish'] as const)('approval %s en
    expect(result).toContain('Root must reconsider scope');
    expect(worker.getStatus()).toBe('completed');
  });
+
+ it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('guidance queued on stdin interrupts one collect, not every later one', async () => {
+   // Like Claude, the fixture reads queued input only at its turn end: the
+   // guidance stays unacknowledged across both collects.
+   writeFileSync(fixture.script, `
+     import { createInterface } from 'node:readline';
+     const call = async name => (await fetch(process.env.OCTIPUS_AGENT_URL + '/call', {method:'POST',headers:{Authorization:'Bearer ' + process.env.OCTIPUS_AGENT_KEY},body:JSON.stringify({name,arguments:{}})})).json();
+     let inputs = 0;
+     for await (const line of createInterface({input: process.stdin})) {
+       const event = JSON.parse(line);
+       if (event.type !== 'user') continue;
+       if (++inputs === 1) {
+         console.log(JSON.stringify({type:'assistant',message:{id:'w',content:[{type:'tool_use',id:'native',name:'Read',input:{}}]}}));
+         continue;
+       }
+       const first = await call('collect_children');
+       const second = await call('collect_children');
+       console.log(JSON.stringify(event));
+       console.log(JSON.stringify({type:'result',subtype:'success',result:JSON.stringify({first,second}),num_turns:1}));
+     }
+   `);
+   const worker = sampleWorker();
+   let finish!: (r: import('./swarm/types').ChildResult) => void;
+   worker.registerPendingChild({childId:'child',startedAt:Date.now(),topic:'test',taskBrief:'test',promise:new Promise(resolve => {finish=resolve;})});
+   let collects = 0;
+   worker.registerTool({name:'collect_children',description:'',parameters:{type:'object'},execute:async () => {
+     if (++collects === 2) setTimeout(() => finish({nodeId:'child',kind:'subagent',status:'ok',output:'child finished normally',durationMs:1,usedTokens:1,spawnedChildren:[]}), 50);
+     return worker.collectAllDetached(collects === 2 ? 2_000 : 60_000);
+   }});
+   let sent = false;
+   worker.onEvent(event => {
+     if (!sent && event.type === 'action' && (event.data as {toolName?: string}).toolName === 'Read') {
+       sent = true;
+       worker.steer({role:'user',content:'Root must reconsider scope',timestamp:new Date()});
+     }
+   });
+   const { first, second } = JSON.parse(await worker.run('sample')) as { first: unknown; second: unknown };
+   expect(JSON.stringify(first)).toContain('interrupted by new guidance');
+   expect(JSON.stringify(second)).not.toContain('interrupted by new guidance');
+   expect(JSON.stringify(second)).toContain('child finished normally');
+ });
