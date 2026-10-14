@@ -1,8 +1,8 @@
-import { and, eq, ilike, inArray, isNotNull, isNull, lt, or, type SQL, sql } from 'drizzle-orm';
+import { and, eq, getTableColumns, ilike, inArray, isNotNull, isNull, lt, or, type SQL, sql } from 'drizzle-orm';
 import { getUserOrgIds } from '@/services/org-membership';
 import { getDb } from '../postgres';
 import { skillTopicAssignments } from '../schema/skill-topic-assignments';
-import { type Skill, skills } from '../schema/skills';
+import { type Skill, type SkillView, skills } from '../schema/skills';
 
 /**
  * Fields that affect the embedding hash (sha256(name + description)). When
@@ -27,6 +27,13 @@ export type SkillUpdate = Partial<Pick<Skill,
   | 'alwaysInject'
 >>;
 
+/**
+ * Every column but `description_embedding` (see `SkillView`): a lookup, a
+ * listing or a prompt fragment that loaded it carried a few kilobytes per row
+ * for nothing, and `GET /api/skills` served it to the browser.
+ */
+const { descriptionEmbedding: _embedding, ...viewColumns } = getTableColumns(skills);
+
 /** The skills a user sees: system skills, their own, and their orgs'. */
 async function visibleTo(userId: string): Promise<SQL> {
   const orgIds = await getUserOrgIds(userId);
@@ -44,9 +51,9 @@ async function visibleTo(userId: string): Promise<SQL> {
 export class SkillRepository {
   private get db() { return getDb(); }
 
-  async findAll(userId?: string): Promise<Skill[]> {
-    if (userId) return this.db.select().from(skills).where(await visibleTo(userId));
-    return this.db.select().from(skills);
+  async findAll(userId?: string): Promise<SkillView[]> {
+    if (userId) return this.db.select(viewColumns).from(skills).where(await visibleTo(userId));
+    return this.db.select(viewColumns).from(skills);
   }
 
   /** Skills `userId` can see whose name or description matches the ILIKE `pattern`. */
@@ -58,20 +65,20 @@ export class SkillRepository {
       .limit(limit);
   }
 
-  async findById(skillId: string): Promise<Skill | undefined> {
-    const [row] = await this.db.select().from(skills).where(eq(skills.id, skillId)).limit(1);
+  async findById(skillId: string): Promise<SkillView | undefined> {
+    const [row] = await this.db.select(viewColumns).from(skills).where(eq(skills.id, skillId)).limit(1);
     return row;
   }
 
-  async findByIds(skillIds: string[]): Promise<Skill[]> {
+  async findByIds(skillIds: string[]): Promise<SkillView[]> {
     if (skillIds.length === 0) return [];
-    return this.db.select().from(skills).where(inArray(skills.id, skillIds));
+    return this.db.select(viewColumns).from(skills).where(inArray(skills.id, skillIds));
   }
 
   /** The rows among `skillIds` that `userId` can see (system, own, their orgs'). */
-  async findVisibleByIds(userId: string, skillIds: string[]): Promise<Skill[]> {
+  async findVisibleByIds(userId: string, skillIds: string[]): Promise<SkillView[]> {
     if (skillIds.length === 0) return [];
-    return this.db.select().from(skills).where(and(inArray(skills.id, skillIds), await visibleTo(userId)));
+    return this.db.select(viewColumns).from(skills).where(and(inArray(skills.id, skillIds), await visibleTo(userId)));
   }
 
   /**

@@ -1,4 +1,4 @@
-import type { Skill } from '@/db/schema/skills';
+import type { SkillView } from '@/db/schema/skills';
 import { logger } from '@/utils/logger';
 import * as yaml from 'js-yaml';
 
@@ -19,7 +19,7 @@ export interface PortableSkill {
 // ---------------------------------------------------------------------------
 
 /** Strip internal fields from a skill, returning a portable object */
-export function toPortableSkill(skill: Skill): PortableSkill {
+export function toPortableSkill(skill: SkillView): PortableSkill {
   const portable: PortableSkill = {
     name: skill.name,
     category: skill.category,
@@ -46,7 +46,7 @@ export function toPortableSkill(skill: Skill): PortableSkill {
 }
 
 /** Convert a skill to a markdown document with YAML frontmatter */
-export function skillToMarkdown(skill: Skill | PortableSkill): string {
+export function skillToMarkdown(skill: SkillView | PortableSkill): string {
   const lines: string[] = [];
 
   // YAML frontmatter
@@ -96,7 +96,7 @@ export function skillToMarkdown(skill: Skill | PortableSkill): string {
 }
 
 /** Convert multiple skills to a single combined markdown document */
-export function skillsToMarkdown(skills: (Skill | PortableSkill)[]): string {
+export function skillsToMarkdown(skills: (SkillView | PortableSkill)[]): string {
   return skills.map(skillToMarkdown).join('\n---\n\n');
 }
 
