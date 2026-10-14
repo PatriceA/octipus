@@ -479,7 +479,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'swarm',
     valueType: 'number',
     defaultValue: 600_000,
-    description: 'Orphan reaper cadence (ms)',
+    description: 'Age (ms) after which a running swarm node with no live worker is reaped as an orphan (checked every 2 min)',
     isSecret: false,
     envVar: 'SWARM_ORPHAN_REAPER_INTERVAL_MS',
   },
