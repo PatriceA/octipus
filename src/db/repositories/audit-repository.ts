@@ -5,9 +5,9 @@ import { type AuditDetails, type AuditLogEntry, type auditActionEnum, auditLog, 
 export class AuditRepository {
   private get db() { return getDb(); }
 
-  async log(entry: Omit<NewAuditLogEntry, 'id' | 'createdAt'>): Promise<AuditLogEntry> {
-    const result = await this.db.insert(auditLog).values(entry).returning();
-    return result[0];
+  /** No caller reads the row back, so the insert returns nothing. */
+  async log(entry: Omit<NewAuditLogEntry, 'id' | 'createdAt'>): Promise<void> {
+    await this.db.insert(auditLog).values(entry);
   }
 
   async findById(id: string): Promise<AuditLogEntry | null> {

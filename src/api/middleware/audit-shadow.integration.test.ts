@@ -78,14 +78,24 @@ async function clearAudit(): Promise<void> {
   await executeRaw(`DELETE FROM audit_log WHERE action='api_request'`);
 }
 
+/**
+ * The middleware does not await its insert, so the row lands after the
+ * response. Wait until `expected` rows are there (bounded); for an expected
+ * zero, give a stray insert time to land so the assertion can catch it.
+ */
+async function settle(expected: number): Promise<void> {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  if (expected === 0) { await sleep(100); return; }
+  for (let i = 0; i < 100 && (await countAuditRows()) < expected; i++) await sleep(20);
+}
+
 describe('audit-shadow middleware (integration)', () => {
   test('POST /api/sessions writes one audit_log row', async () => {
     await clearAudit();
     const res = await app.handle(new Request('http://localhost/api/sessions', { method: 'POST' }));
     expect(res.status).toBe(200);
-    // onAfterHandle fires asynchronously alongside the response; give the
-    // Elysia microtask a tick to flush before counting.
-    await new Promise((r) => setTimeout(r, 5));
+    // The insert is not awaited by the response; wait for it to land.
+    await settle(1);
     expect(await countAuditRows()).toBe(1);
   });
 
@@ -93,7 +103,7 @@ describe('audit-shadow middleware (integration)', () => {
     await clearAudit();
     const res = await app.handle(new Request('http://localhost/api/sessions'));
     expect(res.status).toBe(200);
-    await new Promise((r) => setTimeout(r, 5));
+    await settle(0);
     expect(await countAuditRows()).toBe(0);
   });
 
@@ -101,7 +111,7 @@ describe('audit-shadow middleware (integration)', () => {
     await clearAudit();
     const res = await app.handle(new Request('http://localhost/api/sessions/abc', { method: 'DELETE' }));
     expect(res.status).toBe(200);
-    await new Promise((r) => setTimeout(r, 5));
+    await settle(1);
 
     const { queryRaw } = await import('@/db/postgres');
     const { rows } = await queryRaw(`SELECT resource_type, details FROM audit_log WHERE action='api_request'`);
@@ -116,7 +126,7 @@ describe('audit-shadow middleware (integration)', () => {
     await clearAudit();
     const res = await app.handle(new Request('http://localhost/api/health/ping', { method: 'POST' }));
     expect(res.status).toBe(200);
-    await new Promise((r) => setTimeout(r, 5));
+    await settle(0);
     expect(await countAuditRows()).toBe(0);
   });
 
@@ -129,7 +139,7 @@ describe('audit-shadow middleware (integration)', () => {
     try {
       const res = await app.handle(new Request('http://localhost/api/sessions', { method: 'POST' }));
       expect(res.status).toBe(200);
-      await new Promise((r) => setTimeout(r, 5));
+      await settle(0);
       expect(await countAuditRows()).toBe(0);
     } finally {
       cfg.multiuser.auditShadow = original;
@@ -139,7 +149,7 @@ describe('audit-shadow middleware (integration)', () => {
   test('anonymous principal yields null user_id and principalKind=anonymous', async () => {
     await clearAudit();
     await app.handle(new Request('http://localhost/api/sessions', { method: 'POST' }));
-    await new Promise((r) => setTimeout(r, 5));
+    await settle(1);
 
     const { queryRaw } = await import('@/db/postgres');
     const { rows } = await queryRaw(`SELECT user_id, details FROM audit_log WHERE action='api_request'`);

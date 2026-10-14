@@ -24,41 +24,32 @@ export class RateLimiter {
   }
 
   /**
-   * Sliding-window rate limit check.
-   * Returns whether the request is allowed, how many remain, and when to retry if blocked.
+   * Fixed-window rate limit check: a key's window opens on its first hit and
+   * lasts `windowSecs`. Returns whether the request is allowed, how many
+   * remain, and when to retry if blocked.
+   *
+   * One atomic increment per request (plus the expiry on a window's first
+   * hit). The read-then-write this replaces cost two storage round trips per
+   * layer per request, and two concurrent requests could read the same count
+   * and both pass. A refused request still counts; it does not extend the
+   * window. The key prefix differs from the old JSON `{count, windowStart}`
+   * entries so a counter never increments one of those.
    */
   async check(key: string, limit: number, windowSecs: number): Promise<RateLimitResult> {
-    const now = Date.now();
-    const windowKey = `ratelimit:${key}`;
+    const windowKey = `ratecount:${key}`;
+    const count = await this.cache.increment(windowKey);
+    if (count === 1) await this.cache.expire(windowKey, windowSecs);
+    if (count <= limit) return { allowed: true, remaining: limit - count };
 
-    // Get current window data
-    const data = await this.cache.get<{ count: number; windowStart: number }>(windowKey);
-
-    if (!data) {
-      // First request in this window
-      await this.cache.set(windowKey, { count: 1, windowStart: now }, windowSecs);
-      return { allowed: true, remaining: limit - 1 };
+    // A counter left without an expiry (the process stopped between the
+    // increment and the expire) would refuse the key for good: give it one.
+    let ttl = await this.cache.ttl(windowKey);
+    if (ttl === -1) {
+      apiLogger.warn({ key }, 'Rate-limit counter had no expiry; restarting its window');
+      await this.cache.expire(windowKey, windowSecs);
+      ttl = windowSecs;
     }
-
-    const elapsed = (now - data.windowStart) / 1000;
-
-    if (elapsed >= windowSecs) {
-      // Window expired, start new one
-      await this.cache.set(windowKey, { count: 1, windowStart: now }, windowSecs);
-      return { allowed: true, remaining: limit - 1 };
-    }
-
-    if (data.count >= limit) {
-      const retryAfter = Math.ceil(windowSecs - elapsed);
-      return { allowed: false, remaining: 0, retryAfter };
-    }
-
-    // Increment
-    data.count += 1;
-    const remainingTtl = Math.ceil(windowSecs - elapsed);
-    await this.cache.set(windowKey, data, remainingTtl);
-
-    return { allowed: true, remaining: limit - data.count };
+    return { allowed: false, remaining: 0, retryAfter: Math.max(1, ttl) };
   }
 
   /**

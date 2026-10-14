@@ -157,7 +157,10 @@ export const auditShadowMiddleware = new Elysia({ name: 'audit-shadow' })
       const durationMs = start ? Date.now() - start : 0;
       const status = (ctx.set?.status as number | undefined) ?? 200;
 
-      await writeApiAudit({
+      // Not awaited: the after-hooks run before the response is sent, and an
+      // audit insert must not add a database round trip to every write
+      // request. A failed insert is still logged.
+      void writeApiAudit({
         principal: getPrincipal(ctx),
         method: ctx.request.method,
         pathname: url.pathname,
@@ -165,7 +168,7 @@ export const auditShadowMiddleware = new Elysia({ name: 'audit-shadow' })
         durationMs,
         ipAddress: recordedClientIp(ctx.request, ctx.socketAddress),
         userAgent: ctx.request.headers.get('user-agent') ?? undefined,
-      });
+      }).catch((err: unknown) => apiLogger.warn({ err }, 'audit-shadow: failed to record api_request'));
     } catch (err) {
       // Audit must never break a request — log and continue.
       apiLogger.warn({ err }, 'audit-shadow: failed to record api_request');
