@@ -180,7 +180,8 @@ export const costLog = pgTable('cost_log', {
   funding: text('funding').$type<CostFunding>().default('own').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
-  userIdIdx: index('cost_log_user_id_idx').on(table.userId),
+  /** Spend budgets: one user's rows since the period start. */
+  userCreatedIdx: index('cost_log_user_created_idx').on(table.userId, table.createdAt),
   sessionIdIdx: index('cost_log_session_id_idx').on(table.sessionId),
   modelNameIdx: index('cost_log_model_name_idx').on(table.modelName),
   createdAtIdx: index('cost_log_created_at_idx').on(table.createdAt),
