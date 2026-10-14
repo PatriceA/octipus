@@ -1,6 +1,6 @@
 # Interactive answers (inline UI) — implementation spec
 
-> **Spec, revision 3, 2026-10-14.** Adds small interactive answers — charts,
+> **Spec, revision 3.1, 2026-10-14.** Adds small interactive answers — charts,
 > calculators, diagrams, comparisons with controls — rendered inside the web
 > chat, next to the reply that produced them. The idea and some code come from
 > [CopilotKit/OpenIntelligentUI](https://github.com/CopilotKit/OpenIntelligentUI)
@@ -14,7 +14,8 @@
 > reviewers (security; code accuracy; product and model behaviour; tests,
 > operations and house rules): 95 findings, 9 blockers. Revision 2 was
 > reviewed by two (security; accuracy and consistency): 39 findings, 3
-> blockers. Every verified finding is folded in; Appendix B lists what
+> blockers. Revision 3 was checked once more (1 blocker, 3 majors, 3 minors).
+> Every verified finding is folded in; Appendix B lists what
 > changed. Problems found outside this feature are in §13 and are not fixed
 > here.
 >
@@ -197,7 +198,11 @@ root-runner computes `inlineUiOffered`:
 - `(await sessionAudience(session)).kind === 'personal'`;
 - the client declared `renders: ['inline_ui']` for this turn (D14);
 - not small-tier;
-- no stored DENY on tool `inline-ui` for the user (kill switch, §10.4).
+- no stored DENY on tool `inline-ui` for the user (kill switch, §10.4);
+- the root model is not a CLI provider (`isCLIProvider`,
+  `src/core/cli-agent-factory.ts:9`): a vendor CLI keeps its own resumable
+  transcript (`src/core/cli-compaction.ts:16-20`), which D12 cannot stub, and
+  receives root tools through the MCP bridge (`src/core/cli-agent-worker.ts:241-276`).
 
 It stores the result as `context.metadata.inlineUiOffered = true` on the root
 `AgentContext`. `render` requires `context.root === true &&
@@ -282,9 +287,11 @@ checked on navigations of its child frames in Chromium and Gecko.
 
 - **If the spike (§5.0) shows the host's `frame-src` blocks the content
   frame's navigation to any `http(s):` URL on Chromium, Gecko and WebKit:**
-  a scripted render has **no egress**. The host reports the blocked attempt
-  (`securitypolicyviolation`) and the block stops with "tried to open
-  <host name>".
+  a scripted render has **no egress**. The block is stopped when the host
+  observes a violation in its own realm or a content-frame `load` after the
+  first; events in the content realm are never relied on (generated code
+  lives there). If an engine offers neither signal, navigation is still
+  blocked and the block shows no stop reason.
 - **Otherwise:** a scripted render is **`write` egress** in `classifyFlow`
   (a browser GET can carry any data to any host — write-like; this also
   covers private+suspicious, `flow-guard.ts:486`), every scripted block is
@@ -327,7 +334,10 @@ written (`agent-worker.ts:797-808`), for every message in `this.messages`:
   signatures are not needed for replay; dropping `providerRaw` is a state
   replay already supports (`agent-worker.ts:582`).
 
-Within the turn nothing is edited: the current tool-use cycle and its signed
+Stubbed messages carry a marker so the Gemini replay warning
+(`src/models/providers/gemini-provider.ts:175`) is not logged for them on
+every later turn. The stub is applied to the mapped copy before
+`capNativeSnapshot`. Within the turn nothing is edited: the current tool-use cycle and its signed
 blocks stay intact, and a failed render keeps its arguments so the model can
 fix them. When the snapshot is not usable, the final assistant row's
 `metadata.promptContext` carries `(system note: interactive answers shown in
@@ -345,8 +355,9 @@ It stays §14-Q1 because it would stream on providers that deliver tool
 arguments in one chunk.
 
 **D14. Clients declare what they can render.** `chat.send` gains an optional
-`renders: ['inline_ui']` (Zod). `AgentService.handleMessage` gains a
-`renders` argument, set into `RunContext.renders` (new readonly field,
+`renders: ['inline_ui']` (Zod). `AgentService.handleMessage` (positional,
+`service.ts:222-235`) gains one trailing option
+`inlineUi?: { renders, reports, provenance }`; `renders` set into `RunContext.renders` (new readonly field,
 `run-context.ts:21-30`) in the `runWithContext` call (`service.ts:276`);
 root-runner and the tool read `getRunContext()?.renders`. The web declares it
 over the gateway only. The REST fallback declares nothing: it runs when the
@@ -389,10 +400,20 @@ connect-src 'none'`. P3 depends on fixing §13-1 first.
 Host frame CSP (`H` = per-mount nonce from `crypto.getRandomValues`):
 
 ```
-default-src 'none'; script-src 'nonce-H'; style-src 'unsafe-inline';
-frame-src <spike result: 'none' if about:srcdoc is exempt, else blob:>;
-img-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none'
+default-src 'none'; script-src 'nonce-H' 'nonce-C'; style-src 'unsafe-inline';
+img-src data: blob:; font-src data:; media-src data: blob:;
+frame-src <spike result>; connect-src 'none'; form-action 'none'; base-uri 'none'
 ```
+
+**Inheritance rule.** A `srcdoc` document copies its creator's policy
+container, and a `blob:` document gets the policy container of the context
+that made the blob. So the host CSP is also enforced inside the content
+frame, on top of the content frame's own meta CSP. **The host CSP must
+therefore allow everything the content CSP allows** (nonce C, `data:`/`blob:`
+images and media, `data:` fonts). This is safe because the host never inserts
+generated markup. A unit test checks that the content CSP's allowances are a
+subset of the host CSP's. The alternative, a `data:` URL content frame
+(empty policy container, `frame-src data:`), is evaluated in the spike.
 
 Content frame CSP (`C` = second per-mount nonce):
 
@@ -505,6 +526,15 @@ Firefox and WebKit (and a manual run in the three desktop webviews):
    needed?
 4. `navigator.userActivation`, `document.featurePolicy`, and
    `execCommand('copy')` behaviour per engine.
+5. Inheritance: inside the content frame, the nonce-C runtime runs and
+   `data:` image, `data:` font and `blob:` image load with no violation
+   (§4.2 inheritance rule); compare `srcdoc`, `blob:` and `data:` content
+   frames.
+6. Which realm gets the navigation violation. By CSP3 the initiator's
+   policy is checked, and the content document carries the inherited host
+   `frame-src` too, so the event may fire only in the content realm, where
+   generated code lives. Record per engine whether the **host** observes a
+   violation or a content `load` (Chromium commits an error page).
 
 The result picks D9's branch and the host `frame-src` value and is recorded
 in the P1 PR. If WebKit alone fails, the fallback branch applies everywhere
@@ -671,8 +701,8 @@ outcomes (`script-error`, `blank`, `stopped-navigation`, `stopped-flood`,
 (Zod: enums and integers only, ≤ 20). The composer shows "Report attached for
 1 interactive answer" and lets the user remove it.
 
-Server path: `message-handler` → `handleMessage(…, { renders, reports,
-provenance })` → root-runner extras → validated (ids must belong to the
+Server path: `message-handler` → `handleMessage(…, { inlineUi: { renders, reports,
+provenance } })` → root-runner extras → validated (ids must belong to the
 session) → one line pushed into the root prompt's volatile part → stored on
 the user row as `promptContext` (`agent-worker.ts:609-633`), so it reaches the
 model in both the snapshot and the rebuild paths. A steered send writes the
@@ -768,9 +798,14 @@ in the P1 PR.
     source)` (ref + `useImperativeHandle`); it appends on a new line and shows
     a removable "from <title>" chip.
 - Provenance: `chat.send` gains `provenance?: { inlineUiId }`; same server
-  path as reports (§5.6), id checked against the session, line
+  path as reports (§5.6), id checked against the session. Both the normal
+  path (`agent-worker.ts:625`) and the steer path (`message-handler.ts:122`,
+  `trySteerRunningRootAgent` gains `{ reports, provenance }`) store
+  `metadata: { promptContext, inlineUiProvenance: { id } }`, and the steer
+  `chat.message` event (`message-handler.ts:304-310`) carries
+  `inlineUiProvenance`. The model-facing line is
   `(system note: the user sent this from interactive answer <uuid>)`. The
-  visible bubble shows a "from <title>" chip from metadata; the text is
+  visible bubble's "from <title>" chip reads `inlineUiProvenance`; the text is
   unchanged.
 - Disabled while impersonating.
 
@@ -917,6 +952,7 @@ description and checked by the eval.
 | REST fallback | Not offered (D14) |
 | TUI | Not offered; shows "open in the web app" for blocks from the web |
 | Channels, MCP, eval | Not offered unless declared |
+| CLI-provider root (Claude Code CLI, Codex) | Not offered (D4) |
 | Federation peers | No events forwarded |
 
 ### 10.6 Docs
@@ -942,7 +978,7 @@ adds them (CI: `.github/workflows/ci.yml:64`).
 |---|---|---|
 | Spike | §5.0 | Playwright (3 engines) + manual desktop |
 | Lint and limits | every §4.3 row; limits at ±1; JSON-size limit; esbuild check; `{{secret:` | unit `src/shared/inline-ui/*.test.ts`, `src/tools/inline-ui/*.test.ts` |
-| Document builders | payload escape of `<`, U+2028/2029; CSP first in head; constant runtime sources (hash pinned) | unit (string) + Playwright (`document.head.firstElementChild` is the CSP meta; exactly one CSP meta) |
+| Document builders | payload escape of `<`, U+2028/2029; CSP first in head; constant runtime sources (hash pinned); content CSP allowances ⊆ host CSP allowances | unit (string) + Playwright (`document.head.firstElementChild` is the CSP meta; exactly one CSP meta) |
 | Breakouts | `</style>` + `<link rel=dns-prefetch>` in css; `</script>`, `<!--<script>` in js; `<plaintext>`, `<textarea>`, `<title>`, unclosed `<!--`, meta refresh, nested `<template>`, `shadowrootmode` in html | Playwright: runtime intact, no request, `ready` received |
 | Clobbering | `<img name="getElementById">`, `<img name="body">`, `<form name="querySelector">` | Playwright: runtime works, link handling intact |
 | Links | no live `href` after insertion; click/Enter/Space → chip; middle-click and pointerdown cause no request; SVG `set`/`animate` href refused; MathML href removed | Playwright with request recording |
@@ -950,10 +986,12 @@ adds them (CI: `.github/workflows/ci.yml:64`).
 | S4 / D9 | scripted `location=` to routed `https://exfil.test/**` with 200, 204 and a hanging body: no request (spike branch) or block stopped and ASK applied (fallback) | Playwright |
 | S5 | messages from the content frame or another frame to the chat page ignored; content cannot forge `stopped`; flood unmounts | Playwright |
 | S6 / P2 | strip shows full text; buttons inert for 800 ms; frame height locked while open; nothing sent without a click in the chat page; Edit appends to an existing draft | Playwright |
+| Lint ≡ sanitizer | one shared fixture of refused inputs; the server lint and the content runtime refuse/remove exactly the same set | unit + Playwright |
+| T6 caps | 201 `<use>`, `<use>` depth 4, 21 filters are cut back by the runtime | Playwright |
 | S12 | footer and spacer present; password/file inputs replaced; height clamp | Playwright |
 | S14 | programmatic `focus()` in a frame while typing in the composer returns focus and stops the block | Playwright |
 | D10 | history scripted block waits; tainted live block waits; impersonation waits; freeze marker → "froze" | Playwright |
-| Offer | root × audience × renders × small × denied; customized role row's handlers filtered | unit |
+| Offer | root × audience × renders × small × denied × CLI provider; customized role row's handlers filtered | unit |
 | D14 plumbing | `chat.send` schema, `RunContext.renders`, REST fallback offers nothing | unit |
 | Tool | conformance; stores and returns meta; `get` session-scoped; caps; D4 check from a child and from codemode; truncation messages | unit + database |
 | History | `stubInlineUiHistory`: success, failure, `get` results, `providerRaw` dropped; snapshot size bounded after N renders; `promptContext` note with ids only | unit + database; live check on Anthropic, Gemini, one OpenAI-compatible provider |
@@ -1030,6 +1068,13 @@ One phase per PR; refactors and pre-existing fixes are their own PRs.
 | `ResizeObserver` + polling | `ResizeObserver`, coalesced, clamped | — |
 
 ## Appendix B — Revision log
+
+**Revision 3.1** (round 3: 1 blocker, 3 majors, 3 minors):
+- **CSP inheritance.** The content frame inherits the host CSP. The host CSP now allows everything the content CSP allows, a subset test was added, and the spike tests inheritance and `data:` frames (§4.2, §5.0).
+- **Navigation stop signal.** The navigation violation may fire only in the content realm. The stop signal now relies only on what the host observes (D9, spike step 6).
+- **CLI roots.** CLI-provider roots are not offered the tool, because their vendor transcript cannot be stubbed (D4).
+- **Steered sends.** Provenance is stored as a structured key on both paths, the steer path included (§6).
+- **Minors.** Gemini replay warning skipped for stubbed messages; one `handleMessage` option; lint/sanitizer parity and render-cost cap tests.
 
 **Revision 3** (round 2: security; accuracy and consistency — 39 findings, 3 blockers):
 - **History.** History stub moved to turn end and extended to drop `providerRaw`, because Anthropic and Gemini replay tool inputs from it. Failed renders and `get` results are also stubbed (D12).
