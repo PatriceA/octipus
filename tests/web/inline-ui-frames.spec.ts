@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { buildHostDocument, inlineUiAllowAttribute } from '../../src/shared/inline-ui';
+import { buildHostDocument } from '../../src/shared/inline-ui';
 
 /**
  * The interactive-answer frames in a real browser (spec §5.0 spike, S1–S4).
@@ -21,19 +21,18 @@ async function mount(page: Page, input: { html: string; css?: string; js?: strin
     mode: input.mode ?? (input.js ? 'scripted' : 'static'), theme: 'dark',
   });
   await page.setContent('<!doctype html><html><body></body></html>');
-  await page.evaluate(({ doc, allow }) => {
+  await page.evaluate(({ doc }) => {
     const w = window as unknown as { __msgs: unknown[] };
     w.__msgs = [];
     const f = document.createElement('iframe');
     f.id = 'host';
     f.setAttribute('sandbox', 'allow-scripts');
-    f.setAttribute('allow', allow);
     f.setAttribute('referrerpolicy', 'no-referrer');
     f.style.cssText = 'width:600px;height:400px;border:0';
     window.addEventListener('message', (e) => { if (e.source === f.contentWindow) w.__msgs.push(e.data); });
     f.srcdoc = doc;
     document.body.appendChild(f);
-  }, { doc, allow: inlineUiAllowAttribute() });
+  }, { doc });
   return {
     requests,
     messages: () => page.evaluate(() => (window as unknown as { __msgs: Array<Record<string, any>> }).__msgs),

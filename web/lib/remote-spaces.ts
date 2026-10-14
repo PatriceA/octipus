@@ -1,3 +1,4 @@
+import type { InlineUiBlockData } from '@/components/chat/inline-ui/context';
 /**
  * Spaces joined on other installs (docs/plans/federation-spec.md §8.3): the
  * wire shapes of `/api/remote-spaces` (`src/api/routes/remote-spaces.ts`),
@@ -167,6 +168,8 @@ export interface RoomSource {
   post(roomId: string, body: { content: string; addressed: boolean; clientId: string }): Promise<PostOutcome>;
   /** My mute of the room: no notifications of it. A remote room's is kept by its host. */
   setMuted(roomId: string, muted: boolean): Promise<unknown>;
+  /** An interactive answer of a reply in the room (a remote room's from its host). */
+  inlineUi(roomId: string, blockId: string): Promise<InlineUiBlockData>;
   gateway: SpaceGateway;
 }
 
@@ -185,6 +188,7 @@ export function localRoomSource(spaceId: string, gateway: WebGateway): RoomSourc
     messages: (roomId, query) => api.get(`/spaces/${spaceId}/rooms/${roomId}/messages?${pageQuery(query)}`),
     post: (roomId, body) => api.post(`/spaces/${spaceId}/rooms/${roomId}/messages`, body),
     setMuted: (roomId, muted) => api.patch(`/spaces/${spaceId}/rooms/${roomId}/me`, { muted }),
+    inlineUi: (roomId, blockId) => api.get<{ block: InlineUiBlockData }>(`/sessions/${roomId}/inline-ui/${blockId}`).then((r) => r.block),
     gateway: localSpaceGateway(gateway),
   };
 }
@@ -199,6 +203,8 @@ export function remoteRoomSource(remoteSpaceId: string, gateway: WebGateway): Ro
       .then((page) => ({ messages: withUuidIds(page.messages), hasMore: page.hasMore === true })),
     post: (roomId, body) => api.post(remotePath(remoteSpaceId, ['rooms', roomId, 'messages']), body),
     setMuted: (roomId, muted) => api.patch(remotePath(remoteSpaceId, ['rooms', roomId, 'me']), { muted }),
+    inlineUi: (roomId, blockId) => api.get<{ block: InlineUiBlockData }>(remotePath(remoteSpaceId, ['rooms', roomId, 'inline-ui', blockId]))
+      .then((r) => ({ ...r.block, shared: true })),
     gateway: remoteSpaceGateway(gateway, remoteSpaceId),
   };
 }

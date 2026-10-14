@@ -22,6 +22,7 @@ import { compareTimelineEntries } from '../../../src/shared/timeline-order';
 import { agentCompletionLabel, type AgentCompletionReason } from '../../../src/shared/agent-completion';
 import type { ToolInputPreview, ToolResultPreview } from '../../../src/shared/work-stream';
 import DiffView from '@/components/chat/diff-view';
+import { AssistantContent, StreamingContent } from '@/components/chat/inline-ui/content';
 import { Markdown } from '@/components/ui/markdown-renderer';
 import { fmtUsd, type LimitRefusal, periodWord, resetLabel, scopeLabel } from '@/lib/spend-budgets';
 import { initials } from '@/lib/rooms';
@@ -56,6 +57,8 @@ export interface ChatMessageData {
   author?: { name: string; mine: boolean };
   /** Sent, not yet stored by the server (a room post awaiting its echo). */
   pending?: boolean;
+  /** Sent from an interactive answer's suggestion (its chip). */
+  fromInlineUi?: boolean;
 }
 
 export interface TrackedAgent {
@@ -283,6 +286,9 @@ function MessageBubble({ message, untrusted }: { message: ChatMessageData; untru
     return (
       <div className="flex justify-end py-1.5 group" data-role="user" data-author={message.author?.name} data-pending={message.pending || undefined}>
         <div className="flex flex-col items-end gap-0.5">
+          {message.fromInlineUi && (
+            <span className="text-[10px] text-on-surface-variant px-1" data-testid="from-inline-ui">from an interactive answer</span>
+          )}
           <div className={cn('bg-linear-to-r from-primary to-primary-container text-on-primary px-4 py-2.5 rounded-2xl rounded-br-md shadow-xs', message.pending && 'opacity-60')}>
             <p className="whitespace-pre-wrap text-sm">{content}</p>
           </div>
@@ -310,8 +316,9 @@ function MessageBubble({ message, untrusted }: { message: ChatMessageData; untru
         {metadata?.limit ? (
           <LimitRefusalCard limit={metadata.limit} fallback={content} />
         ) : (
-          <div className="bg-surface-container border border-outline-variant/10 px-4 py-3 rounded-2xl rounded-tl-md shadow-xs text-on-surface">
-            <MessageContent content={content} untrusted={untrusted} />
+          <div className="bg-surface-container border border-outline-variant/10 px-4 py-3 rounded-2xl rounded-tl-md shadow-xs text-on-surface min-w-0">
+            {/* Interactive answers render as blocks between the markdown parts. */}
+            <AssistantContent content={content} untrusted={untrusted} />
           </div>
         )}
 
@@ -1006,7 +1013,7 @@ export default function MessageTimeline({
             <Loader2 className="h-4 w-4 text-on-primary animate-spin" />
           </div>
           {streamingText ? (
-            <div className="text-sm whitespace-pre-wrap break-words min-w-0">{streamingText}</div>
+            <StreamingContent text={streamingText} />
           ) : (
             <span className="text-sm text-accent animate-pulse">
               {statusMessage || 'Thinking...'}

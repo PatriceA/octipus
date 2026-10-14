@@ -41,20 +41,17 @@ export function inlineUiNonce(): string {
 }
 
 /**
- * Policy-controlled features denied on both iframes (S3). The opaque-origin
- * frames already get none of the powerful features (camera, microphone,
- * geolocation, clipboard, fullscreen, payment, …): their default allowlist is
- * `'self'`, and an iframe only gets them when the embedder delegates them. Of
- * the features whose default is `*`, everything except picture-in-picture
- * needs network, which the CSP refuses. Picture-in-picture does not: a script
- * could float a video window outside the page, so it is denied explicitly.
- * Chromium logs one console error per denied entry, so the list stays minimal.
+ * No `allow` attribute on either iframe (S3). The opaque-origin frames get
+ * none of the powerful features (camera, microphone, geolocation, clipboard,
+ * fullscreen, payment, …): their default allowlist is `'self'`, and an iframe
+ * only gets them when its embedder delegates them. The features whose default
+ * is `*` need network, which the CSP refuses — except picture-in-picture,
+ * which the sanitizer disables on every `<video>` it lets through (a script
+ * can still request it, with a click inside the frame, for a window that only
+ * shows video frames). Denying it with `allow="picture-in-picture 'none'"`
+ * would make Chromium log a console error on every frame mount.
  */
-export const INLINE_UI_DENIED_FEATURES = ['picture-in-picture'] as const;
-
-export function inlineUiAllowAttribute(): string {
-  return INLINE_UI_DENIED_FEATURES.map((f) => `${f} 'none'`).join('; ');
-}
+export const INLINE_UI_FRAME_SANDBOX = 'allow-scripts';
 
 /** CSP of the content frame (`C` = content nonce). No network of any kind. */
 export function contentCsp(contentNonce: string): string {
@@ -169,6 +166,7 @@ const CONTENT_RUNTIME = String.raw`(function (P) {
       var n = String(el.localName).toLowerCase(), ns = el.namespaceURI;
       if (n === 'use' && ++uses > 200) { el.remove(); note('cost'); continue; }
       if (n === 'filter' && ++filters > 20) { el.remove(); note('cost'); continue; }
+      if (n === 'video') el.setAttribute('disablepictureinpicture', '');
       if (n === 'input') {
         var t = String(el.getAttribute('type') || '').toLowerCase();
         var ac = String(el.getAttribute('autocomplete') || '').toLowerCase();
@@ -307,7 +305,6 @@ interface HostPayload {
   title: string;
   preview: boolean;
   doc: string;
-  allow: string;
   flood: number;
   maxErrors: number;
   interval: number;
@@ -333,7 +330,6 @@ const HOST_RUNTIME = String.raw`(function (H) {
   }
   var f = d.createElement('iframe');
   f.setAttribute('sandbox', 'allow-scripts');
-  f.setAttribute('allow', H.allow);
   f.setAttribute('referrerpolicy', 'no-referrer');
   f.setAttribute('title', H.title);
   f.style.cssText = 'border:0;width:100%;height:100%;display:block;background:transparent;color-scheme:normal';
@@ -457,7 +453,6 @@ export function buildHostDocument(input: InlineUiFrameInput): { doc: string; hos
     title: input.title,
     preview: !!input.preview,
     doc: buildContentDocument(input, contentNonce),
-    allow: inlineUiAllowAttribute(),
     flood: INLINE_UI_LIMITS.floodPerSecond,
     maxErrors: INLINE_UI_LIMITS.errorsPerMount,
     interval: INLINE_UI_LIMITS.bridgeIntervalMs,

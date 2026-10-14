@@ -11,7 +11,7 @@ import {
   Square,
   X,
 } from 'lucide-react';
-import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
+import { type Ref, useCallback, useEffect, useId, useImperativeHandle, useRef, useState, useSyncExternalStore } from 'react';
 import type { RealtimeState } from '@/hooks/useVoiceRealtime';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -34,8 +34,16 @@ export interface Attachment {
   type: 'image' | 'file' | 'audio';
 }
 
+/** What a page can do to the composer from outside (an interactive answer's "Edit in composer"). */
+export interface PromptInputHandle {
+  /** Append `text` on a new line after the draft (never replacing it) and mark it as from that interactive answer. */
+  insertDraft: (text: string, source: { inlineUiId: string; title?: string }) => void;
+}
+
 interface PromptInputProps {
-  onSend: (message: string, attachments?: Attachment[]) => void;
+  onSend: (message: string, attachments?: Attachment[], options?: { inlineUiProvenance?: string }) => void;
+  /** The composer handle (`insertDraft`). */
+  composerRef?: Ref<PromptInputHandle>;
   disabled?: boolean;
   placeholder?: string;
   /** Reason voice is unavailable (no STT engine / no cloud key) — for the tooltip. */
@@ -102,8 +110,12 @@ export default function PromptInput({
   onToggleRealtimeMode,
   voiceError = null,
   voiceAvailable = true,
+  composerRef,
 }: PromptInputProps) {
   const [text, setText] = useState('');
+  // The interactive answer a suggestion in the draft came from; sent with the
+  // message (its chip in the transcript). Removable before sending.
+  const [inlineUiSource, setInlineUiSource] = useState<{ inlineUiId: string; title?: string } | null>(null);
   const [commands, setCommands] = useState<Array<{ name: string; description: string }>>([]);
   const [commandError, setCommandError] = useState(false);
   const [commandIndex, setCommandIndex] = useState(0);
@@ -208,9 +220,10 @@ export default function PromptInput({
     setHistoryIndex(-1);
     setBrowsingHistory(false);
 
-    onSend(trimmed, attachments.length > 0 ? attachments : undefined);
+    onSend(trimmed, attachments.length > 0 ? attachments : undefined, inlineUiSource ? { inlineUiProvenance: inlineUiSource.inlineUiId } : undefined);
     setText('');
     setAttachments([]);
+    setInlineUiSource(null);
 
     setTimeout(() => {
       if (textareaRef.current) {
@@ -218,7 +231,16 @@ export default function PromptInput({
         textareaRef.current.focus();
       }
     }, 0);
-  }, [text, attachments, disabled, onSend]);
+  }, [text, attachments, disabled, onSend, inlineUiSource]);
+
+  useImperativeHandle(composerRef, () => ({
+    insertDraft: (inserted, source) => {
+      setText((prev) => (prev.trim() ? `${prev}\n${inserted}` : inserted));
+      setInlineUiSource(source);
+      // The user clicked "Edit in composer": moving focus here is theirs.
+      setTimeout(() => textareaRef.current?.focus(), 0);
+    },
+  }), []);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -529,6 +551,14 @@ export default function PromptInput({
       )}
 
       {/* Attachment bar */}
+      {inlineUiSource && (
+        <div className="mb-2 flex items-center gap-1.5 text-xs text-on-surface-variant" data-testid="composer-inline-ui-source">
+          <span className="rounded-full bg-surface-container-high px-2 py-0.5">
+            from interactive answer{inlineUiSource.title ? ` “${inlineUiSource.title}”` : ''}
+          </span>
+          <button type="button" onClick={() => setInlineUiSource(null)} className="underline" aria-label="Remove the interactive-answer source">remove</button>
+        </div>
+      )}
       {attachments.length > 0 && (
         <div className="mb-2 flex gap-2 overflow-x-auto pb-1">
           {attachments.map((attachment) => {

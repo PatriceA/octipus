@@ -288,3 +288,15 @@ export function splitInlineUiBody(body: string): InlineUiParts {
   if (/<script\b/i.test(html)) { issues.push('unclosed-script'); html = html.replace(/<script\b[\s\S]*$/i, ''); }
   return { css: css.join('\n').trim(), html: html.trim(), js: js.join('\n;\n').trim(), issues };
 }
+
+/**
+ * What a streaming preview may show of a half-written body: complete styles
+ * and the markup so far, without any script, a trailing partial tag or a
+ * trailing partial entity. The content runtime sanitizes it again; scripts
+ * never run in a preview.
+ */
+export function previewInlineUiBody(body: string): { css: string; html: string } {
+  const parts = splitInlineUiBody(body);
+  const html = parts.html.replace(/<[^>]*$/, '').replace(/&[a-zA-Z0-9#]*$/, '');
+  return { css: parts.css, html };
+}

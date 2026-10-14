@@ -1,3 +1,5 @@
+import { inlineUiSpeechText } from '../../src/shared/inline-ui/fence';
+
 /**
  * Sanitize an assistant reply for text-to-speech.
  *
@@ -7,7 +9,7 @@
  * voice speaks only the prose.
  */
 export function stripForSpeech(text: string): string {
-  return text
+  return inlineUiSpeechText(text) // interactive answers are not read aloud
     .replace(/\n+_Sources:[^\n]*_/gi, '') // rootAgent sources footer
     .replace(/```[\s\S]*?```/g, ' ') // don't read code blocks aloud
     .replace(/`([^`]+)`/g, '$1') // inline code → its text
