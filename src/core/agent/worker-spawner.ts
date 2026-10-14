@@ -1,4 +1,6 @@
+import { execFile } from 'child_process';
 import { resolve } from 'path';
+import { promisify } from 'util';
 import { getConfig } from '@/config';
 import { getAgentManager } from '@/core/agent-manager';
 import { getGatewayHub } from '@/core/gateway/hub';
@@ -38,6 +40,32 @@ import type { AgentRole, WorkerResult } from './types';
 import { inheritScope, writesWithheld } from './context';
 import { sessionAudience } from './audience';
 import { withoutPersonalOnlyTools } from '@/security/space-tools';
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * The `--- Git Status ---` prompt section for `cwd` (short status, diff
+ * stat), or '' when there is nothing to show — no changes, not a git repo,
+ * or git unavailable. Async, both commands in parallel: a slow repo must not
+ * stall the event loop on every spawn of a git-aware role.
+ */
+export async function gitContextSection(cwd: string): Promise<string> {
+  // No shell: `2>/dev/null | head` does not exist in cmd.exe, so on Windows these threw and agents got no git context.
+  const runGit = async (args: string[]) => (await execFileAsync('git', args, { cwd, timeout: 5_000, encoding: 'utf-8', windowsHide: true })).stdout.trim().split(/\r?\n/);
+  try {
+    const [status, diff] = await Promise.all([runGit(['status', '--short']), runGit(['diff', '--stat'])]);
+    const gitStatus = status.slice(0, 20).join('\n').trim();
+    const gitDiff = diff.slice(-5).join('\n').trim();
+    if (!gitStatus && !gitDiff) return '';
+    let git = '\n\n--- Git Status ---';
+    if (gitStatus) git += `\n${gitStatus}`;
+    if (gitDiff) git += `\n\nDiff summary:\n${gitDiff}`;
+    return git;
+  } catch (err) {
+    coreLogger.debug({ err, cwd }, 'git context skipped for spawn');
+    return '';
+  }
+}
 
 // Per-section token budget for the injected AGENTS.md guide (Phase 5 item 2).
 // ≈ the existing 8000-char cap in loadAgentsMd, so a normal guide isn't trimmed
@@ -574,20 +602,8 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   // Inject git status/diff for code-aware roles (gives agents awareness of pending changes)
   const GIT_AWARE_ROLES = new Set(['coding', 'review', 'devops', 'security', 'qa']);
   if (GIT_AWARE_ROLES.has(agentRole)) {
-    try {
-      const { execFileSync } = await import('child_process');
-      const gitCwd = devProjectPath || getConfig().workspace?.rootPath || process.cwd();
-      // No shell: `2>/dev/null | head` does not exist in cmd.exe, so on Windows these threw and agents got no git context.
-      const runGit = (args: string[]) => execFileSync('git', args, { cwd: gitCwd, timeout: 5_000, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }).trim().split(/\r?\n/);
-      const gitStatus = runGit(['status', '--short']).slice(0, 20).join('\n').trim();
-      const gitDiff = runGit(['diff', '--stat']).slice(-5).join('\n').trim();
-      if (gitStatus || gitDiff) {
-        let git = '\n\n--- Git Status ---';
-        if (gitStatus) git += `\n${gitStatus}`;
-        if (gitDiff) git += `\n\nDiff summary:\n${gitDiff}`;
-        volatileParts.push(git);
-      }
-    } catch { /* not a git repo or git unavailable */ }
+    const git = await gitContextSection(devProjectPath || getConfig().workspace?.rootPath || process.cwd());
+    if (git) volatileParts.push(git);
   }
 
   // Inject user profile context + related profiles for people-related queries
