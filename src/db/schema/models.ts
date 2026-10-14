@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { boolean, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { organizations } from './organizations';
 import { users } from './users';
@@ -185,6 +186,8 @@ export const costLog = pgTable('cost_log', {
   sessionIdIdx: index('cost_log_session_id_idx').on(table.sessionId),
   modelNameIdx: index('cost_log_model_name_idx').on(table.modelName),
   createdAtIdx: index('cost_log_created_at_idx').on(table.createdAt),
+  /** Space spend by funding source (migration 0128). */
+  wsFundingIdx: index('cost_log_ws_funding_idx').on(table.workspaceId, table.funding, table.createdAt).where(sql`${table.workspaceId} IS NOT NULL`),
 }));
 
 export type CostFunding = 'own' | 'sponsor' | 'install';
