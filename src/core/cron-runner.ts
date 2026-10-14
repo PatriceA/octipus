@@ -1,4 +1,4 @@
-import { and, eq, isNotNull, lte } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull, lte, sql } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { getEmbeddingService } from '@/core/rag/embeddings';
 import { sweepPurgedSpaceFiles } from '@/core/spaces/purge';
@@ -7,7 +7,7 @@ import { defaultListenDeps, runListenTick } from '@/channels/group-listen';
 import { getDb } from '@/db/postgres';
 import { agentRepository } from '@/db/repositories/agent-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
-import { hooks } from '@/db/schema/hooks';
+import { type Hook, hooks } from '@/db/schema/hooks';
 import { retentionPolicies } from '@/db/schema/retention-policies';
 import { getHookManager } from '@/hooks/manager';
 import { coreLogger } from '@/utils/logger';
@@ -267,6 +267,28 @@ function maybeEnsureVectorIndexes(): void {
     .catch((err: unknown) => coreLogger.error({ err }, 'Vector index ensure failed'));
 }
 
+/**
+ * Claim a due schedule hook for this tick: move its nextRunAt on (and disable
+ * a one-shot) only if nextRunAt still holds what the tick read. Every instance
+ * runs this loop, and two can read the same due hook; only the one whose
+ * UPDATE matches fires it. The same compare-and-set as the heartbeat's slot
+ * claim (heartbeat.ts) — compared at millisecond precision, since the row
+ * was read into a JS Date.
+ */
+export async function claimDueHook(hook: Hook, nextRunAt: Date | null, oneShot: boolean, now: Date): Promise<boolean> {
+  const snapshot = hook.nextRunAt;
+  const [claimed] = await getDb()
+    .update(hooks)
+    .set({ nextRunAt, ...(oneShot && { isEnabled: false }), updatedAt: now })
+    .where(and(
+      eq(hooks.id, hook.id),
+      eq(hooks.isEnabled, true),
+      snapshot == null ? isNull(hooks.nextRunAt) : sql`date_trunc('milliseconds', ${hooks.nextRunAt}) = ${snapshot.toISOString()}::timestamptz`,
+    ))
+    .returning({ id: hooks.id });
+  return claimed !== undefined;
+}
+
 const listenDeps = defaultListenDeps();
 let roomListenDeps: import('@/channels/group-listen').ListenDeps<import('@/core/rooms/listen').RoomListenTarget> | null = null;
 
@@ -325,25 +347,11 @@ async function processCronTick(): Promise<void> {
       // IMPORTANT: Update nextRunAt BEFORE executing — hook execution can take minutes/hours
       // (e.g. spawning a root agent + research agent). Without this, the next cron tick
       // finds the same hook still "due" and fires it again, causing duplicate executions.
+      // One-time datetime task: clear nextRunAt and disable after firing.
       const nextRun = isDatetimeTask ? null : getNextCronDate(cronExpression, timezone);
-      if (isDatetimeTask) {
-        // One-time datetime task: clear nextRunAt and disable after firing
-        await db
-          .update(hooks)
-          .set({
-            nextRunAt: null,
-            isEnabled: false,
-            updatedAt: now,
-          })
-          .where(eq(hooks.id, hook.id));
-      } else {
-        await db
-          .update(hooks)
-          .set({
-            nextRunAt: nextRun,
-            updatedAt: now,
-          })
-          .where(eq(hooks.id, hook.id));
+      if (!(await claimDueHook(hook, nextRun, isDatetimeTask, now))) {
+        coreLogger.debug({ hookId: hook.id }, 'Scheduled hook claimed elsewhere since this tick read it; skipping');
+        continue;
       }
 
       try {
