@@ -8,6 +8,8 @@ set -o pipefail 2>/dev/null || true
 # Usage:
 #   octi start [tui|web|desktop]    Start the backend; optionally attach a client
 #   octi restart [tui|web|desktop]  Same, after stopping what is running
+#                                   (--rebuild, or OCTI_REBUILD=1: rebuild the
+#                                   backend, MCP server and web UI even if current)
 #   octi stop                       Stop all Octipus processes
 #   octi tui                        Terminal chat against a running backend
 #   octi open                       Web UI in the browser (starts it if needed)
@@ -257,16 +259,24 @@ sync_codex_mcp_config() {
   mv "${_codex_config}.tmp" "$_codex_config"
 }
 
+# Poll `url` until it answers 2xx, for up to `seconds`. Four times a second: a
+# warm backend is up in ~2.5 s, and a 1 s poll added up to a second on top.
+# With `pid`, give up as soon as that process is gone — it is not coming up.
 wait_for_health() {
   local url="$1"
-  local max_attempts="${2:-30}"
+  local seconds="${2:-30}"
+  local pid="${3:-}"
   local attempt=0
+  local max_attempts=$((seconds * 4))
 
   while [[ $attempt -lt $max_attempts ]]; do
     if curl -sf "$url" >/dev/null 2>&1; then
       return 0
     fi
-    sleep 1
+    if [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null; then
+      return 1
+    fi
+    sleep 0.25
     attempt=$((attempt + 1))
   done
   return 1
@@ -399,10 +409,13 @@ kill_all_octipus() {
       fi
     done
   else
-    # Unix: pkill orphans
-    pkill -f "node.*dist/index.js" 2>/dev/null || true
+    # Unix: pkill orphans. The servers are started by absolute path, so the
+    # patterns name this checkout: a bare "node.*dist/index.js" also killed
+    # every other Node app's dist/index.js on the machine, MCP servers
+    # included (this checkout's own mcp-server/dist/index.js among them).
+    pkill -f "node.*${PROJECT_DIR}/dist/index.js" 2>/dev/null || true
     pkill -f "tsx.*src/index.ts" 2>/dev/null || true
-    pkill -f "next.*${WEB_PORT}" 2>/dev/null || true
+    pkill -f "node.*${PROJECT_DIR}/web/serve.mjs" 2>/dev/null || true
   fi
 
   # Free up ports
@@ -517,8 +530,13 @@ diagnose_backend_failure() {
 LAUNCH_TARGET="backend"
 LAUNCH_DEV=false
 LAUNCH_CWD=""
+# Rebuild the backend, MCP server and web UI even when they look current (a
+# build that depends on something the staleness check doesn't see, such as a
+# NEXT_PUBLIC_* variable baked into the web bundle).
+LAUNCH_REBUILD=false
+[[ "${OCTI_REBUILD:-}" == 1 || "${OCTI_REBUILD:-}" == true ]] && LAUNCH_REBUILD=true
 
-# Parse `octi start|restart [tui|web|desktop] [--dev]`.
+# Parse `octi start|restart [tui|web|desktop] [--dev] [--rebuild]`.
 #
 # The retired flags (`--tui`, `--backend-only`, `--headless`, `--no-web`) are
 # still accepted, unlisted: they are in people's shell history and scripts, and
@@ -536,6 +554,7 @@ parse_launch_args() {
       web|webui|browser) LAUNCH_TARGET="web" ;;
       desktop|app) LAUNCH_TARGET="desktop" ;;
       --dev|-d) LAUNCH_DEV=true ;;
+      --rebuild) LAUNCH_REBUILD=true ;;
       --backend-only|--headless|--no-web) LAUNCH_TARGET="backend" ;;
       -*) ;; # unknown flags are forwarded/ignored, not fatal
       *)
@@ -558,18 +577,22 @@ preflight_checks() {
     log_info "External storage (backend will verify DATABASE_URL)"
   fi
 
-  # Build MCP server and register with CLI tools
+  # Build MCP server (when its sources changed) and register with CLI tools
   if [[ -f "$PROJECT_DIR/mcp-server/package.json" ]]; then
-    log_step "Building MCP server..."
-    cd "$PROJECT_DIR/mcp-server"
-    # Fresh clones never installed mcp-server deps (it's not a root workspace),
-    # so tsc would fail with missing @types/node + SDK. Install on first build.
-    if [[ ! -d node_modules ]]; then
-      log_step "Installing MCP server deps (first run)..."
-      npm install --silent 2>/dev/null || log_warn "MCP dep install failed"
+    if [[ "$LAUNCH_REBUILD" == true ]] || ! node "$PROJECT_DIR/scripts/needs-build.mjs" mcp-server; then
+      log_step "Building MCP server..."
+      cd "$PROJECT_DIR/mcp-server"
+      # Fresh clones never installed mcp-server deps (it's not a root workspace),
+      # so tsc would fail with missing @types/node + SDK. Install on first build.
+      if [[ ! -d node_modules ]]; then
+        log_step "Installing MCP server deps (first run)..."
+        npm install --silent 2>/dev/null || log_warn "MCP dep install failed"
+      fi
+      npm run build --silent 2>/dev/null && log_info "MCP server built" || log_warn "MCP build failed (non-critical)"
+      cd "$PROJECT_DIR"
+    else
+      log_info "MCP server build is current"
     fi
-    npm run build --silent 2>/dev/null && log_info "MCP server built" || log_warn "MCP build failed (non-critical)"
-    cd "$PROJECT_DIR"
 
     regen_mcp_config
     log_info ".mcp.json generated"
@@ -578,15 +601,19 @@ preflight_checks() {
 
 # Rebuild dist/ when it is missing or older than the sources.
 #
-# `npm run start` runs `node dist/index.js`, which is a build artifact, and
+# The backend runs `node dist/index.js`, which is a build artifact, and
 # nothing rebuilt it — so after a `git pull` the backend silently kept serving
 # the previous checkout. It reports itself healthy and the only symptom is that
 # a change simply is not there.
 ensure_backend_build() {
   # Staleness is answered by scripts/needs-build.mjs, shared with the Windows
   # CLI: exit 0 current, exit 1 rebuild.
-  node "$PROJECT_DIR/scripts/needs-build.mjs" && return 0
-  log_step "Rebuilding the backend (sources changed since the last build)..."
+  [[ "$LAUNCH_REBUILD" != true ]] && node "$PROJECT_DIR/scripts/needs-build.mjs" backend && return 0
+  if [[ "$LAUNCH_REBUILD" == true ]]; then
+    log_step "Rebuilding the backend..."
+  else
+    log_step "Rebuilding the backend (sources changed since the last build)..."
+  fi
   (cd "$PROJECT_DIR" && npm run build > "$LOG_FILE.build" 2>&1) || {
     log_error "Backend build failed — see $LOG_FILE.build"
     return 1
@@ -604,12 +631,16 @@ start_backend() {
   else
     ensure_backend_build || return 1
     log_step "Starting backend..."
-    nohup npm run start > "$LOG_FILE" 2>&1 &
+    # What `npm run start` runs, without npm: an npm parent sat idle beside
+    # the server for its whole life (~50 MB), and the PID file named npm rather
+    # than the server, so `octi stop` signalled the wrapper. node_modules/.bin
+    # first on PATH, as npm puts it, for anything the backend spawns by name.
+    PATH="$PROJECT_DIR/node_modules/.bin:$PATH" nohup node "$PROJECT_DIR/dist/index.js" > "$LOG_FILE" 2>&1 &
   fi
   echo $! > "$PID_FILE_BACKEND"
 
   log_step "Waiting for backend to be ready..."
-  if wait_for_health "http://localhost:$API_PORT/api/health" 60; then
+  if wait_for_health "http://localhost:$API_PORT/api/health" 60 "$(get_pid "$PID_FILE_BACKEND")"; then
     log_info "Backend is ready on port $API_PORT"
     # The backend just minted ~/.octipus/mcp-token (multi-user mode);
     # restamp .mcp.json so MCP clients pick it up without a manual step.
@@ -621,29 +652,40 @@ start_backend() {
   return 1
 }
 
-# Build (or dev-serve) the web UI and open a browser at it.
+# Build (when its sources changed) or dev-serve the web UI, and open a browser
+# at it. The bundle used to be deleted and rebuilt on every start.
 start_web() {
-  log_step "Clearing web UI cache..."
-  rm -rf "$PROJECT_DIR/web/dist" "$PROJECT_DIR/web/node_modules/.cache"
-
   cd "$PROJECT_DIR/web"
+  : > "$WEB_LOG_FILE"
+  local serve=true
   if [[ "$LAUNCH_DEV" == true ]]; then
-    log_step "Starting web UI (dev mode)..."
-    nohup npm run dev > "$WEB_LOG_FILE" 2>&1 &
-  else
+    serve=false
+  elif [[ "$LAUNCH_REBUILD" == true ]] || ! node "$PROJECT_DIR/scripts/needs-build.mjs" web; then
     log_step "Building web UI..."
     if ! npm run build >> "$WEB_LOG_FILE" 2>&1; then
-      log_warn "Production build failed, using dev mode instead"
-      nohup npm run dev > "$WEB_LOG_FILE" 2>&1 &
-    else
-      log_step "Starting web UI..."
-      nohup npm run start >> "$WEB_LOG_FILE" 2>&1 &
+      log_warn "Production build failed, using dev mode instead (see octi logs --web)"
+      serve=false
     fi
+  else
+    log_info "Web UI build is current"
+  fi
+
+  if [[ "$serve" == true ]]; then
+    log_step "Starting web UI..."
+    # `node serve.mjs` is what `npm run start` ran; see start_backend for why
+    # without npm.
+    PATH="$PROJECT_DIR/web/node_modules/.bin:$PATH" nohup node "$PROJECT_DIR/web/serve.mjs" >> "$WEB_LOG_FILE" 2>&1 &
+  else
+    log_step "Starting web UI (dev mode)..."
+    nohup npm run dev >> "$WEB_LOG_FILE" 2>&1 &
   fi
   echo $! > "$PID_FILE_WEB"
 
-  sleep 2
-  log_info "Web UI starting on port $WEB_PORT"
+  if wait_for_health "http://localhost:$WEB_PORT/" 15 "$(get_pid "$PID_FILE_WEB")"; then
+    log_info "Web UI is ready on port $WEB_PORT"
+  else
+    log_warn "Web UI is not answering on port $WEB_PORT yet — see octi logs --web"
+  fi
   log_step "Opening browser..."
   open_browser "http://localhost:$WEB_PORT"
 }
@@ -1081,11 +1123,13 @@ cmd_help() {
   echo ""
   echo -e "  ${BOLD}Options:${NC}"
   echo -e "    --dev, -d        Development mode (hot reload) for start/restart"
+  echo -e "    --rebuild        Rebuild backend, MCP server and web UI even if current"
   echo -e "    --web, -w        For 'logs': show web UI logs instead of backend"
   echo ""
   echo -e "  ${BOLD}Environment:${NC}"
   echo -e "    API_PORT         Backend API port (default: 3005)"
   echo -e "    WEB_PORT         Web UI port (default: 3007)"
+  echo -e "    OCTI_REBUILD=1   Same as --rebuild"
   echo ""
 }
 
