@@ -19,6 +19,7 @@ const AGENT_CLEANUP_INTERVAL_MS = 7 * 24 * 3600_000; // Weekly
 const DOCS_REINDEX_INTERVAL_MS = 6 * 3600_000; // Every 6 hours
 const TRAJECTORY_COMPRESS_INTERVAL_MS = 24 * 3600_000; // Daily
 const SPACE_FILES_SWEEP_INTERVAL_MS = 3600_000; // Hourly
+const VECTOR_INDEX_INTERVAL_MS = 24 * 3600_000; // Daily
 
 /**
  * Default age cap for finished agent rows + their events. Nobody needs an
@@ -43,6 +44,8 @@ let lastSpaceFilesSweep = 0;
 let lastDocsReindex = Date.now();
 // Seed to 0 so the first tick after boot compresses yesterday's file (idempotent).
 let lastTrajectoryCompress = 0;
+// Seeded to boot time: src/index.ts runs the same check during boot.
+let lastVectorIndexEnsure = Date.now();
 
 /**
  * Parse a simple cron expression and compute the next run date.
@@ -249,6 +252,21 @@ async function maybeCompressTrajectories(): Promise<void> {
   }
 }
 
+/**
+ * Build the HNSW indexes once the embedding tables have rows of one dimension
+ * (src/db/vector-indexes.ts). Boot does it too; this catches an install whose
+ * tables were still empty then. Not awaited: a build can take minutes.
+ */
+function maybeEnsureVectorIndexes(): void {
+  const now = Date.now();
+  if (now - lastVectorIndexEnsure < VECTOR_INDEX_INTERVAL_MS) return;
+  lastVectorIndexEnsure = now;
+  void import('@/db/vector-indexes')
+    .then(({ ensureVectorIndexes }) => ensureVectorIndexes())
+    .then((outcomes) => { if (outcomes && Object.values(outcomes).includes('created')) coreLogger.info({ outcomes }, 'Vector indexes built'); })
+    .catch((err: unknown) => coreLogger.error({ err }, 'Vector index ensure failed'));
+}
+
 const listenDeps = defaultListenDeps();
 let roomListenDeps: import('@/channels/group-listen').ListenDeps<import('@/core/rooms/listen').RoomListenTarget> | null = null;
 
@@ -260,6 +278,7 @@ async function processCronTick(): Promise<void> {
     await maybeSweepPurgedSpaceFiles();
     await maybeReindexDocs();
     await maybeCompressTrajectories();
+    maybeEnsureVectorIndexes();
     const db = getDb();
     const now = new Date();
 

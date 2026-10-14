@@ -500,19 +500,25 @@ The script exits 1 on drift so a CI gate can pick it up.
 
 Migration 0047 made the embedding column dimensionless to support
 embedding-model swaps; the cost was pgvector couldn't build HNSW on
-a dimensionless column. Migration 0055 auto-restores HNSW when
-it's safe:
+a dimensionless column. Migration 0055 restored HNSW for tables that
+had rows when it ran; since a migration runs once, the same decision
+now runs at boot and daily from the cron runner
+(`src/db/vector-indexes.ts`):
 
-- **Empty table** → leave dimensionless. HNSW arrives next time the
-  migration runs after data lands.
+- **Empty table** → leave dimensionless. HNSW arrives on the first
+  check after data lands (at most a day, or the next restart).
 - **Single distinct dimension** → `ALTER COLUMN TYPE vector(N)` +
-  `CREATE INDEX USING hnsw (embedding vector_cosine_ops)`. One-time
-  table rewrite, data preserved.
-- **Multiple distinct dimensions** → `RAISE NOTICE` with the drift
-  count and skip. Run the drift-check script for the breakdown.
+  `CREATE INDEX CONCURRENTLY … USING hnsw (embedding vector_cosine_ops)`.
+  One-time table rewrite, data preserved; views over the column
+  (`memories_active`) are recreated around it.
+- **Multiple distinct dimensions** → warn with the drift count and
+  skip. Run the drift-check script for the breakdown.
 
-Both `embeddings.embedding` and `memories.embedding` are handled.
-Re-running the migration after a successful pin is a no-op.
+Both `embeddings.embedding` and `memories.embedding` are handled; once
+a valid HNSW index exists the check is a catalog lookup. Vector
+queries order by the bare distance (`embedding <=> $q` ascending) —
+`ORDER BY 1 - (embedding <=> $q) DESC` is the same order but cannot
+use the index.
 
 ## Dedup
 

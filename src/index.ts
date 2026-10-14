@@ -378,6 +378,15 @@ async function main() {
       logger.debug({ err }, 'embedding drift check skipped (non-fatal)');
     }
 
+    // HNSW for the embedding columns once their rows share one dimension
+    // (src/db/vector-indexes.ts). Not awaited: a first build on a large table
+    // must not hold up boot. The cron runner repeats it daily for an install
+    // whose tables were still empty here.
+    void import('@/db/vector-indexes')
+      .then(({ ensureVectorIndexes }) => ensureVectorIndexes())
+      .then((outcomes) => { if (outcomes && Object.values(outcomes).includes('created')) logger.info({ outcomes }, 'Vector indexes built'); })
+      .catch((err) => logger.error({ err }, 'Vector index ensure failed (non-fatal; search falls back to a sequential scan)'));
+
     // Wire gateway message handler and bridge root agent/agent events
     wireMessageHandler(gatewayHub);
     const { wireDocumentHub } = await import('@/core/docs');

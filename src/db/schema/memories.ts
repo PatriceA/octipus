@@ -98,6 +98,8 @@ export const memories = pgTable('memories', {
 
 export type Memory = typeof memories.$inferSelect;
 export type NewMemory = typeof memories.$inferInsert;
+/** A memory as the read paths return it: without the vector, which none of them uses. */
+export type MemoryRecord = Omit<Memory, 'embedding'>;
 
 export type MemoryFactType =
   | 'preference'
