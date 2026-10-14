@@ -76,6 +76,8 @@ export class MCPBridge extends EventEmitter {
   private reconnectTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private intentionalDisconnects: Set<string> = new Set();
   private configMutation: Promise<void> = Promise.resolve();
+  /** The boot-time connect (`startConnectAll`), which spawns wait on (`whenInitiallyConnected`). */
+  private initialConnect: Promise<void> | null = null;
   private static readonly MAX_RECONNECT_ATTEMPTS = 6;
   private static readonly RECONNECT_BASE_MS = 1_000;
   private static readonly RECONNECT_MAX_MS = 30_000;
@@ -411,21 +413,57 @@ export class MCPBridge extends EventEmitter {
 
     await this.loadConfig();
 
-    for (const server of this.serverConfigs) {
-      if (server.isEnabled) {
-        try {
-          await this.connect(server);
-        } catch (error) {
-          coreLogger.error({ error, serverId: server.id }, 'Failed to connect to MCP server');
-        }
+    // In parallel: one slow or dead server must not hold up the others.
+    const enabled = this.serverConfigs.filter((server) => server.isEnabled);
+    const results = await Promise.allSettled(enabled.map((server) => this.connect(server)));
+    results.forEach((result, i) => {
+      if (result.status === 'rejected') {
+        coreLogger.error({ error: result.reason, serverId: enabled[i].id }, 'Failed to connect to MCP server');
       }
-    }
+    });
+  }
+
+  /**
+   * `connectAll` for boot, without waiting on it: a slow server must not
+   * hold up startup. What needs the servers — an agent's tool list, its
+   * prompt's server section — waits through `whenInitiallyConnected`.
+   */
+  startConnectAll(): Promise<void> {
+    this.initialConnect = this.connectAll().catch((err: unknown) => {
+      coreLogger.error({ err }, 'MCP connectAll failed');
+    });
+    return this.initialConnect;
+  }
+
+  /**
+   * Resolves once the boot-time connect has settled, or after `maxWaitMs`
+   * (logged): an agent spawned meanwhile gets the servers that are up by
+   * then rather than waiting on one that hangs. Immediate when nothing is
+   * connecting.
+   */
+  async whenInitiallyConnected(maxWaitMs = 15_000): Promise<void> {
+    const pending = this.initialConnect;
+    if (!pending) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = await Promise.race([
+      pending.then(() => false),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(true), maxWaitMs);
+        (timer as { unref?: () => void }).unref?.();
+      }),
+    ]);
+    clearTimeout(timer);
+    if (timedOut) coreLogger.warn({ maxWaitMs }, 'MCP servers still connecting — continuing with the ones that are up');
+    else this.initialConnect = null;
   }
 
   /**
    * Disconnect from all servers
    */
   async disconnectAll(): Promise<void> {
+    // A server still connecting from boot would otherwise come up after this
+    // and outlive the shutdown.
+    await this.whenInitiallyConnected();
     // Cancel reconnects for servers currently between backoff attempts (dropped
     // from `connections`, so the loop below wouldn't otherwise reach them).
     for (const serverId of [...this.reconnectTimers.keys()]) {

@@ -220,9 +220,10 @@ async function main() {
     }
 
     // Connect to MCP servers
+    // Not awaited: a slow MCP server must not hold up boot. Agent tool lists
+    // wait for it, bounded (MCPBridge.whenInitiallyConnected).
     const mcpBridge = getMCPBridge();
-    await mcpBridge.connectAll();
-    logger.info('MCP servers connected');
+    void mcpBridge.startConnectAll().then(() => logger.info('MCP servers connected'));
 
     // Load hooks
     const hookManager = getHookManager();

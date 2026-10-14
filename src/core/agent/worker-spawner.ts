@@ -40,6 +40,7 @@ import type { AgentRole, WorkerResult } from './types';
 import { inheritScope, writesWithheld } from './context';
 import { sessionAudience } from './audience';
 import { withoutPersonalOnlyTools } from '@/security/space-tools';
+import { getMCPBridge } from '@/mcp/bridge';
 
 const execFileAsync = promisify(execFile);
 
@@ -257,6 +258,7 @@ export async function spawnWorker(
   const agentManager = getAgentManager();
   const agentRole = role as AgentRole;
   const roleConfig = getRoleConfig(agentRole);
+  await getMCPBridge().whenInitiallyConnected();
   let roleTools = getToolsForRole(agentRole);
 
   if (overrides?.toolIds && overrides.toolIds.length > 0) {
