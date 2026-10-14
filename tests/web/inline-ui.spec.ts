@@ -170,6 +170,48 @@ test.describe('interactive answers in the chat', () => {
   });
 });
 
+test.describe('saving an interactive answer as an artifact', () => {
+  test('the dialog suggests a slug, warns about octi, saves privately by default and links to the copy', async ({ authenticatedPage: page }) => {
+    await stubBlocks(page);
+    const saved: Array<Record<string, unknown>> = [];
+    await page.route('**/api/sessions/sess-1/inline-ui/*/promote', async (route) => {
+      saved.push(route.request().postDataJSON());
+      return json(route, 201, { artifact: { id: 'art-1' }, appUrl: '/artifacts/view?id=art-1', warnings: [], removed: [], bridge: true });
+    });
+    const gateway = await stubGateway(page);
+    await page.goto('/chat');
+    await selectChatSession(page, 'sess-1');
+    await expect.poll(() => gateway.subscribed()).toBeGreaterThan(0);
+
+    replyEvent(gateway, marker(LIVE));
+    const block = page.getByTestId('inline-ui-block').filter({ hasText: 'Ask about it' });
+    await block.getByTestId('inline-ui-save').click();
+    const dialog = page.getByTestId('inline-ui-save-dialog');
+    await expect(dialog.getByLabel('Artifact title')).toHaveValue('Ask about it');
+    await expect(dialog.getByLabel('Artifact slug')).toHaveValue('ask-about-it');
+    await expect(dialog).toContainText('A static copy');
+    await expect(dialog).toContainText('not available here');
+    await dialog.getByRole('button', { name: 'save' }).click();
+    await expect(page.getByTestId('inline-ui-saved')).toContainText('Saved as an artifact.');
+    await expect(page.getByTestId('inline-ui-saved').getByRole('link', { name: 'open it' })).toHaveAttribute('href', '/artifacts/view?id=art-1');
+    expect(saved).toEqual([{ title: 'Ask about it', slug: 'ask-about-it', visibility: 'private' }]);
+  });
+
+  test('an answer made after reading content from outside cannot be saved', async ({ authenticatedPage: page }) => {
+    const TAINTED = '77777777-7777-4777-8777-777777777777';
+    blocks[TAINTED] = { title: 'From the web', html: '<p>w</p>', css: '', js: '', scripts: false, tainted: true };
+    await stubBlocks(page);
+    const gateway = await stubGateway(page);
+    await page.goto('/chat');
+    await selectChatSession(page, 'sess-1');
+    await expect.poll(() => gateway.subscribed()).toBeGreaterThan(0);
+    replyEvent(gateway, marker(TAINTED));
+    const save = page.getByTestId('inline-ui-block').filter({ hasText: 'From the web' }).getByTestId('inline-ui-save');
+    await expect(save).toBeDisabled();
+    await expect(save).toHaveAttribute('title', /content from outside/);
+  });
+});
+
 test('a block that takes the keyboard focus by itself is stopped and the focus returns', async ({ authenticatedPage: page }) => {
   const THIEF = '66666666-6666-4666-8666-666666666666';
   blocks[THIEF] = { title: 'Thief', html: '<input id="i" aria-label="x">', css: '', js: "setTimeout(function () { document.getElementById('i').focus(); }, 1500);", scripts: true };

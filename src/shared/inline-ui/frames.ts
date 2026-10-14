@@ -113,6 +113,15 @@ interface ContentPayload {
 }
 
 /**
+ * Elements the sanitizer removes with everything inside them (§4.3). The
+ * content runtime and the server's copy for saved answers
+ * (`core/inline-ui/promote.ts`) use this one list.
+ */
+export const INLINE_UI_REFUSED_ELEMENTS: readonly string[] = ['script', 'meta', 'link', 'base', 'iframe', 'frame', 'frameset', 'object', 'embed', 'portal', 'form', 'noscript', 'template', 'slot', 'set'];
+/** Attributes the sanitizer removes wherever they appear. */
+export const INLINE_UI_DROPPED_ATTRIBUTES: readonly string[] = ['ping', 'attributionsrc', 'autofocus', 'formaction', 'action', 'shadowrootmode', 'shadowroot', 'srcdoc', 'srcset', 'imagesrcset'];
+
+/**
  * The content runtime. Runs first (nonce C), caches every primitive it needs
  * before any generated markup enters the document (DOM clobbering, §4.3),
  * sanitizes and inserts the markup, wires links, height, errors and the
@@ -129,8 +138,8 @@ const CONTENT_RUNTIME = String.raw`(function (P) {
   var RO = w.ResizeObserver;
   var slice = Array.prototype.slice;
   var HTML_NS = 'http://www.w3.org/1999/xhtml', SVG_NS = 'http://www.w3.org/2000/svg';
-  var REFUSED = ['script', 'meta', 'link', 'base', 'iframe', 'frame', 'frameset', 'object', 'embed', 'portal', 'form', 'noscript', 'template', 'slot', 'set'];
-  var DROP_ATTRS = ['ping', 'attributionsrc', 'autofocus', 'formaction', 'action', 'shadowrootmode', 'shadowroot', 'srcdoc', 'srcset', 'imagesrcset'];
+  var REFUSED = ${JSON.stringify(INLINE_UI_REFUSED_ELEMENTS)};
+  var DROP_ATTRS = ${JSON.stringify(INLINE_UI_DROPPED_ATTRIBUTES)};
   var CLASSES = ['TypeError', 'ReferenceError', 'RangeError', 'SyntaxError', 'Error'];
   var removed = {};
   function send(type, data) {

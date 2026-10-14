@@ -138,11 +138,15 @@ function buildEmbedHtml(input: {
   bundle?: { src: string };
 }): { html: string; csp: string } {
   const settings = resolveArtifactSettings();
-  const cspHashes = settings.sdkSha256 ? [settings.sdkSha256] : [];
+  // A closed page (a saved interactive answer) reaches nothing: no live
+  // refresh, so no SDK, gateway or viewer token in it either.
+  const closed = input.artifact.network === 'none';
+  const cspHashes = settings.sdkSha256 && !closed ? [settings.sdkSha256] : [];
   const csp = buildEmbedCsp({
     scriptSha256s: cspHashes,
     gatewayWss: settings.gatewayWss || undefined,
     frameAncestors: input.artifact.allowedEmbedOrigins ?? [],
+    network: closed ? 'none' : 'default',
   });
   const html = `<!doctype html>
 <html><head>
@@ -150,12 +154,12 @@ function buildEmbedHtml(input: {
 <title>${escapeHtml(input.artifact.title)}</title>
 <meta http-equiv="Content-Security-Policy" content="${escapeHtml(csp)}">
 <meta name="octipus-artifact-id" content="${escapeHtml(input.artifact.id)}">
-<meta name="octipus-artifact-token" content="${escapeHtml(input.token)}">
-${settings.gatewayWss ? `<meta name="octipus-gateway-wss" content="${escapeHtml(settings.gatewayWss)}">` : ''}
+${closed ? '' : `<meta name="octipus-artifact-token" content="${escapeHtml(input.token)}">`}
+${settings.gatewayWss && !closed ? `<meta name="octipus-gateway-wss" content="${escapeHtml(settings.gatewayWss)}">` : ''}
 <style>${input.css}</style>
 </head><body>
 ${input.templateBody}
-${sdkAvailable() ? `<script src="/octipus-artifact-client.js"></script>` : ''}
+${sdkAvailable() && !closed ? `<script src="/octipus-artifact-client.js"></script>` : ''}
 ${input.bundle ? `<script src="${escapeHtml(input.bundle.src)}"></script>` : ''}
 </body></html>`;
   return { html, csp };

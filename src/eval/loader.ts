@@ -42,16 +42,27 @@ function isBlankOrComment(line: string): boolean {
   return trimmed === '' || trimmed.startsWith('#');
 }
 
+const DOUBLE_QUOTED_ESCAPES: Record<string, string> = { '\\': '\\', '"': '"', '/': '/', n: '\n', t: '\t', r: '\r', '0': '\0' };
+
+function unescapeDoubleQuoted(body: string): string {
+  return body.replace(/\\(.)/g, (whole, ch: string) => DOUBLE_QUOTED_ESCAPES[ch] ?? whole);
+}
+
 function parseScalar(raw: string): string | number | boolean | null {
   const trimmed = raw.trim();
   if (trimmed === '' || trimmed === 'null' || trimmed === '~') return null;
   if (trimmed === 'true') return true;
   if (trimmed === 'false') return false;
 
-  // Quoted string
-  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-      (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
-    return trimmed.slice(1, -1);
+  // Quoted string. Double quotes take YAML's escapes, so a regex is written
+  // as in any YAML file (`"\\d+"` is the regex `\d+`); the raw text used to be
+  // kept, doubling every backslash a suite wrote. An unknown escape keeps its
+  // backslash. Single quotes escape only the quote itself (`''`).
+  if (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2) {
+    return unescapeDoubleQuoted(trimmed.slice(1, -1));
+  }
+  if (trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2) {
+    return trimmed.slice(1, -1).replace(/''/g, "'");
   }
 
   // Number

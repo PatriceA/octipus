@@ -1968,6 +1968,10 @@ export default function ChatPage() {
       sendSuggestion: impersonating ? undefined : (text, blockId) => { void sendMessageRef.current(text, undefined, { inlineUiProvenance: blockId }); },
       editSuggestion: impersonating ? undefined : (text, blockId) => composerRef.current?.insertDraft(text, { inlineUiId: blockId }),
       busy: isLoading,
+      saveAsArtifact: async (blockId, input) => {
+        const res = await api.post<{ appUrl: string; warnings: string[] }>(`/sessions/${sid}/inline-ui/${blockId}/promote`, input);
+        return { appUrl: res.appUrl, warnings: res.warnings ?? [] };
+      },
     };
   }, [activeSessionId, impersonating, isLoading]);
 

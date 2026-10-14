@@ -14,6 +14,7 @@
 import { artifactsRepository } from '@/db/repositories/artifacts-repository';
 import type { ArtifactWidget } from '@/db/schema/artifact-widgets';
 import { coreLogger } from '@/utils/logger';
+import { OCTI_DARK_OVERRIDES, OCTI_FONT_TOKENS, OCTI_LIGHT_TOKENS, tokenDeclarations } from '@/shared/inline-ui/theme';
 import { escapeHtml } from './render';
 import { ensureToolboxLoaded, getToolboxRegistry } from './toolbox';
 
@@ -189,31 +190,11 @@ export const DEFAULT_LAYOUT_CSS = `
 export const ARTIFACT_BASE_CSS = `
 :root {
   color-scheme: light dark;
-  --octi-surface: #fafaf9;
-  --octi-surface-container: #f5f5f4;
-  --octi-surface-container-high: #ececeb;
-  --octi-on-surface: #1c1b1f;
-  --octi-on-surface-variant: #49454f;
-  --octi-outline: #d6d3d1;
-  --octi-outline-variant: #e7e5e4;
-  --octi-primary: #6750a4;
-  --octi-link: #4f46e5;
-  --octi-error: #b91c1c;
-  --octi-success: #15803d;
-  --octi-warning: #b45309;
-  --octi-mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
-  --octi-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+${tokenDeclarations({ ...OCTI_LIGHT_TOKENS, ...OCTI_FONT_TOKENS })}
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --octi-surface: #1c1b1f;
-    --octi-surface-container: #211f24;
-    --octi-surface-container-high: #2b2930;
-    --octi-on-surface: #e6e1e5;
-    --octi-on-surface-variant: #cac4d0;
-    --octi-outline: #49454f;
-    --octi-outline-variant: #36343b;
-    --octi-link: #a5b4fc;
+${tokenDeclarations(OCTI_DARK_OVERRIDES, '    ')}
   }
 }
 * { box-sizing: border-box; }

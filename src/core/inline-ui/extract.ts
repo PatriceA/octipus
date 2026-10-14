@@ -2,7 +2,7 @@
  * Interactive answers on the server: turn the `octi-ui` fences of a root
  * agent's reply into stored blocks and marker lines (docs/plans/inline-ui-spec.md).
  *
- * - `checkInlineUiReply` lists what is wrong with the fences of a draft reply,
+ * - `inlineUiRepairMessage` says what is wrong with the fences of a draft reply,
  *   for the worker's one repair round (G3: the model hears it in the same turn).
  * - `storeInlineUiBlocks` stores each acceptable block and replaces its fence
  *   with `[[octi-ui:<id>|<title>]]`; a block that cannot be shown becomes a

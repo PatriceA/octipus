@@ -19,8 +19,8 @@ import { scheduleArtifactRefresh } from '@/core/artifacts/scheduler';
 import { artifactLifecycleBus } from '@/core/artifacts/lifecycle-bus';
 import { revokeArtifactViewers } from '@/core/artifacts/viewer-access';
 import { BaseTool, createParameterSchema } from '../base-tool';
-
-const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+import { ARTIFACT_SLUG_RE } from '@/shared/artifacts';
+import { uniqueViolation } from '@/db/unique-violation';
 
 /**
  * Find `{{data.<sourceName>.…}}` references in a template body. Used to
@@ -158,7 +158,7 @@ export class ArtifactsTool extends BaseTool {
         sources: { type: 'array', description: SOURCES_PARAM_DESCRIPTION, items: { type: 'object' } },
       }),
       async (args, context) => {
-        if (!SLUG_RE.test(args.slug as string)) {
+        if (!ARTIFACT_SLUG_RE.test(args.slug as string)) {
           return { error: 'invalid slug (lowercase/digits/dashes, 1-64 chars)' };
         }
         requireWorkspaceId(context);
@@ -169,13 +169,22 @@ export class ArtifactsTool extends BaseTool {
         const visibility = ((args.visibility as ArtifactVisibility | undefined) ?? 'workspace');
         // Through the agent's artifact store (§5.6): stamped with its
         // workspace — a space's in a space, by the member's role — and author.
-        const a = await reposFor(context).artifacts.create({
-          slug: args.slug as string,
-          createdByAgentId: context.id,
-          title: args.title as string,
-          type: args.type as ArtifactType,
-          visibility,
-        });
+        let a;
+        try {
+          a = await reposFor(context).artifacts.create({
+            slug: args.slug as string,
+            createdByAgentId: context.id,
+            title: args.title as string,
+            type: args.type as ArtifactType,
+            visibility,
+          });
+        } catch (err) {
+          // Not the driver's "Failed query: insert …" with the whole row in it.
+          if (uniqueViolation(err) === 'artifacts_workspace_id_slug_uq') {
+            return { error: `slug "${args.slug as string}" is already used in this workspace — pick another, or update that artifact` };
+          }
+          throw err;
+        }
         const template = (args.html_template as string) ?? '';
         const versionWarnings: string[] = [];
         if (template || args.css) {

@@ -45,9 +45,12 @@ export async function writeVersion(opts: {
   previousVersionId?: string | null;
   /** False when `template` was defaulted from the stored version, not supplied. */
   templateProvided: boolean;
+  /** Script to bundle after the template's own (a saved interactive answer's). */
+  script?: string;
 }): Promise<{ versionId: string; warnings: string[] }> {
   const extracted = extractInteractiveScript(opts.template);
   const warnings = [...extracted.warnings];
+  const source = [extracted.source, opts.script ?? ''].filter((s) => s.trim()).join('\n;\n');
 
   const version = await artifactsRepository.createVersion({
     artifactId: opts.artifactId,
@@ -58,12 +61,12 @@ export async function writeVersion(opts: {
   });
   await artifactsRepository.setCurrentVersion(opts.artifactId, version.id);
 
-  if (extracted.source) {
+  if (source) {
     try {
       await buildAndStoreBundle({
         artifactId: opts.artifactId,
         versionId: version.id,
-        source: extracted.source,
+        source,
       });
     } catch (err) {
       warnings.push(

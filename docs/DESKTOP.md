@@ -148,6 +148,14 @@ The Tauri app itself only provides the native window, OS integration, and the
 application bundle. All AI logic stays in the backend. There is no Rust business
 logic in the shell beyond window management.
 
+The two app commands, `get_backend_url` and `set_backend_url`, are declared in
+an app manifest (`web/src-tauri/build.rs`) and granted to the main window in
+`capabilities/default.json`; a command no capability grants is refused, and
+content from a remote origin cannot call them. The webview has no permission on
+the settings store itself, so the backend URL changes only through
+`set_backend_url`, which accepts `http(s)` URLs only. A new command needs both
+its line in `build.rs` and its `allow-<command>` permission.
+
 ---
 
 ## Troubleshooting

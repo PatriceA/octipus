@@ -340,7 +340,8 @@ export async function runTest(
   // scored either way — a green routing suite that never routed is worse than
   // no routing suite.
   const routingBlocker = routingObservabilityBlocker(test.assertions, options.integration)
-    ?? toolUsageObservabilityBlocker(test.assertions, options.integration);
+    ?? toolUsageObservabilityBlocker(test.assertions, options.integration)
+    ?? rendersObservabilityBlocker(test, options.integration);
   if (routingBlocker) return errorResult(test, suiteId, routingBlocker);
 
   let seededIds: string[] = [];
@@ -425,6 +426,16 @@ export function toolUsageObservabilityBlocker(
   if (integration) return undefined;
   if (!assertions.some((a) => a.type === 'uses_tool' || a.type === 'not_uses_tool')) return undefined;
   return 'uses_tool / not_uses_tool need a running backend: unit mode runs no tools. Re-run with --integration.';
+}
+
+/**
+ * Why a test of what a client renders cannot be judged in this run. Unit mode
+ * asks the model without the root prompt, so it is never told it can write an
+ * interactive answer: a "does not use one" case would pass on nothing.
+ */
+export function rendersObservabilityBlocker(test: Pick<EvalTest, 'context'>, integration?: boolean): string | undefined {
+  if (integration || !test.context?.renders?.length) return undefined;
+  return 'context.renders needs a running backend: unit mode never builds the root prompt that offers it. Re-run with --integration.';
 }
 
 /**

@@ -11,14 +11,20 @@ export interface CspInput {
   gatewayWss?: string;
   /** Extra `frame-ancestors` entries beyond `'self'`. */
   frameAncestors?: string[];
+  /**
+   * `none`: the page reaches nothing — no fetch or socket (not even the
+   * gateway), images only from `data:` and `blob:`.
+   */
+  network?: 'default' | 'none';
 }
 
 export function buildEmbedCsp(input: CspInput): string {
   const scriptHashes = input.scriptSha256s
     .map((h) => `'sha256-${hexToBase64(h)}'`)
     .join(' ');
-  const connect = ["'self'"];
-  if (input.gatewayWss) connect.push(input.gatewayWss);
+  const closed = input.network === 'none';
+  const connect = closed ? ["'none'"] : ["'self'"];
+  if (input.gatewayWss && !closed) connect.push(input.gatewayWss);
 
   const frameAncestors = ["'self'", ...(input.frameAncestors ?? [])];
 
@@ -27,7 +33,7 @@ export function buildEmbedCsp(input: CspInput): string {
     `connect-src ${connect.join(' ')}`,
     `script-src 'self' ${scriptHashes}`.trim(),
     `style-src 'self' 'unsafe-inline'`,
-    `img-src 'self' data: https:`,
+    closed ? `img-src data: blob:` : `img-src 'self' data: https:`,
     `font-src 'self' data:`,
     `frame-ancestors ${frameAncestors.join(' ')}`,
     `base-uri 'none'`,

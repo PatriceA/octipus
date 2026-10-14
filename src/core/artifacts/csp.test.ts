@@ -31,4 +31,12 @@ describe('buildEmbedCsp', () => {
     expect(csp).not.toContain('sandbox');
     expect(embedCspHeader(csp)).toMatch(/; sandbox allow-scripts$/);
   });
+
+  test('a closed page reaches nothing: no fetch or socket, images only from data: and blob:', () => {
+    const csp = buildEmbedCsp({ scriptSha256s: [], gatewayWss: 'wss://gw.example.com', network: 'none' });
+    expect(csp).toContain("connect-src 'none'");
+    expect(csp).not.toContain('wss://gw.example.com');
+    expect(csp).toContain('img-src data: blob:');
+    expect(csp).not.toMatch(/img-src[^;]*https:/);
+  });
 });

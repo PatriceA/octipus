@@ -99,6 +99,16 @@ These are prompt guidance and examples, not deterministic routing rules. The gen
 | "remember this", "save this" | general | Stores in profiles + knowledge |
 | "create a schedule", "every morning" | automation | Built-in scheduling tool |
 
+### Added by the client, not by a role
+
+Interactive answers ([INLINE-UI.md](INLINE-UI.md)) are a capability of the
+client that shows the conversation, so no role carries them. root-runner adds
+the prompt section and the `inline-ui__source` tool to the root agent only
+when the turn offers them: a room, or a personal or space chat whose client
+sent `renders: ["inline_ui"]` — never a child, a small model, a vendor CLI
+root or a group thread. It also strips `inline-ui` handlers a customised role
+row brought in when the turn does not offer them.
+
 ## Expert Agents
 
 ### What Are Experts?

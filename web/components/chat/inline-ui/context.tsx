@@ -43,8 +43,21 @@ export interface InlineUiHost {
   editSuggestion?: (text: string, blockId: string) => void;
   /** A turn is running: Send steers it (labelled so). */
   busy?: boolean;
-  /** Keep the block as a live artifact (P3). */
-  saveAsArtifact?: (blockId: string, title: string) => void;
+  /** Keep the block as a live artifact (P3): a static copy in the user's workspace. */
+  saveAsArtifact?: (blockId: string, input: SaveAsArtifactInput) => Promise<SaveAsArtifactResult>;
+}
+
+export interface SaveAsArtifactInput {
+  title: string;
+  slug: string;
+  visibility: 'private' | 'workspace';
+}
+
+export interface SaveAsArtifactResult {
+  /** Where the artifact opens in the app. */
+  appUrl: string;
+  /** The script did not build, and so on: the copy was saved anyway. */
+  warnings: string[];
 }
 
 const InlineUiContext = createContext<InlineUiHost | null>(null);

@@ -47,6 +47,7 @@ The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 | [DOCUMENTS.md](DOCUMENTS.md) | Document ingestion, OCR, management, and exporting a deliverable as .docx / .xlsx. |
 | [DATA-TOOLS.md](DATA-TOOLS.md) | Read-only SQL against a registered database or a workspace CSV, and how a connection is registered. |
 | [ENRICHMENT.md](ENRICHMENT.md) | Reader, deep research, tasks, and email-triage enrichment features. |
+| [INLINE-UI.md](INLINE-UI.md) | Interactive answers: small widgets inside a reply in the web chat and rooms — how they are written, isolated, saved as artifacts and switched off. |
 | [ARTIFACTS.md](ARTIFACTS.md) | Live hosted HTML artifacts produced by agents. |
 | [ARTIFACTS-COOKBOOK.md](ARTIFACTS-COOKBOOK.md) | Worked examples and recipes for building artifacts. |
 | [HOOKS.md](HOOKS.md) | Event hooks and scheduled / recurring tasks. |

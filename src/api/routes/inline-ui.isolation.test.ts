@@ -13,7 +13,10 @@
  *   - every member of a room reads the room's blocks; a stranger gets 404;
  *   - responses are never cached;
  *   - reports and provenance only name blocks of the session;
- *   - the `source` tool returns a block of the agent's own session only.
+ *   - the `source` tool returns a block of the agent's own session only;
+ *   - saving a block as an artifact: the owner's own chat only, never a
+ *     tainted block, private or workspace only; the copy reaches no network,
+ *     its script is bundled after the `octi` shim.
  *
  * Driven through the real `createServer()`, backed by ephemeral PGlite.
  */
@@ -43,6 +46,14 @@ let spaceId: string;
 
 async function get(who: string, path: string): Promise<Response> {
   return app.handle(new Request(`http://localhost${path}`, { headers: { authorization: `Bearer ${tokens[who]}` } }));
+}
+
+async function post(who: string, path: string, body: unknown): Promise<Response> {
+  return app.handle(new Request(`http://localhost${path}`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${tokens[who]}`, 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  }));
 }
 
 const fence = (title: string, body: string) => `Here it is.\n\n\`\`\`octi-ui title="${title}" height=240\n${body}\n\`\`\`\n\nDone.`;
@@ -208,5 +219,78 @@ describe('turn notes and the source tool', () => {
     expect(result.body).toBe('<style>\na{}\n</style>\n<p>s</p>\n<script>\ngo()\n</script>');
     await expect(handler!.execute({ id }, { ...base, sessionId: otherChatId } as never)).rejects.toThrow(/No interactive answer/);
     await expect(handler!.execute({ id }, { ...base, sessionId: chatId, metadata: {} } as never)).rejects.toThrow(/not available/);
+  });
+});
+
+describe('saving a block as an artifact (§7)', () => {
+  const promote = (who: string, sessionId: string, id: string, body: Record<string, unknown>) =>
+    post(who, `/api/sessions/${sessionId}/inline-ui/${id}/promote`, body);
+
+  test('the owner saves a scripted block: a closed, private copy whose script is bundled after the shim', async () => {
+    const out = await store(chatId, fence('Tip calculator', '<style>p{color:red}</style><p id="r">0</p><a href="https://docs.example/tips">docs</a><script>document.getElementById("r").textContent = "15%"; octi.prompt("why");</script>'));
+    const id = out.stored[0];
+    const res = await promote('owner', chatId, id, { title: 'Tip calculator', slug: 'tip-calculator' });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.artifact).toMatchObject({ slug: 'tip-calculator', visibility: 'private', network: 'none', type: 'html' });
+    expect(body.bridge).toBe(true);
+    expect(body.warnings).toEqual([]);
+
+    const { artifactsRepository } = await import('@/db/repositories/artifacts-repository');
+    const version = (await artifactsRepository.getVersion(body.artifact.currentVersionId))!;
+    expect(version.htmlTemplate).toBe('<p id="r">0</p><a data-octi-href="https://docs.example/tips" role="link" tabindex="0">docs</a>');
+    expect(version.css).toContain('p{color:red}');
+    const { bundleFilePath } = await import('@/core/artifacts/bundler');
+    const { readFileSync } = await import('node:fs');
+    const bundle = readFileSync(bundleFilePath(body.artifact.id, version.id), 'utf8');
+    expect(bundle).toContain('not available here');
+    expect(bundle).toContain('15%');
+    expect(bundle.indexOf('not available here')).toBeLessThan(bundle.indexOf('15%'));
+
+    const embed = await get('owner', '/__artifacts__/a/tip-calculator/embed');
+    expect(embed.status).toBe(200);
+    const csp = embed.headers.get('content-security-policy') ?? '';
+    expect(csp).toContain("connect-src 'none'");
+    expect(csp).toContain('img-src data: blob:');
+    expect(csp).toMatch(/sandbox allow-scripts$/);
+    const page = await embed.text();
+    expect(page).not.toContain('octipus-artifact-token');
+    expect(page).not.toContain('octipus-artifact-client.js');
+    expect(page).toContain('/bundle.js');
+  });
+
+  test('a tainted block is refused; so is any visibility beyond workspace', async () => {
+    const { observeFlow } = await import('@/security/flow-guard');
+    const session = await seedSessionFor(ownerId);
+    observeFlow(session, { toolId: 'websearch', action: 'search', args: { query: 'x' } });
+    const tainted = (await store(session, fence('Web', '<p>x</p>'))).stored[0];
+    const refused = await promote('owner', session, tainted, { title: 'Web', slug: 'web-copy' });
+    expect(refused.status).toBe(409);
+    expect((await refused.json()).error).toMatch(/content from outside/);
+
+    const clean = (await store(chatId, fence('Plain', '<p>x</p>'))).stored[0];
+    const pub = await promote('owner', chatId, clean, { title: 'Plain', slug: 'plain-public', visibility: 'public' });
+    expect(pub.status).toBeGreaterThanOrEqual(400);
+    expect(pub.status).toBeLessThan(500);
+    const shared = await promote('owner', chatId, clean, { title: 'Plain', slug: 'plain-shared', visibility: 'workspace' });
+    expect(shared.status).toBe(201);
+    expect((await shared.json()).artifact.visibility).toBe('workspace');
+    const again = await promote('owner', chatId, clean, { title: 'Plain', slug: 'plain-shared' });
+    expect(again.status).toBe(409);
+  });
+
+  test('only from the caller’s own chat: an admin who may read it, a stranger and a room get 404', async () => {
+    const id = (await store(chatId, fence('Mine', '<p>m</p>'))).stored[0];
+    expect((await promote('member', chatId, id, { title: 'Mine', slug: 'by-admin' })).status).toBe(404);
+    expect((await promote('stranger', chatId, id, { title: 'Mine', slug: 'by-stranger' })).status).toBe(404);
+    expect((await promote('owner', otherChatId, id, { title: 'Mine', slug: 'wrong-session' })).status).toBe(404);
+    const inRoom = (await store(roomId, fence('Room', '<p>r</p>'))).stored[0];
+    expect((await promote('owner', roomId, inRoom, { title: 'Room', slug: 'from-room' })).status).toBe(404);
+  });
+
+  test('a bad slug or an empty title is a 400', async () => {
+    const id = (await store(chatId, fence('Slug', '<p>s</p>'))).stored[0];
+    expect((await promote('owner', chatId, id, { title: 'Slug', slug: 'Not A Slug' })).status).toBe(400);
+    expect((await promote('owner', chatId, id, { title: '   ', slug: 'ok-slug' })).status).toBe(400);
   });
 });

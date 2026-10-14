@@ -19,8 +19,8 @@ import { announceVersion, restoreVersion, writeVersion } from '@/core/artifacts/
 import { buildArtifactAppUrl, buildArtifactEmbedUrl, buildArtifactOuterUrl, getArtifactsHostMode, pickShareableUrl } from '@/core/artifacts/host';
 import type { ArtifactVisibility as ArtifactVisibilityType } from '@/db/schema/artifacts';
 import { coreLogger } from '@/utils/logger';
-
-const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+import { ARTIFACT_SLUG_RE } from '@/shared/artifacts';
+import { uniqueViolation } from '@/db/unique-violation';
 
 /**
  * The artifacts of the request's workspace — personal, or the space the
@@ -70,7 +70,7 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
         return { error: 'unauthenticated' };
       }
       const store = artifactStore(principal);
-      if (!SLUG_RE.test(body.slug)) {
+      if (!ARTIFACT_SLUG_RE.test(body.slug)) {
         set.status = 400;
         return { error: 'invalid slug (lowercase, digits, dashes, 1-64 chars)' };
       }
@@ -98,8 +98,7 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
         return { artifact: await artifactsRepository.getById(a.id), warnings };
       } catch (err) {
         if (err instanceof SpaceError) throw err;
-        const msg = (err as Error).message;
-        if (msg.includes('artifacts_workspace_id_slug_uq')) {
+        if (uniqueViolation(err) === 'artifacts_workspace_id_slug_uq') {
           set.status = 409;
           return { error: 'slug already exists in this workspace' };
         }

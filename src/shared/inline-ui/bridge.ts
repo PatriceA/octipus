@@ -96,3 +96,8 @@ export function inlineUiReportLine(r: InlineUiReport): string {
 export function inlineUiProvenanceLine(id: string): string {
   return `(system note: the user sent this message from a suggestion in interactive answer ${id})`;
 }
+
+/** Does an answer's script call the bridge? (A saved copy cannot: the dialog says so.) */
+export function usesOctiBridge(js: string): boolean {
+  return /\bocti\s*(?:\.|\[)/.test(js);
+}

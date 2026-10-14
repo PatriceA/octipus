@@ -235,3 +235,13 @@ describe('evaluateAllAssertions', () => {
     expect(passed).toBe(true);
   });
 });
+
+describe('what a run can observe', () => {
+  test('a test that declares renders needs a running backend; others are unaffected', async () => {
+    const { rendersObservabilityBlocker, toolUsageObservabilityBlocker } = await import('./runner');
+    expect(rendersObservabilityBlocker({ context: { renders: ['inline_ui'] } }, false)).toMatch(/--integration/);
+    expect(rendersObservabilityBlocker({ context: { renders: ['inline_ui'] } }, true)).toBeUndefined();
+    expect(rendersObservabilityBlocker({ context: {} }, false)).toBeUndefined();
+    expect(toolUsageObservabilityBlocker([{ type: 'not_uses_tool', value: 'shell' }], false)).toMatch(/--integration/);
+  });
+});

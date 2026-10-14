@@ -265,6 +265,8 @@ Children **inherit topic bindings, not the parent's model**. If a research Agent
 | architecture | filesystem, shell, knowledge, task_state, websearch, mcp | — | System design |
 | general | filesystem, shell, browser-ext, websearch, messaging, knowledge, notes, tasks, task_state, scheduling, profiles, email-processor, artifacts, artifacts_toolbox, documents, skill-distill, mcp | — | Fallback |
 
+The root agent can also get tools no role lists: `inline-ui` (interactive answers) is added by root-runner when the client that sent the turn can render it, or the conversation is a room — see [Interactive answers](INLINE-UI.md).
+
 ## Thinking Token Management
 
 Some models (Qwen3, DeepSeek) emit `<think>...</think>` reasoning blocks that consume output tokens. The system handles this at multiple levels:

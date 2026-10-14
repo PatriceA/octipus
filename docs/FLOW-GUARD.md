@@ -74,6 +74,18 @@ already default to ASK. The guard adds friction where a standing ALLOW grant,
 a rule, or a default ALLOW would otherwise let a tainted session send data out,
 for example MCP tools, web fetches, or shell network commands.
 
+## Interactive answers
+
+An [interactive answer](INLINE-UI.md) is not a tool call, so the guard never
+asks about one. It has no egress of its own: its frames reach no network, and
+links and suggested messages need the user's click on the chat page. The
+session's label is recorded on each answer when it is stored:
+
+- `tainted` (any flag set): its script waits for **Run**, and it cannot be
+  saved as an artifact;
+- high risk (`secret`, or `private` together with `suspicious`): the Run
+  prompt warns that the answer could send what it shows out of the page.
+
 ## Cost
 
 - **Tokens**: nothing is added to prompts or tool results. The only extra text

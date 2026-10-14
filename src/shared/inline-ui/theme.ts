@@ -45,6 +45,23 @@ export function tokenDeclarations(tokens: ThemeTokens, indent = '  '): string {
 export type InlineUiTheme = 'dark' | 'light';
 
 /**
+ * How an answer's elements look, apart from the page itself: the frame's base
+ * CSS ends with it, and an answer saved as an artifact carries it.
+ */
+export const INLINE_UI_ELEMENT_CSS = `h1, h2, h3, h4 { margin: 0 0 0.5em; line-height: 1.3; }
+p { margin: 0 0 0.75em; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { background: var(--octi-surface-container-high); border: 1px solid var(--octi-outline); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+button:hover { border-color: var(--octi-on-surface-variant); }
+input, select, textarea { background: var(--octi-surface-container); border: 1px solid var(--octi-outline); border-radius: 6px; padding: 4px 8px; max-width: 100%; }
+:focus-visible { outline: 2px solid var(--octi-link); outline-offset: 2px; }
+[data-octi-href] { color: var(--octi-link); cursor: pointer; text-decoration: underline; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--octi-outline-variant); }
+svg { max-width: 100%; height: auto; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }`;
+
+/**
  * Base CSS inside an interactive-answer frame: the tokens for the app's theme
  * (passed in, never read from the OS — the app is dark-only today, and a light
  * OS must not produce a light frame in a dark chat) and readable defaults for
@@ -59,16 +76,5 @@ ${tokenDeclarations({ ...OCTI_FONT_TOKENS, ...tokens })}
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; background: transparent; }
 body { font-family: var(--octi-sans); font-size: 14px; line-height: 1.55; color: var(--octi-on-surface); padding: 2px; overflow-wrap: anywhere; }
-h1, h2, h3, h4 { margin: 0 0 0.5em; line-height: 1.3; }
-p { margin: 0 0 0.75em; }
-button, input, select, textarea { font: inherit; color: inherit; }
-button { background: var(--octi-surface-container-high); border: 1px solid var(--octi-outline); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
-button:hover { border-color: var(--octi-on-surface-variant); }
-input, select, textarea { background: var(--octi-surface-container); border: 1px solid var(--octi-outline); border-radius: 6px; padding: 4px 8px; max-width: 100%; }
-:focus-visible { outline: 2px solid var(--octi-link); outline-offset: 2px; }
-[data-octi-href] { color: var(--octi-link); cursor: pointer; text-decoration: underline; }
-table { border-collapse: collapse; width: 100%; }
-th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--octi-outline-variant); }
-svg { max-width: 100%; height: auto; }
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }`;
+${INLINE_UI_ELEMENT_CSS}`;
 }

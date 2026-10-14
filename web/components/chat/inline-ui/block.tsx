@@ -17,6 +17,7 @@ import type { InlineUiErrorClass, InlineUiHostMessage, InlineUiOutcome } from '.
 import { cn } from '@/lib/utils';
 import { type InlineUiBlockData, type InlineUiHost, forgetInlineUiBlock, useInlineUiBlockFetch, useInlineUiHost } from './context';
 import { InlineUiFrame } from './frame';
+import { SaveAsArtifactDialog } from './save-dialog';
 
 // ── Freeze guard (T6) ─────────────────────────────────────────────────────
 // A block's marker is set while its frame is mounted and removed when it
@@ -284,6 +285,13 @@ function LoadedBlock({ block, host }: { block: InlineUiBlockData; host: InlineUi
     }
   }, [host, report, suggestion]);
 
+  // Saving is a user action under the user's own session (§7): not for an
+  // answer made after reading content from outside, not while impersonating.
+  const [saving, setSaving] = useState(false);
+  const saveRefusal = block.tainted
+    ? 'made after reading content from outside, so it cannot be saved'
+    : host.impersonating ? 'off while acting as another user' : null;
+
   const restart = () => {
     setErrors([]); setRemoved([]); setBlank(false); setLink(null); setSuggestion(null);
     reported.current.clear();
@@ -309,10 +317,22 @@ function LoadedBlock({ block, host }: { block: InlineUiBlockData; host: InlineUi
             <button type="button" title="Restart" onClick={restart} className="p-1 rounded hover:bg-surface-container-high"><RotateCcw className="h-3.5 w-3.5" aria-hidden /><span className="sr-only">Restart</span></button>
           )}
           {host.saveAsArtifact && (
-            <button type="button" title="Save as artifact" onClick={() => host.saveAsArtifact?.(block.id, block.title)} className="p-1 rounded hover:bg-surface-container-high"><Save className="h-3.5 w-3.5" aria-hidden /><span className="sr-only">Save as artifact</span></button>
+            <button
+              type="button"
+              data-testid="inline-ui-save"
+              title={saveRefusal ?? 'Save as artifact'}
+              disabled={!!saveRefusal}
+              onClick={() => setSaving(true)}
+              className="p-1 rounded hover:bg-surface-container-high disabled:opacity-40 disabled:hover:bg-transparent"
+            >
+              <Save className="h-3.5 w-3.5" aria-hidden /><span className="sr-only">{saveRefusal ? `Save as artifact: ${saveRefusal}` : 'Save as artifact'}</span>
+            </button>
           )}
         </span>
       </header>
+      {saving && host.saveAsArtifact && (
+        <SaveAsArtifactDialog block={block} open onClose={() => setSaving(false)} save={(input) => host.saveAsArtifact!(block.id, input)} />
+      )}
 
       {run.kind === 'waiting' && (
         <div className={cn('flex flex-wrap items-center gap-2 px-3 py-2 text-xs', run.high ? 'bg-error-container/30 text-on-surface' : 'text-on-surface-variant')} role="status">

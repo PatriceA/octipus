@@ -3,7 +3,7 @@
  * as the agent tool's do (`core/artifacts/version-writer.ts`): inline script
  * is lifted into the version's bundle, a CSS-only edit carries the bundle
  * forward, and a restore copies the restored version's bundle. The embed is
- * sandboxed by its CSP header wherever it is opened.
+ * sandboxed by its CSP header wherever it is opened. A taken slug is a 409.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync } from 'node:fs';
@@ -90,6 +90,13 @@ describe('artifact versions through the REST API', () => {
     const body = await created.json();
     expect(body.artifact.currentVersionId).toBeTruthy();
     expect(body.warnings.join(' ')).toMatch(/did not build/);
+  });
+
+  test('a slug already used in the workspace is a 409, not a server error', async () => {
+    const first = await call('POST', '/api/artifacts', { slug: 'taken', title: 'One', type: 'html' });
+    expect(first.status).toBe(201);
+    const second = await call('POST', '/api/artifacts', { slug: 'taken', title: 'Two', type: 'html' });
+    expect(second.status).toBe(409);
   });
 
   test('the embed is sandboxed by its CSP header', async () => {

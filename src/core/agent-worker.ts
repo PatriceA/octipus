@@ -1828,6 +1828,10 @@ export class AgentWorker extends BaseAgentWorker {
         if (repair) {
           this.inlineUiRepaired = true;
           agentLogger.info({ agentId: this.context.id, iteration: this.iteration }, 'Interactive answer needs repair — asking the model once');
+          // The draft goes into the history first: the model rewrites its own
+          // reply, and the turn's history keeps alternating. Its fence is
+          // stubbed out of the snapshot with the rest (stubInlineUiFences).
+          this.messages.push({ role: 'assistant', content: response, timestamp: new Date() });
           this.messages.push({ role: 'user', content: repair, timestamp: new Date() });
           continue;
         }
