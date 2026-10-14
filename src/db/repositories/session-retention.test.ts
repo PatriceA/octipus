@@ -124,3 +124,26 @@ describe('sessionRepository.deleteExpired', () => {
     expect((await sessionRepository.findById(kept.id))?.status).toBe('active');
   });
 });
+
+describe('sessionRepository.delete', () => {
+  test('removes every pipeline of the session with its nodes, and nobody else’s', async () => {
+    const { sessionRepository } = await import('@/db/repositories/session-repository');
+    const { getDb } = await import('@/db/postgres');
+    const { pipelines, pipelineNodes } = await import('@/db/schema/pipelines');
+    const db = getDb();
+    const doomed = await sessionAged('del-doomed', 0);
+    const other = await sessionAged('del-other', 0);
+    const pipelineOf = async (sessionId: string) => {
+      const [p] = await db.insert(pipelines).values({ rootAgentId: 'root', sessionId, userId, title: 't', type: 'general' }).returning();
+      await db.insert(pipelineNodes).values({ pipelineId: p.id, nodeKey: 'n1', ordinal: 0, name: 'n', role: 'general', systemPrompt: 's' });
+      return p.id;
+    };
+    const [a, b, kept] = [await pipelineOf(doomed.id), await pipelineOf(doomed.id), await pipelineOf(other.id)];
+
+    expect(await sessionRepository.delete(doomed.id)).toBe(true);
+    const left = await db.select({ pipelineId: pipelineNodes.pipelineId }).from(pipelineNodes);
+    expect(left.map((n) => n.pipelineId)).not.toContain(a);
+    expect(left.map((n) => n.pipelineId)).not.toContain(b);
+    expect(left.map((n) => n.pipelineId)).toContain(kept);
+  });
+});

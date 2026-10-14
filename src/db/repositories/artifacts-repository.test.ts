@@ -96,6 +96,24 @@ describe.skipIf(!isIntegration)('ArtifactsRepository (Integration)', () => {
     expect(b?.title).toBe('B');
   });
 
+  test('findPublicBySlug finds the public one in any workspace, never a private or deleted one', async () => {
+    const db = getDb();
+    const w2 = await db
+      .insert(workspaces)
+      .values(newWorkspaceRow({ userId, slug: 'other', name: 'Other' }))
+      .returning();
+    const hidden = await repo.create({ slug: 'page', workspaceId, createdByUserId: userId, title: 'Private', type: 'dashboard' });
+    expect(await repo.findPublicBySlug('page')).toBeNull();
+
+    const shown = await repo.create({ slug: 'page', workspaceId: w2[0].id, createdByUserId: userId, title: 'Public', type: 'dashboard' });
+    await db.update(artifacts).set({ visibility: 'public' }).where(eq(artifacts.id, shown.id));
+    expect((await repo.findPublicBySlug('page'))?.id).toBe(shown.id);
+    expect(hidden.visibility).not.toBe('public');
+
+    await repo.softDelete(shown.id);
+    expect(await repo.findPublicBySlug('page')).toBeNull();
+  });
+
   test('softDelete hides from getById', async () => {
     const a = await repo.create({
       slug: 's',

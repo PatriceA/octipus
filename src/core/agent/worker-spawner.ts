@@ -634,15 +634,13 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
           .filter(w => w.length > 2 && !/^(the|and|for|with)$/i.test(w));
 
         const matchedProfiles = new Map<string, Awaited<ReturnType<typeof profileRepo.search>>[0]>();
-        // Search for each meaningful term
-        for (const term of searchTerms.slice(0, 3)) {
-          const results = await profileRepo.search(context.userId, term);
-          for (const p of results) matchedProfiles.set(p.id, p);
-        }
-        // Also search for relationship keywords directly (wife, husband, etc.)
+        // Search for each meaningful term, and for relationship keywords
+        // directly (wife, husband, etc.) — independent lookups, run together.
+        // Merged in the same order as before, so a later term still wins.
         const relationshipMatch = task.match(/\b(wife|husband|partner|mother|father|mom|dad|boss|brother|sister|son|daughter)\b/i);
-        if (relationshipMatch) {
-          const results = await profileRepo.search(context.userId, relationshipMatch[1]);
+        const terms = [...searchTerms.slice(0, 3), ...(relationshipMatch ? [relationshipMatch[1]] : [])];
+        const searches = await Promise.all(terms.map((term) => profileRepo.search(context.userId, term)));
+        for (const results of searches) {
           for (const p of results) matchedProfiles.set(p.id, p);
         }
 
