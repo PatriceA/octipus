@@ -32,6 +32,16 @@ const logger = coreLogger.child({ component: 'kb-health' });
 const PROBE_SOURCE_ID = '__kb_health_probe_id__';
 
 let cached: KBReadiness | null = null;
+/** The self-check running now; concurrent callers share it. */
+let inFlight: Promise<KBReadiness> | null = null;
+
+export interface KBSelfCheckOptions {
+  /**
+   * Stop waiting on the embedding call after this long and report it failed
+   * (the boot check). Unbounded when unset (`/knowledge/readiness`).
+   */
+  embedTimeoutMs?: number;
+}
 
 /** Return the last computed readiness (does not re-check). */
 export function getKBReadiness(): KBReadiness | null {
@@ -44,12 +54,55 @@ export function isKBReady(): boolean {
 }
 
 /**
+ * Whether the KB is ready, waiting (at most `maxWaitMs`) for a self-check
+ * that is still running when none has finished yet — at boot the check runs
+ * off the critical path, and a request in that window gets its verdict
+ * rather than a 503 for a check that was about to pass.
+ */
+export async function awaitKBReadiness(maxWaitMs = 30_000): Promise<boolean> {
+  const pending = inFlight;
+  if (!cached && pending) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      pending.then(() => undefined),
+      new Promise<void>((resolve) => { timer = setTimeout(resolve, maxWaitMs); }),
+    ]);
+    clearTimeout(timer);
+  }
+  return isKBReady();
+}
+
+/** `promise`, or a rejection once `ms` have passed (when set). */
+function withTimeout<T>(promise: Promise<T>, ms: number | undefined, what: string): Promise<T> {
+  if (ms === undefined) return promise;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // The call itself is not cancelled; a late failure is logged by its own path.
+  promise.catch((err: unknown) => logger.debug({ err }, `${what} failed after the check stopped waiting`));
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${what} did not answer within ${ms} ms`)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+/**
  * Run the full KB self-check: DB reachable, embedding model resolvable+callable,
  * vector store accepts insert+delete of a probe row. Loud log on any failure.
  *
  * Returns the readiness report. Also caches it for isKBReady()/getKBReadiness().
+ * A call while one runs shares it.
  */
-export async function runKBSelfCheck(): Promise<KBReadiness> {
+export function runKBSelfCheck(opts: KBSelfCheckOptions = {}): Promise<KBReadiness> {
+  if (inFlight) return inFlight;
+  const run = selfCheck(opts).finally(() => {
+    if (inFlight === run) inFlight = null;
+  });
+  inFlight = run;
+  return run;
+}
+
+async function selfCheck(opts: KBSelfCheckOptions): Promise<KBReadiness> {
   const checks: KBReadiness['checks'] = {
     db: { ok: false },
     embeddingModel: { ok: false },
@@ -71,7 +124,7 @@ export async function runKBSelfCheck(): Promise<KBReadiness> {
     const service = getEmbeddingService();
     // generateEmbedding() both resolves the model from the registry AND issues
     // the provider call — so a single call here proves the whole path works.
-    probeVector = await service.generateEmbedding('kb health probe');
+    probeVector = await withTimeout(service.generateEmbedding('kb health probe'), opts.embedTimeoutMs, 'embedding provider');
     if (!Array.isArray(probeVector) || probeVector.length === 0) {
       throw new Error('embedding provider returned empty vector');
     }
@@ -198,7 +251,7 @@ export function kbNotReadyResponse(): { error: string; kb: KBReadiness | null } 
   const baseMsg = 'Knowledge base is not ready';
   if (!report) {
     return {
-      error: `${baseMsg}: self-check has not run yet`,
+      error: `${baseMsg}: ${inFlight ? 'self-check is still running — retry shortly' : 'self-check has not run yet'}`,
       kb: null,
     };
   }

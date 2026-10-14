@@ -28,6 +28,10 @@ import { loadTopicConfigs } from '@/models/topic-config';
 import { initializeVault } from '@/security/vault';
 import { registerBuiltinTools } from '@/tools';
 import { logger } from '@/utils/logger';
+import { runKBSelfCheck } from '@/core/rag/health';
+
+/** How long the boot KB self-check waits on its embedding call. */
+const BOOT_KB_EMBED_TIMEOUT_MS = 20_000;
 
 async function main() {
   logger.info('Starting Octipus...');
@@ -38,10 +42,9 @@ async function main() {
   process.env.OCTIPUS_SIGNALS_OWNED = '1';
 
   try {
-    // Initialize vault first — gateway.start() runs the KB self-check which
-    // exercises the embedding provider, and that provider needs the vault to
-    // resolve API keys. If vault is not initialized yet, getByName throws and
-    // providers fall back with a misleading "API key not configured" error.
+    // Initialize vault first — providers resolve API keys through it. If the
+    // vault is not initialized yet, getByName throws and providers fall back
+    // with a misleading "API key not configured" error.
     await initializeVault();
     logger.info('Vault initialized');
 
@@ -94,8 +97,8 @@ async function main() {
     logger.info('Runtime configuration loaded');
 
     // Invalidate config-derived singletons built DURING earlier startup (e.g.
-    // the gateway KB self-check exercises the embedding provider, which lazily
-    // constructs the LiteLLMClient). Those captured the pre-load default config
+    // anything that reached a model provider lazily constructs the
+    // LiteLLMClient). Those captured the pre-load default config
     // — crucially an EMPTY litellm.apiKey, since vault secrets are only resolved
     // here in loadRuntimeConfig(). Without this reset the root agent keeps
     // using the 'sk-litellm' placeholder for the whole process and every
@@ -203,7 +206,16 @@ async function main() {
     // boot. Running it fire-and-forget lets the server reach ready immediately;
     // the index finishes in the background and stamps the files, so subsequent
     // boots skip unchanged docs (truly a one-time cost).
-    void import('@/db/seed-docs')
+    //
+    // It needs the knowledge-base self-check's verdict, so it follows it. That
+    // check (DB + a real embedding call + a vector write) runs here too: after
+    // the runtime config, so the embedding provider has its keys, and off the
+    // boot path, with a short wait on the embedding call — it used to run
+    // inside gateway.start() on the client's 120 s timeout and retries. KB
+    // write endpoints wait for its verdict (awaitKBReadiness) meanwhile.
+    void runKBSelfCheck({ embedTimeoutMs: BOOT_KB_EMBED_TIMEOUT_MS })
+      .catch((err) => logger.error({ err }, 'KB self-check threw unexpectedly — KB endpoints will 503 until /knowledge/readiness passes'))
+      .then(() => import('@/db/seed-docs'))
       .then(({ indexProductDocs }) => indexProductDocs())
       .catch((err) => logger.error({ err }, 'Product docs auto-index failed (non-fatal) — server continues'));
 
