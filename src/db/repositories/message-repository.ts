@@ -59,11 +59,12 @@ export class MessageRepository {
    * from one aggregate, without reading the rows. Not capped.
    */
   async contextSize(sessionId: string, since: string | undefined, after: { id: string; createdAt: string } | undefined, generation: string | undefined): Promise<{ rows: number; bytes: number }> {
-    // i2: by session id, for the agent runtime that owns the session; user routes use ScopedMessageRepo
-    const [row] = await this.db.select({
+    const totals = {
       rows: sql<number>`count(*)::int`,
       bytes: sql<string>`coalesce(sum(octet_length(${messages.content}) + coalesce(octet_length(${messages.metadata}->>'promptContext'), 0)), 0)::text`,
-    }).from(messages).where(and(...contextFilters(sessionId, since, after, generation)));
+    };
+    // i2: by session id, for the agent runtime that owns the session; user routes use ScopedMessageRepo
+    const [row] = await this.db.select(totals).from(messages).where(and(...contextFilters(sessionId, since, after, generation)));
     return { rows: Number(row?.rows ?? 0), bytes: Number(row?.bytes ?? 0) };
   }
 
