@@ -57,7 +57,6 @@ function Diff({ before, after }: { before: string; after: string }) {
     <pre data-testid="proposal-diff" className="max-h-56 overflow-auto rounded-xs bg-surface-container-lowest p-2 text-[11px] leading-relaxed">
       {lineDiff(before, after).map((line, k) => (
         <div
-          // biome-ignore lint/suspicious/noArrayIndexKey: diff lines have no identity
           key={k}
           className={cn(line.kind === 'add' && 'bg-success/15 text-success', line.kind === 'del' && 'bg-error/15 text-error line-through')}
         >
