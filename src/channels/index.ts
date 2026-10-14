@@ -11,6 +11,7 @@ export { WhatsAppChannel, whatsappChannel } from './whatsapp';
 import { getConfig } from '@/config';
 import { sharedRefusalText } from '@/core/errors/limit-refusal';
 import { recordChannelMessage } from '@/core/telemetry';
+import type { AgentEvent } from '@/core/agent-base';
 import type { Attachment, ChannelType, UnifiedMessage } from '@/core/types';
 import type { GroupChannel } from '@/db/schema/group-channels';
 import { sessionRepository } from '@/db/repositories/session-repository';
@@ -427,12 +428,17 @@ export function forgetResolvedChannelPermission(event: { userId: string; request
  * Returns true if the message was consumed as a permission response.
  */
 /**
- * Octipus session id an agent event belongs to. `data.sessionId` is NOT used
- * here — for CLI thought events that field is a vendor (Claude/Codex) session
- * id, which would never match octipus's own resolved session id.
+ * Octipus session id an agent event belongs to: its agent's, looked up while
+ * the agent is in memory (as the gateway's event bridge does). An
+ * `AgentEvent` carries no session id of its own, and `data.sessionId` is NOT
+ * used — for CLI thought events that field is a vendor (Claude/Codex)
+ * session id, which would never match octipus's own resolved session id.
  */
-export function eventSessionId(event: { sessionId?: string; data?: { context?: { sessionId?: string }; [key: string]: unknown } }): string | undefined {
-  return event.sessionId || event.data?.context?.sessionId;
+export function eventSessionId(
+  event: Pick<AgentEvent, 'agentId'>,
+  getAgent: (agentId: string) => { getContext(): { sessionId: string } } | undefined,
+): string | undefined {
+  return getAgent(event.agentId)?.getContext().sessionId;
 }
 
 /** The key a reply in this chat (and group thread) is looked up under. */
@@ -953,11 +959,14 @@ export async function initializeChannels(): Promise<void> {
         try {
           const { getAgentManager } = await import('@/core/agent-manager');
           const agentManager = getAgentManager();
-          unsubAgentEvents = agentManager.onEvent((event: any) => {
+          unsubAgentEvents = agentManager.onEvent((event: AgentEvent) => {
             if (isTerminal) return;
-            // Match events from agents in this session (check multiple possible locations)
-            const data = event.data || {};
-            if (eventSessionId(event) !== resolvedSessionId) return;
+            const data = (event.data ?? {}) as { type?: string; toolId?: string; toolName?: string };
+            // A streamed token is an event too: one stall reset a second is
+            // plenty, and spares a session lookup and a timer per token.
+            if (data.type === 'text_delta' && Date.now() - _lastEventTime < 1_000) return;
+            // Only events from agents in this session.
+            if (eventSessionId(event, (id) => agentManager.get(id)) !== resolvedSessionId) return;
 
             if (event.type === 'action') {
               const actionType = data.type || '';

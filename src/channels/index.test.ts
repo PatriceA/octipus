@@ -2,18 +2,23 @@ import { describe, expect, it } from 'vitest';
 import { eventSessionId, imageConverter } from './index';
 
 describe('eventSessionId', () => {
-  it('does not drop a channel event because the CLI reported its own vendor session id', () => {
-    // Before the fix this read data.sessionId first, and for CLI thought
-    // events that field holds the vendor (Claude/Codex) session id — so a
-    // stale/foreign value there used to shadow the real octipus session id
-    // and silently drop the event.
-    const event = { sessionId: 'octipus-1', data: { sessionId: 'vendor-9', status: 'running' } };
-    expect(eventSessionId(event)).toBe('octipus-1');
+  const agents = new Map([['agent-1', { getContext: () => ({ sessionId: 'octipus-1' }) }]]);
+  const getAgent = (id: string) => agents.get(id);
+
+  it('is the session of the agent that emitted the event', () => {
+    // An AgentEvent has no session id of its own: reading one off the event
+    // (or its data.context) matched nothing, so the channel never showed a
+    // tool emoji or kept its typing indicator alive on agent events.
+    expect(eventSessionId({ agentId: 'agent-1' }, getAgent)).toBe('octipus-1');
   });
 
-  it('falls back to data.context.sessionId when the event has no top-level sessionId', () => {
-    const event = { data: { context: { sessionId: 'octipus-2' } } };
-    expect(eventSessionId(event)).toBe('octipus-2');
+  it('ignores the vendor session id a CLI event carries in its data', () => {
+    const event = { agentId: 'agent-1', type: 'thought' as const, data: { sessionId: 'vendor-9' }, timestamp: new Date() };
+    expect(eventSessionId(event, getAgent)).toBe('octipus-1');
+  });
+
+  it('is undefined once the agent is gone', () => {
+    expect(eventSessionId({ agentId: 'gone' }, getAgent)).toBeUndefined();
   });
 });
 
