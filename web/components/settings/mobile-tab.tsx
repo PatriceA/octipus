@@ -1,7 +1,6 @@
 'use client';
 
 import { Check, Copy, Loader2, QrCode, RefreshCw, Smartphone } from 'lucide-react';
-import QRCode from 'qrcode';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 
@@ -48,6 +47,8 @@ export function MobileTab() {
         code: data.code,
         ...(data.publicUrl ? { publicUrl: data.publicUrl } : {}),
       });
+      // Loaded on the first pairing, not with every settings visit.
+      const QRCode = (await import('qrcode')).default;
       const dataUrl = await QRCode.toDataURL(qrPayload, {
         width: 280,
         margin: 2,

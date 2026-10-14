@@ -12,11 +12,14 @@ import {
   Save,
   X,
 } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { computeLineDiff } from '../../../src/shared/diff';
-import CodeEditor from '@/components/chat/code-editor';
 import DiffView from '@/components/chat/diff-view';
 import { api } from '@/lib/api';
+
+// CodeMirror and its language table load with the first file opened, not
+// with every /chat visit.
+const CodeEditor = lazy(() => import('@/components/chat/code-editor'));
 
 // In-chat file view (Threads 2–3): a lightweight reader/editor over the
 // session file API. Text flips between read-only and an editable CodeMirror
@@ -276,13 +279,15 @@ export default function FileViewer({ sessionId, path: initialPath, onClose, onAt
               {editing && showDiff ? (
                 <DiffView patch={computeLineDiff(data.content, draft).patch} className="min-h-0 flex-1 p-2" />
               ) : (
-                <CodeEditor
-                  value={editing ? draft : data.content}
-                  onChange={editing ? setDraft : undefined}
-                  editable={editing}
-                  filename={path}
-                  height="100%"
-                />
+                <Suspense fallback={<div className="flex items-center justify-center gap-2 py-12 text-sm text-on-surface-variant"><Loader2 className="h-4 w-4 animate-spin" /> Loading editor…</div>}>
+                  <CodeEditor
+                    value={editing ? draft : data.content}
+                    onChange={editing ? setDraft : undefined}
+                    editable={editing}
+                    filename={path}
+                    height="100%"
+                  />
+                </Suspense>
               )}
             </div>
           )}
