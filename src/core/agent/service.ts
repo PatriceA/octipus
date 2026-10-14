@@ -28,7 +28,7 @@ import { ModelSelector, type SelectedModel } from './model-selector';
 import { type RootRunExtras, runRootAgent } from './root-runner';
 import { type LimitRefusal, limitRefusalOf } from '@/core/errors/limit-refusal';
 import { guardOutput, stripSwarmScaffolding } from './output-guard';
-import { type InlineUiStoreContext, storeInlineUiBlocks } from '@/core/inline-ui/extract';
+import { inlineUiGuardText, type InlineUiStoreContext, storeInlineUiBlocks } from '@/core/inline-ui/extract';
 import { saveProgressMessage } from './progress-message';
 import { filterPII } from './pii-filter';
 import { maybeCompactSession } from './session-compaction';
@@ -856,7 +856,7 @@ export class AgentService {
           { takenTasks: takenTasks.tasks },
         );
         void _planSources;
-        const outputCheck = guardOutput(response, inputGuard.flags);
+        const outputCheck = guardOutput(await inlineUiGuardText(response, resolvedSessionId), inputGuard.flags);
         const finalResponse = await this.withInlineUiStored(
           outputCheck.action === 'replace' ? outputCheck.response : response,
           { sessionId: resolvedSessionId, agentId, requesterId: userId, contentStorageOff: audience.contentStorageOff },
@@ -1081,7 +1081,7 @@ export class AgentService {
       // …and a turn stopped while it ran stores no answer.
       signal?.throwIfAborted();
 
-      const outputCheck = guardOutput(response, inputGuard.flags);
+      const outputCheck = guardOutput(await inlineUiGuardText(response, resolvedSessionId), inputGuard.flags);
       let finalResponse = outputCheck.action === 'replace' ? outputCheck.response : response;
       if (outputCheck.action === 'replace') {
         coreLogger.warn({ flags: outputCheck.flags, sessionId }, 'Output guard replaced rootAgent response');

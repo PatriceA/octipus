@@ -207,6 +207,16 @@ describe('turn notes and the source tool', () => {
     expect(out.provenanceId).toBeUndefined();
   });
 
+  test('the output guard reads the sources of the blocks a reply shows, of this session only', async () => {
+    const own = await store(chatId, fence('Leak', '<p>OWN-SOURCE-TEXT</p>'));
+    const foreign = await store(otherChatId, fence('Other', '<p>FOREIGN-SOURCE-TEXT</p>'));
+    const { inlineUiGuardText } = await import('@/core/inline-ui/extract');
+    const text = await inlineUiGuardText(`${own.text}\n${foreign.text}`, chatId);
+    expect(text).toContain('OWN-SOURCE-TEXT');
+    expect(text).not.toContain('FOREIGN-SOURCE-TEXT');
+    expect(await inlineUiGuardText('no blocks here', chatId)).toBe('no blocks here');
+  });
+
   test('source returns a block of the agent’s own session only, and only where interactive answers are offered', async () => {
     const out = await store(chatId, fence('Source', '<style>a{}</style><p>s</p><script>go()</script>'));
     const id = ID_RE.exec(out.text)?.[1] as string;

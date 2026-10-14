@@ -118,6 +118,16 @@ interface ContentPayload {
  * (`core/inline-ui/promote.ts`) use this one list.
  */
 export const INLINE_UI_REFUSED_ELEMENTS: readonly string[] = ['script', 'meta', 'link', 'base', 'iframe', 'frame', 'frameset', 'object', 'embed', 'portal', 'form', 'noscript', 'template', 'slot', 'set'];
+/**
+ * Globals the content runtime removes before generated code runs: WebRTC,
+ * which CSP does not govern, and the report observer, which would expose the
+ * policy (and its nonce).
+ */
+export const INLINE_UI_WITHHELD_GLOBALS: readonly string[] = [
+  'RTCPeerConnection', 'webkitRTCPeerConnection', 'RTCDataChannel', 'RTCIceTransport', 'RTCDtlsTransport',
+  'RTCSctpTransport', 'RTCRtpSender', 'RTCRtpReceiver', 'RTCRtpTransceiver', 'RTCSessionDescription',
+  'RTCIceCandidate', 'RTCCertificate', 'RTCDTMFSender', 'ReportingObserver',
+];
 /** Attributes the sanitizer removes wherever they appear. */
 export const INLINE_UI_DROPPED_ATTRIBUTES: readonly string[] = ['ping', 'attributionsrc', 'autofocus', 'formaction', 'action', 'shadowrootmode', 'shadowroot', 'srcdoc', 'srcset', 'imagesrcset'];
 
@@ -130,6 +140,23 @@ export const INLINE_UI_DROPPED_ATTRIBUTES: readonly string[] = ['ping', 'attribu
 const CONTENT_RUNTIME = String.raw`(function (P) {
   'use strict';
   var w = window, d = document, parentRef = w.parent;
+  // Nothing generated code can read may hold nonce C: with it, a nested
+  // srcdoc frame (which CSP frame-src does not stop) would run script in a
+  // realm this runtime never touched. The policy stays in force once parsed,
+  // so its meta element and this script's element (whose text holds the
+  // payload) leave the document; violation events, which carry the policy
+  // text, stop at the window; the nonce getter answers ''.
+  var selfScript = d.currentScript;
+  if (selfScript) selfScript.remove();
+  var cspMeta = d.querySelector('meta[http-equiv="Content-Security-Policy"]');
+  if (cspMeta) cspMeta.remove();
+  w.addEventListener('securitypolicyviolation', function (e) { e.stopImmediatePropagation(); }, true);
+  // WebRTC is outside CSP (connect-src does not cover it, and browsers do not
+  // implement the webrtc directive): ICE and STUN/TURN would reach any host.
+  // ReportingObserver would hand back violation reports with the policy.
+  ${JSON.stringify(INLINE_UI_WITHHELD_GLOBALS)}.forEach(function (n) {
+    try { Object.defineProperty(w, n, { value: undefined, writable: false, configurable: false }); } catch (e) { /* not in this engine */ }
+  });
   var post = function (m) { parentRef.postMessage(m, '*'); };
   var createEl = d.createElement.bind(d);
   var getById = d.getElementById.bind(d);
@@ -294,8 +321,12 @@ const CONTENT_RUNTIME = String.raw`(function (P) {
   });
   if (P.mode === 'scripted' && P.js) {
     var s = createEl('script');
+    // The internal nonce only: no content attribute to read back.
     s.nonce = P.nonce;
-    s.setAttribute('nonce', P.nonce);
+    [w.HTMLElement, w.SVGElement, w.MathMLElement].forEach(function (C) {
+      if (!C || !Object.getOwnPropertyDescriptor(C.prototype, 'nonce')) return;
+      Object.defineProperty(C.prototype, 'nonce', { get: function () { return ''; }, set: function () {}, configurable: false });
+    });
     s.textContent = P.js;
     body.appendChild(s);
   }

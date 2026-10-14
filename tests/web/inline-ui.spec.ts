@@ -144,6 +144,33 @@ test.describe('interactive answers in the chat', () => {
     expect(outbound).toEqual([]);
   });
 
+  test('a chip whose address changes waits again before a click opens it', async ({ authenticatedPage: page }) => {
+    const SWAP = '88888888-8888-4888-8888-888888888888';
+    blocks[SWAP] = {
+      title: 'Swap', html: '<p>swap</p>', css: '', scripts: true,
+      js: "octi.openLink('https://example.test/first'); setTimeout(function () { octi.openLink('https://example.test/second'); }, 1500);",
+    };
+    await stubBlocks(page);
+    const gateway = await stubGateway(page);
+    const outbound: string[] = [];
+    await page.context().route('https://example.test/**', (route) => { outbound.push(route.request().url()); return route.fulfill({ status: 200, body: 'x' }); });
+    await page.goto('/chat');
+    await selectChatSession(page, 'sess-1');
+    await expect.poll(() => gateway.subscribed()).toBeGreaterThan(0);
+
+    replyEvent(gateway, marker(SWAP));
+    const chip = page.getByTestId('inline-ui-link');
+    await expect(chip).toContainText('https://example.test/first');
+    await expect(chip).toContainText('https://example.test/second');
+    await chip.getByRole('link').click();
+    await page.waitForTimeout(300);
+    expect(outbound).toEqual([]);
+
+    await page.waitForTimeout(900);
+    await chip.getByRole('link').click();
+    await expect.poll(() => outbound).toEqual(['https://example.test/second']);
+  });
+
   test('a reply still streaming shows a preview of the block being written', async ({ authenticatedPage: page }) => {
     const gateway = await stubGateway(page);
     await page.goto('/chat');

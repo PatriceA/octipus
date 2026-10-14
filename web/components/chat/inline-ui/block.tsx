@@ -182,12 +182,17 @@ function LoadedBlock({ block, host }: { block: InlineUiBlockData; host: InlineUi
   const [errors, setErrors] = useState<string[]>([]);
   const [removed, setRemoved] = useState<string[]>([]);
   const [blank, setBlank] = useState(false);
-  const [link, setLink] = useState<string | null>(null);
+  const [link, setLink] = useState<{ url: string; at: number } | null>(null);
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
   const [showSource, setShowSource] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const frameEl = useRef<HTMLIFrameElement | null>(null);
   const reported = useRef(new Set<InlineUiOutcome>());
+  // When the chip or strip last moved: the frame resizing, or a status line
+  // appearing above them. Their buttons wait the input delay from this too,
+  // so a frame cannot slide one under a click aimed inside it (S6).
+  const movedAt = useRef(0);
+  const heightNow = useRef(height);
   const mode = block.scripts && run.kind === 'running' ? 'scripted' : 'static';
   const showFrame = run.kind === 'running' || (run.kind === 'waiting' && run.reason !== 'froze');
 
@@ -259,17 +264,24 @@ function LoadedBlock({ block, host }: { block: InlineUiBlockData; host: InlineUi
 
   const onMessage = useCallback((m: InlineUiHostMessage) => {
     switch (m.type) {
-      case 'height':
-        if (!suggestion) setHeight(clampInlineUiHeight(m.height, window.innerHeight));
+      case 'height': {
+        // Height is held while a chip or a strip is under the frame.
+        if (suggestion || link) return;
+        const next = clampInlineUiHeight(m.height, window.innerHeight);
+        if (next !== heightNow.current) { heightNow.current = next; movedAt.current = Date.now(); setHeight(next); }
         return;
+      }
       case 'error':
+        movedAt.current = Date.now();
         if (m.kind === 'removed') { setRemoved(m.items); return; }
         if (m.kind === 'blank') { setBlank(true); report('blank'); return; }
         setErrors((prev) => prev.length >= 5 ? prev : [...prev, `${m.errorClass}${m.line ? ` (line ${m.line})` : ''}`]);
         report('script-error', { errorClass: m.errorClass, line: m.line });
         return;
       case 'link':
-        setLink(m.url);
+        // A new address is a new chip: its delay starts again.
+        movedAt.current = Date.now();
+        setLink({ url: m.url, at: Date.now() });
         return;
       case 'prompt':
         if (!host.sendSuggestion && !host.editSuggestion) return;
@@ -283,7 +295,7 @@ function LoadedBlock({ block, host }: { block: InlineUiBlockData; host: InlineUi
       case 'ready':
         return;
     }
-  }, [host, report, suggestion]);
+  }, [host, report, suggestion, link]);
 
   // Saving is a user action under the user's own session (§7): not for an
   // answer made after reading content from outside, not while impersonating.
@@ -301,7 +313,7 @@ function LoadedBlock({ block, host }: { block: InlineUiBlockData; host: InlineUi
 
   // Buttons drawn next to the frame ignore input for a moment after they
   // appear, so a click aimed inside the frame cannot land on them (S6).
-  const settled = (since: number) => Date.now() - since >= INLINE_UI_LIMITS.inputDelayMs;
+  const settled = (since: number) => Date.now() - Math.max(since, movedAt.current) >= INLINE_UI_LIMITS.inputDelayMs;
 
   return (
     <div ref={containerRef}>
@@ -366,7 +378,7 @@ function LoadedBlock({ block, host }: { block: InlineUiBlockData; host: InlineUi
       )}
 
       {showFrame && (
-        <div className="px-1 py-1 min-w-0" style={suggestion ? { height: `${height + 8}px` } : undefined}>
+        <div className="px-1 py-1 min-w-0" style={suggestion || link ? { height: `${height + 8}px` } : undefined}>
           <InlineUiFrame
             key={`${mountKey}:${mode}`}
             title={block.title}
@@ -390,7 +402,7 @@ function LoadedBlock({ block, host }: { block: InlineUiBlockData; host: InlineUi
         </div>
       )}
 
-      {link && <LinkChip url={link} onDismiss={() => setLink(null)} settled={settled} />}
+      {link && <LinkChip key={link.at} url={link.url} at={link.at} onDismiss={() => setLink(null)} settled={settled} />}
 
       {suggestion && (
         <SuggestionStrip
@@ -418,8 +430,7 @@ function LoadedBlock({ block, host }: { block: InlineUiBlockData; host: InlineUi
   );
 }
 
-function LinkChip({ url, onDismiss, settled }: { url: string; onDismiss: () => void; settled: (since: number) => boolean }) {
-  const [at] = useState(() => Date.now());
+function LinkChip({ url, at, onDismiss, settled }: { url: string; at: number; onDismiss: () => void; settled: (since: number) => boolean }) {
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 text-xs border-t border-outline-variant/30" data-testid="inline-ui-link">
       <ExternalLink className="h-3.5 w-3.5 shrink-0" aria-hidden />

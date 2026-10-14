@@ -6,6 +6,17 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { OctiClient } from '../client.js';
 
+/**
+ * A reply's interactive answer is stored apart and shown in the Octipus web app;
+ * the message keeps a marker line `[[octi-ui:<id>|<title>]]`. An MCP client gets
+ * the readable line the other non-web surfaces get.
+ */
+const INLINE_UI_MARKER = /^\[\[octi-ui:[0-9a-f-]{36}\|([^\]\n]*)\]\]$/gim;
+
+export function withInlineUiLines(content: string): string {
+  return content.replace(INLINE_UI_MARKER, (_m, title: string) => `▸ Interactive answer “${title}” — open this conversation in the Octipus web app to use it.`);
+}
+
 export function registerSessionTools(server: McpServer, client: OctiClient): void {
   server.tool(
     'octipus_list_sessions',
@@ -45,7 +56,8 @@ export function registerSessionTools(server: McpServer, client: OctiClient): voi
     },
     async ({ session_id, limit, offset }) => {
       try {
-        const messages = await client.getSessionMessages(session_id, limit, offset);
+        const messages = (await client.getSessionMessages(session_id, limit, offset))
+          .map((m) => (m.role === 'assistant' && typeof m.content === 'string' ? { ...m, content: withInlineUiLines(m.content) } : m));
         return {
           content: [
             {

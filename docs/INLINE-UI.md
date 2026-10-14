@@ -102,7 +102,9 @@ the session's answers by id; the model writes a new block.
    source.
 3. **Other surfaces** apply `inlineUiFallbackText` (channels, monitors, the
    group bridge, hooks, room notifications, `/api/chat` without `renders`,
-   the OpenAI-compatible API, the TUI) or `inlineUiSpeechText` (voice).
+   the OpenAI-compatible API, both terminal UIs, MCP `octipus_get_messages`)
+   or `inlineUiSpeechText` (voice). A status update keeps only the line. The
+   output guard reads a reply together with the sources of its blocks.
 4. **The web app** renders a marker line as a block
    (`web/components/chat/inline-ui/`), fetching its source from
    `GET /api/sessions/:id/inline-ui/:blockId` (rooms of a remote space:
@@ -131,13 +133,20 @@ cookies, storage or app origin) and built from `srcdoc`
 
 Both CSPs deny every fetch and every remote image, font, stylesheet,
 script, frame and worker. The content frame inherits the host's CSP, so the
-host allows exactly what the content needs and nothing more.
+host allows exactly what the content needs and nothing more. CSP does not
+govern WebRTC, so the content runtime removes its constructors before the
+answer's script runs, and keeps the script nonce out of reach so that a
+nested frame cannot run script in a fresh realm. DNS resource hints
+(`dns-prefetch`, `preconnect`) are outside CSP too; prefetching is switched
+off, and what remains is a low-bandwidth residual.
 
 The chat page listens to the host frame only, checks every message's shape,
 channel and rate, and unmounts a frame that floods. Buttons it draws next to
 a frame ignore input for 800 ms after they appear. A block that takes the
 keyboard focus while you type (a page keystroke within the last second, or
-no user activation) is stopped and the focus goes back. At most 6 frames run
+no user activation) is stopped and the focus goes back. A link chip or a
+suggestion strip also waits again when its link changes or anything above it
+moves, and the frame's height is held while either is shown. At most 6 frames run
 at once (3 on narrow screens); a marker in `localStorage` notices a block
 that was mounted when the tab died.
 

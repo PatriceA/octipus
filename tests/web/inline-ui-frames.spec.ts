@@ -72,6 +72,35 @@ test.describe('interactive answer frames', () => {
     expect(heights.at(-1)).toBeLessThan(150);
   });
 
+  test('WebRTC is withheld, directly and through a nested frame, and the nonce cannot be read back', async ({ page }) => {
+    // CSP does not govern WebRTC (no connect-src, no implemented webrtc
+    // directive), and a nested srcdoc frame is not stopped by frame-src: with
+    // the nonce it would run script in a realm the runtime never touched.
+    const findNonce = `function findNonce() {
+      var c = [document.currentScript && document.currentScript.nonce, document.currentScript && document.currentScript.getAttribute('nonce')];
+      [].forEach.call(document.querySelectorAll('[nonce]'), function (el) { c.push(el.getAttribute('nonce'), el.nonce); });
+      var m = document.documentElement.outerHTML.match(/nonce-([A-Za-z0-9+/=_-]+)/); if (m) c.push(m[1]);
+      return c.filter(Boolean)[0] || '';
+    }`;
+    const m = await mount(page, {
+      html: '<p>x</p>',
+      js: `${findNonce}
+        var policy = '';
+        document.addEventListener('securitypolicyviolation', function (e) { policy = e.originalPolicy; }, true);
+        new Image().src = 'https://exfil.test/v.gif';
+        var n = findNonce(), nested = 'no-script';
+        window.addEventListener('message', function (e) { if (e.data && e.data.k) nested = e.data.k; });
+        var f = document.createElement('iframe');
+        f.srcdoc = '<script nonce="' + n + '">parent.postMessage({k: typeof RTCPeerConnection}, "*")<\/script>';
+        document.body.appendChild(f);
+        setTimeout(function () {
+          octi.prompt([typeof RTCPeerConnection, typeof webkitRTCPeerConnection, typeof ReportingObserver, 'nonce=' + n, 'policy=' + policy, 'nested=' + nested].join('|'));
+        }, 1200);`,
+    });
+    expect(await prompted(m)).toBe('undefined|undefined|undefined|nonce=|policy=|nested=no-script');
+    expect(m.requests).toEqual([]);
+  });
+
   test('scripted code runs with the content nonce, and the bridge relays a prompt', async ({ page }) => {
     const m = await mount(page, { html: '<p id="o">0</p>', js: "document.getElementById('o').textContent = '42'; octi.prompt(document.getElementById('o').textContent);" });
     expect(await prompted(m)).toBe('42');

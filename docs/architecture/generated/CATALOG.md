@@ -554,7 +554,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 22 |
 | `api` | `config` | 22 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 131 |
+| `api` | `core` | 132 |
 | `api` | `db` | 114 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
@@ -695,6 +695,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `visual` | 2 |
 | `tools` | `voice` | 3 |
 | `tui-editor` | `mcp` | 2 |
+| `tui-editor` | `shared` | 1 |
 | `tui-editor` | `tui-pi` | 29 |
 | `tui-editor` | `utils` | 2 |
 | `tui-pi` | `config` | 1 |

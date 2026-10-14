@@ -254,6 +254,17 @@ chat page ──iframe sandbox=allow-scripts srcdoc=HOST──▶ host frame (ou
 - Generated code shares a realm only with the content runtime, never with
   the host: it can forge or suppress content messages, not host signals.
 - Two modes: **static** (no JS; no generated code runs) and **scripted**.
+- **What the content realm withholds** before generated code runs: the
+  WebRTC constructors and `ReportingObserver`
+  (`INLINE_UI_WITHHELD_GLOBALS`) — CSP does not govern WebRTC (no
+  `connect-src`; Chromium does not implement a `webrtc` directive) — and
+  nonce C: the runtime's own script element (whose text holds the payload)
+  and the CSP meta leave the document once applied (the policy stays in
+  force), the generated script gets its nonce through the IDL property only,
+  the `nonce` getter answers `''`, and `securitypolicyviolation` events (whose
+  `originalPolicy` carries the nonce) stop at the window. Without the nonce,
+  a nested `srcdoc` frame — which `frame-src` does not stop — runs no script,
+  so it cannot reach a realm with WebRTC.
 - No `allow` attribute: Chromium logs a console error for every `'none'`
   entry on every frame, and the sandbox with an opaque origin already
   withholds every feature whose default allowlist is `self`. Videos get
@@ -326,6 +337,9 @@ server use the same code. The esbuild syntax check is server-only
   changed message is dropped, because Anthropic and Gemini replay it.
 - Later turns see `[[octi-ui:<id>|<title>]]`; `inline-ui__source` fetches
   the source when the model wants to change a block.
+- **Output guard.** The service's `guardOutput` reads the reply together with
+  the sources of the blocks it shows (`inlineUiGuardText`), so a widget is
+  held to the same checks as text.
 
 **D13. A fenced block, not a tool call.** Revision 3.1 chose a tool call and
 kept the fenced block as an open question. Implementing it showed the
@@ -366,11 +380,11 @@ have `network = 'none'`: the embed CSP gets `connect-src 'none'` and
 | # | Invariant | Mechanism |
 |---|---|---|
 | S1 | Generated code never runs with the app's origin, cookies or storage | Both frames `sandbox="allow-scripts"` without `allow-same-origin`, `srcdoc` |
-| S2 | No fetch; no remote script, style, font, image, media, frame or worker | §4.2 CSPs, first element of each `<head>`, in constant documents (D6) |
+| S2 | No fetch; no remote script, style, font, image, media, frame or worker; no WebRTC | §4.2 CSPs, first element of each `<head>`, in constant documents; WebRTC constructors withheld and nonce C unreadable, so no nested frame runs script (D6) |
 | S3 | No popups, forms, top or sibling navigation, modals, downloads | Sandbox flags (only `allow-scripts`); opaque origin withholds `self`-default features (D6); runtime strips `autofocus` |
 | S4 | Content cannot navigate (Chromium); elsewhere scripts wait for a click | No live `href` (§4.3); host `frame-src 'none'`; host stops on a second content load; D9, D10 |
 | S5 | The chat page acts only on host-frame messages of known shape and rate | `event.source` check; per-mount channel (readable by generated code — not a secret); `parseInlineUiHostMessage`; §4.4 rates; > 20 invalid messages per second unmount |
-| S6 | Nothing is sent or opened without a click in the chat page | D8. Strip and chip buttons ignore input for 800 ms after they appear; frame height locked while a strip is open; suggestion text cleaned of C0/C1, bidi and zero-width characters (`cleanSuggestedText`) |
+| S6 | Nothing is sent or opened without a click in the chat page | D8. Strip and chip buttons ignore input for 800 ms after they appear, after the link changes, and after anything above them moves (the frame resizing, a status line appearing); frame height locked while a chip or strip is shown; suggestion text cleaned of C0/C1, bidi and zero-width characters (`cleanSuggestedText`) |
 | S7 | Refused markup is reported to the model (lint, repair round) and removed by the runtime | §4.3 |
 | S8 | Only those who may read the conversation read a block | `inlineUiReader`: the scoped session read of the chat routes (`contentRepos`), or `roomAccess`; a remote room through the federation op `room.inline_ui` (`roomAccess` and the room's space); block id must belong to that session; 404 otherwise; `cache-control: no-store` |
 | S9 | Sizes and rates are bounded | §4.4 |
@@ -466,6 +480,14 @@ Constants in `src/shared/inline-ui/limits.ts`; the browser enforces them too.
 | T13 | Generated text reaches the model as the user's words | Client reports are enums, an error class and a line number; ids, never titles, in model-facing notes |
 | T14 | Focus theft | S14 |
 | T15 | A room member's question shapes code everyone runs | Shared conversations wait for a click (D10); suggestions post as the clicking member's own addressed message |
+| T16 | Exfiltration outside CSP (WebRTC ICE/STUN/TURN, a nested frame's fresh realm) | WebRTC withheld in the content realm; nonce unreadable, so nested frames run no script (D6); tested in `inline-ui-frames.spec.ts` |
+| T17 | A widget that says what the reply must not (a leaked prompt, made-up keys) | The output guard reads the reply with the sources of its blocks (`inlineUiGuardText`); a replaced reply drops its markers |
+
+**Residual.** DNS-level resource hints (`<link rel=dns-prefetch>`,
+`preconnect`) are not governed by CSP either. The head turns DNS prefetching
+off, but a scripted block could still add a hint whose lookup carries a few
+bytes in a host name. This is a low-bandwidth channel; blocks from a
+conversation that read outside content wait for a click (D10).
 
 ---
 
@@ -584,10 +606,12 @@ blocks are dropped with a warning.
 “T” — open this conversation in the Octipus web app to use it.") is applied
 by: channel replies (`summarizeForChannel`), monitor delivery, the group
 bridge relay, hook `notifyOwner`, room notifications, `POST /api/chat`
-without `renders`, the OpenAI-compatible API, and the TUI (final and
-streaming text). Voice (server and web) uses `inlineUiSpeechText`, which
-drops blocks entirely. MCP clients reach replies through `/api/chat` and get
-the line.
+without `renders`, the OpenAI-compatible API, both terminal UIs (final and
+streaming text), and the MCP server's `octipus_get_messages`. Voice (server
+and web) uses `inlineUiSpeechText`, which drops blocks entirely. A status
+update (`send_status_update`) keeps only the line (`stubInlineUiFences`): its
+rows are replayed as history and relayed as they are; a block belongs in the
+final reply. Fences are recognised in any letter case.
 
 ### 5.7 REST and federation
 
@@ -777,6 +801,9 @@ back to where it was (S14); accessible markup is the default in the prompt.
 | Offer matrix | `src/core/inline-ui/offer.test.ts` | unit |
 | Extraction, caps, notices, flow label, idempotence, access (owner, admin, member, stranger, room, wrong session), `no-store`, turn notes, source tool, promotion (bundle after shim, closed CSP, tainted, visibility, ownership, slug) | `src/api/routes/inline-ui.isolation.test.ts` | database |
 | Repair round (draft kept, once only, not offered / child) | `src/core/agent-worker.inline-ui.test.ts` | unit |
+| Status updates keep one line | `src/core/agent/progress-message.test.ts` | unit |
+| WebRTC withheld, nonce unreadable, nested frames run no script; a chip whose address changes waits again | `tests/web/inline-ui-frames.spec.ts`, `tests/web/inline-ui.spec.ts` | Playwright |
+| MCP `octipus_get_messages` line | `mcp-server/test/inline-ui.test.mjs` | node test |
 | Server sanitizer (refusals from the shared lists, raw-text elements, SVG/MathML `<style>`, links, escaping, cost caps), promoted page | `src/core/inline-ui/promote.test.ts` | unit |
 | Frames in a browser: spike, inheritance, navigation (200/204), forged signals, floods, breakouts, clobbering, links, caps | `tests/web/inline-ui-frames.spec.ts` | Playwright (Chromium) |
 | Chat: history waits, live runs, suggestion strip with provenance, reports, link chip, streaming preview, not available, focus guard, save dialog, tainted save disabled | `tests/web/inline-ui.spec.ts` | Playwright |
@@ -899,6 +926,7 @@ Found while implementing:
 - **Promotion (§7).** Server sanitizer on `htmlparser2` sharing the runtime's lists, canonical serializer, `octi` shim in the bundle, `network = 'none'` embed without SDK or token.
 - **Eval harness.** `renders` blocker in unit mode; loader escapes; `eval/inline-ui.yaml`.
 - **§13.** All eight pre-existing issues fixed; five more found and fixed.
+- **Implementation review** (six findings, all fixed): the output guard now reads block sources (T17); WebRTC is withheld and nonce C hidden, since CSP governs neither and a nested `srcdoc` frame would otherwise run script with a fresh `RTCPeerConnection` (D6, T16; `webrtc 'block'` is not implemented in Chromium); chip and strip delays restart on a new link and on any move, and height is held while a chip shows (S6); status updates keep one line; the editor TUI and MCP `get_messages` apply the fallback; fences match in any case and inline code with backticks is not a fence. DNS resource hints are recorded as a residual.
 
 **Revision 3.1** (round 3: 1 blocker, 3 majors, 3 minors):
 - **CSP inheritance.** The content frame inherits the host CSP. The host CSP now allows everything the content CSP allows, a subset test was added, and the spike tests inheritance and `data:` frames (§4.2, §5.0).

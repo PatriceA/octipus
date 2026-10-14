@@ -216,3 +216,20 @@ describe('bridge', () => {
     expect(clampInlineUiHeight(5000, 1000)).toBe(800);
   });
 });
+
+describe('fence edge cases', () => {
+  it('the language is matched in any letter case, everywhere', async () => {
+    const { hasInlineUiFence, inlineUiFallbackText, withoutInlineUiFences, findInlineUiFences } = await import('./fence');
+    const text = 'Intro\n```Octi-UI title="Calc"\n<p>SOURCE</p>\n```\nEnd';
+    expect(findInlineUiFences(text)).toHaveLength(1);
+    expect(hasInlineUiFence(text)).toBe(true);
+    expect(inlineUiFallbackText(text)).not.toContain('SOURCE');
+    expect(withoutInlineUiFences(text)).not.toContain('SOURCE');
+  });
+
+  it('a line of inline code with backticks is not a fence, so a later marker still renders', async () => {
+    const { splitInlineUiSegments } = await import('./fence');
+    const segments = splitInlineUiSegments('Run ```npm i``` first.\n[[octi-ui:11111111-1111-4111-8111-111111111111|Calc]]\nDone.');
+    expect(segments.filter((s) => s.kind === 'block')).toHaveLength(1);
+  });
+});

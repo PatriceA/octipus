@@ -26,6 +26,23 @@
 export const INLINE_UI_LANG = 'octi-ui';
 
 const OPEN_RE = /^ {0,3}(`{3,}|~{3,})[ \t]*([^\s`]*)(.*)$/;
+
+/**
+ * The opening line of a fenced block, or null. A backtick fence's info string
+ * may not contain backticks (CommonMark): ```` ```npm i``` ```` is inline code
+ * on a line, not a fence. The language is compared case-insensitively.
+ */
+function openingFence(line: string): { char: string; length: number; lang: string; info: string } | null {
+  const open = OPEN_RE.exec(line);
+  if (!open) return null;
+  if (open[1][0] === '`' && open[3].includes('`')) return null;
+  return { char: open[1][0], length: open[1].length, lang: open[2].toLowerCase(), info: open[3] };
+}
+
+/** Cheap pre-check: could `text` hold an `octi-ui` fence (any letter case)? */
+export function mentionsInlineUiLang(text: string): boolean {
+  return /octi-ui/i.test(text);
+}
 const UUID_RE_SRC = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const MARKER_LINE_RE = new RegExp(`^\\[\\[octi-ui:(${UUID_RE_SRC})(?:\\|([^\\]\\n]*))?\\]\\]$`);
 const MARKER_GLOBAL_RE = new RegExp(`\\[\\[octi-ui:(${UUID_RE_SRC})(?:\\|([^\\]\\n]*))?\\]\\]`, 'g');
@@ -99,23 +116,19 @@ export function findInlineUiFences(text: string): InlineUiFence[] {
   const fences: InlineUiFence[] = [];
   let i = 0;
   while (i < lines.length) {
-    const open = OPEN_RE.exec(lines[i].text);
+    const open = openingFence(lines[i].text);
     if (!open) { i++; continue; }
-    const marker = open[1];
-    // A backtick fence's info string may not contain backticks (CommonMark).
-    if (marker[0] === '`' && open[3].includes('`')) { i++; continue; }
-    const lang = open[2].toLowerCase();
     const bodyStart = lines[i].end;
     let j = i + 1;
-    while (j < lines.length && !isClosing(lines[j].text, marker[0], marker.length)) j++;
+    while (j < lines.length && !isClosing(lines[j].text, open.char, open.length)) j++;
     const closed = j < lines.length;
-    if (lang === INLINE_UI_LANG) {
+    if (open.lang === INLINE_UI_LANG) {
       const bodyEnd = closed ? lines[j].start : text.length;
-      const { title, height } = parseInlineUiInfo(open[3]);
+      const { title, height } = parseInlineUiInfo(open.info);
       fences.push({
         start: lines[i].start,
         end: closed ? lines[j].end : text.length,
-        info: open[3].trim(),
+        info: open.info.trim(),
         title,
         ...(height !== undefined ? { height } : {}),
         body: text.slice(Math.min(bodyStart, bodyEnd), bodyEnd).replace(/\n$/, ''),
@@ -129,7 +142,7 @@ export function findInlineUiFences(text: string): InlineUiFence[] {
 
 /** True when the text holds at least one `octi-ui` fence (cheap pre-check first). */
 export function hasInlineUiFence(text: string): boolean {
-  return text.includes(INLINE_UI_LANG) && findInlineUiFences(text).length > 0;
+  return mentionsInlineUiLang(text) && findInlineUiFences(text).length > 0;
 }
 
 /** Replace each fence with `replace(fence, index)`; text outside fences is untouched. */
@@ -174,7 +187,7 @@ export function transformOutsideInlineUiFences(text: string, transform: (outside
 
 /** The text with every `octi-ui` fence removed: the prose the tool-call recovery parsers may read. */
 export function withoutInlineUiFences(text: string): string {
-  return text.includes(INLINE_UI_LANG) ? replaceInlineUiFences(text, () => '') : text;
+  return mentionsInlineUiLang(text) ? replaceInlineUiFences(text, () => '') : text;
 }
 
 // ── Marker ───────────────────────────────────────────────────────────────
@@ -220,9 +233,9 @@ export function splitInlineUiSegments(text: string): InlineUiSegment[] {
       if (isClosing(line, fence.char, fence.length)) fence = null;
       continue;
     }
-    const open = OPEN_RE.exec(line);
+    const open = openingFence(line);
     if (open) {
-      fence = { char: open[1][0], length: open[1].length };
+      fence = { char: open.char, length: open.length };
       buffer.push(line);
       continue;
     }
@@ -248,14 +261,14 @@ export function inlineUiFallbackText(text: string): string {
   let out = text.includes('[[octi-ui:')
     ? text.replace(MARKER_GLOBAL_RE, (_m, _id: string, title?: string) => inlineUiFallbackLine(title ?? ''))
     : text;
-  if (out.includes(INLINE_UI_LANG)) out = replaceInlineUiFences(out, (f) => inlineUiFallbackLine(f.title));
+  if (mentionsInlineUiLang(out)) out = replaceInlineUiFences(out, (f) => inlineUiFallbackLine(f.title));
   return out;
 }
 
 /** Text for speech: markers and fences are dropped instead of described. */
 export function inlineUiSpeechText(text: string): string {
   let out = text.includes('[[octi-ui:') ? text.replace(MARKER_GLOBAL_RE, '') : text;
-  if (out.includes(INLINE_UI_LANG)) out = replaceInlineUiFences(out, () => '');
+  if (mentionsInlineUiLang(out)) out = replaceInlineUiFences(out, () => '');
   return out;
 }
 

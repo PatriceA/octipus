@@ -53,6 +53,7 @@ import { StatusBar } from '@/tui-pi/components/status-bar';
 import { GatewayAdapter, type AgentSessionEvent } from '@/tui-pi/gateway-adapter';
 import { createOverlayController, type OverlayController } from '@/tui-pi/overlays/registry';
 import { chalk } from '@/tui-pi/theme/defaults';
+import { inlineUiFallbackText } from '@/shared/inline-ui/fence';
 
 export interface OctipusEditorAppOptions {
   gatewayUrl?: string;
@@ -333,7 +334,9 @@ export class OctipusEditorApp {
   // ── Gateway events ─────────────────────────────────────────────
 
   private pushMessage(role: 'user' | 'assistant' | 'system', content: string): void {
-    this.chat.messages.push({ role, content: content.replace(/^Error: /, ''), tone: /^Error:|^✗/.test(content) ? 'error' : 'notice', timestamp: new Date() });
+    // Interactive answers render only in the web app: a plain line here.
+    const text = role === 'assistant' ? inlineUiFallbackText(content) : content;
+    this.chat.messages.push({ role, content: text.replace(/^Error: /, ''), tone: /^Error:|^✗/.test(content) ? 'error' : 'notice', timestamp: new Date() });
     this.tui.requestRender();
   }
 

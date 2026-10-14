@@ -9,9 +9,9 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
   findInlineUiFences,
-  INLINE_UI_LANG,
   inlineUiFallbackLine,
   inlineUiFallbackText,
+  mentionsInlineUiLang,
   previewInlineUiBody,
   splitInlineUiSegments,
 } from '../../../../src/shared/inline-ui/fence';
@@ -39,7 +39,7 @@ export function AssistantContent({ content, untrusted }: { content: string; untr
 
 export function StreamingContent({ text }: { text: string }) {
   const host = useInlineUiHost();
-  const fences = useMemo(() => (text.includes(INLINE_UI_LANG) ? findInlineUiFences(text) : []), [text]);
+  const fences = useMemo(() => (mentionsInlineUiLang(text) ? findInlineUiFences(text) : []), [text]);
   if (fences.length === 0) return <div className="text-sm whitespace-pre-wrap break-words min-w-0">{text}</div>;
   const parts: ReactNode[] = [];
   let cursor = 0;

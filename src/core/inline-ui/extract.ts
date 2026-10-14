@@ -20,6 +20,7 @@ import {
   INLINE_UI_LIMITS,
   inlineUiFallbackLine,
   inlineUiMarker,
+  inlineUiMarkerIds,
   type InlineUiFence,
   type InlineUiIssue,
   lintInlineUi,
@@ -154,6 +155,19 @@ export async function storeInlineUiBlocks(text: string, ctx: InlineUiStoreContex
     }, 'Interactive answer stored');
   }
   return { text: replaceInlineUiFences(text, (_f, i) => replacements[i] ?? ''), stored, refused };
+}
+
+/**
+ * The reply as the output guard must read it: with the source of every block
+ * it shows. By the time the guard runs, a block is a marker line, which would
+ * hide whatever the widget says (a leaked prompt, made-up keys) from a check
+ * on the reply alone.
+ */
+export async function inlineUiGuardText(text: string, sessionId: string): Promise<string> {
+  const ids = inlineUiMarkerIds(text);
+  if (ids.length === 0) return text;
+  const blocks = await inlineUiRepository.getManyInSession(ids, sessionId);
+  return [text, ...blocks.map((b) => [b.title, b.css, b.html, b.js].join('\n'))].join('\n\n');
 }
 
 /** Replace every fence with its plain line: a history copy that must not carry the source. */
