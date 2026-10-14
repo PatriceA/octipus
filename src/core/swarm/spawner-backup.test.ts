@@ -62,6 +62,7 @@ type RunOpts = {
   parentContext: { userId: string };
   reason: string;
   budget: Budget;
+  onWorkerStarted?: (agentId: string) => void;
 };
 
 function makeSpawner(resultsByAttempt: ChildResult['status'][], calls: RunOpts[]) {
@@ -157,5 +158,14 @@ suite('runChildWithRetry — topic backup model', () => {
     // Both retries are new nodes, so both start from a clean allowance.
     expect(calls[1].budget.fanOut).toEqual({ cap: 4, used: 0 });
     expect(calls[2].budget.fanOut).toEqual({ cap: 4, used: 0 });
+  });
+
+  test('every retry attempt reports its new worker, so steer_child follows the live one', async () => {
+    backupModelId = 'backup-id';
+    const calls: RunOpts[] = [];
+    const onWorkerStarted = () => {};
+    await makeSpawner(['tool_error', 'tool_error', 'ok'], calls).runChildWithRetry({ ...baseOpts(), onWorkerStarted });
+    expect(calls.length).toBe(3);
+    for (const call of calls) expect(call.onWorkerStarted).toBe(onWorkerStarted);
   });
 });
