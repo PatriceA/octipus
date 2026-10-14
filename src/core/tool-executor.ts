@@ -1030,9 +1030,14 @@ export class ToolExecutor {
     const toolMessages: AgentMessage[] = [];
     const newlyBlocked = [...this.blockedByNested.splice(0), ...this.trackFailures(toolCalls, results)];
     if (newlyBlocked.length) {
+      // The MCP SERVERS section of the (cached) system prompt still sends
+      // `codemode` servers to scripts; say where their tools went instead.
+      const mcpReach = newlyBlocked.includes(CODEMODE_TOOL_NAME) && this.tools.has('mcp_list_tools')
+        ? ' Servers the MCP SERVERS section lists as (codemode) are now reached like the (mcp_list_tools) ones: list their tools with mcp_list_tools (server_id) and call them with mcp_call_tool.'
+        : '';
       toolMessages.push({
         role: 'system',
-        content: `These tools failed the same way ${MAX_CONSECUTIVE_TOOL_ERRORS} times in a row and are now unavailable: ${newlyBlocked.join(', ')}. Continue with the remaining tools, and tell the user which tools failed and why.`,
+        content: `These tools failed the same way ${MAX_CONSECUTIVE_TOOL_ERRORS} times in a row and are now unavailable: ${newlyBlocked.join(', ')}. Continue with the remaining tools, and tell the user which tools failed and why.${mcpReach}`,
         timestamp: new Date(),
       });
     }
