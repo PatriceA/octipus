@@ -8,6 +8,8 @@ import { getSettingDefinition, SETTINGS_REGISTRY, type SettingValueType } from '
 
 const PUBSUB_CHANNEL = 'settings:changed';
 const CACHE_TTL = 60; // seconds
+/** Bound on remembered misses; keys come from code, so this is never reached in practice. */
+const MISSING_MAX = 1000;
 
 /**
  * Settings that no longer exist. A stored row for one is deleted at startup:
@@ -29,6 +31,13 @@ export class SettingsService {
   private cache: Cache;
   private pubsub: PubSub;
   private localCache: Map<string, unknown> = new Map();
+  /**
+   * Keys found in neither cache nor the database, until the stored expiry:
+   * `get` answers the default for them without the two lookups. A write here
+   * or a change notification lands in `localCache`, which is read first, so
+   * this only ages out a row written behind the service's back.
+   */
+  private missing: Map<string, number> = new Map();
   private changeHandlers: Set<ChangeHandler> = new Set();
   private initialized = false;
 
@@ -113,6 +122,10 @@ export class SettingsService {
     if (this.localCache.has(key)) {
       return this.localCache.get(key);
     }
+    const missingUntil = this.missing.get(key);
+    if (missingUntil !== undefined && missingUntil > Date.now()) {
+      return getSettingDefinition(key)?.defaultValue ?? null;
+    }
 
     // shared cache
     const cached = await this.cache.get<unknown>(`settings:${key}`);
@@ -132,6 +145,8 @@ export class SettingsService {
     }
 
     // Fall back to registry default
+    if (this.missing.size >= MISSING_MAX) this.missing.clear();
+    this.missing.set(key, Date.now() + CACHE_TTL * 1000);
     const def = getSettingDefinition(key);
     return def?.defaultValue ?? null;
   }
@@ -221,6 +236,7 @@ export class SettingsService {
 
     // Update caches
     this.localCache.set(key, value);
+    this.missing.delete(key);
     await this.cache.set(`settings:${key}`, value, CACHE_TTL);
 
     // Notify other instances via pub/sub
