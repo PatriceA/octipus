@@ -5,9 +5,9 @@ import { billableTokens } from '@/models/billable-tokens';
 import { assertWindowsCmdLineFits, windowsShellQuote, windowsShellQuoter } from '@/models/providers/cli-provider';
 import { randomUUID } from 'crypto';
 import { type ChildProcess, spawn } from 'child_process';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
-import { homedir } from 'os';
-import { join as joinPath, resolve as resolvePath } from 'path';
+import { existsSync, mkdirSync, rmSync } from 'fs';
+import { resolve as resolvePath } from 'path';
+import { contentStorageOffFor } from '@/core/agent/audience';
 import { recordAgentCompletion } from '@/core/agent-task-recorder';
 import { agentRepository } from '@/db/repositories/agent-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
@@ -21,7 +21,8 @@ import { agentLogger } from '@/utils/logger';
 import { killProcessTree } from '@/utils/proc';
 import type { AgentWorkerConfig, ToolHandler } from './agent-base';
 import { BaseAgentWorker } from './agent-base';
-import { CLIArgumentBuilder, CLIOutputParser, isCodexHookTrustWarning, discoverCodexMcpServers, resolveCliMcpEntry, sweepStaleFiles, type CliRunConnection } from './cli-adapters';
+import { CLIArgumentBuilder, CLIOutputParser, isCodexHookTrustWarning, discoverCodexMcpServers, resolveCliMcpEntry, type CliRunConnection } from './cli-adapters';
+import { writePromptDump } from './prompt-dumps';
 import { childCliSessionKey, claimCliSession, cliSessionHolder, dropCliSession, fingerprintRun, loadCliSession, ownedResumeKey, releaseCliSessions, rootCliSessionKey, saveCliSession } from './cli-session-store';
 import { canResume, CLI_RESUME } from '@/shared/cli-capabilities';
 import { startCliToolBridge, type BridgeResult } from './cli-tool-bridge';
@@ -1160,13 +1161,10 @@ When a task matches one of these skills, load it with get_skill before starting 
       'CLI agent context',
     );
 
-    if (getConfig().agent?.promptDumps !== false) try {
-      const dumpDir = joinPath(homedir(), '.octipus', 'prompts');
-      mkdirSync(dumpDir, { recursive: true });
-      // Cap retention — prompt dumps used to accumulate unboundedly (C13).
-      sweepStaleFiles(dumpDir, '', 7 * 24 * 3600_000);
+    // Retention is capped (C13, `writePromptDump`). Never for a session whose
+    // text stays in its own rows (federation F-D11), as in `AgentWorker`.
+    if (getConfig().agent?.promptDumps !== false && !contentStorageOffFor(this.context)) {
       const ts = new Date().toISOString().replace(/[:.]/g, '-');
-      const dumpPath = joinPath(dumpDir, `${ts}_${this.context.id}_${toolConfig.name.replace(/\s+/g, '-')}.md`);
       const body = [
         `# Agent ${this.context.id}`,
         `tool: ${toolConfig.name}`,
@@ -1191,10 +1189,7 @@ When a task matches one of these skills, load it with get_skill before starting 
         [binary, ...args.map((a) => (a.length > 400 ? `<${a.length} chars — see sections above>` : a))].join(' '),
         '```',
       ].join('\n');
-      writeFileSync(dumpPath, body, { encoding: 'utf-8', mode: 0o600 });
-      agentLogger.info({ agentId: this.context.id, path: dumpPath }, 'Dumped CLI agent prompt');
-    } catch (err) {
-      agentLogger.debug({ err, agentId: this.context.id }, 'Failed to dump CLI agent prompt');
+      writePromptDump(`${ts}_${this.context.id}_${toolConfig.name.replace(/\s+/g, '-')}.md`, body, { agentId: this.context.id, cli: toolConfig.name });
     }
 
     // Cleanup helper — removes temp context files and any ephemeral per-spawn

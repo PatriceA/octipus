@@ -189,11 +189,21 @@ function readMcpBootstrapToken(): string {
   }
 }
 
+/** A directory is swept at most this often: callers run on every spawn. */
+const SWEEP_INTERVAL_MS = 3600_000;
+const lastSweepAt = new Map<string, number>();
+
 /**
  * Delete files matching `prefix` in `dir` that are older than `maxAgeMs`.
- * Best-effort retention sweep for ephemeral config/prompt dumps.
+ * Best-effort retention sweep for ephemeral config/prompt dumps. Runs at
+ * most once per `SWEEP_INTERVAL_MS` per dir and prefix — it stats every
+ * file, and the files it is after are days old.
  */
 export function sweepStaleFiles(dir: string, prefix: string, maxAgeMs: number): void {
+  const key = `${dir}\0${prefix}`;
+  const now = Date.now();
+  if (now - (lastSweepAt.get(key) ?? -Infinity) < SWEEP_INTERVAL_MS) return;
+  lastSweepAt.set(key, now);
   try {
     if (!existsSync(dir)) return;
     const cutoff = Date.now() - maxAgeMs;
