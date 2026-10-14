@@ -18,18 +18,11 @@
  * frame enforces the host CSP as well as its own: the host CSP must allow
  * everything the content CSP allows (`contentCspAllowancesWithinHost` is tested).
  */
+import { jsonForScript } from '../html';
 import { INLINE_UI_LIMITS } from './limits';
 import { inlineUiBaseCss, type InlineUiTheme } from './theme';
 
-/** Escape a value for embedding as a JavaScript literal inside a `<script>` element. */
-export function jsonForScript(value: unknown): string {
-  return JSON.stringify(value)
-    .replace(/</g, '\\' + 'u003c')
-    .replace(LINE_SEPARATOR_RE, '\\' + 'u2028')
-    .replace(PARAGRAPH_SEPARATOR_RE, '\\' + 'u2029');
-}
-const LINE_SEPARATOR_RE = new RegExp(String.fromCharCode(0x2028), 'g');
-const PARAGRAPH_SEPARATOR_RE = new RegExp(String.fromCharCode(0x2029), 'g');
+export { jsonForScript };
 
 /** A per-mount nonce from the platform CSPRNG (browser and Node 24 alike). */
 export function inlineUiNonce(): string {

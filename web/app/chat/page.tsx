@@ -1748,7 +1748,10 @@ export default function ChatPage() {
 
     // REST fallback (gateway unavailable). It declares no `renders` (the tab
     // cannot hear the turn's events), and carries no interactive-answer
-    // reports: they wait for the next message sent over the gateway.
+    // reports: they wait for the next message sent over the gateway. It sends
+    // no `channel` either, so the turn is unattended (`channelCanPrompt`): an
+    // action that needs approval is refused, not asked — this tab could not
+    // hear the request, and the model is told so in the tool result.
     if (inlineUiReports.length) inlineUiReportsRef.current.set(sid, [...inlineUiReports, ...(inlineUiReportsRef.current.get(sid) ?? [])]);
     try {
       const result = await api.post<{

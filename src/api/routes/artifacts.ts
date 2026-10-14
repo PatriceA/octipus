@@ -15,6 +15,7 @@ import type { Artifact } from '@/db/schema/artifacts';
 import { mintShareLink } from '@/core/artifacts/share-link';
 import { refreshSource, spaceSourceRefusal } from '@/core/artifacts/refresh';
 import { renderRssFeed } from '@/core/artifacts/render';
+import { announceVersion, restoreVersion, writeVersion } from '@/core/artifacts/version-writer';
 import { buildArtifactAppUrl, buildArtifactEmbedUrl, buildArtifactOuterUrl, getArtifactsHostMode, pickShareableUrl } from '@/core/artifacts/host';
 import type { ArtifactVisibility as ArtifactVisibilityType } from '@/db/schema/artifacts';
 import { coreLogger } from '@/utils/logger';
@@ -81,18 +82,20 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
           type: body.type,
           visibility: body.visibility ?? 'workspace',
         });
+        const warnings: string[] = [];
         if (body.htmlTemplate || body.css) {
-          const v = await artifactsRepository.createVersion({
+          const written = await writeVersion({
             artifactId: a.id,
-            htmlTemplate: body.htmlTemplate ?? '',
+            template: body.htmlTemplate ?? '',
             css: body.css ?? '',
             changeSummary: 'initial',
-            createdByUserId: user.id,
+            userId: user.id,
+            templateProvided: true,
           });
-          await artifactsRepository.setCurrentVersion(a.id, v.id);
+          warnings.push(...written.warnings);
         }
         set.status = 201;
-        return { artifact: await artifactsRepository.getById(a.id) };
+        return { artifact: await artifactsRepository.getById(a.id), warnings };
       } catch (err) {
         if (err instanceof SpaceError) throw err;
         const msg = (err as Error).message;
@@ -256,18 +259,22 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
       if (Object.keys(patch).length > 0) await artifactsRepository.update(a.id, patch);
 
       // Template/css change → new version
+      const warnings: string[] = [];
       if (body.htmlTemplate !== undefined || body.css !== undefined) {
         const prev = a.currentVersionId ? await artifactsRepository.getVersion(a.currentVersionId) : null;
-        const v = await artifactsRepository.createVersion({
+        const written = await writeVersion({
           artifactId: a.id,
-          htmlTemplate: body.htmlTemplate ?? prev?.htmlTemplate ?? '',
+          template: body.htmlTemplate ?? prev?.htmlTemplate ?? '',
           css: body.css ?? prev?.css ?? '',
           changeSummary: body.changeSummary ?? '',
-          createdByUserId: user.id,
+          userId: user.id,
+          previousVersionId: prev?.id,
+          templateProvided: body.htmlTemplate !== undefined,
         });
-        await artifactsRepository.setCurrentVersion(a.id, v.id);
+        warnings.push(...written.warnings);
+        announceVersion(a.id, written.versionId);
       }
-      return { artifact: await artifactsRepository.getById(a.id) };
+      return { artifact: await artifactsRepository.getById(a.id), warnings };
     },
     {
       body: t.Object({
@@ -333,17 +340,9 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
         set.status = 404;
         return { error: 'version not found' };
       }
-      const v = await artifactsRepository.createVersion({
-        artifactId: a.id,
-        htmlTemplate: target.htmlTemplate,
-        css: target.css,
-        jsBundleSha256: target.jsBundleSha256,
-        schemaJson: target.schemaJson,
-        changeSummary: `restore from ${target.id}`,
-        createdByUserId: user.id,
-      });
-      await artifactsRepository.setCurrentVersion(a.id, v.id);
-      return { artifact: await artifactsRepository.getById(a.id), versionId: v.id };
+      const { versionId } = await restoreVersion({ artifactId: a.id, target, userId: user.id });
+      announceVersion(a.id, versionId);
+      return { artifact: await artifactsRepository.getById(a.id), versionId };
     },
   )
 

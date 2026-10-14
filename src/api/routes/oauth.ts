@@ -2,6 +2,7 @@ import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getOAuthManager } from '@/security/oauth';
 import { bindBrowser, callbackBrowser } from '@/api/oauth-browser';
+import { sendPopupCallback } from '@/api/popup-callback';
 
 const SUPPORTED_PROVIDERS = ['google', 'microsoft'];
 
@@ -45,31 +46,26 @@ export const oauthRoutes = new Elysia({ prefix: '/auth/oauth' })
     async ({ params, query, set, request }) => {
       if (!SUPPORTED_PROVIDERS.includes(params.provider)) {
         set.status = 400;
-        set.headers['content-type'] = 'text/html';
-        return errorPage(`Unsupported provider: ${params.provider}`);
+        return errorPage(set, `Unsupported provider: ${params.provider}`);
       }
 
       if (query.error) {
-        set.headers['content-type'] = 'text/html';
-        return errorPage(`Authorization denied: ${query.error_description || query.error}`);
+        return errorPage(set, `Authorization denied: ${query.error_description || query.error}`);
       }
 
       if (!query.code || !query.state) {
         set.status = 400;
-        set.headers['content-type'] = 'text/html';
-        return errorPage('Missing authorization code or state');
+        return errorPage(set, 'Missing authorization code or state');
       }
 
       try {
         const manager = getOAuthManager();
         await manager.exchangeCode(params.provider, query.code, query.state, callbackBrowser(request));
 
-        set.headers['content-type'] = 'text/html';
-        return successPage(params.provider);
+        return successPage(set, params.provider);
       } catch (err) {
         set.status = 400;
-        set.headers['content-type'] = 'text/html';
-        return errorPage((err as Error).message);
+        return errorPage(set, (err as Error).message);
       }
     },
     {
@@ -131,59 +127,25 @@ export const oauthRoutes = new Elysia({ prefix: '/auth/oauth' })
     }
   );
 
-// --- HTML templates for OAuth popup callback ---
+// --- The popup's callback page ---
 
-function successPage(provider: string): string {
-  // Sanitize provider — only allow alpha chars
+function successPage(set: { headers: Record<string, string> }, provider: string): string {
   const safeProvider = provider.replace(/[^a-zA-Z]/g, '');
   const displayName = safeProvider.charAt(0).toUpperCase() + safeProvider.slice(1);
-  const jsData = JSON.stringify({ type: 'oauth_callback', provider: safeProvider, success: true });
-
-  return `<!DOCTYPE html>
-<html>
-<head><title>Connected</title><style>
-body { font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #f9fafb; }
-.card { text-align: center; padding: 2rem; background: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-.icon { font-size: 3rem; margin-bottom: 1rem; }
-h2 { margin: 0 0 0.5rem; color: #111827; }
-p { color: #6b7280; margin: 0; }
-</style></head>
-<body>
-<div class="card">
-  <div class="icon">&#10004;</div>
-  <h2>${displayName} Connected</h2>
-  <p>You can close this window.</p>
-</div>
-<script>
-  if (window.opener) { window.opener.postMessage(${jsData}, window.location.origin); }
-  setTimeout(function() { window.close(); }, 2000);
-</script>
-</body></html>`;
+  return sendPopupCallback(set, {
+    ok: true,
+    heading: `${displayName} Connected`,
+    detail: 'You can close this window.',
+    message: { type: 'oauth_callback', provider: safeProvider, success: true },
+    closeAfterMs: 2000,
+  });
 }
 
-function errorPage(message: string): string {
-  // Sanitize for HTML context
-  const safeHtml = message.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  // Use JSON.stringify for safe JS interpolation (escapes all special chars)
-  const jsData = JSON.stringify({ type: 'oauth_callback', success: false, error: message });
-
-  return `<!DOCTYPE html>
-<html>
-<head><title>Error</title><style>
-body { font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #f9fafb; }
-.card { text-align: center; padding: 2rem; background: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); max-width: 400px; }
-.icon { font-size: 3rem; margin-bottom: 1rem; }
-h2 { margin: 0 0 0.5rem; color: #111827; }
-p { color: #dc2626; margin: 0; word-break: break-word; }
-</style></head>
-<body>
-<div class="card">
-  <div class="icon">&#10008;</div>
-  <h2>Connection Failed</h2>
-  <p>${safeHtml}</p>
-</div>
-<script>
-  if (window.opener) { window.opener.postMessage(${jsData}, window.location.origin); }
-</script>
-</body></html>`;
+function errorPage(set: { headers: Record<string, string> }, message: string): string {
+  return sendPopupCallback(set, {
+    ok: false,
+    heading: 'Connection Failed',
+    detail: message,
+    message: { type: 'oauth_callback', success: false, error: message },
+  });
 }

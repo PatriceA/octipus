@@ -17,7 +17,7 @@ import { existsSync } from 'fs';
 import { apiContext } from '@/api/context';
 import { artifactsRepository } from '@/db/repositories/artifacts-repository';
 import { findViewableArtifactBySlug } from '@/db/repositories/space';
-import { buildEmbedCsp } from '@/core/artifacts/csp';
+import { buildEmbedCsp, embedCspHeader } from '@/core/artifacts/csp';
 import { buildDataBus } from '@/core/artifacts/pipeline';
 import { BUILTIN_TEMPLATES, escapeHtml, renderTemplate } from '@/core/artifacts/render';
 import {
@@ -292,8 +292,9 @@ async function handleEmbed(ctx: HandlerCtx) {
   ctx.set.headers['content-type'] = 'text/html; charset=utf-8';
   // Also as a header: `frame-ancestors` is ignored when delivered via <meta>,
   // so `allowedEmbedOrigins` was never actually enforced. The <meta> copy stays
-  // for the rest of the policy.
-  ctx.set.headers['content-security-policy'] = page.csp;
+  // for the rest of the policy. The header also sandboxes the page, so the
+  // embed never runs with the app's origin when opened directly.
+  ctx.set.headers['content-security-policy'] = embedCspHeader(page.csp);
   return page.html;
 }
 

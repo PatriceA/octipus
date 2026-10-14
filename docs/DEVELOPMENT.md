@@ -79,7 +79,7 @@ npm run test:e2e                      # E2E (requires running server)
 
 ### New Tool
 1. Create `src/tools/<name>/index.ts` extending `BaseTool`
-2. Follow a sibling manifest and handler shape; built-ins are discovered by `src/tools/discovery.ts`. Add the tool ID to the roles that should receive it and define its permission actions.
+2. Follow a sibling manifest and handler shape, and add one line for the folder to `MODULES` in `src/tools/discovery.ts` (built-ins are static imports, not a folder scan: a scan finds nothing once bundled). Add the tool ID to the roles that should receive it and define its permission actions.
 
 ### New Skill
 Create via the API (`POST /api/skills`) or add to `src/db/seed-skills.ts` for system skills.

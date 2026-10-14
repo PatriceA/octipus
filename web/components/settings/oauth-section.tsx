@@ -80,7 +80,10 @@ function OAuthProviderCard({
       const { url } = await api.get<{ url: string }>(`/auth/oauth/${provider.id}/authorize`);
       const popup = window.open(url, 'oauth', 'width=600,height=700,left=200,top=100');
 
+      // Only the callback page in the popup we opened may report back: it
+      // posts with its own origin as the target, which is this app's.
       const handler = (event: MessageEvent) => {
+        if (event.origin !== window.location.origin || event.source !== popup) return;
         if (event.data?.type === 'oauth_callback') {
           window.removeEventListener('message', handler);
           queryClient.invalidateQueries({ queryKey: ['oauth-status', provider.id] });

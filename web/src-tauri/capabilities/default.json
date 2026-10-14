@@ -1,12 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "enables the default permissions",
+  "description": "The main window: core APIs and the two backend-URL commands. The settings store is the Rust side's own; the webview gets no store permission, so the backend URL changes only through set_backend_url's checks.",
   "windows": [
     "main"
   ],
   "permissions": [
     "core:default",
-    "store:default"
+    "allow-get-backend-url",
+    "allow-set-backend-url"
   ]
 }

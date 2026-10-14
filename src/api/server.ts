@@ -173,7 +173,9 @@ export function createServer() {
       const isArtifactPage = path.startsWith('/a/') || path.startsWith('/__artifacts__/');
       if (!isArtifactPage) {
         set.headers['X-Frame-Options'] = 'DENY';
-        set.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:";
+        // A handler that serves its own page may set a narrower policy (the
+        // OAuth popup callbacks: one nonce'd script, nothing else). Keep it.
+        set.headers['Content-Security-Policy'] ??= "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:";
       }
     })
     // Request logging

@@ -35,6 +35,19 @@ export function buildEmbedCsp(input: CspInput): string {
   ].join('; ');
 }
 
+/**
+ * The embed's policy as a response header: the same policy plus `sandbox
+ * allow-scripts`. In path-prefix mode the embed is served from the app's own
+ * origin, so opening `/__artifacts__/a/<slug>/embed` as a top-level page would
+ * run the artifact's scripts with the app's cookies and storage. The directive
+ * gives the page an opaque origin wherever it is opened; framed, it changes
+ * nothing (the frames already carry `sandbox="allow-scripts"`). Header only:
+ * browsers ignore `sandbox` in a `<meta>` policy.
+ */
+export function embedCspHeader(csp: string): string {
+  return `${csp}; sandbox allow-scripts`;
+}
+
 function hexToBase64(hex: string): string {
   if (!/^[0-9a-fA-F]+$/.test(hex) || hex.length !== 64) {
     throw new Error('csp: invalid sha256 hex (expect 64 hex chars)');

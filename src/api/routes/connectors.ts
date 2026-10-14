@@ -12,6 +12,7 @@ import {
 import { getVault } from '@/security/vault';
 import { embedCocoIndex } from '@/connectors/cocoindex-embedding';
 import { bindBrowser, callbackBrowser } from '@/api/oauth-browser';
+import { sendPopupCallback } from '@/api/popup-callback';
 
 /** Derive the public URL used for OAuth redirect URIs. */
 function getPublicUrl(): string {
@@ -20,37 +21,24 @@ function getPublicUrl(): string {
   return oauthConfig?.publicUrl ?? `http://localhost:${config.api.port}`;
 }
 
-/** HTML-escape a string to prevent XSS when interpolating into HTML. */
-function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
+/** The popup's callback page: reports to the opener, closes on success. */
+function callbackPage(set: { headers: Record<string, string> }, opts: { success: boolean; connectorId: string; error?: string }): string {
+  return sendPopupCallback(set, opts.success
+    ? {
+      ok: true,
+      heading: 'Connected',
+      detail: 'You can close this window.',
+      message: { type: 'connector:connected', connectorId: opts.connectorId },
+      closeAfterMs: 0,
+    }
+    : {
+      ok: false,
+      heading: 'Connection Failed',
+      detail: opts.error ?? 'Unknown error',
+      message: { type: 'connector:error', connectorId: opts.connectorId, error: opts.error ?? 'Unknown error' },
+      closeAfterMs: 0,
+    });
 }
-
-/** Build HTML that closes the OAuth popup and posts a postMessage to opener. */
-function buildCallbackHtml(opts: { success: boolean; connectorId: string; error?: string }): string {
-  // Issue 3 fix: use JSON.stringify consistently for both connectorId and error
-  const message = opts.success
-    ? `{ type: 'connector:connected', connectorId: ${JSON.stringify(opts.connectorId)} }`
-    : `{ type: 'connector:error', connectorId: ${JSON.stringify(opts.connectorId)}, error: ${JSON.stringify(opts.error ?? 'Unknown error')} }`;
-
-  // Issue 2 fix: HTML-escape the error message before interpolating into HTML
-  const safeError = escapeHtml(opts.error ?? '');
-
-  return `<!DOCTYPE html><html><head><title>Connecting...</title></head><body>
-<script>
-  try { window.opener?.postMessage(${message}, window.location.origin); } catch(_) {}
-  window.close();
-</script>
-<p>${opts.success ? 'Connected! You can close this window.' : `Error: ${safeError}`}</p>
-</body></html>`;
-}
-
-/** CSP header value that allows the OAuth callback's inline script (no external resources). */
-const CALLBACK_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'";
 
 const COCOINDEX_EMBED_MAX_CHARS = 4_000;
 
@@ -236,41 +224,21 @@ export const connectorRoutes = new Elysia({ prefix: '/connectors' })
   // GET /connectors/:id/callback — OAuth redirect callback (no auth required)
   .get(
     '/:id/callback',
-    async ({ params, query, request }) => {
+    async ({ params, query, request, set }) => {
       const { id } = params;
       const code = query.code as string | undefined;
       const state = query.state as string | undefined;
       const error = query.error as string | undefined;
 
-      // Issue 1 fix: override CSP for callback responses to allow the inline script
-      const callbackHeaders = { 'Content-Type': 'text/html', 'Content-Security-Policy': CALLBACK_CSP };
-
-      if (error) {
-        const html = buildCallbackHtml({ success: false, connectorId: id, error });
-        return new Response(html, { headers: callbackHeaders });
-      }
-
-      if (!code || !state) {
-        const html = buildCallbackHtml({
-          success: false,
-          connectorId: id,
-          error: 'Missing code or state parameter',
-        });
-        return new Response(html, { headers: callbackHeaders });
-      }
+      if (error) return callbackPage(set, { success: false, connectorId: id, error });
+      if (!code || !state) return callbackPage(set, { success: false, connectorId: id, error: 'Missing code or state parameter' });
 
       try {
         const oauthManager = new OAuthManager();
         await oauthManager.exchangeCode(id, code, state, callbackBrowser(request));
-        const html = buildCallbackHtml({ success: true, connectorId: id });
-        return new Response(html, { headers: callbackHeaders });
+        return callbackPage(set, { success: true, connectorId: id });
       } catch (err) {
-        const html = buildCallbackHtml({
-          success: false,
-          connectorId: id,
-          error: (err as Error).message,
-        });
-        return new Response(html, { headers: callbackHeaders });
+        return callbackPage(set, { success: false, connectorId: id, error: (err as Error).message });
       }
     },
     {

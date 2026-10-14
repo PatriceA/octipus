@@ -245,7 +245,7 @@ filesystem or shell isolation.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/chat` | Send a chat message (optional `expertId` for expert routing) |
+| POST | `/api/chat` | Send a chat message (optional `expertId` for expert routing). Without a `channel` that can show an approval prompt, the turn is unattended: actions at ASK are refused, not asked. Interactive answers are replaced by a plain line unless the body declares `renders: ["inline_ui"]`; `toolsUsed: true` adds the tool names the turn called (the eval runner) |
 | POST | `/api/chat/approve` | Respond to an approval request |
 
 ## Reader

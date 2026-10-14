@@ -12,11 +12,10 @@ import { artifactsRepository } from '@/db/repositories/artifacts-repository';
 import type { ArtifactSourceKind } from '@/db/schema/artifact-data-sources';
 import type { ArtifactType, ArtifactVisibility } from '@/db/schema/artifacts';
 import { buildArtifactAppUrl, buildArtifactEmbedUrl, buildArtifactOuterUrl, pickShareableUrl } from '@/core/artifacts/host';
-import { buildAndStoreBundle, copyBundle, deleteArtifactBundles } from '@/core/artifacts/bundler';
-import { extractInteractiveScript } from '@/core/artifacts/render';
+import { deleteArtifactBundles } from '@/core/artifacts/bundler';
+import { announceVersion, writeVersion } from '@/core/artifacts/version-writer';
 import { refreshSource, spaceSourceRefusal } from '@/core/artifacts/refresh';
 import { scheduleArtifactRefresh } from '@/core/artifacts/scheduler';
-import { publishArtifactVersionUpdated } from '@/core/artifacts/events';
 import { artifactLifecycleBus } from '@/core/artifacts/lifecycle-bus';
 import { revokeArtifactViewers } from '@/core/artifacts/viewer-access';
 import { BaseTool, createParameterSchema } from '../base-tool';
@@ -47,68 +46,6 @@ function diffTemplateAndSources(template: string, sourceNames: string[]): {
     missingSources: refs.filter((r) => !present.has(r)),
     unusedSources: sourceNames.filter((n) => !referenced.has(n)),
   };
-}
-
-/** Does this template carry `data-octi-h` markers, i.e. bindings a bundle owns? */
-function hasBoundHandlers(template: string): boolean {
-  return /\sdata-octi-h\s*=/.test(template);
-}
-
-/**
- * Write a new version, lifting the template's own JS into a CSP-pinned bundle.
- *
- * Inline `<script>` and `on*=` handlers cannot run under the embed CSP, so
- * `extractInteractiveScript` moves them into one source string which is built
- * to `bundle.js` and served from the artifact's own origin. A build failure
- * (syntax error, disallowed import) is NOT fatal: the version still lands, the
- * page renders without behaviour, and the caller gets the compiler message —
- * losing the whole edit because one handler had a typo is worse.
- */
-async function writeVersion(opts: {
-  artifactId: string;
-  template: string;
-  css: string;
-  changeSummary: string;
-  userId: string;
-  /** Current version, whose bundle may need to follow the template forward. */
-  previousVersionId?: string | null;
-  /** False when `template` was defaulted from the stored version, not supplied. */
-  templateProvided: boolean;
-}): Promise<{ versionId: string; warnings: string[] }> {
-  const extracted = extractInteractiveScript(opts.template);
-  const warnings = [...extracted.warnings];
-
-  const version = await artifactsRepository.createVersion({
-    artifactId: opts.artifactId,
-    htmlTemplate: extracted.template,
-    css: opts.css,
-    changeSummary: opts.changeSummary,
-    createdByUserId: opts.userId,
-  });
-  await artifactsRepository.setCurrentVersion(opts.artifactId, version.id);
-
-  if (extracted.source) {
-    try {
-      await buildAndStoreBundle({
-        artifactId: opts.artifactId,
-        versionId: version.id,
-        source: extracted.source,
-      });
-    } catch (err) {
-      warnings.push(
-        `The page's JavaScript did not build, so it will render without behaviour: ${(err as Error).message}. Fix the script and call update_live_artifact again.`,
-      );
-    }
-  } else if (opts.previousVersionId && (!opts.templateProvided || hasBoundHandlers(extracted.template))) {
-    // Nothing new to build, but the page still needs its behaviour. Two ways in:
-    // the caller changed only the CSS, or it round-tripped the STORED template
-    // (get_live_artifact → edit → update), which by then holds `data-octi-h`
-    // markers and no `<script>` — so extraction finds nothing and, without this,
-    // every handler on the page would go dead with no warning.
-    await copyBundle(opts.artifactId, opts.previousVersionId, version.id);
-  }
-
-  return { versionId: version.id, warnings };
 }
 
 const SOURCES_PARAM_DESCRIPTION =
@@ -372,8 +309,7 @@ export class ArtifactsTool extends BaseTool {
             templateProvided: args.html_template !== undefined,
           });
           warnings.push(...written.warnings);
-          publishArtifactVersionUpdated(a.id, written.versionId);
-          artifactLifecycleBus.emitEvent({ type: 'artifact:updated', artifactId: a.id, versionId: written.versionId });
+          announceVersion(a.id, written.versionId);
 
           if (template) {
             const existingSources = await artifactsRepository.listSources(a.id);
