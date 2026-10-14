@@ -51,7 +51,13 @@ function exceedsChars(value: unknown, limit: number): boolean {
   while (stack.length > 0) {
     const item = stack.pop();
     if (typeof item === 'string') remaining -= item.length;
-    else if (Array.isArray(item)) { remaining -= item.length; stack.push(...item); }
+    else if (Array.isArray(item)) {
+      // Check before queueing the elements: a spread of a very long array
+      // overflows the argument limit, and the length alone may decide it.
+      remaining -= item.length;
+      if (remaining < 0) return true;
+      for (const child of item) stack.push(child);
+    }
     else if (item && typeof item === 'object') {
       for (const [key, child] of Object.entries(item)) {
         remaining -= key.length + 1;

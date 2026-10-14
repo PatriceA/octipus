@@ -120,4 +120,33 @@ describe('ensureVectorIndexes', () => {
     expect([...sims].sort((a, b) => b - a)).toEqual(sims);
     expect(found[0]).not.toHaveProperty('embedding');
   });
+
+  test('a filtered search over an HNSW index still fills its limit', async () => {
+    const { executeRaw, queryRaw } = await import('@/db/postgres');
+    const { withFilteredVectorScan } = await import('./vector-indexes');
+    const { sql } = await import('drizzle-orm');
+    await executeRaw('DELETE FROM memories');
+    // A user owning 1% of a table the index serves: 40 default candidates
+    // rarely hold their 10 nearest rows.
+    const other = '22222222-2222-4222-8222-222222222222';
+    const { seedUsers } = await import('@/test-helpers/multiuser-fixtures');
+    await seedUsers([{ id: other, username: 'vec-other' }]);
+    await q(
+      `INSERT INTO memories (user_id, fact_type, content, embedding, embedding_version)
+       SELECT CASE WHEN g % 100 = 0 THEN $1::uuid ELSE $2::uuid END, 'preference', 'fixture',
+              ('[' || (random() - 0.5) || ',' || (random() - 0.5) || ',' || (random() - 0.5) || ']')::vector, 'test/n'
+         FROM generate_series(1, 3000) AS g`,
+      [userId, other],
+    );
+    expect((await queryRaw(`SELECT 1 FROM pg_indexes WHERE indexname = 'memories_embedding_idx'`)).rows).toHaveLength(1);
+    const nearest = sql`SELECT id FROM memories WHERE user_id = ${userId} ORDER BY embedding <=> '[0.1,0.2,0.3]'::vector LIMIT 10`;
+    const rows = await withFilteredVectorScan('memories', async (db) => {
+      // Force the plan this is about: HNSW order, not a user_id lookup + sort.
+      await db.execute(sql`SET LOCAL enable_seqscan = off`);
+      await db.execute(sql`SET LOCAL enable_bitmapscan = off`);
+      await db.execute(sql`SET LOCAL enable_sort = off`);
+      return db.execute(nearest);
+    });
+    expect((rows as unknown as { rows?: unknown[] }).rows ?? rows).toHaveLength(10);
+  });
 });

@@ -174,7 +174,7 @@ export class MemoryRepository {
       ? or(isNull(memories.workspaceId), eq(memories.workspaceId, scope.workspaceId))
       : undefined;
 
-    const rows = await withFilteredVectorScan((tx) => tx
+    const rows = await withFilteredVectorScan('memories', (q) => q
       .select({
         row: memoryColumns,
         distance,
@@ -214,7 +214,7 @@ export class MemoryRepository {
     const vecLiteral = this.vectorLiteral(queryEmbedding);
     if (vecLiteral === null) return [];
     const distance = cosineDistance(vecLiteral);
-    const rows = await withFilteredVectorScan((tx) => tx
+    const rows = await withFilteredVectorScan('memories', (q) => q
       .select({ row: memoryColumns, distance })
       .from(memories)
       .where(and(...this.scopeConditions(scope)))

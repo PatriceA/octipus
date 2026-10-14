@@ -69,7 +69,9 @@ export async function runArtifactCleanup(): Promise<CleanupReport> {
  * Each boot starts a fresh hourly chain. With external storage the queue
  * outlives the process, so the previous boot's chain is still queued; only the
  * chain named here re-arms, and older ones end the next time they fire instead
- * of piling up one extra cleanup per restart.
+ * of piling up one extra cleanup chain per restart. A superseded task still
+ * runs its cleanup before ending: a server restarting more often than hourly
+ * would otherwise supersede every task before it ran and never clean up.
  */
 const CLEANUP_CHAIN_KEY = 'artifact:cleanup:chain';
 
@@ -79,12 +81,12 @@ interface CleanupPayload {
 
 export async function handleArtifactCleanupTask(task: ScheduledTask): Promise<void> {
   const chain = (task.payload as CleanupPayload | undefined)?.chain;
+  await runArtifactCleanup();
   const current = await rawStore().get(CLEANUP_CHAIN_KEY);
   if (current && chain !== current) {
     coreLogger.info({ chain, current }, 'artifact.cleanup.superseded_chain — not requeueing');
     return;
   }
-  await runArtifactCleanup();
   await scheduleCleanup(chain);
 }
 

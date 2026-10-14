@@ -55,3 +55,14 @@ test('with no check running, the wait answers at once', async () => {
   expect(await awaitKBReadiness(5_000)).toBe(false);
   expect(kbNotReadyResponse().error).toMatch(/has not run yet/);
 });
+
+test('an embedding that answers after the boot check gave up turns the KB ready', async () => {
+  let answer!: (v: number[]) => void;
+  fx.embed = () => new Promise((resolve) => { answer = resolve; });
+  const report = await runKBSelfCheck({ embedTimeoutMs: 30 });
+  expect(report.ready).toBe(false);
+
+  fx.embed = () => Promise.resolve([0.3, 0.4]);
+  answer([0.1, 0.2]);
+  await vi.waitFor(() => expect(isKBReady()).toBe(true));
+});

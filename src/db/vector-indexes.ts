@@ -63,6 +63,7 @@ export async function ensureVectorIndexes(): Promise<Record<string, VectorIndexO
   try {
     const outcomes: Record<string, VectorIndexOutcome> = {};
     for (const target of TARGETS) outcomes[target.table] = await ensureOne(target);
+    if (Object.values(outcomes).includes('created')) forgetIndexedTables();
     return outcomes;
   } finally {
     // Release only our own claim: one that lapsed may have been taken since.
@@ -143,7 +144,8 @@ async function pinDimension(t: (typeof TARGETS)[number], dim: number): Promise<v
   });
 }
 
-type VectorTx = Parameters<Parameters<ReturnType<typeof getDb>['transaction']>[0]>[0];
+/** What a filtered vector query needs: the database, or a transaction on it. */
+type VectorQueryable = Pick<ReturnType<typeof getDb>, 'select' | 'execute'>;
 let pgvectorVersion: Promise<number | null> | null = null;
 
 async function readPgvectorVersion(): Promise<number | null> {
@@ -155,8 +157,40 @@ async function readPgvectorVersion(): Promise<number | null> {
 }
 
 /**
- * Run a nearest-neighbour query that also filters (by user, scope, purpose)
- * so that HNSW cannot return fewer rows than it asks for.
+ * Tables with a valid HNSW index, re-read at most every few minutes: until
+ * one exists (most new installs, see ensureVectorIndexes) a query is a
+ * sequential scan, exact already, and needs no transaction around it.
+ */
+const HNSW_TABLES_TTL_MS = 5 * 60_000;
+let hnswTables: { at: number; tables: Promise<Set<string>> } | null = null;
+
+function indexedTables(): Promise<Set<string>> {
+  if (!hnswTables || Date.now() - hnswTables.at > HNSW_TABLES_TTL_MS) {
+    const tables = queryRaw(
+      `SELECT DISTINCT t.relname AS name
+         FROM pg_index i
+         JOIN pg_class c ON c.oid = i.indexrelid
+         JOIN pg_class t ON t.oid = i.indrelid
+         JOIN pg_am am ON am.oid = c.relam
+        WHERE am.amname = 'hnsw' AND i.indisvalid`,
+    ).then(({ rows }) => new Set((rows as { name: string }[]).map((r) => r.name)));
+    hnswTables = { at: Date.now(), tables };
+    tables.catch((err: unknown) => {
+      dbLogger.warn({ err }, 'Could not read which tables have an HNSW index');
+      hnswTables = null;
+    });
+  }
+  return hnswTables.tables;
+}
+
+/** Forget the cached index list (after ensureVectorIndexes built one). */
+function forgetIndexedTables(): void {
+  hnswTables = null;
+}
+
+/**
+ * Run a nearest-neighbour query on `table` that also filters (by user,
+ * scope, purpose) so that HNSW cannot return fewer rows than it asks for.
  *
  * An HNSW scan yields `hnsw.ef_search` candidates (40 by default) and the
  * WHERE clause filters those, so a user whose rows are a small share of the
@@ -165,9 +199,15 @@ async function readPgvectorVersion(): Promise<number | null> {
  * exact. pgvector 0.8 can keep scanning until the limit is met
  * (`hnsw.iterative_scan = strict_order`, which also keeps the exact distance
  * order); before 0.8 the best available is a wider candidate list. Both are
- * set for this query's transaction only.
+ * set for this query's transaction only, and only when the table has an
+ * HNSW index for the planner to use.
  */
-export async function withFilteredVectorScan<T>(query: (tx: VectorTx) => Promise<T>): Promise<T> {
+export async function withFilteredVectorScan<T>(
+  table: (typeof TARGETS)[number]['table'],
+  query: (q: VectorQueryable) => Promise<T>,
+): Promise<T> {
+  const indexed = await indexedTables().catch(() => new Set<string>());
+  if (!indexed.has(table)) return query(getDb());
   pgvectorVersion ??= readPgvectorVersion().catch((err) => {
     dbLogger.warn({ err }, 'pgvector version unreadable — filtered vector searches run with default HNSW settings');
     return null;

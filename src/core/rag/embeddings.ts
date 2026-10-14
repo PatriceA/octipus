@@ -768,7 +768,7 @@ export class EmbeddingService {
     const repoFilter = repoScopeSql(scope);
     const k = 60; // RRF constant
 
-    const results = await withFilteredVectorScan((tx) => tx.execute(sql`
+    const results = await withFilteredVectorScan('embeddings', (q) => q.execute(sql`
       WITH fts AS (
         SELECT id,
                row_number() OVER (ORDER BY ts_rank_cd(content_tsv, plainto_tsquery('english', ${query})) DESC) AS rank_fts

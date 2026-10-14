@@ -134,6 +134,11 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
     // maintenance must never rotate them onto a lossy Octipus checkpoint.
     if (session && rootCliConversation(session)) return false;
     const manual = Boolean(options.force || options.userInstructions);
+    // A pass that failed recently backs off whatever the size (decideCompaction
+    // checks it first too); answer that before reading and tokenizing the
+    // whole transcript.
+    const retryAt = compactionRetryAt(session?.context?.compactionState);
+    if (!manual && retryAt !== undefined && Date.now() < retryAt) return false;
     // The common case — a short session — is settled from one aggregate
     // query, not by reading and tokenizing the whole transcript every turn.
     if (!manual && session && (await belowCompactionThreshold(session))) return false;

@@ -252,4 +252,11 @@ describe('replay retention', () => {
     expect(bus.replaySince('s1', 'a').gap).toBe(true);
     expect(bus.getReplayByPattern('swarm.*', 's1').map((e) => e.id)).toEqual(['c']);
   });
+
+  test('a payload holding a huge array is measured without spreading it, and not stored', () => {
+    const bus = new GatewayEventBus();
+    const rows = Array.from({ length: 500_000 }, (_, i) => i);
+    expect(() => bus.publish(event('s1', 'rows', { rows }))).not.toThrow();
+    expect(bus.replaySince('s1').events).toEqual([]);
+  });
 });

@@ -56,3 +56,14 @@ test('boot does not wait on a slow server; a spawn waits for it, bounded', async
   await waiting;
   expect(waited).toBe(true);
 });
+
+test('once the shared deadline has passed, later spawns do not wait again', async () => {
+  const bridge = bridgeWith([server('hung')], () => new Promise(() => {}));
+  void bridge.startConnectAll();
+  // Pretend the boot connect started 15 s ago.
+  (bridge as unknown as { initialConnectDeadline: number }).initialConnectDeadline = Date.now() - 1;
+  const started = Date.now();
+  await bridge.whenInitiallyConnected();
+  await bridge.whenInitiallyConnected();
+  expect(Date.now() - started).toBeLessThan(50);
+});

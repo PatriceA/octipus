@@ -78,6 +78,9 @@ export class MCPBridge extends EventEmitter {
   private configMutation: Promise<void> = Promise.resolve();
   /** The boot-time connect (`startConnectAll`), which spawns wait on (`whenInitiallyConnected`). */
   private initialConnect: Promise<void> | null = null;
+  /** When spawns stop waiting for the boot-time connect — one deadline shared by all of them. */
+  private initialConnectDeadline = 0;
+  private static readonly INITIAL_CONNECT_WAIT_MS = 15_000;
   private static readonly MAX_RECONNECT_ATTEMPTS = 6;
   private static readonly RECONNECT_BASE_MS = 1_000;
   private static readonly RECONNECT_MAX_MS = 30_000;
@@ -429,21 +432,29 @@ export class MCPBridge extends EventEmitter {
    * prompt's server section — waits through `whenInitiallyConnected`.
    */
   startConnectAll(): Promise<void> {
-    this.initialConnect = this.connectAll().catch((err: unknown) => {
-      coreLogger.error({ err }, 'MCP connectAll failed');
-    });
-    return this.initialConnect;
+    this.initialConnectDeadline = Date.now() + MCPBridge.INITIAL_CONNECT_WAIT_MS;
+    const run: Promise<void> = this.connectAll()
+      .catch((err: unknown) => {
+        coreLogger.error({ err }, 'MCP connectAll failed');
+      })
+      .finally(() => {
+        if (this.initialConnect === run) this.initialConnect = null;
+      });
+    this.initialConnect = run;
+    return run;
   }
 
   /**
-   * Resolves once the boot-time connect has settled, or after `maxWaitMs`
-   * (logged): an agent spawned meanwhile gets the servers that are up by
-   * then rather than waiting on one that hangs. Immediate when nothing is
-   * connecting.
+   * Resolves once the boot-time connect has settled, or at the latest
+   * INITIAL_CONNECT_WAIT_MS after it started (logged): an agent spawned
+   * meanwhile gets the servers that are up by then rather than waiting on one
+   * that hangs. The deadline is shared, so once it has passed nobody waits
+   * again — not every later turn and spawn for another 15 s each. Immediate
+   * when nothing is connecting. `maxWaitMs` overrides it (shutdown).
    */
-  async whenInitiallyConnected(maxWaitMs = 15_000): Promise<void> {
+  async whenInitiallyConnected(maxWaitMs = this.initialConnectDeadline - Date.now()): Promise<void> {
     const pending = this.initialConnect;
-    if (!pending) return;
+    if (!pending || maxWaitMs <= 0) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timedOut = await Promise.race([
       pending.then(() => false),
@@ -454,7 +465,6 @@ export class MCPBridge extends EventEmitter {
     ]);
     clearTimeout(timer);
     if (timedOut) coreLogger.warn({ maxWaitMs }, 'MCP servers still connecting — continuing with the ones that are up');
-    else this.initialConnect = null;
   }
 
   /**
@@ -463,7 +473,7 @@ export class MCPBridge extends EventEmitter {
   async disconnectAll(): Promise<void> {
     // A server still connecting from boot would otherwise come up after this
     // and outlive the shutdown.
-    await this.whenInitiallyConnected();
+    await this.whenInitiallyConnected(MCPBridge.INITIAL_CONNECT_WAIT_MS);
     // Cancel reconnects for servers currently between backoff attempts (dropped
     // from `connections`, so the loop below wouldn't otherwise reach them).
     for (const serverId of [...this.reconnectTimers.keys()]) {

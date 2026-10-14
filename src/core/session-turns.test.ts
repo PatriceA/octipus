@@ -151,9 +151,13 @@ describe('session lifecycle across ephemeral root workers', () => {
     fixture.failSummary = true;
     await expect(maybeCompactSession('session')).rejects.toThrow('summary unavailable');
     expect(fixture.context.compactionState).toMatchObject({ failedPasses: 1 });
-    // The next turn skips the pass (no second summary call)…
+    // The next turn skips the pass (no second summary call), without
+    // reading the transcript to find that out…
+    const read = vi.spyOn(messageRepository, 'findContextMessages');
     expect(await maybeCompactSession('session')).toBe(false);
     expect(fixture.summaries).toHaveLength(1);
+    expect(read).not.toHaveBeenCalled();
+    read.mockRestore();
     // …a manual /compact does not wait…
     fixture.failSummary = false;
     expect(await maybeCompactSession('session', { force: true })).toBe(true);

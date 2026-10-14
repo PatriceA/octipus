@@ -72,6 +72,10 @@ export async function awaitKBReadiness(maxWaitMs = 30_000): Promise<boolean> {
   return isKBReady();
 }
 
+class EmbedTimeoutError extends Error {
+  override name = 'EmbedTimeoutError';
+}
+
 /** `promise`, or a rejection once `ms` have passed (when set). */
 function withTimeout<T>(promise: Promise<T>, ms: number | undefined, what: string): Promise<T> {
   if (ms === undefined) return promise;
@@ -81,7 +85,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number | undefined, what: strin
   return Promise.race([
     promise,
     new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`${what} did not answer within ${ms} ms`)), ms);
+      timer = setTimeout(() => reject(new EmbedTimeoutError(`${what} did not answer within ${ms} ms`)), ms);
     }),
   ]).finally(() => clearTimeout(timer));
 }
@@ -124,7 +128,19 @@ async function selfCheck(opts: KBSelfCheckOptions): Promise<KBReadiness> {
     const service = getEmbeddingService();
     // generateEmbedding() both resolves the model from the registry AND issues
     // the provider call — so a single call here proves the whole path works.
-    probeVector = await withTimeout(service.generateEmbedding('kb health probe'), opts.embedTimeoutMs, 'embedding provider');
+    const embedCall = service.generateEmbedding('kb health probe');
+    probeVector = await withTimeout(embedCall, opts.embedTimeoutMs, 'embedding provider').catch((err: unknown) => {
+      if (err instanceof EmbedTimeoutError) {
+        // Slow is not broken: a cold local model can take longer than the
+        // boot check waits. When the call does answer, check again (now warm,
+        // and unbounded) so the verdict is not stuck at "not ready".
+        embedCall.then(
+          () => runKBSelfCheck().catch((recheckErr: unknown) => logger.warn({ err: recheckErr }, 'KB re-check after a slow embedding failed')),
+          () => undefined,
+        );
+      }
+      throw err;
+    });
     if (!Array.isArray(probeVector) || probeVector.length === 0) {
       throw new Error('embedding provider returned empty vector');
     }

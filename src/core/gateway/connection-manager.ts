@@ -667,16 +667,22 @@ export class ConnectionManager {
   // ── Send Helpers ────────────────────────────────────────────────
 
   send(conn: GatewayConnection, msg: GatewayMessage): void {
+    if (conn.ws.readyState !== 1) return; // not OPEN: nothing to serialize for
+    const frame = this.serialize(msg);
+    if (frame !== null) this.sendRaw(conn, frame);
+  }
+
+  /** The frame for `msg`, or null (logged) when it cannot be serialized. */
+  private serialize(msg: GatewayMessage): string | null {
     try {
-      if (conn.ws.readyState === 1) { // OPEN
-        conn.ws.send(JSON.stringify(msg));
-      }
+      return JSON.stringify(msg);
     } catch (err) {
-      coreLogger.debug({ err, connectionId: conn.context?.connectionId }, 'Failed to send to connection');
+      coreLogger.warn({ err, type: msg.type }, 'Gateway message could not be serialized');
+      return null;
     }
   }
 
-  /** `send` for a frame already serialized — one fan-out stringifies once. */
+  /** The one place a frame goes out — one fan-out stringifies once. */
   private sendRaw(conn: GatewayConnection, frame: string): void {
     try {
       if (conn.ws.readyState === 1) conn.ws.send(frame); // OPEN
@@ -691,17 +697,22 @@ export class ConnectionManager {
   }
 
   sendToUser(userId: string, msg: GatewayMessage): void {
+    let frame: string | null | undefined;
     for (const conn of this.getConnectionsByUser(userId)) {
-      this.send(conn, msg);
+      if (conn.ws.readyState !== 1) continue;
+      frame ??= this.serialize(msg);
+      if (frame === null) return;
+      this.sendRaw(conn, frame);
     }
   }
 
   broadcast(msg: GatewayMessage, filter?: (ctx: ConnectionContext) => boolean): void {
-    let frame: string | undefined;
+    let frame: string | null | undefined;
     for (const conn of this.connections.values()) {
       if (conn.state !== 'active' || !conn.context) continue;
       if (filter && !filter(conn.context)) continue;
-      frame ??= JSON.stringify(msg);
+      frame ??= this.serialize(msg);
+      if (frame === null) return;
       this.sendRaw(conn, frame);
     }
   }
@@ -714,12 +725,13 @@ export class ConnectionManager {
   broadcastToUser(userId: string, msg: GatewayMessage, filter?: (ctx: ConnectionContext) => boolean): void {
     const ids = this.byUser.get(userId);
     if (!ids) return;
-    let frame: string | undefined;
+    let frame: string | null | undefined;
     for (const id of ids) {
       const conn = this.connections.get(id);
       if (!conn || conn.state !== 'active' || !conn.context) continue;
       if (filter && !filter(conn.context)) continue;
-      frame ??= JSON.stringify(msg);
+      frame ??= this.serialize(msg);
+      if (frame === null) return;
       this.sendRaw(conn, frame);
     }
   }
