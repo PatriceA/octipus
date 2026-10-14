@@ -32,9 +32,13 @@ function getEncoder(): Tiktoken | null {
 
 // Callers re-estimate the same (often large, append-only) strings repeatedly,
 // so encoding is memoized by content string — unchanged text becomes a cache
-// hit and only new text is BPE-encoded. Bounded to cap memory; evicts oldest.
+// hit and only new text is BPE-encoded. The keys ARE the strings, so the cache
+// is bounded by their total length as well as their number (4096 history-sized
+// keys could otherwise pin hundreds of MB); least recently used goes first.
 const tokenCache = new Map<string, number>();
 const TOKEN_CACHE_MAX = 4096;
+const TOKEN_CACHE_MAX_CHARS = 16 * 1024 * 1024;
+let tokenCacheChars = 0;
 
 /**
  * Estimate token count for a string using the o200k_base tokenizer, with a
@@ -51,7 +55,11 @@ export function estimateTokens(content: string): number {
   const cacheable = content.length >= TOKEN_CACHE_MIN_LEN;
   if (cacheable) {
     const cached = tokenCache.get(content);
-    if (cached !== undefined) return cached;
+    if (cached !== undefined) {
+      tokenCache.delete(content);
+      tokenCache.set(content, cached);
+      return cached;
+    }
   }
 
   let count: number;
@@ -66,11 +74,15 @@ export function estimateTokens(content: string): number {
     count = Math.ceil(content.length / 4);
   }
 
-  if (cacheable) {
-    if (tokenCache.size >= TOKEN_CACHE_MAX) {
-      tokenCache.delete(tokenCache.keys().next().value as string);
+  // A string too big to share the budget with others is counted, not kept.
+  if (cacheable && content.length <= TOKEN_CACHE_MAX_CHARS / 8) {
+    while (tokenCache.size >= TOKEN_CACHE_MAX || (tokenCache.size > 0 && tokenCacheChars + content.length > TOKEN_CACHE_MAX_CHARS)) {
+      const oldest = tokenCache.keys().next().value as string;
+      tokenCache.delete(oldest);
+      tokenCacheChars -= oldest.length;
     }
     tokenCache.set(content, count);
+    tokenCacheChars += content.length;
   }
   return count;
 }
