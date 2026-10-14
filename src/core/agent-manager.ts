@@ -146,6 +146,8 @@ export class AgentManager {
   private eventBuffers: Map<string, BufferedEvent[]> = new Map();
   private eventSeqCounter: number = 0;
   private static MAX_BUFFERED_EVENTS = 200;
+  /** How long a finished worker stays in memory (`cleanup`). */
+  static readonly FINISHED_RETENTION_MS = 10 * 60_000;
   /**
    * Swarm Phase 2: parent → children index for cascade cancellation.
    * Populated by `spawn()` when `parentAgentId` is provided.
@@ -774,11 +776,14 @@ export class AgentManager {
   }
 
   /**
-   * Clean up completed/failed agents older than maxAge
+   * Clean up completed/failed agents older than maxAge. A finished worker
+   * holds its whole history; past this window its detail and events are
+   * served from the DB (`/agents/:id`, `/agents/:id/events`), and only a
+   * running agent takes a follow-up message.
    */
-  cleanup(maxAgeMs: number = 3600000): number {
+  cleanup(maxAgeMs: number = AgentManager.FINISHED_RETENTION_MS): number {
     const now = Date.now();
-    let count = 0;
+    const removed = new Set<string>();
 
     for (const [id, worker] of this.agents) {
       const context = worker.getContext();
@@ -791,15 +796,29 @@ export class AgentManager {
         this.retainUntilSettled(worker);
         this.agents.delete(id);
         this.eventBuffers.delete(id);
-        count++;
+        removed.add(id);
       }
     }
+    const count = removed.size;
+    if (count > 0) this.pruneChildIndex(removed);
 
     if (count > 0) {
       agentLogger.info({ count }, 'Cleaned up old agents');
     }
 
     return count;
+  }
+
+  /**
+   * Drop the cascade edges to `removed` agents. A removed parent's entry is
+   * kept while any of its children still is in memory: `stop(parent,
+   * {cascade})` reaches them through it even after the parent was cleaned up.
+   */
+  private pruneChildIndex(removed: ReadonlySet<string>): void {
+    for (const [parentId, children] of this.childrenByParent) {
+      for (const childId of removed) children.delete(childId);
+      if (children.size === 0) this.childrenByParent.delete(parentId);
+    }
   }
 
   /**
