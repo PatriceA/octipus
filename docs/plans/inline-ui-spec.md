@@ -663,9 +663,9 @@ success: a link to the artifact and any build warning.
 
 **Server** — `POST /api/sessions/:id/inline-ui/:blockId/promote`:
 1. authenticated; refused while impersonating (403);
-2. the caller's own chat: `contentRepos(principal).sessions.findById` and
-   `session.userId === principal.userId` (an admin who may read the chat
-   cannot save from it; rooms are not chats) → else 404;
+2. the caller's own chat: `contentRepos(principal).sessions.findById`, then
+   `canActInSession(session, userId, 'chat')` — the owner only (an admin who
+   may read the chat cannot save from it), never a room → else 404;
 3. the block in that session → else 404; `tainted` → 409;
 4. title 1–200 chars, slug `ARTIFACT_SLUG_RE`, visibility private or
    workspace, a workspace → else 400;

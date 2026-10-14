@@ -14,6 +14,7 @@ import { Elysia, t } from '@/api/http';
 import { buildArtifactAppUrl } from '@/core/artifacts/host';
 import { writeVersion } from '@/core/artifacts/version-writer';
 import { inlineUiReader } from '@/core/inline-ui/access';
+import { canActInSession } from '@/core/rooms/access';
 import { promotedPage, usesOctiBridge } from '@/core/inline-ui/promote';
 import { artifactsRepository } from '@/db/repositories/artifacts-repository';
 import { contentRepos } from '@/db/repositories/content';
@@ -71,9 +72,10 @@ export const inlineUiRoutes = new Elysia({ prefix: '/sessions' })
       const notFound = () => { set.status = 404; return { error: 'Interactive answer not found' }; };
       if (!UUID_RE.test(params.id) || !UUID_RE.test(params.blockId)) return notFound();
       // The caller's own chat: the scoped read every chat route uses, then
-      // ownership (an admin may read another user's chat, not save from it).
+      // `canActInSession(…, 'chat')` — the owner only (an admin may read
+      // another user's chat, not save from it), never a room.
       const session = await contentRepos(principal).sessions.findById(params.id);
-      if (!session || session.userId !== principal.userId) return notFound();
+      if (!session || !(await canActInSession(session, principal.userId, 'chat'))) return notFound();
       const block = await inlineUiRepository.getInSession(params.blockId.toLowerCase(), session.id);
       if (!block) return notFound();
       if (block.tainted) {
