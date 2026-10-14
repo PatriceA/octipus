@@ -771,7 +771,11 @@ async function noticeForMember(hostInstanceId: string, handle: string, body: Rec
 const NOTICES_PER_MINUTE = 30;
 /** `${host}\n${handle}` → notice times in the last minute. */
 const noticeTimes = new Map<string, number[]>();
-/** Recently filed `${host}\n${kind}\n${messageId}`, so a replayed notice files nothing. */
+/**
+ * Recently filed `${host}\n${handle}\n${kind}\n${messageId}`, so a replayed
+ * notice files nothing. Per member: the host sends each member of this
+ * install their own notice for the same post.
+ */
 const recentNotices = new Set<string>();
 const RECENT_NOTICES_MAX = 2_000;
 
@@ -781,7 +785,7 @@ const RECENT_NOTICES_MAX = 2_000;
  * pace itself; each notice is a row and a phone push here.
  */
 export function admitNotice(hostInstanceId: string, handle: string, kind: string, messageId: string, now = Date.now()): boolean {
-  const id = `${hostInstanceId}\n${kind}\n${messageId}`;
+  const id = `${hostInstanceId}\n${handle}\n${kind}\n${messageId}`;
   if (recentNotices.has(id)) return false;
   const key = `${hostInstanceId}\n${handle}`;
   const times = (noticeTimes.get(key) ?? []).filter((t) => now - t < 60_000);
