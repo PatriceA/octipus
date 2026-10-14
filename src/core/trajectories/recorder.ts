@@ -365,21 +365,33 @@ export function writeJsonlLine(
   // paths, which made mkdirSync fail with ENOENT.
   mkdirSync(dirname(path), { recursive: true });
 
-  // Count existing lines so we can report back the new line number. We use
-  // stat-based size + a single newline-count pass only when the file exists.
-  let preCount = 0;
-  try {
-    const st = statSync(path);
-    if (st.size > 0) {
-      // Line-count via Bun.readFileSync is fine — these files are small.
-      const { readFileSync } = require('fs') as typeof import('fs');
-      const buf = readFileSync(path, 'utf8');
-      preCount = buf.split('\n').filter(l => l.length > 0).length;
-    }
-  } catch {
-    preCount = 0;
-  }
-
-  appendFileSync(path, JSON.stringify(record) + '\n', 'utf8');
+  const line = JSON.stringify(record) + '\n';
+  const preCount = linesBefore(path);
+  appendFileSync(path, line, 'utf8');
+  lastFile = { path, lines: preCount + 1, size: statSize(path) };
   return { path, line: preCount + 1 };
+}
+
+/**
+ * Line count of the file this process last appended to, with the size it had
+ * then. Counting used to re-read the whole day's file before every append —
+ * O(file) of synchronous I/O per turn, so the day as a whole went quadratic.
+ * The size check catches anything that touched the file in between (a
+ * rotation, another writer, a manual edit) and falls back to a full count.
+ */
+let lastFile: { path: string; lines: number; size: number } | null = null;
+
+function statSize(path: string): number {
+  try {
+    return statSync(path).size;
+  } catch {
+    return -1;
+  }
+}
+
+function linesBefore(path: string): number {
+  const size = statSize(path);
+  if (size <= 0) return 0;
+  if (lastFile && lastFile.path === path && lastFile.size === size) return lastFile.lines;
+  return readFileSync(path, 'utf8').split('\n').filter((l) => l.length > 0).length;
 }

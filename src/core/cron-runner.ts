@@ -1,4 +1,4 @@
-import { and, eq, isNotNull, lte } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull, lte, sql } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { getEmbeddingService } from '@/core/rag/embeddings';
 import { sweepPurgedSpaceFiles } from '@/core/spaces/purge';
@@ -7,7 +7,7 @@ import { defaultListenDeps, runListenTick } from '@/channels/group-listen';
 import { getDb } from '@/db/postgres';
 import { agentRepository } from '@/db/repositories/agent-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
-import { hooks } from '@/db/schema/hooks';
+import { type Hook, hooks } from '@/db/schema/hooks';
 import { retentionPolicies } from '@/db/schema/retention-policies';
 import { getHookManager } from '@/hooks/manager';
 import { coreLogger } from '@/utils/logger';
@@ -19,6 +19,8 @@ const AGENT_CLEANUP_INTERVAL_MS = 7 * 24 * 3600_000; // Weekly
 const DOCS_REINDEX_INTERVAL_MS = 6 * 3600_000; // Every 6 hours
 const TRAJECTORY_COMPRESS_INTERVAL_MS = 24 * 3600_000; // Daily
 const SPACE_FILES_SWEEP_INTERVAL_MS = 3600_000; // Hourly
+const VECTOR_INDEX_INTERVAL_MS = 24 * 3600_000; // Daily
+const LOG_PRUNE_INTERVAL_MS = 24 * 3600_000; // Daily
 
 /**
  * Default age cap for finished agent rows + their events. Nobody needs an
@@ -43,6 +45,10 @@ let lastSpaceFilesSweep = 0;
 let lastDocsReindex = Date.now();
 // Seed to 0 so the first tick after boot compresses yesterday's file (idempotent).
 let lastTrajectoryCompress = 0;
+// Seeded to boot time: src/index.ts runs the same check during boot.
+let lastVectorIndexEnsure = Date.now();
+let lastLogPrune = 0;
+let logPruneRunning = false;
 
 /**
  * Parse a simple cron expression and compute the next run date.
@@ -249,6 +255,62 @@ async function maybeCompressTrajectories(): Promise<void> {
   }
 }
 
+/**
+ * Build the HNSW indexes once the embedding tables have rows of one dimension
+ * (src/db/vector-indexes.ts). Boot does it too; this catches an install whose
+ * tables were still empty then. Not awaited: a build can take minutes.
+ */
+function maybeEnsureVectorIndexes(): void {
+  const now = Date.now();
+  if (now - lastVectorIndexEnsure < VECTOR_INDEX_INTERVAL_MS) return;
+  lastVectorIndexEnsure = now;
+  void import('@/db/vector-indexes')
+    .then(({ ensureVectorIndexes }) => ensureVectorIndexes())
+    .then((outcomes) => { if (outcomes && Object.values(outcomes).includes('created')) coreLogger.info({ outcomes }, 'Vector indexes built'); })
+    .catch((err: unknown) => coreLogger.error({ err }, 'Vector index ensure failed'));
+}
+
+/**
+ * Age out the log tables (src/core/log-retention.ts) once a day. Not awaited:
+ * a first run over a large backlog deletes in many batches and must not hold
+ * up the scheduled hooks below; a run still going makes the next one a no-op.
+ */
+function maybePruneLogs(): void {
+  const now = Date.now();
+  if (logPruneRunning || now - lastLogPrune < LOG_PRUNE_INTERVAL_MS) return;
+  lastLogPrune = now;
+  logPruneRunning = true;
+  void import('@/core/log-retention')
+    .then(({ pruneLogTables }) => pruneLogTables(new Date(now)))
+    .then((removed) => {
+      if (removed && Object.values(removed).some((n) => n > 0)) coreLogger.info({ removed }, 'Log retention: pruned old rows');
+    })
+    .catch((err: unknown) => coreLogger.error({ err }, 'Log retention prune failed'))
+    .finally(() => { logPruneRunning = false; });
+}
+
+/**
+ * Claim a due schedule hook for this tick: move its nextRunAt on (and disable
+ * a one-shot) only if nextRunAt still holds what the tick read. Every instance
+ * runs this loop, and two can read the same due hook; only the one whose
+ * UPDATE matches fires it. The same compare-and-set as the heartbeat's slot
+ * claim (heartbeat.ts) — compared at millisecond precision, since the row
+ * was read into a JS Date.
+ */
+export async function claimDueHook(hook: Hook, nextRunAt: Date | null, oneShot: boolean, now: Date): Promise<boolean> {
+  const snapshot = hook.nextRunAt;
+  const [claimed] = await getDb()
+    .update(hooks)
+    .set({ nextRunAt, ...(oneShot && { isEnabled: false }), updatedAt: now })
+    .where(and(
+      eq(hooks.id, hook.id),
+      eq(hooks.isEnabled, true),
+      snapshot == null ? isNull(hooks.nextRunAt) : sql`date_trunc('milliseconds', ${hooks.nextRunAt}) = ${snapshot.toISOString()}::timestamptz`,
+    ))
+    .returning({ id: hooks.id });
+  return claimed !== undefined;
+}
+
 const listenDeps = defaultListenDeps();
 let roomListenDeps: import('@/channels/group-listen').ListenDeps<import('@/core/rooms/listen').RoomListenTarget> | null = null;
 
@@ -260,6 +322,8 @@ async function processCronTick(): Promise<void> {
     await maybeSweepPurgedSpaceFiles();
     await maybeReindexDocs();
     await maybeCompressTrajectories();
+    maybeEnsureVectorIndexes();
+    maybePruneLogs();
     const db = getDb();
     const now = new Date();
 
@@ -306,25 +370,11 @@ async function processCronTick(): Promise<void> {
       // IMPORTANT: Update nextRunAt BEFORE executing — hook execution can take minutes/hours
       // (e.g. spawning a root agent + research agent). Without this, the next cron tick
       // finds the same hook still "due" and fires it again, causing duplicate executions.
+      // One-time datetime task: clear nextRunAt and disable after firing.
       const nextRun = isDatetimeTask ? null : getNextCronDate(cronExpression, timezone);
-      if (isDatetimeTask) {
-        // One-time datetime task: clear nextRunAt and disable after firing
-        await db
-          .update(hooks)
-          .set({
-            nextRunAt: null,
-            isEnabled: false,
-            updatedAt: now,
-          })
-          .where(eq(hooks.id, hook.id));
-      } else {
-        await db
-          .update(hooks)
-          .set({
-            nextRunAt: nextRun,
-            updatedAt: now,
-          })
-          .where(eq(hooks.id, hook.id));
+      if (!(await claimDueHook(hook, nextRun, isDatetimeTask, now))) {
+        coreLogger.debug({ hookId: hook.id }, 'Scheduled hook claimed elsewhere since this tick read it; skipping');
+        continue;
       }
 
       try {

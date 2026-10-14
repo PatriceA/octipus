@@ -174,6 +174,12 @@ export interface SpawnChildInternalOpts {
    * a different answer for the same model.
    */
   rootIsLite?: boolean;
+  /**
+   * Called with the child's agent id each time an attempt's worker is spawned
+   * (a retry spawns a new worker under a new id). A detached spawn uses it to
+   * map its handle to the live worker for `steer_child`.
+   */
+  onWorkerStarted?: (agentId: string) => void;
 }
 
 /**
@@ -901,6 +907,7 @@ export class SwarmSpawner {
       scorers: params.scorers,
       childIsSmall: isSmall,
       resumeKey,
+      onWorkerStarted: internal.onWorkerStarted,
     })).finally(() => {
       parent.budget.fanOut.used = Math.max(0, parent.budget.fanOut.used - 1);
     });
@@ -1005,6 +1012,8 @@ export class SwarmSpawner {
     worktree?: WorktreeHandle | null;
     /** Resolved `childResumeKey` for a keyed child on a resumable CLI; unset otherwise. */
     resumeKey?: string;
+    /** See `SpawnChildInternalOpts.onWorkerStarted`; every attempt reports. */
+    onWorkerStarted?: (agentId: string) => void;
   }): Promise<ChildResult> {
     opts.fsBaselines ??= new Map();
     if (opts.worktree === undefined) opts.worktree = await this.prepareWorktree(opts);
@@ -1678,6 +1687,7 @@ export class SwarmSpawner {
     }
 
     const childId = worker.getContext().id;
+    opts.onWorkerStarted?.(childId);
     if (childNode) {
       childNode.signal = worker.getAbortSignal();
       childNode.ownTokenUsage = () => worker.getBillableTokens();

@@ -20,10 +20,16 @@ export function createSteerChildTool(workerRef: { current: AgentWorker | null })
       if (!parent || typeof args.childId !== 'string' || typeof args.message !== 'string' || !args.message.trim()) {
         return 'steer_child: a pending childId and nonempty message are required.';
       }
-      if (!parent.listPendingDetached().some(child => child.childId === args.childId)) {
+      const pending = parent.listPendingDetached().find(child => child.childId === args.childId);
+      if (!pending) {
         return 'steer_child: this child is not pending under you. Collect its result and handle the change yourself or delegate a follow-up.';
       }
-      const child = getAgentManager().get(args.childId);
+      // The handle is not the child's agent id; the spawner records that once
+      // the child's worker exists.
+      if (!pending.agentId) {
+        return 'steer_child: this child has not started running yet. Try again shortly, or handle the change after collecting its result.';
+      }
+      const child = getAgentManager().get(pending.agentId);
       const owner = parent.getContext();
       if (!child || child.getContext().userId !== owner.userId || child.getContext().sessionId !== owner.sessionId || child.getStatus() !== 'running') {
         return 'steer_child: child is no longer running or unavailable. Collect its result and decide on a follow-up.';

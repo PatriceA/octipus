@@ -48,4 +48,10 @@ export const skills = pgTable(
 );
 
 export type Skill = typeof skills.$inferSelect;
+/**
+ * A skill without `description_embedding`. Only discovery and dedup rank by
+ * the vector, and they select it themselves; lookups, listings and prompt
+ * fragments read this.
+ */
+export type SkillView = Omit<Skill, 'descriptionEmbedding'>;
 export type NewSkill = typeof skills.$inferInsert;

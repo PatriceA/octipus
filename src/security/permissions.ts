@@ -74,6 +74,18 @@ function adminMayAnswer(): SQL {
         (SELECT s.workspace_id FROM sessions s WHERE s.id = ${permissionRequests.sessionId})))`;
 }
 
+/**
+ * An approval refused as given: a CLI question approved without a complete
+ * set of answers. The request stays pending, so its requester can still
+ * answer it, or deny it.
+ */
+export class ApprovalNeedsAnswersError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'ApprovalNeedsAnswersError';
+  }
+}
+
 export class PermissionManager {
   private get db() { return getDb(); }
   private preparedWaits = new Map<string, Promise<boolean>>();
@@ -678,7 +690,13 @@ export class PermissionManager {
     if (status === 'approved') {
       const [pending] = await this.db.select().from(permissionRequests).where(and(...filters)).limit(1);
       if (!pending) return null;
-      if (pending.toolId === CLI_QUESTION_TOOL) parseCliAnswers(pending.context?.toolArguments, resolution);
+      if (pending.toolId === CLI_QUESTION_TOOL) {
+        try {
+          parseCliAnswers(pending.context?.toolArguments, resolution);
+        } catch (err) {
+          throw new ApprovalNeedsAnswersError(err instanceof Error ? err.message : String(err), { cause: err });
+        }
+      }
     }
 
     const result = await this.db

@@ -1,11 +1,40 @@
-import type { Browser, BrowserContext, Page } from 'playwright';
+import type { BrowserContext, Page } from 'playwright';
 import type { ToolManifest } from '@/core/types';
 import { decide, decisionModelBound, type DecisionSite, recordShadow } from '@/models/decision';
 import { coreLogger, toolLogger } from '@/utils/logger';
 import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
+import { sharedChromium } from './shared-chromium';
 
 const DEFAULT_TIMEOUT = 30000;
+
 const _MAX_SCREENSHOT_SIZE = 5 * 1024 * 1024; // 5MB
+
+/**
+ * Where Playwright expects its Chromium, asked once of a short-lived child
+ * process. Importing `playwright` here costs ~0.3 s and ~80 MB that stay
+ * resident for the life of the server, and the boot-time availability probe
+ * would pay that on every install, whether or not an agent ever opens a
+ * browser. The browser itself still loads Playwright in-process, on first use.
+ * The path never moves while the server runs; only whether it exists does.
+ */
+let chromiumPath: Promise<string> | null = null;
+function chromiumExecutablePath(): Promise<string> {
+  chromiumPath ??= (async () => {
+    const { createRequire } = await import('node:module');
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const entry = createRequire(import.meta.url).resolve('playwright');
+    const program = `process.stdout.write(require(${JSON.stringify(entry)}).chromium.executablePath())`;
+    const { stdout } = await promisify(execFile)(process.execPath, ['-e', program], {
+      timeout: 15_000,
+      windowsHide: true,
+    });
+    return stdout.trim();
+  })();
+  // A failed lookup is not remembered; the next probe asks again.
+  chromiumPath.catch(() => { chromiumPath = null; });
+  return chromiumPath;
+}
 
 export class BrowserTool extends BaseTool {
   readonly id = 'browser';
@@ -16,8 +45,7 @@ export class BrowserTool extends BaseTool {
   override async checkAvailability(): Promise<ToolAvailability> {
     try {
       const { existsSync } = await import('node:fs');
-      const { chromium } = await import('playwright');
-      const hasPlaywright = existsSync(chromium.executablePath());
+      const hasPlaywright = existsSync(await chromiumExecutablePath());
       if (!hasPlaywright) {
         return { available: false, reason: 'Playwright browsers not installed (run: npx playwright install chromium)' };
       }
@@ -27,9 +55,18 @@ export class BrowserTool extends BaseTool {
     }
   }
 
-  private browser: Browser | null = null;
   private contexts: Map<string, BrowserContext> = new Map();
   private pages: Map<string, Page> = new Map();
+
+  constructor() {
+    super();
+    // The shared browser closes when idle (or crashes): its pages and
+    // contexts go with it, so their handles are dropped here.
+    sharedChromium.onClosed(() => {
+      this.pages.clear();
+      this.contexts.clear();
+    });
+  }
 
   getManifest(): ToolManifest {
     return {
@@ -71,7 +108,9 @@ export class BrowserTool extends BaseTool {
         // swapped in between validation and navigation.
         const addrCheck = assertPublicAddress((await response?.serverAddr())?.ipAddress);
         if (!addrCheck.ok) {
-          await page.goto('about:blank').catch(() => {});
+          // Never handed out, so nothing would ever close it: close it now
+          // (its own context goes with it, see getOrCreatePage).
+          await page.close().catch((err: unknown) => toolLogger.warn({ err }, 'Closing a blocked page failed'));
           return { error: `URL blocked: ${addrCheck.reason}` };
         }
 
@@ -399,17 +438,8 @@ export class BrowserTool extends BaseTool {
     );
   }
 
-  private async getOrCreateBrowser(): Promise<Browser> {
-    if (!this.browser) {
-      const { chromium } = await import('playwright');
-      this.browser = await chromium.launch({ headless: true });
-      toolLogger.info('Browser launched');
-    }
-    return this.browser;
-  }
-
   private async getOrCreatePage(contextId?: string): Promise<Page> {
-    const browser = await this.getOrCreateBrowser();
+    const browser = await sharedChromium.get();
 
     if (contextId && this.contexts.has(contextId)) {
       return this.contexts.get(contextId)!.newPage();
@@ -418,16 +448,23 @@ export class BrowserTool extends BaseTool {
     const context = await browser.newContext();
     if (contextId) {
       this.contexts.set(contextId, context);
+      return context.newPage();
     }
 
-    return context.newPage();
+    // A context of its own, tracked by nothing: it lives as long as its page.
+    const page = await context.newPage();
+    page.once('close', () => {
+      context.close().catch((err: unknown) => toolLogger.warn({ err }, 'Closing a page context failed'));
+    });
+    return page;
   }
 
   private getPage(pageId: string): Page {
     const page = this.pages.get(pageId);
     if (!page) {
-      throw new Error(`Page not found: ${pageId}`);
+      throw new Error(`Page not found: ${pageId} (pages close with the browser after ${sharedChromium.idleMinutes} min idle)`);
     }
+    sharedChromium.touch();
     return page;
   }
 
@@ -446,11 +483,7 @@ export class BrowserTool extends BaseTool {
     }
     this.contexts.clear();
 
-    if (this.browser) {
-      await this.browser.close();
-      this.browser = null;
-      toolLogger.info('Browser closed');
-    }
+    await sharedChromium.close();
   }
 }
 

@@ -39,7 +39,7 @@
  * call site the old one lacked.
  */
 
-import type { Memory } from '@/db/schema/memories';
+import type { MemoryRecord } from '@/db/schema/memories';
 import { coreLogger } from '@/utils/logger';
 import { estimateTokens } from '@/utils/token-count';
 import { getMemoryRepository, type MemoryAccessScope } from './repository';
@@ -59,7 +59,7 @@ export const RELEVANT_CANDIDATE_LIMIT = 8;
 
 const HEADER = '\n\nKnown about the user (long-term memory):\n';
 
-function renderLine(m: Memory): string {
+function renderLine(m: MemoryRecord): string {
   const conf = typeof m.confidence === 'number' ? m.confidence : 1;
   const tag = conf < 0.9 ? `${m.factType}, p≈${conf.toFixed(2)}` : m.factType;
   return `- (${tag}) ${m.content}`;
@@ -75,7 +75,7 @@ function renderLine(m: Memory): string {
  * every fact the user has is already in the block and ranking it would be
  * effort spent to reorder a list nobody will see truncated.
  */
-function fitToBudget(rows: Memory[], tokenBudget: number): { lines: string[]; used: number; dropped: number } {
+function fitToBudget(rows: MemoryRecord[], tokenBudget: number): { lines: string[]; used: number; dropped: number } {
   let used = estimateTokens(HEADER);
   const lines: string[] = [];
   let dropped = 0;
@@ -99,9 +99,9 @@ function fitToBudget(rows: Memory[], tokenBudget: number): { lines: string[]; us
  * fill the block on its own, so the most relevant fact is always present AND
  * the standing facts are never all evicted by one topical question.
  */
-function interleave(a: Memory[], b: Memory[], limit: number): Memory[] {
+function interleave(a: MemoryRecord[], b: MemoryRecord[], limit: number): MemoryRecord[] {
   const seen = new Set<string>();
-  const out: Memory[] = [];
+  const out: MemoryRecord[] = [];
   for (let i = 0; i < Math.max(a.length, b.length) && out.length < limit; i++) {
     for (const row of [a[i], b[i]]) {
       if (!row || seen.has(row.id) || out.length >= limit) continue;
@@ -125,7 +125,7 @@ export interface MemoryContextScope extends MemoryAccessScope {
   tokenBudget?: number;
 }
 
-export async function retrieveForContext(scope: MemoryContextScope): Promise<Memory[]> {
+export async function retrieveForContext(scope: MemoryContextScope): Promise<MemoryRecord[]> {
   const repo = getMemoryRepository();
   const limit = scope.limit ?? 20;
   const budget = scope.tokenBudget ?? DEFAULT_MEMORY_TOKEN_BUDGET;
@@ -167,7 +167,7 @@ export async function retrieveForContext(scope: MemoryContextScope): Promise<Mem
  * the turn its ranking, not its memory. The caller keeps the frequency-ordered
  * block, which is what it would have had anyway.
  */
-async function rankAgainstTurn(scope: MemoryContextScope, limit: number): Promise<Memory[]> {
+async function rankAgainstTurn(scope: MemoryContextScope, limit: number): Promise<MemoryRecord[]> {
   try {
     const { getEmbeddingService } = await import('@/core/rag/embeddings');
     const vector = await getEmbeddingService().generateEmbedding(scope.query as string);
@@ -191,7 +191,7 @@ async function rankAgainstTurn(scope: MemoryContextScope, limit: number): Promis
  * as soft signal rather than gospel.
  */
 export function renderMemoriesBlock(
-  rows: Memory[],
+  rows: MemoryRecord[],
   tokenBudget: number = DEFAULT_MEMORY_TOKEN_BUDGET,
 ): string {
   if (rows.length === 0) return '';

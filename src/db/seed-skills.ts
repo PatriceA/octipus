@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import type { NewSkill } from '@/db/schema/skills';
 import { skills } from '@/db/schema/skills';
@@ -200,32 +200,54 @@ Drop caveman for: security warnings, irreversible action confirmations, multi-st
 Code/commits/PRs: write normal. Structured output (JSON, SQL, configs): write normal.`, principles: [], bestPractices: [], antiPatterns: [], frameworks: [] },
 ];
 
+/** The shipped fields a boot re-applies to an existing system skill. */
+function shippedFields(skill: NewSkill) {
+  return {
+    category: skill.category ?? 'general',
+    content: skill.content ?? '',
+    description: skill.description,
+    principles: skill.principles ?? [],
+    bestPractices: skill.bestPractices ?? [],
+    antiPatterns: skill.antiPatterns ?? [],
+    frameworks: skill.frameworks ?? [],
+  };
+}
+
 /**
  * Seed system skills into the database.
- * Idempotent — skips skills that already exist by id.
+ * Idempotent — inserts missing skills and re-applies shipped content to
+ * existing ones, but only writes a row whose shipped fields actually changed.
+ * Every boot used to UPDATE all of them (and bump `updatedAt`) whether or not
+ * anything differed.
  */
 export async function seedSkills(): Promise<void> {
   const db = getDb();
 
-  for (const skill of SYSTEM_SKILLS) {
-    const existing = await db
-      .select({ id: skills.id })
+  const rows = SYSTEM_SKILLS.length
+    ? await db
+      .select({
+        id: skills.id,
+        category: skills.category,
+        content: skills.content,
+        description: skills.description,
+        principles: skills.principles,
+        bestPractices: skills.bestPractices,
+        antiPatterns: skills.antiPatterns,
+        frameworks: skills.frameworks,
+      })
       .from(skills)
-      .where(eq(skills.id, skill.id))
-      .limit(1);
+      .where(inArray(skills.id, SYSTEM_SKILLS.map((skill) => skill.id)))
+    : [];
+  const stored = new Map(rows.map(({ id, ...fields }) => [id, fields]));
 
-    if (existing.length > 0) {
+  for (const skill of SYSTEM_SKILLS) {
+    const current = stored.get(skill.id);
+
+    if (current) {
       // Update category + content for existing system skills (supports migration)
-      await db.update(skills).set({
-        category: skill.category,
-        content: skill.content ?? '',
-        description: skill.description,
-        principles: skill.principles,
-        bestPractices: skill.bestPractices,
-        antiPatterns: skill.antiPatterns,
-        frameworks: skill.frameworks,
-        updatedAt: new Date(),
-      }).where(eq(skills.id, skill.id));
+      const shipped = shippedFields(skill);
+      if (JSON.stringify(shipped) === JSON.stringify({ ...current, content: current.content ?? '' })) continue;
+      await db.update(skills).set({ ...shipped, updatedAt: new Date() }).where(eq(skills.id, skill.id));
       continue;
     }
 

@@ -21,9 +21,21 @@ interface RefreshPayload {
 
 /** In-memory last-view timestamps. Replaced by Redis-backed storage in step 13. */
 const lastViewedAt = new Map<string, number>();
+/**
+ * Artifacts whose last view is remembered; the least recently viewed is
+ * forgotten past it (and then counts as unviewed: its refresh idles until
+ * the next view).
+ */
+export const MAX_TRACKED_VIEWS = 10_000;
 
 export function recordArtifactView(artifactId: string): void {
+  // Re-inserted, so the map stays in view order and its first key is the oldest.
+  lastViewedAt.delete(artifactId);
   lastViewedAt.set(artifactId, Date.now());
+  if (lastViewedAt.size > MAX_TRACKED_VIEWS) {
+    const oldest = lastViewedAt.keys().next().value;
+    if (oldest !== undefined) lastViewedAt.delete(oldest);
+  }
 }
 
 export function getLastViewMs(artifactId: string): number | null {

@@ -22,7 +22,8 @@ export const messages = pgTable('messages', {
   metadata: jsonb('metadata').$type<MessageMetadata>().default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
-  sessionIdIdx: index('messages_session_id_idx').on(table.sessionId),
+  /** findContextMessages: one session, newest first (created_at, id) under a LIMIT. */
+  sessionCreatedIdx: index('messages_session_created_idx').on(table.sessionId, table.createdAt, table.id),
   createdAtIdx: index('messages_created_at_idx').on(table.createdAt),
   agentIdIdx: index('messages_agent_id_idx').on(table.agentId),
 }));

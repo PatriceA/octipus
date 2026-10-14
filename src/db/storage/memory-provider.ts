@@ -4,7 +4,7 @@
  */
 import { EventEmitter } from 'events';
 import { dbLogger } from '@/utils/logger';
-import type { CacheProvider, PubSubProvider, QueueProvider, StorageProvider } from './types';
+import { type CacheProvider, type PubSubProvider, type QueueProvider, queueScore, type StorageProvider } from './types';
 
 interface CacheEntry {
   value: string;
@@ -90,15 +90,16 @@ export class MemoryStorageProvider implements StorageProvider {
     const items: Array<{ data: string; score: number }> = [];
 
     return {
-      async push(item: unknown, priority = 0): Promise<void> {
-        const score = Date.now() - priority * 1000;
+      async push(item: unknown, priority = 0, notBefore?: number): Promise<void> {
+        const score = queueScore(priority, notBefore);
         const data = JSON.stringify(item);
         // Insert in sorted order (ascending score)
         const idx = items.findIndex((i) => i.score > score);
         if (idx === -1) items.push({ data, score });
         else items.splice(idx, 0, { data, score });
       },
-      async pop(): Promise<unknown | null> {
+      async pop(dueBy?: number): Promise<unknown | null> {
+        if (dueBy !== undefined && items.length > 0 && items[0].score > dueBy) return null;
         const entry = items.shift();
         if (!entry) return null;
         try { return JSON.parse(entry.data); } catch { return entry.data; }

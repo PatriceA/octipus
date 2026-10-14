@@ -1,4 +1,4 @@
-import { Bot, type Context, InputFile } from 'grammy';
+import type { Bot, Context } from 'grammy';
 import { BUFFER_BOT_ID, findGroupMessage, forgetGroupChat, groupMessages, recordGroupMessage } from '@/channels/group-buffer';
 import { type GroupDeps, type GroupMember, groupHints, handleGroupMessage, MAIN_THREAD } from '@/channels/group-handler';
 import { shouldSendHint } from '@/channels/hint-limiter';
@@ -42,6 +42,9 @@ export class TelegramChannel extends BaseChannel {
       return;
     }
 
+    // Loaded here, not at module top: discovery imports every channel module,
+    // and an install without Telegram never needs the SDK.
+    const { Bot } = await import('grammy');
     this.bot = new Bot(config.telegram.botToken);
     this.allowedUsers = new Set(config.telegram.allowedUsers || []);
 
@@ -519,6 +522,7 @@ export class TelegramChannel extends BaseChannel {
           await this.bot.api.sendAudio(chatId, attachment.url, options);
         } else if (attachment.data) {
           // Voice-out: synthesized TTS arrives as raw bytes, not a URL.
+          const { InputFile } = await import('grammy');
           await this.bot.api.sendAudio(chatId, new InputFile(attachment.data as Uint8Array, attachment.filename), options);
         }
         break;

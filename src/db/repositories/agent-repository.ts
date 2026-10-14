@@ -58,22 +58,32 @@ export class AgentRepository {
    * Returns the number of agent rows removed. The cascade to
    * `agent_events` is handled by the caller (there's no FK), so we
    * delete events first to avoid orphans.
+   *
+   * In batches of `batchSize` ids: one `IN (…)` over every stale id broke
+   * past the 65,535 bind-parameter limit on a backlog that size, and held
+   * one long delete over both tables.
    */
-  async deleteCompletedBefore(cutoff: Date): Promise<number> {
-    const stale = await this.db
-      .select({ id: agents.id })
-      // i2: retention sweep, ids only
-      .from(agents)
-      .where(lt(agents.completedAt, cutoff));
-    if (stale.length === 0) return 0;
-    const ids = stale.map((s) => s.id);
+  async deleteCompletedBefore(cutoff: Date, batchSize = 1000): Promise<number> {
     const { agentEvents } = await import('../schema/agent-events');
-    await this.db.delete(agentEvents).where(inArray(agentEvents.agentId, ids));
-    const removed = await this.db
-      .delete(agents)
-      .where(inArray(agents.id, ids))
-      .returning({ id: agents.id });
-    return removed.length;
+    let total = 0;
+    for (;;) {
+      const stale = await this.db
+        .select({ id: agents.id })
+        // i2: retention sweep, ids only
+        .from(agents)
+        .where(lt(agents.completedAt, cutoff))
+        .limit(batchSize);
+      if (stale.length === 0) return total;
+      const ids = stale.map((s) => s.id);
+      await this.db.delete(agentEvents).where(inArray(agentEvents.agentId, ids));
+      const removed = await this.db
+        .delete(agents)
+        .where(inArray(agents.id, ids))
+        .returning({ id: agents.id });
+      total += removed.length;
+      // A batch that removed nothing would be selected again: stop, not spin.
+      if (stale.length < batchSize || removed.length === 0) return total;
+    }
   }
 
   /** Mark any agents still "running" as failed — called on startup to clean up zombies from previous process */

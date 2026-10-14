@@ -11,10 +11,12 @@ export { WhatsAppChannel, whatsappChannel } from './whatsapp';
 import { getConfig } from '@/config';
 import { sharedRefusalText } from '@/core/errors/limit-refusal';
 import { recordChannelMessage } from '@/core/telemetry';
+import type { AgentEvent } from '@/core/agent-base';
 import type { Attachment, ChannelType, UnifiedMessage } from '@/core/types';
 import type { GroupChannel } from '@/db/schema/group-channels';
 import { sessionRepository } from '@/db/repositories/session-repository';
-import { getPermissionManager, type PermissionRequestEvent } from '@/security/permissions';
+import { ApprovalNeedsAnswersError, getPermissionManager, type PermissionRequestEvent } from '@/security/permissions';
+import { CLI_QUESTION_TOOL, cliQuestionsSchema } from '@/shared/cli-questions';
 import { channelLogger } from '@/utils/logger';
 import { attendChat, newestApprovalPostedAt, startApprovalPrompts, tryResolveApprovalFromChannel } from './approval-prompts';
 import { processChannelAttachments } from './attachment-handler';
@@ -426,12 +428,17 @@ export function forgetResolvedChannelPermission(event: { userId: string; request
  * Returns true if the message was consumed as a permission response.
  */
 /**
- * Octipus session id an agent event belongs to. `data.sessionId` is NOT used
- * here — for CLI thought events that field is a vendor (Claude/Codex) session
- * id, which would never match octipus's own resolved session id.
+ * Octipus session id an agent event belongs to: its agent's, looked up while
+ * the agent is in memory (as the gateway's event bridge does). An
+ * `AgentEvent` carries no session id of its own, and `data.sessionId` is NOT
+ * used — for CLI thought events that field is a vendor (Claude/Codex)
+ * session id, which would never match octipus's own resolved session id.
  */
-export function eventSessionId(event: { sessionId?: string; data?: { context?: { sessionId?: string }; [key: string]: unknown } }): string | undefined {
-  return event.sessionId || event.data?.context?.sessionId;
+export function eventSessionId(
+  event: Pick<AgentEvent, 'agentId'>,
+  getAgent: (agentId: string) => { getContext(): { sessionId: string } } | undefined,
+): string | undefined {
+  return getAgent(event.agentId)?.getContext().sessionId;
 }
 
 /** The key a reply in this chat (and group thread) is looked up under. */
@@ -489,19 +496,28 @@ export async function tryResolvePermissionFromChannel(message: UnifiedMessage): 
   // The entry is dropped only after a definite result: if approve/deny
   // throws, it stays so the user can retry.
   const permissionManager = getPermissionManager();
-  const resolved = answer === 'yes'
-    ? await permissionManager.approve(pending.requestId, message.userId)
-    : await permissionManager.deny(pending.requestId, message.userId);
-  removePending(key, pending.requestId);
+  let content: string;
+  try {
+    const resolved = answer === 'yes'
+      ? await permissionManager.approve(pending.requestId, message.userId)
+      : await permissionManager.deny(pending.requestId, message.userId);
+    removePending(key, pending.requestId);
 
-  const stillWaiting = pendingChannelPermissions.get(key)?.filter(p => p.announced).length ?? 0;
-  const more = stillWaiting > 0 ? ` (${stillWaiting} more permission request${stillWaiting === 1 ? '' : 's'} waiting.)` : '';
-  // Never let a reply meant for one prompt fall through to an older one.
-  const content = !resolved
-    ? `That permission request for "${pending.toolName}" was already answered elsewhere or has expired; nothing was changed.${more}`
-    : answer === 'yes'
-      ? `Permission granted for "${pending.toolName}". Continuing...${more}`
-      : `Permission denied for "${pending.toolName}".${more}`;
+    const stillWaiting = pendingChannelPermissions.get(key)?.filter(p => p.announced).length ?? 0;
+    const more = stillWaiting > 0 ? ` (${stillWaiting} more permission request${stillWaiting === 1 ? '' : 's'} waiting.)` : '';
+    // Never let a reply meant for one prompt fall through to an older one.
+    content = !resolved
+      ? `That permission request for "${pending.toolName}" was already answered elsewhere or has expired; nothing was changed.${more}`
+      : answer === 'yes'
+        ? `Permission granted for "${pending.toolName}". Continuing...${more}`
+        : `Permission denied for "${pending.toolName}".${more}`;
+  } catch (err) {
+    if (!(err instanceof ApprovalNeedsAnswersError)) throw err;
+    // A question a typed "yes" cannot answer: the request stays pending (and
+    // so does its prompt here), so the user can still answer it or say no.
+    channelLogger.info({ requestId: pending.requestId, channelType: pending.channelType }, 'A bare yes cannot answer a question; asked for answers instead');
+    content = `"${pending.toolName}" asks you questions, and "yes" alone does not answer them. Answer them in the Octipus web app, or reply "no" to decline.`;
+  }
   try {
     await getUMI().send(pending.channelType, pending.channelId, { content, threadId: pending.threadId });
   } catch (err) {
@@ -658,7 +674,12 @@ export async function forwardPermissionRequestToChannel(request: PermissionReque
       detail = `\nTo: ${target}\nMessage: ${msg.length > 100 ? msg.slice(0, 100) + '…' : msg}`;
     }
   }
-  const fullPrompt = `🔒 Permission required: the agent wants to use "${toolName}".${detail}\n\nReply "yes" to allow or "no" to deny.`;
+  // A CLI question is answered, not allowed: a typed "yes" cannot carry the
+  // answers (see ApprovalNeedsAnswersError), so don't invite one.
+  const questions = request.toolId === CLI_QUESTION_TOOL ? cliQuestionsSchema.safeParse(args) : null;
+  const fullPrompt = questions?.success
+    ? `❓ The agent has ${questions.data.questions.length === 1 ? 'a question' : 'questions'} for you:\n${questions.data.questions.map(q => `• ${q.question}${q.options.length ? ` (${q.options.map(o => o.label).join(' / ')})` : ''}`).join('\n')}\n\nAnswer in the Octipus web app, or reply "no" to decline.`
+    : `🔒 Permission required: the agent wants to use "${toolName}".${detail}\n\nReply "yes" to allow or "no" to deny.`;
   try {
     if (session.groupChannelId) {
       // Everyone in the channel reads the thread, and the tool arguments are
@@ -938,11 +959,14 @@ export async function initializeChannels(): Promise<void> {
         try {
           const { getAgentManager } = await import('@/core/agent-manager');
           const agentManager = getAgentManager();
-          unsubAgentEvents = agentManager.onEvent((event: any) => {
+          unsubAgentEvents = agentManager.onEvent((event: AgentEvent) => {
             if (isTerminal) return;
-            // Match events from agents in this session (check multiple possible locations)
-            const data = event.data || {};
-            if (eventSessionId(event) !== resolvedSessionId) return;
+            const data = (event.data ?? {}) as { type?: string; toolId?: string; toolName?: string };
+            // A streamed token is an event too: one stall reset a second is
+            // plenty, and spares a session lookup and a timer per token.
+            if (data.type === 'text_delta' && Date.now() - _lastEventTime < 1_000) return;
+            // Only events from agents in this session.
+            if (eventSessionId(event, (id) => agentManager.get(id)) !== resolvedSessionId) return;
 
             if (event.type === 'action') {
               const actionType = data.type || '';

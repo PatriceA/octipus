@@ -334,6 +334,19 @@ describe('permission requests are answered by their requester (L10)', () => {
     // Already answered: a second admin answer is a 404, not a silent success.
     expect((await rest(`/admin/permission-requests/${id}/resolve`, adminId, { approved: false, reason: 'again' })).status).toBe(404);
   });
+
+  test('approving a CLI question without its answers is a 400 that leaves it pending, not a 500', async () => {
+    const { getPermissionManager } = await import('@/security/permissions');
+    const id = await getPermissionManager().requestApproval(aliceId, 'agent-alice', 'cli-native:AskUserQuestion', 'AskUserQuestion',
+      { questions: [{ question: 'Which model?', options: [{ label: 'Manual' }] }] }, aliceSession, 'CLI: AskUserQuestion');
+    const own = await rest(`/permission-requests/${id}/respond`, aliceId, { approved: true });
+    expect(own.status).toBe(400);
+    expect(own.body.error).toContain('Answer every question');
+    const admin = await rest(`/admin/permission-requests/${id}/resolve`, adminId, { approved: true, reason: 'unblocking' });
+    expect(admin.status).toBe(400);
+    expect(await permissionStatus(id)).toBe('pending');
+    expect((await rest(`/permission-requests/${id}/respond`, aliceId, { approved: false })).body).toEqual({ resolved: true });
+  });
 });
 
 describe('root-agent approvals are answered by their requester (L10)', () => {

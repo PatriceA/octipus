@@ -139,13 +139,26 @@ const checks = new Set<string>();
 const eventTypes = new Set<string>();
 let unsubscribe: (() => void) | undefined;
 let eventTail = Promise.resolve();
+/**
+ * Interrupted deliveries are rare (a crash mid-continuation), and recovery
+ * only marks them blocked for review, so it runs at boot (the first tick) and
+ * every few minutes rather than on every 5 s tick.
+ */
+const RECOVER_INTERVAL_MS = 5 * 60_000;
+let lastRecoverAt = 0;
 export async function tickMonitors() {
   if (ticking) return;
   ticking = true;
   try {
     const now = new Date();
+    if (now.getTime() - lastRecoverAt >= RECOVER_INTERVAL_MS) {
+      lastRecoverAt = now.getTime();
+      await monitorRepository.recover(now);
+    }
+    // Most installs have no live monitor most of the time: one probe (or
+    // none, see MonitorRepository.hasWork) instead of three queries a tick.
+    if (!(await monitorRepository.hasWork(now))) return;
     for (const row of await monitorRepository.eventSources()) if (row.source.kind === 'event') eventTypes.add(row.source.type);
-    await monitorRepository.recover(now);
     const due = await monitorRepository.due(now);
     // A slow probe never holds up pending wake-ups or other sessions.
     for (const row of due) {

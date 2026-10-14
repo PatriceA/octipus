@@ -23,7 +23,7 @@ import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
 import { filterPII } from '@/core/agent/pii-filter';
 import { SECURITY_PREAMBLE } from '@/core/agent/roles';
-import type { Memory } from '@/db/schema/memories';
+import type { MemoryRecord } from '@/db/schema/memories';
 import type { CandidateFact } from './extractor';
 import { getMemoryRepository } from './repository';
 
@@ -112,7 +112,7 @@ const JUDGE_ACTIONS: Record<JudgeAction, string> = {
   NOOP: 'the candidate restates the existing fact with no new information',
 };
 
-async function decide(candidate: CandidateFact, closest: Memory | null, userId: string, failOnError = false): Promise<JudgeAction> {
+async function decide(candidate: CandidateFact, closest: MemoryRecord | null, userId: string, failOnError = false): Promise<JudgeAction> {
   // Empty list shortcut — no LLM call needed.
   if (!closest) return 'ADD';
   const decision = () => askDecisionModel(JUDGE_SITE, {
@@ -124,7 +124,7 @@ async function decide(candidate: CandidateFact, closest: Memory | null, userId: 
   return preferDecision(JUDGE_SITE, JUDGE_LIVE, decision, () => llmJudge(candidate, closest, userId, failOnError));
 }
 
-async function llmJudge(candidate: CandidateFact, closest: Memory, userId: string, failOnError = false): Promise<JudgeAction> {
+async function llmJudge(candidate: CandidateFact, closest: MemoryRecord, userId: string, failOnError = false): Promise<JudgeAction> {
 
   const model = await getModelRegistry().getModelForTopic('background');
   if (!model) {

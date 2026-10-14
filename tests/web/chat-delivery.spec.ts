@@ -1,7 +1,19 @@
-import type { Route } from '@playwright/test';
+import type { Page, Route } from '@playwright/test';
 import { json, selectChatSession } from './fixtures/api-stubs';
 import { expect, test } from './fixtures/auth';
 import { stubGateway } from './fixtures/gateway';
+
+/**
+ * Make sess-1 a Telegram chat. Its turns run outside the gateway, so the page
+ * refetches its history every 10 s even while the gateway is connected — the
+ * refresh the tests using this drive. A web session is not polled while
+ * connected (last test).
+ */
+async function asChannelSession(page: Page): Promise<void> {
+  await page.route('**/api/sessions', (route) => route.request().method() !== 'GET' ? route.fallback() : json(route, 200, {
+    sessions: [{ id: 'sess-1', title: 'First chat', status: 'active', channelType: 'telegram', updatedAt: new Date().toISOString(), createdAt: new Date().toISOString(), messageCount: 3 }],
+  }));
+}
 
 test('midrun messages appear once, survive reload and keep the active turn running', async ({ authenticatedPage: page }) => {
   let persisted: any[] = [];
@@ -65,6 +77,7 @@ test('stale refresh cannot erase a live answer while activity history is loading
   const held: Route[] = [];
   let hold = false;
   const gateway = await stubGateway(page);
+  await asChannelSession(page);
   await page.route('**/api/sessions/sess-1/messages**', route => hold ? void held.push(route) : json(route, 200, { messages: [] }));
   // Before navigation, so the page's refresh timer is created on the fake
   // clock; installed later, a timer already scheduled on the real clock can
@@ -89,6 +102,7 @@ test('rate-limited history pauses requests, keeps messages and shows an inline e
   let limited = false;
   const messages = [{ id: 'kept', role: 'assistant', content: 'Previously loaded answer', createdAt: new Date().toISOString() }];
   await stubGateway(page);
+  await asChannelSession(page);
   await page.route('**/api/sessions/sess-1/messages**', route => {
     requests++;
     return limited ? route.fulfill({ status: 429, contentType: 'application/json', headers: { 'Retry-After': '30' }, body: JSON.stringify({ error: 'Too many requests. Please try again later.' }) })
@@ -121,6 +135,7 @@ test('chat bounds event backfill and stops polling completed agents', async ({ a
   const agents = Array.from({ length: 8 }, (_, i) => ({ id: `old-${i}`, sessionId: 'sess-1', role: 'coding', model: 'test', status: 'completed',
     createdAt: new Date(2026, 8, 29, 12, i).toISOString(), completedAt: new Date(2026, 8, 29, 12, i + 1).toISOString(), iteration: 1 }));
   await stubGateway(page);
+  await asChannelSession(page);
   await page.route('**/api/sessions/sess-1/messages**', route => { messageRequests++; return json(route, 200, { messages: [] }); });
   await page.route('**/api/agents?sessionId=sess-1', route => json(route, 200, { agents }));
   await page.route('**/api/agents/*/events?**', route => {
@@ -143,4 +158,20 @@ test('chat bounds event backfill and stops polling completed agents', async ({ a
   await expect.poll(() => [...counts.values()].reduce((a, b) => a + b, 0)).toBe(16);
   await page.clock.fastForward(20_000);
   expect([...counts.values()].reduce((a, b) => a + b, 0)).toBe(16);
+});
+
+test('a web session is not refetched on a timer while the gateway is connected', async ({ authenticatedPage: page }) => {
+  let messageRequests = 0;
+  const gateway = await stubGateway(page);
+  await page.route('**/api/sessions/sess-1/messages**', route => { messageRequests++; return json(route, 200, { messages: [] }); });
+  await page.clock.install();
+  await page.goto('/chat');
+  await selectChatSession(page, 'sess-1');
+  await expect.poll(() => gateway.subscribed()).toBe(1);
+  await expect.poll(() => messageRequests).toBeGreaterThan(0);
+  await page.clock.runFor(200);
+  const settled = messageRequests;
+  await page.clock.fastForward(30_000);
+  await page.clock.runFor(200);
+  expect(messageRequests).toBe(settled);
 });

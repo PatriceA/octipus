@@ -1,74 +1,78 @@
 /**
- * Auto-discover toolbox tools from family folders. Each `.ts` file under
- * `collectors/`, `transforms/`, `widgets/`, `exports/` should export a
- * `ToolboxTool` value via either a named or default export. Folder = family.
- * No manual registration needed — drop a file in the right folder.
+ * The toolbox tools, by family. Each module under `collectors/`,
+ * `transforms/`, `widgets/`, `exports/` exports a `ToolboxTool` value via
+ * either a named or default export. Folder = family. Adding a tool is a file
+ * plus one line in `MODULES`; `discovery.test.ts` fails if a file is missing
+ * from it.
+ *
+ * This used to `readdirSync` its own directory and import each file by path.
+ * Bundled, that directory is `dist/`, which has no family folders, so the
+ * built server came up with an empty toolbox — the same failure
+ * `src/tools/discovery.ts` and `src/channels/discovery.ts` hit. Imports a
+ * bundler can see are the fix.
  */
 
-import { readdirSync, statSync } from 'fs';
-import { importModuleAt } from '@/utils/import-module';
-import { dirname, join, resolve } from 'path';
-import { fileURLToPath } from 'url';
 import { coreLogger } from '@/utils/logger';
 import { getToolboxRegistry } from './registry';
 import type { ToolboxFamily, ToolboxTool } from './types';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-
-const FAMILY_FOLDERS: Record<string, ToolboxFamily> = {
-  collectors: 'collect',
-  transforms: 'transform',
-  widgets: 'widget',
-  exports: 'export',
-};
+export const MODULES: ReadonlyArray<{ family: ToolboxFamily; file: string; load: () => Promise<Record<string, unknown>> }> = [
+  { family: 'collect', file: 'collectors/html-scrape', load: () => import('./collectors/html-scrape') },
+  { family: 'collect', file: 'collectors/http-json', load: () => import('./collectors/http-json') },
+  { family: 'collect', file: 'collectors/http-text', load: () => import('./collectors/http-text') },
+  { family: 'collect', file: 'collectors/mcp', load: () => import('./collectors/mcp') },
+  { family: 'collect', file: 'collectors/octipus-tool', load: () => import('./collectors/octipus-tool') },
+  { family: 'collect', file: 'collectors/rss', load: () => import('./collectors/rss') },
+  { family: 'transform', file: 'transforms/diff', load: () => import('./transforms/diff') },
+  { family: 'transform', file: 'transforms/filter', load: () => import('./transforms/filter') },
+  { family: 'transform', file: 'transforms/group_count', load: () => import('./transforms/group_count') },
+  { family: 'transform', file: 'transforms/jsonpath', load: () => import('./transforms/jsonpath') },
+  { family: 'transform', file: 'transforms/sort', load: () => import('./transforms/sort') },
+  { family: 'transform', file: 'transforms/top_n', load: () => import('./transforms/top_n') },
+  { family: 'widget', file: 'widgets/bar_chart', load: () => import('./widgets/bar_chart') },
+  { family: 'widget', file: 'widgets/heatmap', load: () => import('./widgets/heatmap') },
+  { family: 'widget', file: 'widgets/json_tree', load: () => import('./widgets/json_tree') },
+  { family: 'widget', file: 'widgets/kpi_card', load: () => import('./widgets/kpi_card') },
+  { family: 'widget', file: 'widgets/list', load: () => import('./widgets/list') },
+  { family: 'widget', file: 'widgets/markdown', load: () => import('./widgets/markdown') },
+  { family: 'widget', file: 'widgets/mermaid', load: () => import('./widgets/mermaid') },
+  { family: 'widget', file: 'widgets/pie_chart', load: () => import('./widgets/pie_chart') },
+  { family: 'widget', file: 'widgets/table', load: () => import('./widgets/table') },
+  { family: 'export', file: 'exports/csv', load: () => import('./exports/csv') },
+  { family: 'export', file: 'exports/json', load: () => import('./exports/json') },
+  { family: 'export', file: 'exports/markdown', load: () => import('./exports/markdown') },
+];
 
 /** Idempotent — repeat calls are no-ops after the first. */
 export async function discoverToolbox(): Promise<void> {
   const registry = getToolboxRegistry();
   if (registry.isLoaded()) return;
 
-  for (const [folder, family] of Object.entries(FAMILY_FOLDERS)) {
-    const dir = resolve(HERE, folder);
-    let entries: string[];
+  for (const { family, file, load } of MODULES) {
+    let mod: Record<string, unknown>;
     try {
-      entries = readdirSync(dir);
-    } catch {
-      // Folder may not exist yet (phase 2/3 land); silent skip is fine.
+      mod = await load();
+    } catch (err) {
+      coreLogger.error(
+        { file, err: (err as Error).message },
+        'toolbox.discovery.import_failed',
+      );
       continue;
     }
 
-    for (const file of entries) {
-      if (!file.endsWith('.ts') || file.endsWith('.test.ts')) continue;
-      const path = join(dir, file);
-      let st;
-      try { st = statSync(path); } catch { continue; }
-      if (!st.isFile()) continue;
+    const tool = pickTool(mod, family);
+    if (!tool) {
+      coreLogger.debug({ file }, 'toolbox.discovery.no_export');
+      continue;
+    }
 
-      let mod: Record<string, unknown>;
-      try {
-        mod = await importModuleAt(path);
-      } catch (err) {
-        coreLogger.error(
-          { folder, file, err: (err as Error).message },
-          'toolbox.discovery.import_failed',
-        );
-        continue;
-      }
-
-      const tool = pickTool(mod, family);
-      if (!tool) {
-        coreLogger.debug({ folder, file }, 'toolbox.discovery.no_export');
-        continue;
-      }
-
-      try {
-        registry.register(tool);
-      } catch (err) {
-        coreLogger.error(
-          { id: tool.id, err: (err as Error).message },
-          'toolbox.discovery.register_failed',
-        );
-      }
+    try {
+      registry.register(tool);
+    } catch (err) {
+      coreLogger.error(
+        { id: tool.id, err: (err as Error).message },
+        'toolbox.discovery.register_failed',
+      );
     }
   }
 

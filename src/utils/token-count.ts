@@ -1,19 +1,27 @@
-import { getEncoding, type Tiktoken } from 'js-tiktoken';
+import { createRequire } from 'node:module';
+import { Tiktoken, type TiktokenBPE } from 'js-tiktoken/lite';
 import { coreLogger } from '@/utils/logger';
 
 // Real BPE tokenizer for budget estimation. o200k_base is the GPT-4o/o-series
 // vocabulary — the best single default across providers; true per-request
-// counts still come from provider `usage`. Lazily built (rank load is ~ms) and
-// memoized. Falls back to chars/4 if the encoder can't load (exotic runtime).
+// counts still come from provider `usage`. Lazily built and memoized. Falls
+// back to chars/4 if the encoder can't load (exotic runtime).
+//
+// The rank table is required on first use from `js-tiktoken/lite` + its own
+// ranks file. The package root bundles every encoding (gpt2 … o200k, ~5.5 MB
+// of source) and, imported statically, was parsed on every boot whether or
+// not anything counted a token.
 //
 // Standalone (only js-tiktoken + logger) so budget-aware call sites — context
 // compaction, memory injection, summarizer chunking — can import it without
 // pulling in the model-registry/litellm dependency chain.
+const requireRanks = createRequire(import.meta.url);
 let encoder: Tiktoken | null | undefined;
 function getEncoder(): Tiktoken | null {
   if (encoder === undefined) {
     try {
-      encoder = getEncoding('o200k_base');
+      const mod = requireRanks('js-tiktoken/ranks/o200k_base') as { default?: TiktokenBPE } & TiktokenBPE;
+      encoder = new Tiktoken(mod.default ?? mod);
     } catch (err) {
       coreLogger.warn({ err }, 'tiktoken encoder unavailable — falling back to chars/4');
       encoder = null;
@@ -24,9 +32,13 @@ function getEncoder(): Tiktoken | null {
 
 // Callers re-estimate the same (often large, append-only) strings repeatedly,
 // so encoding is memoized by content string — unchanged text becomes a cache
-// hit and only new text is BPE-encoded. Bounded to cap memory; evicts oldest.
+// hit and only new text is BPE-encoded. The keys ARE the strings, so the cache
+// is bounded by their total length as well as their number (4096 history-sized
+// keys could otherwise pin hundreds of MB); least recently used goes first.
 const tokenCache = new Map<string, number>();
 const TOKEN_CACHE_MAX = 4096;
+const TOKEN_CACHE_MAX_CHARS = 16 * 1024 * 1024;
+let tokenCacheChars = 0;
 
 /**
  * Estimate token count for a string using the o200k_base tokenizer, with a
@@ -43,7 +55,11 @@ export function estimateTokens(content: string): number {
   const cacheable = content.length >= TOKEN_CACHE_MIN_LEN;
   if (cacheable) {
     const cached = tokenCache.get(content);
-    if (cached !== undefined) return cached;
+    if (cached !== undefined) {
+      tokenCache.delete(content);
+      tokenCache.set(content, cached);
+      return cached;
+    }
   }
 
   let count: number;
@@ -58,11 +74,15 @@ export function estimateTokens(content: string): number {
     count = Math.ceil(content.length / 4);
   }
 
-  if (cacheable) {
-    if (tokenCache.size >= TOKEN_CACHE_MAX) {
-      tokenCache.delete(tokenCache.keys().next().value as string);
+  // A string too big to share the budget with others is counted, not kept.
+  if (cacheable && content.length <= TOKEN_CACHE_MAX_CHARS / 8) {
+    while (tokenCache.size >= TOKEN_CACHE_MAX || (tokenCache.size > 0 && tokenCacheChars + content.length > TOKEN_CACHE_MAX_CHARS)) {
+      const oldest = tokenCache.keys().next().value as string;
+      tokenCache.delete(oldest);
+      tokenCacheChars -= oldest.length;
     }
     tokenCache.set(content, count);
+    tokenCacheChars += content.length;
   }
   return count;
 }

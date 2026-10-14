@@ -4,7 +4,7 @@ import { apiContext } from '@/api/context';
 import { adminDenied } from '@/api/admin-guard';
 import { getDb } from '@/db/postgres';
 import { skillRepository, type SkillUpdate } from '@/db/repositories/skill-repository';
-import { type Skill, skills } from '@/db/schema/skills';
+import { type SkillView, skills } from '@/db/schema/skills';
 import { hiddenSkillRepository } from '@/db/repositories/hidden-skill-repository';
 import { skillSelections } from '@/db/schema/skill-selections';
 import { isExternalSkillId } from '@/skills/external-loader';
@@ -111,7 +111,7 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
       const db = getDb();
       const format = query.format ?? 'json';
 
-      let rows: Skill[];
+      let rows: SkillView[];
       if (query.ids) {
         const idList = query.ids.split(',').map((s: string) => s.trim()).filter(Boolean);
         // Same rule as GET /:id/export: an admin exports any row, a user only
@@ -184,9 +184,9 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
       // matches every row (and may overwrite any of them); anyone else only
       // the skills they can see, so another user's private skill neither
       // conflicts nor leaks its name. Their own copy wins a name clash.
-      const owns = (row: Skill) => !row.isSystem && row.userId === user.id;
+      const owns = (row: SkillView) => !row.isSystem && row.userId === user.id;
       const existingRows = admin ? await db.select().from(skills) : await skillRepository.findAll(user.id);
-      const existingByName = new Map<string, Skill>();
+      const existingByName = new Map<string, SkillView>();
       for (const row of existingRows) {
         const key = row.name.toLowerCase();
         if (!existingByName.has(key) || (!admin && owns(row))) existingByName.set(key, row);

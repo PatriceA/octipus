@@ -14,8 +14,13 @@ export interface CacheProvider {
 }
 
 export interface QueueProvider {
-  push(item: unknown, priority?: number): Promise<void>;
-  pop(): Promise<unknown | null>;
+  /**
+   * `notBefore` (epoch ms) parks an item until that time: it sorts by its due
+   * time instead of its push time, and a `pop(dueBy)` earlier than it skips it.
+   */
+  push(item: unknown, priority?: number, notBefore?: number): Promise<void>;
+  /** With `dueBy`, only an item whose score is at or before it is taken. */
+  pop(dueBy?: number): Promise<unknown | null>;
   peek(): Promise<unknown | null>;
   length(): Promise<number>;
   clear(): Promise<void>;
@@ -61,4 +66,15 @@ export interface StorageProvider {
   /** Health check */
   ping(): Promise<boolean>;
   close(): Promise<void>;
+}
+
+/**
+ * Ordering key both queue backends store: push time pulled forward a second
+ * per priority point, so a higher priority sorts earlier. A future `notBefore`
+ * replaces it with the due time, which keeps a parked item behind everything
+ * already due and out of reach of `pop(dueBy)` until then.
+ */
+export function queueScore(priority: number, notBefore?: number, now: number = Date.now()): number {
+  if (notBefore !== undefined && notBefore > now) return notBefore;
+  return now - priority * 1000;
 }

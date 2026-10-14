@@ -170,6 +170,10 @@ const zdrUnavailableUntil = new Map<string, number>();
 const lastLogged = new Map<string, number>();
 function firstThisHour(key: string): boolean {
   const now = Date.now();
+  // Keys are sites × reasons and model names — few — but lapsed ones are
+  // dropped before the maps could ever grow.
+  if (lastLogged.size > 256) for (const [k, until] of lastLogged) if (until <= now) lastLogged.delete(k);
+  if (zdrUnavailableUntil.size > 256) for (const [k, until] of zdrUnavailableUntil) if (until <= now) zdrUnavailableUntil.delete(k);
   if ((lastLogged.get(key) ?? 0) > now) return false;
   lastLogged.set(key, now + REMEMBER_MS);
   return true;

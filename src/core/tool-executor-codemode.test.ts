@@ -154,3 +154,16 @@ test('a codemode tool blocked after repeated failures clears AgentContext.codemo
   expect(exec.isToolBlocked('codemode')).toBe(true);
   expect(context.codemode).toBe(false);
 });
+
+test('blocking codemode tells an MCP-capable agent its codemode servers moved to mcp_list_tools', async () => {
+  const context = makeContext();
+  context.codemode = true;
+  const exec = new ToolExecutor(context, () => {});
+  exec.registerTool(buildCodemodeHandler({ tools: () => [], call: (c) => exec.runNestedCall(c) }));
+  exec.registerTool({ name: 'mcp_list_tools', toolId: 'mcp', description: '', parameters: { type: 'object' }, execute: vi.fn() });
+  let messages: Awaited<ReturnType<ToolExecutor['handleToolCalls']>> = [];
+  for (let i = 0; i < 3; i++) messages = await exec.handleToolCalls(script('throw new Error("same failure")').map((c) => ({ ...c, id: `cm-${i}` })));
+  const notice = messages.find((m) => m.role === 'system')?.content ?? '';
+  expect(notice).toContain('now unavailable: codemode');
+  expect(notice).toContain('(codemode) are now reached like the (mcp_list_tools) ones');
+});

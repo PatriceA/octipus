@@ -39,6 +39,7 @@ import { ROOT_ROLE } from './types';
 import { type AgentScope, writesWithheld } from './context';
 import { spaceSessionNotice, withoutPersonalOnlyTools } from '@/security/space-tools';
 import { can } from '@/security/space-access';
+import { getMCPBridge } from '@/mcp/bridge';
 import type { TurnEvent, AgentService, TurnOutcome } from './service';
 import type { MessageClassification } from './types';
 
@@ -309,6 +310,9 @@ export async function runRootAgent(
   // skill injection — the root had no tools at all before this, so that is a
   // gain, not a regression. Lift `spawnWorker`'s tool assembly here if a user
   // asks the root to reach a bound connector directly.
+  // MCP servers still connecting from boot are waited for (bounded), so a
+  // turn right after startup sees their tools.
+  await getMCPBridge().whenInitiallyConnected();
   let rootTools = getToolsForRole(ROOT_ROLE);
   // A planning turn holds no file-writing tools. Applied to the ROOT's set
   // before `allowedToolIds` is derived from it, so a child it spawns cannot be

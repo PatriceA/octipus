@@ -974,6 +974,13 @@
       "when": 1789621116572,
       "tag": "0137_federation",
       "breakpoints": true
+    },
+    {
+      "idx": 139,
+      "version": "7",
+      "when": 1789621117572,
+      "tag": "0138_hot_path_indexes",
+      "breakpoints": true
     }
   ]
 }

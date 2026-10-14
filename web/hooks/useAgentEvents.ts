@@ -147,8 +147,12 @@ export function useAgentEvents(
     // Initial fetch
     fetchEvents();
 
-    // Poll every 1.5 seconds
-    intervalRef.current = setInterval(fetchEvents, 1500);
+    // Poll every 1.5 seconds while the tab is visible; the cursor picks up
+    // whatever happened while it was hidden on the first visible tick.
+    intervalRef.current = setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
+      void fetchEvents();
+    }, 1500);
 
     return () => {
       cancelled = true;

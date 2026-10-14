@@ -168,6 +168,24 @@ describe('MemoryStorageProvider.createQueue', () => {
     expect(await q.pop()).toEqual({ tag: 'low' });
   });
 
+  test('a parked item sorts by due time and stays out of reach of pop(dueBy)', async () => {
+    const q = provider.createQueue('q1');
+    const now = Date.now();
+    await q.push({ tag: 'later' }, 0, now + 60_000);
+    await q.push({ tag: 'now' });
+    expect(await q.peek()).toEqual({ tag: 'now' });
+    expect(await q.pop(Date.now())).toEqual({ tag: 'now' });
+    expect(await q.pop(Date.now())).toBeNull();
+    expect(await q.length()).toBe(1);
+    expect(await q.pop(now + 60_000)).toEqual({ tag: 'later' });
+  });
+
+  test('pop() without dueBy still takes the head, parked or not', async () => {
+    const q = provider.createQueue('q1');
+    await q.push({ tag: 'later' }, 0, Date.now() + 60_000);
+    expect(await q.pop()).toEqual({ tag: 'later' });
+  });
+
   test('clear empties the queue', async () => {
     const q = provider.createQueue('q1');
     await q.push('a');

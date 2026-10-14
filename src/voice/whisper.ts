@@ -3,6 +3,7 @@ import { cp, mkdir, readdir, rm } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { logger } from '../utils/logger';
 import { fileAt, writeFileAt } from '@/utils/fs-file';
+import { octipusRoot } from '@/utils/install-root';
 
 /**
  * Cross-platform provisioning + detection for local whisper.cpp STT.
@@ -22,10 +23,13 @@ const MODEL_URL = `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${M
 
 const EXE = process.platform === 'win32' ? '.exe' : '';
 
-/** `<projectRoot>/models/whisper` — the module lives in `src/voice/`. */
+/**
+ * `<install root>/models/whisper`. The root is looked up, not taken as `../..`
+ * of this module: bundled, the module is `dist/index.js` and `../..` is the
+ * directory above the install.
+ */
 function whisperRoot(): string {
-  const projectRoot = resolve(dirname(decodeURIComponent(new URL(import.meta.url).pathname)), '../..');
-  return resolve(projectRoot, 'models/whisper');
+  return resolve(octipusRoot(), 'models/whisper');
 }
 
 /** Per-platform install dir, e.g. `models/whisper/linux-x64`. */

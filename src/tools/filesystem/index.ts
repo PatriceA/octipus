@@ -1,4 +1,4 @@
-import { existsSync } from 'fs';
+import { existsSync, statSync } from 'fs';
 import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'fs/promises';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'path';
 import { getConfig } from '@/config';
@@ -72,8 +72,27 @@ const PROJECT_MARKERS = Object.freeze([
   'build.gradle.kts',
 ]);
 
-/** Per-process cache of directory → project-root (or null). */
-const projectRootCache = new Map<string, string | null>();
+/**
+ * Per-process cache of directory → its project root (or null), bounded and
+ * short-lived: a repo cloned or `git init`ed mid-session is seen within
+ * PROJECT_ROOT_TTL_MS instead of never.
+ */
+const PROJECT_ROOT_TTL_MS = 60_000;
+const PROJECT_ROOT_CACHE_MAX = 2_000;
+const projectRootCache = new Map<string, { root: string | null; at: number }>();
+
+function cacheProjectRoot(dirs: string[], root: string | null): void {
+  const at = Date.now();
+  for (const dir of dirs) {
+    projectRootCache.delete(dir);
+    projectRootCache.set(dir, { root, at });
+  }
+  while (projectRootCache.size > PROJECT_ROOT_CACHE_MAX) {
+    const oldest = projectRootCache.keys().next().value;
+    if (oldest === undefined) break;
+    projectRootCache.delete(oldest);
+  }
+}
 
 /**
  * Walk up from `absPath` looking for a project marker. Returns the directory
@@ -81,27 +100,38 @@ const projectRootCache = new Map<string, string | null>();
  * workspace root. The walk stops at workspace root — we never claim
  * `workspace.rootPath` itself or any ancestor of it as a "project".
  */
-function findProjectRoot(absPath: string, workspaceRoot: string): string | null {
+export function findProjectRoot(absPath: string, workspaceRoot: string): string | null {
   let dir = absPath;
-  // If the input is a file path, start from its parent.
+  // If the input is a file path, start from its parent. (`existsSync(join(dir,
+  // '.'))` was true for a file too, so files were walked — and cached — as dirs.)
   try {
-    if (existsSync(dir) && !existsSync(join(dir, '.'))) dir = dirname(dir);
-  } catch { /* ignore */ }
+    if (existsSync(dir) && statSync(dir).isFile()) dir = dirname(dir);
+  } catch (err) {
+    coreLogger.debug({ err, path: dir }, 'project-root lookup: could not stat; walking from the path itself');
+  }
   if (!isInside(workspaceRoot, dir)) return null;
 
+  // Every directory walked through carries no marker, so its root is the one
+  // the walk ends on. Caching each dir's own `null` instead made a later walk
+  // from below stop there — and miss the project root above it.
+  const walked: string[] = [];
+  const now = Date.now();
   while (dir.length > workspaceRoot.length && dir !== workspaceRoot) {
     const cached = projectRootCache.get(dir);
-    if (cached !== undefined) return cached;
-
+    if (cached && now - cached.at < PROJECT_ROOT_TTL_MS) {
+      cacheProjectRoot(walked, cached.root);
+      return cached.root;
+    }
+    walked.push(dir);
     for (const marker of PROJECT_MARKERS) {
       if (existsSync(join(dir, marker))) {
-        projectRootCache.set(dir, dir);
+        cacheProjectRoot(walked, dir);
         return dir;
       }
     }
-    projectRootCache.set(dir, null);
     dir = dirname(dir);
   }
+  cacheProjectRoot(walked, null);
   return null;
 }
 

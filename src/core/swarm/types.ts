@@ -314,7 +314,14 @@ export interface SpawnChildParams {
  * at finalize, and cancel on parent failure.
  */
 export interface PendingChild {
+  /** Handle `spawn_child` returned to the parent — NOT the child's agent id. */
   childId: string;
+  /**
+   * Agent id of the child's current attempt, set by the spawner once its
+   * worker exists (and replaced when a retry starts a new worker). Unset
+   * until then. `steer_child` looks the child up by this.
+   */
+  agentId?: string;
   startedAt: number;
   taskBrief: string;
   topic: string;

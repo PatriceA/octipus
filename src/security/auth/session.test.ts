@@ -124,6 +124,29 @@ describe('SessionManager.validate / get', () => {
     expect(new Date(session!.lastActivityAt).getTime()).toBeGreaterThanOrEqual(new Date(before).getTime());
   });
 
+  test('validate rewrites lastActivityAt at most once a minute', async () => {
+    // Every authenticated request validates; a write each time was a storage
+    // round trip per request for a stamp that is only displayed.
+    const mgr = new SessionManager();
+    const id = seedUser();
+    const { token } = await mgr.create(id);
+    const stored = async () => new Date((await mgr.get(token))!.lastActivityAt).getTime();
+    const created = await stored();
+
+    await new Promise((r) => setTimeout(r, 5));
+    await mgr.validate(token);
+    expect(await stored()).toBe(created);
+
+    const later = Date.now() + 61_000;
+    vi.useFakeTimers({ toFake: ['Date'], now: later });
+    try {
+      await mgr.validate(token);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(await stored()).toBe(later);
+  });
+
   test('validate returns null for an expired session', async () => {
     const mgr = new SessionManager();
     const id = seedUser();

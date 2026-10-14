@@ -78,8 +78,8 @@ export class Queue {
     return this._queue;
   }
 
-  push(item: unknown, priority?: number): Promise<void> { return this.queue.push(item, priority); }
-  pop(): Promise<unknown | null> { return this.queue.pop(); }
+  push(item: unknown, priority?: number, notBefore?: number): Promise<void> { return this.queue.push(item, priority, notBefore); }
+  pop(dueBy?: number): Promise<unknown | null> { return this.queue.pop(dueBy); }
   peek(): Promise<unknown | null> { return this.queue.peek(); }
   length(): Promise<number> { return this.queue.length(); }
   clear(): Promise<void> { return this.queue.clear(); }

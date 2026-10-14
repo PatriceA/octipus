@@ -27,3 +27,34 @@ test('a row that came over the gateway (another tab\'s steer, a reply) is replac
   expect(reconcileChatMessages([msg('stored-before', 'hi', 500), msg('stored-steer', 'go left instead', 1500)], [msg('stored-before', 'hi', 500), steered])
     .map(m => m.id)).toEqual(['stored-before', 'stored-steer']);
 });
+
+test('an unchanged refetch hands back the rows, and the array, already shown', () => {
+  const shown = reconcileChatMessages([msg('a', 'one', 1000), msg('b', 'two', 2000)], []);
+  const again = reconcileChatMessages([msg('a', 'one', 1000), msg('b', 'two', 2000)], shown);
+  expect(again).toBe(shown);
+});
+
+test('only the row that changed is a new object', () => {
+  const shown = reconcileChatMessages([msg('a', 'one', 1000), msg('b', 'two', 2000)], []);
+  const next = reconcileChatMessages([msg('a', 'one', 1000), msg('b', 'two, edited', 2000), msg('c', 'three', 3000)], shown);
+  expect(next).not.toBe(shown);
+  expect(next[0]).toBe(shown[0]);
+  expect(next[1]).not.toBe(shown[1]);
+  expect(next.map(m => m.content)).toEqual(['one', 'two, edited', 'three']);
+});
+
+test('a change in metadata alone is a new row; equal metadata keeps the shown one', () => {
+  const limit = (used: number) => ({ ...msg('a', 'refused', 1000), metadata: { limit: { scope: 'user', used, cap: 10 } } });
+  const shown = reconcileChatMessages([limit(10)], []);
+  expect(reconcileChatMessages([limit(10)], shown)).toBe(shown);
+  const next = reconcileChatMessages([limit(12)], shown);
+  expect(next[0]).not.toBe(shown[0]);
+  expect(next[0].metadata.limit.used).toBe(12);
+});
+
+test('a field the shown row lacks makes the refetched row new, an undefined one does not', () => {
+  type Row = ReturnType<typeof msg> & { classification?: string };
+  const shown = reconcileChatMessages<Row>([msg('a', 'one', 1000)], []);
+  expect(reconcileChatMessages<Row>([{ ...msg('a', 'one', 1000), classification: undefined }], shown)).toBe(shown);
+  expect(reconcileChatMessages<Row>([{ ...msg('a', 'one', 1000), classification: 'coding' }], shown)[0]).not.toBe(shown[0]);
+});

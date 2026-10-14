@@ -73,7 +73,9 @@ function ingest(line: string): void {
   }
   const isError = level === 'error' || level === 'fatal';
   if (isError) {
-    errorTimestamps.push(Date.now());
+    const now = Date.now();
+    errorTimestamps.push(now);
+    pruneErrorTimestamps(now);
     const key = typeof rec.msg === 'string' && rec.msg ? rec.msg : '(no message)';
     const existing = topErrors.get(key);
     if (existing) {
@@ -117,11 +119,23 @@ export function getRecent(limit = 200): LogRecord[] {
   return buffer.slice(-n);
 }
 
+/**
+ * Drop error times older than the window. Run on every push, not only when
+ * the stats are read: with no dashboard open, an error storm would otherwise
+ * keep every timestamp for the life of the process. The cap bounds a storm
+ * inside the window too (the count then reads as "at least").
+ */
+const MAX_ERROR_TIMESTAMPS = 10_000;
+function pruneErrorTimestamps(now: number): void {
+  let drop = 0;
+  while (drop < errorTimestamps.length && now - errorTimestamps[drop] > ERROR_WINDOW_MS) drop++;
+  drop = Math.max(drop, errorTimestamps.length - MAX_ERROR_TIMESTAMPS);
+  if (drop > 0) errorTimestamps.splice(0, drop);
+}
+
 export function getStats() {
   const now = Date.now();
-  while (errorTimestamps.length && now - errorTimestamps[0] > ERROR_WINDOW_MS) {
-    errorTimestamps.shift();
-  }
+  pruneErrorTimestamps(now);
   const uptimeSec = Math.max(1, Math.floor((now - counters.startedAt) / 1000));
   const topErrorList = [...topErrors.entries()]
     .map(([msg, v]) => ({ msg, count: v.count, lastSeen: v.lastSeen }))
