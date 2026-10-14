@@ -42,3 +42,19 @@ test('only the row that changed is a new object', () => {
   expect(next[1]).not.toBe(shown[1]);
   expect(next.map(m => m.content)).toEqual(['one', 'two, edited', 'three']);
 });
+
+test('a change in metadata alone is a new row; equal metadata keeps the shown one', () => {
+  const limit = (used: number) => ({ ...msg('a', 'refused', 1000), metadata: { limit: { scope: 'user', used, cap: 10 } } });
+  const shown = reconcileChatMessages([limit(10)], []);
+  expect(reconcileChatMessages([limit(10)], shown)).toBe(shown);
+  const next = reconcileChatMessages([limit(12)], shown);
+  expect(next[0]).not.toBe(shown[0]);
+  expect(next[0].metadata.limit.used).toBe(12);
+});
+
+test('a field the shown row lacks makes the refetched row new, an undefined one does not', () => {
+  type Row = ReturnType<typeof msg> & { classification?: string };
+  const shown = reconcileChatMessages<Row>([msg('a', 'one', 1000)], []);
+  expect(reconcileChatMessages<Row>([{ ...msg('a', 'one', 1000), classification: undefined }], shown)).toBe(shown);
+  expect(reconcileChatMessages<Row>([{ ...msg('a', 'one', 1000), classification: 'coding' }], shown)[0]).not.toBe(shown[0]);
+});

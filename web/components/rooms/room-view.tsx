@@ -3,7 +3,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { Bell, BellOff, Bot, Hash, Lock, MessageSquareLock, PanelRight, WifiOff, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type ComponentProps, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import MessageTimeline, { type ChatMessageData } from '@/components/chat/message-timeline';
 import { api } from '@/lib/api';
 import type { GatewayMessage } from '@/lib/gateway';
@@ -27,6 +27,12 @@ const PAGE = 50;
 /** A gateway `error` this soon after a room frame is that frame's answer. */
 const FRAME_ERROR_WINDOW_MS = 5_000;
 const TYPING_SHOWN_MS = 5_000;
+/**
+ * A room tracks no agents or teams. One instance each, so the timeline's
+ * memoised build sees the same props from render to render.
+ */
+const NO_AGENTS: ComponentProps<typeof MessageTimeline>['trackedAgents'] = new Map();
+const NO_TEAMS: ComponentProps<typeof MessageTimeline>['teams'] = new Map();
 
 type Panel = 'members' | 'memory' | 'settings';
 
@@ -480,8 +486,8 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
             )}
             <MessageTimeline
               messages={timeline}
-              trackedAgents={new Map()}
-              teams={new Map()}
+              trackedAgents={NO_AGENTS}
+              teams={NO_TEAMS}
               isLoading={myTurnRunning}
               statusMessage="Octipus is answering you"
               streamingText={myTurnRunning ? streaming?.text ?? null : null}
