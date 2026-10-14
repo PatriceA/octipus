@@ -162,6 +162,8 @@ export default function ChatPage() {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [sessionListError, setSessionListError] = useState<string | null>(null);
   const [historyErrors, setHistoryErrors] = useState<Record<string, string>>({});
+  /** Sessions whose agents' durable history is still being paged in, a page per load. */
+  const [historyBackfill, setHistoryBackfill] = useState<ReadonlySet<string>>(() => new Set());
   const appliedMessageLoadsRef = useRef(new Map<string, number>());
   const messageLoadsRef = useRef(new Map<string, number>());
   const historyInFlightRef = useRef(new Set<string>());
@@ -360,6 +362,7 @@ export default function ChatPage() {
       // Restore agent activity and file changes for this session
       const restoredAgents = new Map<string, TrackedAgent>();
       const restoredFileChanges: FileChange[] = [];
+      let backfillPending = false;
       {
         const agentData = await api.get<{ agents: Array<{ id: string; sessionId: string; role: string; root?: boolean; model: string; status: string; completionReason?: AgentCompletionReason; createdAt: string; completedAt?: string; durationMs?: number; iteration: number }> }>(`/agents?sessionId=${encodeURIComponent(sessionId)}`);
         const sessionAgents = [...(agentData?.agents || [])].sort((a, b) => {
@@ -474,6 +477,12 @@ export default function ChatPage() {
               toolCalls,
               fileChanges: agentFileChanges,
             });
+            // More durable history to page in on a later load: an agent past
+            // this load's four, a page that said there is more, or a finished
+            // agent not yet confirmed complete. (A running agent's new events
+            // arrive live.)
+            const complete = agentHistoryCacheRef.current.get(a.id)?.complete === true;
+            if (fetchHistory ? evData.hasMore || (finished && !complete) : !(finished && complete)) backfillPending = true;
           }
           restoredFileChanges.push(...agentFileChanges);
           const startTime = new Date(a.createdAt).getTime();
@@ -542,6 +551,13 @@ export default function ChatPage() {
             )]
           : prev.fileChanges;
         return { ...prev, messages: prev.messages, trackedAgents: mergedAgents, fileChanges: mergedFileChanges };
+      });
+      setHistoryBackfill((prev) => {
+        if (prev.has(sessionId) === backfillPending) return prev;
+        const next = new Set(prev);
+        if (backfillPending) next.add(sessionId);
+        else next.delete(sessionId);
+        return next;
       });
       setHistoryErrors(prev => ({ ...prev, [sessionId]: '' }));
     } catch (error) {
@@ -613,9 +629,11 @@ export default function ChatPage() {
   // Poll the open session's history only when the gateway can't deliver it:
   // the connection is down, or the session belongs to an external channel
   // (Telegram, Slack…) whose turns run outside any gateway connection. A
-  // live web session gets its messages as events, and a reconnect reloads.
+  // live web session gets its messages as events, and a reconnect reloads;
+  // it polls only until its agents' earlier history is paged in.
   const activeChannelType = sessions.find((s) => s.id === activeSessionId)?.channelType;
-  const pollHistory = gatewayStatus !== 'connected' || EXTERNAL_CHANNELS.has(activeChannelType ?? '');
+  const pollHistory = gatewayStatus !== 'connected' || EXTERNAL_CHANNELS.has(activeChannelType ?? '')
+    || (!!activeSessionId && historyBackfill.has(activeSessionId));
   useEffect(() => {
     if (!activeSessionId || !pollHistory) return;
     const interval = setInterval(() => {
