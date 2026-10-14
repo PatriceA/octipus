@@ -189,6 +189,28 @@ together with a code review of the recent upstream commits and of this branch.
 - Provider SDK retries behind the bounded boot embedding call still run in
   the background.
 
+## Final measurements
+
+`main` (d2f9b65), the first pass alone (fe6fe36) and this branch's head, each
+built with `npm run build` and booted from its own fresh embedded data
+directory on the same idle machine, back to back. Second to fourth boot of
+each (the first applies migrations); RSS 15 s after ready, CPU over the next
+30 s of idling.
+
+| | `main` | First pass | Head |
+|---|---|---|---|
+| Process start → `/api/health` | 4.06–4.21 s | 3.31–3.52 s | 3.10–3.56 s |
+| RSS after boot | 578–610 MB | 528–566 MB | 489–533 MB |
+| Idle CPU (ticks / 30 s) | 20–22 | 9–12 | 5–6 |
+| JS heap used after GC | 117 MB | 93 MB | 58 MB |
+
+These numbers are from a quieter run than the first table above, so the two
+tables are not directly comparable; compare within this one. The remaining
+boot time is mostly loading the 6.7 MB bundle and its dependencies, PGlite
+start-up, and the out-of-process Chromium path probe (~0.5 s), which could
+still move off the critical path. The remaining idle RSS is mostly PGlite's
+WASM heap (~220 MB `external`).
+
 ## Method
 
 ```bash
