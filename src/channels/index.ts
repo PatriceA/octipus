@@ -14,7 +14,7 @@ import { recordChannelMessage } from '@/core/telemetry';
 import type { Attachment, ChannelType, UnifiedMessage } from '@/core/types';
 import type { GroupChannel } from '@/db/schema/group-channels';
 import { sessionRepository } from '@/db/repositories/session-repository';
-import { getPermissionManager, type PermissionRequestEvent } from '@/security/permissions';
+import { ApprovalNeedsAnswersError, getPermissionManager, type PermissionRequestEvent } from '@/security/permissions';
 import { channelLogger } from '@/utils/logger';
 import { attendChat, newestApprovalPostedAt, startApprovalPrompts, tryResolveApprovalFromChannel } from './approval-prompts';
 import { processChannelAttachments } from './attachment-handler';
@@ -489,19 +489,28 @@ export async function tryResolvePermissionFromChannel(message: UnifiedMessage): 
   // The entry is dropped only after a definite result: if approve/deny
   // throws, it stays so the user can retry.
   const permissionManager = getPermissionManager();
-  const resolved = answer === 'yes'
-    ? await permissionManager.approve(pending.requestId, message.userId)
-    : await permissionManager.deny(pending.requestId, message.userId);
-  removePending(key, pending.requestId);
+  let content: string;
+  try {
+    const resolved = answer === 'yes'
+      ? await permissionManager.approve(pending.requestId, message.userId)
+      : await permissionManager.deny(pending.requestId, message.userId);
+    removePending(key, pending.requestId);
 
-  const stillWaiting = pendingChannelPermissions.get(key)?.filter(p => p.announced).length ?? 0;
-  const more = stillWaiting > 0 ? ` (${stillWaiting} more permission request${stillWaiting === 1 ? '' : 's'} waiting.)` : '';
-  // Never let a reply meant for one prompt fall through to an older one.
-  const content = !resolved
-    ? `That permission request for "${pending.toolName}" was already answered elsewhere or has expired; nothing was changed.${more}`
-    : answer === 'yes'
-      ? `Permission granted for "${pending.toolName}". Continuing...${more}`
-      : `Permission denied for "${pending.toolName}".${more}`;
+    const stillWaiting = pendingChannelPermissions.get(key)?.filter(p => p.announced).length ?? 0;
+    const more = stillWaiting > 0 ? ` (${stillWaiting} more permission request${stillWaiting === 1 ? '' : 's'} waiting.)` : '';
+    // Never let a reply meant for one prompt fall through to an older one.
+    content = !resolved
+      ? `That permission request for "${pending.toolName}" was already answered elsewhere or has expired; nothing was changed.${more}`
+      : answer === 'yes'
+        ? `Permission granted for "${pending.toolName}". Continuing...${more}`
+        : `Permission denied for "${pending.toolName}".${more}`;
+  } catch (err) {
+    if (!(err instanceof ApprovalNeedsAnswersError)) throw err;
+    // A question a typed "yes" cannot answer: the request stays pending (and
+    // so does its prompt here), so the user can still answer it or say no.
+    channelLogger.info({ requestId: pending.requestId, channelType: pending.channelType }, 'A bare yes cannot answer a question; asked for answers instead');
+    content = `"${pending.toolName}" asks you questions, and "yes" alone does not answer them. Answer them in the Octipus web app, or reply "no" to decline.`;
+  }
   try {
     await getUMI().send(pending.channelType, pending.channelId, { content, threadId: pending.threadId });
   } catch (err) {

@@ -4,7 +4,8 @@ import { apiContext } from '@/api/context';
 import { getAgentService } from '@/core/agent';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { recordedClientIp } from '@/security/client-ip';
-import { getPermissionManager } from '@/security/permissions';
+import { ApprovalNeedsAnswersError, getPermissionManager } from '@/security/permissions';
+import type { PermissionRequest } from '@/db/schema/permissions';
 import { isAdmin, isAuthenticated, type Principal } from '@/security/principal';
 
 /**
@@ -90,7 +91,15 @@ export const adminApprovalRoutes = new Elysia({ prefix: '/admin' })
       const { params, body, principal, request, socketAddress, set } = ctx;
       // A request of a space or a room is refused like a missing one (D9,
       // I3): `resolveAsAdmin` never matches it.
-      const resolved = await getPermissionManager().resolveAsAdmin(params.id, body.approved, principal.userId, body.reason);
+      let resolved: PermissionRequest | null;
+      try {
+        resolved = await getPermissionManager().resolveAsAdmin(params.id, body.approved, principal.userId, body.reason);
+      } catch (err) {
+        // A question approved without its answers stays pending: a client error, not a 500.
+        if (!(err instanceof ApprovalNeedsAnswersError)) throw err;
+        set.status = 400;
+        return { error: err.message };
+      }
       if (!resolved) {
         set.status = 404;
         return { error: 'Permission request not found or already resolved' };

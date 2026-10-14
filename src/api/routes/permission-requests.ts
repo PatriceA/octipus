@@ -1,6 +1,6 @@
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
-import { getPermissionManager } from '@/security/permissions';
+import { ApprovalNeedsAnswersError, getPermissionManager } from '@/security/permissions';
 import { isAuthenticated } from '@/security/principal';
 
 /**
@@ -43,9 +43,17 @@ export const permissionRequestRoutes = new Elysia({ prefix: '/permission-request
         return { error: 'Not authenticated' };
       }
       const pm = getPermissionManager();
-      const recorded = body.approved
-        ? await pm.approve(params.id, user.id, body.resolution)
-        : await pm.deny(params.id, user.id, body.resolution);
+      let recorded: boolean;
+      try {
+        recorded = body.approved
+          ? await pm.approve(params.id, user.id, body.resolution)
+          : await pm.deny(params.id, user.id, body.resolution);
+      } catch (err) {
+        // A question approved without its answers: still pending, say why.
+        if (!(err instanceof ApprovalNeedsAnswersError)) throw err;
+        set.status = 400;
+        return { error: err.message };
+      }
       if (!recorded) {
         // Already answered elsewhere, expired, or not this user's request —
         // one response shape so ids cannot be probed.

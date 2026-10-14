@@ -338,7 +338,10 @@ describe('CLI question answers', () => {
       questions: [{ question: 'Which model?', options: [{ label: 'Manual' }] }],
     });
     const waiting = pm.waitForApproval(id, { agentId: 'question-agent' });
+    const { ApprovalNeedsAnswersError } = await import('@/security/permissions');
     await expect(pm.approve(id, bobId)).rejects.toThrow(/Answer every question/);
+    await expect(pm.approve(id, bobId)).rejects.toBeInstanceOf(ApprovalNeedsAnswersError);
+    await expect(pm.approve(id, bobId, 'not json')).rejects.toBeInstanceOf(ApprovalNeedsAnswersError);
     expect((await pm.getPendingRequests(bobId)).some(r => r.id === id)).toBe(true);
     const resolution = JSON.stringify({ 'Which model?': 'Manual' });
     expect(await pm.approve(id, aliceId, resolution)).toBe(false);
