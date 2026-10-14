@@ -737,7 +737,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'logging',
     valueType: 'string',
     defaultValue: 'pretty',
-    description: 'Log format (pretty|json)',
+    description: 'Log format (pretty|json). Unset: pretty on a terminal, json otherwise',
     isSecret: false,
     envVar: 'LOG_FORMAT',
   },

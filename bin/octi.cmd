@@ -41,6 +41,9 @@ set "STATE_DIR=%USERPROFILE%\.octipus"
 set "PID_FILE_BACKEND=%STATE_DIR%\backend.pid"
 set "PID_FILE_WEB=%STATE_DIR%\web.pid"
 set "LOG_FILE=%STATE_DIR%\backend.log"
+:: The backend logs JSON when its stdout is not a terminal (src/utils/logger.ts);
+:: this launcher's log file is read as it is, so ask for the readable format.
+if not defined LOG_FORMAT set "LOG_FORMAT=pretty"
 set "WEB_LOG_FILE=%STATE_DIR%\web.log"
 
 :: Match the backend's precedence: caller environment, checkout .env, default.

@@ -5,11 +5,17 @@ import { redactLogObject } from './log-redact';
 import { ringBufferStream } from './log-stream';
 
 const logLevel = process.env.LOG_LEVEL || 'info';
-const logFormat = process.env.LOG_FORMAT || 'pretty';
 // When the gateway is served over this process's own stdio (`--stdio`),
 // stdout is the protocol pipe and a log line on it is a corrupt message.
 // Logs go to stderr in that mode; `LOG_STDERR=1` asks for the same otherwise.
 const useStderr = process.env.LOG_STDERR === '1' || process.env.GATEWAY_STDIO === '1' || process.argv.includes('--stdio');
+// pino-pretty formats every line on this thread; it is for a person at a
+// terminal. Without one (a container, a service, `octi start`'s log file)
+// the default is JSON lines — `octi logs` pretty-prints them as it reads.
+export function defaultLogFormat(env: NodeJS.ProcessEnv, isTTY: boolean | undefined): string {
+  return env.LOG_FORMAT || (isTTY ? 'pretty' : 'json');
+}
+const logFormat = defaultLogFormat(process.env, (useStderr ? process.stderr : process.stdout).isTTY);
 
 const stdoutStream =
   logFormat === 'pretty'

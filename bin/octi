@@ -92,6 +92,17 @@ init_state_dir() {
   mkdir -p "$STATE_DIR"
 }
 
+# The backend writes JSON log lines when its stdout is a file, as it is here
+# (src/utils/logger.ts); pretty-print them on read. Other lines pass through.
+pretty_backend_log() {
+  local pp="$PROJECT_DIR/node_modules/.bin/pino-pretty"
+  if [[ -z "${LOG_FORMAT:-}" && -x "$pp" ]]; then
+    "$pp" --colorize --translateTime SYS:standard --ignore pid,hostname
+  else
+    cat
+  fi
+}
+
 print_banner() {
   echo -e "${CYAN}${BOLD}"
   echo "  ╔═══════════════════════════════════╗"
@@ -507,7 +518,7 @@ diagnose_backend_failure() {
     echo ""
     log_step "Last log entries (full log: octi logs):"
     echo -e "  ${DIM}"
-    tail -30 "$LOG_FILE" 2>/dev/null | sed 's/^/    /'
+    tail -30 "$LOG_FILE" 2>/dev/null | pretty_backend_log | sed 's/^/    /'
     echo -e "  ${NC}"
   fi
 
@@ -892,7 +903,9 @@ cmd_logs() {
     esac
   done
 
-  if [[ -f "$log_target" ]]; then
+  if [[ -f "$log_target" && "$log_target" == "$LOG_FILE" ]]; then
+    tail -f "$log_target" | pretty_backend_log
+  elif [[ -f "$log_target" ]]; then
     tail -f "$log_target"
   else
     log_error "No log file found at $log_target"
