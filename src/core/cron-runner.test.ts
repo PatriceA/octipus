@@ -1,7 +1,7 @@
 /**
  * The cron runner's database steps, on embedded PGlite with the real
- * migrations: the compare-and-set claim of a due scheduled hook and the
- * batched agent-history sweep.
+ * migrations: the compare-and-set claim of a due scheduled hook, the
+ * log-table retention prune, and the batched agent-history sweep.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -71,6 +71,69 @@ describe('claimDueHook', () => {
     expect(after.isEnabled).toBe(false);
     expect(after.nextRunAt).toBeNull();
     expect(await claimDueHook(after, null, true, new Date())).toBe(false);
+  });
+});
+
+describe('pruneLogTables', () => {
+  test('removes only old history rows, in batches', async () => {
+    const { getDb } = await import('@/db/postgres');
+    const { auditLog } = await import('@/db/schema/audit');
+    const { hookExecutions } = await import('@/db/schema/hook-executions');
+    const { notifications } = await import('@/db/schema/notifications');
+    const { permissionRequests } = await import('@/db/schema/permissions');
+    const { pruneLogTables } = await import('./log-retention');
+    const db = getDb();
+    const old = new Date(Date.now() - 120 * DAY);
+    const recent = new Date(Date.now() - 10 * DAY);
+
+    await db.insert(auditLog).values([
+      ...Array.from({ length: 5 }, () => ({ userId, action: 'api_request' as const, createdAt: old })),
+      { userId, action: 'api_request', createdAt: recent },
+      { userId, action: 'login', createdAt: old },
+    ]);
+    await db.insert(hookExecutions).values([
+      { userId, source: 'hook', status: 'success', createdAt: old },
+      { userId, source: 'hook', status: 'success', createdAt: recent },
+    ]);
+    await db.insert(notifications).values([
+      { userId, type: 't', title: 'read old', read: true, createdAt: old },
+      { userId, type: 't', title: 'unread old', read: false, createdAt: old },
+      { userId, type: 't', title: 'read recent', read: true, createdAt: recent },
+    ]);
+    const request = { userId, agentId: 'a', toolId: 'shell', action: 'execute', context: { toolName: 'shell' } as never };
+    await db.insert(permissionRequests).values([
+      { ...request, status: 'approved', createdAt: old },
+      { ...request, status: 'pending', createdAt: old },
+    ]);
+
+    const removed = await pruneLogTables(new Date(), { batchSize: 2 });
+    expect(removed).toEqual({
+      'audit_log.api_request': 5,
+      hook_executions: 1,
+      'notifications.read': 1,
+      'permission_requests.settled': 1,
+    });
+    const actions = (await db.select({ action: auditLog.action }).from(auditLog)).map((r) => r.action).sort();
+    expect(actions).toEqual(['api_request', 'login']);
+    expect((await db.select().from(notifications)).map((n) => n.title).sort()).toEqual(['read recent', 'unread old']);
+    expect((await db.select().from(permissionRequests)).map((r) => r.status)).toEqual(['pending']);
+  });
+
+  test('a retention_policies row overrides the window, and NULL turns pruning off', async () => {
+    const { getDb } = await import('@/db/postgres');
+    const { retentionPolicies } = await import('@/db/schema/retention-policies');
+    const { hookExecutions } = await import('@/db/schema/hook-executions');
+    const { eq } = await import('drizzle-orm');
+    const { pruneLogTables, LOG_RETENTION_PURPOSE } = await import('./log-retention');
+    const db = getDb();
+    await db.insert(hookExecutions).values({ userId, source: 'hook', status: 'success', createdAt: new Date(Date.now() - 10 * DAY) });
+
+    await db.insert(retentionPolicies).values({ purpose: LOG_RETENTION_PURPOSE, maxAgeDays: null });
+    expect(await pruneLogTables()).toBeNull();
+
+    await db.update(retentionPolicies).set({ maxAgeDays: 5 }).where(eq(retentionPolicies.purpose, LOG_RETENTION_PURPOSE));
+    expect((await pruneLogTables())?.hook_executions).toBe(2);
+    await db.delete(retentionPolicies).where(eq(retentionPolicies.purpose, LOG_RETENTION_PURPOSE));
   });
 });
 

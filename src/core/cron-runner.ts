@@ -20,6 +20,7 @@ const DOCS_REINDEX_INTERVAL_MS = 6 * 3600_000; // Every 6 hours
 const TRAJECTORY_COMPRESS_INTERVAL_MS = 24 * 3600_000; // Daily
 const SPACE_FILES_SWEEP_INTERVAL_MS = 3600_000; // Hourly
 const VECTOR_INDEX_INTERVAL_MS = 24 * 3600_000; // Daily
+const LOG_PRUNE_INTERVAL_MS = 24 * 3600_000; // Daily
 
 /**
  * Default age cap for finished agent rows + their events. Nobody needs an
@@ -46,6 +47,8 @@ let lastDocsReindex = Date.now();
 let lastTrajectoryCompress = 0;
 // Seeded to boot time: src/index.ts runs the same check during boot.
 let lastVectorIndexEnsure = Date.now();
+let lastLogPrune = 0;
+let logPruneRunning = false;
 
 /**
  * Parse a simple cron expression and compute the next run date.
@@ -268,6 +271,25 @@ function maybeEnsureVectorIndexes(): void {
 }
 
 /**
+ * Age out the log tables (src/core/log-retention.ts) once a day. Not awaited:
+ * a first run over a large backlog deletes in many batches and must not hold
+ * up the scheduled hooks below; a run still going makes the next one a no-op.
+ */
+function maybePruneLogs(): void {
+  const now = Date.now();
+  if (logPruneRunning || now - lastLogPrune < LOG_PRUNE_INTERVAL_MS) return;
+  lastLogPrune = now;
+  logPruneRunning = true;
+  void import('@/core/log-retention')
+    .then(({ pruneLogTables }) => pruneLogTables(new Date(now)))
+    .then((removed) => {
+      if (removed && Object.values(removed).some((n) => n > 0)) coreLogger.info({ removed }, 'Log retention: pruned old rows');
+    })
+    .catch((err: unknown) => coreLogger.error({ err }, 'Log retention prune failed'))
+    .finally(() => { logPruneRunning = false; });
+}
+
+/**
  * Claim a due schedule hook for this tick: move its nextRunAt on (and disable
  * a one-shot) only if nextRunAt still holds what the tick read. Every instance
  * runs this loop, and two can read the same due hook; only the one whose
@@ -301,6 +323,7 @@ async function processCronTick(): Promise<void> {
     await maybeReindexDocs();
     await maybeCompressTrajectories();
     maybeEnsureVectorIndexes();
+    maybePruneLogs();
     const db = getDb();
     const now = new Date();
 
