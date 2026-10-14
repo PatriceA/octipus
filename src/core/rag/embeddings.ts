@@ -1,3 +1,4 @@
+import { withFilteredVectorScan } from '@/db/vector-indexes';
 import { createHash } from 'crypto';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
@@ -757,7 +758,6 @@ export class EmbeddingService {
       return this.ftsSearch(knowledge, query, limit, purpose, scope);
     }
 
-    const db = getDb();
     const vecLiteral = `[${queryEmbedding.join(',')}]`;
     const purposeFilter = purpose ? sql`AND purpose = ${purpose}` : sql``;
     // Tenant scope: whose rows are candidates at all.
@@ -768,7 +768,7 @@ export class EmbeddingService {
     const repoFilter = repoScopeSql(scope);
     const k = 60; // RRF constant
 
-    const results = await db.execute(sql`
+    const results = await withFilteredVectorScan((tx) => tx.execute(sql`
       WITH fts AS (
         SELECT id,
                row_number() OVER (ORDER BY ts_rank_cd(content_tsv, plainto_tsquery('english', ${query})) DESC) AS rank_fts
@@ -814,7 +814,7 @@ export class EmbeddingService {
       -- minSimilarity bar means the same thing it always did.
       ORDER BY c.rrf_score * ${freshnessFactorSql('e')} DESC
       LIMIT ${limit}
-    `);
+    `));
 
     const out = rows<{
       id: string;

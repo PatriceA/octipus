@@ -33,6 +33,7 @@
  *                       `retrieval.ts`.
  */
 
+import { withFilteredVectorScan } from '@/db/vector-indexes';
 import { and, desc, eq, getTableColumns, inArray, isNull, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { type Memory, type MemoryRecord, memories, type NewMemory, standingScoreSql } from '@/db/schema/memories';
@@ -173,7 +174,7 @@ export class MemoryRepository {
       ? or(isNull(memories.workspaceId), eq(memories.workspaceId, scope.workspaceId))
       : undefined;
 
-    const rows = await this.db
+    const rows = await withFilteredVectorScan((tx) => tx
       .select({
         row: memoryColumns,
         distance,
@@ -189,7 +190,7 @@ export class MemoryRepository {
         ),
       )
       .orderBy(distance)
-      .limit(limit);
+      .limit(limit));
 
     return rows.map((r) => ({ ...r.row, similarity: similarityOf(r.distance) }));
   }
@@ -213,14 +214,14 @@ export class MemoryRepository {
     const vecLiteral = this.vectorLiteral(queryEmbedding);
     if (vecLiteral === null) return [];
     const distance = cosineDistance(vecLiteral);
-    const rows = await this.db
+    const rows = await withFilteredVectorScan((tx) => tx
       .select({ row: memoryColumns, distance })
       .from(memories)
       .where(and(...this.scopeConditions(scope)))
       // `id` for the same reason as in `retrieveTop`: equal similarity must
       // not mean arbitrary order.
       .orderBy(distance, desc(memories.id))
-      .limit(scope.limit ?? 8);
+      .limit(scope.limit ?? 8));
     return rows.map((r) => ({ ...r.row, similarity: similarityOf(r.distance) }));
   }
 

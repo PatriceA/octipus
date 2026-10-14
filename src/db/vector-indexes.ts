@@ -142,3 +142,40 @@ async function pinDimension(t: (typeof TARGETS)[number], dim: number): Promise<v
     for (const v of views as { name: string; def: string }[]) await tx.execute(sql.raw(`CREATE VIEW ${v.name} AS ${v.def}`));
   });
 }
+
+type VectorTx = Parameters<Parameters<ReturnType<typeof getDb>['transaction']>[0]>[0];
+let pgvectorVersion: Promise<number | null> | null = null;
+
+async function readPgvectorVersion(): Promise<number | null> {
+  const { rows } = await queryRaw(`SELECT extversion FROM pg_extension WHERE extname = 'vector'`);
+  const raw = rows[0]?.extversion;
+  if (typeof raw !== 'string') return null;
+  const [major, minor] = raw.split('.').map(Number);
+  return Number.isFinite(major) && Number.isFinite(minor) ? major + minor / 100 : null;
+}
+
+/**
+ * Run a nearest-neighbour query that also filters (by user, scope, purpose)
+ * so that HNSW cannot return fewer rows than it asks for.
+ *
+ * An HNSW scan yields `hnsw.ef_search` candidates (40 by default) and the
+ * WHERE clause filters those, so a user whose rows are a small share of the
+ * table can get back fewer matches than `LIMIT` — or none — while a
+ * sequential scan, which these queries got before the index existed, was
+ * exact. pgvector 0.8 can keep scanning until the limit is met
+ * (`hnsw.iterative_scan = strict_order`, which also keeps the exact distance
+ * order); before 0.8 the best available is a wider candidate list. Both are
+ * set for this query's transaction only.
+ */
+export async function withFilteredVectorScan<T>(query: (tx: VectorTx) => Promise<T>): Promise<T> {
+  pgvectorVersion ??= readPgvectorVersion().catch((err) => {
+    dbLogger.warn({ err }, 'pgvector version unreadable — filtered vector searches run with default HNSW settings');
+    return null;
+  });
+  const version = await pgvectorVersion;
+  return getDb().transaction(async (tx) => {
+    if (version !== null && version >= 0.08) await tx.execute(sql`SET LOCAL hnsw.iterative_scan = strict_order`);
+    else if (version !== null) await tx.execute(sql`SET LOCAL hnsw.ef_search = 400`);
+    return query(tx);
+  });
+}
