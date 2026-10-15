@@ -31,6 +31,7 @@ import { createOverlayController, type OverlayController } from './overlays/regi
 import { OCTIPUS_APP_KEYBINDINGS } from './keybindings';
 import { findSlashCommand, OCTIPUS_SLASH_COMMANDS } from './slash-commands';
 import type { VoiceService } from '@/voice';
+import { inlineUiFallbackText } from '@/shared/inline-ui/fence';
 
 export interface OctipusTuiAppOptions {
   gatewayUrl?: string;
@@ -257,7 +258,9 @@ export class OctipusTuiApp {
     // already there. Mid-scroll messages stay out of view until the
     // user explicitly returns to the latest.
     const wasAtBottom = this.messages.getScrollOffset() === 0;
-    this.messages.push({ role, content: sanitize(content).replace(/^Error: /, ''), tone: /^Error:|^✗/.test(content) ? 'error' : 'notice', timestamp: new Date() });
+    // Interactive answers render only in the web app: a plain line here.
+    const text = role === 'assistant' ? inlineUiFallbackText(content) : content;
+    this.messages.push({ role, content: sanitize(text).replace(/^Error: /, ''), tone: /^Error:|^✗/.test(content) ? 'error' : 'notice', timestamp: new Date() });
     if (wasAtBottom) this.messages.scrollToBottom();
     this.tui.requestRender();
   }

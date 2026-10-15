@@ -6,7 +6,8 @@ import { SessionCost } from '@/components/chat/session-cost';
 import { SkillUsage } from '@/components/skills/skill-usage';
 
 import { PanelRight, PanelRightClose, Paperclip, X } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import FileViewer from '@/components/chat/file-viewer';
 import MessageTimeline, {
   type ChatMessageData,
@@ -15,7 +16,10 @@ import MessageTimeline, {
   type TrackedAgent,
 } from '@/components/chat/message-timeline';
 import { NewSessionDialog, type NewSessionOptions } from '@/components/chat/new-session-dialog';
-import PromptInput, { type Attachment } from '@/components/chat/prompt-input';
+import PromptInput, { type Attachment, type PromptInputHandle } from '@/components/chat/prompt-input';
+import { type InlineUiBlockData, type InlineUiHost, InlineUiProvider } from '@/components/chat/inline-ui/context';
+import { inlineUiMarkerIds } from '../../../src/shared/inline-ui/fence';
+import type { InlineUiReport } from '../../../src/shared/inline-ui/bridge';
 import { type SessionInfo, SessionList } from '@/components/chat/session-list';
 import SidePanel from '@/components/chat/side-panel';
 import MonitorPanel from '@/components/chat/monitor-panel';
@@ -175,6 +179,13 @@ export default function ChatPage() {
   useEffect(() => { activeSessionIdRef.current = activeSessionId; }, [activeSessionId]);
   const [sessionStates, setSessionStates] = useState<Map<string, SessionState>>(new Map());
   const [isLoading, setIsLoading] = useState(false);
+  // Interactive answers (docs/plans/inline-ui-spec.md): blocks that arrived
+  // in a reply while this page was open (they may start at once), what
+  // happened to blocks since the last message (sent with the next one, per
+  // session), and the composer for "Edit in composer".
+  const liveInlineUiRef = useRef(new Set<string>());
+  const inlineUiReportsRef = useRef(new Map<string, InlineUiReport[]>());
+  const composerRef = useRef<PromptInputHandle>(null);
   const [realtimeMode, setRealtimeMode] = useState(false);
   // Real STT availability (whisper runs, or a cloud key is set) — the voice
   // feature disables itself when neither is present.
@@ -339,7 +350,7 @@ export default function ChatPage() {
     const revision = (messageLoadsRef.current.get(sessionId) ?? 0) + 1;
     messageLoadsRef.current.set(sessionId, revision);
     try {
-      const data = await api.get<{ messages: Array<{ id: string; role: string; content: string; createdAt: string; metadata?: { limit?: MessageMetadata['limit'] } | null }> }>(
+      const data = await api.get<{ messages: Array<{ id: string; role: string; content: string; createdAt: string; metadata?: { limit?: MessageMetadata['limit']; inlineUiProvenance?: { id: string } } | null }> }>(
         `/sessions/${sessionId}/messages?roles=user,assistant,system&limit=10000`
       );
       const msgs = data?.messages?.length
@@ -350,6 +361,8 @@ export default function ChatPage() {
             timestamp: new Date(m.createdAt),
             // A turn refused by a spend budget keeps its card after a reload.
             ...(m.metadata?.limit && { metadata: { limit: m.metadata.limit } }),
+            // Sent from an interactive answer's suggestion: its chip.
+            ...(m.metadata?.inlineUiProvenance && { fromInlineUi: true }),
           }))
         : [welcomeMessage()];
 
@@ -731,6 +744,8 @@ export default function ChatPage() {
    * twice.
    */
   const handleChatResponse = (data: { response?: string; sessionId?: string; agentId?: string; classification?: { type?: string }; metadata?: Record<string, any>; content?: unknown }, event?: { id: string; timestamp: number }) => {
+    // Interactive answers in a reply that arrives now may start at once (D10).
+    if (typeof data.response === 'string') for (const id of inlineUiMarkerIds(data.response)) liveInlineUiRef.current.add(id);
     if (concernsThisTab(data.sessionId)) {
       setIsLoading(false);
       setStatusMessage(null);
@@ -1601,7 +1616,7 @@ export default function ChatPage() {
   };
 
   // Send message
-  const sendMessage = async (userInput: string, attachments?: Attachment[], options?: { voice?: boolean }) => {
+  const sendMessage = async (userInput: string, attachments?: Attachment[], options?: { voice?: boolean; inlineUiProvenance?: string }) => {
     let sid = activeSessionId;
     // Snapshot edit-and-continue attachments for this turn; cleared once sent.
     let fileRefs: Array<{ path: string; version?: string }> | undefined = attachedFiles.length ? attachedFiles : undefined;
@@ -1659,7 +1674,12 @@ export default function ChatPage() {
       role: 'user',
       content: userInput,
       timestamp: new Date(),
+      ...(options?.inlineUiProvenance ? { fromInlineUi: true } : {}),
     };
+    // What happened to this session's interactive answers since the last
+    // message rides along with this one (ids and enums only).
+    const inlineUiReports = inlineUiReportsRef.current.get(sid) ?? [];
+    inlineUiReportsRef.current.delete(sid);
 
     updateSessionState(sid, (prev) => ({
       ...prev,
@@ -1677,6 +1697,14 @@ export default function ChatPage() {
       ...(activeWorkspace ? { workspaceId: activeWorkspace.id } : {}),
       ...(fileRefs ? { fileRefs } : {}),
       ...(outputModeOverride ? { outputMode: outputModeOverride } : {}),
+      // This client renders interactive answers (D14).
+      renders: ['inline_ui'],
+      ...(inlineUiReports.length || options?.inlineUiProvenance
+        ? { inlineUi: {
+          ...(inlineUiReports.length ? { reports: inlineUiReports } : {}),
+          ...(options?.inlineUiProvenance ? { provenance: { inlineUiId: options.inlineUiProvenance } } : {}),
+        } }
+        : {}),
     };
     // What the server would refuse, said before sending: a message over the
     // length limit is refused, and a frame over the size cap closes the socket.
@@ -1718,7 +1746,13 @@ export default function ChatPage() {
       return;
     }
 
-    // REST fallback (gateway unavailable)
+    // REST fallback (gateway unavailable). It declares no `renders` (the tab
+    // cannot hear the turn's events), and carries no interactive-answer
+    // reports: they wait for the next message sent over the gateway. It sends
+    // no `channel` either, so the turn is unattended (`channelCanPrompt`): an
+    // action that needs approval is refused, not asked — this tab could not
+    // hear the request, and the model is told so in the tool result.
+    if (inlineUiReports.length) inlineUiReportsRef.current.set(sid, [...inlineUiReports, ...(inlineUiReportsRef.current.get(sid) ?? [])]);
     try {
       const result = await api.post<{
         response: string;
@@ -1905,6 +1939,42 @@ export default function ChatPage() {
     ? sessions.find((session) => session.id === activeSessionId)?.title || 'Untitled work'
     : 'Choose a conversation';
 
+  // Interactive answers of the open conversation (src/shared/inline-ui):
+  // how a block is fetched, and what its buttons do. Stable across renders
+  // (the handlers read the latest `sendMessage` through a ref).
+  const sendMessageRef = useRef(sendMessage);
+  useEffect(() => { sendMessageRef.current = sendMessage; });
+  const { data: me } = useQuery({
+    queryKey: ['impersonation-banner', 'me'],
+    queryFn: () => api.get<{ actorUserId?: string | null }>('/auth/me'),
+    staleTime: 30_000,
+  });
+  const impersonating = !!me?.actorUserId;
+  const inlineUiHost = useMemo<InlineUiHost | null>(() => {
+    if (!activeSessionId) return null;
+    const sid = activeSessionId;
+    return {
+      key: sid,
+      fetchBlock: async (id) => (await api.get<{ block: InlineUiBlockData }>(`/sessions/${sid}/inline-ui/${id}`)).block,
+      shared: false,
+      isLive: (id) => liveInlineUiRef.current.has(id),
+      impersonating,
+      report: (report) => {
+        const list = inlineUiReportsRef.current.get(sid) ?? [];
+        if (list.length < 20 && !list.some((r) => r.id === report.id && r.outcome === report.outcome)) {
+          inlineUiReportsRef.current.set(sid, [...list, report]);
+        }
+      },
+      sendSuggestion: impersonating ? undefined : (text, blockId) => { void sendMessageRef.current(text, undefined, { inlineUiProvenance: blockId }); },
+      editSuggestion: impersonating ? undefined : (text, blockId) => composerRef.current?.insertDraft(text, { inlineUiId: blockId }),
+      busy: isLoading,
+      saveAsArtifact: async (blockId, input) => {
+        const res = await api.post<{ appUrl: string; warnings: string[] }>(`/sessions/${sid}/inline-ui/${blockId}/promote`, input);
+        return { appUrl: res.appUrl, warnings: res.warnings ?? [] };
+      },
+    };
+  }, [activeSessionId, impersonating, isLoading]);
+
   return (
     <div className="workspace-chat h-full flex relative">
       {sessionListError && <div role="status" className="absolute z-20 bottom-2 left-2 rounded border border-warning bg-surface p-3 text-sm">
@@ -2001,16 +2071,18 @@ export default function ChatPage() {
             className="mt-1 text-primary underline disabled:opacity-50" onClick={() => void loadSessionMessages(activeSessionId)}>Retry sync</button>
         </div>}
         {/* Message timeline */}
-        <MessageTimeline
-          messages={messages}
-          trackedAgents={trackedAgents}
-          teams={teams}
-          fileChanges={activeState?.fileChanges}
-          isLoading={isLoading}
-          statusMessage={statusMessage}
-          streamingText={isLoading && streaming?.sessionId === activeSessionId ? streaming.text : null}
-          onOpenFile={setOpenFilePath}
-        />
+        <InlineUiProvider host={inlineUiHost}>
+          <MessageTimeline
+            messages={messages}
+            trackedAgents={trackedAgents}
+            teams={teams}
+            fileChanges={activeState?.fileChanges}
+            isLoading={isLoading}
+            statusMessage={statusMessage}
+            streamingText={isLoading && streaming?.sessionId === activeSessionId ? streaming.text : null}
+            onOpenFile={setOpenFilePath}
+          />
+        </InlineUiProvider>
 
         {/* Permission / approval banner — sits directly above the prompt
             input so the user doesn't have to hunt for it at the viewport
@@ -2065,6 +2137,7 @@ export default function ChatPage() {
           </div>
           <PromptInput
             onSend={sendMessage}
+            composerRef={composerRef}
             /* The new-session dialog is a choice that is not yet made: a message
                sent while it is open auto-creates its own session, and confirming
                the dialog then adds a second, empty one. A running turn does not

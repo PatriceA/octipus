@@ -159,6 +159,8 @@ export const requestBodySchemas = {
     after: uuidSchema.optional(),
     limit: z.number().int().min(1).max(200).optional(),
   }).strict(),
+  /** An interactive answer of a room reply (docs/plans/inline-ui-spec.md): its source, for the visitor's web client. */
+  'room.inline_ui': z.object({ ...spaceRef, roomId: uuidSchema, blockId: uuidSchema }).strict(),
   /** The member's own mute of a room: no room notices of it to their install. */
   'room.mute': z.object({ ...spaceRef, roomId: uuidSchema, muted: z.boolean() }).strict(),
   'note.list': z.object(spaceRef).strict(),

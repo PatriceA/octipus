@@ -220,20 +220,40 @@ flips the embed's `data-octipus-stale` attribute after 30s.
 
 ## Custom JS bundles
 
-Ship a self-contained bundle:
+A page's own JavaScript is written inline, the way a hand-made page would be:
+`<script>` blocks and `onclick="…"` attributes in `html_template`. When a
+version is written — by the agent tool or through the REST API (create, edit,
+restore), all through `src/core/artifacts/version-writer.ts` — the scripts and
+handlers are lifted out of the template into one source, built with esbuild
+(no imports allowed; the V1 allow-list is empty) and stored per version under
+the bundles directory (`<artifactId>/<versionId>/bundle.js`). Handlers become
+`data-octi-h` markers bound by `addEventListener` in the bundle, so neither
+`'unsafe-inline'` nor `'unsafe-eval'` is needed. The embed loads the bundle
+from the app's own origin under `script-src 'self'`.
 
-```
-update_live_artifact({
-  id,
-  html_template: "<canvas data-bind=\"chart\"></canvas>",
-})
-```
+A script that does not build does not fail the write: the version is saved,
+renders without behaviour, and the caller gets the compiler message as a
+warning. An edit that changes only the CSS, or one that sends back the stored
+template (which no longer holds scripts), carries the previous bundle forward;
+a restore copies the restored version's bundle.
 
-Then POST the JS to a future bundle endpoint (see step 6 of the rollout
-plan). The build pipeline runs esbuild with no external imports
-allowed (V1 allow-list is empty), computes sha256, persists under
-`data/artifacts/<artifactId>/<versionId>/bundle.js`, and the embed
-renderer pins that hash in CSP `script-src` per version.
+## Sandboxing
+
+The outer page and the web app frame the embed with `sandbox="allow-scripts"`
+(an opaque origin). The embed's CSP header also carries `sandbox
+allow-scripts`, so an embed URL opened directly — in path-prefix mode it is on
+the app's own origin — still runs without the app's cookies and storage.
+
+## Saved interactive answers
+
+An [interactive answer](INLINE-UI.md) saved from the chat becomes an `html`
+artifact with `network = 'none'`: the embed CSP allows no fetch or socket
+(`connect-src 'none'`) and images only from `data:` and `blob:`, and the page
+carries no SDK, gateway address or viewer token — a static copy without live
+refresh. Its markup went through the same sanitizer rules as the chat frame
+(on the server), and its script runs as the version's bundle after a shim for
+`octi`, whose methods say "not available here". Visibility is `private` or
+`workspace`.
 
 ## Hosting / DNS
 

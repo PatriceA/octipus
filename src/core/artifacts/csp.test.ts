@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { buildEmbedCsp } from './csp';
+import { buildEmbedCsp, embedCspHeader } from './csp';
 
 describe('buildEmbedCsp', () => {
   test('emits locked-down policy with sha256 script hashes', () => {
@@ -24,5 +24,19 @@ describe('buildEmbedCsp', () => {
 
   test('rejects malformed sha256 hex', () => {
     expect(() => buildEmbedCsp({ scriptSha256s: ['nothex'] })).toThrow();
+  });
+
+  test('the header copy sandboxes the page wherever it is opened; the meta copy does not carry it', () => {
+    const csp = buildEmbedCsp({ scriptSha256s: [] });
+    expect(csp).not.toContain('sandbox');
+    expect(embedCspHeader(csp)).toMatch(/; sandbox allow-scripts$/);
+  });
+
+  test('a closed page reaches nothing: no fetch or socket, images only from data: and blob:', () => {
+    const csp = buildEmbedCsp({ scriptSha256s: [], gatewayWss: 'wss://gw.example.com', network: 'none' });
+    expect(csp).toContain("connect-src 'none'");
+    expect(csp).not.toContain('wss://gw.example.com');
+    expect(csp).toContain('img-src data: blob:');
+    expect(csp).not.toMatch(/img-src[^;]*https:/);
   });
 });

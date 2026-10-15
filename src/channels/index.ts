@@ -1,6 +1,7 @@
 export { BaseChannel, type ChannelConfig, type ChannelEvents, getUMI, UnifiedMessageInterface } from './interface';
 
 import { coreLogger } from '@/utils/logger';
+import { inlineUiFallbackText } from '@/shared/inline-ui/fence';
 
 export { SlackChannel, slackChannel } from './slack';
 export { TeamsChannel, teamsChannel } from './teams';
@@ -45,7 +46,8 @@ export function imageConverter(platform = process.platform, find: (bin: string) 
  * Strips code blocks, thinking sections, and long outputs — sends a concise summary.
  */
 function summarizeForChannel(response: string): string {
-  let text = response;
+  // Interactive answers render only in the web app: a plain line here.
+  let text = inlineUiFallbackText(response);
 
   // Remove <think>...</think> or <thinking>...</thinking> blocks
   text = text.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '');

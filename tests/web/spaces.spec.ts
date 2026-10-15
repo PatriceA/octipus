@@ -424,6 +424,6 @@ test.describe('with a space selected (§5.4)', () => {
     await input.fill('Plan the launch');
     await input.press('Enter');
     await expect.poll(() => gateway.sent.find((m) => m.type === 'chat.send'))
-      .toEqual({ type: 'chat.send', sessionId: 'sess-1', content: 'Plan the launch', workspaceId: SPACE_ID });
+      .toEqual({ type: 'chat.send', sessionId: 'sess-1', content: 'Plan the launch', workspaceId: SPACE_ID, renders: ['inline_ui'] });
   });
 });

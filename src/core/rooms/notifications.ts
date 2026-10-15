@@ -2,6 +2,7 @@ import type { Message } from '@/db/schema/messages';
 import { getNotificationService } from '@/core/notification-service';
 import { serialPerKey } from '@/utils/concurrency';
 import { coreLogger } from '@/utils/logger';
+import { inlineUiFallbackText } from '@/shared/inline-ui/fence';
 import { loadRoom } from './access';
 import { mentionedRemoteHandles, mentionedUsernames } from './mentions';
 import { roomNotificationRecipients } from './service';
@@ -41,7 +42,9 @@ export async function notifyRoomMessage(row: Message, authorName: string | null)
     ? new Set([...mentionedUsernames(row.content), ...mentionedRemoteHandles(row.content)])
     : new Set<string>();
   const title = `${row.role === 'assistant' ? 'Octipus' : authorName ?? 'A member'} in ${room.title}`;
-  const body = row.content.length > 280 ? `${row.content.slice(0, 277)}…` : row.content;
+  // A marker line of an interactive answer reads as a plain line in a notification.
+  const text = inlineUiFallbackText(row.content);
+  const body = text.length > 280 ? `${text.slice(0, 277)}…` : text;
   for (const member of candidates) {
     if (member.userId === row.authorUserId || mentioned.has(member.username.toLowerCase())) continue;
     if (member.kind === 'remote') {

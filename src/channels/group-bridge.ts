@@ -49,6 +49,7 @@ import { workspaces } from '@/db/schema/organizations';
 import { sessions } from '@/db/schema/sessions';
 import { can, requireCan, SpaceError } from '@/security/space-access';
 import { channelLogger } from '@/utils/logger';
+import { inlineUiFallbackText } from '@/shared/inline-ui/fence';
 import { getUMI } from './interface';
 
 type Db = ReturnType<typeof getDb>;
@@ -516,7 +517,8 @@ export function relayText(row: Message, authorName: string | null): string | nul
   if (meta.bridged) return null;
   if (meta.kind === 'progress') return null;
   if (!row.content.trim()) return null;
-  if (row.role === 'assistant') return row.content;
+  // Interactive answers render only in the web room: a plain line in the thread.
+  if (row.role === 'assistant') return inlineUiFallbackText(row.content);
   if (row.role === 'user') return `*${authorName ?? 'A member'}* (in the web room): ${row.content}`;
   return null;
 }

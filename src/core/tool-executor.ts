@@ -1136,6 +1136,9 @@ export class ToolExecutor {
         role: 'tool',
         content: sanitized,
         toolCallId: result.toolCallId,
+        // Named, so a reader of the transcript (the eval's `toolsUsed`) knows
+        // which tool answered without re-joining the assistant's calls.
+        toolName: toolCalls.find((c) => c.id === result.toolCallId)?.name ?? null,
         agentId: this.context.id,
       });
     }

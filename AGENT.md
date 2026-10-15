@@ -204,12 +204,15 @@ think you need to break one, open an issue first.
   `SKILL.md` (or flat `*.md`) under `.octipus/skills/`, `~/.octipus/agent/skills/`,
   `~/.claude/skills/`, `.agents/skills/`, etc. — auto-discovered by
   `src/skills/external-loader.ts`. (No more `skill.json`/`knowledge.md`.)
-- **Tool (built-in)** → `src/tools/<name>/index.ts` extending `BaseTool`.
-  Auto-discovered via `discovery.ts`; no need to register in `src/tools/index.ts`.
+- **Tool (built-in)** → `src/tools/<name>/index.ts` extending `BaseTool`, plus
+  one line in `MODULES` in `src/tools/discovery.ts` (a static import: a folder
+  scan finds nothing once bundled). No entry in `src/tools/index.ts`.
 - **MCP tool** → `mcp-server/src/tools/<group>.ts` with Zod schema + `server.tool`
-  registration. Inventory auto-discovers.
+  registration; a new group's `register…Tools` is called from
+  `mcp-server/src/server.ts`.
 - **Channel** → `src/channels/<name>/`. Must speak the gateway protocol; no
-  channel-specific root agent hooks. Auto-discovered via `discovery.ts`.
+  channel-specific root agent hooks. One line in `CHANNEL_MODULES` in
+  `src/channels/discovery.ts`.
 - **Plugin / extension** → a directory under `extensions/` (in OCTIPUS_HOME) with
   `plugin.json` + `index.ts`; loaded by `src/plugins/loader.ts`. See the
   `plugin-development` skill and `docs/PLUGINS.md`.

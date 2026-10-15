@@ -73,6 +73,15 @@ export const hostAnswerSchemas = {
   'space.rooms': z.object({ rooms: z.array(hostRoomSchema).max(2_000) }).passthrough(),
   'room.page': z.object({ messages: z.array(hostRoomMessageSchema).max(200), hasMore: z.boolean() }).passthrough(),
   'room.mute': z.object({ muted: z.boolean() }).passthrough(),
+  // Sizes leave room for the host's limits (src/shared/inline-ui/limits.ts) and JSON escaping.
+  'room.inline_ui': z.object({
+    block: z.object({
+      id: uuid, title: text(200), heightHint: z.number().int().min(0).max(100_000),
+      css: text(20_000), html: text(60_000), js: text(30_000),
+      scripts: z.boolean(), tainted: z.boolean(), risk: z.enum(['normal', 'high']),
+      issues: z.array(text(64)).max(50), createdAt: when,
+    }).passthrough(),
+  }).passthrough(),
   'note.list': z.object({
     notes: z.array(z.object({ id: uuid, title: text(500), slug: text(500), updatedAt: when }).passthrough()).max(5_000),
   }).passthrough(),

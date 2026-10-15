@@ -11,14 +11,20 @@ export interface CspInput {
   gatewayWss?: string;
   /** Extra `frame-ancestors` entries beyond `'self'`. */
   frameAncestors?: string[];
+  /**
+   * `none`: the page reaches nothing — no fetch or socket (not even the
+   * gateway), images only from `data:` and `blob:`.
+   */
+  network?: 'default' | 'none';
 }
 
 export function buildEmbedCsp(input: CspInput): string {
   const scriptHashes = input.scriptSha256s
     .map((h) => `'sha256-${hexToBase64(h)}'`)
     .join(' ');
-  const connect = ["'self'"];
-  if (input.gatewayWss) connect.push(input.gatewayWss);
+  const closed = input.network === 'none';
+  const connect = closed ? ["'none'"] : ["'self'"];
+  if (input.gatewayWss && !closed) connect.push(input.gatewayWss);
 
   const frameAncestors = ["'self'", ...(input.frameAncestors ?? [])];
 
@@ -27,12 +33,25 @@ export function buildEmbedCsp(input: CspInput): string {
     `connect-src ${connect.join(' ')}`,
     `script-src 'self' ${scriptHashes}`.trim(),
     `style-src 'self' 'unsafe-inline'`,
-    `img-src 'self' data: https:`,
+    closed ? `img-src data: blob:` : `img-src 'self' data: https:`,
     `font-src 'self' data:`,
     `frame-ancestors ${frameAncestors.join(' ')}`,
     `base-uri 'none'`,
     `form-action 'none'`,
   ].join('; ');
+}
+
+/**
+ * The embed's policy as a response header: the same policy plus `sandbox
+ * allow-scripts`. In path-prefix mode the embed is served from the app's own
+ * origin, so opening `/__artifacts__/a/<slug>/embed` as a top-level page would
+ * run the artifact's scripts with the app's cookies and storage. The directive
+ * gives the page an opaque origin wherever it is opened; framed, it changes
+ * nothing (the frames already carry `sandbox="allow-scripts"`). Header only:
+ * browsers ignore `sandbox` in a `<meta>` policy.
+ */
+export function embedCspHeader(csp: string): string {
+  return `${csp}; sandbox allow-scripts`;
 }
 
 function hexToBase64(hex: string): string {

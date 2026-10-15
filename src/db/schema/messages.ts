@@ -40,6 +40,8 @@ export interface MessageMetadata {
   sessionGeneration?: string;
   /** Immutable context supplied with this user turn, outside the system prefix. */
   promptContext?: string;
+  /** A user message sent from an interactive answer's suggestion (docs/plans/inline-ui-spec.md §6): its chip. */
+  inlineUiProvenance?: { id: string };
   channelMessageId?: string;
   attachments?: AttachmentData[];
   tokenCount?: number;

@@ -155,6 +155,9 @@ const SPACE_ACTING = [
   'DELETE /api/sessions/:id', 'GET /api/sessions/:id/messages', 'POST /api/sessions/:id/attachments', 'GET /api/sessions/:id/files',
   'PUT /api/sessions/:id/files', 'GET /api/sessions/:id/changes', 'GET /api/sessions/:id/changes/diff', 'POST /api/sessions/:id/complete',
   'GET /api/sessions/stats/active',
+  // Interactive answers: the session read of the chat routes (`contentRepos`), or `roomAccess` for a room.
+  // Saving one as an artifact: the caller's own session, into the space's artifact store (`write`).
+  'GET /api/sessions/:id/inline-ui/:blockId', 'POST /api/sessions/:id/inline-ui/:blockId/promote',
   'GET /api/tasks', 'GET /api/tasks/role-agents', 'PUT /api/tasks/role-agents', 'GET /api/tasks/:id', 'POST /api/tasks',
   'PATCH /api/tasks/:id', 'POST /api/tasks/:id/checkout', 'POST /api/tasks/:id/release', 'GET /api/tasks/:id/comments',
   'POST /api/tasks/:id/comments', 'DELETE /api/tasks/:id',

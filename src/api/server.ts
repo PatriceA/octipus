@@ -68,6 +68,7 @@ import { recurringTaskRoutes } from './routes/recurring-tasks';
 import { researchRoutes } from './routes/research';
 import { searchRoutes } from './routes/search';
 import { sessionRoutes } from './routes/sessions';
+import { inlineUiRoutes } from './routes/inline-ui';
 import { capabilitiesRoutes } from './routes/capabilities';
 import { roleRoutes } from './routes/roles';
 import { topicRoutes } from './routes/topics';
@@ -172,7 +173,9 @@ export function createServer() {
       const isArtifactPage = path.startsWith('/a/') || path.startsWith('/__artifacts__/');
       if (!isArtifactPage) {
         set.headers['X-Frame-Options'] = 'DENY';
-        set.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:";
+        // A handler that serves its own page may set a narrower policy (the
+        // OAuth popup callbacks: one nonce'd script, nothing else). Keep it.
+        set.headers['Content-Security-Policy'] ??= "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:";
       }
     })
     // Request logging
@@ -429,6 +432,7 @@ export function createServer() {
         .use(samlRoutes)
         .use(agentRoutes)
         .use(sessionRoutes)
+        .use(inlineUiRoutes)
         .use(modelRoutes)
         .use(hookRoutes)
         .use(taskRoutes)

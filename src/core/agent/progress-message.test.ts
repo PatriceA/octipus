@@ -42,3 +42,10 @@ it('allows retry after persistence failure', async () => {
   await expect(saveProgressMessage('Update', ctx)).rejects.toThrow('database unavailable');
   expect(await saveProgressMessage('Update', ctx)).toMatchObject({ messageId: 'm1' });
 });
+
+it('keeps an interactive answer out of a status update: one line, never its source', async () => {
+  const out = await saveProgressMessage('Working on it:\n```octi-ui title="Calc"\n<p>SOURCE</p><script>go()</script>\n```', context());
+  expect(out?.message).toContain('Interactive answer “Calc”');
+  expect(out?.message).not.toContain('SOURCE');
+  expect(f.create).toHaveBeenCalledWith(expect.objectContaining({ content: expect.not.stringContaining('<script>') }), 'before-clear');
+});

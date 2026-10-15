@@ -5,6 +5,8 @@ import { Bell, BellOff, Bot, Hash, Lock, MessageSquareLock, PanelRight, WifiOff,
 import { useRouter } from 'next/navigation';
 import { type ComponentProps, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import MessageTimeline, { type ChatMessageData } from '@/components/chat/message-timeline';
+import { type InlineUiHost, InlineUiProvider } from '@/components/chat/inline-ui/context';
+import { inlineUiMarkerIds } from '../../../src/shared/inline-ui/fence';
 import { api } from '@/lib/api';
 import type { GatewayMessage } from '@/lib/gateway';
 import { isUuid, withUuidIds } from '@/lib/remote-paths';
@@ -113,6 +115,8 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
   const lastFrameAtRef = useRef(0);
   const inflightRef = useRef<string[]>([]);
   const readSentRef = useRef<string | undefined>(undefined);
+  /** Interactive answers that arrived while the room was open. */
+  const liveInlineUiRef = useRef(new Set<string>());
 
   const notify = useCallback((text: string) => {
     setNotices((n) => [...n.slice(-4), { id: clientId(), text, at: new Date().toISOString() }]);
@@ -214,6 +218,8 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
       case 'room.message': {
         const row = payload.message as RoomMessage;
         if (remote && !isUuid(row?.id)) break;
+        // Interactive answers in a reply that arrives now (a room still waits for a click to run them).
+        if (row.role === 'assistant' && typeof row.content === 'string') for (const id of inlineUiMarkerIds(row.content)) liveInlineUiRef.current.add(id);
         setMessages((current) => merge(current, [row]));
         dropPending(payload.clientId ?? row.metadata?.clientId);
         if (row.role === 'assistant' && row.metadata.requesterId === myId && row.metadata.kind !== 'progress') setStreaming(null);
@@ -308,6 +314,20 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
         notify(err.message);
       });
   };
+
+  // Interactive answers of the room: shared, so a script always waits for a
+  // click; a suggestion is posted as my own message, addressed to Octipus.
+  const postRef = useRef(post);
+  useEffect(() => { postRef.current = post; });
+  const canPost = access.role !== 'viewer';
+  const inlineUiHost = useMemo<InlineUiHost>(() => ({
+    key: `room:${remote ? 'remote:' : ''}${roomId}`,
+    fetchBlock: (id) => source.inlineUi(roomId, id),
+    shared: true,
+    isLive: (id) => liveInlineUiRef.current.has(id),
+    impersonating: false,
+    sendSuggestion: canPost ? (text) => postRef.current(text, true) : undefined,
+  }), [roomId, remote, source, canPost]);
 
   const cancelQueued = (messageId: string) => {
     if (remote) {
@@ -484,16 +504,18 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
                 older messages…
               </button>
             )}
-            <MessageTimeline
-              messages={timeline}
-              trackedAgents={NO_AGENTS}
-              teams={NO_TEAMS}
-              isLoading={myTurnRunning}
-              statusMessage="Octipus is answering you"
-              streamingText={myTurnRunning ? streaming?.text ?? null : null}
-              emptyLabel="No messages yet — say hello, or ask Octipus"
-              untrusted={remote}
-            />
+            <InlineUiProvider host={inlineUiHost}>
+              <MessageTimeline
+                messages={timeline}
+                trackedAgents={NO_AGENTS}
+                teams={NO_TEAMS}
+                isLoading={myTurnRunning}
+                statusMessage="Octipus is answering you"
+                streamingText={myTurnRunning ? streaming?.text ?? null : null}
+                emptyLabel="No messages yet — say hello, or ask Octipus"
+                untrusted={remote}
+              />
+            </InlineUiProvider>
           </>
         )}
 

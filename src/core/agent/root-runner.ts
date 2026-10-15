@@ -14,6 +14,8 @@ import type { AgentNode, PendingChild } from '@/core/swarm/types';
 import { agentPrincipal } from '@/security/principal';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { sessionRepository } from '@/db/repositories/session-repository';
+import { getRunContext } from '@/core/run-context';
+import { INLINE_UI_PROMPT, inlineUiOffered } from '@/core/inline-ui/offer';
 import { sessionGeneration } from '@/db/schema/sessions';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
@@ -163,6 +165,29 @@ export interface RootRunExtras {
    * stop that lands before the agent is registered is not lost.
    */
   signal?: AbortSignal;
+}
+
+/**
+ * Whether this turn's root agent is offered interactive answers: the pure
+ * rule (`inlineUiOffered`) fed with the session's audience, what the client
+ * declared it renders (`RunContext.renders`), the model and the kill switch —
+ * a stored DENY on tool `inline-ui`, action `render`.
+ */
+async function resolveInlineUiOffer(input: {
+  userId: string;
+  session: Awaited<ReturnType<typeof sessionRepository.findById>>;
+  small: boolean;
+  provider: string | undefined;
+}): Promise<boolean> {
+  if (!input.session) return false;
+  const [{ sessionAudience }, { isCLIProvider }, { getPermissionManager }] = await Promise.all([
+    import('./audience'), import('@/core/cli-agent-factory'), import('@/security/permissions'),
+  ]);
+  const audience = (await sessionAudience(input.session)).kind;
+  const base = { root: true, audience, renders: getRunContext()?.renders, small: input.small, cliProvider: isCLIProvider(input.provider ?? '') };
+  if (!inlineUiOffered({ ...base, denied: false })) return false;
+  const check = await getPermissionManager().check(input.userId, 'inline-ui', 'render', undefined, undefined, { defaultLevel: 'ALLOW' });
+  return inlineUiOffered({ ...base, denied: check.level === 'DENY' });
 }
 
 export async function runRootAgent(
@@ -358,6 +383,16 @@ export async function runRootAgent(
     const after = new Set(rootTools.map((t) => t.toolId ?? t.name));
     droppedToolGroups = [...before].filter((id) => !after.has(id));
   }
+  // Interactive answers (docs/plans/inline-ui-spec.md D4): told about them
+  // only where they are read in the web app. The decision travels on the root
+  // context (`inlineUiOffered`), which the `inline-ui` tool re-checks; a
+  // customized role row that lists the tool does not get it otherwise.
+  const inlineUi = await resolveInlineUiOffer({ userId, session, small: rootIsSmall, provider: modelMeta?.provider });
+  rootTools = rootTools.filter((t) => t.toolId !== 'inline-ui');
+  if (inlineUi) {
+    const { getToolRegistry } = await import('@/tools/registry');
+    rootTools = [...rootTools, ...getToolRegistry().getToolHandlersForTools(['inline-ui'])];
+  }
   // `capabilities` — how the root answers questions about itself. Advertised on
   // every provider, unlike the lazy-discovery pair below: asked "what can you
   // do?", an agent with no way to enumerate itself answers from whatever is in
@@ -418,6 +453,7 @@ export async function runRootAgent(
           ...rootCoreToolIds,
           ...metaTools.filter((t) => !t.discoverOnly).map((t) => t.toolId ?? t.name),
           'self_report',
+          ...(inlineUi ? ['inline-ui'] : []),
         ];
         // `capabilities` is core on the lazy path too — the one question it
         // answers is the one a shrunken advertisement makes hardest to answer.
@@ -536,6 +572,10 @@ export async function runRootAgent(
   // Chat/work split (Thread 3): tell the root agent whether to deliver in
   // chat or as a file. Empty for the default-inline case, so unchanged.
   volatileParts.push(buildOutputDirective(outputDirective.mode, outputDirective.forced));
+  // What happened to interactive answers in the user's client, and where this
+  // message came from (ids and enums only, checked against the session).
+  const inlineUiNotes = getRunContext()?.inlineUiNotes;
+  if (inlineUiNotes?.length) volatileParts.push(`\n\n${inlineUiNotes.join('\n')}`);
 
   // Inject workspace awareness
   const sessionCtx = session?.context as import('@/db/schema/sessions').SessionContext | undefined;
@@ -647,6 +687,10 @@ export async function runRootAgent(
     staticParts.push(spaceSessionNotice(name, space.role, can(space.role, 'run_agent_write'), extras.room ? { title: extras.room.title } : undefined));
   }
 
+  // Static, not volatile: the volatile part is stored with every user row, and
+  // whether a session is offered interactive answers rarely changes.
+  if (inlineUi) staticParts.push(INLINE_UI_PROMPT);
+
   // Append the volatile per-turn context (date, summary, history) after the
   // whole static/semi-static instruction block — keeps the prefix cacheable.
   systemPrompt = assembleSystemPrompt(staticParts, volatileParts);
@@ -726,6 +770,7 @@ export async function runRootAgent(
       // Its text stays in the session's rows (F-D11): no prompt dump, spill,
       // auto-index or notification text (`contentStorageOffFor`).
       ...(remoteRoom ? { remoteRoom: true, [CONTENT_STORAGE_OFF_KEY]: true } : {}),
+      ...(inlineUi ? { inlineUiOffered: true } : {}),
     },
   });
 

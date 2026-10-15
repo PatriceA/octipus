@@ -27,6 +27,16 @@ export interface RunContext {
   readonly channel?: string;
   /** Provenance of the run for audit (`user`, `hook`, `heartbeat`, …). */
   readonly origin?: string;
+  /**
+   * What the client that sent this turn says it can render beyond text
+   * (`chat.send` `renders`, e.g. `inline_ui` for interactive answers). Unset
+   * for every client that does not declare it.
+   */
+  readonly renders?: readonly string[];
+  /** Model-facing lines about interactive answers, already checked against the session (`resolveInlineUiTurnNotes`). */
+  readonly inlineUiNotes?: readonly string[];
+  /** The interactive answer this turn's message was sent from (stored on the user row for its chip). */
+  readonly inlineUiProvenance?: string;
 }
 
 const storage = new AsyncLocalStorage<RunContext>();

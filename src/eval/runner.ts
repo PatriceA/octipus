@@ -72,7 +72,8 @@ async function runTestUnit(
     // routing assertion compare the classifier against itself — green whether
     // routing worked or not. Routing is only observable in integration mode.
     routedRole: undefined,
-    toolsUsed: [],
+    // Unobserved, not "none": unit mode runs no tools (`toolUsageObservabilityBlocker`).
+    toolsUsed: undefined,
     response: undefined,
     latencyMs: Date.now() - start,
     metadata: { input: test.input, mode: 'unit' },
@@ -201,6 +202,9 @@ async function runTestIntegration(
         // queries per turn, so ordinary chat does not pay for it — but
         // `routes_to_role` is exactly what this harness exists to check.
         routedRoles: true,
+        // …and the tools the turn ran (`uses_tool`, `not_uses_tool`).
+        toolsUsed: true,
+        ...(test.context?.renders?.length ? { renders: test.context.renders } : {}),
         ...(model ? { model } : {}),
       }),
     });
@@ -216,6 +220,8 @@ async function runTestIntegration(
       agentId?: string;
       /** Roles this turn actually delegated to — see `routedRolesForTurn`. */
       routedRoles?: string[];
+      /** Tools this turn ran — see `toolsUsedForTurn`. */
+      toolsUsed?: string[];
     };
 
     return {
@@ -236,7 +242,9 @@ async function runTestIntegration(
       // a miss.
       routedRole: data.routedRoles?.[0],
       routedRoles: data.routedRoles,
-      toolsUsed: [], // Would need agent event tracking for full tool usage
+      // Undefined when the backend does not report it (an older build, a failed
+      // lookup): the assertions read that as unobserved, never as "none".
+      toolsUsed: data.toolsUsed,
       response: data.response,
       latencyMs: Date.now() - start,
       tokenCount: data.metadata?.tokens
@@ -331,7 +339,9 @@ export async function runTest(
   // question about itself. Reported as a setup problem, loudly, rather than
   // scored either way — a green routing suite that never routed is worse than
   // no routing suite.
-  const routingBlocker = routingObservabilityBlocker(test.assertions, options.integration);
+  const routingBlocker = routingObservabilityBlocker(test.assertions, options.integration)
+    ?? toolUsageObservabilityBlocker(test.assertions, options.integration)
+    ?? rendersObservabilityBlocker(test, options.integration);
   if (routingBlocker) return errorResult(test, suiteId, routingBlocker);
 
   let seededIds: string[] = [];
@@ -402,6 +412,30 @@ export function routingObservabilityBlocker(
     'routes_to_role needs a running backend: unit mode never spawns a specialist, so there is no ' +
     'routing to observe. Re-run with --integration.'
   );
+}
+
+/**
+ * Why a tool-usage assertion cannot be judged in this run, or undefined when
+ * it can. Unit mode runs no tools; `not_uses_tool` used to pass there on an
+ * empty list, which is the absence of an observation, not an observation.
+ */
+export function toolUsageObservabilityBlocker(
+  assertions: EvalTest['assertions'],
+  integration?: boolean,
+): string | undefined {
+  if (integration) return undefined;
+  if (!assertions.some((a) => a.type === 'uses_tool' || a.type === 'not_uses_tool')) return undefined;
+  return 'uses_tool / not_uses_tool need a running backend: unit mode runs no tools. Re-run with --integration.';
+}
+
+/**
+ * Why a test of what a client renders cannot be judged in this run. Unit mode
+ * asks the model without the root prompt, so it is never told it can write an
+ * interactive answer: a "does not use one" case would pass on nothing.
+ */
+export function rendersObservabilityBlocker(test: Pick<EvalTest, 'context'>, integration?: boolean): string | undefined {
+  if (integration || !test.context?.renders?.length) return undefined;
+  return 'context.renders needs a running backend: unit mode never builds the root prompt that offers it. Re-run with --integration.';
 }
 
 /**

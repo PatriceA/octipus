@@ -205,6 +205,18 @@ export const remoteSpaceRoutes = new Elysia({ prefix: '/remote-spaces' })
     ...tag,
   })
 
+  // An interactive answer in a reply of a remote room (docs/plans/inline-ui-spec.md):
+  // rendered here like a local one, fetched from the host with the member's access.
+  .get('/:id/rooms/:roomId/inline-ui/:blockId', (ctx) => {
+    ctx.set.headers['cache-control'] = 'no-store';
+    return handle(ctx, (user) => forwardFor(user.id, ctx.params.id, 'room.inline_ui', {
+      roomId: ctx.params.roomId, blockId: ctx.params.blockId,
+    }));
+  }, {
+    params: t.Object({ id: t.String(), roomId: uuid(), blockId: uuid() }),
+    ...tag,
+  })
+
   // The member's own mute of a remote room, kept by the host (it sends no room notices of a muted room).
   .patch('/:id/rooms/:roomId/me', (ctx) => handle(ctx, (user) => forwardFor(user.id, ctx.params.id, 'room.mute', {
     roomId: ctx.params.roomId, muted: ctx.body.muted,

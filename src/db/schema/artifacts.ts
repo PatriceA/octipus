@@ -48,6 +48,11 @@ export const artifacts = pgTable(
     type: artifactTypeEnum('type').notNull(),
     visibility: artifactVisibilityEnum('visibility').notNull().default('workspace'),
     currentVersionId: uuid('current_version_id'),
+    /**
+     * What the page may reach: `default` (the embed policy), or `none` — no
+     * fetch, socket or remote image (an interactive answer saved as a copy).
+     */
+    network: text('network').$type<ArtifactNetwork>().notNull().default('default'),
     /** Per-artifact iframe allow-list (Phase 3 — `allowed_embed_origins`). */
     allowedEmbedOrigins: jsonb('allowed_embed_origins').$type<string[]>().notNull().default([]),
     metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default({}),
@@ -67,3 +72,4 @@ export type Artifact = typeof artifacts.$inferSelect;
 export type NewArtifact = typeof artifacts.$inferInsert;
 export type ArtifactType = (typeof artifactTypeEnum.enumValues)[number];
 export type ArtifactVisibility = (typeof artifactVisibilityEnum.enumValues)[number];
+export type ArtifactNetwork = 'default' | 'none';

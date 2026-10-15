@@ -6,6 +6,7 @@ import { canActInSession } from '@/core/rooms/access';
 import { mentionsOctipus } from '@/core/rooms/service';
 import { API_SCOPES, scopesSatisfy } from '@/security/scopes';
 import { coreLogger } from '@/utils/logger';
+import { resolveInlineUiTurnNotes, type InlineUiTurnNotes } from '@/core/inline-ui/turn-input';
 import { presenceAfterClose } from '@/core/rooms/presence';
 import { getCommandRegistry } from './commands';
 import { handleRoomFrame, isRoomFrame } from './room-handlers';
@@ -86,7 +87,7 @@ export async function readPendingSnapshot(userId: string): Promise<Omit<Permissi
 }
 
 /** Exported for unit tests. */
-export async function trySteerRunningRootAgent(sessionId: string, content: string): Promise<boolean> {
+export async function trySteerRunningRootAgent(sessionId: string, content: string, inlineUi?: InlineUiTurnNotes): Promise<boolean> {
   // Slash commands must reach the command registry, never become model guidance.
   if (content.trimStart().startsWith('/') || isSessionControlMessage(content)) return false;
   const { getAgentManager } = await import('@/core/agent-manager');
@@ -109,7 +110,10 @@ export async function trySteerRunningRootAgent(sessionId: string, content: strin
     return false;
   }
 
-  target.steer({ role: 'user', content, timestamp: new Date() });
+  // Interactive-answer notes (reports, provenance) ride ahead of the steer
+  // for the model, and on the row as its prompt context, like a normal turn.
+  const notes = inlineUi?.notes.join('\n') ?? '';
+  target.steer({ role: 'user', content: notes ? `${notes}\n\n${content}` : content, timestamp: new Date() });
 
   // Race guard: if the root agent finished between the status check and the
   // steer, its steering queue will never drain. Don't persist an orphaned user
@@ -119,7 +123,11 @@ export async function trySteerRunningRootAgent(sessionId: string, content: strin
   try {
     const { messageRepository } = await import('@/db/repositories/message-repository');
     const { sessionRepository } = await import('@/db/repositories/session-repository');
-    await messageRepository.create({ sessionId, role: 'user', content });
+    const metadata = {
+      ...(notes ? { promptContext: notes } : {}),
+      ...(inlineUi?.provenanceId ? { inlineUiProvenance: { id: inlineUi.provenanceId } } : {}),
+    };
+    await messageRepository.create({ sessionId, role: 'user', content, ...(Object.keys(metadata).length ? { metadata } : {}) });
     await sessionRepository.incrementMessageCount(sessionId);
   } catch (err) {
     coreLogger.error({ err, sessionId }, 'failed to persist steered user message');
@@ -302,13 +310,17 @@ async function handleChatSend(
     // If a root agent turn is already running for this session, steer it
     // with this message instead of spawning a concurrent turn. Keeps one live
     // root agent per session; the user can redirect work mid-flight.
-    if (!message.attachments?.length && !message.fileRefs?.length && await trySteerRunningRootAgent(message.sessionId, message.content)) {
+    const inlineUiNotes = await resolveInlineUiTurnNotes(message.sessionId, message.inlineUi);
+    if (!message.attachments?.length && !message.fileRefs?.length && await trySteerRunningRootAgent(message.sessionId, message.content, inlineUiNotes)) {
       hub.publishEvent({
         type: 'chat.message',
         source: `steer:${connectionId}`,
         userId,
         sessionId: message.sessionId,
-        payload: { role: 'user', content: message.content, injected: true },
+        payload: {
+          role: 'user', content: message.content, injected: true,
+          ...(inlineUiNotes.provenanceId ? { inlineUiProvenance: { id: inlineUiNotes.provenanceId } } : {}),
+        },
       });
       return;
     }
@@ -414,6 +426,10 @@ async function handleChatSend(
       context.clientType,
       message.fileRefs,
       message.outputMode,
+      undefined,
+      undefined,
+      undefined,
+      { renders: message.renders, notes: inlineUiNotes.notes, provenanceId: inlineUiNotes.provenanceId },
     );
 
     // Send response back through gateway

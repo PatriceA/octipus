@@ -26,6 +26,7 @@ import { getQuotaTracker } from '@/models/quota-tracker';
 import { validateScopedExtraArgs } from '@/shared/cli-capabilities';
 import { anthropicNativeMessagesEnabled, providerControls, validateProviderSettings } from '@/shared/provider-settings';
 import { coreLogger } from '@/utils/logger';
+import { uniqueViolation } from '@/db/unique-violation';
 
 // ── List / read ──────────────────────────────────────────────────────
 
@@ -224,7 +225,7 @@ export async function registerModel(body: Record<string, unknown>) {
     return await registry.registerModel(createBody as NewModelConfigEntry);
   } catch (err) {
     const msg = (err as Error).message;
-    if (msg.includes('unique') || msg.includes('duplicate')) {
+    if (uniqueViolation(err) !== null || msg.includes('unique') || msg.includes('duplicate')) {
       return { error: `A model with name "${name}" already exists` };
     }
     return { error: `Failed to register model: ${msg}` };

@@ -38,6 +38,7 @@ import { SpaceError, spaceErrorStatus } from '@/security/space-access';
 import { assertLocalUsername, InvalidUsernameError } from '@/security/user-kinds';
 import { hashPassword } from '@/utils/crypto';
 import { dbLogger } from '@/utils/logger';
+import { uniqueViolation } from '@/db/unique-violation';
 
 export type { RegistrationMode } from '@/shared/spaces';
 
@@ -152,11 +153,3 @@ function inviteInvalid(): RegistrationError {
   return new RegistrationError('invite_invalid', 400, 'This invite link is not valid any more (expired, used up or revoked); register without it, or ask for a new link');
 }
 
-/** The constraint a unique violation (`23505`) names (`''` when unnamed); null for any other error. */
-function uniqueViolation(err: unknown): string | null {
-  for (let e: unknown = err, depth = 0; e && typeof e === 'object' && depth < 3; e = (e as { cause?: unknown }).cause, depth++) {
-    const pg = e as { code?: unknown; constraint?: unknown };
-    if (pg.code === '23505') return typeof pg.constraint === 'string' ? pg.constraint : '';
-  }
-  return null;
-}

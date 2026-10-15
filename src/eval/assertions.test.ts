@@ -79,6 +79,14 @@ describe('tool usage', () => {
     expect((await evaluateAssertion({ type: 'uses_tool', value: 'filesystem' }, c)).passed).toBe(true);
   });
 
+  test('unobserved tool usage fails both assertions instead of reading as "none"', async () => {
+    const unobserved = ctx({});
+    expect((await evaluateAssertion({ type: 'uses_tool', value: 'shell' }, unobserved)).passed).toBe(false);
+    const r = await evaluateAssertion({ type: 'not_uses_tool', value: 'shell' }, unobserved);
+    expect(r.passed).toBe(false);
+    expect(r.actual).toBe('unobserved');
+  });
+
   test('not_uses_tool is the exact inverse', async () => {
     expect((await evaluateAssertion({ type: 'not_uses_tool', value: 'shell' }, c)).passed).toBe(true);
     expect((await evaluateAssertion({ type: 'not_uses_tool', value: 'filesystem' }, c)).passed).toBe(false);
@@ -225,5 +233,15 @@ describe('evaluateAllAssertions', () => {
     const { score, passed } = await evaluateAllAssertions([], ctx());
     expect(score).toBe(0);
     expect(passed).toBe(true);
+  });
+});
+
+describe('what a run can observe', () => {
+  test('a test that declares renders needs a running backend; others are unaffected', async () => {
+    const { rendersObservabilityBlocker, toolUsageObservabilityBlocker } = await import('./runner');
+    expect(rendersObservabilityBlocker({ context: { renders: ['inline_ui'] } }, false)).toMatch(/--integration/);
+    expect(rendersObservabilityBlocker({ context: { renders: ['inline_ui'] } }, true)).toBeUndefined();
+    expect(rendersObservabilityBlocker({ context: {} }, false)).toBeUndefined();
+    expect(toolUsageObservabilityBlocker([{ type: 'not_uses_tool', value: 'shell' }], false)).toMatch(/--integration/);
   });
 });

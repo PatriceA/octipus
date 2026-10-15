@@ -20,7 +20,8 @@ test('gateway decodes image bytes and forwards persisted refs to the general age
   expect(mock.store).toHaveBeenCalledTimes(1);
   const files = mock.store.mock.calls[0][1] as File[];
   expect(Buffer.from(await files[0].arrayBuffer()).toString()).toBe('image');
-  expect(mock.handle).toHaveBeenCalledWith(sid, 'user', expect.stringContaining('Describe [image1]'), 'tui', [{ path: '.octipus/attachments/id/paste.png' }], undefined);
+  expect(mock.handle).toHaveBeenCalledWith(sid, 'user', expect.stringContaining('Describe [image1]'), 'tui', [{ path: '.octipus/attachments/id/paste.png' }], undefined,
+    undefined, undefined, undefined, { renders: undefined, notes: [], provenanceId: undefined });
   expect(mock.handle.mock.calls[0][2]).toContain('Attached file: .octipus/attachments/id/paste.png');
   expect(send).not.toHaveBeenCalled();
 });

@@ -107,7 +107,7 @@ multi-user platform; OpenClaw's is better for a personal assistant.
 | Office suites (M365, Google Workspace) | Partial (skills, gmail-ops hooks) | Yes (dedicated tool groups + OAuth connectors) | |
 | Media generation (image/music/video) | Yes (fal, comfy, runway…) | No | |
 | Media understanding (audio/vision pipelines) | Yes | Partial (visual screenshots, Whisper STT) | |
-| Canvas / visual workspace | Yes (Canvas + A2UI on nodes) | Partial (Live Artifacts BETA, hosted app artifacts) | Different shape, similar intent |
+| Canvas / visual workspace | Yes (Canvas + A2UI on nodes) | Partial (interactive answers inside replies in the web chat and rooms; Live Artifacts BETA, hosted app artifacts) | Different shape, similar intent |
 | Device commands (camera, screen record, location) | Yes (via device nodes) | No | Requires OpenClaw's node fleet |
 | Tool catalog search (`tool_search`) | Yes (experimental) | No | Matters as tool count grows |
 | Scheduling/task tools | Yes (cron, goals) | Yes (scheduling, tasks, task-state) | |
@@ -146,7 +146,7 @@ multi-user platform; OpenClaw's is better for a personal assistant.
 | iOS / Android | Yes (native node apps) | No (roadmap) |
 | Windows companion | Yes (Windows Hub) | Partial (Tauri desktop runs on Windows) |
 | Voice wake / talk mode | Yes (on-device on 3 platforms) | Yes (server-side wake-word, STT/TTS, telephony) |
-| Live visual canvas | Yes | Partial (Live Artifacts BETA) |
+| Live visual canvas | Yes | Partial (interactive answers in the web chat, Live Artifacts BETA) |
 
 ## Auth, multi-user, security
 

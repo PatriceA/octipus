@@ -378,6 +378,9 @@ class Relay {
 async function memberPage(browser: Browser, relay: Relay, user: User, errors: string[]): Promise<Page> {
   const ctx = await browser.newContext();
   await ctx.addInitScript(({ token, user, space }) => {
+    // The app's own window only: init scripts also run in sandboxed frames
+    // (interactive answers), which have no storage.
+    if (window !== window.top) return;
     localStorage.setItem('auth_token', token);
     localStorage.setItem('assistant-user', JSON.stringify(user));
     localStorage.setItem('octipus.activeWorkspace', space);
@@ -481,6 +484,50 @@ test('a reconnecting member catches up from the last message held', async ({ bro
   const resubscribe = relay.frames.filter((f) => f.userId === BEN.id && f.message.type === 'room.subscribe').at(-1)!;
   expect(resubscribe.message.afterMessageId).toBe(lastSeen);
   await expect(ben.getByTestId('room-offline')).toHaveCount(0);
+  expectNoConsoleErrors(consoleErrors);
+});
+
+test('an interactive answer in a room: every member sees it, its script waits for a click, a suggestion is posted as my addressed message', async ({ browser, consoleErrors }) => {
+  const relay = new Relay();
+  const BLOCK = '7a1e0000-0000-4000-8000-0000000000b1';
+  const alice = await memberPage(browser, relay, ALICE, consoleErrors);
+  const ben = await memberPage(browser, relay, BEN, consoleErrors);
+  for (const page of [alice, ben]) {
+    // The block is read with the room's own access (GET /api/sessions/:roomId/inline-ui/:id).
+    await page.route(`**/api/sessions/${GENERAL}/inline-ui/${BLOCK}`, (route) => json(route, 200, {
+      block: {
+        id: BLOCK, title: 'Budget split', heightHint: 120, tainted: false, risk: 'normal', issues: [], shared: true, scripts: true, css: '',
+        html: '<button id="b" type="button" style="display:block;width:220px;height:48px">Ask</button>',
+        js: "document.getElementById('b').addEventListener('click', function () { octi.prompt('Split it by team size'); });",
+      },
+    }));
+  }
+  await openRoom(alice);
+  await openRoom(ben);
+  await ben.getByRole('switch', { name: 'Ask Octipus' }).click();
+  await composer(ben).fill('split the budget');
+  await composer(ben).press('Enter');
+  await expect(alice.getByTestId('turn-strip')).toContainText('Octipus — answering ben');
+  relay.answer(GENERAL, `Here is a split:\n[[octi-ui:${BLOCK}|Budget split]]`);
+
+  for (const page of [alice, ben]) {
+    const block = page.getByTestId('inline-ui-block').filter({ hasText: 'Budget split' });
+    await expect(block).toContainText('Someone else’s request may have shaped this answer');
+    await expect(block.getByTestId('inline-ui-run')).toBeVisible();
+  }
+  const block = alice.getByTestId('inline-ui-block').filter({ hasText: 'Budget split' });
+  await block.getByTestId('inline-ui-run').click();
+  await expect(block.getByTestId('inline-ui-run')).toHaveCount(0);
+  await alice.waitForTimeout(500);
+  const box = (await block.getByTestId('inline-ui-frame').boundingBox())!;
+  await alice.mouse.click(box.x + 20, box.y + 20);
+  const strip = block.getByTestId('inline-ui-suggestion');
+  await expect(strip).toContainText('Split it by team size');
+  await alice.waitForTimeout(900);
+  await strip.getByRole('button', { name: /Send/ }).click();
+  await expect(ben.locator('[data-role="user"][data-author="e2etest"]').filter({ hasText: 'Split it by team size' })).toBeVisible();
+  const posted = relay.frames.filter((f) => f.userId === ALICE.id && f.message.type === 'room.post').at(-1)!;
+  expect(posted.message).toMatchObject({ content: 'Split it by team size', addressed: true });
   expectNoConsoleErrors(consoleErrors);
 });
 

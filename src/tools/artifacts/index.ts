@@ -12,16 +12,15 @@ import { artifactsRepository } from '@/db/repositories/artifacts-repository';
 import type { ArtifactSourceKind } from '@/db/schema/artifact-data-sources';
 import type { ArtifactType, ArtifactVisibility } from '@/db/schema/artifacts';
 import { buildArtifactAppUrl, buildArtifactEmbedUrl, buildArtifactOuterUrl, pickShareableUrl } from '@/core/artifacts/host';
-import { buildAndStoreBundle, copyBundle, deleteArtifactBundles } from '@/core/artifacts/bundler';
-import { extractInteractiveScript } from '@/core/artifacts/render';
+import { deleteArtifactBundles } from '@/core/artifacts/bundler';
+import { announceVersion, writeVersion } from '@/core/artifacts/version-writer';
 import { refreshSource, spaceSourceRefusal } from '@/core/artifacts/refresh';
 import { scheduleArtifactRefresh } from '@/core/artifacts/scheduler';
-import { publishArtifactVersionUpdated } from '@/core/artifacts/events';
 import { artifactLifecycleBus } from '@/core/artifacts/lifecycle-bus';
 import { revokeArtifactViewers } from '@/core/artifacts/viewer-access';
 import { BaseTool, createParameterSchema } from '../base-tool';
-
-const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+import { ARTIFACT_SLUG_RE } from '@/shared/artifacts';
+import { uniqueViolation } from '@/db/unique-violation';
 
 /**
  * Find `{{data.<sourceName>.…}}` references in a template body. Used to
@@ -47,68 +46,6 @@ function diffTemplateAndSources(template: string, sourceNames: string[]): {
     missingSources: refs.filter((r) => !present.has(r)),
     unusedSources: sourceNames.filter((n) => !referenced.has(n)),
   };
-}
-
-/** Does this template carry `data-octi-h` markers, i.e. bindings a bundle owns? */
-function hasBoundHandlers(template: string): boolean {
-  return /\sdata-octi-h\s*=/.test(template);
-}
-
-/**
- * Write a new version, lifting the template's own JS into a CSP-pinned bundle.
- *
- * Inline `<script>` and `on*=` handlers cannot run under the embed CSP, so
- * `extractInteractiveScript` moves them into one source string which is built
- * to `bundle.js` and served from the artifact's own origin. A build failure
- * (syntax error, disallowed import) is NOT fatal: the version still lands, the
- * page renders without behaviour, and the caller gets the compiler message —
- * losing the whole edit because one handler had a typo is worse.
- */
-async function writeVersion(opts: {
-  artifactId: string;
-  template: string;
-  css: string;
-  changeSummary: string;
-  userId: string;
-  /** Current version, whose bundle may need to follow the template forward. */
-  previousVersionId?: string | null;
-  /** False when `template` was defaulted from the stored version, not supplied. */
-  templateProvided: boolean;
-}): Promise<{ versionId: string; warnings: string[] }> {
-  const extracted = extractInteractiveScript(opts.template);
-  const warnings = [...extracted.warnings];
-
-  const version = await artifactsRepository.createVersion({
-    artifactId: opts.artifactId,
-    htmlTemplate: extracted.template,
-    css: opts.css,
-    changeSummary: opts.changeSummary,
-    createdByUserId: opts.userId,
-  });
-  await artifactsRepository.setCurrentVersion(opts.artifactId, version.id);
-
-  if (extracted.source) {
-    try {
-      await buildAndStoreBundle({
-        artifactId: opts.artifactId,
-        versionId: version.id,
-        source: extracted.source,
-      });
-    } catch (err) {
-      warnings.push(
-        `The page's JavaScript did not build, so it will render without behaviour: ${(err as Error).message}. Fix the script and call update_live_artifact again.`,
-      );
-    }
-  } else if (opts.previousVersionId && (!opts.templateProvided || hasBoundHandlers(extracted.template))) {
-    // Nothing new to build, but the page still needs its behaviour. Two ways in:
-    // the caller changed only the CSS, or it round-tripped the STORED template
-    // (get_live_artifact → edit → update), which by then holds `data-octi-h`
-    // markers and no `<script>` — so extraction finds nothing and, without this,
-    // every handler on the page would go dead with no warning.
-    await copyBundle(opts.artifactId, opts.previousVersionId, version.id);
-  }
-
-  return { versionId: version.id, warnings };
 }
 
 const SOURCES_PARAM_DESCRIPTION =
@@ -221,7 +158,7 @@ export class ArtifactsTool extends BaseTool {
         sources: { type: 'array', description: SOURCES_PARAM_DESCRIPTION, items: { type: 'object' } },
       }),
       async (args, context) => {
-        if (!SLUG_RE.test(args.slug as string)) {
+        if (!ARTIFACT_SLUG_RE.test(args.slug as string)) {
           return { error: 'invalid slug (lowercase/digits/dashes, 1-64 chars)' };
         }
         requireWorkspaceId(context);
@@ -232,13 +169,22 @@ export class ArtifactsTool extends BaseTool {
         const visibility = ((args.visibility as ArtifactVisibility | undefined) ?? 'workspace');
         // Through the agent's artifact store (§5.6): stamped with its
         // workspace — a space's in a space, by the member's role — and author.
-        const a = await reposFor(context).artifacts.create({
-          slug: args.slug as string,
-          createdByAgentId: context.id,
-          title: args.title as string,
-          type: args.type as ArtifactType,
-          visibility,
-        });
+        let a;
+        try {
+          a = await reposFor(context).artifacts.create({
+            slug: args.slug as string,
+            createdByAgentId: context.id,
+            title: args.title as string,
+            type: args.type as ArtifactType,
+            visibility,
+          });
+        } catch (err) {
+          // Not the driver's "Failed query: insert …" with the whole row in it.
+          if (uniqueViolation(err) === 'artifacts_workspace_id_slug_uq') {
+            return { error: `slug "${args.slug as string}" is already used in this workspace — pick another, or update that artifact` };
+          }
+          throw err;
+        }
         const template = (args.html_template as string) ?? '';
         const versionWarnings: string[] = [];
         if (template || args.css) {
@@ -372,8 +318,7 @@ export class ArtifactsTool extends BaseTool {
             templateProvided: args.html_template !== undefined,
           });
           warnings.push(...written.warnings);
-          publishArtifactVersionUpdated(a.id, written.versionId);
-          artifactLifecycleBus.emitEvent({ type: 'artifact:updated', artifactId: a.id, versionId: written.versionId });
+          announceVersion(a.id, written.versionId);
 
           if (template) {
             const existingSources = await artifactsRepository.listSources(a.id);

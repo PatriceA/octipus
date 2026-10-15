@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { CHAT_INLINE_ATTACHMENT_MAX_CHARS, CHAT_MESSAGE_MAX_CHARS } from '../../shared/chat-gateway';
+import { INLINE_UI_ERROR_CLASSES, INLINE_UI_OUTCOMES } from '../../shared/inline-ui/bridge';
+import { INLINE_UI_LIMITS } from '../../shared/inline-ui/limits';
 
 // ── Trust Levels ──────────────────────────────────────────────────
 
@@ -289,6 +291,22 @@ export const FileRefSchema = z.object({
   version: z.string().max(128).optional(),
 });
 
+/**
+ * Client outcomes of interactive answers, sent with the user's next message
+ * (spec §5.6): enums and numbers only — no text produced by generated code
+ * ever reaches the model. Ids are checked against the session server-side.
+ */
+export const InlineUiSendSchema = z.object({
+  reports: z.array(z.object({
+    id: z.string().uuid(),
+    outcome: z.enum(INLINE_UI_OUTCOMES),
+    errorClass: z.enum(INLINE_UI_ERROR_CLASSES).optional(),
+    line: z.number().int().min(0).max(1_000_000).optional(),
+  })).max(INLINE_UI_LIMITS.reportsPerMessage).optional(),
+  /** The message was sent from an interactive answer's suggestion. */
+  provenance: z.object({ inlineUiId: z.string().uuid() }).optional(),
+});
+
 export const ChatSendSchema = z.object({
   type: z.literal('chat.send'),
   sessionId: z.string().uuid(),
@@ -313,6 +331,14 @@ export const ChatSendSchema = z.object({
   fileRefs: z.array(FileRefSchema).max(10).optional(),
   /** Chat/work split (Thread 3): force the deliverable mode for this message. */
   outputMode: z.enum(['inline', 'file']).optional(),
+  /**
+   * What this client can render beyond text. `inline_ui`: interactive answers
+   * (docs/plans/inline-ui-spec.md D14) — the root agent is told it can write
+   * them only when the client says so.
+   */
+  renders: z.array(z.enum(['inline_ui'])).max(4).optional(),
+  /** Interactive answers: what happened to them in this client since the last message (G3), and where this message came from. */
+  inlineUi: InlineUiSendSchema.optional(),
 });
 
 export const CommandSchema = z.object({

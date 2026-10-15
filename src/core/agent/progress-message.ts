@@ -4,6 +4,7 @@ import { sessionGeneration } from '@/db/schema/sessions';
 import type { AgentContext } from '@/core/types';
 import { guardOutput, stripSwarmScaffolding } from './output-guard';
 import { canActInSession } from '@/core/rooms/access';
+import { stubInlineUiFences } from '@/core/inline-ui/extract';
 
 const delivered = new WeakMap<AgentContext, Set<string>>();
 const pending = new WeakMap<AgentContext, Promise<unknown>>();
@@ -18,7 +19,10 @@ export function saveProgressMessage(message: string, context: AgentContext, gene
 async function save(message: string, context: AgentContext, generation?: string) {
   const flags = Array.isArray(context.metadata.inputGuardFlags)
     ? context.metadata.inputGuardFlags.filter((flag): flag is string => typeof flag === 'string') : [];
-  const text = stripSwarmScaffolding(guardOutput(message, flags).response).trim();
+  // An interactive answer belongs in the final reply, where it is stored; a
+  // status update keeps only its one line (rows here are replayed as history
+  // and relayed to channels as they are).
+  const text = stubInlineUiFences(stripSwarmScaffolding(guardOutput(message, flags).response)).trim();
   if (!text || delivered.get(context)?.has(text)) return null;
   const session = await sessionRepository.findById(context.sessionId);
   if (!session || !(await canActInSession(session, context.userId, 'requester'))) return null;

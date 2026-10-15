@@ -52,6 +52,8 @@ export interface EvalTest {
     userId?: string;
     sessionId?: string;
     channel?: string;
+    /** What the simulated client renders beyond text (`inline_ui`: interactive answers). Integration mode. */
+    renders?: string[];
   };
   /** Expected output or behavior (for display/reference) */
   expected?: string;

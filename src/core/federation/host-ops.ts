@@ -15,7 +15,8 @@
  * `spaceRepos` and `WorkspaceFS` trust their caller:
  *
  *   space.info, space.members (member-visible names, no e-mail, FI5), space.rooms,
- *   room.page (`roomAccess`, ≤ 200), note.list / note.read, note.propose
+ *   room.page (`roomAccess`, ≤ 200), room.inline_ui (`roomAccess`, the
+ *   block of that room), note.list / note.read, note.propose
  *   (`run_agent_write`, keyed `remote:<row id>`), task.list / read / create
  *   / checkout / release / comment (the tasks routes' repository calls),
  *   file.list / file.read (read-only, guest folders, ≤ 1 MiB), memory.list
@@ -335,6 +336,24 @@ function registerOps(): void {
   op('room.page', async ({ spaceId, roomId, before, after, limit }, member) => {
     const { listRoomMessages } = await import('@/core/rooms/service');
     return listRoomMessages({ userId: member.userId }, spaceId, roomId, { before, after, limit: Math.min(limit ?? 50, 200) });
+  });
+
+  // An interactive answer of a room reply: `roomAccess` exactly as `room.page`,
+  // and the block must belong to that room (a block id from elsewhere is not found).
+  op('room.inline_ui', async ({ spaceId, roomId, blockId }, member) => {
+    const [{ roomAccess }, { inlineUiRepository }] = await Promise.all([
+      import('@/core/rooms/access'), import('@/db/repositories/inline-ui-repository'),
+    ]);
+    const access = await roomAccess(member.userId, roomId);
+    if (!access || access.room.workspaceId !== spaceId) throw new LinkRequestError('not_found', 'Not found');
+    const block = await inlineUiRepository.getInSession(blockId, roomId);
+    if (!block) throw new LinkRequestError('not_found', 'Not found');
+    return {
+      block: {
+        id: block.id, title: block.title, heightHint: block.heightHint, css: block.css, html: block.html, js: block.js,
+        scripts: block.scripts, tainted: block.tainted, risk: block.risk, issues: block.issues, createdAt: block.createdAt.toISOString(),
+      },
+    };
   });
 
   op('room.mute', async ({ spaceId, roomId, muted }, member) => {

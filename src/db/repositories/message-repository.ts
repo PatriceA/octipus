@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, lte, sql } from 'drizzle-orm';
 import { dbLogger } from '@/utils/logger';
 import { getDb } from '../postgres';
 import { sessions, sessionGeneration } from '../schema/sessions';
@@ -72,6 +72,15 @@ export class MessageRepository {
     // i2: by session id, for the agent runtime that owns the session; user routes use ScopedMessageRepo
     const result = await this.db.select().from(messages).where(eq(messages.id, id)).limit(1);
     return result[0] ?? null;
+  }
+
+  /** Names of the tools whose rows were written in `sessionId` after `since`, in first-use order (the eval's `toolsUsed`). */
+  async toolNamesSince(sessionId: string, since: Date): Promise<string[]> {
+    // i2: by session id the caller already verified (POST /chat's scoped session read)
+    const rows = await this.db.select({ name: messages.toolName }).from(messages)
+      .where(and(eq(messages.sessionId, sessionId), eq(messages.role, 'tool'), gt(messages.createdAt, since)))
+      .orderBy(asc(messages.createdAt));
+    return [...new Set(rows.map((r) => r.name).filter((n): n is string => !!n))];
   }
 
   async findBySession(sessionId: string, limit: number = 100, offset: number = 0, roles?: string[]): Promise<Message[]> {

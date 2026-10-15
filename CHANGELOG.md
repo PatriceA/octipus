@@ -9,6 +9,24 @@ labels reflect blast radius, not contract guarantees.
 
 ### Security
 
+- **OAuth popup callback pages no longer reflect script.** The connector
+  callback put `?error=` into an inline `<script>` with `JSON.stringify` under
+  a CSP that allowed `'unsafe-inline'`, so `</script><script>…` ran on the
+  app's origin; the sign-in provider callback had the same pattern. Only the
+  global `script-src 'self'` replacing the page's own policy kept it from
+  running — which also blocked the pages' own scripts, so the opener never
+  heard back and the popup stayed open. Both pages now come from one builder:
+  script-safe JSON, escaped markup and a per-response nonce policy that the
+  global security headers keep. The settings page accepts the popup's message
+  only from that popup and the app's origin.
+- **Artifact embeds are sandboxed wherever they are opened.** The embed's CSP
+  header carries `sandbox allow-scripts`; in path-prefix mode an embed URL
+  opened directly used to run its bundle with the app's origin.
+- **Desktop commands are governed by capabilities.** `get_backend_url` and
+  `set_backend_url` are declared in an app manifest and granted to the main
+  window; the webview lost the settings-store permission it did not use, so
+  the backend URL changes only through `set_backend_url`'s checks.
+
 - **Telnyx webhooks are verified with Ed25519.** The old check ran an HMAC
   keyed with the (public) key, which anyone could compute, and passed every
   webhook when no `telnyx_public_key` was set. Verification now uses the
@@ -120,6 +138,25 @@ labels reflect blast radius, not contract guarantees.
   reach other users' skills.
 
 ### Fixed
+
+- **REST artifact versions keep their behaviour.** Create, edit and restore
+  through `/api/artifacts` stored templates as given: inline scripts could
+  not run under the embed CSP, a CSS-only edit dropped the bundle and a
+  restore pointed at a bundle file that was never copied. They now use the
+  agent tool's version writer (`src/core/artifacts/version-writer.ts`), and
+  open viewers hear about the new version.
+- **A taken artifact slug is a 409.** Drizzle wraps the driver's error, so the
+  REST check on the constraint name never matched and answered 500; the agent
+  tool returned the raw "Failed query: insert …". Unique violations are now
+  read from the error's cause (`src/db/unique-violation.ts`), also for models.
+- **Eval suites' double-quoted strings take YAML escapes.** The loader kept
+  them raw, so `"\\*\\*[1-9]"` reached `RegExp` as `\\*\\*[1-9]` and
+  matched any digit.
+- **Declared dependencies.** `htmlparser2`, `domhandler` and `domutils` were
+  imported but installed only through `botbuilder`.
+- **Docs.** Tools, channels and MCP groups are registered in lists, not
+  discovered; lazy tool discovery is not Ollama-only; REST chat turns are
+  unattended (an action that needs approval is refused, not asked).
 
 - **Space invite links use the install's public URL.** The link was built from
   the address the owner's browser used, so an owner on `localhost` handed out
@@ -253,6 +290,20 @@ labels reflect blast radius, not contract guarantees.
   clear presence; `room.subscribe` re-checks access after joining.
 
 ### Added
+
+- **Interactive answers.** In the web chat and in rooms, the root agent can
+  answer with a small widget — a calculator, a chart, a diagram, a stepper —
+  written as an `octi-ui` fenced block in its reply. The server stores the
+  block and leaves a marker line; the web app runs it in two nested sandboxed
+  frames with no network, and other surfaces get one plain line. Scripts wait
+  for a click when the answer comes from history, a room, a conversation that
+  read outside content, an admin acting as the user, or a browser other than
+  Chromium. Links and suggested follow-ups need a click on the chat page; what
+  happened to a block reaches the model with the next message as enums only.
+  An answer can be saved as a static artifact that reaches no network. Off for
+  a user, or everyone, with a stored DENY on tool `inline-ui`. See
+  [Interactive answers](docs/INLINE-UI.md); `eval/inline-ui.yaml` measures
+  when the model uses them.
 
 - **MCP servers in the system prompt.** An agent that can reach MCP tools gets
   an `MCP SERVERS` section, after pi's `mcp_servers` section. It lists every
