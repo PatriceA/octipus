@@ -103,6 +103,12 @@ export interface ToolHandler {
    * there is no discovery tool to reach it with, and hiding it would orphan it.
    */
   discoverOnly?: boolean;
+  /**
+   * Result ceiling for this call, in characters. Set means a larger result is
+   * replaced by a valid-JSON envelope (src/core/tool-output-spill.ts) instead
+   * of the head/tail preview, which cuts structured data mid-document.
+   */
+  maxResultChars?: (args: Record<string, unknown>) => number;
   execute: (args: Record<string, unknown>, context: AgentContext) => Promise<unknown>;
 }
 

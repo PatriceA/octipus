@@ -74,7 +74,8 @@ MCP_AUTO_START=true
 | Transport | Use case | Fields |
 |-----------|----------|--------|
 | **stdio** | Local MCP servers (npm packages, local scripts) | `command`, `args`, `env` |
-| **sse** | Remote/containerized MCP servers (n8n, web services) | `sseUrl`, `postUrl`, `headers` |
+| **sse** | Remote/containerized MCP servers (legacy SSE transport) | `sseUrl`, `postUrl`, `headers` |
+| **streamable-http** | Modern remote MCP servers | `sseUrl` (the MCP HTTP endpoint), `headers` |
 
 ### Tool exposure
 
@@ -118,6 +119,30 @@ Tool names in `mcp__<server>__<tool>` replace every character outside
 `[A-Za-z0-9_]` with `_`. Tools that then collide, or names longer than 64
 characters, get a short hash suffix. An exposure change applies to agents
 started after it.
+
+### Large results
+
+Octipus passes an MCP tool result to the model unchanged when it fits the
+result limit. A larger result is never cut in the middle. Instead, the model
+receives one valid JSON object with the marker fields first:
+
+```json
+{"truncated":true,"totalChars":71273,"totalBytes":71519,"spillId":"call_abc","spillPath":"…/tool-output/call_abc.txt","hint":"…","head":"<start of the result>"}
+```
+
+The saved file is an exact copy of the original result. The agent reads it
+with `mcp_read_result` (`id` = `spillId`, `offset`, `length` up to 60,000) and
+continues from `nextOffset` until `done` is true. It does not need access to
+the host's file system. Sessions with content storage turned off get the
+envelope with a `spillError` instead of a saved copy.
+
+The limit defaults to 65,536 characters. Set `maxResultChars` on a server to
+change it, and `toolMaxResultChars` (`{"<tool name>": n}`) to change it per
+tool. Read-only tools (`readOnlyHint`) and tools with paging arguments
+(`offset`, `maxChars`, `nextOffset`, …) always get room for their own page:
+twice the requested `maxChars` (or the schema's default or maximum) plus 4k for
+JSON escaping and the wrapper. A 60,000-character `get_process_xml` page
+therefore always arrives whole.
 
 ### Server list in the system prompt
 

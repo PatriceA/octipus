@@ -34,8 +34,8 @@ describe('MCPBridge.getLazyToolHandlers', () => {
     });
 
     const handlers = bridge.getLazyToolHandlers();
-    expect(handlers).toHaveLength(5);
-    expect(handlers.map(h => h.name)).toEqual(expect.arrayContaining(['mcp_list_tools', 'mcp_call_tool', 'mcp_list_resources', 'mcp_read_resource', 'mcp_get_prompt']));
+    expect(handlers).toHaveLength(6);
+    expect(handlers.map(h => h.name)).toEqual(expect.arrayContaining(['mcp_list_tools', 'mcp_call_tool', 'mcp_list_resources', 'mcp_read_resource', 'mcp_get_prompt', 'mcp_read_result']));
     expect(handlers[0].toolId).toBe('mcp');
     expect(handlers[1].toolId).toBe('mcp');
   });
@@ -151,9 +151,9 @@ describe('MCPBridge.getLazyToolHandlers', () => {
     expect(expanded[0].name).toBe('mcp_srv_a');
     expect(expanded[1].name).toBe('mcp_srv_b');
 
-    // Lazy: always 2 meta-tools
+    // Lazy: discovery, dispatch, resource, prompt and saved-result meta-tools
     const lazy = bridge.getLazyToolHandlers();
-    expect(lazy).toHaveLength(5);
+    expect(lazy).toHaveLength(6);
   });
 });
 

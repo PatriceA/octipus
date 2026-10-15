@@ -4,7 +4,7 @@ import { isCancellationError } from '@/core/swarm/errors';
 import { type SideEffectCounters, emptyCounters } from '@/core/swarm/receipt';
 import { renderToolActivity } from '@/core/work-stream/renderers';
 import { stripWorkStreamMeta } from '@/shared/work-stream';
-import { spillToolOutput } from './tool-output-spill';
+import { spillMcpResult, spillToolOutput } from './tool-output-spill';
 import { CODEMODE_TOOL_NAME } from '@/tools/codemode';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
@@ -1094,7 +1094,13 @@ export class ToolExecutor {
       // truncation below, since a housekeeping write must not turn a
       // successful command into an error.
       const raw = result.error ? null : sanitizeToolOutput(stripWorkStreamMeta(result.result), { maxLength: Infinity });
-      const spilled = raw
+      // A handler with its own ceiling (MCP) returns structured data: over the
+      // ceiling it becomes a valid-JSON envelope, never a mid-document cut.
+      const call = toolCalls.find((c) => c.id === result.toolCallId);
+      const limit = call ? this.tools.get(call.name)?.maxResultChars?.(call.arguments) : undefined;
+      const spilled = raw && limit !== undefined
+        ? await spillMcpResult(raw, { toolCallId: result.toolCallId, context: this.context, limit })
+        : raw
         ? await spillToolOutput(raw, {
             toolCallId: result.toolCallId,
             context: this.context,
@@ -1108,7 +1114,7 @@ export class ToolExecutor {
         spilled ||
         (raw === null
           ? ''
-          : raw.length > DEFAULT_MAX_LENGTH
+          : limit === undefined && raw.length > DEFAULT_MAX_LENGTH
             ? `${raw.slice(0, DEFAULT_MAX_LENGTH)} [truncated]`
             : raw);
       const modelSafe = modelSeesImages ? sanitized : stripBinaryBlobs(sanitized);
@@ -1138,7 +1144,7 @@ export class ToolExecutor {
         toolCallId: result.toolCallId,
         // Named, so a reader of the transcript (the eval's `toolsUsed`) knows
         // which tool answered without re-joining the assistant's calls.
-        toolName: toolCalls.find((c) => c.id === result.toolCallId)?.name ?? null,
+        toolName: call?.name ?? null,
         agentId: this.context.id,
       });
     }

@@ -16,6 +16,7 @@ import { SSETransport } from './transports/sse';
 import { StdioTransport } from './transports/stdio';
 import { StreamableHTTPTransport } from './transports/streamable-http';
 import { fileAt, writeFileAt } from '@/utils/fs-file';
+import { mcpResultLimit } from '@/core/tool-output-spill';
 
 export interface MCPServerConnection {
   id: string;
@@ -603,6 +604,12 @@ export class MCPBridge extends EventEmitter {
     return resolveToolExposure(this.exposureConfig(serverId) ?? {}, toolName);
   }
 
+  /** Result ceiling for one call (src/core/tool-output-spill.ts `mcpResultLimit`). */
+  maxResultChars(serverId: string, toolName: string, args: Record<string, unknown> = {}): number {
+    const tool = this.connections.get(serverId)?.tools.find((t) => t.name === toolName);
+    return mcpResultLimit(this.connections.get(serverId)?.server ?? this.serverConfigs.find((s) => s.id === serverId), tool, args, toolName);
+  }
+
   /** A server whose own exposure is `hidden` offers no resources or prompts either. */
   isServerHidden(serverId: string): boolean {
     return this.exposureConfig(serverId)?.exposure === 'hidden';
@@ -847,6 +854,7 @@ export class MCPBridge extends EventEmitter {
           parameters: tool.inputSchema,
           toolId: 'mcp',
           permissionAction: `${serverId}.${tool.name}`,
+          maxResultChars: (args) => bridge.maxResultChars(serverId, tool.name, args),
           execute: async (args, context) => {
             return bridge.callTool(serverId, tool.name, args, context);
           },
@@ -977,6 +985,7 @@ export class MCPBridge extends EventEmitter {
         },
         toolId: 'mcp',
         permissionAction: args => `${args.server_id}.${args.tool_name}`,
+        maxResultChars: args => bridge.maxResultChars(String(args.server_id), String(args.tool_name), (args.arguments as Record<string, unknown>) || {}),
         execute: async (args, context) => {
           const serverId = args.server_id as string;
           const toolName = args.tool_name as string;
@@ -1022,6 +1031,7 @@ export class MCPBridge extends EventEmitter {
           parameters: objectSchema(tool.inputSchema),
           toolId: 'mcp',
           permissionAction: () => action,
+          maxResultChars: (args: Record<string, unknown>) => this.maxResultChars(serverId, tool.name, args),
           // Authorized in mcp_call_tool's wrapped shape: authorizeMcpDispatch
           // unwraps a top-level `arguments` key, which for a tool whose own
           // schema has an `arguments` field would check the wrong object.

@@ -1,5 +1,6 @@
 import type { ToolHandler } from '@/core/agent-base';
 import { authorizeMcpDispatch } from '@/security/mcp-authorization';
+import { MAX_READ_CHARS, READ_RESULT_TOOL, readSpill } from '@/core/tool-output-spill';
 import type { MCPBridge } from './bridge';
 
 /** Resource content stays on demand; catalog results contain metadata only. */
@@ -35,5 +36,14 @@ export function resourceHandlers(bridge: MCPBridge): ToolHandler[] {
         await authorizeMcpDispatch(context, `${args.server_id}.prompts/get`, args);
         return bridge.getPrompt(String(args.server_id), String(args.name), args.arguments as Record<string, string> | undefined);
       } },
+    { name: READ_RESULT_TOOL, toolId: 'mcp',
+      description: `Read a slice of an MCP result that came back as {"truncated":true,...}: the exact saved text from character offset, up to length (max ${MAX_READ_CHARS}). Continue from nextOffset until done.`,
+      parameters: { type: 'object', properties: { id: { type: 'string', description: 'spillId from the truncated result' }, offset: { type: 'integer', minimum: 0 }, length: { type: 'integer', minimum: 1, maximum: MAX_READ_CHARS } }, required: ['id'] },
+      // A read verb: outsider text (suspicious taint), never egress.
+      permissionAction: 'read_result',
+      replaySafety: 'read_only',
+      // Its slice is already bounded; never envelope it again.
+      maxResultChars: () => Number.POSITIVE_INFINITY,
+      execute: async (args, context) => readSpill(args, { context }) },
   ];
 }

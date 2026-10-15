@@ -411,6 +411,14 @@ export interface MCPServer extends McpExposureConfig {
   requestTimeoutMs?: number;
   /** Some stdio servers use stderr for routine logs rather than failures. */
   stderrAsError?: boolean;
+  /**
+   * Largest result (characters) handed to the model as is; a larger one becomes
+   * a JSON envelope with the exact copy saved (default 65,536). Paging tools
+   * always get at least their own page (src/core/tool-output-spill.ts).
+   */
+  maxResultChars?: number;
+  /** Per-tool `maxResultChars`, by exact tool name. */
+  toolMaxResultChars?: Record<string, number>;
   isEnabled: boolean;
   /**
    * What the server offers, in a sentence. Lists the server in the
