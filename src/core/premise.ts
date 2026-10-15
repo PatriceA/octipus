@@ -84,6 +84,7 @@ function hasCreateIntent(text: string, matchIndex: number): boolean {
 function isNotAPath(token: string): boolean {
   return (
     token.includes('://') ||
+    (!IS_WIN && token.includes('\\')) ||
     token.startsWith('..') ||
     /^\d+(\.\d+)+$/.test(token) ||
     // bare domains: no slash, and the "extension" is really a TLD-ish word
@@ -118,10 +119,25 @@ export function checkNamedPaths(text: string, roots: string[]): PremiseCheck {
   if (!text) return { present, missing };
 
   const usableRoots = roots.filter(Boolean);
+  // A declared repository is the base for relative names, even when the brief
+  // is delivered from a different workspace. Never probe outside authorized
+  // roots: an inaccessible declaration is unknown, not proof files are missing.
+  const declared = text.match(/^\s*(?:repo(?:sitory)?(?: root)?|project(?: root)?|cwd)\s*:\s*["'`]?(.+?)["'`]?\s*$/im)?.[1];
+  const declaredRoot = declared && isAbsolute(declared) ? resolve(declared) : undefined;
+  const relativeRoots = declaredRoot
+    ? usableRoots.some(root => isInside(root, declaredRoot)) ? [declaredRoot] : []
+    : usableRoots;
+  const quoted = [...text.matchAll(new RegExp('(["\'`])([^"\'`\\n]+\\.(?:' + PATH_EXTENSIONS + '))\\1', 'gi'))];
+  const matches = [
+    ...quoted.map(match => ({ token: match[2], index: match.index ?? 0 })),
+    ...[...text.matchAll(PATH_TOKEN)]
+      .filter(match => !quoted.some(q => (match.index ?? 0) >= (q.index ?? 0) && (match.index ?? 0) < (q.index ?? 0) + q[0].length))
+      .map(match => ({ token: match[1], index: match.index ?? 0 })),
+  ].sort((a, b) => a.index - b.index);
   const seen = new Set<string>();
 
-  for (const match of text.matchAll(PATH_TOKEN)) {
-    const token = match[1];
+  for (const match of matches) {
+    const token = match.token;
     if (!token || seen.has(token) || isNotAPath(token)) continue;
     seen.add(token);
     if (seen.size > MAX_TOKENS) break;
@@ -134,9 +150,10 @@ export function checkNamedPaths(text: string, roots: string[]): PremiseCheck {
     // token can climb out of the workspace just as easily as an absolute one can
     // point outside it. A token that resolves outside every root is not
     // checkable, so it is reported as neither present nor missing.
-    const candidates = usableRoots
+    const activeRoots = isAbsolute(token) ? usableRoots : relativeRoots;
+    const candidates = activeRoots
       .map((root) => (isAbsolute(token) ? resolve(token) : resolve(root, token)))
-      .filter((abs, i) => isInside(usableRoots[i] as string, abs));
+      .filter((abs, i) => isInside(activeRoots[i] as string, abs));
     if (candidates.length === 0) continue;
 
     const exists = candidates.some((abs) => existsSync(abs));

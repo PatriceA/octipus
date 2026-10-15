@@ -1033,14 +1033,8 @@ export interface CLIParserCallbacks {
  * Ids are the CLI's own stable ids (Claude `tool_use.id`, codex `item.id`) so
  * start/result rows pair up in every UI (C1/C2/C9).
  */
-/**
- * CLI tool names that mean "ran a shell command". Claude reports one `Bash`
- * tool; codex reports the *resolved* program name (`detectToolFromCommand` maps
- * `npm`/`git`/`bun`/… individually), so only its unmapped `shell` bucket lands
- * here.
- * ponytail: undercounts codex's named commands; widen to the toolMap values if
- * `commandsRun` ever gates anything (today only `filesChanged` does).
- */
+/** Native Claude command tools. Codex is counted by its command_execution event,
+ * never the display label inferred from shell text. */
 const CLI_COMMAND_TOOLS = new Set(['Bash', 'shell']);
 /** Claude tools whose `run_in_background` work outlives the tool_result and dies with the process. */
 const CLAUDE_BACKGROUND_TOOLS = new Set(['Agent', 'Task', 'Bash']);
@@ -1127,11 +1121,12 @@ export class CLIOutputParser {
    * instead of silently skipping the tally.
    */
   private emit(type: AgentEvent['type'], data: unknown): void {
-    const d = data as { type?: string; toolName?: string; isError?: boolean } | null;
+    const d = data as { type?: string; toolName?: string; isError?: boolean; commandExecution?: boolean } | null;
     const bridged = !!d?.toolName && this.callbacks.isBridgedTool?.(d.toolName);
     if (bridged) { this.emitFn(type, data); return; }
     switch (d?.type) {
       case 'cli_tool_use':
+        if (d.commandExecution || CLI_COMMAND_TOOLS.has(d.toolName ?? '')) this.counters.commandsRun++;
         this.counters.byName[d.toolName || 'tool'] = (this.counters.byName[d.toolName || 'tool'] ?? 0) + 1;
         break;
       case 'cli_tool_result':
@@ -1146,9 +1141,9 @@ export class CLIOutputParser {
 
   /**
    * Deterministic side-effect counters for this CLI run, or `null` when the
-   * stream shape was never recognized (see `streamRecognized`). `toolCalls` /
-   * `commandsRun` are derived from `byName` at snapshot time so they cannot
-   * drift; `filesChanged` is counted directly from `file_change` emissions,
+   * stream shape was never recognized (see `streamRecognized`). `toolCalls`
+   * is derived from `byName`; commands are counted from execution events,
+   * independently of presentation labels. `filesChanged` uses `file_change` emissions,
    * which BOTH vendors route through `emitFileChange`.
    */
   /** Background tasks the CLI started and never reported finished; they die with the process. */
@@ -1160,12 +1155,8 @@ export class CLIOutputParser {
     if (!this.streamRecognized) return null;
     const byName = { ...this.counters.byName };
     let toolCalls = 0;
-    let commandsRun = 0;
-    for (const [name, n] of Object.entries(byName)) {
-      toolCalls += n;
-      if (CLI_COMMAND_TOOLS.has(name)) commandsRun += n;
-    }
-    return { ...this.counters, toolCalls, commandsRun, byName };
+    for (const n of Object.values(byName)) toolCalls += n;
+    return { ...this.counters, toolCalls, byName };
   }
 
   private emitFileChange(change: { action: string; path: string; content?: string; oldContent?: string; diff?: { patch: string; added: number; removed: number } }): void {
@@ -1675,6 +1666,7 @@ export class CLIOutputParser {
         type: 'cli_tool_use',
         id: itemId || undefined,
         toolName,
+        commandExecution: true,
         title: titleFromCommand(command),
         args: { command },
       });

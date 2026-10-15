@@ -49,6 +49,8 @@ let calls: WorkerCall[];
 let replies: Record<string, string[]>;
 /** How many times the run escalated to a human. */
 let approvalsAsked = 0;
+let commandCounts: number[] = [];
+let stopAtStage: string | undefined;
 
 /**
  * A PASSING verdict that survives the audit-coverage gate.
@@ -97,6 +99,7 @@ beforeAll(async () => {
     { name: 'Implement', topic: 'coding', loopOverPlan: true, promptTemplate: 'implement: {{description}}' },
     {
       name: 'QA',
+      runsCommands: true,
       topic: 'qa',
       loopOverPlan: true,
       stageType: 'qa_validation',
@@ -133,13 +136,17 @@ beforeAll(async () => {
     input: string,
     _ctx: unknown,
     context: AgentContext & { stageName?: string },
+    options?: { onCounters?: (counters: import('@/core/swarm/receipt').SideEffectCounters) => void },
   ) => {
     const stageName = context?.stageName ?? '';
     calls.push({ role, stageName, input });
+    if (stageName === stopAtStage) await manager.stop(String(context.metadata?.pipelineId));
+    options?.onCounters?.({ filesChanged: 0, commandsRun: stageName === 'QA' ? commandCounts.shift() ?? 1 : 1, toolCalls: 1, toolErrors: 0, approvalsRequired: 0, approvalsDenied: 0, autoApproved: 0, permissionDenials: 0, byName: {} });
 
     if (stageName === 'Plan') {
       const pipelineId = (context.metadata as { pipelineId?: string })?.pipelineId;
       const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+      if ((await pipelineRepository.getPlanItems(pipelineId!)).length) return 'retained existing plan';
       await pipelineRepository.addPlanItems([
         { pipelineId: pipelineId!, ordinal: 0, title: 'item one' },
         { pipelineId: pipelineId!, ordinal: 1, title: 'item two' },
@@ -165,6 +172,8 @@ beforeEach(() => {
   calls = [];
   replies = {};
   approvalsAsked = 0;
+  commandCounts = [];
+  stopAtStage = undefined;
 });
 
 /** Visits per node name, read from the rows the run wrote. */
@@ -361,4 +370,87 @@ test('stop after replay approval but before reconstruction completes does not re
     expect(calls).toHaveLength(priorCalls);
     expect(await pipelineRepository.getCheckpoints(pipelineId, 100)).toEqual(checkpoints);
   } finally { unsubscribe(); lookup.mockRestore(); }
+});
+
+
+describe('stage contract retries', () => {
+  test('retries a failed execution contract with feedback and then finishes all items', async () => {
+    replies = { QA: [QA_PASS] };
+    commandCounts = [0, 1, 1];
+    const { pipelineId } = await run('retry the contract');
+    expect((await visitsByNode(pipelineId)).QA).toBe(3);
+    expect(calls.filter(call => call.stageName === 'QA')[1].input).toContain('ran 0 commands');
+    expect(await planItemStatuses(pipelineId)).toEqual(['done', 'done']);
+  });
+  test('stops at the retry budget, lists remaining items and saves the retry count', async () => {
+    replies = { QA: [QA_PASS] };
+    commandCounts = [0, 0, 0, 0];
+    const { pipelineId, result } = await run('exhaust the contract');
+    expect((await visitsByNode(pipelineId)).QA).toBe(3);
+    expect(result).toContain('Remaining items: item one; item two');
+    const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+    const checkpoint = (await pipelineRepository.getCheckpoints(pipelineId, 1))[0];
+    expect(Object.values(checkpoint.state.contractRetries as Record<string, number>)).toContain(2);
+    expect((await planItemStatuses(pipelineId))[1]).toBe('pending');
+  });
+});
+
+
+test('stopping an active stage retains its checkpoint and never advances to another item', async () => {
+  stopAtStage = 'QA';
+  replies = { QA: [QA_PASS] };
+  const { pipelineId } = await run('stop during QA');
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  expect((await pipelineRepository.findById(pipelineId))?.status).toBe('paused');
+  expect((await pipelineRepository.getNodes(pipelineId)).find(node => node.name === 'QA')?.status).toBe('pending');
+  expect(await planItemStatuses(pipelineId)).toEqual(['running', 'pending']);
+  const checkpoint = (await pipelineRepository.getCheckpoints(pipelineId, 1))[0];
+  expect(checkpoint.state.previousOutput).toContain('Implement');
+});
+
+test('resume reuses completed stages and finishes the remaining plan items', async () => {
+  stopAtStage = 'QA';
+  replies = { QA: [QA_PASS] };
+  const { pipelineId } = await run('resume the saved QA stage');
+  const priorCalls = calls.length;
+  stopAtStage = undefined;
+  // Simulate an older run without a link and a coordinator-owned visible plan.
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  const { workPlanRepository } = await import('@/db/repositories/work-plan-repository');
+  const { reviseWorkPlan, planUpdateSchema } = await import('@/shared/work-plan');
+  await pipelineRepository.updatePipeline(pipelineId, { metadata: {} });
+  const visible = await workPlanRepository.read(sessionId, userId);
+  const coordinated = reviseWorkPlan(visible, planUpdateSchema.parse({ ...visible.current, revision: visible.revision, summary: 'Coordinator updated the plan' }));
+  await workPlanRepository.save(sessionId, userId, visible.revision, coordinated);
+  // Recovery approval is tested separately; this test exercises the actual
+  // checkpoint walker after approval, without launching a model or asking a user.
+  const { actionRecovery } = await import('@/core/action-recovery');
+  const approval = vi.spyOn(actionRecovery, 'reviewPipeline').mockResolvedValue();
+  try {
+    await manager.resume(pipelineId);
+    expect(calls.slice(priorCalls).map(call => call.stageName)).toEqual(['QA', 'Implement', 'QA']);
+    expect(await planItemStatuses(pipelineId)).toEqual(['done', 'done']);
+    expect((await visitsByNode(pipelineId)).Plan).toBe(1);
+    expect((await workPlanRepository.read(sessionId, userId)).current?.sourcePipelineId).toBe(pipelineId);
+  } finally { approval.mockRestore(); }
+});
+
+
+test('launching over a coordinator plan retains all phases and skips completed work', async () => {
+  const { workPlanRepository } = await import('@/db/repositories/work-plan-repository');
+  const { reviseWorkPlan, planUpdateSchema } = await import('@/shared/work-plan');
+  const state = await workPlanRepository.read(sessionId, userId);
+  const planned = reviseWorkPlan(state, planUpdateSchema.parse({ revision: state.revision, newPlan: true,
+    title: 'All phases', goal: 'Finish the app', summary: 'Six phases',
+    steps: Array.from({ length: 6 }, (_, i) => ({ id: `p${i}`, title: `Phase ${i}`, status: i === 0 ? 'done' : 'pending', evidence: i === 0 ? 'Already verified' : '' })),
+  }));
+  await workPlanRepository.save(sessionId, userId, state.revision, planned);
+  replies = { QA: [QA_PASS] };
+  const { pipelineId } = await run('complete all phases');
+  expect(await planItemStatuses(pipelineId)).toEqual(Array(6).fill('done'));
+  expect((await visitsByNode(pipelineId)).Implement).toBe(5);
+  expect(calls.find(call => call.stageName === 'Plan')?.input).toContain('do not append duplicates');
+  const visible = await workPlanRepository.read(sessionId, userId);
+  expect(visible.current?.steps).toHaveLength(6);
+  expect(visible.current?.steps.every(step => step.status === 'done')).toBe(true);
 });

@@ -1,3 +1,4 @@
+vi.mock('./cli-executable', () => ({ configuredCliBinary: (binary: string) => binary }));
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

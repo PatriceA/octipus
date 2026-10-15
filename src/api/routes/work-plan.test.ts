@@ -161,6 +161,18 @@ describe('plan API and agent handoff', () => {
     expect(durable.current!.steps[0].status).toBe('pending');
   });
 
+  it('allows summary and goal-only tool updates without resending the plan', async () => {
+    const update = createWorkPlanTools().find(t => t.name === 'update_work_plan')!;
+    const context = { sessionId: draftSid, userId: alice } as AgentContext;
+    const before = await workPlanRepository.read(draftSid, alice);
+    await update.execute({ revision: before.revision, goal: 'Decisions are approved', summary: 'Clarified scope' }, context);
+    const after = await workPlanRepository.read(draftSid, alice);
+    expect(after.current!.goal).toBe('Decisions are approved');
+    expect(after.current!.details).toBe(before.current!.details);
+    expect(after.current!.steps).toEqual(before.current!.steps);
+    await update.execute({ revision: after.revision, summary: 'Reviewed scope' }, context);
+  });
+
   it('patches through the real tool with a small receipt and preserves plan-mode restrictions', async () => {
     const update = createWorkPlanTools().find(t => t.name === 'update_work_plan')!;
     const context = { sessionId: draftSid, userId: alice } as AgentContext;

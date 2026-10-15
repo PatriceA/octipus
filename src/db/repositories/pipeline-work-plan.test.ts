@@ -61,3 +61,15 @@ describe('pipeline work plan projection', () => {
     expect(state.current?.details).toContain('item-24');
   });
 });
+
+
+it('adopts the root plan explicitly linked at launch and preserves its feedback and history', () => {
+  let state = reviseWorkPlan(emptyWorkPlan(), planUpdateSchema.parse({ revision: 0, title: 'Root plan', goal: 'Build', summary: 'Plan', steps: [{ id: 'p1', title: 'Build', status: 'pending' }] }));
+  state = addPlanFeedback(state, state.current!.id, state.revision, 'Keep compatibility');
+  const linked = { ...pipeline, metadata: { workPlanId: state.current!.id } };
+  const next = projectPipelinePlan(state, linked, [item('one', 'running')]);
+  expect(next.current?.sourcePipelineId).toBe(pipeline.id);
+  expect(next.current?.steps[0].status).toBe('working');
+  expect(next.current?.feedback[0].text).toBe('Keep compatibility');
+  expect(next.previous[0].id).toBe(state.current!.id);
+});

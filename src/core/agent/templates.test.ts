@@ -133,7 +133,7 @@ describe('stage declarations survive the template round-trip', () => {
   };
   // Carried under a different name (`topic` → `role`) or deliberately not
   // carried at all — everything else must survive byte for byte.
-  const RENAMED_OR_DROPPED = new Set(['topic', 'description']);
+  const RENAMED_OR_DROPPED = new Set(['topic', 'description', 'model']);
 
   test('stepConfigToStageTemplate drops no declaration', () => {
     const mapped = stepConfigToStageTemplate(everyDeclaration) as unknown as Record<string, unknown>;
@@ -142,6 +142,7 @@ describe('stage declarations survive the template round-trip', () => {
       expect([key, mapped[key]]).toEqual([key, (everyDeclaration as Record<string, unknown>)[key]]);
     }
     expect(mapped.role).toBe('coding');
+    expect(mapped.model).toBeUndefined();
   });
 
   test('buildStagesFromTemplate drops no declaration', () => {

@@ -25,15 +25,19 @@ export const planUpdateSchema = z.object({
 export type PlanUpdate = z.infer<typeof planUpdateSchema> & { explicitEvidenceUpdates?: string[] };
 /** Patch existing steps only; omitted fields and unrelated steps are preserved. */
 export const planPatchSchema = z.object({
+  newPlan: z.literal(false).optional(),
   revision: z.number().int().nonnegative(),
   summary: z.string().trim().min(1).max(1000),
   kind: z.enum(['execution', 'proposal']).optional(),
+  title: planUpdateSchema.shape.title.optional(),
+  goal: planUpdateSchema.shape.goal.optional(),
+  details: planUpdateSchema.shape.details,
   stepUpdates: z.array(z.object({
     id: planStepSchema.shape.id,
     title: planStepSchema.shape.title.optional(),
     status: planStepSchema.shape.status.optional(),
     evidence: z.string().max(2000).optional(),
-  }).strict()).min(1).max(20),
+  }).strict()).max(20).default([]),
   feedbackResponses: z.array(z.object({
     id: z.string(), status: z.enum(['applied', 'needs_clarification']),
     response: z.string().trim().min(1).max(1000),

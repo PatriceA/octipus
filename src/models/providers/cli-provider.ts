@@ -1,3 +1,4 @@
+import { configuredCliBinary } from '@/core/cli-executable';
 import { describeCliCapabilities } from '@/shared/cli-capabilities';
 import { cliCredentialOwnerFor, cliEnvFor, cliWorkDirFor } from '@/core/cli-child-env';
 import { discoverCodexMcpServers, getClaudeSpaceSettingsPath, getEmptyMcpConfigPath, getEmptyVibeHome } from '@/core/cli-adapters';
@@ -832,9 +833,8 @@ export class CLIProvider implements ModelProvider {
   }
 
   private async checkToolAvailable(tool: CLIToolConfig): Promise<boolean> {
-    const cmd = process.platform === 'win32' ? 'where' : 'which';
     try {
-      await execCli(cmd, [tool.binaryPath], { timeoutMs: 5_000 });
+      configuredCliBinary(tool.binaryPath);
       return true;
     } catch {
       // Recoverable: binary not found → tool simply marked unavailable
@@ -937,6 +937,8 @@ export function windowsShellQuoter(binary: string): (value: string) => string {
  */
 export function execCli(binary: string, args: string[], opts?: { timeoutMs?: number; env?: Record<string, string>; cwd?: string; stdin?: string }): Promise<string> {
   return new Promise((resolve, reject) => {
+    const noShell = binary === 'agy';
+    try { binary = configuredCliBinary(binary); } catch (error) { reject(error); return; }
     // A newline inside a positional argv does not survive cmd.exe. The CLI
     // then runs with NO prompt at all, answers from its working directory,
     // and exits 0 — a confident hallucination with nothing to distinguish it
@@ -958,7 +960,6 @@ export function execCli(binary: string, args: string[], opts?: { timeoutMs?: num
     const timeout = opts?.timeoutMs ?? 600_000;
     // agy is a native binary — shell:true on Windows would re-tokenize its
     // argv (breaking the prompt); only .cmd wrappers need the shell.
-    const noShell = binary === 'agy';
     const useShell = process.platform === 'win32' && !noShell;
     // shell:true hands the command line to cmd.exe, and Node joins
     // [binary, ...args] with plain spaces, quoting nothing — an unquoted

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { createHandoffContext, HANDOFF_EMIT_INSTRUCTION, parseStructuredHandoff, stripHandoffBlock } from './handoff';
+import { createHandoffContext, HANDOFF_EMIT_INSTRUCTION, parseStructuredHandoff, stripHandoffBlock, stripPipelineControlBlocks } from './handoff';
 import { auditScopeBefore, handoffConfidenceByStage } from './pipeline-manager';
 import { fileAt } from '@/utils/fs-file';
 
@@ -293,4 +293,18 @@ describe('the fence never leaks into prose-derived fields', () => {
     // The prose says everything is green; only the block mentions "failure".
     expect(h.instructions.toLowerCase()).not.toContain('contains errors');
   });
+});
+
+
+describe('pipeline output presentation', () => {
+  test('removes internal verdict and handoff blocks while preserving ordinary code', () => {
+    const report = 'Tests passed.\n\n```json\n{"passed":true,"issues":[],"feedback":"Verified tests"}\n```\n\n```handoff\n{"completedWork":"done"}\n```\n\n```json\n{"port":3005}\n```';
+    expect(stripPipelineControlBlocks(report)).toBe('Tests passed.\n\n```json\n{"port":3005}\n```');
+    expect(report).toContain('"passed":true');
+  });
+});
+
+test('explicit contract fences never leak into user-facing output', async () => {
+  const { stripPipelineControlBlocks } = await import('./handoff');
+  expect(stripPipelineControlBlocks('Tests passed.\n```contract\nmalformed internal report\n```')).toBe('Tests passed.');
 });

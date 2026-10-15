@@ -1,3 +1,4 @@
+import { initializeCliExecutables } from '@/core/cli-executable';
 import { startMonitors, stopMonitors } from '@/core/monitors/service';
 import { startServer, stopApiServer } from '@/api/server';
 import { initializeChannels } from '@/channels';
@@ -95,6 +96,7 @@ async function main() {
     // Load runtime config from DB settings (replaces env-based config)
     await loadRuntimeConfig();
     logger.info('Runtime configuration loaded');
+    initializeCliExecutables();
 
     // Invalidate config-derived singletons built DURING earlier startup (e.g.
     // anything that reached a model provider lazily constructs the

@@ -1,3 +1,4 @@
+import { cliExecutableHealth } from '@/core/cli-executable';
 import { Elysia } from '@/api/http';
 import { adminDenied } from '@/api/admin-guard';
 import { apiContext } from '@/api/context';
@@ -177,6 +178,7 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
           total: status.agents.length,
           running: status.agents.filter((a) => a.status === 'running').length,
         },
+        cliExecutables: cliExecutableHealth(),
         health: {
           database: status.health.database,
           storage: status.health.storage,

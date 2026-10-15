@@ -1,3 +1,4 @@
+vi.mock('./cli-executable', () => ({ configuredCliBinary: (binary: string) => binary }));
 /**
  * Task 5: the worker resumes the vendor CLI session across turns of one
  * octipus session for every adapter the capability table marks resumable

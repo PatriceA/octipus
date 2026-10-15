@@ -13,11 +13,16 @@
  *      succeeds. Tagged `describe.skipIf(!hasBwrap)` so CI without
  *      a sandbox runner stays green.
  */
-import { afterEach, beforeAll, describe, expect, test } from 'vitest';
+import { afterEach, beforeAll, describe, expect, test, vi } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  return { ...actual, homedir: vi.fn(actual.homedir) };
+});
 
 const BWRAP_PATHS = ['/usr/bin/bwrap', '/usr/local/bin/bwrap', '/bin/bwrap'];
 const hasBwrap = BWRAP_PATHS.some((p) => existsSync(p));
@@ -130,7 +135,7 @@ describe.skipIf(!hasBwrap)('wrapCommand — mode "auto" with bwrap installed', (
         const path = join(homedir(), '.local', dir);
         expect(argv).toContain(`--ro-bind-try\n${path}\n${path}`);
       }
-      expect(argv).toContain(`--setenv\nPATH\n/usr/bin:/bin:${join(homedir(), '.local', 'bin')}`);
+      expect(argv).toContain(`--setenv\nPATH\n/usr/bin:/bin:${join(homedir(), '.local', 'bin')}:${join(homedir(), '.npm-global', 'bin')}`);
       expect(out.argv).not.toContain(homedir());
     } finally { out.cleanup(); getConfig().security.shellSandbox = 'off'; }
   });
@@ -187,6 +192,41 @@ describe.skipIf(!hasBwrap)('end-to-end: bwrap-wrapped command actually executes'
     expect(r.status).toBe(0);
     expect(r.stdout).toBe('hi');
     getConfig().security.shellSandbox = 'off';
+  });
+
+  test('runs a user-prefix Node CLI symlink without exposing credentials or writable tools', async () => {
+    const { getConfig } = await import('@/config');
+    const { wrapCommand } = await import('@/security/shell-sandbox');
+    const { spawnSync } = await import('node:child_process');
+    const home = mkdtempSync(join(homedir(), '.octipus-sandbox-test-'));
+    const bin = join(home, '.npm-global/bin');
+    const packageDir = join(home, '.npm-global/lib/node_modules/sandbox-cli');
+    mkdirSync(bin, { recursive: true });
+    mkdirSync(packageDir, { recursive: true });
+    writeFileSync(join(home, '.npmrc'), 'private fixture');
+    writeFileSync(join(packageDir, 'cli.cjs'), `#!/usr/bin/env node
+const fs = require('node:fs');
+if (fs.existsSync(${JSON.stringify(join(home, '.npmrc'))})) process.exit(2);
+try { fs.writeFileSync(__filename, 'overwrite'); process.exit(3); }
+catch (error) { if (error.code !== 'EROFS') throw error; }
+console.log('user CLI executed; runtime read-only; credentials hidden');
+`, { mode: 0o755 });
+    symlinkSync('../lib/node_modules/sandbox-cli/cli.cjs', join(bin, 'sandbox-cli'));
+    vi.mocked(homedir).mockReturnValue(home);
+    getConfig().security.shellSandbox = 'required';
+    const out = wrapCommand(['sandbox-cli'], { workspaceRoot: workspace, path: '/usr/bin:/bin' });
+    try {
+      const result = spawnSync(out.argv[0], out.argv.slice(1), { encoding: 'utf8' });
+      expect(result.stderr).toBe('');
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain('user CLI executed; runtime read-only; credentials hidden');
+    } finally {
+      out.cleanup();
+      vi.mocked(homedir).mockReset();
+      vi.mocked(homedir).mockImplementation((await vi.importActual<typeof import('node:os')>('node:os')).homedir);
+      rmSync(home, { recursive: true, force: true });
+      getConfig().security.shellSandbox = 'off';
+    }
   });
 
   test('blocks reads outside the workspace root', async () => {

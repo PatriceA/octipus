@@ -9,6 +9,33 @@ in a subscription.
 
 Pi supplies the TUI components. It is not an additional agent integration.
 
+## Executable paths and pipeline recovery
+
+At startup, Octipus reads the user's login PATH and checks configured CLI
+executables. Standard `~/.local/bin` and `~/.npm-global/bin` installations are
+included. Set `cliModels.path` in Settings to use an explicit PATH instead;
+restart after changing it. The executable settings are
+`cliModels.claudeCode.binaryPath`, `cliModels.codexCli.binaryPath`, and
+`cliModels.antigravityCli.binaryPath`. Each accepts a command name or absolute
+path. Their first-boot environment equivalents are `OCTIPUS_CLI_PATH`,
+`OCTIPUS_CLAUDE_BINARY`, `OCTIPUS_CODEX_BINARY`, and
+`OCTIPUS_ANTIGRAVITY_BINARY`. Authenticated detailed health reports executable
+paths or the PATH searched when resolution fails.
+
+`create_pipeline` returns a handle after saving the graph and initial checkpoint.
+Use `get_pipeline_status({id})` for stage results and remaining items, and
+`resume_pipeline({id, fromStage?})` to recover a failed or stopped run.
+`fromStage` accepts an exact stage name or node key within retained checkpoints;
+omitting it resumes the latest checkpoint. Earlier completed outputs are reused;
+the interrupted stage runs again. The coordinator collects pipeline results and
+writes its own final response.
+
+Each plan item traverses the configured body stages. Stage execution-contract
+failures retry with the failure reason, up to `maxRetries` (additional attempts).
+Retry counts survive checkpoints. Stopping preserves the current stage for resume;
+restarting the server pauses interrupted runs instead of restarting paid work.
+Pipeline progress updates the work plan linked when the pipeline was launched.
+
 ## Authenticate with a vault credential
 
 Managed CLI agents receive these instructions automatically in their system prompt;

@@ -1,3 +1,4 @@
+import { configuredCliBinary } from './cli-executable';
 import { inlineUiRepairMessage, storeInlineUiBlocks } from '@/core/inline-ui/extract';
 import { VAULT_USAGE_GUIDANCE } from '@/core/agent/vault-guidance';
 import { usageContextOf } from '@/core/agent/context';
@@ -255,7 +256,7 @@ When a task matches one of these skills, load it with get_skill before starting 
   private async executeBridgedTool(name: string, args: Record<string, unknown>): Promise<BridgeResult> {
     this.activeBridgeCalls++;
     const id = randomUUID();
-    const delegation = name === 'spawn_child' || name === 'escalate_to_other_lane' || name === 'collect_children' || this.toolExecutor.getTools().get(name)?.final === true;
+    const delegation = name === 'invoke_recipe' || name === 'create_pipeline' || name === 'spawn_child' || name === 'escalate_to_other_lane' || name === 'collect_children' || this.toolExecutor.getTools().get(name)?.final === true;
     if (delegation) this.setPause('delegation', true);
     // A collect answer can be lost without the bridge noticing: a CLI that
     // timed the call out may drop it without closing the socket, so the write
@@ -1052,7 +1053,7 @@ When a task matches one of these skills, load it with get_skill before starting 
     // Discovery reads the config.toml the run will read: the owner's CODEX_HOME for a personal row.
     const codexMcpServers = this.connection && adapterKey === 'Codex CLI' ? await discoverCodexMcpServers(workspaceCwd, cliEnvFor(this.credentialOwner, toolConfig)) : undefined;
     const built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, resumedChildSystem ?? this.systemMessages, resumedChildSystem ? resumedChildSystem.join('\n\n') : systemPrompt, Math.max(0, this.config.maxTokenBudget - this.billableTokensUsed), this.context.id, this.connection ? { ...this.connection, workingDirectory: workspaceCwd, codexMcpServers, shellGuard: getConfig().agent?.cliShellGuard !== false, maxIterations: Math.max(1, this.config.maxIterations - this.iteration), space: !!this.context.space, personal: !!this.credentialOwner } : undefined, resume);
-    const { binary, args, stdinPrompt, useShell } = built;
+    const { args, stdinPrompt, useShell } = built;
     this.launchCleanup = () => {
       const configIndex = args.indexOf('--mcp-config');
       // Windows writes the system prompt to a temp file (command-line length cap).
@@ -1063,6 +1064,7 @@ When a task matches one of these skills, load it with get_skill before starting 
         catch (err) { agentLogger.warn({ err, path }, 'CLI temporary configuration cleanup failed'); }
       }
     };
+    const binary = configuredCliBinary(built.binary);
     // Vendor CLIs that reuse the `claude` binary (z.ai GLM / Moonshot Kimi) inject
     // ANTHROPIC_BASE_URL + auth token via buildEnv — merge it over the adapter's env.
     const toolEnv = { ...built.env, ...providerEnv };

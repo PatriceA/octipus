@@ -315,6 +315,7 @@ export const agentConfigSchema = z.object({
 
 // CLI models configuration schema
 export const cliModelsConfigSchema = z.object({
+  path: z.string().optional(),
   enabled: z.boolean().default(true),
   claudeCode: z.object({
     enabled: z.boolean().default(true),

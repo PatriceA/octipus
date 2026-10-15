@@ -53,6 +53,15 @@ export function settingKeyToConfigPath(key: string): string[] {
 }
 
 export const SETTINGS_REGISTRY: SettingDefinition[] = [
+  { key: 'cliModels.path', category: 'agent', valueType: 'string', defaultValue: '', isSecret: false,
+    envVar: 'OCTIPUS_CLI_PATH', description: 'PATH used by CLI agents and pipeline shells. Empty uses the login PATH. Restart after changing.' },
+  { key: 'cliModels.claudeCode.binaryPath', category: 'agent', valueType: 'string', defaultValue: 'claude', isSecret: false,
+    envVar: 'OCTIPUS_CLAUDE_BINARY', description: 'Claude executable name or absolute path. Validated at startup.' },
+  { key: 'cliModels.codexCli.binaryPath', category: 'agent', valueType: 'string', defaultValue: 'codex', isSecret: false,
+    envVar: 'OCTIPUS_CODEX_BINARY', description: 'Codex executable name or absolute path. Validated at startup.' },
+  { key: 'cliModels.antigravityCli.binaryPath', category: 'agent', valueType: 'string', defaultValue: 'agy', isSecret: false,
+    envVar: 'OCTIPUS_ANTIGRAVITY_BINARY', description: 'Antigravity executable name or absolute path. Validated at startup.' },
+
   // ── LiteLLM ──
   {
     key: 'litellm.proxyUrl',

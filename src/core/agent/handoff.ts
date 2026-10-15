@@ -301,6 +301,20 @@ export function stripHandoffBlock(output: string): string {
   return output.replace(/```handoff\s*\n?[\s\S]*?\n?```/g, '').replace(/\n{3,}/g, '\n\n').trimEnd();
 }
 
+/** Presentation only: keep verdict JSON available to the gate via the raw reply. */
+export function stripPipelineControlBlocks(output: string): string {
+  return stripHandoffBlock(output).replace(/```contract\s*\n[\s\S]*?\n```/gi, '').replace(/```(?:json)?\s*\n([\s\S]*?)\n```/gi, (block, body: string) => {
+    try {
+      const value: unknown = JSON.parse(body);
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return block;
+      const record = value as Record<string, unknown>;
+      const verdict = ['passed', 'verdict', 'status', 'result', 'outcome'].some(key => key in record);
+      const contract = 'whatIDidNotCheck' in record || ('issues' in record && 'feedback' in record);
+      return verdict && contract ? '' : block;
+    } catch { return block; /* ordinary code is not a control block */ }
+  }).replace(/\n{3,}/g, '\n\n').trim();
+}
+
 // ── Internal extraction helpers ──────────────────────────────────
 
 function extractDecisions(output: string): string[] {
