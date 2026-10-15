@@ -9,8 +9,10 @@ import { hydrateWalk, serializeWalk, type WalkState } from './pipeline-manager';
  */
 const state: WalkState = {
   cursor: 'n3',
+  contractRetries: { 'item:n3': 2 },
+  contractFeedback: 'ran 0 commands',
   previousOutput: 'the implementer wrote a parser',
-  handoffChain: [{ completedWork: 'parser', decisions: ['recursive descent'] } as never],
+  handoffChain: [{ timestamp: new Date('2026-10-15T10:00:00Z'), completedWork: 'parser', decisions: ['recursive descent'] } as never],
   pipelineSources: ['stage(1: Plan/architect)'],
   traversals: { 'n3->n1:qa_fail': 2 },
   loopMarks: { loop1: 1 },
@@ -42,6 +44,8 @@ describe('walk state — checkpoint round trip', () => {
     const bare = hydrateWalk({ cursor: 'n0' });
     expect(bare).toEqual({
       cursor: 'n0',
+      contractRetries: {},
+      contractFeedback: undefined,
       previousOutput: '',
       handoffChain: [],
       pipelineSources: [],
@@ -81,4 +85,9 @@ describe('walk state — the rejected report survives a checkpoint', () => {
     const state = hydrateWalk({ cursor: 'n5', pendingRejection: 'reason' });
     expect(state?.rejectedReport).toBeUndefined();
   });
+});
+
+
+test('invalid persisted handoff timestamps are refused before resume', () => {
+  expect(hydrateWalk({ ...serializeWalk(state), handoffChain: [{ timestamp: 'invalid' }] })).toBeNull();
 });

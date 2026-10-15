@@ -16,6 +16,18 @@ describe('visible work plans', () => {
     expect(state.current!.steps[0].title).toBe('Inspect code');
   });
 
+  it('patches the description without resending details or changing steps', () => {
+    const initial = input();
+    initial.details = 'Keep the full design';
+    const state = reviseWorkPlan(emptyWorkPlan(), initial);
+    const patch = planPatchSchema.parse({ revision: state.revision,
+      goal: 'All decisions are approved', summary: 'Correct stale description' });
+    const next = reviseWorkPlan(state, expandWorkPlanPatch(state, patch));
+    expect(next.current!.goal).toBe('All decisions are approved');
+    expect(next.current!.details).toBe(initial.details);
+    expect(next.current!.steps).toEqual(state.current!.steps);
+  });
+
   it('rejects stale, unknown, duplicate, mixed and completed-step patches', () => {
     const initial = input(); initial.steps[0].status = 'done';
     const state = reviseWorkPlan(emptyWorkPlan(), initial);

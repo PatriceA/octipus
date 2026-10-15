@@ -1,3 +1,5 @@
+import { getAgentManager } from '@/core/agent-manager';
+import { workPlanStateSchema } from '@/shared/work-plan';
 import { getRoleConfig } from './roles';
 import { withExecutionSignal } from '@/core/execution-scope';
 import { can, SpaceError } from '@/security/space-access';
@@ -34,7 +36,7 @@ import { WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
 import { type AuditScopeStage, auditVerdictFailure, coverageScope, unaddressedDoubt, uncoveredStages, unmetCriteria } from './audit-coverage';
 
-import { createHandoffContext, formatHandoffChain, HANDOFF_EMIT_INSTRUCTION, type HandoffContext, parseStructuredHandoff, stripHandoffBlock } from './handoff';
+import { createHandoffContext, formatHandoffChain, HANDOFF_EMIT_INSTRUCTION, type HandoffContext, parseStructuredHandoff, stripHandoffBlock, stripPipelineControlBlocks } from './handoff';
 import {
   compileTemplateToGraph,
   edgeId,
@@ -710,8 +712,8 @@ export function correctionDeclaration<T extends StageDeclaration & { producesPla
  * that exit code would reach the auditor labelled ground truth. Ordinal rather
  * than count, because `plan__add_items` can extend the plan mid-run.
  */
-export function isFinalPlanItem(items: Array<{ ordinal: number }>, current: { ordinal: number }): boolean {
-  return !items.some((i) => i.ordinal > current.ordinal);
+export function isFinalPlanItem(items: Array<{ ordinal: number; status?: string }>, current: { ordinal: number }): boolean {
+  return !items.some((i) => i.ordinal > current.ordinal && i.status !== 'done' && i.status !== 'skipped');
 }
 
 /**
@@ -723,7 +725,11 @@ export function isFinalPlanItem(items: Array<{ ordinal: number }>, current: { or
  * Serialized into one `pipeline_checkpoints.state` at every node boundary,
  * which is what makes pause/resume and rewind-to-node the same mechanism.
  */
+class StageContractError extends Error {}
+
 export interface WalkState {
+  contractRetries?: Record<string, number>;
+  contractFeedback?: string;
   cursor: string;
   previousOutput: string;
   handoffChain: HandoffContext[];
@@ -760,10 +766,21 @@ export function hydrateWalk(raw: unknown): WalkState | null {
   const record = <T>(v: unknown): Record<string, T> =>
     v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, T>) : {};
   const list = <T>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
+  const handoffChain: HandoffContext[] = [];
+  for (const value of list<unknown>(r.handoffChain)) {
+    if (!value || typeof value !== 'object') return null;
+    const handoff = value as Record<string, unknown>;
+    if (!(handoff.timestamp instanceof Date) && typeof handoff.timestamp !== 'string') return null;
+    const timestamp = new Date(handoff.timestamp);
+    if (!Number.isFinite(timestamp.getTime())) return null;
+    handoffChain.push({ ...handoff, timestamp } as unknown as HandoffContext);
+  }
   return {
     cursor: r.cursor,
+    contractRetries: record<number>(r.contractRetries),
+    contractFeedback: typeof r.contractFeedback === 'string' ? r.contractFeedback : undefined,
     previousOutput: typeof r.previousOutput === 'string' ? r.previousOutput : '',
-    handoffChain: list<HandoffContext>(r.handoffChain),
+    handoffChain,
     pipelineSources: list<string>(r.pipelineSources),
     traversals: record<number>(r.traversals),
     loopMarks: record<number>(r.loopMarks),
@@ -787,6 +804,8 @@ export class PipelineManager {
    * Two walkers on one pipeline pay for every remaining node twice.
    */
   private readonly walking = new Set<string>();
+  private readonly controllers = new Map<string, AbortController>();
+  private readonly signals = new Map<string, AbortSignal>();
 
   /**
    * Create a pipeline from a template type and start it.
@@ -803,7 +822,7 @@ export class PipelineManager {
       maxRetries?: number;
       params?: Record<string, unknown>;
       /**
-       * Called once the pipeline row exists, before any stage runs.
+       * Called once the graph and initial checkpoint exist, before any stage runs.
        *
        * A REST caller needs the id NOW — the run itself takes minutes, and a
        * POST that blocks that long is a timeout waiting to happen. With this
@@ -821,12 +840,13 @@ export class PipelineManager {
     // Scoped to the caller: a bare template NAME must resolve to the same row
     // the caller was authorized against (see `getPipelineTemplate`).
     const template = await getPipelineTemplate(type, userId);
+    if (options?.maxRetries !== undefined && (!Number.isInteger(options.maxRetries) || options.maxRetries < 0 || options.maxRetries > 10)) {
+      throw new Error('maxRetries must be an integer between 0 and 10');
+    }
     // Override maxRetries if provided
     if (options?.maxRetries != null) {
       for (const stage of template.stages) {
-        if (stage.stageType === 'qa_validation') {
-          stage.maxRetries = options.maxRetries;
-        }
+        stage.maxRetries = options.maxRetries;
       }
     }
     // Resolve + validate recipe parameters against the template's typed defs
@@ -847,6 +867,8 @@ export class PipelineManager {
       );
     }
 
+    const originPlan = (await sessionRepository.findById(sessionId))?.metadata?.workPlan;
+    const linkedPlan = originPlan ? workPlanStateSchema.parse(originPlan).current : null;
     const pipeline = await pipelineRepository.create({
       rootAgentId,
       sessionId,
@@ -862,13 +884,13 @@ export class PipelineManager {
       // template is re-read by `type`; the params were only ever in memory.
       metadata: {
         // What started the run, so a resume re-resolves the same scope.
+        workPlanId: linkedPlan?.id,
+        sourcePlanDetails: linkedPlan && !linkedPlan.sourcePipelineId ? linkedPlan.details : undefined,
         trigger: context.trigger,
         params: options?.params ?? {},
         ...(options?.maxRetries != null ? { maxRetries: options.maxRetries } : {}),
       },
     });
-
-    options?.onCreated?.(pipeline.id);
 
     // A `foreach` head adopts the approval flag of its first body node, and the
     // body node drops it: the user approves the PLAN once, before the loop
@@ -947,6 +969,20 @@ export class PipelineManager {
       'Pipeline created',
     );
 
+    if (linkedPlan && !linkedPlan.sourcePipelineId && graph.nodes.some(node => node.kind === 'foreach')
+      && linkedPlan.steps.some(step => !['done', 'skipped'].includes(step.status))) {
+      await pipelineRepository.addPlanItems(linkedPlan.steps.map((step, ordinal) => ({
+        pipelineId: pipeline.id, ordinal, title: step.title, detail: step.evidence,
+        status: step.status === 'done' || step.status === 'skipped' ? step.status : 'pending',
+        result: step.status === 'done' ? step.evidence : null,
+      })));
+    }
+
+    await pipelineRepository.saveCheckpoint({ pipelineId: pipeline.id, nodeKey: graph.entryKey,
+      state: serializeWalk({ cursor: graph.entryKey, previousOutput: '', handoffChain: [], pipelineSources: [],
+        traversals: {}, loopMarks: {}, pendingFeedback: {}, judgedContext: {}, currentItemId: null, steps: 0 }) });
+    options?.onCreated?.(pipeline.id);
+
     return this.runGraph({
       pipeline,
       graph,
@@ -1002,10 +1038,39 @@ export class PipelineManager {
       throw new Error(`Pipeline ${pipeline.id} is already being walked in this process.`);
     }
     this.walking.add(pipeline.id);
+    const controller = new AbortController();
+    this.controllers.set(pipeline.id, controller);
+    const parentSignal = args.resumeState ? undefined : getAgentManager().get(args.rootAgentId)?.getAbortSignal();
+    this.signals.set(pipeline.id, parentSignal ? AbortSignal.any([controller.signal, parentSignal]) : controller.signal);
     try {
-      return await this.walk(args);
+      const result = await this.walk(args);
+      const current = await this.getPipeline(pipeline.id);
+      if (current?.status === 'failed') {
+        const items = await pipelineRepository.getPlanItems(pipeline.id);
+        for (const item of items.filter(item => item.status === 'running')) {
+          await pipelineRepository.updatePlanItem(item.id, { status: 'failed', result: current.summary ?? result.result });
+        }
+        const remaining = items.filter(item => !['done', 'skipped'].includes(item.status)).map(item => item.title);
+        if (!result.result.includes('Remaining items:')) result.result += ` Remaining items: ${remaining.join('; ') || 'none'}.`;
+        await this.updatePipeline(pipeline.id, { summary: result.result });
+      }
+      return result;
+    } catch (error) {
+      const current = await this.getPipeline(pipeline.id);
+      if (current?.status !== 'paused') {
+        const items = await pipelineRepository.getPlanItems(pipeline.id);
+        for (const item of items.filter(item => item.status === 'running')) {
+          await pipelineRepository.updatePlanItem(item.id, { status: 'failed', result: error instanceof Error ? error.message : String(error) });
+        }
+        const remaining = items.filter(item => !['done', 'skipped'].includes(item.status)).map(item => item.title);
+        await this.updatePipeline(pipeline.id, { status: 'failed', summary:
+          `Pipeline execution failed: ${error instanceof Error ? error.message : String(error)}. Remaining items: ${remaining.join('; ') || 'none'}.` });
+      }
+      throw error;
     } finally {
       this.walking.delete(pipeline.id);
+      this.controllers.delete(pipeline.id);
+      this.signals.delete(pipeline.id);
     }
   }
 
@@ -1054,6 +1119,8 @@ export class PipelineManager {
     const judgedContext = new Map<string, string>();
     /** Rejection notice for a QA node re-running because its report was unaccountable. */
     let pendingRejection: string | undefined;
+    const contractRetries = new Map<string, number>();
+    let contractFeedback: string | undefined;
     /** That node's rejected report, handed back to it so the retry is a correction. */
     let rejectedReport: string | undefined;
     /** The plan item currently in flight, when inside a `foreach` body. */
@@ -1083,18 +1150,28 @@ export class PipelineManager {
       for (const [k, v] of Object.entries(r.pendingFeedback)) pendingFeedback.set(k, v);
       for (const [k, v] of Object.entries(r.judgedContext)) judgedContext.set(k, v);
       pendingRejection = r.pendingRejection;
+      contractFeedback = r.contractFeedback;
+      for (const [k, v] of Object.entries(r.contractRetries ?? {})) contractRetries.set(k, v);
       rejectedReport = r.rejectedReport;
       steps = r.steps;
       currentItem = r.currentItemId
         ? (await pipelineRepository.getPlanItems(pipeline.id)).find((i) => i.id === r.currentItemId) ?? null
         : null;
+      if (currentItem?.status === 'failed') {
+        await pipelineRepository.updatePlanItem(currentItem.id, { status: 'running' });
+        currentItem.status = 'running';
+      }
     }
 
     while (cursor) {
+      const persisted = await this.getPipeline(pipeline.id);
+      if (persisted?.status === 'paused') return { pipelineId: pipeline.id, result: persisted.summary ?? 'Pipeline paused.' };
       // Node boundary: snapshot first, then honour a pause request. Snapshot
       // BEFORE the node runs, so resuming re-enters this node rather than
       // trying to continue a worker turn mid-flight.
       const snapshot: WalkState = {
+        contractRetries: Object.fromEntries(contractRetries),
+        contractFeedback,
         cursor,
         previousOutput,
         handoffChain,
@@ -1288,6 +1365,15 @@ export class PipelineManager {
           ...paramVars,
         });
 
+        if (b.producesPlan) {
+          const existing = await pipelineRepository.getPlanItems(pipeline.id);
+          if (existing.length) {
+            input += `\n\nThe pipeline already contains the linked work plan. Call plan__list_items and refine it with plan__update_item. Preserve completed items and all remaining scope; do not append duplicates. Append only newly discovered work.\n${existing.map(item => `- ${item.id}: [${item.status}] ${item.title}`).join('\n')}`;
+            const details = pipeline.metadata?.sourcePlanDetails;
+            if (typeof details === 'string' && details) input += `\n\nOriginal plan details:\n${details}`;
+          }
+        }
+
         // The item this pass is for. Appended rather than only substituted, so
         // a template written before plan loops existed still sees it.
         if (currentItem && gnode.parentKey) {
@@ -1384,7 +1470,12 @@ export class PipelineManager {
           judgedContext.set(cursor, handoffText || previousOutput);
         }
 
+        const retryKey = `${currentItem?.id ?? "run"}:${cursor}`;
+        const retryCount = contractRetries.get(retryKey) ?? 0;
+        const retryLimit = stageTemplate.maxRetries ?? 3;
+        if (contractFeedback) input += `\n\nPrevious attempt failed its stage contract: ${contractFeedback}\nCorrect this failure and provide evidence of the required work.`;
         const stepResult = await this.runStepNode({
+          retryContract: retryCount < retryLimit,
           pipeline,
           node,
           // A correction visit is told to run and change nothing, so it is not
@@ -1414,6 +1505,12 @@ export class PipelineManager {
           title,
           reviewModels,
         });
+        if (stepResult.contractFailure) {
+          contractRetries.set(retryKey, retryCount + 1);
+          contractFeedback = stepResult.contractFailure;
+          continue;
+        }
+        contractFeedback = undefined;
         if (stepResult.stopped) return stepResult.stopped;
 
         // The corrected reply is the verdict block alone, and the audit it
@@ -1427,7 +1524,7 @@ export class PipelineManager {
         // outgoing edge always emits a handoff, so downstream reads
         // `handoffText` and never this. It is the node row, the UI and the audit
         // trail that would otherwise keep a bare verdict with the findings gone.
-        const verdictText = stepResult.output;
+        const verdictText = stripHandoffBlock(stepResult.raw);
         // A correction reply is the verdict block alone. If it carries no
         // handoff fence there is nothing structured to parse, and scraping the
         // bare verdict would build the downstream handoff out of JSON with every
@@ -1435,7 +1532,7 @@ export class PipelineManager {
         // Fall back to the re-joined pair in that case, not to the bare reply.
         previousRaw = parseStructuredHandoff(stepResult.raw) ? stepResult.raw : '';
         previousOutput = reportUnderCorrection
-          ? `${reportUnderCorrection}\n\n${stepResult.output}`
+          ? stripPipelineControlBlocks(`${reportUnderCorrection}\n\n${stepResult.output}`)
           : stepResult.output;
         // `runStepNode` stored the reply it received, which for a correction is
         // the verdict block ALONE — so the node row, the UI and the audit trail
@@ -1484,7 +1581,7 @@ export class PipelineManager {
             rejectedReport =
               qaResult.auditGateReason === 'coverage'
                 ? undefined
-                : (reportUnderCorrection ?? previousOutput);
+                : (reportUnderCorrection ?? verdictText);
           } else {
             outcome = 'qa_fail';
           }
@@ -1770,7 +1867,7 @@ export class PipelineManager {
    */
   private resuming = new Map<string, AbortController>();
 
-  async resume(pipelineId: string, opts: { fromSeq?: number } = {}): Promise<{ pipelineId: string; result: string }> {
+  async resume(pipelineId: string, opts: { fromSeq?: number; onResumed?: () => void } = {}): Promise<{ pipelineId: string; result: string }> {
     if (this.resuming.has(pipelineId)) throw new Error(`Pipeline ${pipelineId} is already awaiting resume or running.`);
     this.resuming.set(pipelineId, new AbortController());
     try { return await this.resumeReviewed(pipelineId, opts); }
@@ -1779,7 +1876,7 @@ export class PipelineManager {
 
   private async resumeReviewed(
     pipelineId: string,
-    opts: { fromSeq?: number },
+    opts: { fromSeq?: number; onResumed?: () => void },
   ): Promise<{ pipelineId: string; result: string }> {
     const pipeline = await this.getPipeline(pipelineId);
     if (!pipeline) throw new Error(`Pipeline ${pipelineId} not found.`);
@@ -1839,7 +1936,7 @@ export class PipelineManager {
   private async resumeWalk(
     pipeline: Pipeline,
     pipelineId: string,
-    opts: { fromSeq?: number },
+    opts: { fromSeq?: number; onResumed?: () => void },
     checkpoint: NonNullable<Awaited<ReturnType<typeof pipelineRepository.getCheckpoint>>>,
     resumeState: NonNullable<ReturnType<typeof hydrateWalk>>,
     context: AgentContext,
@@ -1858,7 +1955,7 @@ export class PipelineManager {
     const resumeMaxRetries = ((pipeline.metadata ?? {}) as { maxRetries?: number }).maxRetries;
     if (resumeMaxRetries != null) {
       for (const stage of template.stages) {
-        if (stage.stageType === 'qa_validation') stage.maxRetries = resumeMaxRetries;
+        stage.maxRetries = resumeMaxRetries;
       }
     }
     const built = buildStagesFromTemplate(template, pipeline.description ?? '');
@@ -1890,8 +1987,14 @@ export class PipelineManager {
     // A pause request the walker never reached (it was inside the last node
     // when the run ended) would otherwise fire on the first boundary of THIS
     // walk and pause it before it did anything.
-    const meta = (pipeline.metadata ?? {}) as Record<string, unknown>;
-    if (meta.pauseRequested) {
+    const meta = { ...(pipeline.metadata ?? {}) } as Record<string, unknown>;
+    // Older runs predate the explicit plan link. Establish it on an approved
+    // resume so their existing items also update the coordinator's visible plan.
+    const published = (await sessionRepository.findById(pipeline.sessionId))?.metadata?.workPlan;
+    const currentPlan = published ? workPlanStateSchema.parse(published).current : null;
+    const linkPlan = !meta.workPlanId && currentPlan && !currentPlan.sourcePipelineId;
+    if (linkPlan) meta.workPlanId = currentPlan.id;
+    if (meta.pauseRequested || linkPlan) {
       const { pauseRequested: _drop, ...rest } = meta;
       signal?.throwIfAborted();
       await this.updatePipeline(pipelineId, { metadata: rest });
@@ -1905,7 +2008,7 @@ export class PipelineManager {
     }
 
     signal?.throwIfAborted();
-    await this.updatePipeline(pipelineId, { status: 'running', currentNodeKey: resumeState.cursor });
+    await this.updatePipeline(pipelineId, { status: 'running', currentNodeKey: resumeState.cursor, summary: `Resumed from stage ${resumeState.cursor}.` });
     if (signal?.aborted) {
       await this.updatePipeline(pipelineId, { status: 'paused', summary: 'Pipeline replay cancelled.' });
       signal.throwIfAborted();
@@ -1914,6 +2017,7 @@ export class PipelineManager {
       { pipelineId, fromSeq: checkpoint.seq, nodeKey: resumeState.cursor },
       'Resuming pipeline from checkpoint',
     );
+    opts.onResumed?.();
 
     return this.runGraph({
       pipeline: { ...pipeline, status: 'running' },
@@ -1941,11 +2045,12 @@ export class PipelineManager {
       status: 'paused',
       summary: 'Pipeline stopped by user.',
     });
+    this.controllers.get(pipelineId)?.abort(new Error('Pipeline stopped by user'));
 
-    // Mark running nodes as skipped
+    // Interrupted nodes are rerun from their saved boundary on resume.
     for (const node of await this.getNodes(pipelineId)) {
       if (node.status === 'running' || node.status === 'awaiting_approval') {
-        await this.updateNode(node.id, { status: 'skipped' });
+        await this.updateNode(node.id, { status: 'pending' });
       }
     }
 
@@ -2091,7 +2196,7 @@ export class PipelineManager {
     }
 
     if (failure) {
-      throw new Error(
+      throw new StageContractError(
         `Stage "${stageName}" did not do what it declared: ${failure}. ` +
           `Reporting it complete would claim work that did not happen.`,
       );
@@ -2453,6 +2558,7 @@ export class PipelineManager {
    * goes through one place.
    */
   private async runStepNode(args: {
+    retryContract?: boolean;
     pipeline: Pipeline;
     node: PipelineNodeRow;
     declared: ReturnType<typeof buildStagesFromTemplate>[number];
@@ -2466,12 +2572,12 @@ export class PipelineManager {
     rootAgentId: string;
     title: string;
     reviewModels?: ReviewModelLedger;
-  }): Promise<{ output: string; raw: string; stopped?: { pipelineId: string; result: string } }> {
+  }): Promise<{ output: string; raw: string; contractFailure?: string; stopped?: { pipelineId: string; result: string } }> {
     const { pipeline, node, declared, stageTemplate, input, stageContext, context, registry, workspaceRoot, title } = args;
     const rootAgent = getAgentService();
     const sessionId = pipeline.sessionId;
 
-    await this.updateNode(node.id, { input, status: 'running' });
+    await this.updateNode(node.id, { input, status: 'running', error: null, completedAt: null });
 
     rootAgent['emit']({
       type: 'pipeline_event',
@@ -2535,6 +2641,7 @@ export class PipelineManager {
           onTokens: (t) => { spentTokens += t; },
           ...(this.grantedToolIds(declared) ? { extraToolIds: this.grantedToolIds(declared) } : {}),
           swarmParent: {
+            signal: this.signals.get(pipeline.id),
             id: args.rootAgentId,
             rootSessionId: sessionId,
             topicPath: node.visits > 1
@@ -2555,6 +2662,10 @@ export class PipelineManager {
         );
       }
 
+      if ((await this.getPipeline(pipeline.id))?.status === 'paused') {
+        await this.updateNode(node.id, { status: 'pending' });
+        return { output: '', raw: '', stopped: { pipelineId: pipeline.id, result: 'Pipeline stopped; resume from the saved stage checkpoint.' } };
+      }
       await this.assertStageEvidence({
         sessionId,
         pipelineId: pipeline.id,
@@ -2571,7 +2682,7 @@ export class PipelineManager {
       if (declared.producesPlan) {
         const items = await pipelineRepository.getPlanItems(pipeline.id);
         if (items.length === 0) {
-          throw new Error(
+          throw new StageContractError(
             `Stage "${node.name}" declares producesPlan but left no plan items. ` +
               `It must call \`plan__add_items\` with the steps the pipeline should carry out.`,
           );
@@ -2587,7 +2698,7 @@ export class PipelineManager {
       // back to scraping prose with regexes, while the prompt kept asking each
       // one for a fence nothing read.
       const raw = String(result || '');
-      const output = stripHandoffBlock(raw);
+      const output = stripPipelineControlBlocks(raw);
 
       await this.updateNode(node.id, { status: 'completed', output, completedAt: new Date() });
       recordRunEvent({
@@ -2627,6 +2738,20 @@ export class PipelineManager {
       return { output, raw };
     } catch (error) {
       const errorMsg = (error as Error).message;
+      if ((await this.getPipeline(pipeline.id))?.status === 'paused') {
+        await this.updateNode(node.id, { status: 'pending' });
+        return { output: '', raw: '', stopped: { pipelineId: pipeline.id, result: 'Pipeline stopped; resume from the saved stage checkpoint.' } };
+      }
+      if (error instanceof StageContractError && args.retryContract) {
+        await this.updateNode(node.id, { status: 'pending', error: errorMsg });
+        recordRunEvent({ runId: sessionId, subject: 'pipeline_node', subjectId: node.nodeKey,
+          event: 'node_failed', payload: { pipelineId: pipeline.id, reason: errorMsg } });
+        return { output: '', raw: '', contractFailure: errorMsg };
+      }
+      const remaining = (await pipelineRepository.getPlanItems(pipeline.id))
+        .filter(item => item.status !== 'done' && item.status !== 'skipped')
+        .map(item => item.title);
+      const remainingNote = remaining.length ? ` Remaining items: ${remaining.join('; ')}.` : '';
       await this.updateNode(node.id, { status: 'failed', error: errorMsg });
       recordRunEvent({
         runId: sessionId,
@@ -2637,7 +2762,7 @@ export class PipelineManager {
       });
       await this.updatePipeline(pipeline.id, {
         status: 'failed',
-        summary: `Failed at stage: ${node.name} — ${errorMsg}`,
+        summary: `Failed at stage: ${node.name} — ${errorMsg}${remainingNote}`,
       });
 
       coreLogger.error({ error, pipelineId: pipeline.id, stage: node.name }, 'Pipeline stage failed');
@@ -2649,7 +2774,7 @@ export class PipelineManager {
         { pipelineId: pipeline.id, stage: node.name },
       ).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
 
-      return { output: '', raw: '', stopped: { pipelineId: pipeline.id, result: `Pipeline failed at "${node.name}": ${errorMsg}` } };
+      return { output: '', raw: '', stopped: { pipelineId: pipeline.id, result: `Pipeline failed at "${node.name}": ${errorMsg}${remainingNote}` } };
     } finally {
       // Charge the node whatever this visit cost, success or failure — a run
       // that failed still burned the tokens, and the pool it draws from is what

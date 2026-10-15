@@ -71,7 +71,7 @@ export function createWorkPlanTools(): ToolHandler[] {
           type: 'string',
           description: 'Complete markdown plan artifact. Required in practice for a proposal; omit for routine execution progress.',
         },
-        stepUpdates: { type: 'array', description: 'Patch existing steps by id. Send only changed fields, revision and summary; optionally kind and feedbackResponses. Do not combine with a full plan. Omitted fields are preserved.', items: { type: 'object', properties: {
+        stepUpdates: { type: 'array', description: 'Patch existing steps by id. Omit this field for title, goal, details or summary-only updates. Send revision and summary; omitted fields are preserved. Do not combine with steps.', items: { type: 'object', properties: {
           id: { type: 'string' }, title: { type: 'string' },
           status: { type: 'string', enum: ['pending', 'working', 'done', 'blocked', 'skipped'] },
           evidence: { type: 'string' },
@@ -89,7 +89,7 @@ export function createWorkPlanTools(): ToolHandler[] {
     },
     execute: async (args, context) => {
       const current = await workPlanRepository.read(context.sessionId, context.userId);
-      const input = args.stepUpdates !== undefined
+      const input = args.steps === undefined && args.newPlan !== true
         ? expandWorkPlanPatch(current, planPatchSchema.parse(args))
         : planUpdateSchema.parse(args);
       const planMode = await sessionIsInPlanMode(context.sessionId, context.userId);

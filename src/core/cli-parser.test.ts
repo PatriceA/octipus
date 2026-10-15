@@ -375,6 +375,21 @@ describe('CLIOutputParser — side-effect counters', () => {
     expect(parser.getSideEffectCounters()?.filesChanged).toBe(2);
   });
 
+  it('counts each Codex command once regardless of quoting, name, or a missing start event', () => {
+    const { parser, feed } = makeParser();
+    const commands = ['pnpm -r test', 'docker compose build',
+      `/usr/bin/zsh -lc '"/home/user/Github Rep/bin/pnpm" -r typecheck'`,
+      'some-new-program --verify'];
+    commands.forEach((command, i) => {
+      const item = { id: `command-${i}`, type: 'command_execution', command,
+        aggregated_output: 'ok', exit_code: 0, status: 'completed' };
+      if (i !== 2) feed({ type: 'item.started', item }, 'Codex CLI');
+      feed({ type: 'item.completed', item }, 'Codex CLI');
+    });
+    expect(parser.getSideEffectCounters()?.commandsRun).toBe(4);
+    expect(parser.getSideEffectCounters()?.toolCalls).toBe(4);
+  });
+
   it('counts an errored tool result', () => {
     const { parser, feed } = makeParser();
     feed(assistantWith([{ name: 'Edit', input: { file_path: 'x.ts', old_string: 'a', new_string: 'b' } }]), 'Claude Code');

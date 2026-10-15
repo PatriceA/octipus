@@ -143,6 +143,7 @@ describe('stage declarations survive the template round-trip', () => {
       expect([key, mapped[key]]).toEqual([key, (everyDeclaration as Record<string, unknown>)[key]]);
     }
     expect(mapped.role).toBe('coding');
+    expect(mapped.model).toBeUndefined();
   });
 
   test('buildStagesFromTemplate drops no declaration', () => {

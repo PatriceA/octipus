@@ -139,3 +139,9 @@ describe('the delegation prompt and the spawn surfaces agree', () => {
     }
   });
 });
+
+
+test('pipeline outcomes return to the root for synthesis instead of terminating its turn', () => {
+  const tool = createMetaTools({} as never).find(t => t.name === 'create_pipeline');
+  expect(tool?.final).not.toBe(true);
+});

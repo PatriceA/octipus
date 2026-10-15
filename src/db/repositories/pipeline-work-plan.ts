@@ -5,7 +5,8 @@ import { planUpdateSchema, reviseWorkPlan, type WorkPlanState } from '@/shared/w
 export function projectPipelinePlan(state: WorkPlanState, pipeline: Pipeline, items: PlanItemRow[], previousPipeline?: Pipeline | null): WorkPlanState {
   const current = state.current;
   const replacing = !!current && current.sourcePipelineId !== pipeline.id;
-  if (replacing && (!current.sourcePipelineId || previousPipeline?.id !== current.sourcePipelineId
+  const linked = !!current && !current.sourcePipelineId && pipeline.metadata?.workPlanId === current.id;
+  if (replacing && !linked && (!current.sourcePipelineId || previousPipeline?.id !== current.sourcePipelineId
     || !['completed', 'failed'].includes(previousPipeline.status)
     || pipeline.createdAt <= previousPipeline.createdAt
     || current.feedback.some(feedback => feedback.status === 'pending'))) return state;
@@ -13,9 +14,9 @@ export function projectPipelinePlan(state: WorkPlanState, pipeline: Pipeline, it
   if (!items.length) return state.current
     ? { revision: state.revision + 1, current: null, previous: [...state.previous, state.current].slice(-20) }
     : state;
-  const status = (item: PlanItemRow) => item.status === 'running' ? (pipeline.status === 'failed' ? 'blocked' : 'working') : item.status === 'failed' ? 'blocked' : item.status;
+  const status = (item: PlanItemRow) => item.status === 'running' ? (['failed', 'paused'].includes(pipeline.status) ? 'blocked' : 'working') : item.status === 'failed' ? 'blocked' : item.status;
   const steps = items.slice(0, items.length > 20 ? 19 : 20).map(item => ({
-    id: item.id, title: item.title.slice(0, 240), status: status(item), evidence: (pipeline.status === 'failed' && item.status === 'running' ? pipeline.summary || 'Pipeline failed before this item finished.' : item.result ?? '').slice(0, 2000),
+    id: item.id, title: item.title.slice(0, 240), status: status(item), evidence: (['failed', 'paused'].includes(pipeline.status) && item.status === 'running' ? pipeline.summary || 'Pipeline failed before this item finished.' : item.result ?? '').slice(0, 2000),
   }));
   if (items.length > 20) {
     const rest = items.slice(19);
@@ -32,7 +33,11 @@ export function projectPipelinePlan(state: WorkPlanState, pipeline: Pipeline, it
   });
   // Pipeline rows are authoritative, including retries and human edits. Preserve
   // feedback/history, but do not apply the model-authored completed-step guard.
-  const next = reviseWorkPlan({ ...state, current: state.current && !replacing ? { ...state.current, steps: [] } : state.current }, input);
+  const base = linked && current
+    ? { ...state, current: null, previous: [...state.previous, current].slice(-20) }
+    : { ...state, current: state.current && !replacing ? { ...state.current, steps: [] } : state.current };
+  const next = reviseWorkPlan(base, input);
+  if (linked && current) next.current!.feedback = current.feedback;
   next.current!.id = pipeline.id;
   next.current!.sourcePipelineId = pipeline.id;
   return next;

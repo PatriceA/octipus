@@ -136,3 +136,15 @@ describe('the note', () => {
     expect(note.indexOf('CREATE them')).toBeLessThan(note.indexOf('stand-in'));
   });
 });
+
+describe('declared repository paths', () => {
+  test('resolves relative files under a declared repository containing spaces', () => {
+    const repo = join(root, 'Github Rep'); mkdirSync(repo, { recursive: true });
+    writeFileSync(join(repo, 'app.ts'), 'export {};');
+    expect(checkNamedPaths(`Repo: "${repo}"\nFix app.ts`, [root])).toEqual({ present: ['app.ts'], missing: [] });
+    expect(checkNamedPaths(`Fix "${repo}/app.ts"`, [root])).toEqual({ present: [`${repo}/app.ts`], missing: [] });
+  });
+  test('does not assert missing relative files when the declared repo is outside its authorized roots', () => {
+    expect(checkNamedPaths('Repo: /outside/authorized/roots\nFix app.ts', [root])).toEqual({ present: [], missing: [] });
+  });
+});

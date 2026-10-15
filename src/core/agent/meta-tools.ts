@@ -1,3 +1,5 @@
+import { pipelineRepository } from '@/db/repositories/pipeline-repository';
+import { createPipelineRecoveryTools } from './pipeline-tools';
 import type { AgentWorker, ToolHandler } from '@/core/agent-worker';
 import { createSteerChildTool } from '@/core/swarm/steer-tool';
 import { createCollectChildrenTool } from '@/core/swarm/collect-tool';
@@ -89,10 +91,24 @@ export function createMetaTools(
 
   const PIPELINE_ALREADY_CREATED_MSG =
     'A pipeline has already been created for this request. ' +
-    'You MUST now respond to the user with a plain-text summary of the result. ' +
-    'Do NOT call any more tools. Just write your final answer.';
+    'Summarize its verified status for the user. ' +
+    'Use get_pipeline_status to monitor this handle, or resume_pipeline to recover a failed run.';
 
-  const tools: ToolHandler[] = createWorkPlanTools();
+  const trackPipeline = (id: string, completion: Promise<unknown>, taskBrief = 'Resume pipeline') => {
+    const startedAt = Date.now();
+    options?.swarmRefs?.detachHookRef.current?.registerPendingChild({
+      childId: id, startedAt, taskBrief, topic: 'pipeline',
+      promise: completion.then(async result => {
+        const pipeline = await pipelineRepository.findById(id);
+        return { nodeId: id, kind: 'agent' as const, status: pipeline?.status === 'completed' ? 'ok' as const : 'tool_error' as const,
+          output: result, usedTokens: 0, durationMs: Date.now() - startedAt, spawnedChildren: [],
+          notes: 'Pipeline stage usage is recorded separately. Synthesize verified results; never forward raw stage reports.' };
+      }).catch(error => ({ nodeId: id, kind: 'agent' as const, status: 'tool_error' as const,
+        output: error instanceof Error ? error.message : String(error), usedTokens: 0,
+        durationMs: Date.now() - startedAt, spawnedChildren: [] })),
+    });
+  };
+  const tools: ToolHandler[] = [...createWorkPlanTools(), ...createPipelineRecoveryTools(trackPipeline)];
 
   // Swarm: register `spawn_child` on the Root agent (depth 0). With
   // `swarmRefs` we also enable detach mode + `collect_children`, so the
@@ -133,12 +149,11 @@ export function createMetaTools(
       // user's order, so it is reached through `list_tools` when they ask for
       // one by name. See ToolHandler.discoverOnly.
       discoverOnly: true,
-      final: true,
       description:
-        'Run ordered development stages with explicit handoffs and verification. A pipeline plans work into items, then runs implement -> test -> review -> QA ONCE PER ITEM; a failing QA verdict sends the item back to the implementer with its evidence (up to 3 times) before asking you. ' +
+        'Start ordered development stages and immediately return a pipeline handle. Use get_pipeline_status to monitor and resume_pipeline to recover. A pipeline plans work into items, then runs implement -> test -> review -> QA ONCE PER ITEM; a failing QA verdict sends the item back to the implementer with its evidence (up to 3 times) before asking you. ' +
         'Use this when dependent implementation and verification stages justify the coordination cost, or the user requests that workflow. Done should be checkable with a test suite, build or type-check. For independent specialist tasks use spawn_child; for a bounded fix you can implement and verify with your own tools, work directly. Child scorers also support verification and bounded retry. ' +
         'DO NOT use a pipeline for a question, lookup, explanation, writing task or read-only analysis/audit/review. Answer directly when your tools suffice, otherwise use a focused specialist. Do not use a pipeline to restart investigation or implementation already completed by General or another child. ' +
-        'create_pipeline may only be invoked ONCE per request. ' +
+        'create_pipeline may only be invoked ONCE per request. Summarize its verified outcome in your own final response; do not forward raw stage reports or control blocks. ' +
         'IMPORTANT: You MUST call list_pipeline_templates first to get valid template names. Do NOT invent template names.',
       parameters: {
         type: 'object',
@@ -190,16 +205,26 @@ export function createMetaTools(
 
         pipelineCreated = true;
         try {
-          return await rootAgent.createAndRunPipeline(
-            args.title as string,
-            match.name,
-            args.description as string,
-            context,
-            {
-              maxRetries: args.maxRetries as number | undefined,
-              params: (args.params as Record<string, unknown> | undefined) ?? undefined,
-            },
-          );
+          return await new Promise((resolve, reject) => {
+            const completion = rootAgent.createAndRunPipeline(
+              args.title as string,
+              match.name,
+              args.description as string,
+              context,
+              {
+                onCreated: id => {
+                  trackPipeline(id, completion, args.description as string);
+                  resolve({ id, status: 'running', message: 'Pipeline started. Use get_pipeline_status to monitor or collect_children to await its outcome; do not claim completion until it finishes.' });
+                },
+                maxRetries: args.maxRetries as number | undefined,
+                params: (args.params as Record<string, unknown> | undefined) ?? undefined,
+              },
+            );
+            void completion.then(resolve, error => {
+              coreLogger.error({ error }, 'Pipeline execution failed');
+              reject(error);
+            });
+          });
         } catch (err) {
           // The pipeline never actually started (e.g. param-validation failure)
           // — release the one-shot gate so the model can retry with fixed params
@@ -252,9 +277,8 @@ export function createMetaTools(
       // user's order, so it is reached through `list_tools` when they ask for
       // one by name. See ToolHandler.discoverOnly.
       discoverOnly: true,
-      final: true,
       description:
-        'Run a recipe (parameterized pipeline template) by name with parameter values. ' +
+        'Start a recipe (parameterized pipeline template) and return a pipeline handle. ' +
         'Call list_recipes first to see the recipe’s parameters. Equivalent to create_pipeline with params.',
       parameters: {
         type: 'object',
@@ -267,31 +291,14 @@ export function createMetaTools(
         required: ['recipeName', 'description'],
       },
       execute: async (args, context) => {
-        if (pipelineCreated) throw new Error(PIPELINE_ALREADY_CREATED_MSG);
-        const recipeName = args.recipeName as string;
-        const { listAvailableTemplates } = await import('./templates');
-        const templates = await listAvailableTemplates(context.userId);
-        const match = templates.find(
-          (t) => t.name.toLowerCase() === recipeName.toLowerCase() || t.id === recipeName,
-        );
-        if (!match) {
-          return `Recipe "${recipeName}" not found. Available: ${templates.map((t) => t.name).join(', ') || 'none'}.`;
-        }
-        pipelineCreated = true;
-        try {
-          return await rootAgent.createAndRunPipeline(
-            (args.title as string) || match.name,
-            match.name,
-            args.description as string,
-            context,
-            { params: (args.params as Record<string, unknown> | undefined) ?? undefined },
-          );
-        } catch (err) {
-          // Release the one-shot gate — the recipe didn't start (likely bad
-          // params) — so the model can correct and retry in the same turn.
-          pipelineCreated = false;
-          return `Recipe could not start: ${(err as Error).message}`;
-        }
+        const create = tools.find(tool => tool.name === 'create_pipeline');
+        if (!create) throw new Error('Pipeline creation tool is unavailable');
+        return create.execute({
+          title: args.title || args.recipeName,
+          templateName: args.recipeName,
+          description: args.description,
+          params: args.params,
+        }, context);
       },
     },
     {

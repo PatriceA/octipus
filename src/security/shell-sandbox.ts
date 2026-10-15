@@ -138,6 +138,7 @@ function buildBwrapArgs(binary: string, options: WrapOptions, scratch: string): 
     ...(existsSync(projectBin) ? [projectBin] : []),
     options.path ?? process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
     join(homedir(), '.local', 'bin'),
+    join(homedir(), '.npm-global', 'bin'),
   ].join(':');
   const args: string[] = [
     binary,
@@ -164,6 +165,10 @@ function buildBwrapArgs(binary: string, options: WrapOptions, scratch: string): 
     // themselves live in uv's managed Python directory. Both are runtime-only.
     '--ro-bind-try', join(homedir(), '.local/share/uv/tools'), join(homedir(), '.local/share/uv/tools'),
     '--ro-bind-try', join(homedir(), '.local/share/uv/python'), join(homedir(), '.local/share/uv/python'),
+    // npm's user prefix: bin entries are symlinks into lib/node_modules.
+    // Mount both read-only; never expose the prefix root or ~/.npmrc.
+    '--ro-bind-try', join(homedir(), '.npm-global/bin'), join(homedir(), '.npm-global/bin'),
+    '--ro-bind-try', join(homedir(), '.npm-global/lib/node_modules'), join(homedir(), '.npm-global/lib/node_modules'),
     '--setenv', 'PATH', commandPath,
     // Per-spawn scratch (the legacy /tmp/assistant- prefix lives here).
     // Bound BEFORE the workspace so that workspaces under /tmp aren't
