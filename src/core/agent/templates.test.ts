@@ -132,8 +132,9 @@ describe('stage declarations survive the template round-trip', () => {
     mechanical: true,
   };
   // Carried under a different name (`topic` → `role`) or deliberately not
-  // carried at all — everything else must survive byte for byte.
-  const RENAMED_OR_DROPPED = new Set(['topic', 'description']);
+  // carried at all (`model` is a legacy pin that is ignored — stage models
+  // resolve through the role's topic) — everything else must survive byte for byte.
+  const RENAMED_OR_DROPPED = new Set(['topic', 'description', 'model']);
 
   test('stepConfigToStageTemplate drops no declaration', () => {
     const mapped = stepConfigToStageTemplate(everyDeclaration) as unknown as Record<string, unknown>;

@@ -339,8 +339,11 @@ describe('artifacts', () => {
   };
 
   test('a viewer connection closes when its token expires', async () => {
+    // `exp` is whole seconds, so the server's close timer runs for anywhere
+    // between ~2s and 3s here depending on the sub-second clock; the margin
+    // keeps the 1s "still open" check clear of that window.
     const now = Math.floor(Date.now() / 1000);
-    const token = await viewerToken(artifactId, now, now + 2);
+    const token = await viewerToken(artifactId, now, now + 3);
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       const viewer = await openGateway({ method: 'artifact_token', credentials: { artifactId, token } });
