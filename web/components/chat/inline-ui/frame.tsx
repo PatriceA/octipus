@@ -66,6 +66,9 @@ export function InlineUiFrame({ title, html, css, js, mode, preview, update, hei
 
   useEffect(() => {
     if (!preview || !update) return;
+    // The host frame is a sandboxed srcdoc document: its origin is opaque, so no
+    // origin can be named; the message goes to that one window only.
+    // nosemgrep: javascript.browser.security.wildcard-postmessage-configuration.wildcard-postmessage-configuration -- target is our own sandboxed (opaque-origin) host frame's contentWindow
     iframeRef.current?.contentWindow?.postMessage({ v: 1, ch: frame.channel, type: 'update', html: update.html, css: update.css }, '*');
   }, [preview, update, frame.channel]);
 
