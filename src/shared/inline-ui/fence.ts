@@ -286,20 +286,81 @@ export interface InlineUiParts {
   issues: string[];
 }
 
+type RawTextTag = 'style' | 'script';
+
+/** Ends a tag name: whitespace, `/`, `>` or the end of the text. */
+function endsTagName(ch: string | undefined): boolean {
+  return ch === undefined || ch === '>' || ch === '/' || ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\f';
+}
+
+/** The first `<style` or `<script` start tag at or after `from` in lowercased text. */
+function nextRawTextTag(lower: string, from: number): { at: number; name: RawTextTag } | null {
+  for (let lt = lower.indexOf('<', from); lt >= 0; lt = lower.indexOf('<', lt + 1)) {
+    for (const name of ['style', 'script'] as const) {
+      if (lower.startsWith(name, lt + 1) && endsTagName(lower[lt + 1 + name.length])) return { at: lt, name };
+    }
+  }
+  return null;
+}
+
+/** The end tag closing a raw-text element: `</name` then anything up to `>` (as browsers read it). */
+function rawTextEnd(lower: string, name: RawTextTag, from: number): { start: number; end: number } | null {
+  for (let k = lower.indexOf(`</${name}`, from); k >= 0; k = lower.indexOf(`</${name}`, k + 2)) {
+    if (!endsTagName(lower[k + 2 + name.length])) continue;
+    const gt = lower.indexOf('>', k);
+    return gt < 0 ? null : { start: k, end: gt + 1 };
+  }
+  return null;
+}
+
+const NON_JS_TYPE_RE = /\btype\s*=\s*["']?(?!text\/javascript|application\/javascript|module)[^"'\s>]+/i;
+
+/**
+ * One pass in document order, as a browser reads it: a `<style>` or `<script>`
+ * element runs to its own end tag, so a `<style>` inside a script's string
+ * stays script. Returns the markup left; an element without its end tag
+ * means the body was cut off, and the rest is dropped.
+ */
+function splitPass(body: string, out: { css: string[]; js: string[]; issues: string[] }): string {
+  const lower = body.toLowerCase();
+  let html = '';
+  let cursor = 0;
+  for (let tag = nextRawTextTag(lower, 0); tag; tag = nextRawTextTag(lower, cursor)) {
+    html += body.slice(cursor, tag.at);
+    const openEnd = lower.indexOf('>', tag.at);
+    const close = openEnd < 0 ? null : rawTextEnd(lower, tag.name, openEnd + 1);
+    if (!close) { out.issues.push(`unclosed-${tag.name}`); return html; }
+    const attrs = body.slice(tag.at + 1 + tag.name.length, openEnd);
+    const inner = body.slice(openEnd + 1, close.start);
+    if (tag.name === 'style') out.css.push(inner);
+    else if (/\bsrc\s*=/i.test(attrs)) out.issues.push('script-src');
+    else if (NON_JS_TYPE_RE.test(attrs)) out.issues.push('script-type');
+    else out.js.push(inner);
+    cursor = close.end;
+  }
+  return html + body.slice(cursor);
+}
+
+/** Passes before a body whose leftovers keep forming new tags is cut at the first one. */
+const MAX_SPLIT_PASSES = 4;
+
 export function splitInlineUiBody(body: string): InlineUiParts {
-  const issues: string[] = [];
-  const css: string[] = [];
-  const js: string[] = [];
-  let html = body.replace(/<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi, (_m, inner: string) => { css.push(inner); return ''; });
-  html = html.replace(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi, (_m, attrs: string, inner: string) => {
-    if (/\bsrc\s*=/i.test(attrs)) { issues.push('script-src'); return ''; }
-    if (/\btype\s*=\s*["']?(?!text\/javascript|application\/javascript|module)[^"'\s>]+/i.test(attrs)) { issues.push('script-type'); return ''; }
-    js.push(inner);
-    return '';
-  });
-  if (/<style\b/i.test(html)) { issues.push('unclosed-style'); html = html.replace(/<style\b[\s\S]*$/i, ''); }
-  if (/<script\b/i.test(html)) { issues.push('unclosed-script'); html = html.replace(/<script\b[\s\S]*$/i, ''); }
-  return { css: css.join('\n').trim(), html: html.trim(), js: js.join('\n;\n').trim(), issues };
+  const out = { css: [] as string[], js: [] as string[], issues: [] as string[] };
+  let html = body;
+  // Text around a removed element can join into a new tag
+  // (`<scr<style></style>ipt>`): split again until nothing is removed. The
+  // markup is sanitized again where it is shown; this keeps the parts honest.
+  for (let pass = 0; pass < MAX_SPLIT_PASSES; pass++) {
+    const next = splitPass(html, out);
+    if (next === html) break;
+    html = next;
+  }
+  const left = nextRawTextTag(html.toLowerCase(), 0);
+  if (left) {
+    out.issues.push(`unclosed-${left.name}`);
+    html = html.slice(0, left.at);
+  }
+  return { css: out.css.join('\n').trim(), html: html.trim(), js: out.js.join('\n;\n').trim(), issues: [...new Set(out.issues)] };
 }
 
 /**

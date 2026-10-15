@@ -233,3 +233,29 @@ describe('fence edge cases', () => {
     expect(segments.filter((s) => s.kind === 'block')).toHaveLength(1);
   });
 });
+
+describe('splitInlineUiBody reads a body in document order', () => {
+  it('accepts any end tag a browser accepts, in any letter case', async () => {
+    const { splitInlineUiBody } = await import('./fence');
+    const parts = splitInlineUiBody('<STYLE>a{}</style >\n<p>x</p><script>go()</script\t\n bar><p>y</p>');
+    expect(parts).toEqual({ css: 'a{}', html: '<p>x</p><p>y</p>', js: 'go()', issues: [] });
+  });
+
+  it('keeps a <style> inside a script string as script', async () => {
+    const { splitInlineUiBody } = await import('./fence');
+    const parts = splitInlineUiBody("<p>x</p><script>el.innerHTML = '<style>b{}</style>';</script>");
+    expect(parts.css).toBe('');
+    expect(parts.js).toBe("el.innerHTML = '<style>b{}</style>';");
+  });
+
+  it('never leaves a style or script tag in the markup, even one joined from the text around a removed element', async () => {
+    const { splitInlineUiBody } = await import('./fence');
+    for (const body of [
+      '<p>a</p><scr<style></style>ipt>alert(1)</scr<style></style>ipt><p>b</p>',
+      '<p>a</p><sc<sc<script></script>ript></script>ript>x',
+      '<sty<script></script>le>body{}</style>',
+    ]) {
+      expect(splitInlineUiBody(body).html.toLowerCase(), body).not.toMatch(/<(script|style)/);
+    }
+  });
+});
