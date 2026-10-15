@@ -19,6 +19,12 @@ bash scripts/install-docker.sh
 
 The installer generates `.env.compose`, builds and starts the stack, waits for health, and runs the setup wizard inside the container. No host Node or `octi` installation is needed. Open **http://localhost:3017** and log in with your setup account.
 
+The checked-in `docker-compose.yml` also declares `.env.docker` as the
+container `env_file`. Keep that template present (or copy your deployment
+values into a private `.env.docker`) before starting Compose; `.env.compose`
+supplies Compose interpolation and the generated secrets used by the installer.
+Do not commit either file with real secrets.
+
 Keep `.env.compose` with database backups; it contains the vault encryption key and database password. For subsequent commands use `docker compose --env-file .env.compose logs`, `stop`, or `up -d`. Existing deployments must retain their original secrets/environment file rather than generate replacements. See [INSTALLATION.md](INSTALLATION.md) for native and headless paths.
 
 For manual Docker setup, supply MASTER_KEY, JWT_SECRET, SESSION_SECRET and POSTGRES_PASSWORD in a private Compose environment file, then use that same `--env-file` for every command. After startup run:
@@ -128,18 +134,18 @@ Mount into subdirectories of `/data/workspace` so agents can access them via the
 
 ```bash
 # Rebuild and restart (preserves data volumes)
-docker compose --env-file .env.docker down && docker compose --env-file .env.docker up --build -d
+docker compose --env-file .env.compose down && docker compose --env-file .env.compose up --build -d
 
 # Full reset (deletes all data)
-docker compose --env-file .env.docker down -v && docker compose --env-file .env.docker up --build -d
+docker compose --env-file .env.compose down -v && docker compose --env-file .env.compose up --build -d
 ```
 
 ## Troubleshooting
 
 ### Container won't start
 ```bash
-docker compose --env-file .env.docker logs octipus    # Check for startup errors
-docker compose --env-file .env.docker ps                # Check container status
+docker compose --env-file .env.compose logs octipus    # Check for startup errors
+docker compose --env-file .env.compose ps                # Check container status
 ```
 
 ### Browser extension can't connect

@@ -1,3 +1,4 @@
+import type { CompanionIdentity } from '../../src/shared/companion';
 import type { Browser, Page, Route, WebSocketRoute } from '@playwright/test';
 import { json, stubAllDefaults } from './fixtures/api-stubs';
 import { expect, expectNoConsoleErrors, installConsoleWatchdog, STUB_TOKEN, STUB_USER, test } from './fixtures/auth';
@@ -200,10 +201,10 @@ class Relay {
   }
 
   /** The running turn's final answer: stored, then the turn ends (the next one starts). */
-  answer(roomId: string, content: string): void {
+  answer(roomId: string, content: string, companion?: CompanionIdentity): void {
     const done = this.running;
     if (!done) throw new Error('No turn is running');
-    this.store({ roomId, role: 'assistant', content, authorUserId: null, authorName: null, agentId: 'root-1', metadata: { replyTo: done.messageId, requesterId: done.requesterId } });
+    this.store({ roomId, role: 'assistant', content, authorUserId: null, authorName: null, agentId: 'root-1', metadata: { replyTo: done.messageId, requesterId: done.requesterId, ...(companion ? { companion } : {}) } });
     this.running = null;
     this.turn(roomId, 'done', done, { outcome: 'success' });
     const next = this.queued.shift();
@@ -563,6 +564,7 @@ test('a private room is hidden from non-members; removing a member sends room.re
   await openRoom(ben, SECRET);
   await expect(ben.getByTestId('room-title')).toHaveText('Secret');
   await alice.reload();
+  await alice.getByRole('tab', { name: 'members', exact: true }).click();
   const benRow = alice.getByTestId('room-member').filter({ hasText: 'ben' });
   await expect(benRow).toBeVisible();
   alice.once('dialog', (d) => void d.accept());
@@ -628,5 +630,100 @@ test('rooms list unread badges; an editor creates a private room; space memory',
   await alice.getByRole('textbox', { name: 'Room title' }).fill('Launch plan v2');
   await alice.getByRole('button', { name: 'save' }).click();
   await expect(alice.getByTestId('room-title')).toHaveText('Launch plan v2');
+  expectNoConsoleErrors(consoleErrors);
+});
+
+
+test('personal companion selection and shared attribution survive reload for both members', async ({ browser, consoleErrors }) => {
+  const relay = new Relay();
+  const alice = await memberPage(browser, relay, ALICE, consoleErrors);
+  const ben = await memberPage(browser, relay, BEN, consoleErrors);
+  await alice.route('**/api/persona', (route) => json(route, 200, { name: 'Sparkle' }));
+  await ben.route('**/api/persona', (route) => json(route, 200, { name: 'Sparkle' }));
+  await openRoom(alice);
+  await openRoom(ben);
+  await expect(alice.getByRole('switch', { name: 'Ask Sparkle' })).toBeVisible();
+  await composer(alice).pressSequentially('@Spa');
+  await expect(alice.getByRole('option', { name: '@Sparkle your companion' })).toBeVisible();
+  await composer(alice).press('Tab');
+  await expect(composer(alice)).toHaveValue('@Sparkle ');
+  await expect(alice.getByRole('switch', { name: 'Ask Sparkle' })).toHaveAttribute('aria-checked', 'true');
+  await composer(alice).pressSequentially('make a prototype');
+  await composer(alice).press('Enter');
+  await expect.poll(() => relay.frames.some((f) => f.userId === ALICE.id && f.message.type === 'room.post' && f.message.addressed === true)).toBe(true);
+  relay.answer(GENERAL, 'Here is the prototype.', { ownerUserId: ALICE.id, ownerName: ALICE.username, name: 'Sparkle', appearance: { form: 'ink', color: 'lavender' } });
+  for (const page of [alice, ben]) {
+    await expect(page.locator('[data-role="assistant"]')).toContainText(`Sparkle · ${ALICE.username}’s companion`);
+  }
+  // Rename on Alice's account; both readers must retain the original reply identity.
+  await alice.route('**/api/persona', (route) => json(route, 200, { name: 'Little Ink' }));
+  await alice.reload();
+  await ben.reload();
+  for (const page of [alice, ben]) {
+    await expect(page.locator('[data-role="assistant"]')).toContainText(`Sparkle · ${ALICE.username}’s companion`);
+    await expect(page.locator('[data-role="assistant"]')).toContainText('Here is the prototype.');
+    await expect(page.locator('[data-role="assistant"] .octi-companion')).toHaveAttribute('data-form', 'ink');
+    await expect(page.locator('[data-role="assistant"] .octi-companion')).toHaveAttribute('data-color', 'lavender');
+  }
+  await expect(alice.getByRole('switch', { name: 'Ask Little Ink' })).toBeVisible();
+  expectNoConsoleErrors(consoleErrors);
+});
+
+
+test('shared brainstorm drafts, public progress, working companion, and output index survive reload', async ({ browser, consoleErrors }) => {
+  const relay = new Relay();
+  const alice = await memberPage(browser, relay, ALICE, consoleErrors);
+  const ben = await memberPage(browser, relay, BEN, consoleErrors);
+  const companion: CompanionIdentity = { ownerUserId: ALICE.id, ownerName: ALICE.username, name: 'Sparkle', appearance: { form: 'ribbon', color: 'coral' } };
+  const blockId = '7a1e0000-0000-4000-8000-0000000000b2';
+  await alice.route('**/api/persona', route => json(route, 200, { name: 'Sparkle', appearance: companion.appearance }));
+  await ben.route('**/api/persona', route => json(route, 200, { name: 'Orbit', appearance: { form: 'ink', color: 'blue' } }));
+  for (const page of [alice, ben]) {
+    await page.route(`**/api/sessions/${GENERAL}/inline-ui/${blockId}`, route => json(route, 200, {
+      block: { id: blockId, title: 'Shared idea prototype', heightHint: 120, tainted: false, risk: 'normal', issues: [], shared: true, scripts: true, css: '',
+        html: '<button id="try" type="button">Try the idea</button>', js: "document.getElementById('try').textContent = 'Prototype running';" },
+    }));
+    await openRoom(page);
+  }
+  await composer(alice).fill('An easier way for our team to plan a launch.');
+  await alice.getByRole('button', { name: 'Research', exact: true }).click();
+  await expect(composer(alice)).toHaveValue(/An easier way.*[\s\S]*Research the question/);
+  expect(relay.frames.filter(f => f.message.type === 'room.post')).toHaveLength(0);
+  await expect(alice.getByRole('switch', { name: 'Ask Sparkle' })).toHaveAttribute('aria-checked', 'true');
+  await composer(alice).press('Enter');
+  await expect.poll(() => relay.running?.requesterId).toBe(ALICE.id);
+  const running = { ...relay.running!, requesterName: ALICE.username, startedAt: stamp(), waiting: false, companion };
+  relay.publish(GENERAL, 'room.turn', { state: 'started', requesterId: ALICE.id, messageId: running.messageId, queue: { running, queued: [] } });
+  const activity = ben.getByTestId('companion-activity');
+  await expect(activity).toContainText(`Sparkle · ${ALICE.username}’s companion`);
+  await expect(activity.locator('.octi-companion')).toHaveAttribute('data-color', 'coral');
+  await expect(activity.locator('.octi-companion')).toHaveAttribute('data-state', 'working');
+  relay.store({ roomId: GENERAL, role: 'assistant', content: 'Found two useful sources; comparing the evidence.', authorUserId: null, authorName: null, agentId: 'root',
+    metadata: { kind: 'progress', requesterId: ALICE.id, replyTo: running.messageId, companion } });
+  for (const page of [alice, ben]) {
+    await expect(page.getByTestId('room-progress')).toContainText('Found two useful sources');
+    await expect(page.getByTestId('room-work-panel')).toContainText('Found two useful sources');
+  }
+  await ben.screenshot({ path: '/tmp/octipus-shared-brainstorm-working.png' });
+  relay.publish(GENERAL, 'room.turn', { state: 'waiting', requesterId: ALICE.id, messageId: running.messageId, queue: { running: { ...running, waiting: true }, queued: [] } });
+  await expect(activity).toContainText(`Waiting for ${ALICE.username}’s approval`);
+  await expect(activity.locator('.octi-companion')).toHaveAttribute('data-state', 'waiting');
+  relay.answer(GENERAL, `Here is a small prototype to discuss.\n[[octi-ui:${blockId}|Shared idea prototype]]`, companion);
+  for (const page of [alice, ben]) {
+    const panel = page.getByTestId('room-work-panel');
+    await expect(panel.getByRole('region', { name: 'Interactive outputs' })).toContainText('Shared idea prototype');
+    await expect(page.getByTestId('inline-ui-run')).toBeVisible();
+    await page.reload();
+    await expect(page.getByTestId('room-work-panel')).toContainText('Shared idea prototype');
+    await expect(page.getByTestId('room-progress')).toContainText(`Sparkle · ${ALICE.username}’s companion`);
+  }
+  await ben.screenshot({ path: '/tmp/octipus-shared-brainstorm-output.png' });
+  await ben.setViewportSize({ width: 390, height: 844 });
+  const output = ben.getByTestId('room-work-panel').getByRole('region', { name: 'Interactive outputs' }).getByRole('button');
+  await output.click();
+  await expect(ben.getByTestId('room-work-panel')).toHaveCount(0);
+  await expect(ben.getByTestId('inline-ui-run')).toBeVisible();
+  await expect(ben.locator('[data-message-id]').filter({ has: ben.getByTestId('inline-ui-run') })).toBeFocused();
+  expect(await ben.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   expectNoConsoleErrors(consoleErrors);
 });

@@ -342,6 +342,26 @@ describe('a room post that asks the agent needs api:chat', () => {
     }
   });
 
+  test('REST: a custom companion name cannot bypass the chat scope', async () => {
+    const id = await space();
+    const { createRoom } = await import('@/core/rooms/service');
+    const room = await createRoom({ userId: owner }, id, { title: 'Named companion', visibility: 'space' });
+    const { getPersonaProfileRepository } = await import('@/core/personas/repository');
+    const profile = await getPersonaProfileRepository().create(member, 'Sparkle', {
+      presetId: 'octipus', pronouns: 'they/them', tone: 'neutral', narration: 'off', extras: [],
+    });
+    const { getApiTokenManager } = await import('@/security/api-tokens');
+    const readOnly = (await getApiTokenManager().issue(member, { name: `named-ro-${rand(3)}`, scopes: ['api:read'] })).plaintext;
+    try {
+      const refused = await call(readOnly, 'POST', `/api/spaces/${id}/rooms/${room.id}/messages`, { content: '@Sparkle do it' });
+      expect(refused.status).toBe(403);
+      expect(refused.body.error).toMatch(/api:chat/);
+      expect(await q('SELECT id FROM messages WHERE session_id = $1', [room.id])).toHaveLength(0);
+    } finally {
+      await q('DELETE FROM profiles WHERE id = $1', [profile.id]);
+    }
+  });
+
   test('gateway: a scoped connection needs api:chat for frames that drive the agent', async () => {
     const { frameScopeError } = await import('@/core/gateway/message-handler');
     const readOnly = { scopes: ['api:read'] };

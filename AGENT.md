@@ -18,7 +18,7 @@ file there, add a one-line `CLAUDE.md` containing `@AGENT.md`.
 **Octipus** — an open-source, self-hosted AI platform. One root agent answers
 the user with its own tools and delegates to a swarm of specialist agents when a
 task needs one (3-level: root → Agent → Subagent), all using typed tools, skills,
-and experts. There is no separate "root agent" that only routes: the root runs
+and roles. There is no separate "root agent" that only routes: the root runs
 as the `general` role marked `AgentContext.root` (see `ROOT_ROLE`), and the
 routing hop that used to sit in front of it was deleted in Phase 9 of
 `docs/plans/rebuild-execution-plan.md`. Multi-channel
@@ -27,11 +27,11 @@ routing hop that used to sit in front of it was deleted in Phase 9 of
 with a PGlite embedded mode.
 
 Architecture in one line:
-`Channels → Gateway (WS) → Root agent → (spawn_child) Agents → Tools/Skills/Experts → Models → DB`
+`Channels → Gateway (WS) → Root agent → (spawn_child) Agents → Tools/Skills/Roles → Models → DB`
 
 ## Stack
 
-- **Runtime:** Node ≥ 24 end-to-end (server, tests, scripts, TUI, web build).
+- **Runtime:** Node 24.19.0 or newer end-to-end (server, tests, scripts, TUI, web build).
   `npm run build` bundles `dist/index.js`; `npm start` runs that artifact, not
   the source.
 - **Backend:** Hono + `ws` behind the application in `src/api/http/` (which
@@ -40,8 +40,8 @@ Architecture in one line:
   Postgres too — `kv_store`, `kv_queue`, `LISTEN`/`NOTIFY`.
 - **Web:** Vite + React Router + React 19 + Tailwind in `web/`, served as
   static files by `web/serve.mjs`.
-- **Tests:** Vitest, two projects — `unit` at full width, `database` at one
-  worker. See `vitest.config.ts` for why that split is not optional.
+- **Tests:** Vitest, three projects — `unit` at full width, `database` and
+  `terminal` each at one worker. See `vitest.config.ts` for why that split is not optional.
 - **Validation:** Zod everywhere at boundaries.
 - **Lint/format:** Biome (`npm run lint`). Formatter is **off** — don't
   reformat untouched code.
@@ -58,7 +58,7 @@ src/
   config/         Zod-validated config, hot-reload
   core/
     gateway/      WS entry, command registry
-    root agent/ root-agent turn (runner + service), roles, pipelines,
+    root-agent turn (runner + service), roles, pipelines,
                   meta-tools, classifier (topic hint only), guards
     swarm/        spawn_child, budgets, cancel, error mapping
     rag/          auto-indexer, hybrid search (BM25 + vector)
@@ -220,8 +220,8 @@ think you need to break one, open an issue first.
 - **Connector** → `src/connectors/<name>/definition.ts`, register in the
   connector registry. OAuth via `oauth-http-transport.ts`.
 - **Hook** → wire triggers/actions in `src/hooks/` (`triggers.ts`, `actions.ts`).
-- **Profile** → seed in `src/db/seed-presets.ts`, or POST via API. (Experts are
-  gone — a role now carries the tools, rules and prompt an expert used to.)
+- **Profile** → seed in `src/db/seed-presets.ts`, or POST via API. A role
+  carries its tools, rules and prompt directly.
 - **DB schema change** → edit Drizzle schema in `src/db/schema/`, then
   `npm run db:generate` to produce a migration, then `npm run db:migrate`.
 
@@ -243,7 +243,7 @@ Octipus has a voice subsystem (`src/voice/`) divided into three execution paths.
 3. **Telephony (Phone Calls)**
    - **Providers:** Twilio, Telnyx, Plivo (`src/voice/telephony/`).
    - **Standard Path:** Turn-based conversation using webhooks (`/api/voice/webhook/:provider`) and TwiML `<Gather>`.
-   - **Fast Path:** Bypasses the standard multi-agent Root agent routing to ensure low-latency responses (direct LiteLLM call with a short-response expert prompt).
+   - **Fast Path:** Bypasses the standard multi-agent root-agent routing to ensure low-latency responses (a direct LiteLLM call with a short-response voice prompt).
    - **Media Stream Path (Phase 4d):** For Twilio, an optional WebSocket media bridge (`/api/voice-media-ws.ts`) handles bidirectional `<Connect><Stream>` payload (8kHz μ-law ↔ 16kHz PCM), enabling real-time streaming STT, VAD turn-taking, and caller barge-in.
 
 ## Things to avoid

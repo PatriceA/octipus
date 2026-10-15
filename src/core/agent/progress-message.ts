@@ -28,9 +28,13 @@ async function save(message: string, context: AgentContext, generation?: string)
   if (!session || !(await canActInSession(session, context.userId, 'requester'))) return null;
   const expected = generation ?? (typeof context.metadata.sessionGeneration === 'string'
     ? context.metadata.sessionGeneration : sessionGeneration(session.context));
+  const running = session.kind === 'room'
+    ? (await import('@/core/rooms/queue')).roomQueueSnapshot(session.id).running : null;
+  const companion = running?.companion ?? (session.kind === 'room' && context.trigger !== 'remote'
+    ? await (await import('@/core/rooms/companion')).companionIdentity(context.userId) : undefined);
   const row = await messageRepository.createForGeneration({
     sessionId: context.sessionId, agentId: context.id, role: 'assistant', content: text,
-    metadata: { kind: 'progress' },
+    metadata: { kind: 'progress', ...(session.kind === 'room' ? { requesterId: context.userId, ...(running ? { replyTo: running.messageId } : {}), ...(companion ? { companion } : {}) } : {}) },
   }, expected);
   if (!row) return null;
   const seen = delivered.get(context) ?? new Set<string>();

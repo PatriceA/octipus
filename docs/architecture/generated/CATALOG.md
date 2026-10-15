@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-519 mounted routes across 71 route files. The path is the full one, group prefix included — what a client actually calls.
+520 mounted routes across 71 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -305,6 +305,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/permission-requests/pending` | `src/api/routes/permission-requests.ts` |
 | GET | `/api/persona` | `src/api/routes/persona.ts` |
 | PATCH | `/api/persona` | `src/api/routes/persona.ts` |
+| PUT | `/api/persona/appearance` | `src/api/routes/persona.ts` |
 | GET | `/api/persona/arms` | `src/api/routes/persona.ts` |
 | DELETE | `/api/persona/arms/:role` | `src/api/routes/persona.ts` |
 | PUT | `/api/persona/arms/:role` | `src/api/routes/persona.ts` |
@@ -554,7 +555,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 22 |
 | `api` | `config` | 22 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 132 |
+| `api` | `core` | 134 |
 | `api` | `db` | 114 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
@@ -563,7 +564,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `plugins` | 1 |
 | `api` | `security` | 132 |
 | `api` | `services` | 5 |
-| `api` | `shared` | 9 |
+| `api` | `shared` | 10 |
 | `api` | `skills` | 6 |
 | `api` | `tools` | 4 |
 | `api` | `utils` | 66 |
@@ -604,9 +605,9 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 9 |
 | `core` | `models` | 115 |
-| `core` | `security` | 154 |
+| `core` | `security` | 155 |
 | `core` | `services` | 2 |
-| `core` | `shared` | 26 |
+| `core` | `shared` | 31 |
 | `core` | `skills` | 10 |
 | `core` | `tools` | 20 |
 | `core` | `utils` | 196 |
@@ -635,6 +636,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `hooks` | `tools` | 1 |
 | `hooks` | `utils` | 7 |
 | `mcp` | `config` | 2 |
+| `mcp` | `core` | 2 |
 | `mcp` | `security` | 3 |
 | `mcp` | `shared` | 2 |
 | `mcp` | `utils` | 4 |
@@ -733,6 +735,7 @@ Two modules that import each other. Not fatal, but it is what blocks an extracti
 - core <-> db
 - core <-> extensions
 - core <-> hooks
+- core <-> mcp
 - core <-> models
 - core <-> security
 - core <-> services

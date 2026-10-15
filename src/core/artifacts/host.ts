@@ -54,26 +54,25 @@ export function buildArtifactOuterUrl(slug: string, opts?: { mainHost?: string }
 }
 
 /**
- * In-app dashboard URL for an artifact (`/artifacts/<id>` in the web UI).
+ * In-app dashboard URL for an artifact (`/artifacts/view?id=<id>` in the web UI).
  * Always behind authentication, so this is the link to surface for
  * `workspace` / `private` artifacts — the public outerUrl returns 404 to
  * anyone not signed in for those visibilities.
  *
  * Uses the `oauth.publicUrl` setting (env: `PUBLIC_URL`) as the absolute
- * base. When that's empty, returns a relative path (`/artifacts/<id>`),
+ * base. When that's empty, returns a relative path (`/artifacts/view?id=<id>`),
  * which still works from anywhere inside the web app.
  */
 export function buildArtifactAppUrl(id: string): string {
-  return `${publicBase()}/artifacts/${encodeURIComponent(id)}`;
+  return `${publicBase()}/artifacts/view?id=${encodeURIComponent(id)}`;
 }
 
 export type ArtifactVisibility = 'public' | 'workspace' | 'private' | 'signed';
 
 /**
  * Pick the URL that should actually be handed to the user as the "go look
- * at it" link. For `public` (and `signed`, where the recipient has a
- * token) the anon outerUrl works; for `workspace` / `private` only the
- * authenticated in-app URL will load.
+ * at it" link. Only public artifacts have an anonymous URL. All others use the app
+ * route; a signed artifact needs an explicitly minted share token for outsiders.
  */
 export function pickShareableUrl(args: {
   visibility: ArtifactVisibility;
@@ -82,8 +81,8 @@ export function pickShareableUrl(args: {
 }): string {
   switch (args.visibility) {
     case 'public':
-    case 'signed':
       return buildArtifactOuterUrl(args.slug);
+    case 'signed':
     case 'workspace':
     case 'private':
       return buildArtifactAppUrl(args.id);

@@ -1,3 +1,4 @@
+import { withoutCompanionMentions } from '@/shared/companion';
 import type { Message } from '@/db/schema/messages';
 import { getNotificationService } from '@/core/notification-service';
 import { serialPerKey } from '@/utils/concurrency';
@@ -38,10 +39,11 @@ export async function notifyRoomMessage(row: Message, authorName: string | null)
   if (!room) return;
   const candidates = await roomNotificationRecipients(room);
   // Mentioned members already get the more specific room_mention (postRoomMessage).
+  const mentionContent = row.metadata?.companion ? withoutCompanionMentions(row.content, row.metadata.companion.name) : row.content;
   const mentioned = row.role === 'user' && row.authorUserId
-    ? new Set([...mentionedUsernames(row.content), ...mentionedRemoteHandles(row.content)])
+    ? new Set([...mentionedUsernames(mentionContent), ...mentionedRemoteHandles(mentionContent)])
     : new Set<string>();
-  const title = `${row.role === 'assistant' ? 'Octipus' : authorName ?? 'A member'} in ${room.title}`;
+  const title = `${row.role === 'assistant' ? (row.metadata?.companion ? `${row.metadata.companion.name} · ${row.metadata.companion.ownerName}’s companion` : 'Octipus') : authorName ?? 'A member'} in ${room.title}`;
   // A marker line of an interactive answer reads as a plain line in a notification.
   const text = inlineUiFallbackText(row.content);
   const body = text.length > 280 ? `${text.slice(0, 277)}…` : text;

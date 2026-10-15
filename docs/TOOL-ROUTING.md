@@ -1,4 +1,4 @@
-# Tool & Expert Routing
+# Tool and role routing
 
 ## How Messages Get Routed
 
@@ -109,24 +109,17 @@ sent `renders: ["inline_ui"]` — never a child, a small model, a vendor CLI
 root or a group thread. It also strips `inline-ui` handlers a customised role
 row brought in when the turn does not offer them.
 
-## Expert Agents
+## Role selection
 
-### What Are Experts?
-Experts are pre-configured personas with structured prompts, critical rules, deliverable templates, and success metrics. They provide deeper specialization than roles.
+Roles are the runtime specialization boundary. The root agent can do work with
+its `general` role or ask `spawn_child` for a role whose description matches the
+subtask. A role owns its prompt, critical rules, tool allowlist and default
+model lane. The lane is not a role selector: a caller can name a real lane in
+`spawn_child.topic` when it needs a different model binding.
 
-### Triggering Experts
-
-Experts are triggered explicitly via the `/expert` command in any channel:
-```
-/expert coder Implement a REST API for user management
-/expert security-analyst Audit the authentication flow
-/expert devops-engineer Set up GitHub Actions CI/CD
-```
-
-The root agent:
-1. Loads the expert from the database (name, description, role, system prompt)
-2. Builds expert system prompt with: security preamble + expert identity + role prompt + critical rules + deliverable template + success metrics + domain knowledge from skills
-3. Spawns a worker with the expert's role tools and system prompt
+The former database expert layer and its `/expert` worker bypass were retired.
+The gateway may still expose compatibility commands or proposal records, but
+they do not change the active child model resolution path.
 
 ### Available built-in tools
 
@@ -139,8 +132,8 @@ surface or a valid reviewed grant; unattended ASK is blocked.
 
 ## Model selection
 
-Planned children use a configured lane executor first; otherwise an expert's
-explicit model preference precedes the topic primary. Unresolved specialist
-bindings fail with a configuration error. The root can use the configured
-default. See [Model routing](MODEL-ROUTING.md) for executor, backup, and worker
-path details; model capabilities and routing behavior differ by execution path.
+Planned children use a configured lane executor first; otherwise the lane's
+primary binding is used. Unresolved worker bindings fail with a configuration
+error. The root can use the configured default. See [Model routing](MODEL-ROUTING.md)
+for executor, backup, and worker path details; model capabilities and routing
+behavior differ by execution path.

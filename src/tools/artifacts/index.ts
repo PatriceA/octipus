@@ -59,7 +59,7 @@ const SOURCES_PARAM_DESCRIPTION =
 const CREATE_DESCRIPTION =
   'Create a persistent hosted artifact (dashboard, news feed, RSS reader, table). ' +
   'Returns `{ embedUrl, outerUrl, appUrl, shareUrl, visibility, warnings }`. ' +
-  '`shareUrl` is the link to hand the user: `outerUrl` for `public` / `signed`, in-app `appUrl` for `workspace` / `private` (those 404 anonymously). ' +
+  '`shareUrl` is the link to hand the user: `outerUrl` for `public`, in-app `appUrl` for `workspace` / `private` / `signed`. Signed external sharing requires a share-link token; never hand out a bare signed outerUrl. ' +
   'RECOMMENDED FLOW (toolbox-first — no hand-authored HTML): ' +
   '(a) `art_toolbox_search` / `art_toolbox_describe` to pick collector + widget + export tool ids; ' +
   '(b) call this with `sources: [{ name, kind: "toolbox", tool_id, config }]` and leave `html_template` empty; ' +

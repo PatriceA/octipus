@@ -8,6 +8,8 @@ import { SkillUsage } from '@/components/skills/skill-usage';
 import { PanelRight, PanelRightClose, Paperclip, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import type { ResolvedPersona } from '../../../src/core/personas/types';
+import { usePermissions } from '@/lib/permission-context';
 import FileViewer from '@/components/chat/file-viewer';
 import MessageTimeline, {
   type ChatMessageData,
@@ -159,6 +161,11 @@ export default function ChatPage() {
   // The tab's one gateway connection, shared with the permission prompts and
   // the rest of the app (lib/gateway.ts).
   const gateway = useGateway();
+  const { permissions, approvals } = usePermissions();
+  const { data: companionPersona } = useQuery({
+    queryKey: ['persona', 'me'],
+    queryFn: () => api.get<Pick<ResolvedPersona, 'name' | 'appearance'>>('/persona'),
+  });
   const gatewayStatus = useGatewayStatus();
   const connectionStatus: 'connected' | 'disconnected' | 'connecting' =
     gatewayStatus === 'connected' ? 'connected' : gatewayStatus === 'connecting' || gatewayStatus === 'idle' ? 'connecting' : 'disconnected';
@@ -832,6 +839,7 @@ export default function ChatPage() {
             agentId: data.agentId,
             classification: data.classification?.type,
             metadata: meta,
+            arrivedLiveAt: now,
           }],
           totalTokens: data.metadata?.sessionTotalTokens != null
             ? data.metadata.sessionTotalTokens
@@ -2078,6 +2086,11 @@ export default function ChatPage() {
             teams={teams}
             fileChanges={activeState?.fileChanges}
             isLoading={isLoading}
+            companionName={companionPersona?.name || 'Octipus'}
+            companionAppearance={companionPersona?.appearance}
+            connected={connectionStatus === 'connected'}
+            waitingForInput={!!activeSessionId && [...permissions, ...approvals].some((request) => request.sessionId === activeSessionId)}
+            listening={realtimeMode && realtime.state === 'listening'}
             statusMessage={statusMessage}
             streamingText={isLoading && streaming?.sessionId === activeSessionId ? streaming.text : null}
             onOpenFile={setOpenFilePath}

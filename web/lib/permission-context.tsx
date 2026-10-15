@@ -6,6 +6,7 @@ import type { GatewayMessage } from './gateway';
 
 export interface PermissionRequest {
   requestId: string;
+  sessionId?: string;
   skillId: string;
   action: string;
   args?: Record<string, unknown>;
@@ -13,6 +14,7 @@ export interface PermissionRequest {
 
 export interface ApprovalRequest {
   requestId: string;
+  sessionId?: string;
   summary: string;
   question: string;
   options?: string[];
@@ -85,10 +87,10 @@ export function PermissionProvider({ children }: { children: ReactNode }) {
       // Authoritative: a reconnect drops entries resolved while it was down.
       setPermissions(message.requests
         .filter((r) => !resolved.current.has(r.requestId))
-        .map((r) => ({ requestId: r.requestId, skillId: r.toolId, action: r.action || r.toolName, args: r.args })));
+        .map((r) => ({ requestId: r.requestId, sessionId: r.sessionId, skillId: r.toolId, action: r.action || r.toolName, args: r.args })));
       setApprovals(message.approvals
         .filter((a) => !resolved.current.has(a.requestId))
-        .map((a) => ({ requestId: a.requestId, summary: a.summary, question: a.question, options: a.options })));
+        .map((a) => ({ requestId: a.requestId, sessionId: a.sessionId, summary: a.summary, question: a.question, options: a.options })));
       return;
     }
     if (message.type === 'error') {
@@ -104,6 +106,7 @@ export function PermissionProvider({ children }: { children: ReactNode }) {
       case 'permission.request': {
         const request: PermissionRequest = {
           requestId,
+          sessionId: event.sessionId ?? (typeof payload.sessionId === 'string' ? payload.sessionId : undefined),
           skillId: String(payload.toolId ?? ''),
           action: String(payload.action ?? payload.toolName ?? ''),
           args: payload.args as Record<string, unknown> | undefined,
@@ -118,6 +121,7 @@ export function PermissionProvider({ children }: { children: ReactNode }) {
       case 'agent.approval_required': {
         const approval: ApprovalRequest = {
           requestId,
+          sessionId: event.sessionId ?? (typeof payload.sessionId === 'string' ? payload.sessionId : undefined),
           summary: String(payload.summary ?? ''),
           question: String(payload.question ?? ''),
           options: Array.isArray(payload.options) ? payload.options.map(String) : undefined,

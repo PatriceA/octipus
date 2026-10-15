@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Octipus · A companion of your own</title>
+<style>
+:root{color-scheme:dark;--bg:#071923;--panel:#0d2530;--line:#29434c;--text:#edf5f3;--muted:#a7bdc2;--accent:#92c9c5;--warm:#efab92;font-family:Inter,ui-sans-serif,system-ui,-apple-system,sans-serif}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text)}button,input{font:inherit}button{cursor:pointer}button:focus-visible,input:focus-visible,a:focus-visible{outline:3px solid var(--warm);outline-offset:4px}button{color:inherit}header,main,footer{max-width:1200px;margin:auto;padding:0 32px}header{height:90px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line)}.brand{font-weight:650;font-size:21px;letter-spacing:-.7px;display:flex;align-items:center;gap:10px}.brand svg{width:34px;height:34px}.eyebrow{color:var(--accent);font-size:11px;text-transform:uppercase;letter-spacing:2.3px;font-weight:650}.tag{border:1px solid var(--line);border-radius:30px;padding:7px 12px;font-size:12px;color:var(--muted)}.intro{padding:66px 0 36px;display:grid;grid-template-columns:1.25fr 1fr;gap:70px;align-items:end}h1{font-size:clamp(36px,5vw,63px);line-height:1.06;letter-spacing:-2.8px;font-weight:550;margin:16px 0 0}p{line-height:1.7;color:var(--muted);font-size:15px}h2{font-size:26px;letter-spacing:-.7px;font-weight:550;margin:8px 0}h3{font-size:17px;font-weight:550;margin:0}.concepts{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.concept{position:relative;text-align:left;background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:22px;transition:border-color .2s,background .2s}.concept[aria-pressed=true]{border-color:var(--accent);background:#12303a}.concept .number{color:var(--muted);font-size:12px}.concept svg{display:block;width:155px;height:150px;margin:6px auto 10px}.concept .title{display:flex;justify-content:space-between;align-items:center}.concept .description{display:block;font-size:13px;color:var(--muted);line-height:1.55;margin-top:9px}.choice{font-size:10px;letter-spacing:.4px;color:var(--accent);border:1px solid #437071;border-radius:15px;padding:4px 8px}.section-head{display:flex;align-items:center;justify-content:space-between;margin:48px 0 18px;gap:12px}.workbench{display:grid;grid-template-columns:1.4fr 1fr;border:1px solid var(--line);border-radius:20px;overflow:hidden}.stage{position:relative;min-height:430px;display:flex;align-items:center;justify-content:center;flex-direction:column;background:radial-gradient(ellipse at center,#173d46 0%,#0b222d 65%)}.stage:before{content:'';position:absolute;width:280px;height:280px;border:1px solid #36545a77;border-radius:50%}.stage .stage-label{position:absolute;left:24px;top:22px;font-size:12px;color:var(--muted)}.stage .sample-note{position:absolute;right:24px;top:22px;font-size:11px;color:var(--muted)}#hero{position:relative;width:250px;height:250px}.caption{text-align:center;position:relative}.caption strong{font-weight:550;font-size:19px}.caption p{margin:6px 20px 0;font-size:13px;min-height:24px}.settings{padding:28px;background:var(--panel);border-left:1px solid var(--line)}label,.label{display:block;font-size:12px;color:var(--muted);margin-bottom:9px}.field{margin-bottom:24px}input[type=text]{width:100%;background:#071c25;border:1px solid #47616a;border-radius:9px;color:var(--text);padding:11px 13px}.swatches{display:flex;gap:10px}.swatch{width:31px;height:31px;border-radius:50%;background:var(--swatch);border:3px solid var(--panel);outline:1px solid #607e86}.swatch[aria-pressed=true]{outline:2px solid var(--text);outline-offset:2px}.states{display:flex;flex-wrap:wrap;gap:7px}.state,.quiet{background:transparent;border:1px solid #47616a;border-radius:8px;padding:9px 12px;font-size:12px}.state[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:#09232c}.small-note{font-size:12px;margin-bottom:0;line-height:1.6}.motion{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-top:23px}.motion input{accent-color:var(--accent);width:16px;height:16px}.share-grid{display:grid;grid-template-columns:1.35fr 1fr;gap:40px;align-items:center;margin-bottom:60px}.chat{background:#0c222d;border:1px solid var(--line);border-radius:18px;overflow:hidden}.chat-header{padding:16px 22px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;font-size:13px}.chat-header small{color:var(--muted)}.chat-body{padding:22px;display:grid;gap:23px}.message{display:flex;gap:12px;align-items:start}.avatar{width:38px;height:38px;flex:none;border-radius:12px;display:grid;place-items:center;background:#233943;color:#d6e3e5;font-size:12px}.avatar svg{width:42px;height:42px}.message-name{font-size:13px;font-weight:600}.owner{font-size:11px;color:var(--muted);margin-left:7px;font-weight:400}.message p{font-size:13px;margin:5px 0 0;line-height:1.6}.result{margin-top:12px;border:1px solid #426366;border-radius:11px;padding:13px 15px;background:#15353d;display:flex;justify-content:space-between;align-items:center;gap:14px;font-size:13px}.result small{display:block;color:var(--muted);font-size:11px;margin-top:5px}.preview-button{border:1px solid #68918f;background:transparent;border-radius:6px;padding:7px 10px;font-size:11px}.principles{display:grid;gap:24px;margin:22px 0}.principle{border-top:1px solid var(--line);padding-top:17px}.principle strong{font-weight:550;font-size:15px}.principle p{font-size:13px;margin:6px 0 0}.footer-note{font-size:12px;color:var(--muted)}footer{border-top:1px solid var(--line);padding-top:22px;padding-bottom:32px;display:flex;justify-content:space-between;gap:16px;font-size:12px;color:var(--muted)}dialog{background:#102a35;color:var(--text);border:1px solid #53737b;border-radius:18px;padding:30px;width:min(500px,90vw)}dialog::backdrop{background:#031015c9}dialog h2{margin-bottom:16px}.idea-board{display:grid;gap:10px;margin:20px 0}.idea-board label{border:1px solid var(--line);padding:12px;border-radius:8px;color:var(--text);display:flex;gap:10px;align-items:center}.idea-board input{accent-color:var(--accent)}.pose{transform-origin:100px 125px}.eyes{transform-origin:100px 100px}.arm{transform-box:view-box}.pupils{transition:transform .4s}.shine{opacity:.22}.mouth{fill:none;stroke:#17363e;stroke-width:3.3;stroke-linecap:round}.spark{opacity:0;transform-origin:167px 50px}.resting-shadow{fill:#020f17;opacity:.35}/* Each state has a distinct rhythm: explore, attend, work, offer, await, celebrate, settle. */
+#hero .companion{overflow:visible}
+.animated .eyes{animation:blink 5.8s infinite}
+.animated[data-state=idle] .pose{animation:idle-explore 8s ease-in-out infinite}
+.animated[data-state=idle] .pupils{animation:idle-gaze 8s ease-in-out infinite}
+.animated[data-state=idle] .arm-outer-left{animation:idle-feel-left 8s ease-in-out infinite}
+.animated[data-state=idle] .arm-outer-right{animation:idle-feel-right 8s ease-in-out infinite}
+.animated[data-state=listening] .pose{animation:listen 3.4s ease-in-out infinite}
+.animated[data-state=listening] .pupils{transform:translate(1px,-3px)}
+.animated[data-state=listening] .arm-outer-left{transform:rotate(20deg)}
+.animated[data-state=listening] .arm-outer-right{transform:rotate(-20deg)}
+.animated[data-state=working] .arm{animation:reach 1.05s ease-in-out infinite alternate;animation-delay:calc(var(--arm-index)*-140ms)}
+.animated[data-state=working] .pose{animation:work 2.1s ease-in-out infinite}
+.animated[data-state=working] .pupils{animation:work-gaze 2.1s ease-in-out infinite}
+.animated[data-state=idea] .pose{animation:idea-pop .8s ease-out forwards}
+.animated[data-state=idea] .arm-outer-right{animation:offer .8s ease-out forwards}
+.animated[data-state=idea] .pupils{transform:translate(3px,-3px)}
+.animated[data-state=idea] .spark{animation:spark .6s .3s ease-out forwards}
+.animated[data-state=waiting] .pose{animation:await-input .9s ease-out forwards}
+.animated[data-state=waiting] .arm-outer-left{transform:rotate(40deg)}
+.animated[data-state=waiting] .arm-outer-right{transform:rotate(-40deg)}
+.animated[data-state=waiting] .pupils{transform:translate(-2px,-3px)}
+.animated[data-state=done] .pose{animation:celebrate 1.4s ease-in-out 1}
+.animated[data-state=done] .arm-outer-left{animation:cheer-left 1.4s ease-in-out 1}
+.animated[data-state=done] .arm-outer-right{animation:cheer-right 1.4s ease-in-out 1}
+.animated[data-state=done] .spark{animation:spark 1.4s ease-out 1}
+.animated[data-state=interrupted] .pose{animation:settle 1s ease-out forwards}
+.animated[data-state=interrupted] .eyes{animation:none;transform:scaleY(.78)}
+.animated[data-state=interrupted] .pupils{transform:translateY(3px)}
+.animated[data-state=interrupted] .arm-outer-left{transform:rotate(-22deg)}
+.animated[data-state=interrupted] .arm-outer-right{transform:rotate(22deg)}
+.paused *{animation:none!important}
+.paused .spark{opacity:0!important}
+@keyframes idle-explore{
+  0%,8%,94%,100%{transform:translate(0,0) rotate(0)}
+  20%,32%{transform:translate(-7px,-5px) rotate(-12deg)}
+  43%{transform:translate(0,-9px) rotate(0)}
+  55%,68%{transform:translate(8px,-4px) rotate(13deg)}
+  80%,85%{transform:translate(0,-10px) rotate(-3deg)}
+}
+@keyframes idle-gaze{
+  0%,8%,94%,100%{transform:translate(0,0)}
+  15%,32%{transform:translate(-4px,-1px)}
+  40%,45%{transform:translate(0,-4px)}
+  51%,68%{transform:translate(4px,0)}
+  77%,85%{transform:translate(1px,-4px)}
+}
+@keyframes idle-feel-left{0%,12%,40%,100%{transform:rotate(0)}22%,30%{transform:rotate(28deg)}}
+@keyframes idle-feel-right{0%,45%,76%,100%{transform:rotate(0)}56%,64%{transform:rotate(-30deg)}}
+@keyframes blink{0%,43%,47%,100%{transform:scaleY(1)}45%{transform:scaleY(.08)}}
+@keyframes listen{0%,100%{transform:translateY(-5px) rotate(-10deg) scale(1.04)}30%,65%{transform:translateY(-10px) rotate(-10deg) scale(1.07)}42%,77%{transform:translateY(2px) rotate(-5deg) scale(1.04)}}
+@keyframes reach{from{transform:rotate(-18deg)}to{transform:rotate(22deg)}}
+@keyframes work{0%,100%{transform:translate(-5px,0) rotate(-7deg)}50%{transform:translate(5px,-9px) rotate(7deg)}}
+@keyframes work-gaze{0%,100%{transform:translate(-3px,3px)}50%{transform:translate(3px,3px)}}
+@keyframes idea-pop{0%{transform:translateY(4px) scale(.96)}45%{transform:translateY(-20px) rotate(-7deg) scale(1.06)}100%{transform:translateY(-10px) rotate(-5deg)}}
+@keyframes offer{0%{transform:rotate(0)}65%{transform:rotate(-68deg) scale(1.4)}100%{transform:rotate(-55deg) scale(1.35)}}
+@keyframes await-input{0%{transform:rotate(0)}65%{transform:translateY(-4px) rotate(-18deg)}100%{transform:translateY(-3px) rotate(-14deg)}}
+@keyframes spark{0%{opacity:0;transform:scale(.2)}60%{opacity:1;transform:scale(1.4)}100%{opacity:1;transform:scale(1.15)}}
+@keyframes celebrate{0%,100%{transform:translateY(0)}15%{transform:translateY(5px) scale(1.06,.92)}38%{transform:translateY(-28px) rotate(-12deg) scale(.96,1.06)}62%{transform:translateY(1px) rotate(8deg) scale(1.07,.94)}80%{transform:translateY(-12px) rotate(-4deg)}}
+@keyframes cheer-left{0%,100%{transform:rotate(0)}38%,62%{transform:rotate(75deg)}}
+@keyframes cheer-right{0%,100%{transform:rotate(0)}38%,62%{transform:rotate(-75deg)}}
+@keyframes settle{0%{transform:translateY(0)}22%{transform:translate(-5px,-8px) rotate(-9deg)}48%{transform:translate(4px,4px) rotate(7deg)}100%{transform:translateY(9px) rotate(5deg) scale(1.04,.94)}}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}.animated[data-state=idea] .spark{opacity:1}}@media(max-width:760px){header,main,footer{padding-left:20px;padding-right:20px}header{height:74px}.intro{grid-template-columns:1fr;gap:13px;padding-top:36px}h1{letter-spacing:-1.6px}.concepts{gap:8px}.concept{padding:13px 10px;border-radius:12px}.concept svg{width:100%;height:100px}.concept .title{display:block}.choice{display:inline-block;margin-top:7px}.concept .description{font-size:11px}.workbench,.share-grid{grid-template-columns:1fr}.stage{min-height:360px}.settings{border-left:none;border-top:1px solid var(--line);padding:22px}.section-head{margin-top:35px}h2{font-size:22px}.share-grid{gap:20px}.owner{display:block;margin:4px 0 0}footer{flex-direction:column}.sample-note{display:none}}
+</style>
+</head>
+<body>
+<header><div class="brand"><svg viewBox="0 0 40 40" fill="none" aria-hidden="true"><path d="M10 24V17a10 10 0 0 1 20 0v7m-20-1c-8 8-9-1-5-1m9 1c-7 17-14 12-10 8m14-8c-4 18-7 16-7 11m11-11c4 18 7 16 7 11m-3-11c7 17 14 12 10 8m-6-8c8 8 9-1 5-1" stroke="#92c9c5" stroke-width="1.7" stroke-linecap="round"/></svg>Octipus</div><span class="tag">Companion studies · 01</span></header>
+<main>
+<section class="intro"><div><span class="eyebrow">A capable partner. A workspace of your own.</span><h1>A little character.<br>A lot of possibility.</h1></div><p>A companion you can name, shape, and work alongside. Three starting points for the same idea: curious, capable, and unmistakably yours.</p></section>
+<section aria-label="Choose a companion concept" class="concepts" id="concepts"></section>
+<div class="section-head"><div><span class="eyebrow">Meet your companion</span><h2>Make it feel like you.</h2></div><button class="quiet" id="export">Save SVG</button></div>
+<section class="workbench" aria-label="Interactive companion prototype"><div class="stage"><span class="stage-label" id="concept-label">01 / Pebble</span><span class="sample-note">Motion study 02 · simulated states</span><div id="hero"></div><div class="caption"><strong id="companion-name">Sparkle</strong><p id="status" aria-live="polite">Wondering what we could make next.</p></div></div><div class="settings"><div class="field"><label for="name">Companion name</label><input id="name" type="text" value="Sparkle" maxlength="32" autocomplete="off"></div><div class="field"><span class="label">A color of your own</span><div class="swatches" id="swatches" role="group" aria-label="Companion color"></div></div><div class="field"><span class="label">Try a moment</span><div class="states" id="states" role="group" aria-label="Companion state"></div></div><label class="motion"><input type="checkbox" id="pause">Pause motion</label><p class="small-note" id="motion-note">Curious glances at rest. Clear gestures for listening, working, and milestones. A clear status always accompanies the expression.</p></div></section>
+<div class="section-head"><div><span class="eyebrow">Your companions. Shared momentum.</span><h2>Good ideas like company.</h2></div><span class="tag">Illustrative chat</span></div>
+<section class="share-grid"><div class="chat"><div class="chat-header"><span>Weekend project <small>/ Shared space</small></span><span aria-label="Two people">Alex + Jo</span></div><div class="chat-body"><div class="message"><div class="avatar">AL</div><div><span class="message-name">Alex</span><p>What if we made a little tool to choose our next team project?</p></div></div><div class="message"><div class="avatar" id="chat-avatar"></div><div><span class="message-name"><span id="chat-name">Sparkle</span><span class="owner">Alex’s companion</span></span><p>I made a first sketch. Try selecting a few ideas—what should we change?</p><div class="result"><div>Our next project<small>Interactive sketch · demo</small></div><button class="preview-button" id="preview">Try it ↗</button></div></div></div><div class="message"><div class="avatar" id="other-avatar"></div><div><span class="message-name">Moss<span class="owner">Jo’s companion</span></span><p>I can look into what each idea would take. Which constraints matter most to us?</p></div></div></div></div><div><h2>Distinct companions.<br>Something made together.</h2><div class="principles"><div class="principle"><strong>Yours, without losing the family resemblance.</strong><p>Names and colors make each companion recognizable. The octopus silhouette connects them.</p></div><div class="principle"><strong>Expression with a purpose.</strong><p>A raised arm offers an idea. Attentive eyes ask for your input. Movement gives a little context to the work.</p></div><div class="principle"><strong>People stay at the center.</strong><p>Names, ownership, and readable status keep a shared conversation clear.</p></div></div></div></section>
+</main>
+<footer><span>Octipus · Companion exploration, October 2026</span><span>SVG + CSS · No external assets · Reduced-motion aware</span></footer>
+<dialog id="sketch"><span class="eyebrow">A small working sketch</span><h2>What shall we make?</h2><p>Pick the ideas you’d enjoy exploring together.</p><div class="idea-board"><label><input type="checkbox">A shared reading corner</label><label><input type="checkbox">A tiny team garden tracker</label><label><input type="checkbox">A place for weekend project ideas</label></div><p id="selection" aria-live="polite">No ideas selected yet.</p><button class="quiet" id="close">Back to the conversation</button></dialog>
+<script>
+const concepts=[{id:'pebble',title:'Pebble',description:'Soft shape, short arms. A quietly playful everyday partner.'},{id:'ribbon',title:'Ribbon',description:'A taller mantle and flowing arms. Curious and graceful.'},{id:'ink',title:'Inky',description:'Wide silhouette, bold eyes. Compact, alert, a little mischievous.'}];
+const colors=[['Sea glass','#92c9c5'],['Coral','#efab92'],['Lilac','#b6a7dc'],['Honey','#e6c37c'],['Moss','#a9c598']];
+const states={idle:['Idle','Wondering what we could make next.'],listening:['Listening','I’m listening. Where shall we take this?'],working:['Working','Looking into it. I’ll share what I find.'],idea:['An idea','I have something for us to try.'],waiting:['Needs input','Your call. Which direction feels right?'],done:['Finished','Ready for you to take a look.'],interrupted:['Interrupted','Work paused. Let’s check what happened.']};
+let chosen='pebble',accent=colors[0][1],state='idle';
+function svg(kind,color,animated=false){
+ const forms={pebble:{body:'M54 121 C45 96 49 57 76 45 C89 39 111 39 125 46 C151 58 155 97 146 121 C124 140 76 140 54 121Z',arms:['M61 116 Q36 137 25 123','M70 124 Q49 158 38 142','M82 129 Q69 170 57 153','M94 132 Q88 176 79 163','M106 132 Q112 176 121 163','M118 129 Q131 170 143 153','M130 124 Q151 158 162 142','M139 116 Q164 137 175 123'],eyeY:96,eyeX:83,r:10},ribbon:{body:'M66 119 C56 101 56 65 73 42 C88 22 114 25 128 46 C145 72 145 101 135 119 C115 136 85 136 66 119Z',arms:['M70 116 C45 115 48 153 25 138','M77 123 C60 131 64 166 42 155','M86 129 C76 146 80 179 63 164','M96 132 Q96 181 83 170','M105 132 Q111 177 123 167','M115 128 C129 145 116 176 143 160','M124 123 C150 124 138 163 164 146','M132 116 C152 109 159 139 178 120'],eyeY:92,eyeX:85,r:9},ink:{body:'M41 117 C35 94 48 62 75 54 C106 43 145 55 157 85 C163 99 162 112 156 123 C127 139 66 140 41 117Z',arms:['M49 115 Q24 128 23 114','M60 124 Q36 148 29 133','M76 130 Q55 158 48 145','M91 133 Q78 166 70 151','M108 133 Q119 164 128 151','M124 130 Q145 158 152 142','M140 124 Q164 148 170 131','M151 115 Q176 128 178 113'],eyeY:98,eyeX:79,r:12}};
+ const f=forms[kind],right=200-f.eyeX;
+ return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" class="companion ${animated?'animated':''}" data-state="${state}" role="img" aria-label="${kind} octopus companion"><ellipse class="resting-shadow" cx="100" cy="181" rx="49" ry="6"/><g class="pose"><g fill="none" stroke="${color}" stroke-width="${kind==='ribbon'?12:15}" stroke-linecap="round">${f.arms.map((d,i)=>`<path class="arm ${i===7?'arm-outer-right':i===0?'arm-outer-left':''}" style="--arm-index:${i};transform-origin:${d.match(/^M(\d+) (\d+)/)[1]}px ${d.match(/^M(\d+) (\d+)/)[2]}px" d="${d}"/>`).join('')}</g><path fill="${color}" d="${f.body}"/><path class="shine" fill="white" d="M65 76 Q67 56 86 52 Q73 62 72 77 Q68 83 65 76Z"/><g class="eyes"><ellipse cx="${f.eyeX}" cy="${f.eyeY}" rx="${f.r}" ry="${f.r+3}" fill="#f8fcf4"/><ellipse cx="${right}" cy="${f.eyeY}" rx="${f.r}" ry="${f.r+3}" fill="#f8fcf4"/><g class="pupils" fill="#102c35"><ellipse cx="${f.eyeX+1}" cy="${f.eyeY+1}" rx="4.6" ry="6.2"/><ellipse cx="${right+1}" cy="${f.eyeY+1}" rx="4.6" ry="6.2"/></g></g><path class="mouth" d="M95 ${f.eyeY+19} Q100 ${f.eyeY+23} 105 ${f.eyeY+19}"/></g><g class="spark" stroke="#efc39a" stroke-width="2.8" stroke-linecap="round"><path d="M164 36v16m-8-8h16M179 60v8m-4-4h8"/></g></svg>`;
+}
+const $=s=>document.querySelector(s);
+function name(){return $('#name').value.trim()||'Your companion'}
+function render(){
+ $('#hero').innerHTML=svg(chosen,accent,true);$('#hero').classList.toggle('paused',$('#pause').checked);
+ $('#companion-name').textContent=name();$('#chat-name').textContent=name();$('#status').textContent=states[state][1];
+ $('#chat-avatar').innerHTML=svg(chosen,accent);$('#other-avatar').innerHTML=svg('ribbon',colors[4][1]);
+ const i=concepts.findIndex(c=>c.id===chosen);$('#concept-label').textContent=`0${i+1} / ${concepts[i].title}`;
+ document.querySelectorAll('.concept').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.concept===chosen)));
+ document.querySelectorAll('.state').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.state===state)));
+ document.querySelectorAll('.swatch').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.color===accent)));
+}
+$('#concepts').innerHTML=concepts.map((c,i)=>`<button class="concept" data-concept="${c.id}" aria-pressed="${i===0}"><span class="number">0${i+1} / SHAPE STUDY</span>${svg(c.id,colors[i][1])}<span class="title"><span>${c.title}</span>${i===0?'<span class="choice">Starting favorite</span>':''}</span><span class="description">${c.description}</span></button>`).join('');
+$('#swatches').innerHTML=colors.map(([label,color])=>`<button class="swatch" data-color="${color}" style="--swatch:${color}" aria-label="${label}" aria-pressed="false"></button>`).join('');
+$('#states').innerHTML=Object.entries(states).map(([id,[label]])=>`<button class="state" data-state="${id}" aria-pressed="false">${label}</button>`).join('');
+document.querySelectorAll('.concept').forEach(b=>b.addEventListener('click',()=>{chosen=b.dataset.concept;render()}));
+document.querySelectorAll('.swatch').forEach(b=>b.addEventListener('click',()=>{accent=b.dataset.color;render()}));
+document.querySelectorAll('.state').forEach(b=>b.addEventListener('click',()=>{state=b.dataset.state;render()}));
+$('#name').addEventListener('input',()=>{$('#companion-name').textContent=name();$('#chat-name').textContent=name()});
+$('#pause').addEventListener('change',()=>$('#hero').classList.toggle('paused',$('#pause').checked));
+const reduced=matchMedia('(prefers-reduced-motion: reduce)');
+function motionPreference(){if(reduced.matches){$('#pause').checked=true;$('#pause').disabled=true;$('#motion-note').textContent='Reduced motion is enabled on your device. Expressions and readable status remain available.'}else{$('#pause').disabled=false;$('#motion-note').textContent='Curious glances at rest. Clear gestures for listening, working, and milestones. A clear status always accompanies the expression.'}render()}
+reduced.addEventListener('change',motionPreference);
+$('#preview').addEventListener('click',()=>$('#sketch').showModal());$('#close').addEventListener('click',()=>$('#sketch').close());
+$('#sketch').addEventListener('change',()=>{const count=document.querySelectorAll('.idea-board input:checked').length;$('#selection').textContent=count?`${count} idea${count===1?'':'s'} selected. Ready to explore together.`:'No ideas selected yet.'});
+$('#export').addEventListener('click',()=>{const content=svg(chosen,accent).replace('<svg ', '<svg width="200" height="200" ').replace('><ellipse', '><style>.resting-shadow{fill:#020f17;opacity:.35}.shine{opacity:.22}.mouth{fill:none;stroke:#17363e;stroke-width:3.3;stroke-linecap:round}.spark{display:none}</style><ellipse');const blob=new Blob([content],{type:'image/svg+xml'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`octipus-${chosen}.svg`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)});
+motionPreference();
+</script>
+</body>
+</html>

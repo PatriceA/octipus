@@ -11,6 +11,7 @@ The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 
 | Doc | What it covers |
 |-----|----------------|
+| [INSTALLATION.md](INSTALLATION.md) | Supported runtime, installer, manual setup, upgrades, and desktop prerequisites. |
 | [CONFIGURATION.md](CONFIGURATION.md) | Environment variables, ports, Docker services, and the settings you set before first boot. |
 | [CONFIGURATION-PRECEDENCE.md](CONFIGURATION-PRECEDENCE.md) | How `.env` (first-boot seed), the DB `settings` table, and the vault interact — and why the DB wins at runtime. |
 | [DOCKER.md](DOCKER.md) | Running Octipus and its services (Postgres, Ollama, LiteLLM) with Docker. |
@@ -29,6 +30,8 @@ The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 
 | Doc | What it covers |
 |-----|----------------|
+| [DIRECT-PROVIDERS.md](DIRECT-PROVIDERS.md) | Native provider connections and credentials. |
+| [CLI-AGENTS.md](CLI-AGENTS.md) | External CLI workers, sessions, permissions, and failure behavior. |
 | [MODEL-ROUTING.md](MODEL-ROUTING.md) | Per-topic primary/backup/executor model bindings, resolution order, and the planner→executor cost split. |
 | [LITELLM.md](LITELLM.md) | Routing every model call through a LiteLLM proxy; authentication and the "401 unreachable" fix. |
 | [OLLAMA.md](OLLAMA.md) | Running Octipus on Ollama: model sizing, tool support, context length, iGPU, and lazy tool discovery. |
@@ -41,7 +44,10 @@ The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 
 | Doc | What it covers |
 |-----|----------------|
-| [CHAT-COMMANDS.md](CHAT-COMMANDS.md) | The `/`-commands available in chat (expert, think, persona, compact, …). |
+| [SPACES.md](SPACES.md) | Personal and shared spaces, access, registration, and personal models. |
+| [MONITORS.md](MONITORS.md) | Scheduled checks and their delivery behavior. |
+| [WORK-PLANS.md](WORK-PLANS.md) | Visible execution plans, proposals, and feedback in web and terminal clients. |
+| [CHAT-COMMANDS.md](CHAT-COMMANDS.md) | The `/`-commands available in chat (skills, think, persona, compact, …). |
 | [RAG.md](RAG.md) | The knowledge base: auto-indexing and hybrid (BM25 + vector) search. Also long-term memory retrieval — what goes in the block of user facts every turn, and how it is ordered. |
 | [KNOWLEDGE-GRAPH.md](KNOWLEDGE-GRAPH.md) | Notes, `[[wikilinks]]`, authored edges, graph traversal, Obsidian/Canvas interop. |
 | [DOCUMENTS.md](DOCUMENTS.md) | Document ingestion, OCR, management, and exporting a deliverable as .docx / .xlsx. |
@@ -66,9 +72,14 @@ The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 | Doc | What it covers |
 |-----|----------------|
 | [AGENT-ARCHITECTURE.md](AGENT-ARCHITECTURE.md) | The root agent → agent → subagent swarm model and how a message becomes work. |
+| [EXECUTION-RELIABILITY.md](EXECUTION-RELIABILITY.md) | Execution outcomes, persistence, and reliability boundaries. |
+| [ACTION-RECOVERY.md](ACTION-RECOVERY.md) | Failed actions and recovery controls. |
+| [CHAT-CONTINUITY.md](CHAT-CONTINUITY.md) | Conversation continuity across turns and clients. |
+| [SESSION-LEARNING.md](SESSION-LEARNING.md) | Session learning and review of reusable guidance. |
+| [FLOW-GUARD.md](FLOW-GUARD.md) | Execution flow checks and their limits. |
 | [SWARM-RELIABILITY.md](SWARM-RELIABILITY.md) | Swarm receipts, scorer gates, and the crash-resume ledger. |
 | [LANE-ROLE-SKILL-ROUTING.md](LANE-ROLE-SKILL-ROUTING.md) | How a request picks a role, a model lane, and its skills. |
-| [TOOL-ROUTING.md](TOOL-ROUTING.md) | How tools and experts are routed to agents. |
+| [TOOL-ROUTING.md](TOOL-ROUTING.md) | How roles expose tools and resolve models for agents. |
 | [MULTI-REPO.md](MULTI-REPO.md) | Working across a suite of repos: the repo registry, dependency graph, and how agents navigate it. |
 | [API.md](API.md) | REST + WebSocket API reference, and how to get an API token. |
 | [architecture/gateway.md](architecture/gateway.md) | The gateway WS hub and command registry. |
@@ -79,7 +90,7 @@ The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 
 | Doc | What it covers |
 |-----|----------------|
-| [DEVELOPMENT.md](DEVELOPMENT.md) | Project layout, commands (`octi`, `npm run …`), and how to add tools / skills / experts. |
+| [DEVELOPMENT.md](DEVELOPMENT.md) | Project layout, commands (`octi`, `npm run …`), and how to add tools, skills, and roles. |
 | [TESTING.md](TESTING.md) | Unit, integration, E2E, and web test suites. |
 | [QA.md](QA.md) | Manual QA / feature-validation walkthroughs. |
 | [OBSERVABILITY.md](OBSERVABILITY.md) | Prometheus metrics, run correlation, and logging. |
@@ -92,3 +103,26 @@ The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 | Doc | What it covers |
 |-----|----------------|
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Diagnosing connection, auth, model, and delivery issues; `octi doctor`. |
+
+## Keeping the website aligned
+
+Shared reference pages are published from this repository with
+`scripts/sync-website-docs.mjs`. Edit the
+repository guide, then sync it into the Astro website checkout:
+
+```bash
+node scripts/sync-website-docs.mjs /path/to/octipus-website
+node scripts/sync-website-docs.mjs /path/to/octipus-website --check
+npm --prefix /path/to/octipus-website run build
+```
+
+The page map (`scripts/website-docs-map.json`) preserves existing website URLs
+and adds missing feature guides. The sync rewrites relative documentation links
+to website routes; source and historical references link back to GitHub. Generated
+pages use Markdown rather than MDX so code examples remain literal. Do not edit
+the generated website copies directly. Website-only quick-start, runtime, security,
+pipeline, tools, and web UI guides still need a code review when behavior changes.
+Release notes and historical plans remain snapshots, not current feature references.
+
+A successful sync check proves the shared text matches; it does not verify the
+implementation or publish the website. Build and deploy the website separately.

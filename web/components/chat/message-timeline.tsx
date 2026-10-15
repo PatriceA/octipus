@@ -1,7 +1,7 @@
 'use client';
 
+import type { CompanionAppearance, CompanionIdentity } from '../../../src/shared/companion';
 import {
-  Bot,
   CheckCircle,
   ChevronDown,
   ChevronRight,
@@ -21,6 +21,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { compareTimelineEntries } from '../../../src/shared/timeline-order';
 import { agentCompletionLabel, type AgentCompletionReason } from '../../../src/shared/agent-completion';
 import type { ToolInputPreview, ToolResultPreview } from '../../../src/shared/work-stream';
+import { CompanionAvatar, type CompanionState } from '@/components/companion/companion-avatar';
 import DiffView from '@/components/chat/diff-view';
 import { AssistantContent, StreamingContent } from '@/components/chat/inline-ui/content';
 import { Markdown } from '@/components/ui/markdown-renderer';
@@ -42,8 +43,10 @@ export interface MessageMetadata {
 }
 
 export interface ChatMessageData {
+  companion?: CompanionIdentity;
+  companionName?: string;
   id: string;
-  role: 'user' | 'assistant' | 'system' | 'narration';
+  role: 'user' | 'assistant' | 'system' | 'narration' | 'progress';
   content: string;
   timestamp: Date;
   agentId?: string;
@@ -59,6 +62,8 @@ export interface ChatMessageData {
   pending?: boolean;
   /** Sent from an interactive answer's suggestion (its chip). */
   fromInlineUi?: boolean;
+  /** A reply received in this open tab, never reconstructed from history. */
+  arrivedLiveAt?: number;
 }
 
 export interface TrackedAgent {
@@ -230,9 +235,26 @@ function LimitRefusalCard({ limit, fallback }: { limit: LimitRefusal; fallback: 
 // MessageBubble
 // ---------------------------------------------------------------------------
 
-function MessageBubble({ message, untrusted }: { message: ChatMessageData; untrusted?: boolean }) {
+function MessageBubble({ message, untrusted, companionName, companionAppearance, motionPaused }: { message: ChatMessageData; untrusted?: boolean; companionName: string; companionAppearance?: CompanionAppearance; motionPaused: boolean }) {
   const { role, content, timestamp, classification, metadata } = message;
   const timeStr = new Date(timestamp).toLocaleTimeString();
+  // Only a freshly mounted reply celebrates. Reopening a session must not
+  // replay arrival gestures on its previously received messages.
+  const [freshArrival] = useState(() => message.arrivedLiveAt !== undefined
+    && Date.now() - message.arrivedLiveAt < 1500);
+
+  if (role === 'progress') {
+    return (
+      <div className="flex gap-3 py-2" data-testid="room-progress">
+        <CompanionAvatar size={28} appearance={message.companion?.appearance} />
+        <div className="min-w-0 border-l-2 border-primary/30 pl-3 text-sm text-on-surface-variant">
+          <p className="mb-1 text-[11px]">{message.companion ? `${message.companion.name} · ${message.companion.ownerName}’s companion` : 'Octipus'} · update</p>
+          <MessageContent content={content} untrusted={untrusted} />
+          <p className="mt-1 text-[10px] opacity-60">{timeStr}</p>
+        </div>
+      </div>
+    );
+  }
 
   if (role === 'system') {
     return (
@@ -308,11 +330,10 @@ function MessageBubble({ message, untrusted }: { message: ChatMessageData; untru
     // moment it is echoed into the transcript.
     <div className="flex gap-3 py-1.5 group" data-role="assistant">
       <div className="shrink-0 mt-1">
-        <div className="h-7 w-7 rounded-full bg-linear-to-br from-primary to-primary-container flex items-center justify-center shadow-xs">
-          <Bot className="h-4 w-4 text-on-primary" />
-        </div>
+        <CompanionAvatar appearance={message.companion || message.companionName ? message.companion?.appearance : companionAppearance} state={metadata?.limit ? 'interrupted' : freshArrival ? 'done' : 'idle'} animated={freshArrival && !motionPaused} />
       </div>
       <div className="flex flex-col gap-1 min-w-0 flex-1">
+        <span className="text-[11px] text-on-surface-variant">{message.companion ? `${message.companion.name} · ${message.companion.ownerName}’s companion` : message.companionName ?? companionName}</span>
         {metadata?.limit ? (
           <LimitRefusalCard limit={metadata.limit} fallback={content} />
         ) : (
@@ -811,6 +832,13 @@ interface FileChangeGroup {
 }
 
 interface MessageTimelineProps {
+  /** Public room activity; answer deltas keep their existing audience. */
+  companionActivity?: { name: string; appearance?: CompanionAppearance; state: CompanionState; label: string };
+  companionAppearance?: CompanionAppearance;
+  companionName?: string;
+  connected?: boolean;
+  waitingForInput?: boolean;
+  listening?: boolean;
   messages: ChatMessageData[];
   trackedAgents: Map<string, TrackedAgent>;
   teams: Map<string, TeamState>;
@@ -857,11 +885,18 @@ export default function MessageTimeline({
   onOpenFile,
   emptyLabel = 'Start a conversation',
   untrusted = false,
+  companionName = 'Octipus',
+  companionAppearance,
+  companionActivity,
+  connected = true,
+  waitingForInput = false,
+  listening = false,
 }: MessageTimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const isNearBottomRef = useRef(true);
+  const [motionPaused, setMotionPaused] = useState(false);
 
   // Build unified timeline — only when its inputs change, not per token.
   const timeline = useMemo(() => {
@@ -975,10 +1010,17 @@ export default function MessageTimeline({
       onScroll={handleScroll}
       className="flex-1 overflow-y-auto px-4 py-4 space-y-1 relative"
     >
+      <div className="flex justify-end">
+        <button type="button" className="text-[11px] text-on-surface-variant hover:text-on-surface rounded px-2 py-1 motion-reduce:hidden"
+          aria-pressed={motionPaused} onClick={() => setMotionPaused((paused) => !paused)}>
+          {motionPaused ? 'Resume companion motion' : 'Pause companion motion'}
+        </button>
+      </div>
       {/* Empty state */}
-      {messages.length === 0 && !isLoading && (
+      {messages.length === 0 && !isLoading && !waitingForInput && !listening && !companionActivity && (
         <div className="flex flex-col items-center justify-center h-full text-on-surface-variant gap-3">
-          <Bot className="h-10 w-10 opacity-30" />
+          <CompanionAvatar appearance={companionAppearance} size={64} state={connected ? 'idle' : 'interrupted'} animated={connected && !motionPaused} />
+          <span className="text-sm font-medium">{companionName}</span>
           <p className="text-sm">{emptyLabel}</p>
         </div>
       )}
@@ -987,7 +1029,7 @@ export default function MessageTimeline({
       {timeline.map((entry, idx) => {
         switch (entry.kind) {
           case 'message':
-            return <MemoMessageBubble key={`msg-${entry.data.id}`} message={entry.data} untrusted={untrusted} />;
+            return <div key={`msg-${entry.data.id}`} data-message-id={entry.data.id} tabIndex={-1}><MemoMessageBubble message={entry.data} untrusted={untrusted} companionName={companionName} companionAppearance={companionAppearance} motionPaused={motionPaused} /></div>;
           case 'agent':
             return <MemoAgentActivityInline key={`agent-${entry.data.id}`} agent={entry.data} onOpenFile={onOpenFile} />;
           case 'team':
@@ -1006,19 +1048,23 @@ export default function MessageTimeline({
         }
       })}
 
-      {/* Loading indicator */}
-      {isLoading && (
-        <div className="flex items-center gap-2 py-3 px-2">
-          <div className="h-7 w-7 rounded-full bg-linear-to-br from-primary to-primary-container flex items-center justify-center shadow-xs">
-            <Loader2 className="h-4 w-4 text-on-primary animate-spin" />
+      {/* One live companion; older transcript avatars remain still. */}
+      {(messages.length > 0 || isLoading || waitingForInput || listening || companionActivity) && (
+        <div className="flex items-start gap-3 py-3" data-testid="companion-activity">
+          <CompanionAvatar appearance={companionActivity ? companionActivity.appearance : companionAppearance} state={!connected ? 'interrupted' : companionActivity?.state ?? (waitingForInput ? 'waiting' : isLoading ? 'working' : listening ? 'listening' : 'idle')} animated={connected && !motionPaused} />
+          <div className="min-w-0 flex-1">
+            <p className="text-[11px] text-on-surface-variant mb-1">{companionActivity?.name ?? companionName}</p>
+            {(!connected || waitingForInput) && <p role="status" className="text-sm text-on-surface-variant mb-1">
+              {!connected ? 'Connection lost — activity may be out of date.' : 'Waiting for your input'}
+            </p>}
+            {streamingText ? (
+              <StreamingContent text={streamingText} />
+            ) : (
+              <span className="text-sm text-accent">
+                {!connected ? 'Reconnecting…' : companionActivity ? companionActivity.label : waitingForInput ? 'Review the pending request below.' : isLoading ? (statusMessage || 'Thinking...') : listening ? 'Listening…' : 'Ready for your next idea.'}
+              </span>
+            )}
           </div>
-          {streamingText ? (
-            <StreamingContent text={streamingText} />
-          ) : (
-            <span className="text-sm text-accent animate-pulse">
-              {statusMessage || 'Thinking...'}
-            </span>
-          )}
         </div>
       )}
 

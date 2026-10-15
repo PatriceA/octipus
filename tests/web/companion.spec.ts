@@ -1,0 +1,82 @@
+import { json, selectChatSession } from './fixtures/api-stubs';
+import { expect, test } from './fixtures/auth';
+import { stubGateway } from './fixtures/gateway';
+
+test('companion follows the live turn and only waits for this session’s requests', async ({ authenticatedPage: page }) => {
+  const gateway = await stubGateway(page);
+  await page.route('**/api/persona', route => json(route, 200, { name: 'Sparkle' }));
+  await page.route('**/api/sessions/sess-1/messages**', route => json(route, 200, { messages: [{ id: 'old-reply', role: 'assistant', content: 'A previous reply.', createdAt: '2026-10-01T10:00:00Z' }] }));
+  await page.goto('/chat');
+  await selectChatSession(page, 'sess-1');
+  await expect.poll(() => gateway.subscribed()).toBe(1);
+  const historical = page.locator('[data-role="assistant"] .octi-companion');
+  await expect(historical.first()).toHaveAttribute('data-motion', 'off');
+  const input = page.getByPlaceholder(/send a message/i).first();
+  await input.fill('Research an idea for our next team project');
+  await input.press('Enter');
+  await expect.poll(() => gateway.sent.some(m => m.type === 'chat.send')).toBe(true);
+  const activity = page.getByTestId('companion-activity');
+  const avatar = activity.locator('.octi-companion');
+  await expect(activity).toContainText('Sparkle');
+  await expect(avatar).toHaveAttribute('data-state', 'working');
+  const request = { requestId: 'other', toolId: 'shell', action: 'execute', toolName: 'shell', args: {} };
+  gateway.event('permission.request', request, 'sess-2');
+  await expect(avatar).toHaveAttribute('data-state', 'working');
+  gateway.event('permission.request', { ...request, requestId: 'here' }, 'sess-1');
+  await expect(avatar).toHaveAttribute('data-state', 'waiting');
+  await expect(activity).toContainText('Waiting for your input');
+  gateway.event('permission.resolved', { requestId: 'here', status: 'approved' }, 'sess-1');
+  await expect(avatar).toHaveAttribute('data-state', 'working');
+  gateway.event('permission.resolved', { requestId: 'other', status: 'approved' }, 'sess-2');
+  await page.screenshot({ path: '/tmp/octipus-companion-chat-working.png' });
+  gateway.event('chat.response', { response: { response: 'Here are three directions we can explore.' } }, 'sess-1');
+  await expect(avatar).toHaveAttribute('data-state', 'idle');
+  await expect(activity).toContainText('Ready for your next idea.');
+  const reply = page.locator('[data-role="assistant"]').filter({ hasText: 'Here are three directions' });
+  await expect(reply).toContainText('Sparkle');
+  await expect(reply.locator('.octi-companion')).toHaveAttribute('data-state', 'done');
+  // The one-shot arrival settles; it does not turn history into an animated feed.
+  await expect.poll(() => reply.locator('.octi-companion').evaluate(el => el.getAnimations({ subtree: true }).filter(a => a.playState === 'running').length)).toBe(0);
+  await selectChatSession(page, 'sess-2');
+  await selectChatSession(page, 'sess-1');
+  await expect(page.locator('[data-role="assistant"] .octi-companion[data-motion="on"]')).toHaveCount(0);
+});
+
+test('disconnection stops working motion without claiming completion', async ({ authenticatedPage: page }) => {
+  let refuse = false;
+  const gateway = await stubGateway(page, { tooManyConnections: () => refuse });
+  await page.goto('/chat');
+  await selectChatSession(page, 'sess-1');
+  await expect.poll(() => gateway.subscribed()).toBe(1);
+  const input = page.getByPlaceholder(/send a message/i).first();
+  await input.fill('Continue the investigation');
+  await input.press('Enter');
+  const activity = page.getByTestId('companion-activity');
+  await expect(activity.locator('.octi-companion')).toHaveAttribute('data-state', 'working');
+  refuse = true;
+  await gateway.sockets[0].close({ code: 1011, reason: 'Test connection loss' });
+  await expect(activity.locator('.octi-companion')).toHaveAttribute('data-state', 'interrupted');
+  await expect(activity.locator('.octi-companion')).toHaveAttribute('data-motion', 'off');
+  await expect(activity).toContainText('activity may be out of date');
+});
+
+test('pending snapshots, pause, and reduced motion work at mobile chat size', async ({ authenticatedPage: page }) => {
+  const gateway = await stubGateway(page);
+  gateway.setPending({ approvals: [{ requestId: 'approval', sessionId: 'sess-1', summary: 'Review the proposal', question: 'Continue?' }] });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/chat');
+  await page.getByRole('button', { name: /Switch conversation/ }).click();
+  await page.getByRole('dialog', { name: 'Conversations' }).locator('[data-session-id="sess-1"]').click();
+  const avatar = page.getByTestId('companion-activity').locator('.octi-companion');
+  await expect(avatar).toHaveAttribute('data-state', 'waiting');
+  await page.getByRole('button', { name: 'Pause companion motion' }).click();
+  await expect(avatar).toHaveAttribute('data-motion', 'off');
+  await expect.poll(() => avatar.evaluate(el => el.getAnimations({ subtree: true }).length)).toBe(0);
+  await page.getByRole('button', { name: 'Resume companion motion' }).click();
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect.poll(() => avatar.evaluate(el => el.getAnimations({ subtree: true }).length)).toBe(0);
+  await expect(page.getByRole('button', { name: 'Pause companion motion' })).toBeHidden();
+  await expect(page.getByTestId('companion-activity')).toContainText('Waiting for your input');
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: '/tmp/octipus-companion-chat-mobile.png' });
+});

@@ -14,21 +14,21 @@ describe('buildArtifactAppUrl', () => {
   });
 
   test('returns a relative path when PUBLIC_URL is unset', () => {
-    expect(buildArtifactAppUrl('abc-123')).toBe('/artifacts/abc-123');
+    expect(buildArtifactAppUrl('abc-123')).toBe('/artifacts/view?id=abc-123');
   });
 
   test('prefixes with PUBLIC_URL when set', () => {
     process.env.PUBLIC_URL = 'https://octi.example.com';
-    expect(buildArtifactAppUrl('abc-123')).toBe('https://octi.example.com/artifacts/abc-123');
+    expect(buildArtifactAppUrl('abc-123')).toBe('https://octi.example.com/artifacts/view?id=abc-123');
   });
 
   test('strips trailing slash from PUBLIC_URL', () => {
     process.env.PUBLIC_URL = 'https://octi.example.com/';
-    expect(buildArtifactAppUrl('abc-123')).toBe('https://octi.example.com/artifacts/abc-123');
+    expect(buildArtifactAppUrl('abc-123')).toBe('https://octi.example.com/artifacts/view?id=abc-123');
   });
 
   test('encodes the id', () => {
-    expect(buildArtifactAppUrl('a/b c')).toMatch(/\/artifacts\/a%2Fb%20c$/);
+    expect(buildArtifactAppUrl('a/b c')).toMatch(/\/artifacts\/view\?id=a%2Fb%20c$/);
   });
 });
 
@@ -54,15 +54,15 @@ describe('pickShareableUrl', () => {
     expect(pickShareableUrl({ ...args, visibility: 'public' })).toContain('/a/qa-issues');
   });
 
-  test('signed → outerUrl (recipient uses the token)', () => {
-    expect(pickShareableUrl({ ...args, visibility: 'signed' })).toContain('/a/qa-issues');
+  test('signed → appUrl (sharing requires an explicit token)', () => {
+    expect(pickShareableUrl({ ...args, visibility: 'signed' })).toContain('/artifacts/view?id=aaa');
   });
 
   test('workspace → appUrl', () => {
-    expect(pickShareableUrl({ ...args, visibility: 'workspace' })).toContain('/artifacts/aaa');
+    expect(pickShareableUrl({ ...args, visibility: 'workspace' })).toContain('/artifacts/view?id=aaa');
   });
 
   test('private → appUrl', () => {
-    expect(pickShareableUrl({ ...args, visibility: 'private' })).toContain('/artifacts/aaa');
+    expect(pickShareableUrl({ ...args, visibility: 'private' })).toContain('/artifacts/view?id=aaa');
   });
 });

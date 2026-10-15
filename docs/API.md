@@ -34,11 +34,6 @@ curl -H "Authorization: Bearer $OCTIPUS_API_TOKEN" http://localhost:3005/api/aut
 | GET | `/api/auth/registration` | No | `{mode, firstAccount}`: the registration mode |
 | POST | `/api/auth/login` | No | Login with credentials; a TOTP account without `totpCode` gets `401 { requiresTOTP: true }` (audited as `login` / `login_failed`) |
 | POST | `/api/auth/login-mobile` | No | Login returning bearer token in response body (for native clients) |
-
-Login, login-mobile and register take an optional `returnTo`: a same-origin
-path (one leading `/`, no `//`, no backslash, no whitespace or control
-characters). Anything else is refused with 400; a valid one is echoed back as
-`returnTo` in the response (`/` when none was sent).
 | POST | `/api/auth/logout` | Yes | Logout and invalidate session |
 | GET | `/api/auth/me` | Yes | Get current user info |
 | GET | `/api/auth/ws-ticket` | Yes | Get a short-lived (60 s) token to sign a socket in: the gateway `auth` frame, or the `/voice` URL |
@@ -50,6 +45,11 @@ characters). Anything else is refused with 400; a valid one is echoed back as
 | POST | `/api/auth/totp/enable` | Yes | Enable TOTP after verification |
 | POST | `/api/auth/totp/disable` | Yes | Disable TOTP 2FA |
 | POST | `/api/auth/link` | Yes | Redeem channel link code |
+
+Login, login-mobile and register take an optional `returnTo`: a same-origin
+path (one leading `/`, no `//`, no backslash, no whitespace or control
+characters). Anything else is refused with 400; a valid one is echoed back as
+`returnTo` in the response (`/` when none was sent).
 
 ## Agents
 
@@ -245,7 +245,7 @@ filesystem or shell isolation.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/chat` | Send a chat message (optional `expertId` for expert routing). Without a `channel` that can show an approval prompt, the turn is unattended: actions at ASK are refused, not asked. Interactive answers are replaced by a plain line unless the body declares `renders: ["inline_ui"]`; `toolsUsed: true` adds the tool names the turn called (the eval runner) |
+| POST | `/api/chat` | Send a chat message. Without a `channel` that can show an approval prompt, the turn is unattended: actions at ASK are refused, not asked. Interactive answers are replaced by a plain line unless the body declares `renders: ["inline_ui"]`; `toolsUsed: true` adds the tool names the turn called (the eval runner) |
 | POST | `/api/chat/approve` | Respond to an approval request |
 
 ## Reader

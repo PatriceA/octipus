@@ -43,9 +43,50 @@ A special profile row with `category='assistant'` stores the root agent's per-us
 | `pronouns` | Rendered into the persona prompt (default `it/we`) |
 | `tone` | One of `dry|playful|neutral|professional|terse|verbose` |
 | `narration` | Live swarm narration volume: `off|minimal|chatty` |
+| `appearance` | Saved companion shape and color (JSON; presentation only) |
 | `extra:N` | Free-form rules added via `/persona say` or the web UI |
 
 Auto-created on first edit. See [CHAT-COMMANDS.md](CHAT-COMMANDS.md#persona) for the slash commands and the [UX revamp plan](plans/ux-personality-revamp.md) for the full design.
+
+### Companion appearance
+
+Open **Persona → Your companion’s look** to choose Pebble, Ribbon, or Inky,
+then a color: Sea glass, Coral, Lavender, Sunshine, or Ocean blue. The animated
+preview lets you try looking around, listening, working, and waiting. Changes
+stay in the preview until **Save appearance** succeeds; **Discard changes**
+restores the saved choice. You can pause the preview, and system reduced-motion
+preferences apply.
+
+The appearance is saved per user and follows their companion in private chat
+and new shared-room replies. Room replies keep an appearance snapshot alongside
+their name and owner, so a later change does not restyle history. Older room
+replies use Pebble in Sea glass. The full persona reset also resets appearance;
+switching a personality preset keeps it.
+
+`GET /api/persona` includes `appearance`. `PUT /api/persona/appearance` accepts
+`{ "form": "ribbon", "color": "coral" }` for the authenticated user only. Forms
+are `pebble|ribbon|ink`; colors are `sea-glass|coral|lavender|sunshine|blue`.
+Unknown values and extra fields are rejected. Appearance is presentation data,
+not a persona instruction or an additional permission.
+
+### Companion names in shared rooms
+
+In rooms hosted by your installation, type `@Sparkle` after naming your companion
+Sparkle, or select **your companion** from `@` autocomplete. Selecting it turns on
+**Ask Sparkle**; the toggle also works without a mention. `@octipus` remains an
+alias for your own companion.
+
+Each person invokes their own companion. Execution uses the authenticated
+requester's user ID, permissions and funding, even when two companions share a
+name. A plain mention matching a space member's username addresses that member;
+choose **your companion** or use the Ask toggle to disambiguate.
+
+New completed replies and public progress updates show **Sparkle · Alex’s companion**.
+The server stores the owner ID, display names, and appearance with these messages, so a later rename does not rewrite
+history. Only public names are exposed; persona instructions and personal facts
+are not included in room attribution. Older replies keep their generic Octipus
+label. Rooms hosted by another installation retain their existing host-agent
+addressing.
 
 ## Agent Tools
 
@@ -83,7 +124,11 @@ This means agents automatically know the user's location for weather queries, th
 | `/api/tools/profiles/tools/list_profiles/execute` | POST | List profiles |
 | `/api/tools/profiles/tools/get_profile/execute` | POST | Get profile by ID/name |
 | `/api/tools/profiles/tools/create_profile/execute` | POST | Create profile |
+| `/api/tools/profiles/tools/update_profile/execute` | POST | Update profile fields |
 | `/api/tools/profiles/tools/add_fact/execute` | POST | Add fact to profile |
+| `/api/tools/profiles/tools/remove_fact/execute` | POST | Remove a fact |
+| `/api/tools/profiles/tools/delete_profile/execute` | POST | Delete profile |
+| `/api/tools/profiles/tools/search_profiles/execute` | POST | Search profiles |
 
 ## Database
 

@@ -63,7 +63,7 @@ The compact details show steps near the active step. The full transcript entry r
 | `\` then `Enter` | Newline when the terminal does not support Shift+Enter |
 | `Alt+T` / `F8` | Chat shell voice input, when configured |
 
-Typing `/` opens command completion. `/help` lists available commands. Common gateway commands include `/status`, `/abort`, `/cost`, `/changes`, `/expert` and `/compact`.
+Typing `/` opens command completion. `/help` lists available commands. Common gateway commands include `/status`, `/abort`, `/cost`, `/changes`, `/persona`, `/skills` and `/compact`.
 
 The standalone chat shell also handles `/login`, `/logout` (sign out and disconnect), `/whoami`, `/project`, `/workspace` and `/resume` locally. These local commands are not all implemented by the editor; its palette includes the shared gateway commands, plan controls and editor shortcuts.
 

@@ -23,7 +23,7 @@ If anything in here is wrong, unclear, or out of date, that is itself a bug — 
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org) ≥ 24 — the whole stack: backend, scripts, tests,
+- [Node.js](https://nodejs.org) 24.19.0 or newer — the whole stack: backend, scripts, tests,
   TUI and the web build. (Bun was the backend runtime until the 2026-08-23
   rebuild; it is gone from the image, the CI, the installer and the launcher.)
 - _Desktop app only:_ [Rust](https://rustup.rs) + Tauri system libs — installed
@@ -40,6 +40,10 @@ cd web && npm ci && cd ..
 # Optional, only when changing the standalone MCP server:
 cd mcp-server && npm ci && cd ..
 
+npm run build
+npm --prefix web run build
+# If mcp-server dependencies are installed:
+npm --prefix mcp-server run build
 npm run setup          # Interactive wizard — "Embedded" mode for zero-deps
 bin/octi start web
 ```
@@ -157,7 +161,10 @@ The MCP server lives in `mcp-server/`. Each tool is one file in `mcp-server/src/
 - A handler function
 - A `server.tool()` registration call
 
-The server's `inventory` auto-discovers all tool modules at startup.
+Register the module explicitly in `mcp-server/src/server.ts` by importing its
+`register…Tools` function and calling it from `createServer`. The server does
+not scan the tools directory at runtime; an unregistered module is absent from
+the published MCP server.
 
 ---
 

@@ -1,0 +1,67 @@
+.octi-companion { flex-shrink: 0; display: block; overflow: visible; color: #92c9c5; }
+.octi-companion .pose { transform-origin: 100px 125px; }
+.octi-companion .eyes { transform-origin: 100px 100px; }
+.octi-companion .arm { transform-box: view-box; }
+.octi-companion .shine { opacity: .22; }
+.octi-companion .mouth { fill: none; stroke: #17363e; stroke-width: 3.3; stroke-linecap: round; }
+.octi-companion .resting-shadow { fill: #020f17; opacity: .2; }
+.octi-companion.animated .eyes{animation:octi-blink 5.8s infinite}
+.octi-companion.animated[data-state=idle] .pose{animation:octi-idle-explore 8s ease-in-out infinite}
+.octi-companion.animated[data-state=idle] .pupils{animation:octi-idle-gaze 8s ease-in-out infinite}
+.octi-companion.animated[data-state=idle] .arm-outer-left{animation:octi-idle-feel-left 8s ease-in-out infinite}
+.octi-companion.animated[data-state=idle] .arm-outer-right{animation:octi-idle-feel-right 8s ease-in-out infinite}
+.octi-companion.animated[data-state=listening] .pose{animation:octi-listen 3.4s ease-in-out infinite}
+.octi-companion.animated[data-state=listening] .pupils{transform:translate(1px,-3px)}
+.octi-companion.animated[data-state=listening] .arm-outer-left{transform:rotate(20deg)}
+.octi-companion.animated[data-state=listening] .arm-outer-right{transform:rotate(-20deg)}
+.octi-companion.animated[data-state=working] .arm{animation:octi-reach 1.05s ease-in-out infinite alternate;animation-delay:calc(var(--arm-index)*-140ms)}
+.octi-companion.animated[data-state=working] .pose{animation:octi-work 2.1s ease-in-out infinite}
+.octi-companion.animated[data-state=working] .pupils{animation:octi-octi-work-gaze 2.1s ease-in-out infinite}
+.octi-companion.animated[data-state=waiting] .pose{animation:octi-await-input .9s ease-out forwards}
+.octi-companion.animated[data-state=waiting] .arm-outer-left{transform:rotate(40deg)}
+.octi-companion.animated[data-state=waiting] .arm-outer-right{transform:rotate(-40deg)}
+.octi-companion.animated[data-state=waiting] .pupils{transform:translate(-2px,-3px)}
+.octi-companion.animated[data-state=done] .pose{animation:octi-celebrate 1.4s ease-in-out 1}
+.octi-companion.animated[data-state=done] .arm-outer-left{animation:octi-cheer-left 1.4s ease-in-out 1}
+.octi-companion.animated[data-state=done] .arm-outer-right{animation:octi-cheer-right 1.4s ease-in-out 1}
+.octi-companion.animated[data-state=done] .octi-spark{animation:octi-spark 1.4s ease-out 1}
+.octi-companion.animated[data-state=interrupted] .pose{animation:octi-settle 1s ease-out forwards}
+.octi-companion.animated[data-state=interrupted] .eyes{animation:none;transform:scaleY(.78)}
+.octi-companion.animated[data-state=interrupted] .pupils{transform:translateY(3px)}
+.octi-companion.animated[data-state=interrupted] .arm-outer-left{transform:rotate(-22deg)}
+.octi-companion.animated[data-state=interrupted] .arm-outer-right{transform:rotate(22deg)}
+
+@keyframes octi-idle-explore{
+  0%,8%,94%,100%{transform:translate(0,0) rotate(0)}
+  20%,32%{transform:translate(-7px,-5px) rotate(-12deg)}
+  43%{transform:translate(0,-9px) rotate(0)}
+  55%,68%{transform:translate(8px,-4px) rotate(13deg)}
+  80%,85%{transform:translate(0,-10px) rotate(-3deg)}
+}
+@keyframes octi-idle-gaze{
+  0%,8%,94%,100%{transform:translate(0,0)}
+  15%,32%{transform:translate(-4px,-1px)}
+  40%,45%{transform:translate(0,-4px)}
+  51%,68%{transform:translate(4px,0)}
+  77%,85%{transform:translate(1px,-4px)}
+}
+@keyframes octi-idle-feel-left{0%,12%,40%,100%{transform:rotate(0)}22%,30%{transform:rotate(28deg)}}
+@keyframes octi-idle-feel-right{0%,45%,76%,100%{transform:rotate(0)}56%,64%{transform:rotate(-30deg)}}
+@keyframes octi-blink{0%,43%,47%,100%{transform:scaleY(1)}45%{transform:scaleY(.08)}}
+@keyframes octi-listen{0%,100%{transform:translateY(-5px) rotate(-10deg) scale(1.04)}30%,65%{transform:translateY(-10px) rotate(-10deg) scale(1.07)}42%,77%{transform:translateY(2px) rotate(-5deg) scale(1.04)}}
+@keyframes octi-reach{from{transform:rotate(-18deg)}to{transform:rotate(22deg)}}
+@keyframes octi-work{0%,100%{transform:translate(-5px,0) rotate(-7deg)}50%{transform:translate(5px,-9px) rotate(7deg)}}
+@keyframes octi-octi-work-gaze{0%,100%{transform:translate(-3px,3px)}50%{transform:translate(3px,3px)}}
+@keyframes octi-await-input{0%{transform:rotate(0)}65%{transform:translateY(-4px) rotate(-18deg)}100%{transform:translateY(-3px) rotate(-14deg)}}
+@keyframes octi-celebrate{0%,100%{transform:translateY(0)}15%{transform:translateY(5px) scale(1.06,.92)}38%{transform:translateY(-28px) rotate(-12deg) scale(.96,1.06)}62%{transform:translateY(1px) rotate(8deg) scale(1.07,.94)}80%{transform:translateY(-12px) rotate(-4deg)}}
+@keyframes octi-cheer-left{0%,100%{transform:rotate(0)}38%,62%{transform:rotate(75deg)}}
+@keyframes octi-cheer-right{0%,100%{transform:rotate(0)}38%,62%{transform:rotate(-75deg)}}
+@keyframes octi-settle{0%{transform:translateY(0)}22%{transform:translate(-5px,-8px) rotate(-9deg)}48%{transform:translate(4px,4px) rotate(7deg)}100%{transform:translateY(9px) rotate(5deg) scale(1.04,.94)}}
+
+/* Completed replies settle permanently, including when React updates adjacent rows. */
+.octi-companion.animated[data-state=done] .eyes { animation: none; }
+.octi-companion[data-state=waiting] .pose { transform: translateY(-3px) rotate(-14deg); }
+.octi-companion[data-state=interrupted] .pose { transform: translateY(9px) rotate(5deg); }
+@media (prefers-reduced-motion: reduce) {
+  .octi-companion *, .octi-companion { animation: none !important; transition: none !important; }
+}

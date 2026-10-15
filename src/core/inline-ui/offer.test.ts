@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { INLINE_UI_PROMPT, inlineUiOffered, type InlineUiOfferInput } from './offer';
 
-const base: InlineUiOfferInput = { root: true, audience: 'personal', renders: ['inline_ui'], small: false, cliProvider: false, denied: false };
+const base: InlineUiOfferInput = { root: true, audience: 'personal', renders: ['inline_ui'], small: false, denied: false };
 
 describe('inlineUiOffered', () => {
   it('offers a personal or space chat only to a client that renders them', () => {
@@ -20,8 +20,8 @@ describe('inlineUiOffered', () => {
     expect(inlineUiOffered({ ...base, audience: 'remote-space' })).toBe(false);
   });
 
-  it('never offers a child, a small model, a CLI root, or a user who denied it', () => {
-    for (const off of [{ root: false }, { small: true }, { cliProvider: true }, { denied: true }]) {
+  it('never offers a child, a small model, a user who denied it', () => {
+    for (const off of [{ root: false }, { small: true }, { denied: true }]) {
       expect(inlineUiOffered({ ...base, audience: 'room', ...off }), JSON.stringify(off)).toBe(false);
       expect(inlineUiOffered({ ...base, ...off }), JSON.stringify(off)).toBe(false);
     }
@@ -31,5 +31,6 @@ describe('inlineUiOffered', () => {
     expect(INLINE_UI_PROMPT).toContain('```octi-ui title=');
     expect(INLINE_UI_PROMPT).toContain('inline-ui__source');
     expect(INLINE_UI_PROMPT).toContain('addEventListener');
+    expect(INLINE_UI_PROMPT).toContain('If a suitable file already exists, reuse its logic in the inline block');
   });
 });

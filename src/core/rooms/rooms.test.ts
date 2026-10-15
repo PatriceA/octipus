@@ -1294,3 +1294,120 @@ describe('rights that follow the current role', () => {
     expect((await call('admin', 'GET', `/api/swarm/nodes/${nodes.personal}`)).status).toBe(200);
   });
 });
+
+
+describe('personal companions in shared rooms', () => {
+  test('names address the authenticated owner, replies retain attribution after a rename, and collisions are explicit', async () => {
+    const { getPersonaProfileRepository } = await import('@/core/personas/repository');
+    const { postAndQueue } = await import('@/core/gateway/room-handlers');
+    const { postRoomMessage, listRoomMessages } = await import('./service');
+    const repo = getPersonaProfileRepository();
+    const profile = await repo.create(commenterId, 'Sparkle', {
+      presetId: 'octipus', pronouns: 'they/them', tone: 'warm', narration: 'off', extras: ['PRIVATE persona fact'],
+    });
+    try {
+      const posted = await postAndQueue(commenterId, generalId, { content: '@Sparkle research this' });
+      await settle(generalId);
+      expect(fx.turns.at(-1)?.userId).toBe(commenterId);
+      const page = await listRoomMessages({ userId: editorId }, spaceId, generalId, { limit: 100 });
+      const reply = page.messages.find((m) => m.metadata.replyTo === posted.messageId);
+      expect(reply?.metadata.companion).toEqual({ ownerUserId: commenterId, ownerName: NAMES[commenterId], name: 'Sparkle' });
+      expect(JSON.stringify(page)).not.toContain('PRIVATE persona fact');
+      const scoped = await tab(commenterId);
+      const { getGatewayHub } = await import('@/core/gateway/hub');
+      const connection = getGatewayHub().connectionManager.getConnection(scoped.id);
+      if (!connection?.context) throw new Error('Expected connected tab');
+      connection.context.scopes = ['api:read'];
+      await scoped.send({ type: 'room.post', roomId: generalId, content: '@Sparkle do work', clientId: 'scoped-companion' });
+      await waitFor(() => scoped.frames.find((f) => f.type === 'error' && /api:chat/.test(f.message)), 'scope refusal');
+      await closeTab(scoped);
+      const before = (await roomRows(generalId)).length;
+      await expect(postRoomMessage({ userId: commenterId }, generalId, { content: '@Sparkle spend money' }, { allowAgent: false }))
+        .rejects.toThrow('api:chat');
+      expect(await roomRows(generalId)).toHaveLength(before);
+      await repo.updateName(profile.id, 'Little Ink');
+      const history = await listRoomMessages({ userId: editorId }, spaceId, generalId, { limit: 100 });
+      expect(history.messages.find((m) => m.id === reply?.id)?.metadata.companion?.name).toBe('Sparkle');
+      expect((await postRoomMessage({ userId: commenterId }, generalId, { content: '@Little Ink hello' })).addressed).toBe(true);
+      expect((await postRoomMessage({ userId: editorId }, generalId, { content: '@Little Ink hello' })).addressed).toBe(false);
+      await repo.updateName(profile.id, NAMES[editorId]);
+      expect((await postRoomMessage({ userId: commenterId }, generalId, { content: `@${NAMES[editorId]} hello` })).addressed).toBe(false);
+      const explicit = await postRoomMessage({ userId: commenterId }, generalId, { content: `@${NAMES[editorId]} hello`, addressed: true });
+      expect(explicit.message.metadata.companion?.ownerUserId).toBe(commenterId);
+      expect(explicit.addressed).toBe(true);
+      const second = await repo.create(editorId, NAMES[editorId], {
+        presetId: 'octipus', pronouns: 'they/them', tone: 'neutral', narration: 'off', extras: [],
+      });
+      try {
+        const sameName = await postRoomMessage({ userId: editorId }, generalId, { content: 'make a prototype', addressed: true });
+        expect(sameName.message.metadata.companion).toMatchObject({ ownerUserId: editorId, name: explicit.message.metadata.companion?.name });
+      } finally {
+        await q('DELETE FROM profiles WHERE id = $1', [second.id]);
+      }
+    } finally {
+      const { roomNotifications } = await import('./notifications');
+      await (await import('./fanout')).roomDeliveries(generalId);
+      await roomNotifications(generalId);
+      await q('DELETE FROM profiles WHERE id = $1', [profile.id]);
+    }
+  });
+});
+
+
+test('appearance is validated, belongs to the current user, survives reload and is frozen on room replies', async () => {
+  const { getPersonaProfileRepository } = await import('@/core/personas/repository');
+  const repo = getPersonaProfileRepository();
+  const beforeOther = await (await call('editor', 'GET', '/api/persona')).json();
+  try {
+    expect((await call('commenter', 'PUT', '/api/persona/appearance', { form: 'dragon', color: 'coral' })).status).toBe(422);
+    expect((await call('commenter', 'PUT', '/api/persona/appearance', { form: 'ribbon', color: 'url(bad)' })).status).toBe(422);
+    expect((await call('commenter', 'PUT', '/api/persona/appearance', { form: 'ribbon', color: 'coral', userId: editorId })).status).toBe(422);
+    const saved = await call('commenter', 'PUT', '/api/persona/appearance', { form: 'ribbon', color: 'coral' });
+    expect(saved.status).toBe(200);
+    expect((await (await call('commenter', 'GET', '/api/persona')).json()).appearance).toEqual({ form: 'ribbon', color: 'coral' });
+    expect((await (await call('editor', 'GET', '/api/persona')).json()).appearance).toEqual(beforeOther.appearance);
+    const { postAndQueue } = await import('@/core/gateway/room-handlers');
+    const posted = await postAndQueue(commenterId, generalId, { content: 'Sketch a prototype', addressed: true });
+    await settle(generalId);
+    await call('commenter', 'PUT', '/api/persona/appearance', { form: 'ink', color: 'lavender' });
+    const { listRoomMessages } = await import('./service');
+    const history = await listRoomMessages({ userId: editorId }, spaceId, generalId, { limit: 100 });
+    expect(history.messages.find(m => m.metadata.replyTo === posted.messageId)?.metadata.companion?.appearance)
+      .toEqual({ form: 'ribbon', color: 'coral' });
+    const { resolvePersonaForUser } = await import('@/core/personas/resolver');
+    expect((await resolvePersonaForUser(commenterId)).appearance).toEqual({ form: 'ink', color: 'lavender' });
+    await call('commenter', 'POST', '/api/persona/reset');
+    expect((await (await call('commenter', 'GET', '/api/persona')).json()).appearance).toEqual({ form: 'pebble', color: 'sea-glass' });
+  } finally {
+    await (await import('./fanout')).roomDeliveries(generalId);
+    await (await import('./notifications')).roomNotifications(generalId);
+    const profile = await repo.findForUser(commenterId);
+    if (profile) await q('DELETE FROM profiles WHERE id = $1', [profile.id]);
+  }
+});
+
+test('public progress names the active companion and request, persists for other members, and rejects another requester', async () => {
+  const { postAndQueue } = await import('@/core/gateway/room-handlers');
+  const { listRoomMessages } = await import('./service');
+  const { saveProgressMessage } = await import('@/core/agent/progress-message');
+  const watcher = await tab(editorId);
+  await subscribeRoom(watcher, generalId);
+  try {
+    fx.during.push(async turn => {
+      const context = await roomContext(commenterId, generalId, turn.extras.room?.postedMessageId);
+      await saveProgressMessage('Found two useful sources; comparing their evidence.', context);
+      expect(await saveProgressMessage('Not my turn', await roomContext(editorId, generalId))).toBeNull();
+    });
+    const posted = await postAndQueue(commenterId, generalId, { content: '@octipus research our idea' });
+    await settle(generalId);
+    const progress = roomMessages(watcher, generalId).find(m => m.metadata.kind === 'progress' && m.metadata.replyTo === posted.messageId);
+    expect(progress).toMatchObject({ content: 'Found two useful sources; comparing their evidence.', metadata: {
+      kind: 'progress', requesterId: commenterId, companion: { ownerUserId: commenterId, ownerName: NAMES[commenterId] },
+    } });
+    const page = await listRoomMessages({ userId: editorId }, spaceId, generalId, { limit: 100 });
+    expect(page.messages.find(m => m.id === progress.id)?.metadata).toEqual(progress.metadata);
+  } finally {
+    await closeTab(watcher);
+    await (await import('./notifications')).roomNotifications(generalId);
+  }
+});

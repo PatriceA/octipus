@@ -31,7 +31,7 @@ export interface PersonaCommandResult {
   text: string;
 }
 
-async function ensureProfile(userId: string): Promise<{ id: string; name: string }> {
+export async function ensureProfile(userId: string): Promise<{ id: string; name: string }> {
   const repo = getPersonaProfileRepository();
   const existing = await repo.findForUser(userId);
   if (existing) return { id: existing.id, name: existing.name };

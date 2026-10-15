@@ -108,7 +108,7 @@ export const roomRoutes = new Elysia({ prefix: '/spaces' })
         await requireRoom(actor, ctx.params.id, ctx.params.roomId);
         return { commandResult: await runRoomCommand(ctx.params.roomId, actor.userId, content) };
       }
-      const outcome = await postAndQueue(actor.userId, ctx.params.roomId, ctx.body, { workspaceId: ctx.params.id });
+      const outcome = await postAndQueue(actor.userId, ctx.params.roomId, ctx.body, { workspaceId: ctx.params.id, allowAgent: requireScope(ctx.principal, API_SCOPES.CHAT) });
       ctx.set.status = 201;
       return outcome;
     }),

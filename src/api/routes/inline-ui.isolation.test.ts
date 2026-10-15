@@ -266,7 +266,8 @@ describe('saving a block as an artifact (§7)', () => {
     const page = await embed.text();
     expect(page).not.toContain('octipus-artifact-token');
     expect(page).not.toContain('octipus-artifact-client.js');
-    expect(page).toContain('/bundle.js');
+    expect(page).toContain(`<script>${bundle.replace(/<\/script/gi, '<\\/script')}</script>`);
+    expect(page).not.toContain('/bundle.js');
   });
 
   test('a tainted block is refused; so is any visibility beyond workspace', async () => {

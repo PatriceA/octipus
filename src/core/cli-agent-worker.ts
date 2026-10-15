@@ -1,3 +1,4 @@
+import { inlineUiRepairMessage, storeInlineUiBlocks } from '@/core/inline-ui/extract';
 import { VAULT_USAGE_GUIDANCE } from '@/core/agent/vault-guidance';
 import { usageContextOf } from '@/core/agent/context';
 import { recordProviderUsage } from '@/models/providers/instrumented';
@@ -590,6 +591,21 @@ When a task matches one of these skills, load it with get_skill before starting 
 
       if (this.pauseReasons.has('approval')) throw new Error('CLI finished while a tool was still waiting for approval. The command was not run.');
 
+      if (isRootAgent(this.context)) {
+        const repair = this.context.metadata?.inlineUiOffered === true
+          ? await inlineUiRepairMessage(result) : null;
+        if (repair && this.iteration < this.config.maxIterations) {
+          this.messages.push({ role: 'assistant', content: result, timestamp: new Date() });
+          this.messages.push({ role: 'user', content: repair, timestamp: new Date() });
+          result = await this.executeCLI();
+          if (this.aborted) throw new Error(this.runError ?? this.abortReason ?? 'Agent was aborted by user');
+        }
+        result = (await storeInlineUiBlocks(result, {
+          sessionId: this.context.sessionId, agentId: this.context.id,
+          requesterId: this.context.userId, contentStorageOff: contentStorageOffFor(this.context),
+        })).text;
+      }
+
       this.context.status = 'completed';
       this.context.completedAt = new Date();
       this.emit('status_change', { status: 'completed' });
@@ -955,7 +971,9 @@ When a task matches one of these skills, load it with get_skill before starting 
     // Never in a room (§6.4): a vendor session would carry one requester's
     // conversation into the next requester's turn; each room turn starts
     // cold from the fenced transcript.
-    if (canResume(adapterKey) && !(await isRoomSession(this.context.sessionId))) {
+    // Interactive turns start from Octipus's stubbed history. A vendor transcript
+    // retains widget source and cannot be scrubbed before the next turn.
+    if (canResume(adapterKey) && this.context.metadata?.inlineUiOffered !== true && !(await isRoomSession(this.context.sessionId))) {
       const childResumeKey = root ? undefined : this.context.metadata?.resumeKey;
       if (root) storeKey = rootCliSessionKey(adapterKey, credentialOwnerId);
       else if (typeof childResumeKey === 'string' && childResumeKey) {

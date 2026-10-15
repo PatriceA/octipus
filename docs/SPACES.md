@@ -1004,7 +1004,8 @@ and `replay` answer 404 for a room — its creator included.
   writers that add one in a chat (agent and CLI workers, direct responses,
   commands, the service's guard, plan and voice paths, steering) skip it.
   A post asks Octipus when the composer's toggle is on or the text says
-  `@octipus`; `@username` notifies that member (`room_mention`, filed in the
+  `@octipus` (or your own companion’s name in locally hosted rooms; see
+  [Profiles](PROFILES.md#companion-names-in-shared-rooms)); `@username` notifies that member (`room_mention`, filed in the
   space) unless they muted the room or cannot enter it. A post starting
   with `/` is a command, answered to the poster only and not stored
   (`/help`, `/status`, `/stop`, `/stop queue`, `/cancel`, `/clear`, `/compact`).
@@ -1020,6 +1021,20 @@ and `replay` answer 404 for a room — its creator included.
   consent; a read of the requester's private data is ASK to the requester,
   whatever the flow-guard mode, because the answer is posted in the room.
   Approvals in a room are bare yes/no. No agent of a room outlives its turn.
+- **Working together in the web app.** The composer offers **Explore ideas**,
+  **Research**, **Prototype**, and **Next steps**. Each appends an editable request
+  to the current draft and enables Ask; nothing is sent until you submit it.
+  Everyone sees the active companion, including its saved appearance and owner.
+  Public progress messages preserve the turn’s public companion identity, requester,
+  and originating message; they remain visible after a reload. Raw tool events
+  and answer deltas remain requester-only.
+- **Work panel.** The default side panel indexes interactive outputs, the six most
+  recent public updates, and eight most recent replies from the loaded conversation.
+  Select an item to jump to its message; on mobile this closes the panel. Use
+  **Load earlier conversation work** to include older history. Outputs with the
+  same ID point to the latest loaded version. Opening an output does not run its
+  scripts: the existing **Run** action still controls that. This panel indexes
+  room messages, not the workspace-wide artifact library.
 - **History.** The model sees a room as one fenced block
   (`src/core/rooms/room-context.ts`): the checkpoint summary, then the
   transcript with each line named by its author (`Octipus (you)` for its own
@@ -1036,7 +1051,9 @@ and `replay` answer 404 for a room — its creator included.
   connection it lost the room. Every stored message of a room reaches the
   room through one mechanism (`messageEvents` after commit →
   `src/core/rooms/fanout.ts`); deltas stream to the requester only, the
-  others see "Octipus is answering Anna" and then the final answer.
+  others see the active companion and requester, public progress updates, and
+  the final answer. Waiting turns identify whose approval is needed. A lost
+  connection marks the displayed activity as out of date.
   `space.presence` shows where members are (a room, or an open note) only to
   recipients who may enter it. Removing a member from a private room, or
   changing a room's visibility, ends that member's subscriptions, queued and

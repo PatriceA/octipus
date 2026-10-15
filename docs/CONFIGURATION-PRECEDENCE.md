@@ -22,7 +22,7 @@ Two stores, two stages. Knowing which wins when is important.
 Bootstrap config in memory
    STORAGE_MODE, DATABASE_URL,
    MASTER_KEY, JWT_SECRET, SESSION_SECRET,
-   PORT, HOST
+   API_PORT, API_HOST
    │
    ▼
 DB initialized + migrations run
@@ -50,7 +50,7 @@ mirrors the DB. DB writes hot-reload through the cache.
 | `MASTER_KEY`              | `.env`       | regenerate with care — see warning below  |
 | `JWT_SECRET`              | `.env`       | regenerate (invalidates sessions)         |
 | `SESSION_SECRET`          | `.env`       | regenerate (invalidates sessions)         |
-| `PORT` / `HOST`           | `.env`       | edit + restart                            |
+| `API_PORT` / `API_HOST`   | `.env`       | edit + restart                            |
 | `BOOTSTRAP_PROVIDER` etc. | `.env`       | first-boot only; no effect once a model is in DB |
 | LLM provider configs      | DB `model_config` | Models page / API                    |
 | Channel tokens            | Vault        | Channels page                             |
@@ -69,6 +69,10 @@ preserved (`src/config/migrate-env-to-db.ts`).
 For bootstrap-only fields (`STORAGE_MODE`, `DATABASE_URL`,
 `MASTER_KEY`, …), the .env IS the source of truth — but you must
 restart for changes to take effect since they're read at boot time.
+
+`PORT` and `HOST` remain accepted as legacy aliases by the bootstrap loader;
+use `API_PORT` and `API_HOST` in new configuration. The launcher also uses
+`API_PORT` (falling back to `PORT`) when it discovers the backend port.
 
 ## "Why two stores?"
 

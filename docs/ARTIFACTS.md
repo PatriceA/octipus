@@ -201,7 +201,7 @@ Three built-in templates are available out of the box for the `dashboard`,
 |------------|--------------|
 | `private`  | Creator only |
 | `workspace`| Any user in the artifact's workspace (default) |
-| `signed`   | Anyone with a valid `?t=<token>` URL |
+| `signed`   | Authorized workspace viewers, or anyone with a valid `?t=<token>` URL |
 | `public`   | Anyone (no auth). Per-IP rate limit applies. |
 
 Signed share links expire (default 1h, max 30d). Revocation is immediate
@@ -218,6 +218,13 @@ On `artifact.data_updated`, it re-fetches via REST and patches the DOM.
 If the WS disconnects, the SDK attempts exponential-backoff reconnect and
 flips the embed's `data-octipus-stale` attribute after 30s.
 
+Links opened from another site may initially omit the strict session cookie.
+The outer page establishes a same-site entry and retries authorization; visitors
+without a session see a sign-in/share-link message. This entry reveals no artifact
+metadata, and protected embeds still return 404 without authorization. Agent
+links use the authenticated app route for signed/private/workspace artifacts;
+only public artifacts get a bare outer URL.
+
 ## Custom JS bundles
 
 A page's own JavaScript is written inline, the way a hand-made page would be:
@@ -228,8 +235,9 @@ handlers are lifted out of the template into one source, built with esbuild
 (no imports allowed; the V1 allow-list is empty) and stored per version under
 the bundles directory (`<artifactId>/<versionId>/bundle.js`). Handlers become
 `data-octi-h` markers bound by `addEventListener` in the bundle, so neither
-`'unsafe-inline'` nor `'unsafe-eval'` is needed. The embed loads the bundle
-from the app's own origin under `script-src 'self'`.
+`'unsafe-inline'` nor `'unsafe-eval'` is needed. The embed includes the built bundle inline under its exact SHA-256 CSP hash.
+This keeps private artifacts functional inside an opaque sandbox, where a
+separate bundle request would lose SameSite login cookies.
 
 A script that does not build does not fail the write: the version is saved,
 renders without behaviour, and the caller gets the compiler message as a

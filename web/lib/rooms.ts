@@ -1,3 +1,4 @@
+import type { CompanionIdentity } from '../../src/shared/companion';
 /**
  * Rooms of a shared space (docs/SPACES.md → Rooms): the wire shapes of the
  * room routes (`src/api/routes/rooms.ts`) and gateway events
@@ -35,6 +36,7 @@ export interface RoomMessage {
   agentId: string | null;
   createdAt: string;
   metadata: {
+    companion?: CompanionIdentity;
     kind?: 'progress';
     clientId?: string;
     addressed?: boolean;
@@ -71,8 +73,8 @@ export interface SpaceMemoryEntry {
 
 /** The turn strip as the server sees it (`RoomQueueSnapshot`). */
 export interface RoomQueue {
-  running: { requesterId: string; requesterName: string; messageId: string; startedAt: string; waiting: boolean; model?: string } | null;
-  queued: Array<{ requesterId: string; requesterName: string; messageId: string; enqueuedAt: string }>;
+  running: { requesterId: string; requesterName: string; companion?: CompanionIdentity; messageId: string; startedAt: string; waiting: boolean; model?: string } | null;
+  queued: Array<{ requesterId: string; requesterName: string; companion?: CompanionIdentity; messageId: string; enqueuedAt: string }>;
 }
 
 export const EMPTY_QUEUE: RoomQueue = { running: null, queued: [] };
@@ -127,7 +129,7 @@ export function initials(name: string | null | undefined): string {
 /** The `@` word ending at `caret` in `text`, if the caret is in one. */
 export function mentionAt(text: string, caret: number): { start: number; query: string } | null {
   const before = text.slice(0, caret);
-  const match = /(^|\s)@([\w.-]*)$/.exec(before);
+  const match = /(^|\s)@([\p{L}\p{N}_.-]*)$/u.exec(before);
   if (!match) return null;
   return { start: caret - match[2].length - 1, query: match[2] };
 }

@@ -62,6 +62,10 @@ function mockChildProcess(actual: typeof import('child_process')) {
 // imports 'node:child_process' — mock both specifiers, same stub.
 vi.mock('child_process', async importOriginal => mockChildProcess(await importOriginal<typeof import('child_process')>()));
 vi.mock('node:child_process', async importOriginal => mockChildProcess(await importOriginal<typeof import('child_process')>()));
+vi.mock('@/db/repositories/inline-ui-repository', () => ({ inlineUiRepository: {
+  countForSession: async () => 0,
+  create: async (row: Record<string, unknown>) => ({ ...row, id: '11111111-1111-4111-8111-111111111111' }),
+} }));
 vi.mock('@/models/model-registry', () => ({
   getModelRegistry: () => ({ getModel: async () => ({ metadata: { cliAgent: fixture.cliAgent } }), getModelByModelId: async () => ({}) }),
 }));
@@ -143,7 +147,7 @@ function makeSession(sessionId: string, dir: string) {
   }
 }
 
-function makeWorker(model: string, opts: { sessionId: string; model?: string; permissionMode?: string; history?: string[]; maxTokenBudget?: number }) {
+function makeWorker(model: string, opts: { sessionId: string; model?: string; permissionMode?: string; history?: string[]; maxTokenBudget?: number; inlineUiOffered?: boolean }) {
   fixture.cliAgent = { model: opts.model, permissionMode: opts.permissionMode };
   fixture.history = opts.history ?? [];
   makeSession(opts.sessionId, fixture.dir);
@@ -152,7 +156,7 @@ function makeWorker(model: string, opts: { sessionId: string; model?: string; pe
     id: `agent-${opts.sessionId}-${Math.random().toString(36).slice(2)}`,
     sessionId: opts.sessionId, userId: 'u', workspaceId: 'w', root: true,
     model, role: 'general', topic: 'general', status: 'idle',
-    createdAt: new Date(), updatedAt: new Date(), metadata: {},
+    createdAt: new Date(), updatedAt: new Date(), metadata: { inlineUiOffered: opts.inlineUiOffered },
   };
   const worker = new CLIAgentWorker(context, { maxIterations: 5, maxTokenBudget: opts.maxTokenBudget ?? 10000, timeout: 10000, contextWindowSize: 10000 });
   const stdinFile = join(fixture.dir, 'claude-last-stdin.txt');
@@ -175,7 +179,7 @@ function makeWorker(model: string, opts: { sessionId: string; model?: string; pe
   };
 }
 
-const makeClaudeWorker = (opts: { sessionId: string; model?: string; permissionMode?: string; history?: string[]; maxTokenBudget?: number }) => makeWorker('cli/claude-code', opts);
+const makeClaudeWorker = (opts: { sessionId: string; model?: string; permissionMode?: string; history?: string[]; maxTokenBudget?: number; inlineUiOffered?: boolean }) => makeWorker('cli/claude-code', opts);
 const makeCodexWorker = (opts: { sessionId: string; model?: string; permissionMode?: string }) => makeWorker('cli/codex', opts);
 
 const failMarker = () => join(fixture.dir, 'fail-marker');
@@ -265,6 +269,27 @@ beforeEach(() => {
 afterEach(() => { try { unlinkSync(failMarker()); } catch { /* not there */ } rmSync(fixture.dir, { recursive: true, force: true }); });
 
 describe('CLI session reuse', () => {
+  it('stores CLI widget output before emitting completion', async () => {
+    writeFileSync(join(fixture.dir, 'answer-marker'), 'Here:\n```octi-ui title="Counter"\n<button type="button">Next</button>\n```');
+    const { worker, run } = makeClaudeWorker({ sessionId: 'inline-output', inlineUiOffered: true });
+    const completions: unknown[] = [];
+    worker.onEvent(event => { if (event.type === 'complete') completions.push(event.data); });
+    const result = await run('Make a counter');
+    expect(result).toContain('[[octi-ui:11111111-1111-4111-8111-111111111111|Counter]]');
+    expect(result).not.toContain('<button');
+    expect(completions).toEqual([{ result }]);
+  });
+
+  it('interactive turns do not resume or retain vendor transcripts', async () => {
+    const first = makeClaudeWorker({ sessionId: 'inline', inlineUiOffered: true });
+    await first.run('Make a calculator');
+    expect(fixture.sessions.get('inline')?.context.cliSessions).toBeUndefined();
+    const second = makeClaudeWorker({ sessionId: 'inline', inlineUiOffered: true, history: ['[[octi-ui:example|Calculator]]'] });
+    await second.run('Change it');
+    expect(second.lastPrompt).toContain('[[octi-ui:example|Calculator]]');
+    expect(fixture.sessions.get('inline')?.context.cliSessions).toBeUndefined();
+  });
+
   it('starts fresh and stores the id on the first turn', async () => {
     const worker = makeClaudeWorker({ sessionId: 's1' });
     await worker.run('first question');

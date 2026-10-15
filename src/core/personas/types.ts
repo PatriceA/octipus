@@ -1,3 +1,4 @@
+import type { CompanionAppearance } from '../../shared/companion';
 import { z } from 'zod';
 
 /**
@@ -82,6 +83,7 @@ export type Persona = z.infer<typeof Persona>;
  * per-user profile overrides from the `profiles` table.
  */
 export interface ResolvedPersona {
+  appearance?: CompanionAppearance;
   // Stable identifiers
   id: string;               // preset id, e.g. "octipus"
   profileId?: string;       // db row id if a user override exists

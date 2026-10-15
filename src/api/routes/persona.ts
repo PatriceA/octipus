@@ -1,6 +1,7 @@
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
-import { handlePersonaCommand } from '@/core/personas/commands';
+import { COMPANION_FORMS, COMPANION_COLORS, DEFAULT_COMPANION_APPEARANCE, type CompanionAppearance } from '@/shared/companion';
+import { ensureProfile, handlePersonaCommand } from '@/core/personas/commands';
 import { getPersonaProfileRepository, PersonaProfileRepository } from '@/core/personas/repository';
 import { getPersonaRegistry } from '@/core/personas/registry';
 import { resolvePersonaForUser } from '@/core/personas/resolver';
@@ -12,6 +13,7 @@ import { resolvePersonaForUser } from '@/core/personas/resolver';
  *   GET    /persona              — resolved persona for the current user
  *   GET    /persona/presets      — list all shipped preset YAMLs
  *   PATCH  /persona              — update name / tone / narration / preset_id
+ *   PUT    /persona/appearance   — save the current user’s companion shape and color
  *   POST   /persona/facts        — append a free-form user fact
  *   DELETE /persona/facts/:idx   — remove a free-form fact by index
  *   POST   /persona/reset        — restore base Octipus
@@ -34,6 +36,7 @@ export const personaRoutes = new Elysia({ prefix: '/persona' })
         id: persona.id,
         presetId: persona.presetId,
         name: persona.name,
+        appearance: persona.appearance ?? DEFAULT_COMPANION_APPEARANCE,
         pronouns: persona.pronouns,
         tone: persona.tone,
         narration: persona.narration,
@@ -109,6 +112,31 @@ export const personaRoutes = new Elysia({ prefix: '/persona' })
         narration: t.Optional(t.String()),
         presetId: t.Optional(t.String()),
       }),
+      detail: { tags: ['persona'] },
+    },
+  )
+
+  .put(
+    '/appearance',
+    async ({ user, body, set }) => {
+      if (!user || user.id === 'system') {
+        set.status = 401;
+        return { error: 'unauthenticated' };
+      }
+      const appearance = body as CompanionAppearance;
+      const profile = await ensureProfile(user.id);
+      const saved = await getPersonaProfileRepository().upsertFact(profile.id, 'appearance', JSON.stringify(appearance), 'user');
+      if (!saved) {
+        set.status = 409;
+        return { error: 'Persona changed while saving. Please try again.' };
+      }
+      return { appearance };
+    },
+    {
+      body: t.Object({
+        form: t.Union(COMPANION_FORMS.map(form => t.Literal(form))),
+        color: t.Union(Object.keys(COMPANION_COLORS).map(color => t.Literal(color))),
+      }, { additionalProperties: false }),
       detail: { tags: ['persona'] },
     },
   )

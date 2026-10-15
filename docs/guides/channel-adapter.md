@@ -38,7 +38,10 @@ export class MyPlatformChannel extends BaseChannel {
 
   async connect(): Promise<void> {
     // Initialize your platform SDK
-    this.client = new MyPlatformClient(process.env.MY_PLATFORM_TOKEN);
+    // Resolve credentials through the vault/config integration used by the
+    // rest of the backend. Do not read channel secrets from process.env at
+    // runtime; .env is only a first-boot seed for configured deployments.
+    this.client = new MyPlatformClient(await loadMyPlatformCredentials());
 
     // Bridge: platform messages → channel
     this.client.on('message', (msg) => {

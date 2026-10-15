@@ -60,10 +60,19 @@ export function resolveArtifactSettings(): ArtifactSettings {
   if (cached) return cached;
   const svc = getSettingsService();
 
-  const host = pickStr(svc, 'artifacts.host');
+  const hostSetting = pickStr(svc, 'artifacts.host').trim();
+  // Accept the origin users paste into Settings as well as a bare host.
+  const hostUrl = hostSetting ? new URL(hostSetting.includes('://') ? hostSetting : `https://${hostSetting}`) : null;
+  if (hostUrl && !['http:', 'https:'].includes(hostUrl.protocol)) throw new Error('Artifact host must use HTTP or HTTPS');
+  const host = hostUrl?.host ?? '';
   const protoRaw = pickStr(svc, 'artifacts.proto') || 'https';
-  const proto: 'http' | 'https' = protoRaw === 'http' ? 'http' : 'https';
-  const gatewayWss = pickStr(svc, 'artifacts.gatewayWss');
+  const proto: 'http' | 'https' = (hostSetting.includes('://') ? hostUrl?.protocol === 'http:' : protoRaw === 'http') ? 'http' : 'https';
+  const gatewaySetting = pickStr(svc, 'artifacts.gatewayWss').trim();
+  const gatewayUrl = gatewaySetting ? new URL(gatewaySetting) : null;
+  if (gatewayUrl?.protocol === 'https:') gatewayUrl.protocol = 'wss:';
+  if (gatewayUrl?.protocol === 'http:') gatewayUrl.protocol = 'ws:';
+  if (gatewayUrl && !['ws:', 'wss:'].includes(gatewayUrl.protocol)) throw new Error('Artifact gateway must use WS or WSS');
+  const gatewayWss = gatewayUrl?.href ?? '';
   const tokenSecret = pickStr(svc, 'artifacts.tokenSecret');
   const sdkSetting = pickStr(svc, 'artifacts.sdkSha256');
   const sdkSha256 = sdkSetting || readSdkShaFromDisk();

@@ -177,14 +177,13 @@ async function resolveInlineUiOffer(input: {
   userId: string;
   session: Awaited<ReturnType<typeof sessionRepository.findById>>;
   small: boolean;
-  provider: string | undefined;
 }): Promise<boolean> {
   if (!input.session) return false;
-  const [{ sessionAudience }, { isCLIProvider }, { getPermissionManager }] = await Promise.all([
-    import('./audience'), import('@/core/cli-agent-factory'), import('@/security/permissions'),
+  const [{ sessionAudience }, { getPermissionManager }] = await Promise.all([
+    import('./audience'), import('@/security/permissions'),
   ]);
   const audience = (await sessionAudience(input.session)).kind;
-  const base = { root: true, audience, renders: getRunContext()?.renders, small: input.small, cliProvider: isCLIProvider(input.provider ?? '') };
+  const base = { root: true, audience, renders: getRunContext()?.renders, small: input.small };
   if (!inlineUiOffered({ ...base, denied: false })) return false;
   const check = await getPermissionManager().check(input.userId, 'inline-ui', 'render', undefined, undefined, { defaultLevel: 'ALLOW' });
   return inlineUiOffered({ ...base, denied: check.level === 'DENY' });
@@ -387,7 +386,7 @@ export async function runRootAgent(
   // only where they are read in the web app. The decision travels on the root
   // context (`inlineUiOffered`), which the `inline-ui` tool re-checks; a
   // customized role row that lists the tool does not get it otherwise.
-  const inlineUi = await resolveInlineUiOffer({ userId, session, small: rootIsSmall, provider: modelMeta?.provider });
+  const inlineUi = await resolveInlineUiOffer({ userId, session, small: rootIsSmall });
   rootTools = rootTools.filter((t) => t.toolId !== 'inline-ui');
   if (inlineUi) {
     const { getToolRegistry } = await import('@/tools/registry');

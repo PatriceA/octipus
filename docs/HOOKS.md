@@ -412,7 +412,7 @@ The swarm root agent (Root agent → Agent → Subagent) publishes its own gatew
 
 | Event | When it fires |
 |-------|---------------|
-| `swarm.node_spawned` | A new Root agent / Agent / Subagent is created. Payload includes `rootSessionId`, `nodeId`, `parentNodeId`, `kind`, `depth`, `topicPath`, `role`, `expertId`, `model`, `budgets`, `taskBriefPreview`. |
+| `swarm.node_spawned` | A new Root agent / Agent / Subagent is created. Payload includes `rootSessionId`, `nodeId`, `parentNodeId`, `kind`, `depth`, `topicPath`, `role`, `model`, `budgets`, and `taskBriefPreview`. The legacy `expertId` field may still be present for wire compatibility but is currently null after the expert layer was retired. |
 | `swarm.node_completed` | Node finished; `ChildResult` is attached (status + output + usedTokens + durationMs). |
 | `swarm.budget_warning` | Node crossed its budget warning threshold. |
 | `swarm.call_graph_cycle_blocked` | Duplicate / ancestor-chain fingerprint rejected a spawn. |

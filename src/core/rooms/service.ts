@@ -17,6 +17,8 @@
  * an audit row with the space's `workspace_id` (I10) and call
  * `onRoomAccessChanged`.
  */
+import { type CompanionIdentity, isCompanionAppearance, isCompanionIdentity, withoutCompanionMentions } from '@/shared/companion';
+import { companionIdentity, mentionsOwnCompanion } from './companion';
 import { randomUUID } from 'node:crypto';
 import { and, asc, desc, eq, inArray, ne, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
@@ -209,6 +211,7 @@ export interface RoomMessageView {
   agentId: string | null;
   createdAt: string;
   metadata: {
+    companion?: CompanionIdentity;
     kind?: 'progress';
     clientId?: string;
     addressed?: boolean;
@@ -235,6 +238,7 @@ export function messageView(row: Message, authorName: string | null): RoomMessag
     agentId: row.agentId ?? null,
     createdAt: row.createdAt.toISOString(),
     metadata: {
+      ...(isCompanionIdentity(meta.companion) ? { companion: { ownerUserId: meta.companion.ownerUserId, ownerName: meta.companion.ownerName, name: meta.companion.name, ...(isCompanionAppearance(meta.companion.appearance) ? { appearance: { form: meta.companion.appearance.form, color: meta.companion.appearance.color } } : {}) } } : {}),
       ...(meta.kind === 'progress' ? { kind: 'progress' as const } : {}),
       ...(typeof meta.clientId === 'string' ? { clientId: meta.clientId } : {}),
       ...(typeof meta.addressed === 'boolean' ? { addressed: meta.addressed } : {}),
@@ -376,7 +380,7 @@ export async function postRoomMessage(
      */
     guardFlags?: string[];
   },
-  opts: { workspaceId?: string } = {},
+  opts: { workspaceId?: string; allowAgent?: boolean } = {},
 ): Promise<{ message: RoomMessageView; access: RoomAccess; addressed: boolean }> {
   const access = opts.workspaceId ? await requireRoom(actor, opts.workspaceId, roomId) : await roomAccess(actor.userId, roomId);
   if (!access) throw new SpaceError('not_found', 'Room not found');
@@ -387,7 +391,11 @@ export async function postRoomMessage(
   if ((input.agent || input.guardFlags) && !access.remote) {
     throw new SpaceError('invalid_input', 'Only a post from another install carries an agent label or input guard flags');
   }
-  const addressed = input.addressed === true || mentionsOctipus(content);
+  const companion = !access.remote && (input.addressed || content.includes('@'))
+    ? await companionIdentity(actor.userId) : undefined;
+  const addressed = input.addressed === true || mentionsOctipus(content)
+    || (!!companion && await mentionsOwnCompanion(content, companion, access.room.workspaceId));
+  if (addressed && opts.allowAgent === false) throw new SpaceError('forbidden_role', 'API token missing required scope "api:chat"');
   const { messageRepository } = await import('@/db/repositories/message-repository');
   const { sessionRepository } = await import('@/db/repositories/session-repository');
   const values = {
@@ -401,6 +409,7 @@ export async function postRoomMessage(
       ...(input.agent ? { agent: true } : {}),
       ...(input.guardFlags && input.guardFlags.length > 0 ? { guardFlags: input.guardFlags } : {}),
       addressed,
+      ...(addressed && companion ? { companion } : {}),
     },
   };
   const row = access.remote
@@ -411,7 +420,7 @@ export async function postRoomMessage(
   await setReadPosition(roomId, actor.userId, row.id);
   const [view] = await views([row]);
   const { notifyRoomMentions } = await import('./mentions');
-  await notifyRoomMentions(access.room, actor.userId, row.id, content, row.createdAt).catch((err: unknown) =>
+  await notifyRoomMentions(access.room, actor.userId, row.id, addressed && companion ? withoutCompanionMentions(content, companion.name) : content, row.createdAt).catch((err: unknown) =>
     coreLogger.error({ err, roomId, messageId: row.id }, 'Room mention notifications failed'));
   return { message: view, access, addressed };
 }

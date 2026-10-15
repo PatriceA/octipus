@@ -347,6 +347,7 @@ export class AgentService {
       access.room.workspaceId,
       {
         requesterId, requesterName, messageId: postedMessageId, enqueuedAt: new Date(),
+        ...(posted.metadata?.companion ? { companion: posted.metadata.companion } : {}),
         ...(remote ? { trigger: 'remote' as const, remoteInstanceId: remote.instanceId } : {}),
       },
       (request, signal) => this.runRoomTurn(roomId, request.requesterId, request.requesterName, request.messageId, signal, bridged,
@@ -610,6 +611,8 @@ export class AgentService {
     let userMessageSaved = isRoom;
     try {
       const resolvedSessionId = sessionId;
+      const companion = isRoom && trigger !== 'remote'
+        ? await (await import('@/core/rooms/companion')).companionIdentity(userId) : undefined;
 
       // The turn runs in the session's workspace (the user's default when the
       // session has none), resolved once and threaded through every spawn,
@@ -1124,7 +1127,7 @@ export class AgentService {
           // survives a reload — not in a room, where every member reads it.
           ...(limit && !isRoom && { limit: limit }),
           // A room answer names the post and the member it answers.
-          ...(isRoom && { requesterId: userId, ...(postedMessageId && { replyTo: postedMessageId }) }),
+          ...(isRoom && { requesterId: userId, ...(companion ? { companion } : {}), ...(postedMessageId && { replyTo: postedMessageId }) }),
           // Nobody asked for a listen turn's answer (§9.3): members rate it
           // like the listen offers, and their 👎 slows the room's gate.
           ...(isRoom && trigger === 'listen' && { unprompted: true }),

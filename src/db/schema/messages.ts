@@ -1,4 +1,5 @@
 import { index, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import type { CompanionIdentity } from '@/shared/companion';
 import { sessions } from './sessions';
 import { users } from './users';
 
@@ -35,6 +36,7 @@ export interface ToolCallData {
 }
 
 export interface MessageMetadata {
+  companion?: CompanionIdentity;
   /** An intermediate public update, distinct from the completed turn's answer. */
   kind?: 'progress';
   sessionGeneration?: string;

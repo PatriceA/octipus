@@ -68,8 +68,8 @@ Limits (`src/shared/inline-ui/limits.ts`): title 80 characters; markup
 reply; 200 per session. A block whose code contains a line of three
 backticks is fenced with four.
 
-**Offered when** (`inlineUiOffered`): a root agent, not a small model, not a
-vendor CLI root, no stored DENY on tool `inline-ui` action `render`, and:
+**Offered when** (`inlineUiOffered`): a root agent, not a small model,
+no stored DENY on tool `inline-ui` action `render`, and:
 
 | Conversation | Offered |
 |---|---|
@@ -187,3 +187,5 @@ that was mounted when the tab died.
 A change to the refused elements or attributes goes in one list
 (`INLINE_UI_REFUSED_ELEMENTS`, `INLINE_UI_DROPPED_ATTRIBUTES`): the content
 runtime and the server sanitizer for saved copies both read it.
+
+CLI roots support interactive answers and start these turns from Octipus history instead of resuming vendor transcripts, so previous widget source is not replayed.

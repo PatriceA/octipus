@@ -1,12 +1,13 @@
 'use client';
 
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bell, BellOff, Bot, Hash, Lock, MessageSquareLock, PanelRight, WifiOff, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { type ComponentProps, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import MessageTimeline, { type ChatMessageData } from '@/components/chat/message-timeline';
 import { type InlineUiHost, InlineUiProvider } from '@/components/chat/inline-ui/context';
 import { inlineUiMarkerIds } from '../../../src/shared/inline-ui/fence';
+import type { ResolvedPersona } from '../../../src/core/personas/types';
 import { api } from '@/lib/api';
 import type { GatewayMessage } from '@/lib/gateway';
 import { isUuid, withUuidIds } from '@/lib/remote-paths';
@@ -23,6 +24,7 @@ import { cn } from '@/lib/utils';
 import type { WorkspaceAccess } from '@/lib/workspace-context';
 import { RoomComposer } from './room-composer';
 import { MembersPanel, MemoryPanel, RemoteMembersPanel, SettingsPanel, useRemoteMembers, useRoomMembers } from './room-panels';
+import { RoomWorkPanel } from './room-work-panel';
 import { TurnStrip } from './turn-strip';
 
 const PAGE = 50;
@@ -36,7 +38,7 @@ const TYPING_SHOWN_MS = 5_000;
 const NO_AGENTS: ComponentProps<typeof MessageTimeline>['trackedAgents'] = new Map();
 const NO_TEAMS: ComponentProps<typeof MessageTimeline>['teams'] = new Map();
 
-type Panel = 'members' | 'memory' | 'settings';
+type Panel = 'work' | 'members' | 'memory' | 'settings';
 
 interface Pending {
   clientId: string;
@@ -97,6 +99,12 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
   const router = useRouter();
   const localMembers = useRoomMembers(spaceId, roomId, !remote);
   const remoteMembers = useRemoteMembers(remote ? spaceId : null);
+  const persona = useQuery({
+    queryKey: ['persona', 'me'],
+    queryFn: () => api.get<Pick<ResolvedPersona, 'name' | 'appearance'>>('/persona'),
+    enabled: !remote,
+  });
+  const companionName = !remote ? persona.data?.name ?? 'Octipus' : 'Octipus';
 
   const [messages, setMessages] = useState<RoomMessage[]>([]);
   const [pending, setPending] = useState<Pending[]>([]);
@@ -108,7 +116,7 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
   const [streaming, setStreaming] = useState<{ iteration: number; text: string } | null>(null);
   const [notices, setNotices] = useState<Array<{ id: string; text: string; at: string }>>([]);
   const [panel, setPanel] = useState<Panel | null>(() =>
-    typeof window !== 'undefined' && window.matchMedia?.('(min-width: 1024px)').matches ? 'members' : null);
+    typeof window !== 'undefined' && window.matchMedia?.('(min-width: 1024px)').matches ? 'work' : null);
   const [asking, setAsking] = useState(false);
 
   const lastIdRef = useRef<string | undefined>(undefined);
@@ -398,7 +406,7 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
   const timeline: ChatMessageData[] = useMemo(() => {
     const stored: ChatMessageData[] = messages.map((m) => {
       if (m.role === 'assistant') {
-        return { id: m.id, role: m.metadata.kind === 'progress' ? 'system' : 'assistant', content: m.content, timestamp: new Date(m.createdAt) };
+        return { id: m.id, role: m.metadata.kind === 'progress' ? 'progress' : 'assistant', content: m.content, timestamp: new Date(m.createdAt), companion: m.metadata.companion, companionName: 'Octipus' };
       }
       const mine = !!myId && m.authorUserId === myId;
       return {
@@ -425,8 +433,17 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
     ? (remoteMembers.data ?? []).map((m) => m.displayName)
     : (localMembers.data ?? []).map((m) => m.username);
 
+  const revealMessage = (messageId: string) => {
+    if (window.matchMedia('(max-width: 767px)').matches) setPanel(null);
+    requestAnimationFrame(() => {
+      const element = document.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(messageId)}"]`);
+      element?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'center' });
+      element?.focus({ preventScroll: true });
+    });
+  };
+
   return (
-    <div className="flex flex-1 min-w-0 min-h-0" data-testid="room-view" data-room-id={roomId}>
+    <div className="relative flex flex-1 min-w-0 min-h-0" data-testid="room-view" data-room-id={roomId}>
       <section className="flex flex-col flex-1 min-w-0 min-h-0" aria-label={`Room ${room.title}`}>
         <header className="flex items-center gap-2 px-4 h-11 shrink-0 border-b border-outline-variant/40 font-mono">
           {room.visibility === 'private' ? <Lock className="w-4 h-4 text-on-surface-variant" /> : <Hash className="w-4 h-4 text-on-surface-variant" />}
@@ -479,7 +496,7 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
             </button>
             <button
               type="button"
-              onClick={() => setPanel((p) => (p ? null : 'members'))}
+              onClick={() => setPanel((p) => (p ? null : 'work'))}
               aria-pressed={!!panel}
               aria-label="Room panel"
               className="p-1.5 rounded-xs text-on-surface-variant hover:text-on-surface hover:bg-surface-container cursor-pointer"
@@ -489,7 +506,7 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
           </div>
         </header>
 
-        <TurnStrip queue={queue} myId={myId} onCancel={cancelQueued} />
+        <TurnStrip connected={status === 'connected'} queue={queue} myId={myId} onCancel={cancelQueued} />
 
         {load.state === 'error' && (
           <div role="alert" className="m-4 px-3 py-2 border border-error/40 bg-error/10 rounded-xs text-[12px] text-error font-mono">
@@ -510,9 +527,20 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
                 trackedAgents={NO_AGENTS}
                 teams={NO_TEAMS}
                 isLoading={myTurnRunning}
-                statusMessage="Octipus is answering you"
+                companionActivity={queue.running ? {
+                  name: queue.running.companion ? `${queue.running.companion.name} · ${queue.running.companion.ownerName}’s companion` : 'Octipus',
+                  appearance: queue.running.companion?.appearance,
+                  state: queue.running.waiting ? 'waiting' : 'working',
+                  label: queue.running.waiting
+                    ? `Waiting for ${queue.running.requesterId === myId ? 'your' : `${queue.running.requesterName}’s`} approval`
+                    : `Working with ${queue.running.requesterId === myId ? 'you' : queue.running.requesterName}`,
+                } : undefined}
+                connected={status === 'connected'}
+                companionName={companionName}
+                companionAppearance={!remote ? persona.data?.appearance : undefined}
+                statusMessage={`${companionName} is answering you`}
                 streamingText={myTurnRunning ? streaming?.text ?? null : null}
-                emptyLabel="No messages yet — say hello, or ask Octipus"
+                emptyLabel={`No messages yet — say hello, or ask ${companionName}`}
                 untrusted={remote}
               />
             </InlineUiProvider>
@@ -528,6 +556,7 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
         {access.canComment ? (
           <RoomComposer
             members={memberNames.filter((n) => n !== undefined)}
+            companionName={companionName}
             canAsk={access.canComment}
             onPost={post}
             onTyping={() => { gateway.send({ type: 'room.typing', roomId }); }}
@@ -542,9 +571,9 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
       </section>
 
       {panel && (
-        <aside className="w-72 shrink-0 border-l border-outline-variant/40 flex flex-col min-h-0 font-mono bg-surface-container-lowest" aria-label="Room panel">
+        <aside className="absolute inset-0 z-30 w-full md:relative md:inset-auto md:w-80 shrink-0 border-l border-outline-variant/40 flex flex-col min-h-0 font-mono bg-surface-container-lowest" aria-label="Room panel">
           <div className="flex items-center border-b border-outline-variant/40" role="tablist">
-            {(remote ? (['members'] as const) : (['members', 'memory', 'settings'] as const)).map((p) => (
+            {(remote ? (['work', 'members'] as const) : (['work', 'members', 'memory', 'settings'] as const)).map((p) => (
               <button
                 key={p}
                 type="button"
@@ -561,6 +590,7 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
             </button>
           </div>
           <div className="flex-1 overflow-y-auto p-3">
+            {panel === 'work' && <RoomWorkPanel messages={messages} onReveal={revealMessage} hasOlder={hasOlder} onLoadOlder={() => void loadOlder()} />}
             {panel === 'members' && (remote
               ? <RemoteMembersPanel members={remoteMembers.data ?? []} error={remoteMembers.error ? (remoteMembers.error as Error).message : null} />
               : <MembersPanel spaceId={spaceId} room={room} canManage={canManage && !access.archived} />)}

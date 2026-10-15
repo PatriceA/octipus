@@ -9,14 +9,18 @@
  * fallback always works without any configuration.
  *
  * Auth flow: session cookie/Bearer → workspace check; else `?t=<token>` →
- * share-link redeem; else 404 (never 401 — don't leak existence).
+ * share-link redeem. Anonymous outer links get a generic session-entry page;
+ * embeds and unauthorized retries return 404 without revealing existence.
  */
 
 import { Elysia } from '@/api/http';
 import { existsSync } from 'fs';
+import { createHash } from 'node:crypto';
 import { apiContext } from '@/api/context';
 import { artifactsRepository } from '@/db/repositories/artifacts-repository';
 import { findViewableArtifactBySlug } from '@/db/repositories/space';
+import { artifactEntryPage } from '@/core/artifacts/entry-page';
+import { publicLinkBase } from '@/core/public-url';
 import { buildEmbedCsp, embedCspHeader } from '@/core/artifacts/csp';
 import { buildDataBus } from '@/core/artifacts/pipeline';
 import { BUILTIN_TEMPLATES, escapeHtml, renderTemplate } from '@/core/artifacts/render';
@@ -60,7 +64,7 @@ async function authorizeForRequest(opts: {
     // owner alone, which a space (no owning user) would not match and a raw
     // `workspaces.user_id` read would. `private` is the creator's only.
     artifact = await findViewableArtifactBySlug(opts.user.id, opts.slug);
-    if (artifact && (artifact.visibility === 'workspace' || artifact.visibility === 'private')) {
+    if (artifact && (artifact.visibility === 'workspace' || artifact.visibility === 'private' || artifact.visibility === 'signed')) {
       return { artifact, scope: 'view+refresh' };
     }
     if (artifact && artifact.visibility === 'public') {
@@ -118,30 +122,23 @@ async function handleSdk(ctx: HandlerCtx) {
   return file.text();
 }
 
-/**
- * NO `integrity=` on these script tags. The embed runs in a
- * `sandbox="allow-scripts"` iframe, i.e. an opaque origin, so the browser
- * treats even a same-path subresource as cross-origin and refuses to check SRI
- * without CORS ("the resource requires the request to be CORS enabled to check
- * the integrity … has been blocked"). CORS is not available either: the bundle
- * route authenticates by cookie or share token, and `Origin: null` cannot be
- * paired with credentialed CORS. `script-src 'self'` is what actually gates
- * these — and both files are served by this app, to a viewer this same handler
- * already authorized, so SRI was guarding nothing.
- */
+/** Render the authorized bundle inline under its exact CSP hash. */
 function buildEmbedHtml(input: {
   artifact: Artifact;
   templateBody: string;
   css: string;
   token: string;
-  /** Same-origin URL of this version's JS bundle, when it has one. */
-  bundle?: { src: string };
+  // Inline the authorized bundle: opaque sandbox subrequests cannot carry
+  // SameSite cookies, so a private bundle URL would return 404 in browsers.
+  bundle?: { source: string };
 }): { html: string; csp: string } {
   const settings = resolveArtifactSettings();
   // A closed page (a saved interactive answer) reaches nothing: no live
   // refresh, so no SDK, gateway or viewer token in it either.
   const closed = input.artifact.network === 'none';
   const cspHashes = settings.sdkSha256 && !closed ? [settings.sdkSha256] : [];
+  const script = input.bundle?.source.replace(/<\/script/gi, '<\\/script');
+  if (script) cspHashes.push(createHash('sha256').update(script).digest('hex'));
   const csp = buildEmbedCsp({
     scriptSha256s: cspHashes,
     gatewayWss: settings.gatewayWss || undefined,
@@ -160,7 +157,7 @@ ${settings.gatewayWss && !closed ? `<meta name="octipus-gateway-wss" content="${
 </head><body>
 ${input.templateBody}
 ${sdkAvailable() && !closed ? `<script src="/octipus-artifact-client.js"></script>` : ''}
-${input.bundle ? `<script src="${escapeHtml(input.bundle.src)}"></script>` : ''}
+${script ? `<script>${script}</script>` : ''}
 </body></html>`;
   return { html, csp };
 }
@@ -202,6 +199,16 @@ async function handleOuter(ctx: HandlerCtx) {
     shareToken: typeof ctx.query.t === 'string' ? ctx.query.t : null,
   });
   if (!auth) {
+    // A cross-site navigation omits SameSite=Strict cookies even for a signed-in
+    // owner. Establish this origin, then retry with cookies. Embeds and the
+    // retry itself still fail closed; no artifact metadata enters this page.
+    if (!ctx.user && !ctx.query.t && ctx.request.headers.get('X-Octipus-Artifact-Entry') !== '1') {
+      const entry = artifactEntryPage(`${publicLinkBase()}/login?returnTo=%2Fartifacts`);
+      ctx.set.headers['content-type'] = 'text/html; charset=utf-8';
+      ctx.set.headers['content-security-policy'] = entry.csp;
+      ctx.set.headers['cache-control'] = 'no-store';
+      return entry.html;
+    }
     ctx.set.status = 404;
     return 'Not found';
   }
@@ -280,16 +287,13 @@ async function handleEmbed(ctx: HandlerCtx) {
     viewerUserId: ctx.user?.id ?? null,
   });
 
-  // This version's own JS, lifted out of the template at author time and
-  // served from the artifact's origin (inline script can't run under the CSP).
-  // Existence only — the hash is not used (see buildEmbedHtml on why there is
-  // no SRI here), so do not read and digest the whole file on every request.
-  let bundle: { src: string } | undefined;
-  if (version && (await fileAt(bundleFilePath(auth.artifact.id, version.id)).exists())) {
-    const qs = typeof ctx.query.t === 'string' ? `?t=${encodeURIComponent(ctx.query.t)}` : '';
-    // Derive from the request path so this works under both mounts.
-    const src = `${new URL(ctx.request.url).pathname.replace(/\/embed$/, '/bundle.js')}${qs}`;
-    bundle = { src };
+  // Deliver the script with the already-authorized document. A sandboxed
+  // document has an opaque origin, so fetching a protected bundle separately
+  // loses SameSite cookies and the browser blocks the 404 as an opaque response.
+  let bundle: { source: string } | undefined;
+  if (version) {
+    const file = fileAt(bundleFilePath(auth.artifact.id, version.id));
+    if (await file.exists()) bundle = { source: await file.text() };
   }
 
   const page = buildEmbedHtml({ artifact: auth.artifact, templateBody: body, css, token, bundle });

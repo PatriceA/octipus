@@ -203,13 +203,14 @@ Run each path and check the footer renders.
 2. **Expect:** the final reply footer includes
    `classifier(<topic>)` plus any session/recent items.
 
-### 4c. Expert session
+### 4c. Specialist role session
 
-1. Open **Experts** in the web UI. Pin one to the current session
-   (e.g. *Coder*).
-2. Send a coding question.
-3. **Expect:** footer includes `expert(<name>)`, `role(<role>)`, and
-   if any skills are attached, `skills(N)`.
+1. Start a task that requires a focused specialist (for example, ask for a
+   code change that needs repository tools).
+2. Allow the root agent to delegate with `spawn_child`.
+3. **Expect:** the run metadata identifies the delegated `role` and topic; if
+   skills were selected or discovered, the source footer reports them. There is
+   no separate Experts page or expert pinning control.
 
 ### 4d. Pipeline final summary
 

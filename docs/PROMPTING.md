@@ -8,8 +8,9 @@ Before using advanced features, ensure:
 
 1. **Backend running**: `npm run dev` (or `npm run dev`) on port 3005
 2. **PostgreSQL**: Docker service running (`docker compose up -d`)
-3. **LLM model available**: At least one model configured in LiteLLM (default: `qwen3:14b`)
-4. **Web UI**: Access at `http://localhost:3007` (auto-started with backend)
+3. **LLM model available**: At least one model configured in the model registry
+   (the embedded Ollama default is `llama3.2`; setup may save a different model)
+4. **Web UI**: Start it with `bin/octi start web`, then open `http://localhost:3007`
 
 ### Optional Configuration
 
@@ -42,69 +43,60 @@ Customize via `/persona name <X>`, `/persona tone <…>`, `/persona say <fact>`.
 
 Specialist children do **not** inherit the persona — they stay role-defined (Coder, Reviewer, etc.). The persona is host-level only.
 
-## Expert Agents
+## Specialist roles
 
-Experts are pre-configured agent personas with specific tools and skills. The agent you're talking to delegates to the right expert when your message needs one, or you can specify one explicitly.
+The root agent is a `general` role with its own tools. When a task benefits from
+focused tools or judgement, it delegates to a specialist role with
+`spawn_child`. The root agent remains the owner of the turn and can also answer
+directly when delegation would add cost without helping.
 
 ### Auto-Delegation
 
 There is no separate routing layer. The agent you talk to is an ordinary `general`-role worker with its own tools (files, web, knowledge base, notes, tasks, messaging, scheduling). It answers directly whenever its own tools reach the request, and calls `spawn_child` to hand off to a specialist role only when the task needs a toolset or judgement it doesn't have:
 
 ```
-# Delegates to the Coding expert
+# Delegates to the coding role
 Fix the bug in src/utils/parser.ts where it fails on empty input
 
-# Delegates to the DevOps expert
+# Delegates to the devops role
 Deploy the staging environment and check container health
 
-# Delegates to the Security expert
+# Delegates to the security role
 Scan the API endpoints for XSS vulnerabilities
 
-# Delegates to the Research expert
+# Delegates to the research role
 Research the top 5 alternatives to Postgres for a vector-search workload
 
-# Delegates to the QA expert
+# Delegates to the qa role
 Test the login flow on the staging site and report any issues
 
-# Delegates to the Data expert
+# Delegates to the data role
 Write a SQL query to find users who signed up in the last 30 days
 
-# Delegates to the Communication expert
+# Delegates to the communication role
 Check my Gmail for unread emails from today
 ```
 
-### Direct Expert Chat (via API/MCP)
+### Available roles
 
-Bypass delegation by specifying an `expertId` directly:
-
-```json
-POST /api/chat
-{
-  "message": "Review the authentication module",
-  "expertId": "security-analyst"
-}
-```
-
-### Available Experts
-
-| Expert | Specialization | Key Tools |
+| Role | Specialization | Key Tools |
 |--------|---------------|-----------|
-| Coder | Code implementation, debugging | filesystem, shell, git |
-| Architect | System architecture, technical specs | filesystem, shell, knowledge |
-| Reviewer | Code review, architecture analysis | filesystem, shell, git |
-| Researcher | Web research, investigation | websearch, knowledge |
-| UI/UX Designer | UI/UX evaluation | browser, filesystem |
-| DevOps Engineer | CI/CD, containers, infrastructure | shell, docker, git |
-| Security Analyst | Vulnerability scanning, auditing | shell, browser, websearch |
-| Data Engineer | Database, queries, data pipelines | shell, filesystem, knowledge |
-| AI Engineer | ML, RAG, prompt engineering | shell, browser, knowledge |
-| QA Engineer | Testing, bug finding | browser, browser-ext, shell |
-| Financial Analyst | Market analysis, financial data | browser, websearch |
-| Automation Engineer | Workflow automation | shell, docker, scheduling |
-| Project Manager | Planning, status tracking | filesystem, messaging |
-| Technical Writer | Documentation | filesystem, browser |
-| Communicator | Email, calendar, messaging | google-workspace, microsoft365, messaging |
-| General | Everyday tasks, catch-all delegator | filesystem, shell, websearch, knowledge |
+| `coding` | Code implementation, debugging | filesystem, shell, git |
+| `architecture` | System architecture, technical specs | filesystem, shell, knowledge |
+| `review` | Code review, architecture analysis | filesystem, shell, git |
+| `research` | Web research, investigation | websearch, knowledge |
+| `design` | UI/UX evaluation | browser, filesystem |
+| `devops` | CI/CD, containers, infrastructure | shell, docker, git |
+| `security` | Vulnerability scanning, auditing | shell, browser, websearch |
+| `data` | Database, queries, data pipelines | shell, filesystem, knowledge |
+| `ai` | ML, RAG, prompt engineering | shell, browser, knowledge |
+| `qa` | Testing, bug finding | browser, browser-ext, shell |
+| `finance` | Market analysis, financial data | browser, websearch |
+| `automation` | Workflow automation | shell, docker, scheduling |
+| `pm` | Planning, status tracking | filesystem, messaging |
+| `writing` | Documentation | filesystem, browser |
+| `communication` | Email, calendar, messaging | google-workspace, microsoft365, messaging |
+| `general` | Everyday tasks, catch-all delegator | filesystem, shell, websearch, knowledge |
 
 ## Swarm Delegation (`spawn_child`)
 
@@ -136,11 +128,18 @@ our pricing data, and a third draft a market positioning document.
 2. **Multiple `spawn_child`** — when the task has distinct sub-topics; use `parallelGroup` to fan out.
 3. **`create_pipeline`** — a root-only staged workflow for work needing explicit implementation, testing, review, and QA steps. Development templates can retry failed QA within configured bounds. The current delegation prompt prefers pipelines for development tasks with runnable checks. That is prompt guidance; a pipeline does not itself prove correctness. A single delegated task can also attach independent scorer checks. Pipelines can be started through `POST /api/pipelines`.
 
-Children inherit the model bound to their role's topic (via `ModelRegistry.getModelForTopic`), not the parent's model. If a topic has no binding the spawner throws loudly — no silent default model.
+Children resolve a model from their role's default topic (or an explicit stage
+topic). The model selector applies the caller's personal or sponsored lane
+binding before the install binding; an explicit model override wins. Children
+do not simply inherit the parent's model. If the lane has no binding the
+spawner fails loudly — there is no silent worker default.
 
 ### Role Selection for `spawn_child`
 
-Pick the child's `role` from the same 16 roles as direct experts (see below). The spawner auto-matches a system expert by role unless you pass an explicit `expertId`. If an Agent exhausts its fan-out budget and children return `budget`/`timeout`, it can call `escalate_to_different_expert` once per lifetime to retry with a different expert of the same role.
+Pick the child's `role` from the registered specialist roles. The child resolves
+its role prompt, tool allowlist, and model from that role and its topic binding.
+If an Agent exhausts its fan-out budget, it can use the lane escalation tool to
+retry within the configured bounds.
 
 ### Deprecated Primitives
 
@@ -372,12 +371,13 @@ Skills provide domain knowledge to agents. They can be markdown content (recomme
 
 ### Using Skills
 
-Skills are automatically injected into agent system prompts based on the expert configuration. To add custom knowledge:
+Skills are selected for the session or discovered for a delegated role and then
+injected into agent system prompts. To add custom knowledge:
 
 1. Go to the Skills page
 2. Click "Create Skill"
 3. Use Markdown mode to paste skill content (e.g., Claude Code skills, coding guidelines)
-4. Assign it to an expert in the expert configuration
+4. Select it for a session or configure it for the relevant role
 
 ### Markdown Skills
 
@@ -413,5 +413,5 @@ The recommended format — just paste a markdown document:
 ### Agent doesn't use expected tools
 
 1. The agent's role determines available tools
-2. Check which expert was selected (visible in response metadata)
+2. Check which role and topic were selected (visible in response metadata)
 3. Be specific: "use the browser to open..." vs just "check..."

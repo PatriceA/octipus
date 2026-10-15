@@ -46,7 +46,7 @@ octipus/
 | `npm run start` | Run built `dist/index.js` (build first) |
 | `npm run start:all` | Start backend + web UI via `bin/octi start web` (plain `octi start` is backend-only) |
 | `npm run stop:all` | Stop full stack via `bin/octi stop` |
-| `npm test` | Run Vitest unit and embedded-database projects |
+| `npm test` | Run Vitest unit, embedded-database, and terminal projects |
 | `npm run test:tui` | Run TUI tests only |
 | `npm run test:e2e` | Run E2E API test suite |
 | `npm run test:web` | Run web UI E2E tests (Playwright) |
@@ -72,7 +72,7 @@ octipus/
 npm test                              # Unit tests
 npm test -- src/utils/crypto.test.ts     # Specific file
 npm test -- --coverage                   # With coverage
-npm run test:e2e                      # E2E (requires running server)
+npm run test:e2e                      # E2E API/WS tests (requires a running server)
 ```
 
 ## Adding New Components

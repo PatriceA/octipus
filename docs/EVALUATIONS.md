@@ -41,7 +41,7 @@ npx tsx src/models/testing/run.ts
 npx tsx src/models/testing/run.ts --provider=ollama
 
 # Test a specific model
-npx tsx src/models/testing/run.ts --model=qwen3:14b
+npx tsx src/models/testing/run.ts --model=llama3.2
 
 # Run only selected tests
 npx tsx src/models/testing/run.ts --test=basic-completion,tool-calling
@@ -59,7 +59,7 @@ Exit code is 1 if any tests fail. JSON report is written to `conformance-report-
 
 ```
 /eval conformance              # all enabled models
-/eval conformance qwen3:14b    # specific model by modelId or name
+/eval conformance llama3.2     # specific model by modelId or name
 ```
 
 **API:**
@@ -70,7 +70,7 @@ Authorization: Bearer <token>
 Content-Type: application/json
 
 {
-  "models": ["qwen3:14b", "gemma3:12b"],  // omit for all enabled models
+  "models": ["llama3.2"],  // omit for all enabled models
   "tests": ["basic-completion", "tool-calling"],  // omit for all tests
   "timeout": 30000
 }
@@ -207,14 +207,14 @@ Datasets are defined in `src/models/evaluation/datasets.ts`. `output`, `model`, 
 **Chat command:**
 
 ```
-/eval quality qwen3:14b     # runs generalQA dataset + relevance/coherence/completeness/latency
+/eval quality llama3.2      # runs generalQA dataset + relevance/coherence/completeness/latency
 /eval compare               # cross-model comparison table from DB
 ```
 
 Example quality output:
 
 ```
-**Quality Evaluation: `qwen3:14b`**
+**Quality Evaluation: `llama3.2`**
 
 | Metric       | Score | Pass Rate    | Samples |
 |--------------|-------|--------------|---------|
@@ -232,7 +232,7 @@ Authorization: Bearer <token>
 Content-Type: application/json
 
 {
-  "model": "qwen3:14b",
+  "model": "llama3.2",
   "dataset": "generalQA",
   "evaluators": ["relevance", "coherence", "completeness"],
   "name": "my-eval-run"
@@ -341,7 +341,7 @@ npm run dev
 npx tsx src/models/testing/run.ts --provider=ollama
 
 # 4. Run quality evaluation via chat
-/eval quality qwen3:14b
+/eval quality llama3.2
 
 # 5. Compare all models
 /eval compare

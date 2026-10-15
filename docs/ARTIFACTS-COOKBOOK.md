@@ -83,7 +83,9 @@ The shape `artifacts_toolbox__validate` accepts and `artifacts.get_live_artifact
 | `art_collect_mcp` | Call a tool on an external MCP server through the bridge. | `server`, `tool` | whatever the MCP tool returns |
 | `art_collect_octipus_tool` | Call an internal Octipus tool by id. | `toolId` | whatever the tool returns |
 
-`http_json` and `http_text` accept optional `method` (`GET`/`POST`), `headers`, `body`. Header values can reference `${vault.<key>}` placeholders — **but vault resolution is currently a stub** (see §6).
+`http_json` and `http_text` accept optional `method` (`GET`/`POST`), `headers`,
+`body`. Header values can reference `${vault.<key>}` placeholders; resolution
+uses the source principal and workspace scope (see §6).
 
 ### 3.2 Transforms (`family: 'transform'`)
 
@@ -188,7 +190,8 @@ For "last 100 commits on main" the single-page form is sufficient.
 
 For **public repos**, anonymous works. Rate limits: 60/hour for core API, 10/min for search. Confirmed for `PatriceA/octipus` (HTTP 200, no auth).
 
-For **private repos or higher limits**, you need an `Authorization: Bearer <token>` header. **See §6 — vault is stubbed today, so this doesn't actually work in production right now.** Track the wiring task before authoring private-repo artifacts.
+For **private repos or higher limits**, add an `Authorization: Bearer <token>`
+header and store the token in the vault as described in §6.
 
 ---
 
@@ -375,7 +378,7 @@ For **public repos** none of this matters — anonymous works (60/hr core, 10/mi
 |---|---|
 | "No data" in an issues widget | Either zero issues actually exist *or* the URL was `/issues` (conflates with PRs) and `state` is wrong. Check via `gh api /repos/.../issues -f state=open --jq 'length'` and `--jq '[.[]\|select(.pull_request==null)]\|length'` to distinguish. |
 | Empty PR list | Default `state=open` — pass `state=all` to include closed/merged. |
-| 401 / 403 from GitHub | You have `Authorization` header set to a vault placeholder (resolver is stubbed) — drop the header and go anonymous, or implement vault first. |
+| 401 / 403 from GitHub | Check that the vault secret exists for the source principal and workspace, that the token has the required repository scopes, and that the `Authorization` header uses the expected scheme. |
 | `bind path "X" does not resolve` | The first segment of your bind path is not a declared source or transform name. Names are case-sensitive. |
 | `required parameter "rows" is missing` | Widget needs it from `bind` *or* `params`. You probably forgot to declare `bind: { rows: "..." }`. |
 | Dashboard refreshes too aggressively / hits rate limit | Bump `refreshSeconds`. Search API needs ≥ 60s anon; core API needs ≥ 60s anon. |

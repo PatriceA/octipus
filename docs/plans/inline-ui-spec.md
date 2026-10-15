@@ -205,8 +205,7 @@ inside a code fence is text, not a block.
 
 **D4. Offered when one predicate holds** (`inlineUiOffered`,
 `src/core/inline-ui/offer.ts`, unit-tested as a matrix):
-- root agent, not small-tier, not a vendor CLI root (its own transcript
-  cannot be stubbed, D12), no stored DENY on tool `inline-ui` action
+- root agent, not small-tier, no stored DENY on tool `inline-ui` action
   `render` (the kill switch);
 - **room**: always — members read a room in the web app, whoever's turn it
   was; a room bridged to a platform thread gets the fallback line there;
@@ -931,7 +930,7 @@ Found while implementing:
 **Revision 3.1** (round 3: 1 blocker, 3 majors, 3 minors):
 - **CSP inheritance.** The content frame inherits the host CSP. The host CSP now allows everything the content CSP allows, a subset test was added, and the spike tests inheritance and `data:` frames (§4.2, §5.0).
 - **Navigation stop signal.** The navigation violation may fire only in the content realm. The stop signal now relies only on what the host observes (D9, spike step 6).
-- **CLI roots.** CLI-provider roots are not offered the tool, because their vendor transcript cannot be stubbed (D4).
+- **CLI roots.** CLI-provider roots are offered interactive answers. These turns start cold from Octipus history and do not reuse vendor transcripts, so widget source is not replayed (D4, D12).
 - **Steered sends.** Provenance is stored as a structured key on both paths, the steer path included (§6).
 - **Minors.** Gemini replay warning skipped for stubbed messages; one `handleMessage` option; lint/sanitizer parity and render-cost cap tests.
 

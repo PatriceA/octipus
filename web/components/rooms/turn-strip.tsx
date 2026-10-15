@@ -5,6 +5,7 @@ import type { RoomQueue } from '@/lib/rooms';
 
 interface TurnStripProps {
   queue: RoomQueue;
+  connected?: boolean;
   myId: string | undefined;
   onCancel: (messageId: string) => void;
 }
@@ -15,7 +16,7 @@ interface TurnStripProps {
  * requester's approval), then the queued requests, each of mine with a
  * cancel. Hidden when the room is idle.
  */
-export function TurnStrip({ queue, myId, onCancel }: TurnStripProps) {
+export function TurnStrip({ queue, myId, onCancel, connected = true }: TurnStripProps) {
   const { running, queued } = queue;
   if (!running && queued.length === 0) return null;
   const name = (requesterId: string, requesterName: string) => (requesterId === myId ? 'you' : requesterName);
@@ -27,15 +28,17 @@ export function TurnStrip({ queue, myId, onCancel }: TurnStripProps) {
       className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-1.5 border-b border-outline-variant/40 bg-surface-container-low font-mono text-[12px]"
     >
       {running && (
-        running.waiting ? (
+        !connected ? (
+          <span className="text-warning">Connection lost — shown activity may be out of date.</span>
+        ) : running.waiting ? (
           <span className="flex items-center gap-1.5 text-warning">
             <ShieldQuestion className="w-3.5 h-3.5" />
-            Octipus — waiting for {name(running.requesterId, running.requesterName)} to approve
+            {running.companion?.name ?? 'Octipus'} — waiting for {name(running.requesterId, running.requesterName)} to approve
           </span>
         ) : (
           <span className="flex items-center gap-1.5 text-on-surface">
             <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
-            Octipus — answering {name(running.requesterId, running.requesterName)}
+            {running.companion?.name ?? 'Octipus'} — answering {name(running.requesterId, running.requesterName)}
             {running.model && <span className="text-on-surface-variant">· {running.model}</span>}
           </span>
         )

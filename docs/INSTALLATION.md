@@ -137,6 +137,12 @@ bash scripts/install-docker.sh
 
 This creates `.env.compose` with random secrets, builds/starts PostgreSQL and Octipus, waits for health, and runs terminal setup inside the container. Keep `.env.compose` with your backups. The defaults are web **3017**, API **3015**, and database **5442** on the host. Open `http://localhost:3017`. Use `docker compose --env-file .env.compose logs`, `stop`, or `up -d` to manage it. Do not replace existing deployment secrets with newly generated ones: for an existing stack, continue using its existing Compose environment file.
 
+The checked-in Compose file also loads `.env.docker` inside the application
+container. Keep that template file available in the checkout, or create a
+private `.env.docker` with your deployment values, before starting the stack;
+`.env.compose` supplies the generated secrets and Compose interpolation. See
+[Docker deployment](DOCKER.md) for the two-file detail.
+
 Container tools and local model URLs refer to the container's environment: host CLI logins, host files, and `localhost` model servers are not automatically available. See [DOCKER.md](DOCKER.md).
 
 

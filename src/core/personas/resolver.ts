@@ -1,3 +1,4 @@
+import { type CompanionAppearance, isCompanionAppearance } from '@/shared/companion';
 import { coreLogger } from '@/utils/logger';
 import { getPersonaProfileRepository, PersonaProfileRepository } from './repository';
 import { getPersonaRegistry } from './registry';
@@ -39,11 +40,22 @@ export async function resolvePersonaForUser(userId: string): Promise<ResolvedPer
   let pronouns = base.pronouns;
   let userFacts: string[] = [];
   let profileId: string | undefined;
+  let appearance: CompanionAppearance | undefined;
 
   try {
     const profile = await getPersonaProfileRepository().findForUser(userId);
     if (profile) {
       profileId = profile.id;
+      const storedAppearance = profile.facts?.find(f => f.key === 'appearance')?.value;
+      if (storedAppearance) {
+        try {
+          const value: unknown = JSON.parse(storedAppearance);
+          if (!isCompanionAppearance(value)) throw new Error('Invalid companion appearance');
+          appearance = { form: value.form, color: value.color };
+        } catch (err) {
+          coreLogger.warn({ err, userId }, 'Ignoring invalid stored companion appearance');
+        }
+      }
       userName = profile.name;
       const fields = PersonaProfileRepository.toFields(profile);
       const presetByUser = registry.get(fields.presetId);
@@ -76,6 +88,7 @@ export async function resolvePersonaForUser(userId: string): Promise<ResolvedPer
   return {
     id: preset.id,
     profileId,
+    ...(appearance ? { appearance } : {}),
     name: userName,
     pronouns,
     tone,

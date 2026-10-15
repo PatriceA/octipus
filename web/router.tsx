@@ -6,10 +6,15 @@
  * forty-four screens.
  */
 import { lazy, Suspense } from 'react';
-import { createBrowserRouter, Outlet, RouterProvider, useRouteError } from 'react-router-dom';
+import { createBrowserRouter, Navigate, Outlet, RouterProvider, useParams, useRouteError } from 'react-router-dom';
 import { AppShell } from '@/components/app-shell';
 import { Providers } from './app/providers';
 import AdminLayout from './app/admin/layout';
+
+function LegacyArtifactRedirect() {
+  const { id } = useParams();
+  return <Navigate replace to={`/artifacts/view?id=${encodeURIComponent(id ?? '')}`} />;
+}
 
 const Home = lazy(() => import('./app/page'));
 const AdminPage = lazy(() => import('./app/admin/page'));
@@ -123,6 +128,7 @@ const router = createBrowserRouter([
       { path: 'artifacts', element: <ArtifactsPage /> },
       { path: 'artifacts/new', element: <ArtifactsNewPage /> },
       { path: 'artifacts/view', element: <ArtifactsViewPage /> },
+      { path: 'artifacts/:id', element: <LegacyArtifactRedirect /> },
       { path: 'chat', element: <ChatPage /> },
       { path: 'documents', element: <DocumentsPage /> },
       { path: 'email', element: <EmailPage /> },

@@ -85,7 +85,7 @@ export default {
 
 ## Root agent hooks
 
-In addition to registering tools, plugins can subscribe to the root agent's `before-agent-start` hook to mutate the system prompt before the LLM call (e.g., inject project-specific guidance, custom security rules, or a different persona). The hook is the same primitive the built-in persona system uses to layer the persona block between `SECURITY_PREAMBLE` and the role prompt.
+In addition to registering tools, an in-process plugin can subscribe to the root agent's `before-agent-start` hook to mutate the system prompt before the LLM call (for example, to inject project-specific guidance or persona text). This is an internal host hook, not a field on `PluginContext`; a plugin must import the host hook registry from the checkout and should treat that coupling as version-sensitive. The hook is the same primitive the built-in persona system uses to layer the persona block between `SECURITY_PREAMBLE` and the role prompt.
 
 ```ts
 import { getAgentHooks } from '@/core/agent/hooks';

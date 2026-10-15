@@ -28,7 +28,7 @@ curl -fsSL https://raw.githubusercontent.com/PatriceA/octipus/main/scripts/insta
 
 Quick start uses embedded storage with default paths and ports, asks for an admin account and one model provider, then runs `octi start web` and opens **http://localhost:3007**. Drop `--quick` / `-Quick` for the full wizard (storage mode, ports, optional tools, voice); it ends with `octi start web` as the next step. Add the printed CLI directory to PATH if your shell needs it.
 
-For Docker without host Node/npm, clone this repository and run `bash scripts/install-docker.sh`; the web UI is **http://localhost:3017**.
+For Docker without host Node/npm, clone this repository and run `bash scripts/install-docker.sh`; keep the checked-in `.env.docker` template available because Compose loads it into the app container. The web UI is **http://localhost:3017**.
 
 **[Full installation guide](docs/INSTALLATION.md)** — prerequisites, one-command start, manual install, headless setup, audits, upgrades, Docker, and troubleshooting.
 

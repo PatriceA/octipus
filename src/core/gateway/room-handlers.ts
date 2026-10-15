@@ -17,6 +17,7 @@
  * posts is the server's `created_at`, and `clientId` is echoed for the
  * client to reconcile its copy.
  */
+import { API_SCOPES, scopesSatisfy } from '@/security/scopes';
 import { coreLogger } from '@/utils/logger';
 import type { GatewayHub } from './hub';
 import type { ClientMessage, ConnectionContext } from './protocol';
@@ -173,7 +174,7 @@ async function roomPost(hub: GatewayHub, connectionId: string, context: Connecti
     });
     return;
   }
-  const { message: _stored, ...outcome } = await postAndQueue(context.userId, message.roomId, { content, addressed: message.addressed, clientId: message.clientId });
+  const { message: _stored, ...outcome } = await postAndQueue(context.userId, message.roomId, { content, addressed: message.addressed, clientId: message.clientId }, { allowAgent: scopesSatisfy(context.scopes, API_SCOPES.CHAT) });
   void _stored; // members (the poster included) receive it as `room.message`
   hub.connectionManager.sendToConnection(connectionId, { type: 'room.posted', roomId: message.roomId, ...outcome });
 }
@@ -222,7 +223,7 @@ export async function postAndQueue(
   userId: string,
   roomId: string,
   input: { content: string; addressed?: boolean; clientId?: string; agent?: boolean; guardFlags?: string[] },
-  opts: { workspaceId?: string } = {},
+  opts: { workspaceId?: string; allowAgent?: boolean } = {},
 ): Promise<{ messageId: string; clientId?: string; queuedPosition?: number; notQueued?: string; message: unknown }> {
   const { postRoomMessage } = await import('@/core/rooms/service');
   const posted = await postRoomMessage({ userId }, roomId, input, opts);

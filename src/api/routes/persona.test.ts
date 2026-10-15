@@ -58,3 +58,8 @@ describe('persona REST API', () => {
     expect(res.status).toBe(401);
   });
 });
+
+
+test('PUT /persona/appearance requires authentication', async () => {
+  expect((await call('PUT', '/persona/appearance', { form: 'pebble', color: 'coral' })).status).toBe(401);
+});

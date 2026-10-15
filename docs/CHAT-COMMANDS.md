@@ -11,8 +11,6 @@ Chat commands are slash commands you can use in any channel (WebChat, Telegram, 
 | `/help` | Show available commands |
 | `/docs <query>` | Search the product documentation (setup, channels, providers, configuration) — returns matching sections directly, no LLM call |
 | `/status` | Check session status, running agents |
-| `/expert [name]` | List experts or switch to a specific expert |
-| `/experts [name]` | Alias for `/expert` |
 | `/stop` | Stop all running agents in the session |
 | `/clear` | Clear conversation context and start fresh |
 | `/model [name]` | Switch to a specific model for the session |
@@ -71,8 +69,7 @@ These commands are available in the TUI and gateway clients (not web/channel cli
 | `/work-plan` | — | Show the visible plan, evidence, and feedback |
 | `/plan-feedback <change>` | — | Save feedback on the current plan |
 | `/abort` | `/stop`, `/cancel` | Stop running agents (gateway version; `/stop` is root agent version) |
-| `/expert` | `/e` | Switch expert or list available experts (gateway version) |
-| `/status` | `/s` | Show session status, agents, and active expert (gateway version) |
+| `/status` | `/s` | Show session status and agents (gateway version) |
 | `/cost` | — | Show cumulative token usage and cost |
 | `/compact` | — | Compact session context (summarize old messages); optional: `/compact <focus instructions>` |
 | `/clear` | `/cls`, `/reset` | Reset root agent context and clear TUI display |
@@ -92,19 +89,13 @@ These commands are available in the TUI and gateway clients (not web/channel cli
 
 ---
 
-## Expert Switching
+## Role delegation
 
-Switch between pre-built expert personas from any channel:
-
-```
-/expert                    → List all available experts
-/expert Technical Writer   → Switch to Technical Writer
-/expert reset              → Return to auto-routing
-```
-
-When an expert is active, all your messages bypass the normal root-agent turn and go directly to that expert's agent with its specialized system prompt, domain knowledge (skills), critical rules, and deliverable template.
-
-Expert selection persists across messages in the session. Use `/expert reset` to return to automatic classification.
+The root agent handles the conversation and may delegate focused work to a
+specialist role with `spawn_child`. Role selection happens per delegated task;
+there is no user-facing `/expert` or `/experts` command and no persistent expert
+catalog to switch between. Use `/persona` for the root agent's voice and
+`/skills` for session skill selection.
 
 ---
 
@@ -173,19 +164,19 @@ A typing indicator is also sent while the agent works (refreshes every 4 seconds
 Commands go through the **root agent command registry** (`src/core/commands/`), not directly to agents. They execute immediately without an LLM call.
 
 ```
-User sends "/expert Technical Writer"
+User sends "Review the API documentation and propose corrections"
     |
     v
 Channel receives message -> starts with "/"
     |
     v
-Root agent handleCommand() -> looks up "expert" in registry
+Root agent handles the request and chooses whether to call `spawn_child`
     |
     v
-Expert command handler -> finds expert in DB -> stores in session context
+The child receives its selected role, model topic, tools, and deliverable
     |
     v
-Response: "Switched to expert: Technical Writer"
+Response: root agent answer with the delegated result
 ```
 
 The TUI has an additional set of commands via the **gateway command registry** (`src/core/gateway/commands.ts`) which include `/cost`, `/diff`, `/compact`, and other local operations.
@@ -199,13 +190,8 @@ The TUI has an additional set of commands via the **gateway command registry** (
 - Commands are case-insensitive for the command name, case-sensitive for arguments
 - Unknown commands return an error message listing available commands
 
-### `/expert` not switching
-- Use the exact expert name (e.g., `/expert Technical Writer`, not `/expert writer`)
-- Check available experts with `/expert` (no arguments)
-- Expert selection is per-session — starts a new session to reset
-
 ### `/clear` didn't help
-- `/clear` resets session context including active plans and expert selection
+- `/clear` resets session context including active plans
 - In TUI, `/clear` also clears the terminal screen and scrollback
 - For a completely fresh start, create a new session in the web UI
 

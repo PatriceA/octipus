@@ -10,14 +10,12 @@ export interface InlineUiOfferInput {
   /** What the client that sent this turn says it can render (`chat.send` `renders`). */
   renders?: readonly string[];
   small: boolean;
-  /** A vendor CLI root keeps its own transcript, which history stubbing cannot reach (spec D4). */
-  cliProvider: boolean;
   /** A stored DENY on tool `inline-ui` (the kill switch, spec §10.4). */
   denied: boolean;
 }
 
 export function inlineUiOffered(input: InlineUiOfferInput): boolean {
-  if (!input.root || input.small || input.cliProvider || input.denied) return false;
+  if (!input.root || input.small || input.denied) return false;
   switch (input.audience) {
     // Members read a room in the web app, whoever's turn it was (a bridged
     // platform thread gets the plain fallback line).
@@ -42,6 +40,7 @@ export const INLINE_UI_PROMPT = [
   '## Interactive answers',
   'This conversation is shown in the Octipus web app, which can render an interactive answer inside your reply: a small self-contained HTML/CSS/JS widget — a calculator, a chart of given or retrieved numbers, a diagram, a stepper through a mechanism, a comparison with controls.',
   'Use one only when a control, a calculation, a visual or a step-through helps more than text; at most one per reply unless asked. Not for prose, code, short lists, a single value, a plain table (use markdown), or anything to keep, share or refresh (use a live artifact).',
+  'For a requested calculator, converter, interactive chart or stepper, deliver the working widget inline by default. Create a standalone HTML file only when the user explicitly requests a file or app. If a suitable file already exists, reuse its logic in the inline block; telling the user to open that file or offering to put it inline later does not deliver the requested answer.',
   'Write it in your final reply — never in a message that also calls tools — as a fenced block:',
   '```octi-ui title="Loan calculator" height=360',
   '<style>/* styles */</style>',

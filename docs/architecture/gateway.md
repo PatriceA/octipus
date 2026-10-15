@@ -98,7 +98,7 @@ lockouts and the audit log use the same rule (`src/security/client-ip.ts`).
 | `chat.send` | Send a chat message to the root agent |
 | `chat.interject` | Side-channel question sent while root agent is running (non-blocking) |
 | `chat.steer` | Inject a message into the running root agent turn to change course mid-flight |
-| `command` | Execute a gateway command (e.g., `/expert`, `/status`) |
+| `command` | Execute a gateway command (e.g., `/persona`, `/status`) |
 | `subscribe` | Subscribe to event patterns over your own events (e.g., `agent.*`) and/or `resources` (e.g., `artifact:<id>`), each access-checked |
 | `unsubscribe` | Remove event patterns and/or resources |
 | `permission.respond` | Approve/deny a permission request |
@@ -187,7 +187,7 @@ The `GatewayEventBus` is a typed pub/sub system that replaces scattered EventEmi
 
 Additional event families exist for worker lifecycle, pipelines, sessions, and extensions. See `src/core/gateway/protocol.ts` for the complete list of `GatewayEventType` definitions.
 
-`swarm.node_spawned` payload includes `rootSessionId`, `nodeId`, `parentNodeId`, `kind`, `depth`, `topicPath`, `role`, `expertId`, `model`, `budgets`, and a `taskBriefPreview` (first 200 chars). The web UI composes the live swarm tree from these events and falls back to `GET /api/swarm/nodes` for rehydration.
+`swarm.node_spawned` payload includes `rootSessionId`, `nodeId`, `parentNodeId`, `kind`, `depth`, `topicPath`, `role`, `model`, `budgets`, and a `taskBriefPreview` (first 200 chars). The web UI composes the live swarm tree from these events and falls back to `GET /api/swarm/nodes` for rehydration.
 
 ### Event Bridge
 
@@ -220,7 +220,7 @@ Built-in commands available via the gateway protocol:
 |---------|---------|-------------|
 | `/help` | `/h`, `/?` | List available commands |
 | `/status` | `/s` | Show session status and running agents |
-| `/expert` | `/e` | Switch expert or list available |
+| `/persona` |  | Configure the root agent persona |
 | `/abort` | `/stop`, `/cancel` | Cancel your running agents |
 | `/clear` | `/cls` | Clear conversation display |
 | `/compact` | | Compact session context |
@@ -238,7 +238,7 @@ The `FeedbackManager` maps agent lifecycle events to emoji reactions:
 | Agent State | Emoji | Debounce |
 |-------------|-------|----------|
 | Classifying | 🤔 | 700ms |
-| Expert selected | 🧠 | 700ms |
+| Agent started | 🧠 | 700ms |
 | Tool use | 🔧/📖/💻/🔍 | 700ms |
 | Completed | ✅ | Immediate |
 | Error | ❌ | Immediate |

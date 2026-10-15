@@ -30,11 +30,13 @@
  *
  * Every change is announced to the room as `room.turn`.
  */
+import type { CompanionIdentity } from '@/shared/companion';
 import { getConfig } from '@/config';
 import { coreLogger } from '@/utils/logger';
 import { publishRoomEvent } from './events';
 
 export interface RoomRequest {
+  companion?: CompanionIdentity;
   requesterId: string;
   requesterName: string;
   messageId: string;
@@ -102,8 +104,8 @@ function forget(roomId: string): void {
 
 /** What the room's turn strip shows. */
 export interface RoomQueueSnapshot {
-  running: { requesterId: string; requesterName: string; messageId: string; startedAt: string; waiting: boolean; model?: string } | null;
-  queued: Array<{ requesterId: string; requesterName: string; messageId: string; enqueuedAt: string }>;
+  running: { requesterId: string; requesterName: string; companion?: CompanionIdentity; messageId: string; startedAt: string; waiting: boolean; model?: string } | null;
+  queued: Array<{ requesterId: string; requesterName: string; companion?: CompanionIdentity; messageId: string; enqueuedAt: string }>;
 }
 
 export function roomQueueSnapshot(roomId: string): RoomQueueSnapshot {
@@ -113,12 +115,13 @@ export function roomQueueSnapshot(roomId: string): RoomQueueSnapshot {
     running: state.running ? {
       requesterId: state.running.requesterId,
       requesterName: state.running.requesterName,
+      ...(state.running.companion ? { companion: state.running.companion } : {}),
       messageId: state.running.messageId,
       startedAt: state.running.startedAt.toISOString(),
       waiting: state.running.waiting,
       ...(state.running.model ? { model: state.running.model } : {}),
     } : null,
-    queued: state.waiting.map((q) => ({ requesterId: q.requesterId, requesterName: q.requesterName, messageId: q.messageId, enqueuedAt: q.enqueuedAt.toISOString() })),
+    queued: state.waiting.map((q) => ({ requesterId: q.requesterId, requesterName: q.requesterName, ...(q.companion ? { companion: q.companion } : {}), messageId: q.messageId, enqueuedAt: q.enqueuedAt.toISOString() })),
   };
 }
 

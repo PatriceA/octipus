@@ -217,7 +217,7 @@ testing); when omitted it follows the setting:
 
 ## Phone Calls
 
-Make and receive actual phone calls through telephony providers. Octipus uses the existing STT/TTS pipeline for audio processing and routes conversations through an expert for fast, direct LLM responses.
+Make and receive actual phone calls through telephony providers. Octipus uses the existing STT/TTS pipeline for audio processing and routes conversations through the configured `voice` model topic for fast, direct LLM responses.
 
 ### Supported Providers
 
@@ -278,7 +278,8 @@ curl -X PUT http://localhost:3005/api/settings/voice.publicUrl \
 
 In the **Models** page, assign a fast model to the `voice` topic. Local models (Ollama) give the lowest latency since there's no network round-trip.
 
-That's it. The expert prompt is automatically loaded from the Communicator expert.
+That's it. The direct call path uses the configured voice prompt and the model
+bound to the `voice` topic.
 
 ### Twilio Setup Guide (Detailed)
 
@@ -364,7 +365,8 @@ Caller speaks → Provider STT (~1s) → Direct LLM call (~1-3s) → Provider TT
 Total: ~2-5 seconds per turn
 ```
 
-No classification, no worker spawning, no tool execution. The model assigned to the `voice` topic is called directly with the Communicator expert's system prompt.
+No classification, no worker spawning, no tool execution. The model assigned to
+the `voice` topic is called directly with the phone conversation prompt.
 
 ### Call Modes
 
@@ -420,8 +422,8 @@ https://your-public-url/api/voice/webhook/twilio
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `voice.sttProvider` | `auto` | STT engine: auto, whisper, mistral, openai |
-| `voice.ttsProvider` | `mistral` | TTS engine: mistral (Voxtral), openai, piper |
+| `voice.sttProvider` | `auto` | STT engine: auto, whisper, fasterwhisper, mistral (Voxtral), openai |
+| `voice.ttsProvider` | `mistral` | TTS engine: mistral (Voxtral), openai, kokoro, piper |
 | `voice.telephonyProvider` | `disabled` | Provider: twilio, telnyx, plivo |
 | `voice.publicUrl` | — | Webhook URL (ngrok etc.) |
 | `voice.inboundPolicy` | `disabled` | Inbound: disabled, allowlist, open |
@@ -456,7 +458,7 @@ These improvements were made after debugging real Twilio integration issues and 
 - **Credential format validation before API calls** — Account SID is checked for `AC` prefix and 34-character length, Auth Token for 32-character length. Invalid formats are rejected early with a clear error message instead of sending a doomed API request.
 - **Auto-detection of phone number** — Octipus queries the Twilio account's `IncomingPhoneNumbers` resource and picks the first available number. No manual phone number configuration is needed.
 - **Detailed error messages per HTTP status code** — Each status (401, 403, 404, etc.) maps to a specific human-readable explanation and suggested fix, rather than a generic "connection failed" message.
-- **Webhook signature verification** — Inbound webhooks are verified using HMAC-SHA1 with timing-safe comparison (`crypto.timingSafeEqual`) to prevent timing attacks. The signature is computed over the full webhook URL plus sorted POST parameters.
+- **Webhook signature verification** — Inbound webhooks are verified with each provider's native signing scheme and timing-safe checks where applicable: Twilio uses HMAC-SHA1 over the full webhook URL plus sorted POST parameters, Plivo uses its HMAC scheme, and Telnyx uses Ed25519 signatures. Treat `voice.publicUrl` and provider credentials as security-sensitive.
 - **XML escaping for TwiML** — All dynamic text inserted into TwiML responses is XML-escaped to prevent injection. Characters `&`, `<`, `>`, `"`, and `'` are replaced with their XML entities.
 - **Gather speech with fallback re-prompt** — If the caller doesn't speak during a `<Gather>` window, Octipus re-prompts instead of hanging up. This uses the `action` attribute to loop back to a re-prompt endpoint.
 - **Enhanced speech gathering** — The `<Gather>` element uses `enhanced="true"` for higher-accuracy speech recognition when available on the Twilio account.

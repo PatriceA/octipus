@@ -102,6 +102,35 @@ describe('artifact versions through the REST API', () => {
   test('the embed is sandboxed by its CSP header', async () => {
     const res = await call('GET', '/__artifacts__/a/counter/embed');
     expect(res.status).toBe(200);
-    expect(res.headers.get('content-security-policy')).toMatch(/; sandbox allow-scripts$/);
+    const csp = res.headers.get('content-security-policy');
+    expect(csp).toMatch(/; sandbox allow-scripts$/);
+    const html = await res.text();
+    expect(html).not.toMatch(/<script src="[^"]*bundle.js/);
+    const script = /<script>([\s\S]*?)<\/script>/.exec(html)?.[1];
+    expect(script).toBeTruthy();
+    const { createHash } = await import('node:crypto');
+    expect(csp).toContain(`'sha256-${createHash('sha256').update(script!).digest('base64')}'`);
   });
+  test('signed pages admit their owner but still reject anonymous viewers', async () => {
+    const created = await call('POST', '/api/artifacts', { slug: 'signed-page', title: 'Signed', type: 'html', visibility: 'signed' });
+    expect(created.status).toBe(201);
+    const { artifact } = await created.json();
+    const detail = await (await call('GET', `/api/artifacts/${artifact.id}`)).json();
+    expect(detail.artifact.shareUrl).toContain(`/artifacts/view?id=${artifact.id}`);
+    expect((await call('GET', '/__artifacts__/a/signed-page/embed')).status).toBe(200);
+    const anon = await app.handle(new Request('http://localhost/__artifacts__/a/signed-page/embed'));
+    expect(anon.status).toBe(404);
+  });
+
+  test('anonymous outer links get a generic entry page; retries and embeds remain protected', async () => {
+    const request = (slug: string, retry = false) => app.handle(new Request(`http://localhost/a/${slug}`, { headers: retry ? { 'X-Octipus-Artifact-Entry': '1' } : {} }));
+    const known = await request('signed-page');
+    const unknown = await request('missing-page');
+    expect(known.status).toBe(200);
+    expect(unknown.status).toBe(200);
+    expect(await known.text()).toBe(await unknown.text());
+    expect(known.headers.get('cache-control')).toBe('no-store');
+    expect((await request('signed-page', true)).status).toBe(404);
+  });
+
 });

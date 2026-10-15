@@ -72,7 +72,9 @@ Delegation runs through a fixed 3-level tree: **Root agent → Agent → Subagen
 | **Agent** | 1 | Parent's `spawn_child` | Yes → Subagents | Ephemeral, per topic |
 | **Subagent** | 2 | Parent's `spawn_child` | **No** (leaf) | Ephemeral, per subtopic |
 
-The LLM-facing tool is `spawn_child`. Agents also get `escalate_to_different_expert` (1/Agent lifetime) to retry a task with a different expert of the same role when children hit budget or timeout.
+The LLM-facing tool is `spawn_child`. Agents also get the lane escalation tool
+(one use per Agent lifetime) to retry a task on a different configured lane
+when children hit budget or timeout. It no longer selects a database expert.
 
 **Location:** `src/core/swarm/` — `spawner.ts`, `call-graph.ts`, `types.ts`, `errors.ts`, `escalate-tool.ts`, `swarm-tool.ts`, `orphan-reaper.ts`, `fan-out-budget.ts`, `node-repository.ts`. DB table `swarm_nodes`. The full design lives in `.octipus/swarm-design.md`.
 
@@ -107,15 +109,13 @@ User Message
     ▼
 Root agent (depth 0)
     │
-    ├─ Expert bypass? ──► Spawn worker with expert's role + tools + skills
-    │
-    └─ Every other message ──► the root agent runs: general tools + meta-tools
+    └─ Every message ──► the root agent runs: general tools + meta-tools
                               │
                               ├─ spawn_child(role, topic, subtopic, taskBrief)
-                              │     ──► Agent (depth 1) with resolved expert,
+                              │     ──► Agent (depth 1) with the named role,
                               │         topic-bound model, intersected tools
                               │         │
-                              │         └─ spawn_child / escalate_to_different_expert
+                              │         └─ spawn_child / lane escalation
                               │                ──► Subagent (depth 2), hard leaf
                               │
                               ├─ Multiple spawn_child calls with same parallelGroup
@@ -211,24 +211,23 @@ When work passes between pipeline stages, a structured **handoff document** is a
 
 The full handoff chain is accumulated across all stages, so later stages have visibility into the entire pipeline history. This prevents context loss and reduces redundant work across sequential stages.
 
-### Automatic Expert Selection
+### Role and skill selection
 
-When the root agent (or an Agent) calls `spawn_child` with a `role` and no explicit `expertId`, the swarm spawner matches a system expert from the database by role. The matched expert provides:
-
-- **System prompt** — expert-specific instructions and persona (with `SECURITY_PREAMBLE` deduplicated)
-- **Domain knowledge** — skills loaded via `SkillRegistry.buildPromptFragment()` and appended
-- **Model preference** — the expert's preferred model (as a fallback; see topic→model below)
-
-**Priority chain:** Explicit `expertId` on `spawn_child` > Explicit UI expert selection > Auto-matched expert by role > Generic role config.
+When the root agent (or an Agent) calls `spawn_child`, the named role supplies
+the system prompt, critical rules, tool allowlist and default lane. Skills are
+discovered from the role/topic assignment and injected as an index that the
+child can load on demand. There is no runtime database expert lookup or expert
+model preference in this path; a caller may name a model lane explicitly with
+`topic`, while the lane binding supplies the model.
 
 ### Topic → Model Routing (Authoritative)
 
 Children resolve their model strictly (no parent-model inheritance, no hardcoded defaults):
 
-1. `ModelRegistry.getModelForTopic(topic)` — primary lookup; returns null if topic is unbound.
-2. If topic model lacks tools, swap to a local Ollama tool-capable model (via `ModelSelector.ensureToolSupport()`).
-3. Expert `modelPreference` — if the matched expert has an explicit preference *and no topic binding exists*, use it.
-4. Fail loud — if all above resolve to null, `SwarmSpawner.resolveChildModelAndExpert` throws with a message pointing the user at the Models page. No default-model fallback for workers.
+1. A configured lane executor, only when the parent supplied a plan.
+2. `resolveModel({ topic: lane })` — the requester's personal binding, then the install binding.
+3. If a tool-equipped child is bound to a model without tool support, try an eligible local Ollama tool-capable model.
+4. Fail loud — if no model resolves, the spawner throws with a message pointing the user at the Topics page. No default-model fallback for workers.
 
 Children **inherit topic bindings, not the parent's model**. If a research Agent spawns a security Subagent, the Subagent resolves the model bound to `security`, not the parent's research model. `ModelRegistry.getModelForTopic()` is the single authoritative entry point. `litellm-client.ts:embed()` and `visual/analyzer.ts` resolve embedding/vision models the same way (or throw if unbound). Default fallback applies *only* to the root agent via `selectForOrchestration()`.
 
@@ -238,7 +237,7 @@ Children **inherit topic bindings, not the parent's model**. If a research Agent
 |---------|-----------|--------------|----------|
 | **Tool** | Executable module (shell, git...) | App startup | Singleton |
 | **Skill** | Domain knowledge | App startup | Singleton |
-| **Expert** | Agent configuration | DB seed / user-created | Persistent |
+| **Role** | Agent configuration (prompt, rules, tools and default lane) | Code or user-created row | Persistent |
 | **Agent** | Running worker instance (depth 1) | Per `spawn_child` | Request-scoped, tracked in `swarm_nodes` |
 | **Subagent** | Leaf worker (depth 2) | Per `spawn_child` from an Agent | Request-scoped |
 | **Swarm** | Full tree for a session | Per root message | Session-scoped, persisted in `swarm_nodes` |
@@ -272,10 +271,10 @@ The root agent can also get tools no role lists: `inline-ui` (interactive answer
 Some models (Qwen3, DeepSeek) emit `<think>...</think>` reasoning blocks that consume output tokens. The system handles this at multiple levels:
 
 - **Model-level:** "Disable Thinking" checkbox in the model Add/Edit dialog sets `extraBody: { think: false }` — prevents the model from generating reasoning tokens entirely (Ollama)
-- **Agent workers (root agent AND experts):** Strip `think:false` from extraBody so the model can reason before emitting tool calls. Empirically (2026-05-12 QA), Ollama with `think:false` produces malformed tool-call JSON that the Go-side parser rejects ("Value looks like object, but can't find closing '}'"); with thinking ON, the same models emit valid tool calls. The override applies to every role that uses tools, not just experts.
+- **Agent workers (root agent and role workers):** Strip `think:false` from extraBody so the model can reason before emitting tool calls. Empirically (2026-05-12 QA), Ollama with `think:false` produces malformed tool-call JSON that the Go-side parser rejects ("Value looks like object, but can't find closing '}'"); with thinking ON, the same models emit valid tool calls. The override applies to every role that uses tools.
 - **LLM client safety net:** `<think>` blocks are stripped from both sync and streaming responses before delivery, to reduce exposure of raw reasoning markup; provider formats can vary
 
-**Strategy:** Keep thinking enabled for any agent that emits tool calls (root agent, experts) — the cost in tokens is much smaller than the cost of a failed tool call + retry storm. Disable thinking only for the toolless surfaces (`direct-response.ts` — voice propose, `chat.interject`), where there are no tool calls to corrupt.
+**Strategy:** Keep thinking enabled for any agent that emits tool calls (root agent and role workers) — the cost in tokens is much smaller than the cost of a failed tool call + retry storm. Disable thinking only for the toolless surfaces (`direct-response.ts` — voice propose, `chat.interject`), where there are no tool calls to corrupt.
 
 ## Steering Messages
 

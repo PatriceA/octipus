@@ -6,18 +6,10 @@ import { useState } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 
-// ── Types (mirrored from /api/persona) ────────────────────────────
+import type { ResolvedPersona } from '../../../src/core/personas/types';
+import { AppearanceEditor } from '@/components/companion/appearance-editor';
 
-interface PersonaState {
-  id: string;
-  presetId: string;
-  name: string;
-  pronouns: string;
-  tone: string;
-  narration: 'off' | 'minimal' | 'chatty';
-  signaturePhrases: string[];
-  userFacts: string[];
-}
+type PersonaState = Pick<ResolvedPersona, 'id' | 'presetId' | 'name' | 'pronouns' | 'tone' | 'narration' | 'signaturePhrases' | 'userFacts' | 'appearance'>;
 
 interface PersonaPresetSummary {
   id: string;
@@ -98,7 +90,7 @@ export default function PersonaPage() {
   }
 
   async function reset() {
-    if (!confirm('Reset persona to the Octipus default? Free-form facts and the custom name will be lost.')) return;
+    if (!confirm('Reset persona to the Octipus default? Free-form facts, the custom name, and appearance will be reset.')) return;
     setError(null);
     try {
       await api.post<PersonaResponse>('/persona/reset');
@@ -209,6 +201,8 @@ export default function PersonaPage() {
           </label>
         </div>
       </section>
+
+      <AppearanceEditor saved={persona.appearance} name={persona.name} onSaved={refresh} />
 
       {/* ── Self-facts ──────────────────────────────────── */}
       <section className="rounded-xs term-frame p-5">

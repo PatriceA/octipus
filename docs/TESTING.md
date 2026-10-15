@@ -6,10 +6,11 @@ complete a task through the deployed application.
 
 ## Unit and embedded database tests
 
-`npm test` runs Vitest across `unit` and `database` projects. The configuration
+`npm test` runs Vitest across `unit`, `database`, and `terminal` projects. The configuration
 includes `.test.ts` and `.spec.ts` files in `src/` and `scripts/`, plus CLI tests
 in `bin/`. Database-marked suites run with one worker to avoid shared-database
-conflicts and concurrent PGlite problems. See `vitest.config.ts` for discovery.
+conflicts and concurrent PGlite problems. The terminal project runs
+`tests/tui/*.e2e.test.ts` with one worker. See `vitest.config.ts` for discovery.
 
 ```bash
 npm test
@@ -156,3 +157,19 @@ quality threshold. It is a post-publication check, not a pre-release gate.
 Provider quality, direct/delegated comparisons, first useful feedback, exact spend,
 and approval/tool-error counts remain unmeasured where telemetry is absent.
 Run live baseline locally before release if a release decision depends on it.
+
+## Documentation website synchronization
+
+The shared website references are generated from the repository documentation.
+Validate the publisher and check for text drift with:
+
+```bash
+node --test scripts/sync-website-docs.test.mjs
+node scripts/sync-website-docs.mjs /path/to/octipus-website --check
+npm --prefix /path/to/octipus-website run build
+```
+
+The sync tests use temporary website directories and verify link conversion,
+fenced examples, replacement of old MDX copies, and non-mutating drift checks.
+They use Node's test runner and are separate from `npm test`. A website build
+checks rendering; browser checks and link validation assess the served result.

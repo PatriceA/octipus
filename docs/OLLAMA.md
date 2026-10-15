@@ -47,7 +47,7 @@ Octipus routes by **parameter count**, derived from `metadata.paramCount` or
 parsed from the model tag (`qwen3:8b` → 8B; `qwen3:30b-a3b` MoE → counted by
 total). See `deriveParamCount` (`src/core/agent/model-selector.ts`).
 
-A model under **`routerSmallModelMaxParams` (default 10B)** is treated as
+A model under **`agent.smallModelMaxParams` (default 10B)** is treated as
 **small** and gets:
 
 - **Prompt trimming** — the expert scaffold, deliverable templates, and success
