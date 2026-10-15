@@ -38,10 +38,10 @@ export default function RoomsPage() {
   const [creating, setCreating] = useState(false);
   const [removed, setRemoved] = useState<{ roomId: string; title: string; reason: string } | null>(null);
 
-  if (isLoading) return <div className="p-8 font-mono text-on-surface-variant">loading…</div>;
+  if (isLoading) return <div className="p-8 font-sans text-on-surface-variant">loading…</div>;
   if (!space || !source) {
     return (
-      <div className="p-8 font-mono text-[13px] text-on-surface-variant space-y-2" data-testid="rooms-no-space">
+      <div className="p-8 font-sans text-[13px] text-on-surface-variant space-y-2" data-testid="rooms-no-space">
         <p>Rooms are shared chats of a space: members talk to each other and ask Octipus together.</p>
         <p>Pick a shared space in the workspace picker (top right), or create one there.</p>
       </div>
@@ -64,7 +64,7 @@ export default function RoomsPage() {
 
   return (
     <div className="flex h-full min-h-0">
-      <nav aria-label="Rooms" className="w-56 shrink-0 border-r border-outline-variant/40 flex flex-col min-h-0 font-mono bg-surface-container-lowest">
+      <nav aria-label="Rooms" className="w-56 shrink-0 border-r border-outline-variant/40 flex flex-col min-h-0 font-sans bg-surface-container-lowest">
         <div className="flex items-center justify-between px-3 h-11 border-b border-outline-variant/40">
           <h2 className="text-[12px] text-on-surface flex items-center gap-1.5 min-w-0">
             rooms
@@ -80,7 +80,7 @@ export default function RoomsPage() {
               onClick={() => setCreating(true)}
               aria-label="New room"
               title="New room"
-              className="p-1 rounded-xs text-on-surface-variant hover:text-primary hover:bg-surface-container cursor-pointer"
+              className="p-1 rounded-lg text-on-surface-variant hover:text-primary hover:bg-surface-container cursor-pointer"
             >
               <Plus className="w-4 h-4" />
             </button>
@@ -96,7 +96,7 @@ export default function RoomsPage() {
                 aria-current={room?.id === r.id ? 'page' : undefined}
                 data-testid="room-link"
                 className={cn(
-                  'flex items-center gap-2 px-2 py-1.5 rounded-xs text-[13px] border',
+                  'flex items-center gap-2 px-2 py-1.5 rounded-lg text-[13px] border',
                   room?.id === r.id
                     ? 'text-primary bg-primary-container/40 border-primary/30'
                     : 'border-transparent text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low',
@@ -123,7 +123,7 @@ export default function RoomsPage() {
 
       <div className="flex flex-col flex-1 min-w-0 min-h-0">
         {removed && (
-          <div role="alert" data-testid="room-removed" className="flex items-center gap-2 px-4 py-2 text-[12px] font-mono border-b border-warning/30 bg-warning/10 text-on-surface">
+          <div role="alert" data-testid="room-removed" className="flex items-center gap-2 px-4 py-2 text-[12px] font-sans border-b border-warning/30 bg-warning/10 text-on-surface">
             <span className="text-warning font-bold">!</span>
             <span className="flex-1">#{removed.title}: {removed.reason}</span>
             <button type="button" onClick={() => setRemoved(null)} aria-label="Dismiss" className="text-on-surface-variant hover:text-on-surface cursor-pointer">
@@ -144,7 +144,7 @@ export default function RoomsPage() {
           />
         ) : (
           !rooms.isLoading && (
-            <div className="p-8 font-mono text-[13px] text-on-surface-variant" data-testid="room-missing">
+            <div className="p-8 font-sans text-[13px] text-on-surface-variant" data-testid="room-missing">
               {wanted ? 'This room does not exist, or you cannot enter it.' : 'No rooms in this space yet.'}
             </div>
           )

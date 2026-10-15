@@ -11,11 +11,7 @@ export interface PipelineStepConfig {
   stageType?: 'standard' | 'qa_validation' | 'human_input';
   maxRetries?: number;
   retryTargetStage?: number;
-  /**
-   * Per-stage model override (a bound model name/id, never a literal in source).
-   * When set, this stage's worker runs on this model instead of the topic's
-   * primary binding. Empty ⇒ topic binding (today's behaviour).
-   */
+  /** Legacy stored field; ignored. Models resolve through the role’s topic. */
   model?: string;
   /**
    * DECLARES that this stage is expected to leave files behind. Only declared
@@ -105,8 +101,8 @@ export interface PipelineStepConfig {
    * stages (review, QA, architecture) deliberately do NOT declare it — a cheap
    * auditor is how a rubber stamp gets in.
    *
-   * An explicit per-stage `model` still wins, and a lane with no
-   * `executorModel` falls through to the primary (planner == executor).
+   * A lane with no `executorModel` falls through to the primary
+   * (planner == executor). Legacy per-stage model pins are ignored.
    */
   mechanical?: boolean;
   /**

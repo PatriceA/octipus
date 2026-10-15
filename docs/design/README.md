@@ -58,7 +58,7 @@ Remote-hosted rooms retain their existing host-agent addressing.
 
 ## Saved appearance
 
-The Persona page offers Pebble, Ribbon, and Inky in five colors, with a 160px
+The Persona page offers Pebble, Ribbon, and Inky in five colors, with a 180px
 animated preview. Draft choices remain local until saved through
 `PUT /api/persona/appearance`. The existing assistant profile stores one
 `appearance` fact; the resolver exposes its validated public shape/color without
@@ -97,3 +97,37 @@ public work and approval states, persisted attribution, interactive output index
 reloads, and mobile navigation. Backend integration coverage verifies that only
 the active requester can publish progress and that authorized room subscribers
 receive the same attributed update as reloaded history.
+
+## App identity alignment
+
+The web app uses the same still sea-glass product mark as the website, with
+personal companion appearances reserved for the user's work and Persona settings.
+Shared page headings use readable titles, cards have softer corners, and room
+controls use Manrope. Code, paths, execution details, and dense technical views
+retain monospace where it helps reading.
+
+The dashboard begins with the user's companion and links into chat, research,
+tasks, and Persona. A shared or remote workspace also offers Work together.
+Operational statistics remain below. The Persona preview uses the website's warm
+paper surface and allows gentle mouse-following eyes only while idle and animated.
+Pausing motion, reduced motion, and changing to a work state disable that gaze.
+Transcript avatars and live activity do not follow the pointer.
+
+Browser checks cover the welcome actions, personal appearance, mobile sizing,
+pointer tracking, pause and reduced motion, shared rooms, and accessibility.
+
+## Moving between work surfaces
+
+The dashboard puts recent conversations before operational statistics and opens
+an individual conversation directly. Failed history requests show a retry rather
+than an empty-history message. Work pages share a compact navigation row for
+conversations, research, documents, prototypes and apps, and next steps. Shared
+workspaces also offer rooms; remote workspaces offer only rooms and next steps
+because these destinations support the remote workspace data source.
+
+Research addresses retain the job ID, so a reload or bookmarked return checks
+the same investigation. During the current app session the navigation remembers
+that address for the signed-in user. Research remains personal and says so in
+shared contexts. Navigation never copies private content into a shared room.
+The room Work panel links to the task board for agreed follow-ups while continuing
+to index only that room’s loaded conversation.

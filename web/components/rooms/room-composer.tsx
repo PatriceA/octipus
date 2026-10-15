@@ -118,7 +118,7 @@ export function RoomComposer({ members, companionName = 'Octipus', canAsk, onPos
   };
 
   return (
-    <div className="border-t border-outline-variant/60 p-3 bg-surface-container-lowest font-mono">
+    <div className="border-t border-outline-variant/60 p-3 bg-surface-container-lowest font-sans">
       {canAsk && <div className="mb-2 flex flex-wrap items-center gap-1.5" aria-label="Draft a request">
         {starters.map(starter => <button key={starter.label} type="button" onClick={() => startDraft(starter.prompt)}
           title={`Add an editable request for ${companionName}; post when you are ready`}

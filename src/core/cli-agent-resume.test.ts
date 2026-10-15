@@ -49,7 +49,7 @@ function mockChildProcess(actual: typeof import('child_process')) {
       return actual.execFile(cmd, args, opts as object, cb as (...a: unknown[]) => void);
     },
     spawn: (binary: string, args: string[], opts: object) => {
-      const script = binary === 'claude' ? fixture.script : binary === 'codex' ? fixture.codexScript : null;
+      const script = binary === 'claude' || binary === 'agy' ? fixture.script : binary === 'codex' ? fixture.codexScript : null;
       if (!script) throw new Error(`Unexpected CLI invocation: ${binary}`);
       fixture.spawnCount++;
       const shell = (opts as { shell?: boolean }).shell === true;
@@ -269,6 +269,21 @@ beforeEach(() => {
 afterEach(() => { try { unlinkSync(failMarker()); } catch { /* not there */ } rmSync(fixture.dir, { recursive: true, force: true }); });
 
 describe('CLI session reuse', () => {
+  it('reports a buffered CLI as running before its output arrives without inventing iterations', async () => {
+    writeFileSync(fixture.script, `await new Promise(r => setTimeout(r, 100)); console.log('QA finished');`);
+    const { worker, run } = makeWorker('cli/gemini', { sessionId: 'buffered-status' });
+    const events: Array<{ type: string; data: unknown }> = [];
+    worker.onEvent(event => { events.push({ type: event.type, data: event.data }); });
+    await run('Check the implementation');
+    const running = events.findIndex(event => event.type === 'thought'
+      && (event.data as { status?: string }).status === 'running');
+    const completed = events.findIndex(event => event.type === 'complete');
+    expect(running).toBeGreaterThan(-1);
+    expect(completed).toBeGreaterThan(running);
+    expect(events[running].data).toMatchObject({ message: expect.stringContaining('Live progress and iteration counts are unavailable') });
+    expect(events.some(event => (event.data as { type?: string }).type === 'iteration_update')).toBe(false);
+  });
+
   it('stores CLI widget output before emitting completion', async () => {
     writeFileSync(join(fixture.dir, 'answer-marker'), 'Here:\n```octi-ui title="Counter"\n<button type="button">Next</button>\n```');
     const { worker, run } = makeClaudeWorker({ sessionId: 'inline-output', inlineUiOffered: true });

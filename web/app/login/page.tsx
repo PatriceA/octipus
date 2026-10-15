@@ -171,36 +171,24 @@ export default function LoginPage() {
   };
 
   const inputClass =
-    'w-full px-3 py-2 bg-surface-container-low border border-outline-variant/60 rounded-xs text-[13px] text-on-surface placeholder-outline-variant focus:outline-none focus:border-primary transition-colors';
-  const labelClass = 'block text-[10px] uppercase tracking-wider text-outline-variant mb-1';
+    'w-full px-3 py-2 bg-surface-container-low border border-outline-variant/60 rounded-lg text-[13px] text-on-surface placeholder-on-surface-variant/70 focus:outline-none focus:border-primary transition-colors';
+  const labelClass = 'block text-[10px] uppercase tracking-wider text-on-surface-variant mb-1';
 
   return (
-    <div className="relative min-h-screen bg-background flex items-center justify-center p-4 font-mono overflow-hidden">
+    <div className="relative min-h-screen bg-background flex items-center justify-center p-4 font-sans overflow-hidden">
       {/* CRT backdrop layers — dotted neural grid under a scanline wash. */}
-      <div aria-hidden className="absolute inset-0 neural-grid" />
-      <div aria-hidden className="absolute inset-0 crt-scanlines" />
       <div className="relative w-full max-w-md animate-enter">
-        {/* Boot-style banner. ASCII frame around the title so the login
-            page introduces the design language up-front. */}
-        <pre className="text-primary text-[10px] leading-tight mb-3 select-none" aria-hidden>
-{`┌─[ octipus :: terminal ]─────────────────┐
-│  multi-agent assistant                  │
-│  multi-channel · multi-provider         │
-└─────────────────────────────────────────┘`}
-        </pre>
-        {/* Path-style brand — `octi:~ $▍` plus the current auth mode. */}
-        <div className="mb-6 text-[13px]">
-          <span className="text-outline font-semibold">octi:</span>
-          <span className="text-on-surface">~</span>
-          <span className="text-primary font-bold"> $</span>
-          <span className="ml-2 text-on-surface-variant">
+        <div className="mb-7 text-center">
+          <img src="/companion-mark.svg" alt="" width={72} height={72} className="mx-auto mb-3" />
+          <h1 className="text-2xl font-semibold">Octipus</h1>
+          <p className="mt-2 text-sm text-primary">Make it yours. Work together.</p>
+          <p className="mt-4 text-sm text-on-surface-variant">
             {totpRequired ? 'two-factor verification' : showLogin ? 'sign in' : 'register'}
-          </span>
-          <span aria-hidden className="term-caret" />
+          </p>
         </div>
 
         {totpRequired ? (
-          <div className="term-frame glow-accent p-4 space-y-3">
+          <div className="term-frame rounded-2xl p-5 space-y-3">
             <p className="text-[12px] text-on-surface-variant">
               enter the 6-digit code from your authenticator app.
             </p>
@@ -210,21 +198,21 @@ export default function LoginPage() {
                 value={totpCode}
                 onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                 placeholder="000000"
-                className="w-full px-3 py-3 text-center text-2xl tracking-[0.5em] bg-surface-container-low border border-outline-variant/60 rounded-xs text-on-surface placeholder-outline-variant focus:outline-none focus:border-primary"
+                className="w-full px-3 py-3 text-center text-2xl tracking-[0.5em] bg-surface-container-low border border-outline-variant/60 rounded-lg text-on-surface placeholder-on-surface-variant/70 focus:outline-none focus:border-primary"
                 autoFocus
                 required
               />
               {error && (
-                <div className="px-2 py-1.5 border border-error/60 bg-error-container/40 rounded-xs text-[12px] text-error">
+                <div className="px-2 py-1.5 border border-error/60 bg-error-container/40 rounded-lg text-[12px] text-error">
                   ! {error}
                 </div>
               )}
               <button
                 type="submit"
                 disabled={isLoading || totpCode.length !== 6}
-                className="w-full py-2 bg-primary text-on-primary rounded-xs hover:bg-primary-dim disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 text-[13px]"
+                className="w-full py-2 bg-primary text-on-primary rounded-lg hover:bg-primary-dim disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 text-[13px]"
               >
-                {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : '❯ verify'}
+                {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Verify'}
               </button>
               <button
                 type="button"
@@ -236,7 +224,7 @@ export default function LoginPage() {
             </form>
           </div>
         ) : (
-          <div className="term-frame glow-accent">
+          <div className="term-frame rounded-2xl overflow-hidden">
             {/* Sign in / register tabs as bordered top-row buttons —
                 terminal-app modal style. */}
             <div className="flex border-b border-outline-variant/60">
@@ -344,7 +332,7 @@ export default function LoginPage() {
               )}
 
               {error && (
-                <div className="px-2 py-1.5 border border-error/60 bg-error-container/40 rounded-xs text-[12px] text-error">
+                <div className="px-2 py-1.5 border border-error/60 bg-error-container/40 rounded-lg text-[12px] text-error">
                   ! {error}
                 </div>
               )}
@@ -352,7 +340,7 @@ export default function LoginPage() {
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full py-2 bg-primary text-on-primary rounded-xs hover:bg-primary-dim disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 text-[13px]"
+                className="w-full py-2 bg-primary text-on-primary rounded-lg hover:bg-primary-dim disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 text-[13px]"
               >
                 {isLoading ? (
                   <>
@@ -360,7 +348,7 @@ export default function LoginPage() {
                     {showLogin ? 'signing in…' : 'creating account…'}
                   </>
                 ) : (
-                  <>❯ {showLogin ? 'sign in' : 'create account'}</>
+                  <>{showLogin ? 'sign in' : 'create account'}</>
                 )}
               </button>
             </form>

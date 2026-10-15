@@ -120,7 +120,7 @@ export default function PersonaPage() {
     <div className="mx-auto max-w-3xl space-y-8 p-8 text-on-surface">
       <PageHeader
         title="persona"
-        description="Persona controls the assistant’s name, voice, and presentation across channels. The default works for ordinary chat; changing it does not grant tools or permissions."
+        description="Give your companion a name, personality, and look that fit how you work. Tool permissions are managed separately."
       />
 
       {error && (
@@ -130,7 +130,7 @@ export default function PersonaPage() {
       )}
 
       {/* ── Identity ─────────────────────────────────────── */}
-      <section className="rounded-xs term-frame p-5">
+      <section className="rounded-xl term-frame p-5">
         <h2 className="mb-4 section-label">Identity</h2>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -205,13 +205,13 @@ export default function PersonaPage() {
       <AppearanceEditor saved={persona.appearance} name={persona.name} onSaved={refresh} />
 
       {/* ── Self-facts ──────────────────────────────────── */}
-      <section className="rounded-xs term-frame p-5">
+      <section className="rounded-xl term-frame p-5">
         <h2 className="mb-2 section-label">
           Self-facts
         </h2>
         <p className="mb-4 text-xs text-on-surface-variant">
-          Free-form rules octi should follow about itself. Re-injected
-          on every turn. Example: <em>&quot;Always summarize in bullets&quot;</em>,
+          Tell your companion how you like to work. These instructions are included
+          in each turn. Example: <em>&quot;Always summarize in bullets&quot;</em>,
           <em> &quot;Stop apologizing for slow responses&quot;</em>.
         </p>
 
@@ -263,7 +263,7 @@ export default function PersonaPage() {
       </section>
 
       {/* ── Preset gallery ──────────────────────────────── */}
-      <section className="rounded-xs term-frame p-5">
+      <section className="rounded-xl term-frame p-5">
         <h2 className="mb-4 section-label">
           Available presets
         </h2>

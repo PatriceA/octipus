@@ -26,6 +26,14 @@ Flow: plan queries → gather sources (SSRF-guarded fetch) → synthesize a sect
 cited report → render. Depth (`quick` / `standard` / `deep`) bounds fan-out width
 and source count (`DEPTH_BUDGET`).
 
+The web page keeps the investigation ID in `/research?job=<id>`. Opening that
+address again checks the existing job rather than starting another one. The Work
+navigation remembers this address while you move between pages in the current app
+session; bookmark it to return after closing the app. Missing or inaccessible jobs
+stop polling and offer an explicit status retry. Investigations are personal to
+the signed-in user, including when a shared workspace is selected. For research
+visible to teammates as it happens, ask your companion in a shared room.
+
 On completion, Octipus attempts to save the Markdown report as a `Documents`
 record (category `Research`) and index it into the knowledge base. Indexing is
 fail-soft: if embeddings are unavailable, the document can still be saved and the

@@ -898,6 +898,9 @@ export default function MessageTimeline({
   const isNearBottomRef = useRef(true);
   const [motionPaused, setMotionPaused] = useState(false);
 
+  const backgroundWorkRunning = Array.from(trackedAgents.values()).some(agent => agent.status === 'running')
+    || Array.from(teams.values()).some(team => team.status === 'running');
+
   // Build unified timeline — only when its inputs change, not per token.
   const timeline = useMemo(() => {
     const entries: TimelineEntry[] = [];
@@ -1017,7 +1020,7 @@ export default function MessageTimeline({
         </button>
       </div>
       {/* Empty state */}
-      {messages.length === 0 && !isLoading && !waitingForInput && !listening && !companionActivity && (
+      {messages.length === 0 && !isLoading && !waitingForInput && !listening && !companionActivity && !backgroundWorkRunning && (
         <div className="flex flex-col items-center justify-center h-full text-on-surface-variant gap-3">
           <CompanionAvatar appearance={companionAppearance} size={64} state={connected ? 'idle' : 'interrupted'} animated={connected && !motionPaused} />
           <span className="text-sm font-medium">{companionName}</span>
@@ -1049,9 +1052,9 @@ export default function MessageTimeline({
       })}
 
       {/* One live companion; older transcript avatars remain still. */}
-      {(messages.length > 0 || isLoading || waitingForInput || listening || companionActivity) && (
+      {(messages.length > 0 || isLoading || waitingForInput || listening || companionActivity || backgroundWorkRunning) && (
         <div className="flex items-start gap-3 py-3" data-testid="companion-activity">
-          <CompanionAvatar appearance={companionActivity ? companionActivity.appearance : companionAppearance} state={!connected ? 'interrupted' : companionActivity?.state ?? (waitingForInput ? 'waiting' : isLoading ? 'working' : listening ? 'listening' : 'idle')} animated={connected && !motionPaused} />
+          <CompanionAvatar appearance={companionActivity ? companionActivity.appearance : companionAppearance} state={!connected ? 'interrupted' : companionActivity?.state ?? (waitingForInput ? 'waiting' : isLoading || backgroundWorkRunning ? 'working' : listening ? 'listening' : 'idle')} animated={connected && !motionPaused} />
           <div className="min-w-0 flex-1">
             <p className="text-[11px] text-on-surface-variant mb-1">{companionActivity?.name ?? companionName}</p>
             {(!connected || waitingForInput) && <p role="status" className="text-sm text-on-surface-variant mb-1">
@@ -1061,7 +1064,7 @@ export default function MessageTimeline({
               <StreamingContent text={streamingText} />
             ) : (
               <span className="text-sm text-accent">
-                {!connected ? 'Reconnecting…' : companionActivity ? companionActivity.label : waitingForInput ? 'Review the pending request below.' : isLoading ? (statusMessage || 'Thinking...') : listening ? 'Listening…' : 'Ready for your next idea.'}
+                {!connected ? 'Reconnecting…' : companionActivity ? companionActivity.label : waitingForInput ? 'Review the pending request below.' : isLoading ? (statusMessage || 'Thinking...') : backgroundWorkRunning ? 'We’re still working. You can send a message anytime.' : listening ? 'Listening…' : 'Ready for your next idea.'}
               </span>
             )}
           </div>

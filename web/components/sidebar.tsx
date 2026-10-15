@@ -132,13 +132,11 @@ export function Sidebar() {
         collapsed ? 'w-14' : 'w-60', mobileOpen && 'mobile-open'
       )}
     >
-      {/* Brand row — small square logo + word "octipus", with a TUI
-          status dot showing the gateway is connected. Logo intentionally
-          flat (no gradient) so it reads as an icon in a terminal grid. */}
+      {/* A still product mark; personal companions belong to the work. */}
       <div className="h-12 flex items-center justify-between px-3 shrink-0 border-b border-outline-variant/40">
         <div className="flex items-center gap-2 overflow-hidden">
           <div className="w-8 h-8 flex items-center justify-center shrink-0">
-            <img src="/logo.png" alt="Octipus" className="w-8 h-8 object-contain" />
+            <img src="/companion-mark.svg" alt="Octipus" className="w-8 h-8 object-contain" />
           </div>
           {!collapsed && (
             <span className="text-sm font-bold text-on-surface whitespace-nowrap">
@@ -148,7 +146,7 @@ export function Sidebar() {
         </div>
         <button
           onClick={toggle}
-          className="p-1 text-on-surface-variant hover:text-primary hover:bg-surface-container rounded-xs cursor-pointer shrink-0 transition-colors"
+          className="p-1 text-on-surface-variant hover:text-primary hover:bg-surface-container rounded-lg cursor-pointer shrink-0 transition-colors"
           title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
           {collapsed ? <PanelLeft className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
@@ -179,14 +177,14 @@ export function Sidebar() {
                     className={cn(
                       'group relative flex items-center gap-2 text-[13px] transition-colors',
                       collapsed
-                        ? 'justify-center px-2 py-2 rounded-xs'
-                        : 'px-2 py-1.5 rounded-xs',
+                        ? 'justify-center px-2 py-2 rounded-lg'
+                        : 'px-2 py-1.5 rounded-lg',
                       isActive
-                        ? 'text-primary bg-primary-container/40 border border-primary/30 glow-accent'
+                        ? 'text-primary bg-primary-container/40 border border-primary/30'
                         : 'border border-transparent text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low'
                     )}
                   >
-                    {/* TUI active marker — chevron in accent. Collapsed
+                    {/* Active marker — a quiet accent dot. Collapsed
                         view drops the marker since there's no room. */}
                     {!collapsed && (
                       <span
@@ -196,7 +194,7 @@ export function Sidebar() {
                           isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-40'
                         )}
                       >
-                        ❯
+                        •
                       </span>
                     )}
                     <item.icon className="shrink-0 w-4 h-4" />

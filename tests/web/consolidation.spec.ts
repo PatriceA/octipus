@@ -70,7 +70,7 @@ test('research does not claim a missing document was saved', async ({ authentica
   } }));
   await page.goto('/research');
   await page.getByRole('main').getByRole('textbox').fill('Fixture question');
-  await page.getByRole('button', { name: 'execute', exact: true }).click();
+  await page.getByRole('button', { name: 'Start research', exact: true }).click();
   await expect(page.getByText('Report available here, but no saved document was confirmed.')).toBeVisible();
   await expect(page.getByRole('link', { name: 'Saved to Documents' })).toHaveCount(0);
 });

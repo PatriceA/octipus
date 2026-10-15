@@ -28,6 +28,7 @@ interface PipelineStep {
   description?: string;
   topic: string;
   skillIds?: string[];
+  loopOverPlan?: boolean;
   requiresApproval?: boolean;
   promptTemplate?: string;
   stageType?: 'standard' | 'qa_validation' | 'human_input';
@@ -132,7 +133,7 @@ export default function PipelinesPage() {
           <span aria-hidden className="block text-lg text-outline mb-3">[--]</span>
           <h3 className="text-sm text-on-surface mb-2 lowercase">no pipeline templates</h3>
           <p className="text-[12px] text-on-surface-variant mb-4">
-            create a template to chain specialist agents in sequence — each step gets its own topic, prompt, and approval gate
+            create a template to chain specialist agents in sequence — each step gets its own role, prompt, and approval gate
           </p>
           <button
             onClick={handleCreate}
@@ -214,12 +215,14 @@ function TemplateCard({
             </div>
           )}
           <button
+            aria-label={`${expanded ? 'Collapse' : 'Expand'} ${template.name}`}
             onClick={() => setExpanded(!expanded)}
             className="p-1.5 text-on-surface-variant hover:text-on-surface rounded cursor-pointer"
           >
             {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
           </button>
           <button
+            aria-label={`Edit ${template.name}`}
             onClick={onEdit}
             className="p-1.5 text-on-surface-variant hover:text-primary rounded cursor-pointer"
           >
@@ -253,6 +256,7 @@ function TemplateCard({
                   <span className="text-xs bg-surface-container-high text-on-surface-variant px-1.5 py-0.5 rounded font-mono">
                     {step.topic}
                   </span>
+                  {step.loopOverPlan && <span className="text-xs text-primary">Per plan item</span>}
                   {step.requiresApproval && (
                     <span title="Requires approval">
                       <Shield className="w-3.5 h-3.5 text-warning" />
@@ -295,7 +299,7 @@ function TemplateEditor({
   // step editor never renders an empty dropdown.
   const { data: rolesData } = useQuery({
     queryKey: ['roles-config'],
-    queryFn: () => api.get<{ roles: Array<{ role: string }> }>('/roles'),
+    queryFn: () => api.get<{ roles: Array<{ role: string; lane: string }> }>('/roles'),
   });
   const roleOptions = rolesData?.roles?.length
     ? rolesData.roles.map((r) => ({ value: r.role, label: r.role }))
@@ -561,8 +565,9 @@ function TemplateEditor({
                             />
                           </div>
                           <div>
-                            <label className="block text-xs text-on-surface-variant mb-1">Topic</label>
+                            <label className="block text-xs text-on-surface-variant mb-1">Role</label>
                             <select
+                              aria-label="Role"
                               value={step.topic}
                               onChange={e => updateStep(i, { topic: e.target.value })}
                               className="w-full px-2.5 py-1.5 bg-surface-container-high border border-outline-variant/10 rounded text-sm text-on-surface"
@@ -573,6 +578,11 @@ function TemplateEditor({
                             </select>
                           </div>
                         </div>
+
+                        <p className="text-xs text-on-surface-variant">
+                          The role defines the work and tools. Models come from its topic assignment
+                          {rolesData?.roles?.find(role => role.role === step.topic)?.lane ? ` (${rolesData.roles.find(role => role.role === step.topic)?.lane})` : ''}.
+                        </p>
 
                         <div>
                           <label className="block text-xs text-on-surface-variant mb-1">Description</label>

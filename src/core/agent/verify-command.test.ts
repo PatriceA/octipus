@@ -135,7 +135,7 @@ describe('an unresolved reference never becomes a command', () => {
   });
 
   test('a recipe whose steps were copied without its parameters fails loud', () => {
-    // `scripts/seed-cli-pipeline.ts` clones the shipped steps; a user template
+    // The former CLI seed script cloned the shipped steps; a user template
     // built by copy-paste does the same. Before this the reference was only
     // ever checked in `promptTemplate`.
     expect(() => validateRecipeParameterRefs(steps, [])).toThrow(/undeclared recipe parameter/);

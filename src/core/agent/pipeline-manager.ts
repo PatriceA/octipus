@@ -1,3 +1,4 @@
+import { getRoleConfig } from './roles';
 import { withExecutionSignal } from '@/core/execution-scope';
 import { can, SpaceError } from '@/security/space-access';
 import { buildAgentContext, resolveAgentScope, withAgentUsage } from './context';
@@ -55,7 +56,7 @@ import {
   getPipelineTemplate,
   type StageTemplate,
 } from './templates';
-import { appendSources, type CriterionVerdict, ROOT_ROLE, type QAValidationResult } from './types';
+import { appendSources, type AgentRole, type CriterionVerdict, ROOT_ROLE, type QAValidationResult } from './types';
 import { countChangedFiles, snapshotWorkspace, type WorkspaceSnapshot } from './workspace-snapshot';
 
 /**
@@ -515,28 +516,6 @@ async function resolveNamedModel(
   return registry.getModelByModelId(name);
 }
 
-/**
- * Resolve a per-stage model override (a bound model name or id) to a concrete
- * row. Returns undefined when no override is set; throws (fail loud) when an
- * override names a model that isn't registered/enabled — or that the
- * pipeline's owner may not use (another user's personal model).
- */
-async function resolveStageModelId(
-  stageModel: string | undefined,
-  userId: string | undefined,
-  registry: ModelRegistry,
-): Promise<StageModel | undefined> {
-  if (!stageModel) return undefined;
-  const model = await resolveNamedModel(stageModel, userId, registry);
-  if (!model) {
-    throw new Error(
-      `Pipeline stage has model override '${stageModel}' but no such model is registered. ` +
-        `Fix the recipe's stage model or clear it.`,
-    );
-  }
-  return { modelId: model.modelId, name: model.name };
-}
-
 /** A stage's model: provider id plus the row it came from (spec §8.1). */
 interface StageModel {
   modelId: string;
@@ -546,12 +525,11 @@ interface StageModel {
 /**
  * The model a pipeline stage actually runs on, in order of precedence:
  *
- *   1. the recipe's per-stage `model` override — an explicit choice wins
- *   2. the lane's `executorModel`, but ONLY for a stage that DECLARED itself
+ *   1. the lane's `executorModel`, but ONLY for a stage that DECLARED itself
  *      `mechanical` (the pipeline's planner→executor split — see
  *      `PipelineStepConfig.mechanical`). A plan-less stage skips this branch
  *      entirely, exactly as a plan-less swarm child does
- *   3. the topic's primary binding — the owner's personal binding first, then
+ *   2. the topic's primary binding — the owner's personal binding first, then
  *      the install's (spec §8.2)
  *
  * Every spawn a stage can make — first pass, implementation retry, auditor
@@ -568,8 +546,7 @@ export async function resolveStageModel(
   userId: string | undefined,
   registry: ModelRegistry,
 ): Promise<StageModel | undefined> {
-  const explicit = await resolveStageModelId(declared?.model, userId, registry);
-  if (explicit) return explicit;
+  // Legacy recipes may still carry model pins. Topic configuration is authoritative.
 
   const executorName = declared?.mechanical ? getTopicConfig(topic).executorModel : null;
   if (executorName) {
@@ -1358,7 +1335,7 @@ export class PipelineManager {
             ...paramVars,
           }).trim();
           // An UNRESOLVED reference is not a command. A template whose steps
-          // were copied without its parameters — `scripts/seed-cli-pipeline.ts`
+          // were copied without its parameters — the former CLI seed script
           // clones the shipped steps, and a user template built the same way —
           // leaves `{{param.verifyCommand}}` standing, and running that literal
           // hands the auditor `RESULT: FAILED` for a command that never
@@ -2513,9 +2490,8 @@ export class PipelineManager {
 
     let spentTokens = 0;
     try {
-      // Resolve the model for this node's topic. Node override → a mechanical
-      // node's lane executor → topic binding.
-      const stageModel = await resolveStageModel(stageTemplate, node.role, pipeline.userId ?? undefined, registry);
+      // Resolve through the role’s topic, including its configured executor.
+      const stageModel = await resolveStageModel(stageTemplate, getRoleConfig(node.role as AgentRole).defaultTopic, pipeline.userId ?? undefined, registry);
       const modelOverride = stageModel?.modelId;
       const sameModel = args.reviewModels
         ? noteReviewModel(args.reviewModels, modelOverride, { auditor: declared.stageType === 'qa_validation', builder: !!declared.producesArtifacts })

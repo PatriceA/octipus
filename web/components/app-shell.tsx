@@ -9,6 +9,7 @@ import { isPublicPath } from '@/lib/public-routes';
 import { cn } from '@/lib/utils';
 import { GlobalPermissionBanner } from './global-permission-banner';
 import { Header } from './header';
+import { WorkNavigation } from './work-navigation';
 import { ImpersonationBanner } from './impersonation-banner';
 import { SpendBudgetBanner } from './spend-budget-banner';
 import { Sidebar } from './sidebar';
@@ -58,6 +59,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <Sidebar />
         <div className="flex flex-col flex-1 min-w-0 bg-background">
           <Header />
+          <WorkNavigation />
           <main
             tabIndex={pathname === '/chat' ? undefined : 0}
             aria-label="Page content"

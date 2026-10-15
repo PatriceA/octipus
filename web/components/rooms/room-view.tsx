@@ -445,7 +445,7 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
   return (
     <div className="relative flex flex-1 min-w-0 min-h-0" data-testid="room-view" data-room-id={roomId}>
       <section className="flex flex-col flex-1 min-w-0 min-h-0" aria-label={`Room ${room.title}`}>
-        <header className="flex items-center gap-2 px-4 h-11 shrink-0 border-b border-outline-variant/40 font-mono">
+        <header className="flex items-center gap-2 px-4 h-11 shrink-0 border-b border-outline-variant/40 font-sans">
           {room.visibility === 'private' ? <Lock className="w-4 h-4 text-on-surface-variant" /> : <Hash className="w-4 h-4 text-on-surface-variant" />}
           <h1 className="text-[14px] text-on-surface truncate" data-testid="room-title">{room.title}</h1>
           <div className="flex items-center -space-x-1 ml-2" aria-label="In this room now" data-testid="room-presence">
@@ -509,15 +509,15 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
         <TurnStrip connected={status === 'connected'} queue={queue} myId={myId} onCancel={cancelQueued} />
 
         {load.state === 'error' && (
-          <div role="alert" className="m-4 px-3 py-2 border border-error/40 bg-error/10 rounded-xs text-[12px] text-error font-mono">
+          <div role="alert" className="m-4 px-3 py-2 border border-error/40 bg-error/10 rounded-xs text-[12px] text-error font-sans">
             ! The room's messages could not be loaded: {load.error}
           </div>
         )}
-        {load.state === 'loading' && <div className="p-4 font-mono text-[12px] text-on-surface-variant">loading…</div>}
+        {load.state === 'loading' && <div className="p-4 font-sans text-[12px] text-on-surface-variant">loading…</div>}
         {load.state === 'ready' && (
           <>
             {hasOlder && (
-              <button type="button" onClick={() => void loadOlder()} className="self-center mt-2 text-[11px] font-mono text-on-surface-variant hover:text-on-surface underline cursor-pointer">
+              <button type="button" onClick={() => void loadOlder()} className="self-center mt-2 text-[11px] font-sans text-on-surface-variant hover:text-on-surface underline cursor-pointer">
                 older messages…
               </button>
             )}
@@ -549,7 +549,7 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
 
         {lastUnprompted && !remote && <UnpromptedFeedback key={lastUnprompted.id} spaceId={spaceId} roomId={roomId} messageId={lastUnprompted.id} />}
 
-        <div className="h-5 px-4 text-[11px] font-mono text-on-surface-variant" aria-live="polite" data-testid="room-typing">
+        <div className="h-5 px-4 text-[11px] font-sans text-on-surface-variant" aria-live="polite" data-testid="room-typing">
           {typers.length > 0 && `${typers.join(', ')} ${typers.length === 1 ? 'is' : 'are'} typing…`}
         </div>
 
@@ -562,7 +562,7 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
             onTyping={() => { gateway.send({ type: 'room.typing', roomId }); }}
           />
         ) : (
-          <div className="border-t border-outline-variant/60 px-4 py-3 text-[12px] font-mono text-on-surface-variant" data-testid="room-read-only">
+          <div className="border-t border-outline-variant/60 px-4 py-3 text-[12px] font-sans text-on-surface-variant" data-testid="room-read-only">
             {access.archived
               ? 'This space is archived: the room is read-only.'
               : `You are a ${access.role} in this space: you can read this room, not post.`}
@@ -571,7 +571,7 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
       </section>
 
       {panel && (
-        <aside className="absolute inset-0 z-30 w-full md:relative md:inset-auto md:w-80 shrink-0 border-l border-outline-variant/40 flex flex-col min-h-0 font-mono bg-surface-container-lowest" aria-label="Room panel">
+        <aside className="absolute inset-0 z-30 w-full md:relative md:inset-auto md:w-80 shrink-0 border-l border-outline-variant/40 flex flex-col min-h-0 font-sans bg-surface-container-lowest" aria-label="Room panel">
           <div className="flex items-center border-b border-outline-variant/40" role="tablist">
             {(remote ? (['work', 'members'] as const) : (['work', 'members', 'memory', 'settings'] as const)).map((p) => (
               <button
@@ -618,7 +618,7 @@ function UnpromptedFeedback({ spaceId, roomId, messageId }: { spaceId: string; r
     }
   };
   return (
-    <div className="flex items-center gap-2 px-4 py-1 text-[11px] font-mono text-on-surface-variant" data-testid="unprompted-feedback">
+    <div className="flex items-center gap-2 px-4 py-1 text-[11px] font-sans text-on-surface-variant" data-testid="unprompted-feedback">
       <span>Octipus spoke up unprompted — was that useful?</span>
       <button type="button" aria-pressed={mine === 1} onClick={() => void rate(1)} className={cn('px-1 rounded-xs cursor-pointer', mine === 1 && 'bg-primary/20')}>👍</button>
       <button type="button" aria-pressed={mine === -1} onClick={() => void rate(-1)} className={cn('px-1 rounded-xs cursor-pointer', mine === -1 && 'bg-error/20')}>👎</button>

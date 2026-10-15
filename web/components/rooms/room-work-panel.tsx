@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { splitInlineUiSegments, inlineUiFallbackText } from '../../../src/shared/inline-ui/fence';
 import { CompanionAvatar } from '@/components/companion/companion-avatar';
 import type { RoomMessage } from '@/lib/rooms';
@@ -75,6 +76,10 @@ export function RoomWorkPanel({ messages, onReveal, hasOlder, onLoadOlder }: {
           </ul>
         )}
       </section>
+      <div className="border-t border-outline-variant/40 pt-4 space-y-2">
+        <p className="text-on-surface-variant">Keep track of agreed follow-ups on the task board. This panel indexes only this room’s conversation.</p>
+        <Link href="/tasks" className="inline-block text-primary underline underline-offset-4">Open next steps →</Link>
+      </div>
       {hasOlder && <button type="button" onClick={onLoadOlder} className="text-primary underline">Load earlier conversation work</button>}
     </div>
   );

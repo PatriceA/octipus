@@ -1034,7 +1034,9 @@ and `replay` answer 404 for a room — its creator included.
   **Load earlier conversation work** to include older history. Outputs with the
   same ID point to the latest loaded version. Opening an output does not run its
   scripts: the existing **Run** action still controls that. This panel indexes
-  room messages, not the workspace-wide artifact library.
+  room messages, not the workspace-wide artifact library. **Open next steps**
+  opens the selected workspace’s task board for agreed follow-ups; it does not
+  create tasks automatically.
 - **History.** The model sees a room as one fenced block
   (`src/core/rooms/room-context.ts`): the checkpoint summary, then the
   transcript with each line named by its author (`Octipus (you)` for its own

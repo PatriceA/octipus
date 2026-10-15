@@ -68,8 +68,15 @@ settles. Motion conveys curiosity and activity, not confidence or correctness.
 
 Use the same forms and animation vocabulary in app and website. Large website
 previews make the character readable. A global homepage pause control and system
-reduced-motion preference stop decorative animation. The room demonstration
-advances only when the visitor selects a step; it never pretends to run AI.
+reduced-motion preference stop decorative animation. The large idle preview can gently follow a mouse pointer; keep that behavior
+away from status avatars and reading surfaces. A quiet desktop depth rail shows
+actual reading progress and provides section shortcuts.
+
+The room demonstration plays a finite, labeled script once on entering view.
+It offers pause and replay, pauses off-screen or when the page is hidden, and
+yields to manual tab or prototype interaction. Reduced motion disables autoplay,
+pointer tracking, and decorative transitions; visitors can still step through
+the outputs or explicitly play the script. It never pretends to run AI.
 
 ## Website application
 

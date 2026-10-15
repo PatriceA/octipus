@@ -55,7 +55,9 @@ then a color: Sea glass, Coral, Lavender, Sunshine, or Ocean blue. The animated
 preview lets you try looking around, listening, working, and waiting. Changes
 stay in the preview until **Save appearance** succeeds; **Discard changes**
 restores the saved choice. You can pause the preview, and system reduced-motion
-preferences apply.
+preferences apply. In the large preview, the idle companion gently follows a
+mouse pointer. Working and waiting states keep their own expressions; pausing
+motion or enabling reduced motion disables pointer tracking.
 
 The appearance is saved per user and follows their companion in private chat
 and new shared-room replies. Room replies keep an appearance snapshot alongside

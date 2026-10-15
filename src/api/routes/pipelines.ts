@@ -1,4 +1,4 @@
-import { desc, eq, or } from 'drizzle-orm';
+import { desc, eq, isNull, or } from 'drizzle-orm';
 import { type AgentScope, buildAgentContext, resolveAgentScope, withAgentUsage } from '@/core/agent/context';
 import { can, SpaceError, spaceErrorStatus } from '@/security/space-access';
 import { normalizeAcceptance } from '@/tools/plan';
@@ -25,7 +25,7 @@ import { pipelineTemplates } from '@/db/schema/pipeline-templates';
 import { isAuthenticated } from '@/security/principal';
 import { coreLogger } from '@/utils/logger';
 
-/** Shared Elysia body schema for a recipe stage (incl. per-stage model override). */
+/** Shared Elysia body schema for a recipe stage. */
 const recipeStepBodySchema = t.Object({
   name: t.String(),
   description: t.Optional(t.String()),
@@ -41,7 +41,6 @@ const recipeStepBodySchema = t.Object({
   ),
   maxRetries: t.Optional(t.Number()),
   retryTargetStage: t.Optional(t.Number()),
-  model: t.Optional(t.String()),
   loopOverPlan: t.Optional(t.Boolean()),
   producesPlan: t.Optional(t.Boolean()),
   humanFields: t.Optional(
@@ -614,6 +613,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         : or(
             eq(pipelineTemplates.userId, user.id),
             eq(pipelineTemplates.isPreset, true),
+            isNull(pipelineTemplates.userId),
           );
 
       const query = db.select().from(pipelineTemplates);
@@ -641,7 +641,6 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         stageType: s.stageType,
         maxRetries: s.maxRetries,
         retryTargetStage: s.retryTargetStage,
-        model: s.model,
         // Every declaration the body schema accepts must be carried here.
         // This mapper enumerates fields, so a flag missing from it is accepted
         // by the API, dropped on the way to the row, and then never seen by the
@@ -705,7 +704,6 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         stageType: s.stageType,
         maxRetries: s.maxRetries,
         retryTargetStage: s.retryTargetStage,
-        model: s.model,
         // Every declaration the body schema accepts must be carried here.
         // This mapper enumerates fields, so a flag missing from it is accepted
         // by the API, dropped on the way to the row, and then never seen by the

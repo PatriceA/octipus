@@ -46,16 +46,16 @@ export function AppearanceEditor({ saved = DEFAULT_COMPANION_APPEARANCE, name, o
   }
 
   return (
-    <section className="rounded-xs term-frame p-5" aria-labelledby="companion-appearance-title">
+    <section className="rounded-xl term-frame p-5" aria-labelledby="companion-appearance-title">
       <h2 id="companion-appearance-title" className="mb-2 section-label">Your companion’s look</h2>
       <p className="text-xs text-on-surface-variant">A little more you. Choose a shape and color for {name}.</p>
-      <div className="my-5 flex flex-col items-center gap-3 rounded-lg bg-surface-container-low p-4" data-testid="appearance-preview">
-        <CompanionAvatar appearance={draft} size={160} state={state} animated={!paused} />
+      <div className="my-5 flex flex-col items-center gap-3 rounded-lg bg-companion-paper text-on-companion-paper p-4" data-testid="appearance-preview">
+        <CompanionAvatar appearance={draft} size={180} state={state} animated={!paused} followPointer />
         <span className="text-sm font-medium">{name}</span>
         <div className="flex flex-wrap justify-center gap-2" aria-label="Preview activity">
           {states.map(item => (
             <button key={item.state} type="button" aria-pressed={state === item.state} onClick={() => setState(item.state)}
-              className={cn('rounded-xs border px-2 py-1 text-xs', state === item.state ? 'border-primary text-primary' : 'border-outline-variant text-on-surface-variant')}>
+              className={cn('rounded-xl border px-2 py-1 text-xs', state === item.state ? 'border-on-companion-paper bg-on-companion-paper text-companion-paper' : 'border-on-companion-paper/30 text-on-companion-paper')}>
               {item.label}
             </button>
           ))}
@@ -94,7 +94,7 @@ export function AppearanceEditor({ saved = DEFAULT_COMPANION_APPEARANCE, name, o
       </fieldset>
       <div className="mt-5 flex flex-wrap items-center gap-3">
         <button type="button" disabled={saving || !changed} onClick={() => void save()}
-          className="rounded-xs bg-primary px-3 py-2 text-sm text-on-primary disabled:opacity-40">
+          className="rounded-xl bg-primary px-3 py-2 text-sm text-on-primary disabled:opacity-40">
           {saving ? 'Saving…' : 'Save appearance'}
         </button>
         {changed && <button type="button" disabled={saving} onClick={() => { setDraft(saved); setError(null); }} className="text-xs underline">Discard changes</button>}

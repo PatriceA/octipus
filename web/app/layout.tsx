@@ -5,15 +5,15 @@ import { Providers } from './providers';
 
 export const metadata: Metadata = {
   title: 'Octipus',
-  description: 'A self-hosted AI workspace. Bring the work together.',
+  description: 'Your AI companion. Your shared workspace. Make it yours. Work together.',
   manifest: '/manifest.json',
   icons: {
     icon: [
-      { url: '/deepsea.ico', sizes: 'any' },
-      { url: '/deepsea-32.png', type: 'image/png', sizes: '32x32' },
+      { url: '/companion-mark.svg', type: 'image/svg+xml' },
+      { url: '/companion-32.png', type: 'image/png', sizes: '32x32' },
     ],
-    apple: [{ url: '/apple-touch-icon.png', sizes: '180x180' }],
-    shortcut: '/deepsea.ico',
+    apple: [{ url: '/companion-180.png', sizes: '180x180' }],
+    shortcut: '/companion-mark.svg',
   },
   appleWebApp: {
     capable: true,

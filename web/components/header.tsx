@@ -188,20 +188,10 @@ export function Header() {
 
   return (
     <header className="h-12 sticky top-0 z-40 bg-surface-container-lowest/95 backdrop-blur-sm border-b border-outline-variant/40 px-3 shrink-0 flex items-center gap-3 font-sans">
-      {/* Command-line style search. The leading `❯` doubles as the
-          focus indicator: blue when something's typed, dim otherwise.
-          The bar is a single-line frame — no rounded pill. */}
+      {/* Workspace search stays available from the keyboard. */}
       <div className="flex-1 max-w-xl" ref={searchRef}>
         <div className="relative">
-          <span
-            aria-hidden
-            className={cn(
-              'absolute left-2.5 top-1/2 -translate-y-1/2 text-sm font-bold transition-colors',
-              searchQuery ? 'text-primary' : 'text-outline-variant'
-            )}
-          >
-            ❯
-          </span>
+          <Search aria-hidden="true" className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-on-surface-variant" />
           <input
             ref={searchInputRef}
             type="text"
@@ -209,16 +199,14 @@ export function Header() {
             onChange={(e) => setSearchQuery(e.target.value)}
             onFocus={() => { if (searchResults.length > 0) setShowResults(true); }}
             placeholder="search sessions, hooks, models…    (ctrl+k)"
-            className="w-full h-8 pl-7 pr-9 bg-surface-container-low border border-outline-variant/60 rounded-xs text-[13px] text-on-surface placeholder-outline-variant focus:outline-none focus:border-primary focus:ring-0 transition-colors"
+            className="w-full h-8 pl-7 pr-9 bg-surface-container-low border border-outline-variant/60 rounded-lg text-[13px] text-on-surface placeholder-on-surface-variant/70 focus:outline-none focus:border-primary focus:ring-0 transition-colors"
           />
           {isSearching ? (
             <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-on-surface-variant animate-spin" />
-          ) : (
-            <Search className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-outline-variant" />
-          )}
+          ) : null}
 
           {showResults && (
-            <div className="absolute top-full mt-1 w-full max-h-96 overflow-y-auto bg-surface-container border border-outline-variant rounded-xs shadow-xl z-50 animate-enter">
+            <div className="absolute top-full mt-1 w-full max-h-96 overflow-y-auto bg-surface-container border border-outline-variant rounded-lg shadow-xl z-50 animate-enter">
               {searchResults.length === 0 && !isSearching ? (
                 <div className="px-3 py-6 text-center text-[12px] text-on-surface-variant">
                   -- no matches --
@@ -265,18 +253,18 @@ export function Header() {
           <button
             onClick={() => { setIsNotifOpen(!isNotifOpen); if (!isNotifOpen) fetchNotifications(); }}
             aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ''}`}
-            className="relative p-1.5 text-on-surface-variant hover:text-on-surface hover:bg-surface-container rounded-xs transition-colors cursor-pointer"
+            className="relative p-1.5 text-on-surface-variant hover:text-on-surface hover:bg-surface-container rounded-lg transition-colors cursor-pointer"
           >
             <Bell className="w-4 h-4" />
             {unreadCount > 0 && (
-              <span className="absolute top-0.5 right-0.5 min-w-[15px] h-3.5 bg-primary text-on-primary text-[9px] font-bold rounded-xs flex items-center justify-center px-1 leading-none">
+              <span className="absolute top-0.5 right-0.5 min-w-[15px] h-3.5 bg-primary text-on-primary text-[9px] font-bold rounded-lg flex items-center justify-center px-1 leading-none">
                 {unreadCount > 99 ? '99+' : unreadCount}
               </span>
             )}
           </button>
 
           {isNotifOpen && (
-            <div className="absolute right-0 mt-1 w-80 bg-surface-container border border-outline-variant rounded-xs shadow-xl z-50 max-h-96 flex flex-col overflow-hidden animate-enter">
+            <div className="absolute right-0 mt-1 w-80 bg-surface-container border border-outline-variant rounded-lg shadow-xl z-50 max-h-96 flex flex-col overflow-hidden animate-enter">
               <div className="flex items-center justify-between px-3 py-2 border-b border-outline-variant/60 bg-surface-container-low">
                 <span className="section-label text-[10px]">notifications</span>
                 {unreadCount > 0 && (
@@ -345,7 +333,7 @@ export function Header() {
         <div className="relative" ref={dropdownRef}>
           <button
             onClick={() => setIsProfileOpen(!isProfileOpen)}
-            className="flex items-center gap-2 px-2 py-1.5 text-on-surface-variant hover:text-on-surface rounded-xs hover:bg-surface-container cursor-pointer transition-colors"
+            className="flex items-center gap-2 px-2 py-1.5 text-on-surface-variant hover:text-on-surface rounded-lg hover:bg-surface-container cursor-pointer transition-colors"
           >
             <span
               aria-hidden
@@ -360,7 +348,7 @@ export function Header() {
           </button>
 
           {isProfileOpen && (
-            <div className="absolute right-0 mt-1 w-52 bg-surface-container border border-outline-variant rounded-xs shadow-xl py-1 z-50 animate-enter">
+            <div className="absolute right-0 mt-1 w-52 bg-surface-container border border-outline-variant rounded-lg shadow-xl py-1 z-50 animate-enter">
               {user ? (
                 <>
                   <div className="px-3 py-2 border-b border-outline-variant/60 flex items-center gap-2">

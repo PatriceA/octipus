@@ -14,8 +14,6 @@ export interface StageTemplate {
   stageType?: PipelineStageType;
   maxRetries?: number;
   retryTargetStage?: number;
-  /** Per-stage model override (bound model name/id). Empty ⇒ topic binding. */
-  model?: string;
   /** Declares the stage must leave files behind — see PipelineStepConfig. */
   producesArtifacts?: boolean;
   /** Declares the stage must EXECUTE something — see PipelineStepConfig. */
@@ -58,7 +56,6 @@ export function stepConfigToStageTemplate(step: PipelineStepConfig): StageTempla
     stageType: step.stageType,
     maxRetries: step.maxRetries,
     retryTargetStage: step.retryTargetStage,
-    model: step.model,
     // Both declarations must be carried explicitly. This mapper enumerates
     // fields, so a new flag that is not listed here is silently dropped between
     // the template and the gate that reads it — the stage then declares
@@ -334,7 +331,6 @@ export function buildStagesFromTemplate(
       stageType: stage.stageType || 'standard',
       maxRetries: stage.maxRetries ?? 3,
       retryTargetStage: stage.retryTargetStage,
-      model: stage.model,
       producesArtifacts: stage.producesArtifacts,
       runsCommands: stage.runsCommands,
       verifyCommand: stage.verifyCommand,

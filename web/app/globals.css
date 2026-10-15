@@ -18,6 +18,8 @@
 @theme {
   /* Backgrounds ------------------------------------------------------ */
   --color-background: #071923;
+  --color-companion-paper: #f0eee5;
+  --color-on-companion-paper: #17363e;
   --color-foreground: #edf5f3;
 
   /* Primary — sea glass ------------------------------------ */
@@ -35,25 +37,25 @@
   --color-secondary-fixed-dim: #a6babd;
 
   /* Tertiary — web semantic is "success / OK" → mobile mint ---------- */
-  --color-tertiary: #8CE8B0;
-  --color-tertiary-dim: #6FC394;
+  --color-tertiary: #a8d4b7;
+  --color-tertiary-dim: #8cb69a;
   --color-tertiary-container: #1C2F24;
-  --color-tertiary-fixed: #8CE8B0;
-  --color-tertiary-fixed-dim: #6FC394;
+  --color-tertiary-fixed: #a8d4b7;
+  --color-tertiary-fixed-dim: #8cb69a;
 
   /* Accent — coral for restrained emphasis ------- */
-  --color-accent: #ef9b88;
+  --color-accent: #efa99b;
   --color-accent-dim: #cf806d;
   --color-accent-container: #3d2c2b;
   --color-on-accent: #44271f;
 
   /* Error ----------------------------------------------------------- */
-  --color-error: #FF716C;
+  --color-error: #f0a49a;
   --color-error-dim: #D85550;
   --color-error-container: #3A1B1A;
 
   /* Warning ---------------------------------------------------------- */
-  --color-warning: #FFD37A;
+  --color-warning: #e6c291;
   --color-warning-dim: #D9AE55;
   --color-warning-container: #3A2F18;
 
@@ -82,7 +84,7 @@
 
   /* Text-on-* (use these instead of hardcoded #fff) ----------------- */
   --color-on-surface: #edf5f3;
-  --color-on-surface-variant: #a6babd;
+  --color-on-surface-variant: #b6cbd0;
 
   --color-on-primary: #08202a;          /* dark text on accent buttons */
   --color-on-primary-container: #cce3e1;
@@ -108,7 +110,7 @@
   --color-inverse-on-surface: #071923;
   --color-inverse-primary: #163b44;
 
-  /* Typography — terminal app, mono everywhere ---------------------- */
+  /* Typography — humanist reading, monospace for code ---------------------- */
   --font-sans: 'Manrope', ui-sans-serif, system-ui, sans-serif;
   --font-body: 'Manrope', ui-sans-serif, system-ui, sans-serif;
   --font-headline: 'Manrope', ui-sans-serif, system-ui, sans-serif;
@@ -246,20 +248,16 @@ select:not([multiple]):disabled {
   color: #5C5C5C;
 }
 
-/* `// SECTION` label — shared with the mobile app's SectionLabel.
-   Use on group headings inside pages. */
+/* Quiet labels for groups inside workspace pages. */
 .section-label {
   font-size: 0.6875rem;
   font-weight: 600;
-  letter-spacing: 0.12em;
+  font-family: var(--font-sans);
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #a6babd;
+  color: var(--color-on-surface-variant);
 }
-.section-label::before {
-  content: '// ';
-  color: rgba(140, 172, 255, 0.7);
-  letter-spacing: 0;
-}
+
 
 /* Single-line dim frame — the web equivalent of a TUI bordered pane.
    Pair with surface bg for the "panel" look. */

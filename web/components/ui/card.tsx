@@ -14,7 +14,7 @@ interface CardProps {
 }
 
 /**
- * Terminal-UI card primitive — every variant resolves to a flat
+ * Workspace card primitive — every variant resolves to a calm
  * surface with a single-line dim border. The three names are kept
  * for backwards compatibility; the visual difference between them
  * is now subtle (surface tint) instead of dramatic (glass blur /
@@ -22,9 +22,9 @@ interface CardProps {
  * pages that want emphasis use `bento`.
  */
 const variantClasses: Record<CardVariant, string> = {
-  default: 'bg-surface-container border border-outline-variant/60 rounded-xs',
-  glass: 'bg-surface-container-low/80 backdrop-blur-sm border border-outline-variant/60 rounded-xs',
-  bento: 'bg-surface-container border border-outline-variant rounded-xs',
+  default: 'bg-surface-container border border-outline-variant/60 rounded-xl',
+  glass: 'bg-surface-container-low/80 backdrop-blur-sm border border-outline-variant/60 rounded-xl',
+  bento: 'bg-surface-container border border-outline-variant rounded-xl',
 };
 
 const hoverClasses: Record<CardVariant, string> = {
@@ -60,7 +60,7 @@ export function CardHeader({ children, className }: Omit<CardProps, 'hover' | 'v
   return (
     <div
       className={cn(
-        'px-4 py-2.5 border-b border-outline-variant/60 bg-surface-container-low/60 flex items-center gap-2',
+        'rounded-t-xl px-4 py-2.5 border-b border-outline-variant/60 bg-surface-container-low/60 flex items-center gap-2',
         className,
       )}
     >
@@ -73,13 +73,10 @@ export function CardTitle({ children, className }: Omit<CardProps, 'hover' | 'va
   return (
     <h3
       className={cn(
-        'text-[13px] text-on-surface font-mono flex items-center gap-1.5',
+        'text-sm font-semibold text-on-surface font-sans flex items-center gap-1.5',
         className,
       )}
     >
-      <span aria-hidden className="text-primary font-bold">
-        &gt;
-      </span>
       {children}
     </h3>
   );

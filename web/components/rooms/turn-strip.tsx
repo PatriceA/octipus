@@ -25,7 +25,7 @@ export function TurnStrip({ queue, myId, onCancel, connected = true }: TurnStrip
     <div
       role="status"
       data-testid="turn-strip"
-      className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-1.5 border-b border-outline-variant/40 bg-surface-container-low font-mono text-[12px]"
+      className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-1.5 border-b border-outline-variant/40 bg-surface-container-low font-sans text-[12px]"
     >
       {running && (
         !connected ? (

@@ -65,3 +65,13 @@
 @media (prefers-reduced-motion: reduce) {
   .octi-companion *, .octi-companion { animation: none !important; transition: none !important; }
 }
+
+/* Pointer attention belongs only to explicitly enabled idle previews. */
+.octi-companion.animated[data-state=idle][data-gaze=pointer] .pupils {
+  animation: none;
+  transform: translate(var(--gaze-x, 0px), var(--gaze-y, 0px));
+  transition: transform 140ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .octi-companion[data-gaze=pointer] .pupils { transform: none; }
+}

@@ -62,7 +62,7 @@ export function PipelineView({ nodes, currentNodeKey, plan, onApprove, className
 
   return (
     <div className={cn('py-2', className)}>
-    <div className="flex items-center gap-1 overflow-x-auto">
+    <div className="flex items-center gap-1 overflow-x-auto px-4 py-4">
       {stages.map((stage, i) => {
         const config = STATUS_CONFIG[stage.status] || STATUS_CONFIG.pending;
         const Icon = config.icon;

@@ -60,7 +60,8 @@ beforeAll(async () => {
   await executeRaw(
     `INSERT INTO pipeline_templates (user_id, name, is_preset, steps) VALUES
        ('${bobId}', 'bob-private', false, '[]'::jsonb),
-       (NULL,       'shipped-preset', true,  '[]'::jsonb)`,
+       (NULL,       'shipped-preset', true,  '[]'::jsonb),
+       (NULL,       'shared-cli', false, '[]'::jsonb)`,
   );
 
   const { rows: pipes } = await queryRaw(`SELECT id FROM pipelines`);
@@ -139,4 +140,12 @@ describe('DELETE /api/pipelines/templates/:id auth (gap closed in Phase 1a)', ()
     const r = await del(aliceApp, `/api/pipelines/templates/${presetTemplateId}`);
     expect(r.body).toEqual({ error: 'Template not found' });
   });
+});
+
+ test('template catalogue includes runnable shared templates without exposing private templates', async () => {
+  const listed = await get(aliceApp, '/api/pipelines/templates');
+  const available = await get(aliceApp, '/api/pipelines/types');
+  const names = listed.body.templates.map((t: { name: string }) => t.name).sort();
+  expect(names).toEqual(['shared-cli', 'shipped-preset']);
+  expect(names).toEqual(available.body.types.map((t: { name: string }) => t.name).sort());
 });

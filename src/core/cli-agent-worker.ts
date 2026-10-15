@@ -1278,6 +1278,14 @@ When a task matches one of these skills, load it with get_skill before starting 
         shell: useShellForSpawn,
         windowsHide: true,
       });
+      proc.once('spawn', () => {
+        if (toolConfig.bufferOutput && !this.aborted) {
+          this.emit('thought', {
+            status: 'running',
+            message: `${toolConfig.name} is running. Live progress and iteration counts are unavailable; output arrives when it finishes.`,
+          });
+        }
+      });
       // 'exit' fires when the process terminates (before streams flush).
       proc.once('exit', () => {
         this.processExited = true;

@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Activity, Bot, MessageSquare, Zap } from 'lucide-react';
 import { useRef } from 'react';
+import { WorkspaceWelcome } from '@/components/dashboard/workspace-welcome';
 import { ActiveAgents } from '@/components/dashboard/active-agents';
 import { AwayDigestCard } from '@/components/dashboard/away-digest';
 import { BudgetsCard } from '@/components/dashboard/budgets-card';
@@ -115,11 +116,11 @@ export default function DashboardPage() {
     : runningAgents > 0 ? `${runningAgents} live` : 'idle';
 
   return (
-    <div className="space-y-6 font-mono">
-      {/* Page header — shared `octi:~/dashboard $` path prompt + status. */}
+    <div className="space-y-6 font-sans">
+      {/* Workspace heading and current status. */}
       <PageHeader
-        title="dashboard"
-        description="live overview · agents · sessions · token usage · system health"
+        title="Your workspace"
+        description="Pick up your work, explore an idea, or bring your people together."
         badge={isAdmin &&
           <StatusBadge variant={statusVariant} dot pulse={runningAgents != null && runningAgents > 0}>
             {statusLabel}
@@ -127,14 +128,12 @@ export default function DashboardPage() {
         }
       />
 
-      <div className="flex flex-wrap gap-3 text-sm" aria-label="Start work">
-        <a href="/chat" className="text-primary underline">Work on a project</a>
-        <a href="/research" className="text-primary underline">Research a question</a>
-        <a href="/tasks" className="text-primary underline">Plan follow-up tasks</a>
-      </div>
+      <WorkspaceWelcome />
 
       {/* What happened since the user last looked — the first thing to read. */}
       <AwayDigestCard />
+
+      <RecentSessions />
 
       {/* Stat counters. Big mono number, label as `> name` so they
           read like ticker rows rather than marketing cards. */}
@@ -144,7 +143,6 @@ export default function DashboardPage() {
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <p className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-on-surface-variant">
-                  <span aria-hidden className="text-primary font-bold">&gt;</span>
                   {stat.name}
                 </p>
                 <p className="mt-2 text-3xl text-on-surface tabular-nums">
@@ -188,7 +186,6 @@ export default function DashboardPage() {
         <ActiveAgents />
       </div>
 
-      <RecentSessions />
     </div>
   );
 }
