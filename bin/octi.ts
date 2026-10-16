@@ -17,7 +17,7 @@
  *   - edit     — `npm run tui:edit`
  *
  * Commands delegated to the bash dispatcher (`bin/octi`) when present:
- *   - start, stop, restart, status, logs, open
+ *   - start, stop, restart, status, logs, recovery, open
  * These manage PIDs, log files, port-kills, and other shell-heavy
  * tasks — porting them in full lives behind a follow-up. The
  * compiled binary still works for them as long as the user's clone
@@ -45,6 +45,7 @@ Commands:
   stop                     Stop all Octipus processes
   status                   Show running state
   logs [--web]             Tail backend logs
+  recovery                 Recovery mode state, URL and token
   open                     Web UI in the browser (starts it if it is not up)
   persona [show]           Print the resolved persona (use the web UI to edit)
   uninstall [--purge]      Remove Octipus (keeps data unless --purge; --dry-run to preview)
@@ -350,6 +351,7 @@ async function main(): Promise<void> {
     case 'restart':
     case 'status':
     case 'logs':
+    case 'recovery':
     case 'open':
     case 'web':
     case 'webui':

@@ -29,9 +29,13 @@ WEB_PID=$!
   done
 ) &
 
-# Start backend in background as well so we can supervise both processes.
+# Start the backend under scripts/supervisor.mjs, in the background as well so
+# we can supervise both processes. The supervisor restarts a backend that
+# crashes or hangs, and serves recovery mode on the API port when it cannot
+# start at all (set OCTIPUS_RECOVERY_TOKEN to reach it: the token file under
+# /home/node/.octipus does not outlive the container).
 cd /app
-node dist/index.js &
+node scripts/supervisor.mjs &
 BACKEND_PID=$!
 
 # Forward termination to both children on container stop.

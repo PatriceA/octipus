@@ -41,6 +41,12 @@ async function main() {
   // also register SIGTERM/SIGINT — otherwise two handlers race their exit(0)
   // and truncate each other's async cleanup.
   process.env.OCTIPUS_SIGNALS_OWNED = '1';
+  // Commands this process runs (the shell tool, CLI agents) inherit this, so a
+  // `bin/octi restart` started from a chat hands itself off to a detached
+  // process: as our child it would be reaped by our own shutdown halfway
+  // through, after the stop and before the start. The supervisor sets it to
+  // its own PID, which is the process `octi` has to stop.
+  process.env.OCTIPUS_INSIDE_PID ??= String(process.pid);
 
   try {
     // Initialize vault first — providers resolve API keys through it. If the

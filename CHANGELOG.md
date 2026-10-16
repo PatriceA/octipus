@@ -139,6 +139,20 @@ labels reflect blast radius, not contract guarantees.
 
 ### Fixed
 
+- **A restart asked for from a chat comes back.** `octi restart` run by the
+  agent (from the phone, say) was a child of the backend it stopped, and the
+  backend's shutdown reaped it halfway: after the stop, before the start. It
+  now hands itself off to a detached process. `octi restart` also brings the
+  web UI back when it was running, instead of leaving whatever reached the API
+  through it (a domain, the phone app) disconnected.
+- **The backend repairs itself, and stays reachable when it can't.** `octi
+  start` and the Docker image run it under `scripts/supervisor.mjs`. The
+  supervisor retries a boot that fails, falls back to the last build that
+  stayed up, and restarts a backend that crashes or hangs. When nothing boots,
+  it serves recovery mode on the API port: status, logs, retry, rebuild, and
+  starting the last good build, behind a token printed by the new `octi
+  recovery`. See docs/RECOVERY.md.
+
 - **REST artifact versions keep their behaviour.** Create, edit and restore
   through `/api/artifacts` stored templates as given: inline scripts could
   not run under the embed CSP, a CSS-only edit dropped the bundle and a

@@ -2,6 +2,8 @@
 
 > **First stop: run `octi doctor`.** It runs 16 environment checks (node, .env, vault keys, shell sandbox, storage mode, base persona, Octipus home, Ollama, LiteLLM, postgres, backend, capabilities, MCP server build, browser extension, log sanity, disk space) and prints exactly what's wired and what's missing, with a one-line hint per failure. Add `--json` for machine-readable output. Most of the sections below are reachable from a doctor warning.
 
+> **Backend didn't come back after a restart?** The supervisor retries it, falls back to the last build that worked, and otherwise serves recovery mode on the API port: open `/api/recovery` with the token from `octi recovery`. See [RECOVERY.md](RECOVERY.md).
+
 ## pgvector Extension Requires Superuser
 
 **Problem**: `CREATE EXTENSION vector` fails with "permission denied".
