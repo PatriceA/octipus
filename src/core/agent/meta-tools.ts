@@ -1,5 +1,6 @@
 import { pipelineRepository } from '@/db/repositories/pipeline-repository';
 import { createPipelineRecoveryTools } from './pipeline-tools';
+import { stripPipelineControlBlocks } from './handoff';
 import type { AgentWorker, ToolHandler } from '@/core/agent-worker';
 import { createSteerChildTool } from '@/core/swarm/steer-tool';
 import { createCollectChildrenTool } from '@/core/swarm/collect-tool';
@@ -100,8 +101,10 @@ export function createMetaTools(
       childId: id, startedAt, taskBrief, topic: 'pipeline',
       promise: completion.then(async result => {
         const pipeline = await pipelineRepository.findById(id);
+        // The run's report as text, control blocks removed — not the raw `{pipelineId, result}` wrapper (#7).
+        const report = (result as { result?: unknown } | null)?.result;
         return { nodeId: id, kind: 'agent' as const, status: pipeline?.status === 'completed' ? 'ok' as const : 'tool_error' as const,
-          output: result, usedTokens: 0, durationMs: Date.now() - startedAt, spawnedChildren: [],
+          output: stripPipelineControlBlocks(typeof report === 'string' ? report : pipeline?.summary ?? ''), usedTokens: 0, durationMs: Date.now() - startedAt, spawnedChildren: [],
           notes: 'Pipeline stage usage is recorded separately. Synthesize verified results; never forward raw stage reports.' };
       }).catch(error => ({ nodeId: id, kind: 'agent' as const, status: 'tool_error' as const,
         output: error instanceof Error ? error.message : String(error), usedTokens: 0,

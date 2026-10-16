@@ -30,11 +30,55 @@ omitting it resumes the latest checkpoint. Earlier completed outputs are reused;
 the interrupted stage runs again. The coordinator collects pipeline results and
 writes its own final response.
 
+For a background continuation, `monitor__create` accepts a tool source with
+`name: "get_pipeline_status"`, `args: {id: "<pipeline handle>"}`, and
+`condition: {path: "status", operator: "in", value: ["completed", "failed", "paused", "awaiting_approval"]}`.
+Save a continuation that inspects the result, then end the turn. The monitor reads
+the same session- and workspace-scoped status without waiting for the pipeline
+to finish. `collect_children` waits for completion and is not a monitor probe;
+`resume_pipeline` is a mutation and cannot be used as a probe either.
+
 Each plan item traverses the configured body stages. Stage execution-contract
 failures retry with the failure reason, up to `maxRetries` (additional attempts).
 Retry counts survive checkpoints. Stopping preserves the current stage for resume;
 restarting the server pauses interrupted runs instead of restarting paid work.
 Pipeline progress updates the work plan linked when the pipeline was launched.
+The linked plan keeps its id, title, goal and step ids; only a plan the pipeline
+creates itself is named after the pipeline. A stage whose handoff reports
+`stopped: true` has not delivered and is retried as a contract failure, for the
+same item. `plan__add_items` skips items whose title is already on the plan.
+
+### Approvals inside a pipeline
+
+A CLI worker cannot hold a tool call open indefinitely, so it ends its turn after
+five minutes without an answer or when its CLI disconnects. A pipeline never
+fails for that reason. The stage is marked `awaiting_approval`, the blocked call
+is raised again as a normal permission request (approval prompt and push
+notification), and `get_pipeline_status` reports it under `pendingApproval`
+(`requestId`, `stage`, `item`, `toolName`, `subject` for the command or path, and
+`reason`). When the user approves, the stage runs again, and the same call
+(same session, tool, action and command or path) runs without a second prompt.
+That allowance is kept in memory for two hours. A denial or a stop pauses the run
+at that stage; `resume_pipeline` runs the stage again. The coordinator can call
+`answer_pipeline_approval({id})` to ask the user in the conversation. The tool
+forwards the question, so the user still makes the decision. After a server
+restart, approving through this tool also resumes the paused stage.
+
+`resume_pipeline({id, skipItems: [itemId], evidence})` marks plan items that
+earlier work already delivered as `skipped`, and records the commit and check
+given in `evidence`. Items that are in progress cannot be skipped.
+
+### Host services for gate commands
+
+The process sandbox (`security.shellSandbox`) runs shell commands without the
+network and without the Docker socket. A pipeline step can opt in with
+`"hostServices": true` in its template step. When set, that stage's
+`shell__run` and `shell__run_background` commands and its `verifyCommand` share
+the host network (for example, a local Postgres) and get
+`/var/run/docker.sock` (for example, for `docker compose build`). It is off by
+default. The Docker socket is root-equivalent on the host, so set it only on
+stages whose commands you trust. The setting has no effect when the sandbox is
+off.
 
 ## Authenticate with a vault credential
 

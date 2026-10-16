@@ -62,6 +62,14 @@ export interface PipelineStepConfig {
    */
   verifyCommand?: string;
   /**
+   * OPT-IN, off by default: this stage's shell commands (and its
+   * `verifyCommand`) run with the host network and `/var/run/docker.sock`
+   * inside the process sandbox, so QA gates such as `docker compose build` or
+   * tests against a local Postgres can run. The Docker socket is root-equivalent
+   * on the host; set it only on stages whose commands you trust.
+   */
+  hostServices?: boolean;
+  /**
    * DECLARES that this stage must NOT change the workspace — it inspects, runs
    * and reports, and the thing it is judging must be the same afterwards.
    *

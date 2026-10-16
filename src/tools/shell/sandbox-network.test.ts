@@ -36,3 +36,12 @@ describe('asking for the network', () => {
     expect(resolveAllowNetwork({ unsafe: true, allowNetwork: false })).toBe(false);
   });
 });
+
+describe('pipeline stage host services (#17)', () => {
+  test('are off unless the stage opted in', async () => {
+    const { withHostServices } = await import('./index');
+    expect(withHostServices({ pipelineId: 'p' }, { allowNetwork: false })).toEqual({ allowNetwork: false });
+    expect(withHostServices({ hostServices: true }, { allowNetwork: false, extraReadWrite: ['/home/tool'] }))
+      .toEqual({ allowNetwork: true, extraReadWrite: ['/home/tool', '/var/run/docker.sock'] });
+  });
+});

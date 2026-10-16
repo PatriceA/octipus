@@ -51,6 +51,8 @@ let replies: Record<string, string[]>;
 let approvalsAsked = 0;
 let commandCounts: number[] = [];
 let stopAtStage: string | undefined;
+/** Stage name → per-call plan: a string makes that call throw it, undefined runs normally. */
+let throwPlan: Record<string, Array<string | undefined>> = {};
 
 /**
  * A PASSING verdict that survives the audit-coverage gate.
@@ -141,6 +143,8 @@ beforeAll(async () => {
     const stageName = context?.stageName ?? '';
     calls.push({ role, stageName, input });
     if (stageName === stopAtStage) await manager.stop(String(context.metadata?.pipelineId));
+    const thrown = throwPlan[stageName]?.shift();
+    if (thrown) throw new Error(thrown);
     options?.onCounters?.({ filesChanged: 0, commandsRun: stageName === 'QA' ? commandCounts.shift() ?? 1 : 1, toolCalls: 1, toolErrors: 0, approvalsRequired: 0, approvalsDenied: 0, autoApproved: 0, permissionDenials: 0, byName: {} });
 
     if (stageName === 'Plan') {
@@ -174,6 +178,7 @@ beforeEach(() => {
   approvalsAsked = 0;
   commandCounts = [];
   stopAtStage = undefined;
+  throwPlan = {};
 });
 
 /** Visits per node name, read from the rows the run wrote. */
@@ -451,6 +456,81 @@ test('launching over a coordinator plan retains all phases and skips completed w
   expect((await visitsByNode(pipelineId)).Implement).toBe(5);
   expect(calls.find(call => call.stageName === 'Plan')?.input).toContain('do not append duplicates');
   const visible = await workPlanRepository.read(sessionId, userId);
+  // The coordinator's plan keeps its identity (#14).
+  expect(visible.current).toMatchObject({ id: planned.current!.id, title: 'All phases', goal: 'Finish the app' });
+  expect(visible.current?.steps.map(step => step.id)).toEqual(['p0', 'p1', 'p2', 'p3', 'p4', 'p5']);
   expect(visible.current?.steps).toHaveLength(6);
   expect(visible.current?.steps.every(step => step.status === 'done')).toBe(true);
+});
+
+
+describe('an unanswered approval parks the stage instead of failing the run (#12/#20/#22)', () => {
+  /** The newest parked pipeline's pending request, once the walker has parked it. */
+  async function parkedApproval() {
+    const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+    return vi.waitFor(async () => {
+      const { rows } = await queryRaw(`SELECT id FROM pipelines WHERE status = 'awaiting_approval' ORDER BY created_at DESC LIMIT 1`);
+      const pipeline = await pipelineRepository.findById(String(rows[0]?.id));
+      const pending = (pipeline?.metadata as { pendingApproval?: import('./pipeline-manager').PendingStageApproval })?.pendingApproval;
+      expect(pending).toBeDefined();
+      return pending!;
+    }, { timeout: 10_000, interval: 50 });
+  }
+
+  test.each(['APPROVAL_TIMEOUT_REASON', 'APPROVAL_DISCONNECT_REASON'] as const)('%s: approving re-runs that stage and the run completes', async key => {
+    const reason = (await import('@/core/approval-wait'))[key];
+    replies = { QA: [QA_PASS] };
+    throwPlan = { Implement: [`Worker "coding" failed: ${reason}`] };
+    const running = run('park on an unanswered approval');
+    const pending = await parkedApproval();
+    expect(pending).toMatchObject({ stage: 'Implement', item: 'item one', reason });
+    const { getPermissionManager } = await import('@/security/permissions');
+    expect(await getPermissionManager().approve(pending.requestId, userId)).toBe(true);
+    const { pipelineId } = await running;
+    const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+    const pipeline = await pipelineRepository.findById(pipelineId);
+    expect(pipeline?.status).toBe('completed');
+    expect((pipeline?.metadata as Record<string, unknown>).pendingApproval).toBeUndefined();
+    expect(calls.map(call => call.stageName)).toEqual(['Plan', 'Implement', 'Implement', 'QA', 'Implement', 'QA']);
+    expect(await planItemStatuses(pipelineId)).toEqual(['done', 'done']);
+  });
+
+  test('a denial pauses the run at that stage; it never fails', async () => {
+    const { APPROVAL_TIMEOUT_REASON } = await import('@/core/approval-wait');
+    replies = { QA: [QA_PASS] };
+    throwPlan = { QA: [`Worker "qa" failed: ${APPROVAL_TIMEOUT_REASON}`] };
+    const running = run('deny the parked approval');
+    const pending = await parkedApproval();
+    const { getPermissionManager } = await import('@/security/permissions');
+    await getPermissionManager().deny(pending.requestId, userId);
+    const { pipelineId, result } = await running;
+    const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+    expect((await pipelineRepository.findById(pipelineId))?.status).toBe('paused');
+    expect(result).toContain('not granted');
+    expect((await pipelineRepository.getNodes(pipelineId)).find(node => node.name === 'QA')?.status).toBe('pending');
+    expect(await planItemStatuses(pipelineId)).toEqual(['running', 'pending']);
+  });
+});
+
+test('a stage that reports it stopped re-runs itself for the same item, not the whole item (#16/#21)', async () => {
+  replies = {
+    Implement: ['Stopped: test/setup.ts does not exist.\n```handoff\n{"completedWork":"nothing","stopped":true}\n```', 'Implement ok'],
+    QA: [QA_PASS],
+  };
+  const { pipelineId } = await run('recover from a stopped stage');
+  expect(calls.map(call => call.stageName)).toEqual(['Plan', 'Implement', 'Implement', 'QA', 'Implement', 'QA']);
+  expect(calls[2].input).toContain('stopped before finishing');
+  expect(await planItemStatuses(pipelineId)).toEqual(['done', 'done']);
+});
+
+test('a failed stage reports its own reason, without an earlier item output (#7/#15)', async () => {
+  replies = { QA: [QA_PASS] };
+  throwPlan = { QA: [undefined, 'Worker "qa" failed: the database is unreachable'] };
+  const { pipelineId, result } = await run('fail on the second item');
+  expect(result).toContain('the database is unreachable');
+  expect(result).not.toContain('Worker "qa" failed');
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  const qa = (await pipelineRepository.getNodes(pipelineId)).find(node => node.name === 'QA');
+  expect(qa).toMatchObject({ status: 'failed', output: null });
+  expect(await planItemStatuses(pipelineId)).toEqual(['done', 'failed']);
 });

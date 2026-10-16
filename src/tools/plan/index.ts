@@ -115,9 +115,13 @@ export class PlanTool extends BaseTool {
 
         if (parsed.length === 0) return { error: 'No items with a title were provided.' };
 
+        const fresh = withoutDuplicates(await pipelineRepository.getPlanItems(pipelineId), parsed);
+        const duplicates = parsed.length - fresh.length;
+        if (fresh.length === 0) return { added: 0, duplicates, items: [] };
+
         const start = await pipelineRepository.nextPlanOrdinal(pipelineId);
         const created = await pipelineRepository.addPlanItems(
-          parsed.map((item, i) => ({
+          fresh.map((item, i) => ({
             pipelineId,
             ordinal: start + i,
             title: item.title,
@@ -127,7 +131,7 @@ export class PlanTool extends BaseTool {
           })),
         );
         toolLogger.info({ pipelineId, added: created.length }, 'Plan items appended');
-        return { added: created.length, items: created.map((i) => ({ id: i.id, ordinal: i.ordinal, title: i.title })) };
+        return { added: created.length, ...(duplicates ? { duplicates } : {}), items: created.map((i) => ({ id: i.id, ordinal: i.ordinal, title: i.title })) };
       },
       { permissionAction: 'write' },
     );
@@ -194,6 +198,13 @@ export class PlanTool extends BaseTool {
       { permissionAction: 'write' },
     );
   }
+}
+
+/** Items whose title is not already on the plan (any status) or earlier in the batch (#23). */
+export function withoutDuplicates<T extends { title: string }>(existing: Array<{ title: string }>, items: T[]): T[] {
+  const norm = (title: string) => title.toLowerCase().replace(/\s+/g, ' ').trim();
+  const seen = new Set(existing.map(item => norm(item.title)));
+  return items.filter(item => !seen.has(norm(item.title)) && !!seen.add(norm(item.title)));
 }
 
 /**

@@ -52,3 +52,12 @@ describe('DetachedChildManager', () => {
    expect((await m.collectAll(60_000))[0].notes).toContain('interrupted');
    expect(m.count()).toBe(1);
  });
+
+it('a child registered again under the same id waits for its new run (#19)', async () => {
+  const m = new DetachedChildManager('parent', () => 0, () => {});
+  m.registerPendingChild({ childId: 'pipeline', startedAt: Date.now(), taskBrief: '', topic: 'pipeline', promise: Promise.resolve(result('first run')) });
+  expect((await m.collectAll(1_000)).map(r => r.output)).toEqual(['done first run']);
+  m.registerPendingChild({ childId: 'pipeline', startedAt: Date.now(), taskBrief: '', topic: 'pipeline', promise: new Promise(() => {}) });
+  const [stillRunning] = await m.collectAll(10);
+  expect(stillRunning.status).toBe('timeout');
+});

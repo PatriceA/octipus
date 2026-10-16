@@ -1,4 +1,5 @@
 import { configuredCliBinary } from './cli-executable';
+import { APPROVAL_DISCONNECT_REASON, APPROVAL_TIMEOUT_REASON, APPROVAL_UNFINISHED_REASON } from './approval-wait';
 import { inlineUiRepairMessage, storeInlineUiBlocks } from '@/core/inline-ui/extract';
 import { VAULT_USAGE_GUIDANCE } from '@/core/agent/vault-guidance';
 import { usageContextOf } from '@/core/agent/context';
@@ -488,9 +489,7 @@ When a task matches one of these skills, load it with get_skill before starting 
         this.emit('thought', { type: 'blocked_progress', reason: 'waiting for approval', blockedForMs: 0 });
         // Human approvals remain mandatory. A CLI subprocess cannot retain a
         // serialized tool call indefinitely while its MCP client gives up.
-        this.approvalDeadline = setTimeout(() => this.endApprovalWait(
-          'Approval was not received within 5 minutes. The command was not run; retry after reviewing permissions.',
-        ), 5 * 60_000);
+        this.approvalDeadline = setTimeout(() => this.endApprovalWait(APPROVAL_TIMEOUT_REASON), 5 * 60_000);
       }
 
     });
@@ -514,7 +513,7 @@ When a task matches one of these skills, load it with get_skill before starting 
         },
         active: () => this.context.status === 'running' && !this.aborted,
         execute: (name, args) => this.executeBridgedTool(name, args),
-        abandoned: () => this.endApprovalWait('The CLI disconnected while waiting for approval. The command was not run.'),
+        abandoned: () => this.endApprovalWait(APPROVAL_DISCONNECT_REASON),
         unqueued: new Set(['get_cli_run_context', 'get_work_plan']),
         undelivered: name => {
           if (name !== 'collect_children') return;
@@ -590,7 +589,7 @@ When a task matches one of these skills, load it with get_skill before starting 
 
       if (this.aborted) throw new Error(this.runError ?? this.abortReason ?? 'Agent was aborted by user');
 
-      if (this.pauseReasons.has('approval')) throw new Error('CLI finished while a tool was still waiting for approval. The command was not run.');
+      if (this.pauseReasons.has('approval')) throw new Error(APPROVAL_UNFINISHED_REASON);
 
       if (isRootAgent(this.context)) {
         const repair = this.context.metadata?.inlineUiOffered === true

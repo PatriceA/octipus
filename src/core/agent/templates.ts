@@ -19,6 +19,8 @@ export interface StageTemplate {
   /** Declares the stage must EXECUTE something — see PipelineStepConfig. */
   runsCommands?: boolean;
   verifyCommand?: string;
+  /** Opt-in: this stage's shell reaches host services — see PipelineStepConfig. */
+  hostServices?: boolean;
   /** Tool ids this stage may use, narrowing its role's default set. */
   toolIds?: string[];
   /** Declares the stage must NOT change the workspace — see PipelineStepConfig. */
@@ -63,6 +65,7 @@ export function stepConfigToStageTemplate(step: PipelineStepConfig): StageTempla
     producesArtifacts: step.producesArtifacts,
     runsCommands: step.runsCommands,
     verifyCommand: step.verifyCommand,
+    hostServices: step.hostServices,
     readOnly: step.readOnly,
     mechanical: step.mechanical,
     loopOverPlan: step.loopOverPlan,
@@ -334,6 +337,7 @@ export function buildStagesFromTemplate(
       producesArtifacts: stage.producesArtifacts,
       runsCommands: stage.runsCommands,
       verifyCommand: stage.verifyCommand,
+      hostServices: stage.hostServices,
       readOnly: stage.readOnly,
       mechanical: stage.mechanical,
       loopOverPlan: stage.loopOverPlan,

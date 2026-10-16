@@ -9,10 +9,17 @@ import { createMonitorSchema, matches } from './types';
 import type { getDb } from '@/db/postgres';
 import type { AgentContext } from '@/core/types';
 
-const mocks = vi.hoisted(() => ({ session: vi.fn(), probe: vi.fn(), resumed: vi.fn(), published: vi.fn(), outcome: 'success' as 'success' | 'failed' | 'cancelled' }));
+const mocks = vi.hoisted(() => ({ session: vi.fn(), probe: vi.fn(), pipeline: vi.fn(), resumed: vi.fn(), published: vi.fn(), outcome: 'success' as 'success' | 'failed' | 'cancelled' }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: { findById: mocks.session } }));
 vi.mock('@/security/orgs', () => ({ getOrgWorkspaceManager: () => ({ ensureDefaultWorkspace: async () => ({ id: '44444444-4444-4444-8444-444444444444' }), findOwnedById: async () => null }) }));
-vi.mock('./probes', () => ({ probe: mocks.probe, readProbe: () => ({ toolId: 'filesystem' }) }));
+vi.mock('@/db/repositories/pipeline-repository', () => ({ pipelineRepository: { findById: mocks.pipeline, getNodes: async () => [], getPlanItems: async () => [] } }));
+vi.mock('./probes', async importOriginal => {
+  const actual = await importOriginal<typeof import('./probes')>();
+  return {
+    readProbe: (name: string, args: Record<string, unknown>) => name === 'get_pipeline_status' ? actual.readProbe(name, args) : { toolId: 'filesystem' },
+    probe: (source: Parameters<typeof actual.probe>[0], context: AgentContext) => source.kind === 'tool' && source.name === 'get_pipeline_status' ? actual.probe(source, context) : mocks.probe(source, context),
+  };
+});
 vi.mock('@/core/agent/service', () => ({ getAgentService: () => ({ publishResponse: mocks.published, handleMessage: async (sessionId: string, _user: string, message: string, _channel: string, _files: unknown, _mode: unknown, before: () => Promise<void>) => withSessionTurn(sessionId, async () => {
   await before(); mocks.resumed(message); return { agentId: 'agent', response: mocks.outcome === 'success' ? 'Done' : 'Continuation failed or was stopped', outcome: mocks.outcome };
 }) }) }));
@@ -46,6 +53,16 @@ beforeEach(async () => {
 });
 
 describe('persistent monitor lifecycle', () => {
+  test('arms a pipeline status probe and wakes when the running pipeline completes', async () => {
+    const pipeline = { id: 'pipeline', userId, sessionId, workspaceId: '44444444-4444-4444-8444-444444444444', status: 'running' };
+    mocks.pipeline.mockResolvedValue(pipeline);
+    const row = await service.create({ ...config, source: { kind: 'tool', name: 'get_pipeline_status', args: { id: pipeline.id }, condition: { path: 'status', operator: 'in', value: ['completed', 'failed', 'paused', 'awaiting_approval'] } } }, context);
+    await service.check(row, new Date(Date.now() + 1));
+    expect(await repo.get(row.id)).toMatchObject({ status: 'armed', lastError: null, previous: { value: 'running' } });
+    mocks.pipeline.mockResolvedValue({ ...pipeline, status: 'completed' });
+    await service.check(row, new Date(Date.now() + 31_000));
+    expect(await repo.get(row.id)).toMatchObject({ status: 'ready', observation: { value: 'completed' } });
+  });
   test('waits without a model, then continues the same session once', async () => {
     const row = await service.create(config, context);
     await service.check(row, new Date(Date.now() + 1));

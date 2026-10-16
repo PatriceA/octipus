@@ -3,6 +3,7 @@ import { resolve } from 'path';
 import { promisify } from 'util';
 import { getConfig } from '@/config';
 import { getAgentManager } from '@/core/agent-manager';
+import { isApprovalWaitEnded } from '@/core/approval-wait';
 import { getGatewayHub } from '@/core/gateway/hub';
 import { getNotificationService } from '@/core/notification-service';
 import { premiseNoteFor } from '@/core/premise';
@@ -91,9 +92,9 @@ const AGENTS_MD_GUIDE_TOKEN_BUDGET = 2000;
  */
 export function pipelineMetadata(metadata: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
   if (!metadata) return undefined;
-  const { pipelineId, nodeKey } = metadata as Record<string, unknown>;
+  const { pipelineId, nodeKey, hostServices } = metadata as Record<string, unknown>;
   if (pipelineId === undefined && nodeKey === undefined) return undefined;
-  return { ...(pipelineId !== undefined && { pipelineId }), ...(nodeKey !== undefined && { nodeKey }) };
+  return { ...(pipelineId !== undefined && { pipelineId }), ...(nodeKey !== undefined && { nodeKey }), ...(hostServices === true && { hostServices }) };
 }
 
 /**
@@ -1242,8 +1243,9 @@ interface WorkerRespawnContext {
 /**
  * Handle worker failure: transient retry (same model) → topic backup model
  * (Topics page "Backup" binding). No implicit CLI-to-API fallback.
+ * Exported for tests.
  */
-async function handleWorkerFailure(
+export async function handleWorkerFailure(
   error: Error,
   worker: import('@/core/agent-base').BaseAgentWorker,
   workerId: string,
@@ -1312,6 +1314,21 @@ async function handleWorkerFailure(
     });
     // Propagate the original — its message names the cap, the current usage and
     // where to change it. Wrapping it would lose all three.
+    throw error;
+  }
+
+  // An abandoned approval wait is neither a stop nor a crash: the CLI worker
+  // stops itself to end it, which the `wasUserStopped` test below would rewrite
+  // as "stopped by user", and a backup-model retry would only ask again. The
+  // original reason goes up so a pipeline can park the stage (#12/#20).
+  if (isApprovalWaitEnded(errorMsg)) {
+    deps.emit({
+      type: 'worker_completed',
+      sessionId: context.sessionId,
+      userId: context.userId,
+      data: { workerId, role: agentRole, status: 'failed', error: errorMsg, totalTokens: failedTokens, durationMs: Date.now() - startTime },
+      timestamp: new Date(),
+    });
     throw error;
   }
 

@@ -4,10 +4,14 @@ import { createPipelineRecoveryTools } from './pipeline-tools';
 import { createMetaTools } from './meta-tools';
 const fixture = vi.hoisted(() => ({
   find: vi.fn(), nodes: vi.fn(), items: vi.fn(), checkpoints: vi.fn(), resume: vi.fn(),
+  updateItem: vi.fn(), updatePipeline: vi.fn(), ask: vi.fn(), approve: vi.fn(), deny: vi.fn(),
 }));
 vi.mock('@/db/repositories/pipeline-repository', () => ({ pipelineRepository: {
   findById: fixture.find, getNodes: fixture.nodes, getPlanItems: fixture.items, getCheckpoints: fixture.checkpoints,
+  updatePlanItem: fixture.updateItem, updatePipeline: fixture.updatePipeline,
 } }));
+vi.mock('@/security/permissions', () => ({ getPermissionManager: () => ({ approve: fixture.approve, deny: fixture.deny }) }));
+vi.mock('./service', () => ({ getAgentService: () => ({ requestApproval: fixture.ask }) }));
 vi.mock('./pipeline-manager', () => ({ getPipelineManager: () => ({ resume: fixture.resume }) }));
 vi.mock('./templates', () => ({ listAvailableTemplates: async () => [{ id: 'template', name: 'Build' }] }));
 const context = { userId: 'owner', sessionId: 'session', workspaceId: 'workspace' } as AgentContext;
@@ -68,6 +72,37 @@ it('keeps the pipeline outcome available for coordinator synthesis after returni
   fixture.find.mockResolvedValue({ status: 'completed' });
   finish({ pipelineId: 'pipeline', result: 'Verified all items' });
   expect(await registerPendingChild.mock.calls[0][0].promise).toMatchObject({
-    status: 'ok', output: { result: 'Verified all items' },
+    status: 'ok', output: 'Verified all items',
   });
+});
+
+describe('a stage parked on an approval (#24)', () => {
+  const pendingApproval = { requestId: 'request', stage: 'QA', nodeKey: 'qa', itemId: 'i2', item: 'remaining item',
+    toolId: 'cli-native:Bash', action: 'Bash', toolName: 'Bash', subject: 'docker compose build', reason: 'Approval was not received within 5 minutes.' };
+  beforeEach(() => {
+    fixture.find.mockResolvedValue({ id: 'pipeline', userId: 'owner', sessionId: 'session', workspaceId: 'workspace', status: 'awaiting_approval', metadata: { pendingApproval } });
+  });
+  it('reports what it waits on in get_pipeline_status', async () => {
+    expect(await tool('get_pipeline_status').execute({ id: 'pipeline' }, context)).toMatchObject({
+      status: 'awaiting_approval', pendingApproval: { requestId: 'request', stage: 'QA', item: 'remaining item', subject: 'docker compose build' },
+    });
+  });
+  it('answer_pipeline_approval forwards the question; only the user answer resolves the request', async () => {
+    fixture.ask.mockResolvedValue({ approved: true, response: 'Approve' });
+    fixture.approve.mockResolvedValue(true);
+    expect(await tool('answer_pipeline_approval').execute({ id: 'pipeline' }, context)).toMatchObject({ approved: true, stage: 'QA' });
+    expect(fixture.ask.mock.calls[0][0]).toContain('docker compose build');
+    expect(fixture.approve).toHaveBeenCalledWith('request', 'owner', expect.any(String));
+    fixture.ask.mockResolvedValue({ approved: true, response: 'Deny' });
+    expect(await tool('answer_pipeline_approval').execute({ id: 'pipeline' }, context)).toMatchObject({ approved: false });
+    expect(fixture.deny).toHaveBeenCalledWith('request', 'owner', expect.any(String));
+  });
+});
+
+it('resume_pipeline marks items already delivered as skipped, with evidence (#23)', async () => {
+  fixture.items.mockResolvedValue([{ id: 'i1', title: 'done item', status: 'done' }, { id: 'i2', title: 'fixed earlier', status: 'pending' }]);
+  fixture.resume.mockImplementation((_id, options) => { options.onResumed(); return new Promise(() => {}); });
+  await expect(tool('resume_pipeline').execute({ id: 'pipeline', skipItems: ['i2'] }, context)).rejects.toThrow('evidence');
+  await tool('resume_pipeline').execute({ id: 'pipeline', skipItems: ['i2'], evidence: 'bc453de, npm test exit 0' }, context);
+  expect(fixture.updateItem).toHaveBeenCalledWith('i2', { status: 'skipped', result: expect.stringContaining('bc453de') });
 });

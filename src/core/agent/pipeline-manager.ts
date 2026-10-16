@@ -8,7 +8,7 @@ import type { AgentTrigger } from '@/core/types';
 import { actionRecovery } from '@/core/action-recovery';
 import { channelCanPrompt } from '@/security/approval-policy';
 import { getConfig } from '@/config';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, ne } from 'drizzle-orm';
 import { getNotificationService } from '@/core/notification-service';
 import { recordRunEvent } from '@/core/run-log';
 import type { SideEffectCounters } from '@/core/swarm/receipt';
@@ -27,6 +27,10 @@ import type {
   PlanItemRow,
 } from '@/db/schema/pipelines';
 import { pipelineNodes, pipelines } from '@/db/schema/pipelines';
+import { permissionRequests } from '@/db/schema/permissions';
+import { getPermissionManager } from '@/security/permissions';
+import { approvalSubject, rememberApprovedCall } from '@/security/approved-calls';
+import { isApprovalWaitEnded } from '@/core/approval-wait';
 import { decide, type DecisionSite, recordShadow } from '@/models/decision';
 import type { ModelConfigEntry } from '@/db/schema/models';
 import { getModelRegistry, type ModelRegistry } from '@/models/model-registry';
@@ -276,7 +280,7 @@ export function qaVerdictCorrectionInput(report: string, reason: string, handsOf
  */
 export async function runStageVerifyCommand(
   command: string,
-  ctx: Pick<AgentContext, 'sessionId' | 'workspaceId' | 'space'> & { userId?: string; role: string; toolIds?: string[] },
+  ctx: Pick<AgentContext, 'sessionId' | 'workspaceId' | 'space'> & { userId?: string; role: string; toolIds?: string[]; hostServices?: boolean },
 ): Promise<string> {
   const canRunCommands = (ctx.toolIds ?? []).includes('shell');
   if (!canRunCommands) {
@@ -315,6 +319,7 @@ export async function runStageVerifyCommand(
         workspaceId: ctx.workspaceId ?? workspaceId,
         space: ctx.space ?? null,
         projectPath: !inSpace && sessionCtx?.devMode === true ? sessionCtx.projectPath : undefined,
+        hostServices: ctx.hostServices,
         workspaceRoot: WorkspaceFS.forSession({ ...session, workspaceId }, { space: ctx.space ?? null }).root,
       },
     );
@@ -726,6 +731,21 @@ export function isFinalPlanItem(items: Array<{ ordinal: number; status?: string 
  * which is what makes pause/resume and rewind-to-node the same mechanism.
  */
 class StageContractError extends Error {}
+
+/** What a parked stage waits on, as `get_pipeline_status` reports it (#24). */
+export interface PendingStageApproval {
+  requestId: string;
+  stage: string;
+  nodeKey: string;
+  itemId: string | null;
+  item: string | null;
+  toolId: string | null;
+  action: string | null;
+  toolName: string | null;
+  /** The command or path the call acts on. */
+  subject: string | null;
+  reason: string;
+}
 
 export interface WalkState {
   contractRetries?: Record<string, number>;
@@ -1452,6 +1472,7 @@ export class PipelineManager {
               space: context.space,
               role: b.role,
               toolIds: b.toolIds,
+              hostServices: b.hostServices,
             });
             input = `${evidence}\n\n---\n\n${input}`;
             frameworkVerified = true;
@@ -2577,7 +2598,10 @@ export class PipelineManager {
     const rootAgent = getAgentService();
     const sessionId = pipeline.sessionId;
 
-    await this.updateNode(node.id, { input, status: 'running', error: null, completedAt: null });
+    // The row holds the LATEST run: an earlier item's report must not sit next
+    // to this run's failure (#15).
+    const stageStartedAt = new Date();
+    await this.updateNode(node.id, { input, status: 'running', error: null, completedAt: null, output: null });
 
     rootAgent['emit']({
       type: 'pipeline_event',
@@ -2625,7 +2649,9 @@ export class PipelineManager {
           stageName: node.name,
           // Read by the `plan` tool to scope its writes to THIS pipeline. A
           // worker cannot be trusted to pass a pipeline id it was told.
-          metadata: { ...(context.metadata ?? {}), pipelineId: pipeline.id, nodeKey: node.nodeKey },
+          metadata: { ...(context.metadata ?? {}), pipelineId: pipeline.id, nodeKey: node.nodeKey,
+            // Opt-in per stage (`hostServices`): its shell gets host network and the Docker socket.
+            ...(declared.hostServices ? { hostServices: true } : {}) },
         } as AgentContext,
         {
           ...(stageModel ? { model: stageModel.modelId, modelName: stageModel.name } : {}),
@@ -2689,6 +2715,16 @@ export class PipelineManager {
         }
       }
 
+      // A stage that says it stopped short delivered nothing, whatever its
+      // status (#16). Retried like any contract failure: this stage, this item.
+      if (parseStructuredHandoff(String(result))?.stopped) {
+        throw new StageContractError(
+          `Stage "${node.name}" reported that it stopped before finishing its work. A failed probe ` +
+            `of your own (a guessed path, a missing helper binary, an exploratory command's exit code) ` +
+            `is not a reason to stop: find the real path, use an available alternative, and finish the stage.`,
+        );
+      }
+
       // Persist and forward the STRIPPED reply, so the internal block is never
       // shown or bled into the next node — but RETURN the raw one as well, so
       // the handoff can still be parsed from it. Returning only the stripped
@@ -2737,11 +2773,13 @@ export class PipelineManager {
 
       return { output, raw };
     } catch (error) {
-      const errorMsg = (error as Error).message;
+      // The stage's own reason, without worker-spawner's `Worker "x" failed:` wrapper (#7).
+      const errorMsg = (error as Error).message.replace(/^Worker "[^"]*" failed: /, '');
       if ((await this.getPipeline(pipeline.id))?.status === 'paused') {
         await this.updateNode(node.id, { status: 'pending' });
         return { output: '', raw: '', stopped: { pipelineId: pipeline.id, result: 'Pipeline stopped; resume from the saved stage checkpoint.' } };
       }
+      if (isApprovalWaitEnded(errorMsg)) return this.awaitStageApproval(args, stageStartedAt, errorMsg);
       if (error instanceof StageContractError && args.retryContract) {
         await this.updateNode(node.id, { status: 'pending', error: errorMsg });
         recordRunEvent({ runId: sessionId, subject: 'pipeline_node', subjectId: node.nodeKey,
@@ -2799,6 +2837,59 @@ export class PipelineManager {
         });
       }
     }
+  }
+
+  /**
+   * A worker gave up waiting on a human approval (#12/#20). Nobody said no, so
+   * this is never a failure: the stage parks as `awaiting_approval`, the call it
+   * was blocked on is raised again as a durable request (prompt, push, and
+   * `get_pipeline_status`), and the stage re-runs once the user approves — the
+   * same call then executes without asking (`approved-calls.ts`). A denial or a
+   * stop pauses the run at this stage.
+   */
+  private async awaitStageApproval(
+    args: Parameters<PipelineManager['runStepNode']>[0],
+    since: Date,
+    reason: string,
+  ): Promise<Awaited<ReturnType<PipelineManager['runStepNode']>>> {
+    const { pipeline, node } = args;
+    const agentId = `pipeline:${pipeline.id}`;
+    // The call the worker was blocked on: the newest request of this session since the stage started.
+    const [asked] = await this.db.select().from(permissionRequests)
+      .where(and(eq(permissionRequests.sessionId, pipeline.sessionId), gte(permissionRequests.createdAt, since), ne(permissionRequests.agentId, agentId)))
+      .orderBy(desc(permissionRequests.createdAt)).limit(1);
+    const toolArgs = (asked?.context?.toolArguments ?? {}) as Record<string, unknown>;
+    const item = (await pipelineRepository.getPlanItems(pipeline.id)).find(i => i.status === 'running');
+    const signal = this.signals.get(pipeline.id);
+    const permissions = getPermissionManager();
+    const requestId = await permissions.requestApproval(pipeline.userId, agentId, asked?.toolId ?? 'pipeline',
+      asked?.action ?? 'resume_stage', toolArgs, pipeline.sessionId,
+      `Pipeline stage "${node.name}": ${asked?.context?.toolName ?? 'continue'}`, signal, pipeline.workspaceId);
+    const pendingApproval: PendingStageApproval = {
+      requestId, stage: node.name, nodeKey: node.nodeKey, itemId: item?.id ?? null, item: item?.title ?? null,
+      toolId: asked?.toolId ?? null, action: asked?.action ?? null, toolName: asked?.context?.toolName ?? null,
+      subject: approvalSubject(toolArgs) ?? null, reason,
+    };
+    await this.updateNode(node.id, { status: 'awaiting_approval', error: reason });
+    await this.updatePipeline(pipeline.id, {
+      status: 'awaiting_approval',
+      summary: `Waiting for approval at "${node.name}": ${pendingApproval.subject ?? pendingApproval.toolName ?? 'continue the stage'}.`,
+      metadata: { ...((await this.getPipeline(pipeline.id))?.metadata ?? {}), pendingApproval },
+    });
+    const approved = await permissions.waitForApproval(requestId, { agentId, signal });
+    const current = await this.getPipeline(pipeline.id);
+    const { pendingApproval: _answered, ...metadata } = (current?.metadata ?? {}) as Record<string, unknown>;
+    if (approved && current?.status === 'awaiting_approval') {
+      if (asked) rememberApprovedCall(pipeline.sessionId, { toolId: asked.toolId, action: asked.action, args: toolArgs });
+      await this.updatePipeline(pipeline.id, { status: 'running', metadata });
+      return this.runStepNode(args);
+    }
+    await this.updateNode(node.id, { status: 'pending' });
+    await this.updatePipeline(pipeline.id, current?.status === 'paused' ? { metadata } : {
+      status: 'paused', metadata,
+      summary: `Approval at "${node.name}" was not granted. Resume to re-run this stage.`,
+    });
+    return { output: '', raw: '', stopped: { pipelineId: pipeline.id, result: `Pipeline paused at "${node.name}": the approval was not granted. Resume to re-run this stage.` } };
   }
 
   /**

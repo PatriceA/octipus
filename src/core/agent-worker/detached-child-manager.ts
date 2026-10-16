@@ -37,14 +37,17 @@ export class DetachedChildManager {
   ) {}
 
   registerPendingChild(pc: PendingChild): void {
+    // Same id again (a resumed pipeline): the earlier run's result is stale (#19).
+    this.collected.delete(pc.childId);
     this.pending.set(pc.childId, pc);
     // Settle eagerly into collected so auto-collect and ad-hoc
     // collect_children calls can both find results without racing on the
     // shared promise. We keep the entry in pending until the LLM
     // (or framework) explicitly collects — that's what drives the cap.
     pc.promise.then(
-      (result) => { this.collected.set(pc.childId, result); },
+      (result) => { if (this.pending.get(pc.childId) === pc) this.collected.set(pc.childId, result); },
       (err) => {
+        if (this.pending.get(pc.childId) !== pc) return;
         const failMsg = (err as Error)?.message || 'detached spawn threw';
         this.collected.set(pc.childId, {
           nodeId: pc.childId,

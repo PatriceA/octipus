@@ -454,6 +454,8 @@ export interface ScorerContext {
   sessionId?: string;
   workspaceId?: string | null;
   space?: import('@/core/types').AgentSpace | null;
+  /** The pipeline stage opted into host network + Docker socket (`hostServices`). */
+  hostServices?: boolean;
   /** What started the run: a `listen` turn's gate commands are refused like its writes (§9.3). */
   trigger?: import('@/core/types').AgentTrigger;
   /** Members of other installs read the run (federation §7.5): its gate commands follow the federated rules. */
@@ -1027,6 +1029,8 @@ async function evaluate(
         }
         const res = await new LocalShellOperations().exec(repaired, cwd, {
           timeout: timeoutMs,
+          // A pipeline stage's `hostServices` opt-in reaches its verify command too.
+          ...(ctx.hostServices ? { allowNetwork: true, extraReadWrite: ['/var/run/docker.sock'] } : {}),
           ...(ctx.signal ? { signal: ctx.signal } : {}),
           // Never `unsafe`. Safe mode is what makes `tokenizeSafe` reject shell
           // metacharacters, and it is the whole security argument for letting an

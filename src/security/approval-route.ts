@@ -34,6 +34,7 @@
  */
 import type { AgentSpace, AgentTrigger, PermissionLevel } from '@/core/types';
 import { type ApprovalDecision, routeApproval } from './approval-policy';
+import { isApprovedCall } from './approved-calls';
 import { classifyFlow, federatedAudienceReason, federatedSpaceWriteReason, getFlowLabel, isSharedAudience, loadFlowLabel, observeFlow } from './flow-guard';
 import { can } from './space-access';
 import { agentConfigWriteReason, commenterMayRun, isReadCall, personalOnlyReason, personalSourceRead, type SpaceToolCall } from './space-tools';
@@ -162,6 +163,12 @@ export async function routeApprovalFor(
     action: call.action,
     unattendedDenyActions: options.unattendedDenyActions,
   });
+  // The user already approved this exact call for a parked pipeline stage
+  // (`approved-calls.ts`). Only a plain policy ASK: space, room and flow-guard
+  // asks keep asking.
+  if (decision.route === 'ask_human' && !space && context.trigger !== 'remote' && source !== 'flow-guard' && isApprovedCall(context.sessionId, call)) {
+    return { route: 'execute', level, source: 'pipeline-approval' };
+  }
   // A turn a member of another install asked for has nobody here to ask
   // (federation §7.5, F-D9): what would wait for its requester is denied.
   if (context.trigger === 'remote' && decision.route === 'ask_human') {

@@ -29,6 +29,18 @@ export function spaceRunOptions(env: Record<string, string> | undefined, home: S
   return { env: withToolHome(env ?? {}, home), unsetEnv: HOST_IDENTITY_ENV, extraReadWrite: [home.dir] };
 }
 
+/**
+ * A pipeline stage that opted into `hostServices` (off by default): host
+ * network plus the Docker socket, so gates like `docker compose build` or a
+ * local Postgres work under the process sandbox. Exported for the tests.
+ */
+export function withHostServices<T extends { allowNetwork?: boolean; extraReadWrite?: string[] }>(
+  metadata: Record<string, unknown> | undefined, options: T,
+): T {
+  if (metadata?.hostServices !== true) return options;
+  return { ...options, allowNetwork: true, extraReadWrite: [...(options.extraReadWrite ?? []), '/var/run/docker.sock'] };
+}
+
 /** A fresh tool home for one run of a space agent, or null outside a space. */
 async function toolHomeFor(context: AgentContext | undefined): Promise<SpaceToolHome | null> {
   return context?.space ? openSpaceToolHome({ ...context, space: context.space }) : null;
@@ -110,10 +122,10 @@ export class ShellTool extends BaseTool {
         const home = await toolHomeFor(context);
         let result: ShellExecResult;
         try {
-          result = await this.ops.exec(command, cwd, {
+          result = await this.ops.exec(command, cwd, withHostServices(context?.metadata, {
             timeout, unsafe, allowNetwork, signal: getExecutionSignal(context),
             ...spaceRunOptions(args.env as Record<string, string> | undefined, home),
-          });
+          }));
         } finally {
           home?.dispose();
         }
@@ -197,9 +209,9 @@ export class ShellTool extends BaseTool {
         const home = await toolHomeFor(context);
         let pid: number | undefined;
         try {
-          ({ pid } = await this.ops.spawnBackground(command, cwd, {
+          ({ pid } = await this.ops.spawnBackground(command, cwd, withHostServices(context?.metadata, {
             unsafe, allowNetwork, ...spaceRunOptions(args.env as Record<string, string> | undefined, home), onExit: () => home?.dispose(),
-          }));
+          })));
         } catch (err) {
           home?.dispose();
           throw err;

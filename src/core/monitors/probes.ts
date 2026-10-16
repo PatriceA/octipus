@@ -2,10 +2,17 @@ import type { AgentContext } from '@/core/types';
 import type { MonitorSource } from './types';
 import { isReadOnlyAction } from '@/core/action-recovery';
 import { getToolRegistry } from '@/tools/registry';
+import { createPipelineRecoveryTools } from '@/core/agent/pipeline-tools';
+
+// Agent tools live outside the regular registry. Expose only the scoped read
+// handler to monitors; recovery must never run as a polling side effect.
+const pipelineStatusProbe = createPipelineRecoveryTools().find(tool => tool.name === 'get_pipeline_status');
 
 /** Resolve only declared read actions; arbitrary shell/evaluate/click are never polling probes. */
 export function readProbe(name: string, args: Record<string, unknown>) {
-  const handler = getToolRegistry().findTool(name);
+  const handler = name === 'get_pipeline_status' && pipelineStatusProbe
+    ? { ...pipelineStatusProbe, toolId: 'monitor', permissionAction: 'read' }
+    : getToolRegistry().findTool(name);
   if (!handler) throw new Error(`Unknown monitor probe: ${name}`);
   const action = typeof handler.permissionAction === 'function' ? handler.permissionAction(args) : handler.permissionAction;
   if (!action || (!isReadOnlyAction(action) && handler.replaySafety !== 'read_only')) throw new Error(`Monitor probe must be a declared read-only action: ${name}`);
