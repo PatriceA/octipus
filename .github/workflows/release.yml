@@ -49,13 +49,9 @@ jobs:
           fetch-depth: 0 # full history so the tagged CHANGELOG is present
           persist-credentials: false
 
-      - name: Setup Node (+ dependency cache)
+      - name: Setup Node (+ npm cache, publish registry)
         uses: ./.github/actions/node-setup
-
-      - name: Setup Node (for npm publish)
-        uses: actions/setup-node@v7
         with:
-          node-version: '24.19'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
