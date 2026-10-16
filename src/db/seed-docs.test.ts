@@ -1,3 +1,5 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
 import { type EmbeddingPurpose, sha256Hex } from '@/core/rag/embeddings';
@@ -188,6 +190,33 @@ describe('indexProductDocs', () => {
     expect(res.ran).toBe(false);
     expect(res.reason).toBe('docs-dir-missing');
     expect(indexCalls.length).toBe(0);
+  });
+
+  test('reports docs-scan-failed, not docs-dir-missing, when the scan throws', async () => {
+    const { service, indexCalls } = makeFakeService();
+    const eacces = Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+    const res = await indexProductDocs(makeDeps({ service, listFiles: async () => { throw eacces; } }));
+
+    expect(res.ran).toBe(false);
+    expect(res.reason).toBe('docs-scan-failed');
+    expect(indexCalls.length).toBe(0);
+  });
+
+  test('the default lister reports a missing docs dir as absent and a non-directory as a scan failure', async () => {
+    const { service, indexCalls } = makeFakeService();
+    const root = mkdtempSync(join(tmpdir(), 'octipus-docs-'));
+    try {
+      const notADir = join(root, 'docs');
+      writeFileSync(notADir, 'not a directory');
+      const missing = await indexProductDocs({ ...makeDeps({ service }), listFiles: undefined, docsDir: join(root, 'absent') });
+      const broken = await indexProductDocs({ ...makeDeps({ service }), listFiles: undefined, docsDir: notADir });
+
+      expect(missing.reason).toBe('docs-dir-missing');
+      expect(broken.reason).toBe('docs-scan-failed');
+      expect(indexCalls.length).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test('skips empty files without indexing them', async () => {
