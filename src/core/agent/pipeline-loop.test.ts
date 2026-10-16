@@ -38,6 +38,7 @@ interface WorkerCall {
   role: string;
   stageName: string;
   input: string;
+  resumeKey?: unknown;
 }
 
 let manager: import('./pipeline-manager').PipelineManager;
@@ -53,6 +54,8 @@ let commandCounts: number[] = [];
 let stopAtStage: string | undefined;
 /** Stage name → per-call plan: a string makes that call throw it, undefined runs normally. */
 let throwPlan: Record<string, Array<string | undefined>> = {};
+/** Runs inside the stubbed worker before it replies or throws. */
+let onSpawn: ((stageName: string, pipelineId: string) => Promise<void>) | undefined;
 
 /**
  * A PASSING verdict that survives the audit-coverage gate.
@@ -141,7 +144,8 @@ beforeAll(async () => {
     options?: { onCounters?: (counters: import('@/core/swarm/receipt').SideEffectCounters) => void },
   ) => {
     const stageName = context?.stageName ?? '';
-    calls.push({ role, stageName, input });
+    calls.push({ role, stageName, input, resumeKey: context.metadata?.resumeKey });
+    await onSpawn?.(stageName, String(context.metadata?.pipelineId));
     if (stageName === stopAtStage) await manager.stop(String(context.metadata?.pipelineId));
     const thrown = throwPlan[stageName]?.shift();
     if (thrown) throw new Error(thrown);
@@ -179,6 +183,7 @@ beforeEach(() => {
   commandCounts = [];
   stopAtStage = undefined;
   throwPlan = {};
+  onSpawn = undefined;
 });
 
 /** Visits per node name, read from the rows the run wrote. */
@@ -481,10 +486,20 @@ describe('an unanswered approval parks the stage instead of failing the run (#12
     const reason = (await import('@/core/approval-wait'))[key];
     replies = { QA: [QA_PASS] };
     throwPlan = { Implement: [`Worker "coding" failed: ${reason}`] };
+    const { getPermissionManager } = await import('@/security/permissions');
+    const { routeApprovalFor } = await import('@/security/approval-route');
+    const blocked = { toolId: 'cli-native:Bash', action: 'Bash', toolName: 'Bash', args: { command: 'docker compose build' } };
+    const routes: string[] = [];
+    let implementRuns = 0;
+    onSpawn = async stageName => {
+      if (stageName !== 'Implement') return;
+      // The worker's own request, as the CLI bridge raises it before it gives up waiting.
+      if (++implementRuns === 1) await getPermissionManager().requestApproval(userId, 'stage-worker', blocked.toolId, blocked.action, blocked.args, sessionId, 'Bash');
+      routes.push((await routeApprovalFor({ userId, sessionId, role: 'coding', attended: true }, blocked, { level: 'ASK' })).route);
+    };
     const running = run('park on an unanswered approval');
     const pending = await parkedApproval();
-    expect(pending).toMatchObject({ stage: 'Implement', item: 'item one', reason });
-    const { getPermissionManager } = await import('@/security/permissions');
+    expect(pending).toMatchObject({ stage: 'Implement', item: 'item one', reason, subject: 'docker compose build' });
     expect(await getPermissionManager().approve(pending.requestId, userId)).toBe(true);
     const { pipelineId } = await running;
     const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
@@ -493,6 +508,14 @@ describe('an unanswered approval parks the stage instead of failing the run (#12
     expect((pipeline?.metadata as Record<string, unknown>).pendingApproval).toBeUndefined();
     expect(calls.map(call => call.stageName)).toEqual(['Plan', 'Implement', 'Implement', 'QA', 'Implement', 'QA']);
     expect(await planItemStatuses(pipelineId)).toEqual(['done', 'done']);
+    // Asked before the approval; the re-run and the next item run it without asking — stored on the run, not in memory.
+    expect(routes).toEqual(['ask_human', 'execute', 'execute']);
+    expect((pipeline?.metadata as Record<string, unknown>).approvedCalls).toEqual([{ toolId: blocked.toolId, action: blocked.action, subject: 'docker compose build' }]);
+    // The re-run continues the same vendor CLI conversation and is told why (#20); the next item starts its own.
+    const implement = calls.filter(call => call.stageName === 'Implement');
+    expect(implement[1].resumeKey).toBe(implement[0].resumeKey);
+    expect(implement[1].input).toContain('`docker compose build` may run now');
+    expect(implement[2].resumeKey).not.toBe(implement[0].resumeKey);
   });
 
   test('a denial pauses the run at that stage; it never fails', async () => {
@@ -533,4 +556,11 @@ test('a failed stage reports its own reason, without an earlier item output (#7/
   const qa = (await pipelineRepository.getNodes(pipelineId)).find(node => node.name === 'QA');
   expect(qa).toMatchObject({ status: 'failed', output: null });
   expect(await planItemStatuses(pipelineId)).toEqual(['done', 'failed']);
+});
+
+test('gate commands are the resolved verifyCommands, without one that waits on a stage output', async () => {
+  const { pipelineGateCommands } = await import('./pipeline-manager');
+  expect(pipelineGateCommands([
+    { verifyCommand: '{{param.verifyCommand}}' }, {}, { verifyCommand: 'npm test' }, { verifyCommand: 'check {{previousOutput}}' },
+  ], { 'param.verifyCommand': 'npm test', description: 'd' })).toEqual(['npm test']);
 });

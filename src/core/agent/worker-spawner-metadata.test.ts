@@ -43,6 +43,10 @@ describe('pipelineMetadata', () => {
   it('passes the two pipeline keys through', () => {
     expect(pipelineMetadata({ pipelineId: 'p1', nodeKey: 'n1' })).toEqual({ pipelineId: 'p1', nodeKey: 'n1' });
   });
+  it('passes the stage visit resume key, so a re-run continues its CLI conversation (#20)', () => {
+    expect(pipelineMetadata({ pipelineId: 'p1', nodeKey: 'n1', resumeKey: 'pipeline-p1:n1:1', isAdmin: true }))
+      .toEqual({ pipelineId: 'p1', nodeKey: 'n1', resumeKey: 'pipeline-p1:n1:1' });
+  });
 
   it('drops everything else, including the flags that grant authority', () => {
     const out = pipelineMetadata({

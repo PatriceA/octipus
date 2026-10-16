@@ -29,7 +29,7 @@ import type {
 import { pipelineNodes, pipelines } from '@/db/schema/pipelines';
 import { permissionRequests } from '@/db/schema/permissions';
 import { getPermissionManager } from '@/security/permissions';
-import { approvalSubject, rememberApprovedCall } from '@/security/approved-calls';
+import { approvalSubject, approvedCallOf, gateCommandCalls, withApprovedCalls } from '@/security/approved-calls';
 import { isApprovalWaitEnded } from '@/core/approval-wait';
 import { decide, type DecisionSite, recordShadow } from '@/models/decision';
 import type { ModelConfigEntry } from '@/db/schema/models';
@@ -262,6 +262,28 @@ export function qaVerdictCorrectionInput(report: string, reason: string, handsOf
     QA_VERDICT_JSON_INSTRUCTION +
     qaCriteriaInstruction(acceptance)
   );
+}
+
+/**
+ * The run's gate commands: each stage's `verifyCommand`, resolved from the
+ * run's description and parameters, so a plan or stage approval can name them
+ * (#12). One that depends on a stage's output is unknown before it and is left out.
+ */
+export function pipelineGateCommands(stages: Pick<StageTemplate, 'verifyCommand'>[], vars: Record<string, string>): string[] {
+  const commands = stages.map(stage => stage.verifyCommand ? expandPromptTemplate(stage.verifyCommand, vars).trim() : '');
+  return [...new Set(commands.filter(command => command && !command.includes('{{')))];
+}
+
+function gateNote(gates: string[]): string {
+  return gates.length
+    ? `\n\nApproving also lets ${gates.length === 1 ? 'this gate command' : 'these gate commands'} run without asking for the rest of this run: ${gates.map(gate => `\`${gate}\``).join(', ')}.`
+    : '';
+}
+
+/** Prepended to a stage re-run after its blocked call was approved (#20). */
+export function approvedResumeNote(subject: string | null): string {
+  return `The approval this stage was waiting on was granted${subject ? `: \`${subject}\` may run now` : ''}. ` +
+    'If this conversation already holds your earlier work on this task, continue from where you stopped; do not redo finished steps.';
 }
 
 /**
@@ -1098,6 +1120,7 @@ export class PipelineManager {
   private async walk(args: Parameters<PipelineManager['runGraph']>[0]): Promise<{ pipelineId: string; result: string }> {
     const { pipeline, graph, built, template, paramVars, description, title, context, sessionId } = args;
     const rootAgent = getAgentService();
+    const gates = pipelineGateCommands(template.stages, { description, ...paramVars });
     const registry = getModelRegistry();
     const nodes = new Map((await pipelineRepository.getNodes(pipeline.id)).map((r) => [r.nodeKey, r]));
     const byKey = new Map(graph.nodes.map((n) => [n.key, n]));
@@ -1286,7 +1309,7 @@ export class PipelineManager {
       // whole plan, once) in `runForeachNode`.
       if (gnode.kind === 'step' && node.requiresApproval && previousOutput) {
         const decision = await this.approveStepNode({
-          pipeline, node, handoffChain, previousOutput, context, title,
+          pipeline, node, handoffChain, previousOutput, context, title, gates,
         });
         if (decision === 'stop') {
           return { pipelineId: pipeline.id, result: `Pipeline stopped at "${node.name}".` };
@@ -1346,6 +1369,7 @@ export class PipelineManager {
           lastOutput: previousOutput,
           context,
           title,
+          gates,
         });
         if (stepResult.stopped) return stepResult.stopped;
         currentItem = stepResult.item;
@@ -2650,6 +2674,10 @@ export class PipelineManager {
           // Read by the `plan` tool to scope its writes to THIS pipeline. A
           // worker cannot be trusted to pass a pipeline id it was told.
           metadata: { ...(context.metadata ?? {}), pipelineId: pipeline.id, nodeKey: node.nodeKey,
+            // One vendor CLI conversation per stage visit: a stage re-run after
+            // an approval (#20) resumes it instead of starting over; a later
+            // visit (next item, QA bounce) starts fresh.
+            resumeKey: `pipeline-${pipeline.id}:${node.nodeKey}:${node.visits}`,
             // Opt-in per stage (`hostServices`): its shell gets host network and the Docker socket.
             ...(declared.hostServices ? { hostServices: true } : {}) },
         } as AgentContext,
@@ -2839,6 +2867,11 @@ export class PipelineManager {
     }
   }
 
+  /** Pipeline metadata recording `gates` as approved, after the user approved a prompt naming them. */
+  private async approveGates(pipelineId: string, gates: string[]): Promise<{ metadata?: Record<string, unknown> }> {
+    return gates.length ? { metadata: withApprovedCalls((await this.getPipeline(pipelineId))?.metadata, gates.flatMap(gateCommandCalls)) } : {};
+  }
+
   /**
    * A worker gave up waiting on a human approval (#12/#20). Nobody said no, so
    * this is never a failure: the stage parks as `awaiting_approval`, the call it
@@ -2880,9 +2913,10 @@ export class PipelineManager {
     const current = await this.getPipeline(pipeline.id);
     const { pendingApproval: _answered, ...metadata } = (current?.metadata ?? {}) as Record<string, unknown>;
     if (approved && current?.status === 'awaiting_approval') {
-      if (asked) rememberApprovedCall(pipeline.sessionId, { toolId: asked.toolId, action: asked.action, args: toolArgs });
-      await this.updatePipeline(pipeline.id, { status: 'running', metadata });
-      return this.runStepNode(args);
+      const call = asked ? approvedCallOf({ toolId: asked.toolId, action: asked.action, args: toolArgs }) : undefined;
+      await this.updatePipeline(pipeline.id, { status: 'running', metadata: call ? withApprovedCalls(metadata, [call]) : metadata });
+      // Same visit, same `resumeKey`: a resumable CLI continues the conversation it stopped in (#20).
+      return this.runStepNode({ ...args, input: `${approvedResumeNote(pendingApproval.subject)}\n\n${args.input}` });
     }
     await this.updateNode(node.id, { status: 'pending' });
     await this.updatePipeline(pipeline.id, current?.status === 'paused' ? { metadata } : {
@@ -2908,12 +2942,13 @@ export class PipelineManager {
     lastOutput: string;
     context: AgentContext;
     title: string;
+    gates: string[];
   }): Promise<{
     outcome: NodeOutcome;
     item: PlanItemRow | null;
     stopped?: { pipelineId: string; result: string };
   }> {
-    const { pipeline, node, currentItem, lastOutput, context, title } = args;
+    const { pipeline, node, currentItem, lastOutput, context, title, gates } = args;
     const rootAgent = getAgentService();
 
     if (currentItem) {
@@ -2972,7 +3007,7 @@ export class PipelineManager {
       const approval = await rootAgent.requestApproval(
         `Pipeline "${title}" — plan (${items.length} item${items.length === 1 ? '' : 's'}):\n\n${list}` +
           `\n\nYou can edit, reorder, or remove items on the pipeline page before approving, and ` +
-          `the plan stays editable while the pipeline runs.`,
+          `the plan stays editable while the pipeline runs.${gateNote(gates)}`,
         `Run the plan?`,
         context,
         ['Approve', 'Stop Pipeline'],
@@ -2989,7 +3024,7 @@ export class PipelineManager {
       }
 
       await this.updateNode(node.id, { status: 'approved', approvedAt: new Date() });
-      await this.updatePipeline(pipeline.id, { status: 'running' });
+      await this.updatePipeline(pipeline.id, { status: 'running', ...await this.approveGates(pipeline.id, gates) });
       // Re-read: the user may have edited the plan while it sat for approval.
       return this.nextPlanItem(pipeline, node);
     }
@@ -3184,8 +3219,9 @@ export class PipelineManager {
     previousOutput: string;
     context: AgentContext;
     title: string;
+    gates: string[];
   }): Promise<'go' | 'skip' | 'stop'> {
-    const { pipeline, node, handoffChain, previousOutput, context, title } = args;
+    const { pipeline, node, handoffChain, previousOutput, context, title, gates } = args;
     const rootAgent = getAgentService();
 
     await this.updateNode(node.id, { status: 'awaiting_approval' });
@@ -3206,7 +3242,7 @@ export class PipelineManager {
       : `Previous stage completed.\n\nResult:\n${previousOutput.slice(0, 2000)}`;
 
     const approval = await rootAgent.requestApproval(
-      `Pipeline "${title}" — ${summary}`,
+      `Pipeline "${title}" — ${summary}${gateNote(gates)}`,
       `Proceed with next stage: "${node.name}"?`,
       context,
       ['Approve', 'Skip', 'Stop Pipeline'],
@@ -3220,7 +3256,7 @@ export class PipelineManager {
     if (approval.response === 'Skip') return 'skip';
 
     await this.updateNode(node.id, { status: 'approved', approvedAt: new Date() });
-    await this.updatePipeline(pipeline.id, { status: 'running' });
+    await this.updatePipeline(pipeline.id, { status: 'running', ...await this.approveGates(pipeline.id, gates) });
     return 'go';
   }
 

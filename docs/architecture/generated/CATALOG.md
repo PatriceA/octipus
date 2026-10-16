@@ -654,10 +654,10 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `security` | `config` | 13 |
 | `security` | `connectors` | 3 |
 | `security` | `core` | 20 |
-| `security` | `db` | 77 |
+| `security` | `db` | 78 |
 | `security` | `shared` | 1 |
 | `security` | `tools` | 1 |
-| `security` | `utils` | 28 |
+| `security` | `utils` | 29 |
 | `services` | `capabilities` | 5 |
 | `services` | `config` | 3 |
 | `services` | `core` | 5 |

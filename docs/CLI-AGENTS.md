@@ -58,8 +58,23 @@ notification), and `get_pipeline_status` reports it under `pendingApproval`
 (`requestId`, `stage`, `item`, `toolName`, `subject` for the command or path, and
 `reason`). When the user approves, the stage runs again, and the same call
 (same session, tool, action and command or path) runs without a second prompt.
-That allowance is kept in memory for two hours. A denial or a stop pauses the run
-at that stage; `resume_pipeline` runs the stage again. The coordinator can call
+The allowance is stored on the pipeline (`metadata.approvedCalls`), so it
+survives a server restart, and it ends when the run is no longer running or
+awaiting approval. Every stage visit runs with its own CLI resume key, so on a
+resumable CLI (Claude Code, Codex) the re-run continues the conversation the
+worker stopped in instead of starting over; the next item or a QA bounce starts
+fresh. A denial or a stop pauses the run at that stage; `resume_pipeline` runs
+the stage again.
+
+A plan approval or a stage approval also lists the pipeline's gate commands,
+which are the stages' `verifyCommand` values resolved from the run's parameters.
+Approving the prompt lets those exact commands run without asking for the rest
+of the run, through either the Octipus shell tool or the CLI's own Bash. A
+pipeline without an approval prompt still asks the first time a gate command
+runs: creating a pipeline is the model's action, not the user's, so it cannot
+authorize anything. A gate command that depends on a stage's output is not known
+in advance and is not listed. A changed command, such as `npm test 2>&1`
+instead of `npm test`, still asks. The coordinator can call
 `answer_pipeline_approval({id})` to ask the user in the conversation. The tool
 forwards the question, so the user still makes the decision. After a server
 restart, approving through this tool also resumes the paused stage.

@@ -92,9 +92,11 @@ const AGENTS_MD_GUIDE_TOKEN_BUDGET = 2000;
  */
 export function pipelineMetadata(metadata: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
   if (!metadata) return undefined;
-  const { pipelineId, nodeKey, hostServices } = metadata as Record<string, unknown>;
+  const { pipelineId, nodeKey, hostServices, resumeKey } = metadata as Record<string, unknown>;
   if (pipelineId === undefined && nodeKey === undefined) return undefined;
-  return { ...(pipelineId !== undefined && { pipelineId }), ...(nodeKey !== undefined && { nodeKey }), ...(hostServices === true && { hostServices }) };
+  return { ...(pipelineId !== undefined && { pipelineId }), ...(nodeKey !== undefined && { nodeKey }), ...(hostServices === true && { hostServices }),
+    // The stage visit's vendor CLI conversation (`cli-agent-worker`), not a privilege.
+    ...(typeof resumeKey === 'string' && { resumeKey }) };
 }
 
 /**

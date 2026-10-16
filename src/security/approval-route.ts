@@ -163,10 +163,10 @@ export async function routeApprovalFor(
     action: call.action,
     unattendedDenyActions: options.unattendedDenyActions,
   });
-  // The user already approved this exact call for a parked pipeline stage
+  // The user already approved this exact call for a pipeline of this session
   // (`approved-calls.ts`). Only a plain policy ASK: space, room and flow-guard
   // asks keep asking.
-  if (decision.route === 'ask_human' && !space && context.trigger !== 'remote' && source !== 'flow-guard' && isApprovedCall(context.sessionId, call)) {
+  if (decision.route === 'ask_human' && !space && context.trigger !== 'remote' && source !== 'flow-guard' && await isApprovedCall(context.sessionId, call)) {
     return { route: 'execute', level, source: 'pipeline-approval' };
   }
   // A turn a member of another install asked for has nobody here to ask

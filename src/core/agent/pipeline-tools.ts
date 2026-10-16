@@ -2,7 +2,7 @@ import type { ToolHandler } from '@/core/agent-worker';
 import type { AgentContext } from '@/core/types';
 import { pipelineRepository } from '@/db/repositories/pipeline-repository';
 import type { Pipeline } from '@/db/schema/pipelines';
-import { rememberApprovedCall } from '@/security/approved-calls';
+import { withApprovedCalls } from '@/security/approved-calls';
 import { getPermissionManager } from '@/security/permissions';
 import { coreLogger } from '@/utils/logger';
 import { stripPipelineControlBlocks } from './handoff';
@@ -83,11 +83,9 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
           : await permissions.deny(pending.requestId, context.userId, 'Denied in the conversation');
         if (live || !approved) return { id: pipeline.id, approved, stage: pending.stage };
         // No walker holds the request any more (a restart): approve and resume the stage.
-        if (pending.toolId && pending.action && pending.subject) {
-          rememberApprovedCall(pipeline.sessionId, { toolId: pending.toolId, action: pending.action, args: { command: pending.subject } });
-        }
         const { pendingApproval: _answered, ...metadata } = (pipeline.metadata ?? {}) as Record<string, unknown>;
-        await pipelineRepository.updatePipeline(pipeline.id, { metadata });
+        await pipelineRepository.updatePipeline(pipeline.id, { metadata: pending.toolId && pending.action && pending.subject
+          ? withApprovedCalls(metadata, [{ toolId: pending.toolId, action: pending.action, subject: pending.subject }]) : metadata });
         return resumeFrom(pipeline, pending.nodeKey);
       }
       if (['running', 'awaiting_approval'].includes(pipeline.status)) throw new Error(`Pipeline is already ${pipeline.status}`);
