@@ -669,7 +669,7 @@ export class Supervisor {
               return;
             }
           }
-          this.busy = false;
+          // singleAttempt keeps `busy` set until the boot is decided.
           await this.singleAttempt(build);
         } finally {
           this.busy = false;
