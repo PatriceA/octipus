@@ -92,11 +92,21 @@ const AGENTS_MD_GUIDE_TOKEN_BUDGET = 2000;
  */
 export function pipelineMetadata(metadata: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
   if (!metadata) return undefined;
-  const { pipelineId, nodeKey, hostServices, resumeKey } = metadata as Record<string, unknown>;
+  const { pipelineId, nodeKey, hostServices, resumeKey, attemptId } = metadata as Record<string, unknown>;
   if (pipelineId === undefined && nodeKey === undefined) return undefined;
   return { ...(pipelineId !== undefined && { pipelineId }), ...(nodeKey !== undefined && { nodeKey }), ...(hostServices === true && { hostServices }),
-    // The stage visit's vendor CLI conversation (`cli-agent-worker`), not a privilege.
-    ...(typeof resumeKey === 'string' && { resumeKey }) };
+    // The stage attempt's vendor CLI conversation (`cli-agent-worker`) and the
+    // attempt its approvals were granted to (`approved-calls.ts`). Not passed
+    // on to a stage's own children (`stageChildMetadata`).
+    ...(typeof resumeKey === 'string' && { resumeKey }), ...(typeof attemptId === 'string' && { attemptId }) };
+}
+
+/** `pipelineMetadata` for a child a stage spawned: the pipeline and stage, not the stage worker's own attempt. */
+export function stageChildMetadata(metadata: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  const forwarded = pipelineMetadata(metadata);
+  if (!forwarded) return undefined;
+  const { resumeKey: _resume, attemptId: _attempt, ...rest } = forwarded;
+  return rest;
 }
 
 /**
@@ -256,6 +266,15 @@ export async function spawnWorker(
      * charged for. A side channel like `onCounters`, for the same reason.
      */
     onTokens?: (tokens: number) => void;
+    /**
+     * Receives the worker's text so far while it runs (every 15 s) and once
+     * more when it fails, so a pipeline can keep an interrupted stage's
+     * progress. ponytail: the first worker only; a failure respawn's progress
+     * is not reported.
+     */
+    onPartialOutput?: (text: string) => void;
+    /** The id of the worker that runs the task, once spawned: its permission requests are the caller's. */
+    onWorkerSpawned?: (workerId: string) => void;
   },
 ): Promise<unknown> {
   const agentManager = getAgentManager();
@@ -758,6 +777,10 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
 
   // Workers must return results to the root agent, not message the user directly (STATIC)
   staticParts.push(`\n\nIMPORTANT: You are a worker agent. Return your findings and results as plain text in your final response. Do NOT use messaging tools (send_to_user, send_channel_message) to contact the user — the rootAgent handles all user communication. Just do your task and respond with the result.`);
+  // Worker guidance, kept out of SECURITY_PREAMBLE (DESIGN.md rule #6): its
+  // rule 8 is about the answer, and a stage that read it as "stop at the first
+  // failed probe" reported a stop as its work (#16).
+  staticParts.push(`\n\nRECOVERING FROM YOUR OWN PROBES: a guessed path that does not exist, a helper binary that is not installed, or an exploratory command that exits non-zero is something to recover from — list or search for the real path, use an available alternative, re-run — and keep working. Report something as unavailable only when what the task needs truly is; never invent the result of a call that failed.`);
 
   // Knowledge-tool roles: point them at the auto-indexed product docs so
   // "how do I set up / configure / connect X" questions are answered from
@@ -925,6 +948,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   });
 
   const workerId = worker.getContext().id;
+  overrides?.onWorkerSpawned?.(workerId);
 
   // ── Register stage in swarm_nodes + announce on hub ──
   if (stageNode && overrides?.swarmParent) {
@@ -1062,7 +1086,9 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     const premise = premiseNoteFor(baseMessage, premiseRoots(context, isDevMode ? devProjectPath : undefined));
     const workerMessage = premise ? `${baseMessage}\n\n${premise}` : baseMessage;
 
-    const result = await worker.run(workerMessage);
+    const onPartial = overrides?.onPartialOutput;
+    const progress = onPartial ? setInterval(() => { const text = worker.getPartialOutput(); if (text) onPartial(text); }, 15_000) : undefined;
+    const result = await worker.run(workerMessage).finally(() => clearInterval(progress));
     const durationMs = Date.now() - startTime;
     overrides?.onCounters?.(await stageCounters(worker, overrides?.swarmParent ? workerId : null));
     // Spend, not context volume — onTokens feeds pipeline budget pools.
@@ -1170,6 +1196,8 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
 
     return result;
   } catch (error) {
+    const partial = worker.getPartialOutput();
+    if (partial) overrides?.onPartialOutput?.(partial);
     // Mark the swarm node as failed before delegating to the retry/fallback
     // path. handleWorkerFailure spawns new workers with new IDs — those
     // aren't tied to this swarm_node row, so the row's terminal state must

@@ -1,5 +1,5 @@
 import { configuredCliBinary } from './cli-executable';
-import { APPROVAL_DISCONNECT_REASON, APPROVAL_TIMEOUT_REASON, APPROVAL_UNFINISHED_REASON } from './approval-wait';
+import { APPROVAL_DISCONNECT_REASON, APPROVAL_TIMEOUT_REASON, APPROVAL_UNFINISHED_REASON, approvalWaitReason } from './approval-wait';
 import { inlineUiRepairMessage, storeInlineUiBlocks } from '@/core/inline-ui/extract';
 import { VAULT_USAGE_GUIDANCE } from '@/core/agent/vault-guidance';
 import { usageContextOf } from '@/core/agent/context';
@@ -101,9 +101,11 @@ export class CLIAgentWorker extends BaseAgentWorker {
   private pauseStartedAt: number | null = null;
   private pauseReasons = new Set<string>();
   private approvalDeadline?: ReturnType<typeof setTimeout>;
+  /** The permission request this worker is waiting on, named in the reason it gives up with. */
+  private awaitedRequestId?: string;
   private endApprovalWait(reason: string): void {
     if (!this.pauseReasons.has('approval') || this.terminalEmitted || this.aborted) return;
-    this.runError = reason;
+    this.runError = approvalWaitReason(reason, this.awaitedRequestId);
     this.stop();
   }
   private setPause(reason: string, on: boolean): void {
@@ -480,8 +482,10 @@ When a task matches one of these skills, load it with get_skill before starting 
 
     if (this.aborted) throw new Error('Agent was aborted before starting');
     this.runStartedAt = Date.now();
-    permissionCleanup = getPermissionManager().onWaitStateChange((agentId, waiting) => {
+    this.partialOutput = '';
+    permissionCleanup = getPermissionManager().onWaitStateChange((agentId, waiting, requestId) => {
       if (agentId !== this.context.id) return;
+      this.awaitedRequestId = waiting ? requestId : undefined;
       this.setPause('approval', waiting);
       clearTimeout(this.approvalDeadline);
       this.approvalDeadline = undefined;
@@ -589,7 +593,7 @@ When a task matches one of these skills, load it with get_skill before starting 
 
       if (this.aborted) throw new Error(this.runError ?? this.abortReason ?? 'Agent was aborted by user');
 
-      if (this.pauseReasons.has('approval')) throw new Error(APPROVAL_UNFINISHED_REASON);
+      if (this.pauseReasons.has('approval')) throw new Error(approvalWaitReason(APPROVAL_UNFINISHED_REASON, this.awaitedRequestId));
 
       if (isRootAgent(this.context)) {
         const repair = this.context.metadata?.inlineUiOffered === true
@@ -1389,6 +1393,7 @@ When a task matches one of these skills, load it with get_skill before starting 
               } else {
                 accumulatedText += result.text;
               }
+              this.partialOutput = accumulatedText.slice(-20_000);
             }
           } catch {
             agentLogger.debug({ line: line.slice(0, 200) }, 'Non-JSON CLI output');

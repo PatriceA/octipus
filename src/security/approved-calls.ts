@@ -2,17 +2,45 @@
  * Calls the user approved for a pipeline (#12/#20): the call a parked stage was
  * blocked on, and the gate commands (`verifyCommand`) a plan or stage approval
  * named. They live on the pipeline row (`metadata.approvedCalls`), so they
- * survive a restart and end with the run: while that pipeline is running or
- * awaiting approval, an identical call in its session (same tool, action and
- * command or path) executes without asking. Anything else still asks.
+ * survive a restart and end with the run.
+ *
+ * A grant is never session-wide. It executes a call without asking only when
+ * the caller is the stage worker it was granted to — same pipeline (owned by
+ * the caller's user, session and workspace, still running or awaiting
+ * approval), same stage, same attempt for a blocked-call grant, same
+ * `hostServices` capability — and the call is the same tool and action with
+ * the same arguments (`callFingerprint`). A different cwd, env, network or
+ * useShell flag, different file contents, a child the stage spawned, the root
+ * agent or another pipeline: all still ask. A DENY never reaches this check.
  */
+import { createHash } from 'node:crypto';
 import { pipelineRepository } from '@/db/repositories/pipeline-repository';
 import { securityLogger } from '@/utils/logger';
 import type { SpaceToolCall } from './space-tools';
 
-export interface ApprovedCall { toolId: string; action: string; subject: string }
+export interface ApprovedCall {
+  toolId: string;
+  action: string;
+  /** Every authorization-relevant argument, hashed (`callFingerprint`). */
+  fingerprint: string;
+  /** The stage the grant belongs to. */
+  nodeKey: string;
+  /** The stage attempt a blocked call was approved in; absent on a gate grant, which holds for each attempt of its stage. */
+  attemptId?: string;
+  /** The stage's host network + Docker socket opt-in the call was approved under. */
+  hostServices: boolean;
+}
 
-/** The argument that names what a call acts on; a call without one is never pre-approved. */
+/** Who a stage worker is, from the metadata the pipeline (never the model) put on its context. */
+export interface StageScope { pipelineId: string; nodeKey: string; attemptId: string; hostServices: boolean }
+
+export function stageScopeOf(metadata: Record<string, unknown> | null | undefined): StageScope | undefined {
+  const { pipelineId, nodeKey, attemptId, hostServices } = metadata ?? {};
+  if (typeof pipelineId !== 'string' || typeof nodeKey !== 'string' || typeof attemptId !== 'string' || !attemptId) return undefined;
+  return { pipelineId, nodeKey, attemptId, hostServices: hostServices === true };
+}
+
+/** The argument that names what a call acts on, for the approval prompt. */
 export function approvalSubject(args: Record<string, unknown> | undefined): string | undefined {
   for (const key of ['command', 'file_path', 'filePath', 'path']) {
     if (typeof args?.[key] === 'string' && args[key]) return args[key] as string;
@@ -20,36 +48,78 @@ export function approvalSubject(args: Record<string, unknown> | undefined): stri
   return undefined;
 }
 
-export function approvedCallOf(call: SpaceToolCall): ApprovedCall | undefined {
-  const subject = approvalSubject(call.args);
-  return subject ? { toolId: call.toolId, action: call.action, subject } : undefined;
+/**
+ * Arguments that change nothing about what a call is allowed to do: the CLI's
+ * one-line label and a time limit. Everything else — cwd, env, network,
+ * useShell, run_in_background, file contents — is part of the approval.
+ */
+const COSMETIC_ARGS = new Set(['description', 'timeout']);
+
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical((value as Record<string, unknown>)[key])]));
+  }
+  return value;
+}
+
+export function callFingerprint(toolId: string, action: string, args: Record<string, unknown>): string {
+  const relevant = Object.fromEntries(Object.entries(args).filter(([key]) => !COSMETIC_ARGS.has(key)));
+  return createHash('sha256').update(JSON.stringify(canonical([toolId, action, relevant]))).digest('hex');
+}
+
+/** The grant for `call`, approved in this stage attempt. */
+export function approvedCallOf(call: SpaceToolCall, scope: Omit<StageScope, 'pipelineId'>): ApprovedCall | undefined {
+  if (!call.args) return undefined;
+  return { toolId: call.toolId, action: call.action, fingerprint: callFingerprint(call.toolId, call.action, call.args),
+    nodeKey: scope.nodeKey, attemptId: scope.attemptId, hostServices: scope.hostServices };
 }
 
 /**
- * A gate command as both shells a stage can run it through: Octipus's shell
- * tool and the CLI's own Bash. ponytail: exact command text only; `npm test
- * 2>&1` still asks.
+ * A gate command as both shells its stage can run it through: Octipus's shell
+ * tool and the CLI's own Bash, each with the command as its only argument.
+ * ponytail: exact text and default scope only; `npm test 2>&1`, a `cwd`, or
+ * `useShell: false` spelled out still ask.
  */
-export function gateCommandCalls(command: string): ApprovedCall[] {
-  return [{ toolId: 'shell', action: 'execute', subject: command }, { toolId: 'cli-native:Bash', action: 'Bash', subject: command }];
+export function gateCommandCalls(command: string, nodeKey: string, hostServices: boolean): ApprovedCall[] {
+  return [['shell', 'execute'], ['cli-native:Bash', 'Bash']].map(([toolId, action]) =>
+    ({ toolId, action, fingerprint: callFingerprint(toolId, action, { command }), nodeKey, hostServices }));
 }
 
-/** `metadata` with `calls` added once each. */
+const grantKey = (c: ApprovedCall) => JSON.stringify([c.toolId, c.action, c.fingerprint, c.nodeKey, c.attemptId ?? null, c.hostServices]);
+
+/** `metadata` with `calls` added once each. Grants in an older shape are dropped: they never match. */
 export function withApprovedCalls(metadata: Record<string, unknown> | null | undefined, calls: ApprovedCall[]): Record<string, unknown> {
-  const stored = Array.isArray(metadata?.approvedCalls) ? metadata.approvedCalls as ApprovedCall[] : [];
-  const key = (c: ApprovedCall) => JSON.stringify([c.toolId, c.action, c.subject]);
-  const seen = new Set(stored.map(key));
-  return { ...(metadata ?? {}), approvedCalls: [...stored, ...calls.filter(c => !seen.has(key(c)) && seen.add(key(c)))] };
+  const stored = (Array.isArray(metadata?.approvedCalls) ? metadata.approvedCalls as ApprovedCall[] : [])
+    .filter(c => typeof c?.fingerprint === 'string' && typeof c.nodeKey === 'string');
+  const seen = new Set(stored.map(grantKey));
+  return { ...(metadata ?? {}), approvedCalls: [...stored, ...calls.filter(c => !seen.has(grantKey(c)) && seen.add(grantKey(c)))] };
 }
 
-export async function isApprovedCall(sessionId: string | undefined, call: SpaceToolCall): Promise<boolean> {
-  const entry = approvedCallOf(call);
-  if (!sessionId || !entry) return false;
+export interface ApprovedCallCaller {
+  userId: string;
+  sessionId?: string;
+  workspaceId?: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export async function isApprovedCall(caller: ApprovedCallCaller, call: SpaceToolCall): Promise<boolean> {
+  const scope = stageScopeOf(caller.metadata);
+  if (!scope || !caller.sessionId || !call.args) return false;
   try {
-    return await pipelineRepository.hasApprovedCall(sessionId, entry);
+    const pipeline = await pipelineRepository.findById(scope.pipelineId);
+    if (!pipeline || pipeline.userId !== caller.userId || pipeline.sessionId !== caller.sessionId
+      || (pipeline.workspaceId ?? null) !== (caller.workspaceId ?? null)
+      || !['running', 'awaiting_approval'].includes(pipeline.status)) return false;
+    const grants = (pipeline.metadata as { approvedCalls?: ApprovedCall[] } | null)?.approvedCalls;
+    if (!Array.isArray(grants)) return false;
+    const fingerprint = callFingerprint(call.toolId, call.action, call.args);
+    return grants.some(g => g.toolId === call.toolId && g.action === call.action && g.fingerprint === fingerprint
+      && g.nodeKey === scope.nodeKey && (g.attemptId === undefined || g.attemptId === scope.attemptId)
+      && g.hostServices === scope.hostServices);
   } catch (err) {
     // Not knowing means asking, never executing.
-    securityLogger.warn({ err, sessionId }, 'Pipeline approval lookup failed; asking instead');
+    securityLogger.warn({ err, pipelineId: scope.pipelineId }, 'Pipeline approval lookup failed; asking instead');
     return false;
   }
 }

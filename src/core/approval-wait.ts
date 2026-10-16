@@ -13,3 +13,12 @@ const REASONS = [APPROVAL_TIMEOUT_REASON, APPROVAL_DISCONNECT_REASON, APPROVAL_U
 export function isApprovalWaitEnded(message: string): boolean {
   return REASONS.some(reason => message.includes(reason));
 }
+
+/** `reason` naming the request the worker was waiting on, so its caller answers that request and no other. */
+export function approvalWaitReason(reason: string, requestId: string | undefined): string {
+  return requestId ? `${reason} [approval-request:${requestId}]` : reason;
+}
+
+export function approvalWaitRequestId(message: string): string | undefined {
+  return /\[approval-request:([0-9a-f-]{36})\]/i.exec(message)?.[1];
+}

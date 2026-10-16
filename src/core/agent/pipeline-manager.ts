@@ -8,6 +8,7 @@ import type { AgentTrigger } from '@/core/types';
 import { actionRecovery } from '@/core/action-recovery';
 import { channelCanPrompt } from '@/security/approval-policy';
 import { getConfig } from '@/config';
+import { randomUUID } from 'node:crypto';
 import { and, desc, eq, gte, inArray, ne } from 'drizzle-orm';
 import { getNotificationService } from '@/core/notification-service';
 import { recordRunEvent } from '@/core/run-log';
@@ -29,8 +30,8 @@ import type {
 import { pipelineNodes, pipelines } from '@/db/schema/pipelines';
 import { permissionRequests } from '@/db/schema/permissions';
 import { getPermissionManager } from '@/security/permissions';
-import { approvalSubject, approvedCallOf, gateCommandCalls, withApprovedCalls } from '@/security/approved-calls';
-import { isApprovalWaitEnded } from '@/core/approval-wait';
+import { approvalSubject, approvedCallOf, callFingerprint, gateCommandCalls, withApprovedCalls } from '@/security/approved-calls';
+import { approvalWaitRequestId, isApprovalWaitEnded } from '@/core/approval-wait';
 import { decide, type DecisionSite, recordShadow } from '@/models/decision';
 import type { ModelConfigEntry } from '@/db/schema/models';
 import { getModelRegistry, type ModelRegistry } from '@/models/model-registry';
@@ -264,20 +265,41 @@ export function qaVerdictCorrectionInput(report: string, reason: string, handsOf
   );
 }
 
+/** A stage's gate command, and the stage scope a plan or stage approval grants it in. */
+export interface PipelineGate { command: string; nodeKey: string; hostServices: boolean }
+
 /**
  * The run's gate commands: each stage's `verifyCommand`, resolved from the
  * run's description and parameters, so a plan or stage approval can name them
- * (#12). One that depends on a stage's output is unknown before it and is left out.
+ * (#12). One that depends on a stage's output is unknown before it and is left
+ * out. Each is granted only to its own stage (`approved-calls.ts`).
  */
-export function pipelineGateCommands(stages: Pick<StageTemplate, 'verifyCommand'>[], vars: Record<string, string>): string[] {
-  const commands = stages.map(stage => stage.verifyCommand ? expandPromptTemplate(stage.verifyCommand, vars).trim() : '');
-  return [...new Set(commands.filter(command => command && !command.includes('{{')))];
+export function pipelineGateCommands(
+  stages: Array<Pick<StageTemplate, 'verifyCommand' | 'hostServices'> & { nodeKey: string }>,
+  vars: Record<string, string>,
+): PipelineGate[] {
+  return stages.flatMap(stage => {
+    const command = stage.verifyCommand ? expandPromptTemplate(stage.verifyCommand, vars).trim() : '';
+    return command && !command.includes('{{') ? [{ command, nodeKey: stage.nodeKey, hostServices: stage.hostServices === true }] : [];
+  });
 }
 
-function gateNote(gates: string[]): string {
-  return gates.length
-    ? `\n\nApproving also lets ${gates.length === 1 ? 'this gate command' : 'these gate commands'} run without asking for the rest of this run: ${gates.map(gate => `\`${gate}\``).join(', ')}.`
+function gateNote(gates: PipelineGate[]): string {
+  const commands = [...new Set(gates.map(gate => gate.command))];
+  return commands.length
+    ? `\n\nApproving also lets ${commands.length === 1 ? 'this gate command' : 'these gate commands'} run without asking in ${gates.length === 1 ? 'its stage' : 'their stages'} for the rest of this run: ${commands.map(command => `\`${command}\``).join(', ')}.`
     : '';
+}
+
+/**
+ * Prepended to a stage attempt re-run with what it said before it was
+ * interrupted: progress, clearly not a finished result.
+ */
+export function incompleteAttemptNote(text: string): string {
+  return 'INCOMPLETE — this stage attempt was interrupted before it finished. What it had reported so far ' +
+    '(progress only, not a result; check the workspace for what actually happened before relying on it, ' +
+    'and do not repeat side effects that already took place):\n' +
+    `<incomplete-output>\n${stripPipelineControlBlocks(text).slice(-8000)}\n</incomplete-output>`;
 }
 
 /** Prepended to a stage re-run after its blocked call was approved (#20). */
@@ -757,8 +779,15 @@ class StageContractError extends Error {}
 /** What a parked stage waits on, as `get_pipeline_status` reports it (#24). */
 export interface PendingStageApproval {
   requestId: string;
+  /** The stage worker's own request this one re-raises, or null when it could not be identified. */
+  workerRequestId: string | null;
   stage: string;
   nodeKey: string;
+  /** The stage attempt that was blocked; the grant is for it alone. */
+  attemptId: string;
+  /** `callFingerprint` of the blocked call, so an answer after a restart grants exactly it. */
+  fingerprint: string | null;
+  hostServices: boolean;
   itemId: string | null;
   item: string | null;
   toolId: string | null;
@@ -787,7 +816,18 @@ export interface WalkState {
   rejectedReport?: string;
   currentItemId: string | null;
   steps: number;
+  /**
+   * The attempt at `cursor` this checkpoint was taken for. A resume reuses it,
+   * so an interrupted attempt continues its vendor CLI conversation; a new
+   * plan item, a retry or a rewind starts a new one.
+   */
+  attemptId?: string;
+  /** What that attempt said before it was interrupted (`incompleteAttemptNote`). */
+  partial?: StagePartial;
 }
+
+/** An interrupted stage attempt's output so far, kept apart from any finished output. */
+export interface StagePartial { attemptId: string; itemId: string | null; text: string; at: string }
 
 /** JSON form of a walk state. Plain data — `Map`s are already objects here. */
 export function serializeWalk(state: WalkState): Record<string, unknown> {
@@ -832,7 +872,15 @@ export function hydrateWalk(raw: unknown): WalkState | null {
     rejectedReport: typeof r.rejectedReport === 'string' ? r.rejectedReport : undefined,
     currentItemId: typeof r.currentItemId === 'string' ? r.currentItemId : null,
     steps: typeof r.steps === 'number' && r.steps >= 0 ? r.steps : 0,
+    attemptId: typeof r.attemptId === 'string' && r.attemptId ? r.attemptId : undefined,
+    partial: isStagePartial(r.partial) ? r.partial : undefined,
   };
+}
+
+function isStagePartial(value: unknown): value is StagePartial {
+  const p = value as StagePartial | null;
+  return !!p && typeof p === 'object' && typeof p.attemptId === 'string' && typeof p.text === 'string'
+    && (p.itemId === null || typeof p.itemId === 'string') && typeof p.at === 'string';
 }
 
 export class PipelineManager {
@@ -1120,7 +1168,10 @@ export class PipelineManager {
   private async walk(args: Parameters<PipelineManager['runGraph']>[0]): Promise<{ pipelineId: string; result: string }> {
     const { pipeline, graph, built, template, paramVars, description, title, context, sessionId } = args;
     const rootAgent = getAgentService();
-    const gates = pipelineGateCommands(template.stages, { description, ...paramVars });
+    const gates = pipelineGateCommands(
+      graph.nodes.filter(n => n.templateIndex >= 0).map(n => ({ ...template.stages[n.templateIndex], nodeKey: n.key })),
+      { description, ...paramVars },
+    );
     const registry = getModelRegistry();
     const nodes = new Map((await pipelineRepository.getNodes(pipeline.id)).map((r) => [r.nodeKey, r]));
     const byKey = new Map(graph.nodes.map((n) => [n.key, n]));
@@ -1172,6 +1223,9 @@ export class PipelineManager {
     const loopMarks = new Map<string, number>();
 
     let cursor: string | null = graph.entryKey;
+    /** The checkpoint's attempt and its progress, taken over by the first node a resume enters. */
+    let resumedAttempt: string | undefined;
+    let resumedPartial: StagePartial | undefined;
     // Backstop. Every cycle is individually bounded, but a template that
     // compiles to something pathological must fail loudly rather than bill for
     // an afternoon.
@@ -1200,7 +1254,17 @@ export class PipelineManager {
       currentItem = r.currentItemId
         ? (await pipelineRepository.getPlanItems(pipeline.id)).find((i) => i.id === r.currentItemId) ?? null
         : null;
-      if (currentItem?.status === 'failed') {
+      resumedAttempt = r.attemptId;
+      resumedPartial = r.partial;
+      const loopHead = byKey.get(cursor)?.parentKey;
+      if (currentItem?.status === 'skipped' && loopHead) {
+        // The item this checkpoint was inside was skipped while the run was
+        // stopped (`resume_pipeline` skipItems): go on from the loop head,
+        // which takes the next pending item and leaves the skip as recorded.
+        cursor = loopHead;
+        currentItem = null;
+        resumedAttempt = resumedPartial = undefined;
+      } else if (currentItem?.status === 'failed') {
         await pipelineRepository.updatePlanItem(currentItem.id, { status: 'running' });
         currentItem.status = 'running';
       }
@@ -1212,6 +1276,9 @@ export class PipelineManager {
       // Node boundary: snapshot first, then honour a pause request. Snapshot
       // BEFORE the node runs, so resuming re-enters this node rather than
       // trying to continue a worker turn mid-flight.
+      const attemptId = resumedAttempt ?? randomUUID();
+      const partial = resumedPartial?.attemptId === attemptId && resumedPartial.itemId === (currentItem?.id ?? null) ? resumedPartial : undefined;
+      resumedAttempt = resumedPartial = undefined;
       const snapshot: WalkState = {
         contractRetries: Object.fromEntries(contractRetries),
         contractFeedback,
@@ -1227,8 +1294,10 @@ export class PipelineManager {
         rejectedReport,
         currentItemId: currentItem?.id ?? null,
         steps,
+        attemptId,
+        ...(partial ? { partial } : {}),
       };
-      await pipelineRepository.saveCheckpoint({
+      const checkpoint = await pipelineRepository.saveCheckpoint({
         pipelineId: pipeline.id,
         nodeKey: cursor,
         state: serializeWalk(snapshot),
@@ -1549,6 +1618,10 @@ export class PipelineManager {
           rootAgentId: args.rootAgentId,
           title,
           reviewModels,
+          attemptId,
+          itemId: currentItem?.id ?? null,
+          checkpoint: { seq: checkpoint.seq, state: checkpoint.state as Record<string, unknown> },
+          partial,
         });
         if (stepResult.contractFailure) {
           contractRetries.set(retryKey, retryCount + 1);
@@ -1907,12 +1980,13 @@ export class PipelineManager {
    * the checkpoints after it are dropped (they describe a future that is being
    * replaced) and the walk re-enters that node with the state it had then.
    *
-   * The node that was interrupted RE-RUNS. Its previous output is already on
-   * its row, and a worker turn cannot be resumed halfway.
+   * The node that was interrupted RE-RUNS, as the same attempt unless
+   * `freshAttempt`: a resumable CLI continues that attempt's conversation, and
+   * any other worker is handed its saved progress, marked INCOMPLETE.
    */
   private resuming = new Map<string, AbortController>();
 
-  async resume(pipelineId: string, opts: { fromSeq?: number; onResumed?: () => void } = {}): Promise<{ pipelineId: string; result: string }> {
+  async resume(pipelineId: string, opts: { fromSeq?: number; onResumed?: () => void; freshAttempt?: boolean } = {}): Promise<{ pipelineId: string; result: string }> {
     if (this.resuming.has(pipelineId)) throw new Error(`Pipeline ${pipelineId} is already awaiting resume or running.`);
     this.resuming.set(pipelineId, new AbortController());
     try { return await this.resumeReviewed(pipelineId, opts); }
@@ -1921,7 +1995,7 @@ export class PipelineManager {
 
   private async resumeReviewed(
     pipelineId: string,
-    opts: { fromSeq?: number; onResumed?: () => void },
+    opts: { fromSeq?: number; onResumed?: () => void; freshAttempt?: boolean },
   ): Promise<{ pipelineId: string; result: string }> {
     const pipeline = await this.getPipeline(pipelineId);
     if (!pipeline) throw new Error(`Pipeline ${pipelineId} not found.`);
@@ -1981,7 +2055,7 @@ export class PipelineManager {
   private async resumeWalk(
     pipeline: Pipeline,
     pipelineId: string,
-    opts: { fromSeq?: number; onResumed?: () => void },
+    opts: { fromSeq?: number; onResumed?: () => void; freshAttempt?: boolean },
     checkpoint: NonNullable<Awaited<ReturnType<typeof pipelineRepository.getCheckpoint>>>,
     resumeState: NonNullable<ReturnType<typeof hydrateWalk>>,
     context: AgentContext,
@@ -2050,6 +2124,12 @@ export class PipelineManager {
     if (opts.fromSeq != null) {
       signal?.throwIfAborted();
       await pipelineRepository.deleteCheckpointsAfter(pipelineId, checkpoint.seq);
+    }
+    // A deliberate rewind runs the stage afresh; otherwise the interrupted
+    // attempt continues, with its CLI conversation and its progress.
+    if (opts.freshAttempt) {
+      resumeState.attemptId = undefined;
+      resumeState.partial = undefined;
     }
 
     signal?.throwIfAborted();
@@ -2617,10 +2697,31 @@ export class PipelineManager {
     rootAgentId: string;
     title: string;
     reviewModels?: ReviewModelLedger;
+    /** This stage attempt (`WalkState.attemptId`): its CLI conversation and its approvals. */
+    attemptId: string;
+    itemId: string | null;
+    /** The checkpoint the attempt was entered from; its progress is kept there. */
+    checkpoint?: { seq: number; state: Record<string, unknown> };
+    /** What this attempt said before an earlier interruption. */
+    partial?: StagePartial;
   }): Promise<{ output: string; raw: string; contractFailure?: string; stopped?: { pipelineId: string; result: string } }> {
-    const { pipeline, node, declared, stageTemplate, input, stageContext, context, registry, workspaceRoot, title } = args;
+    const { pipeline, node, declared, stageTemplate, stageContext, context, registry, workspaceRoot, title, attemptId, itemId, checkpoint } = args;
+    const input = args.partial ? `${incompleteAttemptNote(args.partial.text)}\n\n${args.input}` : args.input;
     const rootAgent = getAgentService();
     const sessionId = pipeline.sessionId;
+    // Progress of this attempt, on its checkpoint: a restart or a cold retry
+    // gets it back as INCOMPLETE output, never as the stage's result.
+    let partialText = args.partial?.text ?? '';
+    let partialWrite: Promise<unknown> = Promise.resolve();
+    const savePartial = (text: string | null) => {
+      if (!checkpoint) return;
+      const { partial: _old, ...state } = checkpoint.state;
+      const next = text ? { ...state, partial: { attemptId, itemId, text: text.slice(-20_000), at: new Date().toISOString() } satisfies StagePartial } : state;
+      partialWrite = partialWrite.then(() => pipelineRepository.updateCheckpointState(pipeline.id, checkpoint.seq, next))
+        .catch((err: unknown) => coreLogger.error({ err, pipelineId: pipeline.id, stage: node.name }, 'Could not save the stage attempt progress'));
+    };
+    /** Workers this attempt spawned: only their own permission requests are this stage's. */
+    const workerIds = new Set<string>();
 
     // The row holds the LATEST run: an earlier item's report must not sit next
     // to this run's failure (#15).
@@ -2674,10 +2775,11 @@ export class PipelineManager {
           // Read by the `plan` tool to scope its writes to THIS pipeline. A
           // worker cannot be trusted to pass a pipeline id it was told.
           metadata: { ...(context.metadata ?? {}), pipelineId: pipeline.id, nodeKey: node.nodeKey,
-            // One vendor CLI conversation per stage visit: a stage re-run after
-            // an approval (#20) resumes it instead of starting over; a later
-            // visit (next item, QA bounce) starts fresh.
-            resumeKey: `pipeline-${pipeline.id}:${node.nodeKey}:${node.visits}`,
+            // One vendor CLI conversation per stage attempt: a stage re-run after
+            // an approval or a restart (#20) resumes it instead of starting
+            // over; a new attempt (next item, QA bounce, retry) starts fresh.
+            resumeKey: `pipeline-${pipeline.id}:${node.nodeKey}:${attemptId}`,
+            attemptId,
             // Opt-in per stage (`hostServices`): its shell gets host network and the Docker socket.
             ...(declared.hostServices ? { hostServices: true } : {}) },
         } as AgentContext,
@@ -2704,6 +2806,8 @@ export class PipelineManager {
             subtopic: node.visits > 1 ? `${node.name} (visit ${node.visits})` : node.name,
           },
           onCounters: (c) => { counters = c; },
+          onWorkerSpawned: (id) => { workerIds.add(id); },
+          onPartialOutput: (text) => { partialText = text; savePartial(text); },
         },
       );
 
@@ -2765,6 +2869,9 @@ export class PipelineManager {
       const output = stripPipelineControlBlocks(raw);
 
       await this.updateNode(node.id, { status: 'completed', output, completedAt: new Date() });
+      // Finished: the attempt's progress is superseded by its output.
+      if (partialText) savePartial(null);
+      await partialWrite;
       recordRunEvent({
         runId: sessionId,
         subject: 'pipeline_node',
@@ -2803,11 +2910,12 @@ export class PipelineManager {
     } catch (error) {
       // The stage's own reason, without worker-spawner's `Worker "x" failed:` wrapper (#7).
       const errorMsg = (error as Error).message.replace(/^Worker "[^"]*" failed: /, '');
+      await partialWrite;
       if ((await this.getPipeline(pipeline.id))?.status === 'paused') {
         await this.updateNode(node.id, { status: 'pending' });
         return { output: '', raw: '', stopped: { pipelineId: pipeline.id, result: 'Pipeline stopped; resume from the saved stage checkpoint.' } };
       }
-      if (isApprovalWaitEnded(errorMsg)) return this.awaitStageApproval(args, stageStartedAt, errorMsg);
+      if (isApprovalWaitEnded(errorMsg)) return this.awaitStageApproval(args, { since: stageStartedAt, reason: errorMsg, workerIds, partialText });
       if (error instanceof StageContractError && args.retryContract) {
         await this.updateNode(node.id, { status: 'pending', error: errorMsg });
         recordRunEvent({ runId: sessionId, subject: 'pipeline_node', subjectId: node.nodeKey,
@@ -2868,8 +2976,10 @@ export class PipelineManager {
   }
 
   /** Pipeline metadata recording `gates` as approved, after the user approved a prompt naming them. */
-  private async approveGates(pipelineId: string, gates: string[]): Promise<{ metadata?: Record<string, unknown> }> {
-    return gates.length ? { metadata: withApprovedCalls((await this.getPipeline(pipelineId))?.metadata, gates.flatMap(gateCommandCalls)) } : {};
+  private async approveGates(pipelineId: string, gates: PipelineGate[]): Promise<{ metadata?: Record<string, unknown> }> {
+    return gates.length
+      ? { metadata: withApprovedCalls((await this.getPipeline(pipelineId))?.metadata, gates.flatMap(gate => gateCommandCalls(gate.command, gate.nodeKey, gate.hostServices))) }
+      : {};
   }
 
   /**
@@ -2877,29 +2987,45 @@ export class PipelineManager {
    * this is never a failure: the stage parks as `awaiting_approval`, the call it
    * was blocked on is raised again as a durable request (prompt, push, and
    * `get_pipeline_status`), and the stage re-runs once the user approves — the
-   * same call then executes without asking (`approved-calls.ts`). A denial or a
-   * stop pauses the run at this stage.
+   * same call then executes without asking, in this stage attempt only
+   * (`approved-calls.ts`). A denial or a stop pauses the run at this stage.
+   *
+   * The blocked call is the request the worker named when it gave up
+   * (`approvalWaitReason`), and only when that request is this attempt's own:
+   * raised by a worker this attempt spawned, in this pipeline's session, since
+   * the attempt started. Anything else is not guessed at: the stage parks on a
+   * plain "continue the stage" question and grants nothing.
    */
   private async awaitStageApproval(
     args: Parameters<PipelineManager['runStepNode']>[0],
-    since: Date,
-    reason: string,
+    blocked: { since: Date; reason: string; workerIds: Set<string>; partialText: string },
   ): Promise<Awaited<ReturnType<PipelineManager['runStepNode']>>> {
-    const { pipeline, node } = args;
+    const { pipeline, node, attemptId } = args;
+    const { reason } = blocked;
     const agentId = `pipeline:${pipeline.id}`;
-    // The call the worker was blocked on: the newest request of this session since the stage started.
-    const [asked] = await this.db.select().from(permissionRequests)
-      .where(and(eq(permissionRequests.sessionId, pipeline.sessionId), gte(permissionRequests.createdAt, since), ne(permissionRequests.agentId, agentId)))
-      .orderBy(desc(permissionRequests.createdAt)).limit(1);
+    const hostServices = args.declared.hostServices === true;
+    const workerRequestId = approvalWaitRequestId(reason);
+    const [row] = workerRequestId
+      ? await this.db.select().from(permissionRequests)
+        .where(and(eq(permissionRequests.id, workerRequestId), eq(permissionRequests.sessionId, pipeline.sessionId),
+          eq(permissionRequests.userId, pipeline.userId), gte(permissionRequests.createdAt, blocked.since), ne(permissionRequests.agentId, agentId)))
+        .limit(1)
+      : [];
+    const asked = row && blocked.workerIds.has(row.agentId) && ['pending', 'expired'].includes(row.status) ? row : undefined;
+    if (workerRequestId && !asked) {
+      coreLogger.warn({ pipelineId: pipeline.id, stage: node.name, workerRequestId }, 'Blocked request is not this stage attempt\'s own; parking without a grant');
+    }
     const toolArgs = (asked?.context?.toolArguments ?? {}) as Record<string, unknown>;
-    const item = (await pipelineRepository.getPlanItems(pipeline.id)).find(i => i.status === 'running');
+    const item = args.itemId ? (await pipelineRepository.getPlanItems(pipeline.id)).find(i => i.id === args.itemId) : undefined;
     const signal = this.signals.get(pipeline.id);
     const permissions = getPermissionManager();
     const requestId = await permissions.requestApproval(pipeline.userId, agentId, asked?.toolId ?? 'pipeline',
       asked?.action ?? 'resume_stage', toolArgs, pipeline.sessionId,
       `Pipeline stage "${node.name}": ${asked?.context?.toolName ?? 'continue'}`, signal, pipeline.workspaceId);
     const pendingApproval: PendingStageApproval = {
-      requestId, stage: node.name, nodeKey: node.nodeKey, itemId: item?.id ?? null, item: item?.title ?? null,
+      requestId, workerRequestId: asked?.id ?? null, stage: node.name, nodeKey: node.nodeKey, attemptId,
+      fingerprint: asked ? callFingerprint(asked.toolId, asked.action, toolArgs) : null, hostServices,
+      itemId: item?.id ?? null, item: item?.title ?? null,
       toolId: asked?.toolId ?? null, action: asked?.action ?? null, toolName: asked?.context?.toolName ?? null,
       subject: approvalSubject(toolArgs) ?? null, reason,
     };
@@ -2913,10 +3039,14 @@ export class PipelineManager {
     const current = await this.getPipeline(pipeline.id);
     const { pendingApproval: _answered, ...metadata } = (current?.metadata ?? {}) as Record<string, unknown>;
     if (approved && current?.status === 'awaiting_approval') {
-      const call = asked ? approvedCallOf({ toolId: asked.toolId, action: asked.action, args: toolArgs }) : undefined;
+      const call = asked ? approvedCallOf({ toolId: asked.toolId, action: asked.action, args: toolArgs }, { nodeKey: node.nodeKey, attemptId, hostServices }) : undefined;
       await this.updatePipeline(pipeline.id, { status: 'running', metadata: call ? withApprovedCalls(metadata, [call]) : metadata });
-      // Same visit, same `resumeKey`: a resumable CLI continues the conversation it stopped in (#20).
-      return this.runStepNode({ ...args, input: `${approvedResumeNote(pendingApproval.subject)}\n\n${args.input}` });
+      // Same attempt, same `resumeKey`: a resumable CLI continues the conversation
+      // it stopped in (#20); a cold one gets what it had said so far.
+      const partial = blocked.partialText
+        ? { attemptId, itemId: args.itemId, text: blocked.partialText, at: new Date().toISOString() }
+        : args.partial;
+      return this.runStepNode({ ...args, partial, input: `${approvedResumeNote(pendingApproval.subject)}\n\n${args.input}` });
     }
     await this.updateNode(node.id, { status: 'pending' });
     await this.updatePipeline(pipeline.id, current?.status === 'paused' ? { metadata } : {
@@ -2942,7 +3072,7 @@ export class PipelineManager {
     lastOutput: string;
     context: AgentContext;
     title: string;
-    gates: string[];
+    gates: PipelineGate[];
   }): Promise<{
     outcome: NodeOutcome;
     item: PlanItemRow | null;
@@ -2951,8 +3081,11 @@ export class PipelineManager {
     const { pipeline, node, currentItem, lastOutput, context, title, gates } = args;
     const rootAgent = getAgentService();
 
-    if (currentItem) {
-      await pipelineRepository.updatePlanItem(currentItem.id, {
+    // Skipped while it ran (`resume_pipeline` skipItems): the skip and its evidence stand.
+    const closing = currentItem && (await pipelineRepository.getPlanItems(pipeline.id)).find(i => i.id === currentItem.id)?.status !== 'skipped'
+      ? currentItem : null;
+    if (closing) {
+      await pipelineRepository.updatePlanItem(closing.id, {
         status: 'done',
         result: lastOutput.slice(0, 4000),
         completedAt: new Date(),
@@ -2960,9 +3093,9 @@ export class PipelineManager {
       recordRunEvent({
         runId: pipeline.sessionId,
         subject: 'plan_item',
-        subjectId: currentItem.id,
+        subjectId: closing.id,
         event: 'item_finished',
-        payload: { pipelineId: pipeline.id, title: currentItem.title, ordinal: currentItem.ordinal },
+        payload: { pipelineId: pipeline.id, title: closing.title, ordinal: closing.ordinal },
       });
     }
 
@@ -3219,7 +3352,7 @@ export class PipelineManager {
     previousOutput: string;
     context: AgentContext;
     title: string;
-    gates: string[];
+    gates: PipelineGate[];
   }): Promise<'go' | 'skip' | 'stop'> {
     const { pipeline, node, handoffChain, previousOutput, context, title, gates } = args;
     const rootAgent = getAgentService();

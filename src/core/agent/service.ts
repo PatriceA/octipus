@@ -1360,6 +1360,10 @@ export class AgentService {
       maxTokenBudget?: number;
       /** Token sink, called once per worker that ran. See spawnWorker. */
       onTokens?: (tokens: number) => void;
+      /** The worker's text so far, while it runs and when it fails. See spawnWorker. */
+      onPartialOutput?: (text: string) => void;
+      /** The spawned worker's id. See spawnWorker. */
+      onWorkerSpawned?: (workerId: string) => void;
     },
   ): Promise<unknown> {
     return spawnWorker(role, task, input, context, this.deps, overrides);

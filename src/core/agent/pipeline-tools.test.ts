@@ -96,6 +96,21 @@ describe('a stage parked on an approval (#24)', () => {
     fixture.ask.mockResolvedValue({ approved: true, response: 'Deny' });
     expect(await tool('answer_pipeline_approval').execute({ id: 'pipeline' }, context)).toMatchObject({ approved: false });
     expect(fixture.deny).toHaveBeenCalledWith('request', 'owner', expect.any(String));
+    expect(fixture.resume).not.toHaveBeenCalled();
+  });
+  it('after a restart, approving grants the blocked call to the blocked attempt and resumes that attempt', async () => {
+    const parked = { ...pendingApproval, attemptId: 'attempt-1', fingerprint: 'f'.repeat(64), hostServices: false, workerRequestId: 'worker-request' };
+    // The boot sweep paused the run; the request row is still pending, so settling it succeeds.
+    fixture.find.mockResolvedValue({ id: 'pipeline', userId: 'owner', sessionId: 'session', workspaceId: 'workspace', status: 'paused', metadata: { pendingApproval: parked } });
+    fixture.checkpoints.mockResolvedValue([{ seq: 9, nodeKey: 'qa', state: { attemptId: 'attempt-2' } }, { seq: 7, nodeKey: 'qa', state: { attemptId: 'attempt-1' } }]);
+    fixture.ask.mockResolvedValue({ approved: true, response: 'Approve' });
+    fixture.approve.mockResolvedValue(true);
+    fixture.resume.mockImplementation((_id, options) => { options.onResumed(); return new Promise(() => {}); });
+    await tool('answer_pipeline_approval').execute({ id: 'pipeline' }, context);
+    expect(fixture.updatePipeline).toHaveBeenCalledWith('pipeline', { metadata: { approvedCalls: [{
+      toolId: 'cli-native:Bash', action: 'Bash', fingerprint: parked.fingerprint, nodeKey: 'qa', attemptId: 'attempt-1', hostServices: false,
+    }] } });
+    expect(fixture.resume).toHaveBeenCalledWith('pipeline', expect.objectContaining({ fromSeq: 7 }));
   });
 });
 
@@ -105,4 +120,7 @@ it('resume_pipeline marks items already delivered as skipped, with evidence (#23
   await expect(tool('resume_pipeline').execute({ id: 'pipeline', skipItems: ['i2'] }, context)).rejects.toThrow('evidence');
   await tool('resume_pipeline').execute({ id: 'pipeline', skipItems: ['i2'], evidence: 'bc453de, npm test exit 0' }, context);
   expect(fixture.updateItem).toHaveBeenCalledWith('i2', { status: 'skipped', result: expect.stringContaining('bc453de') });
+  fixture.updateItem.mockClear();
+  await expect(tool('resume_pipeline').execute({ id: 'pipeline', skipItems: ['i2', 'nope'], evidence: 'bc453de' }, context)).rejects.toThrow("'nope'");
+  expect(fixture.updateItem).not.toHaveBeenCalled();
 });

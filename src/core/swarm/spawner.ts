@@ -13,7 +13,7 @@ import { estimateToolSchemaTokens, logPromptComposition } from '@/core/agent/pro
 import { formatCriticalRules, getRoleConfig, getToolsForRole } from '@/core/agent/roles';
 import { applyToolCap, isSmallModel } from '@/core/agent/small-model';
 import type { AgentRole } from '@/core/agent/types';
-import { pipelineMetadata } from '@/core/agent/worker-spawner';
+import { stageChildMetadata } from '@/core/agent/worker-spawner';
 import { countChangedFiles, snapshotWorkspace, type WorkspaceSnapshot } from '@/core/agent/workspace-snapshot';
 import { recordSwarmSpawn } from '@/core/telemetry';
 import type { AgentContext } from '@/core/types';
@@ -1665,7 +1665,7 @@ export class SwarmSpawner {
           // The child's own ancestry, so its children can say why they exist:
           // what its parent was asked to do, then what the child itself was.
           taskAncestry: [...(opts.brief.ancestry ?? []), opts.brief.taskBrief].map(clipAncestryEntry),
-          ...pipelineMetadata(opts.parentContext.metadata as Record<string, unknown> | undefined),
+          ...stageChildMetadata(opts.parentContext.metadata as Record<string, unknown> | undefined),
           ...treeMetadata,
           ...(opts.resumeKey ? { resumeKey: opts.resumeKey } : {}),
         },

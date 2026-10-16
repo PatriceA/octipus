@@ -39,34 +39,76 @@ afterAll(async () => {
 });
 
 describe('calls approved for a pipeline', () => {
-  const caller = () => ({ userId, sessionId, role: 'qa', attended: true });
-  const bash = (command: string) => ({ toolId: 'cli-native:Bash', action: 'Bash', toolName: 'Bash', args: { command, description: 'any' } });
-  const shell = (command: string) => ({ toolId: 'shell', action: 'execute', toolName: 'run', args: { command } });
+  const bash = (command: string, extra: Record<string, unknown> = {}) => ({ toolId: 'cli-native:Bash', action: 'Bash', toolName: 'Bash', args: { command, description: 'any', ...extra } });
+  const shell = (args: Record<string, unknown>) => ({ toolId: 'shell', action: 'execute', toolName: 'run', args });
+  const write = (content: string) => ({ toolId: 'cli-native:Write', action: 'Write', toolName: 'Write', args: { file_path: 'src/a.ts', content } });
 
-  test('the blocked call and the named gate commands execute while the run lives, nothing else', async () => {
+  test('a grant executes only the exact call, for its own stage attempt and capabilities, while the run lives', async () => {
     const { routeApprovalFor } = await import('./approval-route');
-    const { approvedCallOf, gateCommandCalls, withApprovedCalls } = await import('./approved-calls');
+    const { approvedCallOf, gateCommandCalls, stageScopeOf, withApprovedCalls } = await import('./approved-calls');
+    const { stageChildMetadata } = await import('@/core/agent/worker-spawner');
     const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+    const attempt = { nodeKey: 'implement', attemptId: 'attempt-1', hostServices: false };
     const metadata = withApprovedCalls(
-      withApprovedCalls({ keep: true }, [approvedCallOf(bash('docker compose build'))!]),
-      [...gateCommandCalls('npm test'), ...gateCommandCalls('npm test')],
+      withApprovedCalls({ keep: true, approvedCalls: [{ toolId: 'shell', action: 'execute', subject: 'old shape' }] },
+        [approvedCallOf(bash('docker compose build'), attempt)!, approvedCallOf(write('ok'), attempt)!]),
+      [...gateCommandCalls('npm test', 'qa', false), ...gateCommandCalls('npm test', 'qa', false)],
     );
     expect(metadata).toMatchObject({ keep: true });
-    expect(metadata.approvedCalls).toHaveLength(3);
+    // The pre-scope grant is dropped; the gate pair is stored once.
+    expect(metadata.approvedCalls).toHaveLength(4);
     const pipeline = await pipelineRepository.create({ rootAgentId: 'root', sessionId, userId, title: 't', type: 'development', status: 'running', metadata });
+    // Another live pipeline of the same session, with no grants.
+    const other = await pipelineRepository.create({ rootAgentId: 'root', sessionId, userId, title: 'o', type: 'development', status: 'running', metadata: {} });
 
-    const route = (call: ReturnType<typeof shell> | ReturnType<typeof bash>, over: Record<string, unknown> = {}, level: 'ASK' | 'DENY' = 'ASK') =>
-      routeApprovalFor({ ...caller(), ...over }, call, { level });
-    await expect(route(bash('docker compose build'))).resolves.toMatchObject({ route: 'execute', source: 'pipeline-approval' });
-    await expect(route(bash('npm test'))).resolves.toMatchObject({ route: 'execute' });
-    await expect(route(shell('npm test'))).resolves.toMatchObject({ route: 'execute' });
-    await expect(route(bash('npm test 2>&1'))).resolves.toMatchObject({ route: 'ask_human' });
-    await expect(route(bash('docker compose down'))).resolves.toMatchObject({ route: 'ask_human' });
-    await expect(route(bash('npm test'), { sessionId: otherSessionId })).resolves.toMatchObject({ route: 'ask_human' });
-    await expect(route(bash('npm test'), { sessionId: 'not-a-uuid' })).resolves.toMatchObject({ route: 'ask_human' });
-    await expect(route(bash('npm test'), {}, 'DENY')).resolves.toMatchObject({ route: 'deny' });
+    const stage = (over: Record<string, unknown> = {}) => ({ pipelineId: pipeline.id, nodeKey: 'implement', attemptId: 'attempt-1', ...over });
+    type Call = { toolId: string; action: string; toolName: string; args: Record<string, unknown> };
+    const route = (call: Call, metadata: Record<string, unknown> | undefined = stage(), over: Record<string, unknown> = {}, level: 'ASK' | 'DENY' = 'ASK') =>
+      routeApprovalFor({ userId, sessionId, role: 'coding', attended: true, metadata, ...over }, call, { level }).then(decision => decision.route);
 
+    await expect(route(bash('docker compose build'))).resolves.toBe('execute');
+    // The CLI's one-line label is not part of the approval.
+    await expect(route(bash('docker compose build', { description: 'other label' }))).resolves.toBe('execute');
+    await expect(route(bash('docker compose down'))).resolves.toBe('ask_human');
+    await expect(route(bash('docker compose build', { run_in_background: true }))).resolves.toBe('ask_human');
+    await expect(route(bash('docker compose build', { dangerouslyDisableSandbox: true }))).resolves.toBe('ask_human');
+    await expect(route(write('ok'))).resolves.toBe('execute');
+    await expect(route(write('different contents'))).resolves.toBe('ask_human');
+    // Capabilities: the same call in a stage attempt with host services is a different approval.
+    await expect(route(bash('docker compose build'), stage({ hostServices: true }))).resolves.toBe('ask_human');
+    // Lifecycle of the attempt: a later attempt, another stage, another pipeline.
+    await expect(route(bash('docker compose build'), stage({ attemptId: 'attempt-2' }))).resolves.toBe('ask_human');
+    await expect(route(bash('docker compose build'), stage({ nodeKey: 'qa' }))).resolves.toBe('ask_human');
+    await expect(route(bash('docker compose build'), stage({ pipelineId: other.id }))).resolves.toBe('ask_human');
+    // Unrelated workers: the root (no stage metadata), a child the stage spawned, a forged handle.
+    await expect(route(bash('docker compose build'), {})).resolves.toBe('ask_human');
+    const child = stageChildMetadata({ ...stage(), resumeKey: 'pipeline-x:implement:attempt-1' });
+    expect(child).toEqual({ pipelineId: pipeline.id, nodeKey: 'implement' });
+    expect(stageScopeOf(child)).toBeUndefined();
+    await expect(route(bash('docker compose build'), child)).resolves.toBe('ask_human');
+    await expect(route(bash('docker compose build'), stage({ pipelineId: 'not-a-uuid' }))).resolves.toBe('ask_human');
+    // Owner scope: another session, another workspace.
+    await expect(route(bash('docker compose build'), stage(), { sessionId: otherSessionId })).resolves.toBe('ask_human');
+    await expect(route(bash('docker compose build'), stage(), { workspaceId: '99999999-9999-4999-8999-999999999999' })).resolves.toBe('ask_human');
+    // DENY still wins.
+    await expect(route(bash('docker compose build'), stage(), {}, 'DENY')).resolves.toBe('deny');
+
+    // Gate commands: their own stage, any attempt of it, default scope only.
+    const qa = stage({ nodeKey: 'qa', attemptId: 'qa-attempt-7' });
+    await expect(route(bash('npm test'), qa)).resolves.toBe('execute');
+    await expect(route(shell({ command: 'npm test' }), qa)).resolves.toBe('execute');
+    await expect(route(shell({ command: 'npm test', timeout: 600 }), qa)).resolves.toBe('execute');
+    await expect(route(bash('npm test 2>&1'), qa)).resolves.toBe('ask_human');
+    await expect(route(shell({ command: 'npm test', cwd: '/tmp' }), qa)).resolves.toBe('ask_human');
+    await expect(route(shell({ command: 'npm test', env: { NODE_OPTIONS: '--require x' } }), qa)).resolves.toBe('ask_human');
+    await expect(route(shell({ command: 'npm test', network: true }), qa)).resolves.toBe('ask_human');
+    await expect(route(shell({ command: 'npm test', useShell: true }), qa)).resolves.toBe('ask_human');
+    await expect(route(bash('npm test'), stage())).resolves.toBe('ask_human');
+    await expect(route(bash('npm test'), { ...qa, hostServices: true })).resolves.toBe('ask_human');
+
+    // The run ends: every grant ends with it.
     await pipelineRepository.updatePipeline(pipeline.id, { status: 'completed' });
-    await expect(route(bash('npm test'))).resolves.toMatchObject({ route: 'ask_human' });
+    await expect(route(bash('docker compose build'))).resolves.toBe('ask_human');
+    await expect(route(bash('npm test'), qa)).resolves.toBe('ask_human');
   });
 });

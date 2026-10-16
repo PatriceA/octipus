@@ -4,7 +4,7 @@ import type { AgentContext } from '@/core/types';
 import { channelCanPrompt } from '@/security/approval-policy';
 
 const find = vi.hoisted(() => vi.fn());
-const pipeline = vi.hoisted(() => ({ findById: vi.fn(), getNodes: vi.fn(), getPlanItems: vi.fn() }));
+const pipeline = vi.hoisted(() => ({ findById: vi.fn(), getNodes: vi.fn(), getPlanItems: vi.fn(), getCheckpoints: vi.fn(async () => []) }));
 vi.mock('@/tools/registry', () => ({ getToolRegistry: () => ({ findTool: find }) }));
 vi.mock('@/db/repositories/pipeline-repository', () => ({ pipelineRepository: pipeline }));
 describe('monitor probe boundaries', () => {

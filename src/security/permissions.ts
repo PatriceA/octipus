@@ -93,7 +93,7 @@ export class PermissionManager {
   /** requestIds currently awaited, by the agent that is blocked on them. */
   private waitsByAgent: Map<string, Set<string>> = new Map();
   /** Notified when an agent starts or stops waiting on a human. */
-  private waitListeners: Set<(agentId: string, waiting: boolean) => void> = new Set();
+  private waitListeners: Set<(agentId: string, waiting: boolean, requestId: string) => void> = new Set();
   private resolvedListeners = new Set<(event: PermissionResolvedEvent) => void>();
   private requestListeners: Set<(request: PermissionRequestEvent) => void> = new Set();
 
@@ -587,15 +587,16 @@ export class PermissionManager {
    * uses it to stop its wall clock: with no TTL, a turn would otherwise die of
    * its own timeout while the prompt sat on screen. Returns an unsubscribe.
    */
-  onWaitStateChange(listener: (agentId: string, waiting: boolean) => void): () => void {
+  /** `requestId` is the request that started the wait (on) or the last one settled (off). */
+  onWaitStateChange(listener: (agentId: string, waiting: boolean, requestId: string) => void): () => void {
     this.waitListeners.add(listener);
     return () => this.waitListeners.delete(listener);
   }
 
-  private emitWaitState(agentId: string, waiting: boolean): void {
+  private emitWaitState(agentId: string, waiting: boolean, requestId: string): void {
     for (const listener of this.waitListeners) {
       try {
-        listener(agentId, waiting);
+        listener(agentId, waiting, requestId);
       } catch (err) {
         coreLogger.error({ err, agentId }, 'permission wait listener failed');
       }
@@ -608,7 +609,7 @@ export class PermissionManager {
     const wasIdle = set.size === 0;
     set.add(requestId);
     this.waitsByAgent.set(agentId, set);
-    if (wasIdle) this.emitWaitState(agentId, true);
+    if (wasIdle) this.emitWaitState(agentId, true, requestId);
   }
 
   private untrackWait(agentId: string | undefined, requestId: string): void {
@@ -618,7 +619,7 @@ export class PermissionManager {
     set.delete(requestId);
     if (set.size === 0) {
       this.waitsByAgent.delete(agentId);
-      this.emitWaitState(agentId, false);
+      this.emitWaitState(agentId, false, requestId);
     }
   }
 

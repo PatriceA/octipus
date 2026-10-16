@@ -10,7 +10,7 @@ import { addPlanFeedback, type WorkPlanState } from '@/shared/work-plan';
 
 const fixture = vi.hoisted(() => ({ script: '', dir: '', plan: { revision: 0, current: null, previous: [] } as WorkPlanState,
   check: vi.fn(), execute: vi.fn(), cancel: vi.fn(), readFailure: false, audit: vi.fn(), status: vi.fn(), requestApproval: vi.fn(),
-  wait: vi.fn(), waitListener: undefined as undefined | ((agentId: string, waiting: boolean) => void),
+  wait: vi.fn(), waitListener: undefined as undefined | ((agentId: string, waiting: boolean, requestId: string) => void),
   sessionWorkspaceId: null as string | null }));
 const commentary = vi.hoisted(() => vi.fn().mockResolvedValue({ sent: true }));
 vi.mock('./agent/service', () => ({ getAgentService: () => ({ sendStatusUpdate: commentary }) }));
@@ -417,7 +417,8 @@ it.each(['deadline', 'disconnect', 'premature-finish'] as const)('approval %s en
   let release!: (approved: boolean) => void;
   fixture.wait.mockImplementation(() => new Promise<boolean>(resolve => { release = resolve; }));
   fixture.cancel.mockImplementation(() => { release?.(false); return 1; });
-  fixture.requestApproval.mockImplementation(async () => { fixture.waitListener?.('a', true); return 'approval'; });
+  const requestId = '0b0b0b0b-0000-4000-8000-000000000001';
+  fixture.requestApproval.mockImplementation(async () => { fixture.waitListener?.('a', true, requestId); return requestId; });
   fixture.check.mockResolvedValue({ level: 'ASK', route: 'ask_human' });
   writeFileSync(fixture.script, `
     const controller = new AbortController();
@@ -431,7 +432,10 @@ it.each(['deadline', 'disconnect', 'premature-finish'] as const)('approval %s en
     { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
   worker.registerTool({ name:'approval_sample', toolId:'sample', description:'', parameters:{type:'object'}, execute:fixture.execute });
   try {
-    await expect(worker.run('sample')).rejects.toThrow(mode === 'deadline' ? 'Approval was not received within 5 minutes' : mode === 'disconnect' ? 'CLI disconnected while waiting for approval' : /CLI (finished|disconnected) while.*approval/);
+    const failure = worker.run('sample');
+    await expect(failure).rejects.toThrow(mode === 'deadline' ? 'Approval was not received within 5 minutes' : mode === 'disconnect' ? 'CLI disconnected while waiting for approval' : /CLI (finished|disconnected) while.*approval/);
+    // The reason names the request this worker waited on, so a pipeline answers that one (#20).
+    await expect(failure).rejects.toThrow(`[approval-request:${requestId}]`);
     expect(worker.getStatus()).toBe('failed');
     expect(fixture.execute).not.toHaveBeenCalled();
     expect(fixture.cancel).toHaveBeenCalled();

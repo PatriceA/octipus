@@ -650,6 +650,7 @@ export class AgentWorker extends BaseAgentWorker {
 
   async run(userMessage?: string): Promise<string> {
     this.activeRuns++;
+    this.partialOutput = '';
     this.subscribePermissionWait();
     try {
       // Every model call of the run is attributed to the agent's user,
@@ -2408,6 +2409,7 @@ export class AgentWorker extends BaseAgentWorker {
     // a research child silently drifted to writing docs and the reasoning was
     // unrecoverable). Only emit when there's prose to record.
     if (result.content && result.content.trim()) {
+      this.partialOutput = `${this.partialOutput}${this.partialOutput ? '\n\n' : ''}${result.content}`.slice(-20_000);
       this.emit('thought', { text: result.content.slice(0, 1000), truncated: result.content.length > 1000 });
     }
 

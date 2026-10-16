@@ -132,6 +132,8 @@ export abstract class BaseAgentWorker {
   protected context: AgentContext;
   protected config: AgentWorkerConfig;
   protected messages: AgentMessage[] = [];
+  /** The text the current run has produced so far — kept when the run fails (`getPartialOutput`). */
+  protected partialOutput = '';
   protected eventHandlers: Set<AgentEventHandler> = new Set();
   protected iteration: number = 0;
 
@@ -203,6 +205,11 @@ export abstract class BaseAgentWorker {
    */
   getBillableTokens(): number {
     return this.getTotalTokens();
+  }
+
+  /** What the current run said before it ended or was cut off: progress, never a finished result. */
+  getPartialOutput(): string {
+    return this.partialOutput;
   }
 
   /**

@@ -56,20 +56,37 @@ fails for that reason. The stage is marked `awaiting_approval`, the blocked call
 is raised again as a normal permission request (approval prompt and push
 notification), and `get_pipeline_status` reports it under `pendingApproval`
 (`requestId`, `stage`, `item`, `toolName`, `subject` for the command or path, and
-`reason`). When the user approves, the stage runs again, and the same call
-(same session, tool, action and command or path) runs without a second prompt.
+`reason`). The blocked call is the request the worker named when it gave up,
+and only if that request belongs to a worker of this stage attempt; otherwise
+the stage parks on a plain "continue the stage" question and nothing is
+pre-approved. When the user approves, the stage attempt runs again, and the
+same call runs without a second prompt.
+
 The allowance is stored on the pipeline (`metadata.approvedCalls`), so it
 survives a server restart, and it ends when the run is no longer running or
-awaiting approval. Every stage visit runs with its own CLI resume key, so on a
-resumable CLI (Claude Code, Codex) the re-run continues the conversation the
-worker stopped in instead of starting over; the next item or a QA bounce starts
-fresh. A denial or a stop pauses the run at that stage; `resume_pipeline` runs
-the stage again.
+awaiting approval. It is narrow on purpose. It applies only to the stage worker
+of that pipeline, stage and attempt (not the root agent, another pipeline, or a
+child the stage spawned), with the same `hostServices` setting, and only to the
+same tool and action with the same arguments. A different `cwd`, `env`,
+`network` or `useShell` value, or different file contents, asks again. Only the
+CLI's `description` label and `timeout` are ignored. A DENY rule always wins.
+
+Every stage attempt has an id that is stored in its checkpoint. A resume after
+an approval, a failure or a server restart continues the same attempt, so on a
+resumable CLI (Claude Code, Codex) it reuses the attempt's CLI resume key and
+continues the conversation the worker stopped in. The next item, a QA bounce, a
+contract retry, or a rewind with `fromStage` starts a new attempt. While an
+attempt runs, its text so far is saved to its checkpoint every 15 seconds and
+when it fails. A resumed attempt gets that text back, marked INCOMPLETE, and
+`get_pipeline_status` shows it under `incompleteAttempt`. It is never reported
+as the stage's output, and it is cleared when the attempt finishes. A denial or
+a stop pauses the run at that stage; `resume_pipeline` runs the stage again.
 
 A plan approval or a stage approval also lists the pipeline's gate commands,
 which are the stages' `verifyCommand` values resolved from the run's parameters.
-Approving the prompt lets those exact commands run without asking for the rest
-of the run, through either the Octipus shell tool or the CLI's own Bash. A
+Approving the prompt lets each of those exact commands run without asking in
+its own stage for the rest of the run, through either the Octipus shell tool or
+the CLI's own Bash, with the command as the only argument. A
 pipeline without an approval prompt still asks the first time a gate command
 runs: creating a pipeline is the model's action, not the user's, so it cannot
 authorize anything. A gate command that depends on a stage's output is not known
@@ -81,7 +98,10 @@ restart, approving through this tool also resumes the paused stage.
 
 `resume_pipeline({id, skipItems: [itemId], evidence})` marks plan items that
 earlier work already delivered as `skipped`, and records the commit and check
-given in `evidence`. Items that are in progress cannot be skipped.
+given in `evidence`. Every id is checked first; if one is unknown, nothing is
+skipped. The item the run stopped in (failed, or still marked running after a
+restart) can be skipped too. The resume then goes on from the plan loop with
+the next pending item, and the skip and its evidence are kept.
 
 ### Host services for gate commands
 

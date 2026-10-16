@@ -57,6 +57,8 @@ export interface ApprovalCaller {
   trigger?: AgentTrigger;
   /** Members of other installs read the run (federation §7.5): the audience `federated`. */
   audienceFederated?: boolean;
+  /** The caller's framework-set metadata; a pipeline stage's scope (`approved-calls.ts`). */
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface ApprovalPermission {
@@ -163,10 +165,10 @@ export async function routeApprovalFor(
     action: call.action,
     unattendedDenyActions: options.unattendedDenyActions,
   });
-  // The user already approved this exact call for a pipeline of this session
+  // The user already approved this exact call for this stage of its pipeline
   // (`approved-calls.ts`). Only a plain policy ASK: space, room and flow-guard
-  // asks keep asking.
-  if (decision.route === 'ask_human' && !space && context.trigger !== 'remote' && source !== 'flow-guard' && await isApprovedCall(context.sessionId, call)) {
+  // asks keep asking, and a DENY never gets here.
+  if (decision.route === 'ask_human' && !space && context.trigger !== 'remote' && source !== 'flow-guard' && await isApprovedCall(context, call)) {
     return { route: 'execute', level, source: 'pipeline-approval' };
   }
   // A turn a member of another install asked for has nobody here to ask

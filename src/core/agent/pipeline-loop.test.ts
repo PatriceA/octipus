@@ -22,7 +22,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { AgentContext } from '@/core/types';
 
 const rand = (n: number) => randomBytes(n).toString('hex');
@@ -39,6 +39,8 @@ interface WorkerCall {
   stageName: string;
   input: string;
   resumeKey?: unknown;
+  workerId: string;
+  metadata: Record<string, unknown>;
 }
 
 let manager: import('./pipeline-manager').PipelineManager;
@@ -52,10 +54,12 @@ let replies: Record<string, string[]>;
 let approvalsAsked = 0;
 let commandCounts: number[] = [];
 let stopAtStage: string | undefined;
-/** Stage name → per-call plan: a string makes that call throw it, undefined runs normally. */
-let throwPlan: Record<string, Array<string | undefined>> = {};
+/** Stage name → per-call plan: a string (or one built from the call) makes that call throw it, undefined runs normally. */
+let throwPlan: Record<string, Array<string | ((call: WorkerCall) => string) | undefined>> = {};
+/** Stage name → per-call progress the worker reports before it replies or throws. */
+let partialPlan: Record<string, Array<string | undefined>> = {};
 /** Runs inside the stubbed worker before it replies or throws. */
-let onSpawn: ((stageName: string, pipelineId: string) => Promise<void>) | undefined;
+let onSpawn: ((stageName: string, pipelineId: string, call: WorkerCall) => Promise<void>) | undefined;
 
 /**
  * A PASSING verdict that survives the audit-coverage gate.
@@ -141,14 +145,22 @@ beforeAll(async () => {
     input: string,
     _ctx: unknown,
     context: AgentContext & { stageName?: string },
-    options?: { onCounters?: (counters: import('@/core/swarm/receipt').SideEffectCounters) => void },
+    options?: {
+      onCounters?: (counters: import('@/core/swarm/receipt').SideEffectCounters) => void;
+      onPartialOutput?: (text: string) => void;
+      onWorkerSpawned?: (workerId: string) => void;
+    },
   ) => {
     const stageName = context?.stageName ?? '';
-    calls.push({ role, stageName, input, resumeKey: context.metadata?.resumeKey });
-    await onSpawn?.(stageName, String(context.metadata?.pipelineId));
+    const call: WorkerCall = { role, stageName, input, resumeKey: context.metadata?.resumeKey, workerId: `worker-${calls.length + 1}`, metadata: { ...context.metadata } };
+    calls.push(call);
+    options?.onWorkerSpawned?.(call.workerId);
+    await onSpawn?.(stageName, String(context.metadata?.pipelineId), call);
     if (stageName === stopAtStage) await manager.stop(String(context.metadata?.pipelineId));
+    const progress = partialPlan[stageName]?.shift();
+    if (progress) options?.onPartialOutput?.(progress);
     const thrown = throwPlan[stageName]?.shift();
-    if (thrown) throw new Error(thrown);
+    if (thrown) throw new Error(typeof thrown === 'function' ? thrown(call) : thrown);
     options?.onCounters?.({ filesChanged: 0, commandsRun: stageName === 'QA' ? commandCounts.shift() ?? 1 : 1, toolCalls: 1, toolErrors: 0, approvalsRequired: 0, approvalsDenied: 0, autoApproved: 0, permissionDenials: 0, byName: {} });
 
     if (stageName === 'Plan') {
@@ -183,6 +195,7 @@ beforeEach(() => {
   commandCounts = [];
   stopAtStage = undefined;
   throwPlan = {};
+  partialPlan = {};
   onSpawn = undefined;
 });
 
@@ -481,25 +494,31 @@ describe('an unanswered approval parks the stage instead of failing the run (#12
       return pending!;
     }, { timeout: 10_000, interval: 50 });
   }
+  const blocked = { toolId: 'cli-native:Bash', action: 'Bash', toolName: 'Bash', args: { command: 'docker compose build' } };
+  /** The stage worker's own request, as the CLI bridge raises it before it gives up waiting. */
+  const raise = async (agentId: string, args: Record<string, unknown> = blocked.args) => {
+    const { getPermissionManager } = await import('@/security/permissions');
+    return getPermissionManager().requestApproval(userId, agentId, blocked.toolId, blocked.action, args, sessionId, 'Bash');
+  };
 
-  test.each(['APPROVAL_TIMEOUT_REASON', 'APPROVAL_DISCONNECT_REASON'] as const)('%s: approving re-runs that stage and the run completes', async key => {
-    const reason = (await import('@/core/approval-wait'))[key];
+  test.each(['APPROVAL_TIMEOUT_REASON', 'APPROVAL_DISCONNECT_REASON'] as const)('%s: approving re-runs that stage attempt and the run completes', async key => {
+    const { approvalWaitReason, [key]: reason } = await import('@/core/approval-wait');
     replies = { QA: [QA_PASS] };
-    throwPlan = { Implement: [`Worker "coding" failed: ${reason}`] };
     const { getPermissionManager } = await import('@/security/permissions');
     const { routeApprovalFor } = await import('@/security/approval-route');
-    const blocked = { toolId: 'cli-native:Bash', action: 'Bash', toolName: 'Bash', args: { command: 'docker compose build' } };
     const routes: string[] = [];
+    let requestId = '';
+    throwPlan = { Implement: [() => `Worker "coding" failed: ${approvalWaitReason(reason, requestId)}`] };
     let implementRuns = 0;
-    onSpawn = async stageName => {
+    onSpawn = async (stageName, _pipelineId, call) => {
       if (stageName !== 'Implement') return;
-      // The worker's own request, as the CLI bridge raises it before it gives up waiting.
-      if (++implementRuns === 1) await getPermissionManager().requestApproval(userId, 'stage-worker', blocked.toolId, blocked.action, blocked.args, sessionId, 'Bash');
-      routes.push((await routeApprovalFor({ userId, sessionId, role: 'coding', attended: true }, blocked, { level: 'ASK' })).route);
+      if (++implementRuns === 1) requestId = await raise(call.workerId);
+      // Routed as that worker: its own framework-set stage metadata.
+      routes.push((await routeApprovalFor({ userId, sessionId, role: 'coding', attended: true, metadata: call.metadata }, blocked, { level: 'ASK' })).route);
     };
     const running = run('park on an unanswered approval');
     const pending = await parkedApproval();
-    expect(pending).toMatchObject({ stage: 'Implement', item: 'item one', reason, subject: 'docker compose build' });
+    expect(pending).toMatchObject({ stage: 'Implement', item: 'item one', reason: expect.stringContaining(reason), subject: 'docker compose build', workerRequestId: requestId });
     expect(await getPermissionManager().approve(pending.requestId, userId)).toBe(true);
     const { pipelineId } = await running;
     const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
@@ -508,14 +527,55 @@ describe('an unanswered approval parks the stage instead of failing the run (#12
     expect((pipeline?.metadata as Record<string, unknown>).pendingApproval).toBeUndefined();
     expect(calls.map(call => call.stageName)).toEqual(['Plan', 'Implement', 'Implement', 'QA', 'Implement', 'QA']);
     expect(await planItemStatuses(pipelineId)).toEqual(['done', 'done']);
-    // Asked before the approval; the re-run and the next item run it without asking — stored on the run, not in memory.
-    expect(routes).toEqual(['ask_human', 'execute', 'execute']);
-    expect((pipeline?.metadata as Record<string, unknown>).approvedCalls).toEqual([{ toolId: blocked.toolId, action: blocked.action, subject: 'docker compose build' }]);
-    // The re-run continues the same vendor CLI conversation and is told why (#20); the next item starts its own.
     const implement = calls.filter(call => call.stageName === 'Implement');
+    // Asked before the approval; the re-run of THAT attempt runs it without
+    // asking; the next item is a new attempt and asks again.
+    expect(routes).toEqual(['ask_human', 'execute', 'ask_human']);
+    expect((pipeline?.metadata as Record<string, unknown>).approvedCalls).toEqual([expect.objectContaining({
+      toolId: blocked.toolId, action: blocked.action, nodeKey: implement[0].metadata.nodeKey, attemptId: implement[0].metadata.attemptId, hostServices: false,
+    })]);
+    // The re-run continues the same vendor CLI conversation and is told why (#20); the next item starts its own.
     expect(implement[1].resumeKey).toBe(implement[0].resumeKey);
+    expect(implement[1].metadata.attemptId).toBe(implement[0].metadata.attemptId);
     expect(implement[1].input).toContain('`docker compose build` may run now');
     expect(implement[2].resumeKey).not.toBe(implement[0].resumeKey);
+  });
+
+  test('interleaved workers: the stage parks on its own request, never on a newer one from another worker', async () => {
+    const { APPROVAL_TIMEOUT_REASON, approvalWaitReason } = await import('@/core/approval-wait');
+    replies = { QA: [QA_PASS] };
+    let own = '';
+    throwPlan = { Implement: [() => approvalWaitReason(APPROVAL_TIMEOUT_REASON, own)] };
+    onSpawn = async (stageName, _pipelineId, call) => {
+      if (stageName !== 'Implement' || own) return;
+      own = await raise(call.workerId, { command: 'npm run build' });
+      // Another worker of the same session asks afterwards: the newest request, not this stage's.
+      await raise('unrelated-worker', { command: 'rm -rf build' });
+    };
+    const running = run('interleaved approvals');
+    const pending = await parkedApproval();
+    expect(pending).toMatchObject({ workerRequestId: own, subject: 'npm run build' });
+    const { getPermissionManager } = await import('@/security/permissions');
+    await getPermissionManager().deny(pending.requestId, userId);
+    await running;
+  });
+
+  test('a request that is not the stage worker\'s own is not adopted: it parks without a grant', async () => {
+    const { APPROVAL_TIMEOUT_REASON, approvalWaitReason } = await import('@/core/approval-wait');
+    replies = { QA: [QA_PASS] };
+    let foreign = '';
+    throwPlan = { Implement: [() => approvalWaitReason(APPROVAL_TIMEOUT_REASON, foreign)] };
+    onSpawn = async stageName => {
+      if (stageName === 'Implement' && !foreign) foreign = await raise('unrelated-worker', { command: 'rm -rf build' });
+    };
+    const running = run('foreign approval');
+    const pending = await parkedApproval();
+    expect(pending).toMatchObject({ workerRequestId: null, toolId: null, subject: null, fingerprint: null });
+    const { getPermissionManager } = await import('@/security/permissions');
+    expect(await getPermissionManager().approve(pending.requestId, userId)).toBe(true);
+    const { pipelineId } = await running;
+    const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+    expect(((await pipelineRepository.findById(pipelineId))?.metadata as Record<string, unknown>).approvedCalls).toBeUndefined();
   });
 
   test('a denial pauses the run at that stage; it never fails', async () => {
@@ -532,6 +592,118 @@ describe('an unanswered approval parks the stage instead of failing the run (#12
     expect(result).toContain('not granted');
     expect((await pipelineRepository.getNodes(pipelineId)).find(node => node.name === 'QA')?.status).toBe('pending');
     expect(await planItemStatuses(pipelineId)).toEqual(['running', 'pending']);
+  });
+});
+
+describe('an interrupted stage attempt survives a restart (#20)', () => {
+  // Recovery review is tested separately; these exercise the walker after it was approved.
+  let review: { mockRestore: () => void } | undefined;
+  beforeEach(async () => {
+    const { actionRecovery } = await import('@/core/action-recovery');
+    review = vi.spyOn(actionRecovery, 'reviewPipeline').mockResolvedValue();
+  });
+  afterEach(() => review?.mockRestore());
+  test('after boot reconciliation the same attempt resumes its CLI session, with its progress marked incomplete', async () => {
+    replies = { QA: [QA_PASS] };
+    partialPlan = { Implement: ['edited src/a.ts; tests not run yet'] };
+    throwPlan = { Implement: ['CLI claude exited with signal SIGKILL: no failure diagnostic reported'] };
+    const first = await run('interrupted attempt');
+    const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+    const [checkpoint] = await pipelineRepository.getCheckpoints(first.pipelineId, 1);
+    expect(checkpoint.state).toMatchObject({ partial: { text: 'edited src/a.ts; tests not run yet', attemptId: calls[1].metadata.attemptId } });
+    // The process died mid-stage: rows still claim to be running until the boot sweep.
+    await executeRaw(`UPDATE pipelines SET status = 'running' WHERE id = '${first.pipelineId}'`);
+    await executeRaw(`UPDATE pipeline_nodes SET status = 'running' WHERE pipeline_id = '${first.pipelineId}' AND name = 'Implement'`);
+    expect(await manager.reconcileInterrupted()).toBeGreaterThanOrEqual(1);
+    expect((await pipelineRepository.findById(first.pipelineId))?.status).toBe('paused');
+
+    // The vendor session the interrupted attempt saved, under its resume key.
+    const { childCliSessionKey, loadCliSession, ownedResumeKey, saveCliSession } = await import('@/core/cli-session-store');
+    const { sessionGeneration } = await import('@/db/schema/sessions');
+    const { sessionRepository } = await import('@/db/repositories/session-repository');
+    const keyOf = (resumeKey: unknown) => childCliSessionKey('claude', ownedResumeKey(String(resumeKey)));
+    const generation = sessionGeneration((await sessionRepository.findById(sessionId))?.context as never);
+    await saveCliSession(sessionId, keyOf(calls[1].resumeKey), { id: 'vendor-conversation-1', fingerprint: 'fp', lastUsedAt: new Date().toISOString(), generation });
+
+    const before = calls.length;
+    await manager.resume(first.pipelineId);
+    const [resumed, nextItem] = calls.slice(before).filter(call => call.stageName === 'Implement');
+    expect(resumed.metadata.attemptId).toBe(calls[1].metadata.attemptId);
+    expect((await loadCliSession(sessionId, keyOf(resumed.resumeKey), 'fp'))?.id).toBe('vendor-conversation-1');
+    expect(resumed.input).toContain('INCOMPLETE');
+    expect(resumed.input).toContain('edited src/a.ts; tests not run yet');
+    // The next item is its own attempt: no other item's progress, no shared conversation.
+    expect(nextItem.metadata.attemptId).not.toBe(resumed.metadata.attemptId);
+    expect(nextItem.input).not.toContain('INCOMPLETE');
+    expect((await pipelineRepository.findById(first.pipelineId))?.status).toBe('completed');
+    // The resumed attempt finished: its checkpoint no longer holds progress.
+    const resumedFrom = (await pipelineRepository.getCheckpoints(first.pipelineId, 100))
+      .filter(c => c.seq > checkpoint.seq && (c.state as Record<string, unknown>).attemptId === resumed.metadata.attemptId);
+    expect(resumedFrom).toHaveLength(1);
+    expect(resumedFrom[0].state).not.toHaveProperty('partial');
+  });
+
+  test('a rewind with fromStage is a deliberate fresh attempt', async () => {
+    replies = { QA: [QA_PASS] };
+    throwPlan = { Implement: ['the database is unreachable'] };
+    const { pipelineId } = await run('fresh rewind');
+    const failed = calls[1];
+    const { createPipelineRecoveryTools } = await import('./pipeline-tools');
+    let completion: Promise<unknown> | undefined;
+    const [, resumeTool] = createPipelineRecoveryTools((_id, done) => { completion = done; });
+    const before = calls.length;
+    await resumeTool.execute({ id: pipelineId, fromStage: 'Implement' }, { userId, sessionId, workspaceId: null } as unknown as AgentContext);
+    await completion;
+    expect(calls[before].metadata.attemptId).not.toBe(failed.metadata.attemptId);
+  });
+});
+
+describe('resume_pipeline skipItems', () => {
+  // Recovery review is tested separately; these exercise the walker after it was approved.
+  let review: { mockRestore: () => void } | undefined;
+  beforeEach(async () => {
+    const { actionRecovery } = await import('@/core/action-recovery');
+    review = vi.spyOn(actionRecovery, 'reviewPipeline').mockResolvedValue();
+  });
+  afterEach(() => review?.mockRestore());
+  const tools = async () => {
+    const { createPipelineRecoveryTools } = await import('./pipeline-tools');
+    let completion: Promise<unknown> | undefined;
+    const [, resumeTool] = createPipelineRecoveryTools((_id, done) => { completion = done; });
+    return { resumeTool, done: () => completion };
+  };
+  const ctx = () => ({ userId, sessionId, workspaceId: null } as unknown as AgentContext);
+  const itemIds = async (pipelineId: string) => {
+    const { rows } = await queryRaw(`SELECT id FROM plan_items WHERE pipeline_id = '${pipelineId}' ORDER BY ordinal`);
+    return rows.map(row => String(row.id));
+  };
+
+  test('skipping the failed current item advances past it and keeps the skip and its evidence', async () => {
+    replies = { QA: [QA_PASS] };
+    throwPlan = { Implement: ['the database is unreachable'] };
+    const { pipelineId } = await run('skip the failed item');
+    expect(await planItemStatuses(pipelineId)).toEqual(['failed', 'pending']);
+    const [one] = await itemIds(pipelineId);
+    const { resumeTool, done } = await tools();
+    const before = calls.length;
+    await resumeTool.execute({ id: pipelineId, skipItems: [one], evidence: 'abc123, npm test exit 0' }, ctx());
+    await done();
+    expect(calls.slice(before).map(call => call.stageName)).toEqual(['Implement', 'QA']);
+    expect(calls[before].input).toContain('item two');
+    expect(await planItemStatuses(pipelineId)).toEqual(['skipped', 'done']);
+    const { rows } = await queryRaw(`SELECT result FROM plan_items WHERE id = '${one}'`);
+    expect(rows[0].result).toContain('abc123, npm test exit 0');
+  });
+
+  test('a batch with one unknown id changes nothing', async () => {
+    replies = { QA: [QA_PASS] };
+    throwPlan = { Implement: ['the database is unreachable'] };
+    const { pipelineId } = await run('mixed batch');
+    const [, two] = await itemIds(pipelineId);
+    const { resumeTool } = await tools();
+    await expect(resumeTool.execute({ id: pipelineId, skipItems: [two, 'no-such-item'], evidence: 'abc123' }, ctx()))
+      .rejects.toThrow("No plan item 'no-such-item' on this pipeline; nothing was skipped");
+    expect(await planItemStatuses(pipelineId)).toEqual(['failed', 'pending']);
   });
 });
 
@@ -561,6 +733,9 @@ test('a failed stage reports its own reason, without an earlier item output (#7/
 test('gate commands are the resolved verifyCommands, without one that waits on a stage output', async () => {
   const { pipelineGateCommands } = await import('./pipeline-manager');
   expect(pipelineGateCommands([
-    { verifyCommand: '{{param.verifyCommand}}' }, {}, { verifyCommand: 'npm test' }, { verifyCommand: 'check {{previousOutput}}' },
-  ], { 'param.verifyCommand': 'npm test', description: 'd' })).toEqual(['npm test']);
+    { nodeKey: 'a', verifyCommand: '{{param.verifyCommand}}' }, { nodeKey: 'b' }, { nodeKey: 'qa', verifyCommand: 'npm test', hostServices: true },
+    { nodeKey: 'c', verifyCommand: 'check {{previousOutput}}' },
+  ], { 'param.verifyCommand': 'npm test', description: 'd' })).toEqual([
+    { command: 'npm test', nodeKey: 'a', hostServices: false }, { command: 'npm test', nodeKey: 'qa', hostServices: true },
+  ]);
 });

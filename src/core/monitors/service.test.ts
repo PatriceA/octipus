@@ -12,7 +12,7 @@ import type { AgentContext } from '@/core/types';
 const mocks = vi.hoisted(() => ({ session: vi.fn(), probe: vi.fn(), pipeline: vi.fn(), resumed: vi.fn(), published: vi.fn(), outcome: 'success' as 'success' | 'failed' | 'cancelled' }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: { findById: mocks.session } }));
 vi.mock('@/security/orgs', () => ({ getOrgWorkspaceManager: () => ({ ensureDefaultWorkspace: async () => ({ id: '44444444-4444-4444-8444-444444444444' }), findOwnedById: async () => null }) }));
-vi.mock('@/db/repositories/pipeline-repository', () => ({ pipelineRepository: { findById: mocks.pipeline, getNodes: async () => [], getPlanItems: async () => [] } }));
+vi.mock('@/db/repositories/pipeline-repository', () => ({ pipelineRepository: { findById: mocks.pipeline, getNodes: async () => [], getPlanItems: async () => [], getCheckpoints: async () => [] } }));
 vi.mock('./probes', async importOriginal => {
   const actual = await importOriginal<typeof import('./probes')>();
   return {

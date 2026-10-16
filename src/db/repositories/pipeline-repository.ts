@@ -1,7 +1,7 @@
 import { sessions } from '../schema/sessions';
 import { emptyWorkPlan, workPlanStateSchema } from '@/shared/work-plan';
 import { projectPipelinePlan } from './pipeline-work-plan';
-import { and, asc, desc, eq, gt, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, sql } from 'drizzle-orm';
 import { getDb } from '../postgres';
 import {
   type NewPipelineCheckpoint,
@@ -67,21 +67,6 @@ export class PipelineRepository {
       .where(eq(pipelines.id, id))
       .limit(1);
     return result[0] ?? null;
-  }
-
-  /** Whether a live run of this session recorded `call` as approved (`security/approved-calls.ts`). */
-  async hasApprovedCall(sessionId: string, call: { toolId: string; action: string; subject: string }): Promise<boolean> {
-    const rows = await this.db
-      .select({ id: pipelines.id })
-      // i2: the caller's own session's live runs, for the approval route
-      .from(pipelines)
-      .where(and(
-        eq(pipelines.sessionId, sessionId),
-        inArray(pipelines.status, ['running', 'awaiting_approval']),
-        sql`${pipelines.metadata} -> 'approvedCalls' @> ${JSON.stringify([call])}::jsonb`,
-      ))
-      .limit(1);
-    return rows.length > 0;
   }
 
   async getNodes(pipelineId: string): Promise<PipelineNodeRow[]> {

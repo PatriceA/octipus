@@ -11,7 +11,7 @@
  * stack to say the same thing.
  */
 import { describe, expect, it } from 'vitest';
-import { pipelineMetadata } from './worker-spawner';
+import { pipelineMetadata, stageChildMetadata } from './worker-spawner';
 import { fileAt } from '@/utils/fs-file';
 
 describe('pipeline stage spawns', () => {
@@ -43,9 +43,15 @@ describe('pipelineMetadata', () => {
   it('passes the two pipeline keys through', () => {
     expect(pipelineMetadata({ pipelineId: 'p1', nodeKey: 'n1' })).toEqual({ pipelineId: 'p1', nodeKey: 'n1' });
   });
-  it('passes the stage visit resume key, so a re-run continues its CLI conversation (#20)', () => {
-    expect(pipelineMetadata({ pipelineId: 'p1', nodeKey: 'n1', resumeKey: 'pipeline-p1:n1:1', isAdmin: true }))
-      .toEqual({ pipelineId: 'p1', nodeKey: 'n1', resumeKey: 'pipeline-p1:n1:1' });
+  it('passes the stage attempt and its resume key, so a re-run continues its CLI conversation (#20)', () => {
+    expect(pipelineMetadata({ pipelineId: 'p1', nodeKey: 'n1', resumeKey: 'pipeline-p1:n1:a1', attemptId: 'a1', isAdmin: true }))
+      .toEqual({ pipelineId: 'p1', nodeKey: 'n1', resumeKey: 'pipeline-p1:n1:a1', attemptId: 'a1' });
+  });
+
+  it('gives a stage\'s own children the pipeline, not the stage worker\'s attempt (its approvals, its conversation)', () => {
+    expect(stageChildMetadata({ pipelineId: 'p1', nodeKey: 'n1', hostServices: true, resumeKey: 'pipeline-p1:n1:a1', attemptId: 'a1' }))
+      .toEqual({ pipelineId: 'p1', nodeKey: 'n1', hostServices: true });
+    expect(stageChildMetadata(undefined)).toBeUndefined();
   });
 
   it('drops everything else, including the flags that grant authority', () => {
@@ -78,6 +84,6 @@ describe('a delegating stage keeps the pipeline reachable', () => {
     const at = src.indexOf('contextMetadata: {');
     expect(at).toBeGreaterThan(0);
     const block = src.slice(at, src.indexOf('}', src.indexOf('originalRequest', at)));
-    expect(block).toContain('pipelineMetadata(');
+    expect(block).toContain('stageChildMetadata(');
   });
 });
