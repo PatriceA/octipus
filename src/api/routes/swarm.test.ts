@@ -36,8 +36,7 @@ describe.skipIf(!isIntegration)('Swarm API (Integration)', () => {
   beforeAll(async () => {
     await setupIntegrationDb();
 
-    // Defensive reset — bun's mock.module + shared `getConfig()` mean an
-    // earlier test in the run might have left RLS on.
+    // Pin RLS off explicitly rather than rely on the config default.
     // Swarm routes use the unscoped sessionRepository and would 401 if RLS
     // were enforcing under our non-superuser test role.
     const { getConfig } = await import('@/config');

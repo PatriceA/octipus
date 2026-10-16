@@ -68,7 +68,7 @@ export function userNetworkName(userId: string): string {
 
 /** Run `docker` and return stdout/stderr/exit. Internal — kept here
  *  so `docker-isolation` is the single owner of `docker inspect`
- *  invocations, and tests can stub via `mock.module` if needed. */
+ *  invocations, and tests can stub it via `vi.mock` if needed. */
 function runDocker(args: string[], timeoutMs = 5000): Promise<{
   stdout: string; stderr: string; exitCode: number;
 }> {

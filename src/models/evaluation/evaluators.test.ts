@@ -6,13 +6,8 @@
 const inIntegration = process.env.INTEGRATION === '1';
 
 // Set the env vars `loadConfig()` needs BEFORE importing anything that may
-// touch `@/config`. We can't safely mock `@/config` itself: bun's
-// `mock.module` is process-wide for the whole test run, so any partial mock
-// here would leak into integration tests later in the same `npm test` run
-// and break them (e.g. config.database.url ends up empty → postgres-js
-// connects as the local OS user). Setting env vars is local: integration
-// tests set their own DATABASE_URL via the test:integration
-// runner before any test code runs.
+// touch `@/config`. The real config is used rather than a partial mock of
+// `@/config`, which would have to stub every field the import graph reads.
 process.env.MASTER_KEY ??= 'a'.repeat(32);
 process.env.JWT_SECRET ??= 'b'.repeat(32);
 process.env.SESSION_SECRET ??= 'c'.repeat(32);

@@ -3,8 +3,8 @@
  *
  * Lives in `src/shared` (not next to the web component) for two reasons: it's
  * pure logic with no React imports, and putting it here lets the backend test
- * runner (`npm test src`) cover it — the web side has no unit-test harness, and
- * a `bun:test` file under web/ breaks `tsc --noEmit` there.
+ * runner (`npm test src`) cover it — the web side has no unit-test harness
+ * (vitest.config.ts excludes `web/**`).
  *
  * Why this exists: the chat timeline kept suffering "jumping rows" on the 10s
  * poll. The agent map is rebuilt in a *different* order each poll

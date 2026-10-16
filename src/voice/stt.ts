@@ -535,7 +535,8 @@ async function* streamRealtimeWs(
   protocol: RealtimeWsProtocol,
   stream: ReadableStream<Uint8Array>,
 ): AsyncGenerator<string> {
-  // ponytail: Bun's WebSocket accepts a `headers` option, so no `ws` dependency.
+  // Node's built-in WebSocket (undici) accepts a non-standard `headers` init
+  // option, so no `ws` dependency.
   const ws = new WebSocket(protocol.url, { headers: protocol.headers } as never);
 
   // Event queue: the socket pushes, the generator pulls.

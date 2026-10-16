@@ -15,8 +15,7 @@
  * most once per iteration.
  *
  * Design: the LLM call is INJECTED (`complete`) so this module is pure and
- * unit-testable without mocking providers (mock.module leaks process-wide in
- * bun — see the discovery/notes test leak). `agent-worker` owns provider
+ * unit-testable without mocking providers. `agent-worker` owns provider
  * routing and passes a closure bound to the resolved translator model.
  */
 

@@ -3,9 +3,7 @@ import * as modelRegistry from '@/models/model-registry';
 import { VisualAnalyzer } from './analyzer';
 
 // analyzer.ts dynamically imports getModelRegistry to resolve the vision model.
-// Spy the accessor (NOT mock.module, which is process-global in bun and leaks
-// the stub into unrelated suites — see the bun mock.module leak note) so it
-// restores cleanly after this file runs.
+// Spy the accessor so the rest of the module stays real.
 const registrySpy = vi.spyOn(modelRegistry, 'getModelRegistry').mockReturnValue({
   getModelForTopic: async (topic: string) =>
     topic === 'vision' ? { modelId: 'mock-vision-model' } : null,

@@ -12,9 +12,9 @@ import type { EmbeddingService, SearchScope } from './embeddings';
  * a dummy vector so content_tsv is populated.
  *
  * NB: one DB lifecycle for the whole file. `initializeDb`/`closeDb` operate on
- * a process-wide singleton, so opening a second init/close cycle in a second
- * describe would tear the connection down under the first when bun interleaves
- * suites across files — leaving `db.execute` returning undefined. Keep a single
+ * a process-wide singleton, so a second init/close cycle in a second describe
+ * could tear the connection down under the first — leaving `db.execute`
+ * returning undefined. Keep a single
  * beforeAll/afterAll and give each group of tests its own beforeEach seed.
  */
 let svc: EmbeddingService;

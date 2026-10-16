@@ -59,15 +59,8 @@ process.env.DATA_DIR = DATA_DIR;
 let currentEmbedding: number[] | null = null;
 let embeddingError: Error | null = null;
 
-// Eagerly load the real module before we replace it. `mock.module` is
-// process-wide in bun, so we must spread the real exports into the mock —
-// otherwise other test files that legitimately import the real module
-// (e.g. src/core/rag/embeddings.test.ts uses the real `EmbeddingService`
-// class directly) end up with `undefined` exports.
-// Plain-object snapshot taken BEFORE mock.module. Restoring from the live
-// `import * as` namespace does not work — bun leaves it pointing at the stub,
-// so afterAll must reinstall this copy or the embedding stub leaks into later
-// suites (getEmbeddingService returns a fixed vector → wrong similarity results).
+// Spread the real exports into the mock so everything but
+// `getEmbeddingService` stays real. The mock is scoped to this file.
 
 vi.mock('@/core/rag/embeddings', async () => ({
   ...(await vi.importActual<typeof import('@/core/rag/embeddings')>('@/core/rag/embeddings')),
@@ -83,7 +76,7 @@ vi.mock('@/core/rag/embeddings', async () => ({
   }),
 }));
 
-// ── Imports (must come after mock.module) ──────────────────────────
+// ── Imports (vi.mock above is hoisted) ──────────────────────────────
 import { eq } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { skillTopicAssignments } from '@/db/schema/skill-topic-assignments';
@@ -111,8 +104,6 @@ beforeAll(async () => {
 }, 120_000); // Full embedded migration chain can exceed 30s on Windows.
 
 afterAll(async () => {
-  // Restore the real embeddings module so this suite's stub doesn't leak into
-  // later suites in the same bun process.
   // Best-effort: clean up everything we added under TEST_TOPIC, then
   // close the DB and rm the data dir.
   try {

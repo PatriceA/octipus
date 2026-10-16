@@ -14,13 +14,8 @@ import { getCommand } from './registry';
  * renders whatever it returns rather than re-filtering in JS.
  *
  * We own the service at the `getEmbeddingService` layer (a spyOn RESTORED in
- * afterAll), NOT via a prototype spy. Other suites call
- * `vi.mock('@/core/rag/embeddings', …)` — process-wide and persistent in
- * bun — which replaces `getEmbeddingService` with a stub that has no
- * `searchGlobalDocs`. A prototype spy would then never fire (the command's
- * `getEmbeddingService()` returns the leaked stub, not a real instance) and the
- * command would hit its catch path. Injecting our own service here keeps the
- * test hermetic regardless of which suites loaded first.
+ * afterAll) rather than via a prototype spy, so the command gets exactly the
+ * service this test injects.
  */
 
 let docsSpy: Mock<EmbeddingService['searchGlobalDocs']>;
@@ -54,8 +49,7 @@ function hit(over: Partial<SearchResult>): SearchResult {
 beforeEach(() => {
   docsSpy.mockReset();
   docsSpy.mockResolvedValue([]);
-  // Re-assert the injection each test, in case another suite's process-wide
-  // mock.module re-ran and clobbered the binding between tests.
+  // Re-assert the injection each test so tests stay order-independent.
   getServiceSpy.mockReturnValue({ searchGlobalDocs: docsSpy } as unknown as EmbeddingService);
 });
 afterEach(() => docsSpy.mockReset());

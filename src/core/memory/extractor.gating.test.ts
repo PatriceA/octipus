@@ -1,11 +1,4 @@
-import { afterAll, afterEach, describe, expect, test, vi } from 'vitest';
-
-// Plain-object snapshots taken before the mock.module calls below. Restoring
-// from the live `import * as` namespaces does NOT work: bun's `mock.module`
-// leaves those bindings pointing at the installed stubs, so restoring from them
-// re-installs the stubs and leaks them forward (later integration suites then
-// see a partial `getModelRegistry()`/`getLiteLLMClient()` and crash). A copy
-// taken before mocking is immune.
+import { afterEach, describe, expect, test, vi } from 'vitest';
 
 /**
  * Locks the silent short-circuit that left the `memories` table empty in
@@ -15,12 +8,8 @@ import { afterAll, afterEach, describe, expect, test, vi } from 'vitest';
  * error — it only logs at debug — so a regression is invisible without an
  * explicit guard. See docs/QA.md §9.13.
  *
- * Leak-immune setup: another suite's `vi.mock('@/models/model-registry', …)`
- * is process-global and can leak forward (bun's restore is order-dependent),
- * leaving `getModelRegistry()` a partial stub — which used to make this gate
- * flaky (see the recurring CI failure). Rather than patch a singleton whose
- * identity a leak can swap, this suite OWNS the module bindings for its run
- * (last mock.module wins) and restores the real modules in afterAll.
+ * This suite owns the model-registry and LiteLLM-client bindings through
+ * file-scoped module mocks (the runner isolates each test file).
  */
 let modelForTopic: unknown = null;
 const completeSpy = vi.fn(async () => ({ content: '{"facts":[]}' }));
@@ -37,9 +26,6 @@ vi.mock('@/models/litellm-client', async () => ({
 // Import AFTER the mocks so the extractor/judge bind to them.
 const { extractFacts } = await import('./extractor');
 const { judgeAndApply } = await import('./judge');
-
-afterAll(() => {
-});
 
 describe('memory.extractor — memory_extraction topic gating', () => {
   afterEach(() => {

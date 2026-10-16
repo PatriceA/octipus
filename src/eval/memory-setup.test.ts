@@ -79,9 +79,8 @@ describe('recalls_memory', () => {
 
 // `seedMemories` and `clearMemories` are the IO half. They are exercised
 // through the ACCESSOR functions (`getEmbeddingService`, `getMemoryRepository`,
-// `getDb`) rather than by mocking the modules: `mock.module` leaks across the
-// whole test process here, and the accessor seam is the one this codebase
-// already uses for exactly this reason.
+// `getDb`) rather than by mocking the modules — the accessor seam is the one
+// this codebase already uses for this.
 describe('seedMemories', () => {
   test('embeds each fact and returns the row ids', async () => {
     const added: Record<string, unknown>[] = [];
