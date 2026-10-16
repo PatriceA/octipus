@@ -40,12 +40,15 @@ describe('nextStep', () => {
   });
 
   test('then falls back to the last good build once', () => {
-    expect(nextStep({ failures: 2, build: 'current', lastGoodAvailable: true, maxRetries: 2 })).toMatchObject({ action: 'retry', build: 'last-good' });
+    expect(nextStep({ failures: 2, build: 'current', lastGoodAvailable: true, maxRetries: 2 })).toMatchObject({ action: 'retry', build: 'current' });
+    expect(nextStep({ failures: 3, build: 'current', lastGoodAvailable: true, maxRetries: 2 })).toMatchObject({ action: 'retry', build: 'last-good' });
+    // OCTIPUS_BOOT_RETRIES=0: no retry of the current build at all.
+    expect(nextStep({ failures: 1, build: 'current', lastGoodAvailable: true, maxRetries: 0 })).toMatchObject({ action: 'retry', build: 'last-good' });
   });
 
   test('goes to recovery when there is no other build to try', () => {
-    expect(nextStep({ failures: 2, build: 'current', lastGoodAvailable: false, maxRetries: 2 })).toEqual({ action: 'recovery' });
-    expect(nextStep({ failures: 3, build: 'last-good', lastGoodAvailable: true, maxRetries: 2 })).toEqual({ action: 'recovery' });
+    expect(nextStep({ failures: 3, build: 'current', lastGoodAvailable: false, maxRetries: 2 })).toEqual({ action: 'recovery' });
+    expect(nextStep({ failures: 1, build: 'last-good', lastGoodAvailable: true, maxRetries: 2 })).toEqual({ action: 'recovery' });
   });
 });
 
@@ -54,6 +57,8 @@ describe('settings and helpers', () => {
     const s = resolveSettings({ API_PORT: '4100', OCTIPUS_STATE_DIR: '/tmp/x' }, '/proj', { API_PORT: '9999', HOST: '127.0.0.1', WEB_PORT: '4200' });
     expect(s).toMatchObject({ port: 4100, host: '127.0.0.1', webPort: 4200, stateDir: '/tmp/x', entry: '/proj/dist/index.js', lastGoodDir: '/proj/.last-good-build' });
     expect(resolveSettings({}, '/proj', {}).host).toBe('0.0.0.0');
+    expect(resolveSettings({ OCTIPUS_BOOT_RETRIES: '0' }, '/proj', {}).maxRetries).toBe(0);
+    expect(resolveSettings({ OCTIPUS_BOOT_RETRIES: 'x' }, '/proj', {}).maxRetries).toBe(2);
   });
 
   test('probes a wildcard bind on loopback', () => {
@@ -104,7 +109,7 @@ interface Run {
 
 const runs: Run[] = [];
 
-async function startSupervisor(opts: { broken?: boolean; crashOnce?: boolean; lastGood?: boolean; env?: Record<string, string> } = {}): Promise<Run> {
+async function startSupervisor(opts: { broken?: boolean; crashOnce?: boolean; lastGood?: boolean; port?: number; env?: Record<string, string> } = {}): Promise<Run> {
   const dir = mkdtempSync(join(tmpdir(), 'octi-supervisor-'));
   const build = join(dir, 'dist');
   mkdirSync(build);
@@ -115,7 +120,7 @@ async function startSupervisor(opts: { broken?: boolean; crashOnce?: boolean; la
     mkdirSync(join(dir, 'last-good'));
     writeFileSync(join(dir, 'last-good', 'index.js'), `// last good\n${BACKEND}`);
   }
-  const port = await freePort();
+  const port = opts.port ?? (await freePort());
   const child = spawn(process.execPath, [SUPERVISOR], {
     env: {
       PATH: process.env.PATH,
@@ -127,7 +132,8 @@ async function startSupervisor(opts: { broken?: boolean; crashOnce?: boolean; la
       OCTIPUS_LAST_GOOD_DIR: join(dir, 'last-good'),
       OCTIPUS_RECOVERY_TOKEN: TOKEN,
       OCTIPUS_BOOT_TIMEOUT_MS: '10000',
-      OCTIPUS_BOOT_RETRIES: '1',
+      OCTIPUS_BOOT_RETRIES: '0',
+      OCTIPUS_PORT_WAIT_MS: '1000',
       ...opts.env,
     },
     stdio: 'ignore',
@@ -163,6 +169,29 @@ afterEach(async () => {
 const auth = { authorization: `Bearer ${TOKEN}` };
 
 describe('supervisor end to end', () => {
+  test('does not start over a port someone else holds, stays up, and takes the port for recovery once it is free', async () => {
+    const port = await freePort();
+    const holder = createServer((socket) => socket.end());
+    await new Promise<void>((done) => holder.listen(port, '127.0.0.1', done));
+    const run = await startSupervisor({ port });
+    const state = await until(async () => {
+      const st = run.state() as { mode: string; attempts: Array<{ outcome: string }> };
+      return st.mode === 'recovery' && st.attempts.some((a) => a.outcome === 'port-in-use') ? st : undefined;
+    });
+    // The stand-in backend was never started over the held port and taken for healthy.
+    expect(state.attempts.some((a) => a.outcome === 'healthy')).toBe(false);
+    await new Promise((r) => setTimeout(r, 2500));
+    expect(run.child.exitCode).toBeNull();
+
+    await new Promise<void>((done) => holder.close(() => done()));
+    const health = await until(async () => {
+      const res = await fetch(run.url('/api/health'));
+      return res.status === 503 ? ((await res.json()) as Record<string, unknown>) : undefined;
+    });
+    expect(health).toMatchObject({ mode: 'recovery' });
+  }, 40_000);
+
+
   test('a healthy backend runs, and is kept as the last good build once stable', async () => {
     const run = await startSupervisor({ env: { OCTIPUS_STABLE_MS: '500' } });
     await run.reaches('running', 'current');

@@ -45,6 +45,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, request as httpRequest } from 'node:http';
+import { connect } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -66,6 +67,13 @@ const OPERATOR_QUIET_MS = 10 * 60_000;
 function num(value, fallback) {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+/** Like num(), but 0 is a valid answer ("no retries"). */
+function count(value, fallback) {
+  if (value === undefined || value === '') return fallback;
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 0 ? n : fallback;
 }
 
 /** Read the checkout's `.env` without putting its secrets into this process's environment. */
@@ -97,7 +105,9 @@ export function resolveSettings(env = process.env, projectDir = PROJECT_DIR, dot
     healthIntervalMs: num(env.OCTIPUS_HEALTH_INTERVAL_MS, 10_000),
     /** Consecutive missed health checks before a running backend counts as hung. */
     hangChecks: num(env.OCTIPUS_HANG_CHECKS, 6),
-    maxRetries: num(env.OCTIPUS_BOOT_RETRIES, 2),
+    maxRetries: count(env.OCTIPUS_BOOT_RETRIES, 2),
+    /** How long to wait for the API port to be free (before a boot, binding recovery), and between rebinds. */
+    portWaitMs: num(env.OCTIPUS_PORT_WAIT_MS, 30_000),
   };
 }
 
@@ -107,14 +117,17 @@ export function probeHost(host) {
 }
 
 /**
- * What to do after a boot attempt failed. `failures` counts this one.
+ * What to do after a boot attempt failed. `failures` counts consecutive failed
+ * attempts, this one included.
  *
- * Retry the same build `maxRetries` times, then the last good build once (when
- * there is one that differs from the current build), then give up to recovery.
+ * Retry the current build `maxRetries` times after the first attempt, then the
+ * last good build once (when there is one that differs from the current
+ * build), then give up to recovery.
  */
 export function nextStep({ failures, build, lastGoodAvailable, maxRetries }) {
-  if (failures < maxRetries) return { action: 'retry', build, delayMs: Math.min(2000 * 2 ** (failures - 1), 15_000) };
-  if (build !== 'last-good' && lastGoodAvailable) return { action: 'retry', build: 'last-good', delayMs: 1000 };
+  if (build === 'last-good') return { action: 'recovery' };
+  if (failures <= maxRetries) return { action: 'retry', build, delayMs: Math.min(2000 * 2 ** (failures - 1), 15_000) };
+  if (lastGoodAvailable) return { action: 'retry', build: 'last-good', delayMs: 1000 };
   return { action: 'recovery' };
 }
 
@@ -172,6 +185,17 @@ function probe(host, port, path, timeoutMs = 5000) {
   });
 }
 
+/** Is anything accepting TCP connections on host:port? */
+function portInUse(host, port) {
+  return new Promise((done) => {
+    const socket = connect({ host, port });
+    socket.setTimeout(2000);
+    socket.once('connect', () => { socket.destroy(); done(true); });
+    socket.once('timeout', () => { socket.destroy(); done(false); });
+    socket.once('error', () => done(false));
+  });
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export class Supervisor {
@@ -195,6 +219,7 @@ export class Supervisor {
     this.lastOperatorAt = 0;
     this.retryIndex = 0;
     this.retryTimer = null;
+    this.bindTimer = null;
     this.stableTimer = null;
     this.healthTimer = null;
     this.lastGood = this.readLastGoodMeta();
@@ -325,19 +350,23 @@ export class Supervisor {
     relay(child.stdout, this.out);
     relay(child.stderr, this.out);
     this.child = child;
-    this.childExit = new Promise((done) => child.once('exit', (code, signal) => done({ code, signal })));
+    child.exited = new Promise((done) => child.once('exit', (code, signal) => done({ code, signal })));
+    this.childExit = child.exited;
     child.once('error', (err) => this.log('error', `Could not start the backend: ${err.message}`));
     return child;
   }
 
-  async killChild(graceMs = 6000) {
-    const child = this.child;
+  /**
+   * Stop `child` (the current backend by default). Six seconds before SIGKILL:
+   * the backend force-exits after four, and `octi stop` waits ten for us.
+   */
+  async killChild(child = this.child, graceMs = 6000) {
     if (!child || child.exitCode !== null || child.signalCode !== null) return;
     child.kill('SIGTERM');
-    const exited = await Promise.race([this.childExit.then(() => true), sleep(graceMs).then(() => false)]);
+    const exited = await Promise.race([child.exited.then(() => true), sleep(graceMs).then(() => false)]);
     if (!exited) {
       child.kill('SIGKILL');
-      await this.childExit;
+      await child.exited;
     }
   }
 
@@ -356,18 +385,33 @@ export class Supervisor {
       this.log('error', `Backend build missing: ${attempt.detail}`);
       return false;
     }
+    // Whatever answers /api/health below has to be the child we start, so the
+    // port must be free first. A previous backend still shutting down gets a
+    // little while; one that stays is a failed attempt, not a healthy boot.
+    const host = probeHost(this.s.host);
+    const portFreeBy = Date.now() + this.s.portWaitMs;
+    while (await portInUse(host, this.s.port)) {
+      if (this.stopping) return false;
+      if (Date.now() > portFreeBy) {
+        attempt.outcome = 'port-in-use';
+        attempt.detail = `Something else is listening on port ${this.s.port}`;
+        attempt.endedAt = new Date().toISOString();
+        this.log('error', `Port ${this.s.port} is still taken by another process — not starting the backend`);
+        return false;
+      }
+      await sleep(500);
+    }
     this.log('info', `Starting backend (${build} build)`);
     const logStart = this.logRing.length;
     const child = this.spawnBackend(build);
-    const host = probeHost(this.s.host);
     const deadline = startedAt + this.s.bootTimeoutMs;
     let exited = null;
-    void this.childExit.then((e) => { exited = e; });
+    void child.exited.then((e) => { exited = e; });
     while (Date.now() < deadline) {
       if (this.stopping) return false;
       if (exited) break;
       if ((await probe(host, this.s.port, '/api/health', 3000)) === 200) {
-        // A 200 from someone else's process would be wrong, but this child is the one we just started.
+        // The port was free when it started, so the answer is this child's.
         if (!exited && this.child === child) {
           attempt.outcome = 'healthy';
           attempt.bootMs = Date.now() - startedAt;
@@ -381,11 +425,11 @@ export class Supervisor {
     if (!exited) {
       attempt.outcome = 'boot-timeout';
       this.log('error', `Backend did not answer /api/health within ${this.s.bootTimeoutMs} ms — stopping it`);
-      await this.killChild();
+      await this.killChild(child);
     } else {
       attempt.outcome = 'crashed';
     }
-    const ended = exited ?? (await this.childExit);
+    const ended = exited ?? (await child.exited);
     attempt.exitCode = ended.code;
     attempt.signal = ended.signal;
     attempt.endedAt = new Date().toISOString();
@@ -408,14 +452,17 @@ export class Supervisor {
     this.healthTimer = setInterval(async () => {
       if (this.child !== child || this.stopping) return;
       const status = await probe(probeHost(this.s.host), this.s.port, '/api/health', 5000);
+      // The probe took a while: this child may have exited and been replaced
+      // since. Its result says nothing about the new one.
+      if (this.child !== child || this.stopping) return;
       missed = status === 200 ? 0 : missed + 1;
       if (missed >= this.s.hangChecks) {
         this.log('error', `Backend missed ${missed} health checks in a row — restarting it`);
         missed = 0;
-        await this.killChild();
+        await this.killChild(child);
       }
     }, this.s.healthIntervalMs);
-    void this.childExit.then(({ code, signal }) => {
+    void child.exited.then(({ code, signal }) => {
       clearTimeout(this.stableTimer);
       clearInterval(this.healthTimer);
       if (this.stopping || this.child !== child) return;
@@ -473,13 +520,16 @@ export class Supervisor {
     const delay = RECOVERY_RETRY_MS[Math.min(this.retryIndex, RECOVERY_RETRY_MS.length - 1)];
     this.retryAt = new Date(Date.now() + delay).toISOString();
     this.writeState();
+    // Not unref'd: when the recovery server could not bind, this timer is
+    // what keeps the supervisor alive to try again.
     this.retryTimer = setTimeout(() => void this.autoRetry(), delay);
-    this.retryTimer.unref?.();
   }
 
   async autoRetry() {
     if (this.mode !== 'recovery' || this.stopping) return;
     if (this.busy || Date.now() - this.lastOperatorAt < OPERATOR_QUIET_MS) {
+      this.retryAt = new Date(Date.now() + 5 * 60_000).toISOString();
+      this.writeState();
       this.retryTimer = setTimeout(() => void this.autoRetry(), 5 * 60_000);
       return;
     }
@@ -507,22 +557,34 @@ export class Supervisor {
   }
 
   async openRecoveryServers() {
+    clearTimeout(this.bindTimer);
+    const bound = new Set(this.servers.map((srv) => srv.address()?.port));
     const ports = [this.s.port];
     if (this.s.webPort && this.s.webPort !== this.s.port) ports.push(this.s.webPort);
     for (const port of ports) {
+      if (bound.has(port)) continue;
+      if (this.mode !== 'recovery' || this.stopping) return;
       const required = port === this.s.port;
-      for (let i = 0; i < (required ? 12 : 1); i++) {
+      const giveUpAt = Date.now() + (required ? this.s.portWaitMs : 0);
+      while (true) {
         try {
           const server = await this.listen(port);
           this.servers.push(server);
           this.log('info', `Recovery server listening on ${this.s.host}:${port}`);
           break;
         } catch (err) {
-          if (!required) break; // Another process (the web UI) has it; it proxies /api here anyway.
+          // The web port is optional: whoever has it (the web UI) proxies /api here anyway.
+          if (!required || Date.now() >= giveUpAt || this.stopping) break;
           this.log('warn', `Recovery server could not bind port ${port}: ${err.message} — retrying`);
-          await sleep(5000);
+          await sleep(Math.min(5000, this.s.portWaitMs));
         }
       }
+    }
+    // Still without the API port: keep trying in the background, so recovery
+    // mode appears as soon as whatever holds it lets go.
+    if (!this.servers.some((srv) => srv.address()?.port === this.s.port)) {
+      this.log('error', `Recovery server could not bind port ${this.s.port} — trying again in ${Math.round(this.s.portWaitMs / 1000)} s`);
+      this.bindTimer = setTimeout(() => void this.openRecoveryServers(), this.s.portWaitMs);
     }
     this.writeState();
   }
@@ -547,6 +609,7 @@ export class Supervisor {
     const servers = this.servers;
     this.servers = [];
     clearTimeout(this.retryTimer);
+    clearTimeout(this.bindTimer);
     this.retryAt = null;
     await Promise.all(servers.map((srv) => new Promise((done) => {
       srv.close(() => done());

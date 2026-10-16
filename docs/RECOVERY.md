@@ -96,7 +96,7 @@ would the rest of the API.
 | Variable | Default | |
 | --- | --- | --- |
 | `OCTIPUS_BOOT_TIMEOUT_MS` | `120000` | How long a boot may take to answer `/api/health` |
-| `OCTIPUS_BOOT_RETRIES` | `2` | Attempts with the current build before the last good one |
+| `OCTIPUS_BOOT_RETRIES` | `2` | Retries of the current build after a failed boot, before the last good one (`0`: none) |
 | `OCTIPUS_RECOVERY_TOKEN` | (file) | Token instead of `~/.octipus/recovery-token` |
 | `OCTIPUS_LAST_GOOD_DIR` | `<checkout>/.last-good-build` | Where the last good build is kept |
 

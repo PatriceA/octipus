@@ -11,7 +11,7 @@
  * the commands that do NOT start processes are exercised.
  */
 import { execFileSync } from 'node:child_process';
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,11 +21,11 @@ import { describe, expect, test } from 'vitest';
 const BIN_DIR = dirname(fileURLToPath(import.meta.url));
 const BIN_BASH = join(BIN_DIR, 'octi');
 
-function runBash(args: string[]): { stdout: string; code: number } {
+function runBash(args: string[], env: Record<string, string | undefined> = {}): { stdout: string; code: number } {
   const home = mkdtempSync(join(tmpdir(), 'octi-cli-test-'));
   try {
     const stdout = execFileSync('bash', [BIN_BASH, ...args], {
-      env: { ...process.env, HOME: home, NO_COLOR: '1' },
+      env: { ...process.env, HOME: home, NO_COLOR: '1', ...env },
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -178,7 +178,7 @@ describe('launcher project configuration', () => {
 
 describe('octi recovery', () => {
   test('explains recovery mode and that the token comes with the first start', () => {
-    const { stdout, code } = runBash(['recovery']);
+    const { stdout, code } = runBash(['recovery'], { OCTIPUS_RECOVERY_TOKEN: undefined });
     const out = plain(stdout);
     expect(code).toBe(0);
     expect(out).toContain('No supervisor is running');
@@ -189,4 +189,29 @@ describe('octi recovery', () => {
   test('is listed in help', () => {
     expect(plain(runBash(['help']).stdout)).toMatch(/^\s+recovery\b/m);
   });
+});
+
+describe('octi stop/restart from inside the backend', () => {
+  test('hands off to a detached copy, which does the work instead of handing off again', async () => {
+    // An isolated checkout and HOME, and ports nothing listens on: the
+    // detached `stop` only ever touches this temp install.
+    const { root, script } = isolatedBashProject('API_PORT=1\nWEB_PORT=2\n');
+    const home = mkdtempSync(join(tmpdir(), 'octi-cli-test-'));
+    // OCTI_HANDED_OFF is what an earlier hand-off used to leave in the
+    // environment of the backend it started; it must not stop this one.
+    const env = { ...process.env, HOME: home, NO_COLOR: '1', OCTIPUS_INSIDE_PID: String(process.pid), OCTI_HANDED_OFF: '1' };
+    const out = plain(execFileSync('bash', [script, 'stop'], { env, encoding: 'utf8', cwd: root }));
+    expect(out).toContain("'stop' handed off to a detached process");
+
+    const log = join(home, '.octipus', 'stop.log');
+    const deadline = Date.now() + 20_000;
+    let text = '';
+    while (Date.now() < deadline) {
+      text = existsSync(log) ? plain(readFileSync(log, 'utf8')) : '';
+      if (text.includes('No Octipus processes were running')) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    expect(text).toContain('No Octipus processes were running');
+    expect(text).not.toContain('handed off');
+  }, 30_000);
 });

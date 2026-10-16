@@ -363,9 +363,12 @@ kill_port_users() {
 }
 
 # Kill a tracked process and its children
+# Optional third argument: how many half-seconds to wait for a graceful exit
+# before SIGKILL (default 10).
 kill_tracked() {
   local pid_file="$1"
   local label="$2"
+  local wait_halves="${3:-10}"
 
   if [[ -f "$pid_file" ]]; then
     local pid
@@ -381,7 +384,7 @@ kill_tracked() {
       else
         kill -- -"$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
         local i
-        for i in $(seq 1 10); do
+        for i in $(seq 1 "$wait_halves"); do
           if ! kill -0 "$pid" 2>/dev/null; then break; fi
           sleep 0.5
         done
@@ -400,8 +403,10 @@ kill_tracked() {
 
 # kill all octipus-related processes (orphans included)
 kill_all_octipus() {
-  # Kill tracked processes
-  kill_tracked "$PID_FILE_BACKEND" "backend"
+  # Kill tracked processes. 12 s for the backend: its PID file names the
+  # supervisor, which gives the backend 6 s to shut down before exiting itself.
+  # Killing the supervisor sooner orphans a slow backend.
+  kill_tracked "$PID_FILE_BACKEND" "backend" 24
   kill_tracked "$PID_FILE_WEB" "web UI"
 
   if [[ "$IS_WINDOWS" == true ]]; then
@@ -465,12 +470,15 @@ supervisor_mode() {
 handoff_if_inside_backend() {
   local cmd="$1"
   shift
-  [[ -n "${OCTIPUS_INSIDE_PID:-}" && -z "${OCTI_HANDED_OFF:-}" ]] || return 1
+  [[ -n "${OCTIPUS_INSIDE_PID:-}" ]] || return 1
   [[ "$IS_WINDOWS" == true ]] && return 1
   init_state_dir
   local handoff_log="$STATE_DIR/$cmd.log"
-  # Node rather than setsid(1), which macOS does not ship.
-  if ! OCTI_HANDED_OFF=1 node -e '
+  # Node rather than setsid(1), which macOS does not ship. The detached copy
+  # runs without OCTIPUS_INSIDE_PID, so it does the work instead of handing
+  # off again; nothing else marks it, so the backend it starts (which gets the
+  # variable afresh from the supervisor) hands off the next restart too.
+  if ! node -e '
     const { spawn } = require("node:child_process");
     const { openSync } = require("node:fs");
     const [log, ...argv] = process.argv.slice(1);
@@ -685,7 +693,8 @@ ensure_backend_build() {
   log_info "Backend rebuilt"
 }
 
-# Spawn the backend and block until it answers /api/health. Non-zero on failure,
+# Spawn the backend and block until it answers /api/health. 2 when it is not up
+# but the supervisor carries on (slow boot, recovery mode); otherwise non-zero on failure,
 # having already killed the process and printed a diagnosis.
 start_backend() {
   cd "$PROJECT_DIR"
@@ -717,7 +726,7 @@ start_backend() {
       regen_mcp_config
       return 0
     fi
-    kill_tracked "$PID_FILE_BACKEND" "backend"
+    kill_tracked "$PID_FILE_BACKEND" "backend" 24
     diagnose_backend_failure
     return 1
   fi
@@ -734,7 +743,7 @@ start_backend() {
       return 0
     fi
     if ! kill -0 "$pid" 2>/dev/null; then
-      kill_tracked "$PID_FILE_BACKEND" "backend"
+      kill_tracked "$PID_FILE_BACKEND" "backend" 24
       diagnose_backend_failure
       return 1
     fi
@@ -747,7 +756,7 @@ start_backend() {
       echo ""
       log_warn "The backend could not start — recovery mode is up on port $API_PORT"
       log_hint "Open http://<host>:$API_PORT/api/recovery, or see: octi recovery"
-      return 1
+      return 2
     fi
     sleep 0.25
     attempt=$((attempt + 1))
@@ -755,6 +764,23 @@ start_backend() {
   log_warn "Backend is not answering yet. The supervisor keeps trying, and falls back to"
   log_warn "the last good build or recovery mode on port $API_PORT if it cannot start it."
   log_hint "Follow it with: octi status · octi logs · octi recovery"
+  return 2
+}
+
+# Start the backend, then the client the target names. When the backend is not
+# up but the supervisor is still in charge (a slow boot, or recovery mode),
+# start_backend returns 2 and a web UI target is started anyway: its proxy is
+# how a domain, a tunnel or the phone app reaches the API, and recovery mode.
+start_and_launch() {
+  local rc=0
+  start_backend || rc=$?
+  if [[ $rc -eq 0 ]]; then
+    launch_target
+    return
+  fi
+  if [[ $rc -eq 2 && "$LAUNCH_TARGET" == web ]]; then
+    start_web
+  fi
   return 1
 }
 
@@ -870,8 +896,7 @@ cmd_start() {
   fi
 
   preflight_checks || return 1
-  start_backend || return 1
-  launch_target
+  start_and_launch
 }
 
 cmd_stop() {
@@ -924,8 +949,7 @@ cmd_restart() {
   echo ""
 
   preflight_checks || return 1
-  start_backend || return 1
-  launch_target
+  start_and_launch
 }
 
 cmd_status() {
