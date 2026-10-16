@@ -46,9 +46,8 @@ beforeAll(async () => {
   const { runMigrations } = await import('@/db/migrate');
   await runMigrations();
 
-  // Seed via raw SQL helpers — go around the repo singletons because
-  // bun's mock.module from other test files (notably commands.test.ts)
-  // may have replaced them with partial stubs.
+  // Seed via raw SQL helpers so the seed step does not depend on the
+  // repository layer under test — the schema is the contract.
   const { seedMessage, seedSession, seedUsers } = await import('@/test-helpers/multiuser-fixtures');
   await seedUsers([
     { id: aliceId, username: 'alice' },

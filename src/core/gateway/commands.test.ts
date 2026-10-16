@@ -5,11 +5,8 @@ import { CommandRegistry, registerBuiltinCommands } from './commands';
 
 describe('CommandRegistry', () => {
   let registry: CommandRegistry;
-  // Use spyOn (auto-restores) instead of `vi.mock()` for the
-  // session-repository fakes — bun's `mock.module` is process-wide and
-  // would leak hard-coded `{id:'sess-1',userId:'user1'}` into every later
-  // test (notably the swarm/agents integration tests whose
-  // canAccessRootSession would always reject under that mock).
+  // spyOn the session-repository methods (reset per test) rather than
+  // `vi.mock()` the module, so each test sets exactly the rows it needs.
   const findByIdSpy = vi.spyOn(sessionRepository, 'findById');
   const updateSpy = vi.spyOn(sessionRepository, 'update');
   const clearSpy = vi.spyOn(sessionRepository, 'clearContext');

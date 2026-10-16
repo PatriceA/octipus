@@ -72,8 +72,8 @@ describe('ZaiProvider.embed', () => {
 
 describe('ZaiProvider.complete', () => {
   const p = new ZaiProvider();
-  // Stub global fetch (the OpenAI SDK uses fetch under the hood) rather than
-  // mock.module — the latter leaks process-wide.
+  // Stub global fetch (the OpenAI SDK uses fetch under the hood) so the
+  // real SDK request path is exercised.
   const realFetch = globalThis.fetch;
   const realKey = process.env.ZAI_API_KEY;
 

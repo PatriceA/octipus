@@ -29,12 +29,6 @@ interface StoredUser {
 }
 const users = new Map<string, StoredUser>();
 
-// Snapshot the real module into a plain object BEFORE mocking. Restoring from
-// the live `import * as` namespace does not work — bun's `mock.module` leaves
-// that binding pointing at the stub, so the afterAll restore would re-install
-// the stub and leak it into later suites (e.g. the DB repository integration
-// tests). A copy taken before mocking restores cleanly.
-
 vi.mock('@/db/repositories/user-repository', async () => ({
   ...(await vi.importActual<typeof import('@/db/repositories/user-repository')>('@/db/repositories/user-repository')),
   userRepository: {

@@ -28,8 +28,7 @@ describe('NoteService', () => {
     await seedUsers([{ id: userId, username: 'notes-user' }]);
     const linksMod = await import('@/db/repositories/knowledge-link-repository');
     links = new linksMod.KnowledgeLinkRepository();
-    // Inject a real EmbeddingService (not getEmbeddingService(), which other
-    // test files mock.module into a partial stub that leaks across the suite),
+    // Inject a real EmbeddingService (not the getEmbeddingService() singleton),
     // so the DB methods (countBySource/deleteBySource) stay real — but stub the
     // single network seam, generateEmbedding, to fail locally.
     //
@@ -37,12 +36,9 @@ describe('NoteService', () => {
     // NO embedding backend is reachable. When the dev/CI env has a LiteLLM proxy
     // configured (LITELLM_URL/key), the proxy accepts the bogus 'test-model' and
     // the embed call goes out for real → 401. That rejection (and the wrapped
-    // "Indexing failed" error) surfaces asynchronously and bun attributes it to
-    // whichever unrelated test happens to be running — most visibly flaking
-    // `LiteLLMProvider > checkHealth` in the full-suite run. Failing fast at the
-    // accessor (instance spyOn, not a prototype/mock.module that leaks
-    // process-wide) reproduces the no-model degradation contract with zero
-    // network and zero cross-file leakage.
+    // "Indexing failed" error) surfaces asynchronously as an unhandled
+    // rejection. Failing fast at the accessor (an instance spyOn) reproduces the
+    // no-model degradation contract with zero network.
     const { EmbeddingService } = await import('@/core/rag/embeddings');
     const embeddings = new EmbeddingService('test-model');
     const noModel = new Error('No embedding model configured (test) — re-index degrades to indexed:false');
