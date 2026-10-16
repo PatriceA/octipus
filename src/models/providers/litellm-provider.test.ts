@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 

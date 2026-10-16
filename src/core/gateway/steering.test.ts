@@ -1,7 +1,7 @@
 /**
  * Mid-run steering routing — trySteerRunningRootAgent. Uses spyOn on the
- * agent-manager singleton and the repos. guardInput is left real so the security-hole regression is
- * covered against the actual patterns.
+ * agent-manager singleton and the repos. guardInput is left real so the
+ * security-hole regression is covered against the actual patterns.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { getAgentManager } from '@/core/agent-manager';

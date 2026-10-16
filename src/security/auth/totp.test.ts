@@ -8,7 +8,7 @@
  * secret round-trip. Valid codes are produced with otplib's own `generate`.
  */
 import { randomBytes } from 'node:crypto';
-import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { generate } from 'otplib';
 
 // getConfig() (reached via `new TOTPAuth()` and the HKDF key derivation)
@@ -44,9 +44,6 @@ vi.mock('@/db/repositories/user-repository', async () => ({
 
 // Import the SUT AFTER the mock so it binds to the fake repository.
 const { TOTPAuth } = await import('./totp');
-
-afterAll(() => {
-});
 
 function seedUser(id: string): StoredUser {
   const u: StoredUser = { id, username: `user-${id}`, isAdmin: false, totpEnabled: false, totpSecret: null };

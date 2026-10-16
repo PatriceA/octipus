@@ -105,6 +105,10 @@ jobs:
 
       - name: Setup Node (+ npm cache)
         uses: ./.github/actions/node-setup
+        with:
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
 
       - name: Install root deps
         run: npm ci
@@ -132,6 +136,10 @@ jobs:
 
       - name: Setup Node (+ npm cache)
         uses: ./.github/actions/node-setup
+        with:
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
 
       - name: Install root deps
         run: npm ci

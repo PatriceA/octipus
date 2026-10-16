@@ -32,8 +32,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Node (+ npm cache)
+      - name: Setup Node
         uses: ./.github/actions/node-setup
+        with:
+          cache: ''
 
       - name: Syntax-check every extension script
         run: |

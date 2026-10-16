@@ -2,8 +2,8 @@ name: Node setup
 description: Install the pinned Node and restore the shared npm cache.
 
 # One place for the Node version pin (previously copy-pasted into every job)
-# and the dependency cache, keyed on the root and web lockfiles so a dependency
-# change in either busts it (jobs that also `npm ci` in web/ download from it). The cache only accelerates downloads; `npm ci` stays exact either way.
+# and the dependency cache, keyed on the lockfile so a dependency change busts
+# it (jobs that also `npm ci` in web/ pass both lockfiles). The cache only accelerates downloads; `npm ci` stays exact either way.
 #
 # NOT 24.9: that patch has a bug in the synchronous module-customization hooks
 # (`module.registerHooks`) — a hook that passes a CommonJS module through to the
@@ -13,6 +13,14 @@ description: Install the pinned Node and restore the shared npm cache.
 # integration lane died at the migration step. Reproduced under
 # `node:24.9-bookworm-slim` and confirmed fixed on 24.19.
 inputs:
+  cache:
+    description: Package-manager cache to restore and save; '' for a job that installs nothing.
+    required: false
+    default: npm
+  cache-dependency-path:
+    description: Lockfile(s) the cache key hashes.
+    required: false
+    default: package-lock.json
   registry-url:
     description: npm registry to write an .npmrc for (the release job publishes).
     required: false
@@ -23,8 +31,6 @@ runs:
     - uses: actions/setup-node@v7
       with:
         node-version: '24.19'
-        cache: npm
-        cache-dependency-path: |
-          package-lock.json
-          web/package-lock.json
+        cache: ${{ inputs.cache }}
+        cache-dependency-path: ${{ inputs.cache-dependency-path }}
         registry-url: ${{ inputs.registry-url }}
