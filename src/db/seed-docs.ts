@@ -1,3 +1,4 @@
+import { readdir } from 'node:fs/promises';
 import { join } from 'path';
 import { type EmbeddingPurpose, getEmbeddingService, sha256Hex } from '@/core/rag/embeddings';
 import { isKBReady } from '@/core/rag/health';
@@ -80,12 +81,21 @@ export interface IndexProductDocsResult {
 }
 
 async function defaultListFiles(docsDir: string, patterns: string[]): Promise<string[]> {
+  // The `node:fs` glob swallows directory errors (a missing, unreadable or
+  // not-a-directory cwd all yield zero files), so probe the dir first: absent
+  // is normal and means "no docs"; any other failure is thrown for the caller
+  // to report.
+  try {
+    await readdir(docsDir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw err;
+  }
   const seen = new Set<string>();
   for (const pattern of patterns) {
-
-    // `absolute: false` → paths relative to cwd (docsDir); don't follow
-    // symlinks out of the docs tree. NB: scan() rejects with ENOENT if
-    // `docsDir` does not exist — the caller catches that as "no docs".
+    // `absolute: false` → paths relative to cwd (docsDir). NB: the glob follows
+    // a symlinked directory named in a pattern (e.g. a `guides` symlink under
+    // `guides/**/*.md`), so the docs tree is trusted.
     for await (const rel of globFiles(pattern, { cwd: docsDir, absolute: false })) {
       seen.add(rel);
     }
@@ -104,17 +114,14 @@ export async function indexProductDocs(deps: IndexProductDocsDeps = {}): Promise
     const docsDir = deps.docsDir ?? join(process.cwd(), 'docs');
 
     // Docs only ship in some images / dev trees; absence is normal, not an
-    // error. The glob scan is the existence check — but Bun.Glob.scan THROWS
-    // ENOENT when `cwd` doesn't exist (it does not yield zero files), so the
-    // try/catch below is what turns a missing docs dir into a clean skip.
+    // error, and the default lister reports it as zero files.
     const listFiles = deps.listFiles ?? defaultListFiles;
     let relPaths: string[];
     try {
       relPaths = await listFiles(docsDir, INCLUDE_PATTERNS);
     } catch (err) {
-      // A missing dir yields zero files (handled below); a throw means the dir
-      // is there but could not be scanned (permissions, I/O), which an
-      // operator needs to see rather than read as "no docs shipped".
+      // A throw means the dir is there but could not be read (EACCES, ENOTDIR,
+      // I/O) — an operator needs to see that rather than read it as "no docs".
       log.warn({ err, docsDir }, 'Product docs directory could not be scanned — skipping docs auto-index');
       result.reason = 'docs-scan-failed';
       return result;
