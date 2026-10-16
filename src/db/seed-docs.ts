@@ -83,9 +83,10 @@ async function defaultListFiles(docsDir: string, patterns: string[]): Promise<st
   const seen = new Set<string>();
   for (const pattern of patterns) {
 
-    // `absolute: false` → paths relative to cwd (docsDir); don't follow
-    // symlinks out of the docs tree. A missing `docsDir` yields no files,
-    // which the caller reports as "no docs".
+    // `absolute: false` → paths relative to cwd (docsDir). A missing `docsDir`
+    // yields no files, which the caller reports as "no docs". NB: the
+    // `node:fs` glob follows a symlinked directory named in a pattern (e.g. a
+    // `guides` symlink under `guides/**/*.md`), so the docs tree is trusted.
     for await (const rel of globFiles(pattern, { cwd: docsDir, absolute: false })) {
       seen.add(rel);
     }
