@@ -175,3 +175,18 @@ describe('launcher project configuration', () => {
     expect(stdout).toContain('Octipus v9.8.7');
   });
 });
+
+describe('octi recovery', () => {
+  test('explains recovery mode and that the token comes with the first start', () => {
+    const { stdout, code } = runBash(['recovery']);
+    const out = plain(stdout);
+    expect(code).toBe(0);
+    expect(out).toContain('No supervisor is running');
+    expect(out).toContain('/api/recovery');
+    expect(out).toContain('No token yet');
+  });
+
+  test('is listed in help', () => {
+    expect(plain(runBash(['help']).stdout)).toMatch(/^\s+recovery\b/m);
+  });
+});

@@ -251,6 +251,7 @@ Open directions (later): federation between Octipus instances, local-first sync 
 | **[Development](docs/DEVELOPMENT.md)** | Project structure, commands, tech stack |
 | **[Testing](docs/TESTING.md)** | Test matrix (unit, E2E, integration, red-team) |
 | **[Troubleshooting](docs/TROUBLESHOOTING.md)** | Common issues and solutions |
+| **[Self-repair & recovery](docs/RECOVERY.md)** | What happens when the backend won't start, and how to reach it remotely |
 
 ## License
 

@@ -17,6 +17,7 @@ set -o pipefail 2>/dev/null || true
 #   octi edit                       TUI editor
 #   octi status                     Show running state
 #   octi logs                       Tail backend logs
+#   octi recovery                   Recovery mode state and the recovery token
 #
 # `start` is backend-only on purpose: a terminal user should not have to opt
 # out of a browser. Name the client you want, or attach one afterwards.
@@ -33,6 +34,9 @@ PID_FILE_BACKEND="$STATE_DIR/backend.pid"
 PID_FILE_WEB="$STATE_DIR/web.pid"
 PID_FILE_DESKTOP="$STATE_DIR/desktop.pid"
 LOG_FILE="$STATE_DIR/backend.log"
+# Written by scripts/supervisor.mjs: starting / running / recovery.
+SUPERVISOR_STATE_FILE="$STATE_DIR/supervisor.json"
+RECOVERY_TOKEN_FILE="$STATE_DIR/recovery-token"
 WEB_LOG_FILE="$STATE_DIR/web.log"
 DESKTOP_LOG_FILE="$STATE_DIR/desktop.log"
 
@@ -154,6 +158,7 @@ get_pid() {
 
 open_browser() {
   local url="$1"
+  [[ "${OCTI_NO_BROWSER:-}" == 1 ]] && return 0
   case "$(uname -s)" in
     Linux*)  xdg-open "$url" 2>/dev/null || true ;;
     Darwin*) open "$url" 2>/dev/null || true ;;
@@ -424,7 +429,10 @@ kill_all_octipus() {
     # patterns name this checkout: a bare "node.*dist/index.js" also killed
     # every other Node app's dist/index.js on the machine, MCP servers
     # included (this checkout's own mcp-server/dist/index.js among them).
+    # The supervisor first: it would restart a backend killed before it.
+    pkill -f "node.*${PROJECT_DIR}/scripts/supervisor.mjs" 2>/dev/null || true
     pkill -f "node.*${PROJECT_DIR}/dist/index.js" 2>/dev/null || true
+    pkill -f "node.*${PROJECT_DIR}/.last-good-build/index.js" 2>/dev/null || true
     pkill -f "tsx.*src/index.ts" 2>/dev/null || true
     pkill -f "node.*${PROJECT_DIR}/web/serve.mjs" 2>/dev/null || true
   fi
@@ -436,7 +444,50 @@ kill_all_octipus() {
   sleep 1
 
   # Clean stale PID files
-  rm -f "$PID_FILE_BACKEND" "$PID_FILE_WEB"
+  rm -f "$PID_FILE_BACKEND" "$PID_FILE_WEB" "$SUPERVISOR_STATE_FILE"
+}
+
+# The supervisor's mode (starting / running / recovery), or nothing.
+supervisor_mode() {
+  [[ -f "$SUPERVISOR_STATE_FILE" ]] || return 0
+  grep -oE '"mode": *"[a-z-]+"' "$SUPERVISOR_STATE_FILE" 2>/dev/null | head -1 | sed -E 's/.*"([a-z-]+)"$/\1/' || true
+}
+
+# `octi restart` / `octi stop` asked for from inside the backend — the shell
+# tool, a CLI agent, a chat on your phone. The command is then a child of the
+# process it is about to stop, and the backend reaps its children's process
+# groups when it shuts down: the restart died after the stop and before the
+# start, and nothing came back. So hand the command to a detached process (its
+# own session, outside the backend's process groups) and return at once.
+#
+# OCTIPUS_INSIDE_PID is set by the backend and the supervisor for everything
+# they spawn. Returns non-zero when no hand-off was needed.
+handoff_if_inside_backend() {
+  local cmd="$1"
+  shift
+  [[ -n "${OCTIPUS_INSIDE_PID:-}" && -z "${OCTI_HANDED_OFF:-}" ]] || return 1
+  [[ "$IS_WINDOWS" == true ]] && return 1
+  init_state_dir
+  local handoff_log="$STATE_DIR/$cmd.log"
+  # Node rather than setsid(1), which macOS does not ship.
+  if ! OCTI_HANDED_OFF=1 node -e '
+    const { spawn } = require("node:child_process");
+    const { openSync } = require("node:fs");
+    const [log, ...argv] = process.argv.slice(1);
+    delete process.env.OCTIPUS_INSIDE_PID;
+    const fd = openSync(log, "w");
+    spawn("bash", argv, { detached: true, stdio: ["ignore", fd, fd] }).unref();
+  ' "$handoff_log" "$REAL_SCRIPT" "$cmd" "$@"; then
+    log_warn "Could not detach '$cmd' — running it here"
+    return 1
+  fi
+  log_info "Running inside Octipus — '$cmd' handed off to a detached process"
+  log_hint "Its output: $handoff_log"
+  if [[ "$cmd" == restart ]]; then
+    log_hint "The backend goes down now and should answer again in a minute or two."
+    log_hint "If it cannot start, it comes up in recovery mode on port $API_PORT (/api/recovery)."
+  fi
+  return 0
 }
 
 # Stop the desktop app — every flavor of it. Kept separate from
@@ -539,6 +590,7 @@ diagnose_backend_failure() {
 
 # Which client to attach after the backend is up, and how to run it.
 LAUNCH_TARGET="backend"
+LAUNCH_TARGET_EXPLICIT=false
 LAUNCH_DEV=false
 LAUNCH_CWD=""
 # Rebuild the backend, MCP server and web UI even when they look current (a
@@ -555,18 +607,19 @@ LAUNCH_REBUILD=false
 # for the thing you do every day.
 parse_launch_args() {
   LAUNCH_TARGET="backend"
+  LAUNCH_TARGET_EXPLICIT=false
   LAUNCH_DEV=false
   # Captured before any `cd`: an attached TUI pins to the directory you ran the
   # command in, exactly like `octi tui` does.
   LAUNCH_CWD="$PWD"
   for arg in "$@"; do
     case "$arg" in
-      tui|--tui|-t) LAUNCH_TARGET="tui" ;;
-      web|webui|browser) LAUNCH_TARGET="web" ;;
-      desktop|app) LAUNCH_TARGET="desktop" ;;
+      tui|--tui|-t) LAUNCH_TARGET="tui"; LAUNCH_TARGET_EXPLICIT=true ;;
+      web|webui|browser) LAUNCH_TARGET="web"; LAUNCH_TARGET_EXPLICIT=true ;;
+      desktop|app) LAUNCH_TARGET="desktop"; LAUNCH_TARGET_EXPLICIT=true ;;
       --dev|-d) LAUNCH_DEV=true ;;
       --rebuild) LAUNCH_REBUILD=true ;;
-      --backend-only|--headless|--no-web) LAUNCH_TARGET="backend" ;;
+      --backend-only|--headless|--no-web) LAUNCH_TARGET="backend"; LAUNCH_TARGET_EXPLICIT=true ;;
       -*) ;; # unknown flags are forwarded/ignored, not fatal
       *)
         log_error "Unknown target: $arg"
@@ -640,26 +693,68 @@ start_backend() {
     log_step "Starting backend (dev mode with hot reload)..."
     nohup npm run dev > "$LOG_FILE" 2>&1 &
   else
-    ensure_backend_build || return 1
+    # A failed build is not the end: the supervisor falls back to the last
+    # build that ran, or to recovery mode, so the machine stays reachable.
+    ensure_backend_build || log_warn "Starting anyway — the supervisor falls back to the last good build"
     log_step "Starting backend..."
-    # What `npm run start` runs, without npm: an npm parent sat idle beside
-    # the server for its whole life (~50 MB), and the PID file named npm rather
-    # than the server, so `octi stop` signalled the wrapper. node_modules/.bin
-    # first on PATH, as npm puts it, for anything the backend spawns by name.
-    PATH="$PROJECT_DIR/node_modules/.bin:$PATH" nohup node "$PROJECT_DIR/dist/index.js" > "$LOG_FILE" 2>&1 &
+    # Under scripts/supervisor.mjs, which restarts a backend that crashes or
+    # hangs, falls back to the last good build when a new one won't boot, and
+    # serves recovery mode on the API port when nothing will. The PID file
+    # names the supervisor; stopping it stops the backend. No npm in between:
+    # an npm parent sat idle beside the server for its whole life (~50 MB).
+    # node_modules/.bin first on PATH, as npm puts it, for anything the
+    # backend spawns by name.
+    rm -f "$SUPERVISOR_STATE_FILE"
+    OCTIPUS_STATE_DIR="$STATE_DIR" PATH="$PROJECT_DIR/node_modules/.bin:$PATH" \
+      nohup node "$PROJECT_DIR/scripts/supervisor.mjs" > "$LOG_FILE" 2>&1 &
   fi
   echo $! > "$PID_FILE_BACKEND"
 
   log_step "Waiting for backend to be ready..."
-  if wait_for_health "http://localhost:$API_PORT/api/health" 60 "$(get_pid "$PID_FILE_BACKEND")"; then
-    log_info "Backend is ready on port $API_PORT"
-    # The backend just minted ~/.octipus/mcp-token (multi-user mode);
-    # restamp .mcp.json so MCP clients pick it up without a manual step.
-    regen_mcp_config
-    return 0
+  if [[ "$LAUNCH_DEV" == true ]]; then
+    if wait_for_health "http://localhost:$API_PORT/api/health" 60 "$(get_pid "$PID_FILE_BACKEND")"; then
+      log_info "Backend is ready on port $API_PORT"
+      regen_mcp_config
+      return 0
+    fi
+    kill_tracked "$PID_FILE_BACKEND" "backend"
+    diagnose_backend_failure
+    return 1
   fi
-  kill_tracked "$PID_FILE_BACKEND" "backend"
-  diagnose_backend_failure
+
+  local pid attempt=0
+  pid=$(get_pid "$PID_FILE_BACKEND")
+  # 90 s: a slow first boot fits; past that the supervisor carries on alone.
+  while [[ $attempt -lt 360 ]]; do
+    if curl -sf "http://localhost:$API_PORT/api/health" >/dev/null 2>&1; then
+      log_info "Backend is ready on port $API_PORT"
+      # The backend just minted ~/.octipus/mcp-token (multi-user mode);
+      # restamp .mcp.json so MCP clients pick it up without a manual step.
+      regen_mcp_config
+      return 0
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+      kill_tracked "$PID_FILE_BACKEND" "backend"
+      diagnose_backend_failure
+      return 1
+    fi
+    if [[ "$(supervisor_mode)" == recovery ]]; then
+      # Not diagnose_backend_failure: its "port in use" check would blame the
+      # recovery server holding the port on purpose.
+      echo ""
+      log_error "Backend failed to start. Last log entries (full log: octi logs):"
+      tail -30 "$LOG_FILE" 2>/dev/null | pretty_backend_log | sed 's/^/    /'
+      echo ""
+      log_warn "The backend could not start — recovery mode is up on port $API_PORT"
+      log_hint "Open http://<host>:$API_PORT/api/recovery, or see: octi recovery"
+      return 1
+    fi
+    sleep 0.25
+    attempt=$((attempt + 1))
+  done
+  log_warn "Backend is not answering yet. The supervisor keeps trying, and falls back to"
+  log_warn "the last good build or recovery mode on port $API_PORT if it cannot start it."
+  log_hint "Follow it with: octi status · octi logs · octi recovery"
   return 1
 }
 
@@ -780,6 +875,7 @@ cmd_start() {
 }
 
 cmd_stop() {
+  handoff_if_inside_backend stop && return 0
   init_state_dir
   print_banner
 
@@ -805,9 +901,18 @@ cmd_stop() {
 
 cmd_restart() {
   parse_launch_args "$@" || return 1
+  handoff_if_inside_backend restart "$@" && return 0
 
   init_state_dir
   print_banner
+
+  # "Start again the same way": a web UI that was up comes back up. Restarting
+  # without naming it used to leave it down, and with it anything (a domain, a
+  # tunnel, the phone app) that reaches the API through its proxy.
+  if [[ "$LAUNCH_TARGET_EXPLICIT" == false ]] && is_running "$PID_FILE_WEB"; then
+    LAUNCH_TARGET="web"
+    OCTI_NO_BROWSER=1
+  fi
 
   log_step "Stopping all processes..."
   kill_all_octipus
@@ -831,9 +936,14 @@ cmd_status() {
   echo ""
 
   if is_running "$PID_FILE_BACKEND"; then
-    local pid
+    local pid mode
     pid=$(get_pid "$PID_FILE_BACKEND")
-    log_info "Backend:  running (PID $pid) on port $API_PORT"
+    mode=$(supervisor_mode)
+    case "$mode" in
+      recovery) log_error "Backend:  RECOVERY MODE (supervisor PID $pid) on port $API_PORT — see: octi recovery" ;;
+      starting) log_warn "Backend:  starting (supervisor PID $pid) on port $API_PORT" ;;
+      *) log_info "Backend:  running (PID $pid) on port $API_PORT" ;;
+    esac
   else
     log_error "Backend:  not running"
   fi
@@ -1109,6 +1219,36 @@ cmd_doctor() {
   exec npx tsx --import ./scripts/md-loader.mjs scripts/doctor.ts "$@"
 }
 
+cmd_recovery() {
+  init_state_dir
+  print_banner
+  local mode
+  mode=$(supervisor_mode)
+  case "$mode" in
+    recovery) log_error "Recovery mode is ACTIVE — the backend could not start" ;;
+    running) log_info "Backend is running under the supervisor" ;;
+    starting) log_warn "Backend is starting" ;;
+    *) log_warn "No supervisor is running (start the backend with: octi start)" ;;
+  esac
+  [[ -f "$SUPERVISOR_STATE_FILE" ]] && log_hint "State: $SUPERVISOR_STATE_FILE"
+  echo ""
+  echo -e "  ${BOLD}When the backend cannot start${NC}, the supervisor serves recovery mode on"
+  echo -e "  port $API_PORT (and $WEB_PORT when the web UI is down): open"
+  echo -e "  ${CYAN}http(s)://<your host>/api/recovery${NC} for status, logs, retry, rebuild,"
+  echo -e "  and starting the last good build. The API takes the token as a bearer token:"
+  echo -e "    ${DIM}curl -H \"Authorization: Bearer <token>\" https://<host>/api/recovery/status${NC}"
+  echo ""
+  if [[ -n "${OCTIPUS_RECOVERY_TOKEN:-}" ]]; then
+    log_info "Token: set by OCTIPUS_RECOVERY_TOKEN"
+  elif [[ -f "$RECOVERY_TOKEN_FILE" ]]; then
+    log_info "Token: $(cat "$RECOVERY_TOKEN_FILE")"
+    log_hint "Keep it somewhere you can reach away from this machine (a password manager)."
+  else
+    log_warn "No token yet — it is created the first time the backend starts (octi start)."
+  fi
+  echo ""
+}
+
 cmd_help() {
   print_banner
   echo -e "  ${BOLD}Usage:${NC} octi <command> [options]"
@@ -1121,6 +1261,7 @@ cmd_help() {
   echo -e "    status           Show running state and service health"
   echo -e "    doctor [--json]  Run environment health checks (what's wired, what's missing)"
   echo -e "    logs [--web]     Tail backend logs (--web for web UI logs)"
+  echo -e "    recovery         Recovery mode state, URL and token (keep the token for when you are away)"
   echo -e "    update [--dry-run] Update this installation from its existing source"
   echo -e "    uninstall        Remove Octipus (keeps data; --purge wipes everything)"
   echo -e "    help             Show this help message"
@@ -1347,6 +1488,7 @@ main() {
     status)  cmd_status ;;
     doctor)  cmd_doctor "$@" ;;
     logs)    cmd_logs "$@" ;;
+    recovery) cmd_recovery ;;
     open|web|webui) cmd_open ;;
     desktop) cmd_desktop "$@" ;;
     uninstall) cmd_uninstall "$@" ;;

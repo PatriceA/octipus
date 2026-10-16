@@ -89,3 +89,7 @@ logs.zip
 
 # Local Docker installer secrets
 .env.compose
+
+# Copy of the last backend build that booted and stayed up (scripts/supervisor.mjs)
+.last-good-build/
+.last-good-build.tmp/
