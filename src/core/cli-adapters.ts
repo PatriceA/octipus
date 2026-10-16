@@ -19,7 +19,7 @@ const CLI_BRIDGE_TOOL_TIMEOUT_SECONDS = 7200;
 
 /** How to launch the Octipus MCP server as a stdio child of a CLI tool. */
 interface OctipusMcpLaunch {
-  /** Runtime to exec — 'node' for the compiled bundle, 'bun' for source. */
+  /** Runtime to exec — the running Node binary (`process.execPath`). */
   runtime: string;
   /** Absolute path to the MCP server entry point. */
   entry: string;

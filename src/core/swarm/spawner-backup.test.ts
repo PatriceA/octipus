@@ -9,22 +9,12 @@
  */
 import { describe, expect, test, vi } from 'vitest';
 
-// Plain-object snapshot taken before this file mocks the module. Restoring from
-// the live `import * as` namespace does NOT work — bun's `mock.module` leaves
-// that binding pointing at the installed stub, so the "restore" re-installs the
-// stub and leaks it forward. A copy taken before mocking restores cleanly.
-
 let backupModelId: string | null = null;
 
-// bun's `mock.module` is process-global. Sibling unit suites (evaluators,
-// litellm-client) replace `getModelRegistry` with a partial stub that omits
-// `getBackupModelForTopic`, so grabbing the real singleton here is order-
-// dependent and crashes when their mock leaks in first. Pin our own stub whose
-// backup lookup is driven by `backupModelId` (the only method this suite needs;
-// the spawner's `singleSpawnAndRun` is instance-patched below). The other
-// getters mirror the sibling stubs so this superset can only be safer if it
-// leaks forward. No-op + skip under the integration runner, whose real-DB
-// suites would break if this partial mock leaked into them.
+// Pin our own `getModelRegistry` stub whose backup lookup is driven by
+// `backupModelId` (the only method this suite needs; the spawner's
+// `singleSpawnAndRun` is instance-patched below). The mock is scoped to this
+// file. No-op + skip under the integration runner.
 const inIntegration = process.env.INTEGRATION === '1';
 
 // Top level, because `vi.mock` is hoisted whatever it is nested inside — the

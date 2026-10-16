@@ -2,16 +2,9 @@
  * Test fixtures for the multi-user isolation suite.
  *
  * These helpers seed users/sessions/agents/documents/etc. via raw SQL
- * instead of the repository singletons. The reason: bun's
- * `mock.module` is a process-global module replacement, and at least
- * one other test file (`src/core/gateway/commands.test.ts`) replaces
- * `@/db/repositories/session-repository` with a partial stub. When
- * test files run in the same process, that stub leaks into the
- * isolation tests' `beforeAll` and `sessionRepository.create` is
- * undefined.
- *
- * Going through `executeRaw` keeps the seed step independent of any
- * upstream module-mock state — the schema is the contract.
+ * instead of the repository singletons, so the seed step does not depend
+ * on the repository layer the isolation suites are testing — the schema
+ * is the contract.
  */
 import { randomUUID } from 'node:crypto';
 

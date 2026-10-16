@@ -3,8 +3,7 @@
  * so external agents (Claude Code, Codex, Gemini CLI, etc.) can call
  * Octipus tools over the MCP protocol.
  *
- * mcp-server uses npm + tsc (Node ≥ 18), not Bun — its dependencies
- * include modules that don't play well with Bun's resolver.
+ * mcp-server is a separate npm package with its own `npm ci` + tsc build.
  */
 
 import { existsSync } from 'node:fs';

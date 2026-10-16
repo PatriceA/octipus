@@ -43,7 +43,7 @@ describe('MistralProvider.supportsModel', () => {
 
 describe('MistralProvider.ocr', () => {
   const p = new MistralProvider();
-  // Stub global fetch rather than mock.module — the latter leaks process-wide.
+  // Stub global fetch so the real request path is exercised.
   const realFetch = globalThis.fetch;
   const realKey = process.env.MISTRAL_API_KEY;
 

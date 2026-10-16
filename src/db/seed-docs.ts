@@ -66,7 +66,7 @@ export interface IndexProductDocsDeps {
       metadata?: Record<string, unknown>,
     ): Promise<number>;
   };
-  /** Defaults to Bun.Glob scan of `docsDir`. Returns paths RELATIVE to docsDir. */
+  /** Defaults to a `node:fs` glob scan of `docsDir`. Returns paths RELATIVE to docsDir. */
   listFiles?: (docsDir: string, patterns: string[]) => Promise<string[]>;
   /** Defaults to `fileAt(absPath).text()`. */
   readFile?: (absPath: string) => Promise<string>;

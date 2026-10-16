@@ -27,13 +27,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Bun (+ dependency cache)
+      - name: Setup Node (+ npm cache)
         uses: ./.github/actions/node-setup
-
-      - name: Setup Node
-        uses: actions/setup-node@v7
         with:
-          node-version: '24.19'
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
 
       - name: Install root deps
         run: npm ci

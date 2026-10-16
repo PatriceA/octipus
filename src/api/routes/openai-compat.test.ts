@@ -4,26 +4,13 @@
  * Mounts the route under an injecting `.derive()` (standing in for the server's
  * app-level auth derive). No DB, no live providers.
  *
- * Dependency isolation: bun's `mock.module` is process-global, and sibling
- * suites (evaluators, litellm-client) replace `getProviderRouter` /
- * `getModelRegistry` with PARTIAL stubs that leak forward — so grabbing the real
- * singletons here and spying on them is order-dependent and crashes when their
- * mock lands first (`getProviderRouter().complete is not a function`). Following
- * the pattern in `litellm-provider.test.ts`, we pin our OWN stubs (spreading the
- * real module so other exports survive) driven by mutable impls, and restore the
- * real modules in `afterAll` so this file doesn't pollute later suites. The
- * root agent barrel is NOT contaminated, so `getAgentService` is spied
- * normally.
+ * Dependencies: `getProviderRouter` / `getModelRegistry` are module mocks
+ * (spreading the real module so other exports survive) driven by mutable
+ * per-test impls. They are scoped to this file — the runner isolates each test
+ * file in its own process. `getAgentService` is spied normally.
  */
-import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { Elysia } from '@/api/http';
-
-// Snapshot the real exports into plain objects BEFORE the mock.module calls
-// below. bun's `mock.module` leaves the live `import * as` namespace binding
-// pointing at the installed stub, so restoring from the namespace in afterAll
-// re-installs the stub (a silent cross-file leak: later suites see a partial
-// `getModelRegistry()` and crash on e.g. `registerModel is not a function`).
-// A plain-object copy taken before mocking is immune and restores cleanly.
 import { ANONYMOUS_PRINCIPAL, type Principal, principalFromUser } from '@/security/principal';
 
 // ── Mutable per-test behavior the pinned stubs delegate to ──────────────────
@@ -93,10 +80,6 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks(); // revert getAgentService spies
-});
-
-afterAll(() => {
-  // Restore the real modules so this file's stubs don't leak into later suites.
 });
 
 describe('GET /v1/models', () => {

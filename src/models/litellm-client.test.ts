@@ -19,10 +19,9 @@ import { ClassifiedError } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
 import { modelLogger } from '@/utils/logger';
 
-// Bun's mock.module is process-global. To avoid polluting unrelated suites
-// in the same `npm test` run, every mock here is built as a SPREAD of the
-// real module so its other exports remain intact, and afterAll re-mocks
-// each path back to the captured real module.
+// Every mock here is built as a SPREAD of the real module so its other
+// exports remain intact. Mocks are scoped to this file: the runner isolates
+// each test file in its own process.
 //
 // Logger and config are NOT mocked — we use the real ones with env-derived
 // values, since they're imported transitively by half the codebase.
@@ -120,10 +119,8 @@ vi.mock('@/models/model-registry', async () => ({
   }),
 }));
 
-// Vault is NOT mocked. bun's mock.module is process-global and replacing
-// `@/security/vault` would break unrelated suites that call initializeVault()
-// / getVault().store(...). Vault-resolved apiKey paths therefore stay
-// untested; the caller-supplied apiKey path is exercised instead.
+// Vault is NOT mocked, so vault-resolved apiKey paths stay untested here; the
+// caller-supplied apiKey path is exercised instead.
 
 // ── SUT (imported after mocks are registered) ────────────────────────
 
