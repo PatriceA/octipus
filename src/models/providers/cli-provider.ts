@@ -938,7 +938,6 @@ export function windowsShellQuoter(binary: string): (value: string) => string {
 export function execCli(binary: string, args: string[], opts?: { timeoutMs?: number; env?: Record<string, string>; cwd?: string; stdin?: string }): Promise<string> {
   return new Promise((resolve, reject) => {
     const noShell = binary === 'agy';
-    try { binary = configuredCliBinary(binary); } catch (error) { reject(error); return; }
     // A newline inside a positional argv does not survive cmd.exe. The CLI
     // then runs with NO prompt at all, answers from its working directory,
     // and exits 0 — a confident hallucination with nothing to distinguish it
@@ -953,6 +952,9 @@ export function execCli(binary: string, args: string[], opts?: { timeoutMs?: num
       ), 'cli'));
       return;
     }
+    // Resolve only after the argv checks: a malformed call is rejected the same
+    // way whether or not the binary is installed on this host.
+    try { binary = configuredCliBinary(binary); } catch (error) { reject(error); return; }
     try { assertWindowsCmdLineFits(binary, args); } catch (err) { reject(classifyError(err as Error, 'cli')); return; }
     // Fixed generous default, not a maxTokens*100ms heuristic (which could
     // arm a sub-second timeout for a small budget or a 3h one for a big
