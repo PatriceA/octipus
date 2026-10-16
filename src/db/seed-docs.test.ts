@@ -190,6 +190,16 @@ describe('indexProductDocs', () => {
     expect(indexCalls.length).toBe(0);
   });
 
+  test('reports docs-scan-failed, not docs-dir-missing, when the scan throws', async () => {
+    const { service, indexCalls } = makeFakeService();
+    const eacces = Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+    const res = await indexProductDocs(makeDeps({ service, listFiles: async () => { throw eacces; } }));
+
+    expect(res.ran).toBe(false);
+    expect(res.reason).toBe('docs-scan-failed');
+    expect(indexCalls.length).toBe(0);
+  });
+
   test('skips empty files without indexing them', async () => {
     const { service, indexCalls } = makeFakeService();
     const deps = makeDeps({

@@ -112,8 +112,11 @@ export async function indexProductDocs(deps: IndexProductDocsDeps = {}): Promise
     try {
       relPaths = await listFiles(docsDir, INCLUDE_PATTERNS);
     } catch (err) {
-      log.info({ err, docsDir }, 'Product docs directory missing or not scannable — skipping docs auto-index');
-      result.reason = 'docs-dir-missing';
+      // A missing dir yields zero files (handled below); a throw means the dir
+      // is there but could not be scanned (permissions, I/O), which an
+      // operator needs to see rather than read as "no docs shipped".
+      log.warn({ err, docsDir }, 'Product docs directory could not be scanned — skipping docs auto-index');
+      result.reason = 'docs-scan-failed';
       return result;
     }
     if (relPaths.length === 0) {
