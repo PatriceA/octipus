@@ -43,6 +43,35 @@ describe('calls approved for a pipeline', () => {
   const shell = (args: Record<string, unknown>) => ({ toolId: 'shell', action: 'execute', toolName: 'run', args });
   const write = (content: string) => ({ toolId: 'cli-native:Write', action: 'Write', toolName: 'Write', args: { file_path: 'src/a.ts', content } });
 
+  test('approval binds the concrete operation and preserves published description and timeout arguments', async () => {
+    const { approvedCallOf, gateCommandCalls, isApprovedCall, withApprovedCalls } = await import('./approved-calls');
+    const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+    const scope = { nodeKey: 'implement', attemptId: 'attempt-1', hostServices: false };
+    const foreground = shell({ command: 'npm test' });
+    const createRepo = { toolId: 'github', action: 'write', toolName: 'repo_create',
+      args: { name: 'approval-regression', description: 'Approved public description', private: true } };
+    const calls = [approvedCallOf(foreground, scope)!, approvedCallOf(createRepo, scope)!];
+    const pipeline = await pipelineRepository.create({ rootAgentId: 'root', sessionId, userId,
+      title: 'operation scope', type: 'development', status: 'running', metadata: withApprovedCalls({}, calls) });
+    const caller = { userId, sessionId, metadata: { pipelineId: pipeline.id, ...scope } };
+    await expect(isApprovedCall(caller, foreground)).resolves.toBe(true);
+    await expect(isApprovedCall(caller, { ...foreground, toolName: 'run_background' })).resolves.toBe(false);
+    await expect(isApprovedCall(caller, { ...foreground, toolName: undefined })).resolves.toBe(false);
+    await expect(isApprovedCall(caller, createRepo)).resolves.toBe(true);
+    await expect(isApprovedCall(caller, { ...createRepo,
+      args: { ...createRepo.args, description: 'Different published content' } })).resolves.toBe(false);
+    await expect(isApprovedCall(caller, { ...createRepo,
+      args: { ...createRepo.args, timeout: 600 } })).resolves.toBe(false);
+    // A plan gate also names the foreground operation, never its detached sibling.
+    await pipelineRepository.updatePipeline(pipeline.id, { metadata: withApprovedCalls({}, gateCommandCalls('npm test', scope.nodeKey, false)) });
+    await expect(isApprovedCall(caller, foreground)).resolves.toBe(true);
+    await expect(isApprovedCall(caller, { ...foreground, toolName: 'run_background' })).resolves.toBe(false);
+    // Old persisted grants without concrete operation identity fail closed.
+    const { toolName: _oldName, ...legacy } = calls[0];
+    await pipelineRepository.updatePipeline(pipeline.id, { metadata: { approvedCalls: [legacy] } });
+    await expect(isApprovedCall(caller, foreground)).resolves.toBe(false);
+  });
+
   test('a grant executes only the exact call, for its own stage attempt and capabilities, while the run lives', async () => {
     const { routeApprovalFor } = await import('./approval-route');
     const { approvedCallOf, gateCommandCalls, stageScopeOf, withApprovedCalls } = await import('./approved-calls');

@@ -20,6 +20,7 @@ import type { SpaceToolCall } from './space-tools';
 
 export interface ApprovedCall {
   toolId: string;
+  toolName: string;
   action: string;
   /** Every authorization-relevant argument, hashed (`callFingerprint`). */
   fingerprint: string;
@@ -48,12 +49,11 @@ export function approvalSubject(args: Record<string, unknown> | undefined): stri
   return undefined;
 }
 
-/**
- * Arguments that change nothing about what a call is allowed to do: the CLI's
- * one-line label and a time limit. Everything else — cwd, env, network,
- * useShell, run_in_background, file contents — is part of the approval.
- */
-const COSMETIC_ARGS = new Set(['description', 'timeout']);
+/** Only known shell operations have cosmetic labels or execution time limits. */
+function cosmeticArgument(toolId: string, toolName: string, key: string): boolean {
+  if (toolId === 'cli-native:Bash' && toolName === 'Bash') return key === 'description' || key === 'timeout';
+  return toolId === 'shell' && toolName === 'run' && key === 'timeout';
+}
 
 function canonical(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonical);
@@ -63,15 +63,15 @@ function canonical(value: unknown): unknown {
   return value;
 }
 
-export function callFingerprint(toolId: string, action: string, args: Record<string, unknown>): string {
-  const relevant = Object.fromEntries(Object.entries(args).filter(([key]) => !COSMETIC_ARGS.has(key)));
-  return createHash('sha256').update(JSON.stringify(canonical([toolId, action, relevant]))).digest('hex');
+export function callFingerprint(toolId: string, action: string, toolName: string, args: Record<string, unknown>): string {
+  const relevant = Object.fromEntries(Object.entries(args).filter(([key]) => !cosmeticArgument(toolId, toolName, key)));
+  return createHash('sha256').update(JSON.stringify(canonical([toolId, action, toolName, relevant]))).digest('hex');
 }
 
 /** The grant for `call`, approved in this stage attempt. */
 export function approvedCallOf(call: SpaceToolCall, scope: Omit<StageScope, 'pipelineId'>): ApprovedCall | undefined {
-  if (!call.args) return undefined;
-  return { toolId: call.toolId, action: call.action, fingerprint: callFingerprint(call.toolId, call.action, call.args),
+  if (!call.args || !call.toolName) return undefined;
+  return { toolId: call.toolId, toolName: call.toolName, action: call.action, fingerprint: callFingerprint(call.toolId, call.action, call.toolName, call.args),
     nodeKey: scope.nodeKey, attemptId: scope.attemptId, hostServices: scope.hostServices };
 }
 
@@ -82,16 +82,16 @@ export function approvedCallOf(call: SpaceToolCall, scope: Omit<StageScope, 'pip
  * `useShell: false` spelled out still ask.
  */
 export function gateCommandCalls(command: string, nodeKey: string, hostServices: boolean): ApprovedCall[] {
-  return [['shell', 'execute'], ['cli-native:Bash', 'Bash']].map(([toolId, action]) =>
-    ({ toolId, action, fingerprint: callFingerprint(toolId, action, { command }), nodeKey, hostServices }));
+  return [['shell', 'execute', 'run'], ['cli-native:Bash', 'Bash', 'Bash']].map(([toolId, action, toolName]) =>
+    ({ toolId, toolName, action, fingerprint: callFingerprint(toolId, action, toolName, { command }), nodeKey, hostServices }));
 }
 
-const grantKey = (c: ApprovedCall) => JSON.stringify([c.toolId, c.action, c.fingerprint, c.nodeKey, c.attemptId ?? null, c.hostServices]);
+const grantKey = (c: ApprovedCall) => JSON.stringify([c.toolId, c.toolName, c.action, c.fingerprint, c.nodeKey, c.attemptId ?? null, c.hostServices]);
 
 /** `metadata` with `calls` added once each. Grants in an older shape are dropped: they never match. */
 export function withApprovedCalls(metadata: Record<string, unknown> | null | undefined, calls: ApprovedCall[]): Record<string, unknown> {
   const stored = (Array.isArray(metadata?.approvedCalls) ? metadata.approvedCalls as ApprovedCall[] : [])
-    .filter(c => typeof c?.fingerprint === 'string' && typeof c.nodeKey === 'string');
+    .filter(c => typeof c?.fingerprint === 'string' && typeof c.toolName === 'string' && typeof c.nodeKey === 'string');
   const seen = new Set(stored.map(grantKey));
   return { ...(metadata ?? {}), approvedCalls: [...stored, ...calls.filter(c => !seen.has(grantKey(c)) && seen.add(grantKey(c)))] };
 }
@@ -105,7 +105,7 @@ export interface ApprovedCallCaller {
 
 export async function isApprovedCall(caller: ApprovedCallCaller, call: SpaceToolCall): Promise<boolean> {
   const scope = stageScopeOf(caller.metadata);
-  if (!scope || !caller.sessionId || !call.args) return false;
+  if (!scope || !caller.sessionId || !call.args || !call.toolName) return false;
   try {
     const pipeline = await pipelineRepository.findById(scope.pipelineId);
     if (!pipeline || pipeline.userId !== caller.userId || pipeline.sessionId !== caller.sessionId
@@ -113,8 +113,8 @@ export async function isApprovedCall(caller: ApprovedCallCaller, call: SpaceTool
       || !['running', 'awaiting_approval'].includes(pipeline.status)) return false;
     const grants = (pipeline.metadata as { approvedCalls?: ApprovedCall[] } | null)?.approvedCalls;
     if (!Array.isArray(grants)) return false;
-    const fingerprint = callFingerprint(call.toolId, call.action, call.args);
-    return grants.some(g => g.toolId === call.toolId && g.action === call.action && g.fingerprint === fingerprint
+    const fingerprint = callFingerprint(call.toolId, call.action, call.toolName, call.args);
+    return grants.some(g => g.toolId === call.toolId && g.toolName === call.toolName && g.action === call.action && g.fingerprint === fingerprint
       && g.nodeKey === scope.nodeKey && (g.attemptId === undefined || g.attemptId === scope.attemptId)
       && g.hostServices === scope.hostServices);
   } catch (err) {

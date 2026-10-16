@@ -97,8 +97,8 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
         // No walker holds the request any more (a restart): grant the blocked
         // call to the blocked attempt, and resume that attempt.
         const { pendingApproval: _answered, ...metadata } = (pipeline.metadata ?? {}) as Record<string, unknown>;
-        await pipelineRepository.updatePipeline(pipeline.id, { metadata: pending.toolId && pending.action && pending.fingerprint
-          ? withApprovedCalls(metadata, [{ toolId: pending.toolId, action: pending.action, fingerprint: pending.fingerprint,
+        await pipelineRepository.updatePipeline(pipeline.id, { metadata: pending.toolId && pending.toolName && pending.action && pending.fingerprint
+          ? withApprovedCalls(metadata, [{ toolId: pending.toolId, toolName: pending.toolName, action: pending.action, fingerprint: pending.fingerprint,
             nodeKey: pending.nodeKey, attemptId: pending.attemptId, hostServices: pending.hostServices === true }])
           : metadata });
         return resumeFrom(pipeline, pending.nodeKey, { attemptId: pending.attemptId });

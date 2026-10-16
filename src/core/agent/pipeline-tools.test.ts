@@ -108,7 +108,7 @@ describe('a stage parked on an approval (#24)', () => {
     fixture.resume.mockImplementation((_id, options) => { options.onResumed(); return new Promise(() => {}); });
     await tool('answer_pipeline_approval').execute({ id: 'pipeline' }, context);
     expect(fixture.updatePipeline).toHaveBeenCalledWith('pipeline', { metadata: { approvedCalls: [{
-      toolId: 'cli-native:Bash', action: 'Bash', fingerprint: parked.fingerprint, nodeKey: 'qa', attemptId: 'attempt-1', hostServices: false,
+      toolId: 'cli-native:Bash', toolName: 'Bash', action: 'Bash', fingerprint: parked.fingerprint, nodeKey: 'qa', attemptId: 'attempt-1', hostServices: false,
     }] } });
     expect(fixture.resume).toHaveBeenCalledWith('pipeline', expect.objectContaining({ fromSeq: 7 }));
   });

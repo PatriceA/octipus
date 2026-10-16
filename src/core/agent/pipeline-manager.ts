@@ -3024,7 +3024,7 @@ export class PipelineManager {
       `Pipeline stage "${node.name}": ${asked?.context?.toolName ?? 'continue'}`, signal, pipeline.workspaceId);
     const pendingApproval: PendingStageApproval = {
       requestId, workerRequestId: asked?.id ?? null, stage: node.name, nodeKey: node.nodeKey, attemptId,
-      fingerprint: asked ? callFingerprint(asked.toolId, asked.action, toolArgs) : null, hostServices,
+      fingerprint: asked?.context?.toolName ? callFingerprint(asked.toolId, asked.action, asked.context.toolName, toolArgs) : null, hostServices,
       itemId: item?.id ?? null, item: item?.title ?? null,
       toolId: asked?.toolId ?? null, action: asked?.action ?? null, toolName: asked?.context?.toolName ?? null,
       subject: approvalSubject(toolArgs) ?? null, reason,
@@ -3039,7 +3039,7 @@ export class PipelineManager {
     const current = await this.getPipeline(pipeline.id);
     const { pendingApproval: _answered, ...metadata } = (current?.metadata ?? {}) as Record<string, unknown>;
     if (approved && current?.status === 'awaiting_approval') {
-      const call = asked ? approvedCallOf({ toolId: asked.toolId, action: asked.action, args: toolArgs }, { nodeKey: node.nodeKey, attemptId, hostServices }) : undefined;
+      const call = asked ? approvedCallOf({ toolId: asked.toolId, toolName: asked.context?.toolName, action: asked.action, args: toolArgs }, { nodeKey: node.nodeKey, attemptId, hostServices }) : undefined;
       await this.updatePipeline(pipeline.id, { status: 'running', metadata: call ? withApprovedCalls(metadata, [call]) : metadata });
       // Same attempt, same `resumeKey`: a resumable CLI continues the conversation
       // it stopped in (#20); a cold one gets what it had said so far.
