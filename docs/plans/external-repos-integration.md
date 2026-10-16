@@ -368,7 +368,7 @@ All migrations follow Drizzle journal rule.
 - All vendored code retains license + NOTICE
 - New experts/skills seeded via existing `seed-*.ts` pattern
 - All new MCP tools exposed in `mcp-server/src/server.ts` registration
-- Tests: Bun test, follow existing patterns (`bunfig.test.toml`)
+- Tests: Vitest, follow existing patterns (`vitest.config.ts`)
 - TypeScript strict, no `any` introductions
 
 ---

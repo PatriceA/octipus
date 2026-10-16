@@ -39,7 +39,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Bun (+ dependency cache)
+      - name: Setup Node (+ npm cache)
         uses: ./.github/actions/node-setup
 
       - name: Install dependencies

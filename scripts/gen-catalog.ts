@@ -27,9 +27,9 @@
  * The obvious implementation walks the TypeScript AST. This repo is on
  * TypeScript 7, which is the Go port: it ships a compiler binary and no
  * JavaScript AST API at all, so `ts.createSourceFile` does not exist. Rather
- * than add a parser dependency for one script, this reads what the runtime
- * already gives us — `Bun.Transpiler.scan()` for imports, which is a real
- * parse — and falls back to narrow, anchored patterns for the two catalogs it
+ * than add a parser dependency for one script, this reuses what the build
+ * already has — esbuild's metafile for imports, which is a real parse and
+ * resolution — and falls back to narrow, anchored patterns for the two catalogs it
  * cannot get that way.
  *
  * Those patterns are honest about their limits. Anything that does not resolve

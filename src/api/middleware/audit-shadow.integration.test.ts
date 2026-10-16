@@ -21,8 +21,8 @@ import { Elysia } from '@/api/http';
 
 type ElysiaLike = { handle: (req: Request) => Promise<Response> };
 
-// Defensive — bun's test preload (bunfig.test.toml) doesn't fire reliably
-// for every invocation path, so seed the security secrets here too. The
+// Defensive — the vitest setup file (src/test-setup.ts) may not run for
+// every invocation path, so seed the security secrets here too. The
 // values are random per process and never resemble production keys.
 const rand = (n: number) => randomBytes(n).toString('hex');
 process.env.MASTER_KEY ??= `test-master-${rand(24)}`;

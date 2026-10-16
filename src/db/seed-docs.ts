@@ -65,7 +65,7 @@ export interface IndexProductDocsDeps {
       metadata?: Record<string, unknown>,
     ): Promise<number>;
   };
-  /** Defaults to Bun.Glob scan of `docsDir`. Returns paths RELATIVE to docsDir. */
+  /** Defaults to a `node:fs` glob scan of `docsDir`. Returns paths RELATIVE to docsDir. */
   listFiles?: (docsDir: string, patterns: string[]) => Promise<string[]>;
   /** Defaults to `fileAt(absPath).text()`. */
   readFile?: (absPath: string) => Promise<string>;
@@ -84,8 +84,8 @@ async function defaultListFiles(docsDir: string, patterns: string[]): Promise<st
   for (const pattern of patterns) {
 
     // `absolute: false` → paths relative to cwd (docsDir); don't follow
-    // symlinks out of the docs tree. NB: scan() rejects with ENOENT if
-    // `docsDir` does not exist — the caller catches that as "no docs".
+    // symlinks out of the docs tree. A missing `docsDir` yields no files,
+    // which the caller reports as "no docs".
     for await (const rel of globFiles(pattern, { cwd: docsDir, absolute: false })) {
       seen.add(rel);
     }
@@ -104,9 +104,9 @@ export async function indexProductDocs(deps: IndexProductDocsDeps = {}): Promise
     const docsDir = deps.docsDir ?? join(process.cwd(), 'docs');
 
     // Docs only ship in some images / dev trees; absence is normal, not an
-    // error. The glob scan is the existence check — but Bun.Glob.scan THROWS
-    // ENOENT when `cwd` doesn't exist (it does not yield zero files), so the
-    // try/catch below is what turns a missing docs dir into a clean skip.
+    // error. The glob scan is the existence check: a missing dir yields zero
+    // files, and the try/catch below turns an unscannable one (permissions, a
+    // custom `listFiles` that throws) into the same clean skip.
     const listFiles = deps.listFiles ?? defaultListFiles;
     let relPaths: string[];
     try {
