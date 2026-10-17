@@ -11,6 +11,7 @@ import { messageRepository } from '@/db/repositories/message-repository';
 import { getConfig } from '@/config';
 import { withDispatchAuthorization } from '@/security/dispatch-authorization';
 import { routeApprovalFor } from '@/security/approval-route';
+import { askStillAuthorized } from '@/security/approved-calls';
 import { applyFlowGuard, ensureSharedAudienceKnown, isVaultAuthenticated, observeFlow } from '@/security/flow-guard';
 import { getPermissionManager } from '@/security/permissions';
 import { withoutPersonalOnlyTools } from '@/security/space-tools';
@@ -881,7 +882,8 @@ export class ToolExecutor {
             ? tool.execute(toolCall.arguments, this.context)
             : actionRecovery.run(this.context, toolId, toolCall.name, toolCall.arguments, () => tool.execute(toolCall.arguments, this.context), async () => {
               const current = await permissionManager.check(this.context.userId, toolId, permAction, toolCall.arguments, this.context, { revalidate: true });
-              if (current.level === 'DENY' || (current.level === 'ASK' && !authorizationSource.startsWith('approval:'))) {
+              if (current.level === 'DENY' || (current.level === 'ASK' && !await askStillAuthorized(authorizationSource, this.context,
+                { toolId, action: permAction, toolName: bareName, args: toolCall.arguments }))) {
                 throw new Error('Permission changed before tool execution; obtain action authorization again.');
               }
             }));

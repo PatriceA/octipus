@@ -2475,6 +2475,7 @@ export class AgentWorker extends BaseAgentWorker {
 
   override stop(reason?: string): void {
     const stopReason = reason || 'stopped';
+    this.markStopped(stopReason);
     this.abortController.abort(stopReason);
     // Requests no longer expire, so a stopped agent would otherwise sit on an
     // unanswerable prompt forever. Release its waits as unapproved.

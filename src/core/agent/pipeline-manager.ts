@@ -30,7 +30,7 @@ import type {
 import { pipelineNodes, pipelines } from '@/db/schema/pipelines';
 import { permissionRequests } from '@/db/schema/permissions';
 import { getPermissionManager } from '@/security/permissions';
-import { approvalSubject, approvedCallOf, callFingerprint, gateCommandCalls, withApprovedCalls } from '@/security/approved-calls';
+import { approvalSubject, approvedCallOf, callFingerprint, gateCommandCalls, routedToolName, withApprovedCalls } from '@/security/approved-calls';
 import { approvalWaitRequestId, isApprovalWaitEnded } from '@/core/approval-wait';
 import { decide, type DecisionSite, recordShadow } from '@/models/decision';
 import type { ModelConfigEntry } from '@/db/schema/models';
@@ -1130,7 +1130,11 @@ export class PipelineManager {
     this.walking.add(pipeline.id);
     const controller = new AbortController();
     this.controllers.set(pipeline.id, controller);
-    const parentSignal = args.resumeState ? undefined : getAgentManager().get(args.rootAgentId)?.getAbortSignal();
+    // The root's stop signal, not its abort signal: create_pipeline returns a
+    // handle while the run goes on, so the turn that started it ends long
+    // before the pipeline does, and every run aborts its own signal on the way
+    // out. Stopping the root agent still stops the pipeline.
+    const parentSignal = args.resumeState ? undefined : getAgentManager().get(args.rootAgentId)?.getStopSignal();
     this.signals.set(pipeline.id, parentSignal ? AbortSignal.any([controller.signal, parentSignal]) : controller.signal);
     try {
       const result = await this.walk(args);
@@ -3016,6 +3020,8 @@ export class PipelineManager {
       coreLogger.warn({ pipelineId: pipeline.id, stage: node.name, workerRequestId }, 'Blocked request is not this stage attempt\'s own; parking without a grant');
     }
     const toolArgs = (asked?.context?.toolArguments ?? {}) as Record<string, unknown>;
+    // The prompt shows the row's label; the grant needs the name the call routes under.
+    const toolName = asked ? routedToolName(asked.toolId, asked.action, asked.context?.toolName) : undefined;
     const item = args.itemId ? (await pipelineRepository.getPlanItems(pipeline.id)).find(i => i.id === args.itemId) : undefined;
     const signal = this.signals.get(pipeline.id);
     const permissions = getPermissionManager();
@@ -3024,9 +3030,9 @@ export class PipelineManager {
       `Pipeline stage "${node.name}": ${asked?.context?.toolName ?? 'continue'}`, signal, pipeline.workspaceId);
     const pendingApproval: PendingStageApproval = {
       requestId, workerRequestId: asked?.id ?? null, stage: node.name, nodeKey: node.nodeKey, attemptId,
-      fingerprint: asked?.context?.toolName ? callFingerprint(asked.toolId, asked.action, asked.context.toolName, toolArgs) : null, hostServices,
+      fingerprint: asked && toolName ? callFingerprint(asked.toolId, asked.action, toolName, toolArgs) : null, hostServices,
       itemId: item?.id ?? null, item: item?.title ?? null,
-      toolId: asked?.toolId ?? null, action: asked?.action ?? null, toolName: asked?.context?.toolName ?? null,
+      toolId: asked?.toolId ?? null, action: asked?.action ?? null, toolName: toolName ?? null,
       subject: approvalSubject(toolArgs) ?? null, reason,
     };
     await this.updateNode(node.id, { status: 'awaiting_approval', error: reason });
@@ -3039,7 +3045,7 @@ export class PipelineManager {
     const current = await this.getPipeline(pipeline.id);
     const { pendingApproval: _answered, ...metadata } = (current?.metadata ?? {}) as Record<string, unknown>;
     if (approved && current?.status === 'awaiting_approval') {
-      const call = asked ? approvedCallOf({ toolId: asked.toolId, toolName: asked.context?.toolName, action: asked.action, args: toolArgs }, { nodeKey: node.nodeKey, attemptId, hostServices }) : undefined;
+      const call = asked ? approvedCallOf({ toolId: asked.toolId, toolName, action: asked.action, args: toolArgs }, { nodeKey: node.nodeKey, attemptId, hostServices }) : undefined;
       await this.updatePipeline(pipeline.id, { status: 'running', metadata: call ? withApprovedCalls(metadata, [call]) : metadata });
       // Same attempt, same `resumeKey`: a resumable CLI continues the conversation
       // it stopped in (#20); a cold one gets what it had said so far.

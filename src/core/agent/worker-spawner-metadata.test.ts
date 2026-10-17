@@ -48,9 +48,9 @@ describe('pipelineMetadata', () => {
       .toEqual({ pipelineId: 'p1', nodeKey: 'n1', resumeKey: 'pipeline-p1:n1:a1', attemptId: 'a1' });
   });
 
-  it('gives a stage\'s own children the pipeline, not the stage worker\'s attempt (its approvals, its conversation)', () => {
+  it('gives a stage\'s own children the pipeline, not the stage worker\'s attempt (its approvals, its conversation) or its host services', () => {
     expect(stageChildMetadata({ pipelineId: 'p1', nodeKey: 'n1', hostServices: true, resumeKey: 'pipeline-p1:n1:a1', attemptId: 'a1' }))
-      .toEqual({ pipelineId: 'p1', nodeKey: 'n1', hostServices: true });
+      .toEqual({ pipelineId: 'p1', nodeKey: 'n1' });
     expect(stageChildMetadata(undefined)).toBeUndefined();
   });
 
