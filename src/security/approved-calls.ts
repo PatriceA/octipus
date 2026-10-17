@@ -68,6 +68,17 @@ export function callFingerprint(toolId: string, action: string, toolName: string
   return createHash('sha256').update(JSON.stringify(canonical([toolId, action, toolName, relevant]))).digest('hex');
 }
 
+/**
+ * The tool name a call is routed, and so matched, under. A permission row's
+ * `toolName` is a label: the CLI bridge stores `CLI: Bash` for the approval
+ * prompt (src/core/cli-permissions.ts), while the call itself routes with the
+ * vendor tool's name, which is also its action. A grant built from the label
+ * never matched the call it was approved for.
+ */
+export function routedToolName(toolId: string, action: string, label: string | undefined): string | undefined {
+  return toolId.startsWith('cli-native:') ? action : label;
+}
+
 /** The grant for `call`, approved in this stage attempt. */
 export function approvedCallOf(call: SpaceToolCall, scope: Omit<StageScope, 'pipelineId'>): ApprovedCall | undefined {
   if (!call.args || !call.toolName) return undefined;
@@ -122,4 +133,15 @@ export async function isApprovedCall(caller: ApprovedCallCaller, call: SpaceTool
     securityLogger.warn({ err, pipelineId: scope.pipelineId }, 'Pipeline approval lookup failed; asking instead');
     return false;
   }
+}
+
+/**
+ * May a call decided at level ASK still run, at the moment it executes? It may
+ * when a person approved it just now (`approval:<id>`), or when it runs on a
+ * pipeline grant that still holds: the pipeline is live and the grant still
+ * names this exact call for this stage attempt.
+ */
+export async function askStillAuthorized(source: string, caller: ApprovedCallCaller, call: SpaceToolCall): Promise<boolean> {
+  if (source.startsWith('approval:')) return true;
+  return source === 'pipeline-approval' && isApprovedCall(caller, call);
 }

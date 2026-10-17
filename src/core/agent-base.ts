@@ -149,6 +149,20 @@ export abstract class BaseAgentWorker {
     return this.activeRuns > 0;
   }
 
+  /**
+   * Aborted only when this agent is stopped (a person, an ancestor, shutdown),
+   * never when a run simply ends. Work this agent starts that is meant to
+   * outlive its turn, such as a pipeline it launched, follows this signal
+   * rather than the run's abort signal, which every run aborts on its way out.
+   */
+  private readonly stopController = new AbortController();
+  getStopSignal(): AbortSignal {
+    return this.stopController.signal;
+  }
+  protected markStopped(reason: string): void {
+    if (!this.stopController.signal.aborted) this.stopController.abort(reason);
+  }
+
   abstract run(userMessage?: string): Promise<string>;
   /** Stop the worker. `reason` (manual / cascade) rides on the terminal event. */
   abstract stop(reason?: string): void;

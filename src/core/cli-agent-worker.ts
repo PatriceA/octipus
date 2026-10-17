@@ -691,6 +691,7 @@ When a task matches one of these skills, load it with get_skill before starting 
   }
 
   stop(): void {
+    this.markStopped('CLI agent stopped');
     if (this.terminalEmitted) return;
     this.aborted = true;
     // A resume key is freed once the vendor process has EXITED (its 'exit'

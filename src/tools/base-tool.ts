@@ -8,6 +8,7 @@ import type { AgentContext, ToolManifest, } from '@/core/types';
 import { ApprovalBlockedError, consumeDispatchAuthorization } from '@/security/dispatch-authorization';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { routeApprovalFor } from '@/security/approval-route';
+import { askStillAuthorized } from '@/security/approved-calls';
 import { getPermissionManager } from '@/security/permissions';
 import { injectSecrets, redactSecretValues } from '@/security/secret-injector';
 import { toolLogger } from '@/utils/logger';
@@ -187,7 +188,11 @@ export abstract class BaseTool {
     if (decision.route === 'deny') {
       throw new Error(`Permission denied for ${this.id}.${action}: ${decision.reason}`);
     }
-    if (decision.level === 'ASK') {
+    // The route decides, not the level: a call the user already approved for
+    // this pipeline stage keeps its ASK level but routes to `execute`
+    // (approval-route.ts, source `pipeline-approval`), and asking again here
+    // put the same approval in front of the user a second time.
+    if (decision.level === 'ASK' && decision.route !== 'execute') {
       if (priorAuthorization?.startsWith('approval:')) {
         authorizationSource = priorAuthorization;
       } else if (decision.route === 'blocked') {
@@ -241,7 +246,8 @@ export abstract class BaseTool {
         : await actionRecovery.run(context, this.id, `${this.id}__${toolName}`, args, () => execute(processedArgs, toolContext), async () => {
           const current = await permissionManager.check(context.userId, this.id, action, args, context,
             { revalidate: true, defaultLevel: manifestPermission?.defaultLevel, dangerous: manifestPermission?.dangerous });
-          if (current.level === 'DENY' || (current.level === 'ASK' && !authorizationSource.startsWith('approval:'))) {
+          if (current.level === 'DENY' || (current.level === 'ASK'
+            && !await askStillAuthorized(authorizationSource, context, { toolId: this.id, action, toolName, args }))) {
             throw new Error('Permission changed before tool execution; obtain action authorization again.');
           }
         });

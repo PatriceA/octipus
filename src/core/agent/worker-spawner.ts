@@ -101,11 +101,17 @@ export function pipelineMetadata(metadata: Record<string, unknown> | undefined):
     ...(typeof resumeKey === 'string' && { resumeKey }), ...(typeof attemptId === 'string' && { attemptId }) };
 }
 
-/** `pipelineMetadata` for a child a stage spawned: the pipeline and stage, not the stage worker's own attempt. */
+/**
+ * `pipelineMetadata` for a child a stage spawned: the pipeline and stage, not
+ * the stage worker's own attempt, and not its `hostServices`. That opt-in gives
+ * the stage's own shell the host network and the Docker socket (root on the
+ * host) for commands its template author trusted; a child runs whatever brief
+ * the stage's model wrote for it, so it gets the default sandbox.
+ */
 export function stageChildMetadata(metadata: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
   const forwarded = pipelineMetadata(metadata);
   if (!forwarded) return undefined;
-  const { resumeKey: _resume, attemptId: _attempt, ...rest } = forwarded;
+  const { resumeKey: _resume, attemptId: _attempt, hostServices: _host, ...rest } = forwarded;
   return rest;
 }
 

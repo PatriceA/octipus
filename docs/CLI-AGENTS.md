@@ -112,8 +112,9 @@ network and without the Docker socket. A pipeline step can opt in with
 the host network (for example, a local Postgres) and get
 `/var/run/docker.sock` (for example, for `docker compose build`). It is off by
 default. The Docker socket is root-equivalent on the host, so set it only on
-stages whose commands you trust. The setting has no effect when the sandbox is
-off.
+stages whose commands you trust. It covers the stage's own commands only:
+agents the stage spawns run in the default sandbox. The setting has no effect
+when the sandbox is off.
 
 ## Authenticate with a vault credential
 

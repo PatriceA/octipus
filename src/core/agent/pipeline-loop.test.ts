@@ -149,6 +149,7 @@ beforeAll(async () => {
       onCounters?: (counters: import('@/core/swarm/receipt').SideEffectCounters) => void;
       onPartialOutput?: (text: string) => void;
       onWorkerSpawned?: (workerId: string) => void;
+      swarmParent?: { signal?: AbortSignal };
     },
   ) => {
     const stageName = context?.stageName ?? '';
@@ -156,6 +157,9 @@ beforeAll(async () => {
     calls.push(call);
     options?.onWorkerSpawned?.(call.workerId);
     await onSpawn?.(stageName, String(context.metadata?.pipelineId), call);
+    // A real stage worker is torn down when the signal it was spawned under aborts.
+    const parentSignal = options?.swarmParent?.signal;
+    if (parentSignal?.aborted) throw new Error(`Worker "${role}" stopped: ${String(parentSignal.reason)}`);
     if (stageName === stopAtStage) await manager.stop(String(context.metadata?.pipelineId));
     const progress = partialPlan[stageName]?.shift();
     if (progress) options?.onPartialOutput?.(progress);
@@ -419,6 +423,44 @@ describe('stage contract retries', () => {
 });
 
 
+describe('a pipeline outlives the root turn that started it', () => {
+  async function withRootAgent<T>(fn: (turn: AbortController, stop: AbortController) => Promise<T>): Promise<T> {
+    const { getAgentManager } = await import('@/core/agent-manager');
+    const turn = new AbortController();
+    const stop = new AbortController();
+    const spy = vi.spyOn(getAgentManager(), 'get').mockImplementation(((id: string) =>
+      id === 'orch-loop' ? { getAbortSignal: () => turn.signal, getStopSignal: () => stop.signal } : undefined) as never);
+    try {
+      return await fn(turn, stop);
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  test('the turn ending (its run signal aborting) does not stop the run', async () => {
+    replies = { QA: [QA_PASS] };
+    const { pipelineId } = await withRootAgent(async (turn) => {
+      // create_pipeline returned its handle; the CLI root's run ends and aborts its signal.
+      onSpawn = async (stage) => { if (stage === 'Implement') turn.abort('CLI run ended'); };
+      return run('outlives its turn');
+    });
+    const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+    expect((await pipelineRepository.findById(pipelineId))?.status).toBe('completed');
+    expect(await planItemStatuses(pipelineId)).toEqual(['done', 'done']);
+  });
+
+  test('stopping the root agent still stops the run', async () => {
+    replies = { QA: [QA_PASS] };
+    const outcome = await withRootAgent(async (_turn, stop) => {
+      onSpawn = async (stage) => { if (stage === 'Implement') stop.abort('manual stop'); };
+      return run('stopped with its root').then(r => r.pipelineId, () => undefined);
+    });
+    const { rows } = await queryRaw(`SELECT status FROM pipelines ORDER BY created_at DESC LIMIT 1`);
+    expect(rows[0]?.status).not.toBe('completed');
+    if (outcome) expect(calls.filter(c => c.stageName === 'QA')).toHaveLength(0);
+  });
+});
+
 test('stopping an active stage retains its checkpoint and never advances to another item', async () => {
   stopAtStage = 'QA';
   replies = { QA: [QA_PASS] };
@@ -498,7 +540,8 @@ describe('an unanswered approval parks the stage instead of failing the run (#12
   /** The stage worker's own request, as the CLI bridge raises it before it gives up waiting. */
   const raise = async (agentId: string, args: Record<string, unknown> = blocked.args) => {
     const { getPermissionManager } = await import('@/security/permissions');
-    return getPermissionManager().requestApproval(userId, agentId, blocked.toolId, blocked.action, args, sessionId, 'Bash');
+    // Labelled exactly as src/core/cli-permissions.ts labels it: the label is not the routed tool name.
+    return getPermissionManager().requestApproval(userId, agentId, blocked.toolId, blocked.action, args, sessionId, `CLI: ${blocked.toolName}`);
   };
 
   test.each(['APPROVAL_TIMEOUT_REASON', 'APPROVAL_DISCONNECT_REASON'] as const)('%s: approving re-runs that stage attempt and the run completes', async key => {

@@ -190,3 +190,36 @@ test('cancellation during middleware auditing prevents a filesystem write', asyn
     expect(existsSync(input.path)).toBe(false);
   } finally { audit.mockRestore(); }
 });
+
+describe('a call the user approved for a pipeline stage', () => {
+  test('runs through the tool middleware without a second prompt, and only for that stage attempt', async () => {
+    const { approvedCallOf, withApprovedCalls } = await import('./approved-calls');
+    const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+    const scope = { nodeKey: 'implement', attemptId: 'attempt-1', hostServices: false };
+    // A session of its own: an earlier test leaves a session-scoped ALLOW on the shared one.
+    const { sessionRepository } = await import('@/db/repositories/session-repository');
+    const ownSession = randomUUID();
+    await sessionRepository.create({ id: ownSession, userId, channelType: 'webchat', channelId: `pipeline-grant-${ownSession}` });
+    const input = args();
+    const pipeline = await pipelineRepository.create({ rootAgentId: 'root', sessionId: ownSession, userId, title: 'granted gate',
+      type: 'development', status: 'running',
+      metadata: withApprovedCalls({}, [approvedCallOf({ toolId: writer.id, action: 'write', toolName: 'write', args: input }, scope)!]) });
+    const pm = getPermissionManager();
+    let prompts = 0;
+    const stop = pm.onRequest(request => { prompts++; void pm.deny(request.requestId, userId); });
+    try {
+      // Attended: without the grant this call would prompt (and be denied above).
+      const stage = { ...context(true), sessionId: ownSession, metadata: { pipelineId: pipeline.id, ...scope } };
+      expect((await run(stage, input)).find(m => m.role === 'tool')?.content).not.toContain('Error:');
+      expect(prompts).toBe(0);
+      expect(readFileSync(input.path, 'utf8')).toBe(input.content);
+
+      // Another attempt of the same stage is not covered: it asks.
+      const other = args();
+      const retry = { ...context(true), sessionId: ownSession, metadata: { pipelineId: pipeline.id, ...scope, attemptId: 'attempt-2' } };
+      await expect(run(retry, other)).rejects.toThrow('approval was not granted');
+      expect(prompts).toBe(1);
+      expect(existsSync(other.path)).toBe(false);
+    } finally { stop(); }
+  });
+});
