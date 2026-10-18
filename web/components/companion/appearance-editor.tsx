@@ -10,6 +10,7 @@ const formNames = { pebble: 'Pebble', ribbon: 'Ribbon', ink: 'Inky' };
 const states: Array<{ state: CompanionState; label: string }> = [
   { state: 'idle', label: 'Looking around' }, { state: 'listening', label: 'Listening' },
   { state: 'working', label: 'Working' }, { state: 'waiting', label: 'Waiting' },
+  { state: 'sleeping', label: 'Dozing' },
 ];
 
 /** Draft locally; only Save changes the account's appearance. */

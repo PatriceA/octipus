@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { type ReactNode, useState } from 'react';
 import { DesktopConnectionGate } from '@/components/desktop-connection-gate';
 import { AuthProvider } from '@/lib/auth-context';
+import { CompanionPresenceProvider } from '@/lib/companion-presence';
 import { GatewayProvider } from '@/lib/gateway-context';
 import { PermissionProvider } from '@/lib/permission-context';
 import { WorkspaceProvider } from '@/lib/workspace-context';
@@ -35,7 +36,9 @@ export function Providers({ children }: { children: ReactNode }) {
       <AuthProvider>
         <GatewayProvider>
           <WorkspaceProvider>
-            <PermissionProvider>{children}</PermissionProvider>
+            <PermissionProvider>
+              <CompanionPresenceProvider>{children}</CompanionPresenceProvider>
+            </PermissionProvider>
           </WorkspaceProvider>
         </GatewayProvider>
       </AuthProvider>
