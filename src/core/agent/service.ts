@@ -146,7 +146,6 @@ export class AgentService {
     timestamp: new Date(),
   }));
   private modelSelector = new ModelSelector();
-  private _lastWorkerResult: string | null = null;
   /**
    * Voice "propose-then-confirm" gate + the set of sessions currently in voice
    * mode, both keyed by (session, user) — see `voiceKey` — so one user's
@@ -206,8 +205,6 @@ export class AgentService {
     return {
       modelSelector: this.modelSelector,
       emit: (event: TurnEvent) => this.emit(event),
-      setLastWorkerResult: (result: string | null) => { this._lastWorkerResult = result; },
-      getLastWorkerResult: () => this._lastWorkerResult,
     };
   }
 

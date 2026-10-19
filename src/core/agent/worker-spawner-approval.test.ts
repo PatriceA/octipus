@@ -13,7 +13,7 @@ describe('an abandoned approval wait leaves the worker spawner unchanged (#12/#2
     const emit = vi.fn();
     const failure = handleWorkerFailure(new Error(reason), worker as never, 'w1', 'model', 'qa' as never, {} as never,
       'qa', 'task', '', { userId: 'u', sessionId: 's' } as never, Date.now(),
-      { emit, modelSelector: {} as never, setLastWorkerResult: () => {} }, {} as never);
+      { emit, modelSelector: {} as never }, {} as never);
     await expect(failure).rejects.toThrow(reason);
     expect(resolveModel).not.toHaveBeenCalled();
     expect(emit).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'failed', error: reason }) }));

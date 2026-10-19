@@ -136,7 +136,6 @@ type EmitFn = (event: TurnEvent) => void;
 export interface WorkerSpawnerDeps {
   modelSelector: ModelSelector;
   emit: EmitFn;
-  setLastWorkerResult: (result: string | null) => void;
 }
 
 
@@ -1198,8 +1197,6 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
       { workerId, role: agentRole, durationMs },
     ).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in worker-spawner'));
 
-    deps.setLastWorkerResult(result);
-
     return result;
   } catch (error) {
     const partial = worker.getPartialOutput();
@@ -1439,7 +1436,6 @@ export async function handleWorkerFailure(
     coreLogger.info({ workerId, role: agentRole, error: errorMsg }, 'Worker failed with transient error, retrying once');
     try {
       const retryResult = await respawnAndRun(failedModel, respawnCtx.modelName);
-      deps.setLastWorkerResult(retryResult);
       return retryResult;
     } catch (retryError) {
       coreLogger.error({ error: retryError, workerId, role: agentRole }, 'Retry also failed');
@@ -1459,7 +1455,6 @@ export async function handleWorkerFailure(
         'Worker failed on primary model, retrying with topic backup model',
       );
       const backupResult = await respawnAndRun(backup.modelId, backup.name);
-      deps.setLastWorkerResult(backupResult);
       return backupResult;
     }
   } catch (backupError) {

@@ -54,8 +54,6 @@ const REPO_SUITE_TOKEN_BUDGET = 1500;
 export interface RootRunnerDeps {
   modelSelector: ModelSelector;
   emit: (event: TurnEvent) => void;
-  setLastWorkerResult: (result: string | null) => void;
-  getLastWorkerResult: () => string | null;
 }
 
 /**
@@ -885,7 +883,6 @@ export async function runRootAgent(
 
   const orchStartTime = Date.now();
   try {
-    deps.setLastWorkerResult(null);
     const response = await worker.run(message);
 
     // Safety net: some LLMs (weaker/chatty ones) end their run by calling
@@ -893,7 +890,10 @@ export async function runRootAgent(
     // `response` empty. Fall back to the last status message so the user
     // sees SOMETHING rather than a blank reply. The root agent prompt
     // tells the LLM not to do this, but the safety net is belt-and-braces.
-    let finalResponse = deps.getLastWorkerResult() || response;
+    // The root's own answer. A process-wide "last worker result" used to win
+    // here, so any session's finishing worker (a pipeline stage elsewhere)
+    // replaced this turn's reply.
+    let finalResponse = response;
     if (!finalResponse || !finalResponse.trim()) {
       const ctxMeta = worker.getContext().metadata as Record<string, unknown>;
       const lastStatus = ctxMeta?.lastStatusMessage as string | undefined;
@@ -905,7 +905,6 @@ export async function runRootAgent(
         finalResponse = lastStatus;
       }
     }
-    deps.setLastWorkerResult(null);
 
     emit({
       type: 'worker_completed',
@@ -955,8 +954,6 @@ export async function runRootAgent(
 
     return { response: finalResponse, agentId, sources, outcome: 'success' };
   } catch (error) {
-    deps.setLastWorkerResult(null);
-
     const errMsg = (error as Error).message || '';
     // A spend budget or quota refusal is neither a failure nor a stop. The
     // worker aborts itself on a spend pause, so without this check its
