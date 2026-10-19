@@ -68,7 +68,7 @@
     "@slack/bolt": "^4.7.2",
     "@xmldom/xmldom": "^0.9.12",
     "botbuilder": "^4.22.1",
-    "domhandler": "^5.0.3",
+    "domhandler": "^6.0.1",
     "domutils": "^3.2.2",
     "drizzle-orm": "^0.45.4",
     "grammy": "^1.46.0",
