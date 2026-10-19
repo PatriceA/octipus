@@ -245,11 +245,11 @@ export function SessionList({
                           type="button"
                           data-session-id={session.id}
                           aria-current={isActive ? 'page' : undefined}
-                          aria-label={`Open conversation ${session.title}`}
                           onClick={() => onSelect(session.id)}
                           onDoubleClick={() => handleStartRename(session)}
                           className="min-w-0 flex-1 rounded-xs text-left focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
                         >
+                          <span className="sr-only">Open conversation </span>
                           <p
                             className={cn(
                               'truncate text-[13px]',

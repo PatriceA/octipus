@@ -181,6 +181,44 @@ jobs:
       - name: Cargo check (Tauri app)
         run: cargo check --manifest-path web/src-tauri/Cargo.toml
 
+      - name: Cargo test (Tauri app)
+        run: cargo test --manifest-path web/src-tauri/Cargo.toml
+
+  # The tray, notifications, start-at-login and close-to-tray code has
+  # per-platform branches (Windows process flags, the macOS Dock reopen, Linux
+  # app indicators) that a Linux check never compiles. The frontend bundle is
+  # not needed to compile: an empty frontendDist satisfies generate_context!.
+  desktop-platforms:
+    name: Desktop (tauri compile · ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Placeholder frontend bundle
+        shell: bash
+        run: mkdir -p web/out && echo '<!doctype html>' > web/out/index.html
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: web/src-tauri
+
+      - name: Cargo check (Tauri app)
+        run: cargo check --manifest-path web/src-tauri/Cargo.toml
+
+      - name: Cargo test (Tauri app)
+        run: cargo test --manifest-path web/src-tauri/Cargo.toml
+
   mcp-server:
     name: MCP server (typecheck · build · publish-check)
     runs-on: ubuntu-latest

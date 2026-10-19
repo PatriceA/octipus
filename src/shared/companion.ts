@@ -1,4 +1,10 @@
 export const COMPANION_FORMS = ['pebble', 'ribbon', 'ink'] as const;
+/**
+ * What the companion is doing. `sleeping` is the long-quiet idle: nothing has
+ * happened for a while, so the tray and tab icons doze instead of fidgeting.
+ */
+export const COMPANION_STATES = ['idle', 'listening', 'working', 'waiting', 'done', 'interrupted', 'sleeping'] as const;
+export type CompanionState = typeof COMPANION_STATES[number];
 export const COMPANION_COLORS = {
   'sea-glass': { label: 'Sea glass', hex: '#92c9c5' },
   coral: { label: 'Coral', hex: '#efa99b' },

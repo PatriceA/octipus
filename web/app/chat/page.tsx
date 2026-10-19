@@ -8,6 +8,7 @@ import { SkillUsage } from '@/components/skills/skill-usage';
 import { PanelRight, PanelRightClose, Paperclip, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useSearchParams } from 'next/navigation';
 import type { ResolvedPersona } from '../../../src/core/personas/types';
 import { usePermissions } from '@/lib/permission-context';
 import FileViewer from '@/components/chat/file-viewer';
@@ -1582,6 +1583,14 @@ export default function ChatPage() {
       loadSessionMessages(id);
     }
   };
+
+  // A companion notification opens its conversation with `?session=`; on an
+  // already-open chat page that changes the query without a remount.
+  const sessionParam = useSearchParams().get('session');
+  useEffect(() => {
+    if (mounted && sessionParam) selectSession(sessionParam);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionParam]);
 
   const deleteSession = async (id: string) => {
     // Track locally so polling doesn't resurrect the session

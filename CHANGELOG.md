@@ -305,6 +305,26 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **The companion follows you outside the chat.** Across all of your
+  conversations, not just the open one: the tab icon becomes your companion
+  in your chosen shape and colour, animated while it works, raising a badge
+  when it needs an answer and cheering when it is done, and the title counts
+  what happened while the window was away. System notifications say when work
+  is done, a question or approval is waiting, or a turn failed; a click opens
+  that conversation. A new *Presence & notifications* card on the Persona page
+  holds the per-device switches (off by default in a browser, which has to ask
+  for permission; a soft chime is opt-in). After twenty quiet minutes the
+  companion dozes. See [Desktop](docs/DESKTOP.md#the-companion-in-the-tray).
+
+- **Desktop tray icon.** The desktop app puts the companion in the system tray
+  (Windows notification area, macOS menu bar, Linux app indicator), animated
+  by what it is doing. Its menu shows that status and whether the backend
+  server is running, starts a local server that is down (`octi start`), and
+  toggles notifications, start at login (hidden to the tray) and keep running
+  when the window closes, which is on by default. Native notifications come
+  from the app, so they arrive with the window closed. A second launch brings
+  the running app forward.
+
 - **Interactive answers.** In the web chat and in rooms, the root agent can
   answer with a small widget — a calculator, a chart, a diagram, a stepper —
   written as an `octi-ui` fenced block in its reply. The server stores the
