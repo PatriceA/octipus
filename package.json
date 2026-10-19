@@ -69,7 +69,7 @@
     "@xmldom/xmldom": "^0.9.12",
     "botbuilder": "^4.22.1",
     "domhandler": "^5.0.3",
-    "domutils": "^3.2.2",
+    "domutils": "^4.0.2",
     "drizzle-orm": "^0.45.4",
     "grammy": "^1.46.0",
     "hono": "4.13.13",
