@@ -128,8 +128,9 @@ export function WorkspacePicker() {
       <button
         onClick={() => setIsOpen((v) => !v)}
         className="flex items-center gap-1.5 px-2 py-1 bg-surface-container-low border border-outline-variant/60 rounded-xs text-[12px] text-on-surface hover:bg-surface-container hover:border-outline transition-colors cursor-pointer"
-        aria-label="Switch workspace"
       >
+        {/* The visible workspace stays part of the name: a label replacing it breaks voice control (WCAG 2.5.3). */}
+        <span className="sr-only">Switch workspace: </span>
         {activeWorkspace?.kind === 'shared'
           ? <UsersRound className="w-3.5 h-3.5 text-on-surface-variant" />
           : activeWorkspace?.kind === 'remote'

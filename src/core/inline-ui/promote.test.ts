@@ -17,10 +17,15 @@ describe('sanitizeInlineUiMarkup (the frame rules, on the server)', () => {
   });
 
   test('elements a browser reads as raw text are refused, so their content cannot turn into markup', () => {
-    for (const name of ['xmp', 'noembed', 'noframes', 'plaintext']) {
+    // The parser ends a raw-text element where a browser does — at its end tag,
+    // even inside what looks like an attribute — so the `<img>` after it is a
+    // real element on both sides, and it is sanitized like any other.
+    for (const name of ['xmp', 'noembed', 'noframes']) {
       const out = clean(`<${name}><p title="</${name}><img src=x onerror=alert(1)>"></p></${name}>`);
-      expect(out.html, name).not.toMatch(/<img|onerror/);
+      expect(out.html, name).toBe('<img>"&gt;<p></p>');
     }
+    // `<plaintext>` has no end tag: everything after it is its text.
+    expect(clean('<plaintext><p title="</plaintext><img src=x onerror=alert(1)>"></p>').html).toBe('');
     const noscript = clean('<noscript><p title="</noscript><img src=x onerror=alert(1)>"></p></noscript>');
     expect(noscript.html).not.toMatch(/<img|onerror/);
   });
