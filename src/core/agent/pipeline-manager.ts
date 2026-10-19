@@ -1151,7 +1151,9 @@ export class PipelineManager {
       return result;
     } catch (error) {
       const current = await this.getPipeline(pipeline.id);
-      if (current?.status !== 'paused') {
+      if (this.signals.get(pipeline.id)?.aborted && current?.status !== 'failed') {
+        await this.updatePipeline(pipeline.id, { status: 'stopped', summary: 'Pipeline stopped; resume from the saved stage checkpoint.' });
+      } else if (!['paused', 'stopped', 'failed'].includes(current?.status ?? '')) {
         const items = await pipelineRepository.getPlanItems(pipeline.id);
         for (const item of items.filter(item => item.status === 'running')) {
           await pipelineRepository.updatePlanItem(item.id, { status: 'failed', result: error instanceof Error ? error.message : String(error) });
@@ -1276,10 +1278,11 @@ export class PipelineManager {
 
     while (cursor) {
       const persisted = await this.getPipeline(pipeline.id);
-      if (persisted?.status === 'paused') return { pipelineId: pipeline.id, result: persisted.summary ?? 'Pipeline paused.' };
+      if (persisted && ['paused', 'stopped'].includes(persisted.status)) return { pipelineId: pipeline.id, result: persisted.summary ?? 'Pipeline paused.' };
       // Node boundary: snapshot first, then honour a pause request. Snapshot
       // BEFORE the node runs, so resuming re-enters this node rather than
       // trying to continue a worker turn mid-flight.
+      const isResumedAttempt = !!resumedAttempt;
       const attemptId = resumedAttempt ?? randomUUID();
       const partial = resumedPartial?.attemptId === attemptId && resumedPartial.itemId === (currentItem?.id ?? null) ? resumedPartial : undefined;
       resumedAttempt = resumedPartial = undefined;
@@ -1357,7 +1360,7 @@ export class PipelineManager {
         return { pipelineId: pipeline.id, result: `Pipeline failed: unknown node '${cursor}'.` };
       }
 
-      await this.updatePipeline(pipeline.id, { currentNodeKey: cursor, status: 'running' });
+      await this.updatePipeline(pipeline.id, { currentNodeKey: cursor, status: 'running', summary: `Running "${node.name}"${currentItem ? ` for "${currentItem.title}"` : ''}.` });
       await this.updateNode(node.id, { visits: node.visits + 1 });
       node.visits += 1;
 
@@ -1370,7 +1373,8 @@ export class PipelineManager {
         subject: 'pipeline_node',
         subjectId: node.nodeKey,
         event: 'node_entered',
-        payload: { pipelineId: pipeline.id, name: node.name, role: node.role, kind: gnode.kind, visit: node.visits },
+        payload: { pipelineId: pipeline.id, name: node.name, role: node.role, kind: gnode.kind, visit: node.visits,
+          itemId: currentItem?.id ?? null, itemTitle: currentItem?.title ?? null, attemptId, attempt: node.visits },
       });
 
       let outcome: NodeOutcome;
@@ -1623,6 +1627,8 @@ export class PipelineManager {
           title,
           reviewModels,
           attemptId,
+          itemTitle: currentItem?.title ?? null,
+          startReason: contractFeedback ? `contract_retry: ${contractFeedback}` : correcting ? `verdict_correction: ${pendingRejection}` : feedback ? `qa_rework: ${feedback.feedback}` : isResumedAttempt ? 'resume' : graph.edges.some(edge => edge.condition === 'qa_fail' && (traversals.get(edgeId(edge)) ?? 0) > 0) ? 'qa_rework' : 'item_stage',
           itemId: currentItem?.id ?? null,
           checkpoint: { seq: checkpoint.seq, state: checkpoint.state as Record<string, unknown> },
           partial,
@@ -1761,6 +1767,8 @@ export class PipelineManager {
         event: 'edge_traversed',
         payload: {
           pipelineId: pipeline.id,
+          itemId: currentItem?.id ?? null,
+          attemptId,
           condition: edge.condition,
           outcome,
           traversals: traversals.get(edgeId(edge)),
@@ -1989,17 +1997,56 @@ export class PipelineManager {
    * any other worker is handed its saved progress, marked INCOMPLETE.
    */
   private resuming = new Map<string, AbortController>();
+  private resumeWatchdogs = new Map<string, ReturnType<typeof setInterval>>();
 
-  async resume(pipelineId: string, opts: { fromSeq?: number; onResumed?: () => void; freshAttempt?: boolean } = {}): Promise<{ pipelineId: string; result: string }> {
+  private clearResumeWatchdog(id: string) {
+    clearInterval(this.resumeWatchdogs.get(id));
+    this.resumeWatchdogs.delete(id);
+  }
+
+  /** Human review can wait; scheduling after review must make progress within two minutes. */
+  private watchResume(id: string) {
+    this.clearResumeWatchdog(id);
+    let since = Date.now();
+    let checking = false;
+    const timer = setInterval(() => {
+      if (checking) return;
+      checking = true;
+      void (async () => {
+        const row = await this.getPipeline(id);
+        if (this.resumeWatchdogs.get(id) !== timer) return;
+        if (!row || ['completed', 'failed'].includes(row.status)) { this.clearResumeWatchdog(id); return; }
+        if (row.status === 'awaiting_approval') { since = Date.now(); return; }
+        if (Date.now() - since < 120_000) return;
+        this.clearResumeWatchdog(id);
+        const error = new Error('Resume watchdog: no stage started within 2 minutes of scheduling. Saved checkpoints are available for recovery.');
+        await this.updatePipeline(id, { status: 'failed', summary: error.message });
+        this.resuming.get(id)?.abort(error);
+        this.controllers.get(id)?.abort(error);
+      })().catch(error => coreLogger.error({ error, pipelineId: id }, 'Resume watchdog failed'))
+        .finally(() => { checking = false; });
+    }, 5000);
+    timer.unref();
+    this.resumeWatchdogs.set(id, timer);
+  }
+
+  async resume(pipelineId: string, opts: { fromSeq?: number; onResumed?: () => void; onAccepted?: () => void; freshAttempt?: boolean } = {}): Promise<{ pipelineId: string; result: string }> {
     if (this.resuming.has(pipelineId)) throw new Error(`Pipeline ${pipelineId} is already awaiting resume or running.`);
     this.resuming.set(pipelineId, new AbortController());
     try { return await this.resumeReviewed(pipelineId, opts); }
-    finally { this.resuming.delete(pipelineId); }
+    catch (error) {
+      const current = await this.getPipeline(pipelineId);
+      if (current && !['running', 'paused', 'stopped', 'completed', 'failed'].includes(current.status)) {
+        await this.updatePipeline(pipelineId, { status: 'failed', summary: `Resume failed: ${String(error)}` });
+      }
+      throw error;
+    }
+    finally { this.resuming.delete(pipelineId); this.clearResumeWatchdog(pipelineId); }
   }
 
   private async resumeReviewed(
     pipelineId: string,
-    opts: { fromSeq?: number; onResumed?: () => void; freshAttempt?: boolean },
+    opts: { fromSeq?: number; onResumed?: () => void; onAccepted?: () => void; freshAttempt?: boolean },
   ): Promise<{ pipelineId: string; result: string }> {
     const pipeline = await this.getPipeline(pipelineId);
     if (!pipeline) throw new Error(`Pipeline ${pipelineId} not found.`);
@@ -2059,15 +2106,34 @@ export class PipelineManager {
   private async resumeWalk(
     pipeline: Pipeline,
     pipelineId: string,
-    opts: { fromSeq?: number; onResumed?: () => void; freshAttempt?: boolean },
+    opts: { fromSeq?: number; onResumed?: () => void; onAccepted?: () => void; freshAttempt?: boolean },
     checkpoint: NonNullable<Awaited<ReturnType<typeof pipelineRepository.getCheckpoint>>>,
     resumeState: NonNullable<ReturnType<typeof hydrateWalk>>,
     context: AgentContext,
   ): Promise<{ pipelineId: string; result: string }> {
 
     const priorNodes = await pipelineRepository.getNodes(pipelineId);
-    await withExecutionSignal(context, this.resuming.get(pipelineId)?.signal,
-      () => actionRecovery.reviewPipeline(context, pipelineId, priorNodes.some(node => node.visits > 0)));
+    // Return the handle before a human replay review can wait indefinitely.
+    await this.updatePipeline(pipelineId, { status: 'planning', summary: 'Scheduling resume from the saved checkpoint.' });
+    this.watchResume(pipelineId);
+    opts.onAccepted?.();
+    const resumeSignal = this.resuming.get(pipelineId)?.signal;
+    await withExecutionSignal(context, resumeSignal,
+      () => actionRecovery.reviewPipeline(context, pipelineId, priorNodes.some(node => node.visits > 0), async summary => {
+        const permissions = getPermissionManager();
+        const reviewId = await permissions.requestApproval(context.userId, `pipeline:${pipelineId}`, 'action_recovery', 'replay_pipeline',
+          { warning: summary, pipelineId }, context.sessionId, 'Review pipeline replay', resumeSignal, context.workspaceId);
+        const pendingApproval: PendingStageApproval = { requestId: reviewId, workerRequestId: null, stage: 'Resume review',
+          nodeKey: resumeState.cursor, attemptId: resumeState.attemptId ?? '', itemId: resumeState.currentItemId, item: null,
+          toolId: 'action_recovery', action: 'replay_pipeline', toolName: 'resume_pipeline', subject: summary, reason: 'Review possible repeated effects before resuming', fingerprint: null, hostServices: false };
+        await this.updatePipeline(pipelineId, { status: 'awaiting_approval', summary: 'Waiting for resume review.',
+          metadata: { ...((await this.getPipeline(pipelineId))?.metadata ?? {}), pendingApproval } });
+        const approved = await permissions.waitForApproval(reviewId, { agentId: `pipeline:${pipelineId}`, signal: resumeSignal });
+        const current = await this.getPipeline(pipelineId);
+        const { pendingApproval: _answered, ...metadata } = current?.metadata ?? {};
+        await this.updatePipeline(pipelineId, { metadata, ...(approved ? {} : { status: current?.status === 'stopped' ? 'stopped' as const : pipeline.status, summary: pipeline.status === 'completed' ? pipeline.summary : 'Resume review was not approved; no stage was restarted.' }) });
+        return { approved, reviewId };
+      }));
 
     // Rebuild what the run was compiled from. The template is read by type and
     // recompiled rather than stored: a graph is a pure function of the template,
@@ -2110,7 +2176,7 @@ export class PipelineManager {
     // A pause request the walker never reached (it was inside the last node
     // when the run ended) would otherwise fire on the first boundary of THIS
     // walk and pause it before it did anything.
-    const meta = { ...(pipeline.metadata ?? {}) } as Record<string, unknown>;
+    const meta = { ...((await this.getPipeline(pipelineId))?.metadata ?? {}) } as Record<string, unknown>;
     // Older runs predate the explicit plan link. Establish it on an approved
     // resume so their existing items also update the coordinator's visible plan.
     const published = (await sessionRepository.findById(pipeline.sessionId))?.metadata?.workPlan;
@@ -2164,6 +2230,7 @@ export class PipelineManager {
   }
 
   async stop(pipelineId: string): Promise<boolean> {
+    this.clearResumeWatchdog(pipelineId);
     this.resuming.get(pipelineId)?.abort(new Error('Pipeline replay cancelled'));
     const pipeline = await this.getPipeline(pipelineId);
     if (!pipeline || pipeline.status === 'completed' || pipeline.status === 'failed') {
@@ -2171,8 +2238,8 @@ export class PipelineManager {
     }
 
     await this.updatePipeline(pipelineId, {
-      status: 'paused',
-      summary: 'Pipeline stopped by user.',
+      status: 'stopped',
+      summary: 'Pipeline stopped by user; resume from the saved stage checkpoint.',
     });
     this.controllers.get(pipelineId)?.abort(new Error('Pipeline stopped by user'));
 
@@ -2704,6 +2771,8 @@ export class PipelineManager {
     /** This stage attempt (`WalkState.attemptId`): its CLI conversation and its approvals. */
     attemptId: string;
     itemId: string | null;
+    itemTitle?: string | null;
+    startReason?: string;
     /** The checkpoint the attempt was entered from; its progress is kept there. */
     checkpoint?: { seq: number; state: Record<string, unknown> };
     /** What this attempt said before an earlier interruption. */
@@ -2730,21 +2799,25 @@ export class PipelineManager {
     // The row holds the LATEST run: an earlier item's report must not sit next
     // to this run's failure (#15).
     const stageStartedAt = new Date();
+    this.clearResumeWatchdog(pipeline.id);
+    const identity = { attemptId, itemId, itemTitle: args.itemTitle ?? null, attempt: node.visits, startReason: args.startReason ?? 'resume' };
+    recordRunEvent({ runId: sessionId, subject: 'pipeline_node', subjectId: node.nodeKey, event: 'spawn',
+      payload: { pipelineId: pipeline.id, name: node.name, ...identity } });
     await this.updateNode(node.id, { input, status: 'running', error: null, completedAt: null, output: null });
 
     rootAgent['emit']({
       type: 'pipeline_event',
       userId: pipeline.userId,
       sessionId,
-      data: { event: 'stage_started', pipelineId: pipeline.id, stageId: node.id, name: node.name, role: node.role, index: node.ordinal },
+      data: { ...identity, event: 'stage_started', pipelineId: pipeline.id, stageId: node.id, name: node.name, role: node.role, index: node.ordinal },
       timestamp: new Date(),
     });
 
     messageRepository.create({
       sessionId,
       role: 'system',
-      content: `**${node.name}** (${node.role || 'agent'}) started`,
-      metadata: { pipelineId: pipeline.id, stageId: node.id, pipelineEvent: 'stage_started' },
+      content: `**${node.name}** (${node.role || 'agent'}) started${args.itemTitle ? ` for **${args.itemTitle}**` : ''} — attempt ${node.visits} (${identity.startReason})`,
+      metadata: { ...identity, pipelineId: pipeline.id, stageId: node.id, pipelineEvent: 'stage_started' },
     }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
 
     let spentTokens = 0;
@@ -2824,7 +2897,7 @@ export class PipelineManager {
         );
       }
 
-      if ((await this.getPipeline(pipeline.id))?.status === 'paused') {
+      if (['paused', 'stopped'].includes((await this.getPipeline(pipeline.id))?.status ?? '')) {
         await this.updateNode(node.id, { status: 'pending' });
         return { output: '', raw: '', stopped: { pipelineId: pipeline.id, result: 'Pipeline stopped; resume from the saved stage checkpoint.' } };
       }
@@ -2881,7 +2954,7 @@ export class PipelineManager {
         subject: 'pipeline_node',
         subjectId: node.nodeKey,
         event: 'node_completed',
-        payload: { pipelineId: pipeline.id, name: node.name, visit: node.visits, outputChars: output.length },
+        payload: { pipelineId: pipeline.id, name: node.name, visit: node.visits, ...identity, output: output.slice(-20000), outputChars: output.length, ...(declared.stageType === 'qa_validation' ? { verdict: this.parseQAResult(raw) } : {}) },
       });
 
       const stageSummary = output.length > 300
@@ -2893,6 +2966,7 @@ export class PipelineManager {
         userId: pipeline.userId,
         sessionId,
         data: {
+          ...identity,
           event: 'stage_completed',
           pipelineId: pipeline.id,
           stageId: node.id,
@@ -2915,7 +2989,10 @@ export class PipelineManager {
       // The stage's own reason, without worker-spawner's `Worker "x" failed:` wrapper (#7).
       const errorMsg = (error as Error).message.replace(/^Worker "[^"]*" failed: /, '');
       await partialWrite;
-      if ((await this.getPipeline(pipeline.id))?.status === 'paused') {
+      if (this.signals.get(pipeline.id)?.aborted && (await this.getPipeline(pipeline.id))?.status !== 'failed') {
+        await this.updatePipeline(pipeline.id, { status: 'stopped', summary: 'Pipeline stopped; resume from the saved stage checkpoint.' });
+      }
+      if (['paused', 'stopped'].includes((await this.getPipeline(pipeline.id))?.status ?? '')) {
         await this.updateNode(node.id, { status: 'pending' });
         return { output: '', raw: '', stopped: { pipelineId: pipeline.id, result: 'Pipeline stopped; resume from the saved stage checkpoint.' } };
       }
@@ -2923,7 +3000,7 @@ export class PipelineManager {
       if (error instanceof StageContractError && args.retryContract) {
         await this.updateNode(node.id, { status: 'pending', error: errorMsg });
         recordRunEvent({ runId: sessionId, subject: 'pipeline_node', subjectId: node.nodeKey,
-          event: 'node_failed', payload: { pipelineId: pipeline.id, reason: errorMsg } });
+          event: 'node_failed', payload: { pipelineId: pipeline.id, ...identity, reason: errorMsg, retry: true } });
         return { output: '', raw: '', contractFailure: errorMsg };
       }
       const remaining = (await pipelineRepository.getPlanItems(pipeline.id))
@@ -2936,7 +3013,7 @@ export class PipelineManager {
         subject: 'pipeline_node',
         subjectId: node.nodeKey,
         event: 'node_failed',
-        payload: { pipelineId: pipeline.id, name: node.name, visit: node.visits, reason: errorMsg },
+        payload: { pipelineId: pipeline.id, name: node.name, visit: node.visits, ...identity, reason: errorMsg },
       });
       await this.updatePipeline(pipeline.id, {
         status: 'failed',
@@ -3042,20 +3119,25 @@ export class PipelineManager {
       metadata: { ...((await this.getPipeline(pipeline.id))?.metadata ?? {}), pendingApproval },
     });
     const approved = await permissions.waitForApproval(requestId, { agentId, signal });
+    const [decision] = await this.db.select().from(permissionRequests).where(eq(permissionRequests.id, requestId)).limit(1);
+    recordRunEvent({ runId: pipeline.sessionId, subject: 'pipeline_node', subjectId: node.nodeKey, event: 'result',
+      payload: { pipelineId: pipeline.id, kind: 'approval', attemptId, itemId: args.itemId, requestId,
+        command: pendingApproval.subject, decision: decision?.status ?? 'unknown', decidedBy: decision?.resolvedBy ?? null,
+        decidedAt: decision?.resolvedAt ?? null } });
     const current = await this.getPipeline(pipeline.id);
     const { pendingApproval: _answered, ...metadata } = (current?.metadata ?? {}) as Record<string, unknown>;
     if (approved && current?.status === 'awaiting_approval') {
       const call = asked ? approvedCallOf({ toolId: asked.toolId, toolName, action: asked.action, args: toolArgs }, { nodeKey: node.nodeKey, attemptId, hostServices }) : undefined;
-      await this.updatePipeline(pipeline.id, { status: 'running', metadata: call ? withApprovedCalls(metadata, [call]) : metadata });
+      await this.updatePipeline(pipeline.id, { status: 'running', summary: `Approval granted at "${node.name}"; continuing the stage.`, metadata: call ? withApprovedCalls(metadata, [call]) : metadata });
       // Same attempt, same `resumeKey`: a resumable CLI continues the conversation
       // it stopped in (#20); a cold one gets what it had said so far.
       const partial = blocked.partialText
         ? { attemptId, itemId: args.itemId, text: blocked.partialText, at: new Date().toISOString() }
         : args.partial;
-      return this.runStepNode({ ...args, partial, input: `${approvedResumeNote(pendingApproval.subject)}\n\n${args.input}` });
+      return this.runStepNode({ ...args, partial, startReason: 'approval_resume', input: `${approvedResumeNote(pendingApproval.subject)}\n\n${args.input}` });
     }
     await this.updateNode(node.id, { status: 'pending' });
-    await this.updatePipeline(pipeline.id, current?.status === 'paused' ? { metadata } : {
+    await this.updatePipeline(pipeline.id, current && ['paused', 'stopped'].includes(current.status) ? { metadata } : {
       status: 'paused', metadata,
       summary: `Approval at "${node.name}" was not granted. Resume to re-run this stage.`,
     });
@@ -3105,6 +3187,7 @@ export class PipelineManager {
       });
     }
 
+    if ((await this.getPipeline(pipeline.id))?.metadata?.pendingItemEdits) await pipelineRepository.applyItemEdits(pipeline.id);
     const items = await pipelineRepository.getPlanItems(pipeline.id);
     const pending = items.filter((i) => i.status === 'pending');
 
@@ -3152,6 +3235,10 @@ export class PipelineManager {
         ['Approve', 'Stop Pipeline'],
       ) as { approved: boolean; response?: string };
 
+      recordRunEvent({ runId: pipeline.sessionId, subject: 'pipeline_node', subjectId: node.nodeKey, event: 'result',
+        payload: { pipelineId: pipeline.id, kind: 'gate_approval', response: approval.response ?? null,
+          decidedBy: approval.response ? context.userId : null, decidedAt: new Date().toISOString(),
+          decision: approval.response ? (approval.approved && approval.response !== 'Stop Pipeline' ? 'approved' : 'denied') : 'unanswered' } });
       if (!approval.approved || approval.response === 'Stop Pipeline') {
         await this.updateNode(node.id, { status: 'skipped' });
         await this.updatePipeline(pipeline.id, { status: 'paused', summary: 'Plan rejected by user.' });
@@ -3162,8 +3249,8 @@ export class PipelineManager {
         };
       }
 
-      await this.updateNode(node.id, { status: 'approved', approvedAt: new Date() });
-      await this.updatePipeline(pipeline.id, { status: 'running', ...await this.approveGates(pipeline.id, gates) });
+      await this.updateNode(node.id, { status: 'approved', approvedAt: new Date(), approvedBy: context.userId });
+      await this.updatePipeline(pipeline.id, { status: 'running', summary: `Approval granted for "${node.name}".`, ...await this.approveGates(pipeline.id, gates) });
       // Re-read: the user may have edited the plan while it sat for approval.
       return this.nextPlanItem(pipeline, node);
     }
@@ -3387,6 +3474,10 @@ export class PipelineManager {
       ['Approve', 'Skip', 'Stop Pipeline'],
     ) as { approved: boolean; response?: string };
 
+    recordRunEvent({ runId: pipeline.sessionId, subject: 'pipeline_node', subjectId: node.nodeKey, event: 'result',
+      payload: { pipelineId: pipeline.id, kind: 'gate_approval', response: approval.response ?? null,
+        decidedBy: approval.response ? context.userId : null, decidedAt: new Date().toISOString(),
+        decision: approval.response ? (approval.approved && approval.response !== 'Stop Pipeline' ? 'approved' : 'denied') : 'unanswered' } });
     if (!approval.approved || approval.response === 'Stop Pipeline') {
       await this.updateNode(node.id, { status: 'skipped' });
       await this.updatePipeline(pipeline.id, { status: 'paused', summary: `Stopped by user at stage: ${node.name}` });
@@ -3394,8 +3485,8 @@ export class PipelineManager {
     }
     if (approval.response === 'Skip') return 'skip';
 
-    await this.updateNode(node.id, { status: 'approved', approvedAt: new Date() });
-    await this.updatePipeline(pipeline.id, { status: 'running', ...await this.approveGates(pipeline.id, gates) });
+    await this.updateNode(node.id, { status: 'approved', approvedAt: new Date(), approvedBy: context.userId });
+    await this.updatePipeline(pipeline.id, { status: 'running', summary: `Approval granted for "${node.name}".`, ...await this.approveGates(pipeline.id, gates) });
     return 'go';
   }
 

@@ -18,9 +18,10 @@
  * Its constraints are documented on the variant.
  */
 
-import { existsSync } from 'node:fs';
-import { isAbsolute, join, sep } from 'node:path';
+import { existsSync, statSync } from 'node:fs';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { WorkspaceFS } from '@/security/workspace-fs';
+import { detectRunner, getSandboxMode } from '@/security/shell-sandbox';
 import { basename as programName, commandPolicyViolation, matchElevatedCommand, tokenizeSafe } from '@/tools/shell/policy';
 import { coreLogger } from '@/utils/logger';
 import type { SwarmReceipt } from './receipt';
@@ -507,6 +508,85 @@ function scorerWorkspace(ctx: ScorerContext): WorkspaceFS | null {
   return ctx.workspaceRoot ? WorkspaceFS.forAgent({ system: true, root: ctx.workspaceRoot }) : null;
 }
 
+/** Explicit working-directory switches, not test inputs that the child may create. */
+function commandDirectories(command: string, cwd: string): string[] {
+  const argv = tokenizeSafe(requoteSplitPath(command, cwd));
+  if (!argv) return [];
+  const head = programName(argv[0]);
+  const flags = head === 'pnpm' ? ['-C', '--dir']
+    : head === 'npm' ? ['--prefix']
+    : head === 'yarn' ? ['--cwd']
+    : head === 'git' ? ['-C']
+    : head === 'make' ? ['-C', '--directory'] : [];
+  const paths: string[] = [];
+  let base = cwd;
+  for (let i = 1; i < argv.length && argv[i] !== '--'; i++) {
+    const flag = flags.find((f) => argv[i] === f || argv[i].startsWith(`${f}=`) || (f === '-C' && argv[i].startsWith(f)));
+    if (!flag) continue;
+    const value = argv[i] === flag ? argv[++i]
+      : argv[i].startsWith(`${flag}=`) ? argv[i].slice(flag.length + 1) : argv[i].slice(flag.length);
+    if (!value) continue;
+    const directory = resolve(base, value);
+    paths.push(directory);
+    // git/make apply successive -C switches relative to the previous one.
+    if (head === 'git' || head === 'make') base = directory;
+  }
+  return paths;
+}
+
+/**
+ * Probe directory visibility using the SAME sandbox as the verification command.
+ * Never mount a path just because the parent put it in argv. Before spawning,
+ * paths inside the child's tree may still be created by the requested work.
+ */
+export async function scorerEnvironmentError(
+  scorers: Scorer[], cwd: string, options: { beforeSpawn?: boolean; signal?: AbortSignal; deadline?: number } = {},
+): Promise<string | null> {
+  const deadline = options.deadline ?? Date.now() + 10_000;
+  for (const scorer of scorers) {
+    if (scorer.kind === 'any_of') {
+      const errors: string[] = [];
+      for (const member of scorer.scorers) {
+        const error = await scorerEnvironmentError([member], cwd, { ...options, deadline });
+        if (!error) break;
+        errors.push(error);
+      }
+      if (errors.length === scorer.scorers.length) return errors.join('; ');
+      continue;
+    }
+    if (scorer.kind !== 'command_exit_zero') continue;
+    const directories = commandDirectories(scorer.command, cwd);
+    if (!directories.length) continue;
+    const { LocalShellOperations } = await import('@/tools/shell/local-operations');
+    for (const directory of directories) {
+      const rel = relative(cwd, directory);
+      if (options.beforeSpawn && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)) continue;
+      // Single-quoted fragments also work with tokenizeSafe (no shell is used).
+      const quoted = "'" + directory.replace(/'/g, "'\"'\"'") + "'";
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return 'Scorer environment: directory visibility checks exceeded their deadline';
+      try {
+        const mode = getSandboxMode();
+        const unwrapped = mode === 'off' || (mode === 'auto' && !detectRunner());
+        // Without a process sandbox the host filesystem IS the execution view.
+        // This also avoids depending on a Unix `test` executable on Windows.
+        const result = unwrapped
+          ? { exitCode: statSync(directory).isDirectory() ? 0 : 1, stdout: '', stderr: '' }
+          : await new LocalShellOperations().exec(`test -d ${quoted}`, cwd, {
+              timeout: Math.min(5_000, remaining), signal: options.signal,
+            });
+        if (result.exitCode === 0) continue;
+        return `Scorer environment: directory "${directory}" is unavailable from the child's execution directory "${cwd}" ` +
+          `(sandbox visibility check failed${formatCommandOutput(result.stdout, result.stderr)}). ` +
+          'Select the repository as the session project and use a command relative to it; the child was not asked to repair this environment.';
+      } catch (error) {
+        return `Scorer environment: could not check directory "${directory}" from "${cwd}": ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
+  }
+  return null;
+}
+
 /**
  * Coerce the targeted field to text, JSON-stringifying non-strings.
  * `null`/`undefined` become the empty string — NOT the literal `"\"\""` —
@@ -968,9 +1048,7 @@ async function evaluate(
       // So the gate verified a different tree from the one the work happened
       // in, and failed every time.
       const fs = scorerWorkspace(ctx);
-      const cwd = ctx.projectPath && existsSync(ctx.projectPath)
-        ? ctx.projectPath
-        : fs?.resolveOptional('.');
+      const cwd = ctx.projectPath ?? fs?.resolveOptional('.');
       if (!cwd) {
         return {
           scorer: label,
@@ -1027,8 +1105,15 @@ async function evaluate(
             'Scorer command had a path split by a space — re-quoted before running',
           );
         }
+        const environmentError = await scorerEnvironmentError([scorer], cwd, { signal: ctx.signal, deadline: Math.min(ctx.deadline ?? Infinity, Date.now() + 10_000) });
+        if (ctx.signal?.aborted) throw new ScorerNotEvaluated('the run was cancelled before the check started');
+        if (environmentError) return { scorer: label, reason: environmentError, retryable: false };
+        const remainingTimeout = Math.min(timeoutMs, (ctx.deadline ?? Infinity) - Date.now());
+        if ((ctx.deadline ?? Infinity) - Date.now() < MIN_COMMAND_SCORER_TIMEOUT_MS) {
+          return { scorer: label, reason: 'the verification gate has too little budget left after checking its environment' };
+        }
         const res = await new LocalShellOperations().exec(repaired, cwd, {
-          timeout: timeoutMs,
+          timeout: remainingTimeout,
           // A pipeline stage's `hostServices` opt-in reaches its verify command too.
           ...(ctx.hostServices ? { allowNetwork: true, extraReadWrite: ['/var/run/docker.sock'] } : {}),
           ...(ctx.signal ? { signal: ctx.signal } : {}),

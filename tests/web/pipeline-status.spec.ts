@@ -44,6 +44,18 @@ test('running pipeline rings fit inside the scroll viewport', async ({ authentic
   expect(fits).toBe(true);
 });
 
+test('an explicitly stopped pipeline offers resume', async ({ authenticatedPage: page }) => {
+  await page.route('**/api/agents/root', route => json(route, 200, { id: 'root', model: 'test', topic: 'build', status: 'stopped', createdAt: new Date().toISOString() }));
+  await page.route('**/api/agents/root/events**', route => json(route, 200, { events: [] }));
+  await page.route('**/api/pipelines', route => json(route, 200, { pipelines: [{ id: 'run', rootAgentId: 'root' }] }));
+  await page.route('**/api/pipelines/run', route => json(route, 200, {
+    pipeline: { id: 'run', title: 'Stopped pipeline', type: 'test', status: 'stopped', currentNodeKey: 'n0' },
+    nodes: [{ id: 'n0', nodeKey: 'n0', name: 'Implementation', role: 'coding', status: 'pending', ordinal: 0 }],
+  }));
+  await page.goto('/agents/view?id=root');
+  await expect(page.getByRole('button', { name: 'Resume', exact: true })).toBeVisible();
+});
+
 test('stage editor selects roles and explains their topic model assignment', async ({ authenticatedPage: page }) => {
   await page.route('**/api/roles', route => json(route, 200, { roles: [{ role: 'coding', lane: 'build' }] }));
   await page.route('**/api/pipelines/templates', route => json(route, 200, { templates: [{

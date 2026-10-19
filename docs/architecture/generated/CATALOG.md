@@ -605,11 +605,11 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 9 |
 | `core` | `models` | 115 |
-| `core` | `security` | 160 |
+| `core` | `security` | 161 |
 | `core` | `services` | 2 |
-| `core` | `shared` | 32 |
+| `core` | `shared` | 33 |
 | `core` | `skills` | 10 |
-| `core` | `tools` | 20 |
+| `core` | `tools` | 21 |
 | `core` | `utils` | 198 |
 | `core` | `voice` | 1 |
 | `db` | `config` | 4 |

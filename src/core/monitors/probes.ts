@@ -11,7 +11,8 @@ const pipelineStatusProbe = createPipelineRecoveryTools().find(tool => tool.name
 /** Resolve only declared read actions; arbitrary shell/evaluate/click are never polling probes. */
 export function readProbe(name: string, args: Record<string, unknown>) {
   const handler = name === 'get_pipeline_status' && pipelineStatusProbe
-    ? { ...pipelineStatusProbe, toolId: 'monitor', permissionAction: 'read' }
+    ? { ...pipelineStatusProbe, toolId: 'monitor', permissionAction: 'read',
+      execute: (input: Record<string, unknown>, context: AgentContext) => pipelineStatusProbe.execute({ ...input, includeHistory: false }, context) }
     : getToolRegistry().findTool(name);
   if (!handler) throw new Error(`Unknown monitor probe: ${name}`);
   const action = typeof handler.permissionAction === 'function' ? handler.permissionAction(args) : handler.permissionAction;

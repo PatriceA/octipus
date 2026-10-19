@@ -87,8 +87,8 @@ export interface ApprovalRequest {
   summary: string;
   question: string;
   options?: string[];
-  resolve: (response: string) => void;
-  reject: (reason: string) => void;
+  resolve: (response: string, decision?: { by: string; at: string }) => void;
+  reject: (reason: string, decision?: { by: string; at: string }) => void;
   createdAt: Date;
 }
 
@@ -210,13 +210,13 @@ export class ApprovalManager {
         summary,
         question,
         options,
-        resolve: (response: string) => {
+        resolve: (response: string, decision?: { by: string; at: string }) => {
           this.pendingApprovals.delete(requestId);
-          resolve({ approved: true, response, requestId });
+          resolve({ approved: true, response, requestId, ...(decision ? { decidedBy: decision.by, decidedAt: decision.at } : {}) });
         },
-        reject: (reason: string) => {
+        reject: (reason: string, decision?: { by: string; at: string }) => {
           this.pendingApprovals.delete(requestId);
-          resolve({ approved: false, reason, requestId });
+          resolve({ approved: false, reason, requestId, ...(decision ? { response: reason, decidedBy: decision.by, decidedAt: decision.at } : {}) });
         },
         createdAt: new Date(),
       };
@@ -244,13 +244,13 @@ export class ApprovalManager {
       // Clean up timeout when resolved
       const originalResolve = approval.resolve;
       const originalReject = approval.reject;
-      approval.resolve = (response: string) => {
+      approval.resolve = (response: string, decision?: { by: string; at: string }) => {
         clearTimeout(timeout);
-        originalResolve(response);
+        originalResolve(response, decision);
       };
-      approval.reject = (reason: string) => {
+      approval.reject = (reason: string, decision?: { by: string; at: string }) => {
         clearTimeout(timeout);
-        originalReject(reason);
+        originalReject(reason, decision);
       };
     });
   }
@@ -331,9 +331,9 @@ export class ApprovalManager {
       }
 
       if (approved) {
-        approval.resolve(text);
+        approval.resolve(text, { by: resolvedBy ?? approval.userId, at: new Date().toISOString() });
       } else {
-        approval.reject(text);
+        approval.reject(text, { by: resolvedBy ?? approval.userId, at: new Date().toISOString() });
       }
       this.announce(approval, approved ? 'approved' : 'denied');
       return { status: 'resolved' };

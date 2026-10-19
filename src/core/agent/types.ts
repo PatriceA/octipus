@@ -20,7 +20,7 @@ export type AgentRole =
  */
 export const ROOT_ROLE: AgentRole = 'general';
 
-export type PipelineStatus = 'planning' | 'running' | 'paused' | 'awaiting_approval' | 'completed' | 'failed';
+export type PipelineStatus = 'planning' | 'running' | 'paused' | 'stopped' | 'awaiting_approval' | 'completed' | 'failed';
 
 export type StageStatus = 'pending' | 'running' | 'awaiting_approval' | 'approved' | 'completed' | 'failed' | 'skipped';
 

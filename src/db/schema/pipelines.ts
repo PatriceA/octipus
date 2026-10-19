@@ -3,7 +3,7 @@ import { sessions } from './sessions';
 import { users } from './users';
 
 export const pipelineStatusEnum = pgEnum('pipeline_status', [
-  'planning', 'running', 'paused', 'awaiting_approval', 'completed', 'failed',
+  'planning', 'running', 'paused', 'stopped', 'awaiting_approval', 'completed', 'failed',
 ]);
 
 export const stageStatusEnum = pgEnum('stage_status', [

@@ -9,10 +9,10 @@ import { createMonitorSchema, matches } from './types';
 import type { getDb } from '@/db/postgres';
 import type { AgentContext } from '@/core/types';
 
-const mocks = vi.hoisted(() => ({ session: vi.fn(), probe: vi.fn(), pipeline: vi.fn(), resumed: vi.fn(), published: vi.fn(), outcome: 'success' as 'success' | 'failed' | 'cancelled' }));
+const mocks = vi.hoisted(() => ({ canSteer: vi.fn(), steer: vi.fn(), session: vi.fn(), probe: vi.fn(), pipeline: vi.fn(), resumed: vi.fn(), published: vi.fn(), outcome: 'success' as 'success' | 'failed' | 'cancelled' }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: { findById: mocks.session } }));
 vi.mock('@/security/orgs', () => ({ getOrgWorkspaceManager: () => ({ ensureDefaultWorkspace: async () => ({ id: '44444444-4444-4444-8444-444444444444' }), findOwnedById: async () => null }) }));
-vi.mock('@/db/repositories/pipeline-repository', () => ({ pipelineRepository: { findById: mocks.pipeline, getNodes: async () => [], getPlanItems: async () => [], getCheckpoints: async () => [] } }));
+vi.mock('@/db/repositories/pipeline-repository', () => ({ pipelineRepository: { getStageHistory: async () => [], findById: mocks.pipeline, getNodes: async () => [], getPlanItems: async () => [], getCheckpoints: async () => [] } }));
 vi.mock('./probes', async importOriginal => {
   const actual = await importOriginal<typeof import('./probes')>();
   return {
@@ -20,8 +20,8 @@ vi.mock('./probes', async importOriginal => {
     probe: (source: Parameters<typeof actual.probe>[0], context: AgentContext) => source.kind === 'tool' && source.name === 'get_pipeline_status' ? actual.probe(source, context) : mocks.probe(source, context),
   };
 });
-vi.mock('@/core/agent/service', () => ({ getAgentService: () => ({ publishResponse: mocks.published, handleMessage: async (sessionId: string, _user: string, message: string, _channel: string, _files: unknown, _mode: unknown, before: () => Promise<void>) => withSessionTurn(sessionId, async () => {
-  await before(); mocks.resumed(message); return { agentId: 'agent', response: mocks.outcome === 'success' ? 'Done' : 'Continuation failed or was stopped', outcome: mocks.outcome };
+vi.mock('@/core/agent/service', () => ({ getAgentService: () => ({ canSteer: mocks.canSteer, steer: mocks.steer, publishResponse: mocks.published, handleMessage: async (sessionId: string, _user: string, message: string, _channel: string, _files: unknown, _mode: unknown, before: () => Promise<void | string>) => withSessionTurn(sessionId, async () => {
+  const refreshed = await before(); mocks.resumed(refreshed ?? message); return { agentId: 'agent', response: mocks.outcome === 'success' ? 'Done' : 'Continuation failed or was stopped', outcome: mocks.outcome };
 }) }) }));
 
 const userId = '11111111-1111-4111-8111-111111111111';
@@ -48,11 +48,32 @@ afterAll(async () => { await pg.close(); });
 beforeEach(async () => {
   await pg.exec('TRUNCATE monitors');
   mocks.session.mockReset().mockResolvedValue({ id: sessionId, userId, status: 'active', context: {}, workspaceId: null });
+  mocks.canSteer.mockReset().mockReturnValue(false);
+  mocks.steer.mockReset().mockReturnValue(false);
   mocks.probe.mockReset().mockResolvedValue({ text: 'Running' });
   mocks.resumed.mockReset(); mocks.published.mockReset(); mocks.outcome = 'success';
 });
 
 describe('persistent monitor lifecycle', () => {
+  test('delivers into the busy root immediately, with current state beside the old match', async () => {
+    const row = await service.create(config, context);
+    await repo.ready(row.id, { ...observed, observedAt: new Date(Date.now() - 26 * 60_000).toISOString(), value: 'Awaiting approval' });
+    mocks.canSteer.mockReturnValue(true);
+    mocks.steer.mockReturnValue(true);
+    mocks.probe.mockResolvedValue({ text: 'Running next item' });
+    let release!: () => void;
+    const busy = withSessionTurn(sessionId, () => new Promise<void>(resolve => { release = resolve; }));
+    await Promise.resolve();
+    try {
+      await service.deliver(await repo.get(row.id));
+      expect(mocks.steer).toHaveBeenCalledOnce();
+      const message = mocks.steer.mock.calls[0][1].content;
+      expect(message).toContain('Awaiting approval');
+      expect(message).toContain('Running next item');
+      expect((await repo.get(row.id)).status).toBe('completed');
+      expect(mocks.resumed).not.toHaveBeenCalled();
+    } finally { release(); await busy; }
+  });
   test('arms a pipeline status probe and wakes when the running pipeline completes', async () => {
     const pipeline = { id: 'pipeline', userId, sessionId, workspaceId: '44444444-4444-4444-8444-444444444444', status: 'running' };
     mocks.pipeline.mockResolvedValue(pipeline);

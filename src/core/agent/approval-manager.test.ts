@@ -105,7 +105,7 @@ describe('ApprovalManager persistence', () => {
     const { id, answer } = await ask(manager, ctx(aliceId));
 
     expect(await manager.resolveApproval(id, true, 'Yes', { forUserId: aliceId, resolvedBy: aliceId })).toBe(true);
-    expect(await answer).toMatchObject({ approved: true, response: 'Yes', requestId: id });
+    expect(await answer).toMatchObject({ approved: true, response: 'Yes', requestId: id, decidedBy: aliceId, decidedAt: expect.any(String) });
     expect(await row(id)).toMatchObject({ status: 'approved', response: 'Yes', resolved_by: aliceId });
     expect(manager.getPendingApprovals()).toEqual([]);
   });
@@ -120,7 +120,7 @@ describe('ApprovalManager persistence', () => {
     ]);
     expect([first, second]).toEqual([true, false]);
     expect(await manager.resolveApproval(id, true, undefined, asAlice)).toBe(false);
-    expect(await answer).toMatchObject({ approved: false });
+    expect(await answer).toMatchObject({ approved: false, response: 'No', decidedBy: aliceId, decidedAt: expect.any(String) });
     expect((await row(id))?.status).toBe('denied');
   });
 

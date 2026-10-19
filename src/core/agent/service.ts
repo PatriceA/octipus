@@ -225,7 +225,7 @@ export class AgentService {
     attachedFiles: AttachedFileRef[] = [],
     forcedOutputMode?: 'inline' | 'file',
     /** Durable background wake-ups claim delivery only after prior turns finish. */
-    beforeStart?: () => Promise<void>,
+    beforeStart?: () => Promise<void | string>,
     /**
      * A turn from a group channel: who asked, and the thread transcript. The
      * message itself stays as typed (commands, plan "go" and approval replies
@@ -270,7 +270,8 @@ export class AgentService {
       }
     }
     return withSessionTurn(sessionId, async () => {
-      await beforeStart?.();
+      const refreshedMessage = await beforeStart?.();
+      if (typeof refreshedMessage === 'string') message = refreshedMessage;
       const runId = generateRunId();
       // The whole turn runs inside one usage context; the turn binds its
       // workspace and funding once it has resolved them, so every model call
@@ -1446,6 +1447,11 @@ export class AgentService {
   }
 
   // ── Steering ────────────────────────────────────────────────────
+
+  canSteer(sessionId: string): boolean {
+    return getAgentManager().getBySession(sessionId).some(agent => agent.getStatus() === 'running'
+      && agent.getContext().root === true && !agent.getContext().metadata?.room && 'steer' in agent);
+  }
 
   /**
    * Inject a steering message into the active agent for a session.

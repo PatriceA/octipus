@@ -949,7 +949,7 @@ export class ScopedPipelineRepo {
       .from(pipelines)
       .where(and(
         ...this.scope.own(pipelines),
-        inArray(pipelines.status, ['paused', 'awaiting_approval', 'completed', 'failed']),
+        inArray(pipelines.status, ['paused', 'stopped', 'awaiting_approval', 'completed', 'failed']),
         gte(pipelines.updatedAt, since),
       ))
       .orderBy(desc(pipelines.updatedAt))

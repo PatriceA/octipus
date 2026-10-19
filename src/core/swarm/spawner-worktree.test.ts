@@ -18,6 +18,9 @@ vi.mock('@/models/install-access', async (importOriginal) => ({
   assertInstallModelAccess: async () => {},
 }));
 import { getConfig, refreshConfigKey, resetConfig } from '@/config';
+import { LocalShellOperations } from '@/tools/shell/local-operations';
+import * as sandbox from '@/security/shell-sandbox';
+import type { Scorer } from './scorers';
 
 let projectPath = '';
 let backupModelId: string | null = null;
@@ -73,9 +76,11 @@ async function runReal(
   childModel: string,
   parentMetadata: Record<string, unknown>,
   childDepth: 1 | 2 = 2,
+  scorers: Scorer[] = [],
 ): Promise<ChildResult> {
   const spawner = new SwarmSpawner({} as never);
   return (spawner as unknown as { runChildWithRetry: (o: unknown) => Promise<ChildResult> }).runChildWithRetry({
+    scorers,
     parent: { id: 'agent-1', rootSessionId: 's1', signal: new AbortController().signal },
     parentContext: { userId: 'u1', sessionId: 's1', metadata: parentMetadata },
     childDepth,
@@ -386,6 +391,21 @@ describe.skipIf(inIntegration)('SwarmSpawner — worktree isolation', () => {
     beforeEach(() => {
       captured.metadata.length = 0;
       refreshConfigKey('swarm.worktreeIsolation', true);
+    });
+
+    it('rejects an invisible scorer repo before spawning any worker or retry', async () => {
+      const sandboxMode = vi.spyOn(sandbox, 'getSandboxMode').mockReturnValue('required');
+      const exec = vi.spyOn(LocalShellOperations.prototype, 'exec').mockResolvedValue({
+        exitCode: 1, stdout: '', stderr: '', killed: false, timedOut: false, aborted: false, signal: null,
+      });
+      try {
+        const result = await runReal('native-model', {}, 2, [
+          { kind: 'command_exit_zero', command: 'pnpm -C "/hidden/Github Rep/moco" test' },
+        ]);
+        expect(result.notes ?? result.output).toContain('Scorer environment');
+        expect(captured.metadata).toHaveLength(0);
+        expect(exec).toHaveBeenCalledTimes(1);
+      } finally { exec.mockRestore(); sandboxMode.mockRestore(); }
     });
 
     it('a CLI grandchild inherits the worktree as its cwd and gets no worktree of its own', async () => {

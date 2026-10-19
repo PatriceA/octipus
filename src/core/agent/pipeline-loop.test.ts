@@ -456,7 +456,7 @@ describe('a pipeline outlives the root turn that started it', () => {
       return run('stopped with its root').then(r => r.pipelineId, () => undefined);
     });
     const { rows } = await queryRaw(`SELECT status FROM pipelines ORDER BY created_at DESC LIMIT 1`);
-    expect(rows[0]?.status).not.toBe('completed');
+    expect(rows[0]?.status).toBe('stopped');
     if (outcome) expect(calls.filter(c => c.stageName === 'QA')).toHaveLength(0);
   });
 });
@@ -466,11 +466,68 @@ test('stopping an active stage retains its checkpoint and never advances to anot
   replies = { QA: [QA_PASS] };
   const { pipelineId } = await run('stop during QA');
   const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
-  expect((await pipelineRepository.findById(pipelineId))?.status).toBe('paused');
+  expect((await pipelineRepository.findById(pipelineId))?.status).toBe('stopped');
   expect((await pipelineRepository.getNodes(pipelineId)).find(node => node.name === 'QA')?.status).toBe('pending');
   expect(await planItemStatuses(pipelineId)).toEqual(['running', 'pending']);
   const checkpoint = (await pipelineRepository.getCheckpoints(pipelineId, 1))[0];
   expect(checkpoint.state.previousOutput).toContain('Implement');
+});
+
+test('queued plan edits apply atomically at the next item boundary', async () => {
+  replies = { QA: [QA_PASS] };
+  let queued = false;
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  onSpawn = async (stage, pipelineId) => {
+    if (stage !== 'Implement' || queued) return;
+    queued = true;
+    const items = await pipelineRepository.getPlanItems(pipelineId);
+    await pipelineRepository.queueItemEdit(pipelineId, { skip: [items[1].id], add: [{ title: 'Replacement item' }], evidence: 'User changed the remaining scope' });
+    expect((await pipelineRepository.getPlanItems(pipelineId))[1].status).toBe('pending');
+    // A concurrent stage transition must not overwrite the queued root edits.
+    await pipelineRepository.updatePipeline(pipelineId, { metadata: {} });
+    expect((await pipelineRepository.findById(pipelineId))?.metadata?.pendingItemEdits).toBeTruthy();
+  };
+  const { pipelineId } = await run('edit at boundary');
+  const items = await pipelineRepository.getPlanItems(pipelineId);
+  expect(items.map(item => item.status)).toEqual(['done', 'skipped', 'done']);
+  expect(items[2].title).toBe('Replacement item');
+});
+
+test('stage history retains separate results for both items and the reason for a retry', async () => {
+  replies = { QA: [QA_PASS] };
+  commandCounts = [0, 1, 1];
+  const { pipelineId } = await run('history across items');
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  const items = await pipelineRepository.getPlanItems(pipelineId);
+  await vi.waitFor(async () => {
+    const history = await pipelineRepository.getStageHistory(pipelineId);
+    const starts = history.filter(event => event.event === 'spawn').map(event => event.payload as Record<string, unknown>);
+    expect(starts.some(event => String(event.startReason).startsWith('contract_retry:'))).toBe(true);
+    for (const item of items) {
+      const completed = history.filter(event => event.event === 'node_completed' && (event.payload as Record<string, unknown>).itemId === item.id);
+      expect(completed.length).toBeGreaterThanOrEqual(2);
+      expect(completed.every(event => (event.payload as Record<string, unknown>).attemptId && typeof (event.payload as Record<string, unknown>).output === 'string')).toBe(true);
+    }
+  });
+});
+
+test('resume watchdog fails stalled scheduling but allows a pending human review', async () => {
+  replies = { QA: [QA_PASS] };
+  const { pipelineId } = await run('watchdog fixture');
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  await pipelineRepository.updatePipeline(pipelineId, { status: 'awaiting_approval', metadata: { pendingApproval: { requestId: 'review' } } });
+  vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+  try {
+    manager['watchResume'](pipelineId);
+    vi.setSystemTime(Date.now() + 121_000);
+    await vi.advanceTimersByTimeAsync(5000);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect((await pipelineRepository.findById(pipelineId))?.status).toBe('awaiting_approval');
+    await pipelineRepository.updatePipeline(pipelineId, { status: 'planning', metadata: {} });
+    vi.setSystemTime(Date.now() + 121_000);
+    await vi.advanceTimersByTimeAsync(5000);
+    await vi.waitFor(async () => expect(await pipelineRepository.findById(pipelineId)).toMatchObject({ status: 'failed', summary: expect.stringContaining('Resume watchdog') }));
+  } finally { manager['clearResumeWatchdog'](pipelineId); vi.useRealTimers(); }
 });
 
 test('resume reuses completed stages and finishes the remaining plan items', async () => {

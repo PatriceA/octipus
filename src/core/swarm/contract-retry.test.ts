@@ -304,20 +304,20 @@ describe('SwarmSpawner — contract retry (through runChildWithRetry)', () => {
     expect(final.status).toBe('contract_failed');
   });
 
-  it('still retries when at least one failure is the child’s to fix', async () => {
+  it('does not retry a blocked environment even alongside a fixable failure', async () => {
     const mixed = result({
       status: 'contract_failed',
       scorerOutcome: {
         passed: false,
         ran: 2,
         failures: [
-          { scorer: 'command_exit_zero(x)', reason: 'no shell tool', retryable: false },
+          { scorer: 'command_exit_zero(x)', reason: 'Scorer environment: repository is not mounted', retryable: false },
           { scorer: 'file_exists', reason: 'notes.md does not exist' },
         ],
       },
     });
     const { calls } = await runWith([mixed, result()]);
-    expect(calls).toBe(2);
+    expect(calls).toBe(1);
   });
 
   it('does not re-dispatch onto a cancelled run', async () => {

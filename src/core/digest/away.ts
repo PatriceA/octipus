@@ -65,7 +65,7 @@ async function defaultPendingApprovals(userId: string): Promise<ApprovalBrief[]>
     .map((a) => ({ id: a.id, sessionId: a.sessionId, summary: a.summary, question: a.question }));
 }
 
-const WAITING_STATUSES = new Set(['paused', 'awaiting_approval']);
+const WAITING_STATUSES = new Set(['paused', 'stopped', 'awaiting_approval']);
 
 export async function collectAwayDigest(
   principal: Principal,

@@ -84,6 +84,7 @@ import {
   deriveSchemaScorer,
   deriveToolOutageScorer,
   renderContractFeedback,
+  scorerEnvironmentError,
   runScorers,
   type Scorer,
   type ScorerContext,
@@ -1370,8 +1371,9 @@ export class SwarmSpawner {
       // A failure the child has no power over — no shell tool, a denied
       // permission, a denylisted command, a missing workspace — is not
       // something a second run changes. Re-dispatching on one buys an
-      // identical failure at the price of a full child run.
-      if (failures.length > 0 && failures.every((f) => f.retryable === false)) {
+      // identical failure at the price of a full child run. All gates must pass,
+      // so one unfixable gate blocks retries even alongside fixable failures.
+      if (failures.some((f) => f.retryable === false)) {
         coreLogger.info(
           { parentNodeId: opts.parent.id, failures: failures.map((f) => f.scorer) },
           'Swarm child contract failure is not retryable — surfacing it as-is',
@@ -1541,6 +1543,11 @@ export class SwarmSpawner {
     // relative paths using projectPath even when invoked by a CLI worker.
     // Only the persisted dev-mode session may grant access to a shared project.
     const projectPath = attemptWorktree ?? await devProjectPathForSession(opts.parent.rootSessionId);
+    const scorerEnvironment = opts.scorers?.length ? await scorerEnvironmentError(
+      opts.scorers ?? [], projectPath ?? WorkspaceFS.forAgent(opts.parentContext).root,
+      { beforeSpawn: true, signal: opts.parent.signal },
+    ) : null;
+    if (scorerEnvironment) return this.denialResult(opts.parent, `spawn_child refused: ${scorerEnvironment}`);
     const treeMetadata = attemptWorktree
       ? inheritedTreeMetadata(attemptWorktree)
       : projectPath ? { projectPath } : {};
@@ -1983,9 +1990,7 @@ export class SwarmSpawner {
           signal: opts.parent.signal,
           // The child's worktree when it has one: evidence gates must check the
           // tree the child changed, which is not the shared project until merged.
-          projectPath:
-            attemptWorktree ??
-            (await sharedTreeRoot(opts.parentContext).then((t) => (t.devProject ? t.root : undefined))),
+          projectPath,
         }),
       );
       result.scorerOutcome = outcome;

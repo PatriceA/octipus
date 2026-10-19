@@ -30,13 +30,41 @@ omitting it resumes the latest checkpoint. Earlier completed outputs are reused;
 the interrupted stage runs again. The coordinator collects pipeline results and
 writes its own final response.
 
+`resume_pipeline` acknowledges accepted scheduling with `status: "resuming"`
+before waiting for replay consent. The durable status then exposes that consent
+as `awaiting_approval` with `pendingApproval` details. A scheduling watchdog fails
+a resume if no stage starts within two minutes, excluding time spent awaiting
+an explicit approval. Status reads are read-only and time out after 15 seconds
+if storage cannot answer; they do not acquire the runner's execution lock.
+
+`stop_pipeline({id})` stops the run in its current session and saves the attempt
+as resumable `stopped`, distinct from `failed`. `update_pipeline_items({id,
+skip: [itemId], add: [{title, detail, acceptance}], order: [itemId], evidence})`
+queues changes atomically for the next item boundary. The owner can use these
+tools from a later root turn in the same session/workspace. Stop before skipping
+the active item; edits to stopped or paused runs apply before resume. Completed
+items keep their results. New items are appended; `order` lists existing items
+first, followed by unlisted items.
+
+Stage events include item id/title, attempt id/number, and the start reason.
+`get_pipeline_status` exposes the durable event history in `history` and each
+item's `stages`, including results, retry reasons, and approval decisions. Old
+events lacking item/attempt identity remain unassigned; their provenance is
+not guessed. Running summaries are derived from the current stage and item.
+Use `includeHistory: false` for frequent status polling; monitor probes do this
+automatically rather than fetching every previous report on each check.
+
 For a background continuation, `monitor__create` accepts a tool source with
 `name: "get_pipeline_status"`, `args: {id: "<pipeline handle>"}`, and
-`condition: {path: "status", operator: "in", value: ["completed", "failed", "paused", "awaiting_approval"]}`.
+`condition: {path: "status", operator: "in", value: ["completed", "failed", "paused", "stopped", "awaiting_approval"]}`.
 Save a continuation that inspects the result, then end the turn. The monitor reads
 the same session- and workspace-scoped status without waiting for the pipeline
 to finish. `collect_children` waits for completion and is not a monitor probe;
 `resume_pipeline` is a mutation and cannot be used as a probe either.
+When the session root is busy collecting results, the monitor delivers steering
+to that root instead of queuing behind its turn. Delivery includes a fresh
+observation beside the original match (or a specific refresh error), so an old
+approval match cannot be mistaken for the current state.
 
 Each plan item traverses the configured body stages. Stage execution-contract
 failures retry with the failure reason, up to `maxRetries` (additional attempts).
@@ -80,7 +108,11 @@ attempt runs, its text so far is saved to its checkpoint every 15 seconds and
 when it fails. A resumed attempt gets that text back, marked INCOMPLETE, and
 `get_pipeline_status` shows it under `incompleteAttempt`. It is never reported
 as the stage's output, and it is cleared when the attempt finishes. A denial or
-a stop pauses the run at that stage; `resume_pipeline` runs the stage again.
+a stop leaves it `stopped` at that stage; `resume_pipeline` runs the stage again.
+`answer_pipeline_approval` waits up to five minutes for an explicit user answer.
+A timeout or unavailable answer returns `decided: false` and leaves the pipeline
+approval pending; it does not manufacture a denial. Decisions include the
+command, request id, deciding user and timestamp.
 
 A plan approval or a stage approval also lists the pipeline's gate commands,
 which are the stages' `verifyCommand` values resolved from the run's parameters.
@@ -272,6 +304,16 @@ Check whether those actions already took effect before allowing further changes.
 The `litellm.maxRetries` setting instead controls automatic LiteLLM request
 retries; `swarm.contractRetries` limits retries after a child fails its scorer
 gate. Approving recovery changes neither limit.
+
+Command scorers use the child's captured project/worktree and the shell sandbox.
+Select the repository as the session project, then prefer `pnpm test` over an
+absolute `pnpm -C /host/repo test`: a host path may not be mounted, and an
+isolated child may be working in a different worktree. Explicit directory
+switches for pnpm, npm, yarn, git and make are checked before dispatch when they
+point outside the child's tree, and again before verification. An unavailable
+directory is an environment failure, not a request to rewrite working code.
+A required non-retryable gate stops contract retries even when another gate has
+a fixable failure. A viable `any_of` alternative still allows verification.
 
 The [flow guard](FLOW-GUARD.md) runs on top of these rules. If a session has
 read credentials, or has mixed private data with untrusted content, it turns an

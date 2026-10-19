@@ -1,8 +1,10 @@
 import { sessions } from '../schema/sessions';
 import { emptyWorkPlan, workPlanStateSchema } from '@/shared/work-plan';
 import { projectPipelinePlan } from './pipeline-work-plan';
-import { and, asc, desc, eq, gt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, sql } from 'drizzle-orm';
 import { getDb } from '../postgres';
+import { runEvents } from '../schema/run-events';
+import type { PipelineItemEdit } from '@/shared/pipeline-items';
 import {
   type NewPipelineCheckpoint,
   type PipelineCheckpointRow,
@@ -44,7 +46,13 @@ export class PipelineRepository {
   /** Keep the visible plan in step with failures and resumed execution too. */
   async updatePipeline(id: string, data: Partial<NewPipeline>): Promise<void> {
     await this.db.transaction(async tx => {
-      await tx.update(pipelines).set({ ...data, updatedAt: new Date() }).where(eq(pipelines.id, id));
+      await tx.update(pipelines).set({ ...data,
+        // A stage may have read metadata before a root queued plan edits.
+        // Only applyItemEdits consumes that queue, under the same row lock.
+        ...(data.metadata ? { metadata: sql`(${JSON.stringify(data.metadata)}::jsonb - 'pendingItemEdits') ||
+          CASE WHEN ${pipelines.metadata} ? 'pendingItemEdits'
+          THEN jsonb_build_object('pendingItemEdits', ${pipelines.metadata}->'pendingItemEdits') ELSE '{}'::jsonb END` } : {}),
+        updatedAt: new Date() }).where(eq(pipelines.id, id));
       await this.syncWorkPlan(tx, id);
     });
   }
@@ -75,6 +83,54 @@ export class PipelineRepository {
       .from(pipelineNodes)
       .where(eq(pipelineNodes.pipelineId, pipelineId))
       .orderBy(asc(pipelineNodes.ordinal));
+  }
+
+  async getStageHistory(pipelineId: string, sessionId?: string) {
+    return this.db.select().from(runEvents).where(and(eq(runEvents.subject, 'pipeline_node'),
+      sessionId ? eq(runEvents.runId, sessionId) : undefined,
+      sql`${runEvents.payload}->>'pipelineId' = ${pipelineId}`)).orderBy(asc(runEvents.seq));
+  }
+
+  /** Queue session-owned edits; the walker applies the whole batch at an item boundary. */
+  async queueItemEdit(pipelineId: string, edit: PipelineItemEdit): Promise<void> {
+    await this.db.transaction(async tx => {
+      // i2: caller authorizes the pipeline's owner/session/workspace before queueing edits
+      const [pipeline] = await tx.select().from(pipelines).where(eq(pipelines.id, pipelineId)).for('update');
+      if (!pipeline || ['completed', 'failed'].includes(pipeline.status)) throw new Error('Pipeline is not active; resume it before editing items');
+      const items = await tx.select().from(planItems).where(eq(planItems.pipelineId, pipelineId));
+      for (const id of [...edit.skip, ...(edit.order ?? [])]) {
+        if (!items.some(item => item.id === id)) throw new Error(`Unknown pipeline item: ${id}`);
+      }
+      if (new Set(edit.order).size !== (edit.order?.length ?? 0)) throw new Error('order contains duplicate item ids');
+      if (!['paused', 'stopped'].includes(pipeline.status) && edit.skip.some(id => items.some(item => item.id === id && item.status === 'running'))) throw new Error('Cannot skip the active item; stop the pipeline first');
+      const edits = (pipeline.metadata?.pendingItemEdits ?? []) as PipelineItemEdit[];
+      if (edits.length >= 20) throw new Error('Too many pending item edits; wait for the next item boundary');
+      await tx.update(pipelines).set({ metadata: { ...pipeline.metadata, pendingItemEdits: [...edits, edit] }, updatedAt: new Date() }).where(eq(pipelines.id, pipelineId));
+    });
+  }
+
+  async applyItemEdits(pipelineId: string): Promise<void> {
+    await this.db.transaction(async tx => {
+      // i2: the authorized pipeline walker consumes its own queued plan edits
+      const [pipeline] = await tx.select().from(pipelines).where(eq(pipelines.id, pipelineId)).for('update');
+      const edits = (pipeline?.metadata?.pendingItemEdits ?? []) as PipelineItemEdit[];
+      if (!edits.length) return;
+      const items = await tx.select().from(planItems).where(eq(planItems.pipelineId, pipelineId)).orderBy(asc(planItems.ordinal));
+      let ordinal = items.reduce((max, item) => Math.max(max, item.ordinal), -1) + 1;
+      for (const edit of edits) {
+        for (const id of edit.skip) await tx.update(planItems).set({ status: 'skipped', result: edit.evidence, updatedAt: new Date() })
+          .where(and(eq(planItems.pipelineId, pipelineId), eq(planItems.id, id),
+            inArray(planItems.status, ['paused', 'stopped'].includes(pipeline.status) ? ['pending', 'running', 'failed'] : ['pending'])));
+        for (const item of edit.add) await tx.insert(planItems).values({ ...item, pipelineId, ordinal: ordinal++, detail: item.detail ?? edit.evidence });
+        if (edit.order) {
+          const order = [...edit.order, ...items.map(item => item.id).filter(id => !edit.order!.includes(id))];
+          for (const [index, id] of order.entries()) await tx.update(planItems).set({ ordinal: index }).where(and(eq(planItems.pipelineId, pipelineId), eq(planItems.id, id)));
+        }
+      }
+      const { pendingItemEdits: _applied, ...metadata } = pipeline.metadata ?? {};
+      await tx.update(pipelines).set({ metadata, updatedAt: new Date() }).where(eq(pipelines.id, pipelineId));
+      await this.syncWorkPlan(tx, pipelineId);
+    });
   }
 
   async getEdges(pipelineId: string): Promise<PipelineEdgeRow[]> {

@@ -14,7 +14,7 @@ export function projectPipelinePlan(state: WorkPlanState, pipeline: Pipeline, it
   if (!items.length) return state.current
     ? { revision: state.revision + 1, current: null, previous: [...state.previous, state.current].slice(-20) }
     : state;
-  const status = (item: PlanItemRow) => item.status === 'running' ? (['failed', 'paused'].includes(pipeline.status) ? 'blocked' : 'working') : item.status === 'failed' ? 'blocked' : item.status;
+  const status = (item: PlanItemRow) => item.status === 'running' ? (['failed', 'paused', 'stopped'].includes(pipeline.status) ? 'blocked' : 'working') : item.status === 'failed' ? 'blocked' : item.status;
   // A linked or already-owned plan is updated in place: its id, title, goal and
   // step ids stay what the coordinator published (#14). Only a plan the
   // pipeline starts itself is named after the pipeline.
@@ -26,7 +26,7 @@ export function projectPipelinePlan(state: WorkPlanState, pipeline: Pipeline, it
     return id;
   };
   const steps = items.slice(0, items.length > 20 ? 19 : 20).map(item => ({
-    id: stepId(item), title: item.title.slice(0, 240), status: status(item), evidence: (['failed', 'paused'].includes(pipeline.status) && item.status === 'running' ? pipeline.summary || 'Pipeline failed before this item finished.' : item.result ?? '').slice(0, 2000),
+    id: stepId(item), title: item.title.slice(0, 240), status: status(item), evidence: (['failed', 'paused', 'stopped'].includes(pipeline.status) && item.status === 'running' ? pipeline.summary || 'Pipeline failed before this item finished.' : item.result ?? '').slice(0, 2000),
   }));
   if (items.length > 20) {
     const rest = items.slice(19);

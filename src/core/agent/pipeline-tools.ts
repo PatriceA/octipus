@@ -1,3 +1,4 @@
+import { pipelineItemEditSchema } from '@/shared/pipeline-items';
 import type { ToolHandler } from '@/core/agent-worker';
 import type { AgentContext } from '@/core/types';
 import { pipelineRepository } from '@/db/repositories/pipeline-repository';
@@ -7,6 +8,8 @@ import { getPermissionManager } from '@/security/permissions';
 import { coreLogger } from '@/utils/logger';
 import { stripPipelineControlBlocks } from './handoff';
 import type { PendingStageApproval, WalkState } from './pipeline-manager';
+import { pipelineSummary, pipelineStageHistory, pipelineStageRuns } from './pipeline-status';
+import { replyAnswer } from './approval-manager';
 
 const pendingOf = (pipeline: Pipeline) =>
   (pipeline.metadata as { pendingApproval?: PendingStageApproval } | null)?.pendingApproval;
@@ -23,8 +26,12 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
     const { getPipelineManager } = await import('./pipeline-manager');
     return new Promise((resolve, reject) => {
       const completion = getPipelineManager().resume(pipeline.id, { fromSeq: checkpoint.seq, freshAttempt: opts.freshAttempt,
-        onResumed: () => {
+        onAccepted: () => {
           trackPipeline?.(pipeline.id, completion);
+          resolve({ id: pipeline.id, status: 'resuming', fromStage: checkpoint.nodeKey,
+            message: 'Resume scheduled. Check get_pipeline_status for replay approval or stage progress.' });
+        },
+        onResumed: () => {
           resolve({ id: pipeline.id, status: 'running', fromStage: checkpoint.nodeKey });
         },
       });
@@ -35,16 +42,26 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
     });
   };
 
-  return ['get_pipeline_status', 'resume_pipeline', 'answer_pipeline_approval'].map(name => ({
+  return ['get_pipeline_status', 'resume_pipeline', 'answer_pipeline_approval', 'update_pipeline_items', 'stop_pipeline'].map(name => ({
     name,
     discoverOnly: true,
-    description: name === 'get_pipeline_status'
+    ...(name === 'get_pipeline_status' ? { permissionAction: 'read', replaySafety: 'read_only' as const } : {}),
+    description: name === 'stop_pipeline' ? 'Stop a pipeline in this session, preserving its checkpoint for resume. Returns the resumable stopped state, never a failure.'
+      : name === 'update_pipeline_items' ? 'Change a running pipeline plan in this session. Queue skips, additions and ordering for its next item boundary. Requires evidence or the user decision explaining the change. Active items must be stopped before skipping.'
+      : name === 'get_pipeline_status'
       ? 'Read a pipeline handle: stage status, completed outputs, remaining items, failure reason, and the pending approval when awaiting_approval. Synthesize the result for the user.'
       : name === 'resume_pipeline'
         ? 'Resume a stopped or failed pipeline using its saved outputs. Optionally rewind to fromStage (node key or exact stage name), and mark plan items already delivered by earlier work as skipped with evidence. Returns immediately; use get_pipeline_status to monitor.'
         : 'Ask the user, in this conversation, to answer the approval a pipeline stage is waiting on (see pendingApproval in get_pipeline_status). The user decides; the stage then continues or the run pauses.',
     parameters: { type: 'object', properties: {
       id: { type: 'string', description: 'Pipeline handle returned by create_pipeline' },
+      ...(name === 'get_pipeline_status' ? { includeHistory: { type: 'boolean', description: 'Include per-item attempt history (default true). Use false for frequent polling.' } } : {}),
+      ...(name === 'update_pipeline_items' ? {
+        skip: { type: 'array', items: { type: 'string' } },
+        add: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, detail: { type: 'string' }, acceptance: { type: 'array', items: { type: 'string' } } }, required: ['title'] } },
+        order: { type: 'array', items: { type: 'string' } },
+        evidence: { type: 'string', description: 'Why the plan is changing: user decision or verification evidence' },
+      } : {}),
       ...(name === 'resume_pipeline' ? {
         fromStage: { type: 'string', description: 'Optional stage name or node key; defaults to the last checkpoint' },
         skipItems: { type: 'array', items: { type: 'string' }, description: 'Plan item ids already delivered by earlier work; marked skipped so the loop does not redo them' },
@@ -56,14 +73,30 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
       const pipeline = await pipelineRepository.findById(args.id);
       if (!pipeline || pipeline.userId !== context.userId || pipeline.sessionId !== context.sessionId
         || (pipeline.workspaceId ?? null) !== (context.workspaceId ?? null)) throw new Error('Pipeline not found in this session');
+      if (name === 'stop_pipeline') {
+        const { getPipelineManager } = await import('./pipeline-manager');
+        const stopped = await getPipelineManager().stop(pipeline.id);
+        return { id: pipeline.id, stopped, status: stopped ? 'stopped' : pipeline.status, resumable: stopped };
+      }
+      if (name === 'update_pipeline_items') {
+        const edit = pipelineItemEditSchema.parse(args);
+        await pipelineRepository.queueItemEdit(pipeline.id, edit);
+        if (['paused', 'stopped'].includes(pipeline.status)) {
+          await pipelineRepository.applyItemEdits(pipeline.id);
+          return { id: pipeline.id, applied: true, appliesAt: 'before_resume', ...edit };
+        }
+        return { id: pipeline.id, queued: true, appliesAt: 'next_item_boundary', ...edit };
+      }
       const nodes = await pipelineRepository.getNodes(pipeline.id);
       if (name === 'get_pipeline_status') {
         const items = await pipelineRepository.getPlanItems(pipeline.id);
-        const pending = pendingOf(pipeline);
+        const pending = ['awaiting_approval', 'paused', 'stopped'].includes(pipeline.status) ? pendingOf(pipeline) : undefined;
         // An interrupted attempt's progress, from the newest checkpoint: never a stage result.
         const [newest] = await pipelineRepository.getCheckpoints(pipeline.id, 1);
         const partial = (newest?.state as unknown as WalkState | undefined)?.partial;
-        return { id: pipeline.id, status: pipeline.status, summary: stripPipelineControlBlocks(pipeline.summary ?? ''),
+        const history = args.includeHistory === false ? [] : pipelineStageHistory(await pipelineRepository.getStageHistory(pipeline.id, pipeline.sessionId));
+        return { id: pipeline.id, status: pipeline.status, summary: pipelineSummary(pipeline, nodes, items), history, historyIncluded: args.includeHistory !== false,
+          pendingItemEdits: pipeline.metadata?.pendingItemEdits ?? [],
           ...(pending ? { pendingApproval: { ...pending, answer: 'The user answers it in the approval prompt, or call answer_pipeline_approval to ask them here.' } } : {}),
           ...(partial ? { incompleteAttempt: { incomplete: true, stage: newest.nodeKey,
             attemptId: partial.attemptId, itemId: partial.itemId, savedAt: partial.at,
@@ -73,7 +106,7 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
           stages: nodes.map(node => ({ key: node.nodeKey, name: node.name, status: node.status, attempt: node.visits,
             output: stripPipelineControlBlocks(node.output ?? ''), error: node.error })),
           currentItemId: items.find(item => item.status === 'running')?.id ?? null,
-          items: items.map(item => ({ id: item.id, title: item.title, status: item.status, result: stripPipelineControlBlocks(item.result ?? '') })),
+          items: items.map(item => ({ id: item.id, title: item.title, status: item.status, stages: pipelineStageRuns(history, item.id), result: stripPipelineControlBlocks(item.result ?? '') })),
           remainingItems: items.filter(item => !['done', 'skipped'].includes(item.status)).map(item => item.title) };
       }
       if (name === 'answer_pipeline_approval') {
@@ -84,16 +117,24 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
         const answer = await getAgentService().requestApproval(
           `Pipeline stage "${pending.stage}"${pending.item ? ` (item: ${pending.item})` : ''} is waiting for approval: ` +
             `${pending.toolName ?? 'continue'}${pending.subject ? ` — ${pending.subject}` : ''}.`,
-          'Allow this call and continue the stage?', context, ['Approve', 'Deny'],
-        ) as { approved: boolean; response?: string };
-        const approved = answer.approved && answer.response !== 'Deny';
+          'Allow this call and continue the stage? This prompt waits up to 5 minutes; no answer leaves the pipeline waiting.',
+          { ...context, metadata: { ...context.metadata, approvalTimeoutMs: 300_000 } }, ['Approve', 'Deny'],
+        ) as { approved: boolean; response?: string; reason?: string; requestId?: string; decidedBy?: string; decidedAt?: string };
+        const decision = answer.response ? replyAnswer(answer.response) : null;
+        if (!decision) {
+          return { id: pipeline.id, status: 'awaiting_approval', decided: false, stage: pending.stage, command: pending.subject,
+            reason: answer.reason ?? 'No explicit user decision was received; the pipeline approval is still pending.' };
+        }
+        const approved = answer.approved && decision === 'approve';
         const permissions = getPermissionManager();
-        if (approved) await permissions.approve(pending.requestId, context.userId, 'Approved in the conversation');
-        else await permissions.deny(pending.requestId, context.userId, 'Denied in the conversation');
+        const settled = approved ? await permissions.approve(pending.requestId, context.userId, 'Approved in the conversation')
+          : await permissions.deny(pending.requestId, context.userId, 'Denied in the conversation');
+        if (!settled) return { id: pipeline.id, decided: false, reason: 'The request was already resolved or expired. Read the current pipeline status.', requestId: pending.requestId };
         // A walker still parked on the request takes the answer from here. After a
         // restart the boot sweep paused the run and nobody waits on the request:
         // settling its row alone would leave the stage parked forever.
-        if (!approved || pipeline.status === 'awaiting_approval') return { id: pipeline.id, approved, stage: pending.stage };
+        if (!approved || pipeline.status === 'awaiting_approval') return { id: pipeline.id, approved, stage: pending.stage,
+          command: pending.subject, requestId: pending.requestId, decidedBy: answer.decidedBy ?? context.userId, decidedAt: answer.decidedAt ?? new Date().toISOString() };
         // No walker holds the request any more (a restart): grant the blocked
         // call to the blocked attempt, and resume that attempt.
         const { pendingApproval: _answered, ...metadata } = (pipeline.metadata ?? {}) as Record<string, unknown>;
@@ -125,5 +166,15 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
       }
       return resumeFrom(pipeline, node?.nodeKey, { freshAttempt: node !== undefined });
     },
-  }));
+  })).map(tool => tool.name !== 'get_pipeline_status' ? tool : {
+    ...tool,
+    execute: async (args: Record<string, unknown>, context: AgentContext) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([tool.execute(args, context), new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Pipeline status read timed out after 15 seconds; storage may be unavailable. No run lock was acquired.')), 15_000);
+        })]);
+      } finally { clearTimeout(timer); }
+    },
+  });
 }

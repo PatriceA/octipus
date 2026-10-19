@@ -275,9 +275,9 @@ export default function AgentDetailPage() {
                 Pause
               </button>
             )}
-            {/* Only a paused run resumes. A completed or failed one would
+            {/* Paused and explicitly stopped runs resume. A completed or failed one would
                 re-run its last node against a paid model on a stray click. */}
-            {pipelineData.pipeline.status === 'paused' && (
+            {['paused', 'stopped'].includes(pipelineData.pipeline.status) && (
               <button
                 onClick={() => handleResume(pipelineData.pipeline.id)}
                 className="flex items-center gap-2 px-3 py-1.5 rounded-full hover:bg-surface-variant/40 cursor-pointer"
