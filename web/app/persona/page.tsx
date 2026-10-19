@@ -8,6 +8,7 @@ import { api } from '@/lib/api';
 
 import type { ResolvedPersona } from '../../../src/core/personas/types';
 import { AppearanceEditor } from '@/components/companion/appearance-editor';
+import { PresenceSettings } from '@/components/companion/presence-settings';
 
 type PersonaState = Pick<ResolvedPersona, 'id' | 'presetId' | 'name' | 'pronouns' | 'tone' | 'narration' | 'signaturePhrases' | 'userFacts' | 'appearance'>;
 
@@ -203,6 +204,7 @@ export default function PersonaPage() {
       </section>
 
       <AppearanceEditor saved={persona.appearance} name={persona.name} onSaved={refresh} />
+      <PresenceSettings name={persona.name} />
 
       {/* ── Self-facts ──────────────────────────────────── */}
       <section className="rounded-xl term-frame p-5">
