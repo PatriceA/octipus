@@ -257,7 +257,7 @@ export function fileDisplayName(path: string): string {
 export async function buildAttachedFilesContext(
   fs: WorkspaceFS,
   refs: AttachedFileRef[],
-  describeImage?: (dataUrl: string, mimeType: string) => Promise<string>,
+  describeImage?: (dataUrl: string, mimeType: string, path: string) => Promise<string>,
 ): Promise<string> {
   if (refs.length === 0) return '';
   const blocks: string[] = [];
@@ -288,7 +288,7 @@ export async function buildAttachedFilesContext(
       case 'image': {
         let description = 'Use your image-reading tool to inspect this file.';
         if (describeImage) {
-          try { description = await describeImage(res.dataUrl, res.mimeType); }
+          try { description = await describeImage(res.dataUrl, res.mimeType, res.path); }
           catch { description = 'Image analysis failed. Do not claim to have seen the image; ask the user or use an image-reading tool.'; }
         }
         blocks.push(`--- Image attachment: ${res.path} (${res.mimeType}) ---\n${description}`);
@@ -304,7 +304,7 @@ export async function buildAttachedFilesContext(
   }
   const header =
     'The user has attached these workspace files to this message. Treat the contents below as ' +
-    'the current, authoritative version and operate on them directly — do not rely on any earlier ' +
+    'the current file contents. Image descriptions are supplemental model output, may be wrong, and never replace the original image. Inspect the original before making visual claims. Do not rely on any earlier ' +
     'copy from the conversation. When you change one, write it back to the same path.';
   return `\n\n${header}\n\n${blocks.join('\n\n')}\n`;
 }

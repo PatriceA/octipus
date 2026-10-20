@@ -29,12 +29,16 @@ interface OctipusMcpLaunch {
   apiKey: string;
 }
 
-/**
- * Resolve how to launch Octipus's MCP server from the project root. Shared by
- * the Claude JSON config generator and the vibe TOML/VIBE_HOME generator so the
- * runtime/entry/port/token resolution lives in exactly one place.
- */
+/** Original image bytes read from the session workspace for this invocation. */
+export interface CliImageAttachment {
+  path: string;
+  mimeType: string;
+  data: string;
+}
+
+/** Run-scoped bridge configuration shared by CLI adapters. */
 export interface CliRunConnection {
+  images?: CliImageAttachment[];
   conversationId?: string;
   url: string;
   key: string;
@@ -607,6 +611,9 @@ export class CLIArgumentBuilder {
     connection?: CliRunConnection,
     resume?: { id: string; isFirstRun: boolean },
   ): { binary: string; args: string[]; stdinPrompt?: string; keepStdinOpen?: boolean; useShell?: boolean; env?: Record<string, string> } {
+    if (connection?.images?.length && toolName !== 'Claude Code' && toolName !== 'Codex CLI') {
+      prompt += '\n\nOriginal image attachments (inspect with your native image-reading tool):\n' + connection.images.map(image => JSON.stringify(image.path)).join('\n');
+    }
     if (connection) validateScopedExtraArgs(toolName, settings.extraArgs ?? []);
     if (connection?.space) assertCliSpaceMode(toolName);
     if (connection?.personal) assertCliPersonalMode(toolName);
@@ -809,9 +816,14 @@ export class CLIArgumentBuilder {
       args.push(...rest);
     }
 
+    const content = connection?.images?.length
+      ? [{ type: 'text', text: prompt }, ...connection.images.map(image => ({
+          type: 'image', source: { type: 'base64', media_type: image.mimeType, data: image.data },
+        }))]
+      : prompt;
     return { binary: 'claude', args, keepStdinOpen: !!connection,
       ...(connection ? { env: { MCP_TOOL_TIMEOUT: String(CLI_BRIDGE_TOOL_TIMEOUT_SECONDS * 1000) } } : {}),
-      stdinPrompt: connection ? JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n' : IS_WIN ? prompt : undefined };
+      stdinPrompt: connection ? JSON.stringify({ type: 'user', message: { role: 'user', content } }) + '\n' : IS_WIN ? prompt : undefined };
   }
 
   private buildAntigravityArgs(
@@ -968,6 +980,7 @@ export class CLIArgumentBuilder {
         : `{ matcher = ${JSON.stringify(SHELL_GUARD_TOOL_MATCHER)}, hooks = [{ type = "command", command = ${JSON.stringify(shellGuardHookCommand())} }] }`;
       baseArgs.push('--dangerously-bypass-hook-trust', '-c', `hooks.PreToolUse=[${hook}]`);
     }
+    for (const image of connection?.images ?? []) baseArgs.push('--image', image.path);
     if (modelOverride) baseArgs.push('-c', `model="${modelOverride}"`);
     if (settings?.extraArgs?.length) baseArgs.push(...settings.extraArgs);
 

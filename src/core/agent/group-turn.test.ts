@@ -203,6 +203,12 @@ describe('group-channel turns', () => {
     expect(fx.root.mock.calls[0]![11]).toEqual({ takenTasks: [{ id: 'task-1', title: 'Draft the notes' }] });
   });
 
+  test('forwards original attachment references for model-aware root delivery', async () => {
+    const attachedFiles = [{ path: '.octipus/attachments/screen.png' }];
+    await new AgentService().handleMessage('dm-session', 'user', 'Inspect this screenshot', 'webchat', attachedFiles);
+    expect(fx.root.mock.calls[0]![11]).toMatchObject({ attachedFiles });
+  });
+
   test('a 1:1 session never looks for taken tasks', async () => {
     fx.taken = [{ id: 'task-1', title: 'x' }];
     await new AgentService().handleMessage('dm-session', 'user', 'hello there friend, summarise my week', 'slack');

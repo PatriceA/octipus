@@ -614,3 +614,25 @@ describe('native subagents disabled (delegation via spawn_child only)', () => {
   });
 });
 
+
+describe('original image delivery', () => {
+  const image = { path: '/workspace/path with spaces/screen.png', mimeType: 'image/png', data: 'iVBORw==' };
+  const connection = { url: 'http://localhost:3005', key: 'test', planMode: false, maxIterations: 10, codexMcpServers: [], images: [image] };
+  it.each([true, false])('Claude sends original bytes on firstRun=%s', isFirstRun => {
+    const out = builder.build('Claude Code', 'Look at this', {}, [], undefined, undefined, 'images', connection, { id: 'image-session', isFirstRun });
+    expect(out.args).toContain('--input-format');
+    expect(JSON.parse(out.stdinPrompt!).message.content).toEqual([
+      { type: 'text', text: 'Look at this' },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: image.data } },
+    ]);
+    expect(out.args.join(' ')).not.toContain(image.data);
+  });
+  it.each([true, false])('Codex passes the original path as one image argument on firstRun=%s', isFirstRun => {
+    const out = builder.build('Codex CLI', 'Look at this', {}, [], undefined, undefined, 'images', connection, { id: 'image-session', isFirstRun });
+    expect(out.args[out.args.indexOf('--image') + 1]).toBe(image.path);
+  });
+  it('other adapters retain the original file reference', () => {
+    const out = builder.build('Antigravity', 'Look at this', {}, [], undefined, undefined, 'images', connection);
+    expect(out.args[out.args.indexOf('--print') + 1]).toContain(JSON.stringify(image.path));
+  });
+});

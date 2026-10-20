@@ -761,3 +761,24 @@ describe('CLI quota detection', () => {
     await expect(makeClaudeWorker({ sessionId: 'sq2' }).run('status?')).rejects.toThrow(/max-turns/);
   });
 });
+
+describe('chat image transport through the worker', () => {
+  it('sends the exact current image bytes on fresh and resumed Claude turns', async () => {
+    const path = join(fixture.dir, 'screen with spaces.png');
+    for (const bytes of [Buffer.from([137, 80, 78, 71, 1]), Buffer.from([137, 80, 78, 71, 2])]) {
+      writeFileSync(path, bytes);
+      const turn = makeClaudeWorker({ sessionId: 'image-transport' });
+      turn.worker.getContext().metadata.imageAttachments = [path];
+      await turn.run('Inspect the screenshot');
+      const input = JSON.parse(readFileSync(join(fixture.dir, 'claude-last-stdin.txt'), 'utf8'));
+      expect(input.message.content).toContainEqual({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: bytes.toString('base64') } });
+    }
+    expect(fixture.spawnCount).toBe(2);
+  });
+  it('refuses an image outside the session workspace before launching the CLI', async () => {
+    const turn = makeClaudeWorker({ sessionId: 'image-containment' });
+    turn.worker.getContext().metadata.imageAttachments = [join(fixture.dir, '..', 'other-user.png')];
+    await expect(turn.run('Inspect')).rejects.toThrow();
+    expect(fixture.spawnCount).toBe(0);
+  });
+});

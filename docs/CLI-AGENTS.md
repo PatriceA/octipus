@@ -619,3 +619,17 @@ while an approval is still pending is recorded as failure, not success.
 Octipus shell tools use a separate `/tmp`. Keep test virtual environments in
 the project/workspace so both the CLI and sandboxed verification can use them;
 a missing host `/tmp` executable is not a reason to request elevated access.
+
+### Chat image attachments
+
+CLI chat turns skip auxiliary OCR. Claude receives original image bytes as
+base64 image blocks in its stream-JSON user message; Codex receives original
+workspace file paths through `--image`. Both transports include newly attached
+images on resumed turns. Other adapters receive explicit original file references
+and instructions to inspect them with native image-reading tools.
+
+Image paths are resolved against the session workspace before launch. Missing,
+oversized, or unsupported CLI images are reported rather than converted to text.
+Raw image bytes are omitted from prompt dumps. API-worker auxiliary vision
+summaries are labeled as fallible supplemental descriptions, never authoritative
+replacements for the original image.

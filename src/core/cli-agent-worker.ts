@@ -1,3 +1,5 @@
+import { readSessionFile } from '@/core/session-files';
+import type { CliImageAttachment } from './cli-adapters';
 import { configuredCliBinary } from './cli-executable';
 import { APPROVAL_DISCONNECT_REASON, APPROVAL_TIMEOUT_REASON, APPROVAL_UNFINISHED_REASON, approvalWaitReason } from './approval-wait';
 import { inlineUiRepairMessage, storeInlineUiBlocks } from '@/core/inline-ui/extract';
@@ -910,12 +912,25 @@ When a task matches one of these skills, load it with get_skill before starting 
     // repo could corrupt it — and never invent a dev-mode project directory
     // that has gone missing (see below).
     let workspaceCwd: string;
+    const images: CliImageAttachment[] = [];
     {
       const session = await sessionRepository.findById(this.context.sessionId);
       if (!session) {
         throw new Error(`CLI agent cwd resolution failed: no session ${this.context.sessionId}`);
       }
-      workspaceCwd = resolvePath(WorkspaceFS.forSession(session, { space: this.context.space ?? null }).root);
+      const attachmentFs = WorkspaceFS.forSession(session, { space: this.context.space ?? null });
+      workspaceCwd = resolvePath(attachmentFs.root);
+      const imagePaths = this.context.metadata.imageAttachments;
+      if (imagePaths !== undefined) {
+        if (!Array.isArray(imagePaths) || !imagePaths.every(path => typeof path === 'string')) throw new Error('Invalid image attachment paths');
+        for (const path of imagePaths) {
+          const image = await readSessionFile(attachmentFs, path);
+          if (image.type !== 'image') throw new Error(`Original image attachment is unavailable or too large: ${path}`);
+          if (!['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(image.mimeType)) throw new Error(`Unsupported CLI image format: ${image.mimeType}`);
+          images.push({ path: image.path, mimeType: image.mimeType, data: image.dataUrl.slice(image.dataUrl.indexOf(',') + 1) });
+        }
+        if (images.length && !this.connection) throw new Error('Image attachments require a connected CLI run');
+      }
 
       if (!existsSync(workspaceCwd)) {
         // Whether a missing directory is routine or alarming depends on WHOSE
@@ -1056,7 +1071,7 @@ When a task matches one of these skills, load it with get_skill before starting 
     if (this.credentialOwner && !this.connection) throw new Error('A personal CLI model needs the Octipus bridge, which did not start');
     // Discovery reads the config.toml the run will read: the owner's CODEX_HOME for a personal row.
     const codexMcpServers = this.connection && adapterKey === 'Codex CLI' ? await discoverCodexMcpServers(workspaceCwd, cliEnvFor(this.credentialOwner, toolConfig)) : undefined;
-    const built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, resumedChildSystem ?? this.systemMessages, resumedChildSystem ? resumedChildSystem.join('\n\n') : systemPrompt, Math.max(0, this.config.maxTokenBudget - this.billableTokensUsed), this.context.id, this.connection ? { ...this.connection, workingDirectory: workspaceCwd, codexMcpServers, shellGuard: getConfig().agent?.cliShellGuard !== false, maxIterations: Math.max(1, this.config.maxIterations - this.iteration), space: !!this.context.space, personal: !!this.credentialOwner } : undefined, resume);
+    const built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, resumedChildSystem ?? this.systemMessages, resumedChildSystem ? resumedChildSystem.join('\n\n') : systemPrompt, Math.max(0, this.config.maxTokenBudget - this.billableTokensUsed), this.context.id, this.connection ? { ...this.connection, images, workingDirectory: workspaceCwd, codexMcpServers, shellGuard: getConfig().agent?.cliShellGuard !== false, maxIterations: Math.max(1, this.config.maxIterations - this.iteration), space: !!this.context.space, personal: !!this.credentialOwner } : undefined, resume);
     const { args, stdinPrompt, useShell } = built;
     this.launchCleanup = () => {
       const configIndex = args.indexOf('--mcp-config');
@@ -1202,7 +1217,7 @@ When a task matches one of these skills, load it with get_skill before starting 
         prompt || '(none)',
         '',
         '## stdinPrompt',
-        stdinPrompt || '(none)',
+        images.length ? '[multimodal input: original image bytes omitted from prompt dump]' : stdinPrompt || '(none)',
         '',
         '## CLI args',
         '```',
@@ -1484,7 +1499,11 @@ When a task matches one of these skills, load it with get_skill before starting 
             // from characters so token budgets and pipeline pools stop treating
             // these runs as free; the row is marked as an estimate.
             const est = (s: string | null | undefined) => Math.ceil((s?.length ?? 0) / 4);
-            const inputTokens = est(systemPrompt) + est(prompt) + est(stdinPrompt);
+            // Encoded pixels are not text tokens. Match the native worker's
+            // fixed image estimate when the CLI supplies no real usage.
+            const stdinChars = Math.max(0, (stdinPrompt?.length ?? 0) -
+              (adapterKey === 'Claude Code' ? images.reduce((sum, image) => sum + image.data.length, 0) : 0));
+            const inputTokens = est(systemPrompt) + est(prompt) + Math.ceil(stdinChars / 4) + images.length * 1500;
             const outputTokens = est(accumulatedText);
             invocationUsage = { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, available: true, estimated: true };
             this.totalTokens += invocationUsage.totalTokens;

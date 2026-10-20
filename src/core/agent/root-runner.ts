@@ -1,3 +1,6 @@
+import { getCLIToolConfig } from '@/core/cli-agent-factory';
+import { buildRootAttachmentContext } from './image-attachments';
+import type { AttachedFileRef } from '@/core/session-files';
 import { resolve } from 'path';
 import { getConfig } from '@/config';
 import { CONTENT_STORAGE_OFF_KEY } from './audience';
@@ -146,6 +149,7 @@ async function remoteRoomOfSession(ctx: unknown) {
 
 /** Per-turn additions to the root agent's own tools. */
 export interface RootRunExtras {
+  attachedFiles?: AttachedFileRef[];
   /**
    * Open tasks taken on in this group-channel thread: the root agent gets
    * `complete_taken_task` for them (docs/plans/group-chat-bot.md §5).
@@ -229,6 +233,13 @@ export async function runRootAgent(
   const inSpace = !!space;
   const selectedModel = await deps.modelSelector.selectForRootAgent(sessionId, classification.type, { message, classification }, { userId, inSpace, spaceRole: space?.role, sponsor: scope.sponsor });
   const modelName = selectedModel.modelId;
+  const modelMeta = await getModelRegistry().getModel(selectedModel.name);
+  const attachmentSession = extras.attachedFiles?.length ? await sessionRepository.findById(sessionId) : null;
+  if (extras.attachedFiles?.length && !attachmentSession) throw new Error('Attachment session no longer exists');
+  const attachments = attachmentSession
+    ? await buildRootAttachmentContext(WorkspaceFS.forSession(attachmentSession, { space }), extras.attachedFiles!, (modelMeta ? modelMeta.provider === 'cli' : !!getCLIToolConfig(modelName)), userId, message)
+    : { context: '', imagePaths: [] };
+  extraSystemContext += attachments.context;
 
   // Resolve the root agent mode for THIS turn. 'auto' (default) re-derives
   // from the current default model's size every turn, so swapping to a
@@ -236,7 +247,6 @@ export async function runRootAgent(
   // router short-circuits below to a deterministic single-worker turn; lite
   // shrinks the prompt/tools/iterations further down; full is unchanged.
   const agentCfg = getConfig().agent;
-  const modelMeta = await getModelRegistry().getModel(selectedModel.name);
   const promptTier = resolvePromptTier(
     { modelId: modelName, metadata: modelMeta?.metadata, provider: modelMeta?.provider },
     {
@@ -759,6 +769,7 @@ export async function runRootAgent(
     // user-reported TUI bug where `--project` was effectively ignored.
     contextMetadata: {
       originalRequest: message,
+      ...(attachments.imagePaths.length ? { imageAttachments: attachments.imagePaths } : {}),
       sessionGeneration: sessionGeneration(sessionCtx),
       inputGuardFlags: guardFlags,
       ...(isDevMode ? { projectPath: sessionCtx!.projectPath! } : {}),
