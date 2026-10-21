@@ -57,3 +57,17 @@ describe('SettingsService.get for a key stored nowhere', () => {
     expect(await service.get('plugin.other')).toBe('via service');
   });
 });
+
+test('fresh reads and atomic transforms preserve direct database changes, and failed transforms roll back', async () => {
+  const { SettingsService } = await import('./settings-service');
+  const { executeRaw } = await import('@/db/postgres');
+  const service = new SettingsService();
+  await service.set('mcp.servers', [{ id: 'a', name: 'A', command: 'old', isEnabled: true }]);
+  await executeRaw(`UPDATE settings SET value = '[{"id":"a","name":"A","command":"external","isEnabled":true}]' WHERE key = 'mcp.servers'`);
+  expect((await service.getFresh('mcp.servers') as { command: string }[])[0].command).toBe('external');
+  await executeRaw(`UPDATE settings SET value = '[{"id":"a","name":"A","command":"newer","isEnabled":true}]' WHERE key = 'mcp.servers'`);
+  const updated = await service.update('mcp.servers', value => (value as Record<string, unknown>[]).map(server => ({ ...server, isEnabled: false })));
+  expect(updated).toEqual([{ id: 'a', name: 'A', command: 'newer', isEnabled: false }]);
+  await expect(service.update('mcp.servers', () => { throw new Error('conflict'); })).rejects.toThrow('conflict');
+  expect(await service.getFresh('mcp.servers')).toEqual(updated);
+});

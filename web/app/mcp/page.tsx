@@ -9,6 +9,7 @@ import {
   EyeOff,
   Loader2,
   Plus,
+  Pencil,
   Power,
   PowerOff,
   Puzzle,
@@ -28,24 +29,8 @@ import { EXPOSURE_HELP, EXPOSURE_LABELS, ServerExposureControl, ToolExposureCont
 import { DESCRIPTION_HELP, ServerDescriptionControl } from '@/components/mcp/server-description';
 import { DEFAULT_MCP_EXPOSURE, MCP_EXPOSURES, type McpExposure } from '../../../src/shared/mcp-exposure';
 
-interface MCPServer {
-  id: string;
-  name: string;
-  command: string;
-  args?: string[];
-  transport: 'stdio' | 'sse';
-  sseUrl?: string;
-  isEnabled: boolean;
-  description?: string;
-  /** Absent from servers saved before exposure existed: those are `deferred`. */
-  exposure?: McpExposure;
-  toolExposure?: Record<string, McpExposure>;
-  status: 'connecting' | 'connected' | 'disconnected' | 'error';
-  error?: string;
-  toolCount: number;
-  resourceCount: number;
-  promptCount: number;
-}
+import type { MCPServerSummary as MCPServer } from '../../../src/shared/mcp-config';
+import { ServerEditor } from '@/components/mcp/server-editor';
 
 interface MCPTool {
   name: string;
@@ -419,6 +404,7 @@ function ServerToolList({ server }: { server: MCPServer }) {
 
 export default function MCPPage() {
   const [showAdd, setShowAdd] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'servers' | 'connectors'>('servers');
@@ -631,7 +617,7 @@ export default function MCPPage() {
                         )}
                       </div>
                       <p className="text-xs text-on-surface-variant font-mono truncate mt-0.5">
-                        {server.transport === 'sse'
+                        {server.transport && server.transport !== 'stdio'
                           ? server.sseUrl
                           : `${server.command} ${(server.args || []).join(' ')}`}
                       </p>
@@ -643,6 +629,7 @@ export default function MCPPage() {
                       <Loader2 className="w-4 h-4 animate-spin text-on-surface-variant" />
                     ) : (
                       <>
+                        <button onClick={() => setEditing(server.id)} title={`Edit ${server.name}`} className="p-1.5 rounded-lg hover:bg-surface-container"><Pencil className="w-4 h-4" /></button>
                         {/* Enable/disable */}
                         <button
                           onClick={() => handleToggle(server.id, server.isEnabled)}
@@ -712,6 +699,7 @@ export default function MCPPage() {
         )}
       </div>}
 
+      {editing && <ServerEditor serverId={editing} onClose={() => setEditing(null)} onSaved={() => void queryClient.invalidateQueries({ queryKey: ['mcp-servers'] })} />}
       <AddServerModal
         open={showAdd}
         onClose={() => setShowAdd(false)}

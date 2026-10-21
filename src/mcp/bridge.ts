@@ -1,3 +1,4 @@
+import type { MCPServerEdit, MCPServerConfigView } from '@/shared/mcp-config';
 import { EventEmitter } from 'events';
 import { resourceHandlers } from './resource-tools';
 import { getConfig } from '@/config';
@@ -17,6 +18,7 @@ import { StdioTransport } from './transports/stdio';
 import { StreamableHTTPTransport } from './transports/streamable-http';
 import { fileAt, writeFileAt } from '@/utils/fs-file';
 import { mcpResultLimit } from '@/core/tool-output-spill';
+import { applyServerEdit, configView, mergeServerConfigs } from './config-store';
 
 export interface MCPServerConnection {
   id: string;
@@ -72,6 +74,7 @@ export async function drainPages<T>(
 export class MCPBridge extends EventEmitter {
   private connections: Map<string, MCPServerConnection> = new Map();
   private serverConfigs: MCPServer[] = [];
+  private persistedConfigs: MCPServer[] = [];
   // Auto-reconnect state for unexpected transport closes (server crash / OS kill).
   private reconnectAttempts: Map<string, number> = new Map();
   private reconnectTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
@@ -98,6 +101,7 @@ export class MCPBridge extends EventEmitter {
         const file = fileAt(config.mcp.serversConfigPath);
         const content = await file.json<{ servers?: MCPServer[] }>();
         this.serverConfigs = content.servers || [];
+        this.persistedConfigs = structuredClone(this.serverConfigs);
         coreLogger.info({ count: this.serverConfigs.length, source: 'file' }, 'MCP server configs loaded');
         return;
       } catch (error) {
@@ -108,15 +112,19 @@ export class MCPBridge extends EventEmitter {
     // Fall back to database storage
     try {
       const settingsService = getSettingsService();
-      const stored = await settingsService.get('mcp.servers');
+      const stored = await settingsService.getFresh('mcp.servers');
+      if (stored !== null && !Array.isArray(stored)) throw new Error('Stored mcp.servers must be an array');
       if (stored && Array.isArray(stored)) {
-        this.serverConfigs = stored as MCPServer[];
+        this.serverConfigs = structuredClone(stored) as MCPServer[];
         coreLogger.info({ count: this.serverConfigs.length, source: 'database' }, 'MCP server configs loaded');
       } else {
+        this.serverConfigs = [];
         coreLogger.debug('No MCP server configs found in database');
       }
+      this.persistedConfigs = structuredClone(this.serverConfigs);
     } catch (error) {
       coreLogger.warn({ error }, 'Failed to load MCP servers config from database');
+      throw error;
     }
   }
 
@@ -395,7 +403,9 @@ export class MCPBridge extends EventEmitter {
         stale.transport.close();
         stale.protocol.cleanup();
       }
-      this.connect(server).catch((err: unknown) => {
+      const latest = this.serverConfigs.find(config => config.id === server.id);
+      if (!latest?.isEnabled) return;
+      this.connect(latest).catch((err: unknown) => {
         coreLogger.error({ err, serverId: server.id }, 'MCP reconnect attempt failed');
         this.scheduleReconnect(server);
       });
@@ -661,7 +671,29 @@ export class MCPBridge extends EventEmitter {
    * Get all server configs (connected or not)
    */
   getServerConfigs(): MCPServer[] {
-    return [...this.serverConfigs];
+    return structuredClone(this.serverConfigs);
+  }
+
+  /** Read storage explicitly when opening the editor; leave active connections alone. */
+  async getEditableConfig(serverId: string): Promise<MCPServerConfigView | undefined> {
+    return this.withConfigMutation(async () => {
+      await this.loadConfig();
+      const server = this.serverConfigs.find(s => s.id === serverId);
+      return server ? configView(server) : undefined;
+    });
+  }
+
+  /** Save for the next connection, without disrupting in-flight tool calls. */
+  async editServer(serverId: string, edit: MCPServerEdit): Promise<boolean> {
+    return this.withConfigMutation(async () => {
+      const idx = this.serverConfigs.findIndex(s => s.id === serverId);
+      if (idx < 0) return false;
+      const previous = this.serverConfigs[idx];
+      this.serverConfigs[idx] = applyServerEdit(previous, edit);
+      try { await this.saveConfig(); }
+      catch (error) { this.serverConfigs[idx] = previous; throw error; }
+      return true;
+    });
   }
 
   /**
@@ -691,7 +723,6 @@ export class MCPBridge extends EventEmitter {
       const idx = this.serverConfigs.findIndex((s) => s.id === serverId);
       if (idx < 0) return false;
       const previous = [...this.serverConfigs];
-      await this.disconnect(serverId);
       this.serverConfigs.splice(idx, 1);
       try {
         await this.saveConfig();
@@ -699,6 +730,7 @@ export class MCPBridge extends EventEmitter {
         this.serverConfigs = previous;
         throw error;
       }
+      await this.disconnect(serverId);
       coreLogger.info({ serverId }, 'MCP server config removed');
       return true;
     });
@@ -729,7 +761,8 @@ export class MCPBridge extends EventEmitter {
         throw error;
       }
       if (enabled) {
-        await this.connect(server).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in bridge'));
+        const saved = this.serverConfigs.find(s => s.id === serverId);
+        if (saved) await this.connect(saved).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in bridge'));
       } else {
         await this.disconnect(serverId);
       }
@@ -817,15 +850,24 @@ export class MCPBridge extends EventEmitter {
 
     // Prefer file-based storage if explicitly configured
     if (config.mcp.serversConfigPath) {
-      const content = JSON.stringify({ servers: this.serverConfigs }, null, 2);
-      await writeFileAt(config.mcp.serversConfigPath, content);
+      const file = fileAt(config.mcp.serversConfigPath);
+      const current = await file.exists() ? await file.json<{ servers?: MCPServer[] }>() : { servers: this.persistedConfigs };
+      const merged = mergeServerConfigs(this.persistedConfigs, this.serverConfigs, current.servers ?? []);
+      await writeFileAt(config.mcp.serversConfigPath, JSON.stringify({ ...current, servers: merged }, null, 2));
+      this.serverConfigs = merged;
+      this.persistedConfigs = structuredClone(merged);
       return;
     }
 
     // Fall back to database storage
     try {
       const settingsService = getSettingsService();
-      await settingsService.set('mcp.servers', this.serverConfigs);
+      const merged = await settingsService.update('mcp.servers', (stored) => {
+        if (stored !== null && !Array.isArray(stored)) throw new Error('Stored mcp.servers must be an array');
+        return mergeServerConfigs(this.persistedConfigs, this.serverConfigs, (stored ?? []) as MCPServer[]);
+      });
+      this.serverConfigs = structuredClone(merged) as MCPServer[];
+      this.persistedConfigs = structuredClone(this.serverConfigs);
       coreLogger.debug({ count: this.serverConfigs.length }, 'MCP server configs saved to database');
     } catch (error) {
       coreLogger.error({ error }, 'Failed to save MCP server configs to database');

@@ -1,3 +1,5 @@
+import { mcpServerEditSchema } from '@/shared/mcp-config';
+import { MCPConfigConflict } from '@/mcp/config-store';
 import { Elysia, t } from '@/api/http';
 import { adminDenied } from '@/api/admin-guard';
 import { apiContext } from '@/api/context';
@@ -37,6 +39,7 @@ export const mcpRoutes = new Elysia({ prefix: '/mcp' })
           toolMaxResultChars: cfg.toolMaxResultChars,
           transport: cfg.transport || 'stdio',
           sseUrl: cfg.sseUrl,
+          postUrl: cfg.postUrl,
           isEnabled: cfg.isEnabled,
           description: cfg.description ?? '',
           exposure: cfg.exposure ?? 'deferred',
@@ -127,6 +130,29 @@ export const mcpRoutes = new Elysia({ prefix: '/mcp' })
       detail: { tags: ['mcp'] },
     }
   )
+
+  .get('/servers/:id/config', async ({ user, principal, set, params }) => {
+    const denied = adminDenied({ set, user, principal });
+    if (denied) return denied;
+    const server = await getMCPBridge().getEditableConfig(params.id);
+    if (!server) { set.status = 404; return { error: 'Server not found' }; }
+    return { server };
+  }, { params: t.Object({ id: t.String() }), detail: { tags: ['mcp'] } })
+
+  .put('/servers/:id/config', async ({ user, principal, set, params, body }) => {
+    const denied = adminDenied({ set, user, principal });
+    if (denied) return denied;
+    const parsed = mcpServerEditSchema.safeParse(body);
+    if (!parsed.success) { set.status = 400; return { error: 'Invalid server configuration' }; }
+    try {
+      const saved = await getMCPBridge().editServer(params.id, parsed.data);
+      if (!saved) { set.status = 404; return { error: 'Server not found' }; }
+      return { success: true };
+    } catch (error) {
+      set.status = error instanceof MCPConfigConflict ? 409 : 400;
+      return { error: error instanceof Error ? error.message : 'Could not save server configuration' };
+    }
+  }, { params: t.Object({ id: t.String() }), body: t.Unknown(), detail: { tags: ['mcp'] } })
 
   // Toggle server enabled/disabled
   .post(

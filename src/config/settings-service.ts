@@ -151,6 +151,43 @@ export class SettingsService {
     return def?.defaultValue ?? null;
   }
 
+  /** Read authoritative storage, bypassing both caches (for editable external config). */
+  async getFresh(key: string): Promise<unknown> {
+    const [row] = await getDb().select().from(settings).where(eq(settings.key, key)).limit(1);
+    const value = row ? this.deserialize(row.value, row.valueType as SettingValueType) : getSettingDefinition(key)?.defaultValue ?? null;
+    this.localCache.set(key, value);
+    this.missing.delete(key);
+    await this.cache.set(`settings:${key}`, value, CACHE_TTL);
+    return value;
+  }
+
+  /** Transform the latest stored value under a row lock, never a cached snapshot. */
+  async update(key: string, change: (current: unknown) => unknown, userId?: string): Promise<unknown> {
+    const def = getSettingDefinition(key);
+    const valueType = def?.valueType ?? 'json';
+    const { oldValue, value } = await getDb().transaction(async (tx) => {
+      await tx.insert(settings).values({ key, value: this.serialize(def?.defaultValue ?? null), valueType, category: def?.category ?? 'general' }).onConflictDoNothing({ target: settings.key });
+      const [row] = await tx.select().from(settings).where(eq(settings.key, key)).for('update');
+      const oldValue = this.deserialize(row.value, row.valueType as SettingValueType);
+      const value = change(oldValue);
+      if (def) {
+        this.validateType(value, def.valueType);
+        if (!def.isSecret) {
+          const check = validateSettingValue(key, value);
+          if (!check.ok) throw new Error(`Invalid value for ${key}: ${check.message}`);
+        }
+      }
+      await tx.update(settings).set({ value: this.serialize(value), updatedBy: userId, updatedAt: new Date() }).where(eq(settings.key, key));
+      return { oldValue, value };
+    });
+    this.localCache.set(key, value);
+    this.missing.delete(key);
+    await this.cache.set(`settings:${key}`, value, CACHE_TTL);
+    await this.pubsub.publish(PUBSUB_CHANNEL, { key, value, oldValue, updatedBy: userId });
+    this.notifyHandlers(key, value, oldValue);
+    return value;
+  }
+
   /**
    * Get a setting value synchronously from local cache.
    * Returns undefined if not cached. Use after warmCache().
