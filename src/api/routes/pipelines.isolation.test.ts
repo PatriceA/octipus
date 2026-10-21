@@ -149,3 +149,34 @@ describe('DELETE /api/pipelines/templates/:id auth (gap closed in Phase 1a)', ()
   expect(names).toEqual(['shared-cli', 'shipped-preset']);
   expect(names).toEqual(available.body.types.map((t: { name: string }) => t.name).sort());
 });
+
+test('a saved recipe keeps its plan-loop and skill settings on create and update', async () => {
+  const step = (over: Record<string, unknown>) => ({ name: 'S', topic: 'coding', ...over });
+  const steps = [
+    step({ name: 'Plan', producesPlan: true }),
+    step({ name: 'Build', loopOverPlan: true, maxPlanItems: 3, skillIds: ['caveman'], autoSkills: true }),
+  ];
+  const created = await app(aliceApp, 'POST', '/api/pipelines/templates', { name: 'loop-settings', steps });
+  expect(created.body.error).toBeUndefined();
+  expect(created.body.steps[1]).toMatchObject({ loopOverPlan: true, maxPlanItems: 3, skillIds: ['caveman'], autoSkills: true });
+  expect(created.body.steps[0]).toMatchObject({ producesPlan: true });
+
+  const updated = await putJson(aliceApp, `/api/pipelines/templates/${created.body.id}`, {
+    name: 'loop-settings', steps: [steps[0], { ...steps[1], maxPlanItems: 5 }],
+  });
+  expect(updated.body.steps[1]).toMatchObject({ maxPlanItems: 5, skillIds: ['caveman'], autoSkills: true });
+
+  // Validation runs on the server too: a limit outside a loop is refused.
+  const bad = await app(aliceApp, 'POST', '/api/pipelines/templates', { name: 'bad', steps: [step({ maxPlanItems: 2 })] });
+  expect(bad.body.error).toContain('plan item limit');
+  await del(aliceApp, `/api/pipelines/templates/${created.body.id}`);
+});
+
+async function app(target: ElysiaLike, method: string, path: string, body: unknown) {
+  const res = await target.handle(new Request(`http://localhost${path}`, {
+    method,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  }));
+  return { status: res.status, body: await res.json() };
+}

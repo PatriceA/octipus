@@ -610,7 +610,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `security` | 160 |
 | `core` | `services` | 2 |
 | `core` | `shared` | 33 |
-| `core` | `skills` | 10 |
+| `core` | `skills` | 11 |
 | `core` | `tools` | 21 |
 | `core` | `utils` | 198 |
 | `core` | `voice` | 1 |
@@ -674,7 +674,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `skills` | `config` | 1 |
 | `skills` | `core` | 4 |
 | `skills` | `db` | 14 |
-| `skills` | `models` | 1 |
+| `skills` | `models` | 2 |
 | `skills` | `security` | 4 |
 | `skills` | `utils` | 7 |
 | `test-helpers` | `config` | 1 |

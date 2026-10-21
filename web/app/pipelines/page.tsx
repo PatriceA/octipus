@@ -1,9 +1,13 @@
 'use client';
 
 import {
+  BookOpen,
   ChevronDown,
   ChevronUp,
   GitBranch,
+  HelpCircle,
+  ListChecks,
+  Repeat,
   GripVertical,
   List,
   Network,
@@ -11,15 +15,16 @@ import {
   Plus,
   RotateCcw,
   Shield,
+  Sparkles,
   Trash2,
   X,
 } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { PipelineGraph, validatePipelineStages } from '@/components/pipeline-graph';
 import { PageHeader } from '@/components/ui/page-header';
 import { Portal } from '@/components/ui/portal';
-import { reorderStages } from '../../../src/core/agent/pipeline-validation';
+import { describePlanLoops, type PlanLoopInfo, reorderStages } from '../../../src/core/agent/pipeline-validation';
 import { api } from '@/lib/api';
 import { WORKER_ROLES } from '@/lib/types/models';
 
@@ -28,7 +33,10 @@ interface PipelineStep {
   description?: string;
   topic: string;
   skillIds?: string[];
+  autoSkills?: boolean;
   loopOverPlan?: boolean;
+  producesPlan?: boolean;
+  maxPlanItems?: number;
   requiresApproval?: boolean;
   promptTemplate?: string;
   stageType?: 'standard' | 'qa_validation' | 'human_input';
@@ -179,6 +187,7 @@ function TemplateCard({
 }) {
   const [expanded, setExpanded] = useState(false);
   const [view, setView] = useState<'list' | 'graph'>('list');
+  const cardLoops = describePlanLoops(template.steps);
 
   return (
     <div className="bg-surface-container rounded-xs border border-outline-variant/10 p-4">
@@ -245,9 +254,10 @@ function TemplateCard({
           ) : (
             <div className="space-y-2">
               {template.steps.map((step, i) => (
+                <Fragment key={i}>
+                {cardLoops.find((l) => l.start === i) && <LoopBanner loop={cardLoops.find((l) => l.start === i) as PlanLoopInfo} steps={template.steps} />}
                 <div
-                  key={i}
-                  className="flex items-center gap-3 text-sm pl-2"
+                  className={`flex items-center gap-3 text-sm pl-2 ${loopOf(cardLoops, i) ? 'ml-3 border-l-2 border-primary/30' : ''}`}
                 >
                   <span className="w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-medium">
                     {i + 1}
@@ -256,7 +266,21 @@ function TemplateCard({
                   <span className="text-xs bg-surface-container-high text-on-surface-variant px-1.5 py-0.5 rounded font-mono">
                     {step.topic}
                   </span>
-                  {step.loopOverPlan && <span className="text-xs text-primary">Per plan item</span>}
+                  {step.producesPlan && (
+                    <span title="Writes the plan" className="inline-flex items-center gap-1 text-xs text-primary">
+                      <ListChecks className="w-3.5 h-3.5" /> writes plan
+                    </span>
+                  )}
+                  {!!step.skillIds?.length && (
+                    <span title={`Skills loaded in full: ${step.skillIds.join(', ')}`} className="inline-flex items-center gap-1 text-xs text-on-surface-variant">
+                      <BookOpen className="w-3.5 h-3.5" /> {step.skillIds.length}
+                    </span>
+                  )}
+                  {step.autoSkills && (
+                    <span title="The decision model may add skills for each task">
+                      <Sparkles className="w-3.5 h-3.5 text-primary" />
+                    </span>
+                  )}
                   {step.requiresApproval && (
                     <span title="Requires approval">
                       <Shield className="w-3.5 h-3.5 text-warning" />
@@ -268,6 +292,7 @@ function TemplateCard({
                     </span>
                   )}
                 </div>
+                </Fragment>
               ))}
             </div>
           )}
@@ -301,6 +326,12 @@ function TemplateEditor({
     queryKey: ['roles-config'],
     queryFn: () => api.get<{ roles: Array<{ role: string; lane: string }> }>('/roles'),
   });
+  const { data: skillsData } = useQuery({
+    queryKey: ['skills'],
+    queryFn: () => api.get<{ skills: SkillOption[] }>('/skills'),
+  });
+  const skillOptions = skillsData?.skills ?? [];
+  const loops = describePlanLoops(steps);
   const roleOptions = rolesData?.roles?.length
     ? rolesData.roles.map((r) => ({ value: r.role, label: r.role }))
     : WORKER_ROLES;
@@ -475,6 +506,8 @@ function TemplateEditor({
               </div>
             </div>
 
+            <div className="mb-2"><LoopsHelp /></div>
+
             {view === 'graph' ? (
               <div className="rounded-lg border border-outline-variant/10 bg-surface-container-high p-3">
                 <PipelineGraph
@@ -507,9 +540,10 @@ function TemplateEditor({
             ) : (
               <div className="space-y-2">
                 {steps.map((step, i) => (
+                  <Fragment key={i}>
+                  {loops.find((l) => l.start === i) && <LoopBanner loop={loops.find((l) => l.start === i) as PlanLoopInfo} steps={steps} />}
                   <div
-                    key={i}
-                    className="border border-outline-variant/10 rounded-lg"
+                    className={`border border-outline-variant/10 rounded-lg ${loopOf(loops, i) ? 'ml-3 border-l-2 border-l-primary/40' : ''}`}
                   >
                     {/* Step header */}
                     <div
@@ -524,6 +558,10 @@ function TemplateEditor({
                         {step.name || 'Untitled step'}
                       </span>
                       <span className="text-xs text-on-surface-variant font-mono">{step.topic}</span>
+                      {step.producesPlan && <span title="Writes the plan"><ListChecks className="w-3.5 h-3.5 text-primary shrink-0" /></span>}
+                      {step.loopOverPlan && <span title="Repeats for each plan item"><Repeat className="w-3.5 h-3.5 text-primary shrink-0" /></span>}
+                      {step.stageType === 'qa_validation' && <span title="QA retry"><RotateCcw className="w-3.5 h-3.5 text-primary shrink-0" /></span>}
+                      {!!step.skillIds?.length && <span title="Skills loaded in full"><BookOpen className="w-3.5 h-3.5 text-on-surface-variant shrink-0" /></span>}
                       {step.requiresApproval && (
                         <Shield className="w-3.5 h-3.5 text-warning shrink-0" />
                       )}
@@ -642,7 +680,7 @@ function TemplateEditor({
                               disabled={step.stageType === 'human_input'}
                               onChange={e => updateStep(i, {
                                 stageType: e.target.checked ? 'qa_validation' : 'standard',
-                                ...(e.target.checked ? { maxRetries: 3, retryTargetStage: Math.max(0, i - 1) } : { maxRetries: undefined, retryTargetStage: undefined }),
+                                ...(e.target.checked ? { maxRetries: 3, retryTargetStage: defaultRetryTarget(loops, i) } : { maxRetries: undefined, retryTargetStage: undefined }),
                               })}
                               className="rounded border-outline-variant text-primary focus:ring-primary"
                             />
@@ -680,13 +718,21 @@ function TemplateEditor({
                               </div>
                               <p className="text-[11px] text-on-surface-variant">
                                 If QA fails, the retry stage will re-run with feedback, then QA re-validates. After max retries, escalates for user approval.
+                                {loopOf(loops, i) && ' Inside the plan loop, the retry stage must be in the same loop and every item gets its own retries.'}
                               </p>
                             </div>
                           )}
                         </div>
+
+                        <PlanLoopSettings index={i} steps={steps} loops={loops} updateStep={updateStep} setSteps={setSteps} />
+
+                        {step.stageType !== 'human_input' && (
+                          <StageSkills step={step} skills={skillOptions} onChange={(update) => updateStep(i, update)} />
+                        )}
                       </div>
                     )}
                   </div>
+                  </Fragment>
                 ))}
               </div>
             )}
@@ -712,5 +758,279 @@ function TemplateEditor({
       </div>
     </div>
     </Portal>
+  );
+}
+
+/** One sentence that says what a plan loop does, for the list views and the editor. */
+function loopSummary(loop: PlanLoopInfo, steps: PipelineStep[]): string {
+  const range = loop.start === loop.end ? `Step ${loop.start + 1} repeats` : `Steps ${loop.start + 1}–${loop.end + 1} repeat`;
+  const source = loop.plannerIndex !== null
+    ? `the plan written by step ${loop.plannerIndex + 1} (${steps[loop.plannerIndex]?.name || 'Untitled'})`
+    : 'the plan (no earlier step writes one — it must come from a linked work plan)';
+  const cap = loop.maxItems ? `, at most ${loop.maxItems} item${loop.maxItems === 1 ? '' : 's'} per run` : '';
+  const approval = loop.approvesPlan ? '; you approve the plan once before it starts' : '';
+  return `${range} once for each item of ${source}${cap}${approval}.`;
+}
+
+/** Header row drawn above the first step of a plan loop. */
+function LoopBanner({ loop, steps }: { loop: PlanLoopInfo; steps: PipelineStep[] }) {
+  return (
+    <div className="flex items-start gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-1.5 text-xs text-primary">
+      <Repeat className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+      <span>
+        <span className="font-medium">Plan loop — </span>
+        {loopSummary(loop, steps)}
+      </span>
+    </div>
+  );
+}
+
+/** A new QA step retries the step before it — inside a plan loop, the loop's first step (the one that owns the work). */
+function defaultRetryTarget(loops: PlanLoopInfo[], index: number): number {
+  const loop = loopOf(loops, index);
+  return loop && index > loop.start ? loop.start : Math.max(0, index - 1);
+}
+
+/** The step's plan loop, when it is part of one. */
+function loopOf(loops: PlanLoopInfo[], index: number): PlanLoopInfo | undefined {
+  return loops.find((l) => index >= l.start && index <= l.end);
+}
+
+/** What the two loops a pipeline can run are, in plain words. Collapsed by default. */
+function LoopsHelp() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-lg border border-outline-variant/10 bg-surface-container-high text-xs text-on-surface-variant">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center gap-2 px-3 py-2 cursor-pointer hover:text-on-surface"
+      >
+        <HelpCircle className="w-3.5 h-3.5" />
+        <span className="flex-1 text-left">How pipelines loop</span>
+        {open ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+      </button>
+      {open && (
+        <div className="px-3 pb-3 space-y-2">
+          <p>
+            <span className="inline-flex items-center gap-1 font-medium text-on-surface"><RotateCcw className="w-3 h-3" /> QA retry</span>{' '}
+            — a QA step that fails sends its findings back to its retry step, which runs again; then QA checks again.
+            After its max retries you decide whether to continue or stop.
+          </p>
+          <p>
+            <span className="inline-flex items-center gap-1 font-medium text-on-surface"><Repeat className="w-3 h-3" /> Plan loop</span>{' '}
+            — one step <em>writes the plan</em>: it breaks the task into items. Consecutive steps marked
+            <em> repeat for each plan item</em> then run once per item, in order — e.g. implement → review → QA for
+            item 1, then again for item 2. Each pass is told which item it is on and works only on that item.
+          </p>
+          <ul className="list-disc ml-4 space-y-1">
+            <li>Steps inside the loop can add items they discover; the loop picks them up in the same run. You can also edit, reorder or skip items on the pipeline page while it runs.</li>
+            <li>A QA step inside the loop retries per item: its retry step must be inside the same loop, and every item gets a fresh retry budget.</li>
+            <li>If the loop’s first step requires approval, you approve the whole plan once before the first item, not every item.</li>
+            <li>The item limit is a safety cap: items beyond it are marked skipped with the reason, never silently dropped.</li>
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The loop settings of one step. Loop-wide settings live on the loop's first step. */
+function PlanLoopSettings({
+  index,
+  steps,
+  loops,
+  updateStep,
+  setSteps,
+}: {
+  index: number;
+  steps: PipelineStep[];
+  loops: PlanLoopInfo[];
+  updateStep: (index: number, update: Partial<PipelineStep>) => void;
+  setSteps: React.Dispatch<React.SetStateAction<PipelineStep[]>>;
+}) {
+  const step = steps[index];
+  const loop = loopOf(loops, index);
+  const isHuman = step.stageType === 'human_input';
+
+  const toggleLoop = (on: boolean) => {
+    setSteps((prev) => prev.map((s, i) => {
+      if (i === index) return { ...s, loopOverPlan: on || undefined, maxPlanItems: on ? s.maxPlanItems : undefined };
+      // The loop's cap travels to the step that becomes the loop's first.
+      if (!on && i === index + 1 && s.loopOverPlan && prev[index].maxPlanItems && loop?.start === index) {
+        return { ...s, maxPlanItems: prev[index].maxPlanItems };
+      }
+      return s;
+    }));
+  };
+
+  /** Set the loop's cap on its first step, clearing it on the rest of the loop. */
+  const setCap = (value: number | undefined) => {
+    if (!loop) return;
+    setSteps((prev) => prev.map((s, i) => {
+      if (i < loop.start || i > loop.end) return s;
+      return { ...s, maxPlanItems: i === loop.start ? value : undefined };
+    }));
+  };
+
+  return (
+    <div className="border-t border-outline-variant/10 pt-3 mt-1 space-y-2">
+      <div className="flex items-center gap-1.5 text-xs font-medium text-on-surface">
+        <Repeat className="w-3.5 h-3.5 text-primary" /> Plan loop
+      </div>
+      <label className="flex items-start gap-2 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={!!step.producesPlan}
+          disabled={isHuman || !!step.loopOverPlan}
+          onChange={(e) => updateStep(index, { producesPlan: e.target.checked || undefined })}
+          className="mt-0.5 rounded border-outline-variant text-primary focus:ring-primary"
+        />
+        <span className="text-sm text-on-surface-variant">
+          Writes the plan
+          <span className="block text-[11px]">This step breaks the task into plan items. It must leave at least one item, or it fails.</span>
+        </span>
+      </label>
+      <label className="flex items-start gap-2 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={!!step.loopOverPlan}
+          disabled={!!step.producesPlan}
+          onChange={(e) => toggleLoop(e.target.checked)}
+          className="mt-0.5 rounded border-outline-variant text-primary focus:ring-primary"
+        />
+        <span className="text-sm text-on-surface-variant">
+          Repeat for each plan item
+          <span className="block text-[11px]">Consecutive steps with this checked form one loop that runs once per item.</span>
+        </span>
+      </label>
+      {loop && (
+        <div className="ml-6 space-y-2">
+          <p className="text-[11px] text-primary">{loopSummary(loop, steps)}</p>
+          {loop.start === index ? (
+            <div className="max-w-[12rem]">
+              <label className="block text-xs text-on-surface-variant mb-1">Max items per run</label>
+              <input
+                type="number"
+                min={1}
+                placeholder="No limit"
+                aria-label="Max items per run"
+                value={loop.maxItems ?? ''}
+                onChange={(e) => setCap(e.target.value === '' ? undefined : Math.max(1, parseInt(e.target.value) || 1))}
+                className="w-full px-2.5 py-1.5 bg-surface-container-high border border-outline-variant/10 rounded text-sm text-on-surface"
+              />
+            </div>
+          ) : (
+            <p className="text-[11px] text-on-surface-variant">The loop’s item limit is set on step {loop.start + 1}.</p>
+          )}
+          {loop.start === index && (
+            <p className="text-[11px] text-on-surface-variant">
+              “Require approval” on this step asks you to approve the whole plan once, before the first item.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface SkillOption {
+  id: string;
+  name: string;
+  description?: string;
+  category?: string;
+}
+
+/** Skills loaded in full into this step's agent, plus the decision-model opt-in. */
+function StageSkills({
+  step,
+  skills,
+  onChange,
+}: {
+  step: PipelineStep;
+  skills: SkillOption[];
+  onChange: (update: Partial<PipelineStep>) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const selected = step.skillIds ?? [];
+  const byId = new Map(skills.map((s) => [s.id, s]));
+  const q = query.trim().toLowerCase();
+  const matches = q
+    ? skills
+      .filter((s) => !selected.includes(s.id))
+      .filter((s) => s.name.toLowerCase().includes(q) || s.id.toLowerCase().includes(q) || (s.description ?? '').toLowerCase().includes(q))
+      .slice(0, 8)
+    : [];
+  const setIds = (ids: string[]) => onChange({ skillIds: ids.length ? ids : undefined });
+
+  return (
+    <div className="border-t border-outline-variant/10 pt-3 mt-1 space-y-2">
+      <div className="flex items-center gap-1.5 text-xs font-medium text-on-surface">
+        <BookOpen className="w-3.5 h-3.5 text-primary" /> Skills
+      </div>
+      <p className="text-[11px] text-on-surface-variant">
+        Selected skills are loaded in full into this step’s agent prompt — API and CLI agents alike — instead of
+        only being listed for the agent to fetch itself.
+      </p>
+      {selected.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {selected.map((id) => (
+            <span key={id} className="inline-flex items-center gap-1 rounded-full bg-primary/10 text-primary px-2 py-0.5 text-xs">
+              {byId.get(id)?.name ?? id}
+              {!byId.has(id) && skills.length > 0 && <span className="text-error" title="This skill is not available — the step will fail until it is removed">(missing)</span>}
+              <button
+                type="button"
+                aria-label={`Remove skill ${byId.get(id)?.name ?? id}`}
+                onClick={() => setIds(selected.filter((x) => x !== id))}
+                className="hover:text-error cursor-pointer"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="relative">
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search skills to add…"
+          aria-label="Search skills to add"
+          className="w-full px-2.5 py-1.5 bg-surface-container-high border border-outline-variant/10 rounded text-sm text-on-surface"
+        />
+        {matches.length > 0 && (
+          <ul className="absolute z-10 mt-1 w-full max-h-56 overflow-y-auto rounded border border-outline-variant/20 bg-surface-container shadow-lg">
+            {matches.map((s) => (
+              <li key={s.id}>
+                <button
+                  type="button"
+                  onClick={() => { setIds([...selected, s.id]); setQuery(''); }}
+                  className="w-full text-left px-2.5 py-1.5 text-sm hover:bg-surface-container-high cursor-pointer"
+                >
+                  <span className="text-on-surface">{s.name}</span>
+                  {s.description && <span className="block text-[11px] text-on-surface-variant truncate">{s.description}</span>}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <label className="flex items-start gap-2 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={!!step.autoSkills}
+          onChange={(e) => onChange({ autoSkills: e.target.checked || undefined })}
+          className="mt-0.5 rounded border-outline-variant text-primary focus:ring-primary"
+        />
+        <span className="text-sm text-on-surface-variant">
+          <span className="inline-flex items-center gap-1"><Sparkles className="w-3 h-3" /> Let the decision model add skills for each task</span>
+          <span className="block text-[11px]">
+            Before each run of this step, the model on the Decision topic checks the skills found for the task and
+            loads the ones it is confident about. Needs a local decision model (the task includes workspace code);
+            without one, nothing is added.
+          </span>
+        </span>
+      </label>
+    </div>
   );
 }

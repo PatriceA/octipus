@@ -22,7 +22,7 @@ test('template preview exposes item loops without model overrides', async ({ aut
   await page.goto('/pipelines');
   await page.getByRole('button', { name: 'Expand CLI recipe' }).click();
   await expect(page.getByText('Model override: cli/test')).toHaveCount(0);
-  await expect(page.getByText('Per plan item')).toBeVisible();
+  await expect(page.getByText('Step 1 repeats once for each item of the plan', { exact: false })).toBeVisible();
 });
 
 test('running pipeline rings fit inside the scroll viewport', async ({ authenticatedPage: page }) => {

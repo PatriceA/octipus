@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
+  describePlanLoops,
   type PipelineStageInput,
   reorderStages,
   validatePipelineStages,
@@ -239,5 +240,52 @@ describe('human_input stages', () => {
     expect(validatePipelineStages([{ name: 'Build', topic: '' }])).toEqual([
       'Stage 1: topic is required.',
     ]);
+  });
+});
+
+describe('plan loops', () => {
+  const steps = (): PipelineStageInput[] => [
+    stage({ name: 'Plan', producesPlan: true }),
+    stage({ name: 'Implement', loopOverPlan: true, requiresApproval: true }),
+    stage({ name: 'QA', loopOverPlan: true, stageType: 'qa_validation', retryTargetStage: 1, maxRetries: 2 }),
+    stage({ name: 'Ship' }),
+  ];
+
+  test('describePlanLoops groups consecutive loop steps the way the compiler does', () => {
+    expect(describePlanLoops(steps())).toEqual([
+      { start: 1, end: 2, plannerIndex: 0, maxItems: null, approvesPlan: true },
+    ]);
+    const split = steps();
+    split.splice(2, 0, stage({ name: 'Break' }));
+    // A step that does not repeat ends the loop: two loops, not one.
+    expect(describePlanLoops(split).map((l) => [l.start, l.end])).toEqual([[1, 1], [3, 3]]);
+  });
+
+  test('the item limit is read from the loop, whichever of its steps carries it', () => {
+    const s = steps();
+    s[2].maxPlanItems = 4;
+    expect(describePlanLoops(s)[0].maxItems).toBe(4);
+    expect(validatePipelineStages(s)).toEqual([]);
+  });
+
+  test('a loop with no planner says so rather than inventing one', () => {
+    expect(describePlanLoops(steps().slice(1))[0].plannerIndex).toBeNull();
+  });
+
+  test('an item limit outside a loop, or below 1, is rejected', () => {
+    const outside = steps();
+    outside[3].maxPlanItems = 2;
+    expect(validatePipelineStages(outside)).toContain(
+      'Stage 4: a plan item limit only applies to a step that repeats for each plan item.',
+    );
+    const zero = steps();
+    zero[1].maxPlanItems = 0;
+    expect(validatePipelineStages(zero)).toContain('Stage 2: the plan item limit must be a whole number ≥ 1.');
+  });
+
+  test('a QA step in the loop must retry a step of the same loop', () => {
+    const s = steps();
+    s[2].retryTargetStage = 0;
+    expect(validatePipelineStages(s).join(' ')).toContain('must be a step of the same plan loop (stages 2–3)');
   });
 });

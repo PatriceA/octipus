@@ -305,6 +305,20 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **The pipeline plan loop is visible and configurable.** In the template
+  editor, a step can be marked **Writes the plan** or **Repeat for each plan
+  item**. The list, the graph and the run view frame the steps that repeat and
+  say in one sentence what the loop does. A loop can set **Max items per run**:
+  items beyond the limit are marked skipped with the reason, and the chat says
+  so. **How pipelines loop** explains the QA retry and the plan loop side by
+  side. Saving now rejects a QA step in a loop whose retry target sits outside
+  that loop; the compiler used to re-target it without saying so.
+- **Pipeline steps can force skills.** Skills selected on a step are loaded in
+  full into that step's agent prompt, for API and CLI agents alike, instead of
+  only being listed in the index. A step can also let the decision model add
+  the discovered skills it is confident the task needs (`skills.select`,
+  local-only). A missing declared skill fails the step.
+
 - **The companion follows you outside the chat.** Across all of your
   conversations, not just the open one: the tab icon becomes your companion
   in your chosen shape and colour, animated while it works, raising a badge

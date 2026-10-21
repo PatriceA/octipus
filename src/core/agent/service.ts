@@ -1335,6 +1335,12 @@ export class AgentService {
       onPartialOutput?: (text: string) => void;
       /** The spawned worker's id. See spawnWorker. */
       onWorkerSpawned?: (workerId: string) => void;
+      /** Skills loaded in full (a step's `skillIds`). See spawnWorker. */
+      skillIds?: string[];
+      /** Let the decision model add skills for the task. See spawnWorker. */
+      decideSkills?: boolean;
+      /** Which skills were loaded in full, and why. See spawnWorker. */
+      onSkills?: (skills: { declared: { id: string; name: string }[]; decided: { id: string; name: string; p: number }[] }) => void;
     },
   ): Promise<unknown> {
     return spawnWorker(role, task, input, context, this.deps, overrides);

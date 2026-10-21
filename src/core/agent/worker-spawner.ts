@@ -280,6 +280,16 @@ export async function spawnWorker(
     onPartialOutput?: (text: string) => void;
     /** The id of the worker that runs the task, once spawned: its permission requests are the caller's. */
     onWorkerSpawned?: (workerId: string) => void;
+    /**
+     * Skills loaded IN FULL into this worker's prompt (a pipeline step's
+     * `skillIds`), instead of only appearing in the index. One that is not
+     * available refuses the spawn — see `src/skills/required-skills.ts`.
+     */
+    skillIds?: string[];
+    /** Also load the discovered skills the decision model is confident this task needs (a step's `autoSkills`). */
+    decideSkills?: boolean;
+    /** Receives which skills were loaded in full, and why, before the worker runs. */
+    onSkills?: (skills: { declared: { id: string; name: string }[]; decided: { id: string; name: string; p: number }[] }) => void;
   },
 ): Promise<unknown> {
   const agentManager = getAgentManager();
@@ -436,6 +446,13 @@ export async function spawnWorker(
   // twice — previously the prompt carried two copies of every shared
   // skill, doubling that part of the token cost for no benefit.
   let topicSkillFragment = '';
+  let requiredSkillFragment = '';
+  // Declared skills resolve OUTSIDE the discovery try below: discovery is
+  // best-effort, a declaration is a contract — a missing skill throws here.
+  const { resolveDeclaredSkills, decideTaskSkills, buildRequiredSkillsPrompt } = await import('@/skills/required-skills');
+  const declaredSkills = overrides?.skillIds?.length ? await resolveDeclaredSkills(overrides.skillIds, context.userId) : [];
+  const requiredIds = new Set(declaredSkills.map((skill) => skill.id));
+  let decided: Awaited<ReturnType<typeof decideTaskSkills>> = [];
   try {
     const { discoverSkillIds } = await import('@/skills/discovery');
     const { getSkillRegistry } = await import('@/skills/registry');
@@ -446,7 +463,17 @@ export async function spawnWorker(
       topic: agentRole,
       message: task,
     });
-    const expertSkillIds = new Set<string>(expertSkillIdsOuter);
+    if (overrides?.decideSkills) {
+      const candidates = (await getSkillRegistry().getByIds(discoveredIds.filter((id) => !requiredIds.has(id)), context.userId))
+        .filter((skill) => !skill.archivedAt);
+      // `getByIds` does not keep the ranking; discovery's order is the ranking.
+      const rank = new Map(discoveredIds.map((id, i) => [id, i]));
+      candidates.sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0));
+      decided = await decideTaskSkills(task, agentRole, candidates);
+      for (const skill of decided) requiredIds.add(skill.id);
+    }
+    // A skill loaded in full is not listed again in the index.
+    const expertSkillIds = new Set<string>([...expertSkillIdsOuter, ...requiredIds]);
     const noveltopicIds = discoveredIds.filter((id) => !expertSkillIds.has(id));
     if (noveltopicIds.length > 0) {
       topicSkillFragment = await getSkillRegistry().buildPromptSummary(noveltopicIds, context.userId);
@@ -467,6 +494,10 @@ export async function spawnWorker(
       { err, topic: agentRole },
       'Topic skill injection failed — worker runs WITHOUT topic skills',
     );
+  }
+  if (requiredIds.size > 0) {
+    requiredSkillFragment = await buildRequiredSkillsPrompt([...requiredIds], context.userId);
+    overrides?.onSkills?.({ declared: declaredSkills.map(({ id, name }) => ({ id, name })), decided });
   }
 
   const finalModel = overrides?.model || expertModel || routing.model;
@@ -590,6 +621,7 @@ export async function spawnWorker(
   // Anthropic breakpoint) for every hybrid-skill worker. It must land after
   // the CURRENT DATE marker (the explicit-cache split point), hence pushed
   // after the date line above.
+  if (requiredSkillFragment) volatileParts.push(requiredSkillFragment);
   if (topicSkillFragment) {
     volatileParts.push('\n\n# Topic Skills\n' + topicSkillFragment);
   }

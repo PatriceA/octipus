@@ -1142,7 +1142,7 @@ export default function ChatPage() {
             break;
           case 'stage_started': {
             const stageNum = (pe.index ?? 0) + 1;
-            setTurnStatus(`Stage ${stageNum}: ${pe.name}...`);
+            setTurnStatus(`Stage ${stageNum}: ${pe.name}${pe.itemTitle ? ` — plan item "${pe.itemTitle}"` : ''}...`);
             // Stage messages are persisted to DB by the backend — reload to pick them up
             if (sessionId) loadSessionMessages(sessionId);
             break;
@@ -1154,6 +1154,13 @@ export default function ChatPage() {
             if (sessionId) loadSessionMessages(sessionId);
             break;
           }
+          case 'plan_item_started':
+            setTurnStatus(`Plan loop: next item "${pe.title}"${pe.remaining ? ` (${pe.remaining} more after this)` : ''}`);
+            break;
+          case 'plan_limit_reached':
+            setTurnStatus(`Plan loop limit reached (${pe.maxItems}) — ${pe.skipped} item${pe.skipped === 1 ? '' : 's'} skipped`);
+            if (sessionId) loadSessionMessages(sessionId);
+            break;
           case 'qa_retry': {
             setTurnStatus(`QA found issues — retrying implementation (attempt ${pe.attempt}/${pe.maxRetries})`);
             break;
