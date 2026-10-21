@@ -32,7 +32,7 @@ import { permissionRequests } from '@/db/schema/permissions';
 import { getPermissionManager } from '@/security/permissions';
 import { approvalSubject, approvedCallOf, callFingerprint, gateCommandCalls, routedToolName, withApprovedCalls } from '@/security/approved-calls';
 import { approvalWaitRequestId, isApprovalWaitEnded } from '@/core/approval-wait';
-import { decide, type DecisionSite, recordShadow } from '@/models/decision';
+import { applyDecisionQaVerdict } from './qa-decision';
 import type { ModelConfigEntry } from '@/db/schema/models';
 import { getModelRegistry, type ModelRegistry } from '@/models/model-registry';
 import { resolveModel } from '@/models/resolve-model';
@@ -2461,7 +2461,6 @@ export class PipelineManager {
     acceptance: string[] = [],
   ): Promise<QAValidationResult | null> {
     let parsed = this.parseQAResult(output);
-    shadowQaVerdict(output, parsed?.passed ?? null);
     if (!parsed) {
       // A `qa_validation` stage that emits nothing parseable used to mean "no QA
       // signal — skip the retry loop", which let an auditor opt itself out of
@@ -2495,6 +2494,8 @@ export class PipelineManager {
       }
       return { passed: false, issues: [reason], feedback: reason, retryCount: 0, auditGateFailed: true, auditGateReason: 'unparseable' };
     }
+
+    parsed = await applyDecisionQaVerdict(output, parsed);
 
     // A pass that reports one of the item's own criteria as NOT met is the
     // auditor's finding that the work falls short, not a report fault: it goes
@@ -3561,30 +3562,4 @@ export function getPipelineManager(): PipelineManager {
     instance = new PipelineManager();
   }
   return instance;
-}
-
-/**
- * Decision-model QA verdict (docs/plans/decision-models.md, site 9) — SHADOW
- * ONLY, fire-and-forget. Audit reports describe the owner's code and workspace,
- * so the site is `secret`: the privacy gate lets it run on a local model only.
- * Logs agreement with the parsed verdict, and — when nothing parsed — what the
- * decision model would have read, which is the data needed to decide whether
- * it may ever recover a verdict the contract parser missed.
- * ponytail: never promote this to deciding a gate on its own; at most a
- * recovery path for `parsed === null`, and only after the shadow numbers say so.
- */
-const QA_SITE: DecisionSite = { id: 'pipeline.qa-verdict', sensitivity: 'secret', minConfidence: 0.8 };
-
-function shadowQaVerdict(output: string, parsedPassed: boolean | null): void {
-  void decide(QA_SITE, { report: output.slice(-12_000) }, {
-    passed: {
-      type: 'noul',
-      instructions: 'The audit report concludes that the audited work passes: no blocking issue remains.',
-      criteria: { true: 'the report approves the work, at most with minor notes', false: 'the report names blocking issues, fails the work, or asks for changes' },
-    },
-  }).then((answers) => {
-    const a = answers?.passed;
-    if (a?.type !== 'noul') return;
-    recordShadow({ site: QA_SITE.id, parsed: parsedPassed, decision: a.p >= 0.5, p: Number(a.p.toFixed(3)), agreed: parsedPassed === null ? null : parsedPassed === (a.p >= 0.5) });
-  });
 }

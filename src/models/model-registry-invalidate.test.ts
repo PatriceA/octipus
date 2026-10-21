@@ -21,6 +21,8 @@ describe('ModelRegistry.invalidateCache', () => {
     expect(deleted).toContain('model:my-model');
     expect(deleted).toContain('model:mid:gemini-3.1-flash-lite');
     expect(deleted).toContain('model:default');
+    expect(deleted).toContain('model:topic:decision');
+    expect(deleted).toContain('model:topic:backup:decision');
   });
 
   test('omits the mid key when no modelId is provided', async () => {

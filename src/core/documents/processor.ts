@@ -72,10 +72,10 @@ const CATEGORIES = [
 
 /**
  * Decision-model categorization (docs/plans/decision-models.md, site 2).
- * Shadow mode until DOC_CATEGORY_LIVE: the LLM label is used, agreement logged.
+ * Live decisions supply the label; uncertain or unavailable decisions use the LLM.
  */
 const DOC_CATEGORY_SITE: DecisionSite = { id: 'documents.categorize', sensitivity: 'personal', minConfidence: 0.8 };
-const DOC_CATEGORY_LIVE = false;
+const DOC_CATEGORY_LIVE = true;
 const CATEGORY_CRITERIA: Record<typeof CATEGORIES[number], string> = {
   invoices: 'a bill requesting payment',
   contracts: 'an agreement between parties, signed or to be signed',

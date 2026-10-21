@@ -504,7 +504,7 @@ export class ModelRegistry {
     // / evaluation) plus the non-text model classes, so adding a topic in one
     // place keeps invalidation correct — previously this hardcoded list silently
     // omitted knowledge_review and evaluation, leaking their stale bindings.
-    const topics = [...SINGLE_MODEL_CHAT_TOPICS, 'embedding', 'ocr', 'vision'];
+    const topics = [...SINGLE_MODEL_CHAT_TOPICS, 'embedding', 'ocr', 'vision', 'decision'];
     for (const topic of topics) {
       await this.cacheDelete(`model:topic:${topic}`);
       await this.cacheDelete(`model:topic:backup:${topic}`);

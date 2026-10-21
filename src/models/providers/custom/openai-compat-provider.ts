@@ -12,6 +12,8 @@ import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../../litellm-client';
 import type { ModelProvider, ProviderHealthStatus } from '../interface';
 import { BaseCustomProvider, type ResolvedCustomConfig } from './base-custom-provider';
+import { isPrivateEndpoint, type DecisionAnswers, type DecisionRequest } from '@/models/decision';
+import { systemOneDecide } from '@/models/systemone-decision';
 
 /**
  * Custom OpenAI-compatible provider.
@@ -39,6 +41,22 @@ export class CustomOpenAICompatProvider extends BaseCustomProvider implements Mo
    */
   supportsModel(_modelName: string): boolean {
     return false;
+  }
+
+  /** Opt-in native decisions on a local server, using the exact bound row's credentials. */
+  async decide(req: DecisionRequest): Promise<DecisionAnswers> {
+    const cfg = await this.resolveModelConfig(req.model, { model: req.model, messages: [], modelConfigName: req.modelConfigName });
+    if (cfg.model?.metadata?.decisionProtocol !== 'systemone') throw new Error('Custom decision row requires metadata.decisionProtocol=systemone');
+    const policy = cfg.model.metadata.dataPolicy;
+    if (!isPrivateEndpoint(cfg.baseUrl) || policy?.hosting !== 'local' || policy.retention !== 'none' || policy.trainsOnInput !== false) {
+      throw new Error('SystemOne decisions require a private endpoint and explicit local/no-retention/no-training policy');
+    }
+    if (req.endpoint && req.endpoint.replace(/\/+$/, '') !== cfg.baseUrl) throw new Error('Decision endpoint does not match the bound model row');
+    if (req.zeroDataRetention) throw new Error('Local SystemOne does not support gateway zeroDataRetention enforcement');
+    const { headers, queryParams } = this.buildHeaders(cfg.custom, cfg.apiKey);
+    const base = cfg.baseUrl.replace(/\/+$/, '');
+    const url = this.appendQuery(`${base}${base.endsWith('/v1') ? '' : '/v1'}/systemone`, queryParams);
+    return systemOneDecide(url, headers, req, this.fetchFor(cfg));
   }
 
   async complete(options: CompletionOptions): Promise<CompletionResult> {

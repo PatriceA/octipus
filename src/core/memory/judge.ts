@@ -102,9 +102,9 @@ export function relevantClosest<T extends { similarity: number }>(nearest: T | n
   return nearest.similarity >= JUDGE_RELEVANCE_FLOOR ? nearest : null;
 }
 
-/** Decision-model judge (docs/plans/decision-models.md, site 3); shadow until JUDGE_LIVE. */
+/** Decision-model judge (docs/plans/decision-models.md, site 3); live with the existing fallback. */
 const JUDGE_SITE: DecisionSite = { id: 'memory.judge', sensitivity: 'personal', minConfidence: 0.85 };
-const JUDGE_LIVE = false;
+const JUDGE_LIVE = true;
 const JUDGE_ACTIONS: Record<JudgeAction, string> = {
   ADD: 'the candidate is new information, not redundant with the existing fact, or the existing fact is unrelated',
   UPDATE: 'the candidate refines, contradicts or replaces the existing fact (a changed preference, a corrected location, a revised relationship)',

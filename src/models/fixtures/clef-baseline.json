@@ -1,0 +1,372 @@
+{
+  "at": "2026-10-21T12:07:18.801Z",
+  "model": "ggml-org/Clef-Flash-GGUF:Q8_0",
+  "results": [
+    {
+      "request": {
+        "model": "ggml-org/Clef-Flash-GGUF:Q8_0",
+        "state": "Checkout is down. Customers cannot place orders. Fix it now.",
+        "questions": {
+          "test": {
+            "type": "noul",
+            "instructions": "Is a service currently down?"
+          }
+        }
+      },
+      "response": {
+        "model": "ggml-org/Clef-Flash-GGUF:Q8_0",
+        "answers": {
+          "test": {
+            "type": "noul",
+            "noul": 0.9730641221186221
+          }
+        },
+        "usage": {
+          "input_tokens": 155,
+          "output_tokens": 0
+        }
+      },
+      "expected": true,
+      "passed": true,
+      "latencyMs": 1408,
+      "confidence": 0.9730641221186221
+    },
+    {
+      "request": {
+        "model": "ggml-org/Clef-Flash-GGUF:Q8_0",
+        "state": "All systems operational. This is a routine weekly update.",
+        "questions": {
+          "test": {
+            "type": "noul",
+            "instructions": "Is a service currently down?"
+          }
+        }
+      },
+      "response": {
+        "model": "ggml-org/Clef-Flash-GGUF:Q8_0",
+        "answers": {
+          "test": {
+            "type": "noul",
+            "noul": 0.012587309155301462
+          }
+        },
+        "usage": {
+          "input_tokens": 153,
+          "output_tokens": 0
+        }
+      },
+      "expected": false,
+      "passed": true,
+      "latencyMs": 208,
+      "confidence": 0.9874126908446985
+    },
+    {
+      "request": {
+        "model": "ggml-org/Clef-Flash-GGUF:Q8_0",
+        "state": "Please reply with your availability for our meeting.",
+        "questions": {
+          "test": {
+            "type": "noul",
+            "instructions": "Does this message ask the recipient to reply?"
+          }
+        }
+      },
+      "response": {
+        "model": "ggml-org/Clef-Flash-GGUF:Q8_0",
+        "answers": {
+          "test": {
+            "type": "noul",
+            "noul": 0.9723262370605876
+          }
+        },
+        "usage": {
+          "input_tokens": 154,
+          "output_tokens": 0
+        }
+      },
+      "expected": true,
+      "passed": true,
+      "latencyMs": 195,
+      "confidence": 0.9723262370605876
+    },
+    {
+      "request": {
+        "model": "ggml-org/Clef-Flash-GGUF:Q8_0",
+        "state": "Automated receipt for your payment. No reply needed.",
+        "questions": {
+          "test": {
+            "type": "noul",
+            "instructions": "Does this message ask the recipient to reply?"
+          }
+        }
+      },
+      "response": {
+        "model": "ggml-org/Clef-Flash-GGUF:Q8_0",
+        "answers": {
+          "test": {
+            "type": "noul",
+            "noul": 0.011271334440782134
+          }
+        },
+        "usage": {
+          "input_tokens": 156,
+          "output_tokens": 0
+        }
+      },
+      "expected": false,
+      "passed": true,
+      "latencyMs": 193,
+      "confidence": 0.9887286655592179
+    },
+    {
+      "request": {
+        "model": "ggml-org/Clef-Flash-GGUF:Q8_0",
+        "state": "Invoice: amount due 200 euros for consulting services.",
+        "questions": {
+          "test": {
+            "type": "choice",
+            "instructions": "Classify this document.",
+            "criteria": {
+              "invoice": "A request for payment",
+              "contract": "An agreement between parties",
+              "other": "Neither"
+            }
+          }
+        }
+      },
+      "response": {
+        "model": "ggml-org/Clef-Flash-GGUF:Q8_0",
+        "answers": {
+          "test": {
+            "type": "choice",
+            "choice": "invoice",
+            "probabilities": {
+              "contract": 0.006919595510957417,
+              "invoice": 0.9856251655069955,
+              "other": 0.007455238982047047
+            },
+            "confidence": 0.9784377482604931
+          }
+        },
+        "usage": {
+          "input_tokens": 159,
+          "output_tokens": 0
+        }
+      },
+      "expected": "invoice",
+      "passed": true,
+      "latencyMs": 247,
+      "confidence": 0.9784377482604931
+    },
+    {
+      "request": {
+        "model": "ggml-org/Clef-Flash-GGUF:Q8_0",
+        "state": "Employment agreement between the employee and employer, signed by both parties.",
+        "questions": {
+          "test": {
+            "type": "choice",
+            "instructions": "Classify this document.",
+            "criteria": {
+              "invoice": "A request for payment",
+              "contract": "An agreement between parties",
+              "other": "Neither"
+            }
+          }
+        }
+      },
+      "response": {
+        "model": "ggml-org/Clef-Flash-GGUF:Q8_0",
+        "answers": {
+          "test": {
+            "type": "choice",
+            "choice": "contract",
+            "probabilities": {
+              "contract": 0.9280963873105366,
+              "invoice": 0.01985471627569986,
+              "other": 0.05204889641376358
+            },
+            "confidence": 0.8921445809658048
+          }
+        },
+        "usage": {
+          "input_tokens": 160,
+          "output_tokens": 0
+        }
+      },
+      "expected": "contract",
+      "passed": true,
+      "latencyMs": 236,
+      "confidence": 0.8921445809658048
+    },
+    {
+      "request": {
+        "model": "ggml-org/Clef-Flash-GGUF:Q8_0",
+        "state": "The app crashes every time I click Save.",
+        "questions": {
+          "test": {
+            "type": "choice",
+            "instructions": "Which team should handle this?",
+            "criteria": {
+              "billing": "Invoices and payments",
+              "technical": "Software bugs",
+              "sales": "New product purchases"
+            }
+          }
+        }
+      },
+      "response": {
+        "model": "ggml-org/Clef-Flash-GGUF:Q8_0",
+        "answers": {
+          "test": {
+            "type": "choice",
+            "choice": "technical",
+            "probabilities": {
+              "billing": 0.005744195135052835,
+              "sales": 0.005683714452540246,
+              "technical": 0.9885720904124069
+            },
+            "confidence": 0.9828581356186104
+          }
+        },
+        "usage": {
+          "input_tokens": 156,
+          "output_tokens": 0
+        }
+      },
+      "expected": "technical",
+      "passed": true,
+      "latencyMs": 197,
+      "confidence": 0.9828581356186104
+    },
+    {
+      "request": {
+        "model": "ggml-org/Clef-Flash-GGUF:Q8_0",
+        "state": "I was charged twice on my monthly invoice.",
+        "questions": {
+          "test": {
+            "type": "choice",
+            "instructions": "Which team should handle this?",
+            "criteria": {
+              "billing": "Invoices and payments",
+              "technical": "Software bugs",
+              "sales": "New product purchases"
+            }
+          }
+        }
+      },
+      "response": {
+        "model": "ggml-org/Clef-Flash-GGUF:Q8_0",
+        "answers": {
+          "test": {
+            "type": "choice",
+            "choice": "billing",
+            "probabilities": {
+              "billing": 0.9704622277523948,
+              "sales": 0.011190877489801566,
+              "technical": 0.01834689475780373
+            },
+            "confidence": 0.955693341628592
+          }
+        },
+        "usage": {
+          "input_tokens": 156,
+          "output_tokens": 0
+        }
+      },
+      "expected": "billing",
+      "passed": true,
+      "latencyMs": 193,
+      "confidence": 0.955693341628592
+    },
+    {
+      "request": {
+        "model": "ggml-org/Clef-Flash-GGUF:Q8_0",
+        "state": "Production is down. Every customer is blocked. Fix immediately.",
+        "questions": {
+          "test": {
+            "type": "score",
+            "instructions": "How urgent is this?",
+            "criteria": [
+              "Can wait",
+              "This week",
+              "Immediately"
+            ]
+          }
+        }
+      },
+      "response": {
+        "model": "ggml-org/Clef-Flash-GGUF:Q8_0",
+        "answers": {
+          "test": {
+            "type": "score",
+            "score": 1.9458538346904188,
+            "legend": {
+              "0": "Can wait",
+              "1": "This week",
+              "2": "Immediately"
+            },
+            "probabilities": {
+              "0": 0.017628249592626447,
+              "1": 0.018889666124328353,
+              "2": 0.9634820842830453
+            },
+            "confidence": 0.9187807520356281
+          }
+        },
+        "usage": {
+          "input_tokens": 154,
+          "output_tokens": 0
+        }
+      },
+      "expected": 2,
+      "passed": true,
+      "latencyMs": 190,
+      "confidence": 0.9187807520356281
+    },
+    {
+      "request": {
+        "model": "ggml-org/Clef-Flash-GGUF:Q8_0",
+        "state": "An optional suggestion for next year. There is no deadline and no action needed now.",
+        "questions": {
+          "test": {
+            "type": "score",
+            "instructions": "How urgent is this?",
+            "criteria": [
+              "Can wait",
+              "This week",
+              "Immediately"
+            ]
+          }
+        }
+      },
+      "response": {
+        "model": "ggml-org/Clef-Flash-GGUF:Q8_0",
+        "answers": {
+          "test": {
+            "type": "score",
+            "score": 0.004730550273761857,
+            "legend": {
+              "0": "Can wait",
+              "1": "This week",
+              "2": "Immediately"
+            },
+            "probabilities": {
+              "0": 0.9966671486331226,
+              "1": 0.0019351524599930205,
+              "2": 0.0013976989068844182
+            },
+            "confidence": 0.9929041745893572
+          }
+        },
+        "usage": {
+          "input_tokens": 159,
+          "output_tokens": 0
+        }
+      },
+      "expected": 0,
+      "passed": true,
+      "latencyMs": 188,
+      "confidence": 0.9929041745893572
+    }
+  ]
+}

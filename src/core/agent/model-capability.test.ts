@@ -17,6 +17,7 @@ import {
 } from './model-capability';
 import { classifyMessage } from './classifier';
 import { ModelSelector } from './model-selector';
+import * as laneIntent from './lane-intent';
 import {
   _resetSessionModelOverridesForTesting,
   setSessionModel,
@@ -110,6 +111,15 @@ describe('root model binding selection', () => {
       getAllModels: async () => models,
     } as never);
   }
+
+  test('reuses the root runner decision so model and worker cannot choose different lanes', async () => {
+    installRegistry();
+    const decision = vi.spyOn(laneIntent, 'selectLaneWithDecision');
+    expect(await selectId(new ModelSelector(), undefined, 'task', {
+      message: 'hello', laneChoice: { lane: 'build', reason: 'decision model selected the lane' },
+    })).toBe(buildLaneModel.modelId);
+    expect(decision).not.toHaveBeenCalled();
+  });
 
   test('a coding request routes to the build lane', async () => {
     installRegistry();

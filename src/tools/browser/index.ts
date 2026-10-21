@@ -493,12 +493,11 @@ export const browserTool = new BrowserTool();
  * Decision-model page-state hints (docs/plans/decision-models.md, site 10):
  * after a navigation, ask whether the page is blocked by a cookie banner, a
  * login wall or a captcha, so the agent can deal with it instead of reading
- * a blocked page. Shadow until BROWSER_HINTS_LIVE: fire-and-forget, logs
- * which hints it would add (labels only), and returns nothing.
+ * a blocked page. Live mode includes confident hints in the tool response.
  * Agent-driven pages can carry the owner's logged-in content → `personal`.
  */
 const BROWSER_SITE: DecisionSite = { id: 'browser.page-state', sensitivity: 'personal', minConfidence: 0 };
-const BROWSER_HINTS_LIVE = false;
+const BROWSER_HINTS_LIVE = true;
 const HINT_P = 0.8;
 const SNAPSHOT_TIMEOUT_MS = 1000;
 const PAGE_QUESTIONS = {
@@ -509,8 +508,7 @@ const PAGE_QUESTIONS = {
 
 async function pageStateHints(page: Page): Promise<{ pageState?: string[] }> {
   if (!(await decisionModelBound())) return {};
-  // Snapshot now: in shadow mode the agent may navigate on before the decision
-  // returns. Capped at SNAPSHOT_TIMEOUT_MS — Playwright's default action timeout
+  // Snapshot is capped at SNAPSHOT_TIMEOUT_MS — Playwright's default action timeout
   // is 30s, and a body that is not ready yet must not stall the tool reply.
   const state = { url: page.url(), title: await page.title().catch(() => ''), text: (await page.innerText('body', { timeout: SNAPSHOT_TIMEOUT_MS }).catch(() => '')).slice(0, 6000) };
   const ask = async () => {

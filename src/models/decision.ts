@@ -35,6 +35,8 @@ export interface DecisionRequest {
   zeroDataRetention: boolean;
   /** The model row's endpoint override, when set (e.g. a second Ollama host). */
   endpoint?: string;
+  /** Exact bound row: model ids are not unique across endpoints/credentials. */
+  modelConfigName?: string;
 }
 
 export type Sensitivity = 'public' | 'personal' | 'secret';
@@ -258,7 +260,7 @@ async function decideUnguarded(site: DecisionSite, state: unknown, questions: Re
   try {
     const { withProviderUsageContext } = await import('@/models/providers/instrumented');
     answers = await withProviderUsageContext({ modelConfigName: model.name, accountingMetadata: { decisionSite: site.id } }, () =>
-      provider.decide!({ model: model.modelId, state, questions, zeroDataRetention: verdict.zeroDataRetention, endpoint: model.endpoint ?? undefined }));
+      provider.decide!({ model: model.modelId, modelConfigName: model.name, state, questions, zeroDataRetention: verdict.zeroDataRetention, endpoint: model.endpoint ?? undefined }));
   } catch (err) {
     if (err instanceof ZdrUnavailableError) {
       zdrUnavailableUntil.set(model.name, Date.now() + REMEMBER_MS);

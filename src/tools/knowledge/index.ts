@@ -1,3 +1,4 @@
+import { filterRelevance } from './relevance';
 import { type EntityRef, entityRefFromSourceId, getKnowledgeGraph, type TraversalDirection } from '@/core/knowledge/graph';
 import { reposFor } from '@/db/repositories/content';
 import { slugify } from '@/core/knowledge/wikilink';
@@ -7,7 +8,6 @@ import { getFileIndexer } from '@/core/rag/indexer';
 import { agentKnowledgeOwner, agentKnowledgeScope } from '@/core/rag/knowledge-scope';
 import type { AgentContext, ToolManifest } from '@/core/types';
 import { getKnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
-import { decide, type DecisionSite, recordShadow } from '@/models/decision';
 import { WorkspaceFS, WorkspaceFsError } from '@/security/workspace-fs';
 import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 
@@ -175,7 +175,7 @@ export class KnowledgeTool extends BaseTool {
             results = await service.hybridSearch(knowledge, args.query as string, limit, purpose, undefined, minSimilarity, scope);
         }
 
-        shadowRelevance(args.query as string, results);
+        results = await filterRelevance(args.query as string, results);
 
         if (results.length === 0) {
           return {
@@ -449,29 +449,3 @@ export class KnowledgeTool extends BaseTool {
 }
 
 export const knowledgeTool = new KnowledgeTool();
-
-/**
- * Decision-model relevance filter (docs/plans/decision-models.md, site 7) —
- * SHADOW ONLY: one `noul` per hit ("this passage helps answer the query"),
- * fire-and-forget, logs how many hits a live filter would drop (counts only).
- * Per-question thresholds instead of the site-wide minConfidence, so one
- * uncertain passage does not void the others.
- * ponytail: going live = await it and drop hits with p < DROP_BELOW; do that
- * only after the shadow counts show it removes noise, not answers.
- */
-const RELEVANCE_SITE: DecisionSite = { id: 'knowledge.relevance', sensitivity: 'personal', minConfidence: 0 };
-const DROP_BELOW = 0.2;
-
-function shadowRelevance(query: string, results: Array<{ abstract?: string | null; content: string }>): void {
-  if (results.length < 2) return;
-  const passages = Object.fromEntries(results.map((r, i) => [String(i + 1), (r.abstract || r.content).slice(0, 1500)]));
-  const questions = Object.fromEntries(results.map((_, i) => [`p${i + 1}`, {
-    type: 'noul' as const,
-    instructions: `Passage ${i + 1} contains information that helps answer the query.`,
-  }]));
-  void decide(RELEVANCE_SITE, { query, passages }, questions).then((answers) => {
-    if (!answers) return;
-    const drop = Object.values(answers).filter((a) => a.type === 'noul' && a.p < DROP_BELOW).length;
-    recordShadow({ site: RELEVANCE_SITE.id, hits: results.length, wouldDrop: drop });
-  });
-}

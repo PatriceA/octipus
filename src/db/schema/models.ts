@@ -133,6 +133,8 @@ export interface ModelMetadata {
   dataPolicy?: { hosting: 'local' | 'remote'; retention: 'none' | 'provider'; trainsOnInput: boolean };
   /** Owner opt-in: personal data may go to this model even though the provider retains input. */
   allowRetainedPersonalData?: boolean;
+  /** Native decision API on a custom-openai row; never inferred from its model id. */
+  decisionProtocol?: 'systemone';
   /** CLI sub-agent configuration (only for provider='cli') */
   cliAgent?: CLIAgentConfig;
   /** Custom provider configuration (only for provider='custom-openai', 'custom-anthropic', or 'custom-gemini') */

@@ -6,6 +6,7 @@
  * Reads the backend log on stdin — raw pino JSON or the pretty format `octi`
  * writes to ~/.octipus/backend.log:
  *   npx tsx scripts/decision-shadow.ts < ~/.octipus/backend.log
+ *   npx tsx scripts/decision-shadow.ts < ~/.octipus/decision-shadow.jsonl
  *   docker logs octipus 2>&1 | npx tsx scripts/decision-shadow.ts
  *   journalctl -u octipus -o cat | npx tsx scripts/decision-shadow.ts
  *
@@ -14,6 +15,7 @@
 import { createInterface } from 'node:readline';
 
 const sites = new Map<string, { n: number; agreed: number; compared: number; other: Record<string, number> }>();
+const decisions = new Map<string, { n: number; confident: number; latency: number[] }>();
 
 /** Yield each log record as an object: JSON lines as-is, pretty blocks (`[ts] INFO: msg` + indented `key: value`) rebuilt. */
 async function* records(): AsyncGenerator<Record<string, unknown>> {
@@ -39,7 +41,17 @@ async function* records(): AsyncGenerator<Record<string, unknown>> {
 }
 
 for await (const e of records()) {
-  if (e.msg !== 'decision shadow' || typeof e.site !== 'string') continue;
+  if (typeof e.site !== 'string') continue;
+  if ((e.kind === 'decision' || e.msg === 'Decision') && typeof e.confident === 'boolean') {
+    const key = `${e.site} | ${typeof e.model === 'string' ? e.model : 'unknown model'}`;
+    const d = decisions.get(key) ?? { n: 0, confident: 0, latency: [] };
+    d.n++;
+    if (e.confident) d.confident++;
+    if (typeof e.latencyMs === 'number' && Number.isFinite(e.latencyMs)) d.latency.push(e.latencyMs);
+    decisions.set(key, d);
+    continue;
+  }
+  if (e.msg !== 'decision shadow' && e.kind !== 'shadow') continue;
   const s = sites.get(e.site) ?? { n: 0, agreed: 0, compared: 0, other: {} };
   s.n++;
   // email.triage batches carry compared/agreed counts; single-label sites a boolean.
@@ -50,7 +62,14 @@ for await (const e of records()) {
   sites.set(e.site, s);
 }
 
-if (sites.size === 0) console.log('No "decision shadow" lines. Is a model bound to the decision topic?');
+if (sites.size === 0 && decisions.size === 0) console.log('No decision records. Is a model bound to the decision topic?');
+for (const [key, d] of [...decisions].sort()) {
+  const latencies = d.latency.sort((a, b) => a - b);
+  const percentile = (p: number) => latencies.length ? `${latencies[Math.ceil(latencies.length * p) - 1]} ms` : 'unknown';
+  console.log(`${key}: ${(100 * d.confident / d.n).toFixed(1)}% confident (${d.confident}/${d.n}); p50 ${percentile(0.5)}, p95 ${percentile(0.95)}`);
+}
+if (decisions.size) console.log('Confidence coverage counts validated responses only; failures and privacy blocks are not in this denominator.');
+if (sites.size) console.log('Agreement is grouped by site; historical shadow records have no model identity. Compare separate time windows for each model. Agreement is not labelled accuracy.');
 for (const [site, s] of [...sites].sort()) {
   const agreement = s.compared ? `${((100 * s.agreed) / s.compared).toFixed(1)}% agreed (${s.agreed}/${s.compared})` : 'no comparisons';
   const extra = Object.keys(s.other).length ? `  ${JSON.stringify(s.other)}` : '';

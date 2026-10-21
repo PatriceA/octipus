@@ -20,7 +20,7 @@
  * one fact, and the copy is the one that goes stale.
  */
 
-import { choiceOf, decide, type DecisionSite, recordShadow } from '@/models/decision';
+import { choiceOf, decide, type DecisionSite } from '@/models/decision';
 import { canonicalTopic } from '@/models/topics';
 import type { MessageClassification } from './types';
 
@@ -89,14 +89,7 @@ export function selectLane(message: string, classification?: MessageClassificati
   return { lane: 'everyday', reason: 'no signal for anything dearer' };
 }
 
-/**
- * Decision-model lane routing (docs/plans/decision-models.md, site 5) — SHADOW
- * ONLY. Asked only when the keyword classifier was not confident, i.e. when
- * `selectLane` fell through to its artefact/default heuristics. Fire-and-forget
- * so a turn never waits on it; it logs agreement with the heuristic.
- * ponytail: going live means making lane selection async at both callers
- * (root-runner, model-selector) and passing `npm run eval:routing` first.
- */
+/** Live decision routing for requests the keyword classifier cannot confidently place. */
 const LANE_SITE: DecisionSite = { id: 'routing.lane', sensitivity: 'personal', minConfidence: 0.8 };
 const LANE_CRITERIA: Record<Lane, string> = {
   build: 'implementation, architecture, debugging or code review: work that leaves an artefact (code, config, a file) someone will depend on',
@@ -105,14 +98,16 @@ const LANE_CRITERIA: Record<Lane, string> = {
   research: 'investigation or deep research across many sources',
 };
 
-export function shadowLaneDecision(message: string, classification: MessageClassification | undefined, heuristic: LaneChoice): void {
-  if (classification?.topic && (classification.confidence ?? 0) >= LANE_CONFIDENCE_FLOOR) return;
-  void decide(LANE_SITE, { request: (message ?? '').slice(0, 4000) }, {
+export async function selectLaneWithDecision(message: string, classification?: MessageClassification): Promise<LaneChoice> {
+  const heuristic = selectLane(message, classification);
+  if (classification?.topic && (classification.confidence ?? 0) >= LANE_CONFIDENCE_FLOOR) return heuristic;
+  const answer = await decide(LANE_SITE, { request: (message ?? '').slice(0, 4000) }, {
     lane: { type: 'choice', instructions: 'Which kind of work does this request ask for?', criteria: LANE_CRITERIA },
-  }).then((answer) => {
-    const decided = choiceOf(answer, 'lane');
-    if (decided) recordShadow({ site: LANE_SITE.id, agreed: decided === heuristic.lane, decision: decided, heuristic: heuristic.lane });
   });
+  const decided = choiceOf(answer, 'lane');
+  return decided && LANES.includes(decided)
+    ? { lane: decided as Lane, reason: 'decision model selected the lane' }
+    : heuristic;
 }
 
 /**

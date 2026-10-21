@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-520 mounted routes across 71 route files. The path is the full one, group prefix included — what a client actually calls.
+522 mounted routes across 71 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -220,6 +220,8 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/mcp/servers` | `src/api/routes/mcp.ts` |
 | POST | `/api/mcp/servers` | `src/api/routes/mcp.ts` |
 | DELETE | `/api/mcp/servers/:id` | `src/api/routes/mcp.ts` |
+| GET | `/api/mcp/servers/:id/config` | `src/api/routes/mcp.ts` |
+| PUT | `/api/mcp/servers/:id/config` | `src/api/routes/mcp.ts` |
 | POST | `/api/mcp/servers/:id/connect` | `src/api/routes/mcp.ts` |
 | PUT | `/api/mcp/servers/:id/description` | `src/api/routes/mcp.ts` |
 | POST | `/api/mcp/servers/:id/disconnect` | `src/api/routes/mcp.ts` |
@@ -559,12 +561,12 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `db` | 114 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
-| `api` | `mcp` | 3 |
+| `api` | `mcp` | 4 |
 | `api` | `models` | 39 |
 | `api` | `plugins` | 1 |
 | `api` | `security` | 132 |
 | `api` | `services` | 5 |
-| `api` | `shared` | 10 |
+| `api` | `shared` | 11 |
 | `api` | `skills` | 6 |
 | `api` | `tools` | 4 |
 | `api` | `utils` | 66 |

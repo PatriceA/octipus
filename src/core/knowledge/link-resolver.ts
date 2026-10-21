@@ -70,9 +70,9 @@ const MAX_CANDIDATES = 3;
  */
 const MIN_CANDIDATE_SIMILARITY = 0.35;
 
-/** Decision-model pair resolver (docs/plans/decision-models.md, site 4); shadow until RESOLVER_LIVE. */
+/** Decision-model pair resolver (docs/plans/decision-models.md, site 4); live with the existing fallback. */
 const RESOLVER_SITE: DecisionSite = { id: 'knowledge.link-resolver', sensitivity: 'personal', minConfidence: 0.85 };
-const RESOLVER_LIVE = false;
+const RESOLVER_LIVE = true;
 
 const RESOLVER_SYSTEM_PROMPT = `${SECURITY_PREAMBLE}
 

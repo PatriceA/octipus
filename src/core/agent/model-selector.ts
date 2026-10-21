@@ -4,7 +4,7 @@ import type { SpaceRole } from '@/db/schema/organizations';
 import { InstallModelsDeniedError, mayUseInstallModels } from '@/models/install-access';
 import { personalRowAllowed, resolveModel, usableInSpace } from '@/models/resolve-model';
 import { coreLogger } from '@/utils/logger';
-import { selectLane } from './lane-intent';
+import { selectLaneWithDecision, type LaneChoice } from './lane-intent';
 import { hasRecentShim } from './model-capability';
 import { getSessionModel } from './session-model-override';
 import type { MessageClassification } from './types';
@@ -119,7 +119,7 @@ export class ModelSelector {
     sessionId?: string,
     turnType: MessageClassification['type'] = 'casual',
     /** The request being routed, and its classification. Absent ⇒ no routing. */
-    routing?: { message: string; classification?: MessageClassification },
+    routing?: { message: string; classification?: MessageClassification; laneChoice?: LaneChoice },
     requester: ModelRequester = {},
   ): Promise<SelectedModel> {
     const registry = getModelRegistry();
@@ -154,7 +154,7 @@ export class ModelSelector {
     // meant one binding served a coding brief and "what's the weather" alike.
     // A lane is the same answer without the indirection, and it is chosen per
     // message rather than per install.
-    const routed = routing ? selectLane(routing.message, routing.classification) : null;
+    const routed = routing ? routing.laneChoice ?? await selectLaneWithDecision(routing.message, routing.classification) : null;
     if (routed) {
       const routedModel = await resolveModel({ userId: requester.userId, topic: routed.lane, inSpace: requester.inSpace, spaceRole: requester.spaceRole, sponsor: requester.sponsor });
       if (routedModel) {

@@ -28,7 +28,7 @@ import { estimateToolSchemaTokens, logPromptComposition, recordContextFill } fro
 import { buildSecurityReminder } from './input-guard';
 import { createMetaTools } from './meta-tools';
 import { shouldUseLazyDiscovery } from './lazy-tools';
-import { selectLane, shadowLaneDecision } from './lane-intent';
+import { selectLaneWithDecision } from './lane-intent';
 import { selectCoreToolIds } from './tool-intent';
 import { isPlanMode, PLAN_MODE_DIRECTIVE, stripMutatingTools } from './plan-mode';
 import { isLongTailHandler } from './tool-split';
@@ -225,13 +225,12 @@ export async function runRootAgent(
   // selector so the worker cannot be spawned under a different lane than the one
   // that chose its model — which is what happened while the root always spawned
   // under `general` (→ everyday) no matter where the request was routed.
-  const laneChoice = selectLane(message, classification);
-  shadowLaneDecision(message, classification, laneChoice);
+  const laneChoice = await selectLaneWithDecision(message, classification);
   const routedLane = laneChoice.lane;
   // The requester's own choices first (their `/model`, their personal lane
   // binding), then the install's (coworking spec §8.2).
   const inSpace = !!space;
-  const selectedModel = await deps.modelSelector.selectForRootAgent(sessionId, classification.type, { message, classification }, { userId, inSpace, spaceRole: space?.role, sponsor: scope.sponsor });
+  const selectedModel = await deps.modelSelector.selectForRootAgent(sessionId, classification.type, { message, classification, laneChoice }, { userId, inSpace, spaceRole: space?.role, sponsor: scope.sponsor });
   const modelName = selectedModel.modelId;
   const modelMeta = await getModelRegistry().getModel(selectedModel.name);
   const attachmentSession = extras.attachedFiles?.length ? await sessionRepository.findById(sessionId) : null;

@@ -361,13 +361,11 @@ export function triageEntries(parsed: unknown): Array<[string, Record<string, un
 }
 
 /**
- * Decision-model triage (docs/plans/decision-models.md, site 1). `live: false`
- * = shadow mode: the LLM result is returned and agreement is logged. Flip to
- * live once shadow logs + a labelled check show the decision model is at least
- * as good; then only the items it is unsure about go to the LLM.
+ * Live decision-model triage (docs/plans/decision-models.md, site 1).
+ * Confident decisions win; unanswered items retain the existing LLM path.
  */
 const TRIAGE_SITE: DecisionSite = { id: 'email.triage', sensitivity: 'personal', minConfidence: 0.8 };
-const TRIAGE_LIVE = false;
+const TRIAGE_LIVE = true;
 const PRIORITIES = ['low', 'normal', 'high'] as const;
 
 /**

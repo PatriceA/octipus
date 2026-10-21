@@ -1,8 +1,4 @@
-/**
- * Decision-model triage in shadow mode: the LLM result is what the user gets,
- * the decision model's answer is only compared — and an unbound/declined
- * decision model changes nothing.
- */
+/** Live triage uses confident decisions and sends only undecided mail to the LLM. */
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 // Not under test here: the install-model gate (install-access.isolation.test.ts) lets these fake ids through.
 vi.mock('@/models/install-access', async (importOriginal) => ({
@@ -13,9 +9,8 @@ vi.mock('@/models/install-access', async (importOriginal) => ({
 import type { InboxItem } from './types';
 
 let decision: unknown = null;
-let hang = false;
 let llmCalls = 0;
-vi.mock('@/models/decision', () => ({ recordShadow: vi.fn(), decide: vi.fn(() => (hang ? new Promise(() => {}) : Promise.resolve(decision))) }));
+vi.mock('@/models/decision', () => ({ recordShadow: vi.fn(), decide: vi.fn(() => Promise.resolve(decision)) }));
 vi.mock('@/db/repositories/user-repository', () => ({ userRepository: { findById: async () => ({ preferences: {} }) } }));
 vi.mock('@/models/model-registry', async () => ({
   ...(await vi.importActual<typeof import('@/models/model-registry')>('@/models/model-registry')),
@@ -33,8 +28,8 @@ vi.mock('@/models/litellm-client', async () => ({
 const { triageInbox } = await import('./service');
 const item: InboxItem = { id: 'm1', provider: 'google', from: { email: 'a@b.c' }, subject: 's', snippet: 'x', receivedAt: '', unread: true };
 
-describe('triageInbox with a decision model (shadow)', () => {
-  beforeEach(() => { decision = null; hang = false; llmCalls = 0; });
+describe('triageInbox with a decision model (live)', () => {
+  beforeEach(() => { decision = null; llmCalls = 0; });
 
   test('120 mails are triaged in batches of 30, all of them', async () => {
     const many = Array.from({ length: 120 }, (_, i) => ({ ...item, id: `m${i}` }));
@@ -43,20 +38,16 @@ describe('triageInbox with a decision model (shadow)', () => {
     expect(llmCalls).toBe(4);
   });
 
-  test('a hung decision model does not delay the triage result (shadow)', async () => {
-    hang = true;
-    expect((await triageInbox('u', [item])).m1.priority).toBe('high');
-  });
-
   test('no decision model → LLM triage unchanged', async () => {
     expect(await triageInbox('u', [item])).toEqual({ m1: { priority: 'high', category: 'work', reason: 'r' } });
   });
 
-  test('decision model answers → still returns the LLM result', async () => {
+  test('confident decisions replace the LLM result', async () => {
     decision = {
       priority: { type: 'score', score: 0.1, probabilities: {}, confidence: 0.9 },
       category: { type: 'choice', choice: 'promotion', probabilities: {}, confidence: 0.9 },
     };
-    expect((await triageInbox('u', [item])).m1.priority).toBe('high');
+    expect((await triageInbox('u', [item])).m1).toEqual({ priority: 'low', category: 'promotion' });
+    expect(llmCalls).toBe(0);
   });
 });

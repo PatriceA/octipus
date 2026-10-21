@@ -155,6 +155,15 @@ describe('decide() gate wiring', () => {
   };
   const q = { x: { type: 'noul' as const, instructions: 'x' } };
 
+  it('passes exact row identity and endpoint to a configured local decision provider', async () => {
+    const { decide } = await import('./decision');
+    const wired = await wire({ name: 'tower-decision', provider: 'custom-openai', modelId: 'shared-id', endpoint: 'http://192.168.1.156:8080/v1', metadata: { dataPolicy: { hosting: 'local', retention: 'none', trainsOnInput: false } } });
+    try {
+      expect(await decide({ id: 'local-native', sensitivity: 'secret', minConfidence: 0.8 }, 'test', q)).not.toBeNull();
+      expect(wired.sent).toHaveBeenCalledWith(expect.objectContaining({ model: 'shared-id', modelConfigName: 'tower-decision', endpoint: 'http://192.168.1.156:8080/v1', zeroDataRetention: false }));
+    } finally { wired.restore(); }
+  });
+
   it('an Ollama cloud model behind localhost never gets secret data', async () => {
     const { decide } = await import('./decision');
     const byName = await wire({ provider: 'ollama', modelId: 'gpt-oss:120b-cloud', endpoint: 'http://localhost:11434' });

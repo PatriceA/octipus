@@ -1,0 +1,68 @@
+{
+  "at": "2026-10-21T12:06:37.077Z",
+  "request": {
+    "model": "ggml-org/Clef-Flash-GGUF:Q8_0",
+    "state": "The checkout is broken and all orders are blocked. Please fix it now.",
+    "questions": {
+      "outage": {
+        "type": "noul",
+        "instructions": "Is a service down?"
+      },
+      "team": {
+        "type": "choice",
+        "instructions": "Which team should handle this?",
+        "criteria": {
+          "billing": "Invoices and payments",
+          "technical": "Bugs and outages"
+        }
+      },
+      "urgency": {
+        "type": "score",
+        "instructions": "How urgent is this?",
+        "criteria": [
+          "Can wait",
+          "This week",
+          "Immediately"
+        ]
+      }
+    }
+  },
+  "status": 200,
+  "response": {
+    "model": "ggml-org/Clef-Flash-GGUF:Q8_0",
+    "answers": {
+      "outage": {
+        "type": "noul",
+        "noul": 0.9466813351521018
+      },
+      "team": {
+        "type": "choice",
+        "choice": "technical",
+        "probabilities": {
+          "billing": 0.03344920563108954,
+          "technical": 0.9665507943689106
+        },
+        "confidence": 0.9331015887378211
+      },
+      "urgency": {
+        "type": "score",
+        "score": 1.9476837470934163,
+        "legend": {
+          "0": "Can wait",
+          "1": "This week",
+          "2": "Immediately"
+        },
+        "probabilities": {
+          "0": 0.017372679730652714,
+          "1": 0.017570893445278464,
+          "2": 0.9650564268240689
+        },
+        "confidence": 0.9215256206401241
+      }
+    },
+    "usage": {
+      "input_tokens": 308,
+      "output_tokens": 0
+    }
+  }
+}
