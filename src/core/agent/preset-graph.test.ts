@@ -15,6 +15,7 @@
 import { describe, expect, test } from 'vitest';
 import { PRESET_TEMPLATES } from '@/db/seed-presets';
 import { compileTemplateToGraph, nodeKeyFor, validateGraph } from './pipeline-graph';
+import { validatePipelineStages } from './pipeline-validation';
 import { stepConfigToStageTemplate } from './templates';
 
 const presets = PRESET_TEMPLATES.filter((p) => Array.isArray(p.steps) && p.steps.length > 0);
@@ -33,6 +34,11 @@ describe('shipped pipeline presets', () => {
     // silently skipped work at runtime, and `createAndRun` refuses to run a
     // graph it rejects — so a preset failing here cannot be run at all.
     expect(validateGraph(graphOf(preset))).toEqual([]);
+  });
+
+  test.each(presets.map((p) => [p.name, p] as const))('%s passes the editor\'s save-time validation', (_name, preset) => {
+    // A preset a user duplicates must save without edits.
+    expect(validatePipelineStages(preset.steps)).toEqual([]);
   });
 
   test.each(presets.map((p) => [p.name, p] as const))(

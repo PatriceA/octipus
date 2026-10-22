@@ -15,6 +15,47 @@ export interface PipelineStageInput {
   stageType?: string;
   retryTargetStage?: number;
   maxRetries?: number;
+  loopOverPlan?: boolean;
+  producesPlan?: boolean;
+  maxPlanItems?: number;
+}
+
+/**
+ * One plan loop of a template, as `compileTemplateToGraph` will build it: a
+ * maximal run of CONSECUTIVE `loopOverPlan` steps that repeats once per plan
+ * item. Indices are 0-based step indices.
+ */
+export interface PlanLoopInfo {
+  /** First and last step of the loop body (inclusive). */
+  start: number;
+  end: number;
+  /** The step that writes the plan this loop iterates: the nearest earlier `producesPlan` step, if any. */
+  plannerIndex: number | null;
+  /** The loop's item cap (`maxPlanItems` of its first step declaring one); null ⇒ no cap. */
+  maxItems: number | null;
+  /** The plan is shown for sign-off once before the loop starts — the first body step's `requiresApproval`. */
+  approvesPlan: boolean;
+}
+
+/** The plan loops a list of steps compiles to — the same grouping rule as the graph compiler. */
+export function describePlanLoops(steps: readonly PipelineStageInput[]): PlanLoopInfo[] {
+  const loops: PlanLoopInfo[] = [];
+  for (let i = 0; i < steps.length; i++) {
+    if (!steps[i].loopOverPlan) continue;
+    const start = i;
+    while (i + 1 < steps.length && steps[i + 1].loopOverPlan) i++;
+    let plannerIndex: number | null = null;
+    for (let p = start - 1; p >= 0; p--) if (steps[p].producesPlan) { plannerIndex = p; break; }
+    const capped = steps.slice(start, i + 1).find((st) => typeof st.maxPlanItems === 'number');
+    loops.push({
+      start,
+      end: i,
+      plannerIndex,
+      maxItems: capped?.maxPlanItems ?? null,
+      approvesPlan: !!steps[start].requiresApproval,
+    });
+  }
+  return loops;
 }
 
 export function validatePipelineStages(steps: PipelineStageInput[]): string[] {
@@ -42,6 +83,28 @@ export function validatePipelineStages(steps: PipelineStageInput[]): string[] {
       }
       if (typeof s.maxRetries === 'number' && s.maxRetries < 1) {
         errors.push(`Stage ${i + 1} (QA): maxRetries must be ≥ 1.`);
+      }
+    }
+    if (s.maxPlanItems != null) {
+      if (!s.loopOverPlan) {
+        errors.push(`Stage ${i + 1}: a plan item limit only applies to a step that repeats for each plan item.`);
+      } else if (!Number.isInteger(s.maxPlanItems) || s.maxPlanItems < 1) {
+        errors.push(`Stage ${i + 1}: the plan item limit must be a whole number ≥ 1.`);
+      }
+    }
+  }
+  // A QA step inside a plan loop judges one item, so its retry must re-run a
+  // step of the same loop. The compiler would otherwise re-target it to the
+  // loop's first step without saying so — said here instead, at save time.
+  for (const loop of describePlanLoops(steps)) {
+    for (let i = loop.start; i <= loop.end; i++) {
+      const target = steps[i].retryTargetStage;
+      if (steps[i].stageType !== 'qa_validation' || typeof target !== 'number' || target >= i || target < 0) continue;
+      if (target < loop.start) {
+        errors.push(
+          `Stage ${i + 1} (QA) repeats for each plan item, so its retry target must be a step of the same ` +
+            `plan loop (stages ${loop.start + 1}–${loop.end + 1}), not stage ${target + 1}.`,
+        );
       }
     }
   }

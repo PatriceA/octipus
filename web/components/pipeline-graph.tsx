@@ -1,7 +1,8 @@
 'use client';
 
-import { GripVertical, Plus, RotateCcw, Shield, Trash2 } from 'lucide-react';
+import { GripVertical, ListChecks, Plus, RotateCcw, Shield, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState, type JSX } from 'react';
+import { describePlanLoops } from '../../src/core/agent/pipeline-validation';
 
 interface Step {
   name: string;
@@ -10,6 +11,9 @@ interface Step {
   stageType?: string;
   retryTargetStage?: number;
   maxRetries?: number;
+  loopOverPlan?: boolean;
+  producesPlan?: boolean;
+  maxPlanItems?: number;
 }
 
 interface Props {
@@ -48,7 +52,9 @@ interface Props {
 
 /**
  * Pure-SVG pipeline DAG view. Stages render top-to-bottom with arrows;
- * QA validation stages draw a curved retry arrow back to their target stage.
+ * QA validation stages draw a curved retry arrow back to their target stage,
+ * and a plan loop is drawn as a dashed frame around its steps with a return
+ * arrow on the left ("for each plan item").
  *
  * In editable mode (`editable`), the graph is a first-class edit surface:
  * delete a stage, insert between stages, or click to focus it in the
@@ -72,7 +78,10 @@ export function PipelineGraph({
   const BOX_W = 280;
   const BOX_H = 64;
   const GAP = 32;
-  const PAD_X = 24;
+  const loops = describePlanLoops(steps);
+  // A left lane for the plan loop's return arrow, only when there is a loop.
+  const LOOP_LANE_W = loops.length > 0 ? 40 : 0;
+  const PAD_X = 24 + LOOP_LANE_W;
   const PAD_Y = editable ? 24 : 8; // top breathing room for the leading insertion button
   const RETRY_LANE_W = 80;
   const ROW_H = BOX_H + GAP;
@@ -191,6 +200,52 @@ export function PipelineGraph({
             </button>
           </foreignObject>
         )}
+
+        {/* Plan loops — drawn first so they sit behind the stage cards. */}
+        {loops.map((loop) => {
+          const top = PAD_Y + loop.start * ROW_H;
+          const bottom = PAD_Y + loop.end * ROW_H + BOX_H;
+          const laneX = PAD_X - 22;
+          const startY = PAD_Y + loop.end * ROW_H + BOX_H / 2;
+          const endY = top + BOX_H / 2;
+          const label = `each plan item${loop.maxItems ? ` (max ${loop.maxItems})` : ''}`;
+          return (
+            <g key={`loop-${loop.start}`} aria-label={`Plan loop: stages ${loop.start + 1} to ${loop.end + 1} repeat for each plan item`}>
+              <rect
+                x={PAD_X - 10}
+                y={top - 10}
+                width={BOX_W + 20}
+                height={bottom - top + 20}
+                rx="16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeDasharray="4 4"
+                className="text-primary"
+                opacity="0.6"
+              />
+              <path
+                d={`M ${PAD_X} ${startY} L ${laneX} ${startY} L ${laneX} ${endY} L ${PAD_X - 4} ${endY}`}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeDasharray="6 3"
+                className="text-primary"
+                markerEnd="url(#arrow-retry)"
+              />
+              <text
+                x={laneX - 6}
+                y={(startY + endY) / 2}
+                fontSize="10"
+                textAnchor="middle"
+                transform={`rotate(-90 ${laneX - 6} ${(startY + endY) / 2})`}
+                className="fill-blue-400"
+              >
+                {loop.start === loop.end ? label : `↻ ${label}`}
+              </text>
+            </g>
+          );
+        })}
 
         {steps.map((step, i) => {
           const y = PAD_Y + i * ROW_H;
@@ -319,6 +374,11 @@ export function PipelineGraph({
               {step.stageType === 'qa_validation' && (
                 <foreignObject x={PAD_X + BOX_W - 56} y={y + 8} width="20" height="20">
                   <RotateCcw className="w-4 h-4 text-primary" />
+                </foreignObject>
+              )}
+              {step.producesPlan && (
+                <foreignObject x={PAD_X + BOX_W - 80} y={y + 8} width="20" height="20">
+                  <span title="Writes the plan"><ListChecks className="w-4 h-4 text-primary" /></span>
                 </foreignObject>
               )}
               {/* Drag handle (edit + reorder mode) — leading edge of the card */}

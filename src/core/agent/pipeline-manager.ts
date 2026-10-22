@@ -1439,6 +1439,12 @@ export class PipelineManager {
         pipelineSources.push(`stage(${node.ordinal + 1}: ${node.name}/human)`);
         outcome = 'ok';
       } else if (gnode.kind === 'foreach') {
+        // A loop's cap is declared on its first body step that sets one
+        // (`describePlanLoops` reads the template the same way).
+        const maxItems = graph.nodes
+          .filter((n) => n.parentKey === cursor)
+          .map((n) => built[n.templateIndex]?.maxPlanItems)
+          .find((v): v is number => typeof v === 'number') ?? null;
         const stepResult = await this.runForeachNode({
           pipeline,
           node,
@@ -1447,6 +1453,7 @@ export class PipelineManager {
           context,
           title,
           gates,
+          maxItems,
         });
         if (stepResult.stopped) return stepResult.stopped;
         currentItem = stepResult.item;
@@ -2886,6 +2893,21 @@ export class PipelineManager {
           onCounters: (c) => { counters = c; },
           onWorkerSpawned: (id) => { workerIds.add(id); },
           onPartialOutput: (text) => { partialText = text; savePartial(text); },
+          ...(declared.skillIds?.length ? { skillIds: declared.skillIds } : {}),
+          ...(declared.autoSkills ? { decideSkills: true } : {}),
+          onSkills: ({ declared: fixed, decided }) => {
+            const parts = [
+              ...fixed.map((skill) => skill.name),
+              ...decided.map((skill) => `${skill.name} (picked by the decision model, ${Math.round(skill.p * 100)}%)`),
+            ];
+            coreLogger.info({ pipelineId: pipeline.id, stage: node.name, declared: fixed.map((s) => s.id), decided }, 'Stage skills loaded in full');
+            messageRepository.create({
+              sessionId,
+              role: 'system',
+              content: `**${node.name}** loaded skill${parts.length === 1 ? '' : 's'}: ${parts.join(', ')}`,
+              metadata: { ...identity, pipelineId: pipeline.id, stageId: node.id, pipelineEvent: 'stage_skills' },
+            }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
+          },
         },
       );
 
@@ -3162,12 +3184,14 @@ export class PipelineManager {
     context: AgentContext;
     title: string;
     gates: PipelineGate[];
+    /** The loop's `maxPlanItems`; null ⇒ run until no item is pending. */
+    maxItems: number | null;
   }): Promise<{
     outcome: NodeOutcome;
     item: PlanItemRow | null;
     stopped?: { pipelineId: string; result: string };
   }> {
-    const { pipeline, node, currentItem, lastOutput, context, title, gates } = args;
+    const { pipeline, node, currentItem, lastOutput, context, title, gates, maxItems } = args;
     const rootAgent = getAgentService();
 
     // Skipped while it ran (`resume_pipeline` skipItems): the skip and its evidence stand.
@@ -3260,7 +3284,44 @@ export class PipelineManager {
       await this.updateNode(node.id, { status: 'completed', completedAt: new Date() });
       return { outcome: 'loop_done', item: null };
     }
+    if (maxItems != null) {
+      // Items this run finished. A linked work plan seeds already-done items
+      // without `completedAt`, so they do not count against the cap.
+      const ran = items.filter((i) => i.status === 'done' && i.completedAt).length;
+      if (ran >= maxItems) {
+        await this.skipOverLimit(pipeline, node, pending, maxItems);
+        return { outcome: 'loop_done', item: null };
+      }
+    }
     return this.nextPlanItem(pipeline, node);
+  }
+
+  /**
+   * The loop reached its `maxPlanItems`: every item still pending is skipped,
+   * with the reason on the item and in the chat — a cap that quietly left work
+   * undone would read as a finished plan.
+   */
+  private async skipOverLimit(pipeline: Pipeline, node: PipelineNodeRow, pending: PlanItemRow[], maxItems: number): Promise<void> {
+    const reason = `Not run: the plan loop is limited to ${maxItems} item${maxItems === 1 ? '' : 's'} per run.`;
+    for (const item of pending) {
+      await pipelineRepository.updatePlanItem(item.id, { status: 'skipped', error: reason });
+    }
+    await this.updateNode(node.id, { status: 'completed', completedAt: new Date() });
+    messageRepository.create({
+      sessionId: pipeline.sessionId,
+      role: 'system',
+      content: `Plan loop limit reached (${maxItems} item${maxItems === 1 ? '' : 's'}). ` +
+        `${pending.length} remaining item${pending.length === 1 ? ' was' : 's were'} skipped: ` +
+        `${pending.map((i) => `"${i.title}"`).join(', ')}. Raise the limit on the pipeline template, or run them in a follow-up pipeline.`,
+      metadata: { pipelineId: pipeline.id, stageId: node.id, pipelineEvent: 'plan_limit_reached' },
+    }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
+    getAgentService()['emit']({
+      type: 'pipeline_event',
+      userId: pipeline.userId,
+      sessionId: pipeline.sessionId,
+      data: { event: 'plan_limit_reached', pipelineId: pipeline.id, stageId: node.id, maxItems, skipped: pending.length },
+      timestamp: new Date(),
+    });
   }
 
   /** Claim the next pending plan item, or report the plan finished. */

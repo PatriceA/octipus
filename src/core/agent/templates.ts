@@ -31,6 +31,12 @@ export interface StageTemplate {
   loopOverPlan?: boolean;
   /** Declares the stage writes the plan — see PipelineStepConfig. */
   producesPlan?: boolean;
+  /** Cap on plan items its loop runs — see PipelineStepConfig. */
+  maxPlanItems?: number;
+  /** Skills loaded in full into the stage worker — see PipelineStepConfig. */
+  skillIds?: string[];
+  /** Let the decision model add skills for the task — see PipelineStepConfig. */
+  autoSkills?: boolean;
   /** Answer shape for a `human_input` stage — see PipelineStepConfig. */
   humanFields?: { key: string; label: string; options?: string[] }[];
   /** Per-visit token cap for this stage's worker — see PipelineStepConfig. */
@@ -70,6 +76,9 @@ export function stepConfigToStageTemplate(step: PipelineStepConfig): StageTempla
     mechanical: step.mechanical,
     loopOverPlan: step.loopOverPlan,
     producesPlan: step.producesPlan,
+    maxPlanItems: step.maxPlanItems,
+    skillIds: step.skillIds,
+    autoSkills: step.autoSkills,
     humanFields: step.humanFields,
     maxTokens: step.maxTokens,
     toolIds: step.toolIds,
@@ -342,6 +351,9 @@ export function buildStagesFromTemplate(
       mechanical: stage.mechanical,
       loopOverPlan: stage.loopOverPlan,
       producesPlan: stage.producesPlan,
+      maxPlanItems: stage.maxPlanItems,
+      skillIds: stage.skillIds?.length ? stage.skillIds : undefined,
+      autoSkills: stage.autoSkills,
       maxTokens: stage.maxTokens,
     };
   });

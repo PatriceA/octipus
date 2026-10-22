@@ -518,9 +518,11 @@ Report what was changed and why.`,
         requiresApproval: false,
         // Same reason as QA Validation above: this is the stage that decides
         // whether the fix holds, so it has to emit a verdict the audit-coverage
-        // gate can hold to account. Default retry target (the previous stage,
-        // `Implement Fix`) is already the right one here.
+        // gate can hold to account. The retry target is the previous stage,
+        // `Implement Fix` — the compiler's default, written out so a copy of
+        // this preset passes the editor's save-time validation.
         stageType: 'qa_validation',
+        retryTargetStage: 1,
         // "Try the original reproduction steps" is an instruction to execute.
         runsCommands: true,
         // Run by the framework before this stage's model turn when the caller

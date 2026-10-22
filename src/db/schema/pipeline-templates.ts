@@ -138,6 +138,36 @@ export interface PipelineStepConfig {
    */
   producesPlan?: boolean;
   /**
+   * Safety cap for the plan loop this step belongs to: the loop runs at most
+   * this many plan items in one run, and every item still pending when the
+   * cap is reached is marked `skipped` (with the reason) instead of run.
+   * Absent ⇒ no cap — the loop runs until the plan has no pending item.
+   *
+   * A LOOP setting carried on a step, because a loop has no row of its own in
+   * a template: it is read from the first step of the loop that declares it
+   * (the editor writes it on the loop's first step). Meaningless, and rejected
+   * by `validatePipelineStages`, on a step without `loopOverPlan`.
+   */
+  maxPlanItems?: number;
+  /**
+   * Skills this step's worker ALWAYS gets, with their full instructions in
+   * the prompt — not just the one-line index the agent may or may not act on.
+   *
+   * Discovery only lists skills (name + description) and leaves loading them
+   * to the agent via `get_skill`; agents — CLI agents especially — mostly do
+   * not. A template author who knows a stage needs a skill declares it here.
+   * A declared skill that no longer exists fails the stage instead of
+   * running it without the skill.
+   */
+  skillIds?: string[];
+  /**
+   * Opt-in: ask the decision model (topic `decision`) which of the skills
+   * discovery found for THIS task are needed, and load the confident ones in
+   * full alongside `skillIds`. Nothing bound, a refused privacy gate or an
+   * unsure answer ⇒ no extra skills, the index stays as it was.
+   */
+  autoSkills?: boolean;
+  /**
    * The answer shape a `human_input` step asks for — one entry per field the
    * person is being asked to fill in. Optional: without it the step is a plain
    * free-text question.

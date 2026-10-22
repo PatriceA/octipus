@@ -41,6 +41,8 @@ interface WorkerCall {
   resumeKey?: unknown;
   workerId: string;
   metadata: Record<string, unknown>;
+  skillIds?: string[];
+  decideSkills?: boolean;
 }
 
 let manager: import('./pipeline-manager').PipelineManager;
@@ -120,6 +122,14 @@ beforeAll(async () => {
     `INSERT INTO pipeline_templates (user_id, name, is_preset, steps)
      VALUES (NULL, 'loop-fixture', true, '${JSON.stringify(steps)}'::jsonb)`,
   );
+  // The same loop, capped at one item, with stage-declared skills.
+  const capped = steps.map((step) =>
+    step.name === 'Implement' ? { ...step, maxPlanItems: 1, skillIds: ['caveman'] }
+      : step.name === 'QA' ? { ...step, autoSkills: true } : step);
+  await executeRaw(
+    `INSERT INTO pipeline_templates (user_id, name, is_preset, steps)
+     VALUES (NULL, 'loop-capped', true, '${JSON.stringify(capped)}'::jsonb)`,
+  );
 
   const { PipelineManager } = await import('./pipeline-manager');
   manager = new PipelineManager();
@@ -150,10 +160,13 @@ beforeAll(async () => {
       onPartialOutput?: (text: string) => void;
       onWorkerSpawned?: (workerId: string) => void;
       swarmParent?: { signal?: AbortSignal };
+      skillIds?: string[];
+      decideSkills?: boolean;
     },
   ) => {
     const stageName = context?.stageName ?? '';
-    const call: WorkerCall = { role, stageName, input, resumeKey: context.metadata?.resumeKey, workerId: `worker-${calls.length + 1}`, metadata: { ...context.metadata } };
+    const call: WorkerCall = { role, stageName, input, resumeKey: context.metadata?.resumeKey, workerId: `worker-${calls.length + 1}`, metadata: { ...context.metadata },
+      skillIds: options?.skillIds, decideSkills: options?.decideSkills };
     calls.push(call);
     options?.onWorkerSpawned?.(call.workerId);
     await onSpawn?.(stageName, String(context.metadata?.pipelineId), call);
@@ -218,13 +231,13 @@ async function planItemStatuses(pipelineId: string): Promise<string[]> {
   return rows.map((r) => String(r.status));
 }
 
-function run(description: string) {
+function run(description: string, template = 'loop-fixture') {
   return manager.createAndRun(
     'orch-loop',
     sessionId,
     userId,
     'loop test',
-    'loop-fixture',
+    template,
     description,
     { userId, sessionId, agentId: 'orch-loop' } as unknown as AgentContext,
   );
@@ -259,6 +272,36 @@ describe('the plan loop runs the body once per item', () => {
     // A loop that handed every pass the same item would still visit twice and
     // still finish green, so the visit count alone cannot prove iteration.
     expect(implementInputs[0]).not.toContain('item two');
+  });
+});
+
+describe('the plan loop item limit', () => {
+  test('stops after the limit and marks the rest skipped, with the reason', async () => {
+    replies = { QA: [QA_PASS] };
+    const { pipelineId } = await run('do the thing', 'loop-capped');
+
+    const visits = await visitsByNode(pipelineId);
+    expect(visits.Implement).toBe(1);
+    expect(visits.QA).toBe(1);
+    expect(await planItemStatuses(pipelineId)).toEqual(['done', 'skipped']);
+    const { rows } = await queryRaw(`SELECT error FROM plan_items WHERE pipeline_id = '${pipelineId}' AND status = 'skipped'`);
+    expect(String(rows[0].error)).toContain('limited to 1 item');
+    // A cap is a configured stop, not a failure: the run still completes.
+    const { rows: p } = await queryRaw(`SELECT status FROM pipelines WHERE id = '${pipelineId}'`);
+    expect(p[0].status).toBe('completed');
+  });
+});
+
+describe('stage skills reach the worker', () => {
+  test('declared skills and the decision-model opt-in are passed per stage', async () => {
+    replies = { QA: [QA_PASS] };
+    await run('do the thing', 'loop-capped');
+    const implement = calls.find((c) => c.stageName === 'Implement');
+    const qa = calls.find((c) => c.stageName === 'QA');
+    expect(implement?.skillIds).toEqual(['caveman']);
+    expect(implement?.decideSkills).toBeUndefined();
+    expect(qa?.skillIds).toBeUndefined();
+    expect(qa?.decideSkills).toBe(true);
   });
 });
 

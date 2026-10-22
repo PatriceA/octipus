@@ -27,3 +27,9 @@ On the Skills page, **Remove from Octipus** removes a mounted or shared skill fr
 Multiple paths to the same physical SKILL.md (including junctions/symlinks) are combined, with all sources shown on the expanded card. Identical standalone copies are combined too. Same-name variants and separate directories with supporting assets remain distinct. Old source IDs remain aliases, so existing selections continue to work.
 
 The complete skill content is retained in system context across compaction. This guarantees loading, not perfect model compliance, and adds the full skill's token cost. Skill selection does not grant tool permissions.
+
+## Skills for pipeline steps
+
+A pipeline step can force skills onto the agent that runs it. Open a template on the **Pipelines** page, expand a step and add skills under **Skills**. Their full content goes into that step's agent prompt. This works for API-model agents and for CLI agents (Claude Code, Codex, …). Without this, those agents only see the one-line skill index and must call `get_skill` themselves, which they often skip. If a selected skill is deleted or becomes inaccessible, the step fails visibly. It never runs without the skill.
+
+**Let the decision model add skills for each task** goes further. Before each run of the step, the model bound to the **Decision** topic looks at the skills discovery found for the task (at most 8). It judges each one separately and loads only the skills it is confident the task needs: probability and confidence must both be at least 0.8. The task text can include workspace code, so this decision site (`skills.select`) is `secret` and runs only on a local decision model with no data retention. If no such model is bound, nothing is added and the index stays as before. The chat shows which skills a step loaded and which ones the decision model picked.

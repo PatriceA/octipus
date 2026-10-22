@@ -1,3 +1,4 @@
+import type { Static } from '@sinclair/typebox';
 import { desc, eq, isNull, or } from 'drizzle-orm';
 import { type AgentScope, buildAgentContext, resolveAgentScope, withAgentUsage } from '@/core/agent/context';
 import { can, SpaceError, spaceErrorStatus } from '@/security/space-access';
@@ -21,7 +22,7 @@ import { getDb } from '@/db/postgres';
 import { pipelineRepository } from '@/db/repositories/pipeline-repository';
 import { withoutSpaceRows } from '@/core/spaces/service';
 import { contentRepos } from '@/db/repositories/content';
-import { pipelineTemplates } from '@/db/schema/pipeline-templates';
+import { type PipelineStepConfig, pipelineTemplates } from '@/db/schema/pipeline-templates';
 import { isAuthenticated } from '@/security/principal';
 import { coreLogger } from '@/utils/logger';
 
@@ -43,6 +44,9 @@ const recipeStepBodySchema = t.Object({
   retryTargetStage: t.Optional(t.Number()),
   loopOverPlan: t.Optional(t.Boolean()),
   producesPlan: t.Optional(t.Boolean()),
+  maxPlanItems: t.Optional(t.Number()),
+  skillIds: t.Optional(t.Array(t.String())),
+  autoSkills: t.Optional(t.Boolean()),
   humanFields: t.Optional(
     t.Array(
       t.Object({
@@ -53,6 +57,35 @@ const recipeStepBodySchema = t.Object({
     ),
   ),
 });
+
+/**
+ * A recipe stage body as it is stored. Every declaration the body schema
+ * accepts must be carried here: this mapper enumerates fields, so a flag
+ * missing from it is accepted by the API, dropped on the way to the row, and
+ * then never seen by the gate that reads it — the same way
+ * `loopOverPlan`/`producesPlan` were silently discarded from every
+ * user-authored recipe until they were listed. One mapper for create and
+ * update, so the two cannot drift apart.
+ */
+function toStepConfig(s: Static<typeof recipeStepBodySchema>): PipelineStepConfig {
+  return {
+    name: s.name,
+    description: s.description,
+    topic: s.topic ?? '',
+    toolIds: s.toolIds || [],
+    requiresApproval: s.requiresApproval ?? false,
+    promptTemplate: s.promptTemplate,
+    stageType: s.stageType,
+    maxRetries: s.maxRetries,
+    retryTargetStage: s.retryTargetStage,
+    loopOverPlan: s.loopOverPlan,
+    producesPlan: s.producesPlan,
+    maxPlanItems: s.maxPlanItems,
+    skillIds: s.skillIds?.length ? s.skillIds : undefined,
+    autoSkills: s.autoSkills,
+    humanFields: s.humanFields,
+  };
+}
 
 /** Shared Elysia body schema for a recipe parameter (deep-validated by Zod). */
 const recipeParamBodySchema = t.Object({
@@ -631,25 +664,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
     async ({ user, body }) => {
       if (!user) return { error: 'Not authenticated' };
       const db = getDb();
-      const steps = (body.steps || []).map((s: Record<string, any>) => ({
-        name: s.name,
-        description: s.description,
-        topic: s.topic ?? '',
-        toolIds: s.toolIds || [],
-        requiresApproval: s.requiresApproval ?? false,
-        promptTemplate: s.promptTemplate,
-        stageType: s.stageType,
-        maxRetries: s.maxRetries,
-        retryTargetStage: s.retryTargetStage,
-        // Every declaration the body schema accepts must be carried here.
-        // This mapper enumerates fields, so a flag missing from it is accepted
-        // by the API, dropped on the way to the row, and then never seen by the
-        // gate that reads it — the same way `loopOverPlan`/`producesPlan` were
-        // silently discarded from every user-authored recipe until now.
-        loopOverPlan: s.loopOverPlan,
-        producesPlan: s.producesPlan,
-        humanFields: s.humanFields,
-      }));
+      const steps = (body.steps || []).map(toStepConfig);
       const stepErrors = validatePipelineStages(steps);
       if (stepErrors.length > 0) return { error: stepErrors.join(' ') };
 
@@ -694,25 +709,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
       if (!owned) return { error: 'Template not found' };
 
       const db = getDb();
-      const steps = (body.steps || []).map((s: Record<string, any>) => ({
-        name: s.name,
-        description: s.description,
-        topic: s.topic ?? '',
-        toolIds: s.toolIds || [],
-        requiresApproval: s.requiresApproval ?? false,
-        promptTemplate: s.promptTemplate,
-        stageType: s.stageType,
-        maxRetries: s.maxRetries,
-        retryTargetStage: s.retryTargetStage,
-        // Every declaration the body schema accepts must be carried here.
-        // This mapper enumerates fields, so a flag missing from it is accepted
-        // by the API, dropped on the way to the row, and then never seen by the
-        // gate that reads it — the same way `loopOverPlan`/`producesPlan` were
-        // silently discarded from every user-authored recipe until now.
-        loopOverPlan: s.loopOverPlan,
-        producesPlan: s.producesPlan,
-        humanFields: s.humanFields,
-      }));
+      const steps = (body.steps || []).map(toStepConfig);
       const stepErrors = validatePipelineStages(steps);
       if (stepErrors.length > 0) return { error: stepErrors.join(' ') };
 
