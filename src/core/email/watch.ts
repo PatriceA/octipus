@@ -207,9 +207,13 @@ export async function markEmailHandled(input: {
     .onConflictDoUpdate({ target: [emailHandled.userId, emailHandled.provider, emailHandled.messageId], set: values });
 }
 
-/** One line of untrusted text for the checklist: no newlines, no closing tag, capped. */
+/**
+ * One line of untrusted text for the checklist: no newlines, capped, and no
+ * angle brackets, so no tag of any kind can be spelled. (Removing just the
+ * fence tag is not enough: "<email-<email-list>list>" leaves one behind.)
+ */
 function inline(text: string, max: number): string {
-  const flat = text.replace(/[\r\n\t]+/g, ' ').replace(/<\/?email-list>/gi, '').replace(/\s+/g, ' ').trim();
+  const flat = text.replace(/[\r\n\t]+/g, ' ').replace(/</g, '‹').replace(/>/g, '›').replace(/\s+/g, ' ').trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
