@@ -143,7 +143,9 @@ Each point is its own PR with its own code review.
 | Plan (this file) | `ccr-ab69ee55-j1tal5` | #429 | open |
 | C1a cases, contacts, links, follow-ups | `feat/cases-contacts` | #430 | in review |
 | C1b record types, records, public forms | `feat/record-types` (on C1a) | #431 | in review |
-| C1c web pages for cases, contacts, records, forms | | | next |
+| C1c web pages for cases, contacts, records, forms | `feat/business-web` (on C1b) | #434 | in review |
+| Audit fix (ip-address in mcp-server, not part of the plan) | `fix/mcp-server-ip-address` | #433 | in review |
+| C2 plugin platform | | | next |
 
 ## 5. Open questions (answers expected from the business side)
 
