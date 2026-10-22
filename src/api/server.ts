@@ -36,6 +36,7 @@ import { documentRoutes } from './routes/documents';
 import { emailRoutes } from './routes/email';
 import { heartbeatRoutes } from './routes/heartbeat';
 import { onboardingRoutes } from './routes/onboarding';
+import { contextHookRoutes } from './routes/context-hooks';
 import { evalRoutes } from './routes/eval';
 import { evaluationRoutes } from './routes/evaluations';
 import { gatewayRoutes } from './routes/gateway';
@@ -446,6 +447,7 @@ export function createServer() {
         .use(emailRoutes)
         .use(heartbeatRoutes)
         .use(onboardingRoutes)
+        .use(contextHookRoutes)
         .use(vaultRoutes)
         .use(chatRoutes)
         .use(pipelineRoutes)
