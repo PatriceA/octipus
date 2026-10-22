@@ -30,6 +30,8 @@ export const BUILTIN_HOOKS: ReadonlyArray<Omit<ContextHookDefinition, 'id'> & { 
   },
 ];
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** Most hooks a user may add, beside the built-ins. */
 export const MAX_USER_HOOKS = 20;
 
@@ -108,6 +110,7 @@ export async function updateContextHook(userId: string, id: string, body: Contex
       .returning();
     return { ...fromRow(row), id, kind: builtin.kind };
   }
+  if (!UUID.test(id)) throw new ContextHookError('No such hook', 404);
   const [existing] = await db.select().from(contextHooks).where(and(eq(contextHooks.id, id), eq(contextHooks.userId, userId), isNull(contextHooks.builtin))).limit(1);
   if (!existing) throw new ContextHookError('No such hook', 404);
   const kind = existing.kind as ContextHookKind;
@@ -146,9 +149,12 @@ export async function createContextHook(userId: string, body: ContextHookInputBo
 export async function deleteContextHook(userId: string, id: string): Promise<boolean> {
   const db = getDb();
   if (id.startsWith('builtin:')) {
-    await db.delete(contextHooks).where(and(eq(contextHooks.userId, userId), eq(contextHooks.builtin, id.slice('builtin:'.length))));
+    const key = id.slice('builtin:'.length);
+    if (!BUILTIN_HOOKS.some((b) => b.builtin === key)) return false;
+    await db.delete(contextHooks).where(and(eq(contextHooks.userId, userId), eq(contextHooks.builtin, key)));
     return true;
   }
+  if (!UUID.test(id)) return false;
   const gone = await db.delete(contextHooks).where(and(eq(contextHooks.id, id), eq(contextHooks.userId, userId))).returning({ id: contextHooks.id });
   return gone.length > 0;
 }

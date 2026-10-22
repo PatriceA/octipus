@@ -3,7 +3,7 @@ import { json, stubAllDefaults } from './fixtures/api-stubs';
 
 const hooks = {
   enabled: true,
-  maxTokens: 1200,
+  maxTokens: 2000,
   hooks: [
     { id: 'builtin:knowledge-recall', builtin: 'knowledge-recall', name: 'Knowledge recall', kind: 'recall', events: ['turn_start', 'worker_start'], config: {}, enabled: true, description: 'Searches your knowledge base and notes with each message.' },
     { id: 'builtin:notes-index', builtin: 'notes-index', name: 'Notes index', kind: 'notes_index', events: ['turn_start'], config: {}, enabled: true, description: 'Tells the agent which notes you have.' },
@@ -14,7 +14,8 @@ const rate = (n: number, of: number) => ({ n, of });
 const stats = {
   days: 30,
   turns: 4,
-  byHook: [{ hook: 'Knowledge recall', kind: 'recall', runs: 4, injected: 2, abstained: 2, skipped: 0, errors: 0, avgTokens: 310, avgLatencyMs: 40, avgTopScore: 0.61 }],
+  sampled: false,
+  byHook: [{ id: 'builtin:knowledge-recall', hook: 'Knowledge recall', kind: 'recall', runs: 4, injected: 2, abstained: 2, skipped: 0, errors: 0, avgTokens: 310, avgLatencyMs: 40, avgTopScore: 0.61 }],
   searched: rate(1, 4),
   searchedAfterInjection: rate(0, 2),
   searchedAfterAbstain: rate(1, 2),

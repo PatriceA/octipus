@@ -2,9 +2,9 @@
  * Run a user's context hooks before an agent starts, and record what they
  * injected and what the agent then did (docs/CONTEXT-HOOKS.md).
  *
- * Hooks run in list order and share one token budget (`contextHooks.maxTokens`).
- * A hook that fails or takes longer than HOOK_TIMEOUT_MS costs the turn its
- * block, never the turn: the agent starts without it.
+ * Hooks run together and share one token budget (`contextHooks.maxTokens`),
+ * spent in list order. A hook that fails or takes longer than HOOK_TIMEOUT_MS
+ * costs the turn its block, never the turn: the agent starts without it.
  */
 import { eq } from 'drizzle-orm';
 import { getConfig } from '@/config';
@@ -62,23 +62,31 @@ export async function runContextHooks(
   }
   if (hooks.length === 0) return NONE;
 
+  // All hooks at once, under one deadline: a slow embedding provider costs the
+  // turn HOOK_TIMEOUT_MS at most, however many hooks the user has. The shared
+  // budget is applied afterwards, in list order: a block that no longer fits
+  // is left out.
+  const results = await Promise.all(hooks.map(async (hook) => {
+    const hookStart = Date.now();
+    let result: ContextHookResult;
+    try {
+      result = await withTimeout(KIND_RUNNERS[hook.kind]({ ...input, tokenBudget: settings.maxTokens }, hook.config), HOOK_TIMEOUT_MS);
+    } catch (err) {
+      const reason = (err as Error)?.message === 'timeout' ? 'timeout' : 'failed';
+      coreLogger.warn({ err, hook: hook.name, userId: input.userId }, 'context hook failed — skipped for this turn');
+      result = { status: 'error', reason, text: '', items: [], tokens: 0 };
+    }
+    return { hook, result, latencyMs: Date.now() - hookStart };
+  }));
+
   let budget = settings.maxTokens;
   const texts: string[] = [];
   const records: ContextHookRunRecord[] = [];
   const citable: ContextHookItem[] = [];
-  for (const hook of hooks) {
-    const hookStart = Date.now();
-    let result: ContextHookResult;
-    if (budget < 30) {
+  for (const { hook, latencyMs, result: ran } of results) {
+    let result = ran;
+    if (result.status === 'injected' && result.tokens > budget) {
       result = { status: 'skipped', reason: 'budget_spent', text: '', items: [], tokens: 0 };
-    } else {
-      try {
-        result = await withTimeout(KIND_RUNNERS[hook.kind]({ ...input, tokenBudget: budget }, hook.config), HOOK_TIMEOUT_MS);
-      } catch (err) {
-        const reason = (err as Error)?.message === 'timeout' ? 'timeout' : 'failed';
-        coreLogger.warn({ err, hook: hook.name, userId: input.userId }, 'context hook failed — skipped for this turn');
-        result = { status: 'error', reason, text: '', items: [], tokens: 0 };
-      }
     }
     if (result.status === 'injected' && result.text) {
       texts.push(result.text);
@@ -86,6 +94,7 @@ export async function runContextHooks(
       if (hook.kind !== 'notes_index') citable.push(...result.items);
     }
     records.push({
+      id: hook.id,
       hook: hook.name,
       kind: hook.kind,
       status: result.status,
@@ -93,7 +102,7 @@ export async function runContextHooks(
       // The index lists many titles and is not something to cite; its count is enough.
       items: hook.kind === 'notes_index' ? [] : result.items,
       tokens: result.tokens,
-      latencyMs: Date.now() - hookStart,
+      latencyMs,
     });
   }
 

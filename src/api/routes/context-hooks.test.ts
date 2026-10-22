@@ -122,6 +122,12 @@ describe('the hook list', () => {
     expect((await send(userApp, 'PATCH', '/api/context-hooks/builtin:nope', { enabled: false })).status).toBe(404);
   });
 
+  test('an id that is not a hook is a 404, not a database error', async () => {
+    expect((await send(userApp, 'PATCH', '/api/context-hooks/not-a-uuid', { enabled: false })).status).toBe(404);
+    expect((await send(userApp, 'DELETE', '/api/context-hooks/not-a-uuid')).status).toBe(404);
+    expect((await send(userApp, 'DELETE', '/api/context-hooks/builtin:nope')).status).toBe(404);
+  });
+
   test('a hook of one\'s own: created, changed, and out of reach of another user', async () => {
     const created = await send(userApp, 'POST', '/api/context-hooks', { name: 'About me', kind: 'note', config: { slug: 'about-me' } });
     expect(created.status).toBe(201);
@@ -168,9 +174,21 @@ describe('a run', () => {
     const hooks = rows[0].hooks as Array<{ hook: string; status: string; items: Array<{ title: string }> }>;
     expect(hooks.map((h) => [h.hook, h.status])).toEqual([['Knowledge recall', 'injected'], ['Notes index', 'injected']]);
     expect(hooks[0].items.map((i) => i.title)).toEqual(['Pricing']);
+    expect(hooks.map((h) => (h as { id?: string }).id)).toEqual(['builtin:knowledge-recall', 'builtin:notes-index']);
     // No query text and no passage content in the record.
     expect(JSON.stringify(rows[0])).not.toContain('900 euro');
     expect(JSON.stringify(rows[0])).not.toContain('pricing website');
+  });
+
+  test('counts an access only on the passages it injected', async () => {
+    await note(userId, 'Pricing', 'Website pricing: 900 euro.');
+    await note(userId, 'Pricing archive', 'Old website pricing from 2019: 600 euro.');
+    expect((await send(userApp, 'PATCH', '/api/context-hooks/builtin:knowledge-recall', { config: { limit: 1 } })).status).toBe(200);
+    await run('website pricing');
+    // recordAccess is fire-and-forget.
+    await new Promise((r) => setTimeout(r, 200));
+    const { rows } = await queryRaw(`SELECT access_count FROM embeddings ORDER BY access_count DESC`);
+    expect(rows.map((r) => Number(r.access_count))).toEqual([1, 0]);
   });
 
   test('injects nothing from recall when nothing matches, and skips a bare acknowledgement', async () => {
@@ -237,7 +255,10 @@ describe('a run', () => {
     expect(stats.cited).toEqual({ n: 1, of: 1 });
     expect(stats.searched).toEqual({ n: 2, of: 2 });
     expect(stats.searchedAfterAbstain).toEqual({ n: 1, of: 1 });
-    expect(stats.byHook.find((h: { hook: string }) => h.hook === 'Knowledge recall')).toMatchObject({ runs: 2, injected: 1, abstained: 1 });
+    expect(stats.byHook.find((h: { id: string }) => h.id === 'builtin:knowledge-recall')).toMatchObject({ hook: 'Knowledge recall', runs: 2, injected: 1, abstained: 1 });
+    expect(stats.sampled).toBe(false);
+    expect(stats.days).toBe(7);
+    expect((await send(userApp, 'GET', '/api/context-hooks/stats?days=365')).body.days).toBe(90);
     expect(stats.recent[0].hooks[0]).toMatchObject({ hook: 'Knowledge recall', status: 'abstained' });
     expect(stats.memory).toEqual({ facts: 0, missing: ['background_model', 'embedding_model'] });
     // Another user's numbers are theirs.

@@ -24,8 +24,13 @@ const rate = (n: number, of: number): Rate => ({ n, of });
 export interface ContextHookStats {
   days: number;
   turns: number;
-  byHook: Array<{ hook: string; kind: string; runs: number; injected: number; abstained: number; skipped: number; errors: number; avgTokens: number; avgLatencyMs: number; avgTopScore: number | null }>;
-  /** Finished turns where the agent read the knowledge base or notes itself. */
+  /** True when the window held more than MAX_ROWS turns: the numbers cover the newest MAX_ROWS. */
+  sampled: boolean;
+  byHook: Array<{ id: string; hook: string; kind: string; runs: number; injected: number; abstained: number; skipped: number; errors: number; avgTokens: number; avgLatencyMs: number; avgTopScore: number | null }>;
+  /**
+   * Finished turns where the knowledge base or notes were read by a tool call:
+   * by the agent, or for a root turn by it or a specialist it spawned.
+   */
   searched: Rate;
   /** …of those where recall injected passages, and of those where it found nothing. */
   searchedAfterInjection: Rate;
@@ -57,12 +62,16 @@ export async function contextHookStats(userId: string, days = 30): Promise<Conte
   const rows = await getDb().select().from(contextTurns)
     .where(and(eq(contextTurns.userId, userId), gte(contextTurns.createdAt, since)))
     .orderBy(desc(contextTurns.createdAt))
-    .limit(MAX_ROWS);
+    .limit(MAX_ROWS + 1);
+  const sampled = rows.length > MAX_ROWS;
+  if (sampled) rows.pop();
 
-  const hookAgg = new Map<string, { kind: string; runs: number; injected: number; abstained: number; skipped: number; errors: number; tokens: number[]; latency: number[]; top: number[] }>();
+  const hookAgg = new Map<string, { name: string; kind: string; runs: number; injected: number; abstained: number; skipped: number; errors: number; tokens: number[]; latency: number[]; top: number[] }>();
   for (const row of rows) {
     for (const h of row.hooks) {
-      const a = hookAgg.get(h.hook) ?? { kind: h.kind, runs: 0, injected: 0, abstained: 0, skipped: 0, errors: 0, tokens: [], latency: [], top: [] };
+      // Grouped by id: names repeat and change. Rows from before ids were recorded group by name.
+      const key = h.id ?? `name:${h.hook}`;
+      const a = hookAgg.get(key) ?? { name: h.hook, kind: h.kind, runs: 0, injected: 0, abstained: 0, skipped: 0, errors: 0, tokens: [], latency: [], top: [] };
       a.runs++;
       if (h.status === 'injected') { a.injected++; a.tokens.push(h.tokens); }
       else if (h.status === 'abstained') a.abstained++;
@@ -70,7 +79,8 @@ export async function contextHookStats(userId: string, days = 30): Promise<Conte
       else a.errors++;
       if (h.status !== 'skipped') a.latency.push(h.latencyMs);
       if (h.items.length) a.top.push(Math.max(...h.items.map((i) => i.score)));
-      hookAgg.set(h.hook, a);
+      a.name = a.name || h.hook;
+      hookAgg.set(key, a);
     }
   }
 
@@ -93,8 +103,9 @@ export async function contextHookStats(userId: string, days = 30): Promise<Conte
   return {
     days,
     turns: rows.length,
-    byHook: [...hookAgg.entries()].map(([hook, a]) => ({
-      hook, kind: a.kind, runs: a.runs, injected: a.injected, abstained: a.abstained, skipped: a.skipped, errors: a.errors,
+    sampled,
+    byHook: [...hookAgg.entries()].map(([id, a]) => ({
+      id, hook: a.name, kind: a.kind, runs: a.runs, injected: a.injected, abstained: a.abstained, skipped: a.skipped, errors: a.errors,
       avgTokens: avg(a.tokens), avgLatencyMs: avg(a.latency),
       avgTopScore: a.top.length ? Number((a.top.reduce((x, y) => x + y, 0) / a.top.length).toFixed(3)) : null,
     })),

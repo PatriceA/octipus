@@ -29,6 +29,8 @@ export const contextHooks = pgTable('context_hooks', {
 
 /** What one hook did for one turn. Ids, titles and numbers: no query text, no content. */
 export interface ContextHookRunRecord {
+  /** The hook's id (`builtin:<key>` or the row id); the stats group by it. Absent on rows written before it was recorded. */
+  id?: string;
   hook: string;
   kind: string;
   status: 'injected' | 'abstained' | 'skipped' | 'error';

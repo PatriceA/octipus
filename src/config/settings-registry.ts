@@ -1414,7 +1414,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'contextHooks.maxTokens',
     category: 'agent',
     valueType: 'number',
-    defaultValue: 1200,
+    defaultValue: 2000,
     description: 'Most tokens the context hooks of one turn may inject together (100–8000).',
     isSecret: false,
     envVar: 'CONTEXT_HOOKS_MAX_TOKENS',

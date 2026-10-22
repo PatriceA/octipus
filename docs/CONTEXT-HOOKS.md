@@ -34,9 +34,11 @@ A user can add hooks of their own on the **Recall** page (`/recall`):
   Dutch", and works like a `CLAUDE.md`. Set its `slug` to the note's slug.
 - Another `recall` or `notes_index` hook with different settings.
 
-All hooks of one turn share `contextHooks.maxTokens` (default 1200). They run
-in list order (built-ins first). A hook that fails or takes longer than 4
-seconds is left out of that turn. The agent still starts.
+All hooks of one turn run at the same time and share `contextHooks.maxTokens`
+(default 2000, enough for every default together). The budget is spent in list
+order (built-ins first): a block that no longer fits is left out. A hook that
+fails or takes longer than 4 seconds is left out of that turn. The agent still
+starts.
 
 ### Recall settings
 
@@ -96,7 +98,7 @@ rows into:
 | Number | Read it as |
 |---|---|
 | answers naming an injected source | Recall gave the agent something it used. |
-| searched the KB or notes themselves | How often agents still went looking. |
+| KB or notes searched by a tool call | How often agents still went looking. For a message this counts the specialists the agent spawned too. |
 | searched after recall found nothing | High: recall is missing things the agent then found itself. Lower `minSimilarity`, and check with the eval. |
 | per model, CLI apart | Whether one model or vendor CLI ignores what it is given. |
 | per hook | Injected, found nothing, skipped and errors, average tokens, time and best match. |
@@ -145,7 +147,7 @@ All routes are personal: they read and write only the caller's hooks and rows.
 | POST | `/api/context-hooks` | Add a hook: `{ name, kind, events?, config?, enabled? }`. At most 20. |
 | PATCH | `/api/context-hooks/:id` | Change `name`, `events`, `config` or `enabled`. A hook keeps its kind. |
 | DELETE | `/api/context-hooks/:id` | Delete a hook of one's own. For a built-in, put it back to its default. |
-| GET | `/api/context-hooks/stats?days=` | The numbers above (1 to 365 days, default 30). |
+| GET | `/api/context-hooks/stats?days=` | The numbers above (1 to 90 days, default 30; older rows are pruned with the log tables). Over 5000 agent starts in the window, they cover the newest 5000 and `sampled` is true. |
 | POST | `/api/context-hooks/eval` | The recall eval (1 to 100 cases; optional `minSimilarity`, `limit`). |
 
 Events are `turn_start` (before the root agent answers) and `worker_start`
@@ -156,7 +158,7 @@ Events are `turn_start` (before the root agent answers) and `worker_start`
 | Key | Default | |
 |---|---|---|
 | `contextHooks.enabled` | `true` | Install-wide switch (`CONTEXT_HOOKS_ENABLED`). Off: no hook runs and nothing is measured. |
-| `contextHooks.maxTokens` | `1200` | Most tokens the hooks of one turn may inject together (`CONTEXT_HOOKS_MAX_TOKENS`). |
+| `contextHooks.maxTokens` | `2000` | Most tokens the hooks of one turn may inject together (`CONTEXT_HOOKS_MAX_TOKENS`). |
 
 ## Code
 

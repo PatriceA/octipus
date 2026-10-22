@@ -948,14 +948,26 @@ export class AgentService {
         // action.kind === 'passthrough' → fall through to normal handling below.
       }
 
+      // Context hooks (docs/CONTEXT-HOOKS.md): the knowledge base and notes
+      // nearest this message, put in front of the agent instead of waiting
+      // for it to call search_knowledge, which CLI agents rarely do on their
+      // own. Not where other people read the reply (a group thread, a room)
+      // nor where the session's text may not be copied anywhere. Started
+      // here so it runs while memory is retrieved; it never throws.
+      const contextHooksRun = sharedAudience || audience.contentStorageOff
+        ? Promise.resolve({ text: '', turn: null })
+        : runContextHooks({
+          event: 'turn_start', userId, workspaceId, sessionId: resolvedSessionId,
+          space: scope.space, query: message, role: 'general', channel,
+        });
+
       // Memory-redesign Phase D — best-effort long-term memory
       // injection. Auto-no-ops when the memories table is empty or
       // the embedding provider is down, so zero blast radius if
       // something upstream is misconfigured. Recorded after the turn
       // (fire-and-forget) via `fireMemoryUpdate`; the extractor
       // short-circuits unless a model is bound to topic
-      // "memory_extraction", so this costs nothing until the operator
-      // opts in.
+      // "background", so this costs nothing until the operator opts in.
       //
       // Scope: classifier topic when available, NULL otherwise. The
       // repository filter is OR(NULL, scope) so passing a topic still
@@ -981,18 +993,7 @@ export class AgentService {
         coreLogger.warn({ err }, 'memory.retrieveForContext failed — proceeding without memories');
       }
 
-      // Context hooks (docs/CONTEXT-HOOKS.md): the knowledge base and notes
-      // nearest this message, put in front of the agent instead of waiting
-      // for it to call search_knowledge, which CLI agents rarely do on their
-      // own. Not where other people read the reply (a group thread, a room)
-      // nor where the session's text may not be copied anywhere.
-      const contextHooks = sharedAudience || audience.contentStorageOff
-        ? { text: '', turn: null }
-        : await runContextHooks({
-          event: 'turn_start', userId, workspaceId, sessionId: resolvedSessionId,
-          space: scope.space, query: message, role: 'general', channel,
-        });
-
+      const contextHooks = await contextHooksRun;
       // The root runner adds attachments after selecting the model, so CLI
       // turns can receive original images without an OCR round trip.
       const turnContext = memoryBlock + contextHooks.text + spaceContext;

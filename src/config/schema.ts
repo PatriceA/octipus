@@ -762,7 +762,7 @@ export const configSchema = z.object({
     /** Install-wide switch. Off: no hook runs and nothing is measured. */
     enabled: z.boolean().default(true),
     /** Most tokens all of a turn's hooks together may inject. */
-    maxTokens: z.number().int().min(100).max(8000).default(1200),
+    maxTokens: z.number().int().min(100).max(8000).default(2000),
   }).prefault({}),
   oauth: oauthConfigSchema,
   rateLimit: rateLimitConfigSchema,

@@ -69,7 +69,8 @@ export const contextHookRoutes = new Elysia({ prefix: '/context-hooks' })
 
   .get('/stats', async ({ user, principal, query, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
-    const days = Math.min(365, Math.max(1, Number(query.days) || 30));
+    // At most the log retention window (90 days by default): older rows are pruned.
+    const days = Math.min(90, Math.max(1, Number(query.days) || 30));
     return contextHookStats(user.id, days);
   }, { query: t.Object({ days: t.Optional(t.String({ maxLength: 4 })) }), detail: { tags: ['context-hooks'] } })
 

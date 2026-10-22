@@ -975,6 +975,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     }
   }
 
+  const { bindTurnToAgent, finishContextTurn } = await import('@/core/context-hooks');
   const worker = await agentManager.spawn({
     attended: context.attended ?? false,
     sessionId: context.sessionId,
@@ -996,11 +997,14 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     // answers "Not running inside a pipeline" — which silently disables every
     // `producesPlan`/`loopOverPlan` (foreach) stage.
     contextMetadata: pipelineMetadata(context.metadata),
+  }).catch((err: unknown) => {
+    // A worker that never started still closes its context-hook record.
+    void finishContextTurn(contextTurn, { outcome: 'error' });
+    throw err;
   });
 
   const workerId = worker.getContext().id;
   overrides?.onWorkerSpawned?.(workerId);
-  const { bindTurnToAgent, finishContextTurn } = await import('@/core/context-hooks');
   bindTurnToAgent(contextTurn, workerId);
 
   // ── Register stage in swarm_nodes + announce on hub ──

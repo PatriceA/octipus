@@ -25,6 +25,12 @@ describe('contentWords', () => {
     expect(contentWords('What do we charge for a website?')).toBeGreaterThanOrEqual(4);
     expect(contentWords('Wat rekenen we voor één website?')).toBeGreaterThanOrEqual(4);
   });
+
+  test('scripts written without spaces count two characters as a word', () => {
+    expect(contentWords('我们网站建设的报价是多少？')).toBeGreaterThanOrEqual(2);
+    expect(contentWords('ウェブサイトの料金はいくら')).toBeGreaterThanOrEqual(2);
+    expect(contentWords('好')).toBe(0);
+  });
 });
 
 describe('parseKindConfig', () => {

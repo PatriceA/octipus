@@ -28,7 +28,8 @@ interface Rate { n: number; of: number }
 interface Stats {
   days: number;
   turns: number;
-  byHook: Array<{ hook: string; kind: string; runs: number; injected: number; abstained: number; skipped: number; errors: number; avgTokens: number; avgLatencyMs: number; avgTopScore: number | null }>;
+  sampled: boolean;
+  byHook: Array<{ id: string; hook: string; kind: string; runs: number; injected: number; abstained: number; skipped: number; errors: number; avgTokens: number; avgLatencyMs: number; avgTopScore: number | null }>;
   searched: Rate;
   searchedAfterInjection: Rate;
   searchedAfterAbstain: Rate;
@@ -326,7 +327,8 @@ export default function RecallPage() {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               <Tile value={String(s.turns)} label="agent starts" />
               <Tile value={pct(s.cited)} label={`answers naming an injected source (${frac(s.cited)})`} />
-              <Tile value={pct(s.searched)} label={`searched the KB or notes themselves (${frac(s.searched)})`} />
+              <Tile value={pct(s.searched)} label={`KB or notes searched by a tool call (${frac(s.searched)})`}
+                hint="By the agent, or for a message by the agent or a specialist it spawned" />
               <Tile
                 value={pct(s.searchedAfterAbstain)}
                 label={`searched after recall found nothing (${frac(s.searchedAfterAbstain)})`}
@@ -337,7 +339,7 @@ export default function RecallPage() {
             {s.byModel.length > 0 && (
               <table className="w-full text-xs">
                 <thead className="text-on-surface-variant text-left">
-                  <tr><th className="py-1">model</th><th>turns</th><th>given passages</th><th>searched itself</th><th>named a source</th></tr>
+                  <tr><th className="py-1">model</th><th>turns</th><th>given passages</th><th>searched by tool</th><th>named a source</th></tr>
                 </thead>
                 <tbody>
                   {s.byModel.map((m) => (
@@ -360,7 +362,7 @@ export default function RecallPage() {
                 </thead>
                 <tbody>
                   {s.byHook.map((h) => (
-                    <tr key={h.hook} className="border-t border-outline-variant/30">
+                    <tr key={h.id} className="border-t border-outline-variant/30">
                       <td className="py-1">{h.hook}</td><td>{h.runs}</td><td>{h.injected}</td><td>{h.abstained}</td><td>{h.skipped}</td>
                       <td className={h.errors ? 'text-error' : ''}>{h.errors}</td><td>{h.avgTokens}</td><td>{h.avgLatencyMs}</td>
                       <td>{h.avgTopScore ?? '—'}</td>
@@ -395,6 +397,7 @@ export default function RecallPage() {
                 </ul>
               </details>
             )}
+            {s.sampled && <p className="text-xs text-on-surface-variant">More agent starts than counted: these numbers cover the newest {s.turns}.</p>}
             {s.turns === 0 && <p className="text-xs text-on-surface-variant">Nothing measured yet: numbers appear after your next messages.</p>}
           </>
         )}

@@ -78,9 +78,18 @@ export function fitTokens(text: string, tokens: number): string {
   return `${(space > cut.length * 0.6 ? cut.slice(0, space) : cut).trimEnd()} …`;
 }
 
-/** Words that can carry meaning: a message with fewer than two ("ok", "thanks!") is not looked up. */
+const UNSPACED = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/gu;
+
+/**
+ * Words that can carry meaning: a message with fewer than two ("ok",
+ * "thanks!") is not looked up. Scripts written without spaces (Chinese,
+ * Japanese, Thai, …) count two characters as a word, since a whole sentence
+ * of them is one unbroken run.
+ */
 export function contentWords(text: string): number {
-  return (text.match(/[\p{L}\p{N}][\p{L}\p{N}'-]{2,}/gu) ?? []).length;
+  const unspaced = text.match(UNSPACED)?.length ?? 0;
+  const spaced = (text.replace(UNSPACED, ' ').match(/[\p{L}\p{N}][\p{L}\p{N}'-]{2,}/gu) ?? []).length;
+  return spaced + Math.floor(unspaced / 2);
 }
 
 const skipped = (reason: string): ContextHookResult => ({ status: 'skipped', reason, text: '', items: [], tokens: 0 });
@@ -105,7 +114,9 @@ export async function recallHits(input: Pick<ContextHookInput, 'userId' | 'works
   const query = input.query.slice(0, 2000);
   // Over-fetch: several chunks of one note, and the product docs, are dropped below.
   // Repository artefacts stay out (`allowedRepoIds: []`), as for a search with no repo visibility.
-  const scope = { allowedRepoIds: [] };
+  // Access is counted only for the passages actually injected (runRecall), not
+  // for the over-fetch dropped below, nor for an eval run.
+  const scope = { allowedRepoIds: [], skipAccess: true };
   // Without an embedding model, keyword search straight away: hybridSearch
   // would fall back to it too, but log an error on every message first.
   const { getModelRegistry } = await import('@/models/model-registry');
@@ -152,6 +163,8 @@ async function runRecall(input: ContextHookInput, raw: Record<string, unknown>):
     items.push({ id: r.id, sourceId: r.sourceId, title, score: Number(r.similarity.toFixed(3)) });
   }
   if (items.length === 0) return abstained('over_budget');
+  const { getEmbeddingService } = await import('@/core/rag/embeddings');
+  getEmbeddingService().recordAccess(items.map((i) => i.id));
   const text = head + parts.join('') + tail;
   return { status: 'injected', text, items, tokens: estimateTokens(text) };
 }
@@ -166,7 +179,8 @@ function personalNotes(userId: string, workspaceId: string | null): SQL {
   ) as SQL;
 }
 
-const INDEX_TTL_MS = 5 * 60_000;
+/** Short: nothing clears it when a note is written, pinned or archived. */
+const INDEX_TTL_MS = 60_000;
 const indexCache = new Map<string, { at: number; result: ContextHookResult }>();
 
 export function resetNotesIndexCache(): void {
@@ -203,7 +217,8 @@ async function runNotesIndex(input: ContextHookInput, raw: Record<string, unknow
       items: rows.map((r) => ({ id: r.id, sourceId: `note:${r.id}`, title: r.title, score: 1 })),
     };
   }
-  indexCache.set(key, { at: Date.now(), result });
+  // Not "no notes yet": the first note written should show on the next turn.
+  if (result.status === 'injected') indexCache.set(key, { at: Date.now(), result });
   if (indexCache.size > 5_000) indexCache.delete(indexCache.keys().next().value as string);
   return result;
 }
