@@ -27,6 +27,17 @@ export type DecisionAnswer =
 
 export type DecisionAnswers = Record<string, DecisionAnswer>;
 
+/** Validated answers before the confidence gate; callers choose what is safe to record. */
+export interface DecisionObservation {
+  model: string;
+  modelId: string;
+  answers: DecisionAnswers;
+  latencyMs: number;
+  minConfidence: number;
+  confident: boolean;
+}
+type DecisionObserver = (observation: DecisionObservation) => void;
+
 export interface DecisionRequest {
   model: string;
   state: unknown;
@@ -188,10 +199,10 @@ function firstThisHour(key: string): boolean {
  * `site.minConfidence`. Never throws: call sites must behave exactly as
  * before when anything here goes wrong. Every non-trivial null is logged.
  */
-export async function decide(site: DecisionSite, state: unknown, questions: Record<string, DecisionQuestion>): Promise<DecisionAnswers | null> {
+export async function decide(site: DecisionSite, state: unknown, questions: Record<string, DecisionQuestion>, observe?: DecisionObserver): Promise<DecisionAnswers | null> {
   if (Date.now() < unboundUntil) return null;
   try {
-    return await decideUnguarded(site, state, questions);
+    return await decideUnguarded(site, state, questions, observe);
   } catch (err) {
     modelLogger.warn({ err, site: site.id }, 'Decision failed; falling back');
     return null;
@@ -211,7 +222,7 @@ export async function decisionModelBound(): Promise<boolean> {
   return !!(await boundModel().catch(() => null));
 }
 
-async function decideUnguarded(site: DecisionSite, state: unknown, questions: Record<string, DecisionQuestion>): Promise<DecisionAnswers | null> {
+async function decideUnguarded(site: DecisionSite, state: unknown, questions: Record<string, DecisionQuestion>, observe?: DecisionObserver): Promise<DecisionAnswers | null> {
   const model = await boundModel();
   if (!model) return null;
 
@@ -282,6 +293,10 @@ async function decideUnguarded(site: DecisionSite, state: unknown, questions: Re
   const outcome = { site: site.id, model: model.name, latencyMs: Date.now() - start, minConfidence, confident, zdr: verdict.zeroDataRetention };
   modelLogger.info(outcome, 'Decision');
   recordShadow(outcome, 'decision'); // coverage: how often a site would get a usable answer
+  if (observe) {
+    try { observe({ ...outcome, modelId: model.modelId, answers: structuredClone(answers) }); }
+    catch (err) { modelLogger.warn({ err, site: site.id }, 'Decision observer failed'); }
+  }
   return confident ? answers : null;
 }
 
@@ -292,7 +307,7 @@ async function decideUnguarded(site: DecisionSite, state: unknown, questions: Re
  * it ever gets big. Tests (NODE_ENV=test) must not write to the real home.
  */
 const SHADOW_FILE = join(homedir(), '.octipus', 'decision-shadow.jsonl');
-export function recordShadow(entry: { site: string } & Record<string, unknown>, kind: 'shadow' | 'decision' = 'shadow'): void {
+export function recordShadow(entry: { site: string } & Record<string, unknown>, kind: 'shadow' | 'decision' | 'email-evaluation' = 'shadow'): void {
   if (kind === 'shadow') modelLogger.info(entry, 'decision shadow');
   if (process.env.NODE_ENV === 'test') return;
   void mkdir(dirname(SHADOW_FILE), { recursive: true })

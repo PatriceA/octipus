@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { gateDecision, resolveDataPolicy, validateAnswers, type DecisionQuestion } from './decision';
 import { TypeSafeProvider, normalizeAnswer } from './providers/typesafe-provider';
 
@@ -154,6 +154,22 @@ describe('decide() gate wiring', () => {
     return { sent, restore: () => { r.mockRestore(); p.mockRestore(); d.mockRestore(); } };
   };
   const q = { x: { type: 'noul' as const, instructions: 'x' } };
+
+  it('observes validated answers below threshold without changing fallback or allowing observer mutation', async () => {
+    const { decide } = await import('./decision');
+    const wired = await wire({ provider: 'custom-openai', modelId: 'clef', metadata: { dataPolicy: { hosting: 'local', retention: 'none', trainsOnInput: false } } });
+    const observer = vi.fn();
+    try {
+      expect(await decide({ id: 'evaluation', sensitivity: 'personal', minConfidence: 0.95 }, 'PRIVATE', q, observer)).toBeNull();
+      expect(observer).toHaveBeenCalledWith(expect.objectContaining({ confident: false, modelId: 'clef', answers: { x: { type: 'noul', p: 0.9, confidence: 0.9 } } }));
+      expect(JSON.stringify(observer.mock.calls)).not.toContain('PRIVATE');
+      const result = await decide({ id: 'evaluation', sensitivity: 'personal', minConfidence: 0.8 }, 'PRIVATE', q, observation => {
+        observation.answers.x.confidence = 0;
+        throw new Error('observer failed');
+      });
+      expect(result?.x.confidence).toBe(0.9);
+    } finally { wired.restore(); }
+  });
 
   it('passes exact row identity and endpoint to a configured local decision provider', async () => {
     const { decide } = await import('./decision');

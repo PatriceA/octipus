@@ -468,3 +468,35 @@ node --import tsx scripts/decision-shadow.ts < ~/.octipus/decision-shadow.jsonl
 - Primitives and patterns: https://gist.github.com/pjburnhill/adf8d28efcad9df037bfdece178ef965
 - LangChain harness: https://www.langchain.com/blog/building-a-harness-with-jev
 - Local options: https://www.modemguides.com/blogs/ai-news/jev-typesafe-reality-check-run-locally
+
+### Email calibration capture (2026-10-21)
+
+Live email triage now appends `kind: "email-evaluation"` records to
+`~/.octipus/decision-shadow.jsonl`. Each run has a UUID and each per-mail record
+has the mailbox message ID. `decision` events contain validated Clef answers
+before the confidence gate: priority label/score/confidence, category
+label/confidence, model identity, latency and acceptance at the current 0.80
+threshold. Unavailable decisions are explicit nulls.
+
+The existing everyday LLM classifies every email for comparison, including
+emails accepted by Clef. `comparison` events record its model and labels,
+per-question agreement and the source selected for the live result. Confident
+Clef answers still win. Missing reference answers are null; reference failures
+are recorded and do not discard already captured decisions. A reference-only
+failure does not invalidate a batch fully answered by Clef. Run events record
+counts and timing. Join events by `(runId, messageId)`, not file order.
+
+This capture intentionally adds reference inference for confident emails. It
+records no sender, subject, snippet, body, rubric descriptions or generated
+reasons. Agreement with the LLM is a comparison, not human-labelled accuracy.
+The existing summary script ignores these new events; detailed threshold
+analysis uses the paired events and their separate confidence values.
+
+The `action-required-v2` priority rubric distinguishes required action from mere
+relevance: low means no action/reply required; normal means action/reply can
+wait; high means action today or a concrete risk from delay. Automated urgent
+actions take precedence over the routine-notification rule, and work context or
+promotional wording alone does not establish urgency. Clef and the reference
+LLM receive the same instructions and levels. Capture events include
+`priorityRubric: "action-required-v2"` to separate this experiment from earlier
+runs. The score representation and 0.80 threshold remain unchanged.
