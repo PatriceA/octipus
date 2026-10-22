@@ -71,15 +71,26 @@ export class Pop3Client {
     });
     socket.setTimeout(timeout);
     const client = new Pop3Client(socket, opts);
+    // The whole greeting, STLS and login must finish in time: idle timeouts
+    // alone let a server that trickles bytes hold the connection forever.
+    const deadline = setTimeout(() => {
+      client.fail(new Pop3Error('The server took too long to log in'));
+      client.destroy();
+    }, timeout * 2);
+    deadline.unref?.();
     try {
       await client.expectOk(client.read(false));
       if (opts.security === 'starttls') await client.startTls();
       await client.command(`USER ${opts.username}`);
-      await client.command(`PASS ${opts.password}`).catch(() => { throw new Pop3Error('The server refused the login'); });
+      await client.command(`PASS ${opts.password}`).catch((err) => {
+        throw err instanceof Pop3Error && err.message.startsWith('The server answered') ? new Pop3Error('The server refused the login') : err;
+      });
       return client;
     } catch (err) {
       client.destroy();
       throw err;
+    } finally {
+      clearTimeout(deadline);
     }
   }
 
@@ -97,7 +108,7 @@ export class Pop3Client {
     socket.removeAllListeners('close');
   }
 
-  private fail(err: Error): void {
+  fail(err: Error): void {
     this.failure ??= err;
     const w = this.waiter;
     this.waiter = null;
@@ -160,12 +171,28 @@ export class Pop3Client {
     await this.command('STLS');
     const plain = this.socket;
     this.detach(plain);
+    plain.on('error', () => undefined);
+    const timeout = this.opts.timeoutMs ?? 30_000;
     this.socket = await new Promise<net.Socket>((resolve, reject) => {
       const s = tls.connect({ socket: plain, servername: this.opts.servername });
-      s.once('secureConnect', () => resolve(s));
-      s.once('error', reject);
+      // Until the handshake is done, its failure or silence ends both sockets.
+      const fail = (err: Error) => {
+        s.removeAllListeners();
+        s.on('error', () => undefined);
+        s.destroy();
+        plain.destroy();
+        reject(err);
+      };
+      s.setTimeout(timeout, () => fail(new Pop3Error('The TLS handshake timed out')));
+      s.once('error', fail);
+      s.once('secureConnect', () => {
+        s.removeAllListeners('error');
+        s.removeAllListeners('timeout');
+        s.setTimeout(0);
+        resolve(s);
+      });
     });
-    this.socket.setTimeout(this.opts.timeoutMs ?? 30_000);
+    this.socket.setTimeout(timeout);
     this.buf = Buffer.alloc(0);
     this.attach(this.socket);
   }

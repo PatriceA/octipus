@@ -8,8 +8,9 @@ import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import type { MailAccount, MailSyncState } from '@/db/schema/mail';
 import type { MailServer } from '@/shared/mail';
+import { withDeadline } from './deadline';
 import { type PinnedHost, pinMailHost } from './hosts';
-import { Pop3Client } from './pop3';
+import { Pop3Client, Pop3Error } from './pop3';
 
 /** Messages above this size are stored without their raw source (headers and a note only). */
 export const MAX_RAW_BYTES = 25 * 1024 * 1024;
@@ -48,7 +49,10 @@ export interface FetchOptions {
 
 export interface MailSource {
   fetchNew(state: MailSyncState, opts: FetchOptions): Promise<FetchBatch>;
+  /** Log out politely. */
   close(): Promise<void>;
+  /** Drop the connection at once (a deadline passed). */
+  destroy(): void;
 }
 
 export type SourceAccount = Pick<MailAccount, 'protocol' | 'folder' | 'incoming' | 'localNetwork'>;
@@ -62,8 +66,11 @@ export async function openSource(account: SourceAccount, password: string): Prom
 
 /** Log in to the incoming server and leave: a settings check. */
 export async function checkIncoming(account: SourceAccount, password: string): Promise<void> {
-  const source = await openSource(account, password);
-  await source.close();
+  let source: MailSource | null = null;
+  await withDeadline((async () => {
+    source = await openSource(account, password);
+    await source.close();
+  })(), 3 * 60_000, 'The login check', () => (source as MailSource | null)?.destroy());
 }
 
 // ── IMAP ────────────────────────────────────────────────────────────
@@ -103,7 +110,9 @@ async function openImap(folder: string, server: MailServer, pinned: PinnedHost, 
           // A first sync (or the folder was rebuilt): the newest messages of the window.
           const found = ((await client.search({ since: opts.since }, { uid: true })) || []).sort((a, b) => a - b);
           const candidates = found.slice(-FIRST_SYNC_MAX);
-          lastUid = candidates.length > 0 ? candidates[0] - 1 : Math.max(0, Number(mailbox.uidNext) - 1);
+          // A server that reports no UIDNEXT starts from the window's start.
+          const uidNext = Number(mailbox.uidNext);
+          lastUid = candidates.length > 0 ? candidates[0] - 1 : Number.isFinite(uidNext) && uidNext > 0 ? uidNext - 1 : 0;
         }
         const from = lastUid;
         const uids = ((await client.search({ uid: `${from + 1}:*` }, { uid: true })) || [])
@@ -134,10 +143,29 @@ async function openImap(folder: string, server: MailServer, pinned: PinnedHost, 
     async close() {
       await client.logout().catch(() => client.close());
     },
+    destroy() {
+      client.close();
+    },
   };
 }
 
 // ── POP3 ────────────────────────────────────────────────────────────
+
+/**
+ * A message's headers. TOP is optional (RFC 1939): a server without it is
+ * asked for the whole message (when it is not too large to fetch), and the
+ * headers taken from that; null when neither works.
+ */
+async function headersOf(client: Pop3Client, num: number, size: number): Promise<Buffer | null> {
+  try {
+    return await client.top(num, 0);
+  } catch (err) {
+    if (!(err instanceof Pop3Error) || size > MAX_RAW_BYTES) return null;
+    const whole = await client.retr(num);
+    const end = whole.indexOf('\r\n\r\n');
+    return end >= 0 ? whole.subarray(0, end + 2) : whole;
+  }
+}
 
 /** The Date header of a message's headers, or null. */
 async function headerDate(headers: Buffer): Promise<Date | null> {
@@ -168,7 +196,8 @@ async function openPop3(server: MailServer, pinned: PinnedHost, password: string
         const candidates = listed.slice(-FIRST_SYNC_MAX);
         for (const m of listed.slice(0, listed.length - candidates.length)) skipped.add(m.uid);
         for (const m of candidates) {
-          const date = await headerDate(await client.top(m.num, 0));
+          const headers = await headersOf(client, m.num, sizes.get(m.num) ?? 0);
+          const date = headers ? await headerDate(headers) : null;
           if (date && date < opts.since) skipped.add(m.uid);
         }
       }
@@ -178,13 +207,18 @@ async function openPop3(server: MailServer, pinned: PinnedHost, password: string
       for (const m of pending.slice(0, opts.limit)) {
         const size = sizes.get(m.num) ?? 0;
         const truncated = size > MAX_RAW_BYTES;
-        const source = truncated ? await client.top(m.num, 0) : await client.retr(m.num);
+        const source = truncated
+          ? (await headersOf(client, m.num, size)) ?? Buffer.from('Subject: (a message too large to fetch)\r\n\r\n')
+          : await client.retr(m.num);
         messages.push({ remoteId: m.uid, source, truncated, size: size || source.length, unread: true });
       }
       return { messages, state: { skipped: [...skipped] }, more: pending.length > opts.limit };
     },
     async close() {
       await client.quit();
+    },
+    destroy() {
+      client.destroy();
     },
   };
 }

@@ -72,6 +72,7 @@ function fakeSource(batches: FetchedMessage[][]): MailSource {
       return { messages, state: { ...state, lastUid: (state.lastUid ?? 0) + messages.length }, more: i < batches.length };
     },
     async close() {},
+    destroy() {},
   };
 }
 
@@ -91,6 +92,7 @@ beforeAll(async () => {
   vi.spyOn(dns.promises, 'lookup').mockImplementation((async (host: string, opts: unknown) => {
     if (host === 'mail.example.com') return [{ address: '93.184.216.34', family: 4 }];
     if (host === 'kim.lan') return [{ address: '10.0.0.5', family: 4 }];
+    if (host === 'smtp.example.com') return [{ address: '93.184.216.35', family: 4 }];
     return (lookup as (h: string, o: unknown) => Promise<unknown>)(host, opts);
   }) as never);
   const { initializeDb, executeRaw } = await import('@/db/postgres');
@@ -175,6 +177,35 @@ describe('which hosts an account may use', () => {
     expect(moved?.localNetwork).toBe(false);
     expect(moved?.syncState).toEqual({});
   });
+
+  test('the role is checked before any host is resolved', async () => {
+    const { createMailAccount } = await import('./accounts');
+    // An editor learns nothing about the host (resolvable or not): the refusal is the role's.
+    await expect(createMailAccount(await inSpace(bob), { address: 'x@praxis.de', incoming: { host: 'kim.lan', port: 995, security: 'tls' } }))
+      .rejects.toMatchObject({ name: 'SpaceError' });
+  });
+
+  test('a server moved to another host forgets its password; outgoing borrows the incoming one only on the same host', async () => {
+    const { createMailAccount, updateMailAccount, accountViews } = await import('./accounts');
+    const { outgoingPassword } = await import('./secrets');
+    const a = await personal(alice);
+    const account = await createMailAccount(a, {
+      address: 'move@example.com', incoming: PUBLIC, outgoing: { host: 'mail.example.com', port: 465, security: 'tls' },
+    }, { incoming: 'in-pw' });
+    expect(await outgoingPassword(account)).toBe('in-pw');
+
+    const relabeled = await updateMailAccount(a, account.id, { label: 'Renamed' });
+    expect((await accountViews([relabeled!]))[0].passwordSet.incoming).toBe(true);
+
+    // The outgoing server elsewhere: the incoming password is not handed to it.
+    const split = await updateMailAccount(a, account.id, { outgoing: { host: 'smtp.example.com', port: 465, security: 'tls' } });
+    expect(await outgoingPassword(split!)).toBeNull();
+    // The incoming server elsewhere: its password is gone, unless a new one comes along.
+    const movedIn = await updateMailAccount(a, account.id, { incoming: { ...PUBLIC, host: 'smtp.example.com' } });
+    expect((await accountViews([movedIn!]))[0].passwordSet.incoming).toBe(false);
+    const withNew = await updateMailAccount(a, account.id, { incoming: PUBLIC }, { incoming: 'new-pw' });
+    expect((await accountViews([withNew!]))[0].passwordSet.incoming).toBe(true);
+  });
 });
 
 describe('sync', () => {
@@ -200,6 +231,59 @@ describe('sync', () => {
     // The state is the source's, saved after each batch (the fake counts what it handed out).
     expect((await freshAccount(account.id)).syncState.lastUid).toBe(5);
     expect(await (await inSpace(carol)).mail.raw(rows[0].id)).toBeInstanceOf(Buffer);
+  });
+
+  test('a message with a NUL byte is stored, and the mailbox keeps syncing', async () => {
+    const { createMailAccount } = await import('./accounts');
+    const { syncAccount } = await import('./sync');
+    const account = await createMailAccount(await personal(alice), { address: 'nul@example.com', incoming: PUBLIC }, { incoming: 'pw' });
+    const bad = Buffer.from('From: x@y.de\r\nSubject: =?utf-8?B?aGkA?=\r\nMessage-ID: <nul@y.de>\r\n\r\nbody\u0000end\r\n');
+    const result = await syncAccount(await freshAccount(account.id), {
+      password: async () => 'pw',
+      open: async () => fakeSource([[{ remoteId: '1:1', source: bad, truncated: false, size: bad.length, unread: true }, fetched('1:2', 'after', 'After')]]),
+    });
+    expect(result).toEqual({ stored: 2, more: false });
+    const subjects = (await (await personal(alice)).mail.list({ accountId: account.id })).map((r) => r.subject).sort();
+    expect(subjects).toEqual(['After', 'hi']);
+  });
+
+  test('a sync does not write an old server\'s state over a change made meanwhile', async () => {
+    const { createMailAccount, updateMailAccount } = await import('./accounts');
+    const { syncAccount } = await import('./sync');
+    const a = await personal(alice);
+    const account = await createMailAccount(a, { address: 'race@example.com', incoming: PUBLIC }, { incoming: 'pw' });
+    const source = fakeSource([[fetched('1:1', 'r1', 'R1')]]);
+    const fetchNew = source.fetchNew.bind(source);
+    source.fetchNew = async (state, opts) => {
+      await updateMailAccount(a, account.id, { incoming: { ...PUBLIC, port: 143, security: 'starttls' } });
+      return fetchNew(state, opts);
+    };
+    await syncAccount(await freshAccount(account.id), { password: async () => 'pw', open: async () => source });
+    expect((await freshAccount(account.id)).syncState).toEqual({});
+  });
+
+  test('a send cut off midway is marked failed, saying it may have gone out; orphaned passwords are removed', async () => {
+    const { reapStuckSends } = await import('./sync');
+    const { pruneOrphanMailPasswords, setMailPassword, mailPassword } = await import('./secrets');
+    const { createMailAccount } = await import('./accounts');
+    const { getDb } = await import('@/db/postgres');
+    const { mailMessages } = await import('@/db/schema/mail');
+    const { eq } = await import('drizzle-orm');
+    const a = await personal(alice);
+    const account = await createMailAccount(a, { address: 'stuck@example.com', incoming: PUBLIC, outgoing: { ...PUBLIC, port: 465 } }, { incoming: 'pw' });
+    const draft = await a.mail.createDraft(account, { toAddresses: [{ address: 'x@y.de' }], ccAddresses: [], subject: 's', bodyText: 'b' });
+    await a.mail.claimForSend(draft.id);
+    await getDb().update(mailMessages).set({ updatedAt: new Date(Date.now() - 60 * 60_000) }).where(eq(mailMessages.id, draft.id));
+    expect(await reapStuckSends()).toBeGreaterThanOrEqual(1);
+    const reaped = await a.mail.message(draft.id);
+    expect(reaped?.status).toBe('failed');
+    expect(reaped?.error).toMatch(/may have gone out/);
+
+    const gone = '99999999-9999-4999-8999-999999999999';
+    await setMailPassword(gone, 'incoming', 'left-behind');
+    expect(await pruneOrphanMailPasswords()).toBeGreaterThanOrEqual(1);
+    expect(await mailPassword(gone, 'incoming')).toBeNull();
+    expect(await mailPassword(account.id, 'incoming')).toBe('pw');
   });
 
   test('a failure is recorded and spaces the next attempt out', async () => {
@@ -253,6 +337,8 @@ describe('POP3 and SMTP for real', () => {
         { uid: 'old', raw: raw({ id: 'old', subject: 'Last year', date: 'Mon, 06 Jan 2025 10:00:00 +0000' }) },
         { uid: 'u1', raw: raw({ id: 'u1', subject: 'Befund', from: 'Labor <labor@kim.telematik>' }) },
         { uid: 'u2', raw: raw({ id: 'u2', subject: 'eAU' }) },
+        // The same message delivered twice (an alias): another UIDL, the same Message-ID.
+        { uid: 'u2-copy', raw: raw({ id: 'u2', subject: 'eAU' }) },
       ],
     });
     smtp = new SMTPServer({
@@ -295,11 +381,12 @@ describe('POP3 and SMTP for real', () => {
   test('a first POP3 sync takes the window only; later syncs take what is new; nothing twice', async () => {
     const { syncAccount } = await import('./sync');
     expect(await syncAccount(await freshAccount(kim.id))).toEqual({ stored: 2, more: false });
-    expect(pop.retrieved.sort()).toEqual(['u1', 'u2']);
+    expect(pop.retrieved.sort()).toEqual(['u1', 'u2', 'u2-copy']);
     pop.messages.push({ uid: 'u3', raw: raw({ id: 'u3', subject: 'Neu' }) });
     expect(await syncAccount(await freshAccount(kim.id))).toEqual({ stored: 1, more: false });
-    expect(pop.retrieved.filter((u) => u === 'u1')).toHaveLength(1);
-    expect((await freshAccount(kim.id)).syncState.skipped).toEqual(['old']);
+    // Nothing fetched twice, the duplicate included.
+    expect(pop.retrieved.sort()).toEqual(['u1', 'u2', 'u2-copy', 'u3']);
+    expect((await freshAccount(kim.id)).syncState.skipped?.sort()).toEqual(['old', 'u2-copy']);
     const rows = await (await personal(admin, true)).mail.list({ accountId: kim.id });
     expect(rows.map((r) => r.subject).sort()).toEqual(['Befund', 'Neu', 'eAU']);
   });

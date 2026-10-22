@@ -56,8 +56,8 @@ export class MailRepo {
     return this.scope.shared(mailMessages);
   }
 
-  /** Setting a mailbox up: personally the owner, in a space its owners. */
-  private canManage(): void {
+  /** Setting a mailbox up (and testing its login): personally the owner, in a space its owners. Throws `SpaceError`. */
+  assertManage(): void {
     if (this.scope.kind === 'space') this.scope.can('manage_space');
   }
 
@@ -74,7 +74,7 @@ export class MailRepo {
   }
 
   async createAccount(data: MailAccountWrite): Promise<MailAccount> {
-    this.canManage();
+    this.assertManage();
     const stamp = { userId: this.scope.stamp().userId, workspaceId: await this.scope.writeWorkspace() };
     const [row] = await this.db.insert(mailAccounts).values({ ...data, ...stamp }).returning();
     return row;
@@ -85,7 +85,7 @@ export class MailRepo {
    * sync over (`syncState` cleared); messages already stored stay.
    */
   async updateAccount(id: string, patch: Partial<MailAccountWrite>, opts: { resetSync?: boolean } = {}): Promise<MailAccount | null> {
-    this.canManage();
+    this.assertManage();
     if (!isUuid(id)) return null;
     const reset = opts.resetSync ? { syncState: {}, failures: 0, lastError: null } : {};
     const [row] = await this.db
@@ -98,7 +98,7 @@ export class MailRepo {
 
   /** Remove an account and every message of it (cascade). */
   async deleteAccount(id: string): Promise<boolean> {
-    this.canManage();
+    this.assertManage();
     if (!isUuid(id)) return false;
     const rows = await this.db.delete(mailAccounts).where(and(eq(mailAccounts.id, id), ...this.accountRows())).returning({ id: mailAccounts.id });
     return rows.length > 0;

@@ -14,8 +14,9 @@ import { getDb } from '@/db/postgres';
 import { type MailAccount, mailAccounts, mailMessages, mailRaw } from '@/db/schema/mail';
 import { coreLogger } from '@/utils/logger';
 import { mapLimit } from '@/utils/concurrency';
-import { parseRawMessage } from './parse';
-import { mailPassword } from './secrets';
+import { withDeadline } from './deadline';
+import { parseRawMessage, storable } from './parse';
+import { mailPassword, pruneOrphanMailPasswords } from './secrets';
 import { type FetchedMessage, type MailSource, openSource } from './sources';
 
 /** How often an account is synced. */
@@ -30,6 +31,13 @@ const MAX_BATCHES = 4;
 /** Accounts one sweep takes, and how many sync at once. */
 const SWEEP_LIMIT = 20;
 const CONCURRENCY = 3;
+/** The longest one account's sync may take, connection included. */
+export const SYNC_DEADLINE_MS = 10 * 60_000;
+/** A send still `sending` after this long was interrupted (a restart). */
+const STUCK_SEND_MS = 15 * 60_000;
+/** How often the sweep removes passwords whose account is gone. */
+const PRUNE_EVERY_MS = 60 * 60_000;
+let lastPrune = 0;
 
 export interface MailSyncDeps {
   open: (account: MailAccount, password: string) => Promise<MailSource>;
@@ -64,8 +72,40 @@ async function knownRemoteIds(accountId: string, remoteIds: string[]): Promise<S
   return known;
 }
 
-/** Store one received message; false when it was already there (same remote id or Message-ID). */
-export async function storeReceived(account: MailAccount, fetched: FetchedMessage): Promise<boolean> {
+/** What storing a fetched message did. */
+export type StoreOutcome = 'stored' | 'duplicate';
+
+/**
+ * Store one received message: `duplicate` when the account already has it
+ * (same remote id, or for received mail the same Message-ID). A message that
+ * cannot be stored as it is (a value the database refuses) is stored as a
+ * placeholder, so one bad message never blocks the mailbox behind it.
+ */
+export async function storeReceived(account: MailAccount, fetched: FetchedMessage): Promise<StoreOutcome> {
+  try {
+    return await insertReceived(account, fetched);
+  } catch (err) {
+    coreLogger.warn({ accountId: account.id, err: (err as Error).message }, 'mail: a message could not be stored; keeping a placeholder');
+    const [row] = await getDb()
+      .insert(mailMessages)
+      .values({
+        accountId: account.id,
+        userId: account.userId,
+        workspaceId: account.workspaceId,
+        status: 'received',
+        remoteId: storable(fetched.remoteId),
+        subject: '(this message could not be stored; open it in the mail client)',
+        unread: fetched.unread,
+        date: fetched.receivedAt ?? new Date(),
+        size: fetched.size,
+      })
+      .onConflictDoNothing()
+      .returning({ id: mailMessages.id });
+    return row ? 'stored' : 'duplicate';
+  }
+}
+
+async function insertReceived(account: MailAccount, fetched: FetchedMessage): Promise<StoreOutcome> {
   const parsed = await parseRawMessage(fetched.source);
   const note = fetched.truncated
     ? `[This message is ${Math.round(fetched.size / 1024 / 1024)} MB, too large to keep here. Open it in the mail client.]`
@@ -79,7 +119,7 @@ export async function storeReceived(account: MailAccount, fetched: FetchedMessag
         userId: account.userId,
         workspaceId: account.workspaceId,
         status: 'received',
-        remoteId: fetched.remoteId,
+        remoteId: storable(fetched.remoteId),
         messageIdHeader: parsed.messageIdHeader,
         inReplyTo: parsed.inReplyTo,
         references: parsed.references,
@@ -98,9 +138,9 @@ export async function storeReceived(account: MailAccount, fetched: FetchedMessag
       })
       .onConflictDoNothing()
       .returning({ id: mailMessages.id });
-    if (!row) return false;
+    if (!row) return 'duplicate';
     if (!fetched.truncated) await tx.insert(mailRaw).values({ messageId: row.id, raw: fetched.source });
-    return true;
+    return 'stored';
   });
 }
 
@@ -134,28 +174,17 @@ export async function syncAccount(account: MailAccount, deps: MailSyncDeps = def
   if (running.has(account.id)) return { stored: 0, more: true, error: 'A sync of this mailbox is already running' };
   if (!(await claim(account, now))) return { stored: 0, more: true, error: 'A sync of this mailbox is already running' };
   running.add(account.id);
-  let stored = 0;
-  let more = false;
+  const progress = { stored: 0, more: false };
   let source: MailSource | null = null;
-  let state = account.syncState;
   try {
-    const password = await deps.password(account.id);
-    if (!password) throw new Error('No password is stored for this mailbox');
-    source = await deps.open(account, password);
-    const since = new Date(now.getTime() - FIRST_SYNC_WINDOW_MS);
-    for (let i = 0; i < MAX_BATCHES; i++) {
-      const batch = await source.fetchNew(state, { since, limit: BATCH, known: (ids) => knownRemoteIds(account.id, ids) });
-      for (const message of batch.messages) {
-        if (await storeReceived(account, message)) stored++;
-      }
-      // Every message of the batch is stored: the state may move past them.
-      state = batch.state;
-      await getDb().update(mailAccounts).set({ syncState: state }).where(eq(mailAccounts.id, account.id));
-      more = batch.more;
-      if (!batch.more) break;
-    }
+    await withDeadline((async () => {
+      const password = await deps.password(account.id);
+      if (!password) throw new Error('No password is stored for this mailbox');
+      source = await deps.open(account, password);
+      await fetchBatches(account, source, now, progress);
+    })(), SYNC_DEADLINE_MS, 'The mail sync', () => (source as MailSource | null)?.destroy());
     await getDb().update(mailAccounts).set({ lastError: null, failures: 0 }).where(eq(mailAccounts.id, account.id));
-    return { stored, more };
+    return { ...progress };
   } catch (err) {
     const error = describe(err);
     coreLogger.warn({ accountId: account.id, error }, 'mail: sync failed');
@@ -163,10 +192,41 @@ export async function syncAccount(account: MailAccount, deps: MailSyncDeps = def
       .update(mailAccounts)
       .set({ lastError: error, failures: sql`${mailAccounts.failures} + 1` })
       .where(eq(mailAccounts.id, account.id));
-    return { stored, more, error };
+    return { ...progress, error };
   } finally {
     running.delete(account.id);
-    await source?.close().catch(() => undefined);
+    await (source as MailSource | null)?.close().catch(() => undefined);
+  }
+}
+
+/**
+ * Fetch and store up to `MAX_BATCHES` batches. After each batch the state
+ * moves past what it held, unless the account was changed meanwhile (new
+ * servers start over: an old server's state must not land on the new one).
+ */
+async function fetchBatches(account: MailAccount, source: MailSource, now: Date, progress: { stored: number; more: boolean }): Promise<void> {
+  const since = new Date(now.getTime() - FIRST_SYNC_WINDOW_MS);
+  let state = account.syncState;
+  for (let i = 0; i < MAX_BATCHES; i++) {
+    const batch = await source.fetchNew(state, { since, limit: BATCH, known: (ids) => knownRemoteIds(account.id, ids) });
+    const duplicates: string[] = [];
+    for (const message of batch.messages) {
+      if ((await storeReceived(account, message)) === 'stored') progress.stored++;
+      else duplicates.push(message.remoteId);
+    }
+    state = batch.state;
+    // A POP3 duplicate (same Message-ID, another UIDL) is stored under no
+    // remote id: remember it, or it would be fetched again on every sync.
+    if (account.protocol === 'pop3' && duplicates.length > 0) {
+      state = { ...state, skipped: [...new Set([...(state.skipped ?? []), ...duplicates])] };
+    }
+    const saved = await getDb()
+      .update(mailAccounts)
+      .set({ syncState: state })
+      .where(and(eq(mailAccounts.id, account.id), eq(mailAccounts.updatedAt, account.updatedAt)))
+      .returning({ id: mailAccounts.id });
+    progress.more = batch.more;
+    if (saved.length === 0 || !batch.more) break;
   }
 }
 
@@ -178,14 +238,36 @@ async function dueAccounts(now: Date): Promise<MailAccount[]> {
     .from(mailAccounts)
     .where(and(
       eq(mailAccounts.enabled, true),
+      // An archived space reads only: its mailboxes rest.
+      sql`NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.id = ${mailAccounts.workspaceId} AND w.archived_at IS NOT NULL)`,
       or(isNull(mailAccounts.lastSyncAt), lt(mailAccounts.lastSyncAt, sql`${now.toISOString()}::timestamptz - ${wait}`)),
     ))
     .orderBy(sql`${mailAccounts.lastSyncAt} ASC NULLS FIRST`)
     .limit(SWEEP_LIMIT);
 }
 
+/**
+ * Sends still `sending` long after they started were cut off (a restart
+ * between the claim and the outcome). Mark them failed, saying they may have
+ * gone out, so the author can check before sending again.
+ */
+export async function reapStuckSends(now = new Date()): Promise<number> {
+  const rows = await getDb()
+    .update(mailMessages)
+    .set({ status: 'failed', error: 'The send was interrupted and may have gone out. Check the Sent folder before sending it again.', updatedAt: now })
+    .where(and(eq(mailMessages.status, 'sending'), lt(mailMessages.updatedAt, new Date(now.getTime() - STUCK_SEND_MS))))
+    .returning({ id: mailMessages.id });
+  return rows.length;
+}
+
 /** The cron tick's sweep: sync every due account. Returns how many messages were stored. */
 export async function syncDueMailAccounts(now = new Date(), deps: MailSyncDeps = defaultDeps): Promise<number> {
+  await reapStuckSends(now);
+  if (now.getTime() - lastPrune >= PRUNE_EVERY_MS) {
+    lastPrune = now.getTime();
+    // Accounts removed with their space or their owner leave passwords behind.
+    await pruneOrphanMailPasswords().catch((err: unknown) => coreLogger.warn({ err }, 'mail: password cleanup failed'));
+  }
   const due = await dueAccounts(now);
   if (due.length === 0) return 0;
   const results = await mapLimit(due, CONCURRENCY, (account) => syncAccount(account, deps, now));

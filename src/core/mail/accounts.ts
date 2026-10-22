@@ -23,7 +23,7 @@ import {
 import type { MailSummaryRow } from '@/db/repositories/mail';
 import { isMailAddress, MailInputError } from './drafts';
 import { assertHostAllowed, MailHostError, resolveMailHost } from './hosts';
-import { deleteMailPasswords, mailPassword, mailPasswordsSet, setMailPassword } from './secrets';
+import { deleteMailPasswords, mailPassword, mailPasswordsSet, outgoingPassword, setMailPassword } from './secrets';
 import { checkOutgoing } from './send';
 import { checkIncoming } from './sources';
 
@@ -101,6 +101,8 @@ async function accountWrite(input: MailAccountInput, admin: boolean): Promise<Ma
 }
 
 export async function createMailAccount(repos: ContentRepos, input: MailAccountInput, passwords: MailPasswordsInput = {}): Promise<MailAccount> {
+  // The role first: hosts are resolved only for someone who may set the account up.
+  repos.mail.assertManage();
   const write = await accountWrite(input, isAdmin(repos.principal));
   const account = await repos.mail.createAccount(write);
   try {
@@ -121,6 +123,7 @@ export async function createMailAccount(repos: ContentRepos, input: MailAccountI
 export async function updateMailAccount(repos: ContentRepos, id: string, input: MailAccountInput, passwords: MailPasswordsInput = {}): Promise<MailAccount | null> {
   const current = await repos.mail.account(id);
   if (!current) return null;
+  repos.mail.assertManage();
   const connection = input.address !== undefined || input.protocol !== undefined || input.incoming !== undefined
     || input.outgoing !== undefined || input.folder !== undefined;
   let patch: Partial<MailAccountWrite>;
@@ -147,8 +150,13 @@ export async function updateMailAccount(repos: ContentRepos, id: string, input: 
   );
   const row = await repos.mail.updateAccount(id, patch, { resetSync: serversChanged });
   if (!row) return null;
-  if (passwords.incoming !== undefined) await setMailPassword(id, 'incoming', passwords.incoming);
-  if (passwords.outgoing !== undefined) await setMailPassword(id, 'outgoing', passwords.outgoing);
+  // A password goes only to the server it was entered for: a server moved to
+  // another host, port or user name forgets it unless a new one comes along.
+  const moved = (a: MailServer | null, b: MailServer | null) => !!a && (!b || a.host !== b.host || a.port !== b.port || a.username !== b.username);
+  const incoming = passwords.incoming !== undefined ? passwords.incoming : moved(current.incoming, row.incoming) ? null : undefined;
+  const outgoing = passwords.outgoing !== undefined ? passwords.outgoing : moved(current.outgoing, row.outgoing) ? null : undefined;
+  if (incoming !== undefined) await setMailPassword(id, 'incoming', incoming);
+  if (outgoing !== undefined) await setMailPassword(id, 'outgoing', outgoing);
   return row;
 }
 
@@ -170,7 +178,7 @@ export async function testMailAccount(account: MailAccount): Promise<{ incoming:
   if (!incoming) result.incoming = 'No password is stored';
   else await checkIncoming(account, incoming).catch((err) => { result.incoming = failure(err); });
   if (account.outgoing) {
-    const outgoing = await mailPassword(account.id, 'outgoing');
+    const outgoing = await outgoingPassword(account);
     if (!outgoing) result.outgoing = 'No password is stored';
     else await checkOutgoing(account, outgoing).catch((err) => { result.outgoing = failure(err); });
   }

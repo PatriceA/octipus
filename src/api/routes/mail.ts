@@ -138,6 +138,8 @@ export const mailRoutes = new Elysia({ prefix: '/mail' })
     const repos = contentRepos(principal);
     const account = await repos.mail.account(params.id);
     if (!account) { set.status = 404; return { error: 'Mail account not found' }; }
+    // A login attempt with the stored passwords is a setup step: owners only in a space.
+    repos.mail.assertManage();
     return testMailAccount(account);
   }, { params: ID, detail: { tags: ['mail'] } })
 

@@ -23,7 +23,7 @@ function multiline(body: string): string {
   return `${lines.join('\r\n')}\r\n.\r\n`;
 }
 
-export async function startFakePop3(opts: { user: string; pass: string; messages: FakeMessage[] }): Promise<FakePop3> {
+export async function startFakePop3(opts: { user: string; pass: string; messages: FakeMessage[]; stallOnStls?: boolean }): Promise<FakePop3> {
   const state: FakePop3 = { port: 0, messages: opts.messages, retrieved: [], close: async () => undefined };
   const sockets = new Set<net.Socket>();
   const server = net.createServer((socket) => {
@@ -51,6 +51,8 @@ export async function startFakePop3(opts: { user: string; pass: string; messages
             else socket.write('-ERR invalid login\r\n');
             break;
           case 'QUIT': socket.end('+OK bye\r\n'); break;
+          // Agree to STLS, then never start the handshake.
+          case 'STLS': if (opts.stallOnStls) socket.write('+OK begin TLS\r\n'); else socket.write('-ERR not supported\r\n'); break;
           default:
             if (!authed) { socket.write('-ERR not logged in\r\n'); break; }
             if (cmd === 'STAT') socket.write(`+OK ${msgs.length} 0\r\n`);

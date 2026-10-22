@@ -27,14 +27,23 @@ An account has:
 - **Incoming server:** host, port, security and user name (the address by
   default). Its password is stored in the vault.
 - **Outgoing server (optional):** SMTP host, port, security and user name.
-  Without one the account only receives. Its password falls back to the
-  incoming one when not set.
+  Without one the account only receives. Without its own password it uses
+  the incoming one, but only when both are the same host.
 
 Security is `tls` (implicit TLS: IMAP 993, POP3 995, SMTP 465), `starttls`
 (required: a server that does not offer it fails) or `none`.
 
 Passwords are vault system secrets (`mail:<account>:incoming`,
 `mail:<account>:outgoing`). The API reports only whether one is set.
+
+A password goes only to the server it was entered for. Moving a server to
+another host, port or user name forgets its password unless a new one comes
+with the change, so changing an account can never send the stored password
+somewhere else. Passwords of an account removed with its space or its owner
+are cleaned up within the hour.
+
+Testing a login (`POST /accounts/:id/test`) is part of setting up: in a space
+only its owners can do it.
 
 ### Hosts
 
@@ -72,7 +81,15 @@ more than 5 minutes old. After a failure the wait doubles, up to an hour.
   `DELE`) and flags are not set. "Unread" is Octipus's own mark: IMAP starts
   it from `\Seen`, POP3 mail starts unread.
 - A message is stored once per account: by its server id, and for received
-  mail also by its `Message-ID`.
+  mail also by its `Message-ID`. A POP3 copy with the same Message-ID under
+  another id is remembered and not fetched again.
+- **One bad message never blocks the mailbox.** NUL bytes and broken UTF-16
+  are stripped, and a message the database still refuses is kept as a
+  placeholder ("open it in the mail client").
+- **A deadline.** One account's sync is stopped after 10 minutes, and its
+  connection dropped. A slow or hostile server cannot hold up the other
+  accounts. Sends and login checks have a deadline too.
+- An archived space's mailboxes are not synced.
 - A message over 25 MB is stored with its headers and a note only; open it in
   the mail client.
 
@@ -107,6 +124,10 @@ A draft is sent over the account's SMTP server:
   sends of one draft cannot both go out.
 - **Failures are kept.** A failed send is `failed` with the server's answer and
   can be edited or sent again.
+- **Interrupted sends are not resent blindly.** A send cut off between the
+  claim and the outcome (a restart) stays `sending`. After 15 minutes the
+  sweep marks it `failed` with a note that it may have gone out, so the
+  author can check the Sent folder first.
 - **A copy in Sent.** For an IMAP account, the sent message is also appended
   to the folder the server marks as Sent, when it has one.
 

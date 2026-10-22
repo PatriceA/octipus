@@ -1,8 +1,11 @@
 /**
  * Mail account passwords: vault system secrets `mail:<accountId>:incoming`
  * and `mail:<accountId>:outgoing`. Never returned by the API, never logged.
- * An outgoing server without its own password uses the incoming one.
+ * An outgoing server without its own password uses the incoming one, but
+ * only on the same host: a password is never handed to a server it was not
+ * entered for.
  */
+import type { MailAccount } from '@/db/schema/mail';
 import { getVault } from '@/security/vault';
 
 export type MailSecretSide = 'incoming' | 'outgoing';
@@ -12,10 +15,14 @@ export function mailSecretName(accountId: string, side: MailSecretSide): string 
 }
 
 export async function mailPassword(accountId: string, side: MailSecretSide): Promise<string | null> {
-  const vault = getVault();
-  const own = await vault.getSystemSecret(mailSecretName(accountId, side));
-  if (own || side === 'incoming') return own;
-  return vault.getSystemSecret(mailSecretName(accountId, 'incoming'));
+  return getVault().getSystemSecret(mailSecretName(accountId, side));
+}
+
+/** The outgoing server's password: its own, or the incoming one when both are the same host. */
+export async function outgoingPassword(account: Pick<MailAccount, 'id' | 'incoming' | 'outgoing'>): Promise<string | null> {
+  const own = await mailPassword(account.id, 'outgoing');
+  if (own || !account.outgoing || account.outgoing.host !== account.incoming.host) return own;
+  return mailPassword(account.id, 'incoming');
 }
 
 export async function setMailPassword(accountId: string, side: MailSecretSide, value: string | null): Promise<void> {
@@ -42,4 +49,28 @@ export async function deleteMailPasswords(accountId: string, sides: readonly Mai
   for (const entry of await vault.list('system')) {
     if (wanted.has(entry.name)) await vault.delete('system', entry.id);
   }
+}
+
+const SECRET_RE = /^mail:([0-9a-f-]{36}):(incoming|outgoing)$/;
+
+/**
+ * Remove passwords whose account is gone: an account removed with its space
+ * (purge) or its owner (cascade) never passed through `deleteMailAccount`.
+ */
+export async function pruneOrphanMailPasswords(): Promise<number> {
+  const { getDb } = await import('@/db/postgres');
+  const { mailAccounts } = await import('@/db/schema/mail');
+  const { inArray } = await import('drizzle-orm');
+  const vault = getVault();
+  const entries = (await vault.list('system')).filter((e) => SECRET_RE.test(e.name));
+  if (entries.length === 0) return 0;
+  const ids = [...new Set(entries.map((e) => (SECRET_RE.exec(e.name) as RegExpExecArray)[1]))];
+  const live = new Set((await getDb().select({ id: mailAccounts.id }).from(mailAccounts).where(inArray(mailAccounts.id, ids))).map((r) => r.id));
+  let removed = 0;
+  for (const entry of entries) {
+    if (live.has((SECRET_RE.exec(entry.name) as RegExpExecArray)[1])) continue;
+    await vault.delete('system', entry.id);
+    removed++;
+  }
+  return removed;
 }

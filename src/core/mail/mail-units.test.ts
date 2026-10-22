@@ -3,7 +3,7 @@ import type { MailMessage } from '@/db/schema/mail';
 import { startFakePop3 } from './fixtures/fake-pop3';
 import { MailInputError, parseRecipients, replyDraft, replySubject } from './drafts';
 import { assertHostAllowed, MailHostError, resolveMailHost } from './hosts';
-import { parseRawMessage } from './parse';
+import { parseRawMessage, storable } from './parse';
 import { Pop3Client, Pop3Error } from './pop3';
 
 const lookupTo = (...addresses: string[]) => (async () => addresses.map((address) => ({ address, family: address.includes(':') ? 6 : 4 }))) as never;
@@ -100,6 +100,13 @@ describe('mail parsing', () => {
     expect(parsed.attachments).toEqual([{ filename: 'rechnung.pdf', contentType: 'application/pdf', size: 13 }]);
   });
 
+  test('NUL bytes and lone surrogates are stripped from everything stored', async () => {
+    const parsed = await parseRawMessage(Buffer.from('From: x@y.de\r\nSubject: =?utf-8?B?aGkA?=\r\nContent-Type: text/plain\r\nContent-Transfer-Encoding: base64\r\n\r\n' + Buffer.from('a\u0000b').toString('base64') + '\r\n'));
+    expect(parsed.subject).toBe('hi');
+    expect(parsed.text).toBe('ab');
+    expect(storable({ a: ['x\uD800y', 'ok'], d: new Date(0) })).toEqual({ a: ['xy', 'ok'], d: new Date(0) });
+  });
+
   test('garbage still parses to something storable', async () => {
     const parsed = await parseRawMessage(Buffer.from('\u0000\u0001 not a message'));
     expect(typeof parsed.subject).toBe('string');
@@ -124,6 +131,18 @@ describe('POP3 client', () => {
       expect((await client.retr(2)).toString()).toBe('Subject: two\r\n\r\n.leading dot\r\n..two dots\r\nend\r\n');
       await client.quit();
       expect(server.retrieved).toEqual(['u-2']);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('a server that agrees to STLS and then stalls fails in time', async () => {
+    const server = await startFakePop3({ user: 'kim', pass: 'secret', messages: [], stallOnStls: true });
+    try {
+      const started = Date.now();
+      await expect(Pop3Client.connect({ address: '127.0.0.1', port: server.port, security: 'starttls', username: 'kim', password: 'secret', timeoutMs: 300 }))
+        .rejects.toThrow();
+      expect(Date.now() - started).toBeLessThan(3000);
     } finally {
       await server.close();
     }

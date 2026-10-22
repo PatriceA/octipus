@@ -81,6 +81,23 @@ function clean(value: string | undefined, max: number): string | null {
   return v ? v.slice(0, max) : null;
 }
 
+/**
+ * Postgres stores no NUL in `text` or `jsonb`, and a lone UTF-16 surrogate
+ * is not valid UTF-8: strip both from every string, so one crafted message
+ * (`Subject: =?utf-8?B?aGkA?=`) cannot fail its insert. Walks arrays and
+ * plain objects; leaves dates and the rest alone.
+ */
+export function storable<T>(value: T): T {
+  if (typeof value === 'string') {
+    return value.replace(/\u0000|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '') as T;
+  }
+  if (Array.isArray(value)) return value.map(storable) as T;
+  if (value && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, storable(v)])) as T;
+  }
+  return value;
+}
+
 /** Parse a raw message. Never throws on malformed mail: what cannot be read stays empty. */
 export async function parseRawMessage(raw: Buffer): Promise<ParsedMessage> {
   let mail: ParsedMail;
@@ -95,7 +112,7 @@ export async function parseRawMessage(raw: Buffer): Promise<ParsedMessage> {
   const rawHtml = typeof mail.html === 'string' ? mail.html : '';
   const html = rawHtml ? sanitizeHtmlFragment(rawHtml.slice(0, BODY_HTML_MAX * 2), { presentational: true }).slice(0, BODY_HTML_MAX) : null;
   const text = (mail.text?.trim() ? mail.text : htmlToText(rawHtml)).slice(0, BODY_TEXT_MAX);
-  return {
+  return storable({
     messageIdHeader: clean(mail.messageId, 998),
     inReplyTo: clean(mail.inReplyTo, 998),
     references: referencesOf(mail.references),
@@ -111,7 +128,7 @@ export async function parseRawMessage(raw: Buffer): Promise<ParsedMessage> {
     attachments: mail.attachments
       .filter((a) => !a.related)
       .map((a) => ({ filename: (a.filename ?? 'attachment').slice(0, 255), contentType: a.contentType, size: a.size })),
-  };
+  });
 }
 
 /** The attachments of a raw message, in the same order `parseRawMessage` lists them. */
