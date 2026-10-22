@@ -102,7 +102,7 @@ test.describe('onboarding guide', () => {
 
   test('what is already set up is said, and not done again', async ({ authenticatedPage: page }) => {
     Object.assign(state, {
-      models: { textReady: true, embeddingReady: false, verifySeparate: false, names: ['anthropic claude-sonnet-5-5'], providersWithKey: ['anthropic'], byTopic: {} },
+      models: { textReady: true, embeddingReady: true, verifySeparate: false, names: ['anthropic claude-sonnet-5-5'], providersWithKey: ['anthropic'], byTopic: {} },
       heartbeat: { ...state.heartbeat, serverEnabled: true },
       roleAgents: [{ role: 'research', enabled: true, pipelineTemplate: 'tpl-research' }],
       permissions: { tasksWrite: 'ALLOW', messagingSend: 'ASK' },
@@ -112,13 +112,22 @@ test.describe('onboarding guide', () => {
     await guide.getByRole('checkbox', { name: /Research and knowledge/ }).click();
     await guide.getByRole('button', { name: 'Continue' }).click();
     await expect(guide).toContainText('Every kind of work already has a model.');
-    await guide.getByRole('radio', { name: 'Not now' }).click();
+    // A section everything is already in place for is marked in the steps.
+    await expect(guide.getByRole('button', { name: /AI models · set up/ })).toBeVisible();
     await guide.getByRole('button', { name: 'Research', exact: true }).click();
     await expect(guide).toContainText('The research agent is already on.');
     await guide.getByRole('button', { name: 'Review' }).click();
     const list = guide.getByRole('list', { name: 'What the guide will do' });
     await expect(list).not.toContainText('research agent');
     await expect(list).toContainText('Mark the setup as done');
+    // What was there before is listed as found, not silently dropped.
+    const found = guide.getByRole('list', { name: 'Already set up' });
+    await expect(found).toContainText('Every kind of work already has a model');
+    await expect(found).toContainText('Document search already has a model');
+    await expect(found).toContainText('The research agent is already on');
+    await guide.getByRole('button', { name: 'Set it up' }).click();
+    await expect(guide.locator('[data-step="role:research"]')).toHaveAttribute('data-status', 'done');
+    expect(calls.some((c) => c.path === '/tasks/role-agents')).toBe(false);
   });
 
   test('putting it away leaves a link on the home page', async ({ authenticatedPage: page }) => {

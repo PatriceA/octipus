@@ -334,8 +334,9 @@ labels reflect blast radius, not contract guarantees.
   it will do, and does it through the ordinary routes: models and lanes,
   coding CLIs, areas of work and a shared space, logins for companies with
   their own mailbox, a Telegram link, Jira or Linear, the mailbox and inbox
-  watch, standing instructions, permissions and role agents. Steps only you
-  can do (a sign-in, a chat code) wait for you. Secrets are never saved with
+  watch, standing instructions, permissions and role agents. What is already
+  set up, by hand or by an earlier run, is listed as done and left alone.
+  Steps only you can do (a sign-in, a chat code) wait for you. Secrets are never saved with
   the progress. `/onboarding` opens it again later. See docs/ONBOARDING.md.
 - **The heartbeat can watch your inbox.** Turn on **Watch my inbox** on the
   new *Heartbeat* settings tab and new mail wakes the heartbeat: the agent

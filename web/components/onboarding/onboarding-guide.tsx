@@ -162,6 +162,11 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
   if (phase === 'questions') {
     // One section at a time; a section with nothing to ask (an admin-only one
     // for someone else, with no note) is left out.
+    // Every question of the section answered by what is already there.
+    const sectionSetUp = (sec: (typeof sections)[number]) => {
+      const qs = visibleQuestions(sec, answers, state);
+      return qs.length > 0 && qs.every((q) => Boolean(q.alreadyDone?.(state, answers)));
+    };
     const shown = sections.filter((sec) => visibleQuestions(sec, answers, state).length > 0 || (sec.adminOnly && !state.isAdmin && sec.nonAdminNote));
     const i = Math.min(sectionIndex, shown.length - 1);
     const section = shown[i];
@@ -177,7 +182,7 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
               aria-current={n === i ? 'step' : undefined}
               className={`rounded-full px-3 py-1 text-xs border ${n === i ? 'border-primary bg-primary/10 text-on-surface' : n < i ? 'border-tertiary/40 text-on-surface-variant' : 'border-outline-variant/40 text-on-surface-variant'}`}
             >
-              {n < i ? '✓ ' : ''}{sec.title}
+              {n < i || sectionSetUp(sec) ? '✓ ' : ''}{sec.title}{sectionSetUp(sec) && n >= i ? ' · set up' : ''}
             </button>
           ))}
         </nav>
@@ -212,30 +217,45 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
   }
 
   if (phase === 'review') {
+    const todo = plan.filter((st) => st.kind !== 'done');
+    const found = plan.filter((st) => st.kind === 'done');
     return shell(
       <>
-        {plan.length === 0 ? (
+        {todo.length === 0 ? (
           <p className="text-sm text-on-surface-variant">Everything you asked for is already set up. Nothing to do.</p>
         ) : (
           <>
             <p className="text-sm font-medium">Octipus will:</p>
             <ol className="space-y-1.5 list-decimal pl-5 text-sm" aria-label="What the guide will do">
-              {plan.map((s) => (
-                <li key={s.id} data-plan-step={s.id}>
-                  <span className="text-on-surface">{s.title}</span>
-                  {s.kind !== 'api' && <span className="ml-2 text-xs text-warning">needs you</span>}
-                  {s.detail && <span className="block text-xs text-on-surface-variant">{s.detail}</span>}
+              {todo.map((st) => (
+                <li key={st.id} data-plan-step={st.id}>
+                  <span className="text-on-surface">{st.title}</span>
+                  {st.kind !== 'api' && <span className="ml-2 text-xs text-warning">needs you</span>}
+                  {st.detail && <span className="block text-xs text-on-surface-variant">{st.detail}</span>}
                 </li>
               ))}
             </ol>
           </>
         )}
+        {found.length > 0 && (
+          <div>
+            <p className="text-sm font-medium">Already set up, left as it is:</p>
+            <ul className="mt-1.5 space-y-1 text-sm" aria-label="Already set up">
+              {found.map((st) => (
+                <li key={st.id} data-plan-step={st.id} className="flex gap-2 text-on-surface-variant">
+                  <Check className="w-4 h-4 mt-0.5 text-tertiary shrink-0" aria-hidden />
+                  <span>{st.title}{st.detail && <span className="block text-xs">{st.detail}</span>}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <div className="flex justify-between">
           <button type="button" onClick={() => setPhase('questions')} className="inline-flex items-center gap-1.5 text-sm text-on-surface-variant">
             <ArrowLeft className="w-4 h-4" /> Change answers
           </button>
-          <button type="button" onClick={() => (plan.length ? setPhase('run') : finished({}))} className="inline-flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-on-primary">
-            {plan.length ? 'Set it up' : 'Finish'} <ArrowRight className="w-4 h-4" />
+          <button type="button" onClick={() => (todo.length ? setPhase('run') : finished(Object.fromEntries(found.map((st) => [st.id, { status: 'done' as StepStatus, message: 'Already set up.' }]))))} className="inline-flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-on-primary">
+            {todo.length ? 'Set it up' : 'Finish'} <ArrowRight className="w-4 h-4" />
           </button>
         </div>
       </>,
@@ -257,12 +277,13 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
           const r = outcome[step.id];
           const status = r?.status ?? 'skipped';
           const mark = status === 'done' ? '✓' : status === 'failed' ? '✗' : '–';
+          const before = step.kind === 'done';
           return (
             <li key={step.id} data-step={step.id} data-status={status} className="flex gap-2">
               <span aria-hidden className={status === 'done' ? 'text-tertiary' : status === 'failed' ? 'text-error' : 'text-on-surface-variant'}>{mark}</span>
               <span className="min-w-0">
-                <span className="text-on-surface">{step.title}</span>
-                {r?.message && !(step.kind === 'api' && step.reveal) && <span className="block text-xs text-on-surface-variant">{r.message}</span>}
+                <span className={before ? 'text-on-surface-variant' : 'text-on-surface'}>{step.title}</span>
+                {r?.message && !before && !(step.kind === 'api' && step.reveal) && <span className="block text-xs text-on-surface-variant">{r.message}</span>}
               </span>
             </li>
           );

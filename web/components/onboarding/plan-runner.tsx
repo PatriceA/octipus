@@ -74,6 +74,11 @@ export function PlanRunner({ steps, onFinished }: { steps: PlanStep[]; onFinishe
       next();
       return;
     }
+    if (step.kind === 'done') {
+      set(step.id, { status: 'done', message: 'Already set up.' });
+      next();
+      return;
+    }
     if (step.kind !== 'api') {
       set(step.id, { status: 'waiting' });
       return;

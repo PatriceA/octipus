@@ -34,10 +34,18 @@ everyone; the others come with a use case:
 | Research | Research and knowledge | research agent |
 
 When something is already set up, the question says so ("Every kind of work
-already has a model") and starts from the current value.
+already has a model") and starts from the current value. A section where
+everything is already in place is marked "set up" in the row of sections.
 
-**3. Review.** A numbered list of everything the guide will do. Steps that need
-you are marked "needs you".
+**3. Review.** A numbered list of everything the guide will do; steps that
+need you are marked "needs you". Below it, **Already set up, left as it is**
+lists what the guide found in place and will not touch, such as a connected
+mailbox, a linked chat, an agent that is already on, or a permission that is
+already Allow. Setup done by hand before the guide counts.
+
+A step that depends on something already in place runs straight away. For
+example, the inbox watch needs a connected mailbox, and an already connected
+mailbox counts.
 
 **4. Set it up.** The steps run one at a time:
 - A failed step stops only the steps that depend on it.
@@ -45,7 +53,8 @@ you are marked "needs you".
   you type in, or something on another page. You can skip it.
 - The last screen lists what was done, what failed and what was left for later.
 
-Run the guide again at any time: what is already in place is left alone.
+Run the guide again at any time: what is already in place is listed as done
+and left alone.
 
 ## How it works
 
@@ -58,7 +67,7 @@ Run the guide again at any time: what is already in place is left alone.
 - **The steps** run through the ordinary API routes, with your own session.
   Every check those routes make still applies: admin-only settings,
   workspace-root limits, known roles, permission levels. A step whose result
-  already exists is left out.
+  already exists becomes a `done` step: it is listed, and nothing is called.
 - **`GET /api/onboarding`** reports what is already set up
   (`src/core/onboarding/state.ts`). Install-wide facts (model rows, provider
   keys, MCP servers, CLI tools on the host) are only read for admins. Every

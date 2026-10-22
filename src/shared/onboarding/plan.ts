@@ -4,9 +4,10 @@
  * through the existing API routes with the person's own session, so every
  * check those routes make (admin only, valid paths, known roles) still applies.
  *
- * A step whose result is already in place is left out (a model that exists is
- * not added again, an enabled role agent is not re-enabled); the same step
- * asked for by two use cases appears once.
+ * A step whose result is already in place is not done again (a model that
+ * exists is not added again, an enabled role agent is not re-enabled): it is
+ * listed as `done`, so the person sees it was found, not forgotten. The same
+ * step asked for by two use cases appears once.
  */
 import { cliModelName, EMBEDDING_MODELS, KEY_PROVIDERS, picked, sectionsFor } from './use-cases';
 import type { Answers, ApiCall, OnboardingState, PlanStep, UseCaseId } from './types';
@@ -48,6 +49,10 @@ class Plan {
   api(id: string, title: string, call: ApiCall, extra: { detail?: string; dependsOn?: string[]; optional?: boolean; secret?: boolean; reveal?: string } = {}): void {
     this.add({ id, title, kind: 'api', call, ...extra });
   }
+  /** Already in place: listed, never called. */
+  done(id: string, title: string, detail?: string): void {
+    this.add({ id, title, kind: 'done', ...(detail ? { detail } : {}) });
+  }
   list(): PlanStep[] {
     return [...this.steps.values()];
   }
@@ -55,22 +60,31 @@ class Plan {
 
 /** Add a model unless it exists; returns the id of the step that makes it exist ('' when it already does). */
 function ensureModel(plan: Plan, s: OnboardingState, name: string, body: Record<string, unknown>, title: string, dependsOn?: string[]): string {
-  if (s.models.names.includes(name)) return '';
   const id = `model:${name}`;
+  if (s.models.names.includes(name)) {
+    plan.done(id, `The model "${name}" is already added`);
+    return '';
+  }
   plan.api(id, title, { method: 'POST', path: '/models', body: { name, ...body } }, { dependsOn });
   return id;
 }
 
 /** Bind `name` to `topic` after the comma-separated step ids in `after`. */
 function bind(plan: Plan, s: OnboardingState, topic: string, name: string, after: string, title: string): void {
-  if (s.models.byTopic[topic] === name && !(TEXT_LANES.includes(topic) && plan.has('assign-all'))) return;
+  if (s.models.byTopic[topic] === name && !(TEXT_LANES.includes(topic) && plan.has('assign-all'))) {
+    plan.done(`bind:${topic}`, `${title}: already set`);
+    return;
+  }
   const deps = after.split(',').filter(Boolean);
   plan.api(`bind:${topic}`, title, { method: 'PUT', path: `/topics/${topic}/binding`, body: { primaryModel: name } }, { dependsOn: deps.length ? deps : undefined });
 }
 
 function permission(plan: Plan, s: OnboardingState, toolId: 'tasks' | 'messaging', action: 'write' | 'send', why: string): void {
   const current = toolId === 'tasks' ? s.permissions.tasksWrite : s.permissions.messagingSend;
-  if (current === 'ALLOW') return;
+  if (current === 'ALLOW') {
+    plan.done(`perm:${toolId}/${action}`, `Agents may already ${why}`, `${toolId} → ${action} is Allow.`);
+    return;
+  }
   plan.api(`perm:${toolId}/${action}`, `Allow agents to ${why}`, { method: 'PUT', path: '/tools/permissions', body: { toolId, action, level: 'ALLOW' } }, {
     detail: `${toolId} → ${action} set to Allow. Background runs cannot ask you, so anything left on Ask is refused.`,
   });
@@ -78,7 +92,10 @@ function permission(plan: Plan, s: OnboardingState, toolId: 'tasks' | 'messaging
 
 /** Background agents need the server's heartbeat. */
 function serverHeartbeat(plan: Plan, s: OnboardingState): void {
-  if (s.heartbeat.serverEnabled) return;
+  if (s.heartbeat.serverEnabled) {
+    plan.done('setting:heartbeat.enabled', 'The heartbeat already runs on this server');
+    return;
+  }
   if (s.isAdmin) {
     plan.api('setting:heartbeat.enabled', 'Turn on the heartbeat for this server', { method: 'PUT', path: '/settings/heartbeat.enabled', body: { value: true } }, {
       detail: 'The regular check-in that background agents run on. A check that finds nothing costs nothing.',
@@ -91,7 +108,10 @@ function serverHeartbeat(plan: Plan, s: OnboardingState): void {
 function roleAgent(plan: Plan, s: OnboardingState, role: string, pipelineTemplate: string, title: string): void {
   const existing = s.roleAgents.find((r) => r.role === role);
   const wanted = pipelineTemplate || null;
-  if (existing?.enabled && existing.pipelineTemplate === wanted) return;
+  if (existing?.enabled && existing.pipelineTemplate === wanted) {
+    plan.done(`role:${role}`, `The ${role} agent is already on, working tasks the way you chose`);
+    return;
+  }
   serverHeartbeat(plan, s);
   permission(plan, s, 'tasks', 'write', 'work your to-do list');
   const template = s.pipelineTemplates.find((t) => t.id === pipelineTemplate);
@@ -101,7 +121,10 @@ function roleAgent(plan: Plan, s: OnboardingState, role: string, pipelineTemplat
 }
 
 function connectMailbox(plan: Plan, s: OnboardingState, provider: 'google' | 'microsoft', why: string): string {
-  if (s.mailbox) return '';
+  if (s.mailbox) {
+    plan.done('connect:mailbox', `Your ${s.mailbox === 'google' ? 'Google' : 'Microsoft'} account is already connected`);
+    return 'connect:mailbox';
+  }
   if (!s.oauthClients[provider]) {
     const label = provider === 'google' ? 'Google' : 'Microsoft';
     plan.add({
@@ -159,7 +182,9 @@ function modelSteps(plan: Plan, a: Answers, s: OnboardingState): void {
     mainStep = ensureModel(plan, s, main, { provider: 'ollama', modelId, endpoint: url }, `Add the local model ${modelId}`);
   }
 
-  if (main && !TEXT_LANES.every((t) => s.models.byTopic[t] === main)) {
+  if (source === 'keep' && s.models.textReady) plan.done('models:ready', 'Every kind of work already has a model');
+  if (main && TEXT_LANES.every((t) => s.models.byTopic[t] === main)) plan.done('assign-all', `"${main}" is already used for all work`);
+  else if (main) {
     plan.api('assign-all', 'Use it for all work', { method: 'POST', path: '/topics/assign-all', body: { model: main } }, {
       dependsOn: mainStep ? [mainStep] : undefined,
       detail: 'Chat, coding, research, checking and background jobs. Give single jobs their own model later on the Topics page.',
@@ -184,6 +209,7 @@ function modelSteps(plan: Plan, a: Answers, s: OnboardingState): void {
   }
 
   const embedding = str(a, 'models.embedding');
+  if (embedding === 'keep' && s.models.embeddingReady) plan.done('models:embedding', 'Document search already has a model');
   if (embedding === 'ollama' || embedding === 'openai') {
     const m = EMBEDDING_MODELS[embedding];
     const url = str(a, 'models.ollamaUrl') || s.ollama.url;
@@ -210,7 +236,10 @@ function areaSteps(plan: Plan, a: Answers, s: OnboardingState, opts: PlanOptions
     const known = new Set(s.workspaces.flatMap((w) => [w.name.toLowerCase(), w.slug]));
     for (const name of list(a, 'areas.names')) {
       const slug = slugify(name);
-      if (known.has(name.toLowerCase()) || known.has(slug)) continue;
+      if (known.has(name.toLowerCase()) || known.has(slug)) {
+        plan.done(`area:${slug}`, `The area "${name}" already exists`);
+        continue;
+      }
       known.add(slug);
       plan.api(`area:${slug}`, `Create the area "${name}"`, { method: 'POST', path: '/me/workspaces', body: { slug, name: name.slice(0, 120) } }, {
         detail: 'Its own chats, tasks, notes and documents. Switch to it at the top of the page.',
@@ -218,7 +247,9 @@ function areaSteps(plan: Plan, a: Answers, s: OnboardingState, opts: PlanOptions
     }
   }
   const space = str(a, 'areas.spaceName');
-  if (yes(a, 'areas.team') && space && !s.workspaces.some((w) => w.kind === 'shared' && w.name.toLowerCase() === space.toLowerCase())) {
+  const hasSpace = s.workspaces.some((w) => w.kind === 'shared' && w.name.toLowerCase() === space.toLowerCase());
+  if (yes(a, 'areas.team') && space && hasSpace) plan.done('space', `The shared space "${space}" already exists`);
+  if (yes(a, 'areas.team') && space && !hasSpace) {
     plan.api('space', `Create the shared space "${space}"`, { method: 'POST', path: '/spaces', body: { name: space.slice(0, 120) } }, {
       detail: 'Invite people from the space\'s settings.',
     });
@@ -238,7 +269,11 @@ function areaSteps(plan: Plan, a: Answers, s: OnboardingState, opts: PlanOptions
 
 function chatSteps(plan: Plan, a: Answers, s: OnboardingState): void {
   const channel = str(a, 'chat.channel');
-  if (!channel || channel === 'none' || s.channels.linked.includes(channel)) return;
+  if (!channel || channel === 'none') return;
+  if (s.channels.linked.includes(channel)) {
+    plan.done(`link:${channel}`, `Your ${channel === 'teams' ? 'Teams' : channel[0].toUpperCase() + channel.slice(1)} chat is already linked`);
+    return;
+  }
   if (channel === 'telegram') {
     const token = str(a, 'chat.telegramToken');
     if (token) {
@@ -278,6 +313,7 @@ function devSteps(plan: Plan, a: Answers, s: OnboardingState): void {
       bind(plan, s, 'build', name, [after, plan.has('assign-all') ? 'assign-all' : ''].filter(Boolean).join(','), `Use ${chosen[0].name} for coding work`);
     }
     const root = str(a, 'dev.root');
+    if (root && root === s.workspaceRoot) plan.done('workspace-root', `Agents already work in ${root}`);
     if (root && root !== s.workspaceRoot) {
       plan.api('workspace-root', `Work in ${root}`, { method: 'PUT', path: '/workspace', body: { rootPath: root } }, { detail: 'Agents read and write code inside this folder.' });
     }
@@ -292,7 +328,9 @@ function devSteps(plan: Plan, a: Answers, s: OnboardingState): void {
 function trackerSteps(plan: Plan, a: Answers, s: OnboardingState): void {
   const tracker = str(a, 'tools.tracker');
   const connector = tracker === 'jira' ? 'atlassian' : tracker === 'linear' ? 'linear' : '';
-  if (connector && !s.connectors.find((c) => c.id === connector)?.connected) {
+  if (connector && s.connectors.find((c) => c.id === connector)?.connected) {
+    plan.done(`connect:${connector}`, `${tracker === 'jira' ? 'Jira' : 'Linear'} is already connected`);
+  } else if (connector) {
     plan.add({
       id: `connect:${connector}`,
       kind: 'connect',
@@ -304,7 +342,8 @@ function trackerSteps(plan: Plan, a: Answers, s: OnboardingState): void {
   }
   const url = str(a, 'tools.mcpUrl');
   const name = str(a, 'tools.mcpName') || 'tracker';
-  if (tracker === 'mcp' && s.isAdmin && url && !s.mcpServers.includes(name)) {
+  if (tracker === 'mcp' && s.isAdmin && s.mcpServers.includes(name)) plan.done(`mcp:${name}`, `The MCP server "${name}" already exists`);
+  else if (tracker === 'mcp' && s.isAdmin && url) {
     plan.api(`mcp:${name}`, `Add the MCP server "${name}"`, {
       method: 'POST', path: '/mcp/servers', body: { name, transport: 'streamable-http', sseUrl: url, isEnabled: true },
     }, { detail: url });
@@ -348,7 +387,9 @@ function companySteps(plan: Plan, a: Answers, s: OnboardingState): void {
     permission(plan, s, 'tasks', 'write', 'add tasks to your list');
     permission(plan, s, 'messaging', 'send', 'message you in your chat');
     const interval = Number(str(a, 'company.interval')) || 15;
-    if (!(s.heartbeat.enabled && s.heartbeat.watchEmail && s.heartbeat.intervalMinutes === interval)) {
+    if (s.heartbeat.enabled && s.heartbeat.watchEmail && s.heartbeat.intervalMinutes === interval) {
+      plan.done('heartbeat:me', `Your inbox is already checked every ${interval} minutes`);
+    } else {
       plan.api('heartbeat:me', `Check your inbox every ${interval} minutes`, {
         method: 'PUT', path: '/heartbeat/me', body: { enabled: true, watchEmail: true, intervalMinutes: interval },
       }, { dependsOn: connect && connect.startsWith('connect:') ? [connect] : undefined, detail: 'Only mail that arrives from now on.' });
@@ -363,7 +404,8 @@ function productSteps(plan: Plan, a: Answers, s: OnboardingState): void {
     const provider = str(a, 'mailbox.provider') === 'microsoft' ? 'microsoft' : 'google';
     const connect = connectMailbox(plan, s, provider, 'Octipus reads your calendar to prepare you for meetings.');
     serverHeartbeat(plan, s);
-    if (!s.heartbeat.enabled && !plan.has('heartbeat:me')) {
+    if (s.heartbeat.enabled) plan.done('heartbeat:me', 'Your heartbeat is already on');
+    else if (!plan.has('heartbeat:me')) {
       plan.api('heartbeat:me', 'Turn on your heartbeat', { method: 'PUT', path: '/heartbeat/me', body: { enabled: true } }, {
         dependsOn: connect && connect.startsWith('connect:') ? [connect] : undefined,
       });

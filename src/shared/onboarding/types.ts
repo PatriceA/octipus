@@ -134,7 +134,9 @@ export type PlanStep =
   /** A code the person types in (a chat link code). */
   | (StepBase & { kind: 'code'; call: { method: 'POST'; path: string; field: string }; prompt: string })
   /** Something to do elsewhere; the guide links there. */
-  | (StepBase & { kind: 'todo'; href: string });
+  | (StepBase & { kind: 'todo'; href: string })
+  /** Already in place before the guide ran: shown as done, nothing is called. */
+  | (StepBase & { kind: 'done' });
 
 /** How the guide tells a connect step finished: a re-read of the state. */
 export type ConnectCheck = { mailbox: true } | { connector: string };

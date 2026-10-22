@@ -32,6 +32,9 @@ const fresh = (over: Partial<OnboardingState> = {}): OnboardingState => ({
 const plan = (useCases: UseCaseId[], answers: Answers, state = fresh()) =>
   buildPlan(useCases, { ...initialAnswers(useCases, state), ...answers }, state, { newPassword: () => 'Pw-123456' });
 const ids = (steps: PlanStep[]) => steps.map((s) => s.id);
+/** What will actually be done (not what was found already in place). */
+const todo = (steps: PlanStep[]) => steps.filter((s) => s.kind !== 'done').map((s) => s.id);
+const found = (steps: PlanStep[]) => steps.filter((s) => s.kind === 'done').map((s) => s.id);
 const step = (steps: PlanStep[], id: string) => steps.find((s) => s.id === id);
 
 describe('models', () => {
@@ -49,17 +52,19 @@ describe('models', () => {
     expect(step(steps, 'test:main')).toMatchObject({ optional: true });
   });
 
-  test('what exists is not added again; "keep" changes nothing', () => {
+  test('what exists is not added again but listed as already set up; "keep" changes nothing', () => {
     const state = fresh({
       models: { textReady: true, embeddingReady: true, verifySeparate: false, names: ['anthropic claude-sonnet-5-5'], providersWithKey: ['anthropic'], byTopic: {} },
     });
     expect(initialAnswers(['research'], state)['models.source']).toBe('keep');
     const kept = plan(['research'], {}, state);
-    expect(ids(kept).some((id) => id.startsWith('model:') || id === 'assign-all')).toBe(false);
+    expect(todo(kept).some((id) => id.startsWith('model:') || id === 'assign-all')).toBe(false);
+    expect(found(kept)).toEqual(expect.arrayContaining(['models:ready', 'models:embedding']));
     const again = plan(['research'], { 'models.source': 'key', 'models.provider': 'anthropic', 'models.modelId': 'claude-sonnet-5-5' }, state);
-    expect(ids(again)).not.toContain('model:anthropic claude-sonnet-5-5');
+    expect(found(again)).toContain('model:anthropic claude-sonnet-5-5');
+    expect(step(again, 'model:anthropic claude-sonnet-5-5')?.title).toBe('The model "anthropic claude-sonnet-5-5" is already added');
     expect(ids(again)).not.toContain('key:main'); // an empty key keeps the stored one
-    expect(ids(again)).toContain('assign-all');
+    expect(todo(again)).toContain('assign-all');
   });
 
   test('a CLI subscription becomes the model', () => {
@@ -86,7 +91,8 @@ describe('models', () => {
 describe('areas of work', () => {
   test('new areas become personal workspaces; existing ones are left alone', () => {
     const steps = plan(['company'], { 'areas.separate': true, 'areas.names': ['Acme Ltd', 'Personal', 'Café Noir', 'Acme Ltd'] });
-    expect(ids(steps).filter((id) => id.startsWith('area:'))).toEqual(['area:acme-ltd', 'area:cafe-noir']);
+    expect(todo(steps).filter((id) => id.startsWith('area:'))).toEqual(['area:acme-ltd', 'area:cafe-noir']);
+    expect(step(steps, 'area:personal')).toMatchObject({ kind: 'done', title: 'The area "Personal" already exists' });
     expect(step(steps, 'area:cafe-noir')).toMatchObject({ call: { path: '/me/workspaces', body: { slug: 'cafe-noir', name: 'Café Noir' } } });
   });
 
@@ -116,8 +122,8 @@ describe('chat', () => {
   });
 
   test('an already linked chat needs nothing; another platform points to its settings', () => {
-    expect(ids(plan(['company'], { 'chat.channel': 'telegram' }, fresh({ channels: { configured: ['telegram'], linked: ['telegram'] } }))))
-      .not.toContain('link:telegram');
+    expect(step(plan(['company'], { 'chat.channel': 'telegram' }, fresh({ channels: { configured: ['telegram'], linked: ['telegram'] } })), 'link:telegram'))
+      .toMatchObject({ kind: 'done', title: 'Your Telegram chat is already linked' });
     expect(step(plan(['company'], { 'chat.channel': 'slack' }), 'todo:channel:slack')).toMatchObject({ kind: 'todo', href: '/settings' });
   });
 });
@@ -150,7 +156,8 @@ describe('software development', () => {
   test('an agent already on the same way is not touched', () => {
     const state = fresh({ roleAgents: [{ role: 'coding', enabled: true, pipelineTemplate: 'tpl-dev' }], heartbeat: { ...fresh().heartbeat, serverEnabled: true }, permissions: { tasksWrite: 'ALLOW', messagingSend: 'ASK' } });
     const steps = plan(['development'], { 'dev.roleAgent': true, 'dev.pipeline': 'tpl-dev' }, state);
-    expect(ids(steps).filter((id) => /^(role|perm|setting:heartbeat)/.test(id))).toEqual([]);
+    expect(todo(steps).filter((id) => /^(role|perm|setting:heartbeat)/.test(id))).toEqual([]);
+    expect(step(steps, 'role:coding')).toMatchObject({ kind: 'done' });
   });
 });
 
@@ -181,6 +188,31 @@ describe('running a company', () => {
     expect(text).toContain('Tell me right away (send_to_user) about: the bank; client complaints');
     expect(text).toContain('Never send email');
     expect(standingInstructions({ ...answers, 'company.send': 'send' })).toContain('Routine replies may be sent');
+  });
+});
+
+describe('already set up before the guide', () => {
+  test('a connected mailbox, an inbox already watched, Jira already connected and allowed permissions are all listed as done', () => {
+    const state = fresh({
+      mailbox: 'google',
+      connectors: [{ id: 'atlassian', name: 'Atlassian', connected: true }],
+      heartbeat: { serverEnabled: true, enabled: true, watchEmail: true, intervalMinutes: 15, timezone: 'UTC' },
+      permissions: { tasksWrite: 'ALLOW', messagingSend: 'ALLOW' },
+      workspaceRoot: '/home/me/code',
+    });
+    const steps = plan(['company', 'development'], {
+      'company.mail': true, 'company.interval': '15', 'tools.tracker': 'jira', 'dev.root': '/home/me/code', 'company.ideas': false, 'dev.roleAgent': false,
+    }, state);
+    expect(found(steps)).toEqual(expect.arrayContaining([
+      'connect:mailbox', 'heartbeat:me', 'connect:atlassian', 'perm:tasks/write', 'perm:messaging/send', 'setting:heartbeat.enabled', 'workspace-root',
+    ]));
+    expect(steps.filter((s) => s.kind === 'connect')).toEqual([]);
+  });
+
+  test('a done step counts as done for the steps after it', () => {
+    const steps = plan(['company'], { 'company.mail': true, 'company.interval': '30' }, fresh({ mailbox: 'google' }));
+    expect(step(steps, 'heartbeat:me')).toMatchObject({ kind: 'api', dependsOn: ['connect:mailbox'] });
+    expect(step(steps, 'connect:mailbox')).toMatchObject({ kind: 'done' });
   });
 });
 
