@@ -23,6 +23,7 @@ import * as AtlassianModule from './atlassian';
 import { BaseTool } from './base-tool';
 import * as BrowserModule from './browser';
 import * as BrowserExtModule from './browser-ext';
+import * as CasesModule from './cases';
 import * as DataModule from './data';
 import * as DockerModule from './docker';
 import * as DocumentsModule from './documents';
@@ -58,6 +59,7 @@ const MODULES: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
   ['atlassian', AtlassianModule],
   ['browser', BrowserModule],
   ['browser-ext', BrowserExtModule],
+  ['cases', CasesModule],
   ['data', DataModule],
   ['docker', DockerModule],
   ['documents', DocumentsModule],

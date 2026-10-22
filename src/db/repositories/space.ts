@@ -36,6 +36,7 @@ import { getDb } from '../postgres';
 import { type Artifact, artifacts, type NewArtifact } from '../schema/artifacts';
 import { workspaceMembers, workspaces } from '../schema/organizations';
 import { type NewVaultEntry, vault } from '../schema/vault';
+import { CaseRepo, ContactRepo } from './cases';
 import { type KnowledgeLinkRepository, getKnowledgeLinkRepository } from './knowledge-link-repository';
 import { type NoteScope, type NoteStore, SpaceNoteRepo } from './note-repository';
 import {
@@ -454,6 +455,8 @@ export interface SpaceRepos {
   documents: SpaceDocumentRepo;
   notifications: ScopedNotificationRepo;
   tasks: TaskRepo;
+  cases: CaseRepo;
+  contacts: ContactRepo;
   notes: NoteStore;
   noteScope: NoteScope;
   links: LinkStore;
@@ -496,6 +499,8 @@ export function spaceRepos(principal: Principal): SpaceRepos {
     documents: new SpaceDocumentRepo(principal, space),
     notifications: new ScopedNotificationRepo(principal, scope),
     tasks: new TaskRepo(scope),
+    cases: new CaseRepo(scope),
+    contacts: new ContactRepo(scope),
     notes: new SpaceNoteRepo(noteScope),
     noteScope,
     links: linkStoreFor(noteScope),

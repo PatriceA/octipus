@@ -100,6 +100,8 @@ async function seedSpaceRows(ws: string, author: string): Promise<{ sessionId: s
   await one('agents', `INSERT INTO agents (id, session_id, user_id, workspace_id) VALUES ($1, $2, $3, $4)`, [`agent-${randomUUID()}`, session.id, author, ws]);
   await one('artifacts', `INSERT INTO artifacts (workspace_id, slug, title, type, created_by_user_id) VALUES ($1, $2, 'A', 'html', $3)`, [ws, `a-${rand(3)}`, author]);
   await one('background_jobs', `INSERT INTO background_jobs (kind, user_id, title, workspace_id) VALUES ('research', $1, 'job', $2)`, [author, ws]);
+  await one('cases', `INSERT INTO cases (user_id, title, workspace_id) VALUES ($1, 'c', $2)`, [author, ws]);
+  await one('contacts', `INSERT INTO contacts (user_id, name, workspace_id) VALUES ($1, 'k', $2)`, [author, ws]);
   await one('documents', `INSERT INTO documents (user_id, filename, original_name, mime_type, size, storage_path, workspace_id) VALUES ($1, 'f', 'f', 'text/plain', 1, '/x', $2)`, [author, ws]);
   await one('embeddings', `INSERT INTO embeddings (source_id, content, model, embedding, purpose, content_sha256, embedding_version, user_id, workspace_id) VALUES ('s', 'c', 'm', '[0.1,0.2,0.3]', 'document', $1, 'm/3', $2, $3)`, [randomUUID(), author, ws]);
   await one('hooks', `INSERT INTO hooks (user_id, name, trigger, trigger_config, action, action_config, workspace_id) VALUES ($1, 'h', 'message_received', '{}', 'notify', '{}', $2)`, [author, ws]);

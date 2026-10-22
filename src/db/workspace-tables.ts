@@ -47,8 +47,11 @@ export const WORKSPACE_TABLES: readonly WorkspaceTable[] = [
   // actor column stays the actor through a transfer.
   { table: 'audit_log', ownerColumn: 'user_id', transfer: 'n/a', purge: 'keep' },
   { table: 'background_jobs', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
+  // Cases and contacts (docs/CASES.md); a case's links go with it (cascade).
+  { table: 'cases', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   // Retention history of what a cleanup removed.
   { table: 'cleanup_audit_log', ownerColumn: 'user_id', transfer: 'n/a', purge: 'keep' },
+  { table: 'contacts', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   // Billing history: who spent what, where. Outlives the space.
   { table: 'cost_log', ownerColumn: 'user_id', transfer: 'n/a', purge: 'keep' },
   { table: 'documents', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },

@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { index, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { users } from './users';
 import { workspaces } from './organizations';
@@ -57,6 +58,14 @@ export const tasks = pgTable('tasks', {
   checkedOutAt: timestamp('checked_out_at', { withTimezone: true }),
   checkoutRunId: text('checkout_run_id'),
   dueAt: timestamp('due_at', { withTimezone: true }),
+  /**
+   * Follow-up ("Wiedervorlage", docs/CASES.md): when the task comes back to
+   * its assignee's attention. The cron loop stamps `remindedAt` once it
+   * passes and notifies if the task is still active (core/tasks/reminders.ts);
+   * changing `remindAt` clears the stamp, so the reminder fires again.
+   */
+  remindAt: timestamp('remind_at', { withTimezone: true }),
+  remindedAt: timestamp('reminded_at', { withTimezone: true }),
   completedAt: timestamp('completed_at', { withTimezone: true }),
   /** Provenance: 'user' | 'agent' | 'reader' | 'research' | 'email' | 'channel'. */
   source: text('source').default('user').notNull(),
@@ -68,6 +77,7 @@ export const tasks = pgTable('tasks', {
   userStatusDueIdx: index('tasks_user_status_due_idx').on(table.userId, table.status, table.dueAt),
   parentIdx: index('tasks_parent_idx').on(table.parentId),
   userAssigneeIdx: index('tasks_user_assignee_idx').on(table.userId, table.assigneeKind, table.assigneeRef, table.status),
+  dueReminderIdx: index('tasks_due_reminder_idx').on(table.remindAt).where(sql`${table.remindAt} IS NOT NULL AND ${table.remindedAt} IS NULL`),
 }));
 
 export interface TaskSourceRef {

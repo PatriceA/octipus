@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-529 mounted routes across 73 route files. The path is the full one, group prefix included — what a client actually calls.
+543 mounted routes across 74 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -114,6 +114,15 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/capabilities/:id/install` | `src/api/routes/capabilities.ts` |
 | POST | `/api/capabilities/install-all-missing` | `src/api/routes/capabilities.ts` |
 | POST | `/api/capabilities/probe` | `src/api/routes/capabilities.ts` |
+| GET | `/api/cases` | `src/api/routes/cases.ts` |
+| POST | `/api/cases` | `src/api/routes/cases.ts` |
+| DELETE | `/api/cases/:id` | `src/api/routes/cases.ts` |
+| GET | `/api/cases/:id` | `src/api/routes/cases.ts` |
+| PATCH | `/api/cases/:id` | `src/api/routes/cases.ts` |
+| POST | `/api/cases/:id/follow-ups` | `src/api/routes/cases.ts` |
+| POST | `/api/cases/:id/links` | `src/api/routes/cases.ts` |
+| DELETE | `/api/cases/:id/links/:linkId` | `src/api/routes/cases.ts` |
+| GET | `/api/cases/linked` | `src/api/routes/cases.ts` |
 | POST | `/api/channels/teams/webhook` | `src/api/routes/teams-webhook.ts` |
 | GET | `/api/channels/whatsapp/webhook` | `src/api/routes/whatsapp-webhook.ts` |
 | POST | `/api/channels/whatsapp/webhook` | `src/api/routes/whatsapp-webhook.ts` |
@@ -129,6 +138,11 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/connectors/cocoindex` | `src/api/routes/connectors.ts` |
 | POST | `/api/connectors/cocoindex/:side/embeddings` | `src/api/routes/connectors.ts` |
 | POST | `/api/connectors/cocoindex/install` | `src/api/routes/connectors.ts` |
+| GET | `/api/contacts` | `src/api/routes/cases.ts` |
+| POST | `/api/contacts` | `src/api/routes/cases.ts` |
+| DELETE | `/api/contacts/:id` | `src/api/routes/cases.ts` |
+| GET | `/api/contacts/:id` | `src/api/routes/cases.ts` |
+| PATCH | `/api/contacts/:id` | `src/api/routes/cases.ts` |
 | GET | `/api/devices` | `src/api/routes/devices.ts` |
 | DELETE | `/api/devices/:sessionId` | `src/api/routes/devices.ts` |
 | POST | `/api/devices/pair/generate` | `src/api/routes/devices.ts` |
@@ -564,14 +578,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 22 |
 | `api` | `config` | 23 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 142 |
-| `api` | `db` | 114 |
+| `api` | `core` | 144 |
+| `api` | `db` | 115 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 4 |
 | `api` | `models` | 39 |
 | `api` | `plugins` | 1 |
-| `api` | `security` | 134 |
+| `api` | `security` | 136 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 12 |
 | `api` | `skills` | 6 |
@@ -609,7 +623,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `channels` | 12 |
 | `core` | `config` | 56 |
 | `core` | `connectors` | 4 |
-| `core` | `db` | 356 |
+| `core` | `db` | 357 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 10 |
@@ -620,12 +634,12 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `shared` | 34 |
 | `core` | `skills` | 11 |
 | `core` | `tools` | 21 |
-| `core` | `utils` | 203 |
+| `core` | `utils` | 204 |
 | `core` | `voice` | 1 |
 | `db` | `config` | 4 |
-| `db` | `core` | 18 |
+| `db` | `core` | 20 |
 | `db` | `models` | 1 |
-| `db` | `security` | 14 |
+| `db` | `security` | 15 |
 | `db` | `services` | 1 |
 | `db` | `shared` | 3 |
 | `db` | `utils` | 21 |
@@ -693,8 +707,8 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `channels` | 2 |
 | `tools` | `config` | 3 |
 | `tools` | `connectors` | 2 |
-| `tools` | `core` | 90 |
-| `tools` | `db` | 31 |
+| `tools` | `core` | 92 |
+| `tools` | `db` | 32 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |
 | `tools` | `models` | 8 |

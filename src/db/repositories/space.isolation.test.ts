@@ -118,6 +118,7 @@ const ALLOWLIST: Record<string, string> = {
   'src/core/spaces/membership.ts': ACCESS_LAYER,
   'src/core/spaces/purge.ts': ACCESS_LAYER,
   'src/db/repositories/live-documents.ts': ACCESS_LAYER,
+  'src/db/repositories/cases.ts': ACCESS_LAYER,
   // Rooms (S2): every read follows `roomAccess` / the membership read.
   'src/core/rooms/access.ts': ACCESS_LAYER,
   'src/core/rooms/service.ts': ACCESS_LAYER,
@@ -129,6 +130,9 @@ const ALLOWLIST: Record<string, string> = {
   // S5 "My work": tasks assigned to the caller, in spaces joined through
   // their membership in the same query, and their own personal workspaces.
   'src/core/tasks/team.ts': 'my tasks across my memberships, by assignee',
+  // Follow-ups: due tasks claimed by id, told to their assignee or author
+  // (a space recipient re-checked against the membership).
+  'src/core/tasks/reminders.ts': 'due follow-ups, notified to the assignee or author',
   'src/db/repositories/session-kind.ts': 'the kind of one session by id (no content)',
   'src/security/workspace-resolver.ts': 'workspace of a session/agent/pipeline the caller owns, by id',
   // Federation (docs/plans/federation-spec.md §7.5, §9): whether a room or
