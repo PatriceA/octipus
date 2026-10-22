@@ -10,6 +10,8 @@
  *   - `notifications` the user has READ. Unread ones stay, whatever their age.
  *   - `permission_requests` that were answered or expired. Pending ones stay:
  *     a human answers when they answer.
+ *   - `context_turns` — what the context hooks injected per turn and what the
+ *     agent did with it (docs/CONTEXT-HOOKS.md); the stats read 90 days at most.
  *
  * Deliberately not pruned: `cost_log` (billing history and the source of the
  * spend budgets; it outlives a purged space), `run_events` (replay and the
@@ -30,6 +32,7 @@ import { and, eq, inArray, lt, ne, type SQL } from 'drizzle-orm';
 import type { PgColumn, PgTable } from 'drizzle-orm/pg-core';
 import { getDb } from '@/db/postgres';
 import { auditLog } from '@/db/schema/audit';
+import { contextTurns } from '@/db/schema/context-hooks';
 import { hookExecutions } from '@/db/schema/hook-executions';
 import { notifications } from '@/db/schema/notifications';
 import { permissionRequests } from '@/db/schema/permissions';
@@ -70,6 +73,12 @@ const TARGETS: readonly PruneTarget[] = [
     table: permissionRequests,
     id: permissionRequests.id,
     where: (cutoff) => and(ne(permissionRequests.status, 'pending'), lt(permissionRequests.createdAt, cutoff)),
+  },
+  {
+    name: 'context_turns',
+    table: contextTurns,
+    id: contextTurns.id,
+    where: (cutoff) => lt(contextTurns.createdAt, cutoff),
   },
 ];
 

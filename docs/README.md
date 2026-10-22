@@ -49,6 +49,7 @@ The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 | [WORK-PLANS.md](WORK-PLANS.md) | Visible execution plans, proposals, and feedback in web and terminal clients. |
 | [CHAT-COMMANDS.md](CHAT-COMMANDS.md) | The `/`-commands available in chat (skills, think, persona, compact, …). |
 | [RAG.md](RAG.md) | The knowledge base: auto-indexing and hybrid (BM25 + vector) search. Also long-term memory retrieval — what goes in the block of user facts every turn, and how it is ordered. |
+| [CONTEXT-HOOKS.md](CONTEXT-HOOKS.md) | What is put in front of every agent before it starts (knowledge-base recall, the notes index, context notes), and the numbers on how agents use it, with a recall eval. |
 | [KNOWLEDGE-GRAPH.md](KNOWLEDGE-GRAPH.md) | Notes, `[[wikilinks]]`, authored edges, graph traversal, Obsidian/Canvas interop. |
 | [DOCUMENTS.md](DOCUMENTS.md) | Document ingestion, OCR, management, and exporting a deliverable as .docx / .xlsx. |
 | [DATA-TOOLS.md](DATA-TOOLS.md) | Read-only SQL against a registered database or a workspace CSV, and how a connection is registered. |
