@@ -136,6 +136,13 @@ export interface SearchScope {
    * rows. An explicit repoIds filter intersects this set, never expands it.
    */
   allowedRepoIds?: string[];
+  /**
+   * Do not count the returned rows as accessed. For callers that fetch more
+   * than they use (the recall context hook over-fetches and filters): they
+   * call `recordAccess` with the rows they did use, so LFU retention keeps
+   * counting what was actually read.
+   */
+  skipAccess?: boolean;
 }
 
 /**
@@ -716,7 +723,7 @@ export class EmbeddingService {
       headingLevel: r.heading_level,
       repoId: r.repo_id,
     }));
-    this.recordAccess(out.map((r) => r.id));
+    if (!scope?.skipAccess) this.recordAccess(out.map((r) => r.id));
     return out;
   }
 
@@ -851,7 +858,7 @@ export class EmbeddingService {
       // keyword (FTS) hit makes the entry relevant on lexical grounds alone.
       .filter(r => r.similarity >= minSimilarity || r.hasFtsMatch)
       .map(({ hasFtsMatch: _hasFtsMatch, ...rest }) => rest);
-    this.recordAccess(out.map((r) => r.id));
+    if (!scope?.skipAccess) this.recordAccess(out.map((r) => r.id));
     return out;
   }
 
@@ -882,7 +889,7 @@ export class EmbeddingService {
    * logged but never thrown — access tracking is an optimisation, not a
    * correctness property.
    */
-  private recordAccess(ids: string[]): void {
+  recordAccess(ids: string[]): void {
     if (ids.length === 0) return;
     const db = getDb();
     db

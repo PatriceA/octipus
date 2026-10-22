@@ -110,6 +110,10 @@ ON DELETE CASCADE FK reaps the chunks with the parent.
 - **MCP server** — `octipus_index_file` and `octipus_search_knowledge`
   for external models (Claude Code, Antigravity, …).
 
+Agents also get the closest passages without asking: the knowledge recall
+context hook searches with each message and injects what is near enough. See
+[CONTEXT-HOOKS.md](CONTEXT-HOOKS.md).
+
 ### Product docs auto-index at boot
 
 `src/db/seed-docs.ts` (`indexProductDocs()`) indexes Octipus's own
