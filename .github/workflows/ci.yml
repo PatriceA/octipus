@@ -38,8 +38,9 @@ jobs:
     name: Backend (typecheck · lint · test)
     runs-on: ubuntu-latest
     # The full suite (database lane runs one file at a time) now takes about
-    # 14 minutes; 15 cut a passing run off at the coverage step.
-    timeout-minutes: 25
+    # 14 minutes; 15 cut a passing run off at the coverage step. Slow runners
+    # took 7-12 minutes for the browser install alone before it was cached.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:
@@ -67,8 +68,21 @@ jobs:
         run: npm ci && npm run build
         working-directory: mcp-server
 
+      # The browser is cached per Playwright version; the OS libraries come
+      # from apt. `--with-deps` runs apt-get update, which also pulls Google's
+      # Chrome index shipped in the runner image (unused: Playwright brings its
+      # own browser) and has been slow or broken upstream, so drop it first.
+      - name: Cache Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
       - name: Install browser for page extraction tests
-        run: npx playwright install --with-deps chromium
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
+                     /etc/apt/sources.list.d/google-chrome.sources
+          npx playwright install --with-deps chromium
 
       - name: Test
         run: npm run test -- --coverage
