@@ -7,6 +7,8 @@ import { apiLogger } from '@/utils/logger';
 
 const AUTH_RATE_LIMIT = 20; // requests per window
 const AUTH_RATE_WINDOW_SECS = 60; // 1 minute
+const FORM_RATE_LIMIT = 30; // public form requests per IP per window
+const FORM_RATE_WINDOW_SECS = 60;
 
 /**
  * The auth endpoints that TAKE a credential, and so are worth a tight per-IP
@@ -40,6 +42,17 @@ export function isCredentialAttempt(path: string): boolean {
     // a guess at it (docs/plans/coworking-spec.md §5.7, I8).
     path.startsWith('/api/invites/')
   );
+}
+
+/**
+ * Public form routes (docs/RECORDS.md → Forms). Their token is a bearer
+ * secret and a public form is what a flood would aim at, so they get a
+ * per-IP window of their own: not the credential bucket, where an office
+ * behind one NAT filling in a form would lock everyone out of signing in,
+ * and where flooding a known form URL would do the same on purpose.
+ */
+export function isPublicFormPath(path: string): boolean {
+  return path.startsWith('/api/forms/');
 }
 const USER_QUOTA_WINDOW_SECS = 60;
 
@@ -135,6 +148,20 @@ export const rateLimitMiddleware = new Elysia({ name: 'rate-limit' }).onBeforeHa
         return { error: 'Too many requests. Please try again later.', retryAfter: result.retryAfter };
       }
       return;
+    }
+
+    // ── Layer 1a: per-IP on public forms (own bucket, then the baseline) ──
+    if (isPublicFormPath(url.pathname)) {
+      const ip = clientIp(request, socketAddress);
+      const result = await getRateLimiter().check(`form:ip:${ip}`, FORM_RATE_LIMIT, FORM_RATE_WINDOW_SECS);
+      if (!result.allowed) {
+        if (shouldWarn(`form:ip:${ip}`, FORM_RATE_WINDOW_SECS)) {
+          apiLogger.warn({ ip, retryAfter: result.retryAfter }, 'Rate limit exceeded on public forms');
+        }
+        set.status = 429;
+        set.headers['Retry-After'] = String(result.retryAfter);
+        return { error: 'Too many requests. Please try again later.', retryAfter: result.retryAfter };
+      }
     }
 
     // Only /api/* below this point. Health probes are never limited so

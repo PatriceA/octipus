@@ -72,7 +72,7 @@ export type NewCase = typeof cases.$inferInsert;
 export const caseLinks = pgTable('case_links', {
   id: uuid('id').primaryKey().defaultRandom(),
   caseId: uuid('case_id').references(() => cases.id, { onDelete: 'cascade' }).notNull(),
-  /** 'contact' | 'document' | 'task' | 'note' | 'artifact' — see core/cases/status.ts. */
+  /** 'contact' | 'document' | 'task' | 'note' | 'artifact' | 'record' — see core/cases/status.ts. */
   entityType: text('entity_type').notNull(),
   entityId: uuid('entity_id').notNull(),
   /** What the entity is to the case ("client", "sender", "invoice", "follow_up"). Free text. */

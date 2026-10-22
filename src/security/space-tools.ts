@@ -49,6 +49,7 @@ export const COMMENTER_TOOLS: ReadonlySet<string> = new Set([
   'notes:read_note', 'notes:list_notes', 'notes:search_notes', 'notes:query_notes', 'notes:suggest_links',
   'tasks:list_tasks', 'tasks:add_task_comment',
   'cases:list_cases', 'cases:get_case', 'cases:find_contacts', 'cases:get_contact',
+  'records:list_record_types', 'records:list_records', 'records:get_record',
   'documents:list_documents', 'documents:get_document', 'documents:search_documents',
   'knowledge:knowledge_stats', 'knowledge:search_knowledge', 'knowledge:read_knowledge',
   'knowledge:get_backlinks', 'knowledge:traverse_knowledge',
@@ -128,7 +129,7 @@ export const SPACE_CONNECTOR_TOOL_IDS: ReadonlySet<string> = new Set(['github', 
  * refused until it is listed here. `action_recovery` is the replay review.
  */
 const SPACE_TOOL_IDS = new Set([
-  'notes', 'tasks', 'cases', 'documents', 'knowledge', 'artifacts', 'artifacts_toolbox', 'task_state', 'plan',
+  'notes', 'tasks', 'cases', 'records', 'documents', 'knowledge', 'artifacts', 'artifacts_toolbox', 'task_state', 'plan',
   'filesystem', 'shell', 'git', 'docker', 'browser', 'websearch', 'visual', 'repo_registry',
   'skill_runtime', 'test_container', 'action_recovery',
   // The space's own connectors (`SPACE_CONNECTOR_TOOL_IDS`).

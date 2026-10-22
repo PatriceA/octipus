@@ -42,6 +42,7 @@ import * as MonitorModule from './monitor';
 import * as NotesModule from './notes';
 import * as PlanModule from './plan';
 import * as ProfilesModule from './profiles';
+import * as RecordsModule from './records';
 import * as RepoRegistryModule from './repo-registry';
 import * as SchedulingModule from './scheduling';
 import * as ShellModule from './shell';
@@ -78,6 +79,7 @@ const MODULES: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
   ['notes', NotesModule],
   ['plan', PlanModule],
   ['profiles', ProfilesModule],
+  ['records', RecordsModule],
   ['repo-registry', RepoRegistryModule],
   ['scheduling', SchedulingModule],
   ['shell', ShellModule],

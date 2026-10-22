@@ -31,6 +31,8 @@ export const SPACE_ROUTES: readonly SpaceRoute[] = [
   { prefix: '/api/tasks', what: 'tasks and task comments' },
   { prefix: '/api/cases', what: 'cases, their links and follow-ups' },
   { prefix: '/api/contacts', what: 'contacts' },
+  { prefix: '/api/record-types', what: 'record types and their form links' },
+  { prefix: '/api/records', what: 'records' },
   { prefix: '/api/documents', what: 'uploaded documents' },
   { prefix: '/api/artifacts', what: 'live artifacts' },
   { prefix: '/a', what: 'hosted artifact pages (subdomain mount)' },

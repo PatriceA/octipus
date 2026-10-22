@@ -73,6 +73,10 @@ export const WORKSPACE_TABLES: readonly WorkspaceTable[] = [
   // A request belongs to the agent run that raised it, not to the workspace.
   { table: 'permission_requests', ownerColumn: 'user_id', transfer: 'n/a', purge: 'delete' },
   { table: 'pipelines', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
+  // Record types and records (docs/RECORDS.md); a type's form links go with it.
+  // The purge deletes records first (their type is RESTRICT).
+  { table: 'records', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
+  { table: 'record_types', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'sessions', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   // Space memory (S2): only shared workspaces have it, and they are never
   // transferred; its RESTRICT key makes the purge delete it first.

@@ -15,7 +15,7 @@ export function isCaseStatus(value: unknown): value is CaseStatus {
 }
 
 /** What a case can link to: the shared entities of a scope. */
-export const CASE_ENTITY_TYPES = ['contact', 'document', 'task', 'note', 'artifact'] as const;
+export const CASE_ENTITY_TYPES = ['contact', 'document', 'task', 'note', 'artifact', 'record'] as const;
 export type CaseEntityType = (typeof CASE_ENTITY_TYPES)[number];
 
 export function isCaseEntityType(value: unknown): value is CaseEntityType {

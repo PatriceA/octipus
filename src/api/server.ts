@@ -81,6 +81,7 @@ import { skillRoutes } from './routes/skills';
 import { swarmRoutes } from './routes/swarm';
 import { taskRoutes } from './routes/tasks';
 import { caseRoutes, contactRoutes } from './routes/cases';
+import { publicFormRoutes, recordRoutes, recordTypeRoutes } from './routes/records';
 import { teamsWebhookRoutes } from './routes/teams-webhook';
 import { toolRoutes } from './routes/tools';
 import { trajectoryRoutes } from './routes/trajectories';
@@ -441,6 +442,9 @@ export function createServer() {
         .use(taskRoutes)
         .use(caseRoutes)
         .use(contactRoutes)
+        .use(recordTypeRoutes)
+        .use(recordRoutes)
+        .use(publicFormRoutes)
         .use(readerRoutes)
         .use(digestRoutes)
         .use(emailRoutes)

@@ -34,6 +34,8 @@ const PERSONAL_PREFIXES = [
   // Spaces joined on other installs (federation §8.2): the caller's own
   // pointer rows here, forwarded to the host; nothing of a space on this install.
   '/api/remote-spaces',
+  // Public forms: no sign-in, the scope is the form link's (docs/RECORDS.md).
+  '/api/forms',
   // The artifact SDK script, served beside the hosted pages: no content.
   '/octipus-artifact-client.js',
 ];
@@ -165,6 +167,11 @@ const SPACE_ACTING = [
   'GET /api/cases', 'GET /api/cases/linked', 'POST /api/cases', 'GET /api/cases/:id', 'PATCH /api/cases/:id', 'DELETE /api/cases/:id',
   'POST /api/cases/:id/links', 'DELETE /api/cases/:id/links/:linkId', 'POST /api/cases/:id/follow-ups',
   'GET /api/contacts', 'POST /api/contacts', 'GET /api/contacts/:id', 'PATCH /api/contacts/:id', 'DELETE /api/contacts/:id',
+  // Record types, records and form links (docs/RECORDS.md): `contentRepos`, by the member's role.
+  'GET /api/record-types', 'POST /api/record-types', 'GET /api/record-types/:id', 'PATCH /api/record-types/:id',
+  'DELETE /api/record-types/:id', 'GET /api/record-types/:id/form-links', 'POST /api/record-types/:id/form-links',
+  'DELETE /api/record-types/:id/form-links/:linkId',
+  'GET /api/records', 'POST /api/records', 'GET /api/records/:id', 'PATCH /api/records/:id', 'DELETE /api/records/:id',
   'GET /api/notifications', 'POST /api/notifications/:id/read', 'POST /api/notifications/read-all',
   'GET /api/artifacts/_meta', 'GET /api/artifacts', 'POST /api/artifacts', 'GET /api/artifacts/spec/:slugOrId', 'GET /api/artifacts/:id',
   'PUT /api/artifacts/:id', 'DELETE /api/artifacts/:id', 'GET /api/artifacts/:id/versions',
