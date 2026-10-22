@@ -200,6 +200,12 @@ MCP configuration. Antigravity can reach the same bridge through a supplied
 terminal helper. The helper supports listing tools and calling a named tool with
 JSON arguments; credentials are inherited privately through the environment.
 
+A CLI agent rarely calls `search_knowledge` on its own: it has its own file
+and web search. The knowledge base and notes closest to each message are
+therefore injected into its instructions by the context hooks
+([CONTEXT-HOOKS.md](CONTEXT-HOOKS.md)), and the Recall page shows, per model,
+how often an agent used them or searched itself.
+
 The working directory remains the session's project or user workspace, except
 for a coding child given its own git worktree (see
 [Optional git worktree per coding child](#optional-git-worktree-per-coding-child)). System

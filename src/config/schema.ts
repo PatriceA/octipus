@@ -754,6 +754,16 @@ export const configSchema = z.object({
      */
     extractionCadence: z.enum(['per_turn', 'on_compaction', 'off']).default('per_turn'),
   }).prefault({}),
+  /**
+   * Context hooks (docs/CONTEXT-HOOKS.md): knowledge-base recall, a notes
+   * index and pinned notes put in front of every agent before it starts.
+   */
+  contextHooks: z.object({
+    /** Install-wide switch. Off: no hook runs and nothing is measured. */
+    enabled: z.boolean().default(true),
+    /** Most tokens all of a turn's hooks together may inject. */
+    maxTokens: z.number().int().min(100).max(8000).default(1200),
+  }).prefault({}),
   oauth: oauthConfigSchema,
   rateLimit: rateLimitConfigSchema,
   swarm: swarmConfigSchema.prefault({}),

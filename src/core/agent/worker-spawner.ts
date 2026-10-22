@@ -812,6 +812,20 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     }
   }
 
+  // Context hooks (docs/CONTEXT-HOOKS.md), against the worker's own brief: a
+  // specialist or role agent gets the knowledge base and notes nearest its
+  // job without having to think of searching. Same audience rule as the root.
+  let contextTurn: import('@/core/context-hooks').ContextTurnHandle | null = null;
+  if (context.userId && !audience.shared && !audience.contentStorageOff) {
+    const { runContextHooks } = await import('@/core/context-hooks');
+    const hooks = await runContextHooks({
+      event: 'worker_start', userId: context.userId, workspaceId: context.workspaceId ?? null,
+      sessionId: context.sessionId, space: context.space, query: input ? `${task}\n${input}` : task, role: agentRole,
+    });
+    if (hooks.text) volatileParts.push(hooks.text);
+    contextTurn = hooks.turn;
+  }
+
   // Workers must return results to the root agent, not message the user directly (STATIC)
   staticParts.push(`\n\nIMPORTANT: You are a worker agent. Return your findings and results as plain text in your final response. Do NOT use messaging tools (send_to_user, send_channel_message) to contact the user — the rootAgent handles all user communication. Just do your task and respond with the result.`);
   // Worker guidance, kept out of SECURITY_PREAMBLE (DESIGN.md rule #6): its
@@ -986,6 +1000,8 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
 
   const workerId = worker.getContext().id;
   overrides?.onWorkerSpawned?.(workerId);
+  const { bindTurnToAgent, finishContextTurn } = await import('@/core/context-hooks');
+  bindTurnToAgent(contextTurn, workerId);
 
   // ── Register stage in swarm_nodes + announce on hub ──
   if (stageNode && overrides?.swarmParent) {
@@ -1221,6 +1237,8 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
       }
     }
 
+    void finishContextTurn(contextTurn, { agentId: workerId, response: result, outcome: 'success' });
+
     getNotificationService().notify(
       context.userId,
       'agent_complete',
@@ -1231,6 +1249,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
 
     return result;
   } catch (error) {
+    void finishContextTurn(contextTurn, { agentId: workerId, outcome: 'error' });
     const partial = worker.getPartialOutput();
     if (partial) overrides?.onPartialOutput?.(partial);
     // Mark the swarm node as failed before delegating to the retry/fallback

@@ -1400,6 +1400,26 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'GROUP_CHANNELS_UNPROMPTED_ENABLED',
   },
 
+  // ── Context hooks ──
+  {
+    key: 'contextHooks.enabled',
+    category: 'agent',
+    valueType: 'boolean',
+    defaultValue: true,
+    description: 'Run context hooks: knowledge-base recall, the notes index and pinned context notes are put in front of every agent before it starts (docs/CONTEXT-HOOKS.md).',
+    isSecret: false,
+    envVar: 'CONTEXT_HOOKS_ENABLED',
+  },
+  {
+    key: 'contextHooks.maxTokens',
+    category: 'agent',
+    valueType: 'number',
+    defaultValue: 1200,
+    description: 'Most tokens the context hooks of one turn may inject together (100–8000).',
+    isSecret: false,
+    envVar: 'CONTEXT_HOOKS_MAX_TOKENS',
+  },
+
   // ── Heartbeat (WS2) ──
   {
     key: 'heartbeat.enabled',

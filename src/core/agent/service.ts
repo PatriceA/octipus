@@ -5,6 +5,7 @@ import { getConfig } from '@/config';
 import { getAgentManager } from '@/core/agent-manager';
 import { handleCommand } from '@/core/commands';
 import { renderMemoriesBlock, retrieveForContext, updateMemoriesAfterTurn } from '@/core/memory';
+import { finishContextTurn, runContextHooks } from '@/core/context-hooks';
 import { clearFlowLabel, getFlowLabel, markNotSharedAudience, markSharedAudience, observeFlow } from '@/security/flow-guard';
 import { bareReply, type GroupTurn, groupTurnContext } from '@/core/channels/group-context';
 import { generateRunId, runWithContext } from '@/core/run-context';
@@ -980,9 +981,21 @@ export class AgentService {
         coreLogger.warn({ err }, 'memory.retrieveForContext failed — proceeding without memories');
       }
 
+      // Context hooks (docs/CONTEXT-HOOKS.md): the knowledge base and notes
+      // nearest this message, put in front of the agent instead of waiting
+      // for it to call search_knowledge, which CLI agents rarely do on their
+      // own. Not where other people read the reply (a group thread, a room)
+      // nor where the session's text may not be copied anywhere.
+      const contextHooks = sharedAudience || audience.contentStorageOff
+        ? { text: '', turn: null }
+        : await runContextHooks({
+          event: 'turn_start', userId, workspaceId, sessionId: resolvedSessionId,
+          space: scope.space, query: message, role: 'general', channel,
+        });
+
       // The root runner adds attachments after selecting the model, so CLI
       // turns can receive original images without an OCR round trip.
-      const turnContext = memoryBlock + spaceContext;
+      const turnContext = memoryBlock + contextHooks.text + spaceContext;
       const memoryCadence = getConfig().memory?.extractionCadence ?? 'per_turn';
       const fireMemoryUpdate = () => {
         // Cadence gate. `off` short-circuits before any work; the
@@ -1130,6 +1143,7 @@ export class AgentService {
       }
 
       fireMemoryUpdate();
+      void finishContextTurn(contextHooks.turn, { agentId, response: finalResponse, outcome });
       // Group threads, rooms and space sessions are never learned from (the
       // processor refuses them too).
       if (outcome === 'success' && agentId && !memoryOff) {
