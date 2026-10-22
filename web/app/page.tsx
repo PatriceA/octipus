@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Activity, Bot, MessageSquare, Zap } from 'lucide-react';
 import { useRef } from 'react';
 import { WorkspaceWelcome } from '@/components/dashboard/workspace-welcome';
+import { OnboardingGuide } from '@/components/onboarding/onboarding-guide';
 import { ActiveAgents } from '@/components/dashboard/active-agents';
 import { AwayDigestCard } from '@/components/dashboard/away-digest';
 import { BudgetsCard } from '@/components/dashboard/budgets-card';
@@ -127,6 +128,9 @@ export default function DashboardPage() {
           </StatusBadge>
         }
       />
+
+      {/* First run: the setup guide, until it is finished or put away. */}
+      <OnboardingGuide variant="home" />
 
       <WorkspaceWelcome />
 

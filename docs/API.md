@@ -307,6 +307,14 @@ inert and stays in the array.
 | PUT | `/api/email/categories` | Save the user's categories (`{categories: {name: description}}`, `null` resets) |
 | POST | `/api/email/message/:id/save-draft` | Save a reply (`{body}`) as a draft in the mailbox, threaded under the message; nothing is sent |
 
+## Onboarding
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/onboarding` | What is already set up, for the setup guide (models, CLI tools, areas, mailbox, connectors, chats, heartbeat, permissions, role agents, templates, saved progress). Install-wide details for admins only |
+| PUT | `/api/onboarding/progress` | Save the guide's progress (`dismissed`, `useCases`, `answers` without secrets, `completed`) |
+| PUT | `/api/onboarding/standing-instructions` | Write (or append to) the pinned user-level `heartbeat` note (`{body}`) |
+
 ## Heartbeat
 
 | Method | Endpoint | Description |

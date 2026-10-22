@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-525 mounted routes across 72 route files. The path is the full one, group prefix included — what a client actually calls.
+529 mounted routes across 73 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -306,6 +306,10 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/notifications` | `src/api/routes/notifications.ts` |
 | POST | `/api/notifications/:id/read` | `src/api/routes/notifications.ts` |
 | POST | `/api/notifications/read-all` | `src/api/routes/notifications.ts` |
+| GET | `/api/onboarding` | `src/api/routes/onboarding.ts` |
+| GET | `/api/onboarding/progress` | `src/api/routes/onboarding.ts` |
+| PUT | `/api/onboarding/progress` | `src/api/routes/onboarding.ts` |
+| PUT | `/api/onboarding/standing-instructions` | `src/api/routes/onboarding.ts` |
 | POST | `/api/permission-requests/:id/respond` | `src/api/routes/permission-requests.ts` |
 | GET | `/api/permission-requests/pending` | `src/api/routes/permission-requests.ts` |
 | GET | `/api/persona` | `src/api/routes/persona.ts` |
@@ -560,19 +564,19 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 22 |
 | `api` | `config` | 23 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 141 |
-| `api` | `db` | 115 |
+| `api` | `core` | 142 |
+| `api` | `db` | 114 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 4 |
 | `api` | `models` | 39 |
 | `api` | `plugins` | 1 |
-| `api` | `security` | 133 |
+| `api` | `security` | 134 |
 | `api` | `services` | 5 |
-| `api` | `shared` | 11 |
+| `api` | `shared` | 12 |
 | `api` | `skills` | 6 |
 | `api` | `tools` | 4 |
-| `api` | `utils` | 68 |
+| `api` | `utils` | 69 |
 | `api` | `voice` | 23 |
 | `capabilities` | `db` | 2 |
 | `capabilities` | `models` | 1 |
@@ -602,20 +606,21 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `connectors` | `shared` | 1 |
 | `connectors` | `utils` | 5 |
 | `core` | `capabilities` | 2 |
-| `core` | `channels` | 11 |
-| `core` | `config` | 53 |
-| `core` | `connectors` | 3 |
-| `core` | `db` | 353 |
+| `core` | `channels` | 12 |
+| `core` | `config` | 56 |
+| `core` | `connectors` | 4 |
+| `core` | `db` | 356 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
-| `core` | `mcp` | 9 |
-| `core` | `models` | 116 |
-| `core` | `security` | 160 |
+| `core` | `mcp` | 10 |
+| `core` | `models` | 118 |
+| `core` | `security` | 168 |
 | `core` | `services` | 2 |
-| `core` | `shared` | 33 |
+| `core` | `setup` | 1 |
+| `core` | `shared` | 34 |
 | `core` | `skills` | 11 |
 | `core` | `tools` | 21 |
-| `core` | `utils` | 202 |
+| `core` | `utils` | 203 |
 | `core` | `voice` | 1 |
 | `db` | `config` | 4 |
 | `db` | `core` | 18 |

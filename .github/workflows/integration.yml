@@ -26,7 +26,7 @@ jobs:
   integration:
     name: Integration (postgres)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     # Dummy 32+ char secrets satisfy config-load validation — the same reason
     # the `CI` workflow sets them. Integration tests mock LLM providers, so no
     # real API keys are needed; only Docker (Postgres) is required.
@@ -52,8 +52,21 @@ jobs:
         run: npm ci && npm run build
         working-directory: mcp-server
 
+      # The browser is cached per Playwright version; the OS libraries come
+      # from apt. `--with-deps` runs apt-get update, which also pulls Google's
+      # Chrome index shipped in the runner image (unused: Playwright brings its
+      # own browser) and has been slow or broken upstream, so drop it first.
+      - name: Cache Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
       - name: Install browser for page extraction tests
-        run: npx playwright install --with-deps chromium
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
+                     /etc/apt/sources.list.d/google-chrome.sources
+          npx playwright install --with-deps chromium
 
       - name: Integration tests
         run: npx tsx scripts/test-integration.ts

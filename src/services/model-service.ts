@@ -411,7 +411,7 @@ export async function installRecommendedModel(
   userId: string,
 ) {
   const { getCatalogEntry } = await import('@/capabilities/hwfit');
-  const { startInstall } = await import('@/capabilities/hwfit/install');
+  const { primaryDemotions, startInstall } = await import('@/capabilities/hwfit/install');
   const { emitInstallProgress } = await import('@/capabilities/hwfit/install-events');
   const { OllamaProvider } = await import('@/models/providers/ollama-provider');
 
@@ -440,7 +440,14 @@ export async function installRecommendedModel(
   const job = startInstall(entry, bindTopics, userId, {
     pull: (pid, onProgress) => provider.pull(pid, onProgress),
     register: async (e) => {
+      // The new model takes primary on its lanes: the previous holders step
+      // down, after the insert, so a failed insert leaves the lanes as they were.
       await registry.registerModel(e);
+      const lanes = Object.entries(e.topicRoles ?? {}).filter(([, role]) => role === 'primary').map(([lane]) => lane);
+      const others = (await registry.getAllModelsIncludeDisabled()).filter((m) => m.name !== e.name);
+      for (const d of primaryDemotions(others, lanes)) {
+        await registry.updateModel(d.name, { topicRoles: d.topicRoles });
+      }
     },
     isFirstModel: async () => (await registry.getDefaultModel()) === null,
     // Push progress to the owner's WebSocket (the panel listens instead of

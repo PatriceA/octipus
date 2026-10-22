@@ -18,6 +18,10 @@ below is configuration: no code.
 
 ## Setting it up
 
+The quickest way: on the home page, the setup guide's **Run my company** asks
+these questions and does steps 2 to 7 for you ([ONBOARDING.md](../ONBOARDING.md)).
+By hand:
+
 1. **Turn the heartbeat on for the server** (admin): Settings →
    Configuration → `heartbeat.enabled`. Set `heartbeat.quietHoursTimezone`
    and the quiet hours to your own day.

@@ -57,6 +57,7 @@ The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 | [ARTIFACTS.md](ARTIFACTS.md) | Live hosted HTML artifacts produced by agents. |
 | [ARTIFACTS-COOKBOOK.md](ARTIFACTS-COOKBOOK.md) | Worked examples and recipes for building artifacts. |
 | [HOOKS.md](HOOKS.md) | Event hooks and scheduled / recurring tasks. |
+| [ONBOARDING.md](ONBOARDING.md) | The setup guide on the home page: use cases, questions, what it sets up and how. |
 | [HEARTBEAT.md](HEARTBEAT.md) | Proactive periodic checks for due tasks and notifications, with per-user standing instructions. |
 | [TASK-BOARD.md](TASK-BOARD.md) | The work board on the tasks page: assignees, checkout leases, comments, dependency wakeups, the audit trail, and role agents that work their tasks. |
 | [SPEND-BUDGETS.md](SPEND-BUDGETS.md) | Dollar spend budgets per user, role or workspace: warn and pause, what users see, and the admin screen. |

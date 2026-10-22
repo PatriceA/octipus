@@ -233,7 +233,9 @@ export const PROVIDERS: ProviderDef[] = [
     id: 'cli',
     label: 'Claude CLI (claude-code auth)',
     description: 'Uses your existing Claude Code auth. No key needed if signed in.',
-    defaultModel: 'claude-sonnet-4-6',
+    // The CLI provider matches tools by `cli/<tool>` (cli-provider.ts); a bare
+    // model name registered a row that could never run.
+    defaultModel: 'cli/claude-code',
     kind: 'manual',
     requiresApiKey: false,
   },

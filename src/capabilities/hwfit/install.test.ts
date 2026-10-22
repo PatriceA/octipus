@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import type { NewModelConfigEntry } from '@/db/schema/models';
 import type { PullProgress } from '@/models/providers/ollama-provider';
-import { buildModelEntry, type InstallDeps, type InstallJob, runInstall } from './install';
+import { buildModelEntry, type InstallDeps, type InstallJob, primaryDemotions, runInstall } from './install';
 import type { ModelCatalogEntry } from './types';
 
 const ENTRY: ModelCatalogEntry = {
@@ -149,5 +149,15 @@ describe('runInstall', () => {
     };
     await runInstall(makeJob(['chat']), ENTRY, deps);
     expect(seen[seen.length - 1]).toBe('error');
+  });
+});
+
+describe('primaryDemotions', () => {
+  test('a model taking primary on a lane takes it from the model that had it, and nothing else changes', () => {
+    expect(primaryDemotions([
+      { name: 'cloud', topicRoles: { build: 'primary', everyday: 'primary', verify: 'backup' } },
+      { name: 'other', topicRoles: { embedding: 'primary' } },
+      { name: 'empty', topicRoles: null },
+    ], ['everyday', 'verify'])).toEqual([{ name: 'cloud', topicRoles: { build: 'primary', verify: 'backup' } }]);
   });
 });

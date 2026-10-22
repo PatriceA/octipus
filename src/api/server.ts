@@ -35,6 +35,7 @@ import { deviceRoutes } from './routes/devices';
 import { documentRoutes } from './routes/documents';
 import { emailRoutes } from './routes/email';
 import { heartbeatRoutes } from './routes/heartbeat';
+import { onboardingRoutes } from './routes/onboarding';
 import { evalRoutes } from './routes/eval';
 import { evaluationRoutes } from './routes/evaluations';
 import { gatewayRoutes } from './routes/gateway';
@@ -441,6 +442,7 @@ export function createServer() {
         .use(digestRoutes)
         .use(emailRoutes)
         .use(heartbeatRoutes)
+        .use(onboardingRoutes)
         .use(vaultRoutes)
         .use(chatRoutes)
         .use(pipelineRoutes)

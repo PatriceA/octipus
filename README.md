@@ -179,8 +179,10 @@ node bin/octi.mjs start web   # backend + web UI (server / browser); works on Wi
 ```
 
 Then open [http://localhost:3007](http://localhost:3007) and log in
-with the admin account you registered during `octi setup`. There is
-no separate web onboarding flow — setup happens in the terminal.
+with the admin account you registered during `octi setup`. The terminal
+sets up the install; the **setup guide** on the home page then sets Octipus
+up for what you do: coding agents, your mailbox, a chat, separate areas of
+work ([docs/ONBOARDING.md](docs/ONBOARDING.md)).
 
 **Desktop app (optional):** the Tauri desktop client needs the Rust toolchain
 plus Tauri's system libraries on top of the deps above. One line installs them
