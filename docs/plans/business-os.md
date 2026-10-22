@@ -140,8 +140,10 @@ Each point is its own PR with its own code review.
 
 | Point | Branch | PR | Status |
 |---|---|---|---|
-| Plan (this file) | `ccr-ab69ee55-j1tal5` | | open |
-| C1 data model and forms | | | next |
+| Plan (this file) | `ccr-ab69ee55-j1tal5` | #429 | open |
+| C1a cases, contacts, links, follow-ups | `feat/cases-contacts` | #430 | in review |
+| C1b record types and forms | | | next |
+| C1c web pages for cases and contacts | | | |
 
 ## 5. Open questions (answers expected from the business side)
 
