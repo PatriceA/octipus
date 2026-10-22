@@ -4,6 +4,7 @@ import {
   Bell,
   Cpu,
   Globe,
+  HeartPulse,
   Key,
   MessageSquare,
   Phone,
@@ -19,6 +20,7 @@ import { ApiTokensTab } from '@/components/settings/api-tokens-tab';
 import { ChannelsTab } from '@/components/settings/channels-tab';
 import { ConfigurationTab } from '@/components/settings/configuration-tab';
 import { GeneralTab } from '@/components/settings/general-tab';
+import { HeartbeatTab } from '@/components/settings/heartbeat-tab';
 import { IntegrationsTab } from '@/components/settings/integrations-tab';
 import { MobileTab } from '@/components/settings/mobile-tab';
 import { MyModelsTab } from '@/components/settings/my-models-tab';
@@ -41,6 +43,7 @@ export default function SettingsPage() {
     { id: 'remote-spaces', label: 'Spaces on other installs', icon: Globe },
     { id: 'voice', label: 'Voice & Calls', icon: Phone },
     { id: 'notifications', label: 'Notifications', icon: Bell },
+    { id: 'heartbeat', label: 'Heartbeat', icon: HeartPulse },
     { id: 'mobile', label: 'Mobile App', icon: Smartphone },
   ];
 
@@ -88,6 +91,7 @@ export default function SettingsPage() {
           {activeTab === 'remote-spaces' && <RemoteSpacesTab />}
           {activeTab === 'voice' && <VoiceTab />}
           {activeTab === 'notifications' && <NotificationsTab />}
+          {activeTab === 'heartbeat' && <HeartbeatTab />}
           {activeTab === 'mobile' && <MobileTab />}
         </div>
       </div>

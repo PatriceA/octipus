@@ -216,7 +216,7 @@ describe('gate: dollar spend budget', () => {
     const hook = { userId: aliceId, triggerConfig: {} } as unknown as import('@/db/schema/hooks').Hook;
     const r = await evaluateHeartbeatGate(hook, {
       enabled: true, intervalMinutes: 60, quietHoursStart: 22, quietHoursEnd: 7, quietHoursTimezone: 'UTC',
-      maxRunsPerDay: 24, probeGithub: false, probeCalendar: false, calendarLookaheadMinutes: 60,
+      maxRunsPerDay: 24, probeGithub: false, probeCalendar: false, calendarLookaheadMinutes: 60, probeEmail: false,
     }, new Date(new Date().setUTCHours(12, 0, 0, 0)));
     expect(r.decision).toEqual({ run: false, reason: 'spend_budget' });
   });

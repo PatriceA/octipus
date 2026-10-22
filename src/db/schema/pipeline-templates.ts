@@ -168,6 +168,15 @@ export interface PipelineStepConfig {
    */
   autoSkills?: boolean;
   /**
+   * With `requiresApproval`: when nobody is watching the run (a heartbeat or
+   * role agent started it, or the API), approve this step's sign-off — the
+   * plan, for a loop's first step — instead of waiting for an answer that
+   * may never come. An attended run still asks. The approval is recorded as
+   * automatic, and it does NOT pre-approve the run's gate commands: those
+   * still go through their own permission check.
+   */
+  autoApproveUnattended?: boolean;
+  /**
    * The answer shape a `human_input` step asks for — one entry per field the
    * person is being asked to fill in. Optional: without it the step is a plain
    * free-text question.

@@ -139,6 +139,25 @@ export interface TriggerConfig {
    */
   heartbeatInFlightUntil?: string;
   heartbeatInFlightToken?: string;
+  /**
+   * For the plain heartbeat — minutes between this hook's runs, overriding
+   * `heartbeat.intervalMinutes` (5–1440). The owner sets it on the
+   * heartbeat settings card; the gate and its caps are unchanged.
+   */
+  intervalMinutes?: number;
+  /**
+   * For the plain heartbeat — watch the owner's inbox (core/email/watch.ts):
+   * new mail no agent has handled wakes the heartbeat. `watchEmailSince` is
+   * when it was turned on; mail from before then is never shown.
+   */
+  watchEmail?: boolean;
+  watchEmailSince?: string;
+  /**
+   * For a role heartbeat — run each ready task through this pipeline
+   * template (an id or name the owner can see) instead of working it as one
+   * agent turn (core/tasks/role-pipelines.ts).
+   */
+  pipelineTemplate?: string;
 }
 
 export interface ActionConfig {

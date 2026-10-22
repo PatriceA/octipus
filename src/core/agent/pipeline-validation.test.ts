@@ -289,3 +289,11 @@ describe('plan loops', () => {
     expect(validatePipelineStages(s).join(' ')).toContain('must be a step of the same plan loop (stages 2–3)');
   });
 });
+
+describe('approving without anyone watching', () => {
+  test('only applies to a step that asks for approval', () => {
+    expect(validatePipelineStages([stage({ name: 'Ship', requiresApproval: true, autoApproveUnattended: true })])).toEqual([]);
+    expect(validatePipelineStages([stage({ name: 'Ship', autoApproveUnattended: true })]).join(' '))
+      .toContain('only applies to a step that asks for approval');
+  });
+});

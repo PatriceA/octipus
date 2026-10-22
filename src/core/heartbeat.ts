@@ -7,8 +7,9 @@
  * (called each cron tick) runs a **cheap deterministic gate BEFORE any LLM tokens
  * are spent** — quiet hours → skip; daily cap → skip; user out of token budget →
  * skip; then an "anything pending?" probe over due tasks + unread notifications,
- * and — when enabled — the user's pull requests with failing checks and calendar
- * events about to start (`heartbeat-probes.ts`). Only a non-empty probe spawns
+ * and — when enabled — the user's pull requests with failing checks, calendar
+ * events about to start (`heartbeat-probes.ts`) and, for a user watching their
+ * inbox, new mail no agent has handled (`email/watch.ts`). Only a non-empty probe spawns
  * an orchestrated turn on the `heartbeat` channel, seeded with the pending
  * checklist + the user's standing `HEARTBEAT` note.
  *
@@ -73,6 +74,8 @@ import {
   runGh,
   type UpcomingEvent,
 } from './heartbeat-probes';
+import { defaultEmailWatchDeps, type EmailWatchDeps, markEmailsSurfaced, probeNewEmail, renderEmailChecklist } from './email/watch';
+import type { InboxItem } from './email/types';
 
 /** Root agent channel + note slug for standing instructions. */
 export const HEARTBEAT_CHANNEL = 'heartbeat';
@@ -120,6 +123,8 @@ export interface HeartbeatProbe {
   failingPullRequests: FailingPullRequest[];
   /** Calendar events starting within the lookahead window (empty when off or no calendar is connected). */
   upcomingEvents: UpcomingEvent[];
+  /** Inbox mail no agent has handled yet (empty unless the owner watches their inbox). */
+  newEmails?: InboxItem[];
   /** The GitHub source could not be read this tick (its seen set must be kept, not pruned). */
   githubUnavailable?: boolean;
   /** At least one connected calendar could not be read this tick (same rule). */
@@ -130,6 +135,8 @@ export interface HeartbeatProbe {
 export interface HeartbeatProbeDeps {
   github: GithubProbeDeps;
   calendar: CalendarProbeDeps;
+  /** The inbox watch (core/email/watch.ts); the real mailbox when absent. */
+  email?: EmailWatchDeps;
   /**
    * Whether THIS user's heartbeat may read the server's `gh`. The CLI's
    * identity belongs to whoever authenticated it — the operator — so the
@@ -157,7 +164,7 @@ async function defaultGithubAllowed(userId: string): Promise<boolean> {
   }
 }
 
-const defaultProbeDeps: HeartbeatProbeDeps = { github: { runGh }, calendar: defaultCalendarDeps, githubAllowed: defaultGithubAllowed };
+const defaultProbeDeps: HeartbeatProbeDeps = { github: { runGh }, calendar: defaultCalendarDeps, email: defaultEmailWatchDeps, githubAllowed: defaultGithubAllowed };
 
 /** Identity of an external item for the per-hook "already surfaced" set. */
 export function pullRequestKey(pr: FailingPullRequest): string {
@@ -175,7 +182,13 @@ function readSeen(hook: Hook): HeartbeatSeen {
 }
 
 export function probeHasWork(p: HeartbeatProbe): boolean {
-  return p.dueTasks.length > 0 || p.unreadNotifications.length > 0 || p.failingPullRequests.length > 0 || p.upcomingEvents.length > 0;
+  return p.dueTasks.length > 0 || p.unreadNotifications.length > 0 || p.failingPullRequests.length > 0 || p.upcomingEvents.length > 0
+    || (p.newEmails?.length ?? 0) > 0;
+}
+
+/** Does this plain heartbeat hook watch its owner's inbox? */
+export function watchesEmail(hook: { triggerConfig: Hook['triggerConfig'] | null }): boolean {
+  return (hook.triggerConfig ?? {}).watchEmail === true;
 }
 
 async function probePendingWork(
@@ -183,16 +196,17 @@ async function probePendingWork(
   now: Date,
   config: HeartbeatConfig,
   deps: HeartbeatProbeDeps,
+  watch: { email: boolean; since?: string },
 ): Promise<HeartbeatProbe> {
   const db = getDb();
   // "Pending now" = open tasks with a due date at/before `now`. The dueAt filter
   // is pushed into SQL (uses the tasks_user_status_due_idx index) so a user with
   // many open-but-not-due tasks can't push the due ones past the LIMIT.
   //
-  // The two external probes run alongside the DB ones and are each fail-soft
-  // and switchable: the DB probe is the floor, they are the reasons a
-  // developer actually wants to be nudged.
-  const [due, unread, failingPullRequests, upcoming] = await Promise.all([
+  // The external probes (pull requests, calendar, the inbox watch) run
+  // alongside the DB ones and are each fail-soft and switchable: the DB probe
+  // is the floor, they are the reasons a person actually wants to be nudged.
+  const [due, unread, failingPullRequests, upcoming, mail] = await Promise.all([
     db
       .select({ title: tasks.title, dueAt: tasks.dueAt })
       .from(tasks)
@@ -209,12 +223,16 @@ async function probePendingWork(
     config.probeCalendar
       ? probeUpcomingEvents(userId, now, config.calendarLookaheadMinutes, deps.calendar)
       : Promise.resolve({ events: [] as UpcomingEvent[], partial: false }),
+    config.probeEmail && watch.email
+      ? probeNewEmail(userId, now, watch.since, deps.email ?? defaultEmailWatchDeps)
+      : Promise.resolve({ emails: [] as InboxItem[], unavailable: false }),
   ]);
   return {
     dueTasks: due,
     unreadNotifications: unread,
     failingPullRequests: failingPullRequests ?? [],
     upcomingEvents: upcoming.events,
+    newEmails: mail.emails,
     // "Could not read" is not "nothing there": the seen set for an
     // unavailable source is carried over, not rebuilt from an empty list.
     githubUnavailable: failingPullRequests === null,
@@ -238,7 +256,7 @@ function localClock(iso: string, tz: string): string {
 }
 
 /** Render the probe findings as a compact checklist for the agent prompt. Times in `tz`. */
-export function renderChecklist(p: HeartbeatProbe, tz = 'UTC'): string {
+export function renderChecklist(p: HeartbeatProbe, tz = 'UTC', ownerId?: string): string {
   const lines: string[] = [];
   if (p.upcomingEvents.length > 0) {
     lines.push(`Starting soon (${p.upcomingEvents.length}, times in ${tz}):`);
@@ -264,6 +282,8 @@ export function renderChecklist(p: HeartbeatProbe, tz = 'UTC'): string {
       lines.push(`- [${n.type}] ${n.title}`);
     }
   }
+  const mail = renderEmailChecklist(p.newEmails ?? [], (iso) => localClock(iso, tz), ownerId);
+  if (mail) lines.push(mail);
   return lines.join('\n');
 }
 
@@ -663,6 +683,8 @@ interface GateEvaluation {
   boardPermissionMissing?: boolean;
   /** Role hooks run with `claimLease`: the lease this run holds (set only when it runs). */
   leaseToken?: string;
+  /** Mail this run is given, for the caller to mark surfaced before it fires. */
+  surfacedEmails?: InboxItem[];
 }
 
 /** Read the per-hook daily-run counter, resetting it when the calendar day rolls over. */
@@ -764,7 +786,10 @@ export async function evaluateHeartbeatGate(
     }
   }
 
-  const raw = await probePendingWork(hook.userId, now, config, deps);
+  const raw = await probePendingWork(hook.userId, now, config, deps, {
+    email: watchesEmail(hook),
+    since: typeof hook.triggerConfig?.watchEmailSince === 'string' ? hook.triggerConfig.watchEmailSince : undefined,
+  });
 
   // A red PR or a meeting in the window has no "done" the user can click, so
   // an item already surfaced does not count again. `seen` is rebuilt from what
@@ -787,8 +812,8 @@ export async function evaluateHeartbeatGate(
   };
   if (!probeHasWork(probe)) return skip('nothing_pending', seen);
 
-  const message = await buildHeartbeatMessage(hook.userId, renderChecklist(probe, config.quietHoursTimezone));
-  return { decision: { run: true, message }, runsToday, dayKey, seen };
+  const message = await buildHeartbeatMessage(hook.userId, renderChecklist(probe, config.quietHoursTimezone, hook.userId));
+  return { decision: { run: true, message }, runsToday, dayKey, seen, surfacedEmails: probe.newEmails ?? [] };
 }
 
 /** Run `fn` over `items` with at most `limit` in flight; every item runs, failures are the caller's. */
@@ -867,6 +892,84 @@ export async function disableHeartbeatHook(userId: string, now: Date = new Date(
     .update(hooks)
     .set({ isEnabled: false, updatedAt: now })
     .where(and(eq(hooks.trigger, 'heartbeat'), eq(hooks.userId, userId), sql`${hookRole} IS NULL`));
+}
+
+/** The owner's own heartbeat preferences, as the settings card shows them. */
+export interface HeartbeatPrefs {
+  /** Their plain heartbeat hook exists and is enabled. */
+  enabled: boolean;
+  /** Their own interval, or null for the server's. */
+  intervalMinutes: number | null;
+  watchEmail: boolean;
+  /** When the inbox watch was turned on (mail from before is never shown). */
+  watchEmailSince: string | null;
+}
+
+async function plainHeartbeatHook(userId: string): Promise<Hook | null> {
+  const [row] = await getDb()
+    .select()
+    .from(hooks)
+    .where(and(eq(hooks.trigger, 'heartbeat'), eq(hooks.userId, userId), sql`${hookRole} IS NULL`))
+    .orderBy(desc(hooks.isEnabled), asc(hooks.createdAt))
+    .limit(1);
+  return row ?? null;
+}
+
+export async function getHeartbeatPrefs(userId: string): Promise<HeartbeatPrefs> {
+  const hook = await plainHeartbeatHook(userId);
+  const cfg = hook?.triggerConfig ?? {};
+  // Only a value the tick would use (see hookIntervalMinutes) counts as set.
+  const own = hook && hookIntervalMinutes(hook, { intervalMinutes: 0 });
+  return {
+    enabled: hook?.isEnabled ?? false,
+    intervalMinutes: own ? own : null,
+    watchEmail: cfg.watchEmail === true,
+    watchEmailSince: typeof cfg.watchEmailSince === 'string' ? cfg.watchEmailSince : null,
+  };
+}
+
+/**
+ * Write the owner's preferences: on/off through `ensureHeartbeatHook` /
+ * `disableHeartbeatHook`, the rest merged into the hook's trigger config (a
+ * disabled hook is created to hold them when there is none). Turning the
+ * inbox watch on stamps `watchEmailSince`, so mail from before is not shown;
+ * turning it off and on again moves that start forward.
+ */
+export async function setHeartbeatPrefs(
+  userId: string,
+  patch: { enabled?: boolean; intervalMinutes?: number | null; watchEmail?: boolean },
+  now: Date = new Date(),
+): Promise<HeartbeatPrefs> {
+  if (patch.intervalMinutes != null && (!Number.isInteger(patch.intervalMinutes) || patch.intervalMinutes < HOOK_INTERVAL_MIN || patch.intervalMinutes > HOOK_INTERVAL_MAX)) {
+    throw new RangeError(`intervalMinutes must be a whole number from ${HOOK_INTERVAL_MIN} to ${HOOK_INTERVAL_MAX}`);
+  }
+  if (patch.enabled === true) await ensureHeartbeatHook(userId, now);
+  if (patch.enabled === false) await disableHeartbeatHook(userId, now);
+
+  const set: Record<string, unknown> = {};
+  const drop: string[] = [];
+  if (patch.intervalMinutes !== undefined) {
+    if (patch.intervalMinutes === null) drop.push('intervalMinutes');
+    else set.intervalMinutes = patch.intervalMinutes;
+  }
+  if (patch.watchEmail !== undefined) {
+    const current = await getHeartbeatPrefs(userId);
+    set.watchEmail = patch.watchEmail;
+    if (patch.watchEmail && !current.watchEmail) set.watchEmailSince = now.toISOString();
+  }
+  if (Object.keys(set).length > 0 || drop.length > 0) {
+    let hook = await plainHeartbeatHook(userId);
+    if (!hook) {
+      const id = await ensureHeartbeatHook(userId, now);
+      await disableHeartbeatHook(userId, now);
+      hook = await plainHeartbeatHook(userId);
+      if (!hook || hook.id !== id) throw new Error('heartbeat hook could not be created');
+    }
+    let config = sql`${hooks.triggerConfig} || ${JSON.stringify(set)}::jsonb`;
+    for (const key of drop) config = sql`(${config}) - ${key}`;
+    await getDb().update(hooks).set({ triggerConfig: config, updatedAt: now }).where(eq(hooks.id, hook.id));
+  }
+  return getHeartbeatPrefs(userId);
 }
 
 /** Reload the hook manager's cache so a hook written here fires (best-effort). */
@@ -995,6 +1098,17 @@ export function stopRoleHeartbeatWakeups(): void {
 
 // ── Cron entry point ────────────────────────────────────────────────────────
 
+/**
+ * Minutes between this hook's runs: its own `intervalMinutes` (the owner's
+ * choice on the heartbeat settings card) when valid, else the server's.
+ */
+export function hookIntervalMinutes(hook: { triggerConfig: Hook['triggerConfig'] | null }, config: Pick<HeartbeatConfig, 'intervalMinutes'>): number {
+  const own = (hook.triggerConfig ?? {}).intervalMinutes;
+  return typeof own === 'number' && Number.isInteger(own) && own >= HOOK_INTERVAL_MIN && own <= HOOK_INTERVAL_MAX ? own : config.intervalMinutes;
+}
+export const HOOK_INTERVAL_MIN = 5;
+export const HOOK_INTERVAL_MAX = 1440;
+
 /** A heartbeat hook is due when it has never run or its interval has elapsed. */
 function isDue(hook: Hook, now: Date): boolean {
   return hook.nextRunAt == null || hook.nextRunAt <= now;
@@ -1041,7 +1155,6 @@ export async function maybeRunHeartbeats(
 
   const { getHookManager } = await import('@/hooks/manager');
   const hookManager = getHookManager();
-  const nextRunAt = new Date(now.getTime() + config.intervalMinutes * 60_000);
   const tickDeps: HeartbeatProbeDeps = { ...deps, github: { runGh: memoizeGhPerTick(deps.github.runGh) } };
 
   const processHook = async (hook: Hook): Promise<void> => {
@@ -1052,6 +1165,7 @@ export async function maybeRunHeartbeats(
     // after the gate, as before, erased such a wakeup.) A miss means another
     // writer moved it since the read: leave the hook to the next tick.
     const snapshot = hook.nextRunAt;
+    const nextRunAt = new Date(now.getTime() + hookIntervalMinutes(hook, config) * 60_000);
     const [claimed] = await db
       .update(hooks)
       .set({ nextRunAt, updatedAt: now })
@@ -1091,6 +1205,13 @@ export async function maybeRunHeartbeats(
     }
 
     if (notifyPermission) await notifyBoardPermissionRequired(hook, role ?? '');
+
+    // Mail the turn is about to be given is marked surfaced first: a turn
+    // that dies before it marks the mail handled leaves it to come back
+    // later (core/email/watch.ts), instead of on every tick.
+    if (gate.decision.run && gate.surfacedEmails?.length) {
+      await markEmailsSurfaced(hook.userId, gate.surfacedEmails, now);
+    }
 
     if (!gate.decision.run) {
       coreLogger.debug({ hookId: hook.id, userId: hook.userId, reason: gate.decision.reason }, 'Heartbeat skipped');

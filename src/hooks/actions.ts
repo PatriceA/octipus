@@ -396,7 +396,16 @@ async function executeSpawnAgent(
   // A role heartbeat (triggerConfig.role) is that role's agent working the
   // board, so it runs AS the role whatever `orchestrated` says: the root
   // agent always runs as `general`. See spawnRoleHeartbeat.
-  if (heartbeatRole) return runRoleHeartbeat(heartbeatRole, config, sessionId, userId, prompt, message);
+  if (heartbeatRole) {
+    // A role set to work its tasks through a pipeline template runs one task
+    // per turn as a pipeline run (core/tasks/role-pipelines.ts).
+    const templateRef = (hook?.triggerConfig as { pipelineTemplate?: unknown } | undefined)?.pipelineTemplate;
+    if (hook && typeof templateRef === 'string' && templateRef.trim()) {
+      const { runRoleTaskPipeline } = await import('@/core/tasks/role-pipelines');
+      return runRoleTaskPipeline({ hookId: hook.id, role: heartbeatRole, templateRef, sessionId, userId });
+    }
+    return runRoleHeartbeat(heartbeatRole, config, sessionId, userId, prompt, message);
+  }
 
   // If orchestrated, route through the root agent instead of bare spawn
   if (config.orchestrated) {

@@ -22,6 +22,7 @@ const cfg = (over: Partial<HeartbeatConfig> = {}): HeartbeatConfig => ({
   probeGithub: true,
   probeCalendar: true,
   calendarLookaheadMinutes: 60,
+  probeEmail: true,
   ...over,
 });
 

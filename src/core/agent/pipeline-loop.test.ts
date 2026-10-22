@@ -54,6 +54,8 @@ let calls: WorkerCall[];
 let replies: Record<string, string[]>;
 /** How many times the run escalated to a human. */
 let approvalsAsked = 0;
+/** What the stubbed human answers. */
+let approvalAnswer: { approved: boolean; response?: string; reason?: string } = { approved: false, response: 'Abort Pipeline' };
 let commandCounts: number[] = [];
 let stopAtStage: string | undefined;
 /** Stage name → per-call plan: a string (or one built from the call) makes that call throw it, undefined runs normally. */
@@ -130,6 +132,13 @@ beforeAll(async () => {
     `INSERT INTO pipeline_templates (user_id, name, is_preset, steps)
      VALUES (NULL, 'loop-capped', true, '${JSON.stringify(capped)}'::jsonb)`,
   );
+  // The same loop with a plan sign-off that approves itself when nobody watches.
+  const autoApproved = steps.map((step) =>
+    step.name === 'Implement' ? { ...step, requiresApproval: true, autoApproveUnattended: true } : step);
+  await executeRaw(
+    `INSERT INTO pipeline_templates (user_id, name, is_preset, steps)
+     VALUES (NULL, 'loop-auto-approve', true, '${JSON.stringify(autoApproved)}'::jsonb)`,
+  );
 
   const { PipelineManager } = await import('./pipeline-manager');
   manager = new PipelineManager();
@@ -147,7 +156,7 @@ beforeAll(async () => {
   // run's recorded outcome instead of about a timeout.
   vi.spyOn(service, 'requestApproval').mockImplementation(async () => {
     approvalsAsked++;
-    return { approved: false, response: 'Abort Pipeline' };
+    return approvalAnswer;
   });
 
   vi.spyOn(service, 'spawnWorker').mockImplementation((async (
@@ -209,6 +218,7 @@ beforeEach(() => {
   calls = [];
   replies = {};
   approvalsAsked = 0;
+  approvalAnswer = { approved: false, response: 'Abort Pipeline' };
   commandCounts = [];
   stopAtStage = undefined;
   throwPlan = {};
@@ -231,7 +241,7 @@ async function planItemStatuses(pipelineId: string): Promise<string[]> {
   return rows.map((r) => String(r.status));
 }
 
-function run(description: string, template = 'loop-fixture') {
+function run(description: string, template = 'loop-fixture', context: Partial<AgentContext> = {}) {
   return manager.createAndRun(
     'orch-loop',
     sessionId,
@@ -239,7 +249,7 @@ function run(description: string, template = 'loop-fixture') {
     'loop test',
     template,
     description,
-    { userId, sessionId, agentId: 'orch-loop' } as unknown as AgentContext,
+    { userId, sessionId, agentId: 'orch-loop', ...context } as unknown as AgentContext,
   );
 }
 
@@ -289,6 +299,39 @@ describe('the plan loop item limit', () => {
     // A cap is a configured stop, not a failure: the run still completes.
     const { rows: p } = await queryRaw(`SELECT status FROM pipelines WHERE id = '${pipelineId}'`);
     expect(p[0].status).toBe('completed');
+  });
+});
+
+describe('plan approval when nobody is watching', () => {
+  test('an unattended run approves the plan by itself, says so, and runs the loop', async () => {
+    replies = { QA: [QA_PASS] };
+    const { pipelineId } = await run('do the thing', 'loop-auto-approve', { attended: false });
+    expect(approvalsAsked).toBe(0);
+    expect(await planItemStatuses(pipelineId)).toEqual(['done', 'done']);
+    const { rows } = await queryRaw(`SELECT status FROM pipelines WHERE id = '${pipelineId}'`);
+    expect(rows[0].status).toBe('completed');
+    const { rows: msgs } = await queryRaw(
+      `SELECT content FROM messages WHERE session_id = '${sessionId}' AND metadata->>'pipelineId' = '${pipelineId}' AND metadata->>'pipelineEvent' = 'auto_approved'`,
+    );
+    expect(String(msgs[0]?.content)).toContain('no one was watching');
+    const { rows: head } = await queryRaw(`SELECT status, approved_by FROM pipeline_nodes WHERE pipeline_id = '${pipelineId}' AND kind = 'foreach'`);
+    // Approved, by nobody: never recorded as a person's yes.
+    expect(head[0]).toMatchObject({ status: 'completed', approved_by: null });
+  });
+
+  test('an attended run still asks', async () => {
+    const { pipelineId } = await run('do the thing', 'loop-auto-approve', { attended: true });
+    expect(approvalsAsked).toBe(1);
+    const { rows } = await queryRaw(`SELECT status, summary FROM pipelines WHERE id = '${pipelineId}'`);
+    expect(rows[0]).toMatchObject({ status: 'paused', summary: 'Plan rejected by user.' });
+  });
+
+  test('an approval nobody answered pauses the run as unanswered, not as rejected', async () => {
+    approvalAnswer = { approved: false, reason: 'Approval timed out' };
+    const { pipelineId } = await run('do the thing', 'loop-auto-approve');
+    const { rows } = await queryRaw(`SELECT status, summary FROM pipelines WHERE id = '${pipelineId}'`);
+    expect(rows[0].status).toBe('paused');
+    expect(String(rows[0].summary)).toContain('Nobody answered the plan approval');
   });
 });
 

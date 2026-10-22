@@ -124,8 +124,8 @@ describe('GET /api/tasks/role-agents', () => {
     expect(body.boardWritesAllowed).toBe(false);
     expect(body.heartbeatEnabled).toBe(false);
     expect(body.roles).toEqual([
-      { role: 'pm', activeTasks: 2, totalTasks: 3, enabled: false, hookId: null, known: true },
-      { role: 'qa', activeTasks: 2, totalTasks: 2, enabled: false, hookId: null, known: true },
+      { role: 'pm', activeTasks: 2, totalTasks: 3, enabled: false, hookId: null, known: true, pipelineTemplate: null },
+      { role: 'qa', activeTasks: 2, totalTasks: 2, enabled: false, hookId: null, known: true, pipelineTemplate: null },
     ]);
   });
 
@@ -245,5 +245,39 @@ describe('PUT /api/tasks/role-agents', () => {
     await send(bobApp, 'PUT', '/api/tasks/role-agents', { role: 'pm', enabled: false });
     const list = await send(aliceApp, 'GET', '/api/tasks/role-agents');
     expect(list.body.roles.find((r: { role: string }) => r.role === 'pm')).toMatchObject({ enabled: true });
+  });
+
+  test('a role agent can work each task through a pipeline template, and back to working them itself', async () => {
+    const { executeRaw, queryRaw } = await import('@/db/postgres');
+    const steps = JSON.stringify([{ name: 'Do', topic: 'coding', requiresApproval: false }]);
+    await executeRaw(
+      `INSERT INTO pipeline_templates (user_id, name, is_preset, steps) VALUES (NULL, 'Role Flow', true, '${steps}'::jsonb)`,
+    );
+    await executeRaw(
+      `INSERT INTO pipeline_templates (user_id, name, is_preset, steps, parameters) VALUES
+         (NULL, 'Needs Input', true, '${steps}'::jsonb, '[{"key":"repo","inputType":"string","requirement":"required"}]'::jsonb)`,
+    );
+    const [{ id: templateId }] = (await queryRaw(`SELECT id FROM pipeline_templates WHERE name = 'Role Flow'`)).rows as { id: string }[];
+
+    const on = await send(aliceApp, 'PUT', '/api/tasks/role-agents', { role: 'qa', enabled: true, pipelineTemplate: 'role flow' });
+    expect(on.status).toBe(200);
+    expect(on.body.pipelineTemplate).toBe(templateId);
+    const row = async () => (await send(aliceApp, 'GET', '/api/tasks/role-agents')).body.roles.find((r: { role: string }) => r.role === 'qa');
+    expect(await row()).toMatchObject({ enabled: true, pipelineTemplate: templateId });
+
+    // A plain toggle keeps the choice; null clears it.
+    await send(aliceApp, 'PUT', '/api/tasks/role-agents', { role: 'qa', enabled: true });
+    expect((await row()).pipelineTemplate).toBe(templateId);
+    await send(aliceApp, 'PUT', '/api/tasks/role-agents', { role: 'qa', enabled: true, pipelineTemplate: null });
+    expect((await row()).pipelineTemplate).toBeNull();
+  });
+
+  test('a template that is unknown, or needs input nobody can give, is refused', async () => {
+    const unknown = await send(aliceApp, 'PUT', '/api/tasks/role-agents', { role: 'qa', enabled: true, pipelineTemplate: 'no such flow' });
+    expect(unknown.status).toBe(400);
+    expect(unknown.body.error).toContain('Unknown pipeline template');
+    const needsInput = await send(aliceApp, 'PUT', '/api/tasks/role-agents', { role: 'qa', enabled: true, pipelineTemplate: 'Needs Input' });
+    expect(needsInput.status).toBe(400);
+    expect(needsInput.body.error).toContain('"repo"');
   });
 });

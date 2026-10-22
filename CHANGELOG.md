@@ -318,6 +318,28 @@ labels reflect blast radius, not contract guarantees.
   only being listed in the index. A step can also let the decision model add
   the discovered skills it is confident the task needs (`skills.select`,
   local-only). A missing declared skill fails the step.
+- **The heartbeat can watch your inbox.** Turn on **Watch my inbox** on the
+  new *Heartbeat* settings tab and new mail wakes the heartbeat: the agent
+  decides per message whether nothing is needed, a task, a short message to
+  you, or a reply draft, and records it. Checking costs no model call when
+  nothing is new; newsletters and social mail are skipped; mail from before
+  you turned it on is never looked at. What was done is kept in
+  `email_handled` (ids and outcomes only — migration `0143_email_handled`)
+  and shown on the tab. Server switch: `heartbeat.probeEmail`. The same tab
+  turns your heartbeat on or off and sets how often it checks.
+- **Reply drafts in the mailbox.** `save_reply_draft` (email processor tool,
+  allowed by default) and a *Save to drafts* button on the inbox page save a
+  threaded reply in Gmail Drafts or Outlook Drafts without sending it.
+- **Role agents can run each task through a pipeline.** In the Role agents
+  panel a role can be set to work each task through a pipeline template: one
+  task per heartbeat, checked out, commented on, closed when the run
+  completes, and handed back to you (with a notification) when it does not.
+- **Approvals from background runs.** A pipeline step's sign-off can be set to
+  approve itself when no one is watching (role agents, the heartbeat, the
+  API); you are still asked on runs you start. Approvals from such runs are
+  also posted to your own linked chats, where a reply answers them. An
+  approval nobody answered now pauses the run as unanswered, not as
+  "rejected by user".
 
 - **The companion follows you outside the chat.** Across all of your
   conversations, not just the open one: the tab icon becomes your companion
@@ -583,6 +605,10 @@ labels reflect blast radius, not contract guarantees.
 
 ### Changed
 
+- **The flow guard lets an agent message its own user after reading mail.**
+  `send_to_user` to the session's own user is delivered only to that user's
+  verified chats, so it is no longer escalated to an approval after the
+  session mixed private data with outsider text. Every other send still is.
 - Install-topic model calls (compaction and its chunk summaries, learning,
   link resolver, weekly review, evaluators, document processing, the group
   listen probe) are now stamped `install` in `cost_log` whatever turn they

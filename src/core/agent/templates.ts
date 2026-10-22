@@ -37,6 +37,8 @@ export interface StageTemplate {
   skillIds?: string[];
   /** Let the decision model add skills for the task — see PipelineStepConfig. */
   autoSkills?: boolean;
+  /** Sign off on its own when nobody is watching — see PipelineStepConfig. */
+  autoApproveUnattended?: boolean;
   /** Answer shape for a `human_input` stage — see PipelineStepConfig. */
   humanFields?: { key: string; label: string; options?: string[] }[];
   /** Per-visit token cap for this stage's worker — see PipelineStepConfig. */
@@ -79,6 +81,7 @@ export function stepConfigToStageTemplate(step: PipelineStepConfig): StageTempla
     maxPlanItems: step.maxPlanItems,
     skillIds: step.skillIds,
     autoSkills: step.autoSkills,
+    autoApproveUnattended: step.autoApproveUnattended,
     humanFields: step.humanFields,
     maxTokens: step.maxTokens,
     toolIds: step.toolIds,
@@ -354,6 +357,7 @@ export function buildStagesFromTemplate(
       maxPlanItems: stage.maxPlanItems,
       skillIds: stage.skillIds?.length ? stage.skillIds : undefined,
       autoSkills: stage.autoSkills,
+      autoApproveUnattended: stage.autoApproveUnattended,
       maxTokens: stage.maxTokens,
     };
   });

@@ -20,8 +20,22 @@ import {
   triageInbox,
   type InboxItem,
 } from '@/core/email';
+import { saveReplyDraft } from '@/core/email/drafts';
+import { type EmailOutcome, markEmailHandled } from '@/core/email/watch';
+import type { EmailProvider } from '@/core/email/types';
 import { createTasksFromSource, emailToTask } from '@/core/tasks/sourced';
 import { isAuthenticated } from '@/security/principal';
+import { apiLogger } from '@/utils/logger';
+
+/**
+ * The owner dealt with a message here: the inbox watch (core/email/watch.ts)
+ * must not hand it to the heartbeat as new. Best-effort — the action itself
+ * already happened.
+ */
+function handledByOwner(userId: string, provider: EmailProvider, messageId: string, outcome: EmailOutcome, taskId?: string): void {
+  markEmailHandled({ userId, provider, messageId, outcome, note: 'Handled in the inbox page', taskId })
+    .catch((err: unknown) => apiLogger.warn({ err, userId }, 'email: could not record a handled message'));
+}
 
 /**
  * Email triage-lite (feature #7). Read + assist over the connected mailbox,
@@ -166,6 +180,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
         const message = await getMessage(user.id, provider, params.id);
         const [task] = await createTasksFromSource(principal, 'email', [emailToTask(message)]);
+        handledByOwner(user.id, provider, params.id, 'task', task.id);
         return { task: { id: task.id, title: task.title, priority: task.priority } };
       } catch (err) {
         set.status = 400;
@@ -200,13 +215,39 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
       try {
         const provider = await detectProvider(user.id);
         if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
-        return await archiveMessage(user.id, provider, params.id);
+        const archived = await archiveMessage(user.id, provider, params.id);
+        handledByOwner(user.id, provider, params.id, 'archived');
+        return archived;
       } catch (err) {
         set.status = 400;
         return { error: (err as Error).message };
       }
     },
     { params: t.Object({ id: t.String() }), detail: { tags: ['email'] } }
+  )
+
+  // Save a reply as a draft in the mailbox (Gmail Drafts / Outlook Drafts),
+  // threaded under the message. Nothing is sent.
+  .post(
+    '/message/:id/save-draft',
+    async ({ user, principal, params, body, set }) => {
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+      try {
+        const provider = await detectProvider(user.id);
+        if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
+        const draft = await saveReplyDraft(user.id, provider, params.id, body.body);
+        handledByOwner(user.id, provider, params.id, 'drafted');
+        return { saved: true, ...draft };
+      } catch (err) {
+        set.status = 400;
+        return { error: (err as Error).message };
+      }
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      body: t.Object({ body: t.String({ minLength: 1, maxLength: 100_000 }) }),
+      detail: { tags: ['email'] },
+    }
   )
 
   // Send a reply — ASK-gated. Requires confirm:true; never sends automatically.

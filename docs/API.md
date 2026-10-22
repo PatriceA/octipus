@@ -281,6 +281,8 @@ filesystem or shell isolation.
 | POST | `/api/tasks` | Create a task (`parentId`, `blockedBy[]`, `estimate` optional) |
 | PATCH | `/api/tasks/:id` | Update task; status is `open` / `in_progress` / `done` / `archived`; `parentId: null` and `blockedBy: []` clear the links |
 | DELETE | `/api/tasks/:id` | Delete task (its sub-tasks become top-level) |
+| GET | `/api/tasks/role-agents` | The caller's role agents: task counts, on/off, `pipelineTemplate` (the template each task runs through, or null) |
+| PUT | `/api/tasks/role-agents` | Turn a role agent on or off (`{role, enabled}`); with `enabled: true`, `pipelineTemplate` (an id or name) makes it run each task through that pipeline and `null` makes it work tasks itself. A template with a required parameter is refused |
 
 A parent or blocker the caller cannot see, a self-link, or a parent loop is a
 `400`. Only an active (open or in-progress) blocker blocks; a done one is
@@ -303,6 +305,14 @@ inert and stays in the array.
 | POST | `/api/email/triage` | Run email triage (`items`, `autoArchive`, `applyLabels` → Gmail label / Outlook category `Octipus/<category>`) |
 | GET | `/api/email/categories` | The user's triage categories and the presets |
 | PUT | `/api/email/categories` | Save the user's categories (`{categories: {name: description}}`, `null` resets) |
+| POST | `/api/email/message/:id/save-draft` | Save a reply (`{body}`) as a draft in the mailbox, threaded under the message; nothing is sent |
+
+## Heartbeat
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/heartbeat/me` | The caller's heartbeat: `enabled`, `intervalMinutes` (null = the server's), `watchEmail`, `watchEmailSince`, the server settings, the connected mailbox, whether standing instructions exist, and the last 10 outcomes of the inbox watch |
+| PUT | `/api/heartbeat/me` | Change them: `enabled`, `intervalMinutes` (5–1440, `null` resets), `watchEmail` |
 
 ## Capabilities
 

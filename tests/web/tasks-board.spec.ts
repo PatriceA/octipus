@@ -166,6 +166,7 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
         if (method === 'PUT') {
           const r = roleAgents.roles.find((x) => x.role === body.role)!;
           r.enabled = body.enabled;
+          if (body.pipelineTemplate !== undefined) r.pipelineTemplate = body.pipelineTemplate;
           return json(route, 200, { role: body.role, enabled: body.enabled });
         }
         return json(route, 200, roleAgents);
@@ -352,6 +353,25 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
     await pm.click();
     await expect(pm).toHaveAttribute('aria-checked', 'false');
     await expect(notice).toHaveCount(0);
+  });
+
+  test('a role agent can be set to work each task through a pipeline', async ({ authenticatedPage: page }) => {
+    roleAgents.boardWritesAllowed = true;
+    Object.assign(roleAgents.roles[0], { enabled: true, pipelineTemplate: null });
+    await page.route('**/api/pipelines/templates', (route) =>
+      json(route, 200, { templates: [{ id: 'tpl-feature', name: 'Feature Development' }] }));
+    await page.goto('/tasks');
+    const panel = page.getByTestId('role-agents');
+    await panel.getByRole('button', { name: /Role agents/ }).click();
+    const how = panel.getByLabel('How the pm agent works its tasks');
+    await expect(how).toHaveValue('');
+    await how.selectOption({ label: 'through the Feature Development pipeline' });
+    await expect(how).toHaveValue('tpl-feature');
+    expect(calls.filter((c) => c.method === 'PUT').at(-1)).toEqual({
+      method: 'PUT', path: '/role-agents', body: { role: 'pm', enabled: true, pipelineTemplate: 'tpl-feature' },
+    });
+    // Agents that are off have no choice to make yet.
+    await expect(panel.getByLabel('How the qa agent works its tasks')).toHaveCount(0);
   });
 
   test('the panel says it spans workspaces, and says so when the server heartbeat is off', async ({ authenticatedPage: page }) => {

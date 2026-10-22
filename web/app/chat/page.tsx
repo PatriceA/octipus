@@ -1161,6 +1161,10 @@ export default function ChatPage() {
             setTurnStatus(`Plan loop limit reached (${pe.maxItems}) — ${pe.skipped} item${pe.skipped === 1 ? '' : 's'} skipped`);
             if (sessionId) loadSessionMessages(sessionId);
             break;
+          case 'auto_approved':
+            setTurnStatus(`Approved automatically at "${pe.name}" (no one was watching)`);
+            if (sessionId) loadSessionMessages(sessionId);
+            break;
           case 'qa_retry': {
             setTurnStatus(`QA found issues — retrying implementation (attempt ${pe.attempt}/${pe.maxRetries})`);
             break;

@@ -22,6 +22,11 @@
  *    (`attendChat`: a Telegram group, a Teams group chat or channel): a
  *    prompt without the details, which can quote the user's files or mail —
  *    those go privately where the platform can, else they are in the web app;
+ *  - a run nobody is watching (a heartbeat, a hook, a scheduled job — the
+ *    session has no chat of its own): the owner's own chats (their linked
+ *    Telegram, Slack, Teams or WhatsApp identities), with the details, so a
+ *    background pipeline's plan can be approved from a phone. A reply in any
+ *    of the owner's private chats on that platform answers it;
  *  - nowhere else. The web app, notifications and push show every approval.
  *
  * A typed reply answers only an approval posted in that chat (and thread) for
@@ -37,8 +42,9 @@ import { sessionRepository } from '@/db/repositories/session-repository';
 import { channelLogger } from '@/utils/logger';
 import { answerHow } from './group-handler';
 import { getUMI } from './interface';
-import { EXTERNAL_CHANNELS, loadNotifyScope, resolveTarget, sendResolved } from './ownership';
+import { EXTERNAL_CHANNELS, loadNotifyScope, ownerTargets, resolveTarget, sendResolved } from './ownership';
 import { canActInSession } from '@/core/rooms/access';
+import { isSharedWorkspaceId } from '@/security/workspace-fs';
 
 interface ApprovalEventData {
   requestId?: string;
@@ -82,10 +88,37 @@ function chatKey(userId: string, channelType: string, channelId: string, threadI
   return [userId, channelType, channelId, threadId ?? ''].join('\u0000');
 }
 
+/**
+ * The channel id approvals forwarded to the owner's own chats are filed
+ * under. The address a reply comes from is not always the one the prompt
+ * went to (a Slack user id is answered from a `D…` channel, a Teams
+ * identity from its 1:1 conversation), so a reply from ANY private chat of
+ * the owner on that platform looks here.
+ */
+const OWNER_CHATS = '\u0001owner';
+
+/** Sessions with no chat of their own: their runs were started by the server. */
+const BACKGROUND_CHANNELS: ReadonlySet<string> = new Set(['heartbeat', 'hook', 'cron', 'monitor', 'schedule']);
+
 /** The key a reply in this chat looks under. */
 function replyKey(message: UnifiedMessage): string {
   const groupThread = typeof message.metadata?.groupChannelId === 'string' ? message.threadId : undefined;
   return chatKey(message.userId, message.channelType, message.channelId, groupThread);
+}
+
+/**
+ * Where a reply in this chat is answered from: its own chat's prompts, else
+ * the owner-chats bucket when the message comes from one of the user's own
+ * private chats (never a group thread or a shared destination).
+ */
+async function lookupKey(message: UnifiedMessage): Promise<string> {
+  const own = replyKey(message);
+  if (posted.has(own) || typeof message.metadata?.groupChannelId === 'string') return own;
+  const forwarded = chatKey(message.userId, message.channelType, OWNER_CHATS);
+  if (!posted.has(forwarded)) return own;
+  const scope = await loadNotifyScope(message.userId);
+  const target = await resolveTarget(scope, message.channelType, message.channelId);
+  return target.allowed && !scope.allowlist.has(`${message.channelType}:${message.channelId}`) ? forwarded : own;
 }
 
 async function agentService() {
@@ -163,7 +196,13 @@ export async function announceApproval(event: TurnEvent): Promise<void> {
   if (event.type !== 'approval_required' || !requestId || !userId || !isUuid(event.sessionId)) return;
 
   const session = await sessionRepository.findById(event.sessionId);
-  if (!session || !(await canActInSession(session, userId, 'chat')) || !EXTERNAL_CHANNELS.has(session.channelType) || !session.channelId) return;
+  if (!session || !(await canActInSession(session, userId, 'chat'))) return;
+  // A space's background runs are not one person's to answer from their phone.
+  if (BACKGROUND_CHANNELS.has(session.channelType) && !(await isSharedWorkspaceId(session.workspaceId))) {
+    await forwardToOwnerChats(data, userId, requestId);
+    return;
+  }
+  if (!EXTERNAL_CHANNELS.has(session.channelType) || !session.channelId) return;
   const channelType = session.channelType as ChannelType;
   const channelId = session.channelId;
   const agent = await agentService();
@@ -208,6 +247,34 @@ export async function announceApproval(event: TurnEvent): Promise<void> {
   } else {
     channelLogger.info({ sessionId: session.id, channelType, reason: target.reason },
       'Approval not posted in chat: the chat is not the user\'s own nor an approved destination; it can be answered in the web app');
+  }
+}
+
+/**
+ * A background run's approval, to each of the owner's own chats (with the
+ * details: they are the owner's). Filed under the owner-chats bucket of its
+ * platform, so a reply from their private chat there answers it.
+ */
+async function forwardToOwnerChats(data: ApprovalEventData, userId: string, requestId: string): Promise<void> {
+  const agent = await agentService();
+  const live = () => new Set(agent.getPendingApprovals().map((a) => a.id));
+  const scope = await loadNotifyScope(userId);
+  const kind: ApprovalKind = data.kind === 'question' ? 'question' : 'gate';
+  const platforms = new Set<ChannelType>();
+  for (const t of ownerTargets(scope)) {
+    if (!live().has(requestId)) return; // answered in the web app meanwhile
+    const target = await resolveTarget(scope, t.channelType, t.channelId);
+    if (!target.allowed) continue;
+    const sent = await sendResolved(target, {
+      content: `${details(data)}\n\nThis came from a run in the background (nobody was watching it). ${data.options?.length
+        ? 'Reply with one of the options, **yes** to continue, or **no** to cancel.'
+        : 'Reply **yes** to continue, or **no** to cancel.'}`,
+    });
+    if (sent.ok) platforms.add(t.channelType as ChannelType);
+    else channelLogger.warn({ channelType: t.channelType, reason: sent.reason }, 'Background approval could not be posted to the owner');
+  }
+  for (const channelType of platforms) {
+    record(userId, { requestId, channelType, channelId: OWNER_CHATS, shared: false, options: data.options, kind, postedAt: Date.now() }, live());
   }
 }
 
@@ -257,7 +324,7 @@ function record(userId: string, entry: PostedApproval, live: ReadonlySet<string>
  * one or a permission prompt.
  */
 export async function newestApprovalPostedAt(message: UnifiedMessage): Promise<number> {
-  const key = replyKey(message);
+  const key = await lookupKey(message);
   if (!posted.has(key)) return 0;
   prune(new Set((await agentService()).getPendingApprovals().map((a) => a.id)));
   const open = (posted.get(key) ?? []).filter((p) => p.closedAt === undefined);
@@ -295,7 +362,7 @@ async function answerFor(text: string, entry: PostedApproval): Promise<{ approve
  * reply to one that stopped waiting is told so, once.
  */
 export async function tryResolveApprovalFromChannel(message: UnifiedMessage): Promise<boolean> {
-  const key = replyKey(message);
+  const key = await lookupKey(message);
   if (!posted.has(key) || message.attachments?.length) return false;
   const agent = await agentService();
   prune(new Set(agent.getPendingApprovals().map((a) => a.id)));
@@ -327,7 +394,9 @@ export async function tryResolveApprovalFromChannel(message: UnifiedMessage): Pr
       : 'That approval was already answered elsewhere or has expired; nothing was changed.';
   }
   try {
-    await getUMI().send(entry.channelType, entry.channelId, { content: content + more, threadId: entry.threadId });
+    // A forwarded approval is confirmed in the chat the reply came from.
+    const channelId = entry.channelId === OWNER_CHATS ? message.channelId : entry.channelId;
+    await getUMI().send(entry.channelType, channelId, { content: content + more, threadId: entry.threadId });
   } catch (err) {
     channelLogger.warn({ err, channelType: entry.channelType }, 'Could not confirm an approval reply in the chat');
   }

@@ -18,6 +18,7 @@ export interface PipelineStageInput {
   loopOverPlan?: boolean;
   producesPlan?: boolean;
   maxPlanItems?: number;
+  autoApproveUnattended?: boolean;
 }
 
 /**
@@ -84,6 +85,9 @@ export function validatePipelineStages(steps: PipelineStageInput[]): string[] {
       if (typeof s.maxRetries === 'number' && s.maxRetries < 1) {
         errors.push(`Stage ${i + 1} (QA): maxRetries must be ≥ 1.`);
       }
+    }
+    if (s.autoApproveUnattended && !s.requiresApproval) {
+      errors.push(`Stage ${i + 1}: "approve automatically when no one is watching" only applies to a step that asks for approval.`);
     }
     if (s.maxPlanItems != null) {
       if (!s.loopOverPlan) {

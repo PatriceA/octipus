@@ -47,6 +47,7 @@ const recipeStepBodySchema = t.Object({
   maxPlanItems: t.Optional(t.Number()),
   skillIds: t.Optional(t.Array(t.String())),
   autoSkills: t.Optional(t.Boolean()),
+  autoApproveUnattended: t.Optional(t.Boolean()),
   humanFields: t.Optional(
     t.Array(
       t.Object({
@@ -83,6 +84,7 @@ function toStepConfig(s: Static<typeof recipeStepBodySchema>): PipelineStepConfi
     maxPlanItems: s.maxPlanItems,
     skillIds: s.skillIds?.length ? s.skillIds : undefined,
     autoSkills: s.autoSkills,
+    autoApproveUnattended: s.autoApproveUnattended,
     humanFields: s.humanFields,
   };
 }

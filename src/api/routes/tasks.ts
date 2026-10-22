@@ -5,7 +5,8 @@ import { auditTaskMutation, changedTaskFields, type TaskMutationOp } from '@/cor
 import { TASK_CHECKOUT_TTL_MS } from '@/core/tasks/checkout';
 import { nextActions } from '@/core/tasks/next';
 import { dateOnlyToEndOfDay } from '@/core/tasks/rank';
-import { listRoleAgents, roleAgentToggleError } from '@/core/tasks/role-agents';
+import { listRoleAgents, roleAgentToggleError, setRolePipelineTemplate } from '@/core/tasks/role-agents';
+import { resolveRoleTemplate } from '@/core/tasks/role-pipelines';
 import { assigneePatch, isTaskStatus, TASK_ASSIGNEE_KINDS, TASK_STATUSES } from '@/core/tasks/status';
 import { normalizeEstimate } from '@/core/tasks/structure';
 import { resolveUserTimezone } from '@/core/tasks/timezone';
@@ -184,10 +185,28 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         set.status = 400;
         return { error: invalid };
       }
+      // How the agent works its tasks: through a pipeline template (checked
+      // here, so a template that cannot run unattended is refused now rather
+      // than failing on every heartbeat), or itself (null).
+      let template: { id: string; name: string } | null | undefined;
+      if (body.enabled && body.pipelineTemplate !== undefined) {
+        if (body.pipelineTemplate === null || body.pipelineTemplate === '') {
+          template = null;
+        } else {
+          const resolved = await resolveRoleTemplate(user.id, body.pipelineTemplate);
+          if ('error' in resolved) {
+            set.status = 400;
+            return { error: resolved.error };
+          }
+          template = resolved;
+        }
+      }
       try {
         if (body.enabled) {
           const hookId = await ensureRoleHeartbeatHook(user.id, body.role);
-          return { role: body.role, enabled: true, hookId };
+          // The hook row is read fresh when it fires, so no cache to reload.
+          if (template !== undefined) await setRolePipelineTemplate(user.id, body.role, template?.id ?? null);
+          return { role: body.role, enabled: true, hookId, ...(template !== undefined ? { pipelineTemplate: template?.id ?? null } : {}) };
         }
         await disableRoleHeartbeatHook(user.id, body.role);
         return { role: body.role, enabled: false };
@@ -201,6 +220,8 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
       body: t.Object({
         role: t.String({ minLength: 1, maxLength: 64 }),
         enabled: t.Boolean(),
+        /** A template id or name to run each task through; null = the agent works tasks itself. */
+        pipelineTemplate: t.Optional(t.Union([t.String({ maxLength: 200 }), t.Null()])),
       }),
       detail: { tags: ['tasks'] },
     }
