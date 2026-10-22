@@ -87,6 +87,8 @@ export interface ToolHandler {
   /** Trusted handler metadata: BaseTool journals after its middleware checks. */
   recordsActions?: boolean;
   replaySafety?: 'read_only' | 'mutation';
+  /** Trusted per-invocation recovery classification; does not grant permission. */
+  recoverySafety?: (args: Record<string, unknown>) => 'read_only' | undefined;
   /** Name of the most-informative parameter for compact UI display. */
   previewParam?: string;
   /** Custom preview renderer (overrides `previewParam`). Truncated to 80 chars. */

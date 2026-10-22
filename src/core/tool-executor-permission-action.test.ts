@@ -1,3 +1,4 @@
+import { auditRepository } from '@/db/repositories/audit-repository';
 import { toolActionRepository } from '@/db/repositories/tool-action-repository';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { messageRepository } from '@/db/repositories/message-repository';
@@ -44,6 +45,8 @@ const call = (name: string, args: Record<string, unknown> = {}): ToolCall => ({
 let check: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  vi.spyOn(auditRepository, 'logToolExecuted').mockResolvedValue();
+  vi.spyOn(auditRepository, 'logToolDenied').mockResolvedValue();
   vi.spyOn(toolActionRepository, 'pending').mockResolvedValue([]);
   vi.spyOn(toolActionRepository, 'start').mockResolvedValue();
   vi.spyOn(toolActionRepository, 'finish').mockResolvedValue();
@@ -119,4 +122,27 @@ describe('the agent loop resolves a tool call to its declared permission action'
     await run({ ...base, toolId: 'custom', name: 'do_thing' });
     expect(check.mock.calls[1]?.[5]).toEqual({ defaultLevel: undefined });
   });
+});
+
+
+test('per-call recovery safety skips journaling without granting permission', async () => {
+  const handler: ToolHandler = { ...base, toolId: 'mcp', name: 'mcp_call_tool',
+    permissionAction: args => `server.${args.tool_name}`,
+    recoverySafety: args => args.tool_name === 'verified_read' ? 'read_only' : undefined };
+  await run(handler, { tool_name: 'verified_read' });
+  expect(toolActionRepository.pending).not.toHaveBeenCalled();
+  expect(toolActionRepository.start).not.toHaveBeenCalled();
+  expect(check.mock.calls[0]?.[5]).toEqual({ defaultLevel: undefined });
+  await run(handler, { tool_name: 'write' });
+  expect(toolActionRepository.start).toHaveBeenCalledWith(expect.objectContaining({ toolName: 'server.write' }));
+});
+
+
+test('a read-only recovery hint never bypasses an explicit permission denial', async () => {
+  check.mockResolvedValue({ allowed: false, level: 'DENY', requiresApproval: false });
+  const execute = vi.fn();
+  await run({ ...base, name: 'mcp_call_tool', toolId: 'mcp', permissionAction: 'server.read',
+    recoverySafety: () => 'read_only', execute });
+  expect(execute).not.toHaveBeenCalled();
+  expect(toolActionRepository.start).not.toHaveBeenCalled();
 });

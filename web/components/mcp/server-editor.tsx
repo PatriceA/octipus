@@ -39,6 +39,7 @@ function EditorForm({ initial, onSaved, onClose }: {
   const [authorization, setAuthorization] = useState('');
   const [removeAuth, setRemoveAuth] = useState(false);
   const [env, setEnv] = useState('');
+  const [trustRecoveryHints, setTrustRecoveryHints] = useState(initial.trustRecoveryHints === true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const inputClass = 'w-full rounded border border-outline-variant bg-surface-container px-3 py-2 text-on-surface';
@@ -47,6 +48,7 @@ function EditorForm({ initial, onSaved, onClose }: {
     setBusy(true); setError('');
     try {
       const edit: MCPServerEdit = { revision: initial.revision };
+      if (trustRecoveryHints !== (initial.trustRecoveryHints === true)) edit.trustRecoveryHints = trustRecoveryHints;
       if (name.trim() !== initial.name) edit.name = name.trim();
       if (transport !== (initial.transport ?? 'stdio')) edit.transport = transport;
       if (transport === 'stdio') {
@@ -96,6 +98,8 @@ function EditorForm({ initial, onSaved, onClose }: {
         <p className="text-xs text-on-surface-variant">{initial.hasAuthorization ? 'A credential is stored.' : 'No Authorization header stored.'} Leave blank to preserve it. Other headers are preserved.</p>
         <label className="flex gap-2"><input type="checkbox" checked={removeAuth} onChange={e => setRemoveAuth(e.target.checked)} />Remove stored Authorization header</label>
       </>}
+      <label className="flex gap-2"><input type="checkbox" checked={trustRecoveryHints} onChange={e => setTrustRecoveryHints(e.target.checked)} />Trust server recovery declarations</label>
+      <p className="text-xs text-on-surface-variant">For servers you trust: allow declared read-only calls and confirmed preflight refusals without an uncertain-outcome review. Tool permissions still apply. Interrupted writes still require review.</p>
     </fieldset>
     <p className="text-sm text-on-surface-variant">Changes apply on the next connection. To apply now, save, then disconnect and connect this server. Active connections are left running.</p>
     {error && <p role="alert" className="text-error">{error}</p>}

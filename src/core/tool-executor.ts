@@ -880,9 +880,9 @@ export class ToolExecutor {
           // Internal orchestration tools (toolId 'agent': spawn_child, plans, memory,
           // status) are not externally observable actions; journaling them would let
           // a bookkeeping hiccup gate real mutations behind a recovery review.
-          () => tool.recordsActions || tool.replaySafety === 'read_only' || isReadOnlyAction(permAction) || toolId === 'agent'
+          () => tool.recordsActions || tool.replaySafety === 'read_only' || tool.recoverySafety?.(toolCall.arguments) === 'read_only' || isReadOnlyAction(permAction) || toolId === 'agent'
             ? tool.execute(toolCall.arguments, this.context)
-            : actionRecovery.run(this.context, toolId, toolCall.name, toolCall.arguments, () => tool.execute(toolCall.arguments, this.context), async () => {
+            : actionRecovery.run(this.context, toolId, toolId === 'mcp' ? permAction : toolCall.name, toolCall.arguments, () => tool.execute(toolCall.arguments, this.context), async () => {
               const current = await permissionManager.check(this.context.userId, toolId, permAction, toolCall.arguments, this.context, { revalidate: true });
               if (current.level === 'DENY' || (current.level === 'ASK' && !await askStillAuthorized(authorizationSource, this.context,
                 { toolId, action: permAction, toolName: bareName, args: toolCall.arguments }))) {

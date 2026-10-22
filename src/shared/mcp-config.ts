@@ -4,6 +4,7 @@ import type { MCPServer } from './mcp-server';
 /** Credentials are write-only in the settings editor. Null explicitly removes one. */
 export const mcpServerEditSchema = z.object({
   revision: z.string().min(1),
+  trustRecoveryHints: z.boolean().optional(),
   name: z.string().trim().min(1).optional(),
   transport: z.enum(['stdio', 'sse', 'streamable-http']).optional(),
   command: z.string().optional(),
