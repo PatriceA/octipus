@@ -33,6 +33,7 @@ export const SPACE_ROUTES: readonly SpaceRoute[] = [
   { prefix: '/api/contacts', what: 'contacts' },
   { prefix: '/api/record-types', what: 'record types and their form links' },
   { prefix: '/api/records', what: 'records' },
+  { prefix: '/api/mail', what: 'functional mailboxes: accounts, messages, drafts' },
   { prefix: '/api/documents', what: 'uploaded documents' },
   { prefix: '/api/artifacts', what: 'live artifacts' },
   { prefix: '/a', what: 'hosted artifact pages (subdomain mount)' },

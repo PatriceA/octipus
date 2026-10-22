@@ -40,6 +40,7 @@ export * from './pipeline-templates';
 export * from './pipeline-checkpoints';
 export * from './pipelines';
 export * from './plugin-packages';
+export * from './mail';
 export * from './profiles';
 export * from './records';
 export * from './recurring-tasks';

@@ -8,7 +8,7 @@ import type { FieldDef, RecordData } from './record-fields';
 
 export const CASE_STATUS_VALUES = ['open', 'waiting', 'done', 'archived'] as const;
 export type CaseStatusValue = (typeof CASE_STATUS_VALUES)[number];
-export const CASE_ENTITY_VALUES = ['contact', 'document', 'task', 'note', 'artifact', 'record'] as const;
+export const CASE_ENTITY_VALUES = ['contact', 'document', 'task', 'note', 'artifact', 'record', 'mail'] as const;
 export type CaseEntityValue = (typeof CASE_ENTITY_VALUES)[number];
 
 export interface CaseView {

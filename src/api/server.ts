@@ -84,6 +84,7 @@ import { taskRoutes } from './routes/tasks';
 import { caseRoutes, contactRoutes } from './routes/cases';
 import { publicFormRoutes, recordRoutes, recordTypeRoutes } from './routes/records';
 import { pluginPackageRoutes } from './routes/plugin-packages';
+import { mailRoutes } from './routes/mail';
 import { teamsWebhookRoutes } from './routes/teams-webhook';
 import { toolRoutes } from './routes/tools';
 import { trajectoryRoutes } from './routes/trajectories';
@@ -448,6 +449,7 @@ export function createServer() {
         .use(recordRoutes)
         .use(publicFormRoutes)
         .use(pluginPackageRoutes)
+        .use(mailRoutes)
         .use(readerRoutes)
         .use(digestRoutes)
         .use(emailRoutes)

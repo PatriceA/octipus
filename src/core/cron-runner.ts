@@ -3,6 +3,7 @@ import { getConfig } from '@/config';
 import { getEmbeddingService } from '@/core/rag/embeddings';
 import { sweepPurgedSpaceFiles } from '@/core/spaces/purge';
 import { maybeRunHeartbeats } from '@/core/heartbeat';
+import { syncDueMailAccounts } from '@/core/mail/sync';
 import { fireDueReminders } from '@/core/tasks/reminders';
 import { defaultListenDeps, runListenTick } from '@/channels/group-listen';
 import { getDb } from '@/db/postgres';
@@ -51,6 +52,7 @@ let lastVectorIndexEnsure = Date.now();
 let lastLogPrune = 0;
 let logPruneRunning = false;
 let reminderSweepRunning = false;
+let mailSweepRunning = false;
 
 /**
  * Parse a simple cron expression and compute the next run date.
@@ -342,6 +344,17 @@ async function processCronTick(): Promise<void> {
         .then((sent) => { if (sent > 0) coreLogger.info({ sent }, 'Follow-up reminders handed to notifications'); })
         .catch((err: unknown) => coreLogger.error({ err }, 'Follow-up reminder sweep failed'))
         .finally(() => { reminderSweepRunning = false; });
+    }
+
+    // Mail accounts over IMAP / POP3 (core/mail/sync.ts): each due account
+    // fetches its new mail. Not awaited, like the reminders: a slow mail
+    // server never holds up scheduled hooks.
+    if (!mailSweepRunning) {
+      mailSweepRunning = true;
+      syncDueMailAccounts(now)
+        .then((stored) => { if (stored > 0) coreLogger.info({ stored }, 'Mail sync stored new messages'); })
+        .catch((err: unknown) => coreLogger.error({ err }, 'Mail sync sweep failed'))
+        .finally(() => { mailSweepRunning = false; });
     }
 
     // Group channels in listen / proactive mode: unanswered questions, gated

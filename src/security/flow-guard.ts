@@ -152,6 +152,10 @@ export function classifyFlow(call: FlowCall): FlowContract {
       return { taints, egress: 'write' };
     case 'email-processor':
       return { taints: ['private', 'suspicious'] };
+    case 'mail':
+      // Received mail is outsider text; a draft stays here; a send reaches other people.
+      if (action === 'read') return { taints: ['private', 'suspicious'] };
+      return action === 'send' ? { taints, egress: 'write' } : { taints };
     case 'data':
       return { taints: ['private'] };
     case 'github':
