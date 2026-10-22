@@ -3,7 +3,7 @@ import { apiContext } from '@/api/context';
 import { getConfig } from '@/config';
 import { detectProvider } from '@/core/email/providers';
 import { recentEmailOutcomes } from '@/core/email/watch';
-import { getHeartbeatPrefs, HEARTBEAT_NOTE_SLUG, setHeartbeatPrefs } from '@/core/heartbeat';
+import { findStandingNote, getHeartbeatPrefs, setHeartbeatPrefs } from '@/core/heartbeat';
 import { isAuthenticated } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
 
@@ -23,10 +23,7 @@ export const heartbeatRoutes = new Elysia({ prefix: '/heartbeat' })
       getHeartbeatPrefs(user.id),
       detectProvider(user.id).catch(() => null),
       recentEmailOutcomes(user.id, 10),
-      import('@/db/repositories/note-repository')
-        .then(({ getNoteRepository }) => getNoteRepository().getBySlug(user.id, null, HEARTBEAT_NOTE_SLUG))
-        .then((note) => Boolean(note?.body?.trim()))
-        .catch(() => false),
+      findStandingNote(user.id).then((note) => Boolean(note?.body?.trim())).catch(() => false),
     ]);
     return {
       ...prefs,

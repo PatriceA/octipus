@@ -637,12 +637,28 @@ export function renderRoleHeartbeatMessage(role: string, ready: readonly RoleTas
   return lines.join('\n');
 }
 
+/**
+ * The user's standing-instructions note: the personal note with the slug
+ * `heartbeat`. A note written in the web app or by an agent carries the
+ * workspace it was written in, so every personal workspace counts, not only
+ * user-level notes (which is all this used to read: such a note was never
+ * found). A user-level one wins, then a pinned one, then the newest.
+ */
+export async function findStandingNote(userId: string): Promise<{ id: string; body: string; workspaceId: string | null } | null> {
+  const { notes } = await import('@/db/schema/notes');
+  const [row] = await getDb()
+    .select({ id: notes.id, body: notes.body, workspaceId: notes.workspaceId })
+    .from(notes)
+    .where(and(eq(notes.userId, userId), eq(notes.slug, HEARTBEAT_NOTE_SLUG), notInSharedWorkspace(notes.workspaceId)))
+    .orderBy(sql`${notes.workspaceId} IS NULL DESC`, desc(notes.pinned), desc(notes.updatedAt))
+    .limit(1);
+  return row ?? null;
+}
+
 /** Standing instructions live in the user's pinned `HEARTBEAT` note (best-effort). */
 async function readStandingInstructions(userId: string): Promise<string> {
   try {
-    const { getNoteRepository } = await import('@/db/repositories/note-repository');
-    const note = await getNoteRepository().getBySlug(userId, null, HEARTBEAT_NOTE_SLUG);
-    return note?.body?.trim() ?? '';
+    return (await findStandingNote(userId))?.body?.trim() ?? '';
   } catch (err) {
     coreLogger.debug({ err, userId }, 'heartbeat: standing-note read failed (proceeding without)');
     return '';

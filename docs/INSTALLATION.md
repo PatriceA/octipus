@@ -29,6 +29,8 @@ The Unix checkout defaults to `~/.octipus/app`, with `octi` in `~/.local/bin`. A
 
 Setup selects storage (embedded is the default), generates secrets, creates an administrator, saves provider settings and a default model, and offers optional capabilities. It temporarily starts the backend and shuts it down after setup. Model credentials are configured, but a paid inference is not automatically run: send a first chat message to verify the connection.
 
+After the first login, the setup guide on the home page takes over: it asks what you will use Octipus for and sets up the rest (coding CLIs, your mailbox, a chat, areas of work, background agents). See [ONBOARDING.md](ONBOARDING.md).
+
 ```bash
 octi start web       # starts backend and web UI
 # Open http://localhost:3007; log in with the setup account.

@@ -411,7 +411,7 @@ export async function installRecommendedModel(
   userId: string,
 ) {
   const { getCatalogEntry } = await import('@/capabilities/hwfit');
-  const { startInstall } = await import('@/capabilities/hwfit/install');
+  const { primaryDemotions, startInstall } = await import('@/capabilities/hwfit/install');
   const { emitInstallProgress } = await import('@/capabilities/hwfit/install-events');
   const { OllamaProvider } = await import('@/models/providers/ollama-provider');
 
@@ -440,6 +440,11 @@ export async function installRecommendedModel(
   const job = startInstall(entry, bindTopics, userId, {
     pull: (pid, onProgress) => provider.pull(pid, onProgress),
     register: async (e) => {
+      // The new model takes primary on its lanes: the previous holders step down.
+      const lanes = Object.entries(e.topicRoles ?? {}).filter(([, role]) => role === 'primary').map(([lane]) => lane);
+      for (const d of primaryDemotions(await registry.getAllModelsIncludeDisabled(), lanes)) {
+        await registry.updateModel(d.name, { topicRoles: d.topicRoles });
+      }
       await registry.registerModel(e);
     },
     isFirstModel: async () => (await registry.getDefaultModel()) === null,

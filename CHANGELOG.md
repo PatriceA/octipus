@@ -139,6 +139,16 @@ labels reflect blast radius, not contract guarantees.
 
 ### Fixed
 
+- **The heartbeat reads standing instructions written in the web app.** It
+  looked for a `heartbeat` note outside every workspace, but notes made in the
+  web app or by an agent are saved in a workspace, so their instructions were
+  never read. Any of the user's personal workspaces now counts.
+- **`octi setup` with the Claude CLI registers a model that runs.** It saved
+  the model id `claude-sonnet-4-6` for the `cli` provider, which matches no
+  CLI tool (`cli/claude-code` does).
+- **Installing a recommended local model takes over its lanes cleanly.** The
+  model it replaced kept its primary role too, so which of the two answered
+  was up to the database's row order.
 - **A restart asked for from a chat comes back.** `octi restart` run by the
   agent (from the phone, say) was a child of the backend it stopped, and the
   backend's shutdown reaped it halfway: after the stop, before the start. It
@@ -318,6 +328,15 @@ labels reflect blast radius, not contract guarantees.
   only being listed in the index. A step can also let the decision model add
   the discovered skills it is confident the task needs (`skills.select`,
   local-only). A missing declared skill fails the step.
+- **A setup guide on the home page.** It asks what you use Octipus for
+  (build software, run a company, product management, research), then a few
+  questions per use case, says what is already set up, shows the list of what
+  it will do, and does it through the ordinary routes: models and lanes,
+  coding CLIs, areas of work and a shared space, logins for companies with
+  their own mailbox, a Telegram link, Jira or Linear, the mailbox and inbox
+  watch, standing instructions, permissions and role agents. Steps only you
+  can do (a sign-in, a chat code) wait for you. Secrets are never saved with
+  the progress. `/onboarding` opens it again later. See docs/ONBOARDING.md.
 - **The heartbeat can watch your inbox.** Turn on **Watch my inbox** on the
   new *Heartbeat* settings tab and new mail wakes the heartbeat: the agent
   decides per message whether nothing is needed, a task, a short message to

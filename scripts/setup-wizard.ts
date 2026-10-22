@@ -12,9 +12,14 @@
  *   4. Boot backend  → spawns `npx tsx src/index.ts`, waits on /api/health
  *   5. Admin account → POST /api/auth/register (first user gets admin grant)
  *   6. Provider      → select from canonical PROVIDERS, key into vault
- *   7. Default model → PATCH /api/settings
+ *   7. Default model → POST /api/models, then POST /api/topics/assign-all
+ *                      (the key went in via PUT /api/settings/batch)
  *   8. Capabilities  → probe missing, multiselect-install (Playwright, MCP, …)
  *   9. Mark complete → POST /settings/setup-complete; print next steps
+ *
+ * What it sets up is the install itself. Everything about how someone uses
+ * Octipus (separate areas, coding CLIs, a mailbox, a chat, role agents) is
+ * the web app's setup guide on the home page (docs/ONBOARDING.md).
  *
  * Non-interactive mode: pass `--non-interactive` or set CI; the wizard
  * reads OCTIPUS_SETUP_* env vars instead of prompting. Useful for CI
@@ -857,6 +862,8 @@ async function main() {
   }
 
   process.stdout.write('\n\x1b[1;32mSetup complete.\x1b[0m\n');
+  process.stdout.write('  Open the web app: the setup guide on the home page sets Octipus up for what you do\n');
+  process.stdout.write('  (coding agents, your mailbox, a chat, separate areas of work).\n');
   process.stdout.write('  octi start web     # backend + web UI (localhost:3007 by default)\n');
   process.stdout.write('  octi tui           # terminal chat\n');
   process.stdout.write('  octi capabilities  # install optional tools (browser, MCP, …)\n\n');

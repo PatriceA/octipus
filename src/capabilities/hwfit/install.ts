@@ -52,14 +52,39 @@ export interface InstallDeps {
  * Resolves to topic bindings (`topicRoles`), never a hardcoded default — house
  * rule #2. Capabilities beyond vision are derived by the capabilities system.
  */
+/**
+ * The role changes that let a new model take primary on `lanes`: every other
+ * model holding primary there loses it, as PUT /topics/:topic/binding does.
+ * Without this an install next to an already bound model left two primaries
+ * on a lane, and which one ran was up to the database's row order. Pure.
+ */
+export function primaryDemotions(
+  models: ReadonlyArray<{ name: string; topicRoles?: Record<string, string> | null }>,
+  lanes: readonly string[],
+): Array<{ name: string; topicRoles: Record<string, 'primary' | 'backup'> }> {
+  const out: Array<{ name: string; topicRoles: Record<string, 'primary' | 'backup'> }> = [];
+  for (const m of models) {
+    const roles = { ...((m.topicRoles ?? {}) as Record<string, 'primary' | 'backup'>) };
+    let changed = false;
+    for (const lane of lanes) {
+      if (roles[lane] === 'primary') {
+        delete roles[lane];
+        changed = true;
+      }
+    }
+    if (changed) out.push({ name: m.name, topicRoles: roles });
+  }
+  return out;
+}
+
 export function buildModelEntry(
   entry: ModelCatalogEntry,
   bindTopics: CatalogTopic[],
   isFirst: boolean,
 ): NewModelConfigEntry {
   // Catalog topics still use the editorial names ('general', 'coding', …);
-  // bindings must land on the CANONICAL lanes ('agents', 'chat', 'vision', …)
-  // or getModelForTopic would never resolve them after the topic consolidation.
+  // bindings must land on the CANONICAL lanes ('build', 'everyday', 'vision',
+  // …; src/models/topics.ts) or getModelForTopic would never resolve them.
   const lanes = [...new Set(bindTopics.map((t) => canonicalTopic(t)))];
   return {
     name: entry.id,

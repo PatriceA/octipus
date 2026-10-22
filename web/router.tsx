@@ -48,6 +48,7 @@ const McpPage = lazy(() => import('./app/mcp/page'));
 const MemoryPage = lazy(() => import('./app/memory/page'));
 const ModelsPage = lazy(() => import('./app/models/page'));
 const NotesPage = lazy(() => import('./app/notes/page'));
+const OnboardingPage = lazy(() => import('./app/onboarding/page'));
 const NotificationsPage = lazy(() => import('./app/notifications/page'));
 const PermissionsPage = lazy(() => import('./app/permissions/page'));
 const PersonaPage = lazy(() => import('./app/persona/page'));
@@ -130,6 +131,7 @@ const router = createBrowserRouter([
       { path: 'artifacts/view', element: <ArtifactsViewPage /> },
       { path: 'artifacts/:id', element: <LegacyArtifactRedirect /> },
       { path: 'chat', element: <ChatPage /> },
+      { path: 'onboarding', element: <OnboardingPage /> },
       { path: 'documents', element: <DocumentsPage /> },
       { path: 'email', element: <EmailPage /> },
       { path: 'eval', element: <EvalPage /> },
