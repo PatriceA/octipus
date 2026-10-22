@@ -3,9 +3,11 @@
  * roles and contact tags are free text; these are not.
  */
 
+import { CASE_ENTITY_VALUES, CASE_STATUS_VALUES, type CaseEntityValue, type CaseStatusValue } from '@/shared/business';
+
 /** A case is open (being worked), waiting (on someone outside), done, or archived. */
-export const CASE_STATUSES = ['open', 'waiting', 'done', 'archived'] as const;
-export type CaseStatus = (typeof CASE_STATUSES)[number];
+export const CASE_STATUSES = CASE_STATUS_VALUES;
+export type CaseStatus = CaseStatusValue;
 
 /** The statuses a case is still active in; leaving them stamps `closedAt`. */
 export const ACTIVE_CASE_STATUSES: readonly CaseStatus[] = ['open', 'waiting'];
@@ -15,8 +17,8 @@ export function isCaseStatus(value: unknown): value is CaseStatus {
 }
 
 /** What a case can link to: the shared entities of a scope. */
-export const CASE_ENTITY_TYPES = ['contact', 'document', 'task', 'note', 'artifact', 'record'] as const;
-export type CaseEntityType = (typeof CASE_ENTITY_TYPES)[number];
+export const CASE_ENTITY_TYPES = CASE_ENTITY_VALUES;
+export type CaseEntityType = CaseEntityValue;
 
 export function isCaseEntityType(value: unknown): value is CaseEntityType {
   return typeof value === 'string' && (CASE_ENTITY_TYPES as readonly string[]).includes(value);

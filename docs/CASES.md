@@ -123,8 +123,14 @@ All routes act on the space named by the `X-Octipus-Workspace` header, like
 | `PATCH /api/contacts/:id` | Change a contact. |
 | `DELETE /api/contacts/:id` | Delete a contact; its people lose the organisation, links to it are removed. |
 
+## In the web
+
+The sidebar's **Business** group has the pages: **Cases** (list, filters,
+links, follow-ups, status), **Contacts** (people and organisations, with the
+cases each is linked to) and **Records** ([RECORDS.md](RECORDS.md)). In a space
+they show the space's rows; viewers and commenters see them read-only.
+
 ## Not yet
 
-- Web pages for cases and contacts.
 - A case timeline (comments, status history). The audit log records every API
   change and tool call in the meantime.

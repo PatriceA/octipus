@@ -96,8 +96,8 @@ linked as `submission`.
 The agent's `records` tool cannot mint form links: publishing a form to
 outsiders is a person's decision.
 
-There is no web page for forms yet (plan point C1c); `GET` and `POST
-/api/forms/:token` are the form today.
+The form page is `/forms/:token` in the web app, which needs no sign-in; the
+records page (`/records`) mints and revokes links and shows a new link once.
 
 ## Agent tool
 

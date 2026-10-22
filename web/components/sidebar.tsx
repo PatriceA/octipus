@@ -4,6 +4,9 @@ import {
   BookOpen,
   Bot,
   ClipboardList,
+  Contact,
+  Database,
+  FolderKanban,
   Brain,
   Cable,
   Cpu,
@@ -64,6 +67,11 @@ const navGroups: NavGroup[] = [
     { name: 'inbox', href: '/notifications', icon: Bell },
     { name: 'research', href: '/research', icon: Telescope },
     { name: 'agent activity', href: '/agents', icon: Bot },
+  ] },
+  { label: 'Business', items: [
+    { name: 'cases', href: '/cases', icon: FolderKanban },
+    { name: 'contacts', href: '/contacts', icon: Contact },
+    { name: 'records', href: '/records', icon: Database },
   ] },
   { label: 'Library', items: [
     { name: 'notes', href: '/notes', icon: NotebookPen },

@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
-import type { FieldDef, RecordData } from '@/core/records/fields';
+import type { FieldDef, RecordData } from '@/shared/record-fields';
 import { workspaces } from './organizations';
 import { users } from './users';
 
