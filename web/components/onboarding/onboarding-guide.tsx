@@ -50,9 +50,17 @@ const FLASH_MS = 1400;
 /** A password for a login the guide creates: 16 characters with upper, lower and a digit. */
 function newPassword(): string {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  const body = [...bytes].map((b) => alphabet[b % alphabet.length]).join('');
-  return `${body.slice(0, 13)}Aa7`;
+  // Bytes at or above the last whole multiple of the alphabet are dropped, so every character is equally likely.
+  const limit = 256 - (256 % alphabet.length);
+  for (;;) {
+    let out = '';
+    while (out.length < 16) {
+      for (const b of crypto.getRandomValues(new Uint8Array(32))) {
+        if (b < limit && out.length < 16) out += alphabet[b % alphabet.length];
+      }
+    }
+    if (/[A-Z]/.test(out) && /[a-z]/.test(out) && /\d/.test(out)) return out;
+  }
 }
 
 /** An answer that adds something (a yes, a choice, one more item) earns a cheer; text being typed does not. */
