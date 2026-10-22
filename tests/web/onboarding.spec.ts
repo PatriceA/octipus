@@ -56,8 +56,14 @@ test.describe('onboarding guide', () => {
   test('a first visit: pick a use case, answer, review, and it sets things up', async ({ authenticatedPage: page }) => {
     await page.goto('/');
     const guide = page.getByTestId('onboarding');
-    await expect(guide).toContainText('Set up Octipus for what you do');
+    // The companion hosts it: it greets, and cheers what you add.
+    const companion = guide.getByTestId('guide-companion');
+    await expect(guide.getByTestId('guide-line')).toContainText("Tell me what we'll do together");
+    await expect(companion).toHaveAttribute('data-state', 'idle');
     await guide.getByRole('checkbox', { name: /Run my company/ }).click();
+    await expect(companion).toHaveAttribute('data-state', 'done');
+    await expect(guide.getByTestId('guide-line')).toContainText('Run my company, lovely');
+    await expect(companion).toHaveAttribute('data-state', 'listening');
     await guide.getByRole('button', { name: 'Continue' }).click();
 
     // Models: an Anthropic key.
@@ -71,7 +77,7 @@ test.describe('onboarding guide', () => {
     await guide.locator('[data-question="company.about"] textarea').fill('A small design studio.');
     await guide.getByRole('radio', { name: /Every 30 minutes/ }).click();
     await guide.getByRole('button', { name: 'Mailbox and calendar' }).click();
-    await guide.getByRole('button', { name: 'Review' }).click();
+    await guide.getByRole('button', { name: 'See my plan' }).click();
 
     const list = guide.getByRole('list', { name: 'What the guide will do' });
     await expect(list).toContainText('Store your Anthropic (Claude) API key');
@@ -82,10 +88,13 @@ test.describe('onboarding guide', () => {
     // Secrets never go to the saved progress.
     expect(JSON.stringify(progress)).not.toContain('sk-ant-test');
 
-    await guide.getByRole('button', { name: 'Set it up' }).click();
+    await guide.getByRole('button', { name: 'Go, set it up' }).click();
     // The sign-in waits for the person; skip it.
     const connect = guide.locator('[data-step="connect:mailbox"]');
     await expect(connect).toHaveAttribute('data-status', 'waiting');
+    // It waits for you, and says so.
+    await expect(companion).toHaveAttribute('data-state', 'waiting');
+    await expect(guide.getByTestId('guide-line')).toContainText('Your turn');
     await connect.getByRole('button', { name: 'Skip' }).click();
     await expect(guide.getByRole('status')).toContainText('left for later');
 
@@ -97,6 +106,9 @@ test.describe('onboarding guide', () => {
     expect(calls.some((c) => c.path === '/heartbeat/me')).toBe(false);
     await expect(guide.locator('[data-step="heartbeat:me"]')).toHaveAttribute('data-status', 'skipped');
     expect(progress.at(-1)).toMatchObject({ completed: true });
+    // What was left can be finished from here: the plan comes back with it.
+    await guide.getByRole('button', { name: 'Finish the rest' }).click();
+    await expect(guide.getByRole('list', { name: 'What the guide will do' })).toContainText('Connect your Google account');
     if (process.env.ONBOARDING_SCREENSHOT) await page.screenshot({ path: process.env.ONBOARDING_SCREENSHOT, fullPage: true });
   });
 
@@ -116,7 +128,7 @@ test.describe('onboarding guide', () => {
     await expect(guide.getByRole('button', { name: /AI models · set up/ })).toBeVisible();
     await guide.getByRole('button', { name: 'Research', exact: true }).click();
     await expect(guide).toContainText('The research agent is already on.');
-    await guide.getByRole('button', { name: 'Review' }).click();
+    await guide.getByRole('button', { name: 'See my plan' }).click();
     const list = guide.getByRole('list', { name: 'What the guide will do' });
     await expect(list).not.toContainText('research agent');
     await expect(list).toContainText('Mark the setup as done');
@@ -125,7 +137,7 @@ test.describe('onboarding guide', () => {
     await expect(found).toContainText('Every kind of work already has a model');
     await expect(found).toContainText('Document search already has a model');
     await expect(found).toContainText('The research agent is already on');
-    await guide.getByRole('button', { name: 'Set it up' }).click();
+    await guide.getByRole('button', { name: 'Go, set it up' }).click();
     await expect(guide.locator('[data-step="role:research"]')).toHaveAttribute('data-status', 'done');
     expect(calls.some((c) => c.path === '/tasks/role-agents')).toBe(false);
   });

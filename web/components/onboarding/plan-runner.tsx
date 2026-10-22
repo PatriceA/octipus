@@ -50,12 +50,29 @@ const icon = (status: StepStatus) => {
  * step stops only the steps that depend on it; a step that needs the person
  * (a sign-in, a code, something elsewhere) waits for them, and can be skipped.
  */
-export function PlanRunner({ steps, onFinished }: { steps: PlanStep[]; onFinished: (results: Record<string, StepResult>) => void }) {
+export function PlanRunner({ steps, onFinished, onStep }: {
+  steps: PlanStep[];
+  onFinished: (results: Record<string, StepResult>) => void;
+  /** Each change of a step's status, for the companion to react to. */
+  onStep?: (step: PlanStep, status: StepStatus, done: number) => void;
+}) {
   const [results, setResults] = useState<Record<string, StepResult>>(() => Object.fromEntries(steps.map((s) => [s.id, { status: 'pending' as StepStatus }])));
   const [index, setIndex] = useState(0);
   const [code, setCode] = useState('');
   const started = useRef(-1);
   const set = useCallback((id: string, r: StepResult) => setResults((prev) => ({ ...prev, [id]: r })), []);
+
+  // Tell the companion about each status change, once (compared with the last render).
+  const seen = useRef<Record<string, StepStatus>>({});
+  useEffect(() => {
+    const finished = Object.values(results).filter((x) => x.status === 'done' || x.status === 'failed' || x.status === 'skipped').length;
+    for (const step of steps) {
+      const status = results[step.id]?.status;
+      if (!status || seen.current[step.id] === status) continue;
+      seen.current[step.id] = status;
+      if (status !== 'pending') onStep?.(step, status, finished);
+    }
+  }, [results, steps, onStep]);
   const next = useCallback(() => setIndex((i) => i + 1), []);
 
   const current = steps[index];
