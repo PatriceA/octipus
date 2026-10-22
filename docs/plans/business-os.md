@@ -142,8 +142,8 @@ Each point is its own PR with its own code review.
 |---|---|---|---|
 | Plan (this file) | `ccr-ab69ee55-j1tal5` | #429 | open |
 | C1a cases, contacts, links, follow-ups | `feat/cases-contacts` | #430 | in review |
-| C1b record types and forms | | | next |
-| C1c web pages for cases and contacts | | | |
+| C1b record types, records, public forms | `feat/record-types` (on C1a) | #431 | in review |
+| C1c web pages for cases, contacts, records, forms | | | next |
 
 ## 5. Open questions (answers expected from the business side)
 
