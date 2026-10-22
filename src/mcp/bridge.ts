@@ -1,4 +1,5 @@
 import type { MCPServerEdit, MCPServerConfigView } from '@/shared/mcp-config';
+import { markToolNotExecuted } from '@/core/tool-execution-error';
 import { EventEmitter } from 'events';
 import { resourceHandlers } from './resource-tools';
 import { getConfig } from '@/config';
@@ -500,25 +501,35 @@ export class MCPBridge extends EventEmitter {
    * Call a tool on an MCP server
    */
   async callTool(serverId: string, toolName: string, args: Record<string, unknown>, context: AgentContext, authorizationArgs = args): Promise<unknown> {
-    // Every path to a server's tool ends here, so `hidden` is enforced here.
-    if (this.toolExposure(serverId, toolName) === 'hidden') {
-      throw new Error(`MCP tool '${toolName}' on server '${serverId}' is hidden by the server's exposure setting.`);
-    }
-    // Every caller, including artifact refreshes, reaches this boundary before transport.
-    const { authorizeMcpDispatch } = await import('@/security/mcp-authorization');
-    await authorizeMcpDispatch(context, `${serverId}.${toolName}`, authorizationArgs);
-    await this.ensureConnected(serverId);
-
     const breaker = getMcpCircuitBreaker();
-    if (!breaker.canCall(serverId)) {
-      const st = breaker.getState(serverId);
-      throw new Error(`MCP server circuit open: ${serverId} (cooldown ${st.cooldownRemainingMs}ms remaining)`);
-    }
-
-    const connection = this.connections.get(serverId);
-    if (!connection || connection.status !== 'connected') {
-      breaker.recordFailure(serverId);
-      throw new Error(`MCP server not connected: ${serverId}`);
+    // The executor may have skipped journaling using this connection's read hint.
+    // Refuse if reconnect/authorization waits replace that evidence before send.
+    const readOnlyConnection = this.recoverySafety(serverId, toolName) === 'read_only' ? this.connections.get(serverId) : undefined;
+    let connection: MCPServerConnection;
+    try {
+      // These checks happen before any tools/call request is sent.
+      if (this.toolExposure(serverId, toolName) === 'hidden') {
+        throw new Error(`MCP tool '${toolName}' on server '${serverId}' is hidden by the server's exposure setting.`);
+      }
+      const { authorizeMcpDispatch } = await import('@/security/mcp-authorization');
+      await authorizeMcpDispatch(context, `${serverId}.${toolName}`, authorizationArgs);
+      await this.ensureConnected(serverId);
+      if (!breaker.canCall(serverId)) {
+        const st = breaker.getState(serverId);
+        throw new Error(`MCP server circuit open: ${serverId} (cooldown ${st.cooldownRemainingMs}ms remaining)`);
+      }
+      const current = this.connections.get(serverId);
+      if (!current || current.status !== 'connected') {
+        breaker.recordFailure(serverId);
+        throw new Error(`MCP server not connected: ${serverId}`);
+      }
+      if (readOnlyConnection && (current !== readOnlyConnection || this.recoverySafety(serverId, toolName) !== 'read_only')) {
+        throw new Error('MCP recovery declaration changed before dispatch; rediscover the tool and retry.');
+      }
+      connection = current;
+    } catch (err) {
+      // Preserve approval/cancellation error types and codes for existing callers.
+      throw markToolNotExecuted('mcp', err instanceof Error ? err : new Error(String(err), { cause: err }));
     }
 
     const send = (message: string) => {
@@ -531,11 +542,31 @@ export class MCPBridge extends EventEmitter {
         arguments: args,
       });
       breaker.recordSuccess(serverId);
+      // Only an operator-trusted server may attest that dispatch had no effect.
+      // Text such as "refused", generic errors and idempotentHint are not evidence.
+      if (connection.server.trustRecoveryHints === true && result && typeof result === 'object'
+        && 'isError' in result && result.isError === true && '_meta' in result) {
+        const meta = result._meta;
+        if (meta && typeof meta === 'object' && 'octipus/recovery' in meta) {
+          const recovery = meta['octipus/recovery'];
+          if (recovery && typeof recovery === 'object' && 'outcome' in recovery && recovery.outcome === 'not_executed') {
+            markToolNotExecuted('mcp', result);
+          }
+        }
+      }
       return result;
     } catch (err) {
       breaker.recordFailure(serverId);
       throw err;
     }
+  }
+
+  /** Classification is taken from the active connection, never the call's arguments. */
+  private recoverySafety(serverId: string, toolName: string): 'read_only' | undefined {
+    const connection = this.connections.get(serverId);
+    return connection?.status === 'connected' && connection.server.trustRecoveryHints === true
+      && connection.tools.find(tool => tool.name === toolName)?.annotations?.readOnlyHint === true
+      ? 'read_only' : undefined;
   }
 
   /**
@@ -896,6 +927,7 @@ export class MCPBridge extends EventEmitter {
           parameters: tool.inputSchema,
           toolId: 'mcp',
           permissionAction: `${serverId}.${tool.name}`,
+          recoverySafety: () => bridge.recoverySafety(serverId, tool.name),
           maxResultChars: (args) => bridge.maxResultChars(serverId, tool.name, args),
           execute: async (args, context) => {
             return bridge.callTool(serverId, tool.name, args, context);
@@ -1027,6 +1059,7 @@ export class MCPBridge extends EventEmitter {
         },
         toolId: 'mcp',
         permissionAction: args => `${args.server_id}.${args.tool_name}`,
+        recoverySafety: args => bridge.recoverySafety(String(args.server_id), String(args.tool_name)),
         maxResultChars: args => bridge.maxResultChars(String(args.server_id), String(args.tool_name), (args.arguments as Record<string, unknown>) || {}),
         execute: async (args, context) => {
           const serverId = args.server_id as string;
@@ -1073,6 +1106,7 @@ export class MCPBridge extends EventEmitter {
           parameters: objectSchema(tool.inputSchema),
           toolId: 'mcp',
           permissionAction: () => action,
+          recoverySafety: () => this.recoverySafety(serverId, tool.name),
           maxResultChars: (args: Record<string, unknown>) => this.maxResultChars(serverId, tool.name, args),
           // Authorized in mcp_call_tool's wrapped shape: authorizeMcpDispatch
           // unwraps a top-level `arguments` key, which for a tool whose own

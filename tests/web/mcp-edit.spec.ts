@@ -30,11 +30,13 @@ for (const transport of ['streamable-http', 'sse', 'stdio']) {
       if (transport === 'sse') await expect(dialog.getByLabel('POST URL')).toHaveValue(server.postUrl);
       await dialog.getByLabel('Authorization header', { exact: true }).fill('Bearer new-token');
     }
+    await expect(dialog.getByLabel('Trust server recovery declarations')).not.toBeChecked();
+    await dialog.getByLabel('Trust server recovery declarations').check();
     await dialog.getByRole('button', { name: 'Save changes' }).click();
     await expect(dialog).not.toBeVisible();
     expect(saved).toEqual(transport === 'stdio'
-      ? { revision: 'rev', command: '/new path/node', envPatch: { TOKEN: 'new-token' } }
-      : { revision: 'rev', sseUrl: 'https://new.example.com/mcp', authorization: 'Bearer new-token' });
+      ? { revision: 'rev', trustRecoveryHints: true, command: '/new path/node', envPatch: { TOKEN: 'new-token' } }
+      : { revision: 'rev', trustRecoveryHints: true, sseUrl: 'https://new.example.com/mcp', authorization: 'Bearer new-token' });
     expect(disconnects).toEqual([]);
   });
 }

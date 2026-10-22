@@ -20,6 +20,8 @@ export interface MCPServer extends McpExposureConfig {
   maxResultChars?: number;
   /** Per-tool `maxResultChars`, by exact tool name. */
   toolMaxResultChars?: Record<string, number>;
+  /** Operator trusts this server's readOnlyHint and octipus/recovery outcome metadata. */
+  trustRecoveryHints?: boolean;
   isEnabled: boolean;
   /**
    * What the server offers, in a sentence. Lists the server in the

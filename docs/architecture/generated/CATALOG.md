@@ -638,7 +638,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `hooks` | `tools` | 1 |
 | `hooks` | `utils` | 7 |
 | `mcp` | `config` | 2 |
-| `mcp` | `core` | 2 |
+| `mcp` | `core` | 3 |
 | `mcp` | `security` | 3 |
 | `mcp` | `shared` | 2 |
 | `mcp` | `utils` | 4 |

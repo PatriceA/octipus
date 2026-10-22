@@ -10,8 +10,8 @@ export class ToolNotExecutedError extends Error {
   }
 }
 
-// Preserve APIs that return an aborted outcome, without trusting a serializable
-// flag that arbitrary tool responses or model arguments could imitate.
+// Preserve APIs that return aborted outcomes or throw typed preflight errors,
+// without trusting serializable flags that arbitrary tool responses could imitate.
 const unexecutedResults = new WeakMap<object, string>();
 
 export function markToolNotExecuted<T extends object>(toolId: string, result: T): T {

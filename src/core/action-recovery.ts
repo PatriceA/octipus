@@ -134,7 +134,7 @@ export class ActionRecovery {
       // A path the sandbox refused never reached the disk: that is a definite
       // no-op, not an uncertain mutation (measured 2026-09-17: one refused
       // `/tmp` write gated the rest of the run behind a review nobody could give).
-      const notExecuted = !entered || (error instanceof ToolNotExecutedError && error.toolId === toolId) || error instanceof WorkspaceFsError;
+      const notExecuted = !entered || isToolNotExecutedResult(toolId, error) || (error instanceof ToolNotExecutedError && error.toolId === toolId) || error instanceof WorkspaceFsError;
       try { await this.repository.finish(scope, notExecuted ? 'not_executed' : 'uncertain'); }
       catch (err) { coreLogger.error({ err, actionId: id }, 'Could not record tool termination; action remains uncertain'); }
       throw error;

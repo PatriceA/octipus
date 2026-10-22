@@ -32,6 +32,29 @@ The review covers specific records, in batches of up to 20. An action that
 becomes uncertain while the user is deciding needs its own review. Recovery
 approval does not become a permanent tool permission.
 
+## MCP server recovery declarations
+
+The MCP server editor offers **Trust server recovery declarations**, off by
+default (`trustRecoveryHints: true` in the server configuration). Enable it only
+for a server whose implementation you trust to describe side effects correctly.
+Like other server settings, it applies on the next connection.
+
+For an opted-in server:
+
+- An exact `annotations.readOnlyHint: true` on a discovered tool lets that call
+  inspect state without a mutation journal or recovery review. It does not grant
+  normal tool permission, and call arguments cannot set this annotation.
+- An error result may attest that the action never reached its mutation boundary:
+  `{"isError":true,"_meta":{"octipus/recovery":{"outcome":"not_executed"}}}`.
+  The bridge converts this trusted evidence into the internal result identity.
+  A server must never send this after an external write was dispatched.
+
+Local bridge refusals before `tools/call` are also `not_executed`. Generic errors,
+"refused" text, `idempotentHint`, missing results and post-dispatch transport
+failures remain conservative. Recovery does not automatically retry any action
+or change its retry limit. New MCP journal entries identify `server.tool`, rather
+than only `mcp_call_tool`. Historical uncertain entries remain unchanged.
+
 ## Pipeline resume and rewind
 
 Resuming or rewinding reruns work from a checkpoint. Even tools that returned

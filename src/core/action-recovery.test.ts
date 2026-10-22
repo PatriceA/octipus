@@ -66,6 +66,13 @@ describe('durable action recovery', () => {
     await expect(run(async () => { throw Object.assign(new Error('unsupported shell syntax'), { name: 'ToolNotExecutedError' }); })).rejects.toThrow();
     expect(repo.rows[2].status).toBe('uncertain');
   });
+  test('trusted preflight marks preserve thrown error identity and remain tool-scoped', async () => {
+    const error = markToolNotExecuted('mail', Object.assign(new Error('Approval required'), { code: 'approval_required' }));
+    await expect(run(async () => { throw error; })).rejects.toBe(error);
+    expect(repo.rows[0].status).toBe('not_executed');
+    await expect(recovery.run(ctx(), 'mcp', 'server.write', {}, async () => { throw error; })).rejects.toBe(error);
+    expect(repo.rows[1].status).toBe('uncertain');
+  });
   test('a sandbox path refusal never touched the disk, so it is not_executed', async () => {
     await expect(run(async () => { throw new WorkspaceFsError('OUTSIDE_ROOT', "Path '/tmp/x' is outside allowed workspace directories"); })).rejects.toThrow(/outside/);
     expect(repo.rows[0].status).toBe('not_executed');
