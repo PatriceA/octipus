@@ -17,6 +17,7 @@ import { getPermissionManager } from '@/security/permissions';
 import { withoutPersonalOnlyTools } from '@/security/space-tools';
 import { agentLogger, coreLogger } from '@/utils/logger';
 import { DEFAULT_MAX_LENGTH, sanitizeToolOutput } from '@/utils/sanitize';
+import { noteToolUse } from './context-hooks/tool-usage';
 import type { AgentEvent, ToolHandler } from './agent-base';
 import type { AgentContext, AgentMessage, ToolCall, ToolResult } from './types';
 
@@ -965,6 +966,8 @@ export class ToolExecutor {
         }
 
         const resultStr = sanitizeToolOutput(result);
+        // Context-hook measurement: did the agent look things up itself (docs/CONTEXT-HOOKS.md).
+        noteToolUse(this.context.sessionId, toolId, toolCall.name, this.context.id);
         await auditRepository.logToolExecuted(
           this.context.userId,
           this.context.sessionId,

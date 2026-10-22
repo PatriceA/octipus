@@ -46,6 +46,7 @@ const LinkAccountPage = lazy(() => import('./app/link-account/page'));
 const LoginPage = lazy(() => import('./app/login/page'));
 const McpPage = lazy(() => import('./app/mcp/page'));
 const MemoryPage = lazy(() => import('./app/memory/page'));
+const RecallPage = lazy(() => import('./app/recall/page'));
 const ModelsPage = lazy(() => import('./app/models/page'));
 const NotesPage = lazy(() => import('./app/notes/page'));
 const OnboardingPage = lazy(() => import('./app/onboarding/page'));
@@ -145,6 +146,7 @@ const router = createBrowserRouter([
       { path: 'link-account', element: <LinkAccountPage /> },
       { path: 'mcp', element: <McpPage /> },
       { path: 'memory', element: <MemoryPage /> },
+      { path: 'recall', element: <RecallPage /> },
       { path: 'models', element: <ModelsPage /> },
       { path: 'notes', element: <NotesPage /> },
       { path: 'notifications', element: <NotificationsPage /> },

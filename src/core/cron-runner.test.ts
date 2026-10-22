@@ -81,6 +81,7 @@ describe('pruneLogTables', () => {
     const { hookExecutions } = await import('@/db/schema/hook-executions');
     const { notifications } = await import('@/db/schema/notifications');
     const { permissionRequests } = await import('@/db/schema/permissions');
+    const { contextTurns } = await import('@/db/schema/context-hooks');
     const { pruneLogTables } = await import('./log-retention');
     const db = getDb();
     const old = new Date(Date.now() - 120 * DAY);
@@ -105,6 +106,10 @@ describe('pruneLogTables', () => {
       { ...request, status: 'approved', createdAt: old },
       { ...request, status: 'pending', createdAt: old },
     ]);
+    await db.insert(contextTurns).values([
+      { userId, sessionId: 's', event: 'turn_start', createdAt: old },
+      { userId, sessionId: 's', event: 'turn_start', createdAt: recent },
+    ]);
 
     const removed = await pruneLogTables(new Date(), { batchSize: 2 });
     expect(removed).toEqual({
@@ -112,11 +117,13 @@ describe('pruneLogTables', () => {
       hook_executions: 1,
       'notifications.read': 1,
       'permission_requests.settled': 1,
+      context_turns: 1,
     });
     const actions = (await db.select({ action: auditLog.action }).from(auditLog)).map((r) => r.action).sort();
     expect(actions).toEqual(['api_request', 'login']);
     expect((await db.select().from(notifications)).map((n) => n.title).sort()).toEqual(['read recent', 'unread old']);
     expect((await db.select().from(permissionRequests)).map((r) => r.status)).toEqual(['pending']);
+    expect(await db.select().from(contextTurns)).toHaveLength(1);
   });
 
   test('a retention_policies row overrides the window, and NULL turns pruning off', async () => {
