@@ -27,6 +27,7 @@ import {
   PanelLeft,
   PanelLeftClose,
   Settings,
+  Sparkles,
   Tags,
   Telescope,
   Users,
@@ -78,6 +79,7 @@ const navGroups: NavGroup[] = [
     { name: 'documents', href: '/documents', icon: FileText },
     { name: 'reader', href: '/reader', icon: Newspaper },
     { name: 'knowledge', href: '/knowledge', icon: Brain },
+    { name: 'recall', href: '/recall', icon: Sparkles },
     { name: 'artifacts', href: '/artifacts', icon: Globe, badge: 'BETA' },
   ] },
   { label: 'Automations', items: [
