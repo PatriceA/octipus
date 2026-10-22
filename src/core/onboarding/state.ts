@@ -15,7 +15,7 @@ import { findStandingNote, getHeartbeatPrefs } from '@/core/heartbeat';
 import { getDb } from '@/db/postgres';
 import { users } from '@/db/schema/users';
 import { coreLogger } from '@/utils/logger';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { KEY_PROVIDERS } from '@/shared/onboarding/use-cases';
 import type { OnboardingProgress, OnboardingState } from '@/shared/onboarding/types';
 
@@ -37,12 +37,21 @@ export async function readProgress(userId: string): Promise<OnboardingProgress> 
   return p && typeof p === 'object' ? p : {};
 }
 
-/** Merge `patch` into the user's saved progress (never replacing their other preferences). */
+/**
+ * Merge `patch` into the user's saved progress, in one UPDATE: their other
+ * preferences, and a progress write landing at the same time, are kept.
+ */
 export async function writeProgress(userId: string, patch: OnboardingProgress): Promise<OnboardingProgress> {
-  const next = { ...(await readProgress(userId)), ...patch };
-  const [row] = await getDb().select({ preferences: users.preferences }).from(users).where(eq(users.id, userId)).limit(1);
-  await getDb().update(users).set({ preferences: { ...(row?.preferences ?? {}), onboarding: next } as never, updatedAt: new Date() }).where(eq(users.id, userId));
-  return next;
+  const [row] = await getDb()
+    .update(users)
+    .set({
+      preferences: sql`coalesce(${users.preferences}, '{}'::jsonb) || jsonb_build_object('onboarding',
+        coalesce(${users.preferences}->'onboarding', '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb)`,
+      updatedAt: new Date(),
+    })
+    .where(eq(users.id, userId))
+    .returning({ preferences: users.preferences });
+  return ((row?.preferences as { onboarding?: OnboardingProgress } | null)?.onboarding) ?? {};
 }
 
 async function modelsState(isAdmin: boolean): Promise<OnboardingState['models']> {
@@ -199,6 +208,9 @@ export async function writeStandingInstructions(userId: string, body: string): P
   const { HEARTBEAT_NOTE_SLUG } = await import('@/core/heartbeat');
   const existing = await findStandingNote(userId);
   const text = body.trim().slice(0, 20_000);
+  const section = text.replace(/^# HEARTBEAT\s*/, '').trim();
+  // Asked again (a retry, a second run with the same answers): already there.
+  if (existing && section && existing.body.includes(section)) return { noteId: existing.id, appended: false };
   const scope = { kind: 'personal' as const, userId, workspaceId: existing?.workspaceId ?? null };
   const saved = await getNoteService().save({
     scope,

@@ -117,8 +117,21 @@ export function PlanRunner({ steps, onFinished, onStep }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per step index
   }, [index]);
 
-  const finishWaiting = (status: StepStatus, message?: string) => {
+  // At most one sign-in watcher; it stops when the runner goes away.
+  const watcher = useRef<ReturnType<typeof setInterval> | null>(null);
+  const stopWatching = () => {
+    if (watcher.current) clearInterval(watcher.current);
+    watcher.current = null;
+  };
+  useEffect(() => stopWatching, []);
+  const indexRef = useRef(index);
+  useEffect(() => { indexRef.current = index; }, [index]);
+
+  const finishWaiting = (status: StepStatus, message?: string, stepId?: string) => {
     if (!current) return;
+    // A late watcher (or a second click) for a step already left behind changes nothing.
+    if (stepId && steps[indexRef.current]?.id !== stepId) return;
+    stopWatching();
     set(current.id, { status, message });
     setCode('');
     next();
@@ -129,12 +142,13 @@ export function PlanRunner({ steps, onFinished, onStep }: {
       const res = (await call(step.start)) as { url?: string; error?: string };
       if (!res?.url) throw new Error(res?.error || 'No sign-in address came back');
       const popup = window.open(res.url, 'onboarding-connect', 'width=600,height=700,left=200,top=100');
-      const watch = setInterval(async () => {
+      stopWatching();
+      watcher.current = setInterval(async () => {
         if (popup && !popup.closed) return;
-        clearInterval(watch);
+        stopWatching();
         const state = await api.get<OnboardingState>('/onboarding').catch(() => null);
-        if (state && connected(step, state)) finishWaiting('done');
-        else set(step.id, { status: 'waiting', message: 'Not connected yet. Try again, or skip it and connect later.' });
+        if (state && connected(step, state)) finishWaiting('done', undefined, step.id);
+        else if (steps[indexRef.current]?.id === step.id) set(step.id, { status: 'waiting', message: 'Not connected yet. Try again, or skip it and connect later.' });
       }, 1000);
     } catch (err) {
       set(step.id, { status: 'waiting', message: (err as Error).message });

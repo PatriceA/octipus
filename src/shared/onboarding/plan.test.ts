@@ -109,8 +109,13 @@ describe('areas of work', () => {
 
   test('slugify', () => {
     expect(slugify('  Ünïcode & Co. GmbH  ')).toBe('unicode-co-gmbh');
-    expect(slugify('!!!')).toBe('area');
+    // Nothing usable left: a stable name per input, so two such areas do not collide.
+    expect(slugify('!!!')).toMatch(/^area-[a-z0-9]+$/);
+    expect(slugify('!!!')).toBe(slugify('!!!'));
+    expect(slugify('東京')).not.toBe(slugify('大阪'));
     expect(slugify('x'.repeat(50))).toHaveLength(32);
+    // Cut first, then trimmed: no dash left at the end.
+    expect(slugify(`${'a'.repeat(31)} b`)).toBe('a'.repeat(31));
   });
 });
 

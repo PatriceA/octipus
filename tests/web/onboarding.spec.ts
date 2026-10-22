@@ -37,7 +37,9 @@ test.describe('onboarding guide', () => {
     progress = [];
     await page.route('**/api/onboarding', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(state) }));
     await page.route('**/api/onboarding/progress', async (route) => {
+      if (route.request().method() === 'GET') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(state.progress) });
       const body = route.request().postDataJSON();
+      if (body.completed) state.progress = { ...state.progress, completedAt: '2026-10-22T12:00:00Z' };
       progress.push(body);
       if (body.dismissed) state.progress = { ...state.progress, dismissed: true };
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(state.progress) });
@@ -108,7 +110,11 @@ test.describe('onboarding guide', () => {
     expect(progress.at(-1)).toMatchObject({ completed: true });
     // What was left can be finished from here: the plan comes back with it.
     await guide.getByRole('button', { name: 'Finish the rest' }).click();
-    await expect(guide.getByRole('list', { name: 'What the guide will do' })).toContainText('Connect your Google account');
+    const again = guide.getByRole('list', { name: 'What the guide will do' });
+    await expect(again).toContainText('Connect your Google account');
+    // What was done last run is not done twice (the stub's state did not change).
+    await expect(again).not.toContainText('Turn on an agent for your ideas');
+    await expect(guide.getByRole('list', { name: 'Already set up' })).toContainText('Turn on an agent for your ideas');
     if (process.env.ONBOARDING_SCREENSHOT) await page.screenshot({ path: process.env.ONBOARDING_SCREENSHOT, fullPage: true });
   });
 
@@ -140,6 +146,28 @@ test.describe('onboarding guide', () => {
     await guide.getByRole('button', { name: 'Go, set it up' }).click();
     await expect(guide.locator('[data-step="role:research"]')).toHaveAttribute('data-status', 'done');
     expect(calls.some((c) => c.path === '/tasks/role-agents')).toBe(false);
+  });
+
+  test('finished before: the home page only links to it, and reads nothing more', async ({ authenticatedPage: page }) => {
+    state.progress = { completedAt: '2026-10-01T09:00:00Z' };
+    const fullReads: string[] = [];
+    page.on('request', (r) => { if (new URL(r.url()).pathname === '/api/onboarding') fullReads.push(r.url()); });
+    await page.goto('/');
+    await expect(page.getByRole('link', { name: 'Set up Octipus for something else' })).toBeVisible();
+    expect(fullReads).toEqual([]);
+  });
+
+  test('finishing on the home page keeps the guide there for the next thing', async ({ authenticatedPage: page }) => {
+    state.models = { textReady: true, embeddingReady: true, verifySeparate: false, names: ['anthropic claude-sonnet-5-5'], providersWithKey: ['anthropic'], byTopic: {} };
+    await page.goto('/');
+    const guide = page.getByTestId('onboarding');
+    await guide.getByRole('checkbox', { name: /Research and knowledge/ }).click();
+    await guide.getByRole('button', { name: 'Continue' }).click();
+    await guide.getByRole('button', { name: 'Research', exact: true }).click();
+    await guide.getByRole('button', { name: 'See my plan' }).click();
+    await guide.getByRole('button', { name: 'Go, set it up' }).click();
+    await guide.getByRole('button', { name: 'Set up something else' }).click();
+    await expect(guide.getByRole('checkbox', { name: /Build software/ })).toBeVisible();
   });
 
   test('putting it away leaves a link on the home page', async ({ authenticatedPage: page }) => {

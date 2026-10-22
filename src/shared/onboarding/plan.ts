@@ -25,9 +25,18 @@ export function modelName(provider: string, modelId: string): string {
   return `${provider} ${modelId}`;
 }
 
-/** A workspace slug for an area name: lowercase, dashes, at most 32 characters. */
+/**
+ * A workspace slug for an area name: lowercase letters, digits and dashes, at
+ * most 32 characters, starting and ending with a letter or digit (the
+ * server's rule). A name with no Latin letters or digits gets `area-<hash>`,
+ * so two such names do not collide.
+ */
 export function slugify(name: string): string {
-  return name.toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'area';
+  const base = name.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').slice(0, 32).replace(/^-+|-+$/g, '');
+  if (base) return base;
+  let h = 0;
+  for (const ch of name) h = (Math.imul(h, 31) + (ch.codePointAt(0) ?? 0)) >>> 0;
+  return `area-${h.toString(36)}`;
 }
 
 const str = (a: Answers, id: string): string => (typeof a[id] === 'string' ? (a[id] as string).trim() : '');

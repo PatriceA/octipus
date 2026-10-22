@@ -48,11 +48,6 @@ export interface InstallDeps {
 }
 
 /**
- * Build the DB entry for a pulled catalog model. Pure + exported for testing.
- * Resolves to topic bindings (`topicRoles`), never a hardcoded default — house
- * rule #2. Capabilities beyond vision are derived by the capabilities system.
- */
-/**
  * The role changes that let a new model take primary on `lanes`: every other
  * model holding primary there loses it, as PUT /topics/:topic/binding does.
  * Without this an install next to an already bound model left two primaries
@@ -77,6 +72,11 @@ export function primaryDemotions(
   return out;
 }
 
+/**
+ * Build the DB entry for a pulled catalog model. Pure + exported for testing.
+ * Resolves to topic bindings (`topicRoles`), never a hardcoded default — house
+ * rule #2. Capabilities beyond vision are derived by the capabilities system.
+ */
 export function buildModelEntry(
   entry: ModelCatalogEntry,
   bindTopics: CatalogTopic[],

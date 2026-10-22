@@ -440,12 +440,14 @@ export async function installRecommendedModel(
   const job = startInstall(entry, bindTopics, userId, {
     pull: (pid, onProgress) => provider.pull(pid, onProgress),
     register: async (e) => {
-      // The new model takes primary on its lanes: the previous holders step down.
+      // The new model takes primary on its lanes: the previous holders step
+      // down, after the insert, so a failed insert leaves the lanes as they were.
+      await registry.registerModel(e);
       const lanes = Object.entries(e.topicRoles ?? {}).filter(([, role]) => role === 'primary').map(([lane]) => lane);
-      for (const d of primaryDemotions(await registry.getAllModelsIncludeDisabled(), lanes)) {
+      const others = (await registry.getAllModelsIncludeDisabled()).filter((m) => m.name !== e.name);
+      for (const d of primaryDemotions(others, lanes)) {
         await registry.updateModel(d.name, { topicRoles: d.topicRoles });
       }
-      await registry.registerModel(e);
     },
     isFirstModel: async () => (await registry.getDefaultModel()) === null,
     // Push progress to the owner's WebSocket (the panel listens instead of

@@ -54,7 +54,8 @@ mailbox counts.
 - The last screen lists what was done, what failed and what was left for later.
 
 Run the guide again at any time: what is already in place is listed as done
-and left alone.
+and left alone. **Finish the rest** plans again from the same answers; what the
+last run did counts as done.
 
 ## How it works
 
@@ -72,6 +73,8 @@ and left alone.
   (`src/core/onboarding/state.ts`). Install-wide facts (model rows, provider
   keys, MCP servers, CLI tools on the host) are only read for admins. Every
   source fails soft to "not set up".
+- **`GET /api/onboarding/progress`** returns only the saved progress. The home
+  page reads it first, and reads the full state only when the guide is shown.
 - **`PUT /api/onboarding/progress`** saves your choices in
   `users.preferences.onboarding`, minus every secret. Secrets go straight to
   the call that stores them (settings, vault) and are cleared from the page

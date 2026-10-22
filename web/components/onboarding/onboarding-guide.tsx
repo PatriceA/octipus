@@ -9,7 +9,7 @@ import { api } from '@/lib/api';
 import type { CompanionAppearance } from '../../../src/shared/companion';
 import { buildPlan } from '../../../src/shared/onboarding/plan';
 import { initialAnswers, sectionsFor, storableAnswers, USE_CASES, visibleQuestions } from '../../../src/shared/onboarding/use-cases';
-import type { Answers, AnswerValue, OnboardingState, PlanStep, Question, Section, UseCaseId } from '../../../src/shared/onboarding/types';
+import type { Answers, AnswerValue, OnboardingProgress, OnboardingState, PlanStep, Question, Section, UseCaseId } from '../../../src/shared/onboarding/types';
 import { GuideCompanion } from './guide-companion';
 import { PlanRunner, type StepStatus } from './plan-runner';
 import { QuestionField } from './question-field';
@@ -79,8 +79,20 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
  */
 export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
   const queryClient = useQueryClient();
+  // Set by anything the person does here: from then on the guide stays, even once finished.
+  const [engaged, setEngaged] = useState(false);
+  // The home page first asks only whether the guide is wanted; the full state read
+  // (models, mailbox, connectors, CLI tools…) waits until the guide is shown.
+  const { data: saved } = useQuery({
+    queryKey: ['onboarding', 'progress'],
+    queryFn: () => api.get<OnboardingProgress>('/onboarding/progress'),
+    enabled: variant === 'home',
+    retry: false,
+  });
+  const hidden = variant === 'home' && Boolean(saved?.dismissed || (saved?.completedAt && !engaged));
   const { data: state, error } = useQuery({
     queryKey: ['onboarding'],
+    enabled: variant === 'page' || (saved !== undefined && !hidden),
     // An older server (or anything that is not the guide's state) shows no guide.
     queryFn: async () => {
       const s = await api.get<OnboardingState>('/onboarding');
@@ -143,16 +155,15 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
     }
   }, [react]);
 
-  if (error) return variant === 'page' ? <p className="text-sm text-error">{(error as Error).message}</p> : null;
-  if (!state) return null;
-  const finishedBefore = Boolean(state.progress.completedAt);
-  if (variant === 'home' && (state.progress.dismissed || (finishedBefore && phase === 'choose'))) {
+  if (hidden) {
     return (
       <p className="text-xs text-on-surface-variant">
         <Link href="/onboarding" className="text-primary underline">Set up Octipus for something else</Link>
       </p>
     );
   }
+  if (error) return variant === 'page' ? <p className="text-sm text-error">{(error as Error).message}</p> : null;
+  if (!state) return null;
 
   const dismiss = async () => {
     await api.put('/onboarding/progress', { dismissed: true }).catch(() => undefined);
@@ -161,11 +172,13 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
 
   const toggleUseCase = (id: UseCaseId) => {
     const on = useCases.includes(id);
+    setEngaged(true);
     setUseCases((prev) => (on ? prev.filter((x) => x !== id) : [...prev, id]));
     if (!on) react('done');
   };
 
   const start = () => {
+    setEngaged(true);
     setAnswers((prev) => ({ ...initialAnswers(useCases, state, prev) }));
     setSectionIndex(0);
     setPhase('questions');
@@ -181,10 +194,17 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
     setPhase('review');
   };
 
-  /** Plan again with the same answers against a fresh read: what got done is now "already set up". */
+  /**
+   * Plan again with the same answers against a fresh read. What got done last
+   * run stays done: not every step shows up in the state (a stored key, a new
+   * login), and doing it twice would make a second one.
+   */
   const tryAgain = async () => {
     const fresh = await queryClient.fetchQuery({ queryKey: ['onboarding'], queryFn: () => api.get<OnboardingState>('/onboarding') }).catch(() => state);
-    setPlan(buildPlan(useCases, answers, { ...fresh, progress: fresh.progress ?? {} }, { newPassword }));
+    const next = buildPlan(useCases, answers, { ...fresh, progress: fresh.progress ?? {} }, { newPassword });
+    setPlan(next.map((st): PlanStep => (st.kind !== 'done' && outcome[st.id]?.status === 'done'
+      ? { kind: 'done', id: st.id, title: st.title, detail: st.detail }
+      : st)));
     setOutcome({});
     setPhase('review');
   };
@@ -231,7 +251,7 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
       : `${chosen.map((u) => u.title).join(' and ')}, lovely. I'll ask a few questions about ${chosen.length === 1 ? 'it' : 'each'}, then show you my plan before I change anything.`;
     return shell(
       chosen.length ? 'listening' : 'idle',
-      finishedBefore ? 'Shall we set up something else?' : "Let's set up Octipus together",
+      state.progress.completedAt ? 'Shall we set up something else?' : "Let's set up Octipus together",
       line,
       <>
         <div className="grid gap-3 sm:grid-cols-2">
@@ -424,7 +444,7 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
         {failed + later > 0 && (
           <button type="button" onClick={() => void tryAgain()} className="rounded-full border border-primary/50 px-4 py-2 text-on-surface">Finish the rest</button>
         )}
-        <button type="button" onClick={() => { setPhase('choose'); setPlan([]); setUseCases([]); }} className="rounded-full border border-outline-variant px-4 py-2">Set up something else</button>
+        <button type="button" onClick={() => { setEngaged(true); setPhase('choose'); setPlan([]); setUseCases([]); }} className="rounded-full border border-outline-variant px-4 py-2">Set up something else</button>
         {variant === 'home' && <button type="button" onClick={dismiss} className="text-on-surface-variant underline">Close the guide</button>}
       </div>
     </>,

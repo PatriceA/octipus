@@ -110,6 +110,20 @@ describe('PUT /api/onboarding/progress', () => {
     expect(prefs.onboarding).toMatchObject({ useCases: ['company'], dismissed: true, completedAt: expect.any(String) });
     expect(JSON.stringify(prefs)).not.toContain('sk-secret');
     expect((await send(adminApp, 'GET', '/api/onboarding')).body.progress).toMatchObject({ dismissed: true });
+    // The home page asks for this alone, before reading the whole state.
+    const saved = await send(adminApp, 'GET', '/api/onboarding/progress');
+    expect(saved.status).toBe(200);
+    expect(saved.body).toMatchObject({ dismissed: true, completedAt: expect.any(String) });
+  });
+
+  test('saves made at the same time all land', async () => {
+    await Promise.all([
+      send(userApp, 'PUT', '/api/onboarding/progress', { useCases: ['research'] }),
+      send(userApp, 'PUT', '/api/onboarding/progress', { dismissed: true }),
+      send(userApp, 'PUT', '/api/onboarding/progress', { completed: true }),
+    ]);
+    const saved = await send(userApp, 'GET', '/api/onboarding/progress');
+    expect(saved.body).toMatchObject({ useCases: ['research'], dismissed: true, completedAt: expect.any(String) });
   });
 });
 
@@ -129,6 +143,19 @@ describe('PUT /api/onboarding/standing-instructions', () => {
     expect(String(after[0].body)).toContain('Added by the setup guide');
     expect(String(after[0].body)).toContain('- Never send email.');
     expect((await send(userApp, 'GET', '/api/onboarding')).body.standingInstructions).toBe(true);
+
+    // Running the guide again with the same instructions adds nothing.
+    const same = await send(userApp, 'PUT', '/api/onboarding/standing-instructions', { body: '# HEARTBEAT\n\n- Never send email.' });
+    expect(same.body.appended).toBe(false);
+    const { rows: unchanged } = await queryRaw(`SELECT body FROM notes WHERE user_id = '${userId}' AND slug = 'heartbeat'`);
+    expect(unchanged[0].body).toBe(after[0].body);
+  });
+
+  test('an archived heartbeat note is not the standing instructions', async () => {
+    await executeRaw(`UPDATE notes SET archived_at = now() WHERE user_id = '${userId}' AND slug = 'heartbeat'`);
+    const { findStandingNote } = await import('@/core/heartbeat');
+    expect(await findStandingNote(userId)).toBeNull();
+    await executeRaw(`UPDATE notes SET archived_at = NULL WHERE user_id = '${userId}' AND slug = 'heartbeat'`);
   });
 
   test('the heartbeat finds a heartbeat note written inside a workspace (as the web app writes them)', async () => {

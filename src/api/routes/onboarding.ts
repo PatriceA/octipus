@@ -1,6 +1,6 @@
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
-import { readOnboardingState, writeProgress, writeStandingInstructions } from '@/core/onboarding/state';
+import { readOnboardingState, readProgress, writeProgress, writeStandingInstructions } from '@/core/onboarding/state';
 import { storableAnswers, USE_CASES } from '@/shared/onboarding/use-cases';
 import type { Answers, UseCaseId } from '@/shared/onboarding/types';
 import { isAuthenticated } from '@/security/principal';
@@ -20,6 +20,13 @@ export const onboardingRoutes = new Elysia({ prefix: '/onboarding' })
   .get('/', async ({ user, principal, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
     return readOnboardingState(user.id, Boolean(user.isAdmin));
+  }, { detail: { tags: ['onboarding'] } })
+
+  // Just the saved progress: one row read, for the home page to decide
+  // whether to show the guide before it asks for the full state.
+  .get('/progress', async ({ user, principal, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    return readProgress(user.id);
   }, { detail: { tags: ['onboarding'] } })
 
   .put('/progress', async ({ user, principal, body, set }) => {

@@ -649,7 +649,7 @@ export async function findStandingNote(userId: string): Promise<{ id: string; bo
   const [row] = await getDb()
     .select({ id: notes.id, body: notes.body, workspaceId: notes.workspaceId })
     .from(notes)
-    .where(and(eq(notes.userId, userId), eq(notes.slug, HEARTBEAT_NOTE_SLUG), notInSharedWorkspace(notes.workspaceId)))
+    .where(and(eq(notes.userId, userId), eq(notes.slug, HEARTBEAT_NOTE_SLUG), isNull(notes.archivedAt), notInSharedWorkspace(notes.workspaceId)))
     .orderBy(sql`${notes.workspaceId} IS NULL DESC`, desc(notes.pinned), desc(notes.updatedAt))
     .limit(1);
   return row ?? null;
