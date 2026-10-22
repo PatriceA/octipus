@@ -66,3 +66,20 @@ export function buildChildEnv(
   }
   return { ...out, ...extra };
 }
+
+/**
+ * The host variables an isolated child (a plugin package, docs/PLUGIN-PACKAGES.md)
+ * still gets: enough to find binaries, a home and a locale. Nothing else of
+ * the host's environment crosses, credential-looking or not.
+ */
+const MINIMAL_ENV_NAMES = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TZ', 'TMPDIR', 'TEMP', 'TMP', 'SystemRoot', 'ComSpec', 'PATHEXT', 'WINDIR'];
+
+/** The environment of an isolated child: the minimal host variables plus exactly `extra`. */
+export function buildIsolatedChildEnv(extra?: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const name of MINIMAL_ENV_NAMES) {
+    const v = process.env[name];
+    if (v !== undefined) out[name] = v;
+  }
+  return { ...out, ...extra };
+}

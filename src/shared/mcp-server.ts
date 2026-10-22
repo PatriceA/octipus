@@ -1,4 +1,17 @@
 import type { McpExposureConfig } from './mcp-exposure';
+import type { PluginToolEffect } from './plugin-package';
+
+/**
+ * The plugin package a server runs (docs/PLUGIN-PACKAGES.md). Set only on the
+ * servers the plugin service gives the bridge; never stored with the MCP
+ * servers an operator configures.
+ */
+export interface PluginBinding {
+  package: string;
+  version: string;
+  /** What each declared tool does; an undeclared tool is hidden and refused. */
+  tools: Record<string, PluginToolEffect>;
+}
 
 export interface MCPServer extends McpExposureConfig {
   id: string;
@@ -33,4 +46,10 @@ export interface MCPServer extends McpExposureConfig {
   sseUrl?: string;
   postUrl?: string;
   headers?: Record<string, string>;
+  /** A plugin package's server (see `PluginBinding`). */
+  plugin?: PluginBinding;
+  /** Hand a stdio server only its `env` and a minimal host environment. */
+  isolatedEnv?: boolean;
+  /** Run a stdio server in the shell sandbox with `root` as its only writable directory. */
+  sandbox?: { root: string; allowNetwork: boolean };
 }

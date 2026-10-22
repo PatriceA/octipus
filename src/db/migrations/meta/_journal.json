@@ -1030,6 +1030,13 @@
       "when": 1792749624550,
       "tag": "0146_records_forms",
       "breakpoints": true
+    },
+    {
+      "idx": 147,
+      "version": "7",
+      "when": 1792836024550,
+      "tag": "0147_plugin_packages",
+      "breakpoints": true
     }
   ]
 }

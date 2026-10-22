@@ -244,6 +244,11 @@ async function main() {
     // wait for it, bounded (MCPBridge.whenInitiallyConnected).
     const mcpBridge = getMCPBridge();
     void mcpBridge.startConnectAll().then(() => logger.info('MCP servers connected'));
+    // Plugin packages run as MCP servers too (docs/PLUGIN-PACKAGES.md); same rule: not awaited.
+    import('@/plugins/packages/service')
+      .then(({ syncPluginServers }) => syncPluginServers())
+      .then(() => logger.info('Plugin packages started'))
+      .catch((err) => logger.error({ err }, 'Plugin packages failed to start'));
 
     // Load hooks
     const hookManager = getHookManager();

@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn } from 'child_process';
-import { buildChildEnv } from '@/security/child-env';
+import { buildChildEnv, buildIsolatedChildEnv } from '@/security/child-env';
+import { wrapCommand } from '@/security/shell-sandbox';
 import { killProcessTree, windowsCmdShim } from '@/utils/proc';
 import type { CloseHandler, ErrorHandler, MCPTransport, MessageHandler } from './interface';
 
@@ -9,6 +10,14 @@ export interface StdioTransportOptions {
   env?: Record<string, string>;
   cwd?: string;
   stderrAsError?: boolean;
+  /** Hand the child only `env` and a minimal host environment (`buildIsolatedChildEnv`). */
+  isolatedEnv?: boolean;
+  /**
+   * Run the child in the shell sandbox (`security.shellSandbox`), with `root`
+   * as its only writable directory. With the sandbox off, it runs unwrapped
+   * (the mode decides, as for the shell tool).
+   */
+  sandbox?: { root: string; allowNetwork: boolean };
 }
 
 /**
@@ -21,14 +30,21 @@ export class StdioTransport implements MCPTransport {
   private errorHandlers: ErrorHandler[] = [];
   private closeHandlers: CloseHandler[] = [];
   private buffer = '';
+  private sandboxCleanup: (() => void) | null = null;
 
   constructor(options: StdioTransportOptions) {
     this.options = options;
   }
 
   async connect(): Promise<void> {
-    const env = buildChildEnv(this.options.env);
-    const run = windowsCmdShim([this.options.command, ...(this.options.args || [])], env, process.platform, this.options.cwd);
+    const env = this.options.isolatedEnv ? buildIsolatedChildEnv(this.options.env) : buildChildEnv(this.options.env);
+    let argv = [this.options.command, ...(this.options.args || [])];
+    if (this.options.sandbox) {
+      const wrapped = wrapCommand(argv, { workspaceRoot: this.options.sandbox.root, allowNetwork: this.options.sandbox.allowNetwork, path: env.PATH });
+      argv = wrapped.argv;
+      this.sandboxCleanup = wrapped.cleanup;
+    }
+    const run = windowsCmdShim(argv, env, process.platform, this.options.cwd);
     // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- operator-configured MCP server; shell only for a Windows .cmd with every arg quoted (windowsCmdShim)
     this.process = spawn(run.argv[0], run.argv.slice(1), {
       cwd: this.options.cwd,
@@ -60,6 +76,8 @@ export class StdioTransport implements MCPTransport {
     });
 
     this.process.on('close', () => {
+      this.sandboxCleanup?.();
+      this.sandboxCleanup = null;
       for (const handler of this.closeHandlers) {
         handler();
       }

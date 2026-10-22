@@ -20,6 +20,10 @@ import { StreamableHTTPTransport } from './transports/streamable-http';
 import { fileAt, writeFileAt } from '@/utils/fs-file';
 import { mcpResultLimit } from '@/core/tool-output-spill';
 import { applyServerEdit, configView, mergeServerConfigs } from './config-store';
+import type { PluginToolEffect } from '@/shared/plugin-package';
+
+/** The id prefix of a plugin package's MCP server: `plugin-<package name>`. */
+export const PLUGIN_SERVER_PREFIX = 'plugin-';
 
 export interface MCPServerConnection {
   id: string;
@@ -76,6 +80,17 @@ export class MCPBridge extends EventEmitter {
   private connections: Map<string, MCPServerConnection> = new Map();
   private serverConfigs: MCPServer[] = [];
   private persistedConfigs: MCPServer[] = [];
+  /**
+   * The servers of enabled plugin packages (docs/PLUGIN-PACKAGES.md), given by
+   * the plugin service (`setPluginServers`). Kept apart from `serverConfigs`:
+   * they are never saved with the operator's MCP servers, and the MCP page's
+   * edit, remove and toggle do not reach them.
+   */
+  private pluginServers: MCPServer[] = [];
+  /** Why a plugin server is not connected, by server id. */
+  private pluginProblems: Map<string, string> = new Map();
+  /** The plugin sync in flight; the next one waits for it. */
+  private pluginSync: Promise<void> = Promise.resolve();
   // Auto-reconnect state for unexpected transport closes (server crash / OS kill).
   private reconnectAttempts: Map<string, number> = new Map();
   private reconnectTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
@@ -154,6 +169,8 @@ export class MCPBridge extends EventEmitter {
       env: server.env,
       cwd: server.cwd,
       stderrAsError: server.stderrAsError,
+      isolatedEnv: server.isolatedEnv,
+      sandbox: server.sandbox,
     });
   }
 
@@ -161,6 +178,9 @@ export class MCPBridge extends EventEmitter {
    * Connect to an MCP server
    */
   async connect(server: MCPServer): Promise<MCPServerConnection> {
+    if (server.id.startsWith(PLUGIN_SERVER_PREFIX) && !server.plugin) {
+      throw new Error(`MCP server id "${server.id}" belongs to plugin packages; it is not started from an MCP server config`);
+    }
     if (this.connections.has(server.id)) {
       return this.connections.get(server.id)!;
     }
@@ -310,6 +330,80 @@ export class MCPBridge extends EventEmitter {
   }
 
   /**
+   * A server's config. A `plugin-` id is only ever a plugin package's: an
+   * operator config claiming one (stored by hand, or in mcp-servers.json) is
+   * never used, so it cannot stand in for a package and drop its declared
+   * tool effects.
+   */
+  private configOf(serverId: string): MCPServer | undefined {
+    if (serverId.startsWith(PLUGIN_SERVER_PREFIX)) return this.pluginServers.find((s) => s.id === serverId);
+    return this.serverConfigs.find((s) => s.id === serverId);
+  }
+
+  /** The config a plugin server runs with now, if any (for a sync that could not prepare a new one). */
+  pluginServerConfig(serverId: string): MCPServer | undefined {
+    const server = this.pluginServers.find((s) => s.id === serverId);
+    return server ? structuredClone(server) : undefined;
+  }
+
+  /**
+   * Replace the plugin servers (docs/PLUGIN-PACKAGES.md). A server that is
+   * gone or whose config changed is disconnected; every enabled one is
+   * (re)connected. A connect failure is recorded as that package's problem
+   * (`pluginProblem`) and logged; it never fails the others.
+   */
+  setPluginServers(next: MCPServer[], problems: ReadonlyMap<string, string> = new Map()): Promise<void> {
+    // One sync at a time: two overlapping ones would both connect a server
+    // that is not connected yet and orphan one of the two children.
+    const run = this.pluginSync.then(() => this.applyPluginServers(next, problems));
+    this.pluginSync = run.catch((err: unknown) => coreLogger.error({ err }, 'Plugin server sync failed'));
+    return run;
+  }
+
+  private async applyPluginServers(next: MCPServer[], problems: ReadonlyMap<string, string>): Promise<void> {
+    for (const server of next) {
+      if (!server.id.startsWith(PLUGIN_SERVER_PREFIX) || !server.plugin) throw new Error(`Not a plugin server: ${server.id}`);
+    }
+    const nextById = new Map(next.map((s) => [s.id, s]));
+    for (const old of this.pluginServers) {
+      const replacement = nextById.get(old.id);
+      if (!replacement || !replacement.isEnabled || JSON.stringify(replacement) !== JSON.stringify(old)) {
+        await this.disconnect(old.id);
+      }
+    }
+    for (const id of this.pluginProblems.keys()) if (!nextById.has(id)) this.pluginProblems.delete(id);
+    this.pluginServers = structuredClone(next);
+    const enabled = this.pluginServers.filter((s) => s.isEnabled && !this.isConnected(s.id));
+    const results = await Promise.allSettled(enabled.map((s) => this.connect(s)));
+    for (const [id, problem] of problems) this.pluginProblems.set(id, problem);
+    results.forEach((result, i) => {
+      const id = enabled[i].id;
+      if (result.status === 'fulfilled') {
+        if (!problems.has(id)) this.pluginProblems.delete(id);
+        return;
+      }
+      const message = result.reason instanceof Error ? result.reason.message : String(result.reason);
+      this.pluginProblems.set(id, message);
+      coreLogger.error({ err: result.reason, serverId: id }, 'Plugin package server failed to start');
+    });
+  }
+
+  /** Why a plugin server is not connected, or null. */
+  pluginProblem(serverId: string): string | null {
+    return this.pluginProblems.get(serverId) ?? null;
+  }
+
+  /**
+   * What a plugin package declares a tool does; `undeclared` for a tool it
+   * does not declare; null when the server is not a plugin package's.
+   */
+  pluginToolEffect(serverId: string, toolName: string): PluginToolEffect | 'undeclared' | null {
+    const plugin = this.configOf(serverId)?.plugin;
+    if (!plugin) return null;
+    return Object.hasOwn(plugin.tools, toolName) ? plugin.tools[toolName] : 'undeclared';
+  }
+
+  /**
    * Disconnect from an MCP server
    */
   async disconnect(serverId: string): Promise<void> {
@@ -355,7 +449,7 @@ export class MCPBridge extends EventEmitter {
    */
   async ensureConnected(serverId: string): Promise<void> {
     if (this.connections.get(serverId)?.status === 'connected') return;
-    const server = this.serverConfigs.find((s) => s.id === serverId);
+    const server = this.configOf(serverId);
     if (!server || !server.isEnabled || this.intentionalDisconnects.has(serverId)) return;
     const stale = this.connections.get(serverId);
     if (stale) {
@@ -404,7 +498,7 @@ export class MCPBridge extends EventEmitter {
         stale.transport.close();
         stale.protocol.cleanup();
       }
-      const latest = this.serverConfigs.find(config => config.id === server.id);
+      const latest = this.configOf(server.id);
       if (!latest?.isEnabled) return;
       this.connect(latest).catch((err: unknown) => {
         coreLogger.error({ err, serverId: server.id }, 'MCP reconnect attempt failed');
@@ -429,7 +523,13 @@ export class MCPBridge extends EventEmitter {
     await this.loadConfig();
 
     // In parallel: one slow or dead server must not hold up the others.
-    const enabled = this.serverConfigs.filter((server) => server.isEnabled);
+    // A stored `plugin-` id is a plugin package's name; such an entry is ignored.
+    for (const server of this.serverConfigs) {
+      if (server.id.startsWith(PLUGIN_SERVER_PREFIX)) {
+        coreLogger.warn({ serverId: server.id }, 'Ignoring an MCP server config whose id belongs to plugin packages');
+      }
+    }
+    const enabled = this.serverConfigs.filter((server) => server.isEnabled && !server.id.startsWith(PLUGIN_SERVER_PREFIX));
     const results = await Promise.allSettled(enabled.map((server) => this.connect(server)));
     results.forEach((result, i) => {
       if (result.status === 'rejected') {
@@ -637,7 +737,7 @@ export class MCPBridge extends EventEmitter {
 
   /** The config a server's exposure is read from: its live connection's, else the stored one. */
   private exposureConfig(serverId: string): McpExposureConfig | undefined {
-    return this.connections.get(serverId)?.server ?? this.serverConfigs.find((s) => s.id === serverId);
+    return this.connections.get(serverId)?.server ?? this.configOf(serverId);
   }
 
   /** Effective exposure of one tool; a server we know nothing about has the default. */
@@ -648,7 +748,7 @@ export class MCPBridge extends EventEmitter {
   /** Result ceiling for one call (src/core/tool-output-spill.ts `mcpResultLimit`). */
   maxResultChars(serverId: string, toolName: string, args: Record<string, unknown> = {}): number {
     const tool = this.connections.get(serverId)?.tools.find((t) => t.name === toolName);
-    return mcpResultLimit(this.connections.get(serverId)?.server ?? this.serverConfigs.find((s) => s.id === serverId), tool, args, toolName);
+    return mcpResultLimit(this.connections.get(serverId)?.server ?? this.configOf(serverId), tool, args, toolName);
   }
 
   /** A server whose own exposure is `hidden` offers no resources or prompts either. */
@@ -670,7 +770,7 @@ export class MCPBridge extends EventEmitter {
    * prompt cache and cold-start resumed CLI sessions).
    */
   serversSection(opts: { codemode: boolean }): string | undefined {
-    const listings: ServerListing[] = this.serverConfigs
+    const listings: ServerListing[] = [...this.serverConfigs, ...this.pluginServers]
       .filter((server) => server.isEnabled)
       .map((server) => ({ id: server.id, description: server.description, exposures: configuredExposures(server) }));
     return renderServersSection(listings, opts);
@@ -731,6 +831,9 @@ export class MCPBridge extends EventEmitter {
    * Add a new MCP server config and persist to file
    */
   async addServer(server: MCPServer): Promise<void> {
+    if (server.id.startsWith(PLUGIN_SERVER_PREFIX) || server.plugin) {
+      throw new Error(`Server ids starting with "${PLUGIN_SERVER_PREFIX}" belong to plugin packages; install the package instead`);
+    }
     await this.withConfigMutation(async () => {
       const previous = [...this.serverConfigs];
       const idx = this.serverConfigs.findIndex((s) => s.id === server.id);
