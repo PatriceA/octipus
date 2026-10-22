@@ -642,6 +642,8 @@ export const heartbeatConfigSchema = z.object({
   /** Probe: calendar events starting within `calendarLookaheadMinutes` (one request per connected provider). */
   probeCalendar: z.boolean().default(true),
   calendarLookaheadMinutes: z.number().int().min(5).max(1440).default(60),
+  /** Probe: new inbox mail, for users who turned on "Watch my inbox" (one or two mailbox requests per run). */
+  probeEmail: z.boolean().default(true),
 });
 
 /**

@@ -1,11 +1,13 @@
 import type { AgentContext, ToolManifest } from '@/core/types';
+import { saveReplyDraft } from '@/core/email/drafts';
+import { EMAIL_OUTCOMES, isEmailOutcome, mailboxProvider, markEmailHandled } from '@/core/email/watch';
 import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 
 export class EmailProcessorTool extends BaseTool {
   readonly id = 'email-processor';
   readonly name = 'Email Processor';
   readonly version = '1.0.0';
-  readonly description = 'Process emails one-by-one with AI-driven classification and actions. Supports batch processing with per-email decisions.';
+  readonly description = 'Process emails one-by-one with AI-driven classification and actions. Supports batch processing with per-email decisions, reply drafts saved in the mailbox, and recording what was done with each email.';
 
   override async checkAvailability(): Promise<ToolAvailability> {
     // Requires at least one email provider (Google or Microsoft) to be configured
@@ -29,10 +31,14 @@ export class EmailProcessorTool extends BaseTool {
       description: this.description,
       permissions: [
         { action: 'process', description: 'Process and classify emails', defaultLevel: 'ALLOW' },
+        // A draft stays in the owner's mailbox until they send it: nothing leaves.
+        { action: 'draft', description: 'Save reply drafts in your mailbox (never sent)', defaultLevel: 'ALLOW' },
       ],
       tools: [
         { name: 'process_emails', description: 'Process unread emails one by one', parameters: { provider: { type: 'string', description: 'Email provider: gmail or outlook', required: true }, query: { type: 'string', description: 'Search query' }, limit: { type: 'number', description: 'Batch size' } }, returns: 'Processing results per email' },
         { name: 'get_email_summary', description: 'Get a structured summary of a single email for processing', parameters: { provider: { type: 'string', description: 'Email provider: gmail or outlook', required: true }, id: { type: 'string', description: 'Email message ID', required: true } }, returns: 'Structured email summary' },
+        { name: 'save_reply_draft', description: 'Save a reply to an email as a draft in the mailbox, for the owner to review and send', parameters: { provider: { type: 'string', description: 'Email provider: gmail or outlook', required: true }, id: { type: 'string', description: 'Email message ID to reply to', required: true }, body: { type: 'string', description: 'Reply text', required: true } }, returns: 'The saved draft' },
+        { name: 'mark_email_handled', description: 'Record what was done with an email so the inbox watch does not show it again', parameters: { provider: { type: 'string', description: 'Email provider: gmail or outlook', required: true }, id: { type: 'string', description: 'Email message ID', required: true }, outcome: { type: 'string', description: EMAIL_OUTCOMES.join(', '), required: true } }, returns: 'Confirmation' },
       ],
     };
   }
@@ -191,6 +197,58 @@ export class EmailProcessorTool extends BaseTool {
 
         const result = await readHandler.execute({ id }, context);
         return typeof result === 'string' ? JSON.parse(result) : result;
+      },
+      { permissionAction: 'process' },
+    );
+
+    this.registerTool(
+      'save_reply_draft',
+      'Save a reply to an email as a DRAFT in the owner\'s mailbox (Gmail Drafts / Outlook Drafts), threaded under the original. Nothing is sent: the owner reviews and sends it. Use this instead of sending whenever an answer is needed and you were not explicitly told to send.',
+      createParameterSchema({
+        provider: { type: 'string', description: 'Email provider: gmail or outlook', required: true },
+        id: { type: 'string', description: 'The message ID of the email being answered', required: true },
+        body: { type: 'string', description: 'The reply text (plain text, no quoted original)', required: true },
+      }),
+      async (args: Record<string, unknown>, context: AgentContext) => {
+        const provider = mailboxProvider(args.provider);
+        if (!provider) return { error: 'provider must be gmail or outlook' };
+        if (typeof args.id !== 'string' || !args.id) return { error: 'id is required' };
+        if (typeof args.body !== 'string' || !args.body.trim()) return { error: 'body is required' };
+        try {
+          const draft = await saveReplyDraft(context.userId, provider, args.id, args.body);
+          return { saved: true, ...draft, note: 'Saved as a draft in the mailbox. It was NOT sent.' };
+        } catch (err) {
+          return { error: (err as Error).message };
+        }
+      },
+      { permissionAction: 'draft' },
+    );
+
+    this.registerTool(
+      'mark_email_handled',
+      'Record what was done with an email: no_action, task, notified, drafted, replied, archived or other. The inbox watch (heartbeat) then does not show it again. Call it for every email you were asked to look at, including the ones that needed nothing.',
+      createParameterSchema({
+        provider: { type: 'string', description: 'Email provider: gmail or outlook', required: true },
+        id: { type: 'string', description: 'Email message ID', required: true },
+        outcome: { type: 'string', description: `One of: ${EMAIL_OUTCOMES.join(', ')}`, required: true },
+        note: { type: 'string', description: 'One line on what you did, for the owner' },
+        task_id: { type: 'string', description: 'The task you created for it, if any' },
+      }),
+      async (args: Record<string, unknown>, context: AgentContext) => {
+        const provider = mailboxProvider(args.provider);
+        if (!provider) return { error: 'provider must be gmail or outlook' };
+        if (typeof args.id !== 'string' || !args.id || args.id.length > 500) return { error: 'id is required' };
+        if (!isEmailOutcome(args.outcome)) return { error: `outcome must be one of: ${EMAIL_OUTCOMES.join(', ')}` };
+        const taskId = typeof args.task_id === 'string' && /^[0-9a-f-]{36}$/i.test(args.task_id) ? args.task_id : null;
+        await markEmailHandled({
+          userId: context.userId,
+          provider,
+          messageId: args.id,
+          outcome: args.outcome,
+          note: typeof args.note === 'string' ? args.note : null,
+          taskId,
+        });
+        return { recorded: true, id: args.id, outcome: args.outcome };
       },
       { permissionAction: 'process' },
     );

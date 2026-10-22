@@ -16,6 +16,8 @@ const fx = vi.hoisted(() => ({
   owned: new Set<string>(),
   group: { id: 'g1' } as { id: string } | null,
   active: true,
+  /** The user's linked identities ("notify me" targets). */
+  identities: [] as Array<{ channelType: string; externalId: string; handle?: string }>,
 }));
 vi.mock('@/core/agent/service', () => ({
   getAgentService: () => ({
@@ -33,7 +35,7 @@ vi.mock('./ownership', async (importOriginal) => {
   const { getUMI } = await import('./interface');
   return {
     ...actual,
-    loadNotifyScope: async (userId: string) => ({ userId, identities: [], owned: new Set(), allowlist: new Set() }),
+    loadNotifyScope: async (userId: string) => ({ userId, identities: fx.identities, owned: new Set(), allowlist: new Set() }),
     resolveTarget: async (_scope: unknown, channelType: string, channelId: string) => {
       const target = `${channelType}:${channelId}`;
       return fx.owned.has(target)
@@ -56,6 +58,7 @@ const S_TEAMS = '22222222-2222-4222-8222-222222222222';
 const S_GROUPCHAT = '33333333-3333-4333-8333-333333333333';
 const S_THREAD = '44444444-4444-4444-8444-444444444444';
 const S_WEB = '55555555-5555-4555-8555-555555555555';
+const S_HEARTBEAT = '66666666-6666-4666-8666-666666666666';
 
 const sessions: Record<string, object> = {
   [S_DM]: { id: S_DM, userId: ANNA, channelType: 'telegram', channelId: '1001' },
@@ -63,6 +66,7 @@ const sessions: Record<string, object> = {
   [S_GROUPCHAT]: { id: S_GROUPCHAT, userId: ANNA, channelType: 'telegram', channelId: '-500' },
   [S_THREAD]: { id: S_THREAD, userId: ANNA, channelType: 'slack', channelId: 'C1', threadId: '90.0', groupChannelId: 'g1' },
   [S_WEB]: { id: S_WEB, userId: ANNA, channelType: 'webchat', channelId: ANNA },
+  [S_HEARTBEAT]: { id: S_HEARTBEAT, userId: ANNA, channelType: 'heartbeat', channelId: ANNA },
 };
 
 let n = 0;
@@ -77,6 +81,7 @@ beforeEach(() => {
   fx.owned = new Set(['telegram:1001', 'teams:a:teams-conv']);
   fx.group = { id: 'g1' };
   fx.active = true;
+  fx.identities = [];
   vi.spyOn(sessionRepository, 'findById').mockImplementation(async (id: string) => (sessions[id] ?? null) as never);
   vi.spyOn(userRepository, 'findById').mockResolvedValue({ id: ANNA, username: 'anna' } as never);
   send = vi.spyOn(getUMI(), 'send').mockResolvedValue('ts');
@@ -319,5 +324,42 @@ describe('approvals in a group-channel thread', () => {
     expect(send).not.toHaveBeenCalled();
     expect(sendPrivate).not.toHaveBeenCalled();
     expect(fx.resolve).not.toHaveBeenCalled(); // not declined: it expires on its own after an hour
+  });
+});
+
+describe('approvals from a run nobody is watching', () => {
+  test("go to the owner's own chats with the details, and a yes there answers it", async () => {
+    fx.identities = [{ channelType: 'telegram', externalId: '1001' }];
+    const id = await raise(S_HEARTBEAT, { summary: 'Pipeline "Fix login" — plan (3 items)' });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]!.slice(0, 2)).toEqual(['telegram', '1001']);
+    expect(sentText()).toContain('plan (3 items)');
+    expect(sentText()).toContain('nobody was watching');
+    expect(await newestApprovalPostedAt(reply('yes'))).toBeGreaterThan(0);
+    expect(await tryResolveApprovalFromChannel(reply('yes'))).toBe(true);
+    expect(fx.resolve).toHaveBeenCalledWith(id, true, 'yes', { forUserId: ANNA, resolvedBy: ANNA });
+    // Confirmed in the chat the reply came from.
+    expect(send.mock.calls.at(-1)!.slice(0, 2)).toEqual(['telegram', '1001']);
+  });
+
+  test('a reply from another private chat of the owner on that platform answers it (a Slack DM)', async () => {
+    fx.identities = [{ channelType: 'slack', externalId: 'U1' }];
+    fx.owned = new Set(['slack:U1', 'slack:D9']);
+    const id = await raise(S_HEARTBEAT);
+    expect(await tryResolveApprovalFromChannel(reply('yes', { channelType: 'slack', channelId: 'D9' }))).toBe(true);
+    expect(fx.resolve).toHaveBeenCalledWith(id, true, 'yes', expect.anything());
+    expect(send.mock.calls.at(-1)!.slice(0, 2)).toEqual(['slack', 'D9']);
+  });
+
+  test('a reply in a group the owner talks in does not answer it', async () => {
+    fx.identities = [{ channelType: 'telegram', externalId: '1001' }];
+    await raise(S_HEARTBEAT);
+    expect(await tryResolveApprovalFromChannel(reply('yes', { channelId: '-500' }))).toBe(false);
+    expect(fx.resolve).not.toHaveBeenCalled();
+  });
+
+  test('with no linked chat it is posted nowhere (the web app and notifications still show it)', async () => {
+    await raise(S_HEARTBEAT);
+    expect(send).not.toHaveBeenCalled();
   });
 });

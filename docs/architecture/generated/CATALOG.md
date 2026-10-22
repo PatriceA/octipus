@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-522 mounted routes across 71 route files. The path is the full one, group prefix included — what a client actually calls.
+525 mounted routes across 72 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -150,6 +150,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/email/message/:id/draft` | `src/api/routes/email.ts` |
 | POST | `/api/email/message/:id/mark-read` | `src/api/routes/email.ts` |
 | POST | `/api/email/message/:id/reply-options` | `src/api/routes/email.ts` |
+| POST | `/api/email/message/:id/save-draft` | `src/api/routes/email.ts` |
 | POST | `/api/email/message/:id/summarize` | `src/api/routes/email.ts` |
 | POST | `/api/email/message/:id/task` | `src/api/routes/email.ts` |
 | POST | `/api/email/message/:id/unarchive` | `src/api/routes/email.ts` |
@@ -187,6 +188,8 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/health/ready` | `src/api/routes/health.ts` |
 | GET | `/api/health/storage` | `src/api/routes/health.ts` |
 | GET | `/api/health/time` | `src/api/routes/health.ts` |
+| GET | `/api/heartbeat/me` | `src/api/routes/heartbeat.ts` |
+| PUT | `/api/heartbeat/me` | `src/api/routes/heartbeat.ts` |
 | GET | `/api/hooks` | `src/api/routes/hooks.ts` |
 | POST | `/api/hooks` | `src/api/routes/hooks.ts` |
 | DELETE | `/api/hooks/:id` | `src/api/routes/hooks.ts` |
@@ -555,21 +558,21 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `utils` | 1 |
 | `api` | `capabilities` | 1 |
 | `api` | `channels` | 22 |
-| `api` | `config` | 22 |
+| `api` | `config` | 23 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 135 |
-| `api` | `db` | 114 |
+| `api` | `core` | 141 |
+| `api` | `db` | 115 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 4 |
 | `api` | `models` | 39 |
 | `api` | `plugins` | 1 |
-| `api` | `security` | 132 |
+| `api` | `security` | 133 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 11 |
 | `api` | `skills` | 6 |
 | `api` | `tools` | 4 |
-| `api` | `utils` | 66 |
+| `api` | `utils` | 68 |
 | `api` | `voice` | 23 |
 | `capabilities` | `db` | 2 |
 | `capabilities` | `models` | 1 |
@@ -580,7 +583,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `channels` | `core` | 38 |
 | `channels` | `db` | 41 |
 | `channels` | `models` | 6 |
-| `channels` | `security` | 22 |
+| `channels` | `security` | 23 |
 | `channels` | `shared` | 5 |
 | `channels` | `utils` | 23 |
 | `channels` | `voice` | 2 |
@@ -602,17 +605,17 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `channels` | 11 |
 | `core` | `config` | 53 |
 | `core` | `connectors` | 3 |
-| `core` | `db` | 346 |
+| `core` | `db` | 353 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 9 |
-| `core` | `models` | 115 |
+| `core` | `models` | 116 |
 | `core` | `security` | 160 |
 | `core` | `services` | 2 |
 | `core` | `shared` | 33 |
 | `core` | `skills` | 11 |
 | `core` | `tools` | 21 |
-| `core` | `utils` | 198 |
+| `core` | `utils` | 202 |
 | `core` | `voice` | 1 |
 | `db` | `config` | 4 |
 | `db` | `core` | 18 |
@@ -631,7 +634,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `extensions` | `utils` | 4 |
 | `hooks` | `channels` | 2 |
 | `hooks` | `config` | 2 |
-| `hooks` | `core` | 13 |
+| `hooks` | `core` | 14 |
 | `hooks` | `db` | 13 |
 | `hooks` | `security` | 1 |
 | `hooks` | `shared` | 1 |
@@ -685,7 +688,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `channels` | 2 |
 | `tools` | `config` | 3 |
 | `tools` | `connectors` | 2 |
-| `tools` | `core` | 88 |
+| `tools` | `core` | 90 |
 | `tools` | `db` | 31 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |

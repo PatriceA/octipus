@@ -189,6 +189,17 @@ export default function EmailPage() {
     } finally { setBusy(''); }
   };
 
+  // Keep the reply in the mailbox's own Drafts, to finish from any mail app.
+  const saveDraft = async () => {
+    if (!draft || !openMsg) return;
+    setBusy('save-draft');
+    try {
+      const res = await api.post<{ saved?: boolean; error?: string }>(`/email/message/${openMsg.id}/save-draft`, { body: draft.body });
+      if (res.error) setError(res.error);
+      else { setDraft(null); setSummary('Saved to your mailbox drafts. Nothing was sent.'); }
+    } finally { setBusy(''); }
+  };
+
   const toggleApplyLabels = (on: boolean) => {
     setApplyLabelsOn(on);
     try { localStorage.setItem('email.applyLabels', on ? 'on' : 'off'); } catch { /* preference only */ }
@@ -491,6 +502,9 @@ export default function EmailPage() {
                     <div className="flex gap-2">
                       <button onClick={send} disabled={busy === 'send'} className="px-3 py-1.5 text-sm bg-linear-to-r from-primary to-primary-container text-on-primary rounded-full hover:opacity-90 disabled:opacity-50 inline-flex items-center gap-1.5">
                         <Send className="w-3.5 h-3.5" /> Send
+                      </button>
+                      <button onClick={saveDraft} disabled={busy === 'save-draft'} title="Save this reply in your mailbox's Drafts folder without sending it" className="px-3 py-1.5 text-sm border border-outline-variant/30 text-on-surface rounded-full hover:bg-surface-container-high disabled:opacity-50 inline-flex items-center gap-1.5">
+                        <FileText className="w-3.5 h-3.5" /> Save to drafts
                       </button>
                       <button onClick={() => setDraft(null)} className="px-3 py-1.5 text-sm text-on-surface-variant hover:text-on-surface">Discard</button>
                     </div>

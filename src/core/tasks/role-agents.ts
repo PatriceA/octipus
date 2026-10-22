@@ -28,6 +28,11 @@ export interface RoleAgentRow {
   hookId: string | null;
   /** The role is in the registry (an unknown one cannot be turned on). */
   known: boolean;
+  /**
+   * The pipeline template (id) the role's agent runs each task through, or
+   * null when it works tasks itself (core/tasks/role-pipelines.ts).
+   */
+  pipelineTemplate: string | null;
 }
 
 export interface RoleAgentsView {
@@ -72,7 +77,7 @@ export async function listRoleAgents(userId: string): Promise<RoleAgentsView> {
   const row = (role: string): RoleAgentRow => {
     let r = rows.get(role);
     if (!r) {
-      r = { role, activeTasks: 0, totalTasks: 0, enabled: false, hookId: null, known: Object.hasOwn(ROLE_CONFIGS, role) };
+      r = { role, activeTasks: 0, totalTasks: 0, enabled: false, hookId: null, known: Object.hasOwn(ROLE_CONFIGS, role), pipelineTemplate: null };
       rows.set(role, r);
     }
     return r;
@@ -83,7 +88,11 @@ export async function listRoleAgents(userId: string): Promise<RoleAgentsView> {
     if (!role) continue;
     const r = row(role);
     // Ordered enabled-first: the first hook seen is the one that runs.
-    if (r.hookId === null) r.hookId = hook.id;
+    if (r.hookId === null) {
+      r.hookId = hook.id;
+      const template = hook.triggerConfig?.pipelineTemplate;
+      r.pipelineTemplate = typeof template === 'string' && template ? template : null;
+    }
     r.enabled ||= hook.isEnabled;
   }
   return {
@@ -103,4 +112,20 @@ export async function roleAgentToggleError(role: string, enabled: boolean): Prom
   if (!enabled) return null;
   const { ROLE_CONFIGS } = await import('@/core/agent/roles');
   return Object.hasOwn(ROLE_CONFIGS, role) ? null : `Unknown role "${role}"`;
+}
+
+/**
+ * Set how the role's agent works its tasks: through `templateId` (already
+ * resolved by `resolveRoleTemplate`), or itself (null). Written on every
+ * heartbeat hook of the role, so a duplicate that is turned on later works
+ * the same way. Merged into the stored config, never replacing it.
+ */
+export async function setRolePipelineTemplate(userId: string, role: string, templateId: string | null): Promise<void> {
+  const config = templateId === null
+    ? sql`${hooks.triggerConfig} - 'pipelineTemplate'`
+    : sql`${hooks.triggerConfig} || ${JSON.stringify({ pipelineTemplate: templateId })}::jsonb`;
+  await getDb()
+    .update(hooks)
+    .set({ triggerConfig: config, updatedAt: new Date() })
+    .where(and(eq(hooks.userId, userId), eq(hooks.trigger, 'heartbeat'), sql`${hooks.triggerConfig}->>'role' = ${role}`));
 }

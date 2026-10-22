@@ -38,6 +38,7 @@ interface PipelineStep {
   producesPlan?: boolean;
   maxPlanItems?: number;
   requiresApproval?: boolean;
+  autoApproveUnattended?: boolean;
   promptTemplate?: string;
   stageType?: 'standard' | 'qa_validation' | 'human_input';
   maxRetries?: number;
@@ -647,11 +648,28 @@ function TemplateEditor({
                           <input
                             type="checkbox"
                             checked={step.requiresApproval ?? false}
-                            onChange={e => updateStep(i, { requiresApproval: e.target.checked })}
+                            onChange={e => updateStep(i, { requiresApproval: e.target.checked, ...(e.target.checked ? {} : { autoApproveUnattended: undefined }) })}
                             className="rounded border-outline-variant text-primary focus:ring-primary"
                           />
                           <span className="text-sm text-on-surface-variant">Require approval before running</span>
                         </label>
+                        {step.requiresApproval && (
+                          <label className="flex items-start gap-2 cursor-pointer pl-6">
+                            <input
+                              type="checkbox"
+                              checked={!!step.autoApproveUnattended}
+                              onChange={e => updateStep(i, { autoApproveUnattended: e.target.checked || undefined })}
+                              className="mt-0.5 rounded border-outline-variant text-primary focus:ring-primary"
+                            />
+                            <span className="text-sm text-on-surface-variant">
+                              Approve automatically when no one is watching
+                              <span className="block text-xs text-on-surface-variant/70">
+                                For runs started by a role agent, the heartbeat or the API. You are still asked when you start the run yourself.
+                                {loopOf(loops, i)?.start === i ? ' On this step it approves the plan.' : ''}
+                              </span>
+                            </span>
+                          </label>
+                        )}
 
                         {/* Ask a person instead of an agent. Mutually exclusive
                             with QA: a human step runs no worker, so it has no
@@ -768,7 +786,10 @@ function loopSummary(loop: PlanLoopInfo, steps: PipelineStep[]): string {
     ? `the plan written by step ${loop.plannerIndex + 1} (${steps[loop.plannerIndex]?.name || 'Untitled'})`
     : 'the plan (no earlier step writes one — it must come from a linked work plan)';
   const cap = loop.maxItems ? `, at most ${loop.maxItems} item${loop.maxItems === 1 ? '' : 's'} per run` : '';
-  const approval = loop.approvesPlan ? '; you approve the plan once before it starts' : '';
+  const approval = !loop.approvesPlan ? ''
+    : steps[loop.start]?.autoApproveUnattended
+      ? '; you approve the plan once before it starts (automatically when no one is watching the run)'
+      : '; you approve the plan once before it starts';
   return `${range} once for each item of ${source}${cap}${approval}.`;
 }
 

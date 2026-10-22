@@ -392,6 +392,8 @@ interface RoleAgentRow {
   enabled: boolean;
   hookId: string | null;
   known: boolean;
+  /** Template id the agent runs each task through; null = it works tasks itself. Older servers leave it out. */
+  pipelineTemplate?: string | null;
 }
 
 /**
@@ -406,6 +408,7 @@ export function RoleAgentsPanel({ refreshKey }: { refreshKey: string }) {
   const [data, setData] = useState<RoleAgentsData | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const [templates, setTemplates] = useState<{ id: string; name: string }[]>([]);
 
   const load = useCallback(async () => {
     try {
@@ -420,6 +423,27 @@ export function RoleAgentsPanel({ refreshKey }: { refreshKey: string }) {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- re-read when the task set changes; load sets state from the server
     load();
   }, [load, refreshKey]);
+
+  // The pipeline templates a role agent can run its tasks through, read when the panel opens.
+  useEffect(() => {
+    if (!open) return;
+    api.get<{ templates?: { id: string; name: string }[] }>('/pipelines/templates')
+      .then((res) => setTemplates((res.templates ?? []).map((t) => ({ id: t.id, name: t.name }))))
+      .catch(() => setTemplates([]));
+  }, [open]);
+
+  const chooseTemplate = async (row: RoleAgentRow, pipelineTemplate: string | null) => {
+    setBusy(row.role);
+    try {
+      const res = await api.put<{ error?: string }>('/tasks/role-agents', { role: row.role, enabled: true, pipelineTemplate });
+      if (res?.error) setError(res.error);
+      await load();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const toggle = async (row: RoleAgentRow) => {
     setBusy(row.role);
@@ -460,6 +484,8 @@ export function RoleAgentsPanel({ refreshKey }: { refreshKey: string }) {
         <div className="px-3 pb-3 space-y-2">
           <p className="text-xs text-on-surface-variant">
             A role agent wakes on the heartbeat, checks out ready tasks assigned to its role, works them and logs progress in the comments.
+            Set it to work each task through a pipeline and every task gets a full run of that pipeline instead, one task per heartbeat;
+            a run that does not finish hands the task back to you.
             Role agents are yours across all workspaces: each works every task assigned to its role, whichever workspace it is in.
           </p>
           {heartbeatOff && (
@@ -480,7 +506,7 @@ export function RoleAgentsPanel({ refreshKey }: { refreshKey: string }) {
           {error && <p className="text-xs text-error">{error}</p>}
           <ul className="space-y-1">
             {rows.map((r) => (
-              <li key={r.role} className="flex items-center gap-3 text-sm" data-testid="role-agent">
+              <li key={r.role} className="flex flex-wrap items-center gap-3 text-sm" data-testid="role-agent">
                 <Users className="w-3.5 h-3.5 text-on-surface-variant" aria-hidden />
                 <span className="font-mono text-on-surface">{r.role}</span>
                 <span className="text-xs text-on-surface-variant">
@@ -499,6 +525,26 @@ export function RoleAgentsPanel({ refreshKey }: { refreshKey: string }) {
                 >
                   <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-on-surface transition-transform ${r.enabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
                 </button>
+                {r.enabled && r.pipelineTemplate !== undefined && (
+                  <label className="basis-full flex items-center gap-2 pl-6 text-xs text-on-surface-variant">
+                    Works each task
+                    <select
+                      aria-label={`How the ${r.role} agent works its tasks`}
+                      value={r.pipelineTemplate ?? ''}
+                      disabled={busy === r.role}
+                      onChange={(e) => chooseTemplate(r, e.target.value || null)}
+                      className="rounded-xs border border-outline-variant/20 bg-surface px-1.5 py-0.5 text-xs text-on-surface"
+                    >
+                      <option value="">itself, in one agent turn</option>
+                      {r.pipelineTemplate && !templates.some((t) => t.id === r.pipelineTemplate) && (
+                        <option value={r.pipelineTemplate}>through a pipeline ({r.pipelineTemplate.slice(0, 8)}…)</option>
+                      )}
+                      {templates.map((t) => (
+                        <option key={t.id} value={t.id}>through the {t.name} pipeline</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
               </li>
             ))}
           </ul>

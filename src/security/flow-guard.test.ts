@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { applyFlowGuard, isVaultAuthenticated, classifyFlow, clearFlowLabel, getFlowLabel, observeFlow, resetFlowLabels, type FlowCall } from './flow-guard';
+import { applyFlowGuard, isOwnerOnlyDelivery, isVaultAuthenticated, classifyFlow, clearFlowLabel, getFlowLabel, observeFlow, resetFlowLabels, type FlowCall } from './flow-guard';
 import type { PermissionCheckResult } from './permissions';
 
 const allow: PermissionCheckResult = { allowed: true, level: 'ALLOW', requiresApproval: false };
@@ -107,5 +107,21 @@ describe('isVaultAuthenticated', () => {
   it('never exempts vendor-native CLI tools or calls without placeholders', async () => {
     expect(await isVaultAuthenticated('u', { toolId: 'cli-native:Bash', action: 'Bash', args: { command: 'curl {{secret:x}}' } })).toBe(false);
     expect(await isVaultAuthenticated('u', { toolId: 'shell', action: 'execute', args: { command: 'curl x' } })).toBe(false);
+  });
+});
+
+describe('isOwnerOnlyDelivery', () => {
+  const send = (args: Record<string, unknown>): FlowCall => ({ toolId: 'messaging', action: 'send', args });
+
+  it('a message to the caller themself reaches no one else', () => {
+    expect(isOwnerOnlyDelivery('u1', send({ user_id: 'u1', message: 'Invoice from Ada is due Friday' }))).toBe(true);
+    expect(isOwnerOnlyDelivery('u1', send({ user_id: 'u1', channel: 'telegram', message: 'hi' }))).toBe(true);
+  });
+
+  it('anyone else, a chat target, another tool or no caller is not', () => {
+    expect(isOwnerOnlyDelivery('u1', send({ user_id: 'u2', message: 'hi' }))).toBe(false);
+    expect(isOwnerOnlyDelivery('u1', send({ user_id: 'u1', channel: 'slack', target: 'C-shared', message: 'hi' }))).toBe(false);
+    expect(isOwnerOnlyDelivery('u1', { toolId: 'google-workspace', action: 'gmail_send', args: { user_id: 'u1' } })).toBe(false);
+    expect(isOwnerOnlyDelivery('', send({ user_id: '', message: 'hi' }))).toBe(false);
   });
 });

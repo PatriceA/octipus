@@ -19,6 +19,11 @@
  *   - a write-egress (send, post, push, external mutation) after `private`
  *     AND `suspicious` — the "lethal trifecta".
  *
+ * One send is not egress to anyone else and is exempt: `send_to_user` to the
+ * session's own user (`isOwnerOnlyDelivery`), which the messaging tool delivers
+ * only to that user's own verified identities. Telling the owner what an email
+ * said is the point of reading it for them; nothing reaches a third party.
+ *
  * The approval itself is the existing human-in-the-loop path: an approval
  * clears that one call, never the label. Unattended runs get `blocked`, as for
  * any ASK. Nothing is added to prompts or tool results, so the steady-state
@@ -502,6 +507,18 @@ export function flowBlockReason(label: FlowLabel, contract: FlowContract): strin
  * count (`canAccessByName`): a space connector's secret (scope `space`,
  * coworking §9.5) is never injected, so it never buys an exemption either.
  */
+/**
+ * Is this a message to the caller's own chats only? `send_to_user` with the
+ * caller's own id (and no `target`, which only `send_message` takes) is
+ * delivered to that user's verified identities and nowhere else
+ * (`ownerTargets` in channels/ownership.ts), so it carries nothing to a third
+ * party. Pure.
+ */
+export function isOwnerOnlyDelivery(userId: string, call: FlowCall): boolean {
+  return call.toolId === 'messaging' && call.action === 'send' && !!userId
+    && call.args?.user_id === userId && call.args?.target === undefined;
+}
+
 export async function isVaultAuthenticated(userId: string, call: FlowCall): Promise<boolean> {
   if (call.toolId.startsWith('cli-native:')) return false;
   const names = [...new Set([...argText(call.args).matchAll(VAULT_PLACEHOLDER_RE)].map(m => m[1] as string))];

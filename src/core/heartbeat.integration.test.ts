@@ -32,6 +32,7 @@ const cfg = (over: Partial<HeartbeatConfig> = {}): HeartbeatConfig => ({
   probeGithub: true,
   probeCalendar: true,
   calendarLookaheadMinutes: 60,
+  probeEmail: true,
   ...over,
 });
 
@@ -56,6 +57,7 @@ let heartbeat: typeof import('./heartbeat');
 let hooksSchema: typeof import('@/db/schema/hooks').hooks;
 let tasksSchema: typeof import('@/db/schema/tasks').tasks;
 let notifsSchema: typeof import('@/db/schema/notifications').notifications;
+let emailHandledSchema: typeof import('@/db/schema/email-handled').emailHandled;
 
 async function makeHeartbeatHook(over: Record<string, unknown> = {}): Promise<import('@/db/schema/hooks').Hook> {
   const [row] = await db
@@ -91,6 +93,7 @@ beforeAll(async () => {
   hooksSchema = (await import('@/db/schema/hooks')).hooks;
   tasksSchema = (await import('@/db/schema/tasks')).tasks;
   notifsSchema = (await import('@/db/schema/notifications')).notifications;
+  emailHandledSchema = (await import('@/db/schema/email-handled')).emailHandled;
 });
 
 afterAll(async () => {
@@ -103,6 +106,7 @@ beforeEach(async () => {
   await db.delete(hooksSchema);
   await db.delete(tasksSchema);
   await db.delete(notifsSchema);
+  await db.delete(emailHandledSchema);
 });
 
 describe('evaluateHeartbeatGate', () => {
@@ -285,6 +289,148 @@ describe('maybeRunHeartbeats', () => {
       expect(row.triggerConfig.heartbeatSeen).toEqual(seen);
       expect(row.nextRunAt).not.toBeNull();
     }
+  });
+});
+
+describe('inbox watch', () => {
+  type Mail = import('@/core/email/types').InboxItem;
+  const mail = (id: string, over: Partial<Mail> = {}): Mail => ({
+    id, provider: 'google', from: { email: 'ada@example.com' }, subject: `Subject ${id}`, snippet: 'hello',
+    receivedAt: '2026-07-12T11:00:00Z', unread: true, ...over,
+  });
+  /** A mailbox holding `inbox`; records what was asked of it. */
+  const mailbox = (inbox: Mail[]) => {
+    const calls = { list: 0, fetched: [] as string[], since: null as Date | null };
+    const deps = quiet();
+    deps.email = {
+      provider: async () => 'google',
+      list: async (_u, _p, since) => { calls.list += 1; calls.since = since; return inbox.map((m) => ({ id: m.id })); },
+      fetch: async (_u, _p, ids) => { calls.fetched.push(...ids); return inbox.filter((m) => ids.includes(m.id)); },
+    };
+    return { deps, calls };
+  };
+  const watching = (over: Record<string, unknown> = {}) =>
+    makeHeartbeatHook({ triggerConfig: { watchEmail: true, watchEmailSince: '2026-07-12T08:00:00Z', ...over } });
+
+  test('a hook that does not watch its inbox never reads the mailbox', async () => {
+    const hook = await makeHeartbeatHook();
+    const { deps, calls } = mailbox([mail('m1')]);
+    const r = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, deps);
+    expect(r.decision).toEqual({ run: false, reason: 'nothing_pending' });
+    expect(calls.list).toBe(0);
+  });
+
+  test('the server switch turns it off for everyone', async () => {
+    const hook = await watching();
+    const { deps, calls } = mailbox([mail('m1')]);
+    await heartbeat.evaluateHeartbeatGate(hook, cfg({ probeEmail: false }), NOON, deps);
+    expect(calls.list).toBe(0);
+  });
+
+  test('new mail wakes the heartbeat with the mail in the checklist, since watching began', async () => {
+    const hook = await watching();
+    const { deps, calls } = mailbox([mail('m1'), mail('m2')]);
+    const r = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, deps);
+    expect(r.decision.run).toBe(true);
+    const message = (r.decision as { message: string }).message;
+    expect(message).toContain('[gmail m1]');
+    expect(message).toContain('<email-list>');
+    expect(message).toContain('mark_email_handled');
+    expect(r.surfacedEmails?.map((m) => m.id)).toEqual(['m1', 'm2']);
+    expect(calls.since?.toISOString()).toBe('2026-07-12T08:00:00.000Z');
+  });
+
+  test('handled mail and mail shown recently stay quiet, and are never fetched again', async () => {
+    const hook = await watching();
+    const { markEmailHandled, markEmailsSurfaced } = await import('@/core/email/watch');
+    await markEmailHandled({ userId, provider: 'google', messageId: 'm1', outcome: 'no_action' });
+    await markEmailsSurfaced(userId, [mail('m2')], new Date(NOON.getTime() - 60_000));
+    const { deps, calls } = mailbox([mail('m1'), mail('m2')]);
+    const r = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, deps);
+    expect(r.decision).toEqual({ run: false, reason: 'nothing_pending' });
+    expect(calls.fetched).toEqual([]);
+  });
+
+  test('mail shown and never closed comes back after the delay, at most three times', async () => {
+    const hook = await watching();
+    const { EMAIL_RESURFACE_AFTER_MS, markEmailsSurfaced } = await import('@/core/email/watch');
+    const longAgo = new Date(NOON.getTime() - EMAIL_RESURFACE_AFTER_MS - 1000);
+    await markEmailsSurfaced(userId, [mail('m1')], longAgo);
+    const { deps } = mailbox([mail('m1')]);
+    expect((await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, deps)).decision.run).toBe(true);
+    await markEmailsSurfaced(userId, [mail('m1')], longAgo);
+    await markEmailsSurfaced(userId, [mail('m1')], longAgo);
+    expect((await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, deps)).decision).toEqual({ run: false, reason: 'nothing_pending' });
+  });
+
+  test('marking handled after surfacing closes the mail; surfacing again does not reopen it', async () => {
+    const { markEmailHandled, markEmailsSurfaced } = await import('@/core/email/watch');
+    await markEmailsSurfaced(userId, [mail('m1')], NOON);
+    await markEmailHandled({ userId, provider: 'google', messageId: 'm1', outcome: 'task', note: 'Filed\nit', taskId: null });
+    await markEmailsSurfaced(userId, [mail('m1')], NOON);
+    const [row] = await db.select().from(emailHandledSchema);
+    expect(row).toMatchObject({ status: 'handled', outcome: 'task', note: 'Filed it', surfacedCount: 1 });
+  });
+
+  test('a mailbox error is not pending work and never fails the gate', async () => {
+    const hook = await watching();
+    const { deps } = mailbox([]);
+    deps.email!.list = async () => { throw new Error('HTTP 503'); };
+    const r = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, deps);
+    expect(r.decision).toEqual({ run: false, reason: 'nothing_pending' });
+  });
+
+  test('the tick marks the mail surfaced before the turn fires, and uses the hook\'s own interval', async () => {
+    const hook = await watching({ intervalMinutes: 15 });
+    await db.update(hooksSchema).set({ nextRunAt: null }).where(eq(hooksSchema.id, hook.id));
+    const { getHookManager } = await import('@/hooks/manager');
+    const fired = vi.spyOn(getHookManager(), 'triggerHook').mockResolvedValue(undefined as never);
+    try {
+      const { deps } = mailbox([mail('m1')]);
+      await heartbeat.maybeRunHeartbeats(NOON, deps, cfg());
+      expect(fired).toHaveBeenCalledTimes(1);
+      const rows = await db.select().from(emailHandledSchema);
+      expect(rows.map((r) => [r.messageId, r.status, r.surfacedCount])).toEqual([['m1', 'surfaced', 1]]);
+      const [row] = await db.select().from(hooksSchema).where(eq(hooksSchema.id, hook.id));
+      expect(row.nextRunAt?.getTime()).toBe(NOON.getTime() + 15 * 60_000);
+    } finally {
+      fired.mockRestore();
+    }
+  });
+});
+
+describe('heartbeat preferences (the settings card)', () => {
+  test('defaults with no hook: off, server interval, inbox not watched', async () => {
+    expect(await heartbeat.getHeartbeatPrefs(userId)).toEqual({ enabled: false, intervalMinutes: null, watchEmail: false, watchEmailSince: null });
+  });
+
+  test('on, a custom interval and the inbox watch land on the one plain heartbeat hook', async () => {
+    const prefs = await heartbeat.setHeartbeatPrefs(userId, { enabled: true, intervalMinutes: 15, watchEmail: true }, NOON);
+    expect(prefs).toEqual({ enabled: true, intervalMinutes: 15, watchEmail: true, watchEmailSince: NOON.toISOString() });
+    const rows = await db.select().from(hooksSchema).where(eq(hooksSchema.userId, userId));
+    expect(rows).toHaveLength(1);
+    // Turning the watch on again later keeps when it started; off then on moves it.
+    const later = new Date(NOON.getTime() + 3600_000);
+    expect((await heartbeat.setHeartbeatPrefs(userId, { watchEmail: true }, later)).watchEmailSince).toBe(NOON.toISOString());
+    await heartbeat.setHeartbeatPrefs(userId, { watchEmail: false }, later);
+    expect((await heartbeat.setHeartbeatPrefs(userId, { watchEmail: true }, later)).watchEmailSince).toBe(later.toISOString());
+    // Back to the server interval.
+    expect((await heartbeat.setHeartbeatPrefs(userId, { intervalMinutes: null })).intervalMinutes).toBeNull();
+  });
+
+  test('preferences saved while the heartbeat is off keep it off', async () => {
+    const prefs = await heartbeat.setHeartbeatPrefs(userId, { watchEmail: true }, NOON);
+    expect(prefs).toMatchObject({ enabled: false, watchEmail: true });
+  });
+
+  test('an interval outside 5–1440 minutes is refused', async () => {
+    await expect(heartbeat.setHeartbeatPrefs(userId, { intervalMinutes: 1 })).rejects.toThrow(RangeError);
+    await expect(heartbeat.setHeartbeatPrefs(userId, { intervalMinutes: 2.5 })).rejects.toThrow(RangeError);
+  });
+
+  test('role heartbeats are not the plain one', async () => {
+    await heartbeat.ensureRoleHeartbeatHook(userId, 'coding', NOON);
+    expect((await heartbeat.getHeartbeatPrefs(userId)).enabled).toBe(false);
   });
 });
 

@@ -228,6 +228,33 @@ agent timeout (`agent.defaultTimeout`, or one hour when that is 0) plus 10
 minutes; the running turn renews it and clears it when it ends. A tick that
 finds a live lease skips with `in_flight`.
 
+### Working tasks through a pipeline
+
+A role agent can run each task through a pipeline template instead of
+working it in one agent turn: in the Role agents panel, set **Works each
+task** to *through the <template> pipeline* (`PUT /api/tasks/role-agents`
+with `pipelineTemplate`, stored as `triggerConfig.pipelineTemplate`). Big
+ideas then get the template's planning, plan loop and QA without anyone
+starting the run (`src/core/tasks/role-pipelines.ts`).
+
+- **One task per heartbeat turn.** The server checks the task out as the role
+  agent (`<role>@<hook session>`), comments which pipeline run took it, and
+  renews the claim while the run goes. When more tasks are ready afterwards,
+  the hook is due again at once; quiet hours and the daily cap still apply.
+- **Completed** → the run's summary is added as a comment and the task is done.
+- **Anything else** (failed, stopped, paused at an approval nobody answered)
+  → a comment says where it stopped, the claim is given back and the task is
+  **assigned to you**, with a `task_needs_you` notification, so the role agent
+  does not start the same work again. Resume the run on the Pipelines page, or
+  assign the task to the role again to start over.
+- **Approvals.** The run is unattended. A step that asks for approval waits for
+  you: the approval is posted to your own linked chats (Telegram, Slack, Teams,
+  WhatsApp) and to the web app, and a reply in your chat answers it. A step set
+  to **Approve automatically when no one is watching** (pipeline editor) goes
+  ahead on its own; on a loop's first step that approves the plan.
+- A template with a required parameter is refused when you choose it: nobody
+  is there to fill it in.
+
 ## Several server processes
 
 On external PostgreSQL, wakeups reach every server process: the originating

@@ -12,7 +12,7 @@ import { getConfig } from '@/config';
 import { withDispatchAuthorization } from '@/security/dispatch-authorization';
 import { routeApprovalFor } from '@/security/approval-route';
 import { askStillAuthorized } from '@/security/approved-calls';
-import { applyFlowGuard, ensureSharedAudienceKnown, isVaultAuthenticated, observeFlow } from '@/security/flow-guard';
+import { applyFlowGuard, ensureSharedAudienceKnown, isOwnerOnlyDelivery, isVaultAuthenticated, observeFlow } from '@/security/flow-guard';
 import { getPermissionManager } from '@/security/permissions';
 import { withoutPersonalOnlyTools } from '@/security/space-tools';
 import { agentLogger, coreLogger } from '@/utils/logger';
@@ -746,6 +746,8 @@ export class ToolExecutor {
       let permResult = applyFlowGuard(getConfig().agent?.flowGuard, this.context.sessionId, flowCall, storedPermission);
       // Vault-authenticated calls ({{secret:NAME}}) are the sanctioned way to use credentials.
       if (permResult !== storedPermission && await isVaultAuthenticated(this.context.userId, flowCall)) permResult = storedPermission;
+      // A message to the caller's own chats reaches no one else.
+      if (permResult !== storedPermission && isOwnerOnlyDelivery(this.context.userId, flowCall)) permResult = storedPermission;
       if (permResult !== storedPermission) {
         agentLogger.info({ agentId: this.context.id, tool: toolCall.name, reason: permResult.reason }, 'Flow guard escalated tool call to approval');
       }

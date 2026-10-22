@@ -1482,6 +1482,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
     envVar: 'HEARTBEAT_CALENDAR_LOOKAHEAD_MINUTES',
   },
+  {
+    key: 'heartbeat.probeEmail',
+    category: 'heartbeat',
+    valueType: 'boolean',
+    defaultValue: true,
+    description: 'Heartbeat probe: wake for new inbox mail no agent has handled yet. Applies only to users who turned on "Watch my inbox" on their heartbeat settings.',
+    isSecret: false,
+    envVar: 'HEARTBEAT_PROBE_EMAIL',
+  },
 ];
 
 /** Get a setting definition by key */

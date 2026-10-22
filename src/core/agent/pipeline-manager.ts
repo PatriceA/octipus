@@ -284,6 +284,20 @@ export function pipelineGateCommands(
   });
 }
 
+/**
+ * Does this step's sign-off approve itself on this run? Only when the template
+ * says so (`autoApproveUnattended`) AND nobody can be asked: an attended run
+ * always asks.
+ */
+export function approvesUnattended(context: Pick<AgentContext, 'attended'>, stage: { autoApproveUnattended?: boolean } | undefined): boolean {
+  return stage?.autoApproveUnattended === true && context.attended === false;
+}
+
+/** The approval ran out (timed out, expired) rather than being answered no. */
+function unansweredApproval(approval: { response?: string; reason?: string }): boolean {
+  return !approval.response && /timed out|expired/i.test(approval.reason ?? '');
+}
+
 function gateNote(gates: PipelineGate[]): string {
   const commands = [...new Set(gates.map(gate => gate.command))];
   return commands.length
@@ -1387,6 +1401,7 @@ export class PipelineManager {
       if (gnode.kind === 'step' && node.requiresApproval && previousOutput) {
         const decision = await this.approveStepNode({
           pipeline, node, handoffChain, previousOutput, context, title, gates,
+          autoApprove: approvesUnattended(context, built[gnode.templateIndex]),
         });
         if (decision === 'stop') {
           return { pipelineId: pipeline.id, result: `Pipeline stopped at "${node.name}".` };
@@ -1441,8 +1456,8 @@ export class PipelineManager {
       } else if (gnode.kind === 'foreach') {
         // A loop's cap is declared on its first body step that sets one
         // (`describePlanLoops` reads the template the same way).
-        const maxItems = graph.nodes
-          .filter((n) => n.parentKey === cursor)
+        const body = graph.nodes.filter((n) => n.parentKey === cursor).sort((a, b) => a.ordinal - b.ordinal);
+        const maxItems = body
           .map((n) => built[n.templateIndex]?.maxPlanItems)
           .find((v): v is number => typeof v === 'number') ?? null;
         const stepResult = await this.runForeachNode({
@@ -1454,6 +1469,8 @@ export class PipelineManager {
           title,
           gates,
           maxItems,
+          // The plan's sign-off is the first body step's (see the head's `requiresApproval`).
+          autoApprove: approvesUnattended(context, body[0] ? built[body[0].templateIndex] : undefined),
         });
         if (stepResult.stopped) return stepResult.stopped;
         currentItem = stepResult.item;
@@ -3186,12 +3203,14 @@ export class PipelineManager {
     gates: PipelineGate[];
     /** The loop's `maxPlanItems`; null ⇒ run until no item is pending. */
     maxItems: number | null;
+    /** Sign the plan off without asking: nobody is watching and the step allows it. */
+    autoApprove?: boolean;
   }): Promise<{
     outcome: NodeOutcome;
     item: PlanItemRow | null;
     stopped?: { pipelineId: string; result: string };
   }> {
-    const { pipeline, node, currentItem, lastOutput, context, title, gates, maxItems } = args;
+    const { pipeline, node, currentItem, lastOutput, context, title, gates, maxItems, autoApprove } = args;
     const rootAgent = getAgentService();
 
     // Skipped while it ran (`resume_pipeline` skipItems): the skip and its evidence stand.
@@ -3234,6 +3253,13 @@ export class PipelineManager {
       };
     }
 
+    // Nobody is watching and the template allows it: the plan is approved
+    // without a prompt (recorded as automatic), and the loop starts.
+    if (node.requiresApproval && node.visits === 1 && autoApprove) {
+      await this.autoApproveNode(pipeline, node, `the plan (${items.length} item${items.length === 1 ? '' : 's'})`);
+      return this.nextPlanItem(pipeline, node);
+    }
+
     // First visit and the plan needs sign-off: show the whole list, once.
     if (node.requiresApproval && node.visits === 1) {
       await this.updateNode(node.id, { status: 'awaiting_approval' });
@@ -3258,7 +3284,7 @@ export class PipelineManager {
         `Run the plan?`,
         context,
         ['Approve', 'Stop Pipeline'],
-      ) as { approved: boolean; response?: string };
+      ) as { approved: boolean; response?: string; reason?: string };
 
       recordRunEvent({ runId: pipeline.sessionId, subject: 'pipeline_node', subjectId: node.nodeKey, event: 'result',
         payload: { pipelineId: pipeline.id, kind: 'gate_approval', response: approval.response ?? null,
@@ -3266,7 +3292,9 @@ export class PipelineManager {
           decision: approval.response ? (approval.approved && approval.response !== 'Stop Pipeline' ? 'approved' : 'denied') : 'unanswered' } });
       if (!approval.approved || approval.response === 'Stop Pipeline') {
         await this.updateNode(node.id, { status: 'skipped' });
-        await this.updatePipeline(pipeline.id, { status: 'paused', summary: 'Plan rejected by user.' });
+        await this.updatePipeline(pipeline.id, { status: 'paused', summary: unansweredApproval(approval)
+          ? 'Nobody answered the plan approval in time. Resume the pipeline to be asked again.'
+          : 'Plan rejected by user.' });
         return {
           outcome: 'loop_done',
           item: null,
@@ -3500,6 +3528,34 @@ export class PipelineManager {
    * Approve / Skip / Stop, over the last handoff so the decision is made on
    * what the previous step actually produced.
    */
+  /**
+   * Sign a step off without asking (`autoApproveUnattended`, nobody watching
+   * the run). Recorded as automatic in the run log, the chat and the node, so
+   * it never reads as a person's yes. The gate commands are NOT approved with
+   * it: an approval a person gave covers them (`approveGates`), this does not.
+   */
+  private async autoApproveNode(pipeline: Pipeline, node: PipelineNodeRow, what: string): Promise<void> {
+    const at = new Date();
+    recordRunEvent({ runId: pipeline.sessionId, subject: 'pipeline_node', subjectId: node.nodeKey, event: 'result',
+      payload: { pipelineId: pipeline.id, kind: 'gate_approval', response: null, decidedBy: null, decidedAt: at.toISOString(), decision: 'auto_approved' } });
+    await this.updateNode(node.id, { status: 'approved', approvedAt: at });
+    await this.updatePipeline(pipeline.id, { status: 'running', summary: `Approved automatically: ${what} (no one was watching this run).` });
+    messageRepository.create({
+      sessionId: pipeline.sessionId,
+      role: 'system',
+      content: `Approved ${what} automatically: no one was watching this run, and the step is set to approve itself then. ` +
+        'Gate commands still ask for their own permission.',
+      metadata: { pipelineId: pipeline.id, stageId: node.id, pipelineEvent: 'auto_approved' },
+    }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
+    getAgentService()['emit']({
+      type: 'pipeline_event',
+      userId: pipeline.userId,
+      sessionId: pipeline.sessionId,
+      data: { event: 'auto_approved', pipelineId: pipeline.id, stageId: node.id, name: node.name },
+      timestamp: at,
+    });
+  }
+
   private async approveStepNode(args: {
     pipeline: Pipeline;
     node: PipelineNodeRow;
@@ -3508,9 +3564,16 @@ export class PipelineManager {
     context: AgentContext;
     title: string;
     gates: PipelineGate[];
+    /** Approve without asking: nobody is watching and the step allows it. */
+    autoApprove?: boolean;
   }): Promise<'go' | 'skip' | 'stop'> {
     const { pipeline, node, handoffChain, previousOutput, context, title, gates } = args;
     const rootAgent = getAgentService();
+
+    if (args.autoApprove) {
+      await this.autoApproveNode(pipeline, node, `"${node.name}"`);
+      return 'go';
+    }
 
     await this.updateNode(node.id, { status: 'awaiting_approval' });
     await this.updatePipeline(pipeline.id, { status: 'awaiting_approval' });
@@ -3534,7 +3597,7 @@ export class PipelineManager {
       `Proceed with next stage: "${node.name}"?`,
       context,
       ['Approve', 'Skip', 'Stop Pipeline'],
-    ) as { approved: boolean; response?: string };
+    ) as { approved: boolean; response?: string; reason?: string };
 
     recordRunEvent({ runId: pipeline.sessionId, subject: 'pipeline_node', subjectId: node.nodeKey, event: 'result',
       payload: { pipelineId: pipeline.id, kind: 'gate_approval', response: approval.response ?? null,
@@ -3542,7 +3605,9 @@ export class PipelineManager {
         decision: approval.response ? (approval.approved && approval.response !== 'Stop Pipeline' ? 'approved' : 'denied') : 'unanswered' } });
     if (!approval.approved || approval.response === 'Stop Pipeline') {
       await this.updateNode(node.id, { status: 'skipped' });
-      await this.updatePipeline(pipeline.id, { status: 'paused', summary: `Stopped by user at stage: ${node.name}` });
+      await this.updatePipeline(pipeline.id, { status: 'paused', summary: unansweredApproval(approval)
+        ? `Nobody answered the approval for "${node.name}" in time. Resume the pipeline to be asked again.`
+        : `Stopped by user at stage: ${node.name}` });
       return 'stop';
     }
     if (approval.response === 'Skip') return 'skip';

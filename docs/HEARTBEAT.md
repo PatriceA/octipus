@@ -28,7 +28,9 @@ spent until the last step:
    across every repo the CLI can see; silently empty when `gh` is not
    installed or authenticated) and **calendar events starting within the
    lookahead window** on a connected Google or Microsoft calendar (one
-   request per connected provider). Nothing in any of the four ⇒ skip.
+   request per connected provider). When the user turned on **Watch my
+   inbox**, also **new mail no agent has handled yet** (see
+   [Inbox watch](#inbox-watch)). Nothing in any of them ⇒ skip.
 
    Two rules keep those sources honest. The server's `gh` identity belongs
    to whoever authenticated it — the operator — so the GitHub probe runs
@@ -50,6 +52,44 @@ Only a non-empty probe spawns an orchestrated turn on the **`heartbeat`
 channel** (so the run is tagged `origin='heartbeat'` for audit), seeded with the
 pending checklist plus your standing instructions. **Silence is the default:** an
 empty probe costs zero tokens.
+
+## Inbox watch
+
+With **Watch my inbox** on (Settings → Heartbeat, `triggerConfig.watchEmail`
+on the user's heartbeat hook), the probe also lists the inbox of the
+connected Google or Microsoft 365 mailbox (`src/core/email/watch.ts`):
+
+- **Only new mail.** Mail received since the watch was turned on
+  (`watchEmailSince`), and never more than three days back. Gmail's
+  promotions, social and forums tabs are left out of the query.
+- **Only mail no agent has dealt with.** The `email_handled` table keeps, per
+  message id, whether a heartbeat turn was shown it (`surfaced`) and what an
+  agent did with it (`handled`, with an outcome and a one-line note). Ids and
+  outcomes only: no sender, subject or body is stored.
+- **At most ten per turn**, listed in the checklist as untrusted text inside
+  `<email-list>` (sender, subject, a 200-character preview), with what to do
+  with each: nothing, a task, a short message to the owner (`send_to_user`),
+  or a reply draft (`save_reply_draft`, saved in the mailbox, never sent).
+  The agent then calls `mark_email_handled` for every message.
+- **A message the turn did not close comes back** after three hours, at most
+  three times in all, so a turn that failed does not lose mail and one mail
+  the agent cannot deal with does not wake the heartbeat forever.
+- **Cost.** One list request per check (plus one metadata request per new
+  Gmail message). No model call when nothing is new.
+
+Mail the owner deals with on the inbox page (a task, an archive, a saved
+draft) is recorded as handled too, so the heartbeat does not pick it up
+again. Sending stays behind its own permission: an unattended turn's ASK is
+refused, so the agent cannot send unless the owner allowed it.
+
+For the agent to file tasks and tell the owner, `tasks/write` and
+`messaging/send` need **Allow** (both ask by default). Telling the owner
+works even after the agent read a mail in full: the flow guard counts a
+`send_to_user` to the run's own user as going nowhere else
+(`isOwnerOnlyDelivery`), while any other send after reading mail still asks.
+
+The Heartbeat settings tab lists the last ten outcomes ("Reply draft saved —
+answered the invoice question").
 
 ## Standing instructions — the `HEARTBEAT` note
 
@@ -81,10 +121,12 @@ HEARTBEAT_QUIET_HOURS_TZ=America/New_York
 HEARTBEAT_MAX_RUNS_PER_DAY=24
 ```
 
-**Per user** — backend integrations call `ensureHeartbeatHook(userId)`. A
-first-class settings-page toggle is not yet wired. It creates one enabled `trigger='heartbeat'` hook, idempotently.
-`disableHeartbeatHook(userId)` turns it back off. The global switch still gates
-whether any user's hook actually runs.
+**Per user** — **Settings → Heartbeat**: *Run my heartbeat*, *Check every*
+(the user's own interval, `triggerConfig.intervalMinutes`, 5–1440 minutes,
+instead of `heartbeat.intervalMinutes`) and *Watch my inbox*. The tab calls
+`GET`/`PUT /api/heartbeat/me`, which use `ensureHeartbeatHook` /
+`disableHeartbeatHook` and merge the rest into the hook's trigger config. The
+global switch still gates whether any user's hook actually runs.
 
 ## Config reference
 
@@ -98,6 +140,7 @@ whether any user's hook actually runs.
 | `heartbeat.probeGithub` | `true` | Wake for your open PRs with failing checks (`HEARTBEAT_PROBE_GITHUB`). |
 | `heartbeat.probeCalendar` | `true` | Wake for calendar events about to start (`HEARTBEAT_PROBE_CALENDAR`). |
 | `heartbeat.calendarLookaheadMinutes` | `60` | How far ahead the calendar probe looks (5–1440; `HEARTBEAT_CALENDAR_LOOKAHEAD_MINUTES`). |
+| `heartbeat.probeEmail` | `true` | Allow the inbox watch for users who turned it on (`HEARTBEAT_PROBE_EMAIL`). |
 
 Unattended agent actions remain subject to permissions: ASK blocks rather than
 auto-approving. Standing instructions are prompt guidance, not a grant of access.
@@ -117,5 +160,3 @@ auto-approving. Standing instructions are prompt guidance, not a grant of access
 
 - A first-class **goals** object — standing instructions are a pinned note for
   now (deliberate; schema can follow usage).
-- Settings-page UI toggle (the backend `ensureHeartbeatHook` /
-  `disableHeartbeatHook` + `heartbeat.*` settings are in place for it).

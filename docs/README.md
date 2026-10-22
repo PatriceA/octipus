@@ -96,6 +96,7 @@ The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 | [OBSERVABILITY.md](OBSERVABILITY.md) | Prometheus metrics, run correlation, and logging. |
 | [guides/channel-adapter.md](guides/channel-adapter.md) | Guide: writing a new channel adapter. |
 | [guides/tui.md](guides/tui.md) | Guide: the TUI client. |
+| [guides/small-business.md](guides/small-business.md) | Guide: a small company's inbox, ideas and approvals on autopilot (heartbeat, inbox watch, role agents, pipelines). |
 | [CHANGELOG.md](CHANGELOG.md) | Release history. |
 
 ## Troubleshooting

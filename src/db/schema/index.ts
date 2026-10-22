@@ -15,6 +15,7 @@ export * from './channel-identities';
 export * from './cleanup-log';
 export * from './compaction-entries';
 export * from './documents';
+export * from './email-handled';
 export * from './embeddings';
 export * from './evaluations';
 export * from './hook-executions';
