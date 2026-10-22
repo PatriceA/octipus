@@ -145,7 +145,8 @@ Each point is its own PR with its own code review.
 | C1b record types, records, public forms | `feat/record-types` (on C1a) | #431 | in review |
 | C1c web pages for cases, contacts, records, forms | `feat/business-web` (on C1b) | #434 | in review |
 | Audit fix (ip-address in mcp-server, not part of the plan) | `fix/mcp-server-ip-address` | #433 | in review |
-| C2 plugin platform | | | next |
+| C2 plugin packages (out-of-repo MCP servers, fenced in) | `feat/plugin-packages` (on C1c) | #435 | in review |
+| C3 mail (IMAP/SMTP/POP3, functional mailboxes) | | | next |
 
 ## 5. Open questions (answers expected from the business side)
 
