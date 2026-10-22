@@ -150,8 +150,8 @@ export function citedItems(response: string, items: ContextHookItem[]): number {
 
 async function describeModel(agentId: string | undefined): Promise<{ model: string | null; cli: boolean | null }> {
   if (!agentId) return { model: null, cli: null };
-  const { agents } = await import('@/db/schema/agents');
-  const [agent] = await getDb().select({ model: agents.model }).from(agents).where(eq(agents.id, agentId)).limit(1);
+  const { agentRepository } = await import('@/db/repositories/agent-repository');
+  const agent = await agentRepository.findById(agentId);
   const model = agent?.model || null;
   if (!model) return { model: null, cli: null };
   const { modelConfig } = await import('@/db/schema/models');
