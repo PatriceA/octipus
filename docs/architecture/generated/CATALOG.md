@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-583 mounted routes across 78 route files. The path is the full one, group prefix included — what a client actually calls.
+588 mounted routes across 79 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -440,6 +440,11 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/saml/:orgSlug/acs` | `src/api/routes/saml.ts` |
 | GET | `/api/saml/:orgSlug/login` | `src/api/routes/saml.ts` |
 | GET | `/api/saml/:orgSlug/metadata` | `src/api/routes/saml.ts` |
+| GET | `/api/scan-folders` | `src/api/routes/scan-folders.ts` |
+| POST | `/api/scan-folders` | `src/api/routes/scan-folders.ts` |
+| DELETE | `/api/scan-folders/:id` | `src/api/routes/scan-folders.ts` |
+| PATCH | `/api/scan-folders/:id` | `src/api/routes/scan-folders.ts` |
+| POST | `/api/scan-folders/:id/scan` | `src/api/routes/scan-folders.ts` |
 | GET | `/api/scim/v2/Groups` | `src/api/routes/scim.ts` |
 | GET | `/api/scim/v2/Users` | `src/api/routes/scim.ts` |
 | POST | `/api/scim/v2/Users` | `src/api/routes/scim.ts` |
@@ -617,21 +622,21 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `utils` | 1 |
 | `api` | `capabilities` | 1 |
 | `api` | `channels` | 22 |
-| `api` | `config` | 24 |
+| `api` | `config` | 23 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 154 |
-| `api` | `db` | 118 |
+| `api` | `core` | 157 |
+| `api` | `db` | 119 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 4 |
 | `api` | `models` | 39 |
 | `api` | `plugins` | 2 |
-| `api` | `security` | 141 |
+| `api` | `security` | 143 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 13 |
 | `api` | `skills` | 6 |
 | `api` | `tools` | 4 |
-| `api` | `utils` | 73 |
+| `api` | `utils` | 74 |
 | `api` | `voice` | 23 |
 | `capabilities` | `db` | 2 |
 | `capabilities` | `models` | 1 |
@@ -662,25 +667,25 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `connectors` | `utils` | 5 |
 | `core` | `capabilities` | 2 |
 | `core` | `channels` | 12 |
-| `core` | `config` | 58 |
+| `core` | `config` | 60 |
 | `core` | `connectors` | 4 |
-| `core` | `db` | 380 |
+| `core` | `db` | 383 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 10 |
 | `core` | `models` | 120 |
-| `core` | `security` | 172 |
+| `core` | `security` | 173 |
 | `core` | `services` | 2 |
 | `core` | `setup` | 1 |
 | `core` | `shared` | 38 |
 | `core` | `skills` | 11 |
 | `core` | `tools` | 21 |
-| `core` | `utils` | 211 |
+| `core` | `utils` | 214 |
 | `core` | `voice` | 1 |
 | `db` | `config` | 4 |
 | `db` | `core` | 21 |
 | `db` | `models` | 1 |
-| `db` | `security` | 15 |
+| `db` | `security` | 17 |
 | `db` | `services` | 1 |
 | `db` | `shared` | 3 |
 | `db` | `utils` | 21 |
@@ -724,11 +729,11 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `security` | `config` | 13 |
 | `security` | `connectors` | 3 |
 | `security` | `core` | 20 |
-| `security` | `db` | 78 |
+| `security` | `db` | 79 |
 | `security` | `mcp` | 1 |
 | `security` | `shared` | 1 |
 | `security` | `tools` | 1 |
-| `security` | `utils` | 29 |
+| `security` | `utils` | 30 |
 | `services` | `capabilities` | 5 |
 | `services` | `config` | 3 |
 | `services` | `core` | 5 |

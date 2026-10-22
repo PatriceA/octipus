@@ -35,6 +35,8 @@ export const mailAccounts = pgTable('mail_accounts', {
    * a private address is refused, at save and again at every connect.
    */
   localNetwork: boolean('local_network').default(false).notNull(),
+  /** File the attachments of received mail into the documents of the account's scope (a fax-to-mail drop). */
+  fileAttachments: boolean('file_attachments').default(false).notNull(),
   /** Where the last sync stopped (IMAP: UIDVALIDITY and last UID; POP3: UIDLs passed over). */
   syncState: jsonb('sync_state').$type<MailSyncState>().default({}).notNull(),
   lastSyncAt: timestamp('last_sync_at', { withTimezone: true }),

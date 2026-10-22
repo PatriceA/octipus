@@ -21,9 +21,9 @@ import { getDb } from '@/db/postgres';
 import { contentRepos } from '@/db/repositories/content';
 import { workspaces } from '@/db/schema/organizations';
 import { claimFormSubmission, findLiveFormLink, releaseFormSubmission } from '@/db/repositories/records';
-import { userRepository } from '@/db/repositories/user-repository';
 import type { FieldDef } from '@/core/records/fields';
-import { principalFromUser, type Principal } from '@/security/principal';
+import type { Principal } from '@/security/principal';
+import { writerPrincipal } from '@/security/writer-principal';
 import { coreLogger } from '@/utils/logger';
 
 /** What a public form shows: its title, intro and fields — nothing of the scope behind it. */
@@ -102,10 +102,10 @@ async function undoSubmission(repos: ReturnType<typeof contentRepos>, recordId: 
  */
 async function writerOf(link: { createdByUserId: string; type: { userId: string; workspaceId: string | null } }): Promise<Principal | null> {
   if (link.type.workspaceId && (await workspaceKind(link.type.workspaceId)) === 'shared') {
-    const principal = await creatorPrincipal(link.createdByUserId, link.type.workspaceId);
+    const principal = await writerPrincipal(link.createdByUserId, link.type.workspaceId);
     return principal?.workspaceKind === 'shared' ? principal : null;
   }
-  return creatorPrincipal(link.type.userId, link.type.workspaceId);
+  return writerPrincipal(link.type.userId, link.type.workspaceId);
 }
 
 async function workspaceKind(workspaceId: string): Promise<string | null> {
@@ -113,34 +113,3 @@ async function workspaceKind(workspaceId: string): Promise<string | null> {
   return row?.kind ?? null;
 }
 
-/**
- * The link creator as a principal in the type's workspace, or null when they
- * may no longer write there. A space must still resolve to the same space
- * with a writing role; a personal type needs an active owner.
- */
-async function creatorPrincipal(userId: string, workspaceId: string | null): Promise<Principal | null> {
-  const user = await userRepository.findById(userId);
-  if (!user || user.isActive === false) return null;
-  const base = principalFromUser({ id: user.id, username: user.username, isAdmin: false });
-  const { resolveWorkspace } = await import('@/security/workspace-resolver');
-  const resolution = await resolveWorkspace(base, workspaceId);
-  if (resolution.denied) return null;
-  if (resolution.workspaceKind === 'shared') {
-    if (resolution.workspaceId !== workspaceId || resolution.spaceArchived) return null;
-    if (resolution.spaceRole !== 'owner' && resolution.spaceRole !== 'editor') return null;
-    return {
-      ...base,
-      workspaceId: resolution.workspaceId,
-      workspaceKind: 'shared',
-      spaceRole: resolution.spaceRole,
-      spaceScope: resolution.spaceScope ?? null,
-      spaceArchived: false,
-    };
-  }
-  // A personal type: the workspace must be the creator's own (null = user-level).
-  if (workspaceId && resolution.workspaceId !== workspaceId) {
-    coreLogger.warn({ userId, workspaceId }, 'Form link points at a workspace its creator no longer has');
-    return null;
-  }
-  return { ...base, workspaceId: resolution.workspaceId, workspaceKind: 'personal' };
-}

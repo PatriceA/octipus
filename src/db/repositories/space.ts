@@ -38,6 +38,7 @@ import { workspaceMembers, workspaces } from '../schema/organizations';
 import { type NewVaultEntry, vault } from '../schema/vault';
 import { CaseRepo, ContactRepo } from './cases';
 import { MailRepo } from './mail';
+import { ScanFolderRepo } from './scan-folders';
 import { FormLinkRepo, RecordRepo, RecordTypeRepo } from './records';
 import { type KnowledgeLinkRepository, getKnowledgeLinkRepository } from './knowledge-link-repository';
 import { type NoteScope, type NoteStore, SpaceNoteRepo } from './note-repository';
@@ -463,6 +464,7 @@ export interface SpaceRepos {
   records: RecordRepo;
   formLinks: FormLinkRepo;
   mail: MailRepo;
+  scanFolders: ScanFolderRepo;
   notes: NoteStore;
   noteScope: NoteScope;
   links: LinkStore;
@@ -509,6 +511,7 @@ export function spaceRepos(principal: Principal): SpaceRepos {
     contacts: new ContactRepo(scope),
     ...recordRepos(scope),
     mail: new MailRepo(scope),
+    scanFolders: new ScanFolderRepo(scope),
     notes: new SpaceNoteRepo(noteScope),
     noteScope,
     links: linkStoreFor(noteScope),

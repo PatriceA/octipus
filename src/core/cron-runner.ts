@@ -4,6 +4,7 @@ import { getEmbeddingService } from '@/core/rag/embeddings';
 import { sweepPurgedSpaceFiles } from '@/core/spaces/purge';
 import { maybeRunHeartbeats } from '@/core/heartbeat';
 import { syncDueMailAccounts } from '@/core/mail/sync';
+import { scanDueFolders } from '@/core/scan-folders/sweep';
 import { fireDueReminders } from '@/core/tasks/reminders';
 import { defaultListenDeps, runListenTick } from '@/channels/group-listen';
 import { getDb } from '@/db/postgres';
@@ -53,6 +54,7 @@ let lastLogPrune = 0;
 let logPruneRunning = false;
 let reminderSweepRunning = false;
 let mailSweepRunning = false;
+let scanSweepRunning = false;
 
 /**
  * Parse a simple cron expression and compute the next run date.
@@ -355,6 +357,15 @@ async function processCronTick(): Promise<void> {
         .then((stored) => { if (stored > 0) coreLogger.info({ stored }, 'Mail sync stored new messages'); })
         .catch((err: unknown) => coreLogger.error({ err }, 'Mail sync sweep failed'))
         .finally(() => { mailSweepRunning = false; });
+    }
+
+    // Scan folders (core/scan-folders/sweep.ts): settled files into documents.
+    if (!scanSweepRunning) {
+      scanSweepRunning = true;
+      scanDueFolders(now)
+        .then((filed) => { if (filed > 0) coreLogger.info({ filed }, 'Scan folders filed new documents'); })
+        .catch((err: unknown) => coreLogger.error({ err }, 'Scan folder sweep failed'))
+        .finally(() => { scanSweepRunning = false; });
     }
 
     // Group channels in listen / proactive mode: unanswered questions, gated

@@ -80,6 +80,8 @@ export const WORKSPACE_TABLES: readonly WorkspaceTable[] = [
   // The purge deletes records first (their type is RESTRICT).
   { table: 'records', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'record_types', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
+  // Scan folders (docs/SCAN-FOLDERS.md); what a folder filed goes with it.
+  { table: 'scan_folders', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'sessions', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   // Space memory (S2): only shared workspaces have it, and they are never
   // transferred; its RESTRICT key makes the purge delete it first.

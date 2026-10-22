@@ -30,6 +30,7 @@ import {
 } from './scoped';
 import { CaseRepo, ContactRepo } from './cases';
 import { MailRepo } from './mail';
+import { ScanFolderRepo } from './scan-folders';
 import type { FormLinkRepo, RecordRepo, RecordTypeRepo } from './records';
 import { ArtifactStore, type LinkStore, linkStoreFor, recordRepos, spaceRepos } from './space';
 
@@ -57,6 +58,7 @@ export interface ContentRepos {
   records: RecordRepo;
   formLinks: FormLinkRepo;
   mail: MailRepo;
+  scanFolders: ScanFolderRepo;
   notes: NoteStore;
   noteScope: NoteScope;
   links: LinkStore;
@@ -93,6 +95,7 @@ export function contentRepos(principal: Principal): ContentRepos {
     get records() { return recordRepos(personalScope(principal)).records; },
     get formLinks() { return recordRepos(personalScope(principal)).formLinks; },
     get mail() { return new MailRepo(personalScope(principal)); },
+    get scanFolders() { return new ScanFolderRepo(personalScope(principal)); },
     notes: new PersonalNoteRepo(noteScope),
     noteScope,
     links: linkStoreFor(noteScope),

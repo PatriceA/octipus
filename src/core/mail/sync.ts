@@ -14,8 +14,11 @@ import { getDb } from '@/db/postgres';
 import { type MailAccount, mailAccounts, mailMessages, mailRaw } from '@/db/schema/mail';
 import { coreLogger } from '@/utils/logger';
 import { mapLimit } from '@/utils/concurrency';
+import { ingestDocument } from '@/core/documents/ingest';
+import { contentRepos } from '@/db/repositories/content';
+import { writerPrincipal } from '@/security/writer-principal';
 import { withDeadline } from './deadline';
-import { parseRawMessage, storable } from './parse';
+import { attachmentsOf, parseRawMessage, storable } from './parse';
 import { mailPassword, pruneOrphanMailPasswords } from './secrets';
 import { type FetchedMessage, type MailSource, openSource } from './sources';
 
@@ -48,6 +51,9 @@ const defaultDeps: MailSyncDeps = {
   open: openSource,
   password: (id) => mailPassword(id, 'incoming'),
 };
+
+/** The last attachment-filing failure of a sync, shown on the account when the sync itself went well. */
+const filingErrors = new Map<string, string>();
 
 /** Accounts synced in this process right now (a manual sync and the sweep never overlap). */
 const running = new Set<string>();
@@ -111,7 +117,7 @@ async function insertReceived(account: MailAccount, fetched: FetchedMessage): Pr
     ? `[This message is ${Math.round(fetched.size / 1024 / 1024)} MB, too large to keep here. Open it in the mail client.]`
     : '';
   const text = note ? `${note}\n\n${parsed.text}`.trim() : parsed.text;
-  return getDb().transaction(async (tx) => {
+  const id = await getDb().transaction(async (tx) => {
     const [row] = await tx
       .insert(mailMessages)
       .values({
@@ -138,10 +144,42 @@ async function insertReceived(account: MailAccount, fetched: FetchedMessage): Pr
       })
       .onConflictDoNothing()
       .returning({ id: mailMessages.id });
-    if (!row) return 'duplicate';
+    if (!row) return null;
     if (!fetched.truncated) await tx.insert(mailRaw).values({ messageId: row.id, raw: fetched.source });
-    return 'stored';
+    return row.id;
   });
+  if (!id) return 'duplicate';
+  if (account.fileAttachments && !fetched.truncated && parsed.attachments.length > 0) {
+    await fileMailAttachments(account, id, parsed.subject, fetched.source);
+  }
+  return 'stored';
+}
+
+/**
+ * File a received message's attachments into the documents of the
+ * account's scope (a fax-to-mail or scanner-to-mail drop), written as the
+ * account's author. Best-effort: the message is stored either way, and a
+ * failure is logged and shown on the account.
+ */
+async function fileMailAttachments(account: MailAccount, messageId: string, subject: string, raw: Buffer): Promise<void> {
+  try {
+    const principal = await writerPrincipal(account.userId, account.workspaceId);
+    if (!principal) throw new Error('The account\'s author can no longer add documents here');
+    const repos = contentRepos(principal);
+    for (const attachment of await attachmentsOf(raw)) {
+      const result = await ingestDocument(repos, {
+        buffer: attachment.content,
+        originalName: attachment.filename,
+        mimeType: attachment.contentType,
+        metadata: { source: 'mail', mailAccountId: account.id, mailMessageId: messageId, mailSubject: subject.slice(0, 200) },
+      });
+      if (result.error) throw new Error(result.error);
+    }
+  } catch (err) {
+    const error = `An attachment could not be filed: ${(err as Error).message}`.slice(0, 300);
+    coreLogger.warn({ accountId: account.id, messageId, error }, 'mail: attachment filing failed');
+    filingErrors.set(account.id, error);
+  }
 }
 
 /**
@@ -183,7 +221,7 @@ export async function syncAccount(account: MailAccount, deps: MailSyncDeps = def
       source = await deps.open(account, password);
       await fetchBatches(account, source, now, progress);
     })(), SYNC_DEADLINE_MS, 'The mail sync', () => (source as MailSource | null)?.destroy());
-    await getDb().update(mailAccounts).set({ lastError: null, failures: 0 }).where(eq(mailAccounts.id, account.id));
+    await getDb().update(mailAccounts).set({ lastError: filingErrors.get(account.id) ?? null, failures: 0 }).where(eq(mailAccounts.id, account.id));
     return { ...progress };
   } catch (err) {
     const error = describe(err);
@@ -195,6 +233,7 @@ export async function syncAccount(account: MailAccount, deps: MailSyncDeps = def
     return { ...progress, error };
   } finally {
     running.delete(account.id);
+    filingErrors.delete(account.id);
     await (source as MailSource | null)?.close().catch(() => undefined);
   }
 }

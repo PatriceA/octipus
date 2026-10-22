@@ -40,6 +40,7 @@ const ACCOUNT_FIELDS = {
   outgoing: t.Optional(t.Union([SERVER, t.Null()])),
   folder: t.Optional(t.String({ maxLength: 200 })),
   enabled: t.Optional(t.Boolean()),
+  fileAttachments: t.Optional(t.Boolean()),
   passwords: t.Optional(PASSWORDS),
 };
 const RECIPIENTS = t.Union([t.String({ maxLength: 20_000 }), t.Array(t.String({ maxLength: 400 }), { maxItems: 100 })]);

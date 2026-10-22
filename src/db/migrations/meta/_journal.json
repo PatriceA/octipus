@@ -1044,6 +1044,13 @@
       "when": 1792922424550,
       "tag": "0148_mail",
       "breakpoints": true
+    },
+    {
+      "idx": 149,
+      "version": "7",
+      "when": 1793008824550,
+      "tag": "0149_scan_folders",
+      "breakpoints": true
     }
   ]
 }

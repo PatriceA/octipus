@@ -43,6 +43,7 @@ export interface MailAccountInput {
   outgoing?: MailServerInput | null;
   folder?: string;
   enabled?: boolean;
+  fileAttachments?: boolean;
 }
 
 export interface MailPasswordsInput {
@@ -96,6 +97,7 @@ async function accountWrite(input: MailAccountInput, admin: boolean): Promise<Ma
     outgoing,
     folder,
     enabled: input.enabled ?? true,
+    fileAttachments: input.fileAttachments ?? false,
     localNetwork: await localNetworkFor(outgoing ? [incoming, outgoing] : [incoming], admin),
   };
 }
@@ -137,6 +139,7 @@ export async function updateMailAccount(repos: ContentRepos, id: string, input: 
       outgoing: input.outgoing !== undefined ? input.outgoing : current.outgoing,
       folder: input.folder ?? current.folder,
       enabled: input.enabled ?? current.enabled,
+      fileAttachments: input.fileAttachments ?? current.fileAttachments,
     }, isAdmin(repos.principal));
     patch = merged;
   } else {
@@ -144,6 +147,7 @@ export async function updateMailAccount(repos: ContentRepos, id: string, input: 
     if (input.label !== undefined) patch.label = input.label.trim().slice(0, 100) || current.address;
     if (input.displayName !== undefined) patch.displayName = input.displayName?.replace(/[\r\n"<>]+/g, ' ').trim().slice(0, 100) || null;
     if (input.enabled !== undefined) patch.enabled = input.enabled;
+    if (input.fileAttachments !== undefined) patch.fileAttachments = input.fileAttachments;
   }
   const serversChanged = connection && (
     JSON.stringify([patch.protocol, patch.incoming, patch.folder]) !== JSON.stringify([current.protocol, current.incoming, current.folder])
@@ -200,6 +204,7 @@ export async function accountViews(rows: readonly MailAccount[]): Promise<MailAc
     outgoing: r.outgoing,
     folder: r.folder,
     enabled: r.enabled,
+    fileAttachments: r.fileAttachments,
     passwordSet: set.get(r.id) ?? { incoming: false, outgoing: false },
     lastSyncAt: r.lastSyncAt?.toISOString() ?? null,
     lastError: r.lastError,

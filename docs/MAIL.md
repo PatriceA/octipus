@@ -98,6 +98,17 @@ sanitized like the Gmail inbox's (no scripts, no remote images), the
 attachments' names and sizes, and the raw source (in `mail_raw`), from which
 attachments are downloaded.
 
+## Filing attachments
+
+An account with `fileAttachments: true` files the attachments of every mail it
+receives into the documents of its scope (personal, or the space's). This is
+the path for fax-to-mail and scan-to-mail drops. Filing happens as the account's
+author, resolved again for each message: an author who can no longer write
+there files nothing, and the account shows why. The documents carry
+`metadata.source = "mail"` with the account and message. The message itself is
+stored either way. For files dropped into a directory instead, see
+[SCAN-FOLDERS.md](SCAN-FOLDERS.md).
+
 ## Drafts
 
 Agents and people write drafts. A draft is stored here, never sent by being
@@ -158,7 +169,7 @@ All under `/api/mail`, scoped by the workspace header like every space route.
 | Method and path | What |
 |---|---|
 | `GET /accounts` | The scope's accounts (no passwords; whether each is set) |
-| `POST /accounts` | Create: `address`, `incoming`, optional `protocol`, `outgoing`, `folder`, `label`, `displayName`, `passwords: { incoming, outgoing }` |
+| `POST /accounts` | Create: `address`, `incoming`, optional `protocol`, `outgoing`, `folder`, `label`, `displayName`, `fileAttachments`, `passwords: { incoming, outgoing }` |
 | `PATCH /accounts/:id` | Change any of those; `passwords.x: null` removes one |
 | `DELETE /accounts/:id` | Remove the account, its messages and passwords |
 | `POST /accounts/:id/test` | Log in with the stored passwords; what failed, per server |
@@ -177,6 +188,5 @@ All under `/api/mail`, scoped by the workspace header like every space route.
 - A web page for mail (plan point C3b).
 - The heartbeat's "new mail" check for IMAP/POP3 accounts (it covers Gmail
   and Outlook today).
-- Attachments on outgoing mail, filing an attachment into the documents, and
-  flags or deletion on the server.
+- Attachments on outgoing mail, and flags or deletion on the server.
 - OAuth (XOAUTH2) for IMAP servers that require it.
