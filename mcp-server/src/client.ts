@@ -136,6 +136,14 @@ export class OctiClient {
     return res.json() as Promise<T>;
   }
 
+  // ─── Modules ───
+
+  /** The modules that are on (docs/MODULES.md); tools of the others are hidden. */
+  async getEnabledModules(): Promise<string[]> {
+    const res = await this.request<{ enabled?: string[] }>('/api/modules');
+    return Array.isArray(res.enabled) ? res.enabled : [];
+  }
+
   // ─── Chat ───
 
   async chat(message: string, sessionId?: string): Promise<ChatResponse> {

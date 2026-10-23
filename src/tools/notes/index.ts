@@ -474,7 +474,7 @@ export class NotesTool extends BaseTool {
 
     this.registerTool(
       'export_canvas',
-      'Build a JSON Canvas (jsoncanvas.org) of the neighbourhood around a note — the note at the centre, linked entities on a ring. Opens natively in Obsidian; persist via artifacts or write to the vault as a .canvas file.',
+      'Build a JSON Canvas (jsoncanvas.org) of the neighbourhood around a note — the note at the centre, linked entities on a ring. Opens natively in Obsidian; persist it by writing it to the vault as a .canvas file.',
       createParameterSchema({
         entry_type: { type: 'string', description: 'Entry entity type (e.g. note)', required: true },
         entry_id: { type: 'string', description: 'Entry entity id', required: true },

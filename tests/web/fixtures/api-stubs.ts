@@ -467,6 +467,16 @@ export async function stubProfiles(page: Page): Promise<void> {
 }
 
 /**
+ * Modules (docs/MODULES.md): every one on, as on an install from before
+ * modules, so module pages render. A test of switching off overrides it.
+ */
+export async function stubModules(page: Page): Promise<void> {
+  const { MODULES } = await import('../../../src/modules');
+  const modules = MODULES.map((m) => ({ ...m, requiredBy: [], on: true }));
+  await page.route('**/api/modules', (route) => json(route, 200, { modules, enabled: modules.map((m) => m.id) }));
+}
+
+/**
  * Install the full default set. Individual tests can override specific routes
  * after this call because Playwright's `page.route` matches in reverse order
  * of registration (last registered wins).
@@ -508,6 +518,7 @@ export async function stubAllDefaults(page: Page): Promise<void> {
   await stubVault(page);
   await stubEvaluations(page);
   await stubProfiles(page);
+  await stubModules(page);
   // AFTER stubDocuments on purpose: Playwright tries the most recently
   // registered route first, and stubDocuments' `**/api/documents**` catch-all
   // would otherwise answer the image upload with `{documents: []}`.

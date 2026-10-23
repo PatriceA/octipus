@@ -20,6 +20,7 @@ const fresh = () => ({
   pipelineTemplates: [{ id: 'tpl-research', name: 'Research & Analysis' }],
   mcpServers: [],
   workspaceRoot: null,
+  modules: { enabled: [] as string[], byUseCase: {} },
   progress: {} as Record<string, unknown>,
 });
 

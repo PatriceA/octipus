@@ -396,12 +396,16 @@ function companySteps(plan: Plan, a: Answers, s: OnboardingState): void {
     permission(plan, s, 'tasks', 'write', 'add tasks to your list');
     permission(plan, s, 'messaging', 'send', 'message you in your chat');
     const interval = Number(str(a, 'company.interval')) || 15;
-    if (s.heartbeat.enabled && s.heartbeat.watchEmail && s.heartbeat.intervalMinutes === interval) {
+    // The inbox watch is the `inbox` module's (docs/MODULES.md).
+    if (!moduleOnAfter(a, s, 'inbox')) {
+      plan.done('heartbeat:me', 'Your admin turns on the email inbox in Settings → Modules; then turn on "Watch my inbox" under Settings → Heartbeat');
+    } else if (s.heartbeat.enabled && s.heartbeat.watchEmail && s.heartbeat.intervalMinutes === interval) {
       plan.done('heartbeat:me', `Your inbox is already checked every ${interval} minutes`);
     } else {
+      const after = [...(connect && connect.startsWith('connect:') ? [connect] : []), ...(plan.has('modules') ? ['modules'] : [])];
       plan.api('heartbeat:me', `Check your inbox every ${interval} minutes`, {
         method: 'PUT', path: '/heartbeat/me', body: { enabled: true, watchEmail: true, intervalMinutes: interval },
-      }, { dependsOn: connect && connect.startsWith('connect:') ? [connect] : undefined, detail: 'Only mail that arrives from now on.' });
+      }, { dependsOn: after.length > 0 ? after : undefined, detail: 'Only mail that arrives from now on.' });
     }
   }
   if (yes(a, 'company.ideas')) roleAgent(plan, s, 'general', str(a, 'company.ideasPipeline'), 'Turn on an agent for your ideas (role "general")');
@@ -431,16 +435,38 @@ function researchSteps(plan: Plan, a: Answers, s: OnboardingState): void {
  * install-wide by an admin. Only turned on, never off: a second run of the
  * guide with fewer use cases leaves alone what is already on.
  */
-function moduleSteps(plan: Plan, useCases: readonly UseCaseId[], chatChannel: string, s: OnboardingState): void {
-  if (!s.isAdmin) return;
+/**
+ * The modules this run brings: those of the use cases picked, and the chat
+ * channels when a chat was picked to talk to Octipus from (Telegram, Slack, …).
+ */
+function wantedModules(a: Answers, s: OnboardingState): Map<string, string> {
   const wanted = new Map<string, string>();
-  for (const useCase of useCases) for (const m of s.modules.byUseCase[useCase] ?? []) wanted.set(m.id, m.title);
-  // A chat picked to talk to Octipus from (Telegram, Slack, …) needs the chat channels.
+  const useCases = (a._useCases as UseCaseId[] | undefined) ?? [];
+  for (const useCase of useCases) for (const m of s.modules?.byUseCase[useCase] ?? []) wanted.set(m.id, m.title);
+  const chatChannel = typeof a._chatChannel === 'string' ? a._chatChannel : '';
   if (chatChannel && chatChannel !== 'none') wanted.set('channels', 'Chat channels');
+  return wanted;
+}
+
+/** Module `id` is on once the plan has run: on already, or turned on by its first step. */
+function moduleOnAfter(a: Answers, s: OnboardingState, id: string): boolean {
+  if (!s.modules) return true;
+  return s.modules.enabled.includes(id) || (s.isAdmin && wantedModules(a, s).has(id));
+}
+
+function moduleSteps(plan: Plan, a: Answers, s: OnboardingState): void {
+  // A server from before modules reports none: nothing to switch.
+  const modules = s.modules ?? { enabled: [], byUseCase: {} };
+  const wanted = wantedModules(a, s);
   if (wanted.size === 0) return;
-  const missing = [...wanted].filter(([id]) => !s.modules.enabled.includes(id));
+  const missing = [...wanted].filter(([id]) => !modules.enabled.includes(id));
   if (missing.length === 0) {
     plan.done('modules', `Already on: ${[...wanted.values()].join(', ')}`);
+    return;
+  }
+  // Switching is install-wide: someone else is told who does it.
+  if (!s.isAdmin) {
+    plan.done('modules', `Your admin turns on ${missing.map(([, title]) => title).join(', ')} in Settings → Modules`);
     return;
   }
   plan.api('modules', `Turn on ${missing.map(([, title]) => title).join(', ')}`, {
@@ -455,10 +481,13 @@ function moduleSteps(plan: Plan, useCases: readonly UseCaseId[], chatChannel: st
  */
 export function buildPlan(useCases: readonly UseCaseId[], answers: Answers, state: OnboardingState, opts: PlanOptions): PlanStep[] {
   const a: Answers = { ...answers, _useCases: [...useCases] };
+  const asked0 = new Set(sectionsFor(useCases).map((s) => s.id));
+  // A chat picked to talk from brings the chat channels (wantedModules).
+  if (asked0.has('chat')) a._chatChannel = str(a, 'chat.channel');
   const asked = new Set(sectionsFor(useCases).map((s) => s.id));
   const plan = new Plan();
   // First: the later steps may use what a module brings.
-  moduleSteps(plan, useCases, asked.has('chat') ? str(a, 'chat.channel') : '', state);
+  moduleSteps(plan, a, state);
   if (asked.has('models')) modelSteps(plan, a, state);
   if (asked.has('areas')) areaSteps(plan, a, state, opts);
   if (asked.has('chat')) chatSteps(plan, a, state);

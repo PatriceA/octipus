@@ -25,7 +25,8 @@ const fresh = (over: Partial<OnboardingState> = {}): OnboardingState => ({
   pipelineTemplates: [{ id: 'tpl-dev', name: 'Full Development Cycle' }, { id: 'tpl-research', name: 'Research & Analysis' }],
   mcpServers: [],
   workspaceRoot: null,
-  modules: { enabled: [], byUseCase: { company: [{ id: 'business', title: 'Cases' }, { id: 'mail', title: 'Mail' }] } },
+  // The inbox is on already (an install from before modules has every module).
+  modules: { enabled: ['inbox'], byUseCase: { company: [{ id: 'business', title: 'Cases' }, { id: 'mail', title: 'Mail' }] } },
   progress: {},
   ...over,
 });
@@ -178,7 +179,7 @@ describe('running a company', () => {
     expect(ids(steps)).toEqual(expect.arrayContaining(['standing-instructions', 'connect:mailbox', 'setting:heartbeat.enabled', 'perm:tasks/write',
       'perm:messaging/send', 'heartbeat:me', 'role:general', 'setup-complete']));
     expect(step(steps, 'connect:mailbox')).toMatchObject({ start: { path: '/auth/oauth/google/authorize' }, doneWhen: { mailbox: true } });
-    expect(step(steps, 'heartbeat:me')).toMatchObject({ call: { body: { enabled: true, watchEmail: true, intervalMinutes: 30 } }, dependsOn: ['connect:mailbox'] });
+    expect(step(steps, 'heartbeat:me')).toMatchObject({ call: { body: { enabled: true, watchEmail: true, intervalMinutes: 30 } }, dependsOn: ['connect:mailbox', 'modules'] });
     expect(step(steps, 'role:general')).toMatchObject({ call: { body: { pipelineTemplate: 'tpl-research' } } });
   });
 
@@ -217,7 +218,7 @@ describe('already set up before the guide', () => {
 
   test('a done step counts as done for the steps after it', () => {
     const steps = plan(['company'], { 'company.mail': true, 'company.interval': '30' }, fresh({ mailbox: 'google' }));
-    expect(step(steps, 'heartbeat:me')).toMatchObject({ kind: 'api', dependsOn: ['connect:mailbox'] });
+    expect(step(steps, 'heartbeat:me')).toMatchObject({ kind: 'api', dependsOn: ['connect:mailbox', 'modules'] });
     expect(step(steps, 'connect:mailbox')).toMatchObject({ kind: 'done' });
   });
 });
@@ -262,7 +263,20 @@ describe('modules', () => {
     expect(ids(plan(['development'], { 'chat.channel': 'none' }))).not.toContain('modules');
   });
 
-  test('not for someone who is not an admin', () => {
-    expect(ids(plan(['company'], {}, fresh({ isAdmin: false })))).not.toContain('modules');
+  test('someone who is not an admin is told who turns them on; nothing is called', () => {
+    const steps = plan(['company'], {}, fresh({ isAdmin: false }));
+    expect(step(steps, 'modules')).toMatchObject({ kind: 'done', title: expect.stringMatching(/Your admin turns on Cases, Mail/) });
+  });
+
+  test('the inbox watch waits for the inbox module, or says who turns it on', () => {
+    const byUseCase = { company: [{ id: 'inbox', title: 'Email inbox' }] };
+    const admin = plan(['company'], { 'company.mail': true }, fresh({ modules: { enabled: [], byUseCase } }));
+    expect(step(admin, 'heartbeat:me')).toMatchObject({ kind: 'api', dependsOn: expect.arrayContaining(['modules']) });
+    const member = plan(['company'], { 'company.mail': true }, fresh({ isAdmin: false, modules: { enabled: [], byUseCase } }));
+    expect(step(member, 'heartbeat:me')).toMatchObject({ kind: 'done', title: expect.stringMatching(/admin turns on the email inbox/) });
+  });
+
+  test('a server that reports no modules: no step', () => {
+    expect(ids(plan(['company'], {}, fresh({ modules: undefined as never })))).not.toContain('modules');
   });
 });

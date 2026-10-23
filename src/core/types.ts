@@ -306,6 +306,8 @@ export interface TriggerConfig {
 }
 
 export interface ActionConfig {
+  /** The module the automation is part of (docs/MODULES.md): it does not run while that module is off. */
+  module?: string;
   // For notify
   notifyOwner?: boolean;
   notifyChannels?: string[];
