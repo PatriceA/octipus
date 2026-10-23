@@ -1252,12 +1252,12 @@ export class AgentWorker extends BaseAgentWorker {
         }, 'Incremental tool-output compaction (soft cap)');
       }
 
-      // Compaction below summarises on the agent's model: the right one first.
-      await this.followProtectionLevel();
-
       // Proactive compaction: when cumulative input tokens exceed threshold, compact aggressively
       // This prevents context window overflow before it happens (inspired by claw-code-parity's 100K threshold)
       const AUTO_COMPACT_THRESHOLD = 100_000;
+      // Compaction below summarises on the agent's model: the right one first,
+      // once a summary is near (both thresholds below are higher than this).
+      if (this.estimateRequestTokens() > Math.min(AUTO_COMPACT_THRESHOLD, this.config.contextWindowSize * 0.6)) await this.followProtectionLevel();
       if (this.estimateRequestTokens() > Math.min(AUTO_COMPACT_THRESHOLD, this.config.contextWindowSize * 0.8) && this.messages.length > 10) {
         const { messages: proactiveCompacted, removed: proactiveRemoved } = await compactMessagesWithSummary(this.messages, {
           maxTokens: Math.floor(this.config.contextWindowSize * 0.6),
