@@ -69,6 +69,12 @@ last run did counts as done.
   Every check those routes make still applies: admin-only settings,
   workspace-root limits, known roles, permission levels. A step whose result
   already exists becomes a `done` step: it is listed, and nothing is called.
+- **The first step switches on modules** ([MODULES.md](MODULES.md)). The use
+  cases picked bring their modules: `company` turns on cases, contacts and
+  records, mail, scan folders and protection levels; `development` turns on
+  none, so a developer gets the core only. Only an admin's run has this step.
+  It only turns modules on, never off, so running the guide again with fewer
+  use cases changes nothing that is on. It calls `POST /api/modules/enable`.
 - **`GET /api/onboarding`** reports what is already set up
   (`src/core/onboarding/state.ts`). Install-wide facts (model rows, provider
   keys, MCP servers, CLI tools on the host) are only read for admins. Every

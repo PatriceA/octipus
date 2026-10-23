@@ -76,6 +76,8 @@ describe('GET /api/onboarding', () => {
       models: { textReady: false, embeddingReady: false },
       mailbox: null,
       standingInstructions: false,
+      // Every module on in tests (src/test-setup.ts); company brings the business ones.
+      modules: { byUseCase: { company: expect.arrayContaining([expect.objectContaining({ id: 'business' })]) } },
       permissions: { tasksWrite: 'ASK', messagingSend: 'ASK' },
       progress: {},
     });

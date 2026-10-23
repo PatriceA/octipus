@@ -427,6 +427,32 @@ function researchSteps(plan: Plan, a: Answers, s: OnboardingState): void {
 }
 
 /**
+ * The modules the picked use cases bring (docs/MODULES.md), switched on
+ * install-wide by an admin. Only turned on, never off: a second run of the
+ * guide with fewer use cases leaves alone what is already on.
+ */
+function moduleSteps(plan: Plan, useCases: readonly UseCaseId[], s: OnboardingState): void {
+  // A server from before modules reports none: nothing to switch.
+  const modules = s.modules ?? { enabled: [], byUseCase: {} };
+  const wanted = new Map<string, string>();
+  for (const useCase of useCases) for (const m of modules.byUseCase[useCase] ?? []) wanted.set(m.id, m.title);
+  if (wanted.size === 0) return;
+  const missing = [...wanted].filter(([id]) => !modules.enabled.includes(id));
+  if (missing.length === 0) {
+    plan.done('modules', `Already on: ${[...wanted.values()].join(', ')}`);
+    return;
+  }
+  // Switching is install-wide: someone else is told who does it.
+  if (!s.isAdmin) {
+    plan.done('modules', `Your admin turns on ${missing.map(([, title]) => title).join(', ')} in Settings → Modules`);
+    return;
+  }
+  plan.api('modules', `Turn on ${missing.map(([, title]) => title).join(', ')}`, {
+    method: 'POST', path: '/modules/enable', body: { ids: missing.map(([id]) => id) },
+  }, { detail: 'For everyone on this install. Settings → Modules switches them off again; their data stays.' });
+}
+
+/**
  * The plan for these use cases and answers, in the order it runs. Questions
  * of sections the use cases do not bring in are ignored, whatever their
  * saved answer.
@@ -435,6 +461,8 @@ export function buildPlan(useCases: readonly UseCaseId[], answers: Answers, stat
   const a: Answers = { ...answers, _useCases: [...useCases] };
   const asked = new Set(sectionsFor(useCases).map((s) => s.id));
   const plan = new Plan();
+  // First: the later steps may use what a module brings.
+  moduleSteps(plan, useCases, state);
   if (asked.has('models')) modelSteps(plan, a, state);
   if (asked.has('areas')) areaSteps(plan, a, state, opts);
   if (asked.has('chat')) chatSteps(plan, a, state);

@@ -53,6 +53,11 @@ export interface OnboardingState {
   mcpServers: string[];
   /** The folder agents work in (admins only). */
   workspaceRoot: string | null;
+  /**
+   * Modules (docs/MODULES.md): the ids that are on, and the modules each use
+   * case switches on. The guide's first step turns on the ones missing.
+   */
+  modules: { enabled: string[]; byUseCase: Partial<Record<UseCaseId, Array<{ id: string; title: string }>>> };
   progress: OnboardingProgress;
 }
 

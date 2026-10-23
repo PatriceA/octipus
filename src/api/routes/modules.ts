@@ -1,7 +1,7 @@
 import { adminDenied } from '@/api/admin-guard';
 import { apiContext } from '@/api/context';
 import { Elysia, t } from '@/api/http';
-import { enabledModules, ModuleChangeError, moduleById, moduleViews, setModuleOn } from '@/core/modules/registry';
+import { enableModules, enabledModules, ModuleChangeError, moduleById, moduleViews, setModuleOn } from '@/core/modules/registry';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import type { ModulesResponse } from '@/shared/modules';
 import { isAuthenticated } from '@/security/principal';
@@ -22,6 +22,27 @@ export const moduleRoutes = new Elysia({ prefix: '/modules' })
     if (!isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
     return modulesResponse();
   }, { detail: { tags: ['modules'] } })
+
+  // Turn several on (the onboarding's step): what they depend on comes with
+  // them, and nothing that is on is turned off.
+  .post('/enable', async ({ user, principal, body, set }) => {
+    const denied = adminDenied({ set, user, principal });
+    if (denied) return denied;
+    const unknown = body.ids.filter((id: string) => !moduleById(id));
+    if (unknown.length > 0) { set.status = 404; return { error: `Unknown module: ${unknown.join(', ')}` }; }
+    const enabled = await enableModules(body.ids, user?.id);
+    await auditRepository.log({
+      userId: user?.id,
+      action: 'settings_changed',
+      resourceType: 'setting',
+      resourceId: 'modules.enabled',
+      details: { key: 'modules.enabled', turnedOn: body.ids, enabled },
+    });
+    return modulesResponse();
+  }, {
+    body: t.Object({ ids: t.Array(t.String({ maxLength: 64 }), { maxItems: 64 }) }),
+    detail: { tags: ['modules'] },
+  })
 
   // Turning one on turns on what it depends on; turning one off is refused
   // while a module that depends on it is on. Off deletes nothing.
