@@ -11,6 +11,7 @@ import { GlobalPermissionBanner } from './global-permission-banner';
 import { Header } from './header';
 import { WorkNavigation } from './work-navigation';
 import { ImpersonationBanner } from './impersonation-banner';
+import { ModuleGate } from './module-gate';
 import { SpendBudgetBanner } from './spend-budget-banner';
 import { Sidebar } from './sidebar';
 import { WorkspaceBanner } from './workspace-banner';
@@ -69,12 +70,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             )}
           >
             {fullBleed ? (
-              children
+              <ModuleGate pathname={pathname}>{children}</ModuleGate>
             ) : (
               // Re-keying on navigation gives every page the same quick
               // fade/slide entrance the mobile app uses.
               <div key={pathname} className="animate-enter">
-                {children}
+                <ModuleGate pathname={pathname}>{children}</ModuleGate>
               </div>
             )}
           </main>

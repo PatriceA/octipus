@@ -2,6 +2,7 @@ import { actionRecovery, isReadOnlyAction } from '@/core/action-recovery';
 import { assertExecutionActive, getExecutionSignal } from '@/core/execution-scope';
 import type { ToolHandler } from '@/core/agent-worker';
 import { getAgentHooks } from '@/core/agent/hooks';
+import { toolOffMessage } from '@/core/modules/registry';
 import { isCancellationError } from '@/core/swarm/errors';
 import { recordToolExecution } from '@/core/telemetry';
 import type { AgentContext, ToolManifest, } from '@/core/types';
@@ -102,6 +103,11 @@ export abstract class BaseTool {
       description,
       parameters,
       execute: async (args, context) => {
+        // A tool of a module that is off (docs/MODULES.md) runs for nobody,
+        // however its handler was reached: a running worker's snapshot, a
+        // hook's `execute_tool`, another tool calling it.
+        const off = toolOffMessage(this.id);
+        if (off) return { error: off };
         // Enforce the `required` list the parameter schema already declares.
         // Nothing used to: a model that omitted a required argument reached the
         // tool body, where an ad-hoc guard let it through (`SLUG_RE.test(

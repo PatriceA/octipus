@@ -3,7 +3,7 @@
  * line here; `registry.test.ts` checks that every route, tool and job it
  * names belongs to it alone.
  */
-import type { ModuleDefinition } from '@/core/modules/types';
+import type { ModuleDefinition } from '../core/modules/types';
 import { businessModule } from './business';
 import { mailModule } from './mail';
 import { protectionModule } from './protection';

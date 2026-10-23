@@ -15,6 +15,7 @@ import {
   Sliders,
   Smartphone,
 } from 'lucide-react';
+import { useSearchParams } from 'next/navigation';
 import { useState } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
 import { ApiTokensTab } from '@/components/settings/api-tokens-tab';
@@ -32,7 +33,8 @@ import { SecurityTab } from '@/components/settings/security-tab';
 import { VoiceTab } from '@/components/settings/voice-tab';
 
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState('general');
+  // `?tab=modules` opens a tab directly (the "this module is off" page links there).
+  const [activeTab, setActiveTab] = useState(useSearchParams().get('tab') ?? 'general');
 
   const tabs = [
     { id: 'general', label: 'General', icon: Settings },

@@ -17,6 +17,7 @@ import { setupGatewayWebSocket } from './gateway-ws';
 import { auditShadowMiddleware } from './middleware/audit-shadow';
 import { authGuard } from './middleware/auth-guard';
 import { rateLimitMiddleware } from './middleware/rate-limit';
+import { moduleOffResponse } from './module-guard';
 import { adminRoutes } from './routes/admin';
 import { adminApprovalRoutes } from './routes/admin-approvals';
 import { federationAdminRoutes } from './routes/federation-admin';
@@ -226,6 +227,15 @@ export function createServer() {
       }
 
       return { error: 'Internal server error' };
+    })
+    // A module that is off (docs/MODULES.md): its routes answer 404 for
+    // everyone, before authentication, so they look like routes that do not
+    // exist. Covers the groups mounted below `/api` too (artifact pages).
+    .onBeforeHandle((ctx) => {
+      const off = moduleOffResponse(new URL(ctx.request.url).pathname);
+      if (!off) return;
+      ctx.set.status = 404;
+      return off;
     })
     // Auth middleware helper
     //

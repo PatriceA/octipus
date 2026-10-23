@@ -7,6 +7,7 @@
  */
 import { randomBytes } from 'crypto';
 import { inject } from 'vitest';
+import { MODULES } from '@/modules';
 
 // Installed before test modules import code that calls os.tmpdir(). Child
 // processes inherit the same exclusive root. Set all platform aliases.
@@ -43,6 +44,10 @@ process.env.MASTER_KEY = process.env.MASTER_KEY ?? `test-master-${rand(24)}`;
 process.env.JWT_SECRET = process.env.JWT_SECRET ?? `test-jwt-${rand(24)}`;
 process.env.SESSION_SECRET = process.env.SESSION_SECRET ?? `test-session-${rand(24)}`;
 process.env.LOG_LEVEL = process.env.LOG_LEVEL ?? 'error';
+// Every module on (docs/MODULES.md), as on an install from before modules:
+// the suites of a module's routes and tools run against it switched on. The
+// tests of switching off set the module list themselves.
+process.env.MODULES_ENABLED = process.env.MODULES_ENABLED ?? MODULES.map((m) => m.id).join(',');
 
 export const TEST_CONFIG = {
   masterKey: process.env.MASTER_KEY,

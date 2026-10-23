@@ -83,6 +83,13 @@ export function isToolOn(toolId: string): boolean {
   return owner === undefined || isModuleOn(owner);
 }
 
+/** What a refused call of an off module's tool says; null for a tool that is on. */
+export function toolOffMessage(toolId: string): string | null {
+  const owner = toolOwner.get(toolId);
+  if (owner === undefined || isModuleOn(owner)) return null;
+  return `The ${byId.get(owner)?.title ?? owner} module is switched off on this install, so its tools are not available. Do not retry; an admin turns it on in Settings → Modules.`;
+}
+
 /** A core job, or one whose module is on. Unknown names are core. */
 export function isJobOn(job: string): boolean {
   const owner = jobOwner.get(job);

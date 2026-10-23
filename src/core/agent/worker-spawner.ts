@@ -1,3 +1,4 @@
+import { isToolOn } from '@/core/modules/registry';
 import { execFile } from 'child_process';
 import { resolve } from 'path';
 import { promisify } from 'util';
@@ -203,6 +204,31 @@ function premiseRoots(context: AgentContext, devProjectPath?: string): string[] 
   return roots;
 }
 
+/**
+ * A stage's `toolIds` narrow its role's tools. The ids name a tool GROUP
+ * (`filesystem`) or one tool (`filesystem__read_file`), the shape
+ * `PipelineStepConfig` and the role config use. A declaration that matches
+ * nothing is a template bug and fails open, loudly (a toolless worker looks
+ * like a model refusing to work); one that names only tools of modules that
+ * are off (docs/MODULES.md) gets no tools instead: falling open to the role's
+ * whole set would widen it.
+ */
+export function narrowToStage(roleTools: import('@/core/agent-base').ToolHandler[], toolIds: readonly string[], role: string): import('@/core/agent-base').ToolHandler[] {
+  const declared = toolIds.filter((id) => isToolOn(id.split('__')[0]));
+  if (declared.length === 0) {
+    coreLogger.warn({ role, declared: toolIds }, 'Stage declared only tools of modules that are off — the worker gets none');
+    return [];
+  }
+  const allowed = new Set(declared);
+  const narrowed = roleTools.filter((t) => allowed.has(t.name) || allowed.has(t.name.split('__')[0]));
+  if (narrowed.length > 0) {
+    coreLogger.info({ role, declared: toolIds, from: roleTools.length, to: narrowed.length }, 'Worker tools narrowed to the stage declaration');
+    return narrowed;
+  }
+  coreLogger.warn({ role, declared: toolIds, available: roleTools.map((t) => t.name) }, 'Stage declared toolIds that match none of the role tools — ignoring the declaration');
+  return roleTools;
+}
+
 export async function spawnWorker(
   role: string,
   task: string,
@@ -298,28 +324,7 @@ export async function spawnWorker(
   await getMCPBridge().whenInitiallyConnected();
   let roleTools = getToolsForRole(agentRole);
 
-  if (overrides?.toolIds && overrides.toolIds.length > 0) {
-    const allowed = new Set(overrides.toolIds);
-    // Match on the tool's id/group prefix (`filesystem__read_file` → `filesystem`)
-    // so a declaration names a tool GROUP, the same shape `PipelineStepConfig`
-    // and the role config already use.
-    const narrowed = roleTools.filter((t) => allowed.has(t.name) || allowed.has(t.name.split('__')[0]));
-    if (narrowed.length > 0) {
-      coreLogger.info(
-        { role: agentRole, declared: overrides.toolIds, from: roleTools.length, to: narrowed.length },
-        'Worker tools narrowed to the stage declaration',
-      );
-      roleTools = narrowed;
-    } else {
-      // Fail open, loudly: a declaration that matches nothing is a template
-      // bug, and a toolless worker would fail in a way that looks like the
-      // model refusing to work rather than like a misconfiguration.
-      coreLogger.warn(
-        { role: agentRole, declared: overrides.toolIds, available: roleTools.map((t) => t.name) },
-        'Stage declared toolIds that match none of the role tools — ignoring the declaration',
-      );
-    }
-  }
+  if (overrides?.toolIds && overrides.toolIds.length > 0) roleTools = narrowToStage(roleTools, overrides.toolIds, agentRole);
 
   if (overrides?.extraToolIds?.length) {
     const have = new Set(roleTools.map((t) => t.name));
