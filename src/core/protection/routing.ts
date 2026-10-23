@@ -85,6 +85,10 @@ export type LocalNeed = 'tools' | 'text' | 'vision';
 
 function serves(row: ModelConfigEntry, need: LocalNeed): boolean {
   if (!row.isEnabled) return false;
+  // An embedding model writes vectors, not text.
+  const topics = [...(row.topics ?? []), ...Object.keys(row.topicRoles ?? {})];
+  if (topics.length > 0 && topics.every((t) => t === 'embedding')) return false;
+  if (/embed/i.test(row.modelId)) return false;
   if (need === 'vision') return row.supportsVision;
   if (need === 'tools') return row.supportsTools && !row.modelId.includes('reasoner') && !row.modelId.includes('thinking');
   return true;

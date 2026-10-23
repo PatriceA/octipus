@@ -24,7 +24,12 @@ function isUuidShape(id: string): boolean {
 function remember(sessionId: string, level: ProtectionLevel): void {
   levels.delete(sessionId); // re-insert: Map order doubles as LRU order
   levels.set(sessionId, level);
-  if (levels.size > MAX_SESSIONS) levels.delete(levels.keys().next().value as string);
+  if (levels.size > MAX_SESSIONS) {
+    // An evicted level is read from the row again: never "nothing read".
+    const evicted = levels.keys().next().value as string;
+    levels.delete(evicted);
+    loaded.delete(evicted);
+  }
 }
 
 function rememberLoaded(sessionId: string): void {
@@ -34,7 +39,10 @@ function rememberLoaded(sessionId: string): void {
 
 /** The session's level: the highest it has read, 1 while it has read nothing leveled. */
 export function sessionProtectionLevel(sessionId: string | undefined): ProtectionLevel {
-  return (sessionId && levels.get(sessionId)) || 1;
+  const level = sessionId ? levels.get(sessionId) : undefined;
+  if (!level || !sessionId) return 1;
+  remember(sessionId, level); // a session in use stays in the cache
+  return level;
 }
 
 /**
@@ -62,7 +70,16 @@ export function highestLevel(levelsRead: readonly (number | null | undefined)[])
 }
 
 /**
- * Merge the session's stored level into this process, once per session.
+ * Read the stored level again at the start of a turn: another process may
+ * have raised it since this one loaded it.
+ */
+export function refreshSessionLevel(sessionId: string | undefined): void {
+  if (sessionId) loaded.delete(sessionId);
+}
+
+/**
+ * Merge the session's stored level into this process, once per session
+ * (and again after `refreshSessionLevel`).
  * Throws when the row cannot be read: the caller decides where data may go
  * and must not decide on a level it could not load.
  */

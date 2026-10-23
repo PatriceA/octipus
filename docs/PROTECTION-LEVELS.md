@@ -100,6 +100,9 @@ to what a session already read. It is kept in `sessions.protection_level`.
   bound."
 - **CLI agents** are not started for such a session. One already running when
   the level rises gets its further tool results withheld.
+- **The turn's helpers** (session compaction, memory extraction) follow the
+  session too: compaction runs on a local model, and memory extraction on a
+  remote model is refused.
 - **Every model call** is checked once more before it leaves: completions and
   streams, embeddings, image descriptions, OCR and decision models. An
   embedding model cannot be swapped for another (its vectors would not match
@@ -138,6 +141,13 @@ see (`maxProtection`, see [PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md)).
 ## Not yet
 
 - The steps C6c-C6d above.
+- Memories and notes carry no level: a fact remembered from a level 4
+  conversation (extracted by a local model) can surface in a later
+  conversation without raising it. Reading a document's file through the
+  filesystem tools raises nothing either.
+- Several server processes share a session's level through the database at
+  the start of each turn; a raise in one process reaches another at its next
+  turn, not mid-turn.
 - Levels on notes, tasks and contacts (contacts hold personal data and will
   likely start at 3).
 - A web control to set levels (the API is there).

@@ -34,7 +34,7 @@ import { isPlanMode, PLAN_MODE_DIRECTIVE, stripMutatingTools } from './plan-mode
 import { isLongTailHandler } from './tool-split';
 import { buildCapabilitiesHandler } from '@/tools/self-report';
 import { modelCandidates, type ModelSelector } from './model-selector';
-import { localRowInstead } from '@/core/protection/routing';
+import { localRowInstead, ProtectionRoutingError } from '@/core/protection/routing';
 import { raiseSessionLevel } from '@/core/protection/session-level';
 import { resolvePromptTier } from './prompt-tier';
 import { buildOutputDirective } from './output-directive';
@@ -1046,8 +1046,10 @@ export async function runRootAgent(
     }
 
     if (limit) return { response: limit.text, agentId, sources: [], outcome: 'failed', limit: limit.refusal };
+    // Confidential content and no local model (core/protection/routing.ts): the reason is the answer.
     const response = wasStopped
       ? 'Task was stopped. Would you like to adjust the request or start something new?'
+      : error instanceof ProtectionRoutingError ? errMsg
       : `I encountered an error while processing your request: ${humanizeProviderError(errMsg)}`;
     return { response, agentId, sources, outcome: wasStopped || isCancellationError(error) ? 'cancelled' : 'failed' };
   } finally {

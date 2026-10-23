@@ -3,6 +3,7 @@ import type { WorkspaceFS } from '@/security/workspace-fs';
 import { getModelRegistry } from '@/models/model-registry';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { localRowInstead, ProtectionRoutingError } from '@/core/protection/routing';
+import { modelCandidates } from './model-selector';
 
 /** CLI workers receive originals; auxiliary vision is only used for API workers. */
 export async function buildRootAttachmentContext(
@@ -19,7 +20,7 @@ export async function buildRootAttachmentContext(
     // An attached file counts as level 4 (docs/PROTECTION-LEVELS.md): a local model reads it, or none.
     let vision: typeof bound;
     try {
-      vision = await localRowInstead(bound, sessionId, 'vision', async () => ({ defaultModel: null, rows: await getModelRegistry().getAllModels() })) ?? bound;
+      vision = await localRowInstead(bound, sessionId, 'vision', () => modelCandidates({ userId })) ?? bound;
     } catch (err) {
       if (!(err instanceof ProtectionRoutingError)) throw err;
       return 'The image was not described: attached files stay on local models, and no local model that reads images is bound. Say so; do not claim to have seen it.';

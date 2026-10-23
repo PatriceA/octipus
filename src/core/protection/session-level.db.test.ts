@@ -94,6 +94,17 @@ describe('the stored level', () => {
     resetSessionLevels();
     expect(await localOnlyLevel(id)).toBe(4);
   });
+
+  test('a level pushed out of the cache by other sessions is read back, never taken as "nothing read"', async () => {
+    const { raiseSessionLevel } = await import('./session-level');
+    const { localOnlyLevel } = await import('./routing');
+    const id = await newSession();
+    raiseSessionLevel(id, 4);
+    await settle();
+    expect(await localOnlyLevel(id)).toBe(4);
+    for (let i = 0; i < 2_100; i++) raiseSessionLevel(`busy-${i}`, 2);
+    expect(await localOnlyLevel(id)).toBe(4);
+  });
 });
 
 describe('knowledge hits', () => {

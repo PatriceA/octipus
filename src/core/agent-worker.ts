@@ -1252,6 +1252,9 @@ export class AgentWorker extends BaseAgentWorker {
         }, 'Incremental tool-output compaction (soft cap)');
       }
 
+      // Compaction below summarises on the agent's model: the right one first.
+      await this.followProtectionLevel();
+
       // Proactive compaction: when cumulative input tokens exceed threshold, compact aggressively
       // This prevents context window overflow before it happens (inspired by claw-code-parity's 100K threshold)
       const AUTO_COMPACT_THRESHOLD = 100_000;
@@ -2274,6 +2277,28 @@ export class AgentWorker extends BaseAgentWorker {
     this.drainSteeringQueue();
   }
 
+  /**
+   * A tool result of this turn may have raised the session to level 3-4
+   * (core/protection/routing.ts): the rest of the turn, compaction included,
+   * runs on a local model, or the turn stops before anything leaves the
+   * house (`ProtectionRoutingError`).
+   */
+  private async followProtectionLevel(bound?: ModelConfigEntry | null): Promise<ModelConfigEntry | null | undefined> {
+    const registry = getModelRegistry();
+    const current = bound !== undefined ? bound : this.context.modelName
+      ? await registry.getModel(this.context.modelName)
+      : await registry.getModelByModelId(this.context.model, { userId: this.context.userId });
+    const model = await localRowInstead(current, this.context.sessionId, 'tools', () => modelCandidates({
+      userId: this.context.userId, inSpace: !!this.context.space, spaceRole: this.context.space?.role, sponsor: this.context.sponsor,
+    })) ?? current;
+    if (model && model !== current) {
+      agentLogger.info({ agentId: this.context.id, sessionId: this.context.sessionId, from: current?.name, to: model.name }, 'Confidential content read: agent continues on a local model');
+      this.context.model = model.modelId;
+      this.context.modelName = model.name;
+    }
+    return model;
+  }
+
   private async getCompletion(): Promise<CompletionResult> {
     const client = getLiteLLMClient();
     const registry = getModelRegistry();
@@ -2286,18 +2311,7 @@ export class AgentWorker extends BaseAgentWorker {
     if (!bound) {
       throw new Error(`Model not found: ${this.context.modelName ?? this.context.model}`);
     }
-    // A tool result of this turn may have raised the session to level 3-4
-    // (core/protection/routing.ts): the rest of the turn, compaction
-    // included, runs on a local model, or the turn stops before anything
-    // leaves the house.
-    const model = await localRowInstead(bound, this.context.sessionId, 'tools', () => modelCandidates({
-      userId: this.context.userId, inSpace: !!this.context.space, spaceRole: this.context.space?.role, sponsor: this.context.sponsor,
-    })) ?? bound;
-    if (model !== bound) {
-      agentLogger.info({ agentId: this.context.id, sessionId: this.context.sessionId, from: bound.name, to: model.name }, 'Confidential content read: agent continues on a local model');
-      this.context.model = model.modelId;
-      this.context.modelName = model.name;
-    }
+    const model = (await this.followProtectionLevel(bound)) ?? bound;
 
     const litellmModel = model.modelId;
     const advertisedTools = this.getAdvertisedToolHandlers();

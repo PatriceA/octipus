@@ -146,6 +146,8 @@ describe('choosing the model', () => {
     const seesImages = row('llava-local', { provider: 'ollama', endpoint: 'http://localhost:11434', supportsVision: true });
     expect(await localRowInstead(remote, s, 'tools', candidates([noTools, localOllama]))).toBe(localOllama);
     expect(await localRowInstead(remote, s, 'vision', candidates([localOllama, seesImages]))).toBe(seesImages);
+    const embedder = row('nomic-embed-text', { provider: 'ollama', endpoint: 'http://localhost:11434', topics: ['embedding'] });
+    expect(await localRowInstead(remote, s, 'text', candidates([embedder, localOllama]))).toBe(localOllama);
     const disabled = row('off-local', { provider: 'ollama', endpoint: 'http://localhost:11434', isEnabled: false });
     await expect(localRowInstead(remote, s, 'tools', candidates([disabled]))).rejects.toBeInstanceOf(ProtectionRoutingError);
   });

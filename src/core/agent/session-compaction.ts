@@ -164,8 +164,7 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
     const keep = history.rows.length - boundary;
     const prefix = history.rows.slice(0, boundary);
     if (!prefix.length) return false;
-    const model = await getModelRegistry().getDefaultModel();
-    if (!model) throw new Error('No model configured for session compaction');
+    const model = await compactionModel(sessionId);
     let summaryInput = prefix.map(toContextMessage);
     let nativeTail: NonNullable<typeof savedNative>['messages'] | undefined;
     const native = history.session.context?.nativeConversation;
@@ -308,8 +307,7 @@ async function compactRoom(sessionId: string, options: MaybeCompactSessionOption
   }
   const prefix = rows.slice(0, boundary);
   if (prefix.length === 0) return false;
-  const model = await getModelRegistry().getDefaultModel();
-  if (!model) throw new Error('No model configured for session compaction');
+  const model = await compactionModel(sessionId);
   const { withProviderUsageContext } = await import('@/models/providers/instrumented');
   let previousSummary = history.checkpoint?.summary;
   let previousFileOps = history.checkpoint?.fileOps;
@@ -461,4 +459,16 @@ export async function compactSessionCommand(sessionId: string | undefined, args:
   } catch (err) {
     return `Compaction failed: ${err instanceof Error ? err.message : String(err)}`;
   }
+}
+
+/**
+ * The model a session's history is summarised on: the default, or a local
+ * one while the session holds level 3-4 content (core/protection/routing.ts).
+ */
+async function compactionModel(sessionId: string) {
+  const registry = getModelRegistry();
+  const defaultModel = await registry.getDefaultModel();
+  if (!defaultModel) throw new Error('No model configured for session compaction');
+  const { localRowInstead } = await import('@/core/protection/routing');
+  return (await localRowInstead(defaultModel, sessionId, 'text', async () => ({ defaultModel, rows: await registry.getAllModels() }))) ?? defaultModel;
 }
