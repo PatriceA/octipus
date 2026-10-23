@@ -151,7 +151,8 @@ Each point is its own PR with its own code review.
 | C5 backup (database with vault, files, checked, daily, retention) | `feat/backup` (on C4) | #438 | merged |
 | C6a protection levels 1-4 (design for C6b-d in docs/PROTECTION-LEVELS.md) | `feat/protection-levels` (on C5) | #439 | merged |
 | C6b local-only routing for levels 3-4 | `feat/protection-routing` | | in review |
-| C6c pseudonymization · C6d plugin gate | | | next |
+| C6c pseudonymization for remote models at level 2-3 | `feat/protection-pseudonymization` (on C6b) | | in review |
+| C6d plugin gate | | | next |
 
 ## 5. Open questions (answers expected from the business side)
 

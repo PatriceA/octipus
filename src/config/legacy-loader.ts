@@ -191,6 +191,9 @@ export function loadFromEnvLegacy(): Partial<Config> {
     modules: {
       enabled: (process.env.MODULES_ENABLED || '').split(',').map((s) => s.trim()).filter(Boolean),
     },
+    protection: {
+      remoteAtLevel3: process.env.PROTECTION_REMOTE_AT_LEVEL3 === 'true',
+    },
     spaces: {
       // Passed through as written: the schema rejects anything but the two values.
       creation: (process.env.SPACES_CREATION as 'any_user' | 'admins' | undefined) || 'any_user',

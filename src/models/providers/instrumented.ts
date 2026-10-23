@@ -3,6 +3,7 @@ import type { CompletionOptions, CompletionResult, StreamChunk } from '../litell
 import type { ModelProvider } from './interface';
 import { modelLogger } from '@/utils/logger';
 import { applyProviderSettings } from '../provider-options';
+import { type Pseudonyms, StreamRestorer } from '@/core/protection/pseudonymize';
 
 export type ProviderUsageContext = Pick<CompletionOptions, 'userId' | 'sessionId' | 'agentId' | 'modelConfigName' | 'accountingMetadata' | 'workspaceId' | 'funding'>;
 const usageContext = new AsyncLocalStorage<ProviderUsageContext>();
@@ -82,8 +83,13 @@ async function prepare(options: CompletionOptions, provider: string): Promise<Co
   // Level 3-4 content stays on local models (core/protection/routing.ts): a
   // call that would leave the house is refused here, before any provider.
   // Not inside the try above: a refusal is never "settings unavailable".
-  const { assertMayLeave } = await import('@/core/protection/routing');
-  await assertMayLeave(row ?? { provider, modelId: options.model, endpoint: options.endpoint ?? null, metadata: null }, options.sessionId, provider);
+  const { assertMayLeave, PSEUDONYMIZED, pseudonymsFor } = await import('@/core/protection/routing');
+  const hosted = row ?? { provider, modelId: options.model, endpoint: options.endpoint ?? null, metadata: null };
+  await assertMayLeave(hosted, options.sessionId, provider, PSEUDONYMIZED);
+  // Level 2-3 on a remote model: personal data leaves as placeholders (C6c),
+  // translated back in accountCompletion / accountStream.
+  const pseudonyms = await pseudonymsFor(hosted, options.sessionId, provider);
+  if (pseudonyms) options = { ...options, messages: pseudonymizeMessages(options.messages, pseudonyms) };
   if (row?.ownerUserId) {
     const { assertModelRowOwner, resolveModelKey } = await import('../model-key');
     assertModelRowOwner(row, options.userId);
@@ -95,7 +101,30 @@ async function prepare(options: CompletionOptions, provider: string): Promise<Co
     };
   }
   // Callers own extraBody: an omitted field may be an intentional safety override.
-  return applyProviderSettings(options, provider, settings);
+  const prepared = applyProviderSettings(options, provider, settings);
+  if (pseudonyms) pseudonymized.set(prepared, pseudonyms);
+  return prepared;
+}
+
+/** The mapping each prepared request went out with (C6c). */
+const pseudonymized = new WeakMap<CompletionOptions, Pseudonyms>();
+
+function pseudonymizeMessages(messages: CompletionOptions['messages'], p: Pseudonyms): CompletionOptions['messages'] {
+  return messages.map((m) => ({
+    ...m,
+    content: p.pseudonymize(m.content),
+    ...(m.toolCalls ? { toolCalls: m.toolCalls.map((tc) => ({ ...tc, arguments: p.pseudonymizeDeep(tc.arguments) })) } : {}),
+    ...(m.reasoningContent ? { reasoningContent: p.pseudonymize(m.reasoningContent) } : {}),
+  }));
+}
+
+function restoreResult(result: CompletionResult, p: Pseudonyms): CompletionResult {
+  return {
+    ...result,
+    content: p.restore(result.content),
+    ...(result.toolCalls ? { toolCalls: result.toolCalls.map((tc) => ({ ...tc, arguments: p.restoreDeep(tc.arguments) })) } : {}),
+    ...(result.reasoningContent ? { reasoningContent: p.restore(result.reasoningContent) } : {}),
+  };
 }
 
 /**
@@ -194,7 +223,8 @@ export async function accountCompletion(options: CompletionOptions, provider: st
   try {
     const result = await run({ ...prepared, accountingOwner: true, accountingResponse: value => { observed = value; } });
     await recordProviderUsage(prepared, provider, result);
-    return result;
+    const p = pseudonymized.get(prepared);
+    return p ? restoreResult(result, p) : result;
   } catch (err) {
     // Preserve a received/billable response even if decoding tool arguments fails.
     if (observed) await recordProviderUsage(prepared, provider, observed, true);
@@ -208,17 +238,54 @@ export async function* accountStream(options: CompletionOptions, provider: strin
   let model = options.model;
   let requestId: string | undefined;
   let completed = false;
+  const restorer = streamRestorerFor(pseudonymized.get(prepared));
   try {
     for await (const chunk of run({ ...prepared, accountingOwner: true })) {
       if (chunk.usage) usage = chunk.usage;
       if (chunk.model) model = chunk.model;
       if (chunk.requestId) requestId = chunk.requestId;
-      yield chunk;
+      if (!restorer) { yield chunk; continue; }
+      // Held-back text goes out before the chunk that ends the stream.
+      if (chunk.finishReason || chunk.usage) yield* restorer.flush();
+      yield restorer.chunk(chunk);
     }
+    if (restorer) yield* restorer.flush();
     completed = true;
   } finally {
     await recordProviderUsage(prepared, provider, { usage, model, requestId }, !completed);
   }
+}
+
+/**
+ * Translates a pseudonymized stream back (C6c): its text and each tool
+ * call's arguments, a placeholder split across chunks included.
+ */
+function streamRestorerFor(p: Pseudonyms | undefined) {
+  if (!p) return null;
+  const text = new StreamRestorer(p);
+  const args = new Map<string, InstanceType<typeof StreamRestorer>>();
+  return {
+    chunk(chunk: StreamChunk): StreamChunk {
+      const out: StreamChunk = { ...chunk };
+      if (chunk.content) out.content = text.push(chunk.content);
+      if (chunk.reasoningContent) out.reasoningContent = p.restore(chunk.reasoningContent);
+      if (chunk.toolCallDelta?.arguments) {
+        const id = chunk.toolCallDelta.id;
+        const restorer = args.get(id) ?? new StreamRestorer(p);
+        args.set(id, restorer);
+        out.toolCallDelta = { ...chunk.toolCallDelta, arguments: restorer.push(chunk.toolCallDelta.arguments) };
+      }
+      return out;
+    },
+    *flush(): Generator<StreamChunk> {
+      const rest = text.flush();
+      if (rest) yield { content: rest };
+      for (const [id, restorer] of args) {
+        const tail = restorer.flush();
+        if (tail) yield { toolCallDelta: { id, arguments: tail } };
+      }
+    },
+  };
 }
 
 /** Instrument registered direct instances. LiteLLM instruments its wire methods

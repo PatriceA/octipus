@@ -10,6 +10,7 @@
 import type { ModelConfigEntry } from '@/db/schema/models';
 import { isModuleOn } from '@/core/modules/registry';
 import { PROTECTION_LEVEL_LABELS, type ProtectionLevel } from '@/shared/protection';
+import { pseudonymsOf, type Pseudonyms } from './pseudonymize';
 import { currentContentLevel, loadSessionLevel, sessionProtectionLevel } from './session-level';
 
 /** The lowest level whose content stays on local models. */
@@ -26,21 +27,48 @@ export class ProtectionRoutingError extends Error {
 }
 
 /**
- * The level that decides where the calls of `sessionId` (and of the content
- * work around them) may go, or undefined while it allows any model: the
- * module is off, or nothing at 3-4 was read. A stored level that cannot be
- * read counts as 4: where data may go is not decided on a level not known.
+ * The level of what the calls of `sessionId` (and the content work around
+ * them) carry, or undefined while the `protection` module is off. A stored
+ * level that cannot be read counts as 4: where data may go is not decided on
+ * a level not known.
  */
-export async function localOnlyLevel(sessionId: string | undefined): Promise<ProtectionLevel | undefined> {
+export async function carriedLevel(sessionId: string | undefined): Promise<ProtectionLevel | undefined> {
   if (!isModuleOn('protection')) return undefined;
-  let level: ProtectionLevel = currentContentLevel() ?? 1;
+  const level: ProtectionLevel = currentContentLevel() ?? 1;
   try {
     await loadSessionLevel(sessionId);
-    level = Math.max(level, sessionProtectionLevel(sessionId)) as ProtectionLevel;
+    return Math.max(level, sessionProtectionLevel(sessionId)) as ProtectionLevel;
   } catch {
-    level = 4;
+    return 4;
   }
-  return level >= LOCAL_ONLY_LEVEL ? level : undefined;
+}
+
+/**
+ * How a call reaches a remote model. `pseudonymized`: a completion or a
+ * stream, whose personal data is replaced before it leaves (C6c); level 3
+ * may then go out where the owner allows it (`protection.remoteAtLevel3`).
+ * Embeddings, images, OCR and CLI agents carry the data as it is.
+ */
+export interface Egress { pseudonymized?: boolean }
+
+/** A completion or stream: pseudonymized on its way out. */
+export const PSEUDONYMIZED: Egress = { pseudonymized: true };
+
+async function localOnlyFrom(egress: Egress): Promise<number> {
+  if (!egress.pseudonymized) return LOCAL_ONLY_LEVEL;
+  const { getConfig } = await import('@/config');
+  return getConfig().protection?.remoteAtLevel3 ? LOCAL_ONLY_LEVEL + 1 : LOCAL_ONLY_LEVEL;
+}
+
+/**
+ * The level that keeps the calls of `sessionId` on local models, or
+ * undefined while they may use any model: the module is off, or nothing at
+ * 3-4 was read (at 4 only, for a pseudonymized call where level 3 may go out).
+ */
+export async function localOnlyLevel(sessionId: string | undefined, egress: Egress = {}): Promise<ProtectionLevel | undefined> {
+  const level = await carriedLevel(sessionId);
+  if (level === undefined) return undefined;
+  return level >= await localOnlyFrom(egress) ? level : undefined;
 }
 
 type HostedRow = Pick<ModelConfigEntry, 'provider' | 'modelId' | 'metadata' | 'endpoint'>;
@@ -74,8 +102,8 @@ function refusal(level: ProtectionLevel, what: string): ProtectionRoutingError {
  * `via`) may not go where it would go: the session holds level 3-4 content
  * and the row does not run locally.
  */
-export async function assertMayLeave(row: HostedRow | null | undefined, sessionId: string | undefined, via?: string): Promise<void> {
-  const level = await localOnlyLevel(sessionId);
+export async function assertMayLeave(row: HostedRow | null | undefined, sessionId: string | undefined, via?: string, egress: Egress = {}): Promise<void> {
+  const level = await localOnlyLevel(sessionId, row?.provider === 'cli' ? {} : egress);
   if (level === undefined || await runsLocally(row, via)) return;
   throw refusal(level, `${row?.modelId ?? 'this model'} is not a local model`);
 }
@@ -105,8 +133,10 @@ export async function localRowInstead<R extends ModelConfigEntry>(
   sessionId: string | undefined,
   need: LocalNeed,
   candidates: () => Promise<{ defaultModel: R | null; rows: R[] }>,
+  egress: Egress = {},
 ): Promise<R | null | undefined> {
-  const level = await localOnlyLevel(sessionId);
+  // A CLI agent brings its own harness: nothing it sends is pseudonymized.
+  const level = await localOnlyLevel(sessionId, row?.provider === 'cli' ? {} : egress);
   if (level === undefined || await runsLocally(row)) return row;
   const { defaultModel, rows } = await candidates();
   const ordered = defaultModel ? [defaultModel, ...rows.filter((r) => r.name !== defaultModel.name)] : rows;
@@ -114,4 +144,17 @@ export async function localRowInstead<R extends ModelConfigEntry>(
     if (serves(candidate, need) && await runsLocally(candidate)) return candidate;
   }
   throw refusal(level, need === 'vision' ? 'no local model that reads images is bound' : 'no local model is bound');
+}
+
+/**
+ * The mapping a call on `row` (through provider `via`) is pseudonymized
+ * with, or undefined when it goes out as it is: the module is off, the
+ * content is public (level 1), or the row is local. Level 4 never gets here
+ * on a remote row: `assertMayLeave` refused it.
+ */
+export async function pseudonymsFor(row: HostedRow | null | undefined, sessionId: string | undefined, via?: string): Promise<Pseudonyms | undefined> {
+  const level = await carriedLevel(sessionId);
+  if (level === undefined || level < 2) return undefined;
+  if (await runsLocally(row, via)) return undefined;
+  return pseudonymsOf(sessionId);
 }

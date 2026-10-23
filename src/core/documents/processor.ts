@@ -11,7 +11,7 @@ import { documentRepository } from '@/db/repositories/document-repository';
 import { choiceOf, decide, preferDecision, type DecisionSite } from '@/models/decision';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
-import { localOnlyLevel, localRowInstead, runsLocally } from '@/core/protection/routing';
+import { localOnlyLevel, localRowInstead, PSEUDONYMIZED, runsLocally } from '@/core/protection/routing';
 import { withContentLevel } from '@/core/protection/session-level';
 import { coreLogger } from '@/utils/logger';
 
@@ -993,7 +993,7 @@ export class DocumentProcessor {
       throw new Error('No default model configured for document processing. Set one in the Models page.');
     }
     // A document at 3-4 is read by a local model, or not by any.
-    const row = await localRowInstead(defaultModel, undefined, 'text', async () => ({ defaultModel, rows: await registry.getAllModels() }));
+    const row = await localRowInstead(defaultModel, undefined, 'text', async () => ({ defaultModel, rows: await registry.getAllModels() }), PSEUDONYMIZED);
     return (row ?? defaultModel).modelId;
   }
 }

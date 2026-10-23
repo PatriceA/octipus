@@ -17,7 +17,7 @@ import { billableTokens } from '@/models/billable-tokens';
 import { collectStream } from '@/models/stream-collect';
 import { getModelRegistry } from '@/models/model-registry';
 import { modelCandidates } from './agent/model-selector';
-import { localOnlyLevel, localRowInstead, ProtectionRoutingError } from './protection/routing';
+import { localOnlyLevel, localRowInstead, ProtectionRoutingError, PSEUDONYMIZED } from './protection/routing';
 import { type ToolShimSchema, proseShowsToolIntent, translateToToolCall } from '@/models/toolshim';
 import { applyTopicParamOverrides, getTopicConfig } from '@/models/topic-config';
 import { getConfig } from '@/config';
@@ -2285,14 +2285,14 @@ export class AgentWorker extends BaseAgentWorker {
    */
   private async followProtectionLevel(bound?: ModelConfigEntry | null): Promise<ModelConfigEntry | null | undefined> {
     // Nothing to look up while the session may use any model.
-    if (await localOnlyLevel(this.context.sessionId) === undefined) return bound;
+    if (await localOnlyLevel(this.context.sessionId, PSEUDONYMIZED) === undefined) return bound;
     const registry = getModelRegistry();
     const current = bound !== undefined ? bound : this.context.modelName
       ? await registry.getModel(this.context.modelName)
       : await registry.getModelByModelId(this.context.model, { userId: this.context.userId });
     const model = await localRowInstead(current, this.context.sessionId, 'tools', () => modelCandidates({
       userId: this.context.userId, inSpace: !!this.context.space, spaceRole: this.context.space?.role, sponsor: this.context.sponsor,
-    })) ?? current;
+    }), PSEUDONYMIZED) ?? current;
     if (model && model !== current) {
       agentLogger.info({ agentId: this.context.id, sessionId: this.context.sessionId, from: current?.name, to: model.name }, 'Confidential content read: agent continues on a local model');
       this.context.model = model.modelId;

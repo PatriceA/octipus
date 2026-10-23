@@ -581,6 +581,15 @@ export const modulesConfigSchema = z.object({
   enabled: z.array(z.string()).default([]),
 });
 
+export const protectionConfigSchema = z.object({
+  /**
+   * Level 3 (personal data) may go to a remote model once it is
+   * pseudonymized (docs/PROTECTION-LEVELS.md, C6c). Off: level 3 stays on
+   * local models, like level 4.
+   */
+  remoteAtLevel3: z.boolean().default(false),
+});
+
 export const spacesConfigSchema = z.object({
   /** Who may create a space: every signed-in user, or admins only. */
   creation: z.enum(['any_user', 'admins']).default('any_user'),
@@ -801,6 +810,7 @@ export const configSchema = z.object({
   spaces: spacesConfigSchema.prefault({}),
   backup: backupConfigSchema.prefault({}),
   modules: modulesConfigSchema.prefault({}),
+  protection: protectionConfigSchema.prefault({}),
   rooms: roomsConfigSchema.prefault({}),
   federation: federationConfigSchema.prefault({}),
   gateway: gatewayConfigSchema.prefault({}),
