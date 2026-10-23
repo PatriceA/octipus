@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-592 mounted routes across 81 route files. The path is the full one, group prefix included — what a client actually calls.
+594 mounted routes across 82 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -325,6 +325,8 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/models/usage/daily` | `src/api/routes/models.ts` |
 | GET | `/api/models/usage/global` | `src/api/routes/models.ts` |
 | GET | `/api/models/usage/session/:sessionId` | `src/api/routes/models.ts` |
+| GET | `/api/modules` | `src/api/routes/modules.ts` |
+| PUT | `/api/modules/:id` | `src/api/routes/modules.ts` |
 | GET | `/api/notes` | `src/api/routes/notes.ts` |
 | POST | `/api/notes` | `src/api/routes/notes.ts` |
 | DELETE | `/api/notes/:id` | `src/api/routes/notes.ts` |
@@ -628,14 +630,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 22 |
 | `api` | `config` | 24 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 159 |
-| `api` | `db` | 120 |
+| `api` | `core` | 161 |
+| `api` | `db` | 121 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 4 |
 | `api` | `models` | 39 |
 | `api` | `plugins` | 2 |
-| `api` | `security` | 145 |
+| `api` | `security` | 146 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 14 |
 | `api` | `skills` | 6 |
@@ -671,13 +673,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `connectors` | `utils` | 5 |
 | `core` | `capabilities` | 2 |
 | `core` | `channels` | 12 |
-| `core` | `config` | 61 |
+| `core` | `config` | 63 |
 | `core` | `connectors` | 4 |
 | `core` | `db` | 386 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 10 |
 | `core` | `models` | 120 |
+| `core` | `modules` | 1 |
 | `core` | `security` | 174 |
 | `core` | `services` | 2 |
 | `core` | `setup` | 1 |

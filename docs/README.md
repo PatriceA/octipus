@@ -66,6 +66,7 @@ The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 | [plans/modules.md](plans/modules.md) | Design: a lean core (the agent runner and dock) and modules a profile switches on; what is core, the first modules, how off is enforced. |
 | [PROTECTION-LEVELS.md](PROTECTION-LEVELS.md) | Protection levels 1-4 on documents, cases, records and mail (unclear = 4): where they come from, who may change them, and what they will decide (privacy gateway). |
 | [BACKUP.md](BACKUP.md) | Daily backups of the database (with the vault) and the workspace files, checked by loading them back; retention, the admin API and restore. |
+| [MODULES.md](MODULES.md) | The core and the modules an install switches on (cases, mail, scan folders, protection levels); Settings → Modules and the API. |
 | [SCAN-FOLDERS.md](SCAN-FOLDERS.md) | Scan folders: server directories a scanner or fax service drops files into, filed into the documents of a personal or space scope. |
 | [PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md) | Plugin packages: out-of-repo connections that run as their own fenced-in MCP server, with declared tool effects, settings and vault secrets. |
 | [TASK-BOARD.md](TASK-BOARD.md) | The work board on the tasks page: assignees, checkout leases, comments, dependency wakeups, the audit trail, and role agents that work their tasks. |

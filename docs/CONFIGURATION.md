@@ -232,6 +232,14 @@ described in [SPACES.md → Settings](SPACES.md#settings).
 
 See [BACKUP.md](BACKUP.md).
 
+## Modules Config
+
+| Key | Default | Purpose |
+|---|---|---|
+| `modules.enabled` | `[]` | The modules that are on, set in Settings → Modules or by the onboarding. Empty: the core only. Installs from before modules start with every module on. Env: `MODULES_ENABLED` (comma-separated), read only while nothing is stored: an upgraded install, or one where a module was switched, keeps the stored list. Changed through `/api/modules` only, not the generic settings routes. |
+
+See [MODULES.md](MODULES.md).
+
 ## Federation Config
 
 Spaces across installs (design: [plans/federation-spec.md](plans/federation-spec.md)).

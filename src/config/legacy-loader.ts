@@ -188,6 +188,9 @@ export function loadFromEnvLegacy(): Partial<Config> {
       keep: parseInt(process.env.BACKUP_KEEP || String(defaultConfig.backup!.keep), 10),
       includeFiles: process.env.BACKUP_INCLUDE_FILES ? process.env.BACKUP_INCLUDE_FILES !== 'false' : defaultConfig.backup!.includeFiles,
     },
+    modules: {
+      enabled: (process.env.MODULES_ENABLED || '').split(',').map((s) => s.trim()).filter(Boolean),
+    },
     spaces: {
       // Passed through as written: the schema rejects anything but the two values.
       creation: (process.env.SPACES_CREATION as 'any_user' | 'admins' | undefined) || 'any_user',

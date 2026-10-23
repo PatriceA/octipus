@@ -9,10 +9,18 @@ import {
   getSettingsByCategory,
   SETTINGS_REGISTRY,
 } from '@/config/settings-registry';
+import { MODULES_SETTING } from '@/core/modules/registry';
 import { getSettingsService } from '@/config/settings-service';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { getVault } from '@/security/vault';
 import { apiLogger } from '@/utils/logger';
+
+/**
+ * Modules are switched through `/api/modules` (docs/MODULES.md), which
+ * follows their dependencies; written here, a reset would switch off every
+ * module of an install at once.
+ */
+const MODULES_ELSEWHERE = 'Modules are switched in Settings → Modules (PUT /api/modules/:id)';
 
 export const settingsRoutes = new Elysia({ prefix: '/settings' })
   .use(apiContext)
@@ -207,6 +215,7 @@ export const settingsRoutes = new Elysia({ prefix: '/settings' })
       if (!def) {
         return { error: `Unknown setting: ${key}` };
       }
+      if (key === MODULES_SETTING) return { error: MODULES_ELSEWHERE };
 
       // Validate workspace paths before saving
       if (key === 'workspace.rootPath' && typeof value === 'string') {
@@ -276,6 +285,10 @@ export const settingsRoutes = new Elysia({ prefix: '/settings' })
           errors[key] = `Unknown setting: ${key}`;
           continue;
         }
+        if (key === MODULES_SETTING) {
+          errors[key] = MODULES_ELSEWHERE;
+          continue;
+        }
 
         try {
           if (def.isSecret && def.vaultName) {
@@ -327,6 +340,7 @@ export const settingsRoutes = new Elysia({ prefix: '/settings' })
       if (!def) {
         return { error: `Unknown setting: ${params.key}` };
       }
+      if (params.key === MODULES_SETTING) return { error: MODULES_ELSEWHERE };
 
       try {
         const svc = getSettingsService();

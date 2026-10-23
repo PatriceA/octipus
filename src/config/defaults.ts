@@ -128,6 +128,9 @@ export const defaultConfig: Partial<Config> = {
     keep: 7,
     includeFiles: true,
   },
+  modules: {
+    enabled: [],
+  },
   spaces: {
     creation: 'any_user',
     maxMembers: 50,

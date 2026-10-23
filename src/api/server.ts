@@ -85,6 +85,7 @@ import { caseRoutes, contactRoutes } from './routes/cases';
 import { publicFormRoutes, recordRoutes, recordTypeRoutes } from './routes/records';
 import { pluginPackageRoutes } from './routes/plugin-packages';
 import { mailRoutes } from './routes/mail';
+import { moduleRoutes } from './routes/modules';
 import { scanFolderRoutes } from './routes/scan-folders';
 import { backupRoutes } from './routes/backups';
 import { protectionRoutes } from './routes/protection';
@@ -477,6 +478,7 @@ export function createServer() {
         .use(workspaceRoutes)
         .use(oauthRoutes)
         .use(settingsRoutes)
+        .use(moduleRoutes)
         .use(capabilitiesRoutes)
         .use(skillTopicAssignmentRoutes)
         .use(skillRoutes)
