@@ -1214,6 +1214,17 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'BACKUP_INCLUDE_FILES',
   },
 
+  // ── Modules (docs/MODULES.md) ──
+  {
+    key: 'modules.enabled',
+    category: 'modules',
+    valueType: 'string_array',
+    defaultValue: [],
+    description: 'The modules that are on (Settings → Modules). Empty: the core only.',
+    isSecret: false,
+    envVar: 'MODULES_ENABLED',
+  },
+
   // ── Shared spaces ──
   {
     key: 'spaces.creation',

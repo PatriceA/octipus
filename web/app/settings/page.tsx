@@ -2,6 +2,7 @@
 
 import {
   Bell,
+  Boxes,
   Cpu,
   Globe,
   HeartPulse,
@@ -23,6 +24,7 @@ import { GeneralTab } from '@/components/settings/general-tab';
 import { HeartbeatTab } from '@/components/settings/heartbeat-tab';
 import { IntegrationsTab } from '@/components/settings/integrations-tab';
 import { MobileTab } from '@/components/settings/mobile-tab';
+import { ModulesTab } from '@/components/settings/modules-tab';
 import { MyModelsTab } from '@/components/settings/my-models-tab';
 import { NotificationsTab } from '@/components/settings/notifications-tab';
 import { RemoteSpacesTab } from '@/components/settings/remote-spaces-tab';
@@ -34,6 +36,7 @@ export default function SettingsPage() {
 
   const tabs = [
     { id: 'general', label: 'General', icon: Settings },
+    { id: 'modules', label: 'Modules', icon: Boxes },
     { id: 'configuration', label: 'Configuration', icon: Sliders },
     { id: 'integrations', label: 'Integrations', icon: Plug },
     { id: 'channels', label: 'Channels', icon: MessageSquare },
@@ -82,6 +85,7 @@ export default function SettingsPage() {
 
         <div className="flex-1 min-w-0 bg-surface-container border border-outline-variant rounded-md p-6">
           {activeTab === 'general' && <GeneralTab />}
+          {activeTab === 'modules' && <ModulesTab />}
           {activeTab === 'configuration' && <ConfigurationTab />}
           {activeTab === 'integrations' && <IntegrationsTab />}
           {activeTab === 'channels' && <ChannelsTab />}

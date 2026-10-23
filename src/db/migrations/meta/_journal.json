@@ -1058,6 +1058,13 @@
       "when": 1793095224550,
       "tag": "0150_protection_levels",
       "breakpoints": true
+    },
+    {
+      "idx": 151,
+      "version": "7",
+      "when": 1793181624550,
+      "tag": "0151_modules",
+      "breakpoints": true
     }
   ]
 }

@@ -572,6 +572,15 @@ export const backupConfigSchema = z.object({
   includeFiles: z.boolean().default(true),
 });
 
+/**
+ * Modules (docs/MODULES.md): the parts of Octipus switched on install-wide.
+ * A module not listed is off: no routes, tools, jobs or pages.
+ */
+export const modulesConfigSchema = z.object({
+  /** Ids of the modules that are on. Empty: the core only. */
+  enabled: z.array(z.string()).default([]),
+});
+
 export const spacesConfigSchema = z.object({
   /** Who may create a space: every signed-in user, or admins only. */
   creation: z.enum(['any_user', 'admins']).default('any_user'),
@@ -791,6 +800,7 @@ export const configSchema = z.object({
   groupChannels: groupChannelsConfigSchema.prefault({}),
   spaces: spacesConfigSchema.prefault({}),
   backup: backupConfigSchema.prefault({}),
+  modules: modulesConfigSchema.prefault({}),
   rooms: roomsConfigSchema.prefault({}),
   federation: federationConfigSchema.prefault({}),
   gateway: gatewayConfigSchema.prefault({}),
@@ -801,6 +811,7 @@ export type HeartbeatConfig = z.infer<typeof heartbeatConfigSchema>;
 export type SessionsConfig = z.infer<typeof sessionsConfigSchema>;
 export type SpacesConfig = z.infer<typeof spacesConfigSchema>;
 export type BackupConfig = z.infer<typeof backupConfigSchema>;
+export type ModulesConfig = z.infer<typeof modulesConfigSchema>;
 export type RoomsConfig = z.infer<typeof roomsConfigSchema>;
 export type FederationConfig = z.infer<typeof federationConfigSchema>;
 export type FederationMode = FederationConfig['mode'];
