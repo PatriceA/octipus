@@ -3,8 +3,8 @@
 Every piece of business content carries a protection level: how sensitive it
 is, which decides where it may be processed. This is point C6 of the
 [business OS plan](plans/business-os.md), the privacy gateway. It is built in
-four steps. This page describes the first three (C6a, the levels; C6b, routing
-by level; C6c, pseudonymization) and the design of the last.
+four steps: C6a, the levels; C6b, routing by level; C6c, pseudonymization;
+C6d, plugin calls.
 
 ## The levels
 
@@ -151,17 +151,22 @@ a tool gets the real e-mail address, not `[EMAIL_1]`.
 - A name with no first name from the list and no title is not found. The
   evaluation against real-shaped samples is plan point C7.
 
-## What the levels will decide (C6d, not built yet)
+## Plugin calls (C6d)
 
-**C6d. Plugin calls.** Every plugin package declares the highest level it may
-see (`maxProtection`, see [PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md)).
-- A tool call carrying content above that level is refused.
-- A call to an external system counts as leaving the house, just like a remote
-  model.
+Every plugin package declares the highest level it may see (`maxProtection`,
+see [PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md)). While the `protection` module
+is on, a call to one of its tools, resources or prompts from a conversation
+holding content above that level is refused, and the agent is told why. The
+arguments are written by an agent that has read that content, so the
+conversation's level is what the call may carry.
+
+A package that leaves `maxProtection` out may see level 1 when it lists
+`network` hosts (a call to an outside system counts as leaving the house, like
+a remote model) and level 4 when it lists none (its sandbox has no network).
+Operator-configured MCP servers are not plugin packages and are not gated.
 
 ## Not yet
 
-- The step C6d above.
 - Memories and notes carry no level: a fact remembered from a level 4
   conversation (extracted by a local model) can surface in a later
   conversation without raising it. Reading a document's file through the
@@ -169,6 +174,7 @@ see (`maxProtection`, see [PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md)).
 - Several server processes share a session's level through the database at
   the start of each turn; a raise in one process reaches another at its next
   turn, not mid-turn.
+- What a plugin returns carries no level yet.
 - Levels on notes, tasks and contacts (contacts hold personal data and will
   likely start at 3).
 - A web control to set levels (the API is there).

@@ -14,6 +14,7 @@ export async function authorizeMcpDispatch(context: AgentContext, action: string
   const toolArgs = args.arguments && typeof args.arguments === 'object' ? args.arguments as Record<string, unknown> : args;
   const effect = await pluginEffectOf(action);
   if (effect === 'undeclared') throw new Error(`Permission denied for mcp.${action}: the plugin package does not declare this tool`);
+  if (effect) await assertPluginMayReceive(context, action);
   const checked = await pm.check(context.userId, 'mcp', action, toolArgs, context, {
     revalidate: !!prior,
     ...(effect ? { defaultLevel: effect === 'read' ? 'ALLOW' : 'ASK' } : {}),
@@ -56,4 +57,22 @@ async function pluginEffectOf(action: string): Promise<PluginToolEffect | 'undec
   // Reading a resource or fetching a prompt is a read, not a tool the manifest lists.
   if (effect === 'undeclared' && (tool === 'resources/read' || tool === 'prompts/get')) return 'read';
   return effect;
+}
+
+/**
+ * Refuses a plugin call from a conversation holding content above the
+ * package's `maxProtection` (docs/PROTECTION-LEVELS.md, C6d): its arguments
+ * are written by an agent that has read that content, so the session's level
+ * is what the call may carry. While the `protection` module is off, nothing
+ * is refused.
+ */
+async function assertPluginMayReceive(context: AgentContext, action: string): Promise<void> {
+  const { getMCPBridge } = await import('@/mcp/bridge');
+  const max = getMCPBridge().pluginMaxProtection(action.slice(0, action.indexOf('.')));
+  if (max === null) return;
+  const { carriedLevel } = await import('@/core/protection/routing');
+  const level = await carriedLevel(context.sessionId);
+  if (level === undefined || level <= max) return;
+  throw new Error(`Permission denied for mcp.${action}: this conversation holds protection level ${level} content, `
+    + `and the plugin package may see up to level ${max}. Do NOT retry this call; tell the user it needs a new conversation, or a package allowed this level.`);
 }

@@ -737,9 +737,9 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `security` | `api` | 1 |
 | `security` | `config` | 13 |
 | `security` | `connectors` | 3 |
-| `security` | `core` | 20 |
+| `security` | `core` | 21 |
 | `security` | `db` | 79 |
-| `security` | `mcp` | 1 |
+| `security` | `mcp` | 2 |
 | `security` | `shared` | 1 |
 | `security` | `tools` | 1 |
 | `security` | `utils` | 30 |

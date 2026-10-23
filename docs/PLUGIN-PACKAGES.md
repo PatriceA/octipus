@@ -46,7 +46,7 @@ server (any language) that the manifest says how to start:
 | `server` | `command` and `args`, run in the package directory over stdio. Optional `requestTimeoutMs`. |
 | `tools` | Every tool the server offers, with its `effect` (below). At least one. |
 | `network` | The hosts it talks to. Shown at install; the sandbox gives the package network only when it lists at least one. |
-| `maxProtection` | The highest protection level (1-4) of data it may see. Recorded now; enforced by the privacy gateway (plan point C6). |
+| `maxProtection` | The highest protection level (1-4) of data it may see. A call from a conversation holding content above it is refused ([PROTECTION-LEVELS.md](PROTECTION-LEVELS.md#plugin-calls-c6d)). Left out: 1 for a package with `network` hosts, 4 for one without. |
 | `settings` | Non-secret settings as [record type fields](RECORDS.md#record-types), handed to the server as `OCTIPUS_SETTING_<KEY>`. |
 | `secrets` | Credentials, stored in the vault, handed to the server as environment variables under their own `key`. |
 

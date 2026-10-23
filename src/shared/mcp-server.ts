@@ -11,6 +11,12 @@ export interface PluginBinding {
   version: string;
   /** What each declared tool does; an undeclared tool is hidden and refused. */
   tools: Record<string, PluginToolEffect>;
+  /**
+   * The highest protection level of the conversation its tools may be called
+   * from (docs/PROTECTION-LEVELS.md, C6d): the manifest's `maxProtection`,
+   * else 1 for a package with network access and 4 for one without.
+   */
+  maxProtection: 1 | 2 | 3 | 4;
 }
 
 export interface MCPServer extends McpExposureConfig {
