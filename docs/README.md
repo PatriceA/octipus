@@ -63,6 +63,7 @@ The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 | [CASES.md](CASES.md) | Cases ("Vorgänge"), contacts and follow-ups: the shared records business modules build on, who sees them in a space, the `cases` tool and the API. |
 | [RECORDS.md](RECORDS.md) | Record types with fields a business defines, records validated against them, and public form links that save a record (and open a case) without sign-in. |
 | [MAIL.md](MAIL.md) | Mailboxes over IMAP, POP3 and SMTP: personal and functional (shared) mailboxes, the sync, drafts and approved sends, and which hosts an account may use. |
+| [plans/modules.md](plans/modules.md) | Design: a lean core (the agent runner and dock) and modules a profile switches on; what is core, the first modules, how off is enforced. |
 | [PROTECTION-LEVELS.md](PROTECTION-LEVELS.md) | Protection levels 1-4 on documents, cases, records and mail (unclear = 4): where they come from, who may change them, and what they will decide (privacy gateway). |
 | [BACKUP.md](BACKUP.md) | Daily backups of the database (with the vault) and the workspace files, checked by loading them back; retention, the admin API and restore. |
 | [SCAN-FOLDERS.md](SCAN-FOLDERS.md) | Scan folders: server directories a scanner or fax service drops files into, filed into the documents of a personal or space scope. |
