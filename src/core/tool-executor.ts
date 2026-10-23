@@ -374,11 +374,13 @@ export class ToolExecutor {
    * won't silently route, or null when nothing is close.
    */
   private resolveToolName(name: string): { canonical: string } | { didYouMean: string } | null {
+    // Never a tool of a module that is off (docs/MODULES.md).
+    const names = [...this.tools].filter(([, tool]) => !tool.toolId || isToolOn(tool.toolId)).map(([registered]) => registered);
     // Stage 1: unambiguous bare sub-name → prefixed name.
     if (!name.includes('__')) {
       const suffix = `__${name}`;
       const owners: string[] = [];
-      for (const registered of this.tools.keys()) {
+      for (const registered of names) {
         if (registered.endsWith(suffix)) owners.push(registered);
       }
       if (owners.length === 1) return { canonical: owners[0] };
@@ -389,7 +391,7 @@ export class ToolExecutor {
     let best: string | undefined;
     let bestDist = MAX_DISTANCE + 1;
     let tied = false;
-    for (const registered of this.tools.keys()) {
+    for (const registered of names) {
       const d = boundedLevenshtein(name, registered, MAX_DISTANCE);
       if (d < bestDist) {
         bestDist = d;

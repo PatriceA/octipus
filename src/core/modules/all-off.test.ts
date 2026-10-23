@@ -36,6 +36,9 @@ describe('every module off', () => {
         expect(res.body).toMatchObject({ code: 'module_off', module: m.id });
       }
     }
+    // Percent-encoded, as the router decodes it.
+    expect((await get('/api/c%61ses/x')).body?.code).toBe('module_off');
+    expect((await get('/api/%6D%61il')).body?.code).toBe('module_off');
     // Public forms too: no sign-in needed to be refused.
     expect((await get('/api/forms/sometoken')).body?.code).toBe('module_off');
     // A core route goes on to the rest of the pipeline (here it fails later,
@@ -121,5 +124,18 @@ describe('every module off', () => {
     const { moduleViews, enabledModules } = await import('./registry');
     expect(enabledModules().size).toBe(0);
     expect(moduleViews().every((m) => !m.on)).toBe(true);
+  });
+});
+
+describe('a pipeline stage', () => {
+  test('naming only an off module\'s tools gets none, never the role\'s whole set', async () => {
+    const { narrowToStage } = await import('@/core/agent/worker-spawner');
+    const tool = (name: string) => ({ name, description: '', parameters: {}, toolId: name.split('__')[0], execute: async () => null });
+    const roleTools = [tool('notes__list'), tool('shell__run')];
+    expect(narrowToStage(roleTools, ['cases'], 'general')).toEqual([]);
+    expect(narrowToStage(roleTools, ['cases__list_cases'], 'general')).toEqual([]);
+    expect(narrowToStage(roleTools, ['cases', 'notes'], 'general').map((t) => t.name)).toEqual(['notes__list']);
+    // A plain typo still fails open, as before.
+    expect(narrowToStage(roleTools, ['notez'], 'general')).toHaveLength(2);
   });
 });
