@@ -158,15 +158,38 @@ export class CaseRepo {
    * Update a case the scope reaches. The author, workspace and external key
    * never change on an edit; `closedAt` follows the status.
    */
+  /** A case of the scope, without the admin by-id path. */
+  async findInScope(id: string): Promise<Case | null> {
+    if (!isUuid(id)) return null;
+    const [row] = await this.db.select().from(cases).where(and(eq(cases.id, id), ...this.rows())).limit(1);
+    return row ?? null;
+  }
+
+  /**
+   * Set a case's protection level (null: unclear, 4). `onlyRaise` writes only
+   * when the stored level (null counting as 4) is at most the new one, in the
+   * UPDATE itself. No admin by-id path: the level is the scope's business.
+   */
+  async setProtectionLevel(id: string, level: number | null, onlyRaise = false): Promise<Case | null> {
+    this.scope.can('write');
+    if (!isUuid(id)) return null;
+    const [row] = await this.db.update(cases).set({ protectionLevel: level, updatedAt: new Date() })
+      .where(and(eq(cases.id, id), ...this.rows(), ...(onlyRaise && level !== null ? [sql`coalesce(${cases.protectionLevel}, 4) <= ${level}`] : [])))
+      .returning();
+    return row ?? null;
+  }
+
   async update(id: string, patch: Partial<CaseWrite>): Promise<Case | null> {
     if (!isUuid(id)) return null;
     this.scope.can('write');
     const current = await this.findById(id);
     if (!current) return null;
-    const { externalKey: _key, userId: _user, workspaceId: _ws, ...safe } = patch as Partial<NewCase>;
+    // The protection level is set through `setProtectionLevel` only (core/protection decides who may lower it).
+    const { externalKey: _key, userId: _user, workspaceId: _ws, protectionLevel: _level, ...safe } = patch as Partial<NewCase>;
     void _key;
     void _user;
     void _ws;
+    void _level;
     if (safe.assigneeUserId !== undefined) await this.checkAssignee(safe.assigneeUserId, current.userId);
     const [row] = await this.db
       .update(cases)

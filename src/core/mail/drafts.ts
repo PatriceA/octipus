@@ -6,6 +6,7 @@
 import type { MailDraftWrite } from '@/db/repositories/mail';
 import type { MailAccount, MailMessage } from '@/db/schema/mail';
 import type { MailAddress } from '@/shared/mail';
+import { effectiveProtectionLevel } from '@/shared/protection';
 
 export class MailInputError extends Error {
   constructor(message: string) {
@@ -62,6 +63,16 @@ export function cleanSubject(value: unknown): string {
 /** A body, capped; a draft may be empty while it is written. */
 export function cleanBody(value: unknown): string {
   return typeof value === 'string' ? value.replace(/\r\n/g, '\n').slice(0, BODY_MAX) : '';
+}
+
+/**
+ * The protection level of a reply: it quotes the original, so never below
+ * the original's level (docs/PROTECTION-LEVELS.md). An account without a
+ * default leaves it unclear (4) anyway.
+ */
+export function replyProtectionLevel(account: Pick<MailAccount, 'defaultProtectionLevel'>, original: Pick<MailMessage, 'protectionLevel'>): number | null {
+  if (account.defaultProtectionLevel === null) return null;
+  return Math.max(account.defaultProtectionLevel, effectiveProtectionLevel(original.protectionLevel));
 }
 
 /** "Re: <subject>", without stacking a second one. */

@@ -139,6 +139,7 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
       status: doc.status,
       ocrText: doc.ocrText,
       summary: doc.summary,
+      protectionLevel: doc.protectionLevel,
       storagePath: doc.storagePath,
       metadata: doc.metadata,
       createdAt: doc.createdAt,

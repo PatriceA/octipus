@@ -719,12 +719,19 @@ export class ScopedDocumentRepo {
     return result.length > 0;
   }
 
-  /** Set a document's protection level (null: unclear). Who may lower one is decided a layer up (core/protection). */
-  async setProtectionLevel(id: string, level: number | null): Promise<DocumentRecord | null> {
+  /** A document of the scope, without the admin by-id path (protection levels are the scope's business). */
+  async findInScope(id: string): Promise<DocumentRecord | null> {
+    if (!isUuid(id)) return null;
+    const [row] = await this.db.select().from(documents).where(and(eq(documents.id, id), ...this.scope.shared(documents))).limit(1);
+    return row ?? null;
+  }
+
+  /** Set a document's protection level (null: unclear, 4). `onlyRaise`: see `CaseRepo.setProtectionLevel`. */
+  async setProtectionLevel(id: string, level: number | null, onlyRaise = false): Promise<DocumentRecord | null> {
     if (!isUuid(id)) return null;
     this.scope.can('write');
     const [row] = await this.db.update(documents).set({ protectionLevel: level })
-      .where(and(eq(documents.id, id), ...this.scope.shared(documents))).returning();
+      .where(and(eq(documents.id, id), ...this.scope.shared(documents), ...(onlyRaise && level !== null ? [sql`coalesce(${documents.protectionLevel}, 4) <= ${level}`] : []))).returning();
     return row ?? null;
   }
 

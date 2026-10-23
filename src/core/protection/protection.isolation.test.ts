@@ -81,13 +81,39 @@ describe('protection levels', () => {
     await expect(setProtectionLevel(repos, 'case', unclear.id, 3, 'agent')).rejects.toThrow(/it is 4/);
   });
 
-  test('a record cleared by a person falls back to its type\'s default', async () => {
+  test('a record copies its type\'s default once; null is unclear, whoever set it', async () => {
     const { setProtectionLevel } = await import('./levels');
     const repos = await personal(alice);
     const type = await repos.recordTypes.findByKey('invoice');
-    const record = await repos.records.create(type!.id, { data: { no: 'R-3' }, protectionLevel: 4 });
-    expect(await setProtectionLevel(repos, 'record', record.id, null, 'person')).toMatchObject({ level: null, effective: 2 });
-    await expect(setProtectionLevel(repos, 'record', record.id, 1, 'agent')).rejects.toThrow(/it is 2/);
+    // A person asking for unclear at creation gets unclear, not the type's 2.
+    const unclear = await repos.records.create(type!.id, { data: { no: 'R-3' }, protectionLevel: null });
+    expect(unclear.protectionLevel).toBeNull();
+    const record = await repos.records.create(type!.id, { data: { no: 'R-4' }, protectionLevel: 4 });
+    expect(await setProtectionLevel(repos, 'record', record.id, null, 'person')).toMatchObject({ level: null, effective: 4 });
+    // A later change of the type's default does not reach records made before.
+    const copied = await repos.records.create(type!.id, { data: { no: 'R-5' } });
+    await repos.recordTypes.update(type!.id, { defaultProtectionLevel: 1 });
+    expect((await repos.records.findById(copied.id))?.protectionLevel).toBe(2);
+  });
+
+  test('an agent\'s raise never undoes a higher level set meanwhile', async () => {
+    const repos = await personal(alice);
+    const c = await repos.cases.create({ title: 'Race', protectionLevel: 2 });
+    // The agent read 2 and asks for 3; a person set 4 in between: the conditional write refuses.
+    await repos.cases.setProtectionLevel(c.id, 4);
+    expect(await repos.cases.setProtectionLevel(c.id, 3, true)).toBeNull();
+    expect((await repos.cases.findById(c.id))?.protectionLevel).toBe(4);
+    // A plain case update never carries a level.
+    await repos.cases.update(c.id, { title: 'Race (renamed)', protectionLevel: 1 } as never);
+    expect((await repos.cases.findById(c.id))?.protectionLevel).toBe(4);
+  });
+
+  test('a reply quotes the original, so it starts at no lower level', async () => {
+    const { replyProtectionLevel } = await import('@/core/mail/drafts');
+    expect(replyProtectionLevel({ defaultProtectionLevel: 2 }, { protectionLevel: 4 })).toBe(4);
+    expect(replyProtectionLevel({ defaultProtectionLevel: 3 }, { protectionLevel: 1 })).toBe(3);
+    expect(replyProtectionLevel({ defaultProtectionLevel: 2 }, { protectionLevel: null })).toBe(4);
+    expect(replyProtectionLevel({ defaultProtectionLevel: null }, { protectionLevel: 1 })).toBeNull();
   });
 
   test('documents start at their source\'s level and are set like the rest', async () => {
@@ -103,6 +129,11 @@ describe('protection levels', () => {
     const { setProtectionLevel } = await import('./levels');
     const mine = await (await personal(alice)).cases.create({ title: 'Mine', protectionLevel: 3 });
     expect(await setProtectionLevel(await personal(bob), 'case', mine.id, 1, 'person')).toBeNull();
+    // An admin's by-id access to another user's case does not reach its level.
+    const { resolvedPrincipal } = await import('@/test-helpers/space-fixtures');
+    const { contentRepos } = await import('@/db/repositories/content');
+    const adminRepos = contentRepos(await resolvedPrincipal(bob, null, { isAdmin: true }));
+    expect(await setProtectionLevel(adminRepos, 'case', mine.id, 1, 'person')).toBeNull();
     const shared = await (await inSpace(alice)).cases.create({ title: 'Shared', protectionLevel: 3 });
     await expect(setProtectionLevel(await inSpace(carol), 'case', shared.id, 4, 'person')).rejects.toMatchObject({ name: 'SpaceError' });
     expect(await setProtectionLevel(await inSpace(bob), 'case', shared.id, 4, 'agent')).toMatchObject({ effective: 4 });

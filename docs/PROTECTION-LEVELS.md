@@ -24,8 +24,14 @@ sensitive, never the least.
 |---|---|---|
 | Documents | `documents.protection_level` | The upload's level, the scan folder's or the mail account's default, else unclear |
 | Cases | `cases.protection_level` | The level given at creation, else unclear |
-| Records | `records.protection_level` | The level given, else its record type's `defaultProtectionLevel`, else unclear |
-| Mail messages | `mail_messages.protection_level` | Its account's `defaultProtectionLevel`, else unclear |
+| Records | `records.protection_level` | The level given (null: unclear), else its record type's `defaultProtectionLevel`, copied when the record is created |
+| Mail messages | `mail_messages.protection_level` | Its account's `defaultProtectionLevel`, else unclear. A reply draft quotes the original: it starts at the higher of the two |
+| Filed attachments | the document's level | Their message's level at filing time |
+| Cases opened by a form | the case's level | The level of the record the submission created |
+
+A stored level is the content's own: a default is copied when content is
+created, and changing a source's default later does not reach content made
+before. Null always means unclear, which counts as 4.
 
 Defaults are set on the source: record types, mail accounts (the KIM mailbox
 at 4, info@ at 3), and scan folders (the fax drop at 4).
@@ -41,7 +47,14 @@ at 4, info@ at 3), and scan folders (the fax drop at 4).
 - **An agent** may only **raise** a level (tool `raise_protection_level`):
   it found health data in a document, or a salary in a record. It can never
   lower one, and never clear one to unclear: lowering decides that data may
-  go further, and that is a person's decision.
+  go further, and that is a person's decision. The condition is part of the
+  write itself, so an agent's raise that races a person's change never ends
+  lower than the person set it.
+- Levels are set through the scope alone: an admin's by-id access to another
+  user's personal content does not extend to its level.
+- The API route counts its caller as a person. An API token given to an
+  external agent counts as a person too, so keep such tokens away from
+  `/api/protection`.
 
 Lists and reads show the level: the API's rows, and the cases, records,
 documents and mail tools (as the effective level, 1-4).

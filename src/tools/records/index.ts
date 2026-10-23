@@ -3,6 +3,7 @@ import { FIELD_TYPES, RecordValidationError } from '@/core/records/fields';
 import type { ToolManifest } from '@/core/types';
 import { reposFor } from '@/db/repositories/content';
 import type { RecordRow, RecordType } from '@/db/schema/records';
+import { effectiveProtectionLevel } from '@/shared/protection';
 import { BaseTool, createParameterSchema } from '../base-tool';
 
 /**
@@ -167,11 +168,12 @@ function failure(err: unknown): { error: string; problems?: string[] } {
 }
 
 function summarizeType(t: RecordType) {
-  return { id: t.id, key: t.key, name: t.name, description: t.description, fields: t.fields, titleField: t.titleField };
+  // The level new records start at: a record holding more sensitive data than that is raised with raise_protection_level.
+  return { id: t.id, key: t.key, name: t.name, description: t.description, fields: t.fields, titleField: t.titleField, defaultProtectionLevel: effectiveProtectionLevel(t.defaultProtectionLevel) };
 }
 
 function summarizeRecord(r: RecordRow) {
-  return { id: r.id, typeId: r.typeId, title: r.title, data: r.data, source: r.source, externalKey: r.externalKey, protectionLevel: r.protectionLevel, updatedAt: r.updatedAt };
+  return { id: r.id, typeId: r.typeId, title: r.title, data: r.data, source: r.source, externalKey: r.externalKey, protectionLevel: effectiveProtectionLevel(r.protectionLevel), updatedAt: r.updatedAt };
 }
 
 export const recordsTool = new RecordsTool();

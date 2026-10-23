@@ -153,7 +153,7 @@ export interface RecordInput {
   source?: string;
   sourceRef?: NewRecordRow['sourceRef'];
   externalKey?: string | null;
-  /** The record's level; absent: the type's default. */
+  /** The record's level; absent: the type's default, copied now (a later change of the default does not reach it). Null: unclear. */
   protectionLevel?: number | null;
 }
 
@@ -173,12 +173,12 @@ export class RecordRepo {
     return row ?? null;
   }
 
-  /** Set a record's protection level (null: unclear). Who may lower one is decided a layer up (core/protection). */
-  async setProtectionLevel(id: string, level: number | null): Promise<RecordRow | null> {
+  /** Set a record's protection level (null: unclear, 4). `onlyRaise`: see `CaseRepo.setProtectionLevel`. */
+  async setProtectionLevel(id: string, level: number | null, onlyRaise = false): Promise<RecordRow | null> {
     this.scope.can('write');
     if (!isUuid(id)) return null;
     const [row] = await this.db.update(records).set({ protectionLevel: level, updatedAt: new Date() })
-      .where(and(eq(records.id, id), ...this.rows())).returning();
+      .where(and(eq(records.id, id), ...this.rows(), ...(onlyRaise && level !== null ? [sql`coalesce(${records.protectionLevel}, 4) <= ${level}`] : []))).returning();
     return row ?? null;
   }
 
@@ -221,7 +221,7 @@ export class RecordRepo {
         source: input.source ?? 'user',
         sourceRef: input.sourceRef,
         externalKey: input.externalKey ?? null,
-        protectionLevel: input.protectionLevel ?? type.defaultProtectionLevel ?? null,
+        protectionLevel: input.protectionLevel !== undefined ? input.protectionLevel : type.defaultProtectionLevel,
         ...(await stampRow(this.scope)),
       })
       .returning();
@@ -241,7 +241,7 @@ export class RecordRepo {
         source: input.source ?? 'user',
         sourceRef: input.sourceRef,
         externalKey: input.externalKey,
-        protectionLevel: input.protectionLevel ?? type.defaultProtectionLevel ?? null,
+        protectionLevel: input.protectionLevel !== undefined ? input.protectionLevel : type.defaultProtectionLevel,
         ...(await stampRow(this.scope)),
       })
       .onConflictDoNothing()

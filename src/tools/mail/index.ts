@@ -1,4 +1,4 @@
-import { cleanBody, cleanSubject, MailInputError, parseRecipients, replyDraft } from '@/core/mail/drafts';
+import { cleanBody, cleanSubject, MailInputError, parseRecipients, replyDraft, replyProtectionLevel } from '@/core/mail/drafts';
 import { MailSendError, sendDraft } from '@/core/mail/send';
 import type { ToolManifest } from '@/core/types';
 import { reposFor } from '@/db/repositories/content';
@@ -125,7 +125,7 @@ export class MailTool extends BaseTool {
             if (!original || original.status !== 'received') throw new Error('Message not found');
             const account = await repo.account(original.accountId);
             if (!account) throw new Error('Mail account not found');
-            const draft = await repo.createDraft(account, replyDraft(account, original, String(args.body ?? ''), args.reply_all === true));
+            const draft = await repo.createDraft(account, replyDraft(account, original, String(args.body ?? ''), args.reply_all === true), replyProtectionLevel(account, original));
             return { draft: summarizeMessage(draft), next: 'The draft is saved, not sent. Send it with send_mail_draft once the owner wants it sent.' };
           }
           const account = typeof args.account_id === 'string' ? await repo.account(args.account_id) : null;

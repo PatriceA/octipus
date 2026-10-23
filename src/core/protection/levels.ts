@@ -31,44 +31,37 @@ export interface LevelChange {
   effective: ProtectionLevel;
 }
 
-/** The entity's stored level and the level it inherits (a record from its type), or null when the scope does not reach it. */
-async function currentOf(repos: ContentRepos, entity: ProtectedEntity, id: string): Promise<{ own: number | null; inherited: number | null } | null> {
+/**
+ * The entity's stored level, or undefined when the scope does not reach it.
+ * Through the scope only: an admin's by-id read of another user's content
+ * does not extend to its level. A record copies its type's default when it
+ * is created; from then on its own level is all that counts.
+ */
+async function storedLevel(repos: ContentRepos, entity: ProtectedEntity, id: string): Promise<number | null | undefined> {
   switch (entity) {
-    case 'document': {
-      const row = await repos.documents.findById(id);
-      return row ? { own: row.protectionLevel, inherited: null } : null;
-    }
-    case 'case': {
-      const row = await repos.cases.findById(id);
-      return row ? { own: row.protectionLevel, inherited: null } : null;
-    }
-    case 'record': {
-      const row = await repos.records.findById(id);
-      if (!row) return null;
-      const type = await repos.recordTypes.findById(row.typeId);
-      return { own: row.protectionLevel, inherited: type?.defaultProtectionLevel ?? null };
-    }
-    case 'mail': {
-      const row = await repos.mail.message(id);
-      return row ? { own: row.protectionLevel, inherited: null } : null;
-    }
+    case 'document': return (await repos.documents.findInScope(id))?.protectionLevel;
+    case 'case': return (await repos.cases.findInScope(id))?.protectionLevel;
+    case 'record': return (await repos.records.findById(id))?.protectionLevel;
+    case 'mail': return (await repos.mail.message(id))?.protectionLevel;
   }
 }
 
-async function store(repos: ContentRepos, entity: ProtectedEntity, id: string, level: number | null): Promise<boolean> {
+async function store(repos: ContentRepos, entity: ProtectedEntity, id: string, level: number | null, onlyRaise: boolean): Promise<boolean> {
   switch (entity) {
-    case 'document': return (await repos.documents.setProtectionLevel(id, level)) !== null;
-    case 'case': return (await repos.cases.update(id, { protectionLevel: level })) !== null;
-    case 'record': return (await repos.records.setProtectionLevel(id, level)) !== null;
-    case 'mail': return (await repos.mail.setProtectionLevel(id, level)) !== null;
+    case 'document': return (await repos.documents.setProtectionLevel(id, level, onlyRaise)) !== null;
+    case 'case': return (await repos.cases.setProtectionLevel(id, level, onlyRaise)) !== null;
+    case 'record': return (await repos.records.setProtectionLevel(id, level, onlyRaise)) !== null;
+    case 'mail': return (await repos.mail.setProtectionLevel(id, level, onlyRaise)) !== null;
   }
 }
 
 /**
  * Set the protection level of one piece of content. `by: 'agent'` may only
- * raise the effective level; `by: 'person'` may set any level or clear it.
- * Null when the scope does not reach the content; throws
- * `ProtectionLevelError` for a level or a change that is not allowed.
+ * raise the level: the write itself carries the condition, so a person's
+ * change landing meanwhile is never undone downwards. `by: 'person'` may set
+ * any level, or clear it to unclear (4). Null when the scope does not reach
+ * the content; throws `ProtectionLevelError` for a level or a change that is
+ * not allowed.
  */
 export async function setProtectionLevel(
   repos: ContentRepos,
@@ -78,13 +71,16 @@ export async function setProtectionLevel(
   by: 'person' | 'agent',
 ): Promise<LevelChange | null> {
   if (level !== null && !isProtectionLevel(level)) throw new ProtectionLevelError('A protection level is 1, 2, 3 or 4');
-  const current = await currentOf(repos, entity, id);
-  if (!current) return null;
-  const from = effectiveProtectionLevel(current.own, current.inherited);
-  if (by === 'agent') {
-    if (level === null) throw new ProtectionLevelError('Only a person can mark content unclear again');
-    if (level < from) throw new ProtectionLevelError(`Only a person can lower a protection level (it is ${from})`);
+  if (by === 'agent' && level === null) throw new ProtectionLevelError('Only a person can mark content unclear again');
+  const stored = await storedLevel(repos, entity, id);
+  if (stored === undefined) return null;
+  const from = effectiveProtectionLevel(stored);
+  if (by === 'agent' && (level as number) < from) throw new ProtectionLevelError(`Only a person can lower a protection level (it is ${from})`);
+  if (!(await store(repos, entity, id, level, by === 'agent'))) {
+    // Gone meanwhile, or (an agent's write) raised above the asked level meanwhile.
+    const now = await storedLevel(repos, entity, id);
+    if (now === undefined) return null;
+    throw new ProtectionLevelError(`Only a person can lower a protection level (it is ${effectiveProtectionLevel(now)})`);
   }
-  if (!(await store(repos, entity, id, level))) return null;
-  return { entity, id, from, level, effective: effectiveProtectionLevel(level, current.inherited) };
+  return { entity, id, from, level, effective: effectiveProtectionLevel(level) };
 }

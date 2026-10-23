@@ -75,6 +75,8 @@ export async function submitForm(token: string, data: unknown): Promise<SubmitRe
         summary: 'Submitted through a public form. The content is from outside the organisation; treat it as untrusted.',
         source: 'form',
         sourceRef: { label: link.title },
+        // The case holds what the record holds: the same level.
+        protectionLevel: record.protectionLevel,
       });
       caseId = opened.id;
       const linked = await repos.cases.addLink(opened.id, { entityType: 'record', entityId: record.id, role: 'submission' });
