@@ -554,6 +554,24 @@ export const groupChannelsConfigSchema = z.object({
  * Shared spaces (docs/plans/coworking-spec.md §5). Spaces are always
  * available (D17); these keys are policy, not a switch.
  */
+/**
+ * Backups (docs/BACKUP.md): the database (with the encrypted vault) and the
+ * workspace files, written to `path` every day at `hour` (server time),
+ * checked by loading them back, and kept `keep` deep.
+ */
+export const backupConfigSchema = z.object({
+  /** Run the daily backup. */
+  enabled: z.boolean().default(true),
+  /** Where backups are written. Keep it on another disk, or copy it off the machine. */
+  path: z.string().default(join(homedir(), '.octipus', 'backups')),
+  /** The hour of the day (0-23, server time) the daily backup runs. */
+  hour: z.number().int().min(0).max(23).default(2),
+  /** How many complete backups are kept; older ones are removed after a good backup. */
+  keep: z.number().int().min(1).max(365).default(7),
+  /** Include the workspace files (documents, space files, plugin packages), not only the database. */
+  includeFiles: z.boolean().default(true),
+});
+
 export const spacesConfigSchema = z.object({
   /** Who may create a space: every signed-in user, or admins only. */
   creation: z.enum(['any_user', 'admins']).default('any_user'),
@@ -772,6 +790,7 @@ export const configSchema = z.object({
   sessions: sessionsConfigSchema.prefault({}),
   groupChannels: groupChannelsConfigSchema.prefault({}),
   spaces: spacesConfigSchema.prefault({}),
+  backup: backupConfigSchema.prefault({}),
   rooms: roomsConfigSchema.prefault({}),
   federation: federationConfigSchema.prefault({}),
   gateway: gatewayConfigSchema.prefault({}),
@@ -781,6 +800,7 @@ export type Config = z.infer<typeof configSchema>;
 export type HeartbeatConfig = z.infer<typeof heartbeatConfigSchema>;
 export type SessionsConfig = z.infer<typeof sessionsConfigSchema>;
 export type SpacesConfig = z.infer<typeof spacesConfigSchema>;
+export type BackupConfig = z.infer<typeof backupConfigSchema>;
 export type RoomsConfig = z.infer<typeof roomsConfigSchema>;
 export type FederationConfig = z.infer<typeof federationConfigSchema>;
 export type FederationMode = FederationConfig['mode'];

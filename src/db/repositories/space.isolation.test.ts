@@ -142,6 +142,8 @@ const ALLOWLIST: Record<string, string> = {
   'src/core/mail/secrets.ts': 'which mail account ids still exist (no content)',
   // The scan sweep (docs/SCAN-FOLDERS.md): enabled folders, for no user; files are written as the folder's author.
   'src/core/scan-folders/sweep.ts': 'scan sweep: enabled folders, for no user',
+  // The backup's check (docs/BACKUP.md): counts the vault's rows and decrypts a few with the master key, for no user.
+  'src/core/backup/service.ts': 'backup check: vault row count and a key check, for no user',
   'src/db/repositories/session-kind.ts': 'the kind of one session by id (no content)',
   'src/security/workspace-resolver.ts': 'workspace of a session/agent/pipeline the caller owns, by id',
   // Federation (docs/plans/federation-spec.md §7.5, §9): whether a room or

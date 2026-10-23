@@ -63,6 +63,7 @@ The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 | [CASES.md](CASES.md) | Cases ("Vorgänge"), contacts and follow-ups: the shared records business modules build on, who sees them in a space, the `cases` tool and the API. |
 | [RECORDS.md](RECORDS.md) | Record types with fields a business defines, records validated against them, and public form links that save a record (and open a case) without sign-in. |
 | [MAIL.md](MAIL.md) | Mailboxes over IMAP, POP3 and SMTP: personal and functional (shared) mailboxes, the sync, drafts and approved sends, and which hosts an account may use. |
+| [BACKUP.md](BACKUP.md) | Daily backups of the database (with the vault) and the workspace files, checked by loading them back; retention, the admin API and restore. |
 | [SCAN-FOLDERS.md](SCAN-FOLDERS.md) | Scan folders: server directories a scanner or fax service drops files into, filed into the documents of a personal or space scope. |
 | [PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md) | Plugin packages: out-of-repo connections that run as their own fenced-in MCP server, with declared tool effects, settings and vault secrets. |
 | [TASK-BOARD.md](TASK-BOARD.md) | The work board on the tasks page: assignees, checkout leases, comments, dependency wakeups, the audit trail, and role agents that work their tasks. |

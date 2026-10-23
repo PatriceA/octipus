@@ -5,6 +5,7 @@ import { sweepPurgedSpaceFiles } from '@/core/spaces/purge';
 import { maybeRunHeartbeats } from '@/core/heartbeat';
 import { syncDueMailAccounts } from '@/core/mail/sync';
 import { scanDueFolders } from '@/core/scan-folders/sweep';
+import { maybeRunScheduledBackup } from '@/core/backup/service';
 import { fireDueReminders } from '@/core/tasks/reminders';
 import { defaultListenDeps, runListenTick } from '@/channels/group-listen';
 import { getDb } from '@/db/postgres';
@@ -367,6 +368,10 @@ async function processCronTick(): Promise<void> {
         .catch((err: unknown) => coreLogger.error({ err }, 'Scan folder sweep failed'))
         .finally(() => { scanSweepRunning = false; });
     }
+
+    // The daily backup (core/backup/service.ts), in its configured hour. Not
+    // awaited: a backup takes minutes; it guards against a second run itself.
+    maybeRunScheduledBackup(now).catch((err: unknown) => coreLogger.error({ err }, 'Scheduled backup check failed'));
 
     // Group channels in listen / proactive mode: unanswered questions, gated
     // cheap-first (src/channels/group-listen.ts). No-op unless enabled. Not

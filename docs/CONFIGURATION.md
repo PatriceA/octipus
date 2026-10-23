@@ -220,6 +220,18 @@ described in [SPACES.md → Settings](SPACES.md#settings).
 | `rooms.approvalTimeoutMinutes` | 30 | A room turn waiting this long on its requester's approval gives up. Env: `ROOMS_APPROVAL_TIMEOUT_MINUTES`. |
 | `rooms.transcriptWindowChars` | 6000 | Room transcript kept verbatim after the summary before the room is compacted. Env: `ROOMS_TRANSCRIPT_WINDOW_CHARS`. |
 
+## Backup Config
+
+| Key | Default | Purpose |
+|---|---|---|
+| `backup.enabled` | `true` | Run the daily backup of the database and the workspace files. Env: `BACKUP_ENABLED`. |
+| `backup.path` | `~/.octipus/backups` | Where backups are written. Env: `BACKUP_PATH`. |
+| `backup.hour` | `2` | Hour of the day (server time) the backup runs. Env: `BACKUP_HOUR`. |
+| `backup.keep` | `7` | Good backups kept. Env: `BACKUP_KEEP`. |
+| `backup.includeFiles` | `true` | Include the workspace files. Env: `BACKUP_INCLUDE_FILES`. |
+
+See [BACKUP.md](BACKUP.md).
+
 ## Federation Config
 
 Spaces across installs (design: [plans/federation-spec.md](plans/federation-spec.md)).

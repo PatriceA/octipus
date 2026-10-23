@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-588 mounted routes across 79 route files. The path is the full one, group prefix included — what a client actually calls.
+591 mounted routes across 80 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -110,6 +110,9 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/auth/totp/enable` | `src/api/routes/auth.ts` |
 | POST | `/api/auth/totp/setup` | `src/api/routes/auth.ts` |
 | GET | `/api/auth/ws-ticket` | `src/api/routes/auth.ts` |
+| GET | `/api/backups` | `src/api/routes/backups.ts` |
+| POST | `/api/backups/:id/verify` | `src/api/routes/backups.ts` |
+| POST | `/api/backups/run` | `src/api/routes/backups.ts` |
 | GET | `/api/capabilities` | `src/api/routes/capabilities.ts` |
 | POST | `/api/capabilities/:id/install` | `src/api/routes/capabilities.ts` |
 | POST | `/api/capabilities/install-all-missing` | `src/api/routes/capabilities.ts` |
@@ -622,9 +625,9 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `utils` | 1 |
 | `api` | `capabilities` | 1 |
 | `api` | `channels` | 22 |
-| `api` | `config` | 23 |
+| `api` | `config` | 24 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 157 |
+| `api` | `core` | 158 |
 | `api` | `db` | 119 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
@@ -667,20 +670,20 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `connectors` | `utils` | 5 |
 | `core` | `capabilities` | 2 |
 | `core` | `channels` | 12 |
-| `core` | `config` | 60 |
+| `core` | `config` | 61 |
 | `core` | `connectors` | 4 |
-| `core` | `db` | 384 |
+| `core` | `db` | 386 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 10 |
 | `core` | `models` | 120 |
-| `core` | `security` | 173 |
+| `core` | `security` | 174 |
 | `core` | `services` | 2 |
 | `core` | `setup` | 1 |
 | `core` | `shared` | 38 |
 | `core` | `skills` | 11 |
 | `core` | `tools` | 21 |
-| `core` | `utils` | 214 |
+| `core` | `utils` | 216 |
 | `core` | `voice` | 1 |
 | `db` | `config` | 4 |
 | `db` | `core` | 21 |

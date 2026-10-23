@@ -8,6 +8,8 @@ type DrizzleDB = ReturnType<typeof import('drizzle-orm/postgres-js').drizzle<typ
 let db: DrizzleDB | null = null;
 let closeHandle: (() => Promise<void>) | null = null;
 let rawExec: ((query: string, params?: unknown[]) => Promise<unknown>) | null = null;
+/** Embedded mode only: the data directory as a gzipped tarball (docs/BACKUP.md). */
+let dumpHandle: (() => Promise<Blob>) | null = null;
 let rawQuery: ((query: string, params?: unknown[]) => Promise<{ rows: any[] }>) | null = null;
 let healthCheck: (() => Promise<void>) | null = null;
 /**
@@ -118,6 +120,7 @@ async function initEmbedded(dataDir: string): Promise<DrizzleDB> {
   }
 
   closeHandle = async () => { await client.close(); };
+  dumpHandle = async () => client.dumpDataDir('gzip');
   rawExec = async (query) => { await client.exec(query); return []; };
   rawQuery = async (query, params) => client.query(query, params as any);
   healthCheck = async () => { await client.query('SELECT 1'); };
@@ -217,12 +220,22 @@ export async function closeDb() {
     await closeHandle();
     closeHandle = null;
     rawExec = null;
+    dumpHandle = null;
     rawQuery = null;
     healthCheck = null;
     db = null;
     cachedDbKey = null;
     dbLogger.info('Database connection closed');
   }
+}
+
+/**
+ * The embedded database's data directory as a gzipped tarball, loadable with
+ * `PGlite.create({ loadDataDir })`. Throws in external mode (use pg_dump).
+ */
+export async function dumpEmbeddedDatabase(): Promise<Buffer> {
+  if (!dumpHandle) throw new Error('No embedded database is open');
+  return Buffer.from(await (await dumpHandle()).arrayBuffer());
 }
 
 /**
