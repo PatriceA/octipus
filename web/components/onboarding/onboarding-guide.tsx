@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CompanionState } from '@/components/companion/companion-avatar';
 import { api } from '@/lib/api';
 import type { CompanionAppearance } from '../../../src/shared/companion';
-import { buildPlan } from '../../../src/shared/onboarding/plan';
+import { buildPlan, defaultModulesFor, MODULES_PICKED, requiredModulesFor } from '../../../src/shared/onboarding/plan';
 import { initialAnswers, sectionsFor, storableAnswers, USE_CASES, visibleQuestions } from '../../../src/shared/onboarding/use-cases';
 import type { Answers, AnswerValue, OnboardingProgress, OnboardingState, PlanStep, Question, Section, UseCaseId } from '../../../src/shared/onboarding/types';
 import { GuideCompanion } from './guide-companion';
@@ -124,6 +124,14 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
   const [flash, setFlash] = useState<CompanionState | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loaded = useRef(false);
+  /**
+   * The steps done in an earlier run of this visit ("Try again"): not every
+   * one shows up in the state (a stored key, a new login), and doing it twice
+   * would make a second one, so they stay done whenever the plan is made again.
+   */
+  const doneBefore = useRef<Set<string>>(new Set());
+  /** The state the plan was last made against (a fresh read after "Try again"). */
+  const planState = useRef<OnboardingState | null>(null);
 
   /** A short cheer (or wince), then back to what the phase shows. */
   const react = useCallback((mood: CompanionState) => {
@@ -182,6 +190,8 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
     const on = useCases.includes(id);
     setEngaged(true);
     setUseCases((prev) => (on ? prev.filter((x) => x !== id) : [...prev, id]));
+    // Other use cases bring other modules: the picker starts again from them.
+    setAnswers((prev) => ({ ...prev, [MODULES_PICKED]: undefined }));
     if (!on) react('done');
   };
 
@@ -197,8 +207,23 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
     setAnswers((prev) => ({ ...prev, [q.id]: v }));
   };
 
+  const replan = (a: Answers, s: OnboardingState) => {
+    planState.current = s;
+    setPlan(buildPlan(useCases, a, s, { newPassword }).map((st): PlanStep => (st.kind !== 'done' && doneBefore.current.has(st.id)
+      ? { kind: 'done', id: st.id, title: st.title, detail: st.detail }
+      : st)));
+  };
+
+  /** Tick or untick a module in the review; the plan follows. */
+  const pickModule = (id: string, on: boolean) => {
+    const current = Array.isArray(answers[MODULES_PICKED]) ? (answers[MODULES_PICKED] as string[]) : defaultModulesFor(useCases, answers, state);
+    const next = { ...answers, [MODULES_PICKED]: on ? [...new Set([...current, id])] : current.filter((m) => m !== id) };
+    setAnswers(next);
+    replan(next, planState.current ?? state);
+  };
+
   const review = () => {
-    setPlan(buildPlan(useCases, answers, state, { newPassword }));
+    replan(answers, state);
     setPhase('review');
   };
 
@@ -209,10 +234,8 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
    */
   const tryAgain = async () => {
     const fresh = await queryClient.fetchQuery({ queryKey: ['onboarding'], queryFn: () => api.get<OnboardingState>('/onboarding') }).catch(() => state);
-    const next = buildPlan(useCases, answers, { ...fresh, progress: fresh.progress ?? {} }, { newPassword });
-    setPlan(next.map((st): PlanStep => (st.kind !== 'done' && outcome[st.id]?.status === 'done'
-      ? { kind: 'done', id: st.id, title: st.title, detail: st.detail }
-      : st)));
+    for (const [id, r] of Object.entries(outcome)) if (r.status === 'done') doneBefore.current.add(id);
+    replan(answers, { ...fresh, progress: fresh.progress ?? {} });
     setOutcome({});
     setPhase('review');
   };
@@ -375,6 +398,15 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
             ))}
           </ol>
         )}
+        {state.isAdmin && (state.modules?.available?.length ?? 0) > 0 && (
+          <ModulePicker
+            modules={state.modules.available ?? []}
+            enabled={state.modules.enabled}
+            required={requiredModulesFor(useCases, answers)}
+            picked={Array.isArray(answers[MODULES_PICKED]) ? (answers[MODULES_PICKED] as string[]) : defaultModulesFor(useCases, answers, state)}
+            onPick={pickModule}
+          />
+        )}
         {found.length > 0 && (
           <div>
             <p className="text-sm font-medium">Already set up, left as it is:</p>
@@ -452,9 +484,56 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
         {failed + later > 0 && (
           <button type="button" onClick={() => void tryAgain()} className="rounded-full border border-primary/50 px-4 py-2 text-on-surface">Finish the rest</button>
         )}
-        <button type="button" onClick={() => { setEngaged(true); setPhase('choose'); setPlan([]); setUseCases([]); }} className="rounded-full border border-outline-variant px-4 py-2">Set up something else</button>
+        <button type="button" onClick={() => { setEngaged(true); setPhase('choose'); setPlan([]); setUseCases([]); doneBefore.current = new Set(); planState.current = null; }} className="rounded-full border border-outline-variant px-4 py-2">Set up something else</button>
         {variant === 'home' && <button type="button" onClick={dismiss} className="text-on-surface-variant underline">Close the guide</button>}
       </div>
     </>,
+  );
+}
+
+/**
+ * The modules this setup turns on (docs/MODULES.md): those the use cases
+ * bring are ticked, any other can be added (contacts and records for a
+ * one-person business that builds software). One already on stays on: the
+ * guide never switches a module off; Settings → Modules does.
+ */
+function ModulePicker({ modules, enabled, required, picked, onPick }: {
+  modules: Array<{ id: string; title: string; description: string }>;
+  enabled: string[];
+  /** Needed by the answers (a chat to talk from, the inbox watch): ticked, not to be unticked. */
+  required: string[];
+  picked: string[];
+  onPick: (id: string, on: boolean) => void;
+}) {
+  return (
+    <fieldset data-testid="module-picker">
+      <legend className="text-sm font-medium">Modules to turn on</legend>
+      <p className="text-xs text-on-surface-variant">Ticked from what you picked. Add or drop any; they can be changed later in Settings → Modules.</p>
+      <ul className="mt-1.5 grid gap-1.5 sm:grid-cols-2 text-sm">
+        {modules.map((m) => {
+          const on = enabled.includes(m.id);
+          const needed = !on && required.includes(m.id);
+          return (
+            <li key={m.id}>
+              <label className={on || needed ? 'flex gap-2 text-on-surface-variant' : 'flex gap-2 cursor-pointer'} title={m.description}>
+                <input
+                  type="checkbox"
+                  className="mt-0.5 accent-primary"
+                  checked={on || needed || picked.includes(m.id)}
+                  disabled={on || needed}
+                  onChange={(e) => onPick(m.id, e.target.checked)}
+                  aria-label={m.title}
+                />
+                <span>
+                  {m.title}
+                  {on && <span className="ml-1 text-xs">(already on)</span>}
+                  {needed && <span className="ml-1 text-xs">(needed for your answers)</span>}
+                </span>
+              </label>
+            </li>
+          );
+        })}
+      </ul>
+    </fieldset>
   );
 }

@@ -433,16 +433,19 @@ function researchSteps(plan: Plan, a: Answers, s: OnboardingState): void {
   if (yes(a, 'research.roleAgent')) roleAgent(plan, s, 'research', str(a, 'research.pipeline'), 'Turn on the research agent');
 }
 
+/** The answer that holds the modules picked in the guide's review, when changed there. */
+export const MODULES_PICKED = 'modules.picked';
+
 /**
- * The modules the picked use cases bring (docs/MODULES.md), switched on
- * install-wide by an admin. Only turned on, never off: a second run of the
- * guide with fewer use cases leaves alone what is already on.
+ * The modules the use cases bring: those of the use cases picked, and the
+ * chat channels when a chat was picked to talk to Octipus from (Telegram,
+ * Slack, …). What the guide's picker starts from.
  */
-/**
- * The modules this run brings: those of the use cases picked, and the chat
- * channels when a chat was picked to talk to Octipus from (Telegram, Slack, …).
- */
-function wantedModules(a: Answers, s: OnboardingState): Map<string, string> {
+function defaultModules(a: Answers, s: OnboardingState): string[] {
+  return [...broughtModules(a, s).keys()];
+}
+
+function broughtModules(a: Answers, s: OnboardingState): Map<string, string> {
   const wanted = new Map<string, string>();
   const useCases = (a._useCases as UseCaseId[] | undefined) ?? [];
   for (const useCase of useCases) for (const m of s.modules?.byUseCase[useCase] ?? []) wanted.set(m.id, m.title);
@@ -451,15 +454,48 @@ function wantedModules(a: Answers, s: OnboardingState): Map<string, string> {
   return wanted;
 }
 
+/**
+ * The modules the answers need, whatever is ticked: the chat channels for a
+ * chat picked to talk from, the email inbox for the company's inbox watch.
+ */
+function requiredModules(a: Answers): Map<string, string> {
+  const required = new Map<string, string>();
+  const chatChannel = typeof a._chatChannel === 'string' ? a._chatChannel : '';
+  if (chatChannel && chatChannel !== 'none') required.set('channels', 'Chat channels');
+  const useCases = (a._useCases as UseCaseId[] | undefined) ?? [];
+  if (useCases.includes('company') && yes(a, 'company.mail')) required.set('inbox', 'Email inbox');
+  return required;
+}
+
+/**
+ * The modules this run turns on: what was picked in the review (the profile's
+ * modules, ticked or unticked, plus any other), else what the use cases bring;
+ * and always what the answers need.
+ */
+function wantedModules(a: Answers, s: OnboardingState): Map<string, string> {
+  const picked = a[MODULES_PICKED];
+  const required = requiredModules(a);
+  if (!Array.isArray(picked)) return new Map([...broughtModules(a, s), ...required]);
+  const titles = new Map((s.modules?.available ?? []).map((m) => [m.id, m.title]));
+  for (const [id, title] of broughtModules(a, s)) if (!titles.has(id)) titles.set(id, title);
+  return new Map([...picked.filter((id) => titles.has(id)).map((id): [string, string] => [id, titles.get(id) ?? id]), ...required]);
+}
+
 /** Module `id` is on once the plan has run: on already, or turned on by its first step. */
 function moduleOnAfter(a: Answers, s: OnboardingState, id: string): boolean {
   if (!s.modules) return true;
   return s.modules.enabled.includes(id) || (s.isAdmin && wantedModules(a, s).has(id));
 }
 
+/**
+ * The modules this run brings (docs/MODULES.md), switched on install-wide by
+ * an admin. Only turned on, never off: a second run of the guide with fewer
+ * use cases, or with a module unticked, leaves alone what is already on.
+ */
 function moduleSteps(plan: Plan, a: Answers, s: OnboardingState): void {
   // A server from before modules reports none: nothing to switch.
-  const modules = s.modules ?? { enabled: [], byUseCase: {} };
+  const modules = s.modules;
+  if (!modules) return;
   const wanted = wantedModules(a, s);
   if (wanted.size === 0) return;
   const missing = [...wanted].filter(([id]) => !modules.enabled.includes(id));
@@ -477,16 +513,31 @@ function moduleSteps(plan: Plan, a: Answers, s: OnboardingState): void {
   }, { detail: 'For everyone on this install. Settings → Modules switches them off again; their data stays.' });
 }
 
+/** The answers as the plan reads them: with the use cases, and the chat picked when the chat section is asked. */
+function planAnswers(useCases: readonly UseCaseId[], answers: Answers): Answers {
+  const a: Answers = { ...answers, _useCases: [...useCases] };
+  // A chat picked to talk from brings the chat channels (broughtModules).
+  if (sectionsFor(useCases).some((s) => s.id === 'chat')) a._chatChannel = str(a, 'chat.channel');
+  return a;
+}
+
+/** The modules the answers need: ticked in the guide's picker and not to be unticked. */
+export function requiredModulesFor(useCases: readonly UseCaseId[], answers: Answers): string[] {
+  return [...requiredModules(planAnswers(useCases, answers)).keys()];
+}
+
+/** The modules the guide's picker starts with for these use cases and answers. */
+export function defaultModulesFor(useCases: readonly UseCaseId[], answers: Answers, state: OnboardingState): string[] {
+  return defaultModules(planAnswers(useCases, answers), state);
+}
+
 /**
  * The plan for these use cases and answers, in the order it runs. Questions
  * of sections the use cases do not bring in are ignored, whatever their
  * saved answer.
  */
 export function buildPlan(useCases: readonly UseCaseId[], answers: Answers, state: OnboardingState, opts: PlanOptions): PlanStep[] {
-  const a: Answers = { ...answers, _useCases: [...useCases] };
-  const asked0 = new Set(sectionsFor(useCases).map((s) => s.id));
-  // A chat picked to talk from brings the chat channels (wantedModules).
-  if (asked0.has('chat')) a._chatChannel = str(a, 'chat.channel');
+  const a = planAnswers(useCases, answers);
   const asked = new Set(sectionsFor(useCases).map((s) => s.id));
   const plan = new Plan();
   // First: the later steps may use what a module brings.

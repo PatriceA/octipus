@@ -77,9 +77,17 @@ last run did counts as done.
   - `research`: research jobs, the reader, recall, live artifacts.
   - `development`: none, so a developer gets the core only.
   - A chat picked to talk to Octipus from (Telegram, Slack, …) turns on the
-    chat channels. Voice is turned on in Settings → Modules. Only an admin's run has this step.
+    chat channels. Voice no use case brings: tick it in the picker below, or
+    turn it on in Settings → Modules. Only an admin's run has this step.
   It only turns modules on, never off, so running the guide again with fewer
   use cases changes nothing that is on. It calls `POST /api/modules/enable`.
+- **The plan review has a module picker** (admins). The modules the use cases
+  bring are ticked; any other can be ticked too (contacts and records for a
+  one-person business that builds software), and a ticked one unticked. One
+  already on is shown ticked and cannot be unticked here, nor one the answers
+  need (the chat channels for a chat picked to talk from, the email inbox for
+  the inbox watch). The choice is the
+  `modules.picked` answer; picking other use cases starts it again.
 - **`GET /api/onboarding`** reports what is already set up
   (`src/core/onboarding/state.ts`). Install-wide facts (model rows, provider
   keys, MCP servers, CLI tools on the host) are only read for admins. Every

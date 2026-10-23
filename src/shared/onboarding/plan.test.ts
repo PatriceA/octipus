@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { buildPlan, slugify, standingInstructions } from './plan';
+import { buildPlan, defaultModulesFor, MODULES_PICKED, requiredModulesFor, slugify, standingInstructions } from './plan';
 import { initialAnswers, sectionsFor, storableAnswers, visibleQuestions } from './use-cases';
 import type { Answers, OnboardingState, PlanStep, UseCaseId } from './types';
 
@@ -250,9 +250,9 @@ describe('modules', () => {
   });
 
   test('only what is missing is turned on; nothing is ever turned off', () => {
-    const some = plan(['company'], {}, fresh({ modules: { enabled: ['mail', 'research'], byUseCase: fresh().modules.byUseCase } }));
+    const some = plan(['company'], { 'company.mail': false }, fresh({ modules: { enabled: ['mail', 'research'], byUseCase: fresh().modules.byUseCase } }));
     expect(step(some, 'modules')).toMatchObject({ call: { body: { ids: ['business'] } } });
-    const all = plan(['company'], {}, fresh({ modules: { enabled: ['business', 'mail'], byUseCase: fresh().modules.byUseCase } }));
+    const all = plan(['company'], { 'company.mail': false }, fresh({ modules: { enabled: ['business', 'mail'], byUseCase: fresh().modules.byUseCase } }));
     expect(found(all)).toContain('modules');
     expect(todo(all)).not.toContain('modules');
   });
@@ -282,6 +282,40 @@ describe('modules', () => {
     expect(ids(steps)).not.toContain('perm:messaging/send');
     expect(ids(plan(['company'], { 'company.mail': true }))).toContain('perm:messaging/send');
     expect(standingInstructions({ 'company.urgent': 'invoices', _useCases: ['company'] }, false)).not.toContain('send_to_user');
+  });
+
+  test('the picker: a module added to a developer setup is turned on, one dropped is not', () => {
+    const available = [{ id: 'business', title: 'Cases', description: '' }, { id: 'mail', title: 'Mail', description: '' }];
+    const state = fresh({ modules: { enabled: [], byUseCase: fresh().modules.byUseCase, available } });
+    expect(defaultModulesFor(['development'], {}, state)).toEqual([]);
+    expect(defaultModulesFor(['company'], {}, state)).toEqual(['business', 'mail']);
+    // A one-person business that builds software adds the cases and contacts.
+    const added = plan(['development'], { [MODULES_PICKED]: ['business'] }, state);
+    expect(step(added, 'modules')).toMatchObject({ kind: 'api', call: { body: { ids: ['business'] } } });
+    // Unticking what the use case brought leaves it out.
+    const dropped = plan(['company'], { 'company.mail': false, [MODULES_PICKED]: ['business'] }, state);
+    expect(step(dropped, 'modules')).toMatchObject({ call: { body: { ids: ['business'] } } });
+    expect(ids(plan(['company'], { 'company.mail': false, [MODULES_PICKED]: [] }, state))).not.toContain('modules');
+    // An id the server does not offer is ignored.
+    expect(step(plan(['development'], { [MODULES_PICKED]: ['nope', 'mail'] }, state), 'modules')).toMatchObject({ call: { body: { ids: ['mail'] } } });
+  });
+
+  test('the modules the answers need stay ticked: the chat channels for a chat, the inbox for the inbox watch', () => {
+    const available = [{ id: 'channels', title: 'Chat channels', description: '' }, { id: 'inbox', title: 'Email inbox', description: '' }];
+    const state = fresh({ modules: { enabled: [], byUseCase: {}, available } });
+    expect(requiredModulesFor(['development'], { 'chat.channel': 'telegram' })).toEqual(['channels']);
+    expect(requiredModulesFor(['company'], { 'company.mail': true })).toContain('inbox');
+    // Unticked anyway: still turned on, so the chat and the inbox watch work.
+    const steps = plan(['company'], { 'company.mail': true, [MODULES_PICKED]: [] }, state);
+    expect(step(steps, 'modules')).toMatchObject({ call: { body: { ids: ['inbox'] } } });
+    expect(step(steps, 'heartbeat:me')).toMatchObject({ kind: 'api' });
+  });
+
+  test('the picker never turns a module off: one already on stays, and is not asked for again', () => {
+    const available = [{ id: 'business', title: 'Cases', description: '' }, { id: 'mail', title: 'Mail', description: '' }];
+    const state = fresh({ modules: { enabled: ['mail'], byUseCase: fresh().modules.byUseCase, available } });
+    const steps = plan(['company'], { 'company.mail': false, [MODULES_PICKED]: ['business'] }, state);
+    expect(step(steps, 'modules')).toMatchObject({ call: { body: { ids: ['business'] } } });
   });
 
   test('a server that reports no modules: no step', () => {

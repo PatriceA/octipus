@@ -26,7 +26,7 @@ const fresh = () => ({
   progress: {} as Record<string, unknown>,
 });
 
-const SETUP_PATHS = /\/api\/(settings\/batch|settings\/heartbeat\.enabled|settings\/setup-complete|models\/test|models|topics\/assign-all|tools\/permissions|heartbeat\/me|tasks\/role-agents|me\/workspaces|onboarding\/standing-instructions|auth\/oauth\/google\/authorize)$/;
+const SETUP_PATHS = /\/api\/(settings\/batch|settings\/heartbeat\.enabled|settings\/setup-complete|models\/test|models|topics\/assign-all|tools\/permissions|heartbeat\/me|tasks\/role-agents|me\/workspaces|onboarding\/standing-instructions|auth\/oauth\/google\/authorize|modules\/enable)$/;
 
 test.describe('onboarding guide', () => {
   let state: ReturnType<typeof fresh>;
@@ -171,6 +171,31 @@ test.describe('onboarding guide', () => {
     await guide.getByRole('button', { name: 'Go, set it up' }).click();
     await guide.getByRole('button', { name: 'Set up something else' }).click();
     await expect(guide.getByRole('checkbox', { name: /Build software/ })).toBeVisible();
+  });
+
+  test('the plan review picks modules: the use case\'s are ticked, another can be added', async ({ authenticatedPage: page }) => {
+    state.models = { textReady: true, embeddingReady: true, verifySeparate: false, names: ['anthropic claude-sonnet-5-5'], providersWithKey: ['anthropic'], byTopic: {} };
+    state.modules = {
+      enabled: ['recall'],
+      byUseCase: { research: [{ id: 'reader', title: 'Reader' }, { id: 'recall', title: 'Recall' }] },
+      available: MODULES.map((m) => ({ id: m.id, title: m.title, description: m.description })),
+    } as typeof state.modules;
+    await page.goto('/');
+    const guide = page.getByTestId('onboarding');
+    await guide.getByRole('checkbox', { name: /Research and knowledge/ }).click();
+    await guide.getByRole('button', { name: 'Continue' }).click();
+    await guide.getByRole('button', { name: 'Research', exact: true }).click();
+    await guide.getByRole('button', { name: 'See my plan' }).click();
+    const picker = guide.getByTestId('module-picker');
+    await expect(picker.getByRole('checkbox', { name: 'Reader' })).toBeChecked();
+    // On already: shown, and the guide does not switch it off.
+    await expect(picker.getByRole('checkbox', { name: 'Recall' })).toBeDisabled();
+    const business = picker.getByRole('checkbox', { name: 'Cases, contacts and records' });
+    await expect(business).not.toBeChecked();
+    await business.check();
+    await expect(guide.locator('[data-plan-step="modules"]')).toContainText('Cases, contacts and records');
+    await guide.getByRole('button', { name: 'Go, set it up' }).click();
+    await expect.poll(() => calls.find((c) => c.path === '/modules/enable')?.body).toEqual({ ids: ['reader', 'business'] });
   });
 
   test('putting it away leaves a link on the home page', async ({ authenticatedPage: page }) => {
