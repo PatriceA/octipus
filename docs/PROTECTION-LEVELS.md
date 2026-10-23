@@ -171,6 +171,9 @@ conversation's level is what the call may carry.
 A package that leaves `maxProtection` out may see level 1 when it lists
 `network` hosts (a call to an outside system counts as leaving the house, like
 a remote model) and level 4 when it lists none (its sandbox has no network).
+The call is refused before anyone is asked to approve it. An artifact data
+source on a plugin package's server is checked when the agent creates it: it
+refreshes later without the conversation that wrote its arguments.
 Operator-configured MCP servers are not plugin packages and are not gated.
 
 ## Not yet

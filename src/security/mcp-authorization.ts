@@ -60,19 +60,26 @@ async function pluginEffectOf(action: string): Promise<PluginToolEffect | 'undec
 }
 
 /**
- * Refuses a plugin call from a conversation holding content above the
- * package's `maxProtection` (docs/PROTECTION-LEVELS.md, C6d): its arguments
- * are written by an agent that has read that content, so the session's level
- * is what the call may carry. While the `protection` module is off, nothing
- * is refused.
+ * Why a conversation may not send to the plugin package behind `serverId`
+ * (docs/PROTECTION-LEVELS.md, C6d), or undefined when it may: its content is
+ * above the package's `maxProtection`. What the agent writes was written by
+ * an agent that has read that content, so the session's level is what it may
+ * carry. Undefined for an operator-configured server, and while the
+ * `protection` module is off.
  */
-async function assertPluginMayReceive(context: AgentContext, action: string): Promise<void> {
+export async function pluginProtectionRefusal(sessionId: string | undefined, serverId: string): Promise<string | undefined> {
   const { getMCPBridge } = await import('@/mcp/bridge');
-  const max = getMCPBridge().pluginMaxProtection(action.slice(0, action.indexOf('.')));
-  if (max === null) return;
+  const max = getMCPBridge().pluginMaxProtection(serverId);
+  if (max === null) return undefined;
   const { carriedLevel } = await import('@/core/protection/routing');
-  const level = await carriedLevel(context.sessionId);
-  if (level === undefined || level <= max) return;
-  throw new Error(`Permission denied for mcp.${action}: this conversation holds protection level ${level} content, `
-    + `and the plugin package may see up to level ${max}. Do NOT retry this call; tell the user it needs a new conversation, or a package allowed this level.`);
+  const level = await carriedLevel(sessionId);
+  if (level === undefined || level <= max) return undefined;
+  return `this conversation holds protection level ${level} content, and the plugin package may see up to level ${max}`;
+}
+
+async function assertPluginMayReceive(context: AgentContext, action: string): Promise<void> {
+  const refusal = await pluginProtectionRefusal(context.sessionId, action.slice(0, action.indexOf('.')));
+  if (refusal) {
+    throw new Error(`Permission denied for mcp.${action}: ${refusal}. Do NOT retry this call; tell the user it needs a new conversation, or a package allowed this level.`);
+  }
 }

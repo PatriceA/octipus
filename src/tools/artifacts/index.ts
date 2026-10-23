@@ -225,6 +225,8 @@ export class ArtifactsTool extends BaseTool {
           } else if (toolId) {
             return { error: `source "${s.name}": tool_id is only valid with kind="toolbox"` };
           }
+          const pluginRefusal = await sourcePluginRefusal(context, s.config);
+          if (pluginRefusal) return { error: `source "${s.name}": ${pluginRefusal}` };
           const created = await artifactsRepository.createSource({
             artifactId: a.id,
             name: s.name,
@@ -390,6 +392,9 @@ export class ArtifactsTool extends BaseTool {
         } else if (toolId) {
           return { error: `tool_id is only valid when kind="toolbox" (got kind="${kind}")` };
         }
+
+        const pluginRefusal = await sourcePluginRefusal(context, args.config);
+        if (pluginRefusal) return { error: pluginRefusal };
 
         const refreshSeconds = (args.refresh_seconds as number) ?? 300;
         if (typeof refreshSeconds !== 'number' || refreshSeconds < 30) {
@@ -741,3 +746,17 @@ export class ArtifactsTool extends BaseTool {
 }
 
 export const artifactsTool = new ArtifactsTool();
+
+/**
+ * A source that calls a plugin package's server (`config.server`, kinds
+ * `mcp` and `toolbox`) refreshes later without the conversation that wrote
+ * its arguments: the conversation's level is checked against the package's
+ * `maxProtection` now (docs/PROTECTION-LEVELS.md, C6d).
+ */
+async function sourcePluginRefusal(context: { sessionId?: string }, config: unknown): Promise<string | undefined> {
+  const server = config && typeof config === 'object' ? (config as { server?: unknown }).server : undefined;
+  if (typeof server !== 'string') return undefined;
+  const { pluginProtectionRefusal } = await import('@/security/mcp-authorization');
+  const refusal = await pluginProtectionRefusal(context.sessionId, server);
+  return refusal ? `a data source on ${server} is not allowed: ${refusal}` : undefined;
+}

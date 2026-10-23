@@ -397,15 +397,15 @@ export class MCPBridge extends EventEmitter {
    * What a plugin package declares a tool does; `undeclared` for a tool it
    * does not declare; null when the server is not a plugin package's.
    */
-  /** The highest protection level a plugin package's server may be called at; null for an operator-configured server. */
-  pluginMaxProtection(serverId: string): number | null {
-    return this.configOf(serverId)?.plugin?.maxProtection ?? null;
-  }
-
   pluginToolEffect(serverId: string, toolName: string): PluginToolEffect | 'undeclared' | null {
     const plugin = this.configOf(serverId)?.plugin;
     if (!plugin) return null;
     return Object.hasOwn(plugin.tools, toolName) ? plugin.tools[toolName] : 'undeclared';
+  }
+
+  /** The highest protection level a plugin package's server may be called at; null for an operator-configured server. */
+  pluginMaxProtection(serverId: string): number | null {
+    return this.configOf(serverId)?.plugin?.maxProtection ?? null;
   }
 
   /**
