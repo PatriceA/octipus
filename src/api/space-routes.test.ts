@@ -161,6 +161,10 @@ const SPACE_ACTING = [
   'GET /api/tasks', 'GET /api/tasks/role-agents', 'PUT /api/tasks/role-agents', 'GET /api/tasks/:id', 'POST /api/tasks',
   'PATCH /api/tasks/:id', 'POST /api/tasks/:id/checkout', 'POST /api/tasks/:id/release', 'GET /api/tasks/:id/comments',
   'POST /api/tasks/:id/comments', 'DELETE /api/tasks/:id',
+  // Cases and contacts (docs/CASES.md): `contentRepos`, by the member's role.
+  'GET /api/cases', 'GET /api/cases/linked', 'POST /api/cases', 'GET /api/cases/:id', 'PATCH /api/cases/:id', 'DELETE /api/cases/:id',
+  'POST /api/cases/:id/links', 'DELETE /api/cases/:id/links/:linkId', 'POST /api/cases/:id/follow-ups',
+  'GET /api/contacts', 'POST /api/contacts', 'GET /api/contacts/:id', 'PATCH /api/contacts/:id', 'DELETE /api/contacts/:id',
   'GET /api/notifications', 'POST /api/notifications/:id/read', 'POST /api/notifications/read-all',
   'GET /api/artifacts/_meta', 'GET /api/artifacts', 'POST /api/artifacts', 'GET /api/artifacts/spec/:slugOrId', 'GET /api/artifacts/:id',
   'PUT /api/artifacts/:id', 'DELETE /api/artifacts/:id', 'GET /api/artifacts/:id/versions',

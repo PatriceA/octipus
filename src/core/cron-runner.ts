@@ -3,6 +3,7 @@ import { getConfig } from '@/config';
 import { getEmbeddingService } from '@/core/rag/embeddings';
 import { sweepPurgedSpaceFiles } from '@/core/spaces/purge';
 import { maybeRunHeartbeats } from '@/core/heartbeat';
+import { fireDueReminders } from '@/core/tasks/reminders';
 import { defaultListenDeps, runListenTick } from '@/channels/group-listen';
 import { getDb } from '@/db/postgres';
 import { agentRepository } from '@/db/repositories/agent-repository';
@@ -49,6 +50,7 @@ let lastTrajectoryCompress = 0;
 let lastVectorIndexEnsure = Date.now();
 let lastLogPrune = 0;
 let logPruneRunning = false;
+let reminderSweepRunning = false;
 
 /**
  * Parse a simple cron expression and compute the next run date.
@@ -330,6 +332,17 @@ async function processCronTick(): Promise<void> {
     // WS2 heartbeat — process due per-user heartbeat hooks (gated, cheap-first).
     // Runs before the schedule query's early return below. No-op when disabled.
     await maybeRunHeartbeats(now);
+
+    // Follow-ups whose date has passed (core/tasks/reminders.ts). Not
+    // awaited, so a burst of reminders never holds up scheduled hooks; a
+    // sweep still running makes the next tick's a no-op.
+    if (!reminderSweepRunning) {
+      reminderSweepRunning = true;
+      fireDueReminders(now)
+        .then((sent) => { if (sent > 0) coreLogger.info({ sent }, 'Follow-up reminders handed to notifications'); })
+        .catch((err: unknown) => coreLogger.error({ err }, 'Follow-up reminder sweep failed'))
+        .finally(() => { reminderSweepRunning = false; });
+    }
 
     // Group channels in listen / proactive mode: unanswered questions, gated
     // cheap-first (src/channels/group-listen.ts). No-op unless enabled. Not

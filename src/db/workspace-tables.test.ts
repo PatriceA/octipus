@@ -103,6 +103,8 @@ describe('workspace transfer', () => {
     await one('agent_events', `INSERT INTO agent_events (agent_id, session_id, type, user_id, workspace_id) VALUES ('a1', $1, 'started', $2, $3) RETURNING id`, [session.id, owner, ws]);
     await one('agents', `INSERT INTO agents (id, session_id, user_id, workspace_id) VALUES ($1, $2, $3, $4) RETURNING id`, [`agent-${randomUUID()}`, session.id, owner, ws]);
     await one('background_jobs', `INSERT INTO background_jobs (kind, user_id, title, workspace_id) VALUES ('research', $1, 'job', $2) RETURNING id`, [owner, ws]);
+    await one('cases', `INSERT INTO cases (user_id, title, workspace_id) VALUES ($1, 'c', $2) RETURNING id`, [owner, ws]);
+    await one('contacts', `INSERT INTO contacts (user_id, name, workspace_id) VALUES ($1, 'k', $2) RETURNING id`, [owner, ws]);
     await one('documents', `INSERT INTO documents (user_id, filename, original_name, mime_type, size, storage_path, workspace_id) VALUES ($1, 'f', 'f', 'text/plain', 1, '/x', $2) RETURNING id`, [owner, ws]);
     await one('embeddings', `INSERT INTO embeddings (source_id, content, model, embedding, purpose, content_sha256, embedding_version, user_id, workspace_id) VALUES ('s', 'c', 'm', '[0.1,0.2,0.3]', 'document', $1, 'm/3', $2, $3) RETURNING id`, [randomUUID(), owner, ws]);
     await one('hooks', `INSERT INTO hooks (user_id, name, trigger, trigger_config, action, action_config, workspace_id) VALUES ($1, 'h', 'message_received', '{}', 'notify', '{}', $2) RETURNING id`, [owner, ws]);

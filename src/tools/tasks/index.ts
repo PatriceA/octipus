@@ -4,7 +4,7 @@ import { nextActions } from '@/core/tasks/next';
 import { dateOnlyToEndOfDay } from '@/core/tasks/rank';
 import { ACTIVE_TASK_STATUSES, assigneePatch, TASK_ASSIGNEE_KINDS, TASK_STATUSES } from '@/core/tasks/status';
 import { type Nested, nestTasks, normalizeEstimate, toLookup, waitingOn, waitingReason } from '@/core/tasks/structure';
-import { resolveUserTimezone } from '@/core/tasks/timezone';
+import { parseTaskDate, resolveUserTimezone } from '@/core/tasks/timezone';
 import type { AgentContext, ToolManifest } from '@/core/types';
 import { contentRepos } from '@/db/repositories/content';
 import { agentPrincipal } from '@/security/principal';
@@ -100,6 +100,7 @@ export class TasksTool extends BaseTool {
         priority: { type: 'number', description: 'Priority 0 (none) to 3 (high)' },
         category: { type: 'string', description: 'Optional user category/list, e.g. "Shopping" or "Car"' },
         dueAt: { type: 'string', description: 'Due date/time, ISO 8601' },
+        remindAt: { type: 'string', description: 'Follow-up: when to remind the assignee (ISO 8601; a bare date is the start of that day)' },
         estimate: { type: 'string', description: 'Effort estimate in the user\'s unit, e.g. "S", "M", "L", "XL" or "3h"' },
         parentId: { type: 'string', description: 'Id of the task this is a sub-task of (a phase, an epic)' },
         blockedBy: { type: 'array', description: 'Ids of tasks that must be done before this one can start', items: { type: 'string' } },
@@ -116,6 +117,7 @@ export class TasksTool extends BaseTool {
             priority: clampPriority(args.priority),
             category: normalizeCategory(args.category),
             dueAt: await parseDueAt(args.dueAt, principal.userId),
+            remindAt: await parseRemindAt(args.remindAt, principal.userId),
             estimate: normalizeEstimate(args.estimate),
             parentId: idOrNull(args.parentId),
             blockedBy: idList(args.blockedBy),
@@ -178,6 +180,7 @@ export class TasksTool extends BaseTool {
         priority: { type: 'number', description: 'Priority 0..3' },
         category: { type: 'string', description: 'User category/list; empty string clears it' },
         dueAt: { type: 'string', description: 'Due date/time, ISO 8601' },
+        remindAt: { type: 'string', description: 'Follow-up date-time, ISO 8601; a new one re-arms the reminder, empty string clears it' },
         estimate: { type: 'string', description: 'Effort estimate; empty string clears it' },
         parentId: { type: 'string', description: 'Id of the parent task; empty string makes it top-level' },
         blockedBy: { type: 'array', description: 'Ids of tasks that block this one (replaces the list; empty clears it)', items: { type: 'string' } },
@@ -200,6 +203,7 @@ export class TasksTool extends BaseTool {
             // `!== undefined` (not truthiness): an explicit "" clears the due date;
             // absent leaves it unchanged. parseDueAt('') → null (clear).
             dueAt: args.dueAt !== undefined ? await parseDueAt(args.dueAt, principal.userId) : undefined,
+            remindAt: args.remindAt !== undefined ? await parseRemindAt(args.remindAt, principal.userId) : undefined,
             estimate: args.estimate !== undefined ? normalizeEstimate(args.estimate) : undefined,
             parentId: args.parentId !== undefined ? idOrNull(args.parentId) : undefined,
             blockedBy: args.blockedBy !== undefined ? idList(args.blockedBy) : undefined,
@@ -371,6 +375,17 @@ async function parseDueAt(v: unknown, userId: string): Promise<Date | null> {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+/**
+ * Parse an optional follow-up date. Absent or empty → null; garbage is an
+ * error, not a silently dropped reminder. A bare `YYYY-MM-DD` is the start of
+ * that day in the user's timezone.
+ */
+async function parseRemindAt(v: unknown, userId: string): Promise<Date | null> {
+  if (v === undefined || v === null || v === '') return null;
+  if (typeof v !== 'string') throw new Error('remindAt must be an ISO 8601 date-time');
+  return parseTaskDate(v, 'remindAt', userId);
+}
+
 /** An optional id argument: empty/absent → null (clears the link). */
 function idOrNull(v: unknown): string | null {
   return typeof v === 'string' && v.trim() !== '' ? v.trim() : null;
@@ -391,6 +406,7 @@ function completionPatch(nextStatus: string | undefined, wasCompleted: boolean):
 interface SummarizableTask {
   id: string; title: string; status: string; priority: number;
   category: string | null; dueAt: Date | null; completedAt: Date | null; source: string; notes: string | null;
+  remindAt?: Date | null;
   estimate?: string | null; parentId?: string | null; blockedBy?: string[] | null;
   assigneeKind?: string | null; assigneeRef?: string | null; checkedOutBy?: string | null;
 }
@@ -403,6 +419,7 @@ function summarize(t: SummarizableTask) {
     priority: t.priority,
     category: t.category,
     dueAt: t.dueAt,
+    remindAt: t.remindAt ?? null,
     completedAt: t.completedAt,
     source: t.source,
     notes: t.notes,

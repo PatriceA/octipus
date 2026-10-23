@@ -29,6 +29,8 @@ export interface SpaceRoute {
 export const SPACE_ROUTES: readonly SpaceRoute[] = [
   { prefix: '/api/notes', what: 'notes and their links' },
   { prefix: '/api/tasks', what: 'tasks and task comments' },
+  { prefix: '/api/cases', what: 'cases, their links and follow-ups' },
+  { prefix: '/api/contacts', what: 'contacts' },
   { prefix: '/api/documents', what: 'uploaded documents' },
   { prefix: '/api/artifacts', what: 'live artifacts' },
   { prefix: '/a', what: 'hosted artifact pages (subdomain mount)' },

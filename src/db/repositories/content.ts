@@ -26,7 +26,9 @@ import {
   scopedRepos,
   type TaskRepo,
   assertPersonalWorkspace,
+  personalScope,
 } from './scoped';
+import { CaseRepo, ContactRepo } from './cases';
 import { ArtifactStore, type LinkStore, linkStoreFor, spaceRepos } from './space';
 
 export interface ContentRepos {
@@ -47,6 +49,8 @@ export interface ContentRepos {
   documents: ScopedDocumentRepo;
   notifications: ScopedNotificationRepo;
   tasks: TaskRepo;
+  cases: CaseRepo;
+  contacts: ContactRepo;
   notes: NoteStore;
   noteScope: NoteScope;
   links: LinkStore;
@@ -77,6 +81,8 @@ export function contentRepos(principal: Principal): ContentRepos {
     documents: personal.documents,
     notifications: personal.notifications,
     tasks: personal.tasks,
+    get cases() { return new CaseRepo(personalScope(principal)); },
+    get contacts() { return new ContactRepo(personalScope(principal)); },
     notes: new PersonalNoteRepo(noteScope),
     noteScope,
     links: linkStoreFor(noteScope),

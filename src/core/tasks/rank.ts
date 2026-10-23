@@ -145,6 +145,17 @@ export function dateOnlyToEndOfDay(value: string, tz: string): Date | null {
   return new Date(localMidnightIn(Number(m[1]), Number(m[2]), Number(m[3]) + 1, zone) - 1);
 }
 
+/**
+ * A bare `YYYY-MM-DD` as the start of that day in `tz` — when a follow-up on
+ * that day comes back. Null for anything that is not a bare date.
+ */
+export function dateOnlyToStartOfDay(value: string, tz: string): Date | null {
+  const m = DATE_ONLY.exec(value.trim());
+  if (!m) return null;
+  const zone = isValidTimezone(tz) ? tz : 'UTC';
+  return new Date(localMidnightIn(Number(m[1]), Number(m[2]), Number(m[3]), zone));
+}
+
 function describeSource(source: string | undefined): string {
   switch (source) {
     case 'email': return 'an email';
