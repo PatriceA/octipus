@@ -20,11 +20,17 @@ const TOKEN_RE = new RegExp(`\\[(${KINDS.join('|')})_(\\d+)\\]`, 'g');
 
 interface Span { start: number; end: number; kind: PseudonymKind; value: string }
 
-const UPPER = 'A-ZÄÖÜ';
-const LOWER = 'a-zäöüß';
-const WORD = `[${UPPER}][${LOWER}]+`;
+/** Unicode word boundaries: `\b` is ASCII-only, so "Özdemir" or "René" would not start or end a word. */
+const B = '(?<![\\p{L}\\p{N}])';
+const E = '(?![\\p{L}\\p{N}])';
+/** A capitalised word, any script's letters (Özdemir, René, Dvořák, Gómez). */
+const WORD = '\\p{Lu}\\p{Ll}+';
 /** A name word: capitalised, optionally double-barrelled (Hans-Peter, Müller-Lüdenscheidt). */
 const NAME = `${WORD}(?:-${WORD})?`;
+/** Street words: bounded, so a long run of capitalised words is not rescanned from every position. */
+const STREET_WORDS = `${WORD}(?:[- ]${WORD}){0,3}`;
+const STREET_SUFFIX = 'Straße|Strasse|Str\\.|Weg|Gasse|Platz|Allee|Ring|Damm|Ufer|Chaussee|Steig|Pfad';
+const STREET_SUFFIX_LOWER = 'straße|strasse|str\\.|weg|gasse|platz|allee|ring|damm|ufer|chaussee|steig|pfad|stieg';
 
 /** Mod-97 check of an IBAN (ISO 13616). */
 export function validIban(raw: string): boolean {
@@ -40,61 +46,81 @@ export function validIban(raw: string): boolean {
   return rest === 1;
 }
 
-/** Words after a postcode that are not a place ("12345 Euro"). */
-const NOT_A_PLACE = new Set(['euro', 'eur', 'stück', 'mal', 'tage', 'jahre', 'monate', 'kunden', 'einheiten', 'seiten', 'zeichen', 'punkte', 'mitarbeiter']);
+/** Words after a postcode that are not a place ("12345 Euro", "25000 Besucher"). */
+const NOT_A_PLACE = new Set([
+  'euro', 'eur', 'dollar', 'franken', 'pfund', 'stück', 'mal', 'tage', 'wochen', 'jahre', 'monate', 'stunden', 'minuten', 'kunden',
+  'einheiten', 'seiten', 'zeichen', 'punkte', 'mitarbeiter', 'menschen', 'personen', 'besucher', 'einwohner', 'nutzer', 'mitglieder',
+  'kilometer', 'meter', 'liter', 'kilo', 'tonnen', 'dateien', 'zeilen', 'aufrufe', 'downloads', 'exemplare', 'artikel', 'fälle',
+]);
+/** Words after Am / Im / Zum that start a date or a phrase, not a street ("Im Januar 2025", "Zum Glück 3"). */
+const NOT_A_STREET = new Set([
+  'januar', 'februar', 'märz', 'april', 'mai', 'juni', 'juli', 'august', 'september', 'oktober', 'november', 'dezember',
+  'montag', 'dienstag', 'mittwoch', 'donnerstag', 'freitag', 'samstag', 'sonntag', 'jahr', 'jahre', 'monat', 'quartal', 'glück',
+  'ende', 'anfang', 'moment', 'wochenende', 'abend', 'morgen', 'mittag', 'schluss', 'beispiel', 'vergleich', 'durchschnitt',
+]);
 /** Capitalised words after a first name that are not a surname ("Anna Am Montag"). */
 const NOT_A_SURNAME = new Set(['am', 'im', 'und', 'oder', 'der', 'die', 'das', 'den', 'dem', 'des', 'ein', 'eine', 'hat', 'ist', 'war', 'wird', 'sagt', 'schreibt', 'mit', 'von', 'für', 'aus', 'bei', 'nach', 'zum', 'zur', 'the', 'and']);
+
+const isFirstName = (word: string) => GERMAN_FIRST_NAMES.has(word.split('-')[0].toLowerCase());
 
 interface Detector { kind: PseudonymKind; re: RegExp; group?: number; accept?: (value: string, match: RegExpExecArray) => boolean }
 
 const DETECTORS: readonly Detector[] = [
-  { kind: 'EMAIL', re: /[\w.+-]+@[\w-]+(?:\.[\w-]+)*\.[A-Za-z]{2,}/g },
-  { kind: 'IBAN', re: /\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]{4}){2,7}(?:[ ]?[A-Z0-9]{1,3})?\b/g, accept: (v) => validIban(v) },
+  { kind: 'EMAIL', re: /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,}/gu },
+  { kind: 'IBAN', re: /(?<![\p{L}\p{N}])[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]{4}){2,7}(?:[ ]?[A-Z0-9]{1,3})?(?![\p{L}\p{N}])/gu, accept: (v) => validIban(v) },
   // Identifiers behind their label: Kundennummer 4711-23, Vers.-Nr.: A123456789, Az. 3 O 123/24.
-  // Case-sensitive: a lower-case word after the number ("4711-23 bitte") is not part of it.
+  // Case-sensitive, and a further part is a lone capital or holds a digit: the
+  // word after the number ("4711-23 bitte", "4711 Am Montag") is not part of it.
   {
     kind: 'ID',
-    re: /\b(?:Kunden(?:nummer|-?Nr\.?)|Kd\.?-?Nr\.?|Patienten(?:nummer|-?ID|-?Nr\.?)|Pat\.?-?Nr\.?|Versicherten(?:nummer|-?Nr\.?)|Versicherungs(?:nummer|-?Nr\.?)|Vers\.?-?Nr\.?|Mitglieds(?:nummer|-?Nr\.?)|Akten(?:zeichen|-?Nr\.?)|Az\.|Steuer-?(?:ID|Nr\.?|nummer|Identifikationsnummer)|Personalnummer|Vertragsnummer|[Cc]ustomer (?:ID|[Nn]o\.?|number)|[Pp]atient (?:ID|[Nn]o\.?))\s*[:#]?\s*([A-Z0-9][A-Z0-9./-]*(?: (?:[A-Z]|[A-Z0-9]*\d[A-Z0-9./-]*)){0,3})/g,
+    re: /(?<![\p{L}\p{N}])(?:Kunden(?:nummer|-?Nr\.?)|Kd\.?-?Nr\.?|Patienten(?:nummer|-?ID|-?Nr\.?)|Pat\.?-?Nr\.?|Versicherten(?:nummer|-?Nr\.?)|Versicherungs(?:nummer|-?Nr\.?)|Vers\.?-?Nr\.?|Mitglieds(?:nummer|-?Nr\.?)|Akten(?:zeichen|-?Nr\.?)|Az\.|Steuer-?(?:ID|Nr\.?|nummer|Identifikationsnummer)|Personalnummer|Vertragsnummer|[Cc]ustomer (?:ID|[Nn]o\.?|number)|[Pp]atient (?:ID|[Nn]o\.?))\s*[:#]?\s*([A-Z0-9][A-Z0-9./-]*(?: (?:[A-Z](?![\p{L}\p{N}])|[A-Z0-9]*\d[A-Z0-9./-]*)){0,3})(?![\p{L}\p{N}])/gu,
     group: 1,
     accept: (v) => /\d/.test(v) && v.length >= 3,
   },
   // Krankenversichertennummer: a letter and nine digits.
-  { kind: 'ID', re: /\b[A-Z]\d{9}\b/g },
+  { kind: 'ID', re: /(?<![\p{L}\p{N}])[A-Z]\d{9}(?![\p{L}\p{N}])/gu },
   // A date behind a birth label: geb. 03.04.1981, Geburtsdatum: 3.4.81.
   {
     kind: 'DATE',
-    re: /\b(?:geb\.|geboren(?: am)?|Geburtsdatum|Geb\.-?Datum|date of birth|DOB|born(?: on)?)\s*:?\s*(\d{1,2}\.\s?\d{1,2}\.\s?(?:19|20)?\d{2})/gi,
+    re: /(?<![\p{L}\p{N}])(?:geb\.|geboren(?: am)?|Geburtsdatum|Geb\.-?Datum|date of birth|DOB|born(?: on)?)\s*:?\s*(\d{1,2}\.\s?\d{1,2}\.\s?(?:19|20)?\d{2})/giu,
     group: 1,
   },
-  // Phone numbers: +49 / 0049 / a leading 0, at least seven digits.
+  // Phone numbers: +49 / 0049 / a leading 0, at least seven digits; not a group of a long number ("1 000 000 000").
   {
     kind: 'PHONE',
-    re: /(?<![\w+])(?:\+|00)\d{1,3}[\s/-]?(?:\(0\)[\s/-]?)?\d{2,5}(?:[\s/-]?\d{2,8}){1,3}\b|(?<![\w.,])0[1-9]\d{1,4}[\s/-]\d{3,8}(?:[\s-]\d{1,5})?\b/g,
+    re: /(?<![\p{L}\p{N}_+]|\d[ .])(?:\+|00)\d{1,3}[\s/-]?(?:\(0\)[\s/-]?)?\d{2,5}(?:[\s/-]?\d{2,8}){1,3}(?![\p{L}\p{N}])|(?<![\p{L}\p{N}_.,]|\d[ .])0[1-9]\d{1,4}[\s/-]\d{3,8}(?:[\s-]\d{1,5})?(?![\p{L}\p{N}])/gu,
     accept: (v) => v.replace(/\D/g, '').length >= 7,
   },
-  // Street and number: Musterstraße 12, Hauptstr. 5a, Am Markt 3.
+  // Street and number: Musterstraße 12, Hauptstr. 5a, Bad Homburger Weg 7, Sophie-Scholl-Straße 4, Am Markt 3.
   {
     kind: 'ADDRESS',
-    re: new RegExp(`\\b(?:${WORD}(?:[- ]${WORD})* (?:Straße|Strasse|Str\\.|Weg|Gasse|Platz|Allee|Ring|Damm|Ufer|Chaussee|Steig|Pfad)|${WORD}(?:[- ]${WORD})*(?:straße|strasse|str\\.|weg|gasse|platz|allee|ring|damm|ufer|chaussee|steig|pfad|stieg)|(?:${WORD}(?:straße|strasse|str\\.|weg|gasse|platz|allee))|(?:Am|An der|Im|In der|Zum|Zur|Auf dem|Hinter der) ${WORD})\\s\\d{1,4}\\s?[a-zA-Z]?\\b`, 'gu'),
+    re: new RegExp(`${B}(?:${STREET_WORDS}[ -](?:${STREET_SUFFIX})|${STREET_WORDS}(?:${STREET_SUFFIX_LOWER})|(?:Am|An der|Im|In der|Zum|Zur|Auf dem|Hinter der) (${WORD}))\\s\\d{1,4}\\s?[a-zA-Z]?${E}(?!\\s?Uhr)`, 'gu'),
+    accept: (_v, m) => !m[1] || !NOT_A_STREET.has(m[1].toLowerCase()),
   },
   // Postcode and place: 10115 Berlin, 80331 München-Schwabing.
   {
     kind: 'PLACE',
-    re: new RegExp(`\\b(?:0[1-9]|[1-9]\\d)\\d{3}\\s${NAME}(?:\\s(?:an der|am|im)\\s${NAME})?`, 'gu'),
+    re: new RegExp(`${B}(?:0[1-9]|[1-9]\\d)\\d{3}\\s${NAME}(?:\\s(?:an der|am|im)\\s${NAME})?${E}`, 'gu'),
     accept: (v) => !NOT_A_PLACE.has(v.split(/\s+/)[1]?.toLowerCase() ?? ''),
   },
-  // A title and a name: Herr Müller, Frau Dr. Anna Schmidt, Prof. Weber.
+  // A title and a name: Herr Müller, Frau Dr. Anna Schmidt, Prof. Weber, Herr René Dupont.
   {
     kind: 'PERSON',
-    re: new RegExp(`\\b(?:Herrn?|Frau|Hr\\.|Fr\\.|Dr\\.|Prof\\.|Mr\\.?|Mrs\\.?|Ms\\.?)\\s+(?:(?:Dr\\.|Prof\\.)\\s+)*(${NAME}(?:\\s${NAME})?)`, 'gu'),
+    re: new RegExp(`${B}(?:Herrn?|Frau|Hr\\.|Fr\\.|Dr\\.|Prof\\.|Mr\\.?|Mrs\\.?|Ms\\.?)\\s+(?:(?:Dr\\.|Prof\\.)\\s+)*(${NAME}(?:\\s${NAME}){0,2})${E}`, 'gu'),
     group: 1,
     accept: (v) => !NOT_A_SURNAME.has(v.split(/\s+/)[0].toLowerCase()),
+  },
+  // Two known first names and a surname: Anna Lena Müller, Hans Peter Schmidt.
+  {
+    kind: 'PERSON',
+    re: new RegExp(`${B}(${NAME})\\s(${NAME})\\s(${NAME})${E}`, 'gu'),
+    accept: (_v, m) => isFirstName(m[1]) && isFirstName(m[2]) && !NOT_A_SURNAME.has(m[3].toLowerCase()),
   },
   // A known first name and a surname: Anna Müller, Hans-Peter Schmidt.
   {
     kind: 'PERSON',
-    re: new RegExp(`\\b(${NAME})\\s(${NAME})\\b`, 'gu'),
-    accept: (_v, m) => GERMAN_FIRST_NAMES.has(m[1].split('-')[0].toLowerCase()) && !NOT_A_SURNAME.has(m[2].toLowerCase()),
+    re: new RegExp(`${B}(${NAME})\\s(${NAME})${E}`, 'gu'),
+    accept: (_v, m) => isFirstName(m[1]) && !NOT_A_SURNAME.has(m[2].toLowerCase()),
   },
 ];
 
@@ -140,11 +166,13 @@ export class Pseudonyms {
     this.byValue.set(value, token);
     this.byToken.set(token, value);
     this.matcher = null;
-    // A person's surname alone stands for the same person ("Frau Schmidt" … "Schmidt").
+    // The surname alone is personal data too ("… Schmidt rief an"): its own
+    // placeholder, restored to the surname alone, so a word that only looks
+    // like it ("der Koch") comes back as written.
     if (kind === 'PERSON') {
       const parts = value.split(/\s+/);
       const last = parts[parts.length - 1];
-      if (parts.length > 1 && last.length > 2 && !this.byValue.has(last)) this.byValue.set(last, token);
+      if (parts.length > 1 && last.length > 2) this.register('PERSON', last);
     }
   }
 
