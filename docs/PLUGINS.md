@@ -1,5 +1,10 @@
 # Plugin System
 
+> For connections to other systems (DATEV, banks, Meta…) use a
+> [plugin package](PLUGIN-PACKAGES.md): it runs as its own process with a
+> minimal environment and declared tool effects. The plugins on this page run
+> inside the server with its full rights.
+
 Extend Octipus's capabilities by dropping plugins into the `extensions/` directory. Each plugin provides tools that are automatically registered and available to agents — no core code changes needed.
 
 ## Plugin Structure
