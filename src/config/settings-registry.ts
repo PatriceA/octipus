@@ -1167,6 +1167,53 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'SESSION_RETENTION_DAYS',
   },
 
+  // ── Backup (docs/BACKUP.md) ──
+  {
+    key: 'backup.enabled',
+    category: 'backup',
+    valueType: 'boolean',
+    defaultValue: true,
+    description: 'Run the daily backup of the database (with the encrypted vault) and the workspace files.',
+    isSecret: false,
+    envVar: 'BACKUP_ENABLED',
+  },
+  {
+    key: 'backup.path',
+    category: 'backup',
+    valueType: 'string',
+    defaultValue: join(homedir(), '.octipus', 'backups'),
+    description: 'Directory backups are written to. Put it on another disk, or copy it off the machine.',
+    isSecret: false,
+    envVar: 'BACKUP_PATH',
+  },
+  {
+    key: 'backup.hour',
+    category: 'backup',
+    valueType: 'number',
+    defaultValue: 2,
+    description: 'Hour of the day (0-23, server time) the daily backup runs.',
+    isSecret: false,
+    envVar: 'BACKUP_HOUR',
+  },
+  {
+    key: 'backup.keep',
+    category: 'backup',
+    valueType: 'number',
+    defaultValue: 7,
+    description: 'How many complete backups are kept; older ones are removed after a good backup.',
+    isSecret: false,
+    envVar: 'BACKUP_KEEP',
+  },
+  {
+    key: 'backup.includeFiles',
+    category: 'backup',
+    valueType: 'boolean',
+    defaultValue: true,
+    description: 'Include the workspace files (documents, space files, plugin packages), not only the database.',
+    isSecret: false,
+    envVar: 'BACKUP_INCLUDE_FILES',
+  },
+
   // ── Shared spaces ──
   {
     key: 'spaces.creation',
