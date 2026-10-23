@@ -77,7 +77,9 @@ test('real SDK sessions dispatch tools independently and enforce HTTP boundaries
   ]);
   assert.deepEqual(JSON.parse(health.content[0].text), { path: '/api/health/detailed' });
   assert.deepEqual(JSON.parse(time.content[0].text), { path: '/api/health/time' });
-  assert.equal(calls.length, 2);
+  // Each session also reads which modules are on (docs/MODULES.md).
+  const toolCalls = calls.filter(call => call.path !== '/api/modules');
+  assert.equal(toolCalls.length, 2);
   assert.ok(calls.every(call => call.authorization === 'Bearer backend-test-token'));
   assert.notEqual(first.endpoint(), second.endpoint());
 
@@ -108,7 +110,7 @@ test('real SDK sessions dispatch tools independently and enforce HTTP boundaries
     assert.equal(response.status, 400);
     await response.text();
   }
-  assert.equal(calls.length, 2, 'rejected requests must not call the backend');
+  assert.equal(calls.filter(call => call.path !== '/api/modules').length, 2, 'rejected requests must not call the backend');
   assert.ok((await first.client.listTools()).tools.length > 0, 'bad requests must not kill the session');
   const expiredEndpoint = first.endpoint();
   await first.client.close();

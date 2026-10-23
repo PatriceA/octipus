@@ -4,12 +4,14 @@ import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { CompanionAvatar } from '@/components/companion/companion-avatar';
 import { api } from '@/lib/api';
+import { usePageOn } from '@/lib/modules';
 import { useWorkspace } from '@/lib/workspace-context';
 import type { ResolvedPersona } from '../../../src/core/personas/types';
 
 /** Start with the person's work; operational details remain below. */
 export function WorkspaceWelcome() {
   const { activeWorkspace } = useWorkspace();
+  const pageOn = usePageOn();
   const { data: persona } = useQuery({
     queryKey: ['persona', 'me'],
     queryFn: () => api.get<Pick<ResolvedPersona, 'name' | 'appearance'>>('/persona'),
@@ -27,9 +29,9 @@ export function WorkspaceWelcome() {
         <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
           <Link href="/chat" className="rounded-full bg-primary px-4 py-2 font-semibold text-on-primary hover:bg-primary-fixed-dim">Work on a project</Link>
           {shared && <Link href="/rooms" className="rounded-full border border-outline-variant px-4 py-2 hover:border-primary">Work together</Link>}
-          <Link href="/research" className="text-primary underline underline-offset-4">Research a question</Link>
+          {pageOn('/research') && <Link href="/research" className="text-primary underline underline-offset-4">Research a question</Link>}
           <Link href="/tasks" className="text-primary underline underline-offset-4">Plan follow-up tasks</Link>
-          <Link href="/persona" className="text-on-surface-variant underline underline-offset-4">Make it yours</Link>
+          {pageOn('/persona') && <Link href="/persona" className="text-on-surface-variant underline underline-offset-4">Make it yours</Link>}
         </div>
       </div>
     </section>

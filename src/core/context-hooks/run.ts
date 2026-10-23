@@ -6,6 +6,7 @@
  * spent in list order. A hook that fails or takes longer than HOOK_TIMEOUT_MS
  * costs the turn its block, never the turn: the agent starts without it.
  */
+import { isJobOn } from '@/core/modules/registry';
 import { eq } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { getDb } from '@/db/postgres';
@@ -51,7 +52,8 @@ export async function runContextHooks(
   input: Omit<ContextHookInput, 'tokenBudget'> & { role?: string; channel?: string },
 ): Promise<ContextHooksOutcome> {
   const settings = getConfig().contextHooks;
-  if (!settings?.enabled) return NONE;
+  // Recall is the `recall` module (docs/MODULES.md): off, no hook runs.
+  if (!settings?.enabled || !isJobOn('context-hooks')) return NONE;
   const started = Date.now();
   let hooks;
   try {

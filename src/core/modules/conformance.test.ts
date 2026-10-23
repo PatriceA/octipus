@@ -18,12 +18,12 @@ import { moduleOfPath, moduleOfTool } from './registry';
 const CORE_ROUTE_PREFIXES = [
   '/__artifacts__', '/a', '/octipus-artifact-client.js', '/v1',
   '/api/admin', '/api/agents', '/api/artifacts', '/api/auth', '/api/backups', '/api/capabilities', '/api/channels',
-  '/api/chat', '/api/connectors', '/api/context-hooks', '/api/devices', '/api/digest', '/api/documents', '/api/email',
+  '/api/chat', '/api/connectors', '/api/devices', '/api/digest', '/api/documents', '/api/email',
   '/api/eval', '/api/evaluations', '/api/gateway', '/api/graph', '/api/health', '/api/heartbeat', '/api/hooks',
   '/api/invites', '/api/knowledge', '/api/logs', '/api/mcp', '/api/me', '/api/memory', '/api/metrics', '/api/models',
   '/api/modules', '/api/notes', '/api/notifications', '/api/onboarding', '/api/permission-requests', '/api/persona',
-  '/api/pipelines', '/api/plugin-packages', '/api/plugins', '/api/reader', '/api/recurring-tasks', '/api/remote-spaces',
-  '/api/research', '/api/roles', '/api/runs', '/api/saml', '/api/scim', '/api/search', '/api/sessions', '/api/settings',
+  '/api/pipelines', '/api/plugin-packages', '/api/plugins', '/api/recurring-tasks', '/api/remote-spaces',
+  '/api/roles', '/api/runs', '/api/saml', '/api/scim', '/api/search', '/api/sessions', '/api/settings',
   '/api/skills', '/api/spaces', '/api/spend-budgets', '/api/swarm', '/api/tasks', '/api/tools', '/api/topics',
   '/api/trajectories', '/api/vault', '/api/verification', '/api/voice', '/api/webhooks', '/api/workspace',
 ];
@@ -38,8 +38,8 @@ const CORE_TOOLS = [
 
 /** Sidebar pages of the core. */
 const CORE_PAGES = [
-  '/', '/chat', '/tasks', '/my-work', '/notifications', '/research', '/agents', '/notes', '/documents', '/reader',
-  '/knowledge', '/recall', '/artifacts', '/pipelines', '/hooks', '/models', '/mcp', '/email', '/settings', '/tools',
+  '/', '/chat', '/tasks', '/my-work', '/notifications', '/agents', '/notes', '/documents',
+  '/knowledge', '/artifacts', '/pipelines', '/hooks', '/models', '/mcp', '/email', '/settings', '/tools',
   '/permissions', '/persona', '/profiles', '/memory', '/skills', '/topics', '/eval', '/secrets', '/admin/users',
   '/rooms', '/spaces/remote',
 ];

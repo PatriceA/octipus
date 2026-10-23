@@ -23,6 +23,9 @@ spaces; settings, skills, the tools page and evaluations; backups.
 | `mail` | Mailboxes over IMAP / POP3 and sending over SMTP ([MAIL.md](MAIL.md)) |
 | `scan-folders` | Folders whose new files are filed into the documents ([SCAN-FOLDERS.md](SCAN-FOLDERS.md)) |
 | `protection` | Protection levels 1-4 ([PROTECTION-LEVELS.md](PROTECTION-LEVELS.md)) |
+| `research` | Research jobs: a question researched in the background, the report saved to the documents |
+| `reader` | The reader: a page in a clean view, turned into notes and tasks |
+| `recall` | Context hooks: knowledge passages and the notes index handed to agents as they start ([CONTEXT-HOOKS.md](CONTEXT-HOOKS.md)) |
 
 ## What "off" means
 
@@ -36,6 +39,7 @@ A module that is off is gone for everyone, agents included. Its data stays.
 | Web | Its pages leave the sidebar, and a group left empty goes too. A bookmarked page says the module is off and points admins to Settings → Modules. |
 | Links | A case link to an entity of the module (a mail message while `mail` is off) is not shown and not offered. It is kept, and shows again when the module is back. |
 | Fields | With `protection` off, agents see no protection levels in tool results. The REST API still carries the stored field. |
+| Prompts | Prompt text about a module is marked (`<!-- module:<id> -->`, see `src/core/modules/prompt.ts`) and left out of every agent's system prompt while the module is off. |
 
 ## Switching
 
@@ -48,7 +52,7 @@ effect at once, without a restart.
 - Turning a module off deletes nothing. Its data stays, and turning it on
   again brings everything back as it was.
 
-An install from before modules starts with every module on. A new install
+A job already running when its module is switched off (a research run) finishes; nothing new starts. An install from before modules starts with every module on. A new install
 starts with the core only, until the onboarding or an admin turns modules on.
 
 `GET /api/modules` reports every module and whether it is on.
