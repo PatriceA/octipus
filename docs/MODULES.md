@@ -50,8 +50,9 @@ A module that is off is gone for everyone, agents included. Its data stays.
 
 The onboarding's first step turns on the modules of the use cases picked
 ([ONBOARDING.md](ONBOARDING.md)): `development` brings none, `company` the
-business ones, `product` and `research` theirs. Voice is only turned on here,
-in Settings → Modules.
+business ones, `product` and `research` theirs. The plan review lets an admin
+tick any other (voice, which no use case brings, included) or untick one the
+answers do not need.
 
 ## Switching
 
