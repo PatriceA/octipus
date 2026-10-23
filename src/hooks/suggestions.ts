@@ -95,6 +95,7 @@ Keep it brief and actionable. Highlight anything that needs attention tomorrow.`
 Use the email processor tool with batch processing. Present results grouped by urgency level.`,
         orchestrated: true,
         notifyRoot: true,
+        module: 'inbox',
       },
     });
 
@@ -117,6 +118,7 @@ Use the email processor tool with batch processing. Present results grouped by u
 Use the email processor tool to iterate through emails in batches. Report what you'd recommend archiving or unsubscribing from — don't take action without confirmation.`,
         orchestrated: true,
         notifyRoot: true,
+        module: 'inbox',
       },
     });
 

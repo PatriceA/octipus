@@ -67,7 +67,8 @@ Up to 6 children may be pending at once. Beyond that, `spawn_child` returns a ca
 | UI / UX evaluation, layout, typography, accessibility | `design` |
 | CI/CD, infra, containers, docker, k8s, terraform | `devops` |
 | Security review, threat modelling, vuln scan, OWASP | `security` |
-| Databases, ETL, schemas, dashboards, RSS, hosted artifacts, charts | `data` |
+| Databases, ETL, schemas, charts | `data` |
+| Dashboards, RSS feeds, hosted artifacts | `data` | <!-- module:artifacts -->
 | ML / AI / RAG / training / eval / prompt engineering | `ai` |
 | Markets, investments, financial modelling | `finance` |
 | Scheduling, recurring tasks, cron, hooks, "remind me" | `automation` |

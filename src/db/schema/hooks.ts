@@ -161,6 +161,12 @@ export interface TriggerConfig {
 }
 
 export interface ActionConfig {
+  /**
+   * The module the automation is part of (docs/MODULES.md), such as `inbox`
+   * for one made from an email suggestion: it does not run while that module
+   * is off.
+   */
+  module?: string;
   // For notify
   notifyChannels?: string[];
   notifyMessage?: string;

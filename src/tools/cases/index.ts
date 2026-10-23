@@ -45,7 +45,7 @@ export class CasesTool extends BaseTool {
         { name: 'get_case', description: 'One case with everything linked to it', parameters: {}, returns: 'The case and its links' },
         { name: 'create_case', description: 'File a new case', parameters: {}, returns: 'The case' },
         { name: 'update_case', description: 'Change a case\'s title, kind, status, summary or assignee', parameters: {}, returns: 'The case' },
-        { name: 'link_to_case', description: 'Link a contact, document, task, note or artifact to a case', parameters: {}, returns: 'The link' },
+        { name: 'link_to_case', description: 'Link a contact, document, task, note or another entity to a case', parameters: {}, returns: 'The link' },
         { name: 'unlink_from_case', description: 'Remove a link from a case', parameters: {}, returns: 'Whether it was removed' },
         { name: 'add_follow_up', description: 'Set a follow-up on a case: a task that reminds on a date', parameters: {}, returns: 'The follow-up task' },
         { name: 'find_contacts', description: 'Find contacts by name, email, phone, tag or kind', parameters: {}, returns: 'Array of contacts' },
@@ -82,7 +82,7 @@ export class CasesTool extends BaseTool {
 
     this.registerTool(
       'get_case',
-      'Read one case with every contact, document, task, note and artifact linked to it.',
+      'Read one case with everything linked to it (contacts, documents, tasks, notes, …).',
       createParameterSchema({ id: { type: 'string', description: 'Case id', required: true } }),
       async (args, context) => {
         const repos = reposFor(context);
@@ -167,7 +167,7 @@ export class CasesTool extends BaseTool {
 
     this.registerTool(
       'link_to_case',
-      'Link a contact, document, task, note, artifact or record to a case, with an optional role ("client", "sender", "invoice"). Linking the same entity again changes its role.',
+      'Link an entity (the types in entityType) to a case, with an optional role ("client", "sender", "invoice"). Linking the same entity again changes its role.',
       linkParameters(),
       async (args, context) => {
         try {
@@ -424,7 +424,7 @@ function linkParameters(): Record<string, unknown> {
   const schema = createParameterSchema({
     caseId: { type: 'string', description: 'Case id', required: true },
     entityType: { type: 'string', description: 'What to link', enum: [...CASE_ENTITY_TYPES], required: true },
-    entityId: { type: 'string', description: 'Id of the contact, document, task, note, artifact or record', required: true },
+    entityId: { type: 'string', description: 'Id of the entity', required: true },
     role: { type: 'string', description: 'What it is to the case' },
   });
   const entityType = (schema.properties as Record<string, Record<string, unknown>>).entityType;

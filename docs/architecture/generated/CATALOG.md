@@ -708,7 +708,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `extensions` | `utils` | 4 |
 | `hooks` | `channels` | 2 |
 | `hooks` | `config` | 2 |
-| `hooks` | `core` | 17 |
+| `hooks` | `core` | 18 |
 | `hooks` | `db` | 13 |
 | `hooks` | `security` | 1 |
 | `hooks` | `shared` | 1 |
