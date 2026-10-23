@@ -104,9 +104,10 @@ An account with `fileAttachments: true` files the attachments of every mail it
 receives into the documents of its scope (personal, or the space's). This is
 the path for fax-to-mail and scan-to-mail drops. Filing happens as the account's
 author, resolved again for each message: an author who can no longer write
-there files nothing, and the account shows why. The documents carry
-`metadata.source = "mail"` with the account and message. The message itself is
-stored either way. For files dropped into a directory instead, see
+there files nothing. Each attachment is filed on its own; the ones that could
+not be filed are tried again on later syncs, and until then the account shows
+why. The documents carry `metadata.source = "mail"` with the account and
+message. The message itself is stored either way. For files dropped into a directory instead, see
 [SCAN-FOLDERS.md](SCAN-FOLDERS.md).
 
 ## Drafts

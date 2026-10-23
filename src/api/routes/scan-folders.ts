@@ -1,7 +1,7 @@
 import { apiContext } from '@/api/context';
 import { Elysia, t } from '@/api/http';
 import { checkFolderPath, ScanFolderPathError } from '@/core/scan-folders/paths';
-import { scanFolder } from '@/core/scan-folders/sweep';
+import { scanFolderOnce } from '@/core/scan-folders/sweep';
 import { contentRepos } from '@/db/repositories/content';
 import type { ScanFolder } from '@/db/schema/scan-folders';
 import { isAuthenticated } from '@/security/principal';
@@ -9,7 +9,6 @@ import { SpaceError } from '@/security/space-access';
 import { apiLogger } from '@/utils/logger';
 
 const NOT_AUTHENTICATED = { error: 'Not authenticated' };
-const AFTER = t.Union([t.Literal('move'), t.Literal('delete')]);
 const ID = t.Object({ id: t.String({ maxLength: 64 }) });
 
 function view(f: ScanFolder) {
@@ -18,7 +17,6 @@ function view(f: ScanFolder) {
     workspaceId: f.workspaceId,
     label: f.label,
     path: f.path,
-    afterFiling: f.afterFiling,
     enabled: f.enabled,
     lastScanAt: f.lastScanAt?.toISOString() ?? null,
     lastError: f.lastError,
@@ -67,7 +65,6 @@ export const scanFolderRoutes = new Elysia({ prefix: '/scan-folders' })
       const folder = await repo.create({
         label: body.label?.trim().slice(0, 100) || path,
         path,
-        afterFiling: body.afterFiling ?? 'move',
         enabled: body.enabled ?? true,
       });
       set.status = 201;
@@ -79,7 +76,6 @@ export const scanFolderRoutes = new Elysia({ prefix: '/scan-folders' })
     body: t.Object({
       path: t.String({ minLength: 1, maxLength: 1000 }),
       label: t.Optional(t.String({ maxLength: 100 })),
-      afterFiling: t.Optional(AFTER),
       enabled: t.Optional(t.Boolean()),
     }),
     detail: { tags: ['scan-folders'] },
@@ -93,7 +89,6 @@ export const scanFolderRoutes = new Elysia({ prefix: '/scan-folders' })
       const folder = await repo.update(params.id, {
         ...(body.path !== undefined ? { path: await checkFolderPath(body.path) } : {}),
         ...(body.label !== undefined ? { label: body.label.trim().slice(0, 100) || 'Scan folder' } : {}),
-        ...(body.afterFiling !== undefined ? { afterFiling: body.afterFiling } : {}),
         ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
       });
       if (!folder) { set.status = 404; return { error: 'Scan folder not found' }; }
@@ -106,7 +101,6 @@ export const scanFolderRoutes = new Elysia({ prefix: '/scan-folders' })
     body: t.Object({
       path: t.Optional(t.String({ minLength: 1, maxLength: 1000 })),
       label: t.Optional(t.String({ maxLength: 100 })),
-      afterFiling: t.Optional(AFTER),
       enabled: t.Optional(t.Boolean()),
     }),
     detail: { tags: ['scan-folders'] },
@@ -125,5 +119,8 @@ export const scanFolderRoutes = new Elysia({ prefix: '/scan-folders' })
     repo.assertManage();
     const folder = await repo.findById(params.id);
     if (!folder) { set.status = 404; return { error: 'Scan folder not found' }; }
-    return scanFolder(folder);
+    if (!folder.enabled) { set.status = 409; return { error: 'The scan folder is disabled' }; }
+    const result = await scanFolderOnce(folder);
+    if (!result) { set.status = 409; return { error: 'A scan of this folder is already running' }; }
+    return result;
   }, { params: ID, detail: { tags: ['scan-folders'] } });

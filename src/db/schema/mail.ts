@@ -83,6 +83,10 @@ export const mailMessages = pgTable('mail_messages', {
   bodyText: text('body_text').default('').notNull(),
   bodyHtml: text('body_html'),
   attachments: jsonb('attachments').$type<StoredAttachment[]>().default([]).notNull(),
+  /** For an account that files attachments: the indexes filed into documents so far. */
+  filedAttachments: jsonb('filed_attachments').$type<number[]>().default([]).notNull(),
+  /** Why an attachment is not filed yet; retried on later syncs while set. */
+  filingError: text('filing_error'),
   unread: boolean('unread').default(false).notNull(),
   /** Received (from the server), sent, or for a draft its last change. */
   date: timestamp('date', { withTimezone: true }).defaultNow().notNull(),

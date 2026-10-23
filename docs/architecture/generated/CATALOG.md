@@ -669,7 +669,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `channels` | 12 |
 | `core` | `config` | 60 |
 | `core` | `connectors` | 4 |
-| `core` | `db` | 383 |
+| `core` | `db` | 384 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 10 |

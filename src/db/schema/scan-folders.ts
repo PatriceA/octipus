@@ -5,7 +5,8 @@ import { users } from './users';
 /**
  * Scan folders (docs/SCAN-FOLDERS.md): a directory on the server that a
  * scanner, a fax-to-file service or a network share drops files into. Each
- * file is filed into the documents of the folder's scope and moved aside.
+ * file is filed into the documents of the folder's scope and removed from
+ * the folder (the document keeps it).
  * Set up by admins only (the path is the server's file system). Scoped like
  * `cases`: `user_id` is the admin who set it up, and the documents are
  * written as them; `workspace_id` decides personal or a space.
@@ -17,8 +18,6 @@ export const scanFolders = pgTable('scan_folders', {
   label: text('label').notNull(),
   /** The directory, as resolved at save (no symbolic link in it). */
   path: text('path').notNull(),
-  /** What happens to a filed file: moved to `.octipus-done/` or deleted. */
-  afterFiling: text('after_filing').$type<'move' | 'delete'>().default('move').notNull(),
   enabled: boolean('enabled').default(true).notNull(),
   lastScanAt: timestamp('last_scan_at', { withTimezone: true }),
   lastError: text('last_error'),
@@ -32,16 +31,24 @@ export const scanFolders = pgTable('scan_folders', {
   pathIdx: uniqueIndex('scan_folders_path_idx').on(table.path),
 }));
 
-/** What a folder already filed, by content: the same scan dropped twice is filed once. */
+/**
+ * What a folder already handled. A filed file is keyed by its content
+ * (`sha256:<hex>`): the same scan dropped twice is filed once. A file that
+ * could not be filed is keyed by name, size and change time
+ * (`failed:<name>:<size>:<ctime>`): it stays in the folder and is not tried
+ * again until it changes.
+ */
 export const scanFolderFiles = pgTable('scan_folder_files', {
   id: uuid('id').primaryKey().defaultRandom(),
   folderId: uuid('folder_id').references(() => scanFolders.id, { onDelete: 'cascade' }).notNull(),
-  sha256: text('sha256').notNull(),
+  key: text('key').notNull(),
   name: text('name').notNull(),
   documentId: uuid('document_id'),
+  /** Why it could not be filed (a `failed:` row). */
+  error: text('error'),
   filedAt: timestamp('filed_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
-  contentIdx: uniqueIndex('scan_folder_files_content_idx').on(table.folderId, table.sha256),
+  keyIdx: uniqueIndex('scan_folder_files_key_idx').on(table.folderId, table.key),
 }));
 
 export type ScanFolder = typeof scanFolders.$inferSelect;
