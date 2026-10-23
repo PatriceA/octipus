@@ -3,8 +3,8 @@
 -- on there. A new install (no users yet) leaves them off.
 UPDATE "settings"
 SET "value" = (
-  SELECT jsonb_agg(DISTINCT id)::text
-  FROM jsonb_array_elements_text("value"::jsonb || '["research","reader","recall"]'::jsonb) AS id
+  SELECT jsonb_agg(DISTINCT m.module)::text
+  FROM jsonb_array_elements_text("value"::jsonb || '["research","reader","recall"]'::jsonb) AS m(module)
 ), "updated_at" = now()
 WHERE "key" = 'modules.enabled' AND EXISTS (SELECT 1 FROM "users");
 --> statement-breakpoint
