@@ -469,6 +469,6 @@ async function compactionModel(sessionId: string) {
   const registry = getModelRegistry();
   const defaultModel = await registry.getDefaultModel();
   if (!defaultModel) throw new Error('No model configured for session compaction');
-  const { localRowInstead } = await import('@/core/protection/routing');
-  return (await localRowInstead(defaultModel, sessionId, 'text', async () => ({ defaultModel, rows: await registry.getAllModels() }))) ?? defaultModel;
+  const { localRowInstead, PSEUDONYMIZED } = await import('@/core/protection/routing');
+  return (await localRowInstead(defaultModel, sessionId, 'text', async () => ({ defaultModel, rows: await registry.getAllModels() }), PSEUDONYMIZED)) ?? defaultModel;
 }

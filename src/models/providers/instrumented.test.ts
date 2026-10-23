@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ log: vi.fn(), lookup: vi.fn(), access: vi.fn() }));
+const mocks = vi.hoisted(() => ({ log: vi.fn(), lookup: vi.fn(), access: vi.fn(), pseudonyms: undefined as import('@/core/protection/pseudonymize').Pseudonyms | undefined }));
 // Install-model access has its own suite (install-access.isolation.test.ts); here it allows.
 vi.mock('../install-access', () => ({ assertInstallModelAccess: mocks.access }));
 vi.mock('../cost-tracker', () => ({ getCostTracker: () => ({ logUsageWithCost: mocks.log }) }));
 vi.mock('../model-registry', () => ({ getModelRegistry: () => ({ getModel: mocks.lookup, getModelByModelId: mocks.lookup }) }));
 // Accounting, not routing: the protection gate has its own tests (core/protection/routing.test.ts).
-vi.mock('@/core/protection/routing', () => ({ assertMayLeave: async () => undefined }));
+vi.mock('@/core/protection/routing', () => ({ assertMayLeave: async () => undefined, PSEUDONYMIZED: {}, pseudonymsFor: async () => mocks.pseudonyms }));
 import { instrumentProvider, SYSTEM_USAGE_USER, withProviderUsageContext } from './instrumented';
 import type { CompletionOptions, CompletionResult } from '../litellm-client';
 import type { ModelProvider } from './interface';
@@ -15,7 +15,7 @@ function provider(): ModelProvider {
   return { name: 'openai', type: 'direct', supportsModel: () => true, checkHealth: async () => ({ healthy: true }),
     complete: vi.fn(async () => result), stream: async function* () { yield { content: 'ok' }; yield { usage: result.usage }; } };
 }
-beforeEach(() => { vi.clearAllMocks(); mocks.access.mockResolvedValue(undefined); mocks.lookup.mockResolvedValue({ metadata: { extraBody: { think: false } } }); mocks.log.mockResolvedValue({}); });
+beforeEach(() => { vi.clearAllMocks(); mocks.pseudonyms = undefined; mocks.access.mockResolvedValue(undefined); mocks.lookup.mockResolvedValue({ metadata: { extraBody: { think: false } } }); mocks.log.mockResolvedValue({}); });
 describe('provider accounting boundary', () => {
   test('one completion row with session attribution and legitimate zero charge', async () => {
     const p = instrumentProvider(provider());
@@ -89,4 +89,61 @@ test('a call the install-model check refuses never reaches the provider', async 
   await expect(instrumentProvider(p).complete(options)).rejects.toThrow(/may not use the install's models/);
   expect(complete).not.toHaveBeenCalled();
   expect(mocks.access).toHaveBeenCalledWith(expect.anything(), options.userId, 'own', undefined);
+});
+
+describe('pseudonymization on the way out (C6c)', () => {
+  test('the provider sees placeholders; the caller gets the names back, tool arguments included', async () => {
+    const { Pseudonyms } = await import('@/core/protection/pseudonymize');
+    mocks.pseudonyms = new Pseudonyms();
+    const p = provider(); const raw = p.complete as ReturnType<typeof vi.fn>;
+    raw.mockResolvedValue({ ...result, content: 'Ich schreibe [PERSON_1].', toolCalls: [{ id: 't1', name: 'send_mail', arguments: { to: '[EMAIL_1]' } }] });
+    const out = await instrumentProvider(p).complete({ ...options, messages: [{ role: 'user', content: 'Schreib Anna Müller an anna@example.de', timestamp: new Date() }] });
+    const sent = raw.mock.calls[0][0] as CompletionOptions;
+    expect(sent.messages[0].content).toBe('Schreib [PERSON_1] an [EMAIL_1]');
+    expect(out.content).toBe('Ich schreibe Anna Müller.');
+    expect(out.toolCalls?.[0].arguments).toEqual({ to: 'anna@example.de' });
+  });
+
+  test('a stream is translated back, a placeholder split across chunks included', async () => {
+    const { Pseudonyms } = await import('@/core/protection/pseudonymize');
+    mocks.pseudonyms = new Pseudonyms();
+    const p = provider();
+    p.stream = async function* () { yield { content: 'Hallo [PERS' }; yield { content: 'ON_1]!' }; yield { toolCallDelta: { id: 't', name: 'x', arguments: '{"to":"[EM' } }; yield { toolCallDelta: { id: 't', arguments: 'AIL_1]"}' } }; yield { usage: result.usage, finishReason: 'stop' }; };
+    let text = ''; let args = '';
+    for await (const c of instrumentProvider(p).stream({ ...options, messages: [{ role: 'user', content: 'Herr Lukas Schulz, lukas@example.de', timestamp: new Date() }] })) {
+      text += c.content ?? ''; args += c.toolCallDelta?.arguments ?? '';
+    }
+    expect(text).toBe('Hallo Lukas Schulz!');
+    expect(args).toBe('{"to":"lukas@example.de"}');
+  });
+
+  test('usage on every chunk does not cut a placeholder; the end chunk carries the held text', async () => {
+    const { Pseudonyms } = await import('@/core/protection/pseudonymize');
+    mocks.pseudonyms = new Pseudonyms();
+    const p = provider();
+    p.stream = async function* () { yield { content: 'Hallo [PERS', usage: result.usage }; yield { content: 'ON_1] und [', usage: result.usage, finishReason: 'stop' }; };
+    const chunks: Array<{ content?: string; finishReason?: string }> = [];
+    for await (const c of instrumentProvider(p).stream({ ...options, messages: [{ role: 'user', content: 'Herr Lukas Schulz', timestamp: new Date() }] })) chunks.push(c);
+    expect(chunks.map((c) => c.content ?? '').join('')).toBe('Hallo Lukas Schulz und [');
+    expect(chunks.at(-1)?.finishReason).toBe('stop');
+  });
+
+  test('a provider\'s raw copy of an earlier answer is not sent with a pseudonymized request', async () => {
+    const { Pseudonyms } = await import('@/core/protection/pseudonymize');
+    mocks.pseudonyms = new Pseudonyms();
+    const p = provider(); const raw = p.complete as ReturnType<typeof vi.fn>;
+    await instrumentProvider(p).complete({ ...options, messages: [
+      { role: 'assistant', content: 'Mail an Anna Müller', providerRaw: { anthropicContent: [{ type: 'text', text: 'Mail an Anna Müller' }] }, timestamp: new Date() },
+    ] });
+    const sent = (raw.mock.calls[0][0] as CompletionOptions).messages[0];
+    expect(sent.providerRaw).toBeUndefined();
+    expect(sent.content).toBe('Mail an [PERSON_1]');
+  });
+
+  test('without a mapping (public content, a local model) the request goes as it is', async () => {
+    const p = provider(); const raw = p.complete as ReturnType<typeof vi.fn>;
+    const messages = [{ role: 'user' as const, content: 'Anna Müller', timestamp: new Date() }];
+    await instrumentProvider(p).complete({ ...options, messages });
+    expect((raw.mock.calls[0][0] as CompletionOptions).messages[0].content).toBe('Anna Müller');
+  });
 });

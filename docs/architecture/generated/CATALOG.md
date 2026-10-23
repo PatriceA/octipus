@@ -675,7 +675,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `connectors` | `utils` | 5 |
 | `core` | `capabilities` | 2 |
 | `core` | `channels` | 12 |
-| `core` | `config` | 64 |
+| `core` | `config` | 65 |
 | `core` | `connectors` | 4 |
 | `core` | `db` | 389 |
 | `core` | `extensions` | 1 |
@@ -720,7 +720,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `mcp` | `shared` | 2 |
 | `mcp` | `utils` | 4 |
 | `models` | `config` | 10 |
-| `models` | `core` | 35 |
+| `models` | `core` | 36 |
 | `models` | `db` | 14 |
 | `models` | `security` | 21 |
 | `models` | `services` | 1 |

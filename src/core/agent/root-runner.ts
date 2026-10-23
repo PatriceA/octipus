@@ -34,7 +34,7 @@ import { isPlanMode, PLAN_MODE_DIRECTIVE, stripMutatingTools } from './plan-mode
 import { isLongTailHandler } from './tool-split';
 import { buildCapabilitiesHandler } from '@/tools/self-report';
 import { modelCandidates, type ModelSelector } from './model-selector';
-import { localRowInstead, ProtectionRoutingError } from '@/core/protection/routing';
+import { localRowInstead, ProtectionRoutingError, PSEUDONYMIZED } from '@/core/protection/routing';
 import { raiseSessionLevel } from '@/core/protection/session-level';
 import { resolvePromptTier } from './prompt-tier';
 import { buildOutputDirective } from './output-directive';
@@ -239,7 +239,7 @@ export async function runRootAgent(
   if (extras.attachedFiles?.length) raiseSessionLevel(sessionId, null);
   const chosenModel = await deps.modelSelector.selectForRootAgent(sessionId, classification.type, { message, classification, laneChoice }, requester);
   const chosenMeta = await getModelRegistry().getModel(chosenModel.name);
-  const modelMeta = await localRowInstead(chosenMeta, sessionId, 'tools', () => modelCandidates(requester));
+  const modelMeta = await localRowInstead(chosenMeta, sessionId, 'tools', () => modelCandidates(requester), PSEUDONYMIZED);
   const selectedModel = modelMeta && modelMeta !== chosenMeta ? { modelId: modelMeta.modelId, name: modelMeta.name } : chosenModel;
   const modelName = selectedModel.modelId;
   const attachmentSession = extras.attachedFiles?.length ? await sessionRepository.findById(sessionId) : null;

@@ -131,6 +131,9 @@ export const defaultConfig: Partial<Config> = {
   modules: {
     enabled: [],
   },
+  protection: {
+    remoteAtLevel3: false,
+  },
   spaces: {
     creation: 'any_user',
     maxMembers: 50,

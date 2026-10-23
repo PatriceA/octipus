@@ -3,8 +3,8 @@
 Every piece of business content carries a protection level: how sensitive it
 is, which decides where it may be processed. This is point C6 of the
 [business OS plan](plans/business-os.md), the privacy gateway. It is built in
-four steps. This page describes the first two (C6a, the levels; C6b, routing
-by level) and the design of the rest.
+four steps. This page describes the first three (C6a, the levels; C6b, routing
+by level; C6c, pseudonymization) and the design of the last.
 
 ## The levels
 
@@ -119,18 +119,47 @@ default model is replaced by a local one for the category and the summary.
 When a step finds no local model, the document is marked failed with the
 reason. Bind the `ocr`, `vision` and `embedding` topics to local models.
 
-## What the levels will decide (C6c-C6d, not built yet)
+## Pseudonymization (C6c)
 
-**C6c. Pseudonymization.** For level 2 (and level 3, where the owner allows
-it) on the way to a remote model:
-- Names, addresses, IBANs, phone numbers, e-mail addresses, dates of birth and
-  identifiers (customer, patient and insurance numbers) are replaced by stable
-  placeholders (`[PERSON_1]`, `[IBAN_1]`).
-- Each session keeps its own mapping, so the answer is translated back before
-  anyone sees it.
-- The detector covers German names and formats (German first and last names,
-  street and postcode patterns, DE IBANs) and is tested against real-shaped
-  samples (plan point C7).
+A conversation at level 2 that uses a remote model sends its personal data as
+placeholders: `[PERSON_1]`, `[ADDRESS_1]`, `[PLACE_1]`, `[IBAN_1]`, `[PHONE_1]`,
+`[EMAIL_1]`, `[DATE_1]` (dates of birth) and `[ID_1]` (customer, patient and
+insurance numbers, file references, tax ids). The answer is translated back
+before anyone sees it: its text, a streamed answer (a placeholder split
+across two chunks included), and the arguments of the tool calls it makes, so
+a tool gets the real e-mail address, not `[EMAIL_1]`.
+
+- **Level 3** goes to a remote model the same way only where the owner
+  allows it: `protection.remoteAtLevel3` (default off). Off, level 3 stays on
+  local models like level 4. Level 4 never leaves the house.
+- **What is pseudonymized:** completions and streams, the conversation's
+  messages and tool results included. A provider's raw copy of an earlier
+  answer (Gemini's parts, Anthropic's content blocks, sent back as they are) is
+  left out of such a request, and the provider rebuilds that message from its
+  pseudonymized text, as for a conversation restored from the database.
+  Embeddings, image descriptions, OCR and CLI agents carry the data as it is,
+  so for them level 3 always stays local. Decision models do not get
+  placeholders: their privacy gate redacts personal data instead (one way),
+  or refuses.
+- **The mapping** belongs to the session and lives in memory: a value keeps
+  its placeholder for the whole conversation, and a person's surname alone
+  gets its own. Each request is pseudonymized whole from the stored
+  conversation, which always holds the real values, so a restart only
+  renumbers the placeholders.
+- **What it finds** (`src/core/protection/pseudonymize.ts`): a common first
+  name and a surname (Anna Müller, Hans-Peter Schmidt-Rottluff); a title and a
+  name (Frau Dr. Özdemir, Herrn René Dupont); one or two first names and a
+  surname (Anna Lena Müller); a street and number (Lindenstraße 12a,
+  Hauptstr. 5, Sophie-Scholl-Straße 4, Am Markt 3); a postcode and place (10115 Berlin); IBANs that
+  pass the checksum; phone numbers (+49, 0049, a leading 0); e-mail
+  addresses; dates behind a birth label (geb., Geburtsdatum); identifiers
+  behind their label (Kundennummer, Vers.-Nr., Patienten-ID, Az.) and
+  Krankenversichertennummern. It errs on the side of replacing: a word taken
+  for a surname costs some answer quality, a name missed leaves the house.
+- A name with no first name from the list and no title is not found. The
+  evaluation against real-shaped samples is plan point C7.
+
+## What the levels will decide (C6d, not built yet)
 
 **C6d. Plugin calls.** Every plugin package declares the highest level it may
 see (`maxProtection`, see [PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md)).
@@ -140,7 +169,7 @@ see (`maxProtection`, see [PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md)).
 
 ## Not yet
 
-- The steps C6c-C6d above.
+- The step C6d above.
 - Memories and notes carry no level: a fact remembered from a level 4
   conversation (extracted by a local model) can surface in a later
   conversation without raising it. Reading a document's file through the

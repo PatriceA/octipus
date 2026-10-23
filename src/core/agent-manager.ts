@@ -28,7 +28,7 @@ import { stripMutatingTools } from './agent/plan-mode';
 import { isSmallModel } from './agent/small-model';
 import { getMCPBridge } from '@/mcp/bridge';
 import { modelCandidates } from './agent/model-selector';
-import { localRowInstead } from './protection/routing';
+import { localRowInstead, PSEUDONYMIZED } from './protection/routing';
 
 /**
  * Put `section` at the end of the prompt's static (cacheable) part, before the
@@ -268,7 +268,7 @@ export class AgentManager {
     // all (core/protection/routing.ts): the row is swapped here, before the
     // worker kind is chosen, so a CLI agent is never started for it.
     const local = await localRowInstead(modelEntry, options.sessionId, 'tools',
-      () => modelCandidates({ userId: options.userId, inSpace: !!space, spaceRole: space?.role, sponsor }));
+      () => modelCandidates({ userId: options.userId, inSpace: !!space, spaceRole: space?.role, sponsor }), PSEUDONYMIZED);
     if (local && local !== modelEntry) {
       agentLogger.info({ sessionId: options.sessionId, from: modelEntry?.name ?? routedModel, to: local.name }, 'Confidential session: agent runs on a local model');
       modelEntry = local;

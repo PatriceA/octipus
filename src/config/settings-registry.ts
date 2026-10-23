@@ -1225,6 +1225,17 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'MODULES_ENABLED',
   },
 
+  // ── Protection levels (docs/PROTECTION-LEVELS.md) ──
+  {
+    key: 'protection.remoteAtLevel3',
+    category: 'protection',
+    valueType: 'boolean',
+    defaultValue: false,
+    description: 'Let conversations holding level 3 content (personal data) use remote models, pseudonymized. Off: level 3 stays on local models, like level 4.',
+    isSecret: false,
+    envVar: 'PROTECTION_REMOTE_AT_LEVEL3',
+  },
+
   // ── Shared spaces ──
   {
     key: 'spaces.creation',

@@ -12,10 +12,11 @@ import type { ModelConfigEntry } from '@/db/schema/models';
 
 let protectionOn = true;
 vi.mock('@/core/modules/registry', () => ({ isModuleOn: (id: string) => id === 'protection' && protectionOn }));
-vi.mock('@/config', () => ({ getConfig: () => ({ ollama: { url: 'http://localhost:11434' } }) }));
+let remoteAtLevel3 = false;
+vi.mock('@/config', () => ({ getConfig: () => ({ ollama: { url: 'http://localhost:11434' }, protection: { remoteAtLevel3 } }) }));
 vi.mock('@/models/local-decision', () => ({ ollamaRunsLocally: async (_endpoint: string, model: string) => !model.endsWith('-cloud') }));
 
-const { assertMayLeave, localOnlyLevel, localRowInstead, ProtectionRoutingError, runsLocally } = await import('./routing');
+const { assertMayLeave, localOnlyLevel, localRowInstead, ProtectionRoutingError, PSEUDONYMIZED, pseudonymsFor, runsLocally } = await import('./routing');
 const { highestLevel, raiseSessionLevel, resetSessionLevels, sessionProtectionLevel, withContentLevel } = await import('./session-level');
 
 function row(name: string, over: Partial<ModelConfigEntry> = {}): ModelConfigEntry {
@@ -36,6 +37,7 @@ const session = () => `test-session-${++n}`;
 
 beforeEach(() => {
   protectionOn = true;
+  remoteAtLevel3 = false;
   resetSessionLevels();
 });
 
@@ -156,5 +158,35 @@ describe('choosing the model', () => {
     const s = session();
     raiseSessionLevel(s, 3);
     await expect(localRowInstead(remote, s, 'tools', candidates([remote, cloudOllama]))).rejects.toThrow(/no local model is bound/);
+  });
+});
+
+describe('pseudonymization (C6c)', () => {
+  test('level 2-3 on a remote model is pseudonymized; level 1, a local model, or the module off is not', async () => {
+    const s = session();
+    expect(await pseudonymsFor(remote, s)).toBeUndefined();
+    raiseSessionLevel(s, 2);
+    expect(await pseudonymsFor(remote, s)).toBeDefined();
+    expect(await pseudonymsFor(localOllama, s, 'ollama')).toBeUndefined();
+    // The same mapping for the whole session.
+    expect(await pseudonymsFor(remote, s)).toBe(await pseudonymsFor(remote, s));
+    protectionOn = false;
+    expect(await pseudonymsFor(remote, s)).toBeUndefined();
+  });
+
+  test('level 3 goes to a remote model only pseudonymized, and only where the owner allows it', async () => {
+    const s = session();
+    raiseSessionLevel(s, 3);
+    await expect(assertMayLeave(remote, s, 'openai', PSEUDONYMIZED)).rejects.toBeInstanceOf(ProtectionRoutingError);
+    remoteAtLevel3 = true;
+    await expect(assertMayLeave(remote, s, 'openai', PSEUDONYMIZED)).resolves.toBeUndefined();
+    expect(await localRowInstead(remote, s, 'tools', async () => ({ defaultModel: null, rows: [localOllama] }), PSEUDONYMIZED)).toBe(remote);
+    // Embeddings, images and CLI agents carry the data as it is.
+    await expect(assertMayLeave(remote, s, 'openai')).rejects.toBeInstanceOf(ProtectionRoutingError);
+    await expect(assertMayLeave(row('claude-cli', { provider: 'cli' }), s, 'cli', PSEUDONYMIZED)).rejects.toBeInstanceOf(ProtectionRoutingError);
+    // Level 4 never goes out.
+    raiseSessionLevel(s, 4);
+    await expect(assertMayLeave(remote, s, 'openai', PSEUDONYMIZED)).rejects.toBeInstanceOf(ProtectionRoutingError);
+    expect(await localOnlyLevel(s, PSEUDONYMIZED)).toBe(4);
   });
 });
