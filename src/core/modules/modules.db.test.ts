@@ -56,8 +56,23 @@ describe('the modules migration', () => {
     expect(await storedRow()).toBe('["mail"]');
   });
 
+  test('0152: research, the reader and recall stay on where users existed, once', async () => {
+    const { executeRaw } = await import('@/db/postgres');
+    const later = readFileSync(join(__dirname, '../../db/migrations/0152_modules_research_reader_recall.sql'), 'utf8');
+    await executeRaw(`UPDATE settings SET value = '["business","mail"]' WHERE key = 'modules.enabled'`);
+    await executeRaw(later);
+    await executeRaw(later);
+    expect(JSON.parse((await storedRow()) ?? '[]').sort()).toEqual(['business', 'mail', 'reader', 'recall', 'research']);
+    // Users but no row (an install that never switched a module): only the newly declared ones.
+    await executeRaw(`DELETE FROM settings WHERE key = 'modules.enabled'`);
+    await executeRaw(later);
+    expect(JSON.parse((await storedRow()) ?? '[]')).toEqual(['research', 'reader', 'recall']);
+    await executeRaw(`UPDATE settings SET value = '["business","mail"]' WHERE key = 'modules.enabled'`);
+  });
+
   test('a change is stored in the setting, with what it depends on', async () => {
     const { setModuleOn, setEnabledModules } = await import('./registry');
+    await (await import('@/db/postgres')).executeRaw(`UPDATE settings SET value = '["mail"]' WHERE key = 'modules.enabled'`);
     expect(await setModuleOn('business', true)).toEqual(['business', 'mail']);
     expect(JSON.parse((await storedRow()) ?? '[]')).toEqual(['business', 'mail']);
     expect(await setModuleOn('mail', false)).toEqual(['business']);

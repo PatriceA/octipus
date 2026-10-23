@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { useState } from 'react';
 import { useAuth } from '@/lib/auth-context';
+import { usePageOn } from '@/lib/modules';
 import { useWorkspace } from '@/lib/workspace-context';
 import { cn } from '@/lib/utils';
 
@@ -12,6 +13,7 @@ export function WorkNavigation() {
   const pathname = usePathname();
   const { activeWorkspace } = useWorkspace();
   const { user } = useAuth();
+  const pageOn = usePageOn();
   const requestedJob = useSearchParams().get('job');
   const [research, setResearch] = useState<{ owner?: string; job: string | null }>({ owner: user?.id, job: null });
   if (pathname === '/research' && requestedJob && (research.job !== requestedJob || research.owner !== user?.id)) {
@@ -24,7 +26,7 @@ export function WorkNavigation() {
     ...(shared ? [{ href: '/rooms', label: 'Shared rooms' }] : []),
     ...(!remote ? [{ href: '/research', label: 'Research' }, { href: '/documents', label: 'Documents' }, { href: '/artifacts', label: 'Prototypes & apps' }] : []),
     { href: '/tasks', label: 'Next steps' },
-  ];
+  ].filter((item) => pageOn(item.href));
   if (!['/chat', '/rooms', '/research', '/documents', '/artifacts', '/tasks', '/my-work'].some(path => pathname === path || pathname.startsWith(`${path}/`))) return null;
   return (
     <nav aria-label="Work navigation" className="shrink-0 border-b border-outline-variant/40 bg-surface-container-lowest px-3 py-2 font-sans">

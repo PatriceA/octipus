@@ -37,9 +37,8 @@ import {
 import Link from 'next/link';
 import { useState } from 'react';
 import { usePathname } from 'next/navigation';
-import { offModuleFor } from './module-gate';
 import { useAuth } from '@/lib/auth-context';
-import { useModules } from '@/lib/modules';
+import { offModuleFor, useModules } from '@/lib/modules';
 import { useRooms } from '@/lib/rooms';
 import { useSidebarStore } from '@/lib/sidebar-store';
 import { cn } from '@/lib/utils';

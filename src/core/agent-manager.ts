@@ -1,4 +1,5 @@
 import { getConfig } from '@/config';
+import { withoutOffModules } from '@/core/modules/prompt';
 import { assertCliSpaceMode } from './cli-adapters';
 import { can, SpaceError } from '@/security/space-access';
 import { buildSelectedSkillPrompt } from '@/skills/selection';
@@ -420,7 +421,8 @@ export class AgentManager {
     // session-selected skills into that volatile tail: a resumed run re-sends
     // them, and a selection change does not touch the stable part its vendor
     // session is fingerprinted on. Everyone else keeps them as their own message.
-    const systemPrompt = withMcpServersSection(options.systemPrompt, options.tools, workerConfig.codemode === true);
+    // Text of a module that is off never reaches the agent (docs/MODULES.md).
+    const systemPrompt = withMcpServersSection(options.systemPrompt === undefined ? undefined : withoutOffModules(options.systemPrompt), options.tools, workerConfig.codemode === true);
     const intoTail = !context.root && typeof context.metadata.resumeKey === 'string' && isCLI && isResumableCliModel(routedModel)
       && !!selectedSkills && !!systemPrompt && VOLATILE_MARKER.test(systemPrompt);
     if (systemPrompt) {

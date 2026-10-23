@@ -7,6 +7,9 @@ import type { ModuleDefinition } from '@/core/modules/types';
 import { businessModule } from './business';
 import { mailModule } from './mail';
 import { protectionModule } from './protection';
+import { readerModule } from './reader';
+import { recallModule } from './recall';
+import { researchModule } from './research';
 import { scanFoldersModule } from './scan-folders';
 
 export const MODULES: readonly ModuleDefinition[] = [
@@ -14,4 +17,7 @@ export const MODULES: readonly ModuleDefinition[] = [
   mailModule,
   scanFoldersModule,
   protectionModule,
+  researchModule,
+  readerModule,
+  recallModule,
 ];

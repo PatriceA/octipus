@@ -3,12 +3,7 @@
 import { Boxes } from 'lucide-react';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
-import { type ModuleView, useModules } from '@/lib/modules';
-
-/** The module whose page `pathname` is, when that module is off. */
-export function offModuleFor(pathname: string, modules: readonly ModuleView[] | undefined): ModuleView | undefined {
-  return modules?.find((m) => !m.on && m.pages.some((page) => pathname === page || pathname.startsWith(`${page}/`)));
-}
+import { offModuleFor, useModules } from '@/lib/modules';
 
 /**
  * A page of a module that is off (docs/MODULES.md), reached by a bookmark or
