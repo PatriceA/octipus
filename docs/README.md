@@ -60,6 +60,13 @@ The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 | [HOOKS.md](HOOKS.md) | Event hooks and scheduled / recurring tasks. |
 | [ONBOARDING.md](ONBOARDING.md) | The setup guide on the home page: use cases, questions, what it sets up and how. |
 | [HEARTBEAT.md](HEARTBEAT.md) | Proactive periodic checks for due tasks and notifications, with per-user standing instructions. |
+| [CASES.md](CASES.md) | Cases ("Vorgänge"), contacts and follow-ups: the shared records business modules build on, who sees them in a space, the `cases` tool and the API. |
+| [RECORDS.md](RECORDS.md) | Record types with fields a business defines, records validated against them, and public form links that save a record (and open a case) without sign-in. |
+| [MAIL.md](MAIL.md) | Mailboxes over IMAP, POP3 and SMTP: personal and functional (shared) mailboxes, the sync, drafts and approved sends, and which hosts an account may use. |
+| [PROTECTION-LEVELS.md](PROTECTION-LEVELS.md) | Protection levels 1-4 on documents, cases, records and mail (unclear = 4): where they come from, who may change them, and what they will decide (privacy gateway). |
+| [BACKUP.md](BACKUP.md) | Daily backups of the database (with the vault) and the workspace files, checked by loading them back; retention, the admin API and restore. |
+| [SCAN-FOLDERS.md](SCAN-FOLDERS.md) | Scan folders: server directories a scanner or fax service drops files into, filed into the documents of a personal or space scope. |
+| [PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md) | Plugin packages: out-of-repo connections that run as their own fenced-in MCP server, with declared tool effects, settings and vault secrets. |
 | [TASK-BOARD.md](TASK-BOARD.md) | The work board on the tasks page: assignees, checkout leases, comments, dependency wakeups, the audit trail, and role agents that work their tasks. |
 | [SPEND-BUDGETS.md](SPEND-BUDGETS.md) | Dollar spend budgets per user, role or workspace: warn and pause, what users see, and the admin screen. |
 | [PLUGINS.md](PLUGINS.md) | Installing and building host-side plugins / extensions. |

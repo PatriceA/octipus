@@ -121,6 +121,13 @@ export const defaultConfig: Partial<Config> = {
     ocrModel: 'glm-ocr',
     ocrEndpoint: 'http://localhost:11435',
   },
+  backup: {
+    enabled: true,
+    path: join(homedir(), '.octipus', 'backups'),
+    hour: 2,
+    keep: 7,
+    includeFiles: true,
+  },
   spaces: {
     creation: 'any_user',
     maxMembers: 50,

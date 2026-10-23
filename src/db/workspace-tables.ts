@@ -47,8 +47,11 @@ export const WORKSPACE_TABLES: readonly WorkspaceTable[] = [
   // actor column stays the actor through a transfer.
   { table: 'audit_log', ownerColumn: 'user_id', transfer: 'n/a', purge: 'keep' },
   { table: 'background_jobs', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
+  // Cases and contacts (docs/CASES.md); a case's links go with it (cascade).
+  { table: 'cases', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   // Retention history of what a cleanup removed.
   { table: 'cleanup_audit_log', ownerColumn: 'user_id', transfer: 'n/a', purge: 'keep' },
+  { table: 'contacts', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   // Billing history: who spent what, where. Outlives the space.
   { table: 'cost_log', ownerColumn: 'user_id', transfer: 'n/a', purge: 'keep' },
   { table: 'documents', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
@@ -60,6 +63,9 @@ export const WORKSPACE_TABLES: readonly WorkspaceTable[] = [
   { table: 'embeddings', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'hooks', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'knowledge_links', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
+  // Mail accounts and their messages (docs/MAIL.md); `mail_raw` goes with a message.
+  { table: 'mail_accounts', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
+  { table: 'mail_messages', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'memories', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'notes', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   // Live documents (S3): space notes only, and spaces are never transferred.
@@ -70,6 +76,15 @@ export const WORKSPACE_TABLES: readonly WorkspaceTable[] = [
   // A request belongs to the agent run that raised it, not to the workspace.
   { table: 'permission_requests', ownerColumn: 'user_id', transfer: 'n/a', purge: 'delete' },
   { table: 'pipelines', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
+  // Record types and records (docs/RECORDS.md); a type's form links go with it.
+  // The purge deletes records first (their type is RESTRICT).
+  { table: 'records', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
+  { table: 'record_types', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
+  // Scan folders (docs/SCAN-FOLDERS.md): an admin's reading of a server
+  // directory. It does not follow a transfer: the recipient may not be an
+  // admin, and the folder files nothing once its author no longer owns the
+  // workspace.
+  { table: 'scan_folders', ownerColumn: 'user_id', transfer: 'n/a', purge: 'delete' },
   { table: 'sessions', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   // Space memory (S2): only shared workspaces have it, and they are never
   // transferred; its RESTRICT key makes the purge delete it first.

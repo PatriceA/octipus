@@ -118,6 +118,10 @@ const ALLOWLIST: Record<string, string> = {
   'src/core/spaces/membership.ts': ACCESS_LAYER,
   'src/core/spaces/purge.ts': ACCESS_LAYER,
   'src/db/repositories/live-documents.ts': ACCESS_LAYER,
+  'src/db/repositories/cases.ts': ACCESS_LAYER,
+  'src/db/repositories/records.ts': ACCESS_LAYER,
+  'src/db/repositories/mail.ts': ACCESS_LAYER,
+  'src/db/repositories/scan-folders.ts': ACCESS_LAYER,
   // Rooms (S2): every read follows `roomAccess` / the membership read.
   'src/core/rooms/access.ts': ACCESS_LAYER,
   'src/core/rooms/service.ts': ACCESS_LAYER,
@@ -129,6 +133,17 @@ const ALLOWLIST: Record<string, string> = {
   // S5 "My work": tasks assigned to the caller, in spaces joined through
   // their membership in the same query, and their own personal workspaces.
   'src/core/tasks/team.ts': 'my tasks across my memberships, by assignee',
+  // Follow-ups: due tasks claimed by id, told to their assignee or author
+  // (a space recipient re-checked against the membership).
+  'src/core/tasks/reminders.ts': 'due follow-ups, notified to the assignee or author',
+  // The mail sync (docs/MAIL.md): due accounts and their already-stored remote ids, for no user;
+  // writes copy the account's scope. The password cleanup reads only which account ids exist.
+  'src/core/mail/sync.ts': 'mail sync: due accounts and stored remote ids, for no user',
+  'src/core/mail/secrets.ts': 'which mail account ids still exist (no content)',
+  // The scan sweep (docs/SCAN-FOLDERS.md): enabled folders, for no user; files are written as the folder's author.
+  'src/core/scan-folders/sweep.ts': 'scan sweep: enabled folders, for no user',
+  // The backup's check (docs/BACKUP.md): counts the vault's rows and decrypts a few with the master key, for no user.
+  'src/core/backup/service.ts': 'backup check: vault row count and a key check, for no user',
   'src/db/repositories/session-kind.ts': 'the kind of one session by id (no content)',
   'src/security/workspace-resolver.ts': 'workspace of a session/agent/pipeline the caller owns, by id',
   // Federation (docs/plans/federation-spec.md §7.5, §9): whether a room or

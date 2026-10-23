@@ -719,6 +719,22 @@ export class ScopedDocumentRepo {
     return result.length > 0;
   }
 
+  /** A document of the scope, without the admin by-id path (protection levels are the scope's business). */
+  async findInScope(id: string): Promise<DocumentRecord | null> {
+    if (!isUuid(id)) return null;
+    const [row] = await this.db.select().from(documents).where(and(eq(documents.id, id), ...this.scope.shared(documents))).limit(1);
+    return row ?? null;
+  }
+
+  /** Set a document's protection level (null: unclear, 4). `onlyRaise`: see `CaseRepo.setProtectionLevel`. */
+  async setProtectionLevel(id: string, level: number | null, onlyRaise = false): Promise<DocumentRecord | null> {
+    if (!isUuid(id)) return null;
+    this.scope.can('write');
+    const [row] = await this.db.update(documents).set({ protectionLevel: level })
+      .where(and(eq(documents.id, id), ...this.scope.shared(documents), ...(onlyRaise && level !== null ? [sql`coalesce(${documents.protectionLevel}, 4) <= ${level}`] : []))).returning();
+    return row ?? null;
+  }
+
   /** Update status — restricted to documents the principal may write. */
   async updateStatus(id: string, status: DocumentRecord['status'], error?: string): Promise<boolean> {
     if (!isUuid(id)) return false;
@@ -1210,6 +1226,13 @@ export class TaskRepo {
       .limit(opts.limit ?? 50);
   }
 
+  /** The tasks of `ids` the scope reaches, in no particular order. */
+  async findByIds(ids: readonly string[]): Promise<Task[]> {
+    const valid = [...new Set(ids.filter(isUuid))];
+    if (valid.length === 0) return [];
+    return this.db.select().from(tasks).where(and(inArray(tasks.id, valid), ...this.scope()));
+  }
+
   /**
    * The subset of `ids` the scope reaches (workspace-scoped like every
    * other read). Cross-tenant and unknown ids simply do not come back.
@@ -1390,6 +1413,13 @@ export class TaskRepo {
     const release = safe.status !== undefined && (safe.status === 'open' || !isActiveStatus(safe.status))
       ? { checkedOutBy: null, checkedOutAt: null, checkoutRunId: null }
       : {};
+    // A changed follow-up date re-arms the reminder (core/tasks/reminders.ts);
+    // the same date sent again (a client echoing the row) leaves it fired.
+    if (safe.remindAt !== undefined && safe.remindedAt === undefined) {
+      const current = await this.findById(id);
+      if (!current) return null;
+      if ((current.remindAt?.getTime() ?? null) !== (safe.remindAt?.getTime() ?? null)) safe.remindedAt = null;
+    }
     const holderCheck = opts.asActor !== undefined ? [this.leaseFree(opts.asActor)] : [];
     const where = (...extra: SQL[]) => this.scopeWhere(id, ...holderCheck, ...extra);
     const values = { ...safe, ...release, updatedAt: new Date() };

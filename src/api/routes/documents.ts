@@ -1,15 +1,14 @@
-import { randomUUID } from 'crypto';
 import { Elysia, t } from '@/api/http';
 import { existsSync } from 'fs';
-import { mkdir, unlink } from 'fs/promises';
-import { extname, join } from 'path';
+import { unlink } from 'fs/promises';
 import { apiContext } from '@/api/context';
-import { getConfig } from '@/config';
+import { ingestDocument, maxDocumentSize } from '@/core/documents/ingest';
 import { getDocumentQueue } from '@/core/documents/queue';
 import { contentRepos } from '@/db/repositories/content';
 import { isAuthenticated } from '@/security/principal';
+import { isProtectionLevel } from '@/shared/protection';
 import { apiLogger } from '@/utils/logger';
-import { fileAt, writeFileAt } from '@/utils/fs-file';
+import { fileAt } from '@/utils/fs-file';
 
 const logger = apiLogger.child({ component: 'documents-route' });
 
@@ -31,77 +30,43 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
       return { error: 'Authentication required' };
     }
 
-    const config = getConfig();
-    const maxSize = config.workspace.maxUploadSize || 52428800;
     const repos = contentRepos(principal);
     // In a space, uploading is a write; refuse before anything reaches disk.
     repos.can('write');
-    // Scope storage on disk by workspace so document uploads land in the
-    // active workspace's folder, matching the per-user nested layout used by
-    // WorkspaceFS — or, in a space, under `<documentsPath>/spaces/<id>/`.
-    const uncategorizedDir = repos.documents.uploadDirectory();
-
-    // Ensure upload directory exists
-    if (!existsSync(uncategorizedDir)) {
-      await mkdir(uncategorizedDir, { recursive: true });
-    }
-
+    const maxSize = maxDocumentSize();
     const files = Array.isArray(body.files) ? body.files : [body.files];
+    // A level for the whole upload (docs/PROTECTION-LEVELS.md); absent: unclear.
+    const level = body.protectionLevel ? Number(body.protectionLevel) : null;
+    if (level !== null && !isProtectionLevel(level)) { set.status = 400; return { error: 'protectionLevel is 1, 2, 3 or 4' }; }
     const results: Array<{ id: string; filename: string; status: string; error?: string }> = [];
-    const docs = repos.documents;
 
     for (const file of files) {
       if (!file || !(file instanceof Blob)) {
         continue;
       }
 
-      // Check file size
+      // Check file size before reading it
       if (file.size > maxSize) {
         results.push({ id: '', filename: (file as File).name || 'unknown', status: `File too large (max ${Math.round(maxSize / 1048576)}MB)` });
         continue;
       }
 
       const originalName = (file as File).name || 'upload';
-      const ext = extname(originalName) || '';
-      const uniqueFilename = `${randomUUID()}${ext}`;
-      const storagePath = join(uncategorizedDir, uniqueFilename);
-
-      // Write file to disk
-      const buffer = Buffer.from(await file.arrayBuffer());
-      await writeFileAt(storagePath, buffer);
-
-      // Create DB record — scoped repo pins the doc to the principal.
-      const doc = await docs.create({
-        filename: uniqueFilename,
+      const result = await ingestDocument(repos, {
+        buffer: Buffer.from(await file.arrayBuffer()),
         originalName,
         mimeType: file.type || 'application/octet-stream',
-        size: file.size,
-        storagePath,
-        status: 'queued',
+        protectionLevel: level,
       });
-
-      // Enqueue for processing — a row, so the upload survives a restart. If
-      // the row cannot be written the document would sit at `queued` with
-      // nothing to pick it up, so say so on the document and in the response
-      // and carry on with the other files.
-      try {
-        await getDocumentQueue().enqueue(doc.id, user.id, { title: originalName, workspaceId: doc.workspaceId });
-      } catch (err) {
-        const reason = `Could not queue for processing: ${(err as Error).message}`;
-        logger.error({ err, documentId: doc.id, filename: originalName }, 'Document uploaded but not queued');
-        await docs.updateStatus(doc.id, 'failed', reason).catch(() => undefined);
-        results.push({ id: doc.id, filename: originalName, status: 'failed', error: reason });
-        continue;
-      }
-
-      results.push({ id: doc.id, filename: originalName, status: 'queued' });
-      logger.info({ documentId: doc.id, filename: originalName, size: file.size }, 'Document uploaded');
+      results.push(result.error ? result : { id: result.id, filename: result.filename, status: result.status });
+      if (!result.error) logger.info({ documentId: result.id, filename: originalName, size: file.size }, 'Document uploaded');
     }
 
     return { uploaded: results };
   }, {
     body: t.Object({
       files: t.Union([t.File(), t.Array(t.File())]),
+      protectionLevel: t.Optional(t.String({ pattern: '^[1-4]$' })),
     }),
     detail: { tags: ['documents'] },
   })
@@ -135,6 +100,7 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
         size: d.size,
         category: d.category,
         status: d.status,
+        protectionLevel: d.protectionLevel,
         summary: d.summary,
         createdAt: d.createdAt,
         processedAt: d.processedAt,
@@ -173,6 +139,7 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
       status: doc.status,
       ocrText: doc.ocrText,
       summary: doc.summary,
+      protectionLevel: doc.protectionLevel,
       storagePath: doc.storagePath,
       metadata: doc.metadata,
       createdAt: doc.createdAt,

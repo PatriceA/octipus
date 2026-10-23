@@ -26,8 +26,13 @@ import {
   scopedRepos,
   type TaskRepo,
   assertPersonalWorkspace,
+  personalScope,
 } from './scoped';
-import { ArtifactStore, type LinkStore, linkStoreFor, spaceRepos } from './space';
+import { CaseRepo, ContactRepo } from './cases';
+import { MailRepo } from './mail';
+import { ScanFolderRepo } from './scan-folders';
+import type { FormLinkRepo, RecordRepo, RecordTypeRepo } from './records';
+import { ArtifactStore, type LinkStore, linkStoreFor, recordRepos, spaceRepos } from './space';
 
 export interface ContentRepos {
   readonly kind: 'personal' | 'space';
@@ -47,6 +52,13 @@ export interface ContentRepos {
   documents: ScopedDocumentRepo;
   notifications: ScopedNotificationRepo;
   tasks: TaskRepo;
+  cases: CaseRepo;
+  contacts: ContactRepo;
+  recordTypes: RecordTypeRepo;
+  records: RecordRepo;
+  formLinks: FormLinkRepo;
+  mail: MailRepo;
+  scanFolders: ScanFolderRepo;
   notes: NoteStore;
   noteScope: NoteScope;
   links: LinkStore;
@@ -77,6 +89,13 @@ export function contentRepos(principal: Principal): ContentRepos {
     documents: personal.documents,
     notifications: personal.notifications,
     tasks: personal.tasks,
+    get cases() { return new CaseRepo(personalScope(principal)); },
+    get contacts() { return new ContactRepo(personalScope(principal)); },
+    get recordTypes() { return recordRepos(personalScope(principal)).recordTypes; },
+    get records() { return recordRepos(personalScope(principal)).records; },
+    get formLinks() { return recordRepos(personalScope(principal)).formLinks; },
+    get mail() { return new MailRepo(personalScope(principal)); },
+    get scanFolders() { return new ScanFolderRepo(personalScope(principal)); },
     notes: new PersonalNoteRepo(noteScope),
     noteScope,
     links: linkStoreFor(noteScope),

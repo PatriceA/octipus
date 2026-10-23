@@ -1,0 +1,17 @@
+{
+  "name": "echo-plugin",
+  "version": "1.0.0",
+  "apiVersion": "1.0.0",
+  "title": "Echo (test fixture)",
+  "description": "A minimal plugin package for the tests: echoes, reports its environment, and offers one undeclared tool.",
+  "server": { "command": "node", "args": ["server.mjs"] },
+  "tools": {
+    "echo": { "effect": "read", "description": "Echo the text back" },
+    "env_report": { "effect": "read", "description": "Which environment variables the server sees" },
+    "send_letter": { "effect": "external", "description": "Pretend to send a letter" }
+  },
+  "network": ["api.example.com"],
+  "maxProtection": 2,
+  "settings": [{ "key": "region", "label": "Region", "type": "select", "options": ["eu", "us"], "required": true }],
+  "secrets": [{ "key": "ECHO_TOKEN", "label": "Echo token", "required": true }]
+}

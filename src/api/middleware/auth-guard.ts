@@ -30,6 +30,9 @@ const PUBLIC_ROUTES: ReadonlyArray<{ method: string; pattern: RegExp }> = [
   { method: 'GET', pattern: /^\/api\/invites\/[^/]+$/ },
   // The registration mode (`security.registration`): the sign-in page reads it before anyone signs in.
   { method: 'GET', pattern: /^\/api\/auth\/registration$/ },
+  // Public forms (docs/RECORDS.md → Forms): the token is the credential.
+  { method: 'GET', pattern: /^\/api\/forms\/[^/]+$/ },
+  { method: 'POST', pattern: /^\/api\/forms\/[^/]+$/ },
 ];
 
 export function isPublicRoute(method: string, path: string): boolean {

@@ -103,6 +103,17 @@ describe('workspace transfer', () => {
     await one('agent_events', `INSERT INTO agent_events (agent_id, session_id, type, user_id, workspace_id) VALUES ('a1', $1, 'started', $2, $3) RETURNING id`, [session.id, owner, ws]);
     await one('agents', `INSERT INTO agents (id, session_id, user_id, workspace_id) VALUES ($1, $2, $3, $4) RETURNING id`, [`agent-${randomUUID()}`, session.id, owner, ws]);
     await one('background_jobs', `INSERT INTO background_jobs (kind, user_id, title, workspace_id) VALUES ('research', $1, 'job', $2) RETURNING id`, [owner, ws]);
+    await one('cases', `INSERT INTO cases (user_id, title, workspace_id) VALUES ($1, 'c', $2) RETURNING id`, [owner, ws]);
+    await one('contacts', `INSERT INTO contacts (user_id, name, workspace_id) VALUES ($1, 'k', $2) RETURNING id`, [owner, ws]);
+    const [type] = await q(`INSERT INTO record_types (user_id, key, name, workspace_id) VALUES ($1, $2, 't', $3) RETURNING id`, [owner, `t_${randomUUID().slice(0, 8)}`, ws]);
+    ids.record_types = String(type.id);
+    await one('records', `INSERT INTO records (user_id, type_id, workspace_id) VALUES ($1, $2, $3) RETURNING id`, [owner, type.id, ws]);
+    const [account] = await q(
+      `INSERT INTO mail_accounts (user_id, workspace_id, label, address, protocol, incoming) VALUES ($1, $2, 'm', 'm@x.de', 'imap', '{}'::jsonb) RETURNING id`,
+      [owner, ws],
+    );
+    ids.mail_accounts = String(account.id);
+    await one('mail_messages', `INSERT INTO mail_messages (account_id, user_id, workspace_id, status) VALUES ($1, $2, $3, 'received') RETURNING id`, [account.id, owner, ws]);
     await one('documents', `INSERT INTO documents (user_id, filename, original_name, mime_type, size, storage_path, workspace_id) VALUES ($1, 'f', 'f', 'text/plain', 1, '/x', $2) RETURNING id`, [owner, ws]);
     await one('embeddings', `INSERT INTO embeddings (source_id, content, model, embedding, purpose, content_sha256, embedding_version, user_id, workspace_id) VALUES ('s', 'c', 'm', '[0.1,0.2,0.3]', 'document', $1, 'm/3', $2, $3) RETURNING id`, [randomUUID(), owner, ws]);
     await one('hooks', `INSERT INTO hooks (user_id, name, trigger, trigger_config, action, action_config, workspace_id) VALUES ($1, 'h', 'message_received', '{}', 'notify', '{}', $2) RETURNING id`, [owner, ws]);

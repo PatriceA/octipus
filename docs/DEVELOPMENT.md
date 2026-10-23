@@ -62,7 +62,7 @@ octipus/
 | `npm run eval -- --baseline latest` | Same, plus a regression gate: exits 1 if any test that PASSED in the newest `eval/results/*.json` now fails, even when the overall score improved. Pass a path instead of `latest` to pin a committed baseline. |
 | `npm run build` | Build backend for distribution |
 | `npm run build:cli` | Bundle `bin/octi.ts` → executable `dist/octi` JavaScript (requires Node) |
-| `npm run backup` | Backup database, config, vault |
+| `npm run backup` | Write and check a backup (database with the vault, workspace files); `list`, `verify`, `restore` — see [BACKUP.md](BACKUP.md) |
 | `octi doctor` | Run environment health checks (what is wired, what is missing) |
 | `octi init` | Run the pi-tui setup wizard (falls back to `npm run setup` on non-TTY) |
 

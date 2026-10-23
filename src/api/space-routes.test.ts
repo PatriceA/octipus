@@ -23,17 +23,19 @@ process.env.LOG_LEVEL ??= 'error';
  * `spaceTargetOf`).
  */
 const PERSONAL_PREFIXES = [
-  '/api/admin', '/api/agents', '/api/auth', '/api/capabilities', '/api/channels', '/api/chat',
+  '/api/admin', '/api/agents', '/api/auth', '/api/backups', '/api/capabilities', '/api/channels', '/api/chat',
   '/api/connectors', '/api/context-hooks', '/api/devices', '/api/digest', '/api/email', '/api/eval', '/api/evaluations',
   '/api/gateway', '/api/graph', '/api/health', '/api/heartbeat', '/api/hooks', '/api/invites', '/api/logs', '/api/mcp',
   '/api/me', '/api/memory', '/api/metrics', '/api/models', '/api/onboarding', '/api/permission-requests', '/api/persona',
-  '/api/pipelines', '/api/plugins', '/api/reader', '/api/recurring-tasks', '/api/research', '/api/roles',
+  '/api/pipelines', '/api/plugin-packages', '/api/plugins', '/api/reader', '/api/recurring-tasks', '/api/research', '/api/roles',
   '/api/runs', '/api/saml', '/api/scim', '/api/search', '/api/settings', '/api/skills', '/api/spend-budgets',
   '/api/swarm', '/api/tools', '/api/topics', '/api/trajectories', '/api/vault', '/api/verification',
   '/api/voice', '/api/webhooks', '/api/workspace', '/v1',
   // Spaces joined on other installs (federation §8.2): the caller's own
   // pointer rows here, forwarded to the host; nothing of a space on this install.
   '/api/remote-spaces',
+  // Public forms: no sign-in, the scope is the form link's (docs/RECORDS.md).
+  '/api/forms',
   // The artifact SDK script, served beside the hosted pages: no content.
   '/octipus-artifact-client.js',
 ];
@@ -161,6 +163,24 @@ const SPACE_ACTING = [
   'GET /api/tasks', 'GET /api/tasks/role-agents', 'PUT /api/tasks/role-agents', 'GET /api/tasks/:id', 'POST /api/tasks',
   'PATCH /api/tasks/:id', 'POST /api/tasks/:id/checkout', 'POST /api/tasks/:id/release', 'GET /api/tasks/:id/comments',
   'POST /api/tasks/:id/comments', 'DELETE /api/tasks/:id',
+  // Cases and contacts (docs/CASES.md): `contentRepos`, by the member's role.
+  'GET /api/cases', 'GET /api/cases/linked', 'POST /api/cases', 'GET /api/cases/:id', 'PATCH /api/cases/:id', 'DELETE /api/cases/:id',
+  'POST /api/cases/:id/links', 'DELETE /api/cases/:id/links/:linkId', 'POST /api/cases/:id/follow-ups',
+  'GET /api/contacts', 'POST /api/contacts', 'GET /api/contacts/:id', 'PATCH /api/contacts/:id', 'DELETE /api/contacts/:id',
+  // Record types, records and form links (docs/RECORDS.md): `contentRepos`, by the member's role.
+  'GET /api/record-types', 'POST /api/record-types', 'GET /api/record-types/:id', 'PATCH /api/record-types/:id',
+  'DELETE /api/record-types/:id', 'GET /api/record-types/:id/form-links', 'POST /api/record-types/:id/form-links',
+  'DELETE /api/record-types/:id/form-links/:linkId',
+  'GET /api/records', 'POST /api/records', 'GET /api/records/:id', 'PATCH /api/records/:id', 'DELETE /api/records/:id',
+  // Functional mailboxes (docs/MAIL.md): `contentRepos`; owners set accounts up, editors draft, send and mark.
+  'GET /api/mail/accounts', 'POST /api/mail/accounts', 'PATCH /api/mail/accounts/:id', 'DELETE /api/mail/accounts/:id',
+  'POST /api/mail/accounts/:id/test', 'POST /api/mail/accounts/:id/sync',
+  'GET /api/mail/messages', 'GET /api/mail/messages/:id', 'PATCH /api/mail/messages/:id', 'GET /api/mail/messages/:id/attachments/:index',
+  'POST /api/mail/drafts', 'PATCH /api/mail/drafts/:id', 'DELETE /api/mail/drafts/:id', 'POST /api/mail/drafts/:id/send',
+  // Protection levels (docs/PROTECTION-LEVELS.md): `contentRepos`, editors.
+  'PUT /api/protection/:entity/:id',
+  // Scan folders (docs/SCAN-FOLDERS.md): admins only, and in a space a writer there.
+  'GET /api/scan-folders', 'POST /api/scan-folders', 'PATCH /api/scan-folders/:id', 'DELETE /api/scan-folders/:id', 'POST /api/scan-folders/:id/scan',
   'GET /api/notifications', 'POST /api/notifications/:id/read', 'POST /api/notifications/read-all',
   'GET /api/artifacts/_meta', 'GET /api/artifacts', 'POST /api/artifacts', 'GET /api/artifacts/spec/:slugOrId', 'GET /api/artifacts/:id',
   'PUT /api/artifacts/:id', 'DELETE /api/artifacts/:id', 'GET /api/artifacts/:id/versions',

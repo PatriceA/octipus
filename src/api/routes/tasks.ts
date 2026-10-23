@@ -9,7 +9,7 @@ import { listRoleAgents, roleAgentToggleError, setRolePipelineTemplate } from '@
 import { resolveRoleTemplate } from '@/core/tasks/role-pipelines';
 import { assigneePatch, isTaskStatus, TASK_ASSIGNEE_KINDS, TASK_STATUSES } from '@/core/tasks/status';
 import { normalizeEstimate } from '@/core/tasks/structure';
-import { resolveUserTimezone } from '@/core/tasks/timezone';
+import { parseTaskDate, resolveUserTimezone } from '@/core/tasks/timezone';
 import { queryRaw } from '@/db/postgres';
 import { contentRepos } from '@/db/repositories/content';
 import type { NewTask } from '@/db/schema/tasks';
@@ -263,6 +263,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
           priority: body.priority ?? 0,
           category: normalizeCategory(body.category),
           dueAt: body.dueAt ? await parseDueAt(body.dueAt, user.id, body.tz) : null,
+          remindAt: body.remindAt ? await parseTaskDate(body.remindAt, 'remindAt', user.id, body.tz) : null,
           estimate: normalizeEstimate(body.estimate),
           parentId: body.parentId || null,
           blockedBy: body.blockedBy ? idList(body.blockedBy) : [],
@@ -286,6 +287,8 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         priority: t.Optional(t.Integer({ minimum: 0, maximum: 3 })),
         category: t.Optional(t.String({ maxLength: 100 })),
         dueAt: t.Optional(t.String()),
+        /** Follow-up: when the task comes back to the assignee (ISO 8601; a bare date is the start of that day). */
+        remindAt: t.Optional(t.String()),
         estimate: t.Optional(t.String({ maxLength: 40 })),
         parentId: t.Optional(t.String()),
         blockedBy: t.Optional(t.Array(t.String(), { maxItems: 100 })),
@@ -331,6 +334,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
           priority: body.priority,
           category: body.category !== undefined ? normalizeCategory(body.category) : undefined,
           dueAt: body.dueAt !== undefined ? (body.dueAt ? await parseDueAt(body.dueAt, user.id, body.tz) : null) : undefined,
+          remindAt: body.remindAt !== undefined ? (body.remindAt ? await parseTaskDate(body.remindAt, 'remindAt', user.id, body.tz) : null) : undefined,
           estimate: body.estimate !== undefined ? normalizeEstimate(body.estimate) : undefined,
           parentId: body.parentId !== undefined ? body.parentId || null : undefined,
           blockedBy: body.blockedBy !== undefined ? idList(body.blockedBy ?? []) : undefined,
@@ -364,6 +368,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         priority: t.Optional(t.Integer({ minimum: 0, maximum: 3 })),
         category: t.Optional(t.Union([t.String({ maxLength: 100 }), t.Null()])),
         dueAt: t.Optional(t.Union([t.String(), t.Null()])),
+        remindAt: t.Optional(t.Union([t.String(), t.Null()])),
         estimate: t.Optional(t.Union([t.String({ maxLength: 40 }), t.Null()])),
         parentId: t.Optional(t.Union([t.String(), t.Null()])),
         blockedBy: t.Optional(t.Union([t.Array(t.String(), { maxItems: 100 }), t.Null()])),

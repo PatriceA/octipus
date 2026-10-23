@@ -23,6 +23,7 @@ import * as AtlassianModule from './atlassian';
 import { BaseTool } from './base-tool';
 import * as BrowserModule from './browser';
 import * as BrowserExtModule from './browser-ext';
+import * as CasesModule from './cases';
 import * as DataModule from './data';
 import * as DockerModule from './docker';
 import * as DocumentsModule from './documents';
@@ -34,13 +35,16 @@ import * as GitlabModule from './gitlab';
 import * as GoogleWorkspaceModule from './google-workspace';
 import * as InlineUiModule from './inline-ui';
 import * as KnowledgeModule from './knowledge';
+import * as MailModule from './mail';
 import * as McpAdminModule from './mcp-admin';
 import * as MessagingModule from './messaging';
 import * as Microsoft365Module from './microsoft365';
 import * as MonitorModule from './monitor';
 import * as NotesModule from './notes';
 import * as PlanModule from './plan';
+import * as ProtectionModule from './protection';
 import * as ProfilesModule from './profiles';
+import * as RecordsModule from './records';
 import * as RepoRegistryModule from './repo-registry';
 import * as SchedulingModule from './scheduling';
 import * as ShellModule from './shell';
@@ -58,6 +62,7 @@ const MODULES: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
   ['atlassian', AtlassianModule],
   ['browser', BrowserModule],
   ['browser-ext', BrowserExtModule],
+  ['cases', CasesModule],
   ['data', DataModule],
   ['docker', DockerModule],
   ['documents', DocumentsModule],
@@ -69,6 +74,7 @@ const MODULES: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
   ['google-workspace', GoogleWorkspaceModule],
   ['inline-ui', InlineUiModule],
   ['knowledge', KnowledgeModule],
+  ['mail', MailModule],
   ['mcp-admin', McpAdminModule],
   ['messaging', MessagingModule],
   ['microsoft365', Microsoft365Module],
@@ -76,6 +82,8 @@ const MODULES: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
   ['notes', NotesModule],
   ['plan', PlanModule],
   ['profiles', ProfilesModule],
+  ['protection', ProtectionModule],
+  ['records', RecordsModule],
   ['repo-registry', RepoRegistryModule],
   ['scheduling', SchedulingModule],
   ['shell', ShellModule],
