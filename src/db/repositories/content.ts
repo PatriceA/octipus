@@ -29,7 +29,8 @@ import {
   personalScope,
 } from './scoped';
 import { CaseRepo, ContactRepo } from './cases';
-import { ArtifactStore, type LinkStore, linkStoreFor, spaceRepos } from './space';
+import type { FormLinkRepo, RecordRepo, RecordTypeRepo } from './records';
+import { ArtifactStore, type LinkStore, linkStoreFor, recordRepos, spaceRepos } from './space';
 
 export interface ContentRepos {
   readonly kind: 'personal' | 'space';
@@ -51,6 +52,9 @@ export interface ContentRepos {
   tasks: TaskRepo;
   cases: CaseRepo;
   contacts: ContactRepo;
+  recordTypes: RecordTypeRepo;
+  records: RecordRepo;
+  formLinks: FormLinkRepo;
   notes: NoteStore;
   noteScope: NoteScope;
   links: LinkStore;
@@ -83,6 +87,9 @@ export function contentRepos(principal: Principal): ContentRepos {
     tasks: personal.tasks,
     get cases() { return new CaseRepo(personalScope(principal)); },
     get contacts() { return new ContactRepo(personalScope(principal)); },
+    get recordTypes() { return recordRepos(personalScope(principal)).recordTypes; },
+    get records() { return recordRepos(personalScope(principal)).records; },
+    get formLinks() { return recordRepos(personalScope(principal)).formLinks; },
     notes: new PersonalNoteRepo(noteScope),
     noteScope,
     links: linkStoreFor(noteScope),

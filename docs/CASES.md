@@ -12,7 +12,7 @@ that kind and links what belongs to it.
 |---|---|---|
 | Case | `cases` | One matter of business: an incoming invoice, a complaint, an inquiry, a contract review. Has a title, a free-text `kind`, a status, a summary and an assignee. |
 | Contact | `contacts` | A person or organisation the business deals with: client, relative, referrer, supplier, applicant. Has contact details, an address, tags, free attributes, and (for a person) the organisation they belong to. |
-| Link | `case_links` | What a case links to: a contact, document, task, note or artifact, with an optional role ("client", "sender", "invoice"). One link per entity and case. |
+| Link | `case_links` | What a case links to: a contact, document, task, note, artifact or record ([RECORDS.md](RECORDS.md)), with an optional role ("client", "sender", "invoice"). One link per entity and case. |
 | Follow-up | `tasks.remind_at` | A task with a reminder date, linked to a case with the role `follow_up`. When the date passes, its assignee is notified once. |
 
 Contacts are not `profiles`. Profiles are the assistant's personal memory of the
@@ -126,7 +126,5 @@ All routes act on the space named by the `X-Octipus-Workspace` header, like
 ## Not yet
 
 - Web pages for cases and contacts.
-- Record types with their own fields (an invoice's amount, a vehicle's plate)
-  and forms that save into them (plan point C1b).
 - A case timeline (comments, status history). The audit log records every API
   change and tool call in the meantime.

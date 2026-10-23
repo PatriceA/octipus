@@ -36,6 +36,7 @@ const ENTITY_TABLES: Readonly<Record<string, { name: string; live?: string }>> =
   task: { name: 'tasks' },
   note: { name: 'notes' },
   artifact: { name: 'artifacts', live: 'deleted_at IS NULL' },
+  record: { name: 'records' },
 };
 
 /** The row a write stamps: the scope's author, in the scope's workspace. */

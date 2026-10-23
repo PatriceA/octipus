@@ -37,6 +37,7 @@ import { type Artifact, artifacts, type NewArtifact } from '../schema/artifacts'
 import { workspaceMembers, workspaces } from '../schema/organizations';
 import { type NewVaultEntry, vault } from '../schema/vault';
 import { CaseRepo, ContactRepo } from './cases';
+import { FormLinkRepo, RecordRepo, RecordTypeRepo } from './records';
 import { type KnowledgeLinkRepository, getKnowledgeLinkRepository } from './knowledge-link-repository';
 import { type NoteScope, type NoteStore, SpaceNoteRepo } from './note-repository';
 import {
@@ -457,6 +458,9 @@ export interface SpaceRepos {
   tasks: TaskRepo;
   cases: CaseRepo;
   contacts: ContactRepo;
+  recordTypes: RecordTypeRepo;
+  records: RecordRepo;
+  formLinks: FormLinkRepo;
   notes: NoteStore;
   noteScope: NoteScope;
   links: LinkStore;
@@ -501,6 +505,7 @@ export function spaceRepos(principal: Principal): SpaceRepos {
     tasks: new TaskRepo(scope),
     cases: new CaseRepo(scope),
     contacts: new ContactRepo(scope),
+    ...recordRepos(scope),
     notes: new SpaceNoteRepo(noteScope),
     noteScope,
     links: linkStoreFor(noteScope),
@@ -510,4 +515,10 @@ export function spaceRepos(principal: Principal): SpaceRepos {
     knowledgeOwner: { ownerUserId: space.userId, workspaceId: space.workspaceId },
     files: () => WorkspaceFS.forSpace(space.workspaceId, { guestFolders: space.guest?.folders }),
   };
+}
+
+/** The record type, record and form link stores of one scope, sharing the type store. */
+export function recordRepos(scope: RepoScope): { recordTypes: RecordTypeRepo; records: RecordRepo; formLinks: FormLinkRepo } {
+  const recordTypes = new RecordTypeRepo(scope);
+  return { recordTypes, records: new RecordRepo(scope, recordTypes), formLinks: new FormLinkRepo(scope, recordTypes) };
 }

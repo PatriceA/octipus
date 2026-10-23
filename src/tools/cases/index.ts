@@ -165,11 +165,11 @@ export class CasesTool extends BaseTool {
 
     this.registerTool(
       'link_to_case',
-      'Link a contact, document, task, note or artifact to a case, with an optional role ("client", "sender", "invoice"). Linking the same entity again changes its role.',
+      'Link a contact, document, task, note, artifact or record to a case, with an optional role ("client", "sender", "invoice"). Linking the same entity again changes its role.',
       createParameterSchema({
         caseId: { type: 'string', description: 'Case id', required: true },
         entityType: { type: 'string', description: 'What to link', enum: [...CASE_ENTITY_TYPES], required: true },
-        entityId: { type: 'string', description: 'Id of the contact, document, task, note or artifact', required: true },
+        entityId: { type: 'string', description: 'Id of the contact, document, task, note, artifact or record', required: true },
         role: { type: 'string', description: 'What it is to the case' },
       }),
       async (args, context) => {

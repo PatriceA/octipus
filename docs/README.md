@@ -61,6 +61,7 @@ The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 | [ONBOARDING.md](ONBOARDING.md) | The setup guide on the home page: use cases, questions, what it sets up and how. |
 | [HEARTBEAT.md](HEARTBEAT.md) | Proactive periodic checks for due tasks and notifications, with per-user standing instructions. |
 | [CASES.md](CASES.md) | Cases ("Vorgänge"), contacts and follow-ups: the shared records business modules build on, who sees them in a space, the `cases` tool and the API. |
+| [RECORDS.md](RECORDS.md) | Record types with fields a business defines, records validated against them, and public form links that save a record (and open a case) without sign-in. |
 | [TASK-BOARD.md](TASK-BOARD.md) | The work board on the tasks page: assignees, checkout leases, comments, dependency wakeups, the audit trail, and role agents that work their tasks. |
 | [SPEND-BUDGETS.md](SPEND-BUDGETS.md) | Dollar spend budgets per user, role or workspace: warn and pause, what users see, and the admin screen. |
 | [PLUGINS.md](PLUGINS.md) | Installing and building host-side plugins / extensions. |

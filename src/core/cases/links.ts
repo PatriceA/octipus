@@ -2,7 +2,7 @@
  * What a case links to (docs/CASES.md), through the content stores of one
  * scope. A link is made only to an entity the scope reaches — a contact,
  * document, task, note or artifact of the same personal scope or space — so
- * a case never points across tenants. Reads resolve each link through the
+ * a case never points across tenants. Records (docs/RECORDS.md) link the same way. Reads resolve each link through the
  * same stores and drop the ones whose entity is gone or out of reach (a
  * private artifact of another member, a deleted document).
  */
@@ -51,6 +51,12 @@ export async function resolveEntity(repos: ContentRepos, type: CaseEntityType, i
     case 'artifact': {
       const row = await repos.artifacts.findById(id);
       return row ? { label: row.title, detail: null } : null;
+    }
+    case 'record': {
+      const row = await repos.records.findById(id);
+      if (!row) return null;
+      const type = await repos.recordTypes.findById(row.typeId);
+      return { label: row.title ?? type?.name ?? 'Record', detail: type?.key ?? null };
     }
   }
 }
@@ -122,8 +128,8 @@ async function resolveEntities(repos: ContentRepos, links: readonly CaseLink[]):
   for (const r of contactRows) put('contact', r.id, { label: r.name, detail: r.kind });
   for (const r of taskRows) put('task', r.id, { label: r.title, detail: r.status });
   for (const r of noteRows) put('note', r.id, { label: r.title, detail: r.noteKind });
-  // Documents and artifacts have no batch read; one at a time keeps the pool free.
-  for (const type of ['document', 'artifact'] as const) {
+  // Documents, artifacts and records have no batch read; one at a time keeps the pool free.
+  for (const type of ['document', 'artifact', 'record'] as const) {
     for (const id of ids(type)) {
       const view = await resolveEntity(repos, type, id);
       if (view) put(type, id, view);

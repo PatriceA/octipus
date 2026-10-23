@@ -40,6 +40,7 @@ export * from './pipeline-templates';
 export * from './pipeline-checkpoints';
 export * from './pipelines';
 export * from './profiles';
+export * from './records';
 export * from './recurring-tasks';
 export * from './retention-policies';
 export * from './roles';

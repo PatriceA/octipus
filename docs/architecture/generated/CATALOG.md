@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-549 mounted routes across 75 route files. The path is the full one, group prefix included — what a client actually calls.
+564 mounted routes across 76 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -191,6 +191,8 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/evaluations/eval/runs/:id` | `src/api/routes/evaluations.ts` |
 | GET | `/api/evaluations/eval/summary` | `src/api/routes/evaluations.ts` |
 | GET | `/api/evaluations/status` | `src/api/routes/evaluations.ts` |
+| GET | `/api/forms/:token` | `src/api/routes/records.ts` |
+| POST | `/api/forms/:token` | `src/api/routes/records.ts` |
 | GET | `/api/gateway/adapters` | `src/api/routes/gateway.ts` |
 | GET | `/api/gateway/connections` | `src/api/routes/gateway.ts` |
 | GET | `/api/gateway/events/stats` | `src/api/routes/gateway.ts` |
@@ -368,6 +370,19 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/reader` | `src/api/routes/reader.ts` |
 | POST | `/api/reader/action` | `src/api/routes/reader.ts` |
 | POST | `/api/reader/tasks` | `src/api/routes/reader.ts` |
+| GET | `/api/record-types` | `src/api/routes/records.ts` |
+| POST | `/api/record-types` | `src/api/routes/records.ts` |
+| DELETE | `/api/record-types/:id` | `src/api/routes/records.ts` |
+| GET | `/api/record-types/:id` | `src/api/routes/records.ts` |
+| PATCH | `/api/record-types/:id` | `src/api/routes/records.ts` |
+| GET | `/api/record-types/:id/form-links` | `src/api/routes/records.ts` |
+| POST | `/api/record-types/:id/form-links` | `src/api/routes/records.ts` |
+| DELETE | `/api/record-types/:id/form-links/:linkId` | `src/api/routes/records.ts` |
+| GET | `/api/records` | `src/api/routes/records.ts` |
+| POST | `/api/records` | `src/api/routes/records.ts` |
+| DELETE | `/api/records/:id` | `src/api/routes/records.ts` |
+| GET | `/api/records/:id` | `src/api/routes/records.ts` |
+| PATCH | `/api/records/:id` | `src/api/routes/records.ts` |
 | GET | `/api/recurring-tasks` | `src/api/routes/recurring-tasks.ts` |
 | POST | `/api/recurring-tasks` | `src/api/routes/recurring-tasks.ts` |
 | DELETE | `/api/recurring-tasks/:id` | `src/api/routes/recurring-tasks.ts` |
@@ -584,19 +599,19 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 22 |
 | `api` | `config` | 24 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 146 |
-| `api` | `db` | 115 |
+| `api` | `core` | 149 |
+| `api` | `db` | 117 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 4 |
 | `api` | `models` | 39 |
 | `api` | `plugins` | 1 |
-| `api` | `security` | 137 |
+| `api` | `security` | 139 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 12 |
 | `api` | `skills` | 6 |
 | `api` | `tools` | 4 |
-| `api` | `utils` | 70 |
+| `api` | `utils` | 71 |
 | `api` | `voice` | 23 |
 | `capabilities` | `db` | 2 |
 | `capabilities` | `models` | 1 |
@@ -629,21 +644,21 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `channels` | 12 |
 | `core` | `config` | 58 |
 | `core` | `connectors` | 4 |
-| `core` | `db` | 370 |
+| `core` | `db` | 375 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 10 |
 | `core` | `models` | 120 |
-| `core` | `security` | 168 |
+| `core` | `security` | 170 |
 | `core` | `services` | 2 |
 | `core` | `setup` | 1 |
 | `core` | `shared` | 34 |
 | `core` | `skills` | 11 |
 | `core` | `tools` | 21 |
-| `core` | `utils` | 206 |
+| `core` | `utils` | 207 |
 | `core` | `voice` | 1 |
 | `db` | `config` | 4 |
-| `db` | `core` | 20 |
+| `db` | `core` | 21 |
 | `db` | `models` | 1 |
 | `db` | `security` | 15 |
 | `db` | `services` | 1 |
@@ -713,8 +728,8 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `channels` | 2 |
 | `tools` | `config` | 3 |
 | `tools` | `connectors` | 2 |
-| `tools` | `core` | 93 |
-| `tools` | `db` | 32 |
+| `tools` | `core` | 95 |
+| `tools` | `db` | 33 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |
 | `tools` | `models` | 8 |
