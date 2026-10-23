@@ -25,6 +25,7 @@ const fresh = (over: Partial<OnboardingState> = {}): OnboardingState => ({
   pipelineTemplates: [{ id: 'tpl-dev', name: 'Full Development Cycle' }, { id: 'tpl-research', name: 'Research & Analysis' }],
   mcpServers: [],
   workspaceRoot: null,
+  modules: { enabled: [], byUseCase: { company: [{ id: 'business', title: 'Cases' }, { id: 'mail', title: 'Mail' }] } },
   progress: {},
   ...over,
 });
@@ -234,5 +235,28 @@ describe('answers', () => {
 
   test('an install already set up is not marked again', () => {
     expect(ids(plan(['research'], {}, fresh({ setupComplete: true })))).not.toContain('setup-complete');
+  });
+});
+
+describe('modules', () => {
+  test('development: the core only, no module step', () => {
+    expect(ids(plan(['development'], {}))).not.toContain('modules');
+  });
+
+  test('company turns on its modules first, before any step that may use them', () => {
+    const steps = plan(['company'], {});
+    expect(steps[0]).toMatchObject({ id: 'modules', kind: 'api', call: { method: 'POST', path: '/modules/enable', body: { ids: ['business', 'mail'] } } });
+  });
+
+  test('only what is missing is turned on; nothing is ever turned off', () => {
+    const some = plan(['company'], {}, fresh({ modules: { enabled: ['mail', 'research'], byUseCase: fresh().modules.byUseCase } }));
+    expect(step(some, 'modules')).toMatchObject({ call: { body: { ids: ['business'] } } });
+    const all = plan(['company'], {}, fresh({ modules: { enabled: ['business', 'mail'], byUseCase: fresh().modules.byUseCase } }));
+    expect(found(all)).toContain('modules');
+    expect(todo(all)).not.toContain('modules');
+  });
+
+  test('not for someone who is not an admin', () => {
+    expect(ids(plan(['company'], {}, fresh({ isAdmin: false })))).not.toContain('modules');
   });
 });

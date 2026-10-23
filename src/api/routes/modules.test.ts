@@ -79,6 +79,17 @@ describe('/api/modules', () => {
     expect(fixture.audit[0]).toMatchObject({ action: 'settings_changed', details: { module: 'business', on: true } });
   });
 
+  test('enable turns on several (with dependencies) and turns nothing off; admins only', async () => {
+    fixture.user = MEMBER;
+    expect((await call('POST', '/modules/enable', { ids: ['business'] })).status).toBe(403);
+    fixture.user = ADMIN;
+    fixture.enabled = ['protection'];
+    const res = await call('POST', '/modules/enable', { ids: ['business', 'needs-mail'] });
+    expect(res.status).toBe(200);
+    expect(fixture.enabled).toEqual(['business', 'mail', 'protection', 'needs-mail']);
+    expect((await call('POST', '/modules/enable', { ids: ['nope'] })).status).toBe(404);
+  });
+
   test('on brings its dependencies; off is a 409 while something needs it', async () => {
     fixture.user = ADMIN;
     expect((await call('PUT', '/modules/needs-mail', { on: true })).body.enabled).toEqual(['mail', 'needs-mail']);

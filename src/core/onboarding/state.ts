@@ -12,6 +12,8 @@ import { getConfig } from '@/config';
 import { getSettingDefinition } from '@/config/settings-registry';
 import { getSettingsService } from '@/config/settings-service';
 import { findStandingNote, getHeartbeatPrefs } from '@/core/heartbeat';
+import { enabledModules } from '@/core/modules/registry';
+import { MODULES } from '@/modules';
 import { getDb } from '@/db/postgres';
 import { users } from '@/db/schema/users';
 import { coreLogger } from '@/utils/logger';
@@ -142,6 +144,15 @@ async function level(userId: string, toolId: string, action: string): Promise<st
 }
 
 /** The guide's view of the install, for `userId`. */
+/** What is on, and what each use case switches on (docs/MODULES.md). */
+function modulesState(): OnboardingState['modules'] {
+  const byUseCase: OnboardingState['modules']['byUseCase'] = {};
+  for (const m of MODULES) {
+    for (const profile of m.profiles) (byUseCase[profile] ??= []).push({ id: m.id, title: m.title });
+  }
+  return { enabled: [...enabledModules()], byUseCase };
+}
+
 export async function readOnboardingState(userId: string, isAdmin: boolean): Promise<OnboardingState> {
   const config = getConfig();
   const ollamaUrl = config.ollama?.url || 'http://localhost:11434';
@@ -194,6 +205,7 @@ export async function readOnboardingState(userId: string, isAdmin: boolean): Pro
     pipelineTemplates: templates,
     mcpServers,
     workspaceRoot: isAdmin ? (config.workspace?.rootPath ?? null) : null,
+    modules: modulesState(),
     progress,
   };
 }

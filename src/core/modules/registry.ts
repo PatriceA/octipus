@@ -166,7 +166,18 @@ export async function setModuleOn(id: string, on: boolean, userId?: string): Pro
   return value as string[];
 }
 
-/** Replace the whole list (onboarding): what each listed module depends on is added. */
+/** Turn on `ids` and what they depend on, leaving on what is on (the onboarding). */
+export async function enableModules(ids: readonly string[], userId?: string): Promise<string[]> {
+  for (const id of ids) if (!byId.has(id)) throw new ModuleChangeError(`Unknown module: ${id}`);
+  const value = await getSettingsService().update(MODULES_SETTING, (current) => {
+    let next = Array.isArray(current) ? current.filter((v): v is string => typeof v === 'string') : [];
+    for (const id of ids) next = nextEnabled(next, id, true);
+    return next;
+  }, userId);
+  return value as string[];
+}
+
+/** Replace the whole list: what each listed module depends on is added. */
 export async function setEnabledModules(ids: readonly string[], userId?: string): Promise<string[]> {
   for (const id of ids) if (!byId.has(id)) throw new ModuleChangeError(`Unknown module: ${id}`);
   const set = new Set(ids.flatMap(withDependencies));
