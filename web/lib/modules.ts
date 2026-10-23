@@ -42,3 +42,9 @@ export function usePageOn(): (href: string) => boolean {
     return offModuleFor(path, modules.data.modules) === undefined;
   };
 }
+
+/** Whether module `id` is on; false until `/api/modules` has answered. */
+export function useModuleOn(id: string): boolean {
+  const modules = useModules();
+  return modules.data?.enabled.includes(id) ?? false;
+}

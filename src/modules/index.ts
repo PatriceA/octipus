@@ -6,13 +6,16 @@
 import type { ModuleDefinition } from '../core/modules/types';
 import { artifactsModule } from './artifacts';
 import { businessModule } from './business';
+import { channelsModule } from './channels';
 import { inboxModule } from './inbox';
 import { mailModule } from './mail';
+import { peopleModule } from './people';
 import { protectionModule } from './protection';
 import { readerModule } from './reader';
 import { recallModule } from './recall';
 import { researchModule } from './research';
 import { scanFoldersModule } from './scan-folders';
+import { voiceModule } from './voice';
 
 export const MODULES: readonly ModuleDefinition[] = [
   businessModule,
@@ -24,4 +27,7 @@ export const MODULES: readonly ModuleDefinition[] = [
   recallModule,
   inboxModule,
   artifactsModule,
+  peopleModule,
+  voiceModule,
+  channelsModule,
 ];

@@ -27,6 +27,9 @@ spaces; settings, skills, the tools page and evaluations; backups.
 | `reader` | The reader: a page in a clean view, turned into notes and tasks |
 | `inbox` | The Gmail / Outlook inbox of a connected account: triage, drafts, tasks from mail, the email processor tool and the heartbeat's inbox watch |
 | `artifacts` | Live artifacts: hosted dashboards, tables, feeds and pages, their refreshes, and saving a chat answer as one ([ARTIFACTS.md](ARTIFACTS.md)) |
+| `people` | Profiles of people, pets and organisations, the profiles tool, and the profile context agents get (the persona stays core) |
+| `voice` | Speech in the chat and the mobile app, the voice sockets, and phone calls ([VOICE.md](VOICE.md)) |
+| `channels` | Telegram, Slack, Teams and WhatsApp, group channels, linking a chat, and the messaging tool ([CHANNELS.md](CHANNELS.md)); the in-app chat and notifications stay core |
 | `recall` | Context hooks: knowledge passages and the notes index handed to agents as they start ([CONTEXT-HOOKS.md](CONTEXT-HOOKS.md)) |
 
 ## What "off" means
@@ -42,6 +45,13 @@ A module that is off is gone for everyone, agents included. Its data stays.
 | Links | A case link to an entity of the module (a mail message while `mail` is off) is not shown and not offered. It is kept, and shows again when the module is back. |
 | Fields | With `protection` off, agents see no protection levels in tool results. The REST API still carries the stored field. |
 | Prompts | Prompt text about a module is marked (`<!-- module:<id> -->`, see `src/core/modules/prompt.ts`) and left out of every agent's system prompt while the module is off. |
+
+## Who turns them on
+
+The onboarding's first step turns on the modules of the use cases picked
+([ONBOARDING.md](ONBOARDING.md)): `development` brings none, `company` the
+business ones, `product` and `research` theirs. Voice is only turned on here,
+in Settings → Modules.
 
 ## Switching
 

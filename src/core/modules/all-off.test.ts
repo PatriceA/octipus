@@ -139,3 +139,20 @@ describe('a pipeline stage', () => {
     expect(narrowToStage(roleTools, ['notez'], 'general')).toHaveLength(2);
   });
 });
+
+describe('prompts', () => {
+  test('no role prompt, nor the delegation table, names an off module\'s tools', async () => {
+    const { ROLE_CONFIGS } = await import('@/core/agent/roles');
+    const { withoutOffModules } = await import('./prompt');
+    const delegation = (await import('@/core/agent/delegation-prompt.md')).default as string;
+    const named = /voice__|initiate_call|art_toolbox|artifacts_toolbox|create_live_artifact|search_profiles|add_profile_fact|email-processor|send_to_user|channel_history|`messaging`|`profiles`|`voice`|<!--/;
+    for (const cfg of Object.values(ROLE_CONFIGS)) {
+      for (const [kind, text] of [['prompt', cfg.systemPromptTemplate], ['lite', cfg.liteSystemPromptTemplate]] as const) {
+        if (!text) continue;
+        const hit = withoutOffModules(text).split('\n').find((line) => named.test(line));
+        expect(hit, `${cfg.role} ${kind}`).toBeUndefined();
+      }
+    }
+    expect(withoutOffModules(delegation).split('\n').find((line) => named.test(line))).toBeUndefined();
+  });
+});

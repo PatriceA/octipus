@@ -17,7 +17,7 @@ import { moduleOfPath, moduleOfTool } from './registry';
 /** Route prefixes of the core: always mounted, always answering. */
 const CORE_ROUTE_PREFIXES = [
   '/v1',
-  '/api/admin', '/api/agents', '/api/auth', '/api/backups', '/api/capabilities', '/api/channels',
+  '/api/admin', '/api/agents', '/api/auth', '/api/backups', '/api/capabilities', 
   '/api/chat', '/api/connectors', '/api/devices', '/api/digest', '/api/documents', 
   '/api/eval', '/api/evaluations', '/api/gateway', '/api/graph', '/api/health', '/api/heartbeat', '/api/hooks',
   '/api/invites', '/api/knowledge', '/api/logs', '/api/mcp', '/api/me', '/api/memory', '/api/metrics', '/api/models',
@@ -25,22 +25,22 @@ const CORE_ROUTE_PREFIXES = [
   '/api/pipelines', '/api/plugin-packages', '/api/plugins', '/api/recurring-tasks', '/api/remote-spaces',
   '/api/roles', '/api/runs', '/api/saml', '/api/scim', '/api/search', '/api/sessions', '/api/settings',
   '/api/skills', '/api/spaces', '/api/spend-budgets', '/api/swarm', '/api/tasks', '/api/tools', '/api/topics',
-  '/api/trajectories', '/api/vault', '/api/verification', '/api/voice', '/api/webhooks', '/api/workspace',
+  '/api/trajectories', '/api/vault', '/api/verification', '/api/webhooks', '/api/workspace',
 ];
 
 /** Built-in tool containers of the core. */
 const CORE_TOOLS = [
   'atlassian', 'browser', 'browser-ext', 'data', 'docker', 'documents',
   'filesystem', 'git', 'github', 'gitlab', 'google-workspace', 'inline-ui', 'knowledge',
-  'mcp_admin', 'messaging', 'microsoft365', 'monitor', 'notes', 'plan', 'profiles', 'repo_registry', 'scheduling',
-  'shell', 'skill-distill', 'task_state', 'tasks', 'visual', 'voice', 'websearch',
+  'mcp_admin', 'microsoft365', 'monitor', 'notes', 'plan', 'repo_registry', 'scheduling',
+  'shell', 'skill-distill', 'task_state', 'tasks', 'visual', 'websearch',
 ];
 
 /** Sidebar pages of the core. */
 const CORE_PAGES = [
   '/', '/chat', '/tasks', '/my-work', '/notifications', '/agents', '/notes', '/documents',
   '/knowledge', '/pipelines', '/hooks', '/models', '/mcp', '/settings', '/tools',
-  '/permissions', '/persona', '/profiles', '/memory', '/skills', '/topics', '/eval', '/secrets', '/admin/users',
+  '/permissions', '/persona', '/memory', '/skills', '/topics', '/eval', '/secrets', '/admin/users',
   '/rooms', '/spaces/remote',
 ];
 
@@ -64,9 +64,10 @@ describe('core or module', () => {
       .filter(({ path }) => moduleOfPath(path) === undefined && !CORE_ROUTE_PREFIXES.some((p) => under(path, p)))
       .map(({ method, path }) => `${method} ${path}`);
     expect(unclassified, 'add these to a module in src/modules/ or to CORE_ROUTE_PREFIXES').toEqual([]);
-    // No module prefix is stale: each serves at least one mounted route.
+    // No module prefix is stale: each serves at least one mounted route or socket.
+    const served = [...routes.map((r) => r.path), ...createServer().websocketRoutes().map((w) => w.path)];
     for (const m of MODULES) {
-      for (const prefix of m.routes) expect(routes.some(({ path }) => under(path, prefix)), `${m.id}: ${prefix}`).toBe(true);
+      for (const prefix of m.routes) expect(served.some((path) => under(path, prefix)), `${m.id}: ${prefix}`).toBe(true);
     }
     // A core prefix that has become a module's whole route is stale.
     const moduleRoutes = MODULES.flatMap((m) => m.routes);

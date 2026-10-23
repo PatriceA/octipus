@@ -1079,6 +1079,13 @@
       "when": 1793354424550,
       "tag": "0153_modules_inbox_artifacts",
       "breakpoints": true
+    },
+    {
+      "idx": 154,
+      "version": "7",
+      "when": 1793440824550,
+      "tag": "0154_modules_people_voice_channels",
+      "breakpoints": true
     }
   ]
 }

@@ -16,7 +16,7 @@ import { getSettingsService } from './settings-service';
 export function initializeHotReload(): void {
   const svc = getSettingsService();
 
-  svc.onChange(async (key: string, newValue: unknown, _oldValue: unknown) => {
+  svc.onChange(async (key: string, newValue: unknown, oldValue: unknown) => {
     // For secrets, resolve the actual value from vault instead of the vault name
     const def = getSettingDefinition(key);
     let resolvedValue = newValue;
@@ -60,6 +60,19 @@ export function initializeHotReload(): void {
         case 'whatsapp':
           await reinitializeChannel('whatsapp' as ChannelType);
           break;
+
+        case 'modules': {
+          // The outside chats start or stop with the `channels` module
+          // (docs/MODULES.md); everything else reads the module list live.
+          const had = Array.isArray(oldValue) && oldValue.includes('channels');
+          const has = Array.isArray(newValue) && newValue.includes('channels');
+          if (had !== has) {
+            const { reinitializeMessagingChannels } = await import('@/channels');
+            await reinitializeMessagingChannels();
+            logger.info({ on: has }, 'Chat channels restarted after the channels module was switched');
+          }
+          break;
+        }
 
         case 'logging':
           // Logger reconfiguration: pino doesn't support level change on the fly

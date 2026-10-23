@@ -256,6 +256,12 @@ describe('modules', () => {
     expect(todo(all)).not.toContain('modules');
   });
 
+  test('a chat picked to talk from turns on the chat channels', () => {
+    const steps = plan(['development'], { 'chat.channel': 'telegram' });
+    expect(step(steps, 'modules')).toMatchObject({ call: { body: { ids: ['channels'] } } });
+    expect(ids(plan(['development'], { 'chat.channel': 'none' }))).not.toContain('modules');
+  });
+
   test('not for someone who is not an admin', () => {
     expect(ids(plan(['company'], {}, fresh({ isAdmin: false })))).not.toContain('modules');
   });

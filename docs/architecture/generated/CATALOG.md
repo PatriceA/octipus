@@ -652,14 +652,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `capabilities` | `tools` | 4 |
 | `capabilities` | `utils` | 6 |
 | `channels` | `config` | 7 |
-| `channels` | `core` | 38 |
+| `channels` | `core` | 39 |
 | `channels` | `db` | 41 |
 | `channels` | `models` | 6 |
 | `channels` | `security` | 23 |
 | `channels` | `shared` | 5 |
 | `channels` | `utils` | 23 |
 | `channels` | `voice` | 2 |
-| `config` | `channels` | 1 |
+| `config` | `channels` | 2 |
 | `config` | `core` | 4 |
 | `config` | `db` | 3 |
 | `config` | `models` | 1 |

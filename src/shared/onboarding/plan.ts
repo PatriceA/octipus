@@ -431,10 +431,12 @@ function researchSteps(plan: Plan, a: Answers, s: OnboardingState): void {
  * install-wide by an admin. Only turned on, never off: a second run of the
  * guide with fewer use cases leaves alone what is already on.
  */
-function moduleSteps(plan: Plan, useCases: readonly UseCaseId[], s: OnboardingState): void {
+function moduleSteps(plan: Plan, useCases: readonly UseCaseId[], chatChannel: string, s: OnboardingState): void {
   if (!s.isAdmin) return;
   const wanted = new Map<string, string>();
   for (const useCase of useCases) for (const m of s.modules.byUseCase[useCase] ?? []) wanted.set(m.id, m.title);
+  // A chat picked to talk to Octipus from (Telegram, Slack, …) needs the chat channels.
+  if (chatChannel && chatChannel !== 'none') wanted.set('channels', 'Chat channels');
   if (wanted.size === 0) return;
   const missing = [...wanted].filter(([id]) => !s.modules.enabled.includes(id));
   if (missing.length === 0) {
@@ -456,7 +458,7 @@ export function buildPlan(useCases: readonly UseCaseId[], answers: Answers, stat
   const asked = new Set(sectionsFor(useCases).map((s) => s.id));
   const plan = new Plan();
   // First: the later steps may use what a module brings.
-  moduleSteps(plan, useCases, state);
+  moduleSteps(plan, useCases, asked.has('chat') ? str(a, 'chat.channel') : '', state);
   if (asked.has('models')) modelSteps(plan, a, state);
   if (asked.has('areas')) areaSteps(plan, a, state, opts);
   if (asked.has('chat')) chatSteps(plan, a, state);

@@ -70,9 +70,14 @@ last run did counts as done.
   workspace-root limits, known roles, permission levels. A step whose result
   already exists becomes a `done` step: it is listed, and nothing is called.
 - **The first step switches on modules** ([MODULES.md](MODULES.md)). The use
-  cases picked bring their modules: `company` turns on cases, contacts and
-  records, mail, scan folders and protection levels; `development` turns on
-  none, so a developer gets the core only. Only an admin's run has this step.
+  cases picked bring their modules:
+  - `company`: cases, contacts and records; mail; scan folders; protection
+    levels; the email inbox; people and profiles.
+  - `product`: research jobs, live artifacts, people and profiles.
+  - `research`: research jobs, the reader, recall, live artifacts.
+  - `development`: none, so a developer gets the core only.
+  - A chat picked to talk to Octipus from (Telegram, Slack, …) turns on the
+    chat channels. Voice is turned on in Settings → Modules. Only an admin's run has this step.
   It only turns modules on, never off, so running the guide again with fewer
   use cases changes nothing that is on. It calls `POST /api/modules/enable`.
 - **`GET /api/onboarding`** reports what is already set up

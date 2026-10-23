@@ -20,6 +20,7 @@
  * nothing here logs a sender or subject, and the checklist frames the lines it
  * shows as data, never as instructions.
  */
+import { isModuleOn } from '@/core/modules/registry';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { emailHandled } from '@/db/schema/email-handled';
@@ -235,7 +236,10 @@ export function renderEmailChecklist(emails: readonly InboxItem[], clock: (iso: 
     'For each email: read it with `get_email_summary` when the preview is not enough, then decide whether anything is needed.',
     '- Nothing to do (newsletters, notifications, FYIs): no action.',
     '- Work for later: create a task (source "email", the subject as title, the sender in the notes).',
-    `- Needs the owner soon: tell them with \`send_to_user\`${ownerId ? ` (user_id \`${ownerId}\`)` : ''}, in one or two lines.`,
+    // `send_to_user` is the `channels` module's (docs/MODULES.md).
+    isModuleOn('channels')
+      ? `- Needs the owner soon: tell them with \`send_to_user\`${ownerId ? ` (user_id \`${ownerId}\`)` : ''}, in one or two lines.`
+      : '- Needs the owner soon: say so in your final answer, in one or two lines.',
     '- Needs an answer: save a reply draft with `save_reply_draft` for the owner to review. Do not send mail unless the standing instructions say so.',
     'Then call `mark_email_handled` for EVERY email above with its provider, id and outcome (no_action, task, notified, drafted, replied, archived or other), and the task id when you filed one. An email you do not mark comes back on a later heartbeat.',
   ];

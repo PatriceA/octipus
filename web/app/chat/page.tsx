@@ -33,7 +33,7 @@ import type { SwarmTreeEvent } from '@/components/swarm-tree';
 import { useVoiceRealtime } from '@/hooks/useVoiceRealtime';
 import { fetchPersistedAgentEvents } from '@/hooks/useAgentEvents';
 import { api, ApiError, getApiUrl } from '@/lib/api';
-import { usePageOn } from '@/lib/modules';
+import { useModuleOn, usePageOn } from '@/lib/modules';
 import type { ClientMessage, GatewayEvent, GatewayMessage } from '@/lib/gateway';
 import { useGateway, useGatewayMessages, useGatewayStatus } from '@/lib/gateway-context';
 import { useWorkspace } from '@/lib/workspace-context';
@@ -1974,6 +1974,7 @@ export default function ChatPage() {
   const sendMessageRef = useRef(sendMessage);
   useEffect(() => { sendMessageRef.current = sendMessage; });
   const artifactsOn = usePageOn()('/artifacts');
+  const voiceOn = useModuleOn('voice');
   const { data: me } = useQuery({
     queryKey: ['impersonation-banner', 'me'],
     queryFn: () => api.get<{ actorUserId?: string | null }>('/auth/me'),
@@ -2186,7 +2187,8 @@ export default function ChatPage() {
             realtimeState={realtime.state}
             realtimePartial={realtime.partial}
             realtimeError={realtime.error}
-            onToggleRealtimeMode={() => setRealtimeMode((v) => !v)}
+            // Voice is the `voice` module's (docs/MODULES.md): off, no toggle.
+            onToggleRealtimeMode={voiceOn ? () => setRealtimeMode((v) => !v) : undefined}
           />
         </div>
       </div>

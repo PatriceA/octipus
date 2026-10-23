@@ -1,5 +1,6 @@
 export { BaseChannel, type ChannelConfig, type ChannelEvents, getUMI, UnifiedMessageInterface } from './interface';
 
+import { isModuleOn } from '@/core/modules/registry';
 import { coreLogger } from '@/utils/logger';
 import { inlineUiFallbackText } from '@/shared/inline-ui/fence';
 
@@ -534,6 +535,21 @@ export async function tryResolvePermissionFromChannel(message: UnifiedMessage): 
  * channel's `isEnabled(config)` still returns true. Drives off discovery —
  * no per-channel switch.
  */
+/**
+ * A discovered channel runs when configured, and an outside chat (Telegram,
+ * Slack, Teams, WhatsApp) only while the `channels` module is on
+ * (docs/MODULES.md). The in-app web chat always runs.
+ */
+function channelRuns(channel: { type: string; isEnabled: (config: ReturnType<typeof getConfig>) => boolean }, config: ReturnType<typeof getConfig>): boolean {
+  if (MESSAGING_CHANNELS.has(channel.type) && !isModuleOn('channels')) return false;
+  return channel.isEnabled(config);
+}
+
+/** The outside chats again, after the `channels` module was switched on or off. */
+export async function reinitializeMessagingChannels(): Promise<void> {
+  for (const type of MESSAGING_CHANNELS) await reinitializeChannel(type as ChannelType);
+}
+
 export async function reinitializeChannel(channelType: ChannelType): Promise<void> {
   const umi = getUMI();
   const config = getConfig();
@@ -556,8 +572,8 @@ export async function reinitializeChannel(channelType: ChannelType): Promise<voi
     channelLogger.warn({ channelType }, 'Cannot reinitialize: no matching channel discovered');
     return;
   }
-  if (!match.channel.isEnabled(config)) {
-    channelLogger.info({ channelType }, 'Channel removed (no longer configured)');
+  if (!channelRuns(match.channel, config)) {
+    channelLogger.info({ channelType }, 'Channel removed (no longer configured, or the channels module is off)');
     return;
   }
 
@@ -784,8 +800,8 @@ export async function initializeChannels(): Promise<void> {
 
   const { discoverChannels } = await import('./discovery');
   const discovered = await discoverChannels();
-  const enabled = discovered.filter((d) => d.channel.isEnabled(config));
-  const skipped = discovered.filter((d) => !d.channel.isEnabled(config));
+  const enabled = discovered.filter((d) => channelRuns(d.channel, config));
+  const skipped = discovered.filter((d) => !channelRuns(d.channel, config));
   for (const { folder, channel } of enabled) {
     umi.register(channel);
     channelLogger.debug({ folder, type: channel.type }, 'Channel registered (auto-discovered)');
