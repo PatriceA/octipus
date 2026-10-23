@@ -147,7 +147,8 @@ Each point is its own PR with its own code review.
 | Audit fix (ip-address in mcp-server, not part of the plan) | `fix/mcp-server-ip-address` | #433 | in review |
 | C2 plugin packages (out-of-repo MCP servers, fenced in) | `feat/plugin-packages` (on C1c) | #435 | in review |
 | C3 mail (IMAP/SMTP/POP3, functional mailboxes; web page is C3b) | `feat/mail` (on C2) | #436 | in review |
-| C4 scan folder | | | next |
+| C4 scan folders, mail attachments into documents | `feat/scan-folders` (on C3) | #437 | in review |
+| C5 backup | | | next |
 
 ## 5. Open questions (answers expected from the business side)
 
