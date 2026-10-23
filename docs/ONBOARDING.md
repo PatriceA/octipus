@@ -80,6 +80,11 @@ last run did counts as done.
     chat channels. Voice is turned on in Settings → Modules. Only an admin's run has this step.
   It only turns modules on, never off, so running the guide again with fewer
   use cases changes nothing that is on. It calls `POST /api/modules/enable`.
+- **The plan review has a module picker** (admins). The modules the use cases
+  bring are ticked; any other can be ticked too (contacts and records for a
+  one-person business that builds software), and a ticked one unticked. One
+  already on is shown ticked and cannot be unticked here. The choice is the
+  `modules.picked` answer; picking other use cases starts it again.
 - **`GET /api/onboarding`** reports what is already set up
   (`src/core/onboarding/state.ts`). Install-wide facts (model rows, provider
   keys, MCP servers, CLI tools on the host) are only read for admins. Every

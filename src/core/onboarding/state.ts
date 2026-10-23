@@ -149,7 +149,8 @@ function modulesState(): OnboardingState['modules'] {
   for (const m of MODULES) {
     for (const profile of m.profiles) (byUseCase[profile] ??= []).push({ id: m.id, title: m.title });
   }
-  return { enabled: [...enabledModules()], byUseCase };
+  const available = MODULES.map((m) => ({ id: m.id, title: m.title, description: m.description }));
+  return { enabled: [...enabledModules()], byUseCase, available };
 }
 
 /** The guide's view of the install, for `userId`. */

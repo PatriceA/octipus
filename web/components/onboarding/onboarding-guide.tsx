@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CompanionState } from '@/components/companion/companion-avatar';
 import { api } from '@/lib/api';
 import type { CompanionAppearance } from '../../../src/shared/companion';
-import { buildPlan } from '../../../src/shared/onboarding/plan';
+import { buildPlan, defaultModulesFor, MODULES_PICKED } from '../../../src/shared/onboarding/plan';
 import { initialAnswers, sectionsFor, storableAnswers, USE_CASES, visibleQuestions } from '../../../src/shared/onboarding/use-cases';
 import type { Answers, AnswerValue, OnboardingProgress, OnboardingState, PlanStep, Question, Section, UseCaseId } from '../../../src/shared/onboarding/types';
 import { GuideCompanion } from './guide-companion';
@@ -182,6 +182,8 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
     const on = useCases.includes(id);
     setEngaged(true);
     setUseCases((prev) => (on ? prev.filter((x) => x !== id) : [...prev, id]));
+    // Other use cases bring other modules: the picker starts again from them.
+    setAnswers((prev) => ({ ...prev, [MODULES_PICKED]: undefined }));
     if (!on) react('done');
   };
 
@@ -194,7 +196,16 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
 
   const answer = (q: Question, v: AnswerValue | undefined) => {
     if (isAddition(q, answers[q.id], v)) react('done');
-    setAnswers((prev) => ({ ...prev, [q.id]: v }));
+    // The chat picked brings the chat channels: the module picker starts again.
+    setAnswers((prev) => ({ ...prev, [q.id]: v, ...(q.id === 'chat.channel' ? { [MODULES_PICKED]: undefined } : {}) }));
+  };
+
+  /** Tick or untick a module in the review; the plan follows. */
+  const pickModule = (id: string, on: boolean) => {
+    const current = Array.isArray(answers[MODULES_PICKED]) ? (answers[MODULES_PICKED] as string[]) : defaultModulesFor(useCases, answers, state);
+    const next = { ...answers, [MODULES_PICKED]: on ? [...new Set([...current, id])] : current.filter((m) => m !== id) };
+    setAnswers(next);
+    setPlan(buildPlan(useCases, next, state, { newPassword }));
   };
 
   const review = () => {
@@ -375,6 +386,14 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
             ))}
           </ol>
         )}
+        {state.isAdmin && (state.modules?.available?.length ?? 0) > 0 && (
+          <ModulePicker
+            modules={state.modules.available ?? []}
+            enabled={state.modules.enabled}
+            picked={Array.isArray(answers[MODULES_PICKED]) ? (answers[MODULES_PICKED] as string[]) : defaultModulesFor(useCases, answers, state)}
+            onPick={pickModule}
+          />
+        )}
         {found.length > 0 && (
           <div>
             <p className="text-sm font-medium">Already set up, left as it is:</p>
@@ -456,5 +475,48 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
         {variant === 'home' && <button type="button" onClick={dismiss} className="text-on-surface-variant underline">Close the guide</button>}
       </div>
     </>,
+  );
+}
+
+/**
+ * The modules this setup turns on (docs/MODULES.md): those the use cases
+ * bring are ticked, any other can be added (contacts and records for a
+ * one-person business that builds software). One already on stays on: the
+ * guide never switches a module off; Settings → Modules does.
+ */
+function ModulePicker({ modules, enabled, picked, onPick }: {
+  modules: Array<{ id: string; title: string; description: string }>;
+  enabled: string[];
+  picked: string[];
+  onPick: (id: string, on: boolean) => void;
+}) {
+  return (
+    <fieldset data-testid="module-picker">
+      <legend className="text-sm font-medium">Modules to turn on</legend>
+      <p className="text-xs text-on-surface-variant">Ticked from what you picked. Add or drop any; they can be changed later in Settings → Modules.</p>
+      <ul className="mt-1.5 grid gap-1.5 sm:grid-cols-2 text-sm">
+        {modules.map((m) => {
+          const on = enabled.includes(m.id);
+          return (
+            <li key={m.id}>
+              <label className={on ? 'flex gap-2 text-on-surface-variant' : 'flex gap-2 cursor-pointer'} title={m.description}>
+                <input
+                  type="checkbox"
+                  className="mt-0.5 accent-primary"
+                  checked={on || picked.includes(m.id)}
+                  disabled={on}
+                  onChange={(e) => onPick(m.id, e.target.checked)}
+                  aria-label={m.title}
+                />
+                <span>
+                  {m.title}
+                  {on && <span className="ml-1 text-xs">(already on)</span>}
+                </span>
+              </label>
+            </li>
+          );
+        })}
+      </ul>
+    </fieldset>
   );
 }
