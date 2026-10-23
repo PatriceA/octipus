@@ -1,3 +1,4 @@
+import { isJobOn } from '@/core/modules/registry';
 import { readSessionHistory, withSessionConversation } from '@/core/session-history';
 import { buildSelectedSkillPrompt } from '@/skills/selection';
 import { VOLATILE_MARKER } from '@/models/providers/prompt-cache';
@@ -134,7 +135,8 @@ async function directResponseInternal(
     // space or room session, whose answers land in shared content (§5.6).
     let userProfileStr = '';
     const { sessionAudience } = await import('./audience');
-    if (userId && !(await sessionAudience(session)).personalProfileOff) {
+    // Profiles are the `people` module's (docs/MODULES.md).
+    if (userId && !(await sessionAudience(session)).personalProfileOff && isJobOn('profile-context')) {
       try {
         const { ProfileRepository } = await import('@/db/repositories/profile-repository');
         const profileRepo = new ProfileRepository();

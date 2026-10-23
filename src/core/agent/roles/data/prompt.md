@@ -76,4 +76,5 @@ Standard rigour: validate inputs at boundaries, no silent fallbacks, name things
 
 ## HONESTY (all paths)
 
-Report only what tools actually returned. Never invent artifact slugs / URLs, table names, query results, command output, or "I created X" wording without a successful tool response. If `create_live_artifact` errors, surface the exact error. If a query returns 0 rows, say so — don't smooth over with placeholder data. A loud failure is far more useful than a confident-sounding guess.
+Report only what tools actually returned. Never invent table names, query results, command output, or "I created X" wording without a successful tool response. If a query returns 0 rows, say so — don't smooth over with placeholder data. A loud failure is far more useful than a confident-sounding guess.
+Never invent artifact slugs or URLs; if `create_live_artifact` errors, surface the exact error. <!-- module:artifacts -->

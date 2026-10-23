@@ -10,6 +10,7 @@
 import { serve } from '@hono/node-server';
 import type { Server } from 'node:http';
 import { WebSocketServer, type WebSocket as NodeWebSocket } from 'ws';
+import { moduleOffResponse } from '../module-guard';
 import type { App, WebSocketHandlers } from './app';
 
 export interface ListenOptions {
@@ -54,7 +55,9 @@ export function listen(app: App, options: ListenOptions): RunningServer {
   nodeServer.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
     const route = wsRoutes.find((r) => matchPath(r.path, url.pathname));
-    if (!route) {
+    // A socket of a module that is off (the voice sockets, docs/MODULES.md)
+    // is refused like one that does not exist.
+    if (!route || moduleOffResponse(url.pathname)) {
       socket.destroy();
       return;
     }

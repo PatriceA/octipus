@@ -71,6 +71,8 @@ describe('the modules migration', () => {
     // 0153, the same way: the inbox and artifacts.
     await executeRaw(readFileSync(join(__dirname, '../../db/migrations/0153_modules_inbox_artifacts.sql'), 'utf8'));
     expect(JSON.parse((await storedRow()) ?? '[]').sort()).toEqual(['artifacts', 'business', 'inbox', 'mail']);
+    await executeRaw(readFileSync(join(__dirname, '../../db/migrations/0154_modules_people_voice_channels.sql'), 'utf8'));
+    expect(JSON.parse((await storedRow()) ?? '[]').sort()).toEqual(['artifacts', 'business', 'channels', 'inbox', 'mail', 'people', 'voice']);
     await executeRaw(`UPDATE settings SET value = '["business","mail"]' WHERE key = 'modules.enabled'`);
   });
 

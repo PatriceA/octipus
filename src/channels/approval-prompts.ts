@@ -34,6 +34,7 @@
  * read along (a group thread, a shared chat) only a bare yes/no counts; in
  * the user's own chat an approve/deny phrase or an option's exact label does.
  */
+import { isModuleOn } from '@/core/modules/registry';
 import type { ApprovalKind } from '@/core/agent/approval-manager';
 import type { TurnEvent } from '@/core/agent/service';
 import type { ChannelType, UnifiedMessage } from '@/core/types';
@@ -190,6 +191,8 @@ function details(d: ApprovalEventData): string {
  * calls it for every `approval_required` event.
  */
 export async function announceApproval(event: TurnEvent): Promise<void> {
+  // The chat channels are off (docs/MODULES.md): the approval waits in the web app.
+  if (!isModuleOn('channels')) return;
   const data = (event.data ?? {}) as ApprovalEventData;
   const requestId = data.requestId;
   const userId = event.userId;

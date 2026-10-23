@@ -360,7 +360,8 @@ function trackerSteps(plan: Plan, a: Answers, s: OnboardingState): void {
 }
 
 /** The standing instructions the heartbeat reads, from the company answers. Pure. */
-export function standingInstructions(a: Answers): string {
+/** `chats`: the chat channels will be on, so `send_to_user` exists (docs/MODULES.md). */
+export function standingInstructions(a: Answers, chats = true): string {
   const lines = ['# HEARTBEAT', ''];
   const name = str(a, 'company.name');
   const about = str(a, 'company.about');
@@ -368,7 +369,7 @@ export function standingInstructions(a: Answers): string {
   if (yes(a, 'company.mail')) {
     lines.push('## Email');
     const urgent = str(a, 'company.urgent');
-    if (urgent) lines.push(`- Tell me right away (send_to_user) about: ${urgent.replace(/\s*\n\s*/g, '; ')}`);
+    if (urgent) lines.push(`- Tell me right away (${chats ? 'send_to_user' : 'in your final answer'}) about: ${urgent.replace(/\s*\n\s*/g, '; ')}`);
     lines.push('- Work that needs doing: add a task with the email as source.');
     lines.push('- Newsletters, notifications and receipts: no action.');
     lines.push(str(a, 'company.send') === 'send'
@@ -383,7 +384,8 @@ export function standingInstructions(a: Answers): string {
 }
 
 function companySteps(plan: Plan, a: Answers, s: OnboardingState): void {
-  const body = standingInstructions(a);
+  const chats = moduleOnAfter(a, s, 'channels');
+  const body = standingInstructions(a, chats);
   if (body.split('\n').length > 1) {
     plan.api('standing-instructions', s.standingInstructions ? 'Add to your standing instructions' : 'Write your standing instructions', {
       method: 'PUT', path: '/onboarding/standing-instructions', body: { body },
@@ -394,11 +396,11 @@ function companySteps(plan: Plan, a: Answers, s: OnboardingState): void {
     const connect = connectMailbox(plan, s, provider, 'Octipus reads new mail and saves drafts; it does not send unless you allow it.');
     serverHeartbeat(plan, s);
     permission(plan, s, 'tasks', 'write', 'add tasks to your list');
-    permission(plan, s, 'messaging', 'send', 'message you in your chat');
+    // The messaging tool is the `channels` module's (docs/MODULES.md).
+    if (chats) permission(plan, s, 'messaging', 'send', 'message you in your chat');
     const interval = Number(str(a, 'company.interval')) || 15;
-    const useCases = (a._useCases as UseCaseId[] | undefined) ?? [];
     // The inbox watch is the `inbox` module's (docs/MODULES.md).
-    if (!moduleOnAfter(useCases, s, 'inbox')) {
+    if (!moduleOnAfter(a, s, 'inbox')) {
       plan.done('heartbeat:me', 'Your admin turns on the email inbox in Settings → Modules; then turn on "Watch my inbox" under Settings → Heartbeat');
     } else if (s.heartbeat.enabled && s.heartbeat.watchEmail && s.heartbeat.intervalMinutes === interval) {
       plan.done('heartbeat:me', `Your inbox is already checked every ${interval} minutes`);
@@ -436,22 +438,29 @@ function researchSteps(plan: Plan, a: Answers, s: OnboardingState): void {
  * install-wide by an admin. Only turned on, never off: a second run of the
  * guide with fewer use cases leaves alone what is already on.
  */
-function wantedModules(useCases: readonly UseCaseId[], s: OnboardingState): Map<string, string> {
+/**
+ * The modules this run brings: those of the use cases picked, and the chat
+ * channels when a chat was picked to talk to Octipus from (Telegram, Slack, …).
+ */
+function wantedModules(a: Answers, s: OnboardingState): Map<string, string> {
   const wanted = new Map<string, string>();
+  const useCases = (a._useCases as UseCaseId[] | undefined) ?? [];
   for (const useCase of useCases) for (const m of s.modules?.byUseCase[useCase] ?? []) wanted.set(m.id, m.title);
+  const chatChannel = typeof a._chatChannel === 'string' ? a._chatChannel : '';
+  if (chatChannel && chatChannel !== 'none') wanted.set('channels', 'Chat channels');
   return wanted;
 }
 
 /** Module `id` is on once the plan has run: on already, or turned on by its first step. */
-function moduleOnAfter(useCases: readonly UseCaseId[], s: OnboardingState, id: string): boolean {
+function moduleOnAfter(a: Answers, s: OnboardingState, id: string): boolean {
   if (!s.modules) return true;
-  return s.modules.enabled.includes(id) || (s.isAdmin && wantedModules(useCases, s).has(id));
+  return s.modules.enabled.includes(id) || (s.isAdmin && wantedModules(a, s).has(id));
 }
 
-function moduleSteps(plan: Plan, useCases: readonly UseCaseId[], s: OnboardingState): void {
+function moduleSteps(plan: Plan, a: Answers, s: OnboardingState): void {
   // A server from before modules reports none: nothing to switch.
   const modules = s.modules ?? { enabled: [], byUseCase: {} };
-  const wanted = wantedModules(useCases, s);
+  const wanted = wantedModules(a, s);
   if (wanted.size === 0) return;
   const missing = [...wanted].filter(([id]) => !modules.enabled.includes(id));
   if (missing.length === 0) {
@@ -475,10 +484,13 @@ function moduleSteps(plan: Plan, useCases: readonly UseCaseId[], s: OnboardingSt
  */
 export function buildPlan(useCases: readonly UseCaseId[], answers: Answers, state: OnboardingState, opts: PlanOptions): PlanStep[] {
   const a: Answers = { ...answers, _useCases: [...useCases] };
+  const asked0 = new Set(sectionsFor(useCases).map((s) => s.id));
+  // A chat picked to talk from brings the chat channels (wantedModules).
+  if (asked0.has('chat')) a._chatChannel = str(a, 'chat.channel');
   const asked = new Set(sectionsFor(useCases).map((s) => s.id));
   const plan = new Plan();
   // First: the later steps may use what a module brings.
-  moduleSteps(plan, useCases, state);
+  moduleSteps(plan, a, state);
   if (asked.has('models')) modelSteps(plan, a, state);
   if (asked.has('areas')) areaSteps(plan, a, state, opts);
   if (asked.has('chat')) chatSteps(plan, a, state);

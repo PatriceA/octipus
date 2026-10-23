@@ -1,5 +1,6 @@
 export { BaseChannel, type ChannelConfig, type ChannelEvents, getUMI, UnifiedMessageInterface } from './interface';
 
+import { isModuleOn } from '@/core/modules/registry';
 import { coreLogger } from '@/utils/logger';
 import { inlineUiFallbackText } from '@/shared/inline-ui/fence';
 
@@ -534,6 +535,30 @@ export async function tryResolvePermissionFromChannel(message: UnifiedMessage): 
  * channel's `isEnabled(config)` still returns true. Drives off discovery —
  * no per-channel switch.
  */
+/**
+ * A discovered channel runs when configured, and an outside chat (Telegram,
+ * Slack, Teams, WhatsApp) only while the `channels` module is on
+ * (docs/MODULES.md). The in-app web chat always runs.
+ */
+function channelRuns(channel: { type: string; isEnabled: (config: ReturnType<typeof getConfig>) => boolean }, config: ReturnType<typeof getConfig>): boolean {
+  if (MESSAGING_CHANNELS.has(channel.type) && !isModuleOn('channels')) return false;
+  return channel.isEnabled(config);
+}
+
+let messagingReinit: Promise<void> = Promise.resolve();
+
+/**
+ * The outside chats again, after the `channels` module was switched on or
+ * off. Runs one at a time: a switch seen twice (locally and through the
+ * settings notification) must not start two pollers of one bot.
+ */
+export function reinitializeMessagingChannels(): Promise<void> {
+  messagingReinit = messagingReinit.catch(() => undefined).then(async () => {
+    for (const type of MESSAGING_CHANNELS) await reinitializeChannel(type as ChannelType);
+  });
+  return messagingReinit;
+}
+
 export async function reinitializeChannel(channelType: ChannelType): Promise<void> {
   const umi = getUMI();
   const config = getConfig();
@@ -556,8 +581,8 @@ export async function reinitializeChannel(channelType: ChannelType): Promise<voi
     channelLogger.warn({ channelType }, 'Cannot reinitialize: no matching channel discovered');
     return;
   }
-  if (!match.channel.isEnabled(config)) {
-    channelLogger.info({ channelType }, 'Channel removed (no longer configured)');
+  if (!channelRuns(match.channel, config)) {
+    channelLogger.info({ channelType }, 'Channel removed (no longer configured, or the channels module is off)');
     return;
   }
 
@@ -586,6 +611,8 @@ export async function forwardPermissionRequestToChannel(request: PermissionReque
   const userId = request.userId;
   const sessionId = request.sessionId;
   if (!userId || !sessionId) return;
+  // The chat channels are off (docs/MODULES.md): the request waits in the web app.
+  if (!isModuleOn('channels')) return;
 
   // Look up the session to find which channel originated it
   const stored = await sessionRepository.findById(sessionId);
@@ -784,8 +811,8 @@ export async function initializeChannels(): Promise<void> {
 
   const { discoverChannels } = await import('./discovery');
   const discovered = await discoverChannels();
-  const enabled = discovered.filter((d) => d.channel.isEnabled(config));
-  const skipped = discovered.filter((d) => !d.channel.isEnabled(config));
+  const enabled = discovered.filter((d) => channelRuns(d.channel, config));
+  const skipped = discovered.filter((d) => !channelRuns(d.channel, config));
   for (const { folder, channel } of enabled) {
     umi.register(channel);
     channelLogger.debug({ folder, type: channel.type }, 'Channel registered (auto-discovered)');
@@ -1069,6 +1096,16 @@ export async function initializeChannels(): Promise<void> {
         // as text (all channels build audio attachments identically). Audio is not
         // in the document pipeline's PROCESSABLE_MIMES, so it dead-ended here before.
         const audioAttachments = message.attachments.filter(isAudioAttachment);
+        if (audioAttachments.length && !isModuleOn('voice')) {
+          // Voice is a module (docs/MODULES.md): off, a voice note is not transcribed.
+          await umi.send(message.channelType, message.channelId, {
+            content: 'Voice messages are switched off on this install. Please type it out.',
+            replyTo: platformMessageId,
+            threadId: replyThread,
+          });
+          if (unsubscribe) unsubscribe(); if (unsubAgentEvents) unsubAgentEvents(); stopTypingAndStall();
+          return;
+        }
         if (audioAttachments.length) {
           voiceIn = true;
           const transcript = await transcribeChannelAudio(audioAttachments, message);

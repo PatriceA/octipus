@@ -26,7 +26,7 @@ const fresh = (over: Partial<OnboardingState> = {}): OnboardingState => ({
   mcpServers: [],
   workspaceRoot: null,
   // The inbox is on already (an install from before modules has every module).
-  modules: { enabled: ['inbox'], byUseCase: { company: [{ id: 'business', title: 'Cases' }, { id: 'mail', title: 'Mail' }] } },
+  modules: { enabled: ['inbox', 'channels'], byUseCase: { company: [{ id: 'business', title: 'Cases' }, { id: 'mail', title: 'Mail' }] } },
   progress: {},
   ...over,
 });
@@ -257,6 +257,12 @@ describe('modules', () => {
     expect(todo(all)).not.toContain('modules');
   });
 
+  test('a chat picked to talk from turns on the chat channels', () => {
+    const steps = plan(['development'], { 'chat.channel': 'telegram' }, fresh({ modules: { enabled: [], byUseCase: {} } }));
+    expect(step(steps, 'modules')).toMatchObject({ call: { body: { ids: ['channels'] } } });
+    expect(ids(plan(['development'], { 'chat.channel': 'none' }))).not.toContain('modules');
+  });
+
   test('someone who is not an admin is told who turns them on; nothing is called', () => {
     const steps = plan(['company'], {}, fresh({ isAdmin: false }));
     expect(step(steps, 'modules')).toMatchObject({ kind: 'done', title: expect.stringMatching(/Your admin turns on Cases, Mail/) });
@@ -268,6 +274,14 @@ describe('modules', () => {
     expect(step(admin, 'heartbeat:me')).toMatchObject({ kind: 'api', dependsOn: expect.arrayContaining(['modules']) });
     const member = plan(['company'], { 'company.mail': true }, fresh({ isAdmin: false, modules: { enabled: [], byUseCase } }));
     expect(step(member, 'heartbeat:me')).toMatchObject({ kind: 'done', title: expect.stringMatching(/admin turns on the email inbox/) });
+  });
+
+  test('without the chat channels, no messaging permission and no send_to_user', () => {
+    const state = fresh({ modules: { enabled: ['inbox'], byUseCase: {} } });
+    const steps = plan(['company'], { 'company.mail': true, 'company.urgent': 'invoices' }, state);
+    expect(ids(steps)).not.toContain('perm:messaging/send');
+    expect(ids(plan(['company'], { 'company.mail': true }))).toContain('perm:messaging/send');
+    expect(standingInstructions({ 'company.urgent': 'invoices', _useCases: ['company'] }, false)).not.toContain('send_to_user');
   });
 
   test('a server that reports no modules: no step', () => {

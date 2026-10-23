@@ -7,6 +7,7 @@
  * taken in a channel bound to a space is on the space's board and linked to
  * the thread's room; its close is posted in that thread (coworking §9.4).
  */
+import { isModuleOn } from '@/core/modules/registry';
 import { quietText } from '@/core/channels/group-context';
 import { onTaskClosed, type TaskClosedEvent } from '@/core/tasks/wakeups';
 import type { ChannelType } from '@/core/types';
@@ -26,6 +27,7 @@ export function startTakenTaskNotices(): void {
 
 /** Exported for tests; `startTakenTaskNotices` calls it for every close. */
 export async function announceTakenTaskClosed(event: TaskClosedEvent): Promise<void> {
+  if (!isModuleOn('channels')) return;
   const { task, cause } = event;
   if (task.source !== 'channel') return;
   const sessionId = task.sourceRef?.sessionId;

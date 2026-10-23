@@ -36,6 +36,7 @@
  *   (`bridgeListenFunding`) — their probe is install work attributed to the
  *   space (`group-listen.ts`).
  */
+import { isModuleOn } from '@/core/modules/registry';
 import { and, eq, notExists } from 'drizzle-orm';
 import { MAIN_THREAD } from '@/channels/group-handler';
 import type { ChannelType, UnifiedMessage } from '@/core/types';
@@ -557,7 +558,8 @@ let stopRelay: (() => void) | null = null;
 /** Start relaying bridged rooms to their channels. Idempotent; returns the stop function. */
 export function startGroupBridgeRelay(): () => void {
   if (stopRelay) return stopRelay;
-  const onCreated = (row: Message) => { void relayRoomMessage(row); };
+  // Nothing is relayed to a chat while the chat channels are off (docs/MODULES.md).
+  const onCreated = (row: Message) => { if (isModuleOn('channels')) void relayRoomMessage(row); };
   messageEvents.on('created', onCreated);
   stopRelay = () => {
     messageEvents.off('created', onCreated);

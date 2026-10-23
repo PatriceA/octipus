@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { useSearchParams } from 'next/navigation';
 import { useState } from 'react';
+import { useModuleOn } from '@/lib/modules';
 import { PageHeader } from '@/components/ui/page-header';
 import { ApiTokensTab } from '@/components/settings/api-tokens-tab';
 import { ChannelsTab } from '@/components/settings/channels-tab';
@@ -36,17 +37,20 @@ export default function SettingsPage() {
   // `?tab=modules` opens a tab directly (the "this module is off" page links there).
   const [activeTab, setActiveTab] = useState(useSearchParams().get('tab') ?? 'general');
 
+  // Tabs of a module that is off are left out (docs/MODULES.md).
+  const channelsOn = useModuleOn('channels');
+  const voiceOn = useModuleOn('voice');
   const tabs = [
     { id: 'general', label: 'General', icon: Settings },
     { id: 'modules', label: 'Modules', icon: Boxes },
     { id: 'configuration', label: 'Configuration', icon: Sliders },
     { id: 'integrations', label: 'Integrations', icon: Plug },
-    { id: 'channels', label: 'Channels', icon: MessageSquare },
+    ...(channelsOn ? [{ id: 'channels', label: 'Channels', icon: MessageSquare }] : []),
     { id: 'security', label: 'Security', icon: Shield },
     { id: 'api-tokens', label: 'API Tokens', icon: Key },
     { id: 'my-models', label: 'My models', icon: Cpu },
     { id: 'remote-spaces', label: 'Spaces on other installs', icon: Globe },
-    { id: 'voice', label: 'Voice & Calls', icon: Phone },
+    ...(voiceOn ? [{ id: 'voice', label: 'Voice & Calls', icon: Phone }] : []),
     { id: 'notifications', label: 'Notifications', icon: Bell },
     { id: 'heartbeat', label: 'Heartbeat', icon: HeartPulse },
     { id: 'mobile', label: 'Mobile App', icon: Smartphone },
@@ -90,12 +94,12 @@ export default function SettingsPage() {
           {activeTab === 'modules' && <ModulesTab />}
           {activeTab === 'configuration' && <ConfigurationTab />}
           {activeTab === 'integrations' && <IntegrationsTab />}
-          {activeTab === 'channels' && <ChannelsTab />}
+          {activeTab === 'channels' && channelsOn && <ChannelsTab />}
           {activeTab === 'security' && <SecurityTab />}
           {activeTab === 'api-tokens' && <ApiTokensTab />}
           {activeTab === 'my-models' && <MyModelsTab />}
           {activeTab === 'remote-spaces' && <RemoteSpacesTab />}
-          {activeTab === 'voice' && <VoiceTab />}
+          {activeTab === 'voice' && voiceOn && <VoiceTab />}
           {activeTab === 'notifications' && <NotificationsTab />}
           {activeTab === 'heartbeat' && <HeartbeatTab />}
           {activeTab === 'mobile' && <MobileTab />}

@@ -839,6 +839,12 @@ async function handleVoiceSet(
     const { getAgentService } = await import('@/core/agent');
     const service = getAgentService();
     const previous = context.voiceSessionId;
+    // Voice is a module (docs/MODULES.md): off, no session goes into voice mode.
+    const { isModuleOn } = await import('@/core/modules/registry');
+    if (message.on && !isModuleOn('voice')) {
+      hub.connectionManager.sendToConnection(connectionId, { type: 'error', code: 'FORBIDDEN', message: 'Voice is switched off on this install' });
+      return;
+    }
     if (!message.on) {
       if (previous !== message.sessionId) return; // not this connection's voice session
       context.voiceSessionId = undefined;
