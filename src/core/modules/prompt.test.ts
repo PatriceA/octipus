@@ -31,3 +31,26 @@ describe('withoutOffModules', () => {
     expect(withoutOffModules('plain <!-- a comment --> text', on([]))).toBe('plain <!-- a comment --> text');
   });
 });
+
+describe('the prompt files', () => {
+  test('every module block is closed, and every marker names a module', async () => {
+    const { readdirSync, readFileSync, statSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { MODULES } = await import('@/modules');
+    const ids = new Set(MODULES.map((m) => m.id));
+    const files = (dir: string): string[] => readdirSync(dir).flatMap((name) => {
+      const path = join(dir, name);
+      return statSync(path).isDirectory() ? files(path) : path.endsWith('.md') ? [path] : [];
+    });
+    for (const file of files(join(process.cwd(), 'src/core/agent'))) {
+      let depth = 0;
+      for (const line of readFileSync(file, 'utf8').split('\n')) {
+        for (const [, id] of line.matchAll(/<!--\s*module:!?([a-z0-9-]+)\s*-->/g)) expect(ids.has(id), `${file}: ${id}`).toBe(true);
+        if (/^\s*<!--\s*module:!?[a-z0-9-]+\s*-->\s*$/.test(line)) depth++;
+        if (/^\s*<!--\s*\/module\s*-->\s*$/.test(line)) depth--;
+        expect(depth, file).toBeGreaterThanOrEqual(0);
+      }
+      expect(depth, `${file}: a module block is not closed`).toBe(0);
+    }
+  });
+});

@@ -11,6 +11,7 @@
  * contained. Pending approvals are in-process (`ApprovalManager`), so they
  * are read through an injectable dependency rather than a table.
  */
+import { isModuleOn } from '@/core/modules/registry';
 import { scopedRepos } from '@/db/repositories/scoped';
 import type { Principal } from '@/security/principal';
 
@@ -105,7 +106,8 @@ export async function collectAwayDigest(
     changedAt: p.updatedAt.toISOString(),
     waitingOnYou: WAITING_STATUSES.has(p.status),
   }));
-  const jobBriefs: JobBrief[] = jobs.map((j) => ({
+  // Research runs are the `research` module's (docs/MODULES.md).
+  const jobBriefs: JobBrief[] = jobs.filter((j) => j.kind !== 'research' || isModuleOn('research')).map((j) => ({
     id: j.id,
     kind: j.kind,
     title: j.title,

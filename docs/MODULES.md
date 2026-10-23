@@ -52,7 +52,7 @@ effect at once, without a restart.
 - Turning a module off deletes nothing. Its data stays, and turning it on
   again brings everything back as it was.
 
-An install from before modules starts with every module on. A new install
+A job already running when its module is switched off (a research run) finishes; nothing new starts. An install from before modules starts with every module on. A new install
 starts with the core only, until the onboarding or an admin turns modules on.
 
 `GET /api/modules` reports every module and whether it is on.
