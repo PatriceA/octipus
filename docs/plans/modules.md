@@ -1,6 +1,6 @@
 # Modules: a lean core, the rest switched on when wanted
 
-Status: design, for review. Nothing here is built yet.
+Status: decided; being built in the order below.
 
 ## Why
 
@@ -199,14 +199,12 @@ A second test runs with every module off and checks that:
 
 C6b-d (the privacy gateway) come after step 2, inside the `protection` module.
 
-## Decisions for you
+## Decisions (taken)
 
-1. **Granularity of the first modules:** four modules (`business`, `mail`,
-   `scan-folders`, `protection`), or one `company` bundle? Recommended: four.
-   A practice may want mail and scan folders without cases, and the cost is
-   only four rows in Settings.
-2. **Existing installs:** everything on (recommended, nothing disappears), or
-   modules set from the use cases they once picked?
-3. **New installs without onboarding:** core only (recommended), or everything
-   on?
-4. **The later modules (step 4):** do them, or stop after the business modules?
+1. **Granularity:** four modules (`business`, `mail`, `scan-folders`,
+   `protection`), not one bundle.
+2. **Existing installs:** everything on; nothing disappears.
+3. **New installs without onboarding:** the core only.
+4. **The later modules:** all of them, one at a time. A module that is off is
+   invisible to agents too: no tools, no prompt text, no automation that
+   reaches it.
