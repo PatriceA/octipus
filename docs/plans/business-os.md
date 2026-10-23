@@ -149,7 +149,8 @@ Each point is its own PR with its own code review.
 | C3 mail (IMAP/SMTP/POP3, functional mailboxes; web page is C3b) | `feat/mail` (on C2) | #436 | in review |
 | C4 scan folders, mail attachments into documents | `feat/scan-folders` (on C3) | #437 | in review |
 | C5 backup (database with vault, files, checked, daily, retention) | `feat/backup` (on C4) | #438 | in review |
-| C6 privacy gateway | | | next |
+| C6a protection levels 1-4 (design for C6b-d in docs/PROTECTION-LEVELS.md) | `feat/protection-levels` (on C5) | #439 | in review |
+| C6b local-only routing for levels 3-4 · C6c pseudonymization · C6d plugin gate | | | waiting for review of the C6 design |
 
 ## 5. Open questions (answers expected from the business side)
 
