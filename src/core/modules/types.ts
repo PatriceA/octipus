@@ -1,4 +1,4 @@
-import type { ModuleProfile } from '@/shared/modules';
+import type { ModuleProfile } from '../../shared/modules';
 
 /**
  * One module (docs/MODULES.md): everything it brings, declared once in

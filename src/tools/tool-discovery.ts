@@ -14,6 +14,7 @@
  * See docs/plans/lazy-tool-discovery.md.
  */
 
+import { isToolOn } from '@/core/modules/registry';
 import type { ToolHandler } from '@/core/agent-base';
 import { rankToolsByQuery } from '@/tools/tool-search';
 import { TOOL_DISCOVERY_TOOL_ID } from '@/core/agent/tool-split';
@@ -55,7 +56,8 @@ export function buildToolDiscoveryHandlers(availableTools: ToolHandler[]): ToolH
       toolId: TOOL_DISCOVERY_TOOL_ID,
       replaySafety: 'read_only',
       execute: async (args) => {
-        const all = Array.from(byName.values()).map((t) => ({
+        // A module switched off since the worker started (docs/MODULES.md).
+        const all = Array.from(byName.values()).filter((t) => !t.toolId || isToolOn(t.toolId)).map((t) => ({
           name: t.name,
           description: t.description,
         }));
@@ -90,7 +92,8 @@ export function buildToolDiscoveryHandlers(availableTools: ToolHandler[]): ToolH
         if (typeof name !== 'string') {
           throw new Error(`describe_tool: 'name' must be a string, got ${typeof name}.`);
         }
-        const handler = byName.get(name);
+        const found = byName.get(name);
+        const handler = found && (!found.toolId || isToolOn(found.toolId)) ? found : undefined;
         if (!handler) {
           throw new Error(
             `Unknown tool '${name}'. Call list_tools to see the available tool names.`,

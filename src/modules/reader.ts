@@ -1,4 +1,4 @@
-import type { ModuleDefinition } from '@/core/modules/types';
+import type { ModuleDefinition } from '../core/modules/types';
 
 export const readerModule: ModuleDefinition = {
   id: 'reader',
