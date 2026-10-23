@@ -61,6 +61,49 @@ describe('what is detected', () => {
   });
 });
 
+describe('what the review found (C6c)', () => {
+  test('an identifier is cut before the word after it, so it is replaced', () => {
+    expect(kinds('Kundennummer 4711 Am Montag')).toEqual(['ID:4711']);
+    expect(kinds('Versichertennummer A123456789 Bitte prüfen')).toEqual(['ID:A123456789']);
+    expect(kinds('Az. 3 O 123/24 Das Gericht')).toEqual(['ID:3 O 123/24']);
+    expect(new Pseudonyms().pseudonymize('Kundennummer 4711 Am Montag')).toBe('Kundennummer [ID_1] Am Montag');
+  });
+
+  test('hyphenated streets, double first names and names outside ASCII', () => {
+    expect(kinds('Sophie-Scholl-Straße 4')).toEqual(['ADDRESS:Sophie-Scholl-Straße 4']);
+    expect(kinds('Konrad-Adenauer-Str. 5')).toEqual(['ADDRESS:Konrad-Adenauer-Str. 5']);
+    expect(kinds('Anna Lena Müller kommt')).toEqual(['PERSON:Anna Lena Müller']);
+    expect(kinds('Hans Peter Schmidt kommt')).toEqual(['PERSON:Hans Peter Schmidt']);
+    expect(kinds('Herr René Dupont')).toEqual(['PERSON:René Dupont']);
+    expect(kinds('Herr Dvořák')).toEqual(['PERSON:Dvořák']);
+    expect(kinds('Frau Gómez')).toEqual(['PERSON:Gómez']);
+    expect(kinds('Anna Özdemir')).toEqual(['PERSON:Anna Özdemir']);
+    expect(kinds('an anna.müller@firma.de')).toEqual(['EMAIL:anna.müller@firma.de']);
+  });
+
+  test('a surname alone is its own placeholder and comes back as written', () => {
+    const p = new Pseudonyms();
+    const out = p.pseudonymize('Thomas Koch und Lisa Winter. Der Koch empfiehlt im Winter Suppe.');
+    expect(p.restore(out)).toBe('Thomas Koch und Lisa Winter. Der Koch empfiehlt im Winter Suppe.');
+    const q = new Pseudonyms();
+    q.pseudonymize('Martin Luther, Lukas Martin');
+    expect(q.restore(q.pseudonymize('Martin kommt'))).toBe('Martin kommt');
+  });
+
+  test('dates, phrases and big numbers are not addresses, places or phone numbers', () => {
+    expect(kinds('Im Januar 2025 und Am Freitag 15 Uhr, Zum Glück 3 mal')).toEqual([]);
+    expect(kinds('25000 Besucher, 12000 Franken')).toEqual([]);
+    expect(kinds('1 000 000 000 Euro')).toEqual([]);
+  });
+
+  test('a long run of capitalised words stays fast', () => {
+    const text = 'Alpha Beta Gamma Delta '.repeat(5_000);
+    const start = Date.now();
+    detect(text);
+    expect(Date.now() - start).toBeLessThan(1_500);
+  });
+});
+
 describe('the mapping', () => {
   test('replaces, keeps a placeholder per value, and restores exactly', () => {
     const p = new Pseudonyms();
@@ -68,10 +111,11 @@ describe('the mapping', () => {
     const out = p.pseudonymize(text);
     expect(out).toBe('Frau [PERSON_1] (geb. [DATE_1]), [ADDRESS_1], [PLACE_1], IBAN [IBAN_1], [EMAIL_1]');
     expect(p.restore(out)).toBe(text);
-    // The same person later in the conversation, by full name or surname.
-    expect(p.pseudonymize('Hat Anna Müller bezahlt? Frau Müller fragt nach.')).toBe('Hat [PERSON_1] bezahlt? Frau [PERSON_1] fragt nach.');
-    // A second person gets the next number.
-    expect(p.pseudonymize('Herr Thomas Becker')).toBe('Herr [PERSON_2]');
+    // The same person later in the conversation; the surname alone has its own placeholder.
+    expect(p.pseudonymize('Hat Anna Müller bezahlt? Frau Müller fragt nach.')).toBe('Hat [PERSON_1] bezahlt? Frau [PERSON_2] fragt nach.');
+    expect(p.restore('Frau [PERSON_2]')).toBe('Frau Müller');
+    // Another person gets the next numbers.
+    expect(p.pseudonymize('Herr Thomas Becker')).toBe('Herr [PERSON_3]');
   });
 
   test('an answer and tool arguments are translated back; unknown placeholders stay', () => {

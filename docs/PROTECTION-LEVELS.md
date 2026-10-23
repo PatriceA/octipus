@@ -133,16 +133,24 @@ a tool gets the real e-mail address, not `[EMAIL_1]`.
   allows it: `protection.remoteAtLevel3` (default off). Off, level 3 stays on
   local models like level 4. Level 4 never leaves the house.
 - **What is pseudonymized:** completions and streams, the conversation's
-  messages and tool results included. Embeddings, image descriptions, OCR and
-  CLI agents carry the data as it is, so for them level 3 always stays local.
+  messages and tool results included. A provider's raw copy of an earlier
+  answer (Gemini's parts, Anthropic's content blocks, sent back as they are) is
+  left out of such a request, and the provider rebuilds that message from its
+  pseudonymized text, as for a conversation restored from the database.
+  Embeddings, image descriptions, OCR and CLI agents carry the data as it is,
+  so for them level 3 always stays local. Decision models do not get
+  placeholders: their privacy gate redacts personal data instead (one way),
+  or refuses.
 - **The mapping** belongs to the session and lives in memory: a value keeps
-  its placeholder for the whole conversation (and the surname alone keeps the
-  person's). Each request is pseudonymized whole, so a restart only renumbers
-  the placeholders; the stored conversation always holds the real values.
+  its placeholder for the whole conversation, and a person's surname alone
+  gets its own. Each request is pseudonymized whole from the stored
+  conversation, which always holds the real values, so a restart only
+  renumbers the placeholders.
 - **What it finds** (`src/core/protection/pseudonymize.ts`): a common first
   name and a surname (Anna Müller, Hans-Peter Schmidt-Rottluff); a title and a
-  name (Frau Dr. Özdemir, Herrn Weiß); a street and number (Lindenstraße 12a,
-  Hauptstr. 5, Am Markt 3); a postcode and place (10115 Berlin); IBANs that
+  name (Frau Dr. Özdemir, Herrn René Dupont); one or two first names and a
+  surname (Anna Lena Müller); a street and number (Lindenstraße 12a,
+  Hauptstr. 5, Sophie-Scholl-Straße 4, Am Markt 3); a postcode and place (10115 Berlin); IBANs that
   pass the checksum; phone numbers (+49, 0049, a leading 0); e-mail
   addresses; dates behind a birth label (geb., Geburtsdatum); identifiers
   behind their label (Kundennummer, Vers.-Nr., Patienten-ID, Az.) and

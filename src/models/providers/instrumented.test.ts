@@ -117,6 +117,29 @@ describe('pseudonymization on the way out (C6c)', () => {
     expect(args).toBe('{"to":"lukas@example.de"}');
   });
 
+  test('usage on every chunk does not cut a placeholder; the end chunk carries the held text', async () => {
+    const { Pseudonyms } = await import('@/core/protection/pseudonymize');
+    mocks.pseudonyms = new Pseudonyms();
+    const p = provider();
+    p.stream = async function* () { yield { content: 'Hallo [PERS', usage: result.usage }; yield { content: 'ON_1] und [', usage: result.usage, finishReason: 'stop' }; };
+    const chunks: Array<{ content?: string; finishReason?: string }> = [];
+    for await (const c of instrumentProvider(p).stream({ ...options, messages: [{ role: 'user', content: 'Herr Lukas Schulz', timestamp: new Date() }] })) chunks.push(c);
+    expect(chunks.map((c) => c.content ?? '').join('')).toBe('Hallo Lukas Schulz und [');
+    expect(chunks.at(-1)?.finishReason).toBe('stop');
+  });
+
+  test('a provider\'s raw copy of an earlier answer is not sent with a pseudonymized request', async () => {
+    const { Pseudonyms } = await import('@/core/protection/pseudonymize');
+    mocks.pseudonyms = new Pseudonyms();
+    const p = provider(); const raw = p.complete as ReturnType<typeof vi.fn>;
+    await instrumentProvider(p).complete({ ...options, messages: [
+      { role: 'assistant', content: 'Mail an Anna Müller', providerRaw: { anthropicContent: [{ type: 'text', text: 'Mail an Anna Müller' }] }, timestamp: new Date() },
+    ] });
+    const sent = (raw.mock.calls[0][0] as CompletionOptions).messages[0];
+    expect(sent.providerRaw).toBeUndefined();
+    expect(sent.content).toBe('Mail an [PERSON_1]');
+  });
+
   test('without a mapping (public content, a local model) the request goes as it is', async () => {
     const p = provider(); const raw = p.complete as ReturnType<typeof vi.fn>;
     const messages = [{ role: 'user' as const, content: 'Anna Müller', timestamp: new Date() }];

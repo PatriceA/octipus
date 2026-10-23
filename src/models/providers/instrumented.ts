@@ -109,8 +109,15 @@ async function prepare(options: CompletionOptions, provider: string): Promise<Co
 /** The mapping each prepared request went out with (C6c). */
 const pseudonymized = new WeakMap<CompletionOptions, Pseudonyms>();
 
+/**
+ * The messages with their personal data as placeholders. A provider's raw
+ * payload (`providerRaw`: Gemini parts, Anthropic content blocks) is sent back
+ * verbatim by some providers in place of the fields below, and a signed
+ * thinking block cannot be rewritten: it is left out, and the provider builds
+ * the message from its pseudonymized fields.
+ */
 function pseudonymizeMessages(messages: CompletionOptions['messages'], p: Pseudonyms): CompletionOptions['messages'] {
-  return messages.map((m) => ({
+  return messages.map(({ providerRaw: _raw, ...m }) => ({
     ...m,
     content: p.pseudonymize(m.content),
     ...(m.toolCalls ? { toolCalls: m.toolCalls.map((tc) => ({ ...tc, arguments: p.pseudonymizeDeep(tc.arguments) })) } : {}),
@@ -124,6 +131,8 @@ function restoreResult(result: CompletionResult, p: Pseudonyms): CompletionResul
     content: p.restore(result.content),
     ...(result.toolCalls ? { toolCalls: result.toolCalls.map((tc) => ({ ...tc, arguments: p.restoreDeep(tc.arguments) })) } : {}),
     ...(result.reasoningContent ? { reasoningContent: p.restore(result.reasoningContent) } : {}),
+    // Stored with the message: real values, like everything else stored.
+    ...(result.providerRaw ? { providerRaw: p.restoreDeep(result.providerRaw) } : {}),
   };
 }
 
@@ -245,11 +254,11 @@ export async function* accountStream(options: CompletionOptions, provider: strin
       if (chunk.model) model = chunk.model;
       if (chunk.requestId) requestId = chunk.requestId;
       if (!restorer) { yield chunk; continue; }
-      // Held-back text goes out before the chunk that ends the stream.
-      if (chunk.finishReason || chunk.usage) yield* restorer.flush();
-      yield restorer.chunk(chunk);
+      // The chunk that ends the stream carries the held-back text with it
+      // (usage alone does not end it: some providers send it on every chunk).
+      yield* restorer.chunk(chunk, !!chunk.finishReason);
     }
-    if (restorer) yield* restorer.flush();
+    if (restorer) yield* restorer.end();
     completed = true;
   } finally {
     await recordProviderUsage(prepared, provider, { usage, model, requestId }, !completed);
@@ -265,25 +274,34 @@ function streamRestorerFor(p: Pseudonyms | undefined) {
   const text = new StreamRestorer(p);
   const args = new Map<string, InstanceType<typeof StreamRestorer>>();
   return {
-    chunk(chunk: StreamChunk): StreamChunk {
+    *chunk(chunk: StreamChunk, last: boolean): Generator<StreamChunk> {
       const out: StreamChunk = { ...chunk };
       if (chunk.content) out.content = text.push(chunk.content);
       if (chunk.reasoningContent) out.reasoningContent = p.restore(chunk.reasoningContent);
+      if (chunk.providerRaw) out.providerRaw = p.restoreDeep(chunk.providerRaw);
       if (chunk.toolCallDelta?.arguments) {
         const id = chunk.toolCallDelta.id;
         const restorer = args.get(id) ?? new StreamRestorer(p);
         args.set(id, restorer);
         out.toolCallDelta = { ...chunk.toolCallDelta, arguments: restorer.push(chunk.toolCallDelta.arguments) };
       }
-      return out;
-    },
-    *flush(): Generator<StreamChunk> {
+      if (!last) { yield out; return; }
+      // Tool argument tails before the end; the text tail rides on it.
+      yield* this.toolTails();
       const rest = text.flush();
-      if (rest) yield { content: rest };
+      if (rest) out.content = (out.content ?? '') + rest;
+      yield out;
+    },
+    *toolTails(): Generator<StreamChunk> {
       for (const [id, restorer] of args) {
         const tail = restorer.flush();
         if (tail) yield { toolCallDelta: { id, arguments: tail } };
       }
+    },
+    *end(): Generator<StreamChunk> {
+      yield* this.toolTails();
+      const rest = text.flush();
+      if (rest) yield { content: rest };
     },
   };
 }
