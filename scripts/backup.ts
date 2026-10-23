@@ -7,16 +7,17 @@
  *   npm run backup                       write and check a backup now
  *   npm run backup -- list               the backups in backup.path
  *   npm run backup -- verify <id|dir>    check a backup again
- *   npm run backup -- restore <id|dir> [--database] [--files] [--to <dir>]
+ *   npm run backup -- restore <id|dir> [--database] [--files] [--to <dir>] [--force]
  *
  * Restore with the server stopped. It never writes over data that is there:
  * the embedded database directory, and each files root, must be empty or
- * missing (move them aside first), or the files go to `--to <dir>`.
+ * missing (move them aside first), or the files go into an empty `--to <dir>`.
+ * An external database is replaced only with `--force`.
  */
 import { existsSync, readdirSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, isAbsolute, join, resolve } from 'node:path';
 
 function expandHome(p: string): string {
   return p === '~' || p.startsWith('~/') ? join(homedir(), p.slice(2)) : p;
@@ -34,16 +35,31 @@ async function backupDir(arg: string | undefined): Promise<string> {
   return dir;
 }
 
+/** A restored directory readable by the Octipus user only, like the backup it came from. */
+async function lockDown(dir: string): Promise<void> {
+  const { runCommand } = await import('@/utils/proc');
+  await runCommand({ command: 'chmod', args: ['-R', 'go-rwx', dir] }).catch(() => undefined);
+}
+
 async function restore(dir: string, args: string[]): Promise<void> {
   const { readFile } = await import('node:fs/promises');
   const { getConfig } = await import('@/config');
   const { runCommand } = await import('@/utils/proc');
-  const { verifyBackup, MANIFEST } = await import('@/core/backup/service');
+  const { verifyBackup, pgConnection, MANIFEST } = await import('@/core/backup/service');
   const manifest = JSON.parse(await readFile(join(dir, MANIFEST), 'utf8'));
   const wantDb = args.includes('--database') || !args.includes('--files');
   const wantFiles = args.includes('--files') || !args.includes('--database');
+  const force = args.includes('--force');
   const toIdx = args.indexOf('--to');
-  const to = toIdx >= 0 ? resolve(args[toIdx + 1] ?? '') : null;
+  const toArg = toIdx >= 0 ? args[toIdx + 1] : undefined;
+  if (toIdx >= 0 && (!toArg || toArg.startsWith('--'))) throw new Error('--to needs a directory');
+  const to = toArg ? resolve(toArg) : null;
+
+  // The roots come from the backup's manifest: absolute paths only, nothing tar could read as an option.
+  const parts = (manifest.files ?? []) as Array<{ file: string; root: string }>;
+  for (const part of parts) {
+    if (!isAbsolute(part.root) || !/^files-\d+\.tar\.gz$/.test(part.file)) throw new Error(`The manifest names an unexpected files archive: ${part.file}`);
+  }
 
   console.log(`Checking ${manifest.id} before restoring…`);
   const check = await verifyBackup(dir);
@@ -53,40 +69,32 @@ async function restore(dir: string, args: string[]): Promise<void> {
     if (manifest.database.kind === 'pglite') {
       const target = resolve(expandHome(process.env.DATA_DIR || getConfig().database.dataDir));
       if (!isEmptyOrMissing(target)) throw new Error(`The database directory ${target} is not empty. Stop the server and move it aside first.`);
-      await mkdir(target, { recursive: true });
+      await mkdir(target, { recursive: true, mode: 0o700 });
       const r = await runCommand({ command: 'tar', args: ['-xzf', join(dir, manifest.database.file), '-C', target] });
       if (r.exitCode !== 0) throw new Error(`tar failed: ${r.stderr.trim()}`);
+      await lockDown(target);
       console.log(`Database restored into ${target}`);
     } else {
-      const url = new URL(getConfig().database.url);
-      const env: Record<string, string> = { ...(process.env as Record<string, string>) };
-      if (url.password) env.PGPASSWORD = decodeURIComponent(url.password);
-      const r = await runCommand({
-        command: 'pg_restore',
-        args: ['--clean', '--if-exists', '--no-owner', '-h', url.hostname, '-p', url.port || '5432', '-U', decodeURIComponent(url.username), '-d', decodeURIComponent(url.pathname.slice(1)), join(dir, manifest.database.file)],
-        env,
-      });
+      // pg_restore --clean drops what is there: never without saying so.
+      if (!force) throw new Error('Restoring into DATABASE_URL replaces the tables there. Stop the server and run again with --force.');
+      const { args: conn, env } = pgConnection();
+      const r = await runCommand({ command: 'pg_restore', args: ['--clean', '--if-exists', '--no-owner', ...conn, join(dir, manifest.database.file)], env });
       if (r.exitCode !== 0) throw new Error(`pg_restore failed: ${r.stderr.trim().slice(0, 500)}`);
       console.log('Database restored');
     }
   }
 
-  if (wantFiles && manifest.files) {
-    if (to) {
-      await mkdir(to, { recursive: true });
-      const r = await runCommand({ command: 'tar', args: ['-xzf', join(dir, manifest.files.file), '-C', to] });
+  if (wantFiles && parts.length > 0) {
+    const targets = parts.map((part, i) => ({ part, target: to ? join(to, `${i + 1}-${basename(part.root)}`) : part.root }));
+    for (const { target } of targets) {
+      if (!isEmptyOrMissing(target)) throw new Error(`${target} is not empty. Move it aside, or restore the files into an empty directory with --to <dir>.`);
+    }
+    for (const { part, target } of targets) {
+      await mkdir(target, { recursive: true, mode: 0o700 });
+      const r = await runCommand({ command: 'tar', args: ['-xzf', join(dir, part.file), '-C', target] });
       if (r.exitCode !== 0) throw new Error(`tar failed: ${r.stderr.trim()}`);
-      console.log(`Files restored into ${to}`);
-    } else {
-      for (const root of manifest.files.roots as string[]) {
-        if (!isEmptyOrMissing(root)) throw new Error(`${root} is not empty. Move it aside, or restore the files elsewhere with --to <dir>.`);
-      }
-      for (const root of manifest.files.roots as string[]) {
-        await mkdir(dirname(root), { recursive: true });
-        const r = await runCommand({ command: 'tar', args: ['-xzf', join(dir, manifest.files.file), '-C', dirname(root), basename(root)] });
-        if (r.exitCode !== 0) throw new Error(`tar failed: ${r.stderr.trim()}`);
-        console.log(`Files restored into ${root}`);
-      }
+      await lockDown(target);
+      console.log(`Files restored into ${target}`);
     }
   }
   console.log('The vault needs the same master key (MASTER_KEY) the backup was written with.');
@@ -111,7 +119,7 @@ async function main(): Promise<void> {
     const backups = await service.listBackups();
     if (backups.length === 0) console.log(`No backups in ${service.backupRoot()}`);
     for (const b of backups) {
-      const size = b.database.bytes + (b.files?.bytes ?? 0);
+      const size = b.database.bytes + (b.files ?? []).reduce((sum, f) => sum + f.bytes, 0);
       console.log(`${b.id}  ${b.verified?.ok ? 'checked' : 'NOT CHECKED'}  ${(size / 1048576).toFixed(1)} MB  ${b.storageMode}  vault rows: ${b.vault.rows}`);
     }
   } else if (command === 'verify') {

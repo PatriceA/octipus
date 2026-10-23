@@ -60,7 +60,7 @@ describe('a backup', () => {
     expect(manifest.database.kind).toBe('pglite');
     expect(manifest.vault.rows).toBeGreaterThanOrEqual(1);
     expect(manifest.vault.keyChecked).toBe(true);
-    expect(manifest.files?.roots).toEqual([WORKSPACE]);
+    expect(manifest.files?.map((f) => [f.file, f.root])).toEqual([['files-1.tar.gz', WORKSPACE]]);
     expect(manifest.verified).toMatchObject({ ok: true, problems: [] });
     // Nothing of the master key is in it.
     const dir = join(BACKUPS, manifest.id);
@@ -72,13 +72,16 @@ describe('a backup', () => {
   test('a changed byte is caught', async () => {
     const { listBackups, verifyBackup } = await import('./service');
     const [manifest] = await listBackups();
-    const file = join(BACKUPS, manifest.id, 'files.tar.gz');
+    const file = join(BACKUPS, manifest.id, 'files-1.tar.gz');
     const bytes = readFileSync(file);
     bytes[bytes.length - 10] ^= 0xff;
     writeFileSync(file, bytes);
     const result = await verifyBackup(join(BACKUPS, manifest.id));
     expect(result.ok).toBe(false);
-    expect(result.problems).toEqual(['files.tar.gz does not match its checksum']);
+    expect(result.problems).toEqual(['files-1.tar.gz does not match its checksum']);
+    // Recorded as a later check; the backup's first check still stands.
+    const [after] = await listBackups();
+    expect([after.verified?.ok, after.rechecked?.ok]).toEqual([true, false]);
   });
 
   test('the dump, restored the way the CLI restores it, opens as the database with its vault', async () => {
@@ -110,24 +113,25 @@ describe('a backup', () => {
     expect((await listBackups()).map((b) => b.id)).toEqual(['20261022T020000Z', '20261021T020000Z']);
   });
 
-  test('runs once a day in its hour', async () => {
-    const { maybeRunScheduledBackup } = await import('./service');
-    const at = (iso: string) => { const d = new Date(iso); d.setHours(3, 0, 0, 0); return d; };
-    const wrongHour = at('2026-10-25T00:00:00Z');
-    wrongHour.setHours(4);
-    expect(await maybeRunScheduledBackup(wrongHour)).toBeNull();
-    const first = await maybeRunScheduledBackup(at('2026-10-25T00:00:00Z'));
-    expect(first?.ok).toBe(true);
-    // The same hour a minute later: already done today.
-    const again = at('2026-10-25T00:00:00Z');
-    again.setMinutes(1);
-    expect(await maybeRunScheduledBackup(again)).toBeNull();
+  test('one scheduled backup per daily slot: catching up after a missed slot, untouched by manual runs', async () => {
+    const { maybeRunScheduledBackup, runBackup } = await import('./service');
+    const local = (day: number, hour: number, minute = 0) => new Date(2026, 9, day, hour, minute, 0, 0);
+    // 01:00 on the 25th: the slot of the 24th (03:00) has no scheduled run yet (the server was down): catch up.
+    expect((await maybeRunScheduledBackup(local(25, 1)))?.ok).toBe(true);
+    // Later the same night: that slot is done.
+    expect(await maybeRunScheduledBackup(local(25, 2, 30))).toBeNull();
+    // A manual backup does not stand in for the next slot.
+    expect((await runBackup('manual', local(25, 2, 45))).ok).toBe(true);
+    expect((await maybeRunScheduledBackup(local(25, 3)))?.ok).toBe(true);
+    expect(await maybeRunScheduledBackup(local(25, 3, 1))).toBeNull();
   });
 
   test('a failed backup is recorded and the admins are told', async () => {
-    const { runBackup, lastRun } = await import('./service');
+    const { runBackup, lastRun, listBackups } = await import('./service');
     // A backup with this id is already there: the run fails, and leaves it alone.
-    const status = await runBackup('manual', new Date('2026-10-22T02:00:00Z'));
+    const [newest] = await listBackups();
+    const at = new Date(newest.id.replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/, '$1-$2-$3T$4:$5:$6Z'));
+    const status = await runBackup('manual', at);
     expect(status.ok).toBe(false);
     expect(status.error).toMatch(/already exists/);
     expect((await lastRun())?.ok).toBe(false);

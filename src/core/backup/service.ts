@@ -23,7 +23,7 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { getConfig } from '@/config';
 import { getNotificationService } from '@/core/notification-service';
 import { dumpEmbeddedDatabase, queryRaw, storageMode } from '@/db/postgres';
@@ -47,8 +47,12 @@ export interface BackupManifest {
   storageMode: 'embedded' | 'external';
   database: { file: string; kind: 'pglite' | 'pg_dump'; bytes: number; sha256: string };
   vault: { rows: number; keyChecked: boolean };
-  files: { file: string; bytes: number; sha256: string; roots: string[] } | null;
+  /** One archive per directory, each holding the directory's contents (`./…`). */
+  files: Array<{ file: string; bytes: number; sha256: string; root: string }> | null;
+  /** The check when the backup was written: only this decides whether the backup counts (and is kept). */
   verified?: { at: string; ok: boolean; problems: string[] };
+  /** The latest check run again later (verify); recorded, never demoting the backup. */
+  rechecked?: { at: string; ok: boolean; problems: string[] };
 }
 
 export interface BackupRunStatus {
@@ -115,26 +119,36 @@ async function vaultKeyCheck(query: (sql: string) => Promise<{ rows: any[] }>): 
   return { rows: count, keyChecked: true };
 }
 
-/** `pg_dump` connection settings from the database URL, the password in the environment, never in the arguments. */
-function pgEnv(): { args: string[]; env: Record<string, string> } {
-  const url = new URL(getConfig().database.url);
+/**
+ * The connection for `pg_dump` / `pg_restore`: the database URL as given
+ * (host, port, sockets, TLS settings and all) but without its password,
+ * which goes in the environment, never in the arguments.
+ */
+export function pgConnection(databaseUrl = getConfig().database.url): { args: string[]; env: Record<string, string> } {
+  const url = new URL(databaseUrl);
   const env: Record<string, string> = { ...(process.env as Record<string, string>) };
   if (url.password) env.PGPASSWORD = decodeURIComponent(url.password);
-  const sslmode = url.searchParams.get('sslmode');
-  if (sslmode) env.PGSSLMODE = sslmode;
-  const args = ['-h', url.hostname, '-p', url.port || '5432', '-U', decodeURIComponent(url.username), '-d', decodeURIComponent(url.pathname.slice(1))];
-  return { args, env };
+  url.password = '';
+  return { args: [`--dbname=${url.toString()}`], env };
+}
+
+/** Write a manifest whole or not at all: a crash mid-write never leaves a truncated one. */
+async function writeManifest(dir: string, manifest: BackupManifest): Promise<void> {
+  const tmp = join(dir, `${MANIFEST}.tmp`);
+  await writeFile(tmp, JSON.stringify(manifest, null, 2), { mode: 0o600 });
+  await rename(tmp, join(dir, MANIFEST));
 }
 
 async function dumpDatabase(dir: string): Promise<BackupManifest['database']> {
   if (storageMode() === 'embedded') {
     const file = 'database.tar.gz';
     await writeFile(join(dir, file), await dumpEmbeddedDatabase(), { mode: 0o600 });
+    await chmod(join(dir, file), 0o600);
     return { file, kind: 'pglite', ...(await sha256File(join(dir, file))) };
   }
   const file = 'database.dump';
-  const { args, env } = pgEnv();
-  const result = await runCommand({ command: 'pg_dump', args: [...args, '--format=custom', '--no-owner', '-f', join(dir, file)], env }).catch((err: Error) => {
+  const { args, env } = pgConnection();
+  const result = await runCommand({ command: 'pg_dump', args: [...args, '--format=custom', '--no-owner', `--file=${join(dir, file)}`], env }).catch((err: Error) => {
     throw new BackupError(`pg_dump could not run (${err.message}); install the PostgreSQL client tools`);
   });
   if (result.exitCode !== 0) throw new BackupError(`pg_dump failed: ${result.stderr.trim().slice(0, 300)}`);
@@ -142,42 +156,65 @@ async function dumpDatabase(dir: string): Promise<BackupManifest['database']> {
   return { file, kind: 'pg_dump', ...(await sha256File(join(dir, file))) };
 }
 
-/** The directories the files archive holds: the workspace root, and the documents directory when it lies elsewhere. */
-function fileRoots(): string[] {
+/** The directories the files archives hold: the workspace root, and the documents directory when it lies outside it (or holds it). */
+export function fileRoots(): string[] {
   const config = getConfig();
   const roots: string[] = [];
   for (const p of [config.workspace.rootPath, config.workspace.documentsPath]) {
     if (!p) continue;
     const abs = resolve(expandHome(p));
-    if (!roots.some((r) => within(abs, r))) roots.push(abs);
+    if (roots.some((r) => within(abs, r))) continue;
+    // A new root that holds one already listed replaces it.
+    for (let i = roots.length - 1; i >= 0; i--) if (within(roots[i], abs)) roots.splice(i, 1);
+    roots.push(abs);
   }
   return roots;
 }
 
+/** Whether `tar` is GNU tar: only GNU tar's exit code 1 means "a file changed while read" rather than an error. */
+let gnuTar: boolean | null = null;
+async function isGnuTar(): Promise<boolean> {
+  if (gnuTar === null) {
+    const r = await runCommand({ command: 'tar', args: ['--version'] }).catch(() => ({ exitCode: -1, stdout: '', stderr: '' }));
+    gnuTar = r.exitCode === 0 && /GNU tar/.test(r.stdout);
+  }
+  return gnuTar;
+}
+
+/**
+ * One `tar.gz` per root, holding the root's contents as `./…` (`-C root .`):
+ * no path from the settings reaches tar as an operand, two roots of the same
+ * name do not mix, and the excludes (`./<path>`) match only at the top.
+ */
 async function archiveFiles(dir: string, backupDir: string): Promise<BackupManifest['files']> {
   const roots: string[] = [];
   for (const root of fileRoots()) {
     if ((await stat(root).catch(() => null))?.isDirectory()) roots.push(root);
   }
   if (roots.length === 0) return null;
-  const file = 'files.tar.gz';
   const excludes = [backupDir, process.env.DATA_DIR || getConfig().database?.dataDir]
     .filter((p): p is string => !!p)
     .map((p) => resolve(expandHome(p)));
-  const args = ['-czf', join(dir, file)];
-  for (const ex of excludes) {
-    for (const root of roots) {
-      if (within(ex, root)) args.push(`--exclude=${join(basename(root), relative(root, ex))}`);
+  const out: NonNullable<BackupManifest['files']> = [];
+  for (const [index, root] of roots.entries()) {
+    const file = `files-${index + 1}.tar.gz`;
+    const args = ['-czf', join(dir, file)];
+    for (const ex of excludes) {
+      if (within(ex, root) && ex !== root) args.push(`--exclude=./${relative(root, ex)}`);
     }
+    args.push('-C', root, '.');
+    const result = await runCommand({ command: 'tar', args }).catch((err: Error) => {
+      throw new BackupError(`tar could not run: ${err.message}`);
+    });
+    if (result.exitCode !== 0) {
+      // GNU tar exits 1 when a file changed while it was read: the archive is still whole. Any other tar, any other code: failed.
+      if (result.exitCode === 1 && (await isGnuTar())) coreLogger.warn({ root, stderr: result.stderr.slice(0, 500) }, 'backup: files changed while being archived');
+      else throw new BackupError(`tar failed: ${result.stderr.trim().slice(0, 300)}`);
+    }
+    await chmod(join(dir, file), 0o600);
+    out.push({ file, ...(await sha256File(join(dir, file))), root });
   }
-  for (const root of roots) args.push('-C', dirname(root), basename(root));
-  const result = await runCommand({ command: 'tar', args }).catch((err: Error) => {
-    throw new BackupError(`tar could not run: ${err.message}`);
-  });
-  // GNU tar exits 1 when a file changed while it was read: the archive is still whole.
-  if (result.exitCode !== 0 && result.exitCode !== 1) throw new BackupError(`tar failed: ${result.stderr.trim().slice(0, 300)}`);
-  await chmod(join(dir, file), 0o600);
-  return { file, ...(await sha256File(join(dir, file))), roots };
+  return out;
 }
 
 /**
@@ -185,10 +222,25 @@ async function archiveFiles(dir: string, backupDir: string): Promise<BackupManif
  * database (see the module comment) and the files archive. Writes the
  * outcome into the manifest.
  */
-export async function verifyBackup(dir: string): Promise<{ ok: boolean; problems: string[] }> {
+export async function verifyBackup(dir: string, opts: { initial?: boolean } = {}): Promise<{ ok: boolean; problems: string[] }> {
+  // One check at a time: each loads a whole database back.
+  const previous = verifyLock;
+  let release!: () => void;
+  verifyLock = new Promise<void>((r) => { release = r; });
+  await previous;
+  try {
+    return await checkBackup(dir, opts.initial === true);
+  } finally {
+    release();
+  }
+}
+
+let verifyLock: Promise<void> = Promise.resolve();
+
+async function checkBackup(dir: string, initial: boolean): Promise<{ ok: boolean; problems: string[] }> {
   const problems: string[] = [];
   const manifest = JSON.parse(await readFile(join(dir, MANIFEST), 'utf8')) as BackupManifest;
-  for (const part of [manifest.database, manifest.files].filter(Boolean) as Array<{ file: string; sha256: string }>) {
+  for (const part of [manifest.database, ...(manifest.files ?? [])] as Array<{ file: string; sha256: string }>) {
     const actual = await sha256File(join(dir, part.file)).catch(() => null);
     if (!actual) problems.push(`${part.file} is missing`);
     else if (actual.sha256 !== part.sha256) problems.push(`${part.file} does not match its checksum`);
@@ -197,8 +249,7 @@ export async function verifyBackup(dir: string): Promise<{ ok: boolean; problems
     if (manifest.database.kind === 'pglite') {
       const { PGlite } = await import('@electric-sql/pglite');
       const { vector } = await import('@electric-sql/pglite-pgvector');
-      const raw = await readFile(join(dir, manifest.database.file));
-      const restored = await PGlite.create({ loadDataDir: new Blob([new Uint8Array(raw)]), extensions: { vector } });
+      const restored = await PGlite.create({ loadDataDir: new Blob([await readFile(join(dir, manifest.database.file))]), extensions: { vector } });
       try {
         const vault = await vaultKeyCheck((sql) => restored.query(sql));
         if (vault.rows !== manifest.vault.rows) problems.push(`The restored vault has ${vault.rows} rows, the backup recorded ${manifest.vault.rows}`);
@@ -213,14 +264,18 @@ export async function verifyBackup(dir: string): Promise<{ ok: boolean; problems
       if (list.exitCode !== 0) problems.push(`pg_restore cannot read the dump: ${list.stderr.trim().slice(0, 200)}`);
       else if (!/TABLE DATA \S+ vault /.test(list.stdout)) problems.push('The dump holds no vault data');
     }
-    if (manifest.files) {
-      const list = await runCommand({ command: 'tar', args: ['-tzf', join(dir, manifest.files.file)] }).catch((err: Error) => ({ exitCode: -1, stdout: '', stderr: err.message }));
-      if (list.exitCode !== 0) problems.push(`The files archive cannot be read: ${list.stderr.trim().slice(0, 200)}`);
+    for (const part of manifest.files ?? []) {
+      const list = await runCommand({ command: 'tar', args: ['-tzf', join(dir, part.file)] }).catch((err: Error) => ({ exitCode: -1, stdout: '', stderr: err.message }));
+      if (list.exitCode !== 0) problems.push(`${part.file} cannot be read: ${list.stderr.trim().slice(0, 200)}`);
     }
   }
-  manifest.verified = { at: new Date().toISOString(), ok: problems.length === 0, problems };
-  await writeFile(join(dir, MANIFEST), JSON.stringify(manifest, null, 2), { mode: 0o600 });
-  return { ok: problems.length === 0, problems };
+  const outcome = { at: new Date().toISOString(), ok: problems.length === 0, problems };
+  // A later check is recorded beside the first, never instead of it: a key
+  // rotated since, or a missing tool, must not make a good backup prunable.
+  if (initial) manifest.verified = outcome;
+  else manifest.rechecked = outcome;
+  await writeManifest(dir, manifest);
+  return { ok: outcome.ok, problems };
 }
 
 /** The backups in the backup directory, newest first. */
@@ -229,7 +284,12 @@ export async function listBackups(root = backupRoot()): Promise<BackupManifest[]
   const out: BackupManifest[] = [];
   for (const name of names.filter((n) => ID_RE.test(n))) {
     try {
-      out.push(JSON.parse(await readFile(join(root, name, MANIFEST), 'utf8')) as BackupManifest);
+      const info = await stat(join(root, name));
+      if (!info.isDirectory()) continue;
+      const manifest = JSON.parse(await readFile(join(root, name, MANIFEST), 'utf8')) as BackupManifest;
+      // The directory is the backup: a manifest naming another id is not trusted.
+      if (manifest.id !== name) continue;
+      out.push(manifest);
     } catch { /* not a complete backup */ }
   }
   return out.sort((a, b) => b.id.localeCompare(a.id));
@@ -313,11 +373,12 @@ async function doBackup(reason: BackupRunStatus['reason'], now: Date): Promise<B
       format: 1, id, createdAt: now.toISOString(), reason, octipusVersion: pkg.version ?? 'unknown',
       storageMode: storageMode(), database, vault: { rows: vault.rows, keyChecked: vault.keyChecked }, files,
     };
-    await writeFile(join(partial, MANIFEST), JSON.stringify(manifest, null, 2), { mode: 0o600 });
-    const check = await verifyBackup(partial);
+    await writeManifest(partial, manifest);
+    const check = await verifyBackup(partial, { initial: true });
     if (!check.ok) throw new BackupError(`The backup did not pass its check: ${check.problems.join('; ')}`);
     await rename(partial, join(root, id));
-    await pruneBackups(getConfig().backup.keep, root, now);
+    // The backup is written and good; a failed cleanup does not undo that.
+    await pruneBackups(getConfig().backup.keep, root, now).catch((err: unknown) => coreLogger.warn({ err }, 'backup: removing old backups failed'));
     status = { at: now.toISOString(), ok: true, id, durationMs: Date.now() - started, reason };
     coreLogger.info({ id, durationMs: status.durationMs }, 'backup: written and checked');
   } catch (err) {
@@ -332,14 +393,34 @@ async function doBackup(reason: BackupRunStatus['reason'], now: Date): Promise<B
   return status;
 }
 
+const SCHEDULED = 'last-scheduled.json';
+
+/** Today's slot (`hour`:00 local time), or yesterday's when today's is still ahead. */
+export function scheduledSlot(now: Date, hour: number): Date {
+  const slot = new Date(now);
+  slot.setHours(hour, 0, 0, 0);
+  if (slot.getTime() > now.getTime()) {
+    slot.setDate(slot.getDate() - 1);
+    slot.setHours(hour, 0, 0, 0);
+  }
+  return slot;
+}
+
 /**
- * The cron tick's check: once a day, in the configured hour, when no run
- * (good or failed) happened in the last 20 hours. Not awaited by the tick.
+ * The cron tick's check: one scheduled backup per daily slot. It runs on the
+ * first tick at or after the slot that has none yet (a server down through
+ * the hour catches up), whatever manual backups ran meanwhile. A failed
+ * scheduled run counts for its slot: the admins were told, the next slot
+ * tries again. Not awaited by the tick.
  */
 export async function maybeRunScheduledBackup(now = new Date()): Promise<BackupRunStatus | null> {
   const config = getConfig().backup;
-  if (!config.enabled || now.getHours() !== config.hour || backupRunning()) return null;
-  const last = await lastRun();
-  if (last && now.getTime() - Date.parse(last.at) < 20 * 60 * 60_000) return null;
+  if (!config.enabled || backupRunning()) return null;
+  const slot = scheduledSlot(now, config.hour);
+  const root = backupRoot();
+  const last = await readFile(join(root, SCHEDULED), 'utf8').then((t) => JSON.parse(t) as { at: string }).catch(() => null);
+  if (last && Date.parse(last.at) >= slot.getTime()) return null;
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  await writeFile(join(root, SCHEDULED), JSON.stringify({ at: now.toISOString() }), { mode: 0o600 });
   return runBackup('scheduled', now);
 }
