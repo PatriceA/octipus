@@ -9,6 +9,7 @@ import { principalFromUser } from '@/security/principal';
 const fixture = vi.hoisted(() => ({
   user: null as { id: string; username: string; isAdmin: boolean } | null,
   enabled: [] as string[],
+  audit: [] as unknown[],
 }));
 
 vi.mock('@/api/context', async () => ({
@@ -27,6 +28,13 @@ vi.mock('@/config/settings-service', () => ({
   }),
 }));
 
+vi.mock('@/db/repositories/audit-repository', () => ({ auditRepository: { log: async (entry: unknown) => { fixture.audit.push(entry); } } }));
+vi.mock('@/modules', async () => {
+  const real = await vi.importActual<typeof import('@/modules')>('@/modules');
+  const needsMail = { id: 'needs-mail', title: 'Needs mail', description: '', profiles: [], dependsOn: ['mail'], routes: [], pages: [], tools: [], jobs: [], caseEntities: [] };
+  return { MODULES: [...real.MODULES, needsMail] };
+});
+
 const { moduleRoutes } = await import('./modules');
 const app = new App().use(moduleRoutes);
 
@@ -42,7 +50,7 @@ async function call(method: string, path: string, body?: unknown) {
 const ADMIN = { id: '11111111-1111-4111-8111-111111111111', username: 'owner', isAdmin: true };
 const MEMBER = { id: '22222222-2222-4222-8222-222222222222', username: 'member', isAdmin: false };
 
-beforeEach(() => { fixture.enabled = []; fixture.user = null; });
+beforeEach(() => { fixture.enabled = []; fixture.user = null; fixture.audit = []; });
 
 describe('/api/modules', () => {
   test('signed out: 401', async () => {
@@ -67,5 +75,16 @@ describe('/api/modules', () => {
     expect(res.body.enabled).toEqual(['business']);
     expect((await call('PUT', '/modules/business', { on: false })).body.enabled).toEqual([]);
     expect((await call('PUT', '/modules/nope', { on: true })).status).toBe(404);
+    expect(fixture.audit).toHaveLength(2);
+    expect(fixture.audit[0]).toMatchObject({ action: 'settings_changed', details: { module: 'business', on: true } });
+  });
+
+  test('on brings its dependencies; off is a 409 while something needs it', async () => {
+    fixture.user = ADMIN;
+    expect((await call('PUT', '/modules/needs-mail', { on: true })).body.enabled).toEqual(['mail', 'needs-mail']);
+    const refused = await call('PUT', '/modules/mail', { on: false });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toMatch(/needs-mail needs mail/);
+    expect(fixture.enabled).toEqual(['mail', 'needs-mail']);
   });
 });

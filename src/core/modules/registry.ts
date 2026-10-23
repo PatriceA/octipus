@@ -135,10 +135,13 @@ function withDependencies(id: string): string[] {
 /**
  * The setting after turning `id` on (with what it depends on) or off.
  * Turning a module off while one that depends on it is on is refused.
+ * Declared modules come first, in the registry's order.
  */
 export function nextEnabled(current: readonly string[], id: string, on: boolean): string[] {
   if (!byId.has(id)) throw new ModuleChangeError(`Unknown module: ${id}`);
-  const set = new Set(current.filter((m) => byId.has(m)));
+  // Ids this build does not declare are kept as they are: a module declared
+  // by a later version finds the install as its migration left it.
+  const set = new Set(current);
   if (on) {
     for (const m of withDependencies(id)) set.add(m);
   } else {
@@ -146,7 +149,8 @@ export function nextEnabled(current: readonly string[], id: string, on: boolean)
     if (blocking.length > 0) throw new ModuleChangeError(`${blocking.join(', ')} ${blocking.length === 1 ? 'needs' : 'need'} ${id}: turn ${blocking.length === 1 ? 'it' : 'them'} off first`);
     set.delete(id);
   }
-  return MODULES.map((m) => m.id).filter((m) => set.has(m));
+  const known = MODULES.map((m) => m.id).filter((m) => set.has(m));
+  return [...known, ...[...set].filter((m) => !byId.has(m))];
 }
 
 /** Turn one module on or off, under the setting's row lock. Returns the modules now listed. */

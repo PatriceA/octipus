@@ -69,9 +69,11 @@ describe('turning modules on and off', () => {
     expect(registry.nextEnabled(['base'], 'base', false)).toEqual([]);
   });
 
-  test('unknown ids are refused, stale ones dropped, the order is the registry\'s', () => {
+  test('unknown ids are refused; ids this build does not declare are kept, after the declared ones', () => {
     expect(() => registry.nextEnabled([], 'nope', true)).toThrow(/Unknown module/);
-    expect(registry.nextEnabled(['gone', 'protection'], 'business', true)).toEqual(['business', 'protection']);
+    // A module of a later version stays as its migration left it.
+    expect(registry.nextEnabled(['later', 'protection'], 'business', true)).toEqual(['business', 'protection', 'later']);
+    expect(registry.nextEnabled(['later', 'protection'], 'protection', false)).toEqual(['later']);
   });
 
   test('the views say what needs what', () => {

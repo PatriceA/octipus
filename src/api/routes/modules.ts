@@ -2,6 +2,7 @@ import { adminDenied } from '@/api/admin-guard';
 import { apiContext } from '@/api/context';
 import { Elysia, t } from '@/api/http';
 import { enabledModules, ModuleChangeError, moduleById, moduleViews, setModuleOn } from '@/core/modules/registry';
+import { auditRepository } from '@/db/repositories/audit-repository';
 import type { ModulesResponse } from '@/shared/modules';
 import { isAuthenticated } from '@/security/principal';
 
@@ -28,12 +29,21 @@ export const moduleRoutes = new Elysia({ prefix: '/modules' })
     const denied = adminDenied({ set, user, principal });
     if (denied) return denied;
     if (!moduleById(params.id)) { set.status = 404; return { error: `Unknown module: ${params.id}` }; }
+    let enabled: string[];
     try {
-      await setModuleOn(params.id, body.on, user?.id);
+      enabled = await setModuleOn(params.id, body.on, user?.id);
     } catch (err) {
       if (err instanceof ModuleChangeError) { set.status = 409; return { error: err.message }; }
       throw err;
     }
+    // It changes what everyone, agents included, can reach: recorded like a setting.
+    await auditRepository.log({
+      userId: user?.id,
+      action: 'settings_changed',
+      resourceType: 'setting',
+      resourceId: 'modules.enabled',
+      details: { key: 'modules.enabled', module: params.id, on: body.on, enabled },
+    });
     return modulesResponse();
   }, {
     params: t.Object({ id: t.String({ maxLength: 64 }) }),

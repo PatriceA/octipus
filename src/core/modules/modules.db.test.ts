@@ -50,8 +50,7 @@ describe('the modules migration', () => {
     await executeRaw(`INSERT INTO users (username) VALUES ('existing')`);
     await executeRaw(sql);
     const value = JSON.parse((await storedRow()) ?? '[]') as string[];
-    const { MODULES } = await import('@/modules');
-    for (const m of MODULES) expect(value).toContain(m.id);
+    expect(value).toEqual(['business', 'mail', 'scan-folders', 'protection']);
     await executeRaw(`UPDATE settings SET value = '["mail"]' WHERE key = 'modules.enabled'`);
     await executeRaw(sql);
     expect(await storedRow()).toBe('["mail"]');
