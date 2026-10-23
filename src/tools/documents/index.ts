@@ -1,4 +1,4 @@
-import { visibleProtectionLevel } from '@/core/protection/visible';
+import { readKnowledge, readLevel } from '@/core/protection/content-read';
 import { getEmbeddingService } from '@/core/rag/embeddings';
 import { agentKnowledgeScope } from '@/core/rag/knowledge-scope';
 import type { ToolManifest } from '@/core/types';
@@ -81,7 +81,7 @@ export class DocumentsTool extends BaseTool {
           documents: docs.map(d => ({
             id: d.id,
             originalName: d.originalName,
-            protectionLevel: visibleProtectionLevel(d.protectionLevel),
+            protectionLevel: readLevel(context, d.protectionLevel),
             mimeType: d.mimeType,
             size: d.size,
             category: d.category,
@@ -109,7 +109,7 @@ export class DocumentsTool extends BaseTool {
         return {
           id: doc.id,
           originalName: doc.originalName,
-          protectionLevel: visibleProtectionLevel(doc.protectionLevel),
+          protectionLevel: readLevel(context, doc.protectionLevel),
           mimeType: doc.mimeType,
           size: doc.size,
           category: doc.category,
@@ -148,6 +148,7 @@ export class DocumentsTool extends BaseTool {
         }
 
         const finalResults = docResults.length > 0 ? docResults : results;
+        await readKnowledge(context.sessionId, finalResults);
 
         return {
           results: finalResults.map(r => ({

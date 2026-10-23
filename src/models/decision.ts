@@ -243,7 +243,12 @@ async function decideUnguarded(site: DecisionSite, state: unknown, questions: Re
     const { ollamaRunsLocally } = await import('./local-decision');
     if (!(await ollamaRunsLocally(model.endpoint || ollamaUrl || '', model.modelId))) policy = { ...WORST_CASE, zdrRoute: false };
   }
-  const verdict = gateDecision(site.sensitivity, policy, model.metadata?.allowRetainedPersonalData);
+  // Content at level 3-4 in this session or this document stays on local
+  // models (core/protection/routing.ts): the site counts as secret.
+  const { localOnlyLevel } = await import('@/core/protection/routing');
+  const { currentUsageSessionId } = await import('./providers/instrumented');
+  const sensitivity: Sensitivity = await localOnlyLevel(currentUsageSessionId()) !== undefined ? 'secret' : site.sensitivity;
+  const verdict = gateDecision(sensitivity, policy, model.metadata?.allowRetainedPersonalData);
   if (!verdict.allowed) {
     if (firstThisHour(`gate|${site.id}|${verdict.reason}`)) modelLogger.info({ site: site.id, model: model.name, reason: verdict.reason }, 'Decision blocked by privacy gate; falling back (logged once per hour)');
     return null;

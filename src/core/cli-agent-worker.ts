@@ -364,6 +364,7 @@ When a task matches one of these skills, load it with get_skill before starting 
       }
       this.emit(type, data);
     }, undefined, this.abortController.signal);
+    this.toolExecutor.remoteHarness = true;
     this.registerTool({ name: 'get_cli_run_context', description: 'Read the current Octipus plan, feedback and new user guidance. Check before further work and before your final answer.',
       parameters: { type: 'object', properties: {} }, execute: async () => this.controlContext() });
 
@@ -844,6 +845,10 @@ When a task matches one of these skills, load it with get_skill before starting 
     // (install-access.ts); the turn's usage context carries its funding.
     const { assertRowServesCall } = await import('@/models/providers/instrumented');
     await assertRowServesCall(model ?? null, { userId: this.context.userId, funding: this.context.funding }, this.context.sponsor?.userId);
+    // A CLI agent is a vendor's harness: never for level 3-4 content
+    // (core/protection/routing.ts).
+    const { assertMayLeave } = await import('@/core/protection/routing');
+    await assertMayLeave(model ?? { provider: 'cli', modelId: this.context.model, endpoint: null, metadata: null }, this.context.sessionId, 'cli');
     this.credentialOwner = await cliCredentialOwnerFor(model, this.context.userId);
     return model?.metadata?.cliAgent || {};
   }

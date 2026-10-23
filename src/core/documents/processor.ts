@@ -11,6 +11,8 @@ import { documentRepository } from '@/db/repositories/document-repository';
 import { choiceOf, decide, preferDecision, type DecisionSite } from '@/models/decision';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
+import { localOnlyLevel, localRowInstead, runsLocally } from '@/core/protection/routing';
+import { withContentLevel } from '@/core/protection/session-level';
 import { coreLogger } from '@/utils/logger';
 
 // ── File type classification ─────────────────────────────────────────
@@ -181,8 +183,10 @@ export class DocumentProcessor {
     }
 
     // Document processing (OCR, vision, categorizing, summaries, embeddings)
-    // is install work: stamped `install` (coworking spec §9.1).
-    return withProviderUsageContext({ userId: doc.userId, funding: 'install' }, async () => {
+    // is install work: stamped `install` (coworking spec §9.1). Its model
+    // calls follow the document's level: at 3-4 (unclear included) they stay
+    // on local models (core/protection/routing.ts).
+    return withContentLevel(doc.protectionLevel, () => withProviderUsageContext({ userId: doc.userId, funding: 'install' }, async () => {
     this.logger.info({ documentId, filename: doc.originalName, mimeType: doc.mimeType }, 'Processing document');
 
     try {
@@ -267,7 +271,7 @@ export class DocumentProcessor {
       this.logger.error({ err, documentId }, 'Document processing failed');
       await documentRepository.updateStatus(documentId, 'failed', String(err));
     }
-    });
+    }));
   }
 
   /**
@@ -287,6 +291,8 @@ export class DocumentProcessor {
       .getAllProviders()
       .find((p) => p.name === ocrModel.provider);
     if (!provider?.ocr) return null;
+    // A remote OCR endpoint for content that stays local: the vision path decides.
+    if (await localOnlyLevel(undefined) !== undefined && !await runsLocally(ocrModel)) return null;
 
     try {
       this.logger.info({ model: ocrModel.modelId, provider: provider.name, filePath }, 'Native OCR extraction');
@@ -986,7 +992,9 @@ export class DocumentProcessor {
     if (!defaultModel) {
       throw new Error('No default model configured for document processing. Set one in the Models page.');
     }
-    return defaultModel.modelId;
+    // A document at 3-4 is read by a local model, or not by any.
+    const row = await localRowInstead(defaultModel, undefined, 'text', async () => ({ defaultModel, rows: await registry.getAllModels() }));
+    return (row ?? defaultModel).modelId;
   }
 }
 

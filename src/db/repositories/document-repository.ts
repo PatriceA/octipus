@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { getDb } from '../postgres';
 import { type DocumentRecord, documents, type NewDocumentRecord } from '../schema/documents';
 
@@ -47,6 +47,18 @@ export class DocumentRepository {
     // i2: by id for system callers only (queue, processor, recovery)
     const result = await this.db.select().from(documents).where(eq(documents.id, id)).limit(1);
     return result[0] ?? null;
+  }
+
+  /**
+   * The stored protection levels of documents whose content an agent was
+   * handed (a search hit, a recalled passage): system lookup, the content
+   * already reached the agent through its own scope. Missing ids are absent.
+   */
+  async protectionLevelsSystem(ids: readonly string[]): Promise<Map<string, number | null>> {
+    if (ids.length === 0) return new Map();
+    // i2: levels only, never content, for ids whose chunks the caller already reached through its own scope.
+    const rows = await this.db.select({ id: documents.id, level: documents.protectionLevel }).from(documents).where(inArray(documents.id, [...ids]));
+    return new Map(rows.map((r) => [r.id, r.level]));
   }
 
   async delete(id: string): Promise<boolean> {

@@ -27,6 +27,8 @@ import { contentStorageOffFor } from './agent/audience';
 import { stripMutatingTools } from './agent/plan-mode';
 import { isSmallModel } from './agent/small-model';
 import { getMCPBridge } from '@/mcp/bridge';
+import { modelCandidates } from './agent/model-selector';
+import { localRowInstead } from './protection/routing';
 
 /**
  * Put `section` at the end of the prompt's static (cacheable) part, before the
@@ -243,7 +245,7 @@ export class AgentManager {
     // otherwise the modelId resolves to an install row first, then the
     // requester's own — never another user's personal row (§8.1).
     const registry = getModelRegistry();
-    const modelEntry = routedModelName
+    let modelEntry = routedModelName
       ? await registry.getModel(routedModelName)
       : await registry.getModelByModelId(routedModel, { userId: options.userId });
     if (routedModelName && !modelEntry) {
@@ -260,6 +262,18 @@ export class AgentManager {
       if (!personalRowAllowed(modelEntry, options.userId, sponsor)) {
         throw new Error(`Model '${modelEntry.name}' is another user's personal model`);
       }
+    }
+
+    // A session holding level 3-4 content runs on a local model, or not at
+    // all (core/protection/routing.ts): the row is swapped here, before the
+    // worker kind is chosen, so a CLI agent is never started for it.
+    const local = await localRowInstead(modelEntry, options.sessionId, 'tools',
+      () => modelCandidates({ userId: options.userId, inSpace: !!space, spaceRole: space?.role, sponsor }));
+    if (local && local !== modelEntry) {
+      agentLogger.info({ sessionId: options.sessionId, from: modelEntry?.name ?? routedModel, to: local.name }, 'Confidential session: agent runs on a local model');
+      modelEntry = local;
+      routedModel = local.modelId;
+      routedModelName = local.name;
     }
 
     const agentId = generateId();

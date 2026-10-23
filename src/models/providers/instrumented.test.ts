@@ -4,6 +4,8 @@ const mocks = vi.hoisted(() => ({ log: vi.fn(), lookup: vi.fn(), access: vi.fn()
 vi.mock('../install-access', () => ({ assertInstallModelAccess: mocks.access }));
 vi.mock('../cost-tracker', () => ({ getCostTracker: () => ({ logUsageWithCost: mocks.log }) }));
 vi.mock('../model-registry', () => ({ getModelRegistry: () => ({ getModel: mocks.lookup, getModelByModelId: mocks.lookup }) }));
+// Accounting, not routing: the protection gate has its own tests (core/protection/routing.test.ts).
+vi.mock('@/core/protection/routing', () => ({ assertMayLeave: async () => undefined }));
 import { instrumentProvider, SYSTEM_USAGE_USER, withProviderUsageContext } from './instrumented';
 import type { CompletionOptions, CompletionResult } from '../litellm-client';
 import type { ModelProvider } from './interface';

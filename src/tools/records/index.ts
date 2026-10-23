@@ -3,6 +3,7 @@ import { FIELD_TYPES, RecordValidationError } from '@/core/records/fields';
 import type { ToolManifest } from '@/core/types';
 import { reposFor } from '@/db/repositories/content';
 import type { RecordRow, RecordType } from '@/db/schema/records';
+import { readLevel } from '@/core/protection/content-read';
 import { visibleProtectionLevel } from '@/core/protection/visible';
 import { BaseTool, createParameterSchema } from '../base-tool';
 
@@ -97,7 +98,7 @@ export class RecordsTool extends BaseTool {
         if (!type) return { error: `Record type not found: ${String(args.type)}` };
         const limit = Math.max(1, Math.min(200, Math.trunc(Number(args.limit) || 50)));
         const rows = await repos.records.list({ typeId: type.id, q: typeof args.query === 'string' ? args.query : undefined, limit });
-        return { type: type.key, records: rows.map(summarizeRecord) };
+        return { type: type.key, records: rows.map((r) => summarizeRecord(r, context)) };
       },
       { requiresPermission: true, permissionAction: 'read' },
     );
@@ -111,7 +112,7 @@ export class RecordsTool extends BaseTool {
         const record = await repos.records.findById(String(args.id ?? ''));
         if (!record) return { error: 'Record not found' };
         const cases = await repos.cases.casesLinkedTo('record', record.id);
-        return { record: { ...summarizeRecord(record), cases: cases.map((l) => ({ id: l.case.id, title: l.case.title, status: l.case.status, role: l.role })) } };
+        return { record: { ...summarizeRecord(record, context), cases: cases.map((l) => { readLevel(context, l.case.protectionLevel); return { id: l.case.id, title: l.case.title, status: l.case.status, role: l.role }; }) } };
       },
       { requiresPermission: true, permissionAction: 'read' },
     );
@@ -131,9 +132,9 @@ export class RecordsTool extends BaseTool {
           const externalKey = normalizeLabel(args.externalKey, 300);
           if (externalKey) {
             const result = await repo.createOnce(String(args.type ?? ''), { ...input, externalKey });
-            return { created: result.created, record: summarizeRecord(result.record) };
+            return { created: result.created, record: summarizeRecord(result.record, context) };
           }
-          return { created: true, record: summarizeRecord(await repo.create(String(args.type ?? ''), input)) };
+          return { created: true, record: summarizeRecord(await repo.create(String(args.type ?? ''), input), context) };
         } catch (err) {
           return failure(err);
         }
@@ -152,7 +153,7 @@ export class RecordsTool extends BaseTool {
         try {
           const updated = await reposFor(context).records.update(String(args.id ?? ''), args.data);
           if (!updated) return { error: 'Record not found' };
-          return { updated: true, record: summarizeRecord(updated) };
+          return { updated: true, record: summarizeRecord(updated, context) };
         } catch (err) {
           return failure(err);
         }
@@ -172,8 +173,8 @@ function summarizeType(t: RecordType) {
   return { id: t.id, key: t.key, name: t.name, description: t.description, fields: t.fields, titleField: t.titleField, defaultProtectionLevel: visibleProtectionLevel(t.defaultProtectionLevel) };
 }
 
-function summarizeRecord(r: RecordRow) {
-  return { id: r.id, typeId: r.typeId, title: r.title, data: r.data, source: r.source, externalKey: r.externalKey, protectionLevel: visibleProtectionLevel(r.protectionLevel), updatedAt: r.updatedAt };
+function summarizeRecord(r: RecordRow, context: { sessionId?: string }) {
+  return { id: r.id, typeId: r.typeId, title: r.title, data: r.data, source: r.source, externalKey: r.externalKey, protectionLevel: readLevel(context, r.protectionLevel), updatedAt: r.updatedAt };
 }
 
 export const recordsTool = new RecordsTool();

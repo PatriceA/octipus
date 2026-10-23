@@ -822,6 +822,14 @@ export class LiteLLMClient {
     const provider = selected ? router.getProviderByName(selected.provider) : await router.resolveProvider(embeddingModel);
     if (!provider) throw new Error('Configured embedding provider is unavailable');
 
+    // Level 3-4 content stays on local models (core/protection/routing.ts).
+    // Embeddings carry the text itself; an embedding model cannot be swapped
+    // for another (its vectors would not match the index), so it is refused.
+    const embeddingRow = selected ?? await embeddingRegistry().getModelByModelId(embeddingModel).catch(() => null);
+    const { assertMayLeave } = await import('@/core/protection/routing');
+    const { currentUsageSessionId } = await import('./providers/instrumented');
+    await assertMayLeave(embeddingRow ?? { provider: provider.name, modelId: embeddingModel, endpoint: null, metadata: null }, currentUsageSessionId(), provider.name);
+
     if (provider.name === 'litellm') {
       modelLogger.debug(
         { model: embeddingModel, provider: 'litellm', inputCount: input.length },
@@ -945,6 +953,11 @@ export class LiteLLMClient {
       const provider = dbProvider
         ? (router.getAllProviders().find(p => p.name === dbProvider) || router.getProvider(options.model))
         : router.getProvider(options.model);
+
+      // Level 3-4 content stays on local models (core/protection/routing.ts).
+      const { assertMayLeave } = await import('@/core/protection/routing');
+      const { currentUsageSessionId } = await import('./providers/instrumented');
+      await assertMayLeave(visionModelEntry ?? { provider: provider.name, modelId: options.model, endpoint: null, metadata: null }, options.sessionId ?? currentUsageSessionId(), provider.name);
 
       if (provider.name !== 'litellm') {
         modelLogger.info({ model: options.model, provider: provider.name }, 'Routing vision request through direct provider');

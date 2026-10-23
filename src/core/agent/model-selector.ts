@@ -44,7 +44,7 @@ export async function findToolCapableFallback(
   modelId: string,
   /** The row `modelId` was resolved from, when known; else the modelId lookup for `userId`. */
   row: { modelName?: string; userId?: string } = {},
-  /** Whom the call serves: the replacement comes from rows they may run (`rerouteCandidates`). */
+  /** Whom the call serves: the replacement comes from rows they may run (`modelCandidates`). */
   requester: ModelRequester = { userId: row.userId },
 ): Promise<{ model: string; name: string; reason: string } | null> {
   const registry = getModelRegistry();
@@ -55,7 +55,7 @@ export async function findToolCapableFallback(
 
   const localProviders = ['ollama'];
 
-  const { defaultModel, rows: allModels } = await rerouteCandidates(requester);
+  const { defaultModel, rows: allModels } = await modelCandidates(requester);
   if (
     defaultModel && defaultModel.supportsTools
     && defaultModel.modelId !== modelId
@@ -83,7 +83,7 @@ export async function findToolCapableFallback(
  * the sponsor in a sponsored turn) — only rows the requester may run of the
  * payer's own, and no install default.
  */
-async function rerouteCandidates(requester: ModelRequester): Promise<{ defaultModel: ModelConfigEntry | null; rows: ModelConfigEntry[] }> {
+export async function modelCandidates(requester: ModelRequester): Promise<{ defaultModel: ModelConfigEntry | null; rows: ModelConfigEntry[] }> {
   const registry = getModelRegistry();
   const payer = requester.sponsor ? requester.sponsor.userId : requester.userId;
   if (await mayUseInstallModels(payer)) {
@@ -224,7 +224,7 @@ export class ModelSelector {
 
     // Prefer the configured default when it clears the floor, else the first
     // tool-reliable model.
-    const { defaultModel, rows: allModels } = await rerouteCandidates(requester);
+    const { defaultModel, rows: allModels } = await modelCandidates(requester);
     const suitable = defaultModel && isSuitable(defaultModel) ? defaultModel : allModels.find(isSuitable);
     if (suitable) {
       coreLogger.warn(

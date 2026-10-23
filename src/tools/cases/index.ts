@@ -13,7 +13,7 @@ import type { ToolManifest } from '@/core/types';
 import { reposFor } from '@/db/repositories/content';
 import type { Case } from '@/db/schema/cases';
 import type { Contact, ContactAddress } from '@/db/schema/contacts';
-import { visibleProtectionLevel } from '@/core/protection/visible';
+import { readLevel } from '@/core/protection/content-read';
 import { isCaseEntityOn } from '@/core/modules/registry';
 import { BaseTool, createParameterSchema } from '../base-tool';
 
@@ -75,7 +75,7 @@ export class CasesTool extends BaseTool {
           q: typeof args.query === 'string' ? args.query : undefined,
           limit: clampLimit(args.limit, 50),
         });
-        return { cases: rows.map(summarizeCase) };
+        return { cases: rows.map((c) => summarizeCase(c, context)) };
       },
       { requiresPermission: true, permissionAction: 'read' },
     );
@@ -89,7 +89,7 @@ export class CasesTool extends BaseTool {
         const found = await repos.cases.findById(String(args.id ?? ''));
         const links = found ? await caseLinks(repos, found) : null;
         if (!found || !links) return { error: 'Case not found' };
-        return { case: { ...summarizeCase(found), links } };
+        return { case: { ...summarizeCase(found, context), links } };
       },
       { requiresPermission: true, permissionAction: 'read' },
     );
@@ -123,9 +123,9 @@ export class CasesTool extends BaseTool {
           const externalKey = normalizeLabel(args.externalKey, 300);
           if (externalKey) {
             const result = await repo.createOnce({ ...values, externalKey });
-            return { created: result.created, case: summarizeCase(result.case) };
+            return { created: result.created, case: summarizeCase(result.case, context) };
           }
-          return { created: true, case: summarizeCase(await repo.create(values)) };
+          return { created: true, case: summarizeCase(await repo.create(values), context) };
         } catch (err) {
           return { error: (err as Error).message };
         }
@@ -157,7 +157,7 @@ export class CasesTool extends BaseTool {
             assigneeUserId: args.assigneeUserId !== undefined ? idOrNull(args.assigneeUserId) : undefined,
           });
           if (!updated) return { error: 'Case not found' };
-          return { updated: true, case: summarizeCase(updated) };
+          return { updated: true, case: summarizeCase(updated, context) };
         } catch (err) {
           return { error: (err as Error).message };
         }
@@ -267,7 +267,7 @@ export class CasesTool extends BaseTool {
         const contact = await repos.contacts.findById(String(args.id ?? ''));
         if (!contact) return { error: 'Contact not found' };
         const linked = await repos.cases.casesLinkedTo('contact', contact.id);
-        return { contact: { ...summarizeContact(contact), cases: linked.map((l) => ({ ...summarizeCase(l.case), role: l.role })) } };
+        return { contact: { ...summarizeContact(contact), cases: linked.map((l) => ({ ...summarizeCase(l.case, context), role: l.role })) } };
       },
       { requiresPermission: true, permissionAction: 'read' },
     );
@@ -383,7 +383,7 @@ function addressOf(args: Record<string, unknown>): ContactAddress | null {
   return Object.keys(out).length > 0 ? out : null;
 }
 
-function summarizeCase(c: Case) {
+function summarizeCase(c: Case, context: { sessionId?: string }) {
   return {
     id: c.id,
     title: c.title,
@@ -393,7 +393,7 @@ function summarizeCase(c: Case) {
     assigneeUserId: c.assigneeUserId,
     source: c.source,
     externalKey: c.externalKey,
-    protectionLevel: visibleProtectionLevel(c.protectionLevel),
+    protectionLevel: readLevel(context, c.protectionLevel),
     closedAt: c.closedAt,
     updatedAt: c.updatedAt,
   };

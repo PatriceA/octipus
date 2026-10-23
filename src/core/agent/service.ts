@@ -5,6 +5,7 @@ import { getConfig } from '@/config';
 import { getAgentManager } from '@/core/agent-manager';
 import { handleCommand } from '@/core/commands';
 import { renderMemoriesBlock, retrieveForContext, updateMemoriesAfterTurn } from '@/core/memory';
+import { refreshSessionLevel } from '@/core/protection/session-level';
 import { finishContextTurn, runContextHooks } from '@/core/context-hooks';
 import { clearFlowLabel, getFlowLabel, markNotSharedAudience, markSharedAudience, observeFlow } from '@/security/flow-guard';
 import { bareReply, type GroupTurn, groupTurnContext } from '@/core/channels/group-context';
@@ -620,7 +621,12 @@ export class AgentService {
       // the turn: it never runs unscoped (§5.6).
       const scope = await resolveAgentScope({ session, userId, trigger });
       const workspaceId = scope.workspaceId as string;
-      bindProviderUsageContext({ workspaceId: scope.workspaceId, funding: scope.funding });
+      // The session too: the turn's own helpers outside the worker (session
+      // compaction, memory extraction) follow its protection level
+      // (core/protection/routing.ts).
+      bindProviderUsageContext({ workspaceId: scope.workspaceId, funding: scope.funding, sessionId: resolvedSessionId });
+      // Another process may have raised the session's level since this one read it.
+      refreshSessionLevel(resolvedSessionId);
       // Who reads the replies decides whether personal memories, learning and
       // the profile may enter the turn (D10, I7).
       const audience = await sessionAudience(session);
@@ -1281,6 +1287,24 @@ export class AgentService {
         outcome: 'failed',
         classification: { type: 'casual', confidence: 0 },
         metadata: { limit: limit.refusal },
+      };
+    }
+    // Confidential content and no local model (core/protection/routing.ts):
+    // the answer is the reason, stored like a limit refusal.
+    if (error instanceof Error && error.name === 'ProtectionRoutingError') {
+      if (turnSessionId && !info.isRoom) {
+        try {
+          if (!userMessageSaved) await messageRepository.create({ sessionId: turnSessionId, role: 'user', content: message });
+          await messageRepository.create({ sessionId: turnSessionId, role: 'assistant', content: error.message });
+        } catch (err) {
+          coreLogger.warn({ err, sessionId: turnSessionId }, 'Could not persist the protection refusal');
+        }
+      }
+      return {
+        response: error.message,
+        sessionId: turnSessionId ?? sessionId,
+        outcome: 'failed',
+        classification: { type: 'casual', confidence: 0 },
       };
     }
     return {
