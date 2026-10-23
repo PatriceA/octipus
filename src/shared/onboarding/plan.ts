@@ -455,15 +455,30 @@ function broughtModules(a: Answers, s: OnboardingState): Map<string, string> {
 }
 
 /**
+ * The modules the answers need, whatever is ticked: the chat channels for a
+ * chat picked to talk from, the email inbox for the company's inbox watch.
+ */
+function requiredModules(a: Answers): Map<string, string> {
+  const required = new Map<string, string>();
+  const chatChannel = typeof a._chatChannel === 'string' ? a._chatChannel : '';
+  if (chatChannel && chatChannel !== 'none') required.set('channels', 'Chat channels');
+  const useCases = (a._useCases as UseCaseId[] | undefined) ?? [];
+  if (useCases.includes('company') && yes(a, 'company.mail')) required.set('inbox', 'Email inbox');
+  return required;
+}
+
+/**
  * The modules this run turns on: what was picked in the review (the profile's
- * modules, ticked or unticked, plus any other), else what the use cases bring.
+ * modules, ticked or unticked, plus any other), else what the use cases bring;
+ * and always what the answers need.
  */
 function wantedModules(a: Answers, s: OnboardingState): Map<string, string> {
   const picked = a[MODULES_PICKED];
-  if (!Array.isArray(picked)) return broughtModules(a, s);
+  const required = requiredModules(a);
+  if (!Array.isArray(picked)) return new Map([...broughtModules(a, s), ...required]);
   const titles = new Map((s.modules?.available ?? []).map((m) => [m.id, m.title]));
   for (const [id, title] of broughtModules(a, s)) if (!titles.has(id)) titles.set(id, title);
-  return new Map(picked.filter((id) => titles.has(id)).map((id) => [id, titles.get(id) ?? id]));
+  return new Map([...picked.filter((id) => titles.has(id)).map((id): [string, string] => [id, titles.get(id) ?? id]), ...required]);
 }
 
 /** Module `id` is on once the plan has run: on already, or turned on by its first step. */
@@ -479,7 +494,8 @@ function moduleOnAfter(a: Answers, s: OnboardingState, id: string): boolean {
  */
 function moduleSteps(plan: Plan, a: Answers, s: OnboardingState): void {
   // A server from before modules reports none: nothing to switch.
-  const modules = s.modules ?? { enabled: [], byUseCase: {} };
+  const modules = s.modules;
+  if (!modules) return;
   const wanted = wantedModules(a, s);
   if (wanted.size === 0) return;
   const missing = [...wanted].filter(([id]) => !modules.enabled.includes(id));
@@ -503,6 +519,11 @@ function planAnswers(useCases: readonly UseCaseId[], answers: Answers): Answers 
   // A chat picked to talk from brings the chat channels (broughtModules).
   if (sectionsFor(useCases).some((s) => s.id === 'chat')) a._chatChannel = str(a, 'chat.channel');
   return a;
+}
+
+/** The modules the answers need: ticked in the guide's picker and not to be unticked. */
+export function requiredModulesFor(useCases: readonly UseCaseId[], answers: Answers): string[] {
+  return [...requiredModules(planAnswers(useCases, answers)).keys()];
 }
 
 /** The modules the guide's picker starts with for these use cases and answers. */
