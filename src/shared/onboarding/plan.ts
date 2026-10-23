@@ -432,13 +432,19 @@ function researchSteps(plan: Plan, a: Answers, s: OnboardingState): void {
  * guide with fewer use cases leaves alone what is already on.
  */
 function moduleSteps(plan: Plan, useCases: readonly UseCaseId[], s: OnboardingState): void {
-  if (!s.isAdmin) return;
+  // A server from before modules reports none: nothing to switch.
+  const modules = s.modules ?? { enabled: [], byUseCase: {} };
   const wanted = new Map<string, string>();
-  for (const useCase of useCases) for (const m of s.modules.byUseCase[useCase] ?? []) wanted.set(m.id, m.title);
+  for (const useCase of useCases) for (const m of modules.byUseCase[useCase] ?? []) wanted.set(m.id, m.title);
   if (wanted.size === 0) return;
-  const missing = [...wanted].filter(([id]) => !s.modules.enabled.includes(id));
+  const missing = [...wanted].filter(([id]) => !modules.enabled.includes(id));
   if (missing.length === 0) {
     plan.done('modules', `Already on: ${[...wanted.values()].join(', ')}`);
+    return;
+  }
+  // Switching is install-wide: someone else is told who does it.
+  if (!s.isAdmin) {
+    plan.done('modules', `Your admin turns on ${missing.map(([, title]) => title).join(', ')} in Settings → Modules`);
     return;
   }
   plan.api('modules', `Turn on ${missing.map(([, title]) => title).join(', ')}`, {
