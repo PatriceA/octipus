@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 import { useEffect, type ReactNode } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
 import { useAuth } from '@/lib/auth-context';
+import { usePageOn } from '@/lib/modules';
 
 /**
  * Admin layout — Phase 2c.
@@ -23,6 +24,8 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
   const { user, isAuthenticated, isLoading } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
+  // Tabs of a module that is off are left out (docs/MODULES.md).
+  const pageOn = usePageOn();
 
   useEffect(() => {
     if (isLoading) return;
@@ -42,7 +45,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
     { href: '/admin/group-channels', label: 'Group channels' },
     { href: '/admin/federation', label: 'Federation' },
     { href: '/admin/audit', label: 'Audit log' },
-  ];
+  ].filter((t) => pageOn(t.href));
 
   return (
     <div className="space-y-6 max-w-6xl font-mono">

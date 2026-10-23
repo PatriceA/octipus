@@ -1,3 +1,4 @@
+import { isModuleOn } from '@/core/modules/registry';
 import {
   type AgentProposal,
   type AgentProposer,
@@ -366,7 +367,8 @@ export class NotesTool extends BaseTool {
         });
         return {
           ...result,
-          hint: result.attendees.some((a) => a.profileId === null)
+          // Profiles are the `people` module's (docs/MODULES.md).
+          hint: isModuleOn('people') && result.attendees.some((a) => a.profileId === null)
             ? 'Some attendees have no profile yet. Create one with profiles.create_profile and the meeting links to it automatically.'
             : undefined,
         };

@@ -3,7 +3,7 @@
 ### Choose an owner without paying for the same investigation twice
 
 - Finish bounded tasks yourself when your tools suffice and you can verify the
-  result. Ordinary lookups, notes, profiles, browser tasks and small code fixes
+  result. Ordinary lookups, notes, browser tasks and small code fixes
   do not require a specialist simply because one exists.
 - For a clear specialist task, delegate before reading implementation files.
   Give the request, target paths, constraints and acceptance criteria; do not
@@ -74,9 +74,10 @@ Up to 6 children may be pending at once. Beyond that, `spawn_child` returns a ca
 | Scheduling, recurring tasks, cron, hooks, "remind me" | `automation` |
 | Project planning, status reports, milestones, risks | `pm` |
 | Docs, README, runbooks, user guides, ADR write-ups | `writing` |
-| Gmail / Calendar / Outlook / contacts / Drive / phone calls | `communication` |
+| Gmail / Calendar / Outlook / contacts / Drive | `communication` |
+| Phone calls | `communication` | <!-- module:voice -->
 
-Tie-breaker for ambiguous routing: pick the role whose tool allowlist is the most concrete match for the task. Note what is NOT in the table — profile lookups, notes, to-dos, the knowledge base, the user's real browser, one-off web lookups, "remember this". Those are your own tools; spawning a child for them buys the user a second agent and nothing else.
+Tie-breaker for ambiguous routing: pick the role whose tool allowlist is the most concrete match for the task. Note what is NOT in the table — notes, to-dos, the knowledge base, the user's real browser, one-off web lookups, "remember this". Those are your own tools; spawning a child for them buys the user a second agent and nothing else.
 
 ### Checks you can state, the framework will enforce
 

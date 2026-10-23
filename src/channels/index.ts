@@ -545,9 +545,18 @@ function channelRuns(channel: { type: string; isEnabled: (config: ReturnType<typ
   return channel.isEnabled(config);
 }
 
-/** The outside chats again, after the `channels` module was switched on or off. */
-export async function reinitializeMessagingChannels(): Promise<void> {
-  for (const type of MESSAGING_CHANNELS) await reinitializeChannel(type as ChannelType);
+let messagingReinit: Promise<void> = Promise.resolve();
+
+/**
+ * The outside chats again, after the `channels` module was switched on or
+ * off. Runs one at a time: a switch seen twice (locally and through the
+ * settings notification) must not start two pollers of one bot.
+ */
+export function reinitializeMessagingChannels(): Promise<void> {
+  messagingReinit = messagingReinit.catch(() => undefined).then(async () => {
+    for (const type of MESSAGING_CHANNELS) await reinitializeChannel(type as ChannelType);
+  });
+  return messagingReinit;
 }
 
 export async function reinitializeChannel(channelType: ChannelType): Promise<void> {
@@ -602,6 +611,8 @@ export async function forwardPermissionRequestToChannel(request: PermissionReque
   const userId = request.userId;
   const sessionId = request.sessionId;
   if (!userId || !sessionId) return;
+  // The chat channels are off (docs/MODULES.md): the request waits in the web app.
+  if (!isModuleOn('channels')) return;
 
   // Look up the session to find which channel originated it
   const stored = await sessionRepository.findById(sessionId);
@@ -1085,6 +1096,16 @@ export async function initializeChannels(): Promise<void> {
         // as text (all channels build audio attachments identically). Audio is not
         // in the document pipeline's PROCESSABLE_MIMES, so it dead-ended here before.
         const audioAttachments = message.attachments.filter(isAudioAttachment);
+        if (audioAttachments.length && !isModuleOn('voice')) {
+          // Voice is a module (docs/MODULES.md): off, a voice note is not transcribed.
+          await umi.send(message.channelType, message.channelId, {
+            content: 'Voice messages are switched off on this install. Please type it out.',
+            replyTo: platformMessageId,
+            threadId: replyThread,
+          });
+          if (unsubscribe) unsubscribe(); if (unsubAgentEvents) unsubAgentEvents(); stopTypingAndStall();
+          return;
+        }
         if (audioAttachments.length) {
           voiceIn = true;
           const transcript = await transcribeChannelAudio(audioAttachments, message);

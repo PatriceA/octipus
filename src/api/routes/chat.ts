@@ -1,3 +1,4 @@
+import { isModuleOn } from '@/core/modules/registry';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getAllCommands } from '@/core/commands';
@@ -133,6 +134,11 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
 
       let { sessionId } = body;
       const { message, channel } = body;
+      // The mobile app's voice channel is the `voice` module's (docs/MODULES.md).
+      if (channel === 'mobile-voice' && !isModuleOn('voice')) {
+        set.status = 404;
+        return { error: 'Not found', code: 'module_off', module: 'voice' };
+      }
 
       const repos = scopedRepos(principal);
 

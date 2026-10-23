@@ -62,7 +62,7 @@ export class SchedulingTool extends BaseTool {
 
     this.registerTool(
       'create_hook',
-      'Create a new hook (scheduled task or event-triggered automation). For scheduled tasks, provide a cron expression. The hook will notify the user on their linked channels by default.',
+      'Create a new hook (scheduled task or event-triggered automation). For scheduled tasks, provide a cron expression. The hook notifies the user by default.',
       createParameterSchema({
         name: { type: 'string', description: 'Hook name', required: true },
         description: { type: 'string', description: 'What this hook does' },

@@ -360,7 +360,8 @@ function trackerSteps(plan: Plan, a: Answers, s: OnboardingState): void {
 }
 
 /** The standing instructions the heartbeat reads, from the company answers. Pure. */
-export function standingInstructions(a: Answers): string {
+/** `chats`: the chat channels will be on, so `send_to_user` exists (docs/MODULES.md). */
+export function standingInstructions(a: Answers, chats = true): string {
   const lines = ['# HEARTBEAT', ''];
   const name = str(a, 'company.name');
   const about = str(a, 'company.about');
@@ -368,7 +369,7 @@ export function standingInstructions(a: Answers): string {
   if (yes(a, 'company.mail')) {
     lines.push('## Email');
     const urgent = str(a, 'company.urgent');
-    if (urgent) lines.push(`- Tell me right away (send_to_user) about: ${urgent.replace(/\s*\n\s*/g, '; ')}`);
+    if (urgent) lines.push(`- Tell me right away (${chats ? 'send_to_user' : 'in your final answer'}) about: ${urgent.replace(/\s*\n\s*/g, '; ')}`);
     lines.push('- Work that needs doing: add a task with the email as source.');
     lines.push('- Newsletters, notifications and receipts: no action.');
     lines.push(str(a, 'company.send') === 'send'
@@ -383,7 +384,8 @@ export function standingInstructions(a: Answers): string {
 }
 
 function companySteps(plan: Plan, a: Answers, s: OnboardingState): void {
-  const body = standingInstructions(a);
+  const chats = moduleOnAfter(a, s, 'channels');
+  const body = standingInstructions(a, chats);
   if (body.split('\n').length > 1) {
     plan.api('standing-instructions', s.standingInstructions ? 'Add to your standing instructions' : 'Write your standing instructions', {
       method: 'PUT', path: '/onboarding/standing-instructions', body: { body },
@@ -394,7 +396,8 @@ function companySteps(plan: Plan, a: Answers, s: OnboardingState): void {
     const connect = connectMailbox(plan, s, provider, 'Octipus reads new mail and saves drafts; it does not send unless you allow it.');
     serverHeartbeat(plan, s);
     permission(plan, s, 'tasks', 'write', 'add tasks to your list');
-    permission(plan, s, 'messaging', 'send', 'message you in your chat');
+    // The messaging tool is the `channels` module's (docs/MODULES.md).
+    if (chats) permission(plan, s, 'messaging', 'send', 'message you in your chat');
     const interval = Number(str(a, 'company.interval')) || 15;
     // The inbox watch is the `inbox` module's (docs/MODULES.md).
     if (!moduleOnAfter(a, s, 'inbox')) {

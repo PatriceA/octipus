@@ -833,7 +833,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   }
 
   // Workers must return results to the root agent, not message the user directly (STATIC)
-  staticParts.push(`\n\nIMPORTANT: You are a worker agent. Return your findings and results as plain text in your final response. Do NOT use messaging tools (send_to_user, send_channel_message) to contact the user — the rootAgent handles all user communication. Just do your task and respond with the result. <!-- module:channels -->`);
+  staticParts.push(`\n\nIMPORTANT: You are a worker agent. Return your findings and results as plain text in your final response — the rootAgent handles all user communication. Just do your task and respond with the result.\nDo NOT use messaging tools (send_to_user, send_channel_message) to contact the user. <!-- module:channels -->`);
   // Worker guidance, kept out of SECURITY_PREAMBLE (DESIGN.md rule #6): its
   // rule 8 is about the answer, and a stage that read it as "stop at the first
   // failed probe" reported a stop as its work (#16).

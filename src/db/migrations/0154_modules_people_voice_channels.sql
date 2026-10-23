@@ -6,7 +6,7 @@ SET "value" = (
   SELECT jsonb_agg(DISTINCT m.module)::text
   FROM jsonb_array_elements_text("value"::jsonb || '["people","voice","channels"]'::jsonb) AS m(module)
 ), "updated_at" = now()
-WHERE "key" = 'modules.enabled' AND EXISTS (SELECT 1 FROM "users");
+WHERE "key" = 'modules.enabled' AND "value" ~ '^\s*\[' AND EXISTS (SELECT 1 FROM "users");
 --> statement-breakpoint
 INSERT INTO "settings" ("key", "value", "value_type", "category", "description", "default_value")
 SELECT 'modules.enabled', '["people","voice","channels"]', 'string_array', 'modules',

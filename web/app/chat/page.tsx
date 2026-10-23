@@ -1975,6 +1975,8 @@ export default function ChatPage() {
   useEffect(() => { sendMessageRef.current = sendMessage; });
   const artifactsOn = usePageOn()('/artifacts');
   const voiceOn = useModuleOn('voice');
+  // Voice switched off while a conversation was open: leave voice mode.
+  useEffect(() => { if (!voiceOn) setRealtimeMode(false); }, [voiceOn]);
   const { data: me } = useQuery({
     queryKey: ['impersonation-banner', 'me'],
     queryFn: () => api.get<{ actorUserId?: string | null }>('/auth/me'),
