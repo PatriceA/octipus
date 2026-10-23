@@ -42,6 +42,11 @@ async function task(id: string) {
   return rows[0];
 }
 
+/**
+ * The task's comments, oldest first. Two written in one transaction share
+ * `created_at`, and the id that breaks the tie is random: assert that a
+ * comment is there, not where it falls among those.
+ */
 async function comments(id: string): Promise<string[]> {
   const { rows } = await queryRaw(`SELECT body FROM task_comments WHERE task_id = '${id}' ORDER BY created_at, id`);
   return rows.map((r) => String(r.body));
@@ -123,8 +128,8 @@ describe('a pipeline role agent', () => {
     expect(runs[0].context.sessionId).toBe(sessionId);
     expect(await task(id)).toMatchObject({ status: 'done' });
     const said = await comments(id);
-    expect(said[0]).toContain('Started pipeline "Role Flow"');
-    expect(said.at(-1)).toContain('Shipped the login fix.');
+    expect(said.some((c) => c.includes('Started pipeline "Role Flow"'))).toBe(true);
+    expect(said.some((c) => c.includes('Shipped the login fix.'))).toBe(true);
     // The hook's session exists for the run to live in.
     const { rows } = await queryRaw(`SELECT channel_type FROM sessions WHERE id = '${sessionId}'`);
     expect(rows[0].channel_type).toBe('heartbeat');
@@ -135,7 +140,7 @@ describe('a pipeline role agent', () => {
     const id = await addTask('Write the launch post');
     await turn();
     expect(await task(id)).toMatchObject({ status: 'open', assignee_kind: 'user', assignee_ref: userId, checked_out_by: null });
-    expect((await comments(id)).at(-1)).toContain('paused: Nobody answered the plan approval');
+    expect((await comments(id)).some((c) => c.includes('paused: Nobody answered the plan approval'))).toBe(true);
     const { rows } = await queryRaw(`SELECT type, title FROM notifications WHERE user_id = '${userId}'`);
     expect(rows).toEqual([{ type: 'task_needs_you', title: 'Task needs you: Write the launch post' }]);
     // Not picked up again: it is no longer the role's.
@@ -149,7 +154,7 @@ describe('a pipeline role agent', () => {
     const id = await addTask('Set up the newsletter');
     await turn();
     expect(await task(id)).toMatchObject({ status: 'open', assignee_kind: 'user' });
-    expect((await comments(id)).at(-1)).toContain('Unknown pipeline template');
+    expect((await comments(id)).some((c) => c.includes('Unknown pipeline template'))).toBe(true);
   });
 
   test('one task per turn; with more ready the hook is due again at once', async () => {
