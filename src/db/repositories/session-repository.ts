@@ -228,6 +228,14 @@ export class SessionRepository {
       .where(eq(sessions.id, id));
   }
 
+  /** Raise the session's stored protection level to `level`; never lowers it. */
+  async raiseProtectionLevel(id: string, level: number): Promise<void> {
+    await this.db
+      .update(sessions)
+      .set({ protectionLevel: sql`greatest(coalesce(${sessions.protectionLevel}, 0), ${level})` as never })
+      .where(eq(sessions.id, id));
+  }
+
   /** Drop the session's stored flow label. */
   async clearFlowLabel(id: string): Promise<void> {
     await this.db.update(sessions).set({ flowLabel: null }).where(eq(sessions.id, id));

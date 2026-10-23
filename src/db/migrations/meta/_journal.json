@@ -1086,6 +1086,13 @@
       "when": 1793440824550,
       "tag": "0154_modules_people_voice_channels",
       "breakpoints": true
+    },
+    {
+      "idx": 155,
+      "version": "7",
+      "when": 1793440884550,
+      "tag": "0155_session_protection_level",
+      "breakpoints": true
     }
   ]
 }

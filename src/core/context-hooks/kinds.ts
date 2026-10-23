@@ -163,6 +163,9 @@ async function runRecall(input: ContextHookInput, raw: Record<string, unknown>):
     items.push({ id: r.id, sourceId: r.sourceId, title, score: Number(r.similarity.toFixed(3)) });
   }
   if (items.length === 0) return abstained('over_budget');
+  // The passages go into the agent's prompt: their documents' levels are the session's.
+  const { readKnowledge } = await import('@/core/protection/content-read');
+  await readKnowledge(input.sessionId, items);
   const { getEmbeddingService } = await import('@/core/rag/embeddings');
   getEmbeddingService().recordAccess(items.map((i) => i.id));
   const text = head + parts.join('') + tail;

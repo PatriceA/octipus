@@ -33,7 +33,9 @@ import { selectCoreToolIds } from './tool-intent';
 import { isPlanMode, PLAN_MODE_DIRECTIVE, stripMutatingTools } from './plan-mode';
 import { isLongTailHandler } from './tool-split';
 import { buildCapabilitiesHandler } from '@/tools/self-report';
-import type { ModelSelector } from './model-selector';
+import { modelCandidates, type ModelSelector } from './model-selector';
+import { localRowInstead } from '@/core/protection/routing';
+import { raiseSessionLevel } from '@/core/protection/session-level';
 import { resolvePromptTier } from './prompt-tier';
 import { buildOutputDirective } from './output-directive';
 import { getRoleConfig, getToolsForRole } from './roles';
@@ -230,13 +232,20 @@ export async function runRootAgent(
   // The requester's own choices first (their `/model`, their personal lane
   // binding), then the install's (coworking spec §8.2).
   const inSpace = !!space;
-  const selectedModel = await deps.modelSelector.selectForRootAgent(sessionId, classification.type, { message, classification, laneChoice }, { userId, inSpace, spaceRole: space?.role, sponsor: scope.sponsor });
+  const requester = { userId, inSpace, spaceRole: space?.role, sponsor: scope.sponsor };
+  // An attached file carries no protection level: unclear, which counts as 4
+  // (docs/PROTECTION-LEVELS.md). Raised before the model is chosen, so a
+  // session holding level 3-4 content runs on a local model from the start.
+  if (extras.attachedFiles?.length) raiseSessionLevel(sessionId, null);
+  const chosenModel = await deps.modelSelector.selectForRootAgent(sessionId, classification.type, { message, classification, laneChoice }, requester);
+  const chosenMeta = await getModelRegistry().getModel(chosenModel.name);
+  const modelMeta = await localRowInstead(chosenMeta, sessionId, 'tools', () => modelCandidates(requester));
+  const selectedModel = modelMeta && modelMeta !== chosenMeta ? { modelId: modelMeta.modelId, name: modelMeta.name } : chosenModel;
   const modelName = selectedModel.modelId;
-  const modelMeta = await getModelRegistry().getModel(selectedModel.name);
   const attachmentSession = extras.attachedFiles?.length ? await sessionRepository.findById(sessionId) : null;
   if (extras.attachedFiles?.length && !attachmentSession) throw new Error('Attachment session no longer exists');
   const attachments = attachmentSession
-    ? await buildRootAttachmentContext(WorkspaceFS.forSession(attachmentSession, { space }), extras.attachedFiles!, (modelMeta ? modelMeta.provider === 'cli' : !!getCLIToolConfig(modelName)), userId, message)
+    ? await buildRootAttachmentContext(WorkspaceFS.forSession(attachmentSession, { space }), extras.attachedFiles!, (modelMeta ? modelMeta.provider === 'cli' : !!getCLIToolConfig(modelName)), userId, message, sessionId)
     : { context: '', imagePaths: [] };
   extraSystemContext += attachments.context;
 

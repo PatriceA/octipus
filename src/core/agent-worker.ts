@@ -16,6 +16,8 @@ import { type CompletionOptions, type CompletionResult, getLiteLLMClient } from 
 import { billableTokens } from '@/models/billable-tokens';
 import { collectStream } from '@/models/stream-collect';
 import { getModelRegistry } from '@/models/model-registry';
+import { modelCandidates } from './agent/model-selector';
+import { localRowInstead, ProtectionRoutingError } from './protection/routing';
 import { type ToolShimSchema, proseShowsToolIntent, translateToToolCall } from '@/models/toolshim';
 import { applyTopicParamOverrides, getTopicConfig } from '@/models/topic-config';
 import { getConfig } from '@/config';
@@ -1332,6 +1334,11 @@ export class AgentWorker extends BaseAgentWorker {
         // change model) instead of spinning through 14s of retries that all fail the same
         // way. The EAI_AGAIN DNS blip is deliberately excluded — see isFatalConnectionError —
         // so it falls through to the transient-retry path below.
+        // Confidential content and no local model: stop and say so (never retried).
+        if (err instanceof ProtectionRoutingError) {
+          this.emit('error', { error: errMsg, recoverable: false });
+          throw err;
+        }
         if (isFatalConnectionError(errMsg)) {
           this.emit('error', {
             error: `Model "${this.context.model}" unreachable: ${errMsg}`,
@@ -2273,11 +2280,23 @@ export class AgentWorker extends BaseAgentWorker {
 
     // The row this agent was resolved to (`modelName`), never a modelId
     // re-lookup that could land on another row sharing the id (spec §8.1).
-    const model = this.context.modelName
+    const bound = this.context.modelName
       ? await registry.getModel(this.context.modelName)
       : await registry.getModelByModelId(this.context.model, { userId: this.context.userId });
-    if (!model) {
+    if (!bound) {
       throw new Error(`Model not found: ${this.context.modelName ?? this.context.model}`);
+    }
+    // A tool result of this turn may have raised the session to level 3-4
+    // (core/protection/routing.ts): the rest of the turn, compaction
+    // included, runs on a local model, or the turn stops before anything
+    // leaves the house.
+    const model = await localRowInstead(bound, this.context.sessionId, 'tools', () => modelCandidates({
+      userId: this.context.userId, inSpace: !!this.context.space, spaceRole: this.context.space?.role, sponsor: this.context.sponsor,
+    })) ?? bound;
+    if (model !== bound) {
+      agentLogger.info({ agentId: this.context.id, sessionId: this.context.sessionId, from: bound.name, to: model.name }, 'Confidential content read: agent continues on a local model');
+      this.context.model = model.modelId;
+      this.context.modelName = model.name;
     }
 
     const litellmModel = model.modelId;

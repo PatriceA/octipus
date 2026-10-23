@@ -19,6 +19,7 @@ import { withoutPersonalOnlyTools } from '@/security/space-tools';
 import { agentLogger, coreLogger } from '@/utils/logger';
 import { DEFAULT_MAX_LENGTH, sanitizeToolOutput } from '@/utils/sanitize';
 import { noteToolUse } from './context-hooks/tool-usage';
+import { localOnlyLevel } from './protection/routing';
 import type { AgentEvent, ToolHandler } from './agent-base';
 import type { AgentContext, AgentMessage, ToolCall, ToolResult } from './types';
 
@@ -225,6 +226,24 @@ export class ToolExecutor {
     private onDelegationPause?: (durationMs: number) => void,
     private signal?: AbortSignal,
   ) {}
+
+  /**
+   * Results go to a vendor's harness (a CLI agent), not to a model call this
+   * install can route: once the session holds level 3-4 content, they are
+   * withheld (core/protection/routing.ts). Set by `CLIAgentWorker`.
+   */
+  remoteHarness = false;
+
+  private async withheldFromHarness(result: unknown): Promise<unknown> {
+    if (!this.remoteHarness) return result;
+    const level = await localOnlyLevel(this.context.sessionId);
+    if (level === undefined) return result;
+    return {
+      withheld: true,
+      error: `This conversation now holds confidential content (protection level ${level}), which stays on local models. `
+        + 'A CLI agent runs on its vendor\'s servers, so the result is not passed on. Finish without it, and say that the user can continue on a local model.',
+    };
+  }
 
   private activeBatches = 0;
 
@@ -631,7 +650,7 @@ export class ToolExecutor {
       if (toolId === 'agent') {
         try {
           const toolExecStart = Date.now();
-          const result = await tool.execute(toolCall.arguments, this.context);
+          const result = await this.withheldFromHarness(await tool.execute(toolCall.arguments, this.context));
           const toolExecMs = Date.now() - toolExecStart;
 
           // Delegation tools: pause parent's timeout clock for this duration.
@@ -893,7 +912,7 @@ export class ToolExecutor {
       this.assertCanExecute();
       try {
         const toolExecStart = Date.now();
-        const result = await withDispatchAuthorization(this.context, toolId, permAction, toolCall.arguments, authorizationSource,
+        const executed = await withDispatchAuthorization(this.context, toolId, permAction, toolCall.arguments, authorizationSource,
           // Internal orchestration tools (toolId 'agent': spawn_child, plans, memory,
           // status) are not externally observable actions; journaling them would let
           // a bookkeeping hiccup gate real mutations behind a recovery review.
@@ -907,6 +926,7 @@ export class ToolExecutor {
               }
             }));
         const toolExecMs = Date.now() - toolExecStart;
+        const result = await this.withheldFromHarness(executed);
 
         agentLogger.info({
           agentId: this.context.id, sessionId: this.context.sessionId,

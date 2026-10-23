@@ -1283,6 +1283,24 @@ export class AgentService {
         metadata: { limit: limit.refusal },
       };
     }
+    // Confidential content and no local model (core/protection/routing.ts):
+    // the answer is the reason, stored like a limit refusal.
+    if (error instanceof Error && error.name === 'ProtectionRoutingError') {
+      if (turnSessionId && !info.isRoom) {
+        try {
+          if (!userMessageSaved) await messageRepository.create({ sessionId: turnSessionId, role: 'user', content: message });
+          await messageRepository.create({ sessionId: turnSessionId, role: 'assistant', content: error.message });
+        } catch (err) {
+          coreLogger.warn({ err, sessionId: turnSessionId }, 'Could not persist the protection refusal');
+        }
+      }
+      return {
+        response: error.message,
+        sessionId: turnSessionId ?? sessionId,
+        outcome: 'failed',
+        classification: { type: 'casual', confidence: 0 },
+      };
+    }
     return {
       response: `I encountered an error processing your message: ${(error as Error).message}`,
       classification: { type: 'casual', confidence: 0 },

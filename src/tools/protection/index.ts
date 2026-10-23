@@ -1,3 +1,4 @@
+import { raiseSessionLevel } from '@/core/protection/session-level';
 import { isProtectedEntity, PROTECTED_ENTITIES, ProtectionLevelError, setProtectionLevel } from '@/core/protection/levels';
 import type { ToolManifest } from '@/core/types';
 import { reposFor } from '@/db/repositories/content';
@@ -45,6 +46,8 @@ export class ProtectionTool extends BaseTool {
         try {
           const change = await setProtectionLevel(reposFor(context), args.kind, String(args.id), Number(args.level), 'agent');
           if (!change) throw new Error(`${args.kind} not found`);
+          // The agent found the content more sensitive: so is this conversation.
+          raiseSessionLevel(context.sessionId, change.effective);
           return { ...change, label: PROTECTION_LEVEL_LABELS[change.effective] };
         } catch (err) {
           if (err instanceof ProtectionLevelError) throw new Error(err.message);

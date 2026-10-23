@@ -79,6 +79,11 @@ async function prepare(options: CompletionOptions, provider: string): Promise<Co
   // Nor does an install row (or a raw model id on the install's env keys)
   // serve someone the install's models are not for (install-access.ts).
   await assertRowServesCall(row, options);
+  // Level 3-4 content stays on local models (core/protection/routing.ts): a
+  // call that would leave the house is refused here, before any provider.
+  // Not inside the try above: a refusal is never "settings unavailable".
+  const { assertMayLeave } = await import('@/core/protection/routing');
+  await assertMayLeave(row ?? { provider, modelId: options.model, endpoint: options.endpoint ?? null, metadata: null }, options.sessionId, provider);
   if (row?.ownerUserId) {
     const { assertModelRowOwner, resolveModelKey } = await import('../model-key');
     assertModelRowOwner(row, options.userId);
@@ -170,8 +175,20 @@ export async function recordProviderUsage(options: CompletionOptions, provider: 
 }
 
 
+/** A CLI agent is a vendor's harness: never local (core/protection/routing.ts). */
+async function assertCliMayRun(options: CompletionOptions): Promise<void> {
+  const { assertMayLeave } = await import('@/core/protection/routing');
+  await assertMayLeave({ provider: 'cli', modelId: options.model, endpoint: null, metadata: null }, options.sessionId ?? usageContext.getStore()?.sessionId, 'cli');
+}
+
+/** The session the current calls serve, from the turn's usage context. */
+export function currentUsageSessionId(): string | undefined {
+  return usageContext.getStore()?.sessionId;
+}
+
 export async function accountCompletion(options: CompletionOptions, provider: string, run: (o: CompletionOptions) => Promise<CompletionResult>): Promise<CompletionResult> {
   if (options.accountingOwner) return run(options);
+  if (provider === 'cli') await assertCliMayRun(options);
   const prepared = provider === 'cli' ? options : await prepare(options, provider);
   let observed: Pick<CompletionResult, 'usage' | 'model' | 'requestId'> | undefined;
   try {

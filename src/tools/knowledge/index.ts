@@ -1,4 +1,5 @@
 import { filterRelevance } from './relevance';
+import { readKnowledge } from '@/core/protection/content-read';
 import { type EntityRef, entityRefFromSourceId, getKnowledgeGraph, type TraversalDirection } from '@/core/knowledge/graph';
 import { reposFor } from '@/db/repositories/content';
 import { slugify } from '@/core/knowledge/wikilink';
@@ -184,6 +185,7 @@ export class KnowledgeTool extends BaseTool {
           };
         }
 
+        await readKnowledge(context.sessionId, results);
         const base = {
           results: results.map(r => ({
             id: r.id,
@@ -245,6 +247,7 @@ export class KnowledgeTool extends BaseTool {
         if (!entry) {
           return { error: 'Knowledge entry not found.' };
         }
+        await readKnowledge(context.sessionId, [entry]);
 
         return {
           id: entry.id,

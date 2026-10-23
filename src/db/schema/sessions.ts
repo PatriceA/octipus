@@ -1,4 +1,4 @@
-import { boolean, integer, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, integer, jsonb, pgEnum, pgTable, smallint, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { users } from './users';
 
 export const sessionStatusEnum = pgEnum('session_status', ['active', 'paused', 'completed', 'failed']);
@@ -53,6 +53,12 @@ export const sessions = pgTable('sessions', {
    * process still knows what the conversation holds (the space I6 rule).
    */
   flowLabel: jsonb('flow_label').$type<Partial<Record<'suspicious' | 'private' | 'secret', string>>>(),
+  /**
+   * The highest protection level (1-4) of anything the session has read
+   * (core/protection/session-level.ts). Null: nothing leveled yet. Only
+   * ever raised; at 3-4 its model calls stay on local models.
+   */
+  protectionLevel: smallint('protection_level'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   completedAt: timestamp('completed_at', { withTimezone: true }),
