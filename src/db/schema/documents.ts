@@ -1,4 +1,4 @@
-import { index, integer, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { index, integer, jsonb, pgEnum, pgTable, smallint, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 export const documentStatusEnum = pgEnum('document_status', [
   'queued',
@@ -25,6 +25,8 @@ export const documents = pgTable('documents', {
   summary: text('summary'),
   status: documentStatusEnum('status').notNull().default('queued'),
   storagePath: text('storage_path').notNull(),
+  /** 1-4 (docs/PROTECTION-LEVELS.md); null is unclear and counts as 4. */
+  protectionLevel: smallint('protection_level'),
   metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   processedAt: timestamp('processed_at', { withTimezone: true }),

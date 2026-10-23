@@ -157,6 +157,15 @@ export class MailRepo {
     return row?.raw ?? null;
   }
 
+  /** Set a message's protection level (null: unclear). Who may lower one is decided a layer up (core/protection). */
+  async setProtectionLevel(id: string, level: number | null): Promise<MailMessage | null> {
+    this.scope.can('write');
+    if (!isUuid(id)) return null;
+    const [row] = await this.db.update(mailMessages).set({ protectionLevel: level, updatedAt: new Date() })
+      .where(and(eq(mailMessages.id, id), ...this.messageRows())).returning();
+    return row ?? null;
+  }
+
   async setUnread(id: string, unread: boolean): Promise<MailMessage | null> {
     this.scope.can('write');
     if (!isUuid(id)) return null;
@@ -183,6 +192,7 @@ export class MailRepo {
         userId: account.userId,
         workspaceId: account.workspaceId,
         status: 'draft',
+        protectionLevel: account.defaultProtectionLevel,
         fromAddress: { address: account.address, ...(account.displayName ? { name: account.displayName } : {}) },
         snippet: data.bodyText ? data.bodyText.replace(/\s+/g, ' ').trim().slice(0, 200) : '',
         authorId: this.scope.principal.userId,

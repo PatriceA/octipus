@@ -5,6 +5,7 @@ import { reposFor } from '@/db/repositories/content';
 import type { MailSummaryRow } from '@/db/repositories/mail';
 import type { MailAccount } from '@/db/schema/mail';
 import { MAIL_STATUSES, type MailStatus } from '@/shared/mail';
+import { effectiveProtectionLevel } from '@/shared/protection';
 import { BaseTool, createParameterSchema } from '../base-tool';
 
 /** Longest body `read_mail` hands the model. */
@@ -197,6 +198,7 @@ function summarizeMessage(m: MailSummaryRow) {
     date: m.date,
     unread: m.unread,
     attachments: m.attachments.length,
+    protectionLevel: effectiveProtectionLevel(m.protectionLevel),
   };
 }
 

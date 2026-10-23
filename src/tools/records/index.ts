@@ -171,7 +171,7 @@ function summarizeType(t: RecordType) {
 }
 
 function summarizeRecord(r: RecordRow) {
-  return { id: r.id, typeId: r.typeId, title: r.title, data: r.data, source: r.source, externalKey: r.externalKey, updatedAt: r.updatedAt };
+  return { id: r.id, typeId: r.typeId, title: r.title, data: r.data, source: r.source, externalKey: r.externalKey, protectionLevel: r.protectionLevel, updatedAt: r.updatedAt };
 }
 
 export const recordsTool = new RecordsTool();

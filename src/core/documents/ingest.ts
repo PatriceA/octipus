@@ -18,6 +18,8 @@ export interface IngestInput {
   buffer: Buffer;
   originalName: string;
   mimeType?: string;
+  /** 1-4 (docs/PROTECTION-LEVELS.md); absent or null: unclear. */
+  protectionLevel?: number | null;
   /** Where the file came from (`{ source: 'scan_folder', … }`), kept on the document. */
   metadata?: Record<string, unknown>;
 }
@@ -64,6 +66,7 @@ export async function ingestDocument(repos: ContentRepos, input: IngestInput): P
     size: input.buffer.length,
     storagePath,
     status: 'queued',
+    protectionLevel: input.protectionLevel ?? null,
     ...(input.metadata ? { metadata: input.metadata } : {}),
   });
 

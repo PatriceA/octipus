@@ -18,6 +18,7 @@ function view(f: ScanFolder) {
     label: f.label,
     path: f.path,
     enabled: f.enabled,
+    defaultProtectionLevel: f.defaultProtectionLevel,
     lastScanAt: f.lastScanAt?.toISOString() ?? null,
     lastError: f.lastError,
     filed: f.filed,
@@ -66,6 +67,7 @@ export const scanFolderRoutes = new Elysia({ prefix: '/scan-folders' })
         label: body.label?.trim().slice(0, 100) || path,
         path,
         enabled: body.enabled ?? true,
+        defaultProtectionLevel: body.defaultProtectionLevel ?? null,
       });
       set.status = 201;
       return view(folder);
@@ -77,6 +79,7 @@ export const scanFolderRoutes = new Elysia({ prefix: '/scan-folders' })
       path: t.String({ minLength: 1, maxLength: 1000 }),
       label: t.Optional(t.String({ maxLength: 100 })),
       enabled: t.Optional(t.Boolean()),
+      defaultProtectionLevel: t.Optional(t.Union([t.Integer({ minimum: 1, maximum: 4 }), t.Null()])),
     }),
     detail: { tags: ['scan-folders'] },
   })
@@ -90,6 +93,7 @@ export const scanFolderRoutes = new Elysia({ prefix: '/scan-folders' })
         ...(body.path !== undefined ? { path: await checkFolderPath(body.path) } : {}),
         ...(body.label !== undefined ? { label: body.label.trim().slice(0, 100) || 'Scan folder' } : {}),
         ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
+        ...(body.defaultProtectionLevel !== undefined ? { defaultProtectionLevel: body.defaultProtectionLevel } : {}),
       });
       if (!folder) { set.status = 404; return { error: 'Scan folder not found' }; }
       return view(folder);
@@ -102,6 +106,7 @@ export const scanFolderRoutes = new Elysia({ prefix: '/scan-folders' })
       path: t.Optional(t.String({ minLength: 1, maxLength: 1000 })),
       label: t.Optional(t.String({ maxLength: 100 })),
       enabled: t.Optional(t.Boolean()),
+      defaultProtectionLevel: t.Optional(t.Union([t.Integer({ minimum: 1, maximum: 4 }), t.Null()])),
     }),
     detail: { tags: ['scan-folders'] },
   })

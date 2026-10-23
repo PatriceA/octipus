@@ -42,6 +42,7 @@ import * as Microsoft365Module from './microsoft365';
 import * as MonitorModule from './monitor';
 import * as NotesModule from './notes';
 import * as PlanModule from './plan';
+import * as ProtectionModule from './protection';
 import * as ProfilesModule from './profiles';
 import * as RecordsModule from './records';
 import * as RepoRegistryModule from './repo-registry';
@@ -81,6 +82,7 @@ const MODULES: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
   ['notes', NotesModule],
   ['plan', PlanModule],
   ['profiles', ProfilesModule],
+  ['protection', ProtectionModule],
   ['records', RecordsModule],
   ['repo-registry', RepoRegistryModule],
   ['scheduling', SchedulingModule],

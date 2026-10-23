@@ -1,4 +1,4 @@
-import { boolean, index, integer, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, index, integer, pgTable, smallint, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { workspaces } from './organizations';
 import { users } from './users';
 
@@ -19,6 +19,8 @@ export const scanFolders = pgTable('scan_folders', {
   /** The directory, as resolved at save (no symbolic link in it). */
   path: text('path').notNull(),
   enabled: boolean('enabled').default(true).notNull(),
+  /** The protection level new content of this source starts at (docs/PROTECTION-LEVELS.md); null: unclear. */
+  defaultProtectionLevel: smallint('default_protection_level'),
   lastScanAt: timestamp('last_scan_at', { withTimezone: true }),
   lastError: text('last_error'),
   /** Files filed in all. */

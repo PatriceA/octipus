@@ -719,6 +719,15 @@ export class ScopedDocumentRepo {
     return result.length > 0;
   }
 
+  /** Set a document's protection level (null: unclear). Who may lower one is decided a layer up (core/protection). */
+  async setProtectionLevel(id: string, level: number | null): Promise<DocumentRecord | null> {
+    if (!isUuid(id)) return null;
+    this.scope.can('write');
+    const [row] = await this.db.update(documents).set({ protectionLevel: level })
+      .where(and(eq(documents.id, id), ...this.scope.shared(documents))).returning();
+    return row ?? null;
+  }
+
   /** Update status — restricted to documents the principal may write. */
   async updateStatus(id: string, status: DocumentRecord['status'], error?: string): Promise<boolean> {
     if (!isUuid(id)) return false;

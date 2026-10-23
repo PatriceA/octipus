@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { index, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { index, jsonb, pgTable, smallint, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { workspaces } from './organizations';
 import { users } from './users';
 
@@ -38,6 +38,8 @@ export const cases = pgTable('cases', {
    * same matter twice gets the first case back (`CaseRepo.createOnce`).
    */
   externalKey: text('external_key'),
+  /** 1-4 (docs/PROTECTION-LEVELS.md); null is unclear and counts as 4. */
+  protectionLevel: smallint('protection_level'),
   closedAt: timestamp('closed_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),

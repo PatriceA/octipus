@@ -96,6 +96,7 @@ export async function storeReceived(account: MailAccount, fetched: FetchedMessag
         userId: account.userId,
         workspaceId: account.workspaceId,
         status: 'received',
+        protectionLevel: account.defaultProtectionLevel,
         remoteId: storable(fetched.remoteId),
         subject: '(this message could not be stored; open it in the mail client)',
         unread: fetched.unread,
@@ -122,6 +123,7 @@ async function insertReceived(account: MailAccount, fetched: FetchedMessage): Pr
         userId: account.userId,
         workspaceId: account.workspaceId,
         status: 'received',
+        protectionLevel: account.defaultProtectionLevel,
         remoteId: storable(fetched.remoteId),
         messageIdHeader: parsed.messageIdHeader,
         inReplyTo: parsed.inReplyTo,
@@ -176,6 +178,7 @@ export async function fileMailAttachments(account: MailAccount, messageId: strin
           buffer: attachment.content,
           originalName: attachment.filename,
           mimeType: attachment.contentType,
+          protectionLevel: account.defaultProtectionLevel,
           metadata: { source: 'mail', mailAccountId: account.id, mailMessageId: messageId, mailSubject: subject.slice(0, 200) },
         });
         // Stored but not queued is still filed: the document exists and says why.

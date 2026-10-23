@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { boolean, customType, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, customType, index, integer, jsonb, pgTable, smallint, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import type { MailAddress, MailProtocol, MailServer, MailStatus } from '@/shared/mail';
 import { workspaces } from './organizations';
 import { users } from './users';
@@ -37,6 +37,8 @@ export const mailAccounts = pgTable('mail_accounts', {
   localNetwork: boolean('local_network').default(false).notNull(),
   /** File the attachments of received mail into the documents of the account's scope (a fax-to-mail drop). */
   fileAttachments: boolean('file_attachments').default(false).notNull(),
+  /** The protection level new content of this source starts at (docs/PROTECTION-LEVELS.md); null: unclear. */
+  defaultProtectionLevel: smallint('default_protection_level'),
   /** Where the last sync stopped (IMAP: UIDVALIDITY and last UID; POP3: UIDLs passed over). */
   syncState: jsonb('sync_state').$type<MailSyncState>().default({}).notNull(),
   lastSyncAt: timestamp('last_sync_at', { withTimezone: true }),
@@ -87,6 +89,8 @@ export const mailMessages = pgTable('mail_messages', {
   filedAttachments: jsonb('filed_attachments').$type<number[]>().default([]).notNull(),
   /** Why an attachment is not filed yet; retried on later syncs while set. */
   filingError: text('filing_error'),
+  /** 1-4 (docs/PROTECTION-LEVELS.md); null is unclear and counts as 4. */
+  protectionLevel: smallint('protection_level'),
   unread: boolean('unread').default(false).notNull(),
   /** Received (from the server), sent, or for a draft its last change. */
   date: timestamp('date', { withTimezone: true }).defaultNow().notNull(),
