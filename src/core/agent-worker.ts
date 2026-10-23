@@ -17,7 +17,7 @@ import { billableTokens } from '@/models/billable-tokens';
 import { collectStream } from '@/models/stream-collect';
 import { getModelRegistry } from '@/models/model-registry';
 import { modelCandidates } from './agent/model-selector';
-import { localRowInstead, ProtectionRoutingError } from './protection/routing';
+import { localOnlyLevel, localRowInstead, ProtectionRoutingError } from './protection/routing';
 import { type ToolShimSchema, proseShowsToolIntent, translateToToolCall } from '@/models/toolshim';
 import { applyTopicParamOverrides, getTopicConfig } from '@/models/topic-config';
 import { getConfig } from '@/config';
@@ -2284,6 +2284,8 @@ export class AgentWorker extends BaseAgentWorker {
    * house (`ProtectionRoutingError`).
    */
   private async followProtectionLevel(bound?: ModelConfigEntry | null): Promise<ModelConfigEntry | null | undefined> {
+    // Nothing to look up while the session may use any model.
+    if (await localOnlyLevel(this.context.sessionId) === undefined) return bound;
     const registry = getModelRegistry();
     const current = bound !== undefined ? bound : this.context.modelName
       ? await registry.getModel(this.context.modelName)
