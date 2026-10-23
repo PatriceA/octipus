@@ -68,6 +68,10 @@ const JoinRemoteSpacePage = lazy(() => import('./app/spaces/join-remote/page'));
 const RemoteSpacePage = lazy(() => import('./app/spaces/remote/page'));
 const SkillsProposalsPage = lazy(() => import('./app/skills/proposals/page'));
 const TasksPage = lazy(() => import('./app/tasks/page'));
+const CasesPage = lazy(() => import('./app/cases/page'));
+const ContactsPage = lazy(() => import('./app/contacts/page'));
+const RecordsPage = lazy(() => import('./app/records/page'));
+const PublicFormPage = lazy(() => import('./app/forms/page'));
 const MyWorkPage = lazy(() => import('./app/my-work/page'));
 const ToolsPage = lazy(() => import('./app/tools/page'));
 const TopicsPage = lazy(() => import('./app/topics/page'));
@@ -167,6 +171,10 @@ const router = createBrowserRouter([
       { path: 'spaces/join-remote', element: <JoinRemoteSpacePage /> },
       { path: 'spaces/remote', element: <RemoteSpacePage /> },
       { path: 'tasks', element: <TasksPage /> },
+      { path: 'cases', element: <CasesPage /> },
+      { path: 'contacts', element: <ContactsPage /> },
+      { path: 'records', element: <RecordsPage /> },
+      { path: 'forms/:token', element: <PublicFormPage /> },
       { path: 'my-work', element: <MyWorkPage /> },
       { path: 'tools', element: <ToolsPage /> },
       { path: 'topics', element: <TopicsPage /> },

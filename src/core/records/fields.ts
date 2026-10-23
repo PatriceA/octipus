@@ -10,14 +10,9 @@
  * as `YYYY-MM-DD`, `boolean` as true/false, `select` as one of its options.
  */
 import { z } from 'zod';
+import { FIELD_TYPES, type FieldDef, KEY_RE, MAX_FIELDS, type RecordData, type RecordValue } from '@/shared/record-fields';
 
-export const FIELD_TYPES = ['text', 'textarea', 'number', 'money', 'date', 'boolean', 'select', 'email', 'phone', 'url'] as const;
-export type FieldType = (typeof FIELD_TYPES)[number];
-
-/** Machine key of a field or a record type: lower-case, starts with a letter. */
-export const KEY_RE = /^[a-z][a-z0-9_]{0,49}$/;
-
-export const MAX_FIELDS = 50;
+export { FIELD_TYPES, type FieldDef, type FieldType, KEY_RE, MAX_FIELDS, type RecordData, type RecordValue } from '@/shared/record-fields';
 
 export const fieldDefSchema = z.object({
   key: z.string().regex(KEY_RE, 'A field key is lower-case letters, digits and _, starting with a letter (at most 50)'),
@@ -35,8 +30,6 @@ export const fieldDefSchema = z.object({
     ctx.addIssue({ code: 'custom', message: `Field "${field.key}" lists an option twice` });
   }
 });
-
-export type FieldDef = z.infer<typeof fieldDefSchema>;
 
 export const fieldListSchema = z.array(fieldDefSchema).max(MAX_FIELDS).superRefine((fields, ctx) => {
   const seen = new Set<string>();
@@ -59,9 +52,6 @@ export class RecordValidationError extends Error {
     this.name = 'RecordValidationError';
   }
 }
-
-export type RecordValue = string | number | boolean;
-export type RecordData = Record<string, RecordValue>;
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE_RE = /^[+0-9 ()/.-]{3,40}$/;

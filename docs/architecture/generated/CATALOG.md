@@ -652,7 +652,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `security` | 170 |
 | `core` | `services` | 2 |
 | `core` | `setup` | 1 |
-| `core` | `shared` | 34 |
+| `core` | `shared` | 37 |
 | `core` | `skills` | 11 |
 | `core` | `tools` | 21 |
 | `core` | `utils` | 207 |
