@@ -130,7 +130,7 @@ export const SPACE_CONNECTOR_TOOL_IDS: ReadonlySet<string> = new Set(['github', 
  * refused until it is listed here. `action_recovery` is the replay review.
  */
 const SPACE_TOOL_IDS = new Set([
-  'notes', 'tasks', 'cases', 'records', 'mail', 'documents', 'knowledge', 'artifacts', 'artifacts_toolbox', 'task_state', 'plan',
+  'notes', 'tasks', 'cases', 'records', 'mail', 'protection', 'documents', 'knowledge', 'artifacts', 'artifacts_toolbox', 'task_state', 'plan',
   'filesystem', 'shell', 'git', 'docker', 'browser', 'websearch', 'visual', 'repo_registry',
   'skill_runtime', 'test_container', 'action_recovery',
   // The space's own connectors (`SPACE_CONNECTOR_TOOL_IDS`).

@@ -157,6 +157,15 @@ export class MailRepo {
     return row?.raw ?? null;
   }
 
+  /** Set a message's protection level (null: unclear, 4). `onlyRaise`: see `CaseRepo.setProtectionLevel`. */
+  async setProtectionLevel(id: string, level: number | null, onlyRaise = false): Promise<MailMessage | null> {
+    this.scope.can('write');
+    if (!isUuid(id)) return null;
+    const [row] = await this.db.update(mailMessages).set({ protectionLevel: level, updatedAt: new Date() })
+      .where(and(eq(mailMessages.id, id), ...this.messageRows(), ...(onlyRaise && level !== null ? [sql`coalesce(${mailMessages.protectionLevel}, 4) <= ${level}`] : []))).returning();
+    return row ?? null;
+  }
+
   async setUnread(id: string, unread: boolean): Promise<MailMessage | null> {
     this.scope.can('write');
     if (!isUuid(id)) return null;
@@ -171,7 +180,8 @@ export class MailRepo {
   // ── Drafts ────────────────────────────────────────────────────────
 
   /** A new draft in `account` (an account of this scope). */
-  async createDraft(account: MailAccount, data: MailDraftWrite): Promise<MailMessage> {
+  /** `protectionLevel`: absent, the account's default; a reply passes the higher of that and the original's. */
+  async createDraft(account: MailAccount, data: MailDraftWrite, protectionLevel?: number | null): Promise<MailMessage> {
     this.scope.can('write');
     if (!(await this.account(account.id))) throw new Error('Mail account not found');
     const now = new Date();
@@ -183,6 +193,7 @@ export class MailRepo {
         userId: account.userId,
         workspaceId: account.workspaceId,
         status: 'draft',
+        protectionLevel: protectionLevel !== undefined ? protectionLevel : account.defaultProtectionLevel,
         fromAddress: { address: account.address, ...(account.displayName ? { name: account.displayName } : {}) },
         snippet: data.bodyText ? data.bodyText.replace(/\s+/g, ' ').trim().slice(0, 200) : '',
         authorId: this.scope.principal.userId,

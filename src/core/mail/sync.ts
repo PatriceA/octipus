@@ -96,6 +96,7 @@ export async function storeReceived(account: MailAccount, fetched: FetchedMessag
         userId: account.userId,
         workspaceId: account.workspaceId,
         status: 'received',
+        protectionLevel: account.defaultProtectionLevel,
         remoteId: storable(fetched.remoteId),
         subject: '(this message could not be stored; open it in the mail client)',
         unread: fetched.unread,
@@ -122,6 +123,7 @@ async function insertReceived(account: MailAccount, fetched: FetchedMessage): Pr
         userId: account.userId,
         workspaceId: account.workspaceId,
         status: 'received',
+        protectionLevel: account.defaultProtectionLevel,
         remoteId: storable(fetched.remoteId),
         messageIdHeader: parsed.messageIdHeader,
         inReplyTo: parsed.inReplyTo,
@@ -147,7 +149,7 @@ async function insertReceived(account: MailAccount, fetched: FetchedMessage): Pr
   });
   if (!id) return 'duplicate';
   if (account.fileAttachments && !fetched.truncated && parsed.attachments.length > 0) {
-    await fileMailAttachments(account, id, parsed.subject, fetched.source);
+    await fileMailAttachments(account, id, parsed.subject, fetched.source, [], account.defaultProtectionLevel);
   }
   return 'stored';
 }
@@ -161,7 +163,11 @@ async function insertReceived(account: MailAccount, fetched: FetchedMessage): Pr
  * (`retryUnfiledAttachments`). The message itself is stored either way.
  * Returns whether every attachment is filed now.
  */
-export async function fileMailAttachments(account: MailAccount, messageId: string, subject: string, raw: Buffer, alreadyFiled: readonly number[] = []): Promise<boolean> {
+export async function fileMailAttachments(
+  account: MailAccount, messageId: string, subject: string, raw: Buffer, alreadyFiled: readonly number[] = [],
+  /** The message's level now: its attachments start there (a message raised since is not filed lower). */
+  protectionLevel: number | null = account.defaultProtectionLevel,
+): Promise<boolean> {
   const filed = new Set(alreadyFiled);
   let error: string | null = null;
   try {
@@ -176,6 +182,7 @@ export async function fileMailAttachments(account: MailAccount, messageId: strin
           buffer: attachment.content,
           originalName: attachment.filename,
           mimeType: attachment.contentType,
+          protectionLevel,
           metadata: { source: 'mail', mailAccountId: account.id, mailMessageId: messageId, mailSubject: subject.slice(0, 200) },
         });
         // Stored but not queued is still filed: the document exists and says why.
@@ -202,12 +209,12 @@ export async function fileMailAttachments(account: MailAccount, messageId: strin
 async function retryUnfiledAttachments(account: MailAccount): Promise<void> {
   if (!account.fileAttachments) return;
   const pending = await getDb()
-    .select({ id: mailMessages.id, subject: mailMessages.subject, filed: mailMessages.filedAttachments, raw: mailRaw.raw })
+    .select({ id: mailMessages.id, subject: mailMessages.subject, filed: mailMessages.filedAttachments, level: mailMessages.protectionLevel, raw: mailRaw.raw })
     .from(mailMessages)
     .innerJoin(mailRaw, eq(mailRaw.messageId, mailMessages.id))
     .where(and(eq(mailMessages.accountId, account.id), sql`${mailMessages.filingError} IS NOT NULL`))
     .limit(10);
-  for (const m of pending) await fileMailAttachments(account, m.id, m.subject, m.raw, m.filed);
+  for (const m of pending) await fileMailAttachments(account, m.id, m.subject, m.raw, m.filed, m.level);
 }
 
 /** Why the account's attachments are not all filed, or null. */

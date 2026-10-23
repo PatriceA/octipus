@@ -13,6 +13,7 @@ import type { ToolManifest } from '@/core/types';
 import { reposFor } from '@/db/repositories/content';
 import type { Case } from '@/db/schema/cases';
 import type { Contact, ContactAddress } from '@/db/schema/contacts';
+import { effectiveProtectionLevel } from '@/shared/protection';
 import { BaseTool, createParameterSchema } from '../base-tool';
 
 /**
@@ -396,6 +397,7 @@ function summarizeCase(c: Case) {
     assigneeUserId: c.assigneeUserId,
     source: c.source,
     externalKey: c.externalKey,
+    protectionLevel: effectiveProtectionLevel(c.protectionLevel),
     closedAt: c.closedAt,
     updatedAt: c.updatedAt,
   };

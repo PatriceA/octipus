@@ -34,6 +34,7 @@ export const SPACE_ROUTES: readonly SpaceRoute[] = [
   { prefix: '/api/record-types', what: 'record types and their form links' },
   { prefix: '/api/records', what: 'records' },
   { prefix: '/api/mail', what: 'functional mailboxes: accounts, messages, drafts' },
+  { prefix: '/api/protection', what: 'protection levels of the space\'s documents, cases, records and mail' },
   { prefix: '/api/scan-folders', what: 'scan folders filing into the space\'s documents (admins)' },
   { prefix: '/api/documents', what: 'uploaded documents' },
   { prefix: '/api/artifacts', what: 'live artifacts' },

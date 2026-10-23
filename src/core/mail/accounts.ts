@@ -44,6 +44,7 @@ export interface MailAccountInput {
   folder?: string;
   enabled?: boolean;
   fileAttachments?: boolean;
+  defaultProtectionLevel?: number | null;
 }
 
 export interface MailPasswordsInput {
@@ -98,6 +99,7 @@ async function accountWrite(input: MailAccountInput, admin: boolean): Promise<Ma
     folder,
     enabled: input.enabled ?? true,
     fileAttachments: input.fileAttachments ?? false,
+    defaultProtectionLevel: input.defaultProtectionLevel ?? null,
     localNetwork: await localNetworkFor(outgoing ? [incoming, outgoing] : [incoming], admin),
   };
 }
@@ -140,6 +142,7 @@ export async function updateMailAccount(repos: ContentRepos, id: string, input: 
       folder: input.folder ?? current.folder,
       enabled: input.enabled ?? current.enabled,
       fileAttachments: input.fileAttachments ?? current.fileAttachments,
+      defaultProtectionLevel: input.defaultProtectionLevel !== undefined ? input.defaultProtectionLevel : current.defaultProtectionLevel,
     }, isAdmin(repos.principal));
     patch = merged;
   } else {
@@ -148,6 +151,7 @@ export async function updateMailAccount(repos: ContentRepos, id: string, input: 
     if (input.displayName !== undefined) patch.displayName = input.displayName?.replace(/[\r\n"<>]+/g, ' ').trim().slice(0, 100) || null;
     if (input.enabled !== undefined) patch.enabled = input.enabled;
     if (input.fileAttachments !== undefined) patch.fileAttachments = input.fileAttachments;
+    if (input.defaultProtectionLevel !== undefined) patch.defaultProtectionLevel = input.defaultProtectionLevel;
   }
   const serversChanged = connection && (
     JSON.stringify([patch.protocol, patch.incoming, patch.folder]) !== JSON.stringify([current.protocol, current.incoming, current.folder])
@@ -205,6 +209,7 @@ export async function accountViews(rows: readonly MailAccount[]): Promise<MailAc
     folder: r.folder,
     enabled: r.enabled,
     fileAttachments: r.fileAttachments,
+    defaultProtectionLevel: r.defaultProtectionLevel,
     passwordSet: set.get(r.id) ?? { incoming: false, outgoing: false },
     lastSyncAt: r.lastSyncAt?.toISOString() ?? null,
     lastError: r.lastError,
@@ -224,6 +229,7 @@ export function messageSummary(row: MailSummaryRow): MailMessageSummary {
     date: row.date.toISOString(),
     unread: row.unread,
     hasAttachments: row.attachments.length > 0,
+    protectionLevel: row.protectionLevel,
   };
 }
 

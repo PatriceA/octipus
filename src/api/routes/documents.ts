@@ -6,6 +6,7 @@ import { ingestDocument, maxDocumentSize } from '@/core/documents/ingest';
 import { getDocumentQueue } from '@/core/documents/queue';
 import { contentRepos } from '@/db/repositories/content';
 import { isAuthenticated } from '@/security/principal';
+import { isProtectionLevel } from '@/shared/protection';
 import { apiLogger } from '@/utils/logger';
 import { fileAt } from '@/utils/fs-file';
 
@@ -34,6 +35,9 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
     repos.can('write');
     const maxSize = maxDocumentSize();
     const files = Array.isArray(body.files) ? body.files : [body.files];
+    // A level for the whole upload (docs/PROTECTION-LEVELS.md); absent: unclear.
+    const level = body.protectionLevel ? Number(body.protectionLevel) : null;
+    if (level !== null && !isProtectionLevel(level)) { set.status = 400; return { error: 'protectionLevel is 1, 2, 3 or 4' }; }
     const results: Array<{ id: string; filename: string; status: string; error?: string }> = [];
 
     for (const file of files) {
@@ -52,6 +56,7 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
         buffer: Buffer.from(await file.arrayBuffer()),
         originalName,
         mimeType: file.type || 'application/octet-stream',
+        protectionLevel: level,
       });
       results.push(result.error ? result : { id: result.id, filename: result.filename, status: result.status });
       if (!result.error) logger.info({ documentId: result.id, filename: originalName, size: file.size }, 'Document uploaded');
@@ -61,6 +66,7 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
   }, {
     body: t.Object({
       files: t.Union([t.File(), t.Array(t.File())]),
+      protectionLevel: t.Optional(t.String({ pattern: '^[1-4]$' })),
     }),
     detail: { tags: ['documents'] },
   })
@@ -94,6 +100,7 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
         size: d.size,
         category: d.category,
         status: d.status,
+        protectionLevel: d.protectionLevel,
         summary: d.summary,
         createdAt: d.createdAt,
         processedAt: d.processedAt,
@@ -132,6 +139,7 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
       status: doc.status,
       ocrText: doc.ocrText,
       summary: doc.summary,
+      protectionLevel: doc.protectionLevel,
       storagePath: doc.storagePath,
       metadata: doc.metadata,
       createdAt: doc.createdAt,

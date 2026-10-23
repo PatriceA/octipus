@@ -171,6 +171,7 @@ export async function scanFolder(folder: ScanFolder, now = new Date()): Promise<
               buffer: read.buffer,
               originalName: name,
               mimeType: mimeTypeOf(name),
+              protectionLevel: folder.defaultProtectionLevel,
               metadata: { source: 'scan_folder', scanFolderId: folder.id, scanFolder: folder.label },
             });
             documentId = doc.id;

@@ -9,6 +9,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { and, count, desc, eq, ilike, isNull, type SQL, sql } from 'drizzle-orm';
 import { parseFields, type RecordData, RecordValidationError, recordTitle, validateRecordData, KEY_RE } from '@/core/records/fields';
+import { isProtectionLevel } from '@/shared/protection';
 import { getDb } from '../postgres';
 import { caseLinks } from '../schema/cases';
 import { type FormLink, formLinks, type NewRecordRow, type RecordRow, type RecordType, recordTypes, records } from '../schema/records';
@@ -38,6 +39,8 @@ export interface RecordTypeInput {
   description?: string | null;
   fields: unknown;
   titleField?: string | null;
+  /** The level new records of the type start at (docs/PROTECTION-LEVELS.md); null: unclear. */
+  defaultProtectionLevel?: number | null;
 }
 
 export class RecordTypeRepo {
@@ -84,7 +87,10 @@ export class RecordTypeRepo {
     const titleField = input.titleField !== undefined ? input.titleField || null : current?.titleField ?? null;
     if (titleField && !fields.some((f) => f.key === titleField && f.type === 'text')) problems.push(`titleField "${titleField}" is not a text field of this type`);
     if (problems.length > 0) throw new RecordValidationError(problems);
-    return { key: key as string, name: (name as string).slice(0, 200), fields, titleField };
+    const defaultProtectionLevel = input.defaultProtectionLevel !== undefined ? input.defaultProtectionLevel : current?.defaultProtectionLevel ?? null;
+    if (defaultProtectionLevel !== null && !isProtectionLevel(defaultProtectionLevel)) problems.push('defaultProtectionLevel is 1, 2, 3 or 4');
+    if (problems.length > 0) throw new RecordValidationError(problems);
+    return { key: key as string, name: (name as string).slice(0, 200), fields, titleField, defaultProtectionLevel };
   }
 
   async create(input: RecordTypeInput): Promise<RecordType> {
@@ -147,6 +153,8 @@ export interface RecordInput {
   source?: string;
   sourceRef?: NewRecordRow['sourceRef'];
   externalKey?: string | null;
+  /** The record's level; absent: the type's default, copied now (a later change of the default does not reach it). Null: unclear. */
+  protectionLevel?: number | null;
 }
 
 export class RecordRepo {
@@ -162,6 +170,15 @@ export class RecordRepo {
   async findById(id: string): Promise<RecordRow | null> {
     if (!isUuid(id)) return null;
     const [row] = await this.db.select().from(records).where(and(eq(records.id, id), ...this.rows())).limit(1);
+    return row ?? null;
+  }
+
+  /** Set a record's protection level (null: unclear, 4). `onlyRaise`: see `CaseRepo.setProtectionLevel`. */
+  async setProtectionLevel(id: string, level: number | null, onlyRaise = false): Promise<RecordRow | null> {
+    this.scope.can('write');
+    if (!isUuid(id)) return null;
+    const [row] = await this.db.update(records).set({ protectionLevel: level, updatedAt: new Date() })
+      .where(and(eq(records.id, id), ...this.rows(), ...(onlyRaise && level !== null ? [sql`coalesce(${records.protectionLevel}, 4) <= ${level}`] : []))).returning();
     return row ?? null;
   }
 
@@ -204,6 +221,7 @@ export class RecordRepo {
         source: input.source ?? 'user',
         sourceRef: input.sourceRef,
         externalKey: input.externalKey ?? null,
+        protectionLevel: input.protectionLevel !== undefined ? input.protectionLevel : type.defaultProtectionLevel,
         ...(await stampRow(this.scope)),
       })
       .returning();
@@ -223,6 +241,7 @@ export class RecordRepo {
         source: input.source ?? 'user',
         sourceRef: input.sourceRef,
         externalKey: input.externalKey,
+        protectionLevel: input.protectionLevel !== undefined ? input.protectionLevel : type.defaultProtectionLevel,
         ...(await stampRow(this.scope)),
       })
       .onConflictDoNothing()

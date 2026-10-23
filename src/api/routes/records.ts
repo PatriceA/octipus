@@ -85,6 +85,7 @@ export const recordTypeRoutes = new Elysia({ prefix: '/record-types' })
         description: t.Optional(t.String({ maxLength: 2000 })),
         fields: FIELDS,
         titleField: t.Optional(t.String({ maxLength: 50 })),
+        defaultProtectionLevel: t.Optional(t.Union([t.Integer({ minimum: 1, maximum: 4 }), t.Null()])),
       }),
       detail: { tags: ['records'] },
     },
@@ -133,6 +134,7 @@ export const recordTypeRoutes = new Elysia({ prefix: '/record-types' })
         description: t.Optional(t.Union([t.String({ maxLength: 2000 }), t.Null()])),
         fields: t.Optional(FIELDS),
         titleField: t.Optional(t.Union([t.String({ maxLength: 50 }), t.Null()])),
+        defaultProtectionLevel: t.Optional(t.Union([t.Integer({ minimum: 1, maximum: 4 }), t.Null()])),
       }),
       detail: { tags: ['records'] },
     },
@@ -277,7 +279,7 @@ export const recordRoutes = new Elysia({ prefix: '/records' })
         return NOT_AUTHENTICATED;
       }
       try {
-        return await contentRepos(principal).records.create(body.type, { data: body.data, source: 'user' });
+        return await contentRepos(principal).records.create(body.type, { data: body.data, source: 'user', protectionLevel: body.protectionLevel });
       } catch (err) {
         return refused(err, set);
       }
@@ -287,6 +289,8 @@ export const recordRoutes = new Elysia({ prefix: '/records' })
         /** A type id or key. */
         type: t.String({ minLength: 1, maxLength: 100 }),
         data: DATA,
+        /** 1-4; absent: the type's default (docs/PROTECTION-LEVELS.md). */
+        protectionLevel: t.Optional(t.Union([t.Integer({ minimum: 1, maximum: 4 }), t.Null()])),
       }),
       detail: { tags: ['records'] },
     },

@@ -11,7 +11,7 @@ import {
   testMailAccount,
   updateMailAccount,
 } from '@/core/mail/accounts';
-import { cleanBody, cleanSubject, parseRecipients, replyDraft } from '@/core/mail/drafts';
+import { cleanBody, cleanSubject, parseRecipients, replyDraft, replyProtectionLevel } from '@/core/mail/drafts';
 import { attachmentsOf } from '@/core/mail/parse';
 import { MailSendError, sendDraft } from '@/core/mail/send';
 import { syncAccount } from '@/core/mail/sync';
@@ -41,6 +41,7 @@ const ACCOUNT_FIELDS = {
   folder: t.Optional(t.String({ maxLength: 200 })),
   enabled: t.Optional(t.Boolean()),
   fileAttachments: t.Optional(t.Boolean()),
+  defaultProtectionLevel: t.Optional(t.Union([t.Integer({ minimum: 1, maximum: 4 }), t.Null()])),
   passwords: t.Optional(PASSWORDS),
 };
 const RECIPIENTS = t.Union([t.String({ maxLength: 20_000 }), t.Array(t.String({ maxLength: 400 }), { maxItems: 100 })]);
@@ -228,7 +229,7 @@ export const mailRoutes = new Elysia({ prefix: '/mail' })
         if (!original || original.status !== 'received') { set.status = 404; return { error: 'Message not found' }; }
         const account = await repo.account(original.accountId);
         if (!account) { set.status = 404; return { error: 'Mail account not found' }; }
-        const draft = await repo.createDraft(account, replyDraft(account, original, body.body ?? '', body.all === true));
+        const draft = await repo.createDraft(account, replyDraft(account, original, body.body ?? '', body.all === true), replyProtectionLevel(account, original));
         set.status = 201;
         return messageView(draft, false);
       }

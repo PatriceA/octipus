@@ -129,6 +129,7 @@ export const caseRoutes = new Elysia({ prefix: '/cases' })
           summary: body.summary ?? null,
           assigneeUserId: body.assigneeUserId ?? null,
           source: 'user',
+          protectionLevel: body.protectionLevel ?? null,
         });
       } catch (err) {
         return refused(err, set);
@@ -141,6 +142,8 @@ export const caseRoutes = new Elysia({ prefix: '/cases' })
         status: t.Optional(STATUS),
         summary: t.Optional(t.String({ maxLength: 20_000 })),
         assigneeUserId: t.Optional(t.String()),
+        /** 1-4; absent: unclear (docs/PROTECTION-LEVELS.md). */
+        protectionLevel: t.Optional(t.Union([t.Integer({ minimum: 1, maximum: 4 }), t.Null()])),
       }),
       detail: { tags: ['cases'] },
     },

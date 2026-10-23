@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { index, integer, jsonb, pgTable, smallint, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import type { FieldDef, RecordData } from '@/shared/record-fields';
 import { workspaces } from './organizations';
 import { users } from './users';
@@ -24,6 +24,8 @@ export const recordTypes = pgTable('record_types', {
   fields: jsonb('fields').$type<FieldDef[]>().default([]).notNull(),
   /** The field a record's title is taken from; else its first filled text field. */
   titleField: text('title_field'),
+  /** The protection level new content of this source starts at (docs/PROTECTION-LEVELS.md); null: unclear. */
+  defaultProtectionLevel: smallint('default_protection_level'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
@@ -48,6 +50,8 @@ export const records = pgTable('records', {
   /** Derived from the data on every write (`recordTitle`). */
   title: text('title'),
   data: jsonb('data').$type<RecordData>().default({}).notNull(),
+  /** 1-4 (docs/PROTECTION-LEVELS.md); null is unclear and counts as 4. */
+  protectionLevel: smallint('protection_level'),
   /** Provenance: 'user' | 'agent' | 'form' | 'plugin' | … (free text). */
   source: text('source').default('user').notNull(),
   sourceRef: jsonb('source_ref').$type<RecordSourceRef>(),

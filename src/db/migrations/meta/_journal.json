@@ -1051,6 +1051,13 @@
       "when": 1793008824550,
       "tag": "0149_scan_folders",
       "breakpoints": true
+    },
+    {
+      "idx": 150,
+      "version": "7",
+      "when": 1793095224550,
+      "tag": "0150_protection_levels",
+      "breakpoints": true
     }
   ]
 }

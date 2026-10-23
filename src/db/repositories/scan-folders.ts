@@ -13,7 +13,7 @@ import { type NewScanFolder, type ScanFolder, scanFolders } from '../schema/scan
 import { isUuid, type RepoScope } from './scoped';
 
 /** A folder write: the author, workspace, scan state and timestamps are the repository's. */
-export type ScanFolderWrite = Pick<NewScanFolder, 'label' | 'path' | 'enabled'>;
+export type ScanFolderWrite = Pick<NewScanFolder, 'label' | 'path' | 'enabled' | 'defaultProtectionLevel'>;
 
 export class ScanFolderRepo {
   constructor(private readonly scope: RepoScope) {}

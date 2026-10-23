@@ -1,3 +1,4 @@
+import { effectiveProtectionLevel } from '@/shared/protection';
 import { getEmbeddingService } from '@/core/rag/embeddings';
 import { agentKnowledgeScope } from '@/core/rag/knowledge-scope';
 import type { ToolManifest } from '@/core/types';
@@ -80,6 +81,7 @@ export class DocumentsTool extends BaseTool {
           documents: docs.map(d => ({
             id: d.id,
             originalName: d.originalName,
+            protectionLevel: effectiveProtectionLevel(d.protectionLevel),
             mimeType: d.mimeType,
             size: d.size,
             category: d.category,
@@ -107,6 +109,7 @@ export class DocumentsTool extends BaseTool {
         return {
           id: doc.id,
           originalName: doc.originalName,
+          protectionLevel: effectiveProtectionLevel(doc.protectionLevel),
           mimeType: doc.mimeType,
           size: doc.size,
           category: doc.category,

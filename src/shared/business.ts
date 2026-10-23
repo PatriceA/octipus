@@ -22,6 +22,8 @@ export interface CaseView {
   assigneeUserId: string | null;
   source: string;
   externalKey: string | null;
+  /** 1-4 (docs/PROTECTION-LEVELS.md); null is unclear and counts as 4. */
+  protectionLevel: number | null;
   closedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -82,6 +84,8 @@ export interface RecordTypeView {
   description: string | null;
   fields: FieldDef[];
   titleField: string | null;
+  /** The level new records start at; null: unclear. */
+  defaultProtectionLevel: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -95,6 +99,8 @@ export interface RecordView {
   data: RecordData;
   source: string;
   externalKey: string | null;
+  /** 1-4; null: the type's default, else unclear (4). */
+  protectionLevel: number | null;
   createdAt: string;
   updatedAt: string;
 }

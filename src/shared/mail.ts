@@ -44,6 +44,8 @@ export interface MailAccountView {
   enabled: boolean;
   /** Attachments of received mail are filed into the documents. */
   fileAttachments: boolean;
+  /** The protection level received mail (and its filed attachments) start at; null: unclear (4). */
+  defaultProtectionLevel: number | null;
   /** Whether a password is stored for incoming / outgoing. Never the password itself. */
   passwordSet: { incoming: boolean; outgoing: boolean };
   lastSyncAt: string | null;
@@ -71,6 +73,8 @@ export interface MailMessageSummary {
   date: string;
   unread: boolean;
   hasAttachments: boolean;
+  /** 1-4 (docs/PROTECTION-LEVELS.md); null: unclear (4). */
+  protectionLevel: number | null;
 }
 
 export interface MailMessageView extends MailMessageSummary {
