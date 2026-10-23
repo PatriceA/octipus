@@ -150,8 +150,10 @@ export async function invalidHookTargets(
  */
 export async function notifyTargetsError(userId: string, config: unknown, previousConfig?: unknown): Promise<string | null> {
   // An execute_tool hook on a tool of a module that is off (docs/MODULES.md).
-  const toolId = (config && typeof config === 'object' ? (config as Record<string, unknown>).toolId : undefined);
-  if (typeof toolId === 'string') {
+  // A hook that already named it stays editable, like a stored target below.
+  const toolOf = (c: unknown) => (c && typeof c === 'object' ? (c as Record<string, unknown>).toolId : undefined);
+  const toolId = toolOf(config);
+  if (typeof toolId === 'string' && toolOf(previousConfig) !== toolId) {
     const { toolOffMessage } = await import('@/core/modules/registry');
     const off = toolOffMessage(toolId);
     if (off) return off;

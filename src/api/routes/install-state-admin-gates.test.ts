@@ -36,6 +36,7 @@ const toolManifest = {
 vi.mock('@/tools/registry', () => ({
   getToolRegistry: () => ({
     getManifests: () => [toolManifest],
+    getEnabledManifests: () => [toolManifest],
     checkAllAvailability: async () => new Map([['github', { available: true }]]),
     checkAvailability: async () => ({ available: true }),
     isInitialized: () => true,
@@ -43,6 +44,7 @@ vi.mock('@/tools/registry', () => ({
     getToolHandlersForTools: (ids: string[]) => ids.includes('notes') ? [{ name: 'notes__create', description: 'n', parameters: {}, toolId: 'notes' }] : [],
     get: (id: string) => (id === 'github' ? { getManifest: () => toolManifest } : undefined),
     getAll: () => [{ id: 'github', name: 'GitHub', description: 'gh cli' }],
+    getEnabled: () => [{ id: 'github', name: 'GitHub', description: 'gh cli' }],
     findTool: () => ({ execute: fixture.toolExecute }),
     has: () => false,
     unregister: async () => {},
