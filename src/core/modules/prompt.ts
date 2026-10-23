@@ -14,14 +14,16 @@ import { isModuleOn } from './registry';
  *     A marker on a line of its own opens a block that the closing marker
  *     ends: the block goes when the module is off.
  *
+ * `module:!<id>` marks the text used instead while the module is off.
  * The markers themselves never reach a model.
  */
-const LINE = /^(.*?)\s*<!--\s*module:([a-z0-9-]+)\s*-->\s*$/;
-const OPEN = /^\s*<!--\s*module:([a-z0-9-]+)\s*-->\s*$/;
+const LINE = /^(.*?)\s*<!--\s*module:(!?[a-z0-9-]+)\s*-->\s*$/;
+const OPEN = /^\s*<!--\s*module:(!?[a-z0-9-]+)\s*-->\s*$/;
 const CLOSE = /^\s*<!--\s*\/module\s*-->\s*$/;
 
-export function withoutOffModules(prompt: string, on: (id: string) => boolean = isModuleOn): string {
+export function withoutOffModules(prompt: string, isOn: (id: string) => boolean = isModuleOn): string {
   if (!prompt.includes('<!--')) return prompt;
+  const on = (marker: string) => (marker.startsWith('!') ? !isOn(marker.slice(1)) : isOn(marker));
   const out: string[] = [];
   /** The modules of the blocks we are in; a block of an off module hides its lines. */
   const open: string[] = [];

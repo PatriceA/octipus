@@ -24,6 +24,12 @@ describe('withoutOffModules', () => {
     expect(withoutOffModules(prompt, on(['artifacts', 'voice']))).toBe('Tools:\n- `notes` — notes.\n- `artifacts` — live dashboards.\n## Calls\nCall with `voice__initiate_call`.\nDone.');
   });
 
+  test('`module:!id` is the text used instead while the module is off', () => {
+    const alt = 'You build dashboards. <!-- module:artifacts -->\nYou design schemas. <!-- module:!artifacts -->\n<!-- module:!artifacts -->\nNo dashboards here.\n<!-- /module -->';
+    expect(withoutOffModules(alt, on(['artifacts']))).toBe('You build dashboards.');
+    expect(withoutOffModules(alt, on([]))).toBe('You design schemas.\nNo dashboards here.');
+  });
+
   test('a block inside an off block stays out; an unmarked prompt is returned as is', () => {
     const nested = '<!-- module:a -->\nA\n<!-- module:b -->\nB\n<!-- /module -->\nA2\n<!-- /module -->\nend';
     expect(withoutOffModules(nested, on(['b']))).toBe('end');

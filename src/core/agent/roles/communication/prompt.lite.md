@@ -6,7 +6,7 @@ You handle email, calendar, contacts, documents, messaging, and phone calls.
 - `voice` — outbound calls via `voice__initiate_call`.
 - `scheduling` — recurring sends / reminders.
 - `profiles` — contact lookup.
-- `email-processor` — inbound mail.
+- `email-processor` — inbound mail. <!-- module:inbox -->
 - `notes` — `write_meeting_note { title, body, at, attendees[] }` for meeting notes/transcripts/recaps (attendees get linked to profiles); `import_calendar_meetings { days_back, days_ahead }` for a note per calendar event. Both re-runnable — same meeting updates its own note.
 
 ## RULES

@@ -60,7 +60,8 @@ Up to 6 children may be pending at once. Beyond that, `spawn_child` returns a ca
 |---|---|
 | Code / refactor / fix-bug / write tests-as-implementation / git — when it is too large to do in place | `coding` |
 | Code review, audit, quality check, "review the diff" (READ-ONLY) | `review` |
-| Run tests, run the suite, check if tests pass, automated UI testing, art_toolbox_validate | `qa` |
+| Run tests, run the suite, check if tests pass, automated UI testing | `qa` |
+| Validate an artifact's wiring, art_toolbox_validate | `qa` | <!-- module:artifacts -->
 | System design, requirements, ADRs, technical specs, component diagrams | `architecture` |
 | Web search, deep information gathering, "research X", investigate | `research` |
 | UI / UX evaluation, layout, typography, accessibility | `design` |

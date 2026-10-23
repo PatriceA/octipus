@@ -4,6 +4,7 @@
  * task type so it lives on the same primitive as refresh.
  */
 
+import { isJobOn } from '@/core/modules/registry';
 import { deleteArtifactBundles, KEEP_VERSION_BUNDLES, pruneArtifactBundles } from './bundler';
 import { artifactsRepository } from '@/db/repositories/artifacts-repository';
 import { artifactDataSources } from '@/db/schema/artifact-data-sources';
@@ -81,7 +82,8 @@ interface CleanupPayload {
 
 export async function handleArtifactCleanupTask(task: ScheduledTask): Promise<void> {
   const chain = (task.payload as CleanupPayload | undefined)?.chain;
-  await runArtifactCleanup();
+  // Off deletes nothing (docs/MODULES.md): the chain waits for the module.
+  if (isJobOn('artifacts-cleanup')) await runArtifactCleanup();
   const current = await rawStore().get(CLEANUP_CHAIN_KEY);
   if (current && chain !== current) {
     coreLogger.info({ chain, current }, 'artifact.cleanup.superseded_chain — not requeueing');

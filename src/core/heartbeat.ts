@@ -50,6 +50,7 @@
  * Postgres LISTEN/NOTIFY); marking a hook due is a DB write, so only the
  * process where the close happened does it (remote events are ignored here).
  */
+import { isJobOn } from '@/core/modules/registry';
 import { randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lte, ne, or, sql } from 'drizzle-orm';
@@ -223,7 +224,8 @@ async function probePendingWork(
     config.probeCalendar
       ? probeUpcomingEvents(userId, now, config.calendarLookaheadMinutes, deps.calendar)
       : Promise.resolve({ events: [] as UpcomingEvent[], partial: false }),
-    config.probeEmail && watch.email
+    // The inbox watch is the `inbox` module's (docs/MODULES.md).
+    config.probeEmail && watch.email && isJobOn('inbox-watch')
       ? probeNewEmail(userId, now, watch.since, deps.email ?? defaultEmailWatchDeps)
       : Promise.resolve({ emails: [] as InboxItem[], unavailable: false }),
   ]);

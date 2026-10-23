@@ -68,6 +68,10 @@ describe('the modules migration', () => {
     await executeRaw(later);
     expect(JSON.parse((await storedRow()) ?? '[]')).toEqual(['research', 'reader', 'recall']);
     await executeRaw(`UPDATE settings SET value = '["business","mail"]' WHERE key = 'modules.enabled'`);
+    // 0153, the same way: the inbox and artifacts.
+    await executeRaw(readFileSync(join(__dirname, '../../db/migrations/0153_modules_inbox_artifacts.sql'), 'utf8'));
+    expect(JSON.parse((await storedRow()) ?? '[]').sort()).toEqual(['artifacts', 'business', 'inbox', 'mail']);
+    await executeRaw(`UPDATE settings SET value = '["business","mail"]' WHERE key = 'modules.enabled'`);
   });
 
   test('a change is stored in the setting, with what it depends on', async () => {

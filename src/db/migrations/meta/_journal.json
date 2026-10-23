@@ -1072,6 +1072,13 @@
       "when": 1793268024550,
       "tag": "0152_modules_research_reader_recall",
       "breakpoints": true
+    },
+    {
+      "idx": 153,
+      "version": "7",
+      "when": 1793354424550,
+      "tag": "0153_modules_inbox_artifacts",
+      "breakpoints": true
     }
   ]
 }

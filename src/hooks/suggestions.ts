@@ -1,3 +1,4 @@
+import { isModuleOn } from '@/core/modules/registry';
 import { getUMI } from '@/channels/interface';
 import { getOAuthManager } from '@/security/oauth';
 import { coreLogger } from '@/utils/logger';
@@ -74,7 +75,8 @@ Keep it brief and actionable. Highlight anything that needs attention tomorrow.`
 
   // ─── Email Management ─────────────────────────────────────────────
 
-  if (hasEmail) {
+  // The email processor is the `inbox` module's (docs/MODULES.md).
+  if (hasEmail && isModuleOn('inbox')) {
     suggestions.push({
       id: 'email-triage',
       name: 'Email Triage (Every 30 min)',

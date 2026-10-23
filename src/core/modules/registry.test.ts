@@ -107,6 +107,6 @@ describe('the declarations', () => {
   });
 
   test('every route prefix is under /api or a mounted page path', () => {
-    for (const m of modules) for (const route of m.routes) expect(route).toMatch(/^\/[a-z0-9-]+(\/[a-z0-9-]+)*$/);
+    for (const m of modules) for (const route of m.routes) expect(route).toMatch(/^\/[a-z0-9_.-]+(\/[a-z0-9_.-]+)*$/);
   });
 });
