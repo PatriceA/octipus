@@ -56,6 +56,7 @@ export class DocumentRepository {
    */
   async protectionLevelsSystem(ids: readonly string[]): Promise<Map<string, number | null>> {
     if (ids.length === 0) return new Map();
+    // i2: levels only, never content, for ids whose chunks the caller already reached through its own scope.
     const rows = await this.db.select({ id: documents.id, level: documents.protectionLevel }).from(documents).where(inArray(documents.id, [...ids]));
     return new Map(rows.map((r) => [r.id, r.level]));
   }
