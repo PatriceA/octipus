@@ -1,5 +1,6 @@
 import { actionRecovery, isReadOnlyAction } from './action-recovery';
 import { withExecutionSignal } from './execution-scope';
+import { isToolOn, toolOffMessage } from '@/core/modules/registry';
 import { isCancellationError } from '@/core/swarm/errors';
 import { type SideEffectCounters, emptyCounters } from '@/core/swarm/receipt';
 import { renderToolActivity } from '@/core/work-stream/renderers';
@@ -314,9 +315,15 @@ export class ToolExecutor {
     }
   }
 
+  /**
+   * The tools this run may call: not blocked, and not of a module switched
+   * off since the run started (docs/MODULES.md), so the next turn's
+   * declaration no longer offers them.
+   */
   getTools(): Map<string, ToolHandler> {
-    if (!this.blockedTools.size) return this.tools;
-    return new Map([...this.tools].filter(([name]) => !this.blockedTools.has(name)));
+    const offModule = [...this.tools.values()].some((tool) => tool.toolId && !isToolOn(tool.toolId));
+    if (!this.blockedTools.size && !offModule) return this.tools;
+    return new Map([...this.tools].filter(([name, tool]) => !this.blockedTools.has(name) && (!tool.toolId || isToolOn(tool.toolId))));
   }
 
   /** Blocked after repeating the same failure; see `failStreaks`. */
@@ -600,6 +607,13 @@ export class ToolExecutor {
       }
 
       const toolId = tool.toolId || 'agent';
+
+      const off = toolOffMessage(toolId);
+      if (off) {
+        this.counters.permissionDenials++;
+        results.push({ toolCallId: toolCall.id, result: null, errorCode: 'permission_denied', error: off });
+        continue;
+      }
 
       // A meta-tool never reaches `routeApprovalFor`, so in a space one that is
       // not offered there (a personal-only tool such as `update_skill`) is

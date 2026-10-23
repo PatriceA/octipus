@@ -6,6 +6,7 @@
  * same stores and drop the ones whose entity is gone or out of reach (a
  * private artifact of another member, a deleted document).
  */
+import { isCaseEntityOn } from '@/core/modules/registry';
 import type { ContentRepos } from '@/db/repositories/content';
 import type { MailSummaryRow } from '@/db/repositories/mail';
 import type { Case, CaseLink } from '@/db/schema/cases';
@@ -90,6 +91,7 @@ export async function linkToCase(
   input: { entityType: unknown; entityId: string; role?: unknown },
 ): Promise<ResolvedCaseLink | null> {
   if (!isCaseEntityType(input.entityType)) throw new CaseLinkError(`Unknown entity type: ${String(input.entityType)}`);
+  if (!isCaseEntityOn(input.entityType)) throw new CaseLinkError(`Unknown entity type: ${input.entityType}`);
   const entityType = input.entityType;
   const entity = await resolveEntity(repos, entityType, input.entityId);
   if (!entity) throw new CaseLinkError(`${entityType} not found`);
@@ -102,10 +104,14 @@ export async function linkToCase(
  * reachable. Pass the case row when the caller has just read it through
  * `repos`. Entities are resolved one query per type where the store has a
  * batch read; links whose entity row is gone are deleted on the way.
+ * Links to an entity of a module that is off are left out and kept.
  */
 export async function caseLinks(repos: ContentRepos, caseRef: string | Case): Promise<ResolvedCaseLink[] | null> {
-  const links = await repos.cases.links(caseRef);
-  if (!links) return null;
+  const stored = await repos.cases.links(caseRef);
+  if (!stored) return null;
+  // Links to an entity of a module that is off (docs/MODULES.md) are not
+  // shown, and not pruned either: they come back when the module does.
+  const links = stored.filter((link) => isCaseEntityOn(link.entityType));
   const views = await resolveEntities(repos, links);
   const resolved: ResolvedCaseLink[] = [];
   const unresolved: CaseLink[] = [];

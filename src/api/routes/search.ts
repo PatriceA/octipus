@@ -100,7 +100,7 @@ export const searchRoutes = new Elysia({ prefix: '/search' })
         (async () => {
           if (!isAdmin(principal)) return [];
           const registry = getToolRegistry();
-          const allTools = registry.getAll();
+          const allTools = registry.getEnabled();
           const lower = searchTerm.toLowerCase();
           return allTools.filter(
             (tool) =>

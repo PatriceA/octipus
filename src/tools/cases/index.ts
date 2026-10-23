@@ -13,7 +13,8 @@ import type { ToolManifest } from '@/core/types';
 import { reposFor } from '@/db/repositories/content';
 import type { Case } from '@/db/schema/cases';
 import type { Contact, ContactAddress } from '@/db/schema/contacts';
-import { effectiveProtectionLevel } from '@/shared/protection';
+import { visibleProtectionLevel } from '@/core/protection/visible';
+import { isCaseEntityOn } from '@/core/modules/registry';
 import { BaseTool, createParameterSchema } from '../base-tool';
 
 /**
@@ -167,12 +168,7 @@ export class CasesTool extends BaseTool {
     this.registerTool(
       'link_to_case',
       'Link a contact, document, task, note, artifact or record to a case, with an optional role ("client", "sender", "invoice"). Linking the same entity again changes its role.',
-      createParameterSchema({
-        caseId: { type: 'string', description: 'Case id', required: true },
-        entityType: { type: 'string', description: 'What to link', enum: [...CASE_ENTITY_TYPES], required: true },
-        entityId: { type: 'string', description: 'Id of the contact, document, task, note, artifact or record', required: true },
-        role: { type: 'string', description: 'What it is to the case' },
-      }),
+      linkParameters(),
       async (args, context) => {
         try {
           const link = await linkToCase(reposFor(context), String(args.caseId ?? ''), {
@@ -397,7 +393,7 @@ function summarizeCase(c: Case) {
     assigneeUserId: c.assigneeUserId,
     source: c.source,
     externalKey: c.externalKey,
-    protectionLevel: effectiveProtectionLevel(c.protectionLevel),
+    protectionLevel: visibleProtectionLevel(c.protectionLevel),
     closedAt: c.closedAt,
     updatedAt: c.updatedAt,
   };
@@ -418,3 +414,20 @@ function summarizeContact(c: Contact) {
 }
 
 export const casesTool = new CasesTool();
+
+/**
+ * `link_to_case`'s parameters. The entity types are read when the tools are
+ * declared to a model, so a type of a module that is off (a mail message
+ * while `mail` is off, docs/MODULES.md) is not offered.
+ */
+function linkParameters(): Record<string, unknown> {
+  const schema = createParameterSchema({
+    caseId: { type: 'string', description: 'Case id', required: true },
+    entityType: { type: 'string', description: 'What to link', enum: [...CASE_ENTITY_TYPES], required: true },
+    entityId: { type: 'string', description: 'Id of the contact, document, task, note, artifact or record', required: true },
+    role: { type: 'string', description: 'What it is to the case' },
+  });
+  const entityType = (schema.properties as Record<string, Record<string, unknown>>).entityType;
+  Object.defineProperty(entityType, 'enum', { get: () => CASE_ENTITY_TYPES.filter(isCaseEntityOn), enumerable: true });
+  return schema;
+}

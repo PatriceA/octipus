@@ -1,5 +1,6 @@
 import { Elysia, t } from '@/api/http';
 import { buildAgentContext, fundingFor, withAgentUsage } from '@/core/agent/context';
+import { isToolOn } from '@/core/modules/registry';
 import { adminDenied } from '@/api/admin-guard';
 import { apiContext } from '@/api/context';
 import { ROLE_CONFIGS } from '@/core/agent/roles';
@@ -33,11 +34,11 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
 
       const registry = getToolRegistry();
       if (!user.isAdmin) {
-        const own = registry.getManifests().filter((m) => mayRunDirectly(m.id) && registry.isInitialized(m.id));
+        const own = registry.getEnabledManifests().filter((m) => mayRunDirectly(m.id) && registry.isInitialized(m.id));
         return { tools: own.map((m) => ({ id: m.id, name: m.name, version: m.version, description: m.description,
           tools: m.tools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })) })) };
       }
-      const manifests = registry.getManifests();
+      const manifests = registry.getEnabledManifests();
       const availability = await registry.checkAllAvailability();
 
       const tools = manifests.map((m) => {
@@ -145,10 +146,12 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
       // toolId -> roles that grant it (reverse index for the per-tool view).
       const byTool: Record<string, string[]> = {};
       const roles = Object.values(ROLE_CONFIGS).map((cfg) => {
-        for (const toolId of cfg.toolIds) {
+        // A module that is off (docs/MODULES.md) grants nothing.
+        const toolIds = cfg.toolIds.filter(isToolOn);
+        for (const toolId of toolIds) {
           (byTool[toolId] ??= []).push(cfg.role);
         }
-        return { role: cfg.role, defaultTopic: cfg.defaultTopic, toolIds: cfg.toolIds };
+        return { role: cfg.role, defaultTopic: cfg.defaultTopic, toolIds };
       });
       for (const roleList of Object.values(byTool)) roleList.sort();
 
@@ -273,7 +276,7 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
       if (denied) return denied;
 
       const registry = getToolRegistry();
-      const tool = registry.get(params.id);
+      const tool = isToolOn(params.id) ? registry.get(params.id) : undefined;
 
       if (!tool) {
         return { error: 'Tool not found' };

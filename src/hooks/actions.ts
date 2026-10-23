@@ -144,9 +144,18 @@ export async function invalidHookTargets(
  * the stored config are checked, so a hook that already holds a now-invalid
  * target stays editable; the send paths skip such targets at run time.
  *
+ * An execute_tool hook on a tool of a module that is off is refused too.
+ *
  * Returns an error message naming the rejected targets, or null.
  */
 export async function notifyTargetsError(userId: string, config: unknown, previousConfig?: unknown): Promise<string | null> {
+  // An execute_tool hook on a tool of a module that is off (docs/MODULES.md).
+  const toolId = (config && typeof config === 'object' ? (config as Record<string, unknown>).toolId : undefined);
+  if (typeof toolId === 'string') {
+    const { toolOffMessage } = await import('@/core/modules/registry');
+    const off = toolOffMessage(toolId);
+    if (off) return off;
+  }
   const before = previousConfig === undefined ? null : new Set(hookConfigTargets(previousConfig).map(targetKey));
   const prevToUser = previousConfig === undefined
     ? undefined
@@ -628,6 +637,11 @@ async function executeTool(
   if (!toolId || !action) {
     return { success: false, error: 'Tool ID and action required' };
   }
+
+  // A module that is off (docs/MODULES.md): its tools run for no automation.
+  const { toolOffMessage } = await import('@/core/modules/registry');
+  const off = toolOffMessage(toolId);
+  if (off) return { success: false, error: off };
 
   const toolModule = registry.get(toolId);
   if (!toolModule) {

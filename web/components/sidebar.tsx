@@ -37,7 +37,9 @@ import {
 import Link from 'next/link';
 import { useState } from 'react';
 import { usePathname } from 'next/navigation';
+import { offModuleFor } from './module-gate';
 import { useAuth } from '@/lib/auth-context';
+import { useModules } from '@/lib/modules';
 import { useRooms } from '@/lib/rooms';
 import { useSidebarStore } from '@/lib/sidebar-store';
 import { cn } from '@/lib/utils';
@@ -115,7 +117,11 @@ export function Sidebar() {
   const spaceId = activeWorkspace?.kind === 'shared' ? activeWorkspace.id : null;
   const rooms = useRooms(spaceId);
   const unread = (rooms.data ?? []).reduce((sum, r) => sum + (r.muted ? 0 : r.unreadCount), 0);
-  const groups = navGroups.map(g => ({ ...g, items: g.items.filter(item => !item.adminOnly || user?.isAdmin) })).map(group => {
+  // Pages of a module that is off (docs/MODULES.md) are left out, and a
+  // group left without pages goes too.
+  const modules = useModules(!!user);
+  const offPage = (href: string) => offModuleFor(href, modules.data?.modules) !== undefined;
+  const groups = navGroups.map(g => ({ ...g, items: g.items.filter(item => (!item.adminOnly || user?.isAdmin) && !offPage(item.href)) })).map(group => {
     if (group.label === 'Settings' && user?.isAdmin) {
       return { ...group, items: [...group.items, { name: 'users', href: '/admin/users', icon: Users }] };
     }
@@ -131,7 +137,7 @@ export function Sidebar() {
       return { ...group, items };
     }
     return group;
-  });
+  }).filter((group) => group.items.length > 0);
 
   return (
     <>

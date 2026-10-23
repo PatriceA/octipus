@@ -6,6 +6,7 @@ import { maybeRunHeartbeats } from '@/core/heartbeat';
 import { syncDueMailAccounts } from '@/core/mail/sync';
 import { scanDueFolders } from '@/core/scan-folders/sweep';
 import { maybeRunScheduledBackup } from '@/core/backup/service';
+import { isJobOn } from '@/core/modules/registry';
 import { fireDueReminders } from '@/core/tasks/reminders';
 import { defaultListenDeps, runListenTick } from '@/channels/group-listen';
 import { getDb } from '@/db/postgres';
@@ -318,6 +319,37 @@ export async function claimDueHook(hook: Hook, nextRunAt: Date | null, oneShot: 
   return claimed !== undefined;
 }
 
+/**
+ * The sweeps of modules (docs/MODULES.md), each only while its module is on.
+ * Not awaited, like the reminders: a slow mail server never holds up
+ * scheduled hooks; a sweep still running makes the next tick's a no-op.
+ * Returns the sweeps started.
+ */
+export function startModuleSweeps(now: Date): string[] {
+  const started: string[] = [];
+  // Mail accounts over IMAP / POP3 (core/mail/sync.ts): each due account
+  // fetches its new mail.
+  if (!mailSweepRunning && isJobOn('mail-sync')) {
+    mailSweepRunning = true;
+    started.push('mail-sync');
+    syncDueMailAccounts(now)
+      .then((stored) => { if (stored > 0) coreLogger.info({ stored }, 'Mail sync stored new messages'); })
+      .catch((err: unknown) => coreLogger.error({ err }, 'Mail sync sweep failed'))
+      .finally(() => { mailSweepRunning = false; });
+  }
+
+  // Scan folders (core/scan-folders/sweep.ts): settled files into documents.
+  if (!scanSweepRunning && isJobOn('scan-folders')) {
+    scanSweepRunning = true;
+    started.push('scan-folders');
+    scanDueFolders(now)
+      .then((filed) => { if (filed > 0) coreLogger.info({ filed }, 'Scan folders filed new documents'); })
+      .catch((err: unknown) => coreLogger.error({ err }, 'Scan folder sweep failed'))
+      .finally(() => { scanSweepRunning = false; });
+  }
+  return started;
+}
+
 const listenDeps = defaultListenDeps();
 let roomListenDeps: import('@/channels/group-listen').ListenDeps<import('@/core/rooms/listen').RoomListenTarget> | null = null;
 
@@ -349,25 +381,7 @@ async function processCronTick(): Promise<void> {
         .finally(() => { reminderSweepRunning = false; });
     }
 
-    // Mail accounts over IMAP / POP3 (core/mail/sync.ts): each due account
-    // fetches its new mail. Not awaited, like the reminders: a slow mail
-    // server never holds up scheduled hooks.
-    if (!mailSweepRunning) {
-      mailSweepRunning = true;
-      syncDueMailAccounts(now)
-        .then((stored) => { if (stored > 0) coreLogger.info({ stored }, 'Mail sync stored new messages'); })
-        .catch((err: unknown) => coreLogger.error({ err }, 'Mail sync sweep failed'))
-        .finally(() => { mailSweepRunning = false; });
-    }
-
-    // Scan folders (core/scan-folders/sweep.ts): settled files into documents.
-    if (!scanSweepRunning) {
-      scanSweepRunning = true;
-      scanDueFolders(now)
-        .then((filed) => { if (filed > 0) coreLogger.info({ filed }, 'Scan folders filed new documents'); })
-        .catch((err: unknown) => coreLogger.error({ err }, 'Scan folder sweep failed'))
-        .finally(() => { scanSweepRunning = false; });
-    }
+    startModuleSweeps(now);
 
     // The daily backup (core/backup/service.ts), in its configured hour. Not
     // awaited: a backup takes minutes; it guards against a second run itself.

@@ -1,3 +1,4 @@
+import { isCaseEntityOn } from '@/core/modules/registry';
 import { apiContext } from '@/api/context';
 import { Elysia, t } from '@/api/http';
 import { addFollowUp, CaseLinkError, caseLinks, linkToCase, resolveEntity } from '@/core/cases/links';
@@ -105,6 +106,7 @@ export const caseRoutes = new Elysia({ prefix: '/cases' })
       // An entity the caller cannot see has no cases to show (its id could
       // otherwise be probed for which cases it belongs to).
       const repos = contentRepos(principal);
+      if (!isCaseEntityOn(query.entityType)) return [];
       if (!(await resolveEntity(repos, query.entityType, query.entityId))) return [];
       return repos.cases.casesLinkedTo(query.entityType, query.entityId);
     },

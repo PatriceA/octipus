@@ -1,6 +1,7 @@
 import type { ToolHandler } from '@/core/agent-worker';
 import type { ToolManifest } from '@/core/types';
 import { toolLogger } from '@/utils/logger';
+import { isToolOn } from '@/core/modules/registry';
 import type { BaseTool, ToolAvailability } from './base-tool';
 
 export interface ToolRegistryOptions {
@@ -80,6 +81,20 @@ export class ToolRegistry {
   }
 
   /**
+   * The tools of the core and of the modules that are on (docs/MODULES.md):
+   * what an inventory shows. `getAll` / `get` still answer for every
+   * registered tool, so a role or permission naming an off module's tool is
+   * not mistaken for a typo.
+   */
+  getEnabled(): BaseTool[] {
+    return this.getAll().filter((tool) => isToolOn(tool.id));
+  }
+
+  getEnabledManifests(): ToolManifest[] {
+    return this.getEnabled().map((tool) => tool.getManifest());
+  }
+
+  /**
    * Check availability of a single tool (cached).
    */
   async checkAvailability(toolId: string): Promise<ToolAvailability> {
@@ -125,11 +140,12 @@ export class ToolRegistry {
   /**
    * Get all tool handlers from all tools
    */
+  /** Every handler of the core and of the modules that are on. */
   getAllToolHandlers(): ToolHandler[] {
     const handlers: ToolHandler[] = [];
 
     for (const tool of this.tools.values()) {
-      if (this.initialized.has(tool.id)) {
+      if (this.initialized.has(tool.id) && isToolOn(tool.id)) {
         handlers.push(...tool.getToolHandlers());
       }
     }
@@ -145,6 +161,8 @@ export class ToolRegistry {
 
     for (const toolId of toolIds) {
       const tool = this.tools.get(toolId);
+      // A module that is off (docs/MODULES.md): its tools are in no agent's set.
+      if (tool && !isToolOn(toolId)) continue;
       if (tool && this.initialized.has(toolId)) {
         // Use cached availability — only skip if the cache entry is fresh AND unavailable
         const cached = this.availabilityCache.get(toolId);
@@ -174,7 +192,7 @@ export class ToolRegistry {
     const [toolId, toolName] = fullName.split('__');
     const tool = this.tools.get(toolId);
 
-    if (!tool || !this.initialized.has(toolId)) {
+    if (!tool || !this.initialized.has(toolId) || !isToolOn(toolId)) {
       return undefined;
     }
 
