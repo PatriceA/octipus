@@ -674,7 +674,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
 
   // Inject user profile context + related profiles for people-related queries
   // (the `people` module's, docs/MODULES.md).
-  if (context.userId && isJobOn('profile-context') && !audience.personalProfileOff) {
+  if (context.userId && !audience.personalProfileOff && isJobOn('profile-context')) {
     try {
       const { ProfileRepository } = await import('@/db/repositories/profile-repository');
       const profileRepo = new ProfileRepository();

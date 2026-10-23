@@ -136,7 +136,7 @@ async function directResponseInternal(
     let userProfileStr = '';
     const { sessionAudience } = await import('./audience');
     // Profiles are the `people` module's (docs/MODULES.md).
-    if (userId && isJobOn('profile-context') && !(await sessionAudience(session)).personalProfileOff) {
+    if (userId && !(await sessionAudience(session)).personalProfileOff && isJobOn('profile-context')) {
       try {
         const { ProfileRepository } = await import('@/db/repositories/profile-repository');
         const profileRepo = new ProfileRepository();
