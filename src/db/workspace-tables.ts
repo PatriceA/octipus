@@ -63,6 +63,9 @@ export const WORKSPACE_TABLES: readonly WorkspaceTable[] = [
   { table: 'embeddings', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'hooks', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'knowledge_links', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
+  // Mail accounts and their messages (docs/MAIL.md); `mail_raw` goes with a message.
+  { table: 'mail_accounts', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
+  { table: 'mail_messages', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'memories', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'notes', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   // Live documents (S3): space notes only, and spaces are never transferred.

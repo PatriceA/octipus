@@ -80,7 +80,7 @@ export async function assertDeletable(userId: string): Promise<void> {
 /**
  * Space content a user's account deletion would cascade away: rows of the
  * shared tables (tasks, their comments, notes, documents, links, artifacts,
- * cases, contacts, record types and records)
+ * cases, contacts, record types, records, mail accounts and their messages)
  * the user authored in a shared workspace.
  */
 const AUTHORED_SPACE_ROWS = `
@@ -93,7 +93,8 @@ const AUTHORED_SPACE_ROWS = `
   UNION SELECT workspace_id::text FROM cases WHERE user_id::text = $1
   UNION SELECT workspace_id::text FROM contacts WHERE user_id::text = $1
   UNION SELECT workspace_id::text FROM record_types WHERE user_id::text = $1
-  UNION SELECT workspace_id::text FROM records WHERE user_id::text = $1`;
+  UNION SELECT workspace_id::text FROM records WHERE user_id::text = $1
+  UNION SELECT workspace_id::text FROM mail_accounts WHERE user_id::text = $1`;
 
 async function spacesWithContentBy(userId: string): Promise<Array<{ id: string; name: string }>> {
   const { rows } = await queryRaw(

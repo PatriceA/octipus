@@ -37,6 +37,7 @@ import { type Artifact, artifacts, type NewArtifact } from '../schema/artifacts'
 import { workspaceMembers, workspaces } from '../schema/organizations';
 import { type NewVaultEntry, vault } from '../schema/vault';
 import { CaseRepo, ContactRepo } from './cases';
+import { MailRepo } from './mail';
 import { FormLinkRepo, RecordRepo, RecordTypeRepo } from './records';
 import { type KnowledgeLinkRepository, getKnowledgeLinkRepository } from './knowledge-link-repository';
 import { type NoteScope, type NoteStore, SpaceNoteRepo } from './note-repository';
@@ -461,6 +462,7 @@ export interface SpaceRepos {
   recordTypes: RecordTypeRepo;
   records: RecordRepo;
   formLinks: FormLinkRepo;
+  mail: MailRepo;
   notes: NoteStore;
   noteScope: NoteScope;
   links: LinkStore;
@@ -506,6 +508,7 @@ export function spaceRepos(principal: Principal): SpaceRepos {
     cases: new CaseRepo(scope),
     contacts: new ContactRepo(scope),
     ...recordRepos(scope),
+    mail: new MailRepo(scope),
     notes: new SpaceNoteRepo(noteScope),
     noteScope,
     links: linkStoreFor(noteScope),

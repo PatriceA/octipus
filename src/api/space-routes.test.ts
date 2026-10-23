@@ -172,6 +172,11 @@ const SPACE_ACTING = [
   'DELETE /api/record-types/:id', 'GET /api/record-types/:id/form-links', 'POST /api/record-types/:id/form-links',
   'DELETE /api/record-types/:id/form-links/:linkId',
   'GET /api/records', 'POST /api/records', 'GET /api/records/:id', 'PATCH /api/records/:id', 'DELETE /api/records/:id',
+  // Functional mailboxes (docs/MAIL.md): `contentRepos`; owners set accounts up, editors draft, send and mark.
+  'GET /api/mail/accounts', 'POST /api/mail/accounts', 'PATCH /api/mail/accounts/:id', 'DELETE /api/mail/accounts/:id',
+  'POST /api/mail/accounts/:id/test', 'POST /api/mail/accounts/:id/sync',
+  'GET /api/mail/messages', 'GET /api/mail/messages/:id', 'PATCH /api/mail/messages/:id', 'GET /api/mail/messages/:id/attachments/:index',
+  'POST /api/mail/drafts', 'PATCH /api/mail/drafts/:id', 'DELETE /api/mail/drafts/:id', 'POST /api/mail/drafts/:id/send',
   'GET /api/notifications', 'POST /api/notifications/:id/read', 'POST /api/notifications/read-all',
   'GET /api/artifacts/_meta', 'GET /api/artifacts', 'POST /api/artifacts', 'GET /api/artifacts/spec/:slugOrId', 'GET /api/artifacts/:id',
   'PUT /api/artifacts/:id', 'DELETE /api/artifacts/:id', 'GET /api/artifacts/:id/versions',

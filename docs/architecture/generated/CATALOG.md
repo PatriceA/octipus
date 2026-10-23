@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-569 mounted routes across 77 route files. The path is the full one, group prefix included — what a client actually calls.
+583 mounted routes across 78 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -240,6 +240,20 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/logs/recent` | `src/api/routes/logs.ts` |
 | GET | `/api/logs/stats` | `src/api/routes/logs.ts` |
 | GET | `/api/logs/stream` | `src/api/routes/logs.ts` |
+| GET | `/api/mail/accounts` | `src/api/routes/mail.ts` |
+| POST | `/api/mail/accounts` | `src/api/routes/mail.ts` |
+| DELETE | `/api/mail/accounts/:id` | `src/api/routes/mail.ts` |
+| PATCH | `/api/mail/accounts/:id` | `src/api/routes/mail.ts` |
+| POST | `/api/mail/accounts/:id/sync` | `src/api/routes/mail.ts` |
+| POST | `/api/mail/accounts/:id/test` | `src/api/routes/mail.ts` |
+| POST | `/api/mail/drafts` | `src/api/routes/mail.ts` |
+| DELETE | `/api/mail/drafts/:id` | `src/api/routes/mail.ts` |
+| PATCH | `/api/mail/drafts/:id` | `src/api/routes/mail.ts` |
+| POST | `/api/mail/drafts/:id/send` | `src/api/routes/mail.ts` |
+| GET | `/api/mail/messages` | `src/api/routes/mail.ts` |
+| GET | `/api/mail/messages/:id` | `src/api/routes/mail.ts` |
+| PATCH | `/api/mail/messages/:id` | `src/api/routes/mail.ts` |
+| GET | `/api/mail/messages/:id/attachments/:index` | `src/api/routes/mail.ts` |
 | GET | `/api/mcp/circuit` | `src/api/routes/mcp.ts` |
 | POST | `/api/mcp/circuit/:serverId/reset` | `src/api/routes/mcp.ts` |
 | GET | `/api/mcp/servers` | `src/api/routes/mcp.ts` |
@@ -605,19 +619,19 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 22 |
 | `api` | `config` | 24 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 149 |
-| `api` | `db` | 117 |
+| `api` | `core` | 154 |
+| `api` | `db` | 118 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 4 |
 | `api` | `models` | 39 |
 | `api` | `plugins` | 2 |
-| `api` | `security` | 139 |
+| `api` | `security` | 141 |
 | `api` | `services` | 5 |
-| `api` | `shared` | 12 |
+| `api` | `shared` | 13 |
 | `api` | `skills` | 6 |
 | `api` | `tools` | 4 |
-| `api` | `utils` | 72 |
+| `api` | `utils` | 73 |
 | `api` | `voice` | 23 |
 | `capabilities` | `db` | 2 |
 | `capabilities` | `models` | 1 |
@@ -650,18 +664,18 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `channels` | 12 |
 | `core` | `config` | 58 |
 | `core` | `connectors` | 4 |
-| `core` | `db` | 375 |
+| `core` | `db` | 380 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 10 |
 | `core` | `models` | 120 |
-| `core` | `security` | 170 |
+| `core` | `security` | 172 |
 | `core` | `services` | 2 |
 | `core` | `setup` | 1 |
-| `core` | `shared` | 37 |
+| `core` | `shared` | 38 |
 | `core` | `skills` | 11 |
 | `core` | `tools` | 21 |
-| `core` | `utils` | 207 |
+| `core` | `utils` | 211 |
 | `core` | `voice` | 1 |
 | `db` | `config` | 4 |
 | `db` | `core` | 21 |
@@ -740,15 +754,15 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `channels` | 2 |
 | `tools` | `config` | 3 |
 | `tools` | `connectors` | 2 |
-| `tools` | `core` | 95 |
-| `tools` | `db` | 33 |
+| `tools` | `core` | 97 |
+| `tools` | `db` | 34 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |
 | `tools` | `models` | 8 |
 | `tools` | `plugins` | 1 |
 | `tools` | `security` | 34 |
 | `tools` | `services` | 1 |
-| `tools` | `shared` | 5 |
+| `tools` | `shared` | 6 |
 | `tools` | `skills` | 5 |
 | `tools` | `utils` | 37 |
 | `tools` | `visual` | 2 |

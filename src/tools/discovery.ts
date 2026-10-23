@@ -35,6 +35,7 @@ import * as GitlabModule from './gitlab';
 import * as GoogleWorkspaceModule from './google-workspace';
 import * as InlineUiModule from './inline-ui';
 import * as KnowledgeModule from './knowledge';
+import * as MailModule from './mail';
 import * as McpAdminModule from './mcp-admin';
 import * as MessagingModule from './messaging';
 import * as Microsoft365Module from './microsoft365';
@@ -72,6 +73,7 @@ const MODULES: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
   ['google-workspace', GoogleWorkspaceModule],
   ['inline-ui', InlineUiModule],
   ['knowledge', KnowledgeModule],
+  ['mail', MailModule],
   ['mcp-admin', McpAdminModule],
   ['messaging', MessagingModule],
   ['microsoft365', Microsoft365Module],

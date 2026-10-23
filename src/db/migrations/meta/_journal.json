@@ -1037,6 +1037,13 @@
       "when": 1792836024550,
       "tag": "0147_plugin_packages",
       "breakpoints": true
+    },
+    {
+      "idx": 148,
+      "version": "7",
+      "when": 1792922424550,
+      "tag": "0148_mail",
+      "breakpoints": true
     }
   ]
 }

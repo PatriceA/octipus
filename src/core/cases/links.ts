@@ -7,6 +7,7 @@
  * private artifact of another member, a deleted document).
  */
 import type { ContentRepos } from '@/db/repositories/content';
+import type { MailSummaryRow } from '@/db/repositories/mail';
 import type { Case, CaseLink } from '@/db/schema/cases';
 import type { Task } from '@/db/schema/tasks';
 import { type CaseEntityType, isCaseEntityType, normalizeLabel } from './status';
@@ -58,7 +59,17 @@ export async function resolveEntity(repos: ContentRepos, type: CaseEntityType, i
       const type = await repos.recordTypes.findById(row.typeId);
       return { label: row.title ?? type?.name ?? 'Record', detail: type?.key ?? null };
     }
+    case 'mail': {
+      const [row] = await repos.mail.findByIds([id]);
+      return row ? mailView(row) : null;
+    }
   }
+}
+
+/** A message as a link shows it: its subject, and who it is from or to. */
+function mailView(row: MailSummaryRow): EntityView {
+  const other = row.status === 'received' ? row.fromAddress : row.toAddresses[0];
+  return { label: row.subject || '(no subject)', detail: other ? (other.name ?? other.address) : row.status };
 }
 
 export class CaseLinkError extends Error {
@@ -120,14 +131,17 @@ async function resolveEntities(repos: ContentRepos, links: readonly CaseLink[]):
   const contactIds = ids('contact');
   const taskIds = ids('task');
   const noteIds = ids('note');
-  const [contactRows, taskRows, noteRows] = await Promise.all([
+  const mailIds = ids('mail');
+  const [contactRows, taskRows, noteRows, mailRows] = await Promise.all([
     contactIds.length ? repos.contacts.findByIds(contactIds) : [],
     taskIds.length ? repos.tasks.findByIds(taskIds) : [],
     noteIds.length ? repos.notes.getByIds(noteIds) : [],
+    mailIds.length ? repos.mail.findByIds(mailIds) : [],
   ]);
   for (const r of contactRows) put('contact', r.id, { label: r.name, detail: r.kind });
   for (const r of taskRows) put('task', r.id, { label: r.title, detail: r.status });
   for (const r of noteRows) put('note', r.id, { label: r.title, detail: r.noteKind });
+  for (const r of mailRows) put('mail', r.id, mailView(r));
   // Documents, artifacts and records have no batch read; one at a time keeps the pool free.
   for (const type of ['document', 'artifact', 'record'] as const) {
     for (const id of ids(type)) {

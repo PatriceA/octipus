@@ -120,6 +120,7 @@ const ALLOWLIST: Record<string, string> = {
   'src/db/repositories/live-documents.ts': ACCESS_LAYER,
   'src/db/repositories/cases.ts': ACCESS_LAYER,
   'src/db/repositories/records.ts': ACCESS_LAYER,
+  'src/db/repositories/mail.ts': ACCESS_LAYER,
   // Rooms (S2): every read follows `roomAccess` / the membership read.
   'src/core/rooms/access.ts': ACCESS_LAYER,
   'src/core/rooms/service.ts': ACCESS_LAYER,
@@ -134,6 +135,10 @@ const ALLOWLIST: Record<string, string> = {
   // Follow-ups: due tasks claimed by id, told to their assignee or author
   // (a space recipient re-checked against the membership).
   'src/core/tasks/reminders.ts': 'due follow-ups, notified to the assignee or author',
+  // The mail sync (docs/MAIL.md): due accounts and their already-stored remote ids, for no user;
+  // writes copy the account's scope. The password cleanup reads only which account ids exist.
+  'src/core/mail/sync.ts': 'mail sync: due accounts and stored remote ids, for no user',
+  'src/core/mail/secrets.ts': 'which mail account ids still exist (no content)',
   'src/db/repositories/session-kind.ts': 'the kind of one session by id (no content)',
   'src/security/workspace-resolver.ts': 'workspace of a session/agent/pipeline the caller owns, by id',
   // Federation (docs/plans/federation-spec.md §7.5, §9): whether a room or
