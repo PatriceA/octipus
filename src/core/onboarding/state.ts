@@ -143,7 +143,6 @@ async function level(userId: string, toolId: string, action: string): Promise<st
   return check.level;
 }
 
-/** The guide's view of the install, for `userId`. */
 /** What is on, and what each use case switches on (docs/MODULES.md). */
 function modulesState(): OnboardingState['modules'] {
   const byUseCase: OnboardingState['modules']['byUseCase'] = {};
@@ -153,6 +152,7 @@ function modulesState(): OnboardingState['modules'] {
   return { enabled: [...enabledModules()], byUseCase };
 }
 
+/** The guide's view of the install, for `userId`. */
 export async function readOnboardingState(userId: string, isAdmin: boolean): Promise<OnboardingState> {
   const config = getConfig();
   const ollamaUrl = config.ollama?.url || 'http://localhost:11434';

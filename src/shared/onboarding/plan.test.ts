@@ -256,7 +256,12 @@ describe('modules', () => {
     expect(todo(all)).not.toContain('modules');
   });
 
-  test('not for someone who is not an admin', () => {
-    expect(ids(plan(['company'], {}, fresh({ isAdmin: false })))).not.toContain('modules');
+  test('someone who is not an admin is told who turns them on; nothing is called', () => {
+    const steps = plan(['company'], {}, fresh({ isAdmin: false }));
+    expect(step(steps, 'modules')).toMatchObject({ kind: 'done', title: expect.stringMatching(/Your admin turns on Cases, Mail/) });
+  });
+
+  test('a server that reports no modules: no step', () => {
+    expect(ids(plan(['company'], {}, fresh({ modules: undefined as never })))).not.toContain('modules');
   });
 });
