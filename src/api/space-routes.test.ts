@@ -177,6 +177,8 @@ const SPACE_ACTING = [
   'POST /api/mail/accounts/:id/test', 'POST /api/mail/accounts/:id/sync',
   'GET /api/mail/messages', 'GET /api/mail/messages/:id', 'PATCH /api/mail/messages/:id', 'GET /api/mail/messages/:id/attachments/:index',
   'POST /api/mail/drafts', 'PATCH /api/mail/drafts/:id', 'DELETE /api/mail/drafts/:id', 'POST /api/mail/drafts/:id/send',
+  // Scan folders (docs/SCAN-FOLDERS.md): admins only, and in a space a writer there.
+  'GET /api/scan-folders', 'POST /api/scan-folders', 'PATCH /api/scan-folders/:id', 'DELETE /api/scan-folders/:id', 'POST /api/scan-folders/:id/scan',
   'GET /api/notifications', 'POST /api/notifications/:id/read', 'POST /api/notifications/read-all',
   'GET /api/artifacts/_meta', 'GET /api/artifacts', 'POST /api/artifacts', 'GET /api/artifacts/spec/:slugOrId', 'GET /api/artifacts/:id',
   'PUT /api/artifacts/:id', 'DELETE /api/artifacts/:id', 'GET /api/artifacts/:id/versions',

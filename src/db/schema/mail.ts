@@ -35,6 +35,8 @@ export const mailAccounts = pgTable('mail_accounts', {
    * a private address is refused, at save and again at every connect.
    */
   localNetwork: boolean('local_network').default(false).notNull(),
+  /** File the attachments of received mail into the documents of the account's scope (a fax-to-mail drop). */
+  fileAttachments: boolean('file_attachments').default(false).notNull(),
   /** Where the last sync stopped (IMAP: UIDVALIDITY and last UID; POP3: UIDLs passed over). */
   syncState: jsonb('sync_state').$type<MailSyncState>().default({}).notNull(),
   lastSyncAt: timestamp('last_sync_at', { withTimezone: true }),
@@ -81,6 +83,10 @@ export const mailMessages = pgTable('mail_messages', {
   bodyText: text('body_text').default('').notNull(),
   bodyHtml: text('body_html'),
   attachments: jsonb('attachments').$type<StoredAttachment[]>().default([]).notNull(),
+  /** For an account that files attachments: the indexes filed into documents so far. */
+  filedAttachments: jsonb('filed_attachments').$type<number[]>().default([]).notNull(),
+  /** Why an attachment is not filed yet; retried on later syncs while set. */
+  filingError: text('filing_error'),
   unread: boolean('unread').default(false).notNull(),
   /** Received (from the server), sent, or for a draft its last change. */
   date: timestamp('date', { withTimezone: true }).defaultNow().notNull(),

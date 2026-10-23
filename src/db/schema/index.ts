@@ -74,3 +74,4 @@ export * from './spend-budgets';
 export * from './live-documents';
 export * from './federation';
 export * from './inline-ui-blocks';
+export * from './scan-folders';

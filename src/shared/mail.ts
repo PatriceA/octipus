@@ -42,6 +42,8 @@ export interface MailAccountView {
   /** The IMAP folder synced (POP3 has none). */
   folder: string;
   enabled: boolean;
+  /** Attachments of received mail are filed into the documents. */
+  fileAttachments: boolean;
   /** Whether a password is stored for incoming / outgoing. Never the password itself. */
   passwordSet: { incoming: boolean; outgoing: boolean };
   lastSyncAt: string | null;

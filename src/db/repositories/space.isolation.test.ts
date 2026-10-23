@@ -121,6 +121,7 @@ const ALLOWLIST: Record<string, string> = {
   'src/db/repositories/cases.ts': ACCESS_LAYER,
   'src/db/repositories/records.ts': ACCESS_LAYER,
   'src/db/repositories/mail.ts': ACCESS_LAYER,
+  'src/db/repositories/scan-folders.ts': ACCESS_LAYER,
   // Rooms (S2): every read follows `roomAccess` / the membership read.
   'src/core/rooms/access.ts': ACCESS_LAYER,
   'src/core/rooms/service.ts': ACCESS_LAYER,
@@ -139,6 +140,8 @@ const ALLOWLIST: Record<string, string> = {
   // writes copy the account's scope. The password cleanup reads only which account ids exist.
   'src/core/mail/sync.ts': 'mail sync: due accounts and stored remote ids, for no user',
   'src/core/mail/secrets.ts': 'which mail account ids still exist (no content)',
+  // The scan sweep (docs/SCAN-FOLDERS.md): enabled folders, for no user; files are written as the folder's author.
+  'src/core/scan-folders/sweep.ts': 'scan sweep: enabled folders, for no user',
   'src/db/repositories/session-kind.ts': 'the kind of one session by id (no content)',
   'src/security/workspace-resolver.ts': 'workspace of a session/agent/pipeline the caller owns, by id',
   // Federation (docs/plans/federation-spec.md §7.5, §9): whether a room or

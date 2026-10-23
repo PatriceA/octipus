@@ -9,13 +9,16 @@
  * (author and workspace copied from the account), and nothing here logs an
  * address, subject or body.
  */
-import { and, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { type MailAccount, mailAccounts, mailMessages, mailRaw } from '@/db/schema/mail';
 import { coreLogger } from '@/utils/logger';
 import { mapLimit } from '@/utils/concurrency';
+import { ingestDocument } from '@/core/documents/ingest';
+import { contentRepos } from '@/db/repositories/content';
+import { writerPrincipal } from '@/security/writer-principal';
 import { withDeadline } from './deadline';
-import { parseRawMessage, storable } from './parse';
+import { attachmentsOf, parseRawMessage, storable } from './parse';
 import { mailPassword, pruneOrphanMailPasswords } from './secrets';
 import { type FetchedMessage, type MailSource, openSource } from './sources';
 
@@ -111,7 +114,7 @@ async function insertReceived(account: MailAccount, fetched: FetchedMessage): Pr
     ? `[This message is ${Math.round(fetched.size / 1024 / 1024)} MB, too large to keep here. Open it in the mail client.]`
     : '';
   const text = note ? `${note}\n\n${parsed.text}`.trim() : parsed.text;
-  return getDb().transaction(async (tx) => {
+  const id = await getDb().transaction(async (tx) => {
     const [row] = await tx
       .insert(mailMessages)
       .values({
@@ -138,10 +141,84 @@ async function insertReceived(account: MailAccount, fetched: FetchedMessage): Pr
       })
       .onConflictDoNothing()
       .returning({ id: mailMessages.id });
-    if (!row) return 'duplicate';
+    if (!row) return null;
     if (!fetched.truncated) await tx.insert(mailRaw).values({ messageId: row.id, raw: fetched.source });
-    return 'stored';
+    return row.id;
   });
+  if (!id) return 'duplicate';
+  if (account.fileAttachments && !fetched.truncated && parsed.attachments.length > 0) {
+    await fileMailAttachments(account, id, parsed.subject, fetched.source);
+  }
+  return 'stored';
+}
+
+/**
+ * File a received message's attachments into the documents of the
+ * account's scope (a fax-to-mail or scanner-to-mail drop), written as the
+ * account's author. Each attachment on its own: the ones filed are recorded
+ * on the message (`filed_attachments`), the reason the rest are not in
+ * `filing_error`, and those are tried again on later syncs
+ * (`retryUnfiledAttachments`). The message itself is stored either way.
+ * Returns whether every attachment is filed now.
+ */
+export async function fileMailAttachments(account: MailAccount, messageId: string, subject: string, raw: Buffer, alreadyFiled: readonly number[] = []): Promise<boolean> {
+  const filed = new Set(alreadyFiled);
+  let error: string | null = null;
+  try {
+    const principal = await writerPrincipal(account.userId, account.workspaceId);
+    if (!principal) throw new Error('The account\'s author can no longer add documents here');
+    const repos = contentRepos(principal);
+    const attachments = await attachmentsOf(raw);
+    for (const [index, attachment] of attachments.entries()) {
+      if (filed.has(index)) continue;
+      try {
+        const result = await ingestDocument(repos, {
+          buffer: attachment.content,
+          originalName: attachment.filename,
+          mimeType: attachment.contentType,
+          metadata: { source: 'mail', mailAccountId: account.id, mailMessageId: messageId, mailSubject: subject.slice(0, 200) },
+        });
+        // Stored but not queued is still filed: the document exists and says why.
+        filed.add(index);
+        if (result.error) error ??= result.error;
+      } catch (err) {
+        error ??= (err as Error).message;
+      }
+    }
+    if (filed.size < attachments.length) error ??= 'Not every attachment could be filed';
+    else error = null;
+  } catch (err) {
+    error = (err as Error).message;
+  }
+  if (error) coreLogger.warn({ accountId: account.id, messageId, error }, 'mail: attachment filing incomplete');
+  await getDb()
+    .update(mailMessages)
+    .set({ filedAttachments: [...filed].sort((a, b) => a - b), filingError: error ? `An attachment could not be filed: ${error}`.slice(0, 300) : null })
+    .where(eq(mailMessages.id, messageId));
+  return error === null;
+}
+
+/** Messages whose attachments are not all filed yet, tried again (a few per sync). */
+async function retryUnfiledAttachments(account: MailAccount): Promise<void> {
+  if (!account.fileAttachments) return;
+  const pending = await getDb()
+    .select({ id: mailMessages.id, subject: mailMessages.subject, filed: mailMessages.filedAttachments, raw: mailRaw.raw })
+    .from(mailMessages)
+    .innerJoin(mailRaw, eq(mailRaw.messageId, mailMessages.id))
+    .where(and(eq(mailMessages.accountId, account.id), sql`${mailMessages.filingError} IS NOT NULL`))
+    .limit(10);
+  for (const m of pending) await fileMailAttachments(account, m.id, m.subject, m.raw, m.filed);
+}
+
+/** Why the account's attachments are not all filed, or null. */
+async function filingProblem(accountId: string): Promise<string | null> {
+  const [row] = await getDb()
+    .select({ error: mailMessages.filingError })
+    .from(mailMessages)
+    .where(and(eq(mailMessages.accountId, accountId), sql`${mailMessages.filingError} IS NOT NULL`))
+    .orderBy(desc(mailMessages.date))
+    .limit(1);
+  return row?.error ?? null;
 }
 
 /**
@@ -182,8 +259,10 @@ export async function syncAccount(account: MailAccount, deps: MailSyncDeps = def
       if (!password) throw new Error('No password is stored for this mailbox');
       source = await deps.open(account, password);
       await fetchBatches(account, source, now, progress);
+      await retryUnfiledAttachments(account);
     })(), SYNC_DEADLINE_MS, 'The mail sync', () => (source as MailSource | null)?.destroy());
-    await getDb().update(mailAccounts).set({ lastError: null, failures: 0 }).where(eq(mailAccounts.id, account.id));
+    // A sync that went well still says when attachments wait to be filed.
+    await getDb().update(mailAccounts).set({ lastError: await filingProblem(account.id), failures: 0 }).where(eq(mailAccounts.id, account.id));
     return { ...progress };
   } catch (err) {
     const error = describe(err);

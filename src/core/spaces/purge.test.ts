@@ -111,6 +111,7 @@ async function seedSpaceRows(ws: string, author: string): Promise<{ sessionId: s
   );
   seeded.add('mail_accounts');
   await one('mail_messages', `INSERT INTO mail_messages (account_id, user_id, workspace_id, status) VALUES ($1, $2, $3, 'received')`, [mailAccount.id, author, ws]);
+  await one('scan_folders', `INSERT INTO scan_folders (user_id, workspace_id, label, path) VALUES ($1, $2, 's', $3)`, [author, ws, `/srv/scan-${randomUUID()}`]);
   await one('documents', `INSERT INTO documents (user_id, filename, original_name, mime_type, size, storage_path, workspace_id) VALUES ($1, 'f', 'f', 'text/plain', 1, '/x', $2)`, [author, ws]);
   await one('embeddings', `INSERT INTO embeddings (source_id, content, model, embedding, purpose, content_sha256, embedding_version, user_id, workspace_id) VALUES ('s', 'c', 'm', '[0.1,0.2,0.3]', 'document', $1, 'm/3', $2, $3)`, [randomUUID(), author, ws]);
   await one('hooks', `INSERT INTO hooks (user_id, name, trigger, trigger_config, action, action_config, workspace_id) VALUES ($1, 'h', 'message_received', '{}', 'notify', '{}', $2)`, [author, ws]);
