@@ -15,8 +15,15 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import type { AgentContext } from '@/core/types';
+
+// The protection module, switched per test; every other module as configured.
+let protectionOn = false;
+vi.mock('@/core/modules/registry', async (original) => {
+  const actual = await original<typeof import('@/core/modules/registry')>();
+  return { ...actual, isModuleOn: (id: string) => (id === 'protection' ? protectionOn : actual.isModuleOn(id)) };
+});
 
 const rand = (n: number) => randomBytes(n).toString('hex');
 process.env.MASTER_KEY ??= `test-master-${rand(24)}`;
@@ -101,6 +108,30 @@ describe('plugin packages', () => {
     expect(listed.find((t) => t.name === 'undeclared_tool')?.exposure).toBe('hidden');
     await expect(bridge.callTool(SERVER, 'undeclared_tool', {}, agentContext(true))).rejects.toThrow(/hidden/);
     expect(textOf(await bridge.callTool(SERVER, 'echo', { text: 'hallo' }, agentContext(false)))).toBe('hallo');
+  });
+
+  test('a conversation holding content above the package\'s maxProtection may not call it', async () => {
+    const { getMCPBridge } = await import('@/mcp/bridge');
+    const { raiseSessionLevel } = await import('@/core/protection/session-level');
+    const bridge = getMCPBridge();
+    // The fixture declares maxProtection 2. Synthetic session ids: nothing is stored.
+    expect(bridge.pluginMaxProtection(SERVER)).toBe(2);
+    const at = (level: number) => {
+      const sessionId = `plugin-gate-${level}-${rand(4)}`;
+      raiseSessionLevel(sessionId, level);
+      return { ...agentContext(false), sessionId } as AgentContext;
+    };
+    protectionOn = true;
+    expect(textOf(await bridge.callTool(SERVER, 'echo', { text: 'intern' }, at(2)))).toBe('intern');
+    await expect(bridge.callTool(SERVER, 'echo', { text: 'vertraulich' }, at(3))).rejects.toThrow(/protection level 3.*up to level 2/);
+    // The same rule for an artifact data source on the package, written now and refreshed later.
+    const { pluginProtectionRefusal } = await import('@/security/mcp-authorization');
+    expect(await pluginProtectionRefusal(at(3).sessionId, SERVER)).toMatch(/level 3/);
+    expect(await pluginProtectionRefusal(at(2).sessionId, SERVER)).toBeUndefined();
+    expect(await pluginProtectionRefusal(at(4).sessionId, 'operator-server')).toBeUndefined();
+    // With the module off, levels decide nothing.
+    protectionOn = false;
+    expect(textOf(await bridge.callTool(SERVER, 'echo', { text: 'aus' }, at(4)))).toBe('aus');
   });
 
   test('an external tool is never waved through, even with an ALLOW rule', async () => {

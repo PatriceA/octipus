@@ -372,7 +372,11 @@ export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
     // Declared tools are reachable through mcp_list_tools / mcp_call_tool;
     // every other name the server offers is hidden (an exact name wins over `*`).
     toolExposure: { ...Object.fromEntries(Object.keys(m.tools).map((t) => [t, 'deferred' as const])), '*': 'hidden' },
-    plugin: { package: row.name, version: row.version, tools: Object.fromEntries(Object.entries(m.tools).map(([t, d]) => [t, d.effect])) },
+    plugin: {
+      package: row.name, version: row.version, tools: Object.fromEntries(Object.entries(m.tools).map(([t, d]) => [t, d.effect])),
+      // Undeclared: a package that reaches the network leaves the house (1); one that cannot keeps everything in (4).
+      maxProtection: m.maxProtection ?? ((m.network ?? []).length > 0 ? 1 : 4),
+    },
   };
 }
 

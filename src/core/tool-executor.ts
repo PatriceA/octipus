@@ -20,6 +20,7 @@ import { agentLogger, coreLogger } from '@/utils/logger';
 import { DEFAULT_MAX_LENGTH, sanitizeToolOutput } from '@/utils/sanitize';
 import { noteToolUse } from './context-hooks/tool-usage';
 import { localOnlyLevel } from './protection/routing';
+import { pluginProtectionRefusal } from '@/security/mcp-authorization';
 import type { AgentEvent, ToolHandler } from './agent-base';
 import type { AgentContext, AgentMessage, ToolCall, ToolResult } from './types';
 
@@ -753,6 +754,18 @@ export class ToolExecutor {
         typeof tool.permissionAction === 'function'
           ? tool.permissionAction(toolCall.arguments)
           : tool.permissionAction || bareName;
+      // A plugin package that may not see this conversation's content is
+      // refused before anyone is asked to approve the call (C6d); the bridge
+      // checks again at dispatch.
+      if (toolId === 'mcp' && permAction.indexOf('.') > 0) {
+        const refusal = await pluginProtectionRefusal(this.context.sessionId, permAction.slice(0, permAction.indexOf('.')));
+        if (refusal) {
+          this.counters.permissionDenials++;
+          results.push({ toolCallId: toolCall.id, result: null, errorCode: 'permission_denied',
+            error: `Permission denied for mcp.${permAction}: ${refusal}. Do NOT retry this call; tell the user it needs a new conversation, or a package allowed this level.` });
+          continue;
+        }
+      }
       const storedPermission = await permissionManager.check(
         this.context.userId,
         toolId,

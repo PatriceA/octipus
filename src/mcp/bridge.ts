@@ -403,6 +403,11 @@ export class MCPBridge extends EventEmitter {
     return Object.hasOwn(plugin.tools, toolName) ? plugin.tools[toolName] : 'undeclared';
   }
 
+  /** The highest protection level a plugin package's server may be called at; null for an operator-configured server. */
+  pluginMaxProtection(serverId: string): number | null {
+    return this.configOf(serverId)?.plugin?.maxProtection ?? null;
+  }
+
   /**
    * Disconnect from an MCP server
    */
