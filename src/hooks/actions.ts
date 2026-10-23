@@ -29,6 +29,14 @@ export async function executeAction(
 ): Promise<ActionResult> {
   const config = hook.actionConfig;
 
+  // An automation of a module that is off does not run (docs/MODULES.md).
+  if (typeof config?.module === 'string') {
+    const { isModuleOn, moduleById } = await import('@/core/modules/registry');
+    if (moduleById(config.module) && !isModuleOn(config.module)) {
+      return { success: false, error: `The ${moduleById(config.module)?.title ?? config.module} module is switched off on this install, so this automation does not run.` };
+    }
+  }
+
   try {
     switch (hook.action) {
       case 'notify':

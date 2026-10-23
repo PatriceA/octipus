@@ -8,6 +8,7 @@
  * refresh.
  */
 
+import { isJobOn } from '@/core/modules/registry';
 import { artifactsRepository } from '@/db/repositories/artifacts-repository';
 import { getScheduler, type ScheduledTask } from '@/core/scheduler';
 import { refreshSource } from './refresh';
@@ -64,10 +65,14 @@ export async function handleArtifactRefreshTask(task: ScheduledTask): Promise<vo
     return;
   }
 
-  // Wake-gate: skip when no one is watching.
+  // Wake-gate: skip when no one is watching, and while the `artifacts`
+  // module is off (docs/MODULES.md); the chain goes on, so refreshes resume
+  // when it is back.
   const lastView = getLastViewMs(source.artifactId);
   const idleThresholdMs = Math.max(2 * source.refreshSeconds * 1000, 60 * 60 * 1000);
-  if (lastView == null || Date.now() - lastView > idleThresholdMs) {
+  if (!isJobOn('artifacts-refresh')) {
+    coreLogger.debug({ sourceId }, 'artifact.scheduler.skip_module_off');
+  } else if (lastView == null || Date.now() - lastView > idleThresholdMs) {
     coreLogger.debug({ sourceId, artifactId: source.artifactId }, 'artifact.scheduler.skip_idle');
   } else {
     await refreshSource(sourceId);

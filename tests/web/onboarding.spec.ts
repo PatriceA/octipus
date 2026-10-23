@@ -1,3 +1,4 @@
+import { MODULES } from '../../src/modules';
 import { test, expect } from './fixtures/auth';
 import { stubAllDefaults } from './fixtures/api-stubs';
 
@@ -20,7 +21,8 @@ const fresh = () => ({
   pipelineTemplates: [{ id: 'tpl-research', name: 'Research & Analysis' }],
   mcpServers: [],
   workspaceRoot: null,
-  modules: { enabled: [] as string[], byUseCase: {} },
+  // Every module on, as on an install from before modules (docs/MODULES.md).
+  modules: { enabled: MODULES.map((m) => m.id), byUseCase: {} },
   progress: {} as Record<string, unknown>,
 });
 

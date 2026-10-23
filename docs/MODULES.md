@@ -25,6 +25,8 @@ spaces; settings, skills, the tools page and evaluations; backups.
 | `protection` | Protection levels 1-4 ([PROTECTION-LEVELS.md](PROTECTION-LEVELS.md)) |
 | `research` | Research jobs: a question researched in the background, the report saved to the documents |
 | `reader` | The reader: a page in a clean view, turned into notes and tasks |
+| `inbox` | The Gmail / Outlook inbox of a connected account: triage, drafts, tasks from mail, the email processor tool and the heartbeat's inbox watch |
+| `artifacts` | Live artifacts: hosted dashboards, tables, feeds and pages, their refreshes, and saving a chat answer as one ([ARTIFACTS.md](ARTIFACTS.md)) |
 | `recall` | Context hooks: knowledge passages and the notes index handed to agents as they start ([CONTEXT-HOOKS.md](CONTEXT-HOOKS.md)) |
 
 ## What "off" means

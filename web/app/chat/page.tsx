@@ -33,6 +33,7 @@ import type { SwarmTreeEvent } from '@/components/swarm-tree';
 import { useVoiceRealtime } from '@/hooks/useVoiceRealtime';
 import { fetchPersistedAgentEvents } from '@/hooks/useAgentEvents';
 import { api, ApiError, getApiUrl } from '@/lib/api';
+import { usePageOn } from '@/lib/modules';
 import type { ClientMessage, GatewayEvent, GatewayMessage } from '@/lib/gateway';
 import { useGateway, useGatewayMessages, useGatewayStatus } from '@/lib/gateway-context';
 import { useWorkspace } from '@/lib/workspace-context';
@@ -1972,6 +1973,7 @@ export default function ChatPage() {
   // (the handlers read the latest `sendMessage` through a ref).
   const sendMessageRef = useRef(sendMessage);
   useEffect(() => { sendMessageRef.current = sendMessage; });
+  const artifactsOn = usePageOn()('/artifacts');
   const { data: me } = useQuery({
     queryKey: ['impersonation-banner', 'me'],
     queryFn: () => api.get<{ actorUserId?: string | null }>('/auth/me'),
@@ -1996,12 +1998,13 @@ export default function ChatPage() {
       sendSuggestion: impersonating ? undefined : (text, blockId) => { void sendMessageRef.current(text, undefined, { inlineUiProvenance: blockId }); },
       editSuggestion: impersonating ? undefined : (text, blockId) => composerRef.current?.insertDraft(text, { inlineUiId: blockId }),
       busy: isLoading,
-      saveAsArtifact: async (blockId, input) => {
+      // Only while the `artifacts` module is on (docs/MODULES.md).
+      saveAsArtifact: !artifactsOn ? undefined : async (blockId, input) => {
         const res = await api.post<{ appUrl: string; warnings: string[] }>(`/sessions/${sid}/inline-ui/${blockId}/promote`, input);
         return { appUrl: res.appUrl, warnings: res.warnings ?? [] };
       },
     };
-  }, [activeSessionId, impersonating, isLoading]);
+  }, [activeSessionId, impersonating, isLoading, artifactsOn]);
 
   return (
     <div className="workspace-chat h-full flex relative">

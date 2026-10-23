@@ -396,12 +396,17 @@ function companySteps(plan: Plan, a: Answers, s: OnboardingState): void {
     permission(plan, s, 'tasks', 'write', 'add tasks to your list');
     permission(plan, s, 'messaging', 'send', 'message you in your chat');
     const interval = Number(str(a, 'company.interval')) || 15;
-    if (s.heartbeat.enabled && s.heartbeat.watchEmail && s.heartbeat.intervalMinutes === interval) {
+    const useCases = (a._useCases as UseCaseId[] | undefined) ?? [];
+    // The inbox watch is the `inbox` module's (docs/MODULES.md).
+    if (!moduleOnAfter(useCases, s, 'inbox')) {
+      plan.done('heartbeat:me', 'Your admin turns on the email inbox in Settings → Modules; then turn on "Watch my inbox" under Settings → Heartbeat');
+    } else if (s.heartbeat.enabled && s.heartbeat.watchEmail && s.heartbeat.intervalMinutes === interval) {
       plan.done('heartbeat:me', `Your inbox is already checked every ${interval} minutes`);
     } else {
+      const after = [...(connect && connect.startsWith('connect:') ? [connect] : []), ...(plan.has('modules') ? ['modules'] : [])];
       plan.api('heartbeat:me', `Check your inbox every ${interval} minutes`, {
         method: 'PUT', path: '/heartbeat/me', body: { enabled: true, watchEmail: true, intervalMinutes: interval },
-      }, { dependsOn: connect && connect.startsWith('connect:') ? [connect] : undefined, detail: 'Only mail that arrives from now on.' });
+      }, { dependsOn: after.length > 0 ? after : undefined, detail: 'Only mail that arrives from now on.' });
     }
   }
   if (yes(a, 'company.ideas')) roleAgent(plan, s, 'general', str(a, 'company.ideasPipeline'), 'Turn on an agent for your ideas (role "general")');
@@ -431,11 +436,22 @@ function researchSteps(plan: Plan, a: Answers, s: OnboardingState): void {
  * install-wide by an admin. Only turned on, never off: a second run of the
  * guide with fewer use cases leaves alone what is already on.
  */
+function wantedModules(useCases: readonly UseCaseId[], s: OnboardingState): Map<string, string> {
+  const wanted = new Map<string, string>();
+  for (const useCase of useCases) for (const m of s.modules?.byUseCase[useCase] ?? []) wanted.set(m.id, m.title);
+  return wanted;
+}
+
+/** Module `id` is on once the plan has run: on already, or turned on by its first step. */
+function moduleOnAfter(useCases: readonly UseCaseId[], s: OnboardingState, id: string): boolean {
+  if (!s.modules) return true;
+  return s.modules.enabled.includes(id) || (s.isAdmin && wantedModules(useCases, s).has(id));
+}
+
 function moduleSteps(plan: Plan, useCases: readonly UseCaseId[], s: OnboardingState): void {
   // A server from before modules reports none: nothing to switch.
   const modules = s.modules ?? { enabled: [], byUseCase: {} };
-  const wanted = new Map<string, string>();
-  for (const useCase of useCases) for (const m of modules.byUseCase[useCase] ?? []) wanted.set(m.id, m.title);
+  const wanted = wantedModules(useCases, s);
   if (wanted.size === 0) return;
   const missing = [...wanted].filter(([id]) => !modules.enabled.includes(id));
   if (missing.length === 0) {

@@ -12,6 +12,7 @@
  */
 import { Elysia, t } from '@/api/http';
 import { buildArtifactAppUrl } from '@/core/artifacts/host';
+import { isModuleOn } from '@/core/modules/registry';
 import { writeVersion } from '@/core/artifacts/version-writer';
 import { inlineUiReader } from '@/core/inline-ui/access';
 import { canActInSession } from '@/core/rooms/access';
@@ -69,6 +70,8 @@ export const inlineUiRoutes = new Elysia({ prefix: '/sessions' })
         set.status = 403;
         return { error: 'Saving as an artifact is off while acting as another user.' };
       }
+      // Saving as an artifact needs the `artifacts` module (docs/MODULES.md).
+      if (!isModuleOn('artifacts')) { set.status = 404; return { error: 'Not found', code: 'module_off', module: 'artifacts' }; }
       const notFound = () => { set.status = 404; return { error: 'Interactive answer not found' }; };
       if (!UUID_RE.test(params.id) || !UUID_RE.test(params.blockId)) return notFound();
       // The caller's own chat: the scoped read every chat route uses, then

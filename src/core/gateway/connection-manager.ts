@@ -437,6 +437,12 @@ export class ConnectionManager {
           // and subscribe to `artifact:<id>` only.
           const aid = msg.credentials.artifactId;
           const token = msg.credentials.token;
+          // Live artifacts are a module (docs/MODULES.md): off, no viewer connects.
+          const { isModuleOn } = await import('@/core/modules/registry');
+          if (!isModuleOn('artifacts')) {
+            this.sendAuthError(conn, 'Artifact not found');
+            return;
+          }
           if (typeof aid !== 'string' || !aid || typeof token !== 'string' || !token) {
             this.sendAuthError(conn, 'Missing artifact id or token');
             return;

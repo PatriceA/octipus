@@ -4,7 +4,9 @@
  * names belongs to it alone.
  */
 import type { ModuleDefinition } from '../core/modules/types';
+import { artifactsModule } from './artifacts';
 import { businessModule } from './business';
+import { inboxModule } from './inbox';
 import { mailModule } from './mail';
 import { protectionModule } from './protection';
 import { readerModule } from './reader';
@@ -20,4 +22,6 @@ export const MODULES: readonly ModuleDefinition[] = [
   researchModule,
   readerModule,
   recallModule,
+  inboxModule,
+  artifactsModule,
 ];

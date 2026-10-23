@@ -2,6 +2,7 @@
 
 import { HeartPulse, Loader2, Mail } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
+import { usePageOn } from '@/lib/modules';
 import { api } from '@/lib/api';
 
 interface HeartbeatMe {
@@ -44,6 +45,7 @@ export function HeartbeatTab() {
   const [data, setData] = useState<HeartbeatMe | null>(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  const inboxOn = usePageOn()('/email');
 
   const load = useCallback(async () => {
     try {
@@ -138,6 +140,8 @@ export function HeartbeatTab() {
         </select>
       </label>
 
+      {/* The inbox watch is the `inbox` module's (docs/MODULES.md). */}
+      {inboxOn && (
       <div className="border-t border-outline-variant/20 pt-4 space-y-3">
         <label className="flex items-start gap-3 cursor-pointer">
           <input
@@ -179,6 +183,7 @@ export function HeartbeatTab() {
           </div>
         )}
       </div>
+      )}
 
       <div className="border-t border-outline-variant/20 pt-4 text-xs text-on-surface-variant space-y-1">
         <p>
