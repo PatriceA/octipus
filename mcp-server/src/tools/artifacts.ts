@@ -131,7 +131,7 @@ export function registerArtifactTools(server: McpServer, client: OctiClient): vo
     {
       id: z.string().describe('Artifact ID'),
       ttlSeconds: z.number().int().positive().optional().describe('Link lifetime in seconds (default 3600)'),
-      scope: z.record(z.unknown()).optional().describe('Optional scope claims attached to the link'),
+      scope: z.record(z.string(), z.unknown()).optional().describe('Optional scope claims attached to the link'),
     },
     async ({ id, ttlSeconds, scope }) => {
       try { return ok(await client.mintArtifactShareLink(id, { ttlSeconds, scope })); }

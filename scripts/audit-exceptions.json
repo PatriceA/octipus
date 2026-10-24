@@ -1,0 +1,10 @@
+[
+  {
+    "folder": ".",
+    "advisory": "GHSA-mrhx-c7xc-m3w5",
+    "package": "zod",
+    "under": ["botbuilder", "botbuilder-core", "botframework-connector", "botframework-schema"],
+    "reason": "Zod 3 has no fixed release, and botbuilder (the Teams channel) pins zod ^3 even at its latest version and uses APIs zod 4 removed. The advisory is memory exhaustion while validating oversized collections; inbound requests are size-limited before botbuilder sees them. Remove once botbuilder moves to zod >= 4.6.6.",
+    "reviewBy": "2027-01-31"
+  }
+]
