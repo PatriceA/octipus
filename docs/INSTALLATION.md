@@ -41,7 +41,7 @@ octi tui             # terminal chat, while backend is running
 octi stop
 ```
 
-Local defaults: API **3005**, web **3007**. There is no separate web setup page. `octi start` alone starts only the backend. Processes are managed locally; the native installer does not install an automatic boot service.
+Local defaults: API **3005**, web **3007**. There is no separate web setup page. `octi start` alone starts only the backend. After a `git pull`, `octi start` installs a package's locked dependencies again when its lockfile changed (root, web and MCP server: `npm ci`, logged to `backend.log.install` in the state directory) and rebuilds what changed. Before, a pull that added a dependency left the new backend unable to boot, and the supervisor kept serving the previous build. Processes are managed locally; the native installer does not install an automatic boot service.
 
 Unix flags: `--quick` (five-prompt setup that ends running); `--start` starts the web stack after the full wizard; `--desktop` also installs Rust/Tauri prerequisites; `--skip-setup` installs/builds only; `--non-interactive` reads setup environment variables. Pass flags after `bash -s --`. Windows equivalents are `-Quick`, `-Start`, `-SkipSetup`, `-NonInteractive`, and `-Desktop` (prints the Rust, WebView2 and Build Tools prerequisites, which are installed separately). Windows also needs `curl.exe`, which ships with Windows 10 1803 and later.
 

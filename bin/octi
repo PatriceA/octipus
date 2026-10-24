@@ -651,15 +651,14 @@ preflight_checks() {
 
   # Build MCP server (when its sources changed) and register with CLI tools
   if [[ -f "$PROJECT_DIR/mcp-server/package.json" ]]; then
-    if [[ "$LAUNCH_REBUILD" == true ]] || ! node "$PROJECT_DIR/scripts/needs-build.mjs" mcp-server; then
+    # mcp-server is not a root workspace: its locked deps are installed on
+    # their own, on a fresh clone and whenever its lockfile changed.
+    local mcp_deps=0
+    ensure_deps mcp-server "$PROJECT_DIR/mcp-server" || mcp_deps=$?
+    if [[ $mcp_deps -eq 1 ]]; then log_warn "MCP dep install failed"; fi
+    if [[ "$LAUNCH_REBUILD" == true || $mcp_deps -eq 10 ]] || ! node "$PROJECT_DIR/scripts/needs-build.mjs" mcp-server; then
       log_step "Building MCP server..."
       cd "$PROJECT_DIR/mcp-server"
-      # Fresh clones never installed mcp-server deps (it's not a root workspace),
-      # so tsc would fail with missing @types/node + SDK. Install on first build.
-      if [[ ! -d node_modules ]]; then
-        log_step "Installing MCP server deps (first run)..."
-        npm install --silent 2>/dev/null || log_warn "MCP dep install failed"
-      fi
       npm run build --silent 2>/dev/null && log_info "MCP server built" || log_warn "MCP build failed (non-critical)"
       cd "$PROJECT_DIR"
     else
@@ -669,6 +668,26 @@ preflight_checks() {
     regen_mcp_config
     log_info ".mcp.json generated"
   fi
+}
+
+# Install a package's locked dependencies when its lockfile changed since the
+# last install (scripts/needs-install.mjs, shared with the Windows CLI).
+#
+# A `git pull` that adds a dependency used to leave it uninstalled: the
+# rebuilt backend then failed to boot on the missing package and the
+# supervisor fell back to the last good build, a version behind, with no sign
+# but missing features. Returns 0 when nothing was needed, 10 after an
+# install, 1 when the install failed.
+ensure_deps() {
+  local name="$1" dir="$2"
+  node "$PROJECT_DIR/scripts/needs-install.mjs" "$name" && return 0
+  log_step "Installing $name dependencies (the lockfile changed since the last install)..."
+  if (cd "$dir" && npm ci --no-audit --no-fund >> "$LOG_FILE.install" 2>&1); then
+    log_info "$name dependencies installed"
+    return 10
+  fi
+  log_error "Installing $name dependencies failed — see $LOG_FILE.install (run npm ci in $dir)"
+  return 1
 }
 
 # Rebuild dist/ when it is missing or older than the sources.
@@ -698,6 +717,9 @@ ensure_backend_build() {
 # having already killed the process and printed a diagnosis.
 start_backend() {
   cd "$PROJECT_DIR"
+  local root_deps=0
+  ensure_deps root "$PROJECT_DIR" || root_deps=$?
+  if [[ $root_deps -eq 1 ]]; then log_warn "Starting anyway — a dependency the backend needs may be missing"; fi
   if [[ "$LAUNCH_DEV" == true ]]; then
     log_step "Starting backend (dev mode with hot reload)..."
     nohup npm run dev > "$LOG_FILE" 2>&1 &
@@ -789,10 +811,12 @@ start_and_launch() {
 start_web() {
   cd "$PROJECT_DIR/web"
   : > "$WEB_LOG_FILE"
-  local serve=true
+  local serve=true web_deps=0
+  # The bundle includes its dependencies: new ones mean a new bundle.
+  ensure_deps web "$PROJECT_DIR/web" || web_deps=$?
   if [[ "$LAUNCH_DEV" == true ]]; then
     serve=false
-  elif [[ "$LAUNCH_REBUILD" == true ]] || ! node "$PROJECT_DIR/scripts/needs-build.mjs" web; then
+  elif [[ "$LAUNCH_REBUILD" == true || $web_deps -eq 10 ]] || ! node "$PROJECT_DIR/scripts/needs-build.mjs" web; then
     log_step "Building web UI..."
     if ! npm run build >> "$WEB_LOG_FILE" 2>&1; then
       log_warn "Production build failed, using dev mode instead (see octi logs --web)"
