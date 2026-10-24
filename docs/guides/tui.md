@@ -7,7 +7,7 @@ Octipus has two terminal surfaces:
 | Chat | `octi tui` | Work with an agent through a conversation, visible plan and activity |
 | Editor | `octi edit` | Edit local files alongside agent chat, with file navigation and diff review |
 
-Use Node **24.19 or newer**. Start the backend with `octi start`, then open either surface. `octi start tui` starts the backend and chat together. Use `--project /path/to/project` to choose a directory; the default is the current directory.
+Use Node **24.22.1 or newer**. Start the backend with `octi start`, then open either surface. `octi start tui` starts the backend and chat together. Use `--project /path/to/project` to choose a directory; the default is the current directory.
 
 Both surfaces use pi-tui for terminal rendering, overlays and the chat composer. The file editor uses Octipus's own buffer, cursor and undo implementation. It is a lightweight editor, not a replacement for a complete IDE.
 
