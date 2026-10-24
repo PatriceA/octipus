@@ -75,14 +75,17 @@ Use `node bin/octi.mjs` instead of `octi` unless you install a PATH launcher. `n
 
 `npm run audit:all` checks backend, web, and MCP dependencies, including development/build packages. It checks every package even if an earlier audit fails and returns a nonzero status for vulnerabilities or registry errors. Installers show audit warnings and continue; they do not silently rewrite the lockfiles. Internet access to the npm audit registry is needed.
 
-The Dependency Audit workflow runs the same check on pull requests, pushes to main, and daily, with no advisory allowlist. Dependabot proposes weekly dependency updates. Newly disclosed vulnerabilities can still appear between checks.
+The Dependency Audit workflow runs the same check on pull requests, pushes to main, and daily. Dependabot proposes weekly dependency updates. Newly disclosed vulnerabilities can still appear between checks.
 
-Review reported fixes in the affected package. Do not blindly use `npm audit fix --force`: it can downgrade or break tooling. Two scoped backend overrides remove vulnerable legacy dependencies while retaining the current parent packages:
+A finding with no fixed release can be accepted in `scripts/audit-exceptions.json`. An exception names one advisory, the one package it is in, the only packages it may sit under, the reason, and a review date. Anything else still fails, including a second advisory on the same packages or the same package elsewhere in the tree. An exception past its review date fails the audit until it is extended or removed. The one exception today is zod 3 under botbuilder (the Teams channel) for [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5): no zod 3 release is fixed, and botbuilder uses APIs zod 4 removed.
+
+Review reported fixes in the affected package. Do not blindly use `npm audit fix --force`: it can downgrade or break tooling. Three scoped backend overrides remove vulnerable legacy dependencies while retaining the current parent packages:
 
 - `@esbuild-kit/core-utils` uses the root esbuild version, removing the old esbuild pulled in by Drizzle Kit ([advisory](https://github.com/advisories/GHSA-67mh-4wv8-2f99)).
 - `mammoth` uses argparse 2, removing the unpatched sprintf-js dependency from its CLI ([advisory](https://github.com/advisories/GHSA-hp3w-g68c-fv3c)).
+- `@azure/identity` (under botbuilder) uses `@azure/msal-node` 7.1, past the affected 5.x-7.0 range its own range allows; botbuilder's direct msal-node 2.16 is not affected.
 
-Keep these overrides until the parent dependencies support safe versions themselves. When changing them, verify Drizzle's TypeScript transforms, Mammoth's CLI, and document conversion tests as well as `npm run audit:all`.
+Keep these overrides until the parent dependencies support safe versions themselves. When changing them, verify Drizzle's TypeScript transforms, Mammoth's CLI, document conversion and the Teams channel tests as well as `npm run audit:all`.
 
 The installer is also the update path for installations in `~/.octipus/app` (Windows: `%USERPROFILE%\.octipus\app`). From v0.6.0, `octi update` can also update a clean source checkout from its configured upstream and rebuild the backend, CLI, web, and MCP packages; `octi update --dry-run` previews the steps. Older installations should use the installer path below to obtain that command. On an existing checkout the installer fetches and fast-forwards the selected branch, reinstalls locked dependencies, and rebuilds the installed surfaces. It refuses local changes or a divergent branch rather than discarding them.
 
