@@ -136,6 +136,28 @@ set "_CP=%~1"
 powershell -NoProfile -Command "try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('localhost', %_CP%); $c.Close(); exit 0 } catch { exit 1 }" >nul 2>&1
 exit /b %errorlevel%
 
+:ensure_deps
+:: Install a package's locked dependencies when its lockfile changed since the
+:: last install (scripts\needs-install.mjs, shared with the POSIX CLI). A pull
+:: that added a dependency left it uninstalled, and the new build failed to boot.
+:: %~1: root, web or mcp-server; %~2: its directory. Sets DEPS_INSTALLED=1 after
+:: an install.
+set "DEPS_INSTALLED=0"
+node "%PROJECT_DIR%\scripts\needs-install.mjs" %~1
+if not errorlevel 1 exit /b 0
+echo   %BLUE%-%NC% Installing %~1 dependencies %DIM%(the lockfile changed since the last install^)%NC%...
+pushd "%~2"
+call npm ci --no-audit --no-fund >>"%LOG_FILE%.install" 2>&1
+if errorlevel 1 (
+    echo   %RED%x%NC% Installing %~1 dependencies failed ^-^- see %LOG_FILE%.install
+    popd
+    exit /b 0
+)
+popd
+set "DEPS_INSTALLED=1"
+echo   %GREEN%v%NC% %~1 dependencies installed
+exit /b 0
+
 :ensure_backend_build
 :: Rebuild dist/ when it is missing or older than the sources. The staleness
 :: question is answered by scripts/needs-build.mjs, shared with the POSIX CLI.
@@ -212,6 +234,7 @@ if "!STORAGE_MODE!"=="external" (
 )
 
 :: Start backend
+call :ensure_deps root "%PROJECT_DIR%"
 if not "!DEV_MODE!"=="true" (
     call :ensure_backend_build
     if errorlevel 1 exit /b 1
@@ -245,7 +268,10 @@ if not "!TARGET!"=="web" goto :backend_ready
 :: Start web UI only after backend is confirmed healthy. The bundle is
 :: rebuilt only when scripts\needs-build.mjs finds it stale (shared with the
 :: POSIX CLI); rebuilding on every start cost a full Vite build each time.
+:: The bundle includes its dependencies: new ones mean a new bundle.
+call :ensure_deps web "%PROJECT_DIR%\web"
 if "!DEV_MODE!"=="true" goto :start_web_dev
+if "!DEPS_INSTALLED!"=="1" goto :start_web_build
 node "%PROJECT_DIR%\scripts\needs-build.mjs" web
 if errorlevel 1 goto :start_web_build
 echo   %GREEN%v%NC% Web UI build is current
@@ -410,6 +436,7 @@ if "!STORAGE_MODE!"=="external" (
 )
 
 :: Start backend
+call :ensure_deps root "%PROJECT_DIR%"
 if not "!DEV_MODE!"=="true" (
     call :ensure_backend_build
     if errorlevel 1 exit /b 1
