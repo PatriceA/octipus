@@ -1,6 +1,6 @@
-# Node 24.19 includes required crypto APIs and the module-loader fix used by CI.
+# Node 24.22.1: the October 2026 security release (Brotli, TLS, DNS fixes), used by CI.
 # ---- Build stage ----
-FROM node:24.19-bookworm AS build
+FROM node:24.22.1-bookworm AS build
 WORKDIR /app
 
 # Install dependencies first (layer caching)
@@ -27,7 +27,7 @@ ENV NEXT_PUBLIC_API_PORT=${NEXT_PUBLIC_API_PORT}
 RUN cd web && npm ci --include=dev && npm run build
 
 # ---- Runtime stage ----
-FROM node:24.19-bookworm-slim
+FROM node:24.22.1-bookworm-slim
 WORKDIR /app
 
 # Install runtime system dependencies

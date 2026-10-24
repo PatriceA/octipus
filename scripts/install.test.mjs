@@ -6,9 +6,9 @@ import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { supportedNode } from './check-node.mjs';
 
-test('Node floor rejects the old runtime and the known-broken 24.9 loader', () => {
-  for (const version of ['18.20.0', '22.20.0', '24.8.0', '24.9.0', '24.18.9']) assert.equal(supportedNode(version), false);
-  for (const version of ['24.19.0', '24.20.0', '26.2.0']) assert.equal(supportedNode(version), true);
+test('Node floor: a fixed release of a supported line (October 2026 security release)', () => {
+  for (const version of ['18.20.0', '22.20.0', '24.9.0', '24.19.0', '24.22.0', '25.9.0', '26.2.0', '26.12.0']) assert.equal(supportedNode(version), false, version);
+  for (const version of ['24.22.1', '24.23.0', '26.12.1', '26.13.0', '27.0.0']) assert.equal(supportedNode(version), true, version);
 });
 for (const mode of ['old-node', 'success', 'build-failure', 'audit-failure']) {
   test(`installer: ${mode}`, () => {
@@ -19,7 +19,7 @@ for (const mode of ['old-node', 'success', 'build-failure', 'audit-failure']) {
       for (const name of ['node', 'git', 'npm']) {
         writeFileSync(join(tools, name), `#!/bin/bash
 printf '%s %s\\n' '${name}' "$*" >> "$CALL_LOG"
-${name === 'node' ? `if [ "$1" = -e ] && [ "$TEST_MODE" = old-node ]; then exit 1; fi\necho 26.2.0` : ''}
+${name === 'node' ? `if [ "$1" = -e ] && [ "$TEST_MODE" = old-node ]; then exit 1; fi\necho 26.12.1` : ''}
 ${name === 'npm' ? `if [ "$*" = 'run build' ] && [ "$TEST_MODE" = build-failure ]; then exit 1; fi
 if [ "$*" = 'run audit:all' ] && [ "$TEST_MODE" = audit-failure ]; then exit 1; fi
 if [ "$*" = 'run build:cli' ]; then

@@ -17,11 +17,11 @@ function Run-Native([string]$Program, [string[]]$Arguments) {
 # curl.exe: the octi.cmd launcher uses it for health checks (ships with Windows 10 1803+).
 foreach ($tool in @('git', 'node', 'npm.cmd', 'curl.exe')) {
     if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
-        throw "$tool is required. Install Git for Windows and Node.js >=24.19 (including npm), reopen PowerShell, then retry."
+        throw "$tool is required. Install Git for Windows and Node.js >=24.22.1 (including npm), reopen PowerShell, then retry."
     }
 }
-Write-Host 'Checking Node.js >=24.19.0 (required for crypto and module-loader support)...'
-Run-Native node @('-e', 'const [a,b]=process.versions.node.split(String.fromCharCode(46)).map(Number);process.exit(a>24||(a===24&&b>=19)?0:1)')
+Write-Host 'Checking Node.js >=24.22.1 or >=26.12.1 (the October 2026 Node security release)...'
+Run-Native node @('-e', 'const [a,b,c]=process.versions.node.split(String.fromCharCode(46)).map(Number);const m={24:[22,1],26:[12,1]}[a];process.exit(a>26||(m&&(b>m[0]||(b===m[0]&&c>=m[1])))?0:1)')
 if (-not $SkipSetup -and -not $NonInteractive -and -not $env:CI -and [Console]::IsInputRedirected) {
     throw 'No terminal available for setup. Use -NonInteractive with OCTIPUS_SETUP_ADMIN_USER/PASS, or -SkipSetup.'
 }

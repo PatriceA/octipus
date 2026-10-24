@@ -31,7 +31,7 @@ Architecture in one line:
 
 ## Stack
 
-- **Runtime:** Node 24.19.0 or newer end-to-end (server, tests, scripts, TUI, web build).
+- **Runtime:** Node 24.22.1 or newer end-to-end (server, tests, scripts, TUI, web build).
   `npm run build` bundles `dist/index.js`; `npm start` runs that artifact, not
   the source.
 - **Backend:** Hono + `ws` behind the application in `src/api/http/` (which
