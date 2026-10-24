@@ -42,7 +42,7 @@ for arg in "$@"; do
     --start) START_WEB=1 ;;
     --help|-h)
       echo 'Usage: install.sh [--quick] [--desktop] [--non-interactive] [--skip-setup] [--start]'
-      echo 'Requires Git, curl, Node.js >=24.19 and npm. --quick asks five questions and starts the web UI; --start starts it after the full wizard.'
+      echo 'Requires Git, curl, Node.js >=24.22.1 and npm. --quick asks five questions and starts the web UI; --start starts it after the full wizard.'
       exit 0 ;;
     *) echo "Unknown option: $arg" >&2; exit 2 ;;
   esac
@@ -93,16 +93,16 @@ ok "git: $(git --version | head -1)"
 
 # ─── Check node ────────────────────────────────────────────────────────────
 if ! command -v node >/dev/null 2>&1; then
-  err "Node.js not found. Install Node 24.19 or newer from https://nodejs.org and re-run."
+  err "Node.js not found. Install Node 24.22.1 or newer (or 26.12.1+) from https://nodejs.org and re-run."
   exit 1
 fi
-# 24.19 includes the required crypto API and fixes the older module-loader bug.
-# Fail before dependency installation on unsupported versions.
-NODE_MAJOR_MINOR=$(node -p "process.versions.node.split('.').slice(0,2).map(Number).join('.')")
-if node -e "const [a,b]=process.versions.node.split('.').map(Number); process.exit(a>24||(a===24&&b>=19)?0:1)"; then
+# 24.22.1 / 26.12.1: the October 2026 security release (Brotli, TLS, DNS fixes);
+# 24.19 already had the crypto API and the module-loader fix. Node 25 is
+# end-of-life. Fail before dependency installation on unsupported versions.
+if node -e "const [a,b,c]=process.versions.node.split('.').map(Number);const m={24:[22,1],26:[12,1]}[a];process.exit(a>26||(m&&(b>m[0]||(b===m[0]&&c>=m[1])))?0:1)"; then
   ok "node: $(node --version)"
 else
-  err "Node $NODE_MAJOR_MINOR is too old — Octipus needs 24.19 or newer (crypto APIs and module-loader support)."
+  err "Node $(node --version) is not supported — Octipus needs 24.22.1 or newer, or 26.12.1 or newer (the October 2026 Node security release)."
   exit 1
 fi
 

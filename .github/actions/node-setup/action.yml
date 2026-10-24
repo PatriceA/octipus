@@ -30,7 +30,7 @@ runs:
   steps:
     - uses: actions/setup-node@v7
       with:
-        node-version: '24.19'
+        node-version: '24.22.1'
         cache: ${{ inputs.cache }}
         cache-dependency-path: ${{ inputs.cache-dependency-path }}
         registry-url: ${{ inputs.registry-url }}

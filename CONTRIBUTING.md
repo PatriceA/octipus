@@ -23,7 +23,7 @@ If anything in here is wrong, unclear, or out of date, that is itself a bug — 
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org) 24.19.0 or newer — the whole stack: backend, scripts, tests,
+- [Node.js](https://nodejs.org) 24.22.1 or newer — the whole stack: backend, scripts, tests,
   TUI and the web build. (Bun was the backend runtime until the 2026-08-23
   rebuild; it is gone from the image, the CI, the installer and the launcher.)
 - _Desktop app only:_ [Rust](https://rustup.rs) + Tauri system libs — installed

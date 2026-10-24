@@ -2,7 +2,7 @@
 
 ## Before you start
 
-- **Node.js 24.19.0 or newer, including npm**, and Git. Check `node --version` and `npm --version` before installing. Node 24.9 introduced the required crypto API but has a module-loader bug; 24.19 is the supported minimum used by CI. After upgrading Node, open a new terminal and check again.
+- **Node.js 24.22.1 or newer (or 26.12.1 or newer), including npm**, and Git. Check `node --version` and `npm --version` before installing. 24.22.1 and 26.12.1 are the October 2026 Node security release (a Brotli decoder flaw that allows remote code execution, TLS hostname checks, `dns.resolve`); CI uses 24.22.1. Node 25 is end-of-life. After upgrading Node, open a new terminal and check again.
 - Linux/macOS/WSL: Bash and curl. Windows: PowerShell and Git for Windows. Native dependencies may need your platform's C/C++ build tools and Python if a prebuilt package is unavailable.
 - A model: an API key for a hosted provider, or a running Ollama with a downloaded model. Embedded storage does not require Docker, PostgreSQL, Redis, or Valkey. Local models need additional RAM/disk space according to the model.
 - Vendor CLI subscriptions are another option: install and authenticate the vendor CLI separately, then add its CLI model in Models. Provider policies and billing determine whether subscription use is allowed or charged separately.
