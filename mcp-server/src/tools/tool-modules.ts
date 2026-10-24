@@ -48,7 +48,7 @@ export function registerToolModuleTools(server: McpServer, client: OctiClient): 
     {
       tool_id: z.string().describe('Tool ID (e.g., "filesystem", "shell", "git", "docker", "websearch", "browser", "browser-ext", "knowledge")'),
       tool_name: z.string().describe('Tool name within the tool module (e.g., "read_file", "execute", "status", "get_tabs", "screenshot", "extract_content")'),
-      args: z.record(z.unknown()).optional().default({}).describe('Arguments for the tool as a JSON object'),
+      args: z.record(z.string(), z.unknown()).optional().default({}).describe('Arguments for the tool as a JSON object'),
     },
     async ({ tool_id, tool_name, args }) => {
       try {
