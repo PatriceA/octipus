@@ -1,3 +1,4 @@
+import { isProviderQuotaMessage } from '@/core/errors/provider-recovery';
 import { configuredCliBinary } from '@/core/cli-executable';
 import { describeCliCapabilities } from '@/shared/cli-capabilities';
 import { cliCredentialOwnerFor, cliEnvFor, cliWorkDirFor } from '@/core/cli-child-env';
@@ -164,7 +165,7 @@ const claudeCodeConfig: CLIToolConfig = {
   // plain text when the payload isn't JSON.
   parseOutput: parseClaudeStyleOutput('cli/claude-code'),
   isQuotaError: (output: string) =>
-    /rate.?limit|quota|exceeded|capacity|too many/i.test(output),
+    /rate.?limit|quota|exceeded|too many/i.test(output),
   quotaProvider: 'claude-code',
   modelProvider: 'anthropic',
   modelFlag: '--model',
@@ -316,7 +317,7 @@ const codexCliConfig: CLIToolConfig = {
     }
   },
   isQuotaError: (output: string) =>
-    /rate.?limit|quota|exceeded|limit reached/i.test(output),
+    isProviderQuotaMessage(output) || /rate.?limit|quota|exceeded|limit reached/i.test(output),
   quotaProvider: 'codex-cli',
   modelProvider: 'openai',
   modelFlag: '-m',
@@ -527,7 +528,7 @@ function makeAnthropicCompatCliConfig(spec: AnthropicCompatCliSpec): CLIToolConf
         API_TIMEOUT_MS: '3000000',
       };
     },
-    isQuotaError: (output: string) => /rate.?limit|quota|exceeded|capacity|too many/i.test(output),
+    isQuotaError: (output: string) => /rate.?limit|quota|exceeded|too many/i.test(output),
     quotaProvider: spec.quotaProvider,
     modelProvider: spec.modelProvider,
     modelFlag: 'ANTHROPIC_MODEL (env)',

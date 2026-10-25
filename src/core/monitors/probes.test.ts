@@ -60,3 +60,13 @@ describe('monitor probe boundaries', () => {
     expect(channelCanPrompt('monitor')).toBe(false);
   });
 });
+
+test('monitor creation bypasses recovery without advertising itself as a read-only polling probe (#43)', async () => {
+  const { MonitorTool } = await import('@/tools/monitor');
+  const tool = new MonitorTool();
+  await tool.initialize();
+  const create = tool.getToolHandlers().find(handler => handler.name === 'monitor__create');
+  expect(create?.replaySafety).not.toBe('read_only');
+  find.mockReturnValue(create);
+  expect(() => readProbe('monitor__create', {})).toThrow('read-only');
+});

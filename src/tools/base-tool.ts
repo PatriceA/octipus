@@ -1,3 +1,4 @@
+import { rememberRunDecision } from '@/security/pipeline-permissions';
 import { actionRecovery, isReadOnlyAction } from '@/core/action-recovery';
 import { assertExecutionActive, getExecutionSignal } from '@/core/execution-scope';
 import type { ToolHandler } from '@/core/agent-worker';
@@ -23,6 +24,8 @@ export interface ToolExecutionOptions {
   /** Observational tools may retain an existing permission action (e.g. extract)
    * without creating mutation-recovery records. Does not bypass permissions. */
   readOnly?: boolean;
+  /** Local coordination writes may bypass mutation recovery without becoming valid polling probes. */
+  recoverySafe?: boolean;
   /**
    * Permission action to check. A string is resolved once at registration;
    * a function is resolved per call against the live args, which lets a tool
@@ -247,7 +250,8 @@ export abstract class BaseTool {
     let execResult: unknown;
     let execError: unknown;
     try {
-      const result = options?.readOnly || isReadOnlyAction(action)
+      if (authorizationSource.startsWith('approval:')) await rememberRunDecision(context, { toolId: this.id, action, toolName, args });
+      const result = options?.readOnly || options?.recoverySafe || isReadOnlyAction(action)
         ? await execute(processedArgs, toolContext)
         : await actionRecovery.run(context, this.id, `${this.id}__${toolName}`, args, () => execute(processedArgs, toolContext), async () => {
           const current = await permissionManager.check(context.userId, this.id, action, args, context,

@@ -28,6 +28,8 @@ export async function startCliToolBridge(options: {
   abandoned?: (name: string) => void;
   /** Read-only tools that bypass the per-worker queue (safe to answer while a delegation blocks it). */
   unqueued?: ReadonlySet<string>;
+  /** Includes queue wait; the running mutation retains its queue slot until it settles. */
+  timeoutMs?: number;
   /** The caller dropped the connection before this tool's result could be sent. */
   undelivered?: (name: string) => void;
 }): Promise<{ url: string; key: string; close: () => Promise<void> }> {
@@ -42,11 +44,13 @@ export async function startCliToolBridge(options: {
       res.end(JSON.stringify(value));
     };
     const socket = req.socket;
+    let expired = false;
+    const unqueued = (name: string) => options.unqueued?.has(name) || ['get_pipeline_status', 'monitor__list', 'monitor__create', 'answer_pipeline_approval'].includes(name);
     let started = false;
     let settled = false;
     let toolName: string | undefined;
     const onClose = () => {
-      if (!res.writableEnded && started && !settled && toolName && !options.unqueued?.has(toolName)) options.abandoned?.(toolName);
+      if (!res.writableEnded && started && !settled && toolName && !unqueued(toolName)) options.abandoned?.(toolName);
     };
     res.on('close', onClose);
     try {
@@ -80,7 +84,7 @@ export async function startCliToolBridge(options: {
       }
       toolName = input.name;
       const run = async () => {
-        if (res.destroyed) throw new BridgeError('Tool caller disconnected before execution');
+        if (expired || res.destroyed) throw new BridgeError('Tool caller disconnected or timed out before execution');
         if (closed || !options.active()) throw new BridgeError('Agent run is no longer active');
         // Exact membership check before ToolExecutor's fuzzy name recovery.
         if (!options.tools().some(t => t.name === input.name)) {
@@ -97,9 +101,19 @@ export async function startCliToolBridge(options: {
       // responsive while an awaited delegation holds the queue. Parallel executor
       // calls if ToolExecutor's counters/final-flag are ever made concurrency-safe.
       let operation: Promise<BridgeResult>;
-      if (options.unqueued?.has(input.name)) operation = run();
+      if (unqueued(input.name)) operation = run();
       else { operation = queue.then(run); queue = operation.then(() => undefined, () => undefined); }
-      const result = await operation;
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      let result: BridgeResult;
+      try {
+        result = await Promise.race([operation, new Promise<never>((_, reject) => {
+          deadline = setTimeout(() => {
+            expired = true;
+            if (started && !settled && !unqueued(input.name)) options.abandoned?.(input.name);
+            reject(new BridgeError(`Tool ${input.name} timed out after ${options.timeoutMs ?? 30_000}ms. ${started ? 'Execution may have started; inspect its outcome before retrying.' : 'The queued call was not executed.'}`));
+          }, options.timeoutMs ?? 30_000);
+        })]);
+      } finally { clearTimeout(deadline); }
       // The caller gave up (transport timeout, cancel) while the tool ran; a
       // write now goes nowhere, so let the owner keep what it would lose.
       if (socket.destroyed) { options.undelivered?.(input.name); return; }

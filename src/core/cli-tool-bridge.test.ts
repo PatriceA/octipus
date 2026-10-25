@@ -205,3 +205,23 @@ it('never executes a queued write after its caller disconnects', async () => {
   await new Promise(resolve => setTimeout(resolve, 20));
   expect(writes).not.toHaveBeenCalled();
 });
+
+it('keeps monitor reads responsive behind approval and bounds queued calls (#39)', async () => {
+  let release!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const executed: string[] = [];
+  const bridge = await startCliToolBridge({ active: () => true, timeoutMs: 40,
+    tools: () => ['wait', 'monitor__list', 'mutation'].map(name => ({ name, description: '', parameters: {}, execute: async () => null })),
+    execute: async name => { executed.push(name); if (name === 'wait') await blocked; return { content: [] }; },
+  });
+  bridges.push(bridge);
+  const waiting = call(bridge.url, bridge.key, 'wait');
+  await vi.waitFor(() => expect(executed).toContain('wait'));
+  const mutation = call(bridge.url, bridge.key, 'mutation');
+  expect((await call(bridge.url, bridge.key, 'monitor__list')).status).toBe(200);
+  expect(await (await mutation).json()).toMatchObject({ error: expect.stringContaining('not executed') });
+  expect(await (await waiting).json()).toMatchObject({ error: expect.stringContaining('inspect its outcome') });
+  release();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  expect(executed).not.toContain('mutation');
+});

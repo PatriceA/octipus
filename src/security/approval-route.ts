@@ -1,3 +1,4 @@
+import { profileAllows, runPermissionProfile } from './pipeline-permissions';
 /**
  * One decision function for every tool call (docs/plans/coworking-spec.md
  * §5.6; I4, I6, D5).
@@ -168,7 +169,7 @@ export async function routeApprovalFor(
   // The user already approved this exact call for this stage of its pipeline
   // (`approved-calls.ts`). Only a plain policy ASK: space, room and flow-guard
   // asks keep asking, and a DENY never gets here.
-  if (decision.route === 'ask_human' && !space && context.trigger !== 'remote' && source !== 'flow-guard' && await isApprovedCall(context, call)) {
+  if (['ask_human', 'blocked'].includes(decision.route) && !space && context.trigger !== 'remote' && source !== 'flow-guard' && await isApprovedCall(context, call)) {
     return { route: 'execute', level, source: 'pipeline-approval' };
   }
   // A turn a member of another install asked for has nobody here to ask
@@ -178,6 +179,25 @@ export async function routeApprovalFor(
   }
   if (space && (decision.route === 'execute' || decision.route === 'ask_human') && personalSourceRead(call)) {
     observeFlow(context.sessionId, { toolId: call.toolId, action: call.action }, { taints: ['private'] });
+  }
+  if (level === 'ASK' && context.trigger !== 'remote') {
+    const run = await runPermissionProfile(context);
+    if (run && !['flow-guard', 'space-flow', 'space-room', 'space-federated'].includes(source ?? '')
+      && (profileAllows(run.profile, call) || await isApprovedCall(context, call))) return { route: 'execute', level, source: 'pipeline-approval' };
+    if (run?.profile.overnight) {
+      await (await import('@/db/repositories/pipeline-repository')).pipelineRepository.appendRunMetadata(run.pipeline.id, 'deniedRequests', {
+        toolId: call.toolId, action: call.action, command: call.args?.command,
+        reason: 'Outside the approved overnight profile', at: new Date().toISOString(),
+      });
+      return { route: 'deny', level, source: 'pipeline-profile', reason: 'Outside the approved overnight profile. This command was denied and recorded for the morning summary. Continue with permitted alternatives; do not bypass the denial.' };
+    }
+  }
+  if (level === 'DENY' && !space) {
+    const run = await runPermissionProfile(context);
+    if (run?.profile.overnight) await (await import('@/db/repositories/pipeline-repository')).pipelineRepository.appendRunMetadata(run.pipeline.id, 'deniedRequests', {
+      toolId: call.toolId, action: call.action, command: call.args?.command,
+      reason: permission.reason ?? 'Denied by existing policy', at: new Date().toISOString(),
+    });
   }
   return { ...decision, level, reason: reason ?? decision.reason, source };
 }

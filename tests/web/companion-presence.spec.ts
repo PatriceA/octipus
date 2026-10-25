@@ -42,7 +42,7 @@ async function enableNotifications(page: Page) {
   await page.addInitScript(() => localStorage.setItem('octipus.companion.prefs', JSON.stringify({ notify: true })));
 }
 
-test('while away: notifies, animates the tab icon, counts unseen moments, and a click opens the conversation', async ({ authenticatedPage: page }) => {
+test('while away: notifies, updates the tab icon, counts unseen moments, and a click opens the conversation', async ({ authenticatedPage: page }) => {
   const gateway = await stubGateway(page);
   const notifications = await stubNotifications(page, { away: true });
   await enableNotifications(page);
@@ -134,4 +134,31 @@ test('blocked notifications explain how to fix it', async ({ authenticatedPage: 
   await card.getByRole('checkbox', { name: 'System notifications' }).click();
   await expect(card.getByRole('alert')).toContainText('blocked for this site');
   await expect(card.getByRole('checkbox', { name: 'System notifications' })).not.toBeChecked();
+});
+
+test('settings keep a static status thumbnail without recurring icon updates', async ({ authenticatedPage: page }) => {
+  const gateway = await stubGateway(page);
+  await page.route('**/api/persona', route => json(route, 200, persona));
+  await page.goto('/settings');
+  await expect.poll(() => gateway.subscribed()).toBe(1);
+
+  gateway.event('rootAgent.status', { message: 'Reading the repo' }, 'sess-2');
+  const icon = page.locator('link[rel="icon"][data-companion]');
+  await expect(icon).toHaveAttribute('data-companion', 'working');
+  await expect(icon).toHaveAttribute('href', /^data:image\/png;base64,/);
+  const updates = await icon.evaluate(async link => {
+    let count = 0;
+    const observer = new MutationObserver(records => { count += records.length; });
+    observer.observe(link, { attributes: true, attributeFilter: ['href'] });
+    await new Promise(resolve => setTimeout(resolve, 1200));
+    observer.disconnect();
+    return count;
+  });
+  expect(updates).toBe(0);
+
+  gateway.event('permission.request', { requestId: 'static-r1', toolId: 'shell', action: 'execute', toolName: 'shell', args: {} }, 'sess-2');
+  await expect(icon).toHaveAttribute('data-companion', 'waiting');
+  await expect(icon).toHaveAttribute('href', /^data:image\/png;base64,/);
+  await page.goto('/persona');
+  await expect(page.getByTestId('presence-now').locator('.octi-companion')).toHaveAttribute('data-motion', 'off');
 });

@@ -56,6 +56,7 @@ let replies: Record<string, string[]>;
 let approvalsAsked = 0;
 /** What the stubbed human answers. */
 let approvalAnswer: { approved: boolean; response?: string; reason?: string } = { approved: false, response: 'Abort Pipeline' };
+let tokenCharges: Record<string, number> = {};
 let commandCounts: number[] = [];
 let stopAtStage: string | undefined;
 /** Stage name → per-call plan: a string (or one built from the call) makes that call throw it, undefined runs normally. */
@@ -165,6 +166,7 @@ beforeAll(async () => {
     _ctx: unknown,
     context: AgentContext & { stageName?: string },
     options?: {
+      onTokens?: (tokens: number) => void;
       onCounters?: (counters: import('@/core/swarm/receipt').SideEffectCounters) => void;
       onPartialOutput?: (text: string) => void;
       onWorkerSpawned?: (workerId: string) => void;
@@ -177,6 +179,7 @@ beforeAll(async () => {
     const call: WorkerCall = { role, stageName, input, resumeKey: context.metadata?.resumeKey, workerId: `worker-${calls.length + 1}`, metadata: { ...context.metadata },
       skillIds: options?.skillIds, decideSkills: options?.decideSkills };
     calls.push(call);
+    options?.onTokens?.(tokenCharges[stageName] ?? 0);
     options?.onWorkerSpawned?.(call.workerId);
     await onSpawn?.(stageName, String(context.metadata?.pipelineId), call);
     // A real stage worker is torn down when the signal it was spawned under aborts.
@@ -218,6 +221,7 @@ beforeEach(() => {
   calls = [];
   replies = {};
   approvalsAsked = 0;
+  tokenCharges = {};
   approvalAnswer = { approved: false, response: 'Abort Pipeline' };
   commandCounts = [];
   stopAtStage = undefined;
@@ -924,4 +928,110 @@ test('gate commands are the resolved verifyCommands, without one that waits on a
   ], { 'param.verifyCommand': 'npm test', description: 'd' })).toEqual([
     { command: 'npm test', nodeKey: 'a', hostServices: false }, { command: 'npm test', nodeKey: 'qa', hostServices: true },
   ]);
+});
+
+
+test('finishes an item through QA before pausing at the token pool boundary (#41)', async () => {
+  replies = { QA: [QA_PASS] };
+  const { getConfig } = await import('@/config');
+  const previous = getConfig().agent.pipelineTokenBudget;
+  getConfig().agent.pipelineTokenBudget = 100;
+  tokenCharges = { Implement: 60, QA: 60 };
+  try {
+    const { pipelineId } = await run('deliver both items');
+    expect(await planItemStatuses(pipelineId)).toEqual(['done', 'pending']);
+    expect(calls.filter(call => call.stageName === 'QA')).toHaveLength(1);
+    const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+    const pipeline = await pipelineRepository.findById(pipelineId);
+    expect(pipeline).toMatchObject({ status: 'paused', summary: expect.stringContaining('after finishing the current item') });
+    expect(Object.values(pipeline?.metadata?.tokensByItem as Record<string, number>)).toEqual([120]);
+  } finally { getConfig().agent.pipelineTokenBudget = previous; }
+});
+
+test('quota exhaustion parks an unverified item without marking the run or item failed (#38)', async () => {
+  throwPlan = { QA: ["You've hit your usage limit. Try again at Oct 27th, 2026 9:20 AM"] };
+  const { pipelineId } = await run('deliver both items', 'loop-fixture', { attended: false });
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  expect(await pipelineRepository.findById(pipelineId)).toMatchObject({ status: 'paused', metadata: {
+    providerBlock: { nodeKey: expect.any(String), error: expect.stringContaining('usage limit') },
+  } });
+  expect(await planItemStatuses(pipelineId)).toEqual(['running', 'pending']);
+});
+
+test('one run-profile approval covers an entire item loop including its plan gate (#52)', async () => {
+  replies = { QA: [QA_PASS] };
+  const { rows } = await queryRaw("SELECT steps FROM pipeline_templates WHERE name = 'loop-fixture' LIMIT 1");
+  const steps = (rows[0].steps as Array<Record<string, unknown>>).map(step => step.name === 'Implement'
+    ? { ...step, requiresApproval: true, autoApproveUnattended: false } : step);
+  await executeRaw(`INSERT INTO pipeline_templates (name, is_preset, steps) VALUES ('profile-fixture', true, '${JSON.stringify(steps)}'::jsonb)`);
+  approvalAnswer = { approved: true, response: 'Approve' };
+  const { WorkspaceFS } = await import('@/security/workspace-fs');
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const root = WorkspaceFS.forSession((await sessionRepository.findById(sessionId))!, { space: null }).root;
+  const { pipelineId } = await manager.createAndRun('root', sessionId, userId, 'overnight', 'profile-fixture', 'deliver both items',
+    { userId, sessionId, attended: true, role: 'general' } as AgentContext,
+    { permissionProfile: { repoPath: root, packageManagers: ['pnpm'], publicHosts: ['go.dev'], overnight: true } });
+  expect(await planItemStatuses(pipelineId)).toEqual(['done', 'done']);
+  expect(approvalsAsked).toBe(1);
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  expect(await pipelineRepository.findById(pipelineId)).toMatchObject({ status: 'completed', metadata: {
+    permissionProfile: { approvedBy: userId, profile: { overnight: true } },
+  } });
+});
+
+test('overnight QA failure is reported without opening an unattended waiver approval (#52)', async () => {
+  replies = { QA: [qaFail('the check did not pass')] };
+  const { pipelineId } = await run('deliver both items', 'loop-fixture', { attended: false, metadata: { overnightRun: true, approvedRunGates: true } });
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  expect(await pipelineRepository.findById(pipelineId)).toMatchObject({ status: 'failed', summary: expect.stringContaining('did not request a waiver') });
+  expect(approvalsAsked).toBe(0);
+});
+
+test('approval publication cannot revive a pipeline that was already stopped (#45)', async () => {
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  const pipeline = await pipelineRepository.create({ rootAgentId: 'root', sessionId, userId, title: 'stopped', type: 'development', status: 'stopped' });
+  const pending: import('@/shared/pipeline-approval').PendingStageApproval = {
+    kind: 'conversation', requestId: 'question', workerRequestId: null, stage: 'Plan', nodeKey: 'loop1', attemptId: '',
+    fingerprint: null, hostServices: false, itemId: null, item: null, toolId: null, action: null, toolName: null, subject: 'Approve?', reason: 'Plan gate',
+  };
+  expect(await pipelineRepository.publishApproval(pipeline.id, pending, 'Waiting')).toBe(false);
+  expect(await pipelineRepository.findById(pipeline.id)).toMatchObject({ status: 'stopped' });
+  await pipelineRepository.updatePipeline(pipeline.id, { status: 'running' });
+  expect(await pipelineRepository.publishApproval(pipeline.id, pending, 'Waiting')).toBe(true);
+  expect(await pipelineRepository.findById(pipeline.id)).toMatchObject({ status: 'awaiting_approval', metadata: { pendingApproval: pending } });
+});
+
+
+test.each(['Plan', 'QA'])('enforces the pool outside the item loop after %s exhausts it', async chargedStage => {
+  replies = { QA: [QA_PASS] };
+  const { rows } = await queryRaw("SELECT steps FROM pipeline_templates WHERE name = 'loop-fixture' LIMIT 1");
+  const steps = [...rows[0].steps as Array<Record<string, unknown>>,
+    { name: 'Summary', topic: 'writing', promptTemplate: 'summarize: {{previousOutput}}' }];
+  const template = `budget-tail-${chargedStage}`;
+  await executeRaw(`INSERT INTO pipeline_templates (name, is_preset, steps) VALUES ('${template}', true, '${JSON.stringify(steps)}'::jsonb)`);
+  const { getConfig } = await import('@/config');
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  const previous = getConfig().agent.pipelineTokenBudget;
+  getConfig().agent.pipelineTokenBudget = 100;
+  tokenCharges = { [chargedStage]: 120 };
+  // Keep only one plan item so QA is the final item's verification.
+  onSpawn = async (stageName, pipelineId) => {
+    if (stageName === 'Plan') await pipelineRepository.addPlanItems([{ pipelineId, ordinal: 0, title: 'only item' }]);
+  };
+  try {
+    const { pipelineId } = await run('deliver one item then summarize', template);
+    expect(await pipelineRepository.findById(pipelineId)).toMatchObject({ status: 'paused' });
+    expect(calls.some(call => call.stageName === 'Summary')).toBe(false);
+    expect(await planItemStatuses(pipelineId)).toEqual([chargedStage === 'QA' ? 'done' : 'pending']);
+    expect(calls.filter(call => call.stageName === 'Implement')).toHaveLength(chargedStage === 'QA' ? 1 : 0);
+    getConfig().agent.pipelineTokenBudget = 500;
+    // Replay consent is covered separately; exercise the budget checkpoint after consent.
+    const { actionRecovery } = await import('@/core/action-recovery');
+    const review = vi.spyOn(actionRecovery, 'reviewPipeline').mockResolvedValue();
+    try { await manager.resume(pipelineId); } finally { review.mockRestore(); }
+    expect(await pipelineRepository.findById(pipelineId)).toMatchObject({ status: 'completed' });
+    expect(await planItemStatuses(pipelineId)).toEqual(['done']);
+    expect(calls.filter(call => call.stageName === 'Implement')).toHaveLength(1);
+    expect(calls.filter(call => call.stageName === 'Summary')).toHaveLength(1);
+  } finally { getConfig().agent.pipelineTokenBudget = previous; }
 });

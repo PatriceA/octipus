@@ -5,7 +5,7 @@ import { isDesktop } from './tauri-backend';
 
 /**
  * How the companion reaches the user outside the chat: system notifications,
- * a chime, and the animated tab icon. Per device (localStorage), not per
+ * a chime, and a static status tab icon. Per device (localStorage), not per
  * account — a laptop and a phone want different things, and the browser's
  * notification permission is per device anyway.
  */
@@ -19,7 +19,7 @@ export interface CompanionPrefs {
   onlyWhenAway: boolean;
   /** A short chime with each notification. */
   sound: boolean;
-  /** Animate the tab icon and count unseen moments in the title. */
+  /** Show status in the tab icon and count unseen moments in the title. */
   tabIcon: boolean;
 }
 

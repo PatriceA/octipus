@@ -18,7 +18,7 @@ export class MonitorTool extends BaseTool {
   }
   protected async registerTools() {
     this.registerTool('create', `${this.description} source.kind=browser requires tabId, exact url, selector, condition {path:"text",operator:"in",value:["Succeeded","Failed","Cancelled"]}. Tool probes require a declared read-only action and a field condition. Event types are gateway event names (e.g. agent.completed); filter by payload identity, optionally add a tool fallback. changed establishes a baseline on the first successful check. Always save a precise continuation and timeout.`, z.toJSONSchema(createMonitorSchema, { io: 'input' }),
-      (args, context) => monitorService.create(args, context), { permissionAction: 'write', injectSecrets: false });
+      (args, context) => monitorService.create(args, context), { permissionAction: 'write', injectSecrets: false, recoverySafe: true });
     this.registerTool('list', 'List this session’s monitors, status, last check, next check, deadline and errors.', createParameterSchema({}),
       (_args, context) => monitorRepository.list(context.userId, context.sessionId), { permissionAction: 'read' });
     for (const action of ['pause', 'resume', 'cancel'] as const) {

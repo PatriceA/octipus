@@ -28,12 +28,32 @@ export const SHELL_GUARD_MESSAGE = 'Blocked by Octipus: this shell API/client ca
  */
 export function shellGuardBlockReason(command: string): string | null {
   if (/#\s*octipus-fallback:[ \t]*\S/.test(command)) return null;
+  // Remove data heredocs from shell matching; inspect executable script bodies separately.
+  const bodies: string[] = [];
+  command = command.replace(/([^\n]*?)<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?[^\n]*\n([\s\S]*?)\n\2(?:\n|$)/g,
+    (_whole: string, header: string, _delimiter: string, body: string) => {
+      if (/\b(python[\d.]*|py|node|bun|deno)\b/.test(header)) bodies.push(body);
+      return header + '\n';
+    });
   // ponytail: first word per segment, not a shell parser; quoted separators split early, which only ever over-blocks.
   const head = (segment: string): string => (segment.trim()
     .replace(/^(?:\w+=\S*\s+|(?:sudo|exec|env|time|&|\()\s*)+/i, '')
     .match(/^["']?([^\s"']+)/)?.[1] ?? '').split(/[\\/]/).pop()!.toLowerCase().replace(/\.(exe|cmd)$/, '');
   // Commit messages may mention client commands without executing them.
-  const segments = command.split(/&&|\|\||[;|\n]|\$\(|`/).filter(segment => head(segment) !== 'git');
+  const segments: string[] = [];
+  let segment = '', quote = '';
+  for (let i = 0; i < command.length; i++) {
+    const char = command[i];
+    if (char === '\\' && i + 1 < command.length) { segment += char + command[++i]; continue; }
+    if (quote) { segment += char; if (char === quote) quote = ''; continue; }
+    if (char === "'" || char === '"') { quote = char; segment += char; continue; }
+    if (/[;|\n]/.test(char) || char === '&' && command[i + 1] === '&') {
+      if (head(segment) !== 'git') segments.push(segment);
+      segment = ''; if (char === '&') i++; continue;
+    }
+    segment += char;
+  }
+  if (head(segment) !== 'git') segments.push(segment);
   // This is an integration-routing hint, not a network security boundary.
   // Permit plain public reads; auth, uploads, custom headers, config files,
   // dynamic arguments and private/service endpoints still use discovery.
@@ -66,11 +86,15 @@ export function shellGuardBlockReason(command: string): string | null {
     || segments.some(segment => /\bInvoke-(WebRequest|RestMethod)\b|Net\.WebClient|System\.Net\.Http|Start-BitsTransfer/i.test(segment))) {
     return 'shell HTTP client';
   }
-  const scripts = segments.filter(segment => !/\b(?:python[\d.]*|py)(?:["'])?\s+-m\s+pip\b/.test(segment));
-  if (scripts.some(segment => /^(python[\d.]*|py|node|bun|deno)$/.test(head(segment)))
-    && /urllib|\brequests\b|http\.client|httpx|aiohttp|\bfetch\s*\(|\bhttps?\.(request|get)\s*\(|['"](node:)?https?['"]|XMLHttpRequest|WebSocket|\bsocket\b/.test(scripts.join('\n'))) {
-    return 'network call from a script';
+  const scripts = [...bodies];
+  for (const segment of segments) {
+    if (!/^(python[\d.]*|py|node|bun|deno)$/.test(head(segment)) || /\s-m\s+pip\b/.test(segment)) continue;
+    const inline = segment.match(/\s(?:-c|-e|--eval)\s+(["'])([\s\S]*)\1\s*$/);
+    if (inline) scripts.push(inline[2]);
   }
+  // String literals/comments are data: a Markdown sentence mentioning requests is not a network call.
+  const code = scripts.map(script => script.replace(/"""[\s\S]*?"""|'''[\s\S]*?'''|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|#[^\n]*|\/\/[^\n]*/g, ' ')).join('\n');
+  if (/\b(?:requests|httpx|aiohttp|https?|urllib(?:\.request)?)\s*\.\s*(?:get|post|put|patch|delete|request|urlopen|connect)\s*\(|\bfetch\s*\(|\b(?:XMLHttpRequest|WebSocket)\s*\(|\bsocket\s*\.\s*(?:socket|create_connection|connect)\s*\(/.test(code)) return 'network call from a script';
   if (segments.some(segment => /(localhost|127\.\d+\.\d+\.\d+|\[::1\])(:\d+)?\/mcp\b/i.test(segment))) return 'local MCP endpoint';
   return null;
 }

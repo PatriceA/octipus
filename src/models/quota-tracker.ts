@@ -68,7 +68,7 @@ export class QuotaTracker {
     };
 
     // Auto-clear exhaustion after EXHAUSTION_TTL so we retry
-    await this.cache.set(`${QUOTA_KEY_PREFIX}${provider}`, state, EXHAUSTION_TTL);
+    await this.cache.set(`${QUOTA_KEY_PREFIX}${provider}`, state, resetsAt ? Math.max(1, Math.ceil((resetsAt.getTime() - Date.now()) / 1000)) : EXHAUSTION_TTL);
 
     modelLogger.warn({ provider, resetsAt }, 'Provider quota marked as exhausted');
   }

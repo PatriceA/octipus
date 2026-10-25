@@ -1,3 +1,6 @@
+import { createActionRecoveryTools } from './recovery-tools';
+import { pipelinePermissionProfileSchema } from '@/shared/pipeline-permissions';
+import { z } from 'zod';
 import { pipelineRepository } from '@/db/repositories/pipeline-repository';
 import { createPipelineRecoveryTools } from './pipeline-tools';
 import { stripPipelineControlBlocks } from './handoff';
@@ -111,7 +114,7 @@ export function createMetaTools(
         durationMs: Date.now() - startedAt, spawnedChildren: [] })),
     });
   };
-  const tools: ToolHandler[] = [...createWorkPlanTools(), ...createPipelineRecoveryTools(trackPipeline)];
+  const tools: ToolHandler[] = [...createActionRecoveryTools(), ...createWorkPlanTools(), ...createPipelineRecoveryTools(trackPipeline)];
 
   // Swarm: register `spawn_child` on the Root agent (depth 0). With
   // `swarmRefs` we also enable detach mode + `collect_children`, so the
@@ -153,7 +156,7 @@ export function createMetaTools(
       // one by name. See ToolHandler.discoverOnly.
       discoverOnly: true,
       description:
-        'Start ordered development stages and immediately return a pipeline handle. Use get_pipeline_status to monitor and resume_pipeline to recover. A pipeline plans work into items, then runs implement -> test -> review -> QA ONCE PER ITEM; a failing QA verdict sends the item back to the implementer with its evidence (up to 3 times) before asking you. ' +
+        'For unattended/overnight work, include permissionProfile with the actual repository root, exact commands, package tools, public hosts, named Docker projects and overnight=true. The user approves this consolidated scope once. Never invent approval or broaden a denied scope. Start ordered development stages and immediately return a pipeline handle. Use get_pipeline_status to monitor and resume_pipeline to recover. A pipeline plans work into items, then runs implement -> test -> review -> QA ONCE PER ITEM; a failing QA verdict sends the item back to the implementer with its evidence (up to 3 times) before asking you. ' +
         'Use this when dependent implementation and verification stages justify the coordination cost, or the user requests that workflow. Done should be checkable with a test suite, build or type-check. For independent specialist tasks use spawn_child; for a bounded fix you can implement and verify with your own tools, work directly. Child scorers also support verification and bounded retry. ' +
         'DO NOT use a pipeline for a question, lookup, explanation, writing task or read-only analysis/audit/review. Answer directly when your tools suffice, otherwise use a focused specialist. Do not use a pipeline to restart investigation or implementation already completed by General or another child. ' +
         'create_pipeline may only be invoked ONCE per request. Summarize its verified outcome in your own final response; do not forward raw stage reports or control blocks. ' +
@@ -174,6 +177,7 @@ export function createMetaTools(
             type: 'string',
             description: 'Detailed description of what the pipeline should achieve',
           },
+          permissionProfile: z.toJSONSchema(pipelinePermissionProfileSchema),
           maxRetries: {
             type: 'number',
             description: 'Max QA retry attempts before escalating (default 3)',
@@ -219,6 +223,7 @@ export function createMetaTools(
                   trackPipeline(id, completion, args.description as string);
                   resolve({ id, status: 'running', message: 'Pipeline started. Use get_pipeline_status to monitor or collect_children to await its outcome; do not claim completion until it finishes.' });
                 },
+                permissionProfile: args.permissionProfile,
                 maxRetries: args.maxRetries as number | undefined,
                 params: (args.params as Record<string, unknown> | undefined) ?? undefined,
               },

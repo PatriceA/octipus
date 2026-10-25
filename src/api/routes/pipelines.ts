@@ -259,6 +259,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
           // authorized against. Keeping the name (not the id) is what leaves a
           // readable `pipelines.type` for the UI.
           .createAndRunPipeline(body.title || description.slice(0, 100), match.name, description, context, {
+            permissionProfile: body.permissionProfile,
             maxRetries: body.maxRetries,
             params: body.params,
             onCreated: resolve,
@@ -295,6 +296,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         title: t.Optional(t.String()),
         sessionId: t.Optional(t.String()),
         maxRetries: t.Optional(t.Number()),
+        permissionProfile: t.Optional(t.Unknown()),
         approvalTimeoutMs: t.Optional(t.Number({ minimum: 0 })),
         params: t.Optional(t.Record(t.String(), t.Unknown())),
       }),
@@ -614,7 +616,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
       }
 
       const pipelineManager = getPipelineManager();
-      const stopped = await pipelineManager.stop(params.id);
+      const stopped = await pipelineManager.stop(params.id, { userId: user.id, event: 'http_pipeline_stop' });
       return { stopped };
     },
     {

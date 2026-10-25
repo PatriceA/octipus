@@ -223,12 +223,12 @@ describe('explicit names refuse another user\'s personal model (§8.2)', () => {
   test('pipeline ignores legacy model pins and uses the owner’s topic binding', async () => {
     const { resolveStageModel } = await import('@/core/agent/pipeline-manager');
     const { getModelRegistry } = await import('@/models/model-registry');
-    expect(await resolveStageModel({ model: MINE }, 'build', bobId, getModelRegistry())).toEqual({ modelId: 'shared-id', name: 'install-shared' });
-    expect(await resolveStageModel({ model: 'removed-model' }, 'build', aliceId, getModelRegistry())).toEqual({ modelId: 'shared-id', name: MINE });
-    expect(await resolveStageModel({ model: MINE }, 'build', aliceId, getModelRegistry())).toEqual({ modelId: 'shared-id', name: MINE });
+    expect(await resolveStageModel({ model: MINE }, 'build', bobId, getModelRegistry())).toMatchObject({ modelId: 'shared-id', name: 'install-shared' });
+    expect(await resolveStageModel({ model: 'removed-model' }, 'build', aliceId, getModelRegistry())).toMatchObject({ modelId: 'shared-id', name: MINE });
+    expect(await resolveStageModel({ model: MINE }, 'build', aliceId, getModelRegistry())).toMatchObject({ modelId: 'shared-id', name: MINE });
     // The stage's lane binding follows its owner.
-    expect(await resolveStageModel(undefined, 'build', aliceId, getModelRegistry())).toEqual({ modelId: 'shared-id', name: MINE });
-    expect(await resolveStageModel(undefined, 'build', bobId, getModelRegistry())).toEqual({ modelId: 'shared-id', name: 'install-shared' });
+    expect(await resolveStageModel(undefined, 'build', aliceId, getModelRegistry())).toMatchObject({ modelId: 'shared-id', name: MINE });
+    expect(await resolveStageModel(undefined, 'build', bobId, getModelRegistry())).toMatchObject({ modelId: 'shared-id', name: 'install-shared' });
   });
 
   test('swarm executor override', async () => {

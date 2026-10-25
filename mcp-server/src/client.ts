@@ -112,6 +112,7 @@ export class OctiClient {
     let authHeaders = await this.auth.getHeaders(this.baseUrl);
     const send = (headers: Record<string, string>) => fetch(url, {
       ...options,
+      signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(25_000)]) : AbortSignal.timeout(25_000),
       headers: { 'Content-Type': 'application/json', ...headers, ...options.headers },
     });
     let res = await send(authHeaders);

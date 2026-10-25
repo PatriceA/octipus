@@ -56,7 +56,7 @@ export function PresenceSettings({ name }: { name: string }) {
 
       {presence && (
         <div className="my-4 flex items-center gap-3 rounded-lg bg-companion-paper text-on-companion-paper p-3" data-testid="presence-now">
-          <CompanionAvatar appearance={presence.appearance} size={44} state={presence.state} animated />
+          <CompanionAvatar appearance={presence.appearance} size={44} state={presence.state} />
           <span role="status" className="text-sm">{presence.label}</span>
         </div>
       )}
@@ -88,7 +88,7 @@ export function PresenceSettings({ name }: { name: string }) {
         </label>
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={prefs.tabIcon} onChange={e => setCompanionPrefs({ tabIcon: e.target.checked })} />
-          Animate the tab icon and count what happened while I was away
+          Show status in the tab icon and count what happened while I was away
         </label>
       </div>
 

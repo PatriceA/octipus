@@ -109,10 +109,12 @@ when it fails. A resumed attempt gets that text back, marked INCOMPLETE, and
 `get_pipeline_status` shows it under `incompleteAttempt`. It is never reported
 as the stage's output, and it is cleared when the attempt finishes. A denial or
 a stop leaves it `stopped` at that stage; `resume_pipeline` runs the stage again.
-`answer_pipeline_approval` waits up to five minutes for an explicit user answer.
-A timeout or unavailable answer returns `decided: false` and leaves the pipeline
-approval pending; it does not manufacture a denial. Decisions include the
-command, request id, deciding user and timestamp.
+`answer_pipeline_approval` returns immediately with `decided: false` after
+showing the existing question or opening a conversation prompt. Only the user's
+answer settles the original request. Loop, human-input and stage gates expose
+the same durable request ID in status. Stale questions return an explicit
+stop/resume recovery path instead of claiming an instant timeout. Decisions
+include the command, request id, deciding user and timestamp.
 
 A plan approval or a stage approval also lists the pipeline's gate commands,
 which are the stages' `verifyCommand` values resolved from the run's parameters.
@@ -134,6 +136,77 @@ given in `evidence`. Every id is checked first; if one is unknown, nothing is
 skipped. The item the run stopped in (failed, or still marked running after a
 restart) can be skipped too. The resume then goes on from the plan loop with
 the next pending item, and the skip and its evidence are kept.
+
+### Run permission profiles, quotas and token pools
+
+For overnight work, pass `permissionProfile` to `create_pipeline`, or supply it
+to `resume_pipeline` for an existing stopped/paused run. `POST /api/pipelines`
+also accepts the profile. The user receives one consolidated approval before
+stages run; a model-supplied profile is a proposal, never an authorization.
+`repoPath` must equal the session's actual workspace/project root.
+
+```json
+{
+  "repoPath": "/absolute/path/to/project",
+  "commands": ["pnpm exec vitest run"],
+  "packageManagers": ["pnpm", "go"],
+  "publicHosts": ["go.dev", "proxy.golang.org", "registry.npmjs.org"],
+  "dockerProjects": ["project-tests"],
+  "rememberDecisions": true,
+  "overnight": true,
+  "autoApproveGates": true,
+  "allowCheckpointReplay": false
+}
+```
+
+Profiles cover exact commands and recognized package build/test/install forms,
+public unauthenticated curl GET/HEAD calls to the listed hosts, and supported
+Compose operations explicitly naming an approved project. Changed directories,
+custom HTTP headers, shell expressions, arbitrary scripts, and destructive
+operations need separate authorization. Existing DENY rules and space/flow
+restrictions remain authoritative. Named Docker projects do not remove the
+template's separate `hostServices` sandbox requirement.
+
+The destructive-command guard recognizes simple Node probes that create a
+`const` directory with the built-in `mkdtemp` API and remove it in `finally`.
+The exemption requires direct built-in calls and unmodified bindings; indirect
+module access, third-party code or API mutation keeps the normal deletion check.
+
+`rememberDecisions` keeps an actually approved command fingerprint for later
+stages/attempts/items of this run. `autoApproveGates` authorizes plan/stage
+sign-offs under the initial profile, not the waiver of failed QA checks.
+`allowCheckpointReplay` is a separate opt-in to repeating completed stage effects;
+uncertain actions still require inspection. In overnight mode, commands outside
+the approved profile are denied individually and reported to the worker. Status
+exposes `deniedRequests`; the conversation receives a summary when the walk ends.
+
+Provider capacity/overload and transport failures retry with exponential backoff
+inside the current stage, separately from QA's `maxRetries`, then try the topic's
+configured Backup model. Subscription exhaustion retains its reported reset and
+tries the configured alternative without waiting days. If no alternative works,
+the pipeline pauses with its checkpoint; an attended run asks once to configure
+a Backup and retry. Status includes each stage's current model/provider and quota
+state. No unconfigured provider is selected implicitly.
+
+Status exposes the run's `budget` (pool, spend, percentage and estimated remaining
+cost) and each item's recorded token spend. At 80%, a warning is sent and the next
+item needs acknowledgement. A current item continues through review/QA even if
+it crosses the pool; exhaustion pauses before starting the next item or any
+subsequent stage outside the loop. Pre-loop stages also honor the pool. Use
+`resume_pipeline({id, tokenBudget: <new total>})` to request a user-approved top-up.
+Old events without item identity remain unassigned rather than inventing spend.
+
+Tool deadlines include CLI bridge queue time and MCP handler/authentication time.
+Monitor reads and creation stay responsive behind approval waits. A timed-out
+mutation may have started: inspect its outcome before retrying. Read-only checks
+and watcher creation remain available while conflicting actions need recovery.
+`inspect_uncertain_actions` lists those records; `resolve_tool_action` records a
+specific known outcome with inspection evidence, without granting another action.
+
+Visible plan steps retain their item mapping through title changes. Queued skips
+appear before their boundary is reached, and explicit coordinator edits survive
+subsequent pipeline projection. Workers report visible-plan changes in their
+handoff to the root; they use `plan__*` tools for pipeline items.
 
 ### Host services for gate commands
 

@@ -126,7 +126,7 @@ export async function isApprovedCall(caller: ApprovedCallCaller, call: SpaceTool
     if (!Array.isArray(grants)) return false;
     const fingerprint = callFingerprint(call.toolId, call.action, call.toolName, call.args);
     return grants.some(g => g.toolId === call.toolId && g.toolName === call.toolName && g.action === call.action && g.fingerprint === fingerprint
-      && g.nodeKey === scope.nodeKey && (g.attemptId === undefined || g.attemptId === scope.attemptId)
+      && (g.nodeKey === scope.nodeKey || g.nodeKey === '*' && (pipeline.metadata?.permissionProfile as { approvedBy?: string } | undefined)?.approvedBy === caller.userId) && (g.attemptId === undefined || g.attemptId === scope.attemptId)
       && g.hostServices === scope.hostServices);
   } catch (err) {
     // Not knowing means asking, never executing.
@@ -143,5 +143,9 @@ export async function isApprovedCall(caller: ApprovedCallCaller, call: SpaceTool
  */
 export async function askStillAuthorized(source: string, caller: ApprovedCallCaller, call: SpaceToolCall): Promise<boolean> {
   if (source.startsWith('approval:')) return true;
-  return source === 'pipeline-approval' && isApprovedCall(caller, call);
+  if (source !== 'pipeline-approval') return false;
+  if (await isApprovedCall(caller, call)) return true;
+  const { profileAllows, runPermissionProfile } = await import('./pipeline-permissions');
+  const run = await runPermissionProfile(caller);
+  return !!run && profileAllows(run.profile, call);
 }

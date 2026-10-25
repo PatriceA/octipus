@@ -75,6 +75,7 @@ export interface ApprovalResolvedEvent {
 }
 
 export interface ApprovalRequest {
+  kind: ApprovalKind;
   id: string;
   /**
    * Principal that owns this approval. Phase 1a: required so the chat
@@ -180,9 +181,11 @@ export class ApprovalManager {
     emitFn: (event: TurnEvent) => void,
     options?: string[],
     kind: ApprovalKind = 'gate',
+    onCreated?: (requestId: string) => Promise<void>,
+    signal?: AbortSignal,
   ): Promise<unknown> {
     const requestId = randomUUID();
-
+    const publish = () => {
     emitFn({
       type: 'approval_required',
       sessionId: context.sessionId,
@@ -201,14 +204,16 @@ export class ApprovalManager {
       contentStorageOffFor(context) ? summary : `${summary}\n\n${question}`,
       { requestId, sessionId: context.sessionId },
     ).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in approval-manager'));
+    };
 
-    return new Promise<unknown>((resolve) => {
+    const waiting = new Promise<unknown>((resolve) => {
       const approval: ApprovalRequest = {
         id: requestId,
         userId: context.userId,
         sessionId: context.sessionId,
         summary,
         question,
+        kind,
         options,
         resolve: (response: string, decision?: { by: string; at: string }) => {
           this.pendingApprovals.delete(requestId);
@@ -241,18 +246,43 @@ export class ApprovalManager {
           .catch((err: unknown) => coreLogger.error({ err, requestId }, 'Could not expire timed-out approval'));
       }, timeoutMs);
 
+      const onAbort = () => {
+        const claimed = this.claim(requestId);
+        if (!claimed) return;
+        claimed.approval.reject(`Approval cancelled by pipeline interruption: ${String(signal?.reason ?? 'pipeline stopped')}`);
+        this.announce(claimed.approval, 'expired');
+        void claimed.written.then(async ok => { if (ok) await expirePending([requestId], 'Pipeline interrupted; resume to issue a fresh approval.'); })
+          .catch(error => coreLogger.error({ error, requestId }, 'Could not expire cancelled pipeline approval'));
+      };
       // Clean up timeout when resolved
       const originalResolve = approval.resolve;
       const originalReject = approval.reject;
       approval.resolve = (response: string, decision?: { by: string; at: string }) => {
         clearTimeout(timeout);
+        signal?.removeEventListener('abort', onAbort);
         originalResolve(response, decision);
       };
       approval.reject = (reason: string, decision?: { by: string; at: string }) => {
         clearTimeout(timeout);
+        signal?.removeEventListener('abort', onAbort);
         originalReject(reason, decision);
       };
+      if (signal?.aborted) onAbort();
+      else signal?.addEventListener('abort', onAbort, { once: true });
     });
+    try {
+      if (onCreated) {
+        if (!await this.persisted.get(requestId)) throw new Error('Could not persist the pipeline approval; no waiting state was published');
+        if (signal?.aborted) return waiting;
+        await onCreated(requestId);
+      }
+      if (!signal?.aborted) publish();
+      return waiting;
+    } catch (error) {
+      this.pendingApprovals.get(requestId)?.reject('Approval publication failed');
+      await expirePending([requestId], 'Approval publication failed');
+      throw error;
+    }
   }
 
   /**

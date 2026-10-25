@@ -1,3 +1,4 @@
+import { rememberRunDecision } from '@/security/pipeline-permissions';
 import { cliQuestionsSchema, parseCliAnswers } from '@/shared/cli-questions';
 import { z } from 'zod';
 import type { AgentContext } from './types';
@@ -75,6 +76,7 @@ export async function answerCliPermissionRequest(
     emit('permission_request', { requestId: id, toolName: `CLI: ${request.tool_name}`, args: request.input, toolId,
       ...(decision.source === 'flow-guard' || decision.source === 'space-flow' ? { reason: decision.reason } : {}) });
     allowed = await manager.waitForApproval(id, { agentId: context.id });
+    if (allowed) await rememberRunDecision(context, { ...flowCall, toolName: request.tool_name });
     if (allowed && isQuestion) {
       let answers: ReturnType<typeof parseCliAnswers>;
       try {

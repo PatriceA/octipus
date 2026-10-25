@@ -105,7 +105,7 @@ describe('durable action recovery', () => {
     await recovery.run(ctx(), 'shell', 'shell__run', {}, async () => result);
     expect(repo.rows[0].status).toBe('uncertain');
     wait.mockResolvedValue(false);
-    const execute = vi.fn(); await expect(run(execute)).rejects.toThrow('not granted');
+    const execute = vi.fn(); await expect(recovery.run(ctx(), 'filesystem', 'filesystem__write', {}, execute)).rejects.toThrow('not granted');
     expect(execute).not.toHaveBeenCalled();
   });
   test('an arbitrary remote error envelope is not proof of a definitive shell exit', async () => {
@@ -133,10 +133,11 @@ describe('durable action recovery', () => {
     await expect(run(execute)).rejects.toThrow('not granted');
     expect(execute).not.toHaveBeenCalled(); expect(request).toHaveBeenCalledTimes(1);
   });
-  test('a crash record blocks different arguments and different mutation tools too', async () => {
+  test('a crash record does not block an unrelated integration', async () => {
     await uncertain(); wait.mockResolvedValue(false); const execute = vi.fn();
-    await expect(recovery.run(ctx(), 'issues', 'issues__create', { title: 'different' }, execute)).rejects.toThrow('not granted');
-    expect(execute).not.toHaveBeenCalled();
+    await recovery.run(ctx(), 'issues', 'issues__create', { title: 'different' }, execute);
+    expect(execute).toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
   });
   test('approval permits continuing and records exactly which uncertainty was reviewed', async () => {
     await uncertain(); const first = repo.rows[0];
@@ -203,4 +204,10 @@ test('cancelling a queued mutation does not wait for another agent’s unanswere
   controller.abort(); await rejected;
   expect(execute).not.toHaveBeenCalled();
   answer(true); await first;
+});
+
+test('an uncertain shell action does not block an unrelated integration (#43)', async () => {
+  await expect(recovery.run(ctx(), 'shell', 'shell__run', {}, async () => { throw new Error('unknown exit'); })).rejects.toThrow('unknown exit');
+  await run(async () => 'mail sent');
+  expect(request).not.toHaveBeenCalled();
 });

@@ -190,6 +190,11 @@ const PATTERNS: Array<{
   reason: FailoverReason;
   recovery: RecoveryAction;
 }> = [
+  // Subscription exhaustion and transient capacity are distinct, including CLI text without HTTP status.
+  { test: m => /(?:hit|reached|exceeded).{0,20}(?:usage|subscription) limit/i.test(m),
+    reason: FailoverReason.QUOTA_EXHAUSTED, recovery: RecoveryAction.FALLBACK_PROVIDER },
+  { test: m => /selected model is at capacity|workspace routing discovery failed|reconnecting\.\.\./i.test(m),
+    reason: FailoverReason.PROVIDER_DOWN, recovery: RecoveryAction.RETRY_BACKOFF },
   // Rate limits (429 is the strongest signal)
   {
     test: (_m, _c, s) => s === 429,
@@ -375,7 +380,7 @@ const PATTERNS: Array<{
   // Invalid response shape (empty, missing choices)
   {
     test: (m) =>
-      /empty.response|no.choices|returned.*no.*(choices|content)|malformed.response|unexpected.response|invalid.json/i.test(
+      /empty.response|no.choices|returned.*no.*(choices|content)|malformed.response|unexpected.response|invalid.json|unexpected end of JSON input|unterminated string in JSON|unexpected token.*(?:in JSON|is not valid JSON)|unexpected non-whitespace character.*in JSON|expected .*in JSON at position/i.test(
         m,
       ),
     reason: FailoverReason.INVALID_RESPONSE,

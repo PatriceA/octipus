@@ -141,3 +141,26 @@ describe('calls approved for a pipeline', () => {
     await expect(route(bash('npm test'), qa)).resolves.toBe('ask_human');
   });
 });
+
+test('an approved overnight profile covers each stage, records denials and preserves explicit DENY (#49/#52)', async () => {
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  const { routeApprovalFor } = await import('./approval-route');
+  const { rememberRunDecision } = await import('./pipeline-permissions');
+  const { pipelinePermissionProfileSchema } = await import('@/shared/pipeline-permissions');
+  const profile = pipelinePermissionProfileSchema.parse({ repoPath: '/repo', publicHosts: ['go.dev'], packageManagers: ['pnpm'], overnight: true });
+  const pipeline = await pipelineRepository.create({ rootAgentId: 'root', sessionId, userId, title: 'overnight', type: 'development', status: 'running',
+    metadata: { permissionProfile: { profile, repoPath: '/repo', approvedBy: userId } } });
+  const caller = { userId, sessionId, attended: false, metadata: { pipelineId: pipeline.id, nodeKey: 'testing', attemptId: 'one' } };
+  const read = { toolId: 'cli-native:Bash', action: 'Bash', toolName: 'Bash', args: { command: "curl --head 'https://go.dev/dl/?mode=json&include=all'" } };
+  expect(await routeApprovalFor(caller, read, { level: 'ASK' })).toMatchObject({ route: 'execute', source: 'pipeline-approval' });
+  expect(await routeApprovalFor({ ...caller, metadata: { ...caller.metadata, nodeKey: 'qa', attemptId: 'two' } }, read, { level: 'ASK' })).toMatchObject({ route: 'execute' });
+  expect(await routeApprovalFor(caller, read, { level: 'DENY', source: 'permission:deny' })).toMatchObject({ route: 'deny' });
+  const outside = { ...read, args: { command: 'curl https://outside.example' } };
+  expect(await routeApprovalFor(caller, outside, { level: 'ASK' })).toMatchObject({ route: 'deny', reason: expect.stringContaining('morning summary') });
+  expect((await pipelineRepository.findById(pipeline.id))?.metadata?.deniedRequests).toHaveLength(2);
+  // Simulate a real human decision in attended mode; the exact fingerprint then holds across stages.
+  await rememberRunDecision(caller, outside);
+  expect(await routeApprovalFor({ ...caller, metadata: { ...caller.metadata, nodeKey: 'qa', attemptId: 'three' } }, outside, { level: 'ASK' })).toMatchObject({ route: 'execute' });
+  await pipelineRepository.updatePipeline(pipeline.id, { status: 'completed' });
+  expect(await routeApprovalFor(caller, read, { level: 'ASK' })).toMatchObject({ route: 'blocked' });
+});

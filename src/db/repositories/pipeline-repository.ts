@@ -1,7 +1,8 @@
+import type { PendingStageApproval } from '@/shared/pipeline-approval';
 import { sessions } from '../schema/sessions';
 import { emptyWorkPlan, workPlanStateSchema } from '@/shared/work-plan';
 import { projectPipelinePlan } from './pipeline-work-plan';
-import { and, asc, desc, eq, gt, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, notInArray, sql } from 'drizzle-orm';
 import { getDb } from '../postgres';
 import { runEvents } from '../schema/run-events';
 import type { PipelineItemEdit } from '@/shared/pipeline-items';
@@ -41,6 +42,25 @@ export class PipelineRepository {
   async create(data: NewPipeline): Promise<Pipeline> {
     const [row] = await this.db.insert(pipelines).values(data).returning();
     return row;
+  }
+
+  /** Append an audited run record without replacing concurrent approvals, budget or plan edits. */
+  async appendRunMetadata(id: string, key: 'deniedRequests' | 'approvedCalls', entry: Record<string, unknown>): Promise<void> {
+    await this.db.update(pipelines).set({ metadata: sql`jsonb_set(COALESCE(${pipelines.metadata}, '{}'::jsonb),
+      ARRAY[${key}], COALESCE(${pipelines.metadata}->${key}, '[]'::jsonb) || ${JSON.stringify([entry])}::jsonb)`, updatedAt: new Date() })
+      .where(eq(pipelines.id, id));
+  }
+
+  /** Publish one actionable request with its waiting state; cancellation cannot be overwritten. */
+  async publishApproval(id: string, pending: PendingStageApproval, summary: string): Promise<boolean> {
+    return this.db.transaction(async tx => {
+      const rows = await tx.update(pipelines).set({ status: 'awaiting_approval', summary, updatedAt: new Date(),
+        metadata: sql`jsonb_set(COALESCE(${pipelines.metadata}, '{}'::jsonb), '{pendingApproval}', ${JSON.stringify(pending)}::jsonb)`,
+      }).where(and(eq(pipelines.id, id), notInArray(pipelines.status, ['stopped', 'completed', 'failed'])))
+        .returning({ id: pipelines.id });
+      if (rows.length) await this.syncWorkPlan(tx, id);
+      return rows.length > 0;
+    });
   }
 
   /** Keep the visible plan in step with failures and resumed execution too. */
@@ -106,6 +126,7 @@ export class PipelineRepository {
       const edits = (pipeline.metadata?.pendingItemEdits ?? []) as PipelineItemEdit[];
       if (edits.length >= 20) throw new Error('Too many pending item edits; wait for the next item boundary');
       await tx.update(pipelines).set({ metadata: { ...pipeline.metadata, pendingItemEdits: [...edits, edit] }, updatedAt: new Date() }).where(eq(pipelines.id, pipelineId));
+      await this.syncWorkPlan(tx, pipelineId);
     });
   }
 

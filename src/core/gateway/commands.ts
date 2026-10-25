@@ -246,7 +246,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
         if (running === 0) {
           return { text: 'No running agents to stop.' };
         }
-        const stopped = agentManager.stopUser(ctx.userId);
+        const stopped = agentManager.stopUser(ctx.userId, ctx.userId);
         return { text: `Stopped ${stopped} running agent(s).` };
       } catch (err) {
         coreLogger.error({ err, userId: ctx.userId }, 'abort command failed');

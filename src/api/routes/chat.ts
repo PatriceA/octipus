@@ -333,6 +333,7 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
       return {
         approvals: pending.map((a) => ({
           requestId: a.id,
+          kind: a.kind,
           summary: a.summary,
           question: a.question,
           options: a.options,

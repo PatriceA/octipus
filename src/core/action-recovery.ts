@@ -35,13 +35,21 @@ export function describeActions(rows: ToolAction[]): string {
     .join('\n') + (rows.length > 20 ? `\n… ${rows.length - 20} additional actions` : '');
 }
 
+/** Workspace mutation tools conflict across adapters; unrelated integrations do not. */
+export function actionsConflict(previous: string | undefined, next: string): boolean {
+  if (!previous || previous === next || previous === 'mcp' || next === 'mcp') return true;
+  const workspace = new Set(['shell', 'filesystem', 'git', 'docker', 'terminal']);
+  return workspace.has(previous) && workspace.has(next);
+}
+
 export class ActionRecovery {
   private active = new Set<string>();
+  isActive(id: string): boolean { return this.active.has(id); }
   private locks = new Map<string, Promise<void>>();
   constructor(private repository: ToolActionRepository = toolActionRepository) {}
 
-  private async locked<T>(context: AgentContext, run: () => Promise<T>): Promise<T> {
-    const key = JSON.stringify([context.userId, context.sessionId]);
+  private async locked<T>(context: AgentContext, run: () => Promise<T>, resource = 'workspace'): Promise<T> {
+    const key = JSON.stringify([context.userId, context.sessionId, resource]);
     const before = this.locks.get(key) ?? Promise.resolve();
     let release!: () => void;
     const held = new Promise<void>(resolve => { release = resolve; });
@@ -68,10 +76,10 @@ export class ActionRecovery {
     }
   }
 
-  private async reviewPending(context: AgentContext, toolName: string): Promise<void> {
+  private async reviewPending(context: AgentContext, toolName: string, toolId: string): Promise<void> {
     for (;;) {
       assertExecutionActive(context);
-      const pending = (await this.repository.pending(context.userId, context.sessionId)).filter(row => !this.active.has(row.id)).slice(0, 20);
+      const pending = (await this.repository.pending(context.userId, context.sessionId)).filter(row => !this.active.has(row.id) && actionsConflict(row.toolId, toolId)).slice(0, 20);
       if (!pending.length) return;
       const decision = await routeApprovalFor(context, { toolId: 'action_recovery', action: 'retry' }, { level: 'ASK' });
       if (decision.route !== 'ask_human') throw new RecoveryReviewRequiredError(
@@ -94,7 +102,7 @@ export class ActionRecovery {
     const id = randomUUID();
     const scope = { id, userId: context.userId, sessionId: context.sessionId };
     await this.locked(context, async () => {
-      await this.reviewPending(context, toolName);
+      await this.reviewPending(context, toolName, toolId);
       assertExecutionActive(context);
       // Register before insertion can become visible to another dispatch.
       this.active.add(id);
@@ -104,7 +112,7 @@ export class ActionRecovery {
           pipelineId: typeof context.metadata?.pipelineId === 'string' ? context.metadata.pipelineId : null,
           nodeKey: typeof context.metadata?.nodeKey === 'string' ? context.metadata.nodeKey : null });
       } catch (error) { this.active.delete(id); throw error; }
-    });
+    }, ['shell', 'filesystem', 'git', 'docker', 'terminal'].includes(toolId) ? 'workspace' : toolId);
     let entered = false;
     try {
       assertExecutionActive(context);
@@ -151,6 +159,16 @@ export class ActionRecovery {
         if (allRows.some(row => this.active.has(row.id))) throw new RecoveryReviewRequiredError('Previous pipeline tool actions are still running. Wait for them to settle before resuming.');
         const rows = allRows.slice(0, 20);
         if (!rows.length && !hasPriorVisits) return;
+        const pipeline = context.metadata?.approvedRunReplay === true
+          ? await (await import('@/db/repositories/pipeline-repository')).pipelineRepository.findById(pipelineId) : null;
+        const grant = pipeline?.metadata?.permissionProfile as { approvedBy?: string; profile?: { allowCheckpointReplay?: boolean } } | undefined;
+        if (pipeline?.userId === context.userId && pipeline.sessionId === context.sessionId && grant?.approvedBy === context.userId
+          && grant.profile?.allowCheckpointReplay && allRows.every(row => row.status === 'completed')) {
+          await this.repository.acknowledge(context.userId, context.sessionId, rows.map(row => row.id), `run-profile:${pipelineId}`);
+          hasPriorVisits = false;
+          if (!rows.length) return;
+          continue;
+        }
         if (context.attended === false) throw new RecoveryReviewRequiredError('Resuming previous work requires an attended recovery review; no workers have been restarted.');
         const requestReview = ask ?? (async (summary: string) => {
           const manager = getPermissionManager();

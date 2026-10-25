@@ -241,3 +241,47 @@ describe('typed answers', () => {
     expect(mod.approvalAnswer('Continue Anyway')).toBeNull();
   });
 });
+
+test('the durable request and live waiter exist before publishing a pipeline waiting state (#45)', async () => {
+  const manager = new mod.ApprovalManager();
+  let published = '';
+  const pending = manager.requestApproval('Plan', 'Run it?', ctx(aliceId), vi.fn(), ['Approve', 'Deny'], 'gate', async id => {
+    expect(manager.getPendingApprovals(aliceId).some(request => request.id === id)).toBe(true);
+    expect((await row(id))?.status).toBe('pending');
+    published = id;
+  });
+  await vi.waitFor(() => expect(published).not.toBe(''));
+  expect(await manager.resolveApproval(published, true, 'Approve', asAlice)).toBe(true);
+  expect(await pending).toMatchObject({ approved: true });
+});
+
+test('stopping a pipeline releases its question without recording a human denial (#45/#42)', async () => {
+  const manager = new mod.ApprovalManager();
+  const controller = new AbortController();
+  const pending = manager.requestApproval('Plan', 'Run it?', ctx(aliceId), vi.fn(), ['Approve', 'Deny'], 'gate', undefined, controller.signal);
+  const id = manager.getPendingApprovals(aliceId)[0].id;
+  controller.abort(new Error('server/session cleanup'));
+  expect(await pending).toMatchObject({ approved: false, reason: expect.stringContaining('interruption') });
+  expect(manager.getPendingApprovals(aliceId)).toHaveLength(0);
+  await vi.waitFor(async () => expect((await row(id))?.status).toBe('expired'));
+  expect((await row(id))?.resolved_by).toBeNull();
+});
+
+
+test('re-presenting a live question retains its kind and accepts No as an answer', async () => {
+  const { getAgentService } = await import('./service');
+  const service = getAgentService();
+  const context = ctx(aliceId);
+  const emit = vi.spyOn(service, 'emit');
+  try {
+    const waiting = service.requestApproval('Preference', 'Enable it?', context, ['Yes', 'No'], 'question');
+    const pending = service.getPendingApprovals(aliceId).find(request => request.sessionId === context.sessionId)!;
+    await vi.waitFor(async () => expect(await row(pending.id)).toBeDefined());
+    expect(pending.kind).toBe('question');
+    expect(service.presentApproval(pending.id, aliceId, context.sessionId)).toBe(true);
+    expect(emit).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'approval_required',
+      data: expect.objectContaining({ requestId: pending.id, kind: 'question' }) }));
+    await service.resolveApprovalDetailed(pending.id, true, 'No', asAlice);
+    await expect(waiting).resolves.toMatchObject({ approved: true, response: 'No' });
+  } finally { emit.mockRestore(); }
+});

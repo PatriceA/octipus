@@ -20,7 +20,7 @@ import { notifyDesktop, updateTray } from './tauri-companion';
 /**
  * The companion outside the chat page. Follows every conversation of the user
  * over the tab's gateway connection (`src/shared/companion-presence.ts`) and
- * shows it where the user is: the animated tab icon and an unseen count in
+ * shows it where the user is: a static tab icon and an unseen count in
  * the title, system notifications when a turn finishes, fails or needs an
  * answer, and — in the desktop app — the animated tray icon.
  */
@@ -242,23 +242,14 @@ function useTabIcon(state: CompanionState | null, appearance: CompanionAppearanc
     link.type = 'image/png';
     link.dataset.companion = state;
     document.head.appendChild(link);
-    const { frames, intervalMs, loop } = companionFrames(appearance, state);
-    let index = 0;
+    // One still per status avoids continuous favicon updates on every page.
+    const { frames } = companionFrames(appearance, state);
     let cancelled = false;
-    const draw = () => {
-      void iconDataUrl(frames[index], 32)
-        .then(url => { if (!cancelled) link.href = url; })
-        .catch(err => console.warn('companion tab icon failed to render', err));
-    };
-    draw();
-    const timer = frames.length > 1 ? setInterval(() => {
-      if (!loop && index === frames.length - 1) return;
-      index = (index + 1) % frames.length;
-      draw();
-    }, intervalMs) : null;
+    void iconDataUrl(frames.at(-1)!, 32)
+      .then(url => { if (!cancelled) link.href = url; })
+      .catch(err => console.warn('companion tab icon failed to render', err));
     return () => {
       cancelled = true;
-      if (timer) clearInterval(timer);
       link.remove();
       for (const original of originals) document.head.appendChild(original);
     };

@@ -524,13 +524,13 @@ export class AgentManager {
    * `parentAgentId`). CLI-triggered root cancel (`gateway agent.stop`) should
    * pass `cascade: true` explicitly.
    */
-  stop(agentId: string, opts: { cascade?: boolean } = {}): boolean {
+  stop(agentId: string, opts: { cascade?: boolean; actorUserId?: string } = {}): boolean {
     const agent = this.agents.get(agentId);
     const cascade = opts.cascade ?? false;
 
     // Stop the local agent.
     if (agent) {
-      agent.stop(cascade ? 'cascade_cancelled_from_ancestor' : 'manual stop');
+      agent.stop(opts.actorUserId ? `user_stop:${opts.actorUserId}` : cascade ? 'cascade_cancelled_from_ancestor' : 'system_stop');
       agentLogger.info({ agentId, cascade }, 'Agent stopped');
     } else {
       // Agent not in memory — may be a zombie DB record. Mark it as stopped.
@@ -689,11 +689,11 @@ export class AgentManager {
   /**
    * Stop all agents for a session
    */
-  stopSession(sessionId: string): number {
+  stopSession(sessionId: string, actorUserId?: string): number {
     const agents = this.getBySession(sessionId);
     let count = 0;
     for (const agent of agents) {
-      if (this.stop(agent.getContext().id)) {
+      if (this.stop(agent.getContext().id, { actorUserId })) {
         count++;
       }
     }
@@ -703,11 +703,11 @@ export class AgentManager {
   /**
    * Stop all agents for a user
    */
-  stopUser(userId: string): number {
+  stopUser(userId: string, actorUserId?: string): number {
     const agents = this.getByUser(userId);
     let count = 0;
     for (const agent of agents) {
-      if (this.stop(agent.getContext().id)) {
+      if (this.stop(agent.getContext().id, { actorUserId })) {
         count++;
       }
     }

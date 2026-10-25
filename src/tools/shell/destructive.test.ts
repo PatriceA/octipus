@@ -319,3 +319,37 @@ describe('the hot path stays hot', () => {
     expect(isListedAction([], 'filesystem', 'delete')).toBe(false);
   });
 });
+
+test('own const mkdtemp finally cleanup is not deletion of an existing tree (#52)', () => {
+  const command = `node -e "const fs=require('node:fs');const os=require('node:os');const path=require('node:path');const d=fs.mkdtempSync(path.join(os.tmpdir(),'probe-'));try{fs.writeFileSync(path.join(d,'a'),'a')}finally{fs.rmSync(d,{recursive:true,force:true})}"`;
+  expect(matchDestructiveCommand(command)).toBeNull();
+  expect(matchDestructiveCommand(command.replace('fs.rmSync(d,', "fs.rmSync('/existing',"))).not.toBeNull();
+  expect(matchDestructiveCommand(command.replace('const d=', 'let d='))).not.toBeNull();
+});
+
+test('a string pretending to declare a temp path cannot exempt deletion of a real directory', () => {
+  const source = `const fs=require('node:fs');const pretend="const d=fs.mkdtempSync(path.join(os.tmpdir(),'probe-'))";const d='/existing';try{}finally{fs.rmSync(d,{recursive:true,force:true})}`;
+  expect(matchDestructiveCommand(`node -e '${source}'`)).not.toBeNull();
+});
+
+test.each([
+  `import {mkdtempSync,rmSync} from 'node:fs';import {join} from 'node:path';import {tmpdir} from 'node:os';const dir=mkdtempSync(join(tmpdir(),'probe-'));try{}finally{rmSync(dir,{recursive:true,force:true})}`,
+  `import * as fs from 'node:fs/promises';const dir=await fs.mkdtemp('/tmp/probe-');try{}finally{await fs.rm(dir,{recursive:true,force:true})}`,
+])('supports named and async temp-cleanup APIs without weakening other deletion checks', source => {
+  expect(matchDestructiveCommand(`node --input-type=module -e "${source}"`)).toBeNull();
+  expect(matchDestructiveCommand(`node --input-type=module -e "${source.replace("rmSync(dir,", "rmSync('/existing',").replace("fs.rm(dir,", "fs.rm('/existing',")}"`)).not.toBeNull();
+});
+
+
+test.each([
+  "require('node:fs').mkdtempSync=()=>'/existing';",
+  "const other=require('fs');other.mkdtempSync=()=>'/existing';",
+  "const load=require;load('node:fs').mkdtempSync=()=>'/existing';",
+  "Object.defineProperty(require('node:fs'),'mkdtempSync',{value:()=>'/existing'});",
+  "const patch=require('untrusted-module');patch();",
+  "const other=await import('node:fs');",
+])('does not trust temp ownership after indirect access or module mutation: %s', mutation => {
+  const source = `const fs=require('node:fs');${mutation}const dir=fs.mkdtempSync('/tmp/probe-');try{}finally{fs.rmSync(dir,{recursive:true,force:true})}`;
+  // Classify only: none of these commands are executed.
+  expect(matchDestructiveCommand(`node -e "${source}"`)).not.toBeNull();
+});

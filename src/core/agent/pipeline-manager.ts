@@ -1,3 +1,11 @@
+import type { PendingStageApproval } from '@/shared/pipeline-approval';
+import { replyAnswer } from './approval-manager';
+import { resolve as resolvePath } from 'node:path';
+import { WorkerInterruptedError } from '@/core/interruption';
+import { pipelineBudget } from './pipeline-budget';
+import { pipelinePermissionProfileSchema } from '@/shared/pipeline-permissions';
+import { classifyError, FailoverReason } from '@/core/errors/classification';
+import { providerResetAt } from '@/core/errors/provider-recovery';
 import { getAgentManager } from '@/core/agent-manager';
 import { workPlanStateSchema } from '@/shared/work-plan';
 import { getRoleConfig } from './roles';
@@ -9,7 +17,7 @@ import { actionRecovery } from '@/core/action-recovery';
 import { channelCanPrompt } from '@/security/approval-policy';
 import { getConfig } from '@/config';
 import { randomUUID } from 'node:crypto';
-import { and, desc, eq, gte, inArray, ne } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, ne, sql } from 'drizzle-orm';
 import { getNotificationService } from '@/core/notification-service';
 import { recordRunEvent } from '@/core/run-log';
 import type { SideEffectCounters } from '@/core/swarm/receipt';
@@ -289,8 +297,8 @@ export function pipelineGateCommands(
  * says so (`autoApproveUnattended`) AND nobody can be asked: an attended run
  * always asks.
  */
-export function approvesUnattended(context: Pick<AgentContext, 'attended'>, stage: { autoApproveUnattended?: boolean } | undefined): boolean {
-  return stage?.autoApproveUnattended === true && context.attended === false;
+export function approvesUnattended(context: Pick<AgentContext, 'attended' | 'metadata'>, stage: { autoApproveUnattended?: boolean } | undefined): boolean {
+  return context.metadata?.approvedRunGates === true || stage?.autoApproveUnattended === true && context.attended === false;
 }
 
 /** The approval ran out (timed out, expired) rather than being answered no. */
@@ -585,6 +593,7 @@ async function resolveNamedModel(
 interface StageModel {
   modelId: string;
   name: string;
+  provider?: string;
 }
 
 /**
@@ -626,11 +635,11 @@ export async function resolveStageModel(
       { topic, executorModel: executor.modelId },
       'Mechanical pipeline stage routed to the lane executorModel (cheap executor path)',
     );
-    return { modelId: executor.modelId, name: executor.name };
+    return { modelId: executor.modelId, name: executor.name, provider: executor.provider };
   }
 
   const bound = await resolveModel({ userId, topic });
-  return bound ? { modelId: bound.modelId, name: bound.name } : undefined;
+  return bound ? { modelId: bound.modelId, name: bound.name, provider: bound.provider } : undefined;
 }
 
 /**
@@ -791,26 +800,7 @@ export function isFinalPlanItem(items: Array<{ ordinal: number; status?: string 
 class StageContractError extends Error {}
 
 /** What a parked stage waits on, as `get_pipeline_status` reports it (#24). */
-export interface PendingStageApproval {
-  requestId: string;
-  /** The stage worker's own request this one re-raises, or null when it could not be identified. */
-  workerRequestId: string | null;
-  stage: string;
-  nodeKey: string;
-  /** The stage attempt that was blocked; the grant is for it alone. */
-  attemptId: string;
-  /** `callFingerprint` of the blocked call, so an answer after a restart grants exactly it. */
-  fingerprint: string | null;
-  hostServices: boolean;
-  itemId: string | null;
-  item: string | null;
-  toolId: string | null;
-  action: string | null;
-  toolName: string | null;
-  /** The command or path the call acts on. */
-  subject: string | null;
-  reason: string;
-}
+export type { PendingStageApproval } from '@/shared/pipeline-approval';
 
 export interface WalkState {
   contractRetries?: Record<string, number>;
@@ -924,6 +914,7 @@ export class PipelineManager {
     context: AgentContext,
     options?: {
       maxRetries?: number;
+      permissionProfile?: unknown;
       params?: Record<string, unknown>;
       /**
        * Called once the graph and initial checkpoint exist, before any stage runs.
@@ -971,6 +962,11 @@ export class PipelineManager {
       );
     }
 
+    const requestedProfile = options?.permissionProfile === undefined ? undefined : pipelinePermissionProfileSchema.parse(options.permissionProfile);
+    if (requestedProfile) {
+      const root = await this.resolveWorkspaceRoot(sessionId, context);
+      if (!root || resolvePath(requestedProfile.repoPath) !== resolvePath(root)) throw new Error('permissionProfile.repoPath must match this pipeline’s actual workspace root');
+    }
     const originPlan = (await sessionRepository.findById(sessionId))?.metadata?.workPlan;
     const linkedPlan = originPlan ? workPlanStateSchema.parse(originPlan).current : null;
     const pipeline = await pipelineRepository.create({
@@ -991,6 +987,7 @@ export class PipelineManager {
         workPlanId: linkedPlan?.id,
         sourcePlanDetails: linkedPlan && !linkedPlan.sourcePipelineId ? linkedPlan.details : undefined,
         trigger: context.trigger,
+        requestedPermissionProfile: requestedProfile,
         params: options?.params ?? {},
         ...(options?.maxRetries != null ? { maxRetries: options.maxRetries } : {}),
       },
@@ -1085,7 +1082,33 @@ export class PipelineManager {
     await pipelineRepository.saveCheckpoint({ pipelineId: pipeline.id, nodeKey: graph.entryKey,
       state: serializeWalk({ cursor: graph.entryKey, previousOutput: '', handoffChain: [], pipelineSources: [],
         traversals: {}, loopMarks: {}, pendingFeedback: {}, judgedContext: {}, currentItemId: null, steps: 0 }) });
+    if (requestedProfile) {
+      const controller = new AbortController();
+      this.controllers.set(pipeline.id, controller);
+      const parent = getAgentManager().get(rootAgentId)?.getStopSignal();
+      this.signals.set(pipeline.id, parent ? AbortSignal.any([controller.signal, parent]) : controller.signal);
+    }
     options?.onCreated?.(pipeline.id);
+    if (requestedProfile) {
+      const [entry] = await pipelineRepository.getNodes(pipeline.id);
+      if (!entry) throw new Error('Pipeline has no entry stage for permission approval');
+      const decision = await this.requestPipelineApproval(pipeline, entry, rootAgent,
+        `Approve this permission profile once for pipeline "${title}":\n${JSON.stringify(requestedProfile, null, 2)}`,
+        'Allow these commands, package tools, public hosts and named Docker projects for this run? Commands outside the profile still require approval; overnight mode denies and records them instead. allowCheckpointReplay permits repeating completed effects from a saved stage; uncertain outcomes still require inspection.',
+        context, ['Approve', 'Deny']) as { approved: boolean; response?: string };
+      if (!decision.approved || replyAnswer(decision.response ?? '') !== 'approve') {
+        const stopped = (await this.getPipeline(pipeline.id))?.status === 'stopped';
+        this.controllers.delete(pipeline.id);
+        this.signals.delete(pipeline.id);
+        if (stopped) return { pipelineId: pipeline.id, result: 'Pipeline stopped before its permission profile was approved.' };
+        await this.updatePipeline(pipeline.id, { status: 'paused', summary: 'Run permission profile was not approved; no stage has run.' });
+        return { pipelineId: pipeline.id, result: 'Permission profile not approved.' };
+      }
+      pipeline.metadata = { ...pipeline.metadata, permissionProfile: { profile: requestedProfile, repoPath: requestedProfile.repoPath, approvedBy: userId, approvedAt: new Date().toISOString() } };
+      await this.updatePipeline(pipeline.id, { status: 'running', metadata: pipeline.metadata });
+      context = { ...context, attended: requestedProfile.overnight ? false : context.attended,
+        metadata: { ...context.metadata, approvedRunGates: requestedProfile.autoApproveGates, overnightRun: requestedProfile.overnight } };
+    }
 
     return this.runGraph({
       pipeline,
@@ -1142,7 +1165,7 @@ export class PipelineManager {
       throw new Error(`Pipeline ${pipeline.id} is already being walked in this process.`);
     }
     this.walking.add(pipeline.id);
-    const controller = new AbortController();
+    const controller = this.controllers.get(pipeline.id) ?? new AbortController();
     this.controllers.set(pipeline.id, controller);
     // The root's stop signal, not its abort signal: create_pipeline returns a
     // handle while the run goes on, so the turn that started it ends long
@@ -1153,6 +1176,10 @@ export class PipelineManager {
     try {
       const result = await this.walk(args);
       const current = await this.getPipeline(pipeline.id);
+      if (this.signals.get(pipeline.id)?.aborted && current?.status !== 'failed') {
+        await this.updatePipeline(pipeline.id, { status: 'stopped', summary: 'Pipeline stopped; resume from the saved stage checkpoint.' });
+        return { pipelineId: pipeline.id, result: 'Pipeline stopped; resume from the saved stage checkpoint.' };
+      }
       if (current?.status === 'failed') {
         const items = await pipelineRepository.getPlanItems(pipeline.id);
         for (const item of items.filter(item => item.status === 'running')) {
@@ -1178,6 +1205,17 @@ export class PipelineManager {
       }
       throw error;
     } finally {
+      try {
+        const current = await this.getPipeline(pipeline.id);
+        const denied = current?.metadata?.deniedRequests as Array<{ toolId?: string; action?: string; command?: string; reason?: string }> | undefined;
+        if ((current?.metadata?.permissionProfile as { profile?: { overnight?: boolean } } | undefined)?.profile?.overnight && denied?.length) {
+          const body = `${denied.length} commands were denied outside the approved run profile. Pipeline status: ${current?.status}.\n`
+            + denied.slice(-50).map(row => `- ${row.toolId}.${row.action}: ${row.command?.slice(0, 300) ?? row.reason}`).join('\n');
+          await messageRepository.create({ sessionId: pipeline.sessionId, role: 'system', content: body,
+            metadata: { pipelineId: pipeline.id, pipelineEvent: 'overnight_summary' } });
+          await getNotificationService().notify(pipeline.userId, 'pipeline_summary', 'Overnight pipeline summary', body, { pipelineId: pipeline.id });
+        }
+      } catch (error) { coreLogger.error({ error, pipelineId: pipeline.id }, 'Could not publish overnight denial summary'); }
       this.walking.delete(pipeline.id);
       this.controllers.delete(pipeline.id);
       this.signals.delete(pipeline.id);
@@ -1341,11 +1379,15 @@ export class PipelineManager {
       // items to the plan while the loop is running. Checked at the node
       // boundary, so an over-budget run stops before paying for one more node
       // rather than mid-turn.
-      const pool = getConfig().agent.pipelineTokenBudget;
+      const pool = typeof persisted?.metadata?.tokenBudget === 'number' ? persisted.metadata.tokenBudget : getConfig().agent.pipelineTokenBudget;
       const spent = [...nodes.values()].reduce((sum, n) => sum + n.tokensUsed, 0);
       const summary = poolExhaustedSummary(pool, spent, byKey.get(cursor)?.name ?? cursor);
-      if (summary) {
-        await this.updatePipeline(pipeline.id, { status: 'failed', summary });
+      // Finish only the active item's body and its loop-head bookkeeping.
+      // A loop elsewhere in the graph must not exempt pre/post-loop work.
+      const budgetNode = byKey.get(cursor);
+      const finishingItem = currentItem && (budgetNode?.parentKey || budgetNode?.kind === 'foreach');
+      if (summary && !finishingItem) {
+        await this.updatePipeline(pipeline.id, { status: 'paused', summary });
         recordRunEvent({
           runId: sessionId,
           subject: 'pipeline',
@@ -1354,6 +1396,15 @@ export class PipelineManager {
           payload: { pool, spent, nodeKey: cursor },
         });
         return { pipelineId: pipeline.id, result: summary };
+      }
+
+      if (pool > 0 && spent >= pool * .8 && !persisted?.metadata?.budgetWarning) {
+        const items = await pipelineRepository.getPlanItems(pipeline.id);
+        const budget = pipelineBudget(persisted ?? pipeline, [...nodes.values()], items, pool);
+        await this.updatePipeline(pipeline.id, { metadata: { ...persisted?.metadata, budgetWarning: budget } });
+        void getNotificationService().notify(pipeline.userId, 'pipeline_budget', 'Pipeline token pool is at least 80% spent',
+          `${Math.round(budget.percent ?? 0)}% spent. Projected remaining: ${budget.projectedRemainingTokens ?? 'not enough evidence'} tokens. The current item will finish verification; the next item requires budget acknowledgement.`, { pipelineId: pipeline.id })
+          .catch(error => coreLogger.error({ error }, 'Could not notify pipeline budget warning'));
       }
 
       if (++steps > MAX_STEPS) {
@@ -1959,6 +2010,7 @@ export class PipelineManager {
       .set({
         status: 'paused',
         summary: 'Interrupted by a restart — resume to continue from the last checkpoint.',
+        metadata: sql`COALESCE(${pipelines.metadata}, '{}'::jsonb) || jsonb_build_object('interruption', jsonb_build_object('reason', 'server_restart', 'actor', 'server', 'at', now()))`,
         updatedAt: new Date(),
       })
       // `awaiting_approval` is just as dead after a restart: the walker that was
@@ -2112,7 +2164,7 @@ export class PipelineManager {
       throw new SpaceError('forbidden_role', `Your role (${scope.space.role}) cannot resume a pipeline in this space`);
     }
     const context = buildAgentContext({
-      attended: channelCanPrompt(originSession?.channelType),
+      attended: (pipeline.metadata?.permissionProfile as { profile?: { overnight?: boolean } } | undefined)?.profile?.overnight ? false : channelCanPrompt(originSession?.channelType),
       id: pipeline.rootAgentId,
       sessionId: pipeline.sessionId,
       userId: pipeline.userId,
@@ -2122,7 +2174,7 @@ export class PipelineManager {
       root: true,
       model: '',
       status: 'running',
-      metadata: { pipelineId, resumed: true },
+      metadata: { pipelineId, resumed: true, overnightRun: (pipeline.metadata?.permissionProfile as { profile?: { overnight?: boolean } } | undefined)?.profile?.overnight === true, approvedRunReplay: (pipeline.metadata?.permissionProfile as { profile?: { allowCheckpointReplay?: boolean } } | undefined)?.profile?.allowCheckpointReplay === true, approvedRunGates: (pipeline.metadata?.permissionProfile as { profile?: { autoApproveGates?: boolean } } | undefined)?.profile?.autoApproveGates === true },
     });
     return withAgentUsage(pipeline.userId, scope, () => this.resumeWalk(pipeline, pipelineId, opts, checkpoint, resumeState, context));
   }
@@ -2253,7 +2305,7 @@ export class PipelineManager {
     });
   }
 
-  async stop(pipelineId: string): Promise<boolean> {
+  async stop(pipelineId: string, actor?: { userId: string; event: string }): Promise<boolean> {
     this.clearResumeWatchdog(pipelineId);
     this.resuming.get(pipelineId)?.abort(new Error('Pipeline replay cancelled'));
     const pipeline = await this.getPipeline(pipelineId);
@@ -2263,9 +2315,10 @@ export class PipelineManager {
 
     await this.updatePipeline(pipelineId, {
       status: 'stopped',
-      summary: 'Pipeline stopped by user; resume from the saved stage checkpoint.',
+      summary: actor ? 'Pipeline stopped by user; resume from the saved stage checkpoint.' : 'Pipeline stopped; resume from the saved stage checkpoint.',
+      metadata: { ...pipeline.metadata, interruption: { reason: actor ? 'explicit_user_stop' : 'pipeline_stop', actor: actor?.userId ?? 'system_or_unknown', event: actor?.event ?? 'pipeline_stop', at: new Date().toISOString(), checkpoint: { nodeKey: pipeline.currentNodeKey } } },
     });
-    this.controllers.get(pipelineId)?.abort(new Error('Pipeline stopped by user'));
+    this.controllers.get(pipelineId)?.abort(new Error(actor ? `user_stop:${actor.userId}` : 'Pipeline stopped'));
 
     // Interrupted nodes are rerun from their saved boundary on resume.
     for (const node of await this.getNodes(pipelineId)) {
@@ -2850,6 +2903,11 @@ export class PipelineManager {
       // Resolve through the role’s topic, including its configured executor.
       const stageModel = await resolveStageModel(stageTemplate, getRoleConfig(node.role as AgentRole).defaultTopic, pipeline.userId ?? undefined, registry);
       const modelOverride = stageModel?.modelId;
+      const latest = await this.getPipeline(pipeline.id);
+      await this.updatePipeline(pipeline.id, { metadata: { ...latest?.metadata,
+        stageProviders: { ...(latest?.metadata?.stageProviders as Record<string, unknown> ?? {}), [node.nodeKey]: {
+          model: modelOverride, modelName: stageModel?.name, provider: stageModel?.provider, quota: 'unknown', updatedAt: new Date().toISOString(),
+        } } } });
       const sameModel = args.reviewModels
         ? noteReviewModel(args.reviewModels, modelOverride, { auditor: declared.stageType === 'qa_validation', builder: !!declared.producesArtifacts })
         : null;
@@ -2983,6 +3041,10 @@ export class PipelineManager {
       // back to scraping prose with regexes, while the prompt kept asking each
       // one for a fence nothing read.
       const raw = String(result || '');
+      const providerState = await this.getPipeline(pipeline.id);
+      const providers = providerState?.metadata?.stageProviders as Record<string, Record<string, unknown>> ?? {};
+      await this.updatePipeline(pipeline.id, { metadata: { ...providerState?.metadata,
+        stageProviders: { ...providers, [node.nodeKey]: { ...providers[node.nodeKey], quota: 'available' } } } });
       const output = stripPipelineControlBlocks(raw);
 
       await this.updateNode(node.id, { status: 'completed', output, completedAt: new Date() });
@@ -3037,6 +3099,37 @@ export class PipelineManager {
         return { output: '', raw: '', stopped: { pipelineId: pipeline.id, result: 'Pipeline stopped; resume from the saved stage checkpoint.' } };
       }
       if (isApprovalWaitEnded(errorMsg)) return this.awaitStageApproval(args, { since: stageStartedAt, reason: errorMsg, workerIds, partialText });
+      if (error instanceof WorkerInterruptedError) {
+        const current = await this.getPipeline(pipeline.id);
+        await this.updateNode(node.id, { status: 'pending', error: errorMsg });
+        await this.updatePipeline(pipeline.id, { status: 'paused', summary: errorMsg,
+          metadata: { ...current?.metadata, interruption: { ...error.interruption, checkpoint: { nodeKey: node.nodeKey, attemptId, itemId } } } });
+        return { output: '', raw: '', stopped: { pipelineId: pipeline.id, result: errorMsg } };
+      }
+      if (classifyError(error).reason === FailoverReason.QUOTA_EXHAUSTED) {
+        const current = await this.getPipeline(pipeline.id);
+        const resetsAt = providerResetAt(errorMsg)?.toISOString();
+        await this.updateNode(node.id, { status: 'pending', error: errorMsg });
+        await this.updatePipeline(pipeline.id, { status: 'paused', summary: `Provider quota unavailable at "${node.name}". Configure its topic Backup model or wait for reset, then resume this saved attempt. ${errorMsg}`,
+          metadata: { ...current?.metadata, providerBlock: { nodeKey: node.nodeKey, attemptId, resetsAt, error: errorMsg },
+            stageProviders: { ...(current?.metadata?.stageProviders as Record<string, unknown> ?? {}), [node.nodeKey]: {
+              ...((current?.metadata?.stageProviders as Record<string, Record<string, unknown>> | undefined)?.[node.nodeKey]), quota: 'exhausted', resetsAt, error: errorMsg } } } });
+        const promptKey = `${node.nodeKey}:${attemptId}:${resetsAt ?? errorMsg}`;
+        if (context.attended !== false && current?.metadata?.quotaPrompted !== promptKey) {
+          const blocked = await this.getPipeline(pipeline.id);
+          await this.updatePipeline(pipeline.id, { metadata: { ...blocked?.metadata, quotaPrompted: promptKey } });
+          const answer = await this.requestPipelineApproval(pipeline, node, rootAgent,
+            `Provider quota exhausted at "${node.name}". ${resetsAt ? `Reported reset: ${resetsAt}.` : errorMsg} Configured alternatives did not complete the stage.`,
+            'Configure an alternate model in this topic’s Backup binding, then approve to retry this saved attempt. Pause leaves all previous outputs intact.',
+            context, ['Approve', 'Pause']) as { approved: boolean; response?: string };
+          if (answer.approved && replyAnswer(answer.response ?? '') === 'approve') {
+            await this.updatePipeline(pipeline.id, { status: 'running', summary: `Retrying "${node.name}" after provider configuration review.` });
+            return this.runStepNode({ ...args, startReason: 'provider_recovery' });
+          }
+          await this.updatePipeline(pipeline.id, { status: 'paused', summary: `Provider quota unavailable at "${node.name}"; resume after configuring a Backup or quota reset.` });
+        }
+        return { output: '', raw: '', stopped: { pipelineId: pipeline.id, result: 'Pipeline paused on provider quota; prior stage outputs and this attempt checkpoint are preserved.' } };
+      }
       if (error instanceof StageContractError && args.retryContract) {
         await this.updateNode(node.id, { status: 'pending', error: errorMsg });
         recordRunEvent({ runId: sessionId, subject: 'pipeline_node', subjectId: node.nodeKey,
@@ -3076,6 +3169,10 @@ export class PipelineManager {
       // bounds a loop whose item count is not known when the run starts. The
       // in-memory row is updated too: the walker sums it without re-reading.
       if (spentTokens > 0) {
+        const current = await this.getPipeline(pipeline.id);
+        const byItem = current?.metadata?.tokensByItem as Record<string, number> ?? {};
+        if (itemId) await this.updatePipeline(pipeline.id, { metadata: { ...current?.metadata,
+          tokensByItem: { ...byItem, [itemId]: (byItem[itemId] ?? 0) + spentTokens } } });
         node.tokensUsed += spentTokens;
         await this.updateNode(node.id, { tokensUsed: node.tokensUsed });
         recordRunEvent({
@@ -3088,6 +3185,7 @@ export class PipelineManager {
             name: node.name,
             visit: node.visits,
             tokens: spentTokens,
+            attemptId, itemId,
             cumulative: node.tokensUsed,
             cap: node.maxTokens ?? null,
           },
@@ -3234,6 +3332,28 @@ export class PipelineManager {
     if ((await this.getPipeline(pipeline.id))?.metadata?.pendingItemEdits) await pipelineRepository.applyItemEdits(pipeline.id);
     const items = await pipelineRepository.getPlanItems(pipeline.id);
     const pending = items.filter((i) => i.status === 'pending');
+    if (pending.length) {
+      const current = await this.getPipeline(pipeline.id);
+      const budget = pipelineBudget(current ?? pipeline, await pipelineRepository.getNodes(pipeline.id), items, getConfig().agent.pipelineTokenBudget);
+      if (budget.exhausted) {
+        const summary = `Pipeline token pool exhausted (${budget.spent}/${budget.pool}) after finishing the current item. Raise tokenBudget on resume_pipeline to continue with the remaining items.`;
+        await this.updatePipeline(pipeline.id, { status: 'paused', summary, metadata: { ...current?.metadata, budgetWarning: budget } });
+        return { outcome: 'loop_done', item: null, stopped: { pipelineId: pipeline.id, result: summary } };
+      }
+      if (budget.warning && current?.metadata?.budgetAcknowledgedPool !== budget.pool) {
+        const approval = context.attended === false ? { approved: false } : await this.requestPipelineApproval(pipeline, node, rootAgent,
+          `Token pool ${budget.spent}/${budget.pool} (${Math.round(budget.percent ?? 0)}%). Projected remaining cost: ${budget.projectedRemainingTokens ?? 'unknown'} tokens (${budget.projectionBasis}).`,
+          'Continue with the next item? Its implementation, review and QA may exceed the pool. The run will stop before starting another item; resume_pipeline can raise tokenBudget.',
+          context, ['Approve', 'Pause']) as { approved: boolean; response?: string };
+        if (!approval.approved || replyAnswer((approval as { response?: string }).response ?? '') !== 'approve') {
+          await this.updatePipeline(pipeline.id, { status: 'paused', summary: 'Token pool warning: paused at item boundary; raise tokenBudget on resume_pipeline.' });
+          return { outcome: 'loop_done', item: null, stopped: { pipelineId: pipeline.id, result: 'Budget warning requires acknowledgement before the next item.' } };
+        }
+        const updated = await this.getPipeline(pipeline.id);
+        await this.updatePipeline(pipeline.id, { status: 'running', metadata: { ...updated?.metadata, budgetAcknowledgedPool: budget.pool } });
+      }
+    }
+
 
     // An empty plan on the FIRST visit is a failure, not an empty success: the
     // template declared per-item work and nothing produced items (a template
@@ -3263,7 +3383,7 @@ export class PipelineManager {
     // First visit and the plan needs sign-off: show the whole list, once.
     if (node.requiresApproval && node.visits === 1) {
       await this.updateNode(node.id, { status: 'awaiting_approval' });
-      await this.updatePipeline(pipeline.id, { status: 'awaiting_approval' });
+      // The approval helper publishes the waiting state with its request id.
 
       rootAgent['emit']({
         type: 'pipeline_event',
@@ -3277,7 +3397,7 @@ export class PipelineManager {
         `${n + 1}. ${i.title}${i.detail ? ` — ${i.detail}` : ''}` +
         (i.acceptance?.length ? `\n   Acceptance: ${i.acceptance.join('; ')}` : ''),
       ).join('\n');
-      const approval = await rootAgent.requestApproval(
+      const approval = await this.requestPipelineApproval(pipeline, node, rootAgent,
         `Pipeline "${title}" — plan (${items.length} item${items.length === 1 ? '' : 's'}):\n\n${list}` +
           `\n\nYou can edit, reorder, or remove items on the pipeline page before approving, and ` +
           `the plan stays editable while the pipeline runs.${gateNote(gates)}`,
@@ -3442,7 +3562,7 @@ export class PipelineManager {
       : '';
 
     await this.updateNode(node.id, { input: question, status: 'awaiting_approval' });
-    await this.updatePipeline(pipeline.id, { status: 'awaiting_approval' });
+    // The approval helper publishes the waiting state with its request id.
 
     rootAgent['emit']({
       type: 'pipeline_event',
@@ -3461,7 +3581,7 @@ export class PipelineManager {
       timestamp: new Date(),
     });
 
-    const answer = await rootAgent.requestApproval(
+    const answer = await this.requestPipelineApproval(pipeline, node, rootAgent,
       `Pipeline "${title}" — ${node.name}${fieldText}`,
       question,
       context,
@@ -3538,13 +3658,16 @@ export class PipelineManager {
     const at = new Date();
     recordRunEvent({ runId: pipeline.sessionId, subject: 'pipeline_node', subjectId: node.nodeKey, event: 'result',
       payload: { pipelineId: pipeline.id, kind: 'gate_approval', response: null, decidedBy: null, decidedAt: at.toISOString(), decision: 'auto_approved' } });
-    await this.updateNode(node.id, { status: 'approved', approvedAt: at });
-    await this.updatePipeline(pipeline.id, { status: 'running', summary: `Approved automatically: ${what} (no one was watching this run).` });
+    const current = await this.getPipeline(pipeline.id);
+    const profile = current?.metadata?.permissionProfile as { approvedBy?: string; profile?: { autoApproveGates?: boolean } } | undefined;
+    const granted = profile?.approvedBy === pipeline.userId && profile.profile?.autoApproveGates;
+    await this.updateNode(node.id, { status: 'approved', approvedAt: at, ...(granted ? { approvedBy: profile.approvedBy } : {}) });
+    await this.updatePipeline(pipeline.id, { status: 'running', summary: granted ? `Approved under this run’s permission profile: ${what}.` : `Approved automatically: ${what} (no one was watching this run).` });
     messageRepository.create({
       sessionId: pipeline.sessionId,
       role: 'system',
-      content: `Approved ${what} automatically: no one was watching this run, and the step is set to approve itself then. ` +
-        'Gate commands still ask for their own permission.',
+      content: granted ? `Approved ${what} under the permission profile approved by ${profile.approvedBy}. Commands remain limited to that profile.`
+        : `Approved ${what} automatically: no one was watching this run, and the step is set to approve itself then. Gate commands still ask for their own permission.`,
       metadata: { pipelineId: pipeline.id, stageId: node.id, pipelineEvent: 'auto_approved' },
     }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
     getAgentService()['emit']({
@@ -3554,6 +3677,30 @@ export class PipelineManager {
       data: { event: 'auto_approved', pipelineId: pipeline.id, stageId: node.id, name: node.name },
       timestamp: at,
     });
+  }
+
+  private async requestPipelineApproval(
+    pipeline: Pipeline, node: PipelineNodeRow, service: ReturnType<typeof getAgentService>,
+    summary: string, question: string, context: AgentContext, options?: string[], kind?: 'gate' | 'question',
+  ): Promise<unknown> {
+    let publishedId: string | undefined;
+    try {
+      return await service.requestApproval(summary, question, context, options, kind, async requestId => {
+        publishedId = requestId;
+        const current = await this.getPipeline(pipeline.id);
+        const pendingApproval: PendingStageApproval = { kind: 'conversation', requestId, workerRequestId: null,
+          stage: node.name, nodeKey: node.nodeKey, attemptId: '', fingerprint: null, hostServices: false,
+          itemId: null, item: null, toolId: null, action: null, toolName: null, subject: question, reason: summary };
+        if (!current || !await pipelineRepository.publishApproval(pipeline.id, pendingApproval,
+          `Waiting for approval at "${node.name}".`)) throw new Error('Pipeline was stopped before its approval could be published');
+      }, this.signals.get(pipeline.id));
+    } finally {
+      const current = await this.getPipeline(pipeline.id);
+      if ((current?.metadata?.pendingApproval as PendingStageApproval | undefined)?.requestId === publishedId) {
+        const { pendingApproval: _answered, ...metadata } = current?.metadata ?? {};
+        await this.updatePipeline(pipeline.id, { status: current?.status === 'awaiting_approval' ? 'running' : current?.status, metadata });
+      }
+    }
   }
 
   private async approveStepNode(args: {
@@ -3576,7 +3723,7 @@ export class PipelineManager {
     }
 
     await this.updateNode(node.id, { status: 'awaiting_approval' });
-    await this.updatePipeline(pipeline.id, { status: 'awaiting_approval' });
+    // The approval helper publishes the waiting state with its request id.
 
     rootAgent['emit']({
       type: 'pipeline_event',
@@ -3592,7 +3739,7 @@ export class PipelineManager {
         (latest.decisions.length > 0 ? `\n\n**Decisions:** ${latest.decisions.join('; ')}` : '')
       : `Previous stage completed.\n\nResult:\n${previousOutput.slice(0, 2000)}`;
 
-    const approval = await rootAgent.requestApproval(
+    const approval = await this.requestPipelineApproval(pipeline, node, rootAgent,
       `Pipeline "${title}" — ${summary}${gateNote(gates)}`,
       `Proceed with next stage: "${node.name}"?`,
       context,
@@ -3630,6 +3777,13 @@ export class PipelineManager {
     const best = args.bestAttemptNote ? `\n\n${args.bestAttemptNote}` : '';
     const rootAgent = getAgentService();
 
+    if (context.metadata?.overnightRun === true) {
+      const summary = `QA did not pass after ${attempts} attempts at "${node.name}". Overnight mode did not request a waiver. ${qaResult.feedback}${best}`;
+      await this.updatePipeline(pipeline.id, { status: 'failed', summary });
+      recordRunEvent({ runId: pipeline.sessionId, subject: 'pipeline_node', subjectId: node.nodeKey,
+        event: 'node_failed', payload: { pipelineId: pipeline.id, reason: 'overnight_qa_exhausted', issues: qaResult.issues } });
+      return { pipelineId: pipeline.id, result: summary };
+    }
     coreLogger.warn({ pipelineId: pipeline.id, attempts }, 'QA validation exhausted retries, requesting human approval');
 
     rootAgent['emit']({
@@ -3643,9 +3797,9 @@ export class PipelineManager {
       timestamp: new Date(),
     });
 
-    await this.updatePipeline(pipeline.id, { status: 'awaiting_approval' });
+    // The approval helper publishes the waiting state with its request id.
 
-    const escalation = await rootAgent.requestApproval(
+    const escalation = await this.requestPipelineApproval(pipeline, node, rootAgent,
       `QA validation failed after ${attempts} attempts.\n\nRemaining issues:\n${qaResult.issues.join('\n')}\n\nFeedback: ${qaResult.feedback}${best}`,
       `Continue pipeline despite QA failures, or abort?`,
       context,

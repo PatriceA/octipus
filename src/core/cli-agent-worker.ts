@@ -1,3 +1,4 @@
+import { providerResetAt } from '@/core/errors/provider-recovery';
 import { readSessionFile } from '@/core/session-files';
 import type { CliImageAttachment } from './cli-adapters';
 import { configuredCliBinary } from './cli-executable';
@@ -594,7 +595,7 @@ When a task matches one of these skills, load it with get_skill before starting 
         result += `\n\n[Octipus] ${pending} guidance/feedback item${pending === 1 ? '' : 's'} arrived after this CLI's last Octipus tool call and ${pending === 1 ? 'was' : 'were'} not applied because ${reason}. Send another message to continue with it.`;
       }
 
-      if (this.aborted) throw new Error(this.runError ?? this.abortReason ?? 'Agent was aborted by user');
+      if (this.aborted) throw new Error(this.runError ?? this.abortReason ?? `Agent aborted: ${(this.context.metadata?.interruption as { reason?: string } | undefined)?.reason ?? 'unknown cause'}`);
 
       if (this.pauseReasons.has('approval')) throw new Error(approvalWaitReason(APPROVAL_UNFINISHED_REASON, this.awaitedRequestId));
 
@@ -605,7 +606,7 @@ When a task matches one of these skills, load it with get_skill before starting 
           this.messages.push({ role: 'assistant', content: result, timestamp: new Date() });
           this.messages.push({ role: 'user', content: repair, timestamp: new Date() });
           result = await this.executeCLI();
-          if (this.aborted) throw new Error(this.runError ?? this.abortReason ?? 'Agent was aborted by user');
+          if (this.aborted) throw new Error(this.runError ?? this.abortReason ?? `Agent aborted: ${(this.context.metadata?.interruption as { reason?: string } | undefined)?.reason ?? 'unknown cause'}`);
         }
         result = (await storeInlineUiBlocks(result, {
           sessionId: this.context.sessionId, agentId: this.context.id,
@@ -693,8 +694,8 @@ When a task matches one of these skills, load it with get_skill before starting 
     }
   }
 
-  stop(): void {
-    this.markStopped('CLI agent stopped');
+  stop(reason = 'worker_cleanup_or_disconnect'): void {
+    this.markStopped(reason);
     if (this.terminalEmitted) return;
     this.aborted = true;
     // A resume key is freed once the vendor process has EXITED (its 'exit'
@@ -1564,9 +1565,11 @@ When a task matches one of these skills, load it with get_skill before starting 
           // max-turns whose answer quoted a quota error re-armed the block.
           const failed = code !== 0 || !!signal || !!this.runError;
           if (failed && toolConfig.isQuotaError(`${stderr}\n${this.runError ?? ''}`)) {
-            await quotaTracker.markExhausted(quotaKey);
+            const quotaMessage = `${stderr}\n${this.runError ?? ''}`;
+            const resetsAt = providerResetAt(quotaMessage);
+            await quotaTracker.markExhausted(quotaKey, resetsAt);
             reject(new ClassifiedError({ reason: FailoverReason.QUOTA_EXHAUSTED, recovery: RecoveryAction.FALLBACK_PROVIDER,
-              providerHint: toolConfig.quotaProvider, message: `Quota exhausted for ${toolConfig.name}` }));
+              providerHint: toolConfig.quotaProvider, message: `Quota exhausted for ${toolConfig.name}: ${quotaMessage}`, metadata: { resetsAt: resetsAt?.toISOString() } }));
             return;
           }
 

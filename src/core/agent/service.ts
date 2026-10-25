@@ -1394,6 +1394,7 @@ export class AgentService {
     context: AgentContext,
     options?: {
       maxRetries?: number;
+      permissionProfile?: unknown;
       params?: Record<string, unknown>;
       onCreated?: (pipelineId: string) => void;
     },
@@ -1423,13 +1424,26 @@ export class AgentService {
     context: AgentContext,
     options?: string[],
     kind?: ApprovalKind,
+    onCreated?: (requestId: string) => Promise<void>,
+    signal?: AbortSignal,
   ): Promise<unknown> {
     return this.approvalManager.requestApproval(
       summary, question, context,
       (event) => this.emit(event),
       options,
       kind,
+      onCreated,
+      signal,
     );
+  }
+
+  /** Show the existing live question without holding a tool call open. */
+  presentApproval(requestId: string, userId: string, sessionId: string): boolean {
+    const approval = this.getPendingApprovals(userId).find(row => row.id === requestId && row.sessionId === sessionId);
+    if (!approval) return false;
+    this.emit({ type: 'approval_required', userId, sessionId, timestamp: new Date(),
+      data: { requestId, summary: approval.summary, question: approval.question, options: approval.options, kind: approval.kind } });
+    return true;
   }
 
   /** Answer an approval as its requester; `forUserId` must own it. */

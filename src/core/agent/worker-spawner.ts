@@ -1,3 +1,8 @@
+import { WorkerInterruptedError, type Interruption } from '@/core/interruption';
+import { getExecutionSignal } from '@/core/execution-scope';
+import { setTimeout as retryDelay } from 'node:timers/promises';
+import { providerRetryDelay } from '@/core/errors/provider-recovery';
+import { pipelineRepository } from '@/db/repositories/pipeline-repository';
 import { isJobOn, isToolOn } from '@/core/modules/registry';
 import { execFile } from 'child_process';
 import { resolve } from 'path';
@@ -21,7 +26,7 @@ import { getModelRegistry } from '@/models/model-registry';
 import { resolveModel } from '@/models/resolve-model';
 import { isRealUserId } from '@/security/principal';
 import { QuotaExceededError } from '@/security/quota-error';
-import { isProviderQuotaError } from '@/core/errors/classification';
+import { classifyError } from '@/core/errors/classification';
 import { SpendBudgetExceededError } from '@/security/spend-budget-error';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { getToolRegistry } from '@/tools/registry';
@@ -837,7 +842,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   // Worker guidance, kept out of SECURITY_PREAMBLE (DESIGN.md rule #6): its
   // rule 8 is about the answer, and a stage that read it as "stop at the first
   // failed probe" reported a stop as its work (#16).
-  staticParts.push(`\n\nRECOVERING FROM YOUR OWN PROBES: a guessed path that does not exist, a helper binary that is not installed, or an exploratory command that exits non-zero is something to recover from — list or search for the real path, use an available alternative, re-run — and keep working. Report something as unavailable only when what the task needs truly is; never invent the result of a call that failed.`);
+  staticParts.push(`\n\nVISIBLE PLAN: get_work_plan/update_work_plan belong to the root coordinator. Record decisions and verification evidence in your handoff and contract; the pipeline synchronizes its items to the visible plan. Do not call unavailable visible-plan tools. Reuse toolchain versions and availability checks recorded by earlier stages of this run unless code or dependencies changed, or the earlier evidence failed.\n\nRECOVERING FROM YOUR OWN PROBES: a guessed path that does not exist, a helper binary that is not installed, or an exploratory command that exits non-zero is something to recover from — list or search for the real path, use an available alternative, re-run — and keep working. Report something as unavailable only when what the task needs truly is; never invent the result of a call that failed.`);
 
   // Knowledge-tool roles: point them at the auto-indexed product docs so
   // "how do I set up / configure / connect X" questions are answered from
@@ -1155,8 +1160,6 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     const durationMs = Date.now() - startTime;
     overrides?.onCounters?.(await stageCounters(worker, overrides?.swarmParent ? workerId : null));
     // Spend, not context volume — onTokens feeds pipeline budget pools.
-    overrides?.onTokens?.(worker.getBillableTokens());
-
     // A pipeline stage's report IS the next stage's input, so a fragment of a
     // cut-off turn cannot be allowed to stand in for one. Measured: a Testing
     // stage "reported" 95 characters ending mid-sentence, and the pipeline
@@ -1257,6 +1260,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
       { workerId, role: agentRole, durationMs },
     ).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in worker-spawner'));
 
+    overrides?.onTokens?.(worker.getBillableTokens());
     return result;
   } catch (error) {
     void finishContextTurn(contextTurn, { agentId: workerId, outcome: 'error' });
@@ -1309,6 +1313,9 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
       onCounters: overrides?.onCounters,
       onTokens: overrides?.onTokens,
       maxTokenBudget: overrides?.maxTokenBudget,
+      signal: overrides?.swarmParent?.signal,
+      onWorkerSpawned: overrides?.onWorkerSpawned,
+      onPartialOutput: overrides?.onPartialOutput,
     });
   }
 }
@@ -1320,6 +1327,9 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
  * this, retried/fallback workers silently ran as a different, weaker persona.
  */
 interface WorkerRespawnContext {
+  signal?: AbortSignal;
+  onWorkerSpawned?: (id: string) => void;
+  onPartialOutput?: (text: string) => void;
   /** Row identity of the failed model — the transient retry reruns that exact row. */
   modelName?: string;
   systemPrompt: string;
@@ -1429,7 +1439,7 @@ export async function handleWorkerFailure(
   const wasUserStopped = errorMsg.includes('aborted') || errorMsg.includes('stopped')
     || worker.getStatus() === 'stopped';
   if (wasUserStopped) {
-    coreLogger.info({ workerId, role: agentRole }, 'Worker stopped by user, not retrying');
+    coreLogger.info({ workerId, role: agentRole, error: errorMsg }, 'Worker interrupted, not retrying');
     deps.emit({
       type: 'worker_completed',
       sessionId: context.sessionId,
@@ -1438,13 +1448,15 @@ export async function handleWorkerFailure(
       timestamp: new Date(),
     });
     // Re-throw so the root agent aborts the pipeline instead of proceeding to the next stage
-    throw new Error('Agent was stopped by user');
+    throw new WorkerInterruptedError((worker.getContext?.()?.metadata?.interruption ?? context.metadata?.interruption) as Interruption ?? { reason: errorMsg || 'worker_stopped', actor: 'system_or_unknown', at: new Date().toISOString() });
   }
 
   // Respawn the ORIGINAL worker (same assembled prompt + tool surface) on a
   // given model and run the task. Shared by the transient retry and explicit
   // topic backup below.
-  const respawnAndRun = async (model: string, modelName: string | undefined): Promise<string> => {
+  const recoverySignal = respawnCtx.signal ?? getExecutionSignal(context);
+  const respawnAndRun = async (model: string, modelName: string | undefined, provider?: string): Promise<string> => {
+    recoverySignal?.throwIfAborted();
     const agentManager = getAgentManager();
     const retryWorker = await agentManager.spawn({
       sessionId: context.sessionId,
@@ -1459,16 +1471,36 @@ export async function handleWorkerFailure(
       toolAdvertisement: respawnCtx.toolAdvertisement,
       maxTokenBudget: respawnCtx.maxTokenBudget,
       contextMetadata: pipelineMetadata(context.metadata),
+      parentSignal: recoverySignal,
     });
+    respawnCtx.onWorkerSpawned?.(retryWorker.getContext().id);
+    const progress = respawnCtx.onPartialOutput ? setInterval(() => { const text = retryWorker.getPartialOutput(); if (text) respawnCtx.onPartialOutput?.(text); }, 15_000) : undefined;
     const workerMessage = input
       ? `${task}\n\n--- Context from previous steps ---\n${input}`
       : task;
-    const result = await retryWorker.run(workerMessage);
+    let result: string;
+    let providerError: unknown;
+    try { result = await retryWorker.run(workerMessage); }
+    catch (error) { providerError = error; throw error; }
+    finally {
+      clearInterval(progress);
+      const partial = retryWorker.getPartialOutput();
+      if (partial && providerError) respawnCtx.onPartialOutput?.(partial);
+      respawnCtx.onTokens?.(retryWorker.getBillableTokens());
+      try {
+      if (context.metadata?.pipelineId && context.metadata?.nodeKey) {
+        const row = await pipelineRepository.findById(String(context.metadata.pipelineId));
+        if (!row || row.userId !== context.userId || row.sessionId !== context.sessionId) throw new Error('Provider status pipeline scope mismatch');
+        await pipelineRepository.updatePipeline(String(context.metadata.pipelineId), { metadata: { ...row?.metadata,
+          stageProviders: { ...(row?.metadata?.stageProviders as Record<string, unknown> ?? {}),
+            [String(context.metadata.nodeKey)]: { ...((row?.metadata?.stageProviders as Record<string, Record<string, unknown>> | undefined)?.[String(context.metadata.nodeKey)]), model, modelName, ...(provider ? { provider } : {}), quota: providerError ? classifyError(providerError).reason : 'available', error: providerError ? String(providerError) : null, updatedAt: new Date().toISOString() } } } });
+      }
+      } catch (error) { coreLogger.error({ error, workerId }, 'Could not persist provider retry status; preserving the worker result'); }
+    }
     // The respawned worker is a fresh agent id with no swarm node of its own,
     // so there are no children to fold in — its own counters are the whole
     // story. Routed through the same helper so both paths stay in step.
     respawnCtx.onCounters?.(await stageCounters(retryWorker, null));
-    respawnCtx.onTokens?.(retryWorker.getBillableTokens());
     deps.emit({
       type: 'worker_completed',
       sessionId: context.sessionId,
@@ -1488,18 +1520,18 @@ export async function handleWorkerFailure(
     return result;
   };
 
-  // Retry transient failures (JSON parse, rate limit) with the same model
-  const isTransient = errorMsg.includes('JSON') || errorMsg.includes('parse')
-    || errorMsg.includes('Unterminated') || errorMsg.includes('rate_limit')
-    || errorMsg.includes('overloaded');
-
-  if (isTransient && !isProviderQuotaError(error)) {
-    coreLogger.info({ workerId, role: agentRole, error: errorMsg }, 'Worker failed with transient error, retrying once');
-    try {
-      const retryResult = await respawnAndRun(failedModel, respawnCtx.modelName);
-      return retryResult;
-    } catch (retryError) {
-      coreLogger.error({ error: retryError, workerId, role: agentRole }, 'Retry also failed');
+  let lastError: unknown = error;
+  for (let retry = 0; ; retry++) {
+    const delay = providerRetryDelay(lastError, retry);
+    if (delay === null) break;
+    coreLogger.info({ workerId, role: agentRole, retry, delay }, 'Retrying provider failure within the stage attempt');
+    await retryDelay(delay, undefined, { signal: recoverySignal });
+    try { return await respawnAndRun(failedModel, respawnCtx.modelName); }
+    catch (retryError) {
+      if (retryError instanceof QuotaExceededError || retryError instanceof SpendBudgetExceededError || retryError instanceof WorkerInterruptedError
+        || classifyError(retryError).reason === 'permission_denied' || isApprovalWaitEnded(String(retryError))) throw retryError;
+      lastError = retryError;
+      coreLogger.warn({ error: retryError, workerId, retry }, 'Provider retry failed');
     }
   }
 
@@ -1508,6 +1540,7 @@ export async function handleWorkerFailure(
   // would rerun the failed model.
   try {
     // Personal bindings have no backup: this is the install lane's (§8.2).
+    recoverySignal?.throwIfAborted();
     const inSpace = !!context.space;
     const backup = await resolveModel({ userId: context.userId, topic: lane, backup: true, inSpace, spaceRole: context.space?.role, sponsor: context.sponsor });
     if (backup && backup.modelId !== failedModel) {
@@ -1515,10 +1548,12 @@ export async function handleWorkerFailure(
         { failedModel, backupModel: backup.modelId, topic: lane, role: agentRole },
         'Worker failed on primary model, retrying with topic backup model',
       );
-      const backupResult = await respawnAndRun(backup.modelId, backup.name);
+      const backupResult = await respawnAndRun(backup.modelId, backup.name, backup.provider);
       return backupResult;
     }
   } catch (backupError) {
+    if (backupError instanceof WorkerInterruptedError || classifyError(backupError).reason === 'permission_denied' || isApprovalWaitEnded(String(backupError))) throw backupError;
+    lastError = backupError;
     coreLogger.error({ error: backupError, role: agentRole }, 'Backup-model worker also failed');
   }
 
@@ -1549,5 +1584,5 @@ export async function handleWorkerFailure(
     { workerId, role: agentRole },
   ).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in worker-spawner'));
 
-  throw new Error(`Worker "${agentRole}" failed: ${error.message}`);
+  throw classifyError(lastError);
 }

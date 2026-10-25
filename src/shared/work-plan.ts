@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
 export const planStepSchema = z.object({
+  pipelineItemId: z.string().optional(),
+  pipelineSnapshot: z.object({ title: z.string(), status: z.string(), evidence: z.string() }).optional(),
   id: z.string().min(1).max(80),
   title: z.string().trim().min(1).max(240),
   status: z.enum(['pending', 'working', 'done', 'blocked', 'skipped']),
@@ -113,7 +115,11 @@ export function reviseWorkPlan(state: WorkPlanState, input: PlanUpdate): WorkPla
   // used to require a byte-equal resend, and a model that paraphrased its own
   // evidence was refused six times in one run (2026-09-17) while the plan
   // never advanced. Explicit evidence patches may append new observations.
-  const steps = input.steps.map(s => ({ ...s }));
+  const steps = input.steps.map(s => {
+    const previous = old?.steps.find(step => step.id === s.id);
+    return { ...s, pipelineItemId: previous?.pipelineItemId ?? s.pipelineItemId,
+      pipelineSnapshot: previous?.pipelineSnapshot ?? s.pipelineSnapshot };
+  });
   for (const step of old?.steps ?? []) {
     if (step.status !== 'done') continue;
     const sent = steps.find(s => s.id === step.id);

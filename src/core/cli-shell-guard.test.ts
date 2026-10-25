@@ -119,3 +119,10 @@ describe('shell guard injection per adapter', () => {
     expect(builder.build('Antigravity', 'task', {}, [], null, 100, 'test', off).args).not.toContain('--add-dir');
   });
 });
+
+it('treats heredoc and script string literals as data, while checking actual network calls (#47)', () => {
+  expect(shellGuardBlockReason("python3 - <<'PY'\nfrom pathlib import Path\nPath('notes.md').write_text('requests and curl are words')\nPY")).toBeNull();
+  expect(shellGuardBlockReason("cat <<'EOF' >> notes.md\ncurl -X POST https://example.com\nEOF")).toBeNull();
+  expect(shellGuardBlockReason(`python3 -c 'import requests; requests.get("https://example.com")'`)).toBe('network call from a script');
+  expect(shellGuardBlockReason("python3 - <<'PY'\nimport requests\nrequests.get('https://example.com')\nPY")).toBe('network call from a script');
+});

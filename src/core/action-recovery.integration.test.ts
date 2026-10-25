@@ -174,7 +174,7 @@ test('revoking normal tool permission during recovery consent still prevents the
   await sessionRepository.create({ id: ctx.sessionId, userId, channelType: 'webchat', channelId: 'revoke-recovery' });
   await manager.setPermission(userId, tool.id, 'write', 'ALLOW');
   await toolActionRepository.start({ id: randomUUID(), userId, sessionId: ctx.sessionId, agentId: 'old',
-    toolId: 'mail', toolName: 'send', argumentHash: 'hash', status: 'uncertain' });
+    toolId: tool.id, toolName: 'send', argumentHash: 'hash', status: 'uncertain' });
   const unsubscribe = manager.onRequest(request => {
     void manager.setPermission(userId, tool.id, 'write', 'DENY').then(() => manager.approve(request.requestId, userId));
   });

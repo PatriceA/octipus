@@ -162,6 +162,10 @@ export abstract class BaseAgentWorker {
     return this.stopController.signal;
   }
   protected markStopped(reason: string): void {
+    if (!this.stopController.signal.aborted) this.context.metadata = { ...this.context.metadata, interruption: {
+      reason, actor: reason.startsWith('user_stop:') ? reason.slice('user_stop:'.length) : 'system_or_unknown', at: new Date().toISOString(),
+      checkpoint: { pipelineId: this.context.metadata?.pipelineId, nodeKey: this.context.metadata?.nodeKey, attemptId: this.context.metadata?.attemptId },
+    } };
     if (!this.stopController.signal.aborted) this.stopController.abort(reason);
   }
 

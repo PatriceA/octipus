@@ -219,6 +219,9 @@ describe('answering an approval in chat', () => {
 
   test('on a question, any option is the answer, "No" included', async () => {
     const id = await raise(S_DM, { options: ['Yes', 'No'], kind: 'question' });
+    // Re-posting the same request must retain question semantics in the chat record.
+    await announceApproval({ type: 'approval_required', sessionId: S_DM, userId: ANNA, timestamp: new Date(),
+      data: { requestId: id, summary: 'Preference', question: 'Enable it?', options: ['Yes', 'No'], kind: 'question' } });
     expect(await tryResolveApprovalFromChannel(reply('No'))).toBe(true);
     expect(fx.resolve).toHaveBeenCalledWith(id, true, 'No', expect.anything());
   });

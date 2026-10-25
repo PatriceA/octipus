@@ -279,7 +279,7 @@ export async function runRootAgent(
   const rootAbortController = new AbortController();
   const rootAllowedToolIds = new Set<string>();
   // Meta-tool ids that the root agent owns by construction.
-  for (const name of ['get_work_plan', 'update_work_plan', 'spawn_child', 'collect_children', 'create_pipeline', 'get_pipeline_status', 'resume_pipeline', 'answer_pipeline_approval', 'update_pipeline_items', 'stop_pipeline', 'list_pipeline_templates', 'filter_pii', 'request_user_approval', 'exit_plan_mode', 'send_status_update', 'remember_this', 'remember_about_self', 'reflect']) {
+  for (const name of ['inspect_uncertain_actions', 'resolve_tool_action', 'get_work_plan', 'update_work_plan', 'spawn_child', 'collect_children', 'create_pipeline', 'get_pipeline_status', 'resume_pipeline', 'answer_pipeline_approval', 'update_pipeline_items', 'stop_pipeline', 'list_pipeline_templates', 'filter_pii', 'request_user_approval', 'exit_plan_mode', 'send_status_update', 'remember_this', 'remember_about_self', 'reflect']) {
     rootAllowedToolIds.add(name);
   }
   // The root's own role tools — the general toolset it works with directly.

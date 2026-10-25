@@ -785,7 +785,7 @@ async function handleAgentStop(
       });
       return;
     }
-    agentManager.stop(message.agentId);
+    agentManager.stop(message.agentId, { actorUserId: context.userId });
 
     hub.publishEvent({
       type: 'agent.stopped',

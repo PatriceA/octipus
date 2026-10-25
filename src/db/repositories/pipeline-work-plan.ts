@@ -1,5 +1,5 @@
 import type { Pipeline, PlanItemRow } from '../schema/pipelines';
-import { planUpdateSchema, reviseWorkPlan, type WorkPlanState } from '@/shared/work-plan';
+import { planUpdateSchema, reviseWorkPlan, type WorkPlan, type WorkPlanState } from '@/shared/work-plan';
 
 /** Mirror pipeline progress only while this pipeline owns the visible plan. */
 export function projectPipelinePlan(state: WorkPlanState, pipeline: Pipeline, items: PlanItemRow[], previousPipeline?: Pipeline | null): WorkPlanState {
@@ -20,14 +20,29 @@ export function projectPipelinePlan(state: WorkPlanState, pipeline: Pipeline, it
   // pipeline starts itself is named after the pipeline.
   const inPlace = !!current && (linked || !replacing);
   const used = new Set<string>();
-  const stepId = (item: PlanItemRow) => {
-    const id = current?.steps.find(step => step.title === item.title.slice(0, 240) && !used.has(step.id))?.id ?? item.id;
+  const edits = (pipeline.metadata?.pendingItemEdits ?? []) as Array<{ skip?: string[]; evidence?: string }>;
+  const steps: WorkPlan['steps'] = items.slice(0, items.length > 20 ? 19 : 20).map(item => {
+    const previous = current?.steps.find(step => step.pipelineItemId === item.id)
+      ?? current?.steps.find(step => step.id === item.id)
+      ?? current?.steps.find(step => !step.pipelineItemId && step.title === item.title.slice(0, 240) && !used.has(step.id));
+    const id = previous?.id ?? item.id;
     used.add(id);
-    return id;
-  };
-  const steps = items.slice(0, items.length > 20 ? 19 : 20).map(item => ({
-    id: stepId(item), title: item.title.slice(0, 240), status: status(item), evidence: (['failed', 'paused', 'stopped'].includes(pipeline.status) && item.status === 'running' ? pipeline.summary || 'Pipeline failed before this item finished.' : item.result ?? '').slice(0, 2000),
-  }));
+    const queued = edits.find(edit => edit.skip?.includes(item.id));
+    const snapshot = { title: item.title.slice(0, 240), status: status(item),
+      evidence: (['failed', 'paused', 'stopped'].includes(pipeline.status) && item.status === 'running'
+        ? pipeline.summary || 'Pipeline stopped before this item finished.' : item.result ?? '').slice(0, 2000) };
+    const rootTitle = previous?.pipelineSnapshot && previous.title !== previous.pipelineSnapshot.title;
+    const rootStatus = previous?.pipelineSnapshot && previous.status !== previous.pipelineSnapshot.status;
+    const rootEvidence = previous?.pipelineSnapshot && previous.evidence !== previous.pipelineSnapshot.evidence;
+    return { id, pipelineItemId: item.id,
+      title: rootTitle ? previous!.title : snapshot.title,
+      status: queued ? 'skipped' : rootStatus ? previous!.status : status(item),
+      evidence: queued ? `Queued for next item boundary: ${queued.evidence ?? ''}`.slice(0, 2000) : rootEvidence ? previous!.evidence : snapshot.evidence,
+      pipelineSnapshot: { title: rootTitle ? previous!.pipelineSnapshot!.title : snapshot.title,
+        status: rootStatus ? previous!.pipelineSnapshot!.status : queued ? 'skipped' : snapshot.status,
+        evidence: rootEvidence ? previous!.pipelineSnapshot!.evidence : queued ? `Queued for next item boundary: ${queued.evidence ?? ''}`.slice(0, 2000) : snapshot.evidence },
+    };
+  });
   if (items.length > 20) {
     const rest = items.slice(19);
     steps.push({ id: 'remaining-items', title: `${rest.length} additional pipeline items (see details)`,
@@ -36,12 +51,14 @@ export function projectPipelinePlan(state: WorkPlanState, pipeline: Pipeline, it
       evidence: `${rest.filter(i => i.status === 'done').length} done; ${rest.filter(i => i.status === 'skipped').length} skipped.`,
     });
   }
+  const details = items.map(item => `- [${item.status}] ${item.title}\n${item.detail ?? ''}`).join('\n').slice(0, 50000);
+  if (current?.sourcePipelineId === pipeline.id && current.details === details && JSON.stringify(current.steps) === JSON.stringify(steps)) return state;
   const input = planUpdateSchema.parse({
     revision: state.revision, newPlan: !inPlace,
     title: inPlace ? current!.title : pipeline.title.slice(0, 240),
     goal: inPlace ? current!.goal : (pipeline.description || pipeline.title).split('\n')[0].slice(0, 300),
     steps, summary: 'Updated from pipeline execution.',
-    details: items.map(item => `- [${item.status}] ${item.title}\n${item.detail ?? ''}`).join('\n').slice(0, 50000),
+    details,
   });
   // Pipeline rows are authoritative, including retries and human edits. Preserve
   // feedback/history, but do not apply the model-authored completed-step guard.

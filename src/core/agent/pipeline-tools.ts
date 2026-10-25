@@ -1,3 +1,10 @@
+import { pipelinePermissionProfileSchema } from '@/shared/pipeline-permissions';
+import { sessionRepository } from '@/db/repositories/session-repository';
+import { WorkspaceFS } from '@/security/workspace-fs';
+import { resolve as resolvePath } from 'node:path';
+import { z } from 'zod';
+import { getConfig } from '@/config';
+import { pipelineBudget } from './pipeline-budget';
 import { pipelineItemEditSchema } from '@/shared/pipeline-items';
 import type { ToolHandler } from '@/core/agent-worker';
 import type { AgentContext } from '@/core/types';
@@ -13,6 +20,7 @@ import { replyAnswer } from './approval-manager';
 
 const pendingOf = (pipeline: Pipeline) =>
   (pipeline.metadata as { pendingApproval?: PendingStageApproval } | null)?.pendingApproval;
+const forwardedApprovals = new Set<string>();
 const attemptOf = (state: unknown) => (state as WalkState | null)?.attemptId;
 
 /** Recovery handles are scoped to the same owner, session and workspace as creation. */
@@ -63,6 +71,8 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
         evidence: { type: 'string', description: 'Why the plan is changing: user decision or verification evidence' },
       } : {}),
       ...(name === 'resume_pipeline' ? {
+        permissionProfile: z.toJSONSchema(pipelinePermissionProfileSchema),
+        tokenBudget: { type: 'integer', minimum: 1, description: 'Raise the total token pool for this run (must exceed spend). Requires user approval before resuming.' },
         fromStage: { type: 'string', description: 'Optional stage name or node key; defaults to the last checkpoint' },
         skipItems: { type: 'array', items: { type: 'string' }, description: 'Plan item ids already delivered by earlier work; marked skipped so the loop does not redo them' },
         evidence: { type: 'string', description: 'Required with skipItems: the commit and check that show the items are done' },
@@ -75,7 +85,7 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
         || (pipeline.workspaceId ?? null) !== (context.workspaceId ?? null)) throw new Error('Pipeline not found in this session');
       if (name === 'stop_pipeline') {
         const { getPipelineManager } = await import('./pipeline-manager');
-        const stopped = await getPipelineManager().stop(pipeline.id);
+        const stopped = await getPipelineManager().stop(pipeline.id, { userId: context.userId, event: 'stop_pipeline' });
         return { id: pipeline.id, stopped, status: stopped ? 'stopped' : pipeline.status, resumable: stopped };
       }
       if (name === 'update_pipeline_items') {
@@ -96,6 +106,14 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
         const partial = (newest?.state as unknown as WalkState | undefined)?.partial;
         const history = args.includeHistory === false ? [] : pipelineStageHistory(await pipelineRepository.getStageHistory(pipeline.id, pipeline.sessionId));
         return { id: pipeline.id, status: pipeline.status, summary: pipelineSummary(pipeline, nodes, items), history, historyIncluded: args.includeHistory !== false,
+          budget: pipelineBudget(pipeline, nodes, items, getConfig().agent.pipelineTokenBudget),
+          deniedRequests: pipeline.metadata?.deniedRequests ?? [],
+          permissionProfile: pipeline.metadata?.permissionProfile ?? null,
+          interruption: pipeline.metadata?.interruption ?? null,
+          ...(pipeline.status === 'awaiting_approval' && !pending ? { recovery: {
+            reason: 'Orphaned waiting state: no actionable approval is attached.',
+            action: 'stop_pipeline, then resume_pipeline from the saved checkpoint to reissue the question',
+          } } : {}),
           pendingItemEdits: pipeline.metadata?.pendingItemEdits ?? [],
           ...(pending ? { pendingApproval: { ...pending, answer: 'The user answers it in the approval prompt, or call answer_pipeline_approval to ask them here.' } } : {}),
           ...(partial ? { incompleteAttempt: { incomplete: true, stage: newest.nodeKey,
@@ -103,46 +121,73 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
             output: stripPipelineControlBlocks(partial.text).slice(-2000),
             note: 'Progress of an interrupted stage attempt, not a finished result. Resuming continues this attempt.' } } : {}),
           // `attempt` is the stage's visit count; output and error are that attempt's only.
-          stages: nodes.map(node => ({ key: node.nodeKey, name: node.name, status: node.status, attempt: node.visits,
+          stages: nodes.map(node => ({ key: node.nodeKey, name: node.name, status: node.status, attempt: node.visits, provider: (pipeline.metadata?.stageProviders as Record<string, unknown> | undefined)?.[node.nodeKey] ?? null,
             output: stripPipelineControlBlocks(node.output ?? ''), error: node.error })),
           currentItemId: items.find(item => item.status === 'running')?.id ?? null,
-          items: items.map(item => ({ id: item.id, title: item.title, status: item.status, stages: pipelineStageRuns(history, item.id), result: stripPipelineControlBlocks(item.result ?? '') })),
+          items: items.map(item => ({ id: item.id, title: item.title, status: item.status, tokensSpent: (pipeline.metadata?.tokensByItem as Record<string, number> | undefined)?.[item.id] ?? null, stages: pipelineStageRuns(history, item.id), result: stripPipelineControlBlocks(item.result ?? '') })),
           remainingItems: items.filter(item => !['done', 'skipped'].includes(item.status)).map(item => item.title) };
       }
       if (name === 'answer_pipeline_approval') {
         const pending = pendingOf(pipeline);
-        if (!pending) throw new Error('This pipeline is not waiting on an approval');
+        if (!pending) throw new Error(pipeline.status === 'awaiting_approval'
+          ? 'Orphaned approval state: no actionable request is attached. Stop this pipeline, then resume_pipeline from the saved checkpoint to issue a fresh approval.'
+          : 'This pipeline is not waiting on an approval');
         // The model forwards the question; only the user's answer counts.
         const { getAgentService } = await import('./service');
-        const answer = await getAgentService().requestApproval(
+        const service = getAgentService();
+        if (pending.kind === 'conversation') {
+          const presented = service.presentApproval(pending.requestId, context.userId, context.sessionId);
+          return { id: pipeline.id, decided: false, requestId: pending.requestId, presented,
+            reason: presented ? 'The original approval is shown to the user. Await their answer; do not poll.'
+              : 'This approval is stale after a disconnect or restart. Stop and resume the pipeline to issue a fresh question.' };
+        }
+        const forwardingKey = `${pipeline.id}:${pending.requestId}`;
+        if (forwardedApprovals.has(forwardingKey)) return { id: pipeline.id, decided: false, presented: true, message: 'This approval prompt is already open; wait for the user.' };
+        forwardedApprovals.add(forwardingKey);
+        // Return the prompt handle immediately. A tool deadline must never masquerade as a human timeout.
+        const completion = service.requestApproval(
           `Pipeline stage "${pending.stage}"${pending.item ? ` (item: ${pending.item})` : ''} is waiting for approval: ` +
             `${pending.toolName ?? 'continue'}${pending.subject ? ` — ${pending.subject}` : ''}.`,
           'Allow this call and continue the stage? This prompt waits up to 5 minutes; no answer leaves the pipeline waiting.',
           { ...context, metadata: { ...context.metadata, approvalTimeoutMs: 300_000 } }, ['Approve', 'Deny'],
-        ) as { approved: boolean; response?: string; reason?: string; requestId?: string; decidedBy?: string; decidedAt?: string };
+        );
+        void completion.then(async result => {
+        const answer = result as { approved: boolean; response?: string; reason?: string; requestId?: string; decidedBy?: string; decidedAt?: string };
         const decision = answer.response ? replyAnswer(answer.response) : null;
         if (!decision) {
           return { id: pipeline.id, status: 'awaiting_approval', decided: false, stage: pending.stage, command: pending.subject,
             reason: answer.reason ?? 'No explicit user decision was received; the pipeline approval is still pending.' };
         }
         const approved = answer.approved && decision === 'approve';
+        const current = await pipelineRepository.findById(pipeline.id);
+        if (!current || pendingOf(current)?.requestId !== pending.requestId) {
+          coreLogger.warn({ pipelineId: pipeline.id }, 'Approval changed while the forwarded question was open; answer not applied');
+          return;
+        }
         const permissions = getPermissionManager();
         const settled = approved ? await permissions.approve(pending.requestId, context.userId, 'Approved in the conversation')
           : await permissions.deny(pending.requestId, context.userId, 'Denied in the conversation');
-        if (!settled) return { id: pipeline.id, decided: false, reason: 'The request was already resolved or expired. Read the current pipeline status.', requestId: pending.requestId };
+        if (!settled && !(approved && ['paused', 'stopped'].includes(current.status) && pending.fingerprint)) {
+          await pipelineRepository.updatePipeline(pipeline.id, { summary: 'The original approval is stale or already answered. Stop and resume the pipeline to issue a fresh request; no approval was applied.' });
+          return;
+        }
         // A walker still parked on the request takes the answer from here. After a
         // restart the boot sweep paused the run and nobody waits on the request:
         // settling its row alone would leave the stage parked forever.
-        if (!approved || pipeline.status === 'awaiting_approval') return { id: pipeline.id, approved, stage: pending.stage,
+        if (!approved || current.status === 'awaiting_approval') return { id: pipeline.id, approved, stage: pending.stage,
           command: pending.subject, requestId: pending.requestId, decidedBy: answer.decidedBy ?? context.userId, decidedAt: answer.decidedAt ?? new Date().toISOString() };
         // No walker holds the request any more (a restart): grant the blocked
         // call to the blocked attempt, and resume that attempt.
-        const { pendingApproval: _answered, ...metadata } = (pipeline.metadata ?? {}) as Record<string, unknown>;
+        const { pendingApproval: _answered, ...metadata } = (current.metadata ?? {}) as Record<string, unknown>;
         await pipelineRepository.updatePipeline(pipeline.id, { metadata: pending.toolId && pending.toolName && pending.action && pending.fingerprint
           ? withApprovedCalls(metadata, [{ toolId: pending.toolId, toolName: pending.toolName, action: pending.action, fingerprint: pending.fingerprint,
             nodeKey: pending.nodeKey, attemptId: pending.attemptId, hostServices: pending.hostServices === true }])
           : metadata });
         return resumeFrom(pipeline, pending.nodeKey, { attemptId: pending.attemptId });
+        }).catch(error => coreLogger.error({ error, pipelineId: pipeline.id }, 'Forwarded pipeline approval failed'))
+          .finally(() => forwardedApprovals.delete(forwardingKey));
+        return { id: pipeline.id, status: pipeline.status, decided: false, presented: true,
+          message: 'Approval prompt opened. The user decides; this tool does not wait or grant permission.' };
       }
       if (['running', 'awaiting_approval'].includes(pipeline.status)) throw new Error(`Pipeline is already ${pipeline.status}`);
       const stage = args.fromStage;
@@ -163,6 +208,27 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
         for (const item of items.filter(item => (args.skipItems as string[]).includes(item.id) && !['done', 'skipped'].includes(item.status))) {
           await pipelineRepository.updatePlanItem(item.id, { status: 'skipped', result });
         }
+      }
+      if (args.tokenBudget !== undefined || args.permissionProfile !== undefined) {
+        const spent = nodes.reduce((sum, node) => sum + (node.tokensUsed ?? 0), 0);
+        const budget = args.tokenBudget ?? pipeline.metadata?.tokenBudget ?? getConfig().agent.pipelineTokenBudget;
+        const profile = args.permissionProfile === undefined ? undefined : pipelinePermissionProfileSchema.parse(args.permissionProfile);
+        if (profile) {
+          const session = await sessionRepository.findById(pipeline.sessionId);
+          if (!session || resolvePath(profile.repoPath) !== resolvePath(WorkspaceFS.forSession(session, { space: context.space ?? null }).root)) throw new Error('Profile repository must match the actual pipeline workspace root');
+        }
+        if (typeof budget !== 'number' || !Number.isSafeInteger(budget) || budget <= spent || budget <= 0) throw new Error('tokenBudget must be a positive integer greater than recorded spend');
+        const { getAgentService } = await import('./service');
+        void getAgentService().requestApproval(`Resume pipeline "${pipeline.title}" with total token pool ${budget} (${spent} spent)?${profile ? `\nRun permission profile:\n${JSON.stringify(profile, null, 2)}` : ''}`,
+          'Approve this run scope and token pool, then resume the saved checkpoint? If allowCheckpointReplay is enabled, completed stage effects may repeat; uncertain outcomes still need inspection.', context, ['Approve', 'Deny'])
+          .then(async answer => {
+            if (!(answer as { approved?: boolean }).approved || replyAnswer((answer as { response?: string }).response ?? '') !== 'approve') return;
+            const current = await pipelineRepository.findById(pipeline.id);
+            if (!current || !['paused', 'stopped', 'failed'].includes(current.status)) return;
+            await pipelineRepository.updatePipeline(pipeline.id, { metadata: { ...current.metadata, tokenBudget: budget, budgetWarning: null, ...(profile ? { permissionProfile: { profile, repoPath: profile.repoPath, approvedBy: context.userId, approvedAt: new Date().toISOString() } } : {}) } });
+            await resumeFrom(pipeline, node?.nodeKey, { freshAttempt: node !== undefined });
+          }).catch(error => coreLogger.error({ error, pipelineId: pipeline.id }, 'Pipeline top-up failed'));
+        return { id: pipeline.id, decided: false, presented: true, message: 'Run profile or token pool change awaits the user; the run has not resumed.' };
       }
       return resumeFrom(pipeline, node?.nodeKey, { freshAttempt: node !== undefined });
     },

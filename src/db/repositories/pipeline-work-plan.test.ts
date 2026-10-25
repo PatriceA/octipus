@@ -77,3 +77,18 @@ it('adopts the root plan explicitly linked at launch and preserves its feedback 
   const later = projectPipelinePlan(next, linked, [{ ...item('one', 'done'), title: 'Build' }]);
   expect(later.current).toMatchObject({ id: state.current!.id, title: 'Root plan', steps: [{ id: 'p1', status: 'done' }] });
 });
+
+it('retains a stable root step id when its pipeline item is renamed (#46)', () => {
+  const state = reviseWorkPlan(emptyWorkPlan(), planUpdateSchema.parse({ revision: 0, title: 'Root', goal: 'Deliver', summary: 'Plan',
+    steps: [{ id: 'g6', title: 'Phase 6', status: 'pending' }] }));
+  const linked = { ...pipeline, metadata: { workPlanId: state.current!.id } };
+  const first = projectPipelinePlan(state, linked, [{ ...item('uuid'), title: 'Phase 6' }]);
+  const renamed = projectPipelinePlan(first, linked, [{ ...item('uuid'), title: 'Phase 6 renamed' }]);
+  expect(renamed.current?.steps[0]).toMatchObject({ id: 'g6', pipelineItemId: 'uuid', title: 'Phase 6 renamed' });
+});
+it('preserves root edits and projects queued skips before the item boundary (#50)', () => {
+  const state = projectPipelinePlan(emptyWorkPlan(), pipeline, [item('one')]);
+  const edited = { ...state, current: { ...state.current!, steps: [{ ...state.current!.steps[0], title: 'User decision', status: 'skipped' as const }] } };
+  const next = projectPipelinePlan(edited, { ...pipeline, metadata: { pendingItemEdits: [{ skip: ['one'], evidence: 'User explicitly skipped it' }] } }, [item('one')]);
+  expect(next.current?.steps[0]).toMatchObject({ id: 'one', title: 'User decision', status: 'skipped', evidence: expect.stringContaining('Queued') });
+});

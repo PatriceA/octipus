@@ -1,3 +1,4 @@
+import { withoutOwnedTempCleanup } from './owned-temp-cleanup';
 /**
  * What a command is allowed to be, independent of who is running it.
  *
@@ -189,6 +190,12 @@ export function matchElevatedCommand(command: string): string | null {
  * guards against is the unbounded one.
  */
 export function matchDestructiveCommand(command: string): string | null {
+  const argv = tokenizeSafe(command);
+  if (argv && ['node', 'nodejs'].includes(basename(argv[0])) && argv.at(-2) === '-e'
+    && (argv.length === 3 || argv.length === 4 && argv[1] === '--input-type=module')) {
+    command = `node -e ${JSON.stringify(withoutOwnedTempCleanup(argv.at(-1)!))}`;
+  }
+
   const forms = [command.trim().toLowerCase(), ...dequotedForms(command)];
 
   // Inline interpreter source is matched against the WHOLE command, before any
@@ -304,7 +311,11 @@ function inlineInterpreterDestruction(form: string): string | null {
   const flags = tokens.slice(at + 1).filter((t) => INLINE_CODE_FLAGS.has(t));
   if (!flags.length) return null;
   const name = basename(tokens[at] as string);
-  if (!WINDOWS_SHELLS.has(name)) return DESTRUCTIVE_IN_CODE.test(form) ? `${name} inline code` : null;
+  if (!WINDOWS_SHELLS.has(name)) {
+    // A const path returned by mkdtempSync cannot be reassigned to an existing directory.
+    // Exempt only its matching finally cleanup; other delete calls still trigger the guard.
+    return DESTRUCTIVE_IN_CODE.test(form) ? `${name} inline code` : null;
+  }
   // Base64 source is unreadable to a keyword scan, and hiding what runs is the
   // usual reason to encode it — so it goes to a human whatever it says.
   if (name !== 'cmd' && flags.some((f) => ENCODED_FLAGS.has(f))) return `${name} encoded command`;

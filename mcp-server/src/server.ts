@@ -1,3 +1,4 @@
+import { withToolDeadline } from './tool-deadline.js';
 /**
  * MCP Server setup — creates the McpServer instance and registers all tools.
  */
@@ -103,6 +104,18 @@ export function createServer(octiUrl: string): McpServer {
     name: 'octipus',
     version: packageVersion(),
   });
+
+  // Bound every handler, including authentication and local work before HTTP.
+  for (const method of ['tool', 'registerTool'] as const) {
+    const target = server as unknown as Record<typeof method, (...args: unknown[]) => RegisteredTool>;
+    const register = target[method].bind(server);
+    target[method] = (...args: unknown[]) => {
+      const index = args.length - 1;
+      const callback = args[index];
+      if (typeof callback === 'function') args[index] = (...input: unknown[]) => withToolDeadline(() => callback(...input));
+      return register(...args);
+    };
+  }
 
   const client = new OctiClient(octiUrl);
 
