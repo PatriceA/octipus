@@ -225,3 +225,25 @@ it('keeps monitor reads responsive behind approval and bounds queued calls (#39)
   await new Promise(resolve => setTimeout(resolve, 10));
   expect(executed).not.toContain('mutation');
 });
+
+it("waits out a tool's own timeout and queues behind it without cutting either off (#55)", async () => {
+  const executed: string[] = [];
+  const bridge = await startCliToolBridge({ active: () => true, timeoutMs: 40,
+    tools: () => [
+      { name: 'shell__run', description: '', parameters: { type: 'object', properties: { timeout: { type: 'number', default: 60 } } }, execute: async () => null },
+      { name: 'next', description: '', parameters: {}, execute: async () => null },
+    ],
+    execute: async name => { executed.push(name); if (name === 'shell__run') await new Promise(resolve => setTimeout(resolve, 90)); return { content: [{ type: 'text', text: name }] }; },
+  });
+  bridges.push(bridge);
+  const gate = fetch(`${bridge.url}/call`, { method: 'POST', headers: { Authorization: `Bearer ${bridge.key}` },
+    body: JSON.stringify({ name: 'shell__run', arguments: { timeout: 120 } }) });
+  await vi.waitFor(() => expect(executed).toContain('shell__run'));
+  const queued = call(bridge.url, bridge.key, 'next');
+  expect((await gate).status).toBe(200);
+  expect((await queued).status).toBe(200);
+  expect(executed).toEqual(['shell__run', 'next']);
+  // Schema default counts too: 60 ms default + 40 ms base outlasts a 90 ms run.
+  const byDefault = await call(bridge.url, bridge.key, 'shell__run');
+  expect(byDefault.status).toBe(200);
+});

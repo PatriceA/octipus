@@ -16,6 +16,13 @@ class BridgeError extends Error {}
 const callSchema = z.object({ name: z.string().min(1), arguments: z.record(z.string(), z.unknown()).default({}) }).strict();
 export interface BridgeResult { content: Array<{ type: 'text'; text: string }>; isError?: boolean }
 
+/** A tool that takes its own `timeout` (shell__run) ends itself with a clean result; never cut it off first. */
+function ownTimeout(name: string, args: Record<string, unknown>, tools: ToolHandler[]): number {
+  const schema = tools.find(t => t.name === name)?.parameters as { properties?: { timeout?: { default?: unknown } } } | undefined;
+  const value = args.timeout ?? schema?.properties?.timeout?.default;
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
 /** A run-local capability, never an API/admin credential. No caller-supplied identity. */
 export async function startCliToolBridge(options: {
   tools: () => ToolHandler[];
@@ -28,7 +35,7 @@ export async function startCliToolBridge(options: {
   abandoned?: (name: string) => void;
   /** Read-only tools that bypass the per-worker queue (safe to answer while a delegation blocks it). */
   unqueued?: ReadonlySet<string>;
-  /** Includes queue wait; the running mutation retains its queue slot until it settles. */
+  /** Queue wait after the call ahead settles or expires, and execution on top of the tool's own `timeout`; the running mutation retains its queue slot until it settles. */
   timeoutMs?: number;
   /** The caller dropped the connection before this tool's result could be sent. */
   undelivered?: (name: string) => void;
@@ -38,6 +45,8 @@ export async function startCliToolBridge(options: {
   let closing: Promise<void> | undefined;
   // Serialize calls to the worker's executor; separate agents have separate queues.
   let queue = Promise.resolve();
+  // Settles when the call ahead settles or passes its own deadline; a queued call's wait clock starts there.
+  let queueBounded = Promise.resolve();
   const server = createServer(async (req, res) => {
     const reply = (status: number, value: unknown) => {
       res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
@@ -83,6 +92,23 @@ export async function startCliToolBridge(options: {
         input.arguments = target.arguments;
       }
       toolName = input.name;
+      const base = options.timeoutMs ?? 30_000;
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      let bounded!: () => void;
+      const mine = new Promise<void>(resolve => { bounded = resolve; });
+      let expire!: (err: Error) => void;
+      const timedOut = new Promise<never>((_, reject) => { expire = reject; });
+      // One clock per phase: queue wait (base) once the call ahead is done or
+      // expired, then execution (base + the tool's own timeout) once it starts.
+      const arm = (ms: number) => {
+        clearTimeout(deadline);
+        deadline = setTimeout(() => {
+          expired = true;
+          bounded();
+          if (started && !settled && !unqueued(input.name)) options.abandoned?.(input.name);
+          expire(new BridgeError(`Tool ${input.name} timed out after ${ms}ms. ${started ? 'Execution may have started; inspect its outcome before retrying.' : 'The queued call was not executed.'}`));
+        }, ms);
+      };
       const run = async () => {
         if (expired || res.destroyed) throw new BridgeError('Tool caller disconnected or timed out before execution');
         if (closed || !options.active()) throw new BridgeError('Agent run is no longer active');
@@ -94,6 +120,7 @@ export async function startCliToolBridge(options: {
             : 'Tool is not available to this agent');
         }
         started = true;
+        arm(base + ownTimeout(input.name, input.arguments, options.tools()));
         try { return await options.execute(input.name, input.arguments); }
         finally { settled = true; }
       };
@@ -101,18 +128,17 @@ export async function startCliToolBridge(options: {
       // responsive while an awaited delegation holds the queue. Parallel executor
       // calls if ToolExecutor's counters/final-flag are ever made concurrency-safe.
       let operation: Promise<BridgeResult>;
+      const ahead = unqueued(input.name) ? Promise.resolve() : queueBounded;
       if (unqueued(input.name)) operation = run();
-      else { operation = queue.then(run); queue = operation.then(() => undefined, () => undefined); }
-      let deadline: ReturnType<typeof setTimeout> | undefined;
+      else {
+        queueBounded = mine;
+        operation = queue.then(run); queue = operation.then(() => undefined, () => undefined);
+      }
+      void ahead.then(() => { if (!started && !expired) arm(base); });
+      operation.then(bounded, bounded);
       let result: BridgeResult;
       try {
-        result = await Promise.race([operation, new Promise<never>((_, reject) => {
-          deadline = setTimeout(() => {
-            expired = true;
-            if (started && !settled && !unqueued(input.name)) options.abandoned?.(input.name);
-            reject(new BridgeError(`Tool ${input.name} timed out after ${options.timeoutMs ?? 30_000}ms. ${started ? 'Execution may have started; inspect its outcome before retrying.' : 'The queued call was not executed.'}`));
-          }, options.timeoutMs ?? 30_000);
-        })]);
+        result = await Promise.race([operation, timedOut]);
       } finally { clearTimeout(deadline); }
       // The caller gave up (transport timeout, cancel) while the tool ran; a
       // write now goes nowhere, so let the owner keep what it would lose.

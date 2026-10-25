@@ -210,6 +210,10 @@ subsequent stage outside the loop. Pre-loop stages also honor the pool. Use
 Old events without item identity remain unassigned rather than inventing spend.
 
 Tool deadlines include CLI bridge queue time and MCP handler/authentication time.
+The bridge clock for a running call is its base deadline (30 s) plus the tool's own
+`timeout` argument or schema default, so `shell__run` with `timeout: 600000` ends
+with its own timed-out result instead of an uncertain outcome. A queued call's
+wait clock starts only when the call ahead settles or passes its deadline.
 Monitor reads and creation stay responsive behind approval waits. A timed-out
 mutation may have started: inspect its outcome before retrying. Read-only checks
 and watcher creation remain available while conflicting actions need recovery.
