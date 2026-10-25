@@ -2107,6 +2107,7 @@ export default function ChatPage() {
         {/* Message timeline */}
         <InlineUiProvider host={inlineUiHost}>
           <MessageTimeline
+            key={activeSessionId ?? 'new'}
             messages={messages}
             trackedAgents={trackedAgents}
             teams={teams}

@@ -17,7 +17,7 @@ import {
   Zap,
 } from 'lucide-react';
 import Link from 'next/link';
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { compareTimelineEntries } from '../../../src/shared/timeline-order';
 import { agentCompletionLabel, type AgentCompletionReason } from '../../../src/shared/agent-completion';
 import type { ToolInputPreview, ToolResultPreview } from '../../../src/shared/work-stream';
@@ -893,6 +893,7 @@ export default function MessageTimeline({
   listening = false,
 }: MessageTimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const isNearBottomRef = useRef(true);
@@ -987,16 +988,25 @@ export default function MessageTimeline({
     return entries;
   }, [messages, trackedAgents, teams, fileChanges]);
 
-  // Auto-scroll
+  // Keep the viewport pinned while history, agents, streaming text and media
+  // settle. User scrolling up stops following until they return to the bottom.
   const scrollToBottom = useCallback(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, []);
 
+  useLayoutEffect(() => {
+    if (isNearBottomRef.current) scrollToBottom();
+  }, [timeline, streamingText, isLoading, scrollToBottom]);
+
   useEffect(() => {
-    if (isNearBottomRef.current) {
-      scrollToBottom();
-    }
-  }, [messages.length, trackedAgents.size, isLoading, scrollToBottom]);
+    const observer = new ResizeObserver(() => {
+      if (isNearBottomRef.current) scrollToBottom();
+    });
+    if (contentRef.current) observer.observe(contentRef.current);
+    if (scrollRef.current) observer.observe(scrollRef.current);
+    return () => observer.disconnect();
+  }, [scrollToBottom]);
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -1010,9 +1020,11 @@ export default function MessageTimeline({
   return (
     <div
       ref={scrollRef}
+      data-testid="chat-timeline"
       onScroll={handleScroll}
-      className="flex-1 overflow-y-auto px-4 py-4 space-y-1 relative"
+      className="flex-1 overflow-y-auto px-4 py-4 relative"
     >
+      <div ref={contentRef} className="space-y-1">
       <div className="flex justify-end">
         <button type="button" className="text-[11px] text-on-surface-variant hover:text-on-surface rounded px-2 py-1 motion-reduce:hidden"
           aria-pressed={motionPaused} onClick={() => setMotionPaused((paused) => !paused)}>
@@ -1073,6 +1085,7 @@ export default function MessageTimeline({
 
       {/* Scroll anchor */}
       <div ref={bottomRef} />
+      </div>
 
       {/* Scroll-to-bottom button */}
       {showScrollBtn && (

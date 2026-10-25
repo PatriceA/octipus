@@ -24,7 +24,7 @@ export default function WorkPlanPanel({ sessionId, running, onPlanMode }: Props)
   const [editing, setEditing] = useState(false);
   // Plan-mode value we asked for; button stays disabled until the poll reflects it.
   const [requestedPlanMode, setRequestedPlanMode] = useState<boolean | null>(null);
-  const [open, setOpen] = useState(() => typeof window === 'undefined' || window.innerWidth >= 1100);
+  const [open, setOpen] = useState(false);
   // Parent remounts this panel per session (key=sessionId), so no reset-in-effect is needed.
   useEffect(() => {
     let disposed = false;
@@ -117,7 +117,7 @@ function PlanSteps({ plan }: { plan: WorkPlan }) {
 
 function PlanDetails({ plan }: { plan: WorkPlan }) {
   if (!plan.details) return null;
-  return <details open className="min-w-0 rounded-lg border border-outline-variant p-3">
+  return <details className="min-w-0 rounded-lg border border-outline-variant p-3">
     <summary className="cursor-pointer text-sm text-primary">Implementation plan</summary>
     <div className="mt-3 min-w-0 break-words text-sm [&_pre]:max-w-full [&_pre]:overflow-x-auto"><Markdown content={plan.details} /></div>
   </details>;
