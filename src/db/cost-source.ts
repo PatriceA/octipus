@@ -13,6 +13,6 @@ export function costSourceAggregates() {
   return {
     reportedCost: sql<number>`COALESCE(SUM(CASE WHEN ${costLog.metadata}->>'costSource' = 'reported' THEN ${costLog.totalCost} ELSE 0 END), 0)::float`,
     estimatedCost: sql<number>`COALESCE(SUM(CASE WHEN COALESCE(${costLog.metadata}->>'costSource', 'estimated') = 'estimated' THEN ${costLog.totalCost} ELSE 0 END), 0)::float`,
-    unknownCostRequests: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'costSource' = 'unknown')::int`,
+    unknownCostRequests: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'costSource' = 'unknown')::bigint`.mapWith(Number),
   };
 }

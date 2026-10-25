@@ -6,6 +6,11 @@ import { randomUUID } from 'node:crypto';
 process.env.MASTER_KEY ??= `test-${randomUUID()}`;
 process.env.JWT_SECRET ??= `test-${randomUUID()}`;
 process.env.SESSION_SECRET ??= `test-${randomUUID()}`;
+const usageOwner = vi.hoisted(() => ({ id: '' }));
+vi.mock('@/api/context', async () => {
+  const { App } = await import('@/api/http');
+  return { apiContext: new App().derive(() => ({ user: { id: usageOwner.id } })) };
+});
 let tracker: import('./cost-tracker').CostTracker;
 const sessionId = randomUUID();
 const userId = randomUUID();
@@ -15,6 +20,7 @@ beforeAll(async () => {
   const { initializeDb, getDb } = await import('@/db/postgres');
   await initializeDb();
   await (await import('@/db/migrate')).runMigrations();
+  (await import('@/db/storage')).initializeStorage({ mode: 'embedded' });
   const { modelConfig } = await import('@/db/schema/models');
   await getDb().insert(modelConfig).values({ name: 'priced', modelId: 'same', provider: 'openai', costPerInputToken: 10, costPerOutputToken: 30, metadata: { pricing: { cacheRead: 1, cacheWrite: 12.5, source: 'test contract' } } });
   await getDb().insert(modelConfig).values({ name: 'model-without-cache-rates', modelId: 'no-cache', provider: 'openai', costPerInputToken: 5, costPerOutputToken: 15, metadata: { pricing: { source: 'test contract' } } });
@@ -25,7 +31,10 @@ beforeEach(async () => {
   const { __resetCachePricingWarnings } = await import('./cost-tracker');
   __resetCachePricingWarnings();
 });
-afterAll(async () => { await (await import('@/db/postgres')).closeDb(); });
+afterAll(async () => {
+  await (await import('@/db/storage')).closeStorage();
+  await (await import('@/db/postgres')).closeDb();
+});
 test('persists reported zero, estimates and unknowns distinctly and aggregates a session', async () => {
   const reported = await tracker.logUsageWithCost(userId, 'priced', 1000, 100, { sessionId, reportedCost: 0 });
   expect(reported.totalCost).toBe(0);
@@ -92,4 +101,35 @@ test('deduplicates warnings by model id', async () => {
     cacheCreationTokens: 0
   });
   expect(warn).toHaveBeenCalledTimes(1);
+});
+
+
+test('usage totals remain numeric above the PostgreSQL 32-bit limit across all views', async () => {
+  const largeUser = randomUUID(), largeSession = randomUUID();
+  for (let i = 0; i < 2; i++) await tracker.logUsage({
+    userId: largeUser, sessionId: largeSession, modelName: 'large-history',
+    inputTokens: 1_200_000_000, outputTokens: 1_100_000_000,
+    cachedInputTokens: 1_100_000_000, cacheCreationTokens: 100_000_000,
+    totalCost: 0, metadata: { costSource: 'unknown', usageAvailable: false },
+  });
+  const expected = { totalInputTokens: 2_400_000_000, totalOutputTokens: 2_200_000_000,
+    requestCount: 2, cacheReadTokens: 2_200_000_000, cacheCreationTokens: 200_000_000,
+    unknownCostRequests: 2, unknownUsageRequests: 2 };
+  usageOwner.id = largeUser;
+  const { App } = await import('@/api/http');
+  const { modelRoutes } = await import('@/api/routes/models');
+  const app = new App().group('/api', route => route.use(modelRoutes));
+  const response = await app.handle(new Request('http://test/api/models/usage'));
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ stats: expected,
+    byModel: [expect.objectContaining({ modelName: 'large-history', ...expected })] });
+  expect(await tracker.getUserStats(largeUser)).toMatchObject(expected);
+  // Cached responses must have the same numeric contract as fresh SQL results.
+  expect(await tracker.getUserStats(largeUser)).toMatchObject(expected);
+  expect(await tracker.getUserStatsByModel(largeUser)).toEqual([expect.objectContaining({ modelName: 'large-history', ...expected })]);
+  expect(await tracker.getSessionStats(largeSession)).toMatchObject(expected);
+  expect(await tracker.getDailyUsage(largeUser)).toEqual([expect.objectContaining({
+    inputTokens: 2_400_000_000, outputTokens: 2_200_000_000, requests: 2,
+  })]);
+  expect((await tracker.getGlobalStats()).totalInputTokens).toBeGreaterThanOrEqual(2_400_000_000);
 });

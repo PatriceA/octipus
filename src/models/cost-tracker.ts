@@ -210,15 +210,15 @@ export class CostTracker {
 
     const result = await this.db
       .select({
-        totalInputTokens: sql<number>`COALESCE(SUM(${costLog.inputTokens}), 0)::int`,
-        totalOutputTokens: sql<number>`COALESCE(SUM(${costLog.outputTokens}), 0)::int`,
+        totalInputTokens: sql<number>`COALESCE(SUM(${costLog.inputTokens}), 0)::bigint`.mapWith(Number),
+        totalOutputTokens: sql<number>`COALESCE(SUM(${costLog.outputTokens}), 0)::bigint`.mapWith(Number),
         totalCost: sql<number>`COALESCE(SUM(${costLog.totalCost}), 0)::float`,
-        requestCount: sql<number>`COUNT(*)::int`,
+        requestCount: sql<number>`COUNT(*)::bigint`.mapWith(Number),
         estimatedCacheSavings: sql<number>`COALESCE(SUM((${costLog.metadata}->>'estimatedCacheSavings')::float), 0)::float`,
         ...costSourceAggregates(),
-        unknownUsageRequests: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'usageAvailable' = 'false')::int`,
-        cacheReadTokens: sql<number>`COALESCE(SUM(${costLog.cachedInputTokens}), 0)::bigint`,
-        cacheCreationTokens: sql<number>`COALESCE(SUM(${costLog.cacheCreationTokens}), 0)::bigint`,
+        unknownUsageRequests: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'usageAvailable' = 'false')::bigint`.mapWith(Number),
+        cacheReadTokens: sql<number>`COALESCE(SUM(${costLog.cachedInputTokens}), 0)::bigint`.mapWith(Number),
+        cacheCreationTokens: sql<number>`COALESCE(SUM(${costLog.cacheCreationTokens}), 0)::bigint`.mapWith(Number),
       })
       .from(costLog)
       .where(and(...conditions));
@@ -246,15 +246,15 @@ export class CostTracker {
     const result = await this.db
       .select({
         modelName: costLog.modelName,
-        totalInputTokens: sql<number>`COALESCE(SUM(${costLog.inputTokens}), 0)::int`,
-        totalOutputTokens: sql<number>`COALESCE(SUM(${costLog.outputTokens}), 0)::int`,
+        totalInputTokens: sql<number>`COALESCE(SUM(${costLog.inputTokens}), 0)::bigint`.mapWith(Number),
+        totalOutputTokens: sql<number>`COALESCE(SUM(${costLog.outputTokens}), 0)::bigint`.mapWith(Number),
         totalCost: sql<number>`COALESCE(SUM(${costLog.totalCost}), 0)::float`,
-        requestCount: sql<number>`COUNT(*)::int`,
+        requestCount: sql<number>`COUNT(*)::bigint`.mapWith(Number),
         estimatedCacheSavings: sql<number>`COALESCE(SUM((${costLog.metadata}->>'estimatedCacheSavings')::float), 0)::float`,
         ...costSourceAggregates(),
-        unknownUsageRequests: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'usageAvailable' = 'false')::int`,
-        cacheReadTokens: sql<number>`COALESCE(SUM(${costLog.cachedInputTokens}), 0)::bigint`,
-        cacheCreationTokens: sql<number>`COALESCE(SUM(${costLog.cacheCreationTokens}), 0)::bigint`,
+        unknownUsageRequests: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'usageAvailable' = 'false')::bigint`.mapWith(Number),
+        cacheReadTokens: sql<number>`COALESCE(SUM(${costLog.cachedInputTokens}), 0)::bigint`.mapWith(Number),
+        cacheCreationTokens: sql<number>`COALESCE(SUM(${costLog.cacheCreationTokens}), 0)::bigint`.mapWith(Number),
       })
       .from(costLog)
       .where(and(...conditions))
@@ -274,10 +274,10 @@ export class CostTracker {
     const result = await this.db
       .select({
         date: sql<string>`DATE(${costLog.createdAt})::text`,
-        inputTokens: sql<number>`COALESCE(SUM(${costLog.inputTokens}), 0)::int`,
-        outputTokens: sql<number>`COALESCE(SUM(${costLog.outputTokens}), 0)::int`,
+        inputTokens: sql<number>`COALESCE(SUM(${costLog.inputTokens}), 0)::bigint`.mapWith(Number),
+        outputTokens: sql<number>`COALESCE(SUM(${costLog.outputTokens}), 0)::bigint`.mapWith(Number),
         cost: sql<number>`COALESCE(SUM(${costLog.totalCost}), 0)::float`,
-        requests: sql<number>`COUNT(*)::int`,
+        requests: sql<number>`COUNT(*)::bigint`.mapWith(Number),
       })
       .from(costLog)
       .where(and(eq(costLog.userId, userId), gte(costLog.createdAt, since)))
@@ -293,15 +293,15 @@ export class CostTracker {
   async getSessionStats(sessionId: string): Promise<UsageStats> {
     const result = await this.db
       .select({
-        totalInputTokens: sql<number>`COALESCE(SUM(${costLog.inputTokens}), 0)::int`,
-        totalOutputTokens: sql<number>`COALESCE(SUM(${costLog.outputTokens}), 0)::int`,
+        totalInputTokens: sql<number>`COALESCE(SUM(${costLog.inputTokens}), 0)::bigint`.mapWith(Number),
+        totalOutputTokens: sql<number>`COALESCE(SUM(${costLog.outputTokens}), 0)::bigint`.mapWith(Number),
         totalCost: sql<number>`COALESCE(SUM(${costLog.totalCost}), 0)::float`,
-        requestCount: sql<number>`COUNT(*)::int`,
+        requestCount: sql<number>`COUNT(*)::bigint`.mapWith(Number),
         estimatedCacheSavings: sql<number>`COALESCE(SUM((${costLog.metadata}->>'estimatedCacheSavings')::float), 0)::float`,
         ...costSourceAggregates(),
-        unknownUsageRequests: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'usageAvailable' = 'false')::int`,
-        cacheReadTokens: sql<number>`COALESCE(SUM(${costLog.cachedInputTokens}), 0)::bigint`,
-        cacheCreationTokens: sql<number>`COALESCE(SUM(${costLog.cacheCreationTokens}), 0)::bigint`,
+        unknownUsageRequests: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'usageAvailable' = 'false')::bigint`.mapWith(Number),
+        cacheReadTokens: sql<number>`COALESCE(SUM(${costLog.cachedInputTokens}), 0)::bigint`.mapWith(Number),
+        cacheCreationTokens: sql<number>`COALESCE(SUM(${costLog.cacheCreationTokens}), 0)::bigint`.mapWith(Number),
       })
       .from(costLog)
       .where(eq(costLog.sessionId, sessionId));
@@ -322,15 +322,15 @@ export class CostTracker {
 
     const result = await this.db
       .select({
-        totalInputTokens: sql<number>`COALESCE(SUM(${costLog.inputTokens}), 0)::int`,
-        totalOutputTokens: sql<number>`COALESCE(SUM(${costLog.outputTokens}), 0)::int`,
+        totalInputTokens: sql<number>`COALESCE(SUM(${costLog.inputTokens}), 0)::bigint`.mapWith(Number),
+        totalOutputTokens: sql<number>`COALESCE(SUM(${costLog.outputTokens}), 0)::bigint`.mapWith(Number),
         totalCost: sql<number>`COALESCE(SUM(${costLog.totalCost}), 0)::float`,
-        requestCount: sql<number>`COUNT(*)::int`,
+        requestCount: sql<number>`COUNT(*)::bigint`.mapWith(Number),
         estimatedCacheSavings: sql<number>`COALESCE(SUM((${costLog.metadata}->>'estimatedCacheSavings')::float), 0)::float`,
         ...costSourceAggregates(),
-        unknownUsageRequests: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'usageAvailable' = 'false')::int`,
-        cacheReadTokens: sql<number>`COALESCE(SUM(${costLog.cachedInputTokens}), 0)::bigint`,
-        cacheCreationTokens: sql<number>`COALESCE(SUM(${costLog.cacheCreationTokens}), 0)::bigint`,
+        unknownUsageRequests: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'usageAvailable' = 'false')::bigint`.mapWith(Number),
+        cacheReadTokens: sql<number>`COALESCE(SUM(${costLog.cachedInputTokens}), 0)::bigint`.mapWith(Number),
+        cacheCreationTokens: sql<number>`COALESCE(SUM(${costLog.cacheCreationTokens}), 0)::bigint`.mapWith(Number),
       })
       .from(costLog)
       .where(conditions.length > 0 ? and(...conditions) : undefined);
