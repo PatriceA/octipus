@@ -33,6 +33,7 @@ import { childCliSessionKey, claimCliSession, cliSessionHolder, dropCliSession, 
 import { canResume, CLI_RESUME } from '@/shared/cli-capabilities';
 import { startCliToolBridge, type BridgeResult } from './cli-tool-bridge';
 import { PIPELINE_SHELL_TIMEOUT_FLOOR_MS } from '@/tools/shell';
+
 import { ToolExecutor } from './tool-executor';
 import { answerCliPermissionRequest } from './cli-permissions';
 import { getPermissionManager } from '@/security/permissions';
@@ -61,6 +62,9 @@ import { isRoomSession } from '@/db/repositories/session-kind';
 import { VOLATILE_MARKER } from '@/models/providers/prompt-cache';
 import { isLongTailHandler, TOOL_DISCOVERY_TOOL_ID } from './agent/tool-split';
 import { canActInSession } from '@/core/rooms/access';
+
+/** Calls that block until delegated work settles. */
+const DELEGATION_TOOLS: ReadonlySet<string> = new Set(['invoke_recipe', 'create_pipeline', 'spawn_child', 'escalate_to_other_lane', 'collect_children']);
 
 /**
  * Whether this session's cwd is a directory someone ELSE owns — a dev-mode
@@ -263,7 +267,7 @@ When a task matches one of these skills, load it with get_skill before starting 
   private async executeBridgedTool(name: string, args: Record<string, unknown>): Promise<BridgeResult> {
     this.activeBridgeCalls++;
     const id = randomUUID();
-    const delegation = name === 'invoke_recipe' || name === 'create_pipeline' || name === 'spawn_child' || name === 'escalate_to_other_lane' || name === 'collect_children' || this.toolExecutor.getTools().get(name)?.final === true;
+    const delegation = DELEGATION_TOOLS.has(name) || this.toolExecutor.getTools().get(name)?.final === true;
     if (delegation) this.setPause('delegation', true);
     // A collect answer can be lost without the bridge noticing: a CLI that
     // timed the call out may drop it without closing the socket, so the write
@@ -524,6 +528,7 @@ When a task matches one of these skills, load it with get_skill before starting 
         execute: (name, args) => this.executeBridgedTool(name, args),
         abandoned: () => this.endApprovalWait(APPROVAL_DISCONNECT_REASON),
         unqueued: new Set(['get_cli_run_context', 'get_work_plan']),
+        longWait: DELEGATION_TOOLS,
         toolTimeoutFloorMs: typeof this.context.metadata?.pipelineId === 'string' ? PIPELINE_SHELL_TIMEOUT_FLOOR_MS : undefined,
         undelivered: name => {
           if (name !== 'collect_children') return;

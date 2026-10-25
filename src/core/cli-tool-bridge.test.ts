@@ -258,3 +258,18 @@ it('honors the pipeline shell floor so a short requested timeout is not cut off 
     body: JSON.stringify({ name: 'shell__run', arguments: { timeout: 10 } }) });
   expect(response.status).toBe(200);
 });
+
+it('lets a delegation wait run past the base deadline and queues the next call behind it (#55)', async () => {
+  const executed: string[] = [];
+  const bridge = await startCliToolBridge({ active: () => true, timeoutMs: 30, longWait: new Set(['spawn_child']),
+    tools: () => ['spawn_child', 'next'].map(name => ({ name, description: '', parameters: {}, execute: async () => null })),
+    execute: async name => { executed.push(name); if (name === 'spawn_child') await new Promise(resolve => setTimeout(resolve, 100)); return { content: [] }; },
+  });
+  bridges.push(bridge);
+  const child = call(bridge.url, bridge.key, 'spawn_child');
+  await vi.waitFor(() => expect(executed).toContain('spawn_child'));
+  const queued = call(bridge.url, bridge.key, 'next');
+  expect((await child).status).toBe(200);
+  expect((await queued).status).toBe(200);
+  expect(executed).toEqual(['spawn_child', 'next']);
+});

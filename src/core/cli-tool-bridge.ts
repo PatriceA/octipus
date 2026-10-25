@@ -37,6 +37,8 @@ export async function startCliToolBridge(options: {
   unqueued?: ReadonlySet<string>;
   /** Queue wait after the call ahead settles or expires, and execution on top of the tool's own `timeout`; the running mutation retains its queue slot until it settles. */
   timeoutMs?: number;
+  /** Delegation waits (spawn_child, collect_children): no bridge clock once running; the CLI's own tool timeout bounds them. */
+  longWait?: ReadonlySet<string>;
   /** Minimum the tool itself applies to its own `timeout` (pipeline shell floor); the bridge must not cut in below it. */
   toolTimeoutFloorMs?: number;
   /** The caller dropped the connection before this tool's result could be sent. */
@@ -122,7 +124,8 @@ export async function startCliToolBridge(options: {
             : 'Tool is not available to this agent');
         }
         started = true;
-        arm(base + ownTimeout(input.name, input.arguments, options.tools(), options.toolTimeoutFloorMs));
+        if (options.longWait?.has(input.name)) clearTimeout(deadline);
+        else arm(base + ownTimeout(input.name, input.arguments, options.tools(), options.toolTimeoutFloorMs));
         try { return await options.execute(input.name, input.arguments); }
         finally { settled = true; }
       };

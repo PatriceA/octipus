@@ -217,6 +217,9 @@ wait clock starts only when the call ahead settles or passes its deadline.
 Inside a pipeline stage, `shell__run` raises any shorter limit to 10 minutes
 (`PIPELINE_SHELL_TIMEOUT_FLOOR_MS`), and the bridge uses the same floor. A shell
 command killed by its own timeout still records an uncertain outcome by design.
+Delegation calls (`spawn_child`, `collect_children`, `invoke_recipe`, `create_pipeline`,
+`escalate_to_other_lane`) get no bridge clock once running; the CLI's own tool
+timeout bounds them, and calls queued behind them wait until they settle.
 Monitor reads and creation stay responsive behind approval waits. A timed-out
 mutation may have started: inspect its outcome before retrying. Read-only checks
 and watcher creation remain available while conflicting actions need recovery.
