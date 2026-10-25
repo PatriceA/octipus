@@ -107,6 +107,7 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
         const history = args.includeHistory === false ? [] : pipelineStageHistory(await pipelineRepository.getStageHistory(pipeline.id, pipeline.sessionId));
         return { id: pipeline.id, status: pipeline.status, summary: pipelineSummary(pipeline, nodes, items), history, historyIncluded: args.includeHistory !== false,
           budget: pipelineBudget(pipeline, nodes, items, getConfig().agent.pipelineTokenBudget),
+          environmentBlock: pipeline.metadata?.environmentBlock ?? null,
           deniedRequests: pipeline.metadata?.deniedRequests ?? [],
           permissionProfile: pipeline.metadata?.permissionProfile ?? null,
           interruption: pipeline.metadata?.interruption ?? null,

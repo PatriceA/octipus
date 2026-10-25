@@ -215,6 +215,8 @@ interface StructuredHandoff {
   confidence?: 'high' | 'medium' | 'low';
   /** The stage says it stopped before delivering: the pipeline retries it (#16). */
   stopped?: boolean;
+  /** Required toolchain/service could not be used; pause for environment repair. */
+  environmentBlocked?: string;
 }
 
 const HANDOFF_ITEM_MAX = 500; // per-item char bound, matches the regex extractors
@@ -266,6 +268,7 @@ export function parseStructuredHandoff(output: string): StructuredHandoff | null
     completedWork: str(h.completedWork),
     confidence: conf(h.confidence),
     ...(h.stopped === true ? { stopped: true } : {}),
+    ...(typeof h.environmentBlocked === 'string' && h.environmentBlocked.trim() ? { environmentBlocked: h.environmentBlocked.slice(0, 2000) } : {}),
   };
 }
 
@@ -291,6 +294,7 @@ PIPELINE HANDOFF — after your normal report above, append a fenced code block 
 - openQuestions (string[]): anything unresolved the next stage should address
 - nextStageInstructions (string): explicit, actionable instruction for the next stage
 - confidence ("high" | "medium" | "low"): how confident you are in what you are handing off. An honest "low" is welcome — it routes a closer look at this stage rather than counting against you
+- environmentBlocked (string, optional): the required gate command and exact missing toolchain/service error. Use this when verification cannot run; the pipeline pauses for environment repair instead of failing the item.
 - stopped (boolean): true only when you stopped before delivering this stage's work. The pipeline then re-runs this stage, so never report a stop as finished work
 
 Use [] for any list with nothing to report. Emit the block exactly once — do not copy these field descriptions. It is internal pipeline data (stripped before the user sees it); keep your prose report above it.`;

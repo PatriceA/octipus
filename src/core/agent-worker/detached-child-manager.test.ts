@@ -61,3 +61,27 @@ it('a child registered again under the same id waits for its new run (#19)', asy
   const [stillRunning] = await m.collectAll(10);
   expect(stillRunning.status).toBe('timeout');
 });
+
+
+it('an in-flight collector follows the resumed promise and never returns the previous failure (#19/#53)', async () => {
+  let oldFinish!: (value: ChildResult) => void, newFinish!: (value: ChildResult) => void;
+  const m = new DetachedChildManager('parent', () => 0, () => {});
+  m.registerPendingChild({ childId: 'pipeline', startedAt: Date.now(), taskBrief: '', topic: 'pipeline',
+    promise: new Promise(resolve => { oldFinish = resolve; }) });
+  const waiting = m.collectAll(1_000);
+  m.registerPendingChild({ childId: 'pipeline', startedAt: Date.now(), taskBrief: '', topic: 'pipeline',
+    promise: new Promise(resolve => { newFinish = resolve; }) });
+  oldFinish({ ...result('pipeline'), status: 'tool_error', output: 'previous failure', durationMs: 5_011_283 });
+  newFinish({ ...result('pipeline'), output: 'resumed result' });
+  expect((await waiting).map(r => r.output)).toEqual(['resumed result']);
+  expect(m.redeliverLast()).toBe(1);
+  expect((await m.collectAll(1_000)).map(r => r.output)).toEqual(['resumed result']);
+});
+
+it('a resumed run wakes the old collector even if the old promise never settles', async () => {
+  const m = new DetachedChildManager('parent', () => 0, () => {});
+  m.registerPendingChild({ childId: 'pipeline', startedAt: Date.now(), taskBrief: '', topic: 'pipeline', promise: new Promise(() => {}) });
+  const waiting = m.collectAll(1_000);
+  m.registerPendingChild({ childId: 'pipeline', startedAt: Date.now(), taskBrief: '', topic: 'pipeline', promise: Promise.resolve(result('new run')) });
+  expect((await waiting).map(r => r.output)).toEqual(['done new run']);
+});

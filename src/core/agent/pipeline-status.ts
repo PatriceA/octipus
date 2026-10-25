@@ -33,6 +33,7 @@ export function pipelineStageRuns(history: ReturnType<typeof pipelineStageHistor
     run.events.push(event);
     if (event.event === 'spawn') run.status = 'running';
     if (event.event === 'node_completed') Object.assign(run, { status: 'completed', completedAt: event.at, output: event.output, verdict: event.verdict });
+    if (event.event === 'reconcile' && event.reasonKind === 'environment') Object.assign(run, { status: 'paused', reason: 'environment', error: event.reason });
     if (event.event === 'node_failed') Object.assign(run, { status: 'failed', completedAt: event.at, error: event.reason, retry: event.retry });
     runs.set(key, run);
   }

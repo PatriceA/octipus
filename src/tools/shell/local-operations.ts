@@ -1,3 +1,4 @@
+import { runtimePath } from '@/security/runtime-path';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { markToolNotExecuted, ToolNotExecutedError } from '@/core/tool-execution-error';
 import { buildChildEnv, isSensitiveEnvName } from '@/security/child-env';
@@ -86,6 +87,7 @@ export class LocalShellOperations implements ShellOperations {
       allowNetwork?: boolean;
     } & ShellEnvOptions = {},
   ): Promise<ShellExecResult> {
+    options = { ...options, env: { ...options.env, PATH: runtimePath(options.env?.PATH) } };
     // `cd <dir> && <cmd>` is the one metacharacter idiom models produce on
     // nearly every test run, and refusing it costs two round trips (measured
     // 2026-09-16: the retry then broke on an unquoted path with a space). It

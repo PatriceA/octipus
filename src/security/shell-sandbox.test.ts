@@ -131,11 +131,14 @@ describe.skipIf(!hasBwrap)('wrapCommand — mode "auto" with bwrap installed', (
     const out = wrapCommand(['pytest', '--version'], { workspaceRoot: workspace, path: '/usr/bin:/bin' });
     try {
       const argv = out.argv.join('\n');
-      for (const dir of ['bin', 'lib', 'share/uv/tools', 'share/uv/python']) {
+      for (const dir of ['bin', 'lib', 'share/uv/tools', 'share/uv/python', 'go']) {
         const path = join(homedir(), '.local', dir);
         expect(argv).toContain(`--ro-bind-try\n${path}\n${path}`);
       }
       expect(argv).toContain(`--setenv\nPATH\n/usr/bin:/bin:${join(homedir(), '.local', 'bin')}:${join(homedir(), '.npm-global', 'bin')}`);
+      expect(argv).toContain(`--ro-bind-try\n${join(homedir(), 'go/bin')}\n${join(homedir(), 'go/bin')}`);
+      expect(argv).toContain(join(homedir(), '.local/go/bin'));
+      expect(argv).toContain(join(homedir(), 'go/bin'));
       expect(out.argv).not.toContain(homedir());
     } finally { out.cleanup(); getConfig().security.shellSandbox = 'off'; }
   });

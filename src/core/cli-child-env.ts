@@ -1,3 +1,4 @@
+import { runtimePath } from '@/security/runtime-path';
 /**
  * Minimal env for a spawned vendor CLI (C6). Only PATH/HOME/locale/TERM, the
  * CLI's own auth var, and per-tool overrides — NOT the server's full env
@@ -39,6 +40,7 @@ export function buildChildEnv(tool: CLIToolConfig, toolEnv?: Record<string, stri
   if (tool.modelProvider === 'anthropic') pass('CLAUDE_CODE_OAUTH_TOKEN');
   // Per-tool overrides (e.g. vibe's ephemeral VIBE_HOME).
   Object.assign(base, toolEnv || {});
+  base.PATH = runtimePath(base.PATH);
   // Never let the child think it's running inside Claude Code itself.
   delete base.CLAUDECODE;
   return base;

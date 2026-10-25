@@ -18,11 +18,13 @@ import type { ChildResult, PendingChild } from '../swarm/types';
  */
 export class DetachedChildManager {
   private pending: Map<string, PendingChild> = new Map();
+  private latest: Map<string, PendingChild> = new Map();
   private collected: Map<string, ChildResult> = new Map();
   /** Children the last collectAll settled and removed — restorable if its answer never arrived. */
   private lastCollected: PendingChild[] = [];
 
   private waiters = new Set<() => void>();
+  private generationWaiters = new Map<string, Set<() => void>>();
 
   /** Wake the parent only; child promises and results remain intact. */
   interruptWaits(): void {
@@ -40,6 +42,8 @@ export class DetachedChildManager {
     // Same id again (a resumed pipeline): the earlier run's result is stale (#19).
     this.collected.delete(pc.childId);
     this.pending.set(pc.childId, pc);
+    this.latest.set(pc.childId, pc);
+    for (const wake of this.generationWaiters.get(pc.childId) ?? []) wake();
     // Settle eagerly into collected so auto-collect and ad-hoc
     // collect_children calls can both find results without racing on the
     // shared promise. We keep the entry in pending until the LLM
@@ -73,6 +77,7 @@ export class DetachedChildManager {
 
   /** Mark a pending child as collected. Returns its result (awaiting if needed). */
   async collect(childId: string, timeoutMs: number): Promise<ChildResult | null> {
+    const waitStarted = Date.now();
     const pc = this.pending.get(childId);
     if (!pc) return null;
     const settled = this.collected.get(childId);
@@ -86,6 +91,9 @@ export class DetachedChildManager {
       const interrupted = new Promise<ChildResult>((_, reject) => {
         wake = () => reject(new Error('collect_children interrupted by new guidance; child is still running. Review guidance and decide whether to steer_child or handle it after collection.'));
         this.waiters.add(wake);
+        const generationWaiters = this.generationWaiters.get(childId) ?? new Set<() => void>();
+        generationWaiters.add(wake);
+        this.generationWaiters.set(childId, generationWaiters);
         if (this.hasGuidance()) wake();
       });
       const result = await Promise.race([
@@ -95,9 +103,14 @@ export class DetachedChildManager {
           { timer = setTimeout(() => reject(new Error(`collect_children timeout after ${timeoutMs}ms`)), timeoutMs); },
         ),
       ]);
+      if (this.pending.get(childId) !== pc) {
+        // Resume replaced the promise while this collector was already waiting.
+        return this.collect(childId, Math.max(0, timeoutMs - (Date.now() - waitStarted)));
+      }
       this.pending.delete(childId);
       return result;
     } catch (err) {
+      if (this.pending.get(childId) !== pc) return this.collect(childId, Math.max(0, timeoutMs - (Date.now() - waitStarted)));
       // Leave it in pending for a later retry; surface failure as a result
       // object so the LLM keeps going instead of throwing.
       return {
@@ -112,7 +125,12 @@ export class DetachedChildManager {
       };
     } finally {
       clearTimeout(timer);
-      if (wake) this.waiters.delete(wake);
+      if (wake) {
+        this.waiters.delete(wake);
+        const generationWaiters = this.generationWaiters.get(childId);
+        generationWaiters?.delete(wake);
+        if (!generationWaiters?.size) this.generationWaiters.delete(childId);
+      }
     }
   }
 
@@ -174,7 +192,10 @@ export class DetachedChildManager {
       }),
     );
     this.addPausedMs(Date.now() - waitStart);
-    this.lastCollected = entries.filter(([childId]) => !this.pending.has(childId)).map(([, pc]) => pc);
+    this.lastCollected = entries.flatMap(([childId]) => {
+      const pc = this.latest.get(childId);
+      return pc && !this.pending.has(childId) ? [pc] : [];
+    });
     return results.filter((r): r is ChildResult => r !== null);
   }
 
@@ -184,7 +205,7 @@ export class DetachedChildManager {
    * collect (explicit or auto) returns them instantly. Returns how many.
    */
   redeliverLast(): number {
-    const restored = this.lastCollected.filter((pc) => !this.pending.has(pc.childId));
+    const restored = this.lastCollected.filter((pc) => this.latest.get(pc.childId) === pc && !this.pending.has(pc.childId));
     for (const pc of restored) this.pending.set(pc.childId, pc);
     this.lastCollected = [];
     return restored.length;

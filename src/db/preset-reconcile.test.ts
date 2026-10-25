@@ -84,3 +84,17 @@ describe('planPresetReconcile', () => {
     expect(planPresetReconcile(first.steps, first.shippedHash, shipped).action).toBe('noop');
   });
 });
+
+
+test('backfills host access onto existing development verification stages, preserving explicit opt-outs (#53)', async () => {
+  const { PRESET_TEMPLATES, planProducesArtifactsBackfill } = await import('./seed-presets');
+  const shipped = PRESET_TEMPLATES.find(preset => preset.name === 'Full Development Cycle')!.steps;
+  const required = ['Testing', 'Code Review', 'QA Validation'];
+  expect(shipped.filter(step => required.includes(step.name)).every(step => step.hostServices === true)).toBe(true);
+  const stored = shipped.map(step => ({ ...step, promptTemplate: 'user edited', hostServices: undefined }));
+  const result = planProducesArtifactsBackfill(stored, shipped);
+  expect(result.changed).toBe(true);
+  expect(result.steps.filter(step => required.includes(step.name)).every(step => step.hostServices === true)).toBe(true);
+  expect(result.steps.every(step => step.promptTemplate === 'user edited')).toBe(true);
+  expect(planProducesArtifactsBackfill(stored.map(step => ({ ...step, hostServices: false })), shipped).steps.every(step => step.hostServices === false)).toBe(true);
+});

@@ -175,6 +175,7 @@ Report what you implemented and any deviations from the plan.`,
       },
       {
         name: 'Testing',
+        hostServices: true,
         description: 'Discover, write, and run tests for the implementation.',
         topic: 'qa',
         // `git` because this stage writes test files and must be able to commit
@@ -237,6 +238,7 @@ Report:
       },
       {
         name: 'Code Review',
+        hostServices: true,
         description: 'Review the implementation for quality, bugs, and security. Run tests and linters.',
         topic: 'review',
         toolIds: ['filesystem', 'shell', 'git', 'knowledge'],
@@ -310,6 +312,7 @@ Report: findings addressed (file:line → what changed, commit), threads answere
       },
       {
         name: 'QA Validation',
+        hostServices: true,
         description: 'Validate the implementation works end-to-end. Run full test suite and check for regressions.',
         topic: 'qa',
         toolIds: ['browser', 'browser-ext', 'shell', 'filesystem'],
@@ -586,6 +589,7 @@ export function planProducesArtifactsBackfill(
 ): { steps: PipelineStepConfig[]; changed: boolean } {
   const declared = new Set(shipped.filter((s) => s.producesArtifacts).map((s) => s.name));
   const executors = new Set(shipped.filter((s) => s.runsCommands).map((s) => s.name));
+  const hostStages = new Set(shipped.filter(s => s.hostServices).map(s => s.name));
   const readers = new Set(shipped.filter((s) => s.readOnly).map((s) => s.name));
   const executeOnly = new Set(shipped.filter((s) => s.mechanical).map((s) => s.name));
   const auditors = new Map(
@@ -611,6 +615,10 @@ export function planProducesArtifactsBackfill(
     if (next.mechanical === undefined && executeOnly.has(next.name)) {
       changed = true;
       next = { ...next, mechanical: true };
+    }
+    if (next.hostServices === undefined && hostStages.has(next.name)) {
+      changed = true;
+      next = { ...next, hostServices: true };
     }
     const auditor = auditors.get(next.name);
     if (auditor && next.stageType === undefined) {

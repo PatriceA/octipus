@@ -1,3 +1,4 @@
+import { runtimePath } from './runtime-path';
 /**
  * Shell sandbox — Phase 3e multi-user.
  *
@@ -134,12 +135,7 @@ export function getSandboxMode(): SandboxMode {
  */
 function buildBwrapArgs(binary: string, options: WrapOptions, scratch: string): string[] {
   const projectBin = join(options.workspaceRoot, '.venv', 'bin');
-  const commandPath = [
-    ...(existsSync(projectBin) ? [projectBin] : []),
-    options.path ?? process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
-    join(homedir(), '.local', 'bin'),
-    join(homedir(), '.npm-global', 'bin'),
-  ].join(':');
+  const commandPath = [existsSync(projectBin) ? projectBin : '', runtimePath(options.path)].filter(Boolean).join(':');
   const args: string[] = [
     binary,
     // New mount namespace + tmp root.
@@ -169,6 +165,9 @@ function buildBwrapArgs(binary: string, options: WrapOptions, scratch: string): 
     // Mount both read-only; never expose the prefix root or ~/.npmrc.
     '--ro-bind-try', join(homedir(), '.npm-global/bin'), join(homedir(), '.npm-global/bin'),
     '--ro-bind-try', join(homedir(), '.npm-global/lib/node_modules'), join(homedir(), '.npm-global/lib/node_modules'),
+    // Go needs the distribution (GOROOT), plus installed Go tools.
+    '--ro-bind-try', join(homedir(), '.local/go'), join(homedir(), '.local/go'),
+    '--ro-bind-try', join(homedir(), 'go/bin'), join(homedir(), 'go/bin'),
     '--setenv', 'PATH', commandPath,
     // Per-spawn scratch (the legacy /tmp/assistant- prefix lives here).
     // Bound BEFORE the workspace so that workspaces under /tmp aren't
@@ -213,6 +212,12 @@ function buildFirejailArgs(binary: string, options: WrapOptions): string[] {
   if (!options.allowNetwork) {
     args.push('--net=none');
   }
+  const runtimeDirs = ['.local/bin', '.local/lib', '.local/share/uv/tools', '.local/share/uv/python',
+    '.npm-global/bin', '.npm-global/lib/node_modules', '.local/go', 'go/bin'].map(path => join(homedir(), path));
+  for (const p of [...runtimeDirs, ...(options.extraReadOnly ?? [])].filter(path => existsSync(path))) {
+    args.push(`--whitelist=${p}`, `--read-only=${p}`);
+  }
+  args.push(`--env=PATH=${runtimePath(options.path)}`);
   for (const p of options.extraReadWrite ?? []) {
     args.push(`--whitelist=${p}`);
   }

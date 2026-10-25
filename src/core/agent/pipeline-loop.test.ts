@@ -1035,3 +1035,60 @@ test.each(['Plan', 'QA'])('enforces the pool outside the item loop after %s exha
     expect(calls.filter(call => call.stageName === 'Summary')).toHaveLength(1);
   } finally { getConfig().agent.pipelineTokenBudget = previous; }
 });
+
+
+test.each(['go: Kommando nicht gefunden', 'ECONNREFUSED ::1:5433', '/var/run/docker.sock: no such file or directory'])
+('pauses on a required environment failure without consuming item retries: %s', async reason => {
+  replies = { QA: [qaFail(reason)] };
+  const { pipelineId } = await run('verify the project');
+  expect(await planItemStatuses(pipelineId)).toEqual(['running', 'pending']);
+  expect(calls.filter(call => call.stageName === 'Implement')).toHaveLength(1);
+  expect(calls.filter(call => call.stageName === 'QA')).toHaveLength(1);
+  expect(await manager.getPipeline(pipelineId)).toMatchObject({ status: 'paused', metadata: {
+    environmentBlock: { reason: expect.stringContaining(reason), itemId: expect.any(String), attemptId: expect.any(String) },
+  } });
+  replies = { QA: [QA_PASS] };
+  const { actionRecovery } = await import('@/core/action-recovery');
+  const review = vi.spyOn(actionRecovery, 'reviewPipeline').mockResolvedValue();
+  try { await manager.resume(pipelineId); } finally { review.mockRestore(); }
+  expect(await planItemStatuses(pipelineId)).toEqual(['done', 'done']);
+  expect((await manager.getPipeline(pipelineId))?.metadata?.environmentBlock).toBeUndefined();
+  expect(calls.filter(call => call.stageName === 'Implement')).toHaveLength(2);
+});
+
+test('a stopped testing handoff with an environment blocker pauses before command evidence enforcement', async () => {
+  replies = { QA: ['```handoff\n' + JSON.stringify({ stopped: true, environmentBlocked: 'Required gate: go test ./...; go: command not found' }) + '\n```'] };
+  commandCounts = [0];
+  const { pipelineId } = await run('verify the project');
+  expect(await manager.getPipeline(pipelineId)).toMatchObject({ status: 'paused', summary: expect.stringContaining('Environment blocked') });
+  expect(await planItemStatuses(pipelineId)).toEqual(['running', 'pending']);
+});
+
+test('host service declarations reach the actual stage worker metadata', async () => {
+  const { rows } = await queryRaw("SELECT steps FROM pipeline_templates WHERE name = 'loop-fixture' LIMIT 1");
+  const steps = (rows[0].steps as Array<Record<string, unknown>>).map(step => step.name === 'QA' ? { ...step, hostServices: true } : step);
+  await executeRaw(`INSERT INTO pipeline_templates (name, is_preset, steps) VALUES ('host-fixture', true, '${JSON.stringify(steps)}'::jsonb)`);
+  replies = { QA: [QA_PASS] };
+  await run('verify with local services', 'host-fixture');
+  expect(calls.filter(call => call.stageName === 'QA').every(call => call.metadata.hostServices === true)).toBe(true);
+  expect(calls.filter(call => call.stageName === 'Implement').every(call => call.metadata.hostServices !== true)).toBe(true);
+});
+
+
+test.each([false, true])('framework gate environment checks preserve successful evidence (passed=%s)', async passed => {
+  const { rows } = await queryRaw("SELECT steps FROM pipeline_templates WHERE name = 'loop-fixture' LIMIT 1");
+  const steps = (rows[0].steps as Array<Record<string, unknown>>).map(step => step.name === 'QA'
+    ? { ...step, verifyCommand: passed ? 'printf "go: command not found"' : 'go test ./...', hostServices: true } : step);
+  await executeRaw(`INSERT INTO pipeline_templates (name, is_preset, steps) VALUES ('gate-env-${passed}', true, '${JSON.stringify(steps)}'::jsonb)`);
+  const scorer = await import('@/core/swarm/scorers');
+  const probe = vi.spyOn(scorer, 'runScorers').mockResolvedValue({ passed, ran: 1,
+    failures: passed ? [] : [{ scorer: 'command_exit_zero', reason: 'Scorer environment: required Go toolchain unavailable', retryable: false }] });
+  replies = { QA: [QA_PASS] };
+  try {
+    const { pipelineId } = await run('verify gate environment', `gate-env-${passed}`);
+    expect(await manager.getPipeline(pipelineId)).toMatchObject({ status: passed ? 'completed' : 'paused' });
+    expect(await planItemStatuses(pipelineId)).toEqual(['done', passed ? 'done' : 'running']);
+    expect(calls.filter(call => call.stageName === 'QA')).toHaveLength(passed ? 2 : 1);
+    expect(probe.mock.calls[0][2]).toMatchObject({ hostServices: true });
+  } finally { probe.mockRestore(); }
+});

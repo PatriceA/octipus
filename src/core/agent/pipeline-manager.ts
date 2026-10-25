@@ -1,3 +1,4 @@
+import { stageHostServices, stageEnvironmentReason, StageEnvironmentError } from './pipeline-environment';
 import type { PendingStageApproval } from '@/shared/pipeline-approval';
 import { replyAnswer } from './approval-manager';
 import { resolve as resolvePath } from 'node:path';
@@ -350,7 +351,7 @@ export async function runStageVerifyCommand(
 ): Promise<string> {
   const canRunCommands = (ctx.toolIds ?? []).includes('shell');
   if (!canRunCommands) {
-    return `VERIFY COMMAND (from the pipeline, not the model): \`${command}\`\nNot run — this stage does not hold the shell tool. Judge the work on what you can read.`;
+    return `VERIFY COMMAND (from the pipeline, not the model): \`${command}\`\nENVIRONMENT BLOCKED: Not run — this stage does not hold the shell tool. Judge the work on what you can read.`;
   }
   try {
     const { runScorers } = await import('@/core/swarm/scorers');
@@ -390,11 +391,12 @@ export async function runStageVerifyCommand(
       },
     );
     const failure = outcome.failures[0];
+    if (failure && stageEnvironmentReason(failure.reason)) return `ENVIRONMENT BLOCKED: ${failure.reason}`;
     return failure
       ? `VERIFY COMMAND (run by the pipeline, not by you): \`${command}\`\nRESULT: FAILED.\n${failure.reason}\n\nThat is the ground truth for this stage. Do not re-run it to check; explain it.`
       : `VERIFY COMMAND (run by the pipeline, not by you): \`${command}\`\nRESULT: exit 0.\n\nThat is the ground truth for this stage. You do not need to run it again — judge whether it is SUFFICIENT evidence for the work claimed.`;
   } catch (err) {
-    return `VERIFY COMMAND (from the pipeline): \`${command}\`\nCould not be run: ${(err as Error).message}. Judge the work on what you can read.`;
+    return `VERIFY COMMAND (from the pipeline): \`${command}\`\nENVIRONMENT BLOCKED: Could not be run: ${(err as Error).message}.`;
   }
 }
 
@@ -426,6 +428,8 @@ QA VERDICT (required) — append your verdict now, as a fenced code block tagged
     }
 
 \`passed\` is false if ANY critical or major issue remains. An honest \`"low"\` confidence is welcome — it routes follow-up work rather than counting against you. A pass whose \`feedback\` does not account for the stages it covers is rejected and re-run.
+
+If a required gate cannot run because a toolchain, test database or Docker socket is unavailable, include the exact command and error in issues and say ENVIRONMENT BLOCKED. Do not classify an unavailable environment as a code defect or invent a pass. The pipeline pauses for repair.
 
 Emit the block exactly once, as the LAST thing in your reply.`;
 
@@ -1543,7 +1547,8 @@ export class PipelineManager {
           for (const key of bodyKeys) qaAttempts.delete(key);
         }
       } else {
-        const b = built[gnode.templateIndex];
+        const stage = built[gnode.templateIndex];
+        const b = { ...stage, hostServices: stageHostServices(stage, persisted ?? pipeline) };
         const stageTemplate = template.stages[gnode.templateIndex];
         const isQa = b.stageType === 'qa_validation';
         // Only a stage inside the plan loop is judging one item.
@@ -1650,6 +1655,8 @@ export class PipelineManager {
               toolIds: b.toolIds,
               hostServices: b.hostServices,
             });
+            const environment = evidence.startsWith('ENVIRONMENT BLOCKED:') || evidence.includes('\nENVIRONMENT BLOCKED:') ? evidence : undefined;
+            if (environment) return this.pauseForEnvironment(pipeline, node, environment, attemptId, currentItem?.id ?? null);
             input = `${evidence}\n\n---\n\n${input}`;
             frameworkVerified = true;
           }
@@ -2831,6 +2838,17 @@ export class PipelineManager {
    * the node failed) — the caller returns that verbatim, so every exit still
    * goes through one place.
    */
+  private async pauseForEnvironment(pipeline: Pipeline, node: PipelineNodeRow, reason: string, attemptId: string, itemId: string | null) {
+    const current = await this.getPipeline(pipeline.id);
+    const summary = `Environment blocked at "${node.name}". Repair the required toolchain/service, then resume the saved attempt. ${reason}`;
+    await this.updateNode(node.id, { status: 'pending', error: reason });
+    await this.updatePipeline(pipeline.id, { status: 'paused', summary, metadata: { ...current?.metadata,
+      environmentBlock: { nodeKey: node.nodeKey, attemptId, itemId, reason, at: new Date().toISOString() } } });
+    recordRunEvent({ runId: pipeline.sessionId, subject: 'pipeline_node', subjectId: node.nodeKey,
+      event: 'reconcile', payload: { pipelineId: pipeline.id, attemptId, itemId, reason, reasonKind: 'environment' } });
+    return { pipelineId: pipeline.id, result: summary };
+  }
+
   private async runStepNode(args: {
     retryContract?: boolean;
     pipeline: Pipeline;
@@ -2999,6 +3017,11 @@ export class PipelineManager {
         await this.updateNode(node.id, { status: 'pending' });
         return { output: '', raw: '', stopped: { pipelineId: pipeline.id, result: 'Pipeline stopped; resume from the saved stage checkpoint.' } };
       }
+      const handoff = parseStructuredHandoff(String(result));
+      const verdict = declared.stageType === 'qa_validation' ? this.parseQAResult(String(result)) : null;
+      const environment = handoff?.environmentBlocked || ((handoff?.stopped || verdict?.passed === false)
+        ? stageEnvironmentReason(verdict ? [...verdict.issues, verdict.feedback].join('\n') : String(result)) : undefined);
+      if (environment) throw new StageEnvironmentError(environment);
       await this.assertStageEvidence({
         sessionId,
         pipelineId: pipeline.id,
@@ -3047,6 +3070,12 @@ export class PipelineManager {
         stageProviders: { ...providers, [node.nodeKey]: { ...providers[node.nodeKey], quota: 'available' } } } });
       const output = stripPipelineControlBlocks(raw);
 
+      const completedRun = await this.getPipeline(pipeline.id);
+      const block = completedRun?.metadata?.environmentBlock as { nodeKey?: string } | undefined;
+      if (block?.nodeKey === node.nodeKey) {
+        const { environmentBlock: _resolved, ...metadata } = completedRun?.metadata ?? {};
+        await this.updatePipeline(pipeline.id, { metadata });
+      }
       await this.updateNode(node.id, { status: 'completed', output, completedAt: new Date() });
       // Finished: the attempt's progress is superseded by its output.
       if (partialText) savePartial(null);
@@ -3097,6 +3126,9 @@ export class PipelineManager {
       if (['paused', 'stopped'].includes((await this.getPipeline(pipeline.id))?.status ?? '')) {
         await this.updateNode(node.id, { status: 'pending' });
         return { output: '', raw: '', stopped: { pipelineId: pipeline.id, result: 'Pipeline stopped; resume from the saved stage checkpoint.' } };
+      }
+      if (error instanceof StageEnvironmentError || stageEnvironmentReason(errorMsg)) {
+        return { output: '', raw: '', stopped: await this.pauseForEnvironment(pipeline, node, errorMsg, attemptId, itemId) };
       }
       if (isApprovalWaitEnded(errorMsg)) return this.awaitStageApproval(args, { since: stageStartedAt, reason: errorMsg, workerIds, partialText });
       if (error instanceof WorkerInterruptedError) {

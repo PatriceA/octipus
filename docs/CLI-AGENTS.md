@@ -152,6 +152,7 @@ stages run; a model-supplied profile is a proposal, never an authorization.
   "packageManagers": ["pnpm", "go"],
   "publicHosts": ["go.dev", "proxy.golang.org", "registry.npmjs.org"],
   "dockerProjects": ["project-tests"],
+  "hostServices": true,
   "rememberDecisions": true,
   "overnight": true,
   "autoApproveGates": true,
@@ -165,7 +166,19 @@ Compose operations explicitly naming an approved project. Changed directories,
 custom HTTP headers, shell expressions, arbitrary scripts, and destructive
 operations need separate authorization. Existing DENY rules and space/flow
 restrictions remain authoritative. Named Docker projects do not remove the
-template's separate `hostServices` sandbox requirement.
+template's separate `hostServices` sandbox requirement unless the user also
+approves `hostServices: true` in the run profile. That run option gives stage
+shells host localhost networking and the Docker socket; command permissions
+still apply. The shipped Full Development Cycle enables host services on
+Testing, Code Review and QA Validation, including existing preset rows missing
+the flag. An explicit per-stage false is preserved during preset backfill.
+
+Sandboxed runtime paths include read-only `~/.local/go` and `~/go/bin`, as well
+as the existing Node/Python tool directories. Native CLI workers receive the
+same toolchain PATH. A missing required gate prerequisite pauses with
+`environmentBlock` in status and retains the current item/attempt checkpoint;
+it does not consume the item's code-rework retries. Workers should report the
+required command and error in the handoff's `environmentBlocked` field.
 
 The destructive-command guard recognizes simple Node probes that create a
 `const` directory with the built-in `mkdtemp` API and remove it in `finally`.

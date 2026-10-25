@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from 'vitest';
 import { buildChildEnv } from './cli-child-env';
+import { runtimePath } from '@/security/runtime-path';
 import type { CLIToolConfig } from '@/models/providers/cli-provider';
 
 const tool = (modelProvider: CLIToolConfig['modelProvider']) => ({ modelProvider }) as CLIToolConfig;
@@ -13,7 +14,7 @@ describe('buildChildEnv (shared by the agent worker and one-shot completions)', 
     process.env.OPENAI_API_KEY = 'sk-openai';
     process.env.CLAUDECODE = '1';
     const env = buildChildEnv(tool('openai'));
-    expect(env.PATH).toBe(process.env.PATH);
+    expect(env.PATH).toBe(runtimePath(process.env.PATH));
     expect(env).not.toHaveProperty('DATABASE_URL');
     expect(env).not.toHaveProperty('MASTER_KEY');
     expect(env).not.toHaveProperty('OPENAI_API_KEY');
