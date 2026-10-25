@@ -247,3 +247,14 @@ it("waits out a tool's own timeout and queues behind it without cutting either o
   const byDefault = await call(bridge.url, bridge.key, 'shell__run');
   expect(byDefault.status).toBe(200);
 });
+
+it('honors the pipeline shell floor so a short requested timeout is not cut off below it (#55)', async () => {
+  const bridge = await startCliToolBridge({ active: () => true, timeoutMs: 20, toolTimeoutFloorMs: 100,
+    tools: () => [{ name: 'shell__run', description: '', parameters: { type: 'object', properties: { timeout: { type: 'number', default: 30 } } }, execute: async () => null }],
+    execute: async () => { await new Promise(resolve => setTimeout(resolve, 80)); return { content: [] }; },
+  });
+  bridges.push(bridge);
+  const response = await fetch(`${bridge.url}/call`, { method: 'POST', headers: { Authorization: `Bearer ${bridge.key}` },
+    body: JSON.stringify({ name: 'shell__run', arguments: { timeout: 10 } }) });
+  expect(response.status).toBe(200);
+});

@@ -429,7 +429,7 @@ QA VERDICT (required) — append your verdict now, as a fenced code block tagged
 
 \`passed\` is false if ANY critical or major issue remains. An honest \`"low"\` confidence is welcome — it routes follow-up work rather than counting against you. A pass whose \`feedback\` does not account for the stages it covers is rejected and re-run.
 
-If a required gate cannot run because a toolchain, test database or Docker socket is unavailable, include the exact command and error in issues and say ENVIRONMENT BLOCKED. Do not classify an unavailable environment as a code defect or invent a pass. The pipeline pauses for repair.
+Long gates (whole test suites, race tests, compose builds) need shell__run timeout of at least 600000 ms; in a stage shorter limits are raised to that floor. A command killed by its own timeout is not an environment block, and it leaves an uncertain outcome that blocks further commands until a human reviews it, so size limits generously instead of retrying short ones. If a required gate cannot run because a toolchain, test database or Docker socket is unavailable, include the exact command and error in issues and say ENVIRONMENT BLOCKED. Do not classify an unavailable environment as a code defect or invent a pass. The pipeline pauses for repair.
 
 Emit the block exactly once, as the LAST thing in your reply.`;
 

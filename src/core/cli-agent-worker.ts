@@ -32,6 +32,7 @@ import { writePromptDump } from './prompt-dumps';
 import { childCliSessionKey, claimCliSession, cliSessionHolder, dropCliSession, fingerprintRun, loadCliSession, ownedResumeKey, releaseCliSessions, rootCliSessionKey, saveCliSession } from './cli-session-store';
 import { canResume, CLI_RESUME } from '@/shared/cli-capabilities';
 import { startCliToolBridge, type BridgeResult } from './cli-tool-bridge';
+import { PIPELINE_SHELL_TIMEOUT_FLOOR_MS } from '@/tools/shell';
 import { ToolExecutor } from './tool-executor';
 import { answerCliPermissionRequest } from './cli-permissions';
 import { getPermissionManager } from '@/security/permissions';
@@ -523,6 +524,7 @@ When a task matches one of these skills, load it with get_skill before starting 
         execute: (name, args) => this.executeBridgedTool(name, args),
         abandoned: () => this.endApprovalWait(APPROVAL_DISCONNECT_REASON),
         unqueued: new Set(['get_cli_run_context', 'get_work_plan']),
+        toolTimeoutFloorMs: typeof this.context.metadata?.pipelineId === 'string' ? PIPELINE_SHELL_TIMEOUT_FLOOR_MS : undefined,
         undelivered: name => {
           if (name !== 'collect_children') return;
           const restored = this.detached.redeliverLast();

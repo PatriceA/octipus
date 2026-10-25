@@ -14,6 +14,14 @@ import { commandPolicyViolation, matchDestructiveCommand, matchElevatedCommand }
 
 const DEFAULT_TIMEOUT = 30000; // 30 seconds
 
+/** Pipeline stages run whole gate suites (go test -race, pnpm -r test); a shorter limit only kills them mid-run and gates the stage behind recovery review (#55). */
+export const PIPELINE_SHELL_TIMEOUT_FLOOR_MS = 600_000;
+
+export function effectiveShellTimeout(requested: unknown, metadata?: Record<string, unknown>): number {
+  const asked = typeof requested === 'number' && requested > 0 ? requested : DEFAULT_TIMEOUT;
+  return typeof metadata?.pipelineId === 'string' ? Math.max(asked, PIPELINE_SHELL_TIMEOUT_FLOOR_MS) : asked;
+}
+
 /**
  * How a command runs: the caller's `env`, and in a space (coworking §9.5)
  * the run's own tool home — `HOME`, `XDG_CONFIG_HOME`, `GH_CONFIG_DIR` and
@@ -104,7 +112,7 @@ export class ShellTool extends BaseTool {
         }
         const command = args.command;
         const cwd = this.resolveCwd(args.cwd, context);
-        const timeout = (args.timeout as number) || DEFAULT_TIMEOUT;
+        const timeout = effectiveShellTimeout(args.timeout, context?.metadata);
         const unsafe = args.useShell === true;
         const allowNetwork = args.network === true;
 

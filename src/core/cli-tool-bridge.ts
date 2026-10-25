@@ -17,10 +17,10 @@ const callSchema = z.object({ name: z.string().min(1), arguments: z.record(z.str
 export interface BridgeResult { content: Array<{ type: 'text'; text: string }>; isError?: boolean }
 
 /** A tool that takes its own `timeout` (shell__run) ends itself with a clean result; never cut it off first. */
-function ownTimeout(name: string, args: Record<string, unknown>, tools: ToolHandler[]): number {
+function ownTimeout(name: string, args: Record<string, unknown>, tools: ToolHandler[], floor = 0): number {
   const schema = tools.find(t => t.name === name)?.parameters as { properties?: { timeout?: { default?: unknown } } } | undefined;
   const value = args.timeout ?? schema?.properties?.timeout?.default;
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.max(value, floor) : 0;
 }
 
 /** A run-local capability, never an API/admin credential. No caller-supplied identity. */
@@ -37,6 +37,8 @@ export async function startCliToolBridge(options: {
   unqueued?: ReadonlySet<string>;
   /** Queue wait after the call ahead settles or expires, and execution on top of the tool's own `timeout`; the running mutation retains its queue slot until it settles. */
   timeoutMs?: number;
+  /** Minimum the tool itself applies to its own `timeout` (pipeline shell floor); the bridge must not cut in below it. */
+  toolTimeoutFloorMs?: number;
   /** The caller dropped the connection before this tool's result could be sent. */
   undelivered?: (name: string) => void;
 }): Promise<{ url: string; key: string; close: () => Promise<void> }> {
@@ -120,7 +122,7 @@ export async function startCliToolBridge(options: {
             : 'Tool is not available to this agent');
         }
         started = true;
-        arm(base + ownTimeout(input.name, input.arguments, options.tools()));
+        arm(base + ownTimeout(input.name, input.arguments, options.tools(), options.toolTimeoutFloorMs));
         try { return await options.execute(input.name, input.arguments); }
         finally { settled = true; }
       };
