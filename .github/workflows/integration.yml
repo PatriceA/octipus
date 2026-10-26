@@ -57,7 +57,7 @@ jobs:
       # Chrome index shipped in the runner image (unused: Playwright brings its
       # own browser) and has been slow or broken upstream, so drop it first.
       - name: Cache Playwright browser
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
