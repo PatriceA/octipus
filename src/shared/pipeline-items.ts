@@ -8,3 +8,15 @@ export const pipelineItemEditSchema = z.object({
   evidence: z.string().trim().min(1).max(4000),
 });
 export type PipelineItemEdit = z.infer<typeof pipelineItemEditSchema>;
+
+/** An audited answer bound to the item and stage attempt it unblocks. */
+export interface PipelineUserDecision {
+  itemId: string;
+  blockedItemId: string | null;
+  nodeKey: string;
+  attemptId: string;
+  question: string;
+  response: string;
+  decidedBy: string;
+  decidedAt: string;
+}

@@ -1285,3 +1285,84 @@ test.each(['skipped', 'done'] as const)('settling a blocked item as %s clears it
   await pipelineRepository.updatePipeline(pipelineId, { metadata: before!.metadata });
   expect((await pipelineRepository.findById(pipelineId))?.metadata?.environmentBlock).toBeUndefined();
 });
+
+test('a deferred item retains its retry budget after prerequisite QA retries', async () => {
+  replies = { QA: [qaFail('prerequisite first failure'), qaFail('prerequisite second failure'), QA_PASS, qaFail('original needs one correction'), QA_PASS] };
+  let inserted = false;
+  onSpawn = async (stage, pipelineId) => {
+    if (stage !== 'Implement' || inserted) return;
+    inserted = true;
+    const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+    const current = (await pipelineRepository.getPlanItems(pipelineId)).find(item => item.status === 'running')!;
+    await pipelineRepository.addPlanItems([{ pipelineId, ordinal: 100, title: 'Required prerequisite' }], current.id);
+  };
+  const { pipelineId } = await run('preserve independent per-item retries');
+  expect((await manager.getPipeline(pipelineId))?.status).toBe('completed');
+  expect(await planItemStatuses(pipelineId)).toEqual(['done', 'done', 'done']);
+  expect(approvalsAsked).toBe(0);
+});
+
+test('an answered decision survives interruption and reaches the resumed stage and subsequent QA', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'decision-resume-'));
+  const workspace = vi.spyOn(manager as unknown as { resolveWorkspaceRoot: () => Promise<string> }, 'resolveWorkspaceRoot').mockResolvedValue(root);
+  await stageFixture('decision-resume-fixture', { Implement: { producesArtifacts: true } });
+  const response = 'Near ties are inconclusive; run the benchmark once under this rule.';
+  approvalAnswer = { approved: true, response };
+  replies = { QA: [QA_PASS] };
+  throwPlan = { Implement: [undefined, 'CLI claude exited with signal SIGKILL: no failure diagnostic reported'] };
+  onSpawn = async (stage, pipelineId) => {
+    if (stage !== 'Plan') return;
+    const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+    const items = await pipelineRepository.addPlanItems([{ pipelineId, ordinal: 0, title: 'Implement decided rule' }, { pipelineId, ordinal: 1, title: 'User decision on near-tie rule' }]);
+    replies.Implement = ['```handoff\n' + JSON.stringify({ stopped: true, blockedOnDecision: { itemId: items[1].id, question: 'How should a near tie count?' } }) + '\n```', 'Ran the required benchmark once; no product edits were needed.'];
+  };
+  const { actionRecovery } = await import('@/core/action-recovery');
+  const review = vi.spyOn(actionRecovery, 'reviewPipeline').mockResolvedValue();
+  try {
+    const { pipelineId } = await run('recover a recorded user rule', 'decision-resume-fixture');
+    // A process crash leaves running rows for the boot sweep, rather than a caught CLI failure.
+    await executeRaw(`UPDATE pipelines SET status = 'running' WHERE id = '${pipelineId}'`);
+    await executeRaw(`UPDATE pipeline_nodes SET status = 'running' WHERE pipeline_id = '${pipelineId}' AND name = 'Implement'`);
+    await manager.reconcileInterrupted();
+    expect((await manager.getPipeline(pipelineId))?.status).toBe('paused');
+    const interrupted = calls.filter(call => call.stageName === 'Implement')[1];
+    throwPlan = {};
+    await manager.resume(pipelineId);
+    const resumed = calls.filter(call => call.stageName === 'Implement')[2];
+    expect(resumed.metadata.attemptId).toBe(interrupted.metadata.attemptId);
+    expect(resumed.input).toContain(response);
+    expect(calls.find(call => call.stageName === 'QA')?.input).toContain(response);
+    expect((await manager.getPipeline(pipelineId))?.status).toBe('completed');
+    expect(approvalsAsked).toBe(1);
+  } finally { review.mockRestore(); workspace.mockRestore(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('settling a user decision rolls back both records on failure and preserves a concurrent pause', async () => {
+  throwPlan = { Implement: ['CLI claude exited with signal SIGKILL: no failure diagnostic reported'] };
+  const { pipelineId } = await run('persist decisions atomically');
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  const [checkpoint] = await pipelineRepository.getCheckpoints(pipelineId, 1);
+  const [item] = await pipelineRepository.addPlanItems([{ pipelineId, ordinal: 100, title: 'User decision' }]);
+  const { hydrateWalk } = await import('./pipeline-manager');
+  const state = hydrateWalk(checkpoint.state)!;
+  const decision = { itemId: item.id, blockedItemId: state.currentItemId, nodeKey: checkpoint.nodeKey,
+    attemptId: state.attemptId!, question: 'How should a near tie count?', response: 'Inconclusive', decidedBy: userId, decidedAt: new Date().toISOString() };
+  const pipeline = await manager.getPipeline(pipelineId);
+  const pendingItemEdits = [{ skip: [], add: [{ title: 'Queued follow-up' }], evidence: 'Preserve concurrent edits' }];
+  await pipelineRepository.updatePipeline(pipelineId, { status: 'running', metadata: { ...pipeline?.metadata, pendingDecision: decision } });
+  await pipelineRepository.queueItemEdit(pipelineId, pendingItemEdits[0]);
+  const sync = vi.spyOn(pipelineRepository as unknown as { syncWorkPlan: (...args: unknown[]) => Promise<void> }, 'syncWorkPlan').mockRejectedValueOnce(new Error('Injected plan projection failure'));
+  try { await expect(pipelineRepository.settleUserDecision(pipelineId, decision)).rejects.toThrow('Injected plan projection failure'); }
+  finally { sync.mockRestore(); }
+  expect((await pipelineRepository.getPlanItems(pipelineId)).find(row => row.id === item.id)).toMatchObject({ status: 'pending', result: null });
+  expect(await manager.getPipeline(pipelineId)).toMatchObject({ metadata: { pendingDecision: decision, pendingItemEdits } });
+  expect((await manager.getPipeline(pipelineId))?.metadata?.userDecisions).toBeUndefined();
+  await pipelineRepository.updatePipeline(pipelineId, { status: 'paused' });
+  expect(await pipelineRepository.settleUserDecision(pipelineId, decision)).toBe(false);
+  expect((await manager.getPipeline(pipelineId))?.status).toBe('paused');
+  await pipelineRepository.updatePipeline(pipelineId, { status: 'running' });
+  expect(await pipelineRepository.settleUserDecision(pipelineId, decision)).toBe(true);
+  expect((await pipelineRepository.getPlanItems(pipelineId)).find(row => row.id === item.id)).toMatchObject({ status: 'done', result: JSON.stringify(decision) });
+  expect(await manager.getPipeline(pipelineId)).toMatchObject({ metadata: { userDecisions: [decision], pendingItemEdits } });
+  expect((await manager.getPipeline(pipelineId))?.metadata?.pendingDecision).toBeUndefined();
+});

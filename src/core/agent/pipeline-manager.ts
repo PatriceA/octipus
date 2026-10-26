@@ -1306,6 +1306,8 @@ export class PipelineManager {
       if (!deferred) traversals.clear();
       const bodyHead = byKey.get(r.cursor)?.parentKey;
       const bodyKeys = new Set(graph.nodes.filter(node => node.parentKey === bodyHead).map(node => node.key));
+      // A prerequisite's body counters must not consume the deferred item's retry budget.
+      if (deferred) for (const edge of graph.edges) if (bodyKeys.has(edge.from)) traversals.delete(edgeId(edge));
       for (const [k, v] of Object.entries(r.traversals)) {
         if (!deferred || graph.edges.some(edge => edgeId(edge) === k && bodyKeys.has(edge.from))) traversals.set(k, v);
       }
@@ -1588,7 +1590,7 @@ export class PipelineManager {
             previousOutput += `\n\nCompleted prerequisite evidence: ${prerequisiteOutput.slice(-8000)}`;
             // Persist the restored checkpoint before consuming its recovery record.
             await pipelineRepository.saveCheckpoint({ pipelineId: pipeline.id, nodeKey: saved.cursor,
-              state: serializeWalk({ ...saved, previousOutput, steps }) });
+              state: serializeWalk({ ...saved, previousOutput, steps, traversals: Object.fromEntries(traversals), pipelineSources: [...pipelineSources] }) });
             await this.updatePipeline(pipeline.id, { metadata: { ...latest?.metadata, deferredItems: remaining } });
             continue;
           }
@@ -1751,11 +1753,14 @@ export class PipelineManager {
         const retryLimit = stageTemplate.maxRetries ?? 3;
         if (contractFeedback) input += `\n\nPrevious attempt failed its stage contract: ${contractFeedback}\nCorrect this failure and provide evidence of the required work. If a real pending user decision blocks work, report blockedOnDecision with its plan item id and question. Do not fabricate edits, weaken assertions, or repeat a noisy benchmark to satisfy a file count.`;
         const decisions = persisted?.metadata?.userDecisions;
-        const verificationOnly = b.producesArtifacts && Array.isArray(decisions) && decisions.some((decision: unknown) => {
+        const itemDecisions = Array.isArray(decisions) ? decisions.filter((decision: unknown): decision is Record<string, unknown> => {
           if (!decision || typeof decision !== 'object') return false;
           const recorded = decision as Record<string, unknown>;
-          return recorded.blockedItemId === currentItem?.id && recorded.nodeKey === node.nodeKey && recorded.attemptId === attemptId;
-        });
+          return recorded.blockedItemId === currentItem?.id && typeof recorded.question === 'string'
+            && typeof recorded.response === 'string' && recorded.response.trim().length > 0;
+        }) : [];
+        if (itemDecisions.length) input += `\n\nRECORDED USER DECISIONS: ${JSON.stringify(itemDecisions)}\nFollow these recorded answers for this item's required work; do not re-ask settled questions or invent a different rule.`;
+        const verificationOnly = b.producesArtifacts && itemDecisions.some(recorded => recorded.nodeKey === node.nodeKey && recorded.attemptId === attemptId);
         const declaredWork = verificationOnly ? { ...b, producesArtifacts: false, runsCommands: true } : b;
         const stepResult = await this.runStepNode({
           retryContract: retryCount < retryLimit,
@@ -3141,11 +3146,9 @@ export class PipelineManager {
         }
         const decision = { itemId: decisionItem.id, blockedItemId: itemId, nodeKey: node.nodeKey, attemptId, question: pendingDecision.question, response: answer.response,
           decidedBy: answer.decidedBy ?? pipeline.userId, decidedAt: answer.decidedAt ?? new Date().toISOString() };
-        await pipelineRepository.updatePlanItem(decisionItem.id, { status: 'done', result: JSON.stringify(decision), completedAt: new Date() });
-        const answered = await this.getPipeline(pipeline.id);
-        const { pendingDecision: _settled, ...metadata } = answered?.metadata ?? {};
-        await this.updatePipeline(pipeline.id, { status: 'running', metadata: { ...metadata,
-          userDecisions: [...(Array.isArray(metadata.userDecisions) ? metadata.userDecisions : []), decision] } });
+        if (!await pipelineRepository.settleUserDecision(pipeline.id, decision)) {
+          return { output: '', raw: '', stopped: { pipelineId: pipeline.id, result: 'Decision was not applied: the pipeline was paused/stopped or the pending decision changed. Inspect status before resuming.' } };
+        }
         return this.runStepNode({ ...args, partial: undefined,
           declared: declared.producesArtifacts ? { ...declared, producesArtifacts: false, runsCommands: true } : declared,
           input: `${input}\n\nRECORDED USER DECISION: ${JSON.stringify(decision)}\nUse this decision for the required work. Verification-only work is valid for this approved decision: do not manufacture file changes. Run the previously blocked required gate once and report evidence; do not relax acceptance criteria.`, startReason: 'user_decision' });

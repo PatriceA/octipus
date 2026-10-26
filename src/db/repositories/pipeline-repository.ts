@@ -5,7 +5,7 @@ import { projectPipelinePlan } from './pipeline-work-plan';
 import { and, asc, desc, eq, gt, inArray, notInArray, sql } from 'drizzle-orm';
 import { getDb } from '../postgres';
 import { runEvents } from '../schema/run-events';
-import type { PipelineItemEdit } from '@/shared/pipeline-items';
+import type { PipelineItemEdit, PipelineUserDecision } from '@/shared/pipeline-items';
 import {
   type NewPipelineCheckpoint,
   type PipelineCheckpointRow,
@@ -75,6 +75,29 @@ export class PipelineRepository {
         updatedAt: new Date() }).where(eq(pipelines.id, id));
       if (data.metadata?.environmentBlock) await this.clearSettledEnvironmentBlock(tx, id);
       await this.syncWorkPlan(tx, id);
+    });
+  }
+
+  /** Commit the answer and its decision item together, preserving concurrent run edits. */
+  async settleUserDecision(pipelineId: string, decision: PipelineUserDecision): Promise<boolean> {
+    return this.db.transaction(async tx => {
+      // i2: the runtime supplies its authorized pipeline id; the decision item is constrained to the same pipeline.
+      const [pipeline] = await tx.select().from(pipelines).where(eq(pipelines.id, pipelineId)).for('update');
+      if (!pipeline || !['running', 'awaiting_approval'].includes(pipeline.status)) return false;
+      const pending = pipeline.metadata?.pendingDecision as Partial<PipelineUserDecision> | undefined;
+      if (pending?.itemId !== decision.itemId || pending.blockedItemId !== decision.blockedItemId
+        || pending.nodeKey !== decision.nodeKey || pending.attemptId !== decision.attemptId) return false;
+      const [item] = await tx.update(planItems).set({ status: 'done', result: JSON.stringify(decision), completedAt: new Date(), updatedAt: new Date() })
+        .where(and(eq(planItems.id, decision.itemId), eq(planItems.pipelineId, pipelineId), notInArray(planItems.status, ['done', 'skipped'])))
+        .returning({ id: planItems.id });
+      if (!item) return false;
+      const { pendingDecision: _settled, ...metadata } = pipeline.metadata ?? {};
+      await tx.update(pipelines).set({ status: 'running', summary: 'User decision recorded; continuing the saved stage.', updatedAt: new Date(),
+        metadata: { ...metadata, userDecisions: [...(Array.isArray(metadata.userDecisions) ? metadata.userDecisions : []), decision] },
+      }).where(eq(pipelines.id, pipelineId));
+      await this.clearSettledEnvironmentBlock(tx, pipelineId);
+      await this.syncWorkPlan(tx, pipelineId);
+      return true;
     });
   }
 

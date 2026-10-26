@@ -755,7 +755,9 @@ coordinator before dispatch and omitted from workers' product checks once met.
 
 A handoff can report `blockedOnDecision: {itemId, question, options?}` referencing
 a pending user-decision item in this run. The coordinator asks a real question,
-records its answer and actor, then continues the saved stage. A missing answer
+records its answer and actor atomically with completion of the decision item,
+then continues the saved stage. The recorded answer is included again after
+restart and in subsequent stages for the blocked item. A missing answer
 pauses with `pendingDecision`. This happens before artifact/command contracts,
 so the worker need not fabricate edits while waiting. After a recorded decision,
 verification-only implementation is valid for that attempt when it executes the
@@ -765,7 +767,9 @@ Use `plan__add_items` with `beforeItemId` to insert a prerequisite before an
 existing item. Root `update_pipeline_items` supports `beforeItemId` on each
 addition. Edits apply at stage boundaries, including during retries. An inserted
 prerequisite can defer the current item; its stage checkpoint is restored after
-the prerequisite, retaining the interrupted item's implementation and QA ledger.
+the prerequisite, retaining the interrupted item's implementation, QA ledger
+and its own retry budget. Prerequisite retries do not consume the deferred
+item's retries; global traversal counts remain intact across recovery.
 
 Host-service shells mount `~/.cache/ms-playwright` read-only, plus an absolute
 operator-configured `PLAYWRIGHT_BROWSERS_PATH`, and supply that browser location
