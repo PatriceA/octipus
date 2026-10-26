@@ -78,6 +78,7 @@ export async function readPendingSnapshot(userId: string): Promise<Omit<Permissi
   }));
   const approvals: PendingApproval[] = getAgentService().getPendingApprovals(userId).map((approval) => ({
     requestId: approval.id,
+    ...(approval.kind === 'question' ? { kind: 'question' as const } : {}),
     sessionId: approval.sessionId,
     summary: approval.summary,
     question: approval.question,

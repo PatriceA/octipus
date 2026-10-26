@@ -112,6 +112,7 @@ export function GlobalPermissionBanner({ inline = false }: { inline?: boolean } 
         {/* Show approval banner if one is pending (approvals take priority) */}
         {latestApproval && (
           <ApprovalBanner
+            key={latestApproval.requestId}
             approval={latestApproval}
             totalCount={totalCount}
             isExpanded={expandedId === latestApproval.requestId}
@@ -261,6 +262,8 @@ function ApprovalBanner({
   onApprove: (response?: string) => void;
   onDeny: () => void;
 }) {
+  const [response, setResponse] = useState('');
+  const freeQuestion = approval.kind === 'question' && !approval.options?.length;
   return (
     <div className="mx-4 mb-4 rounded-xs border border-warning/40 bg-surface-container glow-warn overflow-hidden font-mono">
       <div className="flex items-center justify-between px-4 py-3">
@@ -311,6 +314,8 @@ function ApprovalBanner({
                 <Square className="w-3 h-3" /> Stop
               </button>
             </>
+          ) : freeQuestion ? (
+            <button onClick={onDeny} className="px-3 py-1.5 text-sm text-error">Pause</button>
           ) : (
             <>
               <button
@@ -330,8 +335,18 @@ function ApprovalBanner({
         </div>
       </div>
 
+      {approval.kind === 'question' && <div className="border-t border-outline-variant/10 px-4 py-3 space-y-2">
+        <p className="text-sm text-on-surface">{approval.question}</p>
+        {freeQuestion && <form className="space-y-2" onSubmit={event => { event.preventDefault(); if (response.trim()) onApprove(response.trim()); }}>
+          <label className="block text-sm">Your decision
+            <textarea value={response} onChange={event => setResponse(event.target.value)} maxLength={4000}
+              className="mt-1 block w-full rounded border border-outline-variant p-2 bg-surface" />
+          </label>
+          <button type="submit" disabled={!response.trim()} className="px-3 py-1.5 rounded bg-primary text-on-primary disabled:opacity-50">Submit decision</button>
+        </form>}
+      </div>}
       {/* Expandable details */}
-      {isExpanded && approval.question && (
+      {isExpanded && approval.question && approval.kind !== 'question' && (
         <div className="border-t border-outline-variant/10 px-4 py-3 bg-surface-container-low">
           <p className="text-sm text-on-surface">{approval.question}</p>
         </div>

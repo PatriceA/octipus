@@ -1,4 +1,4 @@
-import { runtimePath } from '@/security/runtime-path';
+import { runtimePath, packageStorePath } from '@/security/runtime-path';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { markToolNotExecuted, ToolNotExecutedError } from '@/core/tool-execution-error';
 import { buildChildEnv, isSensitiveEnvName } from '@/security/child-env';
@@ -70,6 +70,7 @@ export function resolveAllowNetwork(options: { unsafe?: boolean; allowNetwork?: 
 /** A command's environment: the inherited one without `unsetEnv`, `env` laid over it. */
 function childEnv(options: { env?: Record<string, string> } & ShellEnvOptions): Record<string, string> {
   const env = buildChildEnv();
+  env.npm_config_store_dir ??= packageStorePath();
   for (const k of options.unsetEnv ?? []) delete env[k];
   return { ...env, ...options.env };
 }
@@ -138,7 +139,7 @@ export class LocalShellOperations implements ShellOperations {
     const { wrapCommand } = await import('@/security/shell-sandbox');
     let wrap: ReturnType<typeof wrapCommand>;
     try {
-      wrap = wrapCommand(baseArgv, { workspaceRoot: cwd, allowNetwork: resolveAllowNetwork(options), path: options.env?.PATH, extraReadWrite: options.extraReadWrite });
+      wrap = wrapCommand(baseArgv, { workspaceRoot: cwd, allowNetwork: resolveAllowNetwork(options), path: options.env?.PATH, extraReadWrite: options.extraReadWrite, extraReadOnly: options.extraReadOnly });
     } catch (error) {
       throw new ToolNotExecutedError('shell', error instanceof Error ? error.message : String(error), { cause: error });
     }
@@ -292,6 +293,7 @@ export class LocalShellOperations implements ShellOperations {
       workspaceRoot: cwd,
       allowNetwork: resolveAllowNetwork(options),
       extraReadWrite: options.extraReadWrite,
+      extraReadOnly: options.extraReadOnly,
     });
     const done = () => { wrap.cleanup(); options.onExit?.(); };
 

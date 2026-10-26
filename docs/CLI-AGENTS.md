@@ -735,3 +735,45 @@ oversized, or unsupported CLI images are reported rather than converted to text.
 Raw image bytes are omitted from prompt dumps. API-worker auxiliary vision
 summaries are labeled as fallible supplemental descriptions, never authoritative
 replacements for the original image.
+
+
+### Evidence, decisions, prerequisites and runtime caches
+
+Read-only stages report evidence and proposed contract/visible-plan updates in
+handoffs for the coordinator to record. They must not edit the contract or
+product files. If a read-only write still occurs, the pipeline pauses with
+`readOnlyViolation`, preserving the report and parsed verdict for inspection;
+the item is not failed or redispatched for a cosmetic correction.
+
+`environmentBlocked` must identify a required contract gate or declared runtime
+prerequisite. An ad-hoc probe failure gets one corrective retry of the same
+stage/attempt before an environment pause. Package-local dependencies must be
+probed from their package cwd; unavailable coordinator-only plan tools produce
+`coordinatorRequest` instead of an environment failure. Visible-plan status
+criteria are rejected by the planning tool; legacy criteria are checked by the
+coordinator before dispatch and omitted from workers' product checks once met.
+
+A handoff can report `blockedOnDecision: {itemId, question, options?}` referencing
+a pending user-decision item in this run. The coordinator asks a real question,
+records its answer and actor, then continues the saved stage. A missing answer
+pauses with `pendingDecision`. This happens before artifact/command contracts,
+so the worker need not fabricate edits while waiting. After a recorded decision,
+verification-only implementation is valid for that attempt when it executes the
+required checks; it is never asked to manufacture a file change.
+
+Use `plan__add_items` with `beforeItemId` to insert a prerequisite before an
+existing item. Root `update_pipeline_items` supports `beforeItemId` on each
+addition. Edits apply at stage boundaries, including during retries. An inserted
+prerequisite can defer the current item; its stage checkpoint is restored after
+the prerequisite, retaining the interrupted item's implementation and QA ledger.
+
+Host-service shells mount `~/.cache/ms-playwright` read-only, plus an absolute
+operator-configured `PLAYWRIGHT_BROWSERS_PATH`, and supply that browser location
+to Playwright even with a temporary tool home. A project shell can also read the
+same principal's canonical workspace for contract evidence. Package stores
+default to `/tmp/octipus-pnpm-store`, outside the repository.
+
+Environment diagnostics are scoped to the item, node and attempt that emitted
+them. Completing or skipping that item clears the block, including queued
+skips; a stale metadata writer cannot reinstate it. Status does not advertise a
+previous item's diagnostic as the next item's blocker.

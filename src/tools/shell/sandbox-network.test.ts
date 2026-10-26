@@ -1,3 +1,4 @@
+import { browserRuntimePaths } from '@/security/runtime-path';
 import { describe, expect, test } from 'vitest';
 import { resolveAllowNetwork } from './local-operations';
 
@@ -42,6 +43,7 @@ describe('pipeline stage host services (#17)', () => {
     const { withHostServices } = await import('./index');
     expect(withHostServices({ pipelineId: 'p' }, { allowNetwork: false })).toEqual({ allowNetwork: false });
     expect(withHostServices({ hostServices: true }, { allowNetwork: false, extraReadWrite: ['/home/tool'] }))
-      .toEqual({ allowNetwork: true, extraReadWrite: ['/home/tool', '/var/run/docker.sock'] });
+      .toMatchObject({ allowNetwork: true, extraReadWrite: ['/home/tool', '/var/run/docker.sock'], extraReadOnly: browserRuntimePaths(),
+        env: { PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH ?? browserRuntimePaths()[0] } });
   });
 });

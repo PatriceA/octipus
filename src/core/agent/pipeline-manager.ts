@@ -1,4 +1,5 @@
-import { stageHostServices, stageEnvironmentReason, StageEnvironmentError } from './pipeline-environment';
+import { workPlanRepository } from '@/db/repositories/work-plan-repository';
+import { stageHostServices, stageEnvironmentReason, StageEnvironmentError, coordinatorCriterion, coordinatorCriterionSatisfied } from './pipeline-environment';
 import type { PendingStageApproval } from '@/shared/pipeline-approval';
 import { replyAnswer } from './approval-manager';
 import { resolve as resolvePath } from 'node:path';
@@ -802,11 +803,13 @@ export function isFinalPlanItem(items: Array<{ ordinal: number; status?: string 
  * which is what makes pause/resume and rewind-to-node the same mechanism.
  */
 class StageContractError extends Error {}
+class StageReadOnlyViolation extends Error {}
 
 /** What a parked stage waits on, as `get_pipeline_status` reports it (#24). */
 export type { PendingStageApproval } from '@/shared/pipeline-approval';
 
 export interface WalkState {
+  qaAttempts?: Record<string, QaAttempt[]>;
   contractRetries?: Record<string, number>;
   contractFeedback?: string;
   cursor: string;
@@ -872,6 +875,7 @@ export function hydrateWalk(raw: unknown): WalkState | null {
     previousOutput: typeof r.previousOutput === 'string' ? r.previousOutput : '',
     handoffChain,
     pipelineSources: list<string>(r.pipelineSources),
+    ...(r.qaAttempts ? { qaAttempts: record<QaAttempt[]>(r.qaAttempts) } : {}),
     traversals: record<number>(r.traversals),
     loopMarks: record<number>(r.loopMarks),
     pendingFeedback: record<QAValidationResult>(r.pendingFeedback),
@@ -1294,17 +1298,19 @@ export class PipelineManager {
     let steps = 0;
     const MAX_STEPS = 500;
 
-    // Resuming or rewinding: adopt the snapshot taken when the target node was
-    // last entered. Everything the walker carries is restored except the plan
-    // item, which is re-read from the row (the user may have edited it while
-    // the run sat paused).
-    if (args.resumeState) {
-      const r = args.resumeState;
+    const restoreWalk = async (r: WalkState, deferred = false) => {
       cursor = r.cursor;
       previousOutput = r.previousOutput;
-      handoffChain.push(...r.handoffChain);
-      pipelineSources.push(...r.pipelineSources);
-      for (const [k, v] of Object.entries(r.traversals)) traversals.set(k, v);
+      handoffChain.splice(0, handoffChain.length, ...r.handoffChain);
+      pipelineSources.splice(0, pipelineSources.length, ...new Set([...r.pipelineSources, ...pipelineSources]));
+      if (!deferred) traversals.clear();
+      const bodyHead = byKey.get(r.cursor)?.parentKey;
+      const bodyKeys = new Set(graph.nodes.filter(node => node.parentKey === bodyHead).map(node => node.key));
+      for (const [k, v] of Object.entries(r.traversals)) {
+        if (!deferred || graph.edges.some(edge => edgeId(edge) === k && bodyKeys.has(edge.from))) traversals.set(k, v);
+      }
+      pendingFeedback.clear(); judgedContext.clear(); contractRetries.clear(); qaAttempts.clear();
+      for (const [key, attempts] of Object.entries(r.qaAttempts ?? {})) if (Array.isArray(attempts)) qaAttempts.set(key, attempts);
       for (const [k, v] of Object.entries(r.loopMarks)) loopMarks.set(k, v);
       for (const [k, v] of Object.entries(r.pendingFeedback)) pendingFeedback.set(k, v);
       for (const [k, v] of Object.entries(r.judgedContext)) judgedContext.set(k, v);
@@ -1312,12 +1318,22 @@ export class PipelineManager {
       contractFeedback = r.contractFeedback;
       for (const [k, v] of Object.entries(r.contractRetries ?? {})) contractRetries.set(k, v);
       rejectedReport = r.rejectedReport;
-      steps = r.steps;
+      steps = Math.max(steps, r.steps);
       currentItem = r.currentItemId
         ? (await pipelineRepository.getPlanItems(pipeline.id)).find((i) => i.id === r.currentItemId) ?? null
         : null;
       resumedAttempt = r.attemptId;
       resumedPartial = r.partial;
+      return currentItem;
+    };
+
+    // Resuming or rewinding: adopt the snapshot taken when the target node was
+    // last entered. Everything the walker carries is restored except the plan
+    // item, which is re-read from the row (the user may have edited it while
+    // the run sat paused).
+    if (args.resumeState) {
+      const r = args.resumeState;
+      currentItem = await restoreWalk(r);
       const loopHead = byKey.get(cursor)?.parentKey;
       if (currentItem?.status === 'skipped' && loopHead) {
         // The item this checkpoint was inside was skipped while the run was
@@ -1333,8 +1349,19 @@ export class PipelineManager {
     }
 
     while (cursor) {
-      const persisted = await this.getPipeline(pipeline.id);
+      let persisted = await this.getPipeline(pipeline.id);
       if (persisted && ['paused', 'stopped'].includes(persisted.status)) return { pipelineId: pipeline.id, result: persisted.summary ?? 'Pipeline paused.' };
+      if (persisted?.metadata?.pendingItemEdits) {
+        await pipelineRepository.applyItemEdits(pipeline.id);
+        persisted = await this.getPipeline(pipeline.id);
+        if (currentItem) {
+          currentItem = (await pipelineRepository.getPlanItems(pipeline.id)).find(item => item.id === currentItem!.id) ?? null;
+          const head: string | undefined = byKey.get(cursor)?.parentKey;
+          if (currentItem?.status === 'skipped' && head) {
+            cursor = head; currentItem = null; resumedAttempt = resumedPartial = undefined;
+          }
+        }
+      }
       // Node boundary: snapshot first, then honour a pause request. Snapshot
       // BEFORE the node runs, so resuming re-enters this node rather than
       // trying to continue a worker turn mid-flight.
@@ -1343,6 +1370,7 @@ export class PipelineManager {
       const partial = resumedPartial?.attemptId === attemptId && resumedPartial.itemId === (currentItem?.id ?? null) ? resumedPartial : undefined;
       resumedAttempt = resumedPartial = undefined;
       const snapshot: WalkState = {
+        qaAttempts: Object.fromEntries(qaAttempts),
         contractRetries: Object.fromEntries(contractRetries),
         contractFeedback,
         cursor,
@@ -1360,6 +1388,24 @@ export class PipelineManager {
         attemptId,
         ...(partial ? { partial } : {}),
       };
+      if (currentItem) {
+        const ordered = await pipelineRepository.getPlanItems(pipeline.id);
+        const active = ordered.find(item => item.id === currentItem!.id);
+        const prerequisite = active && ordered.find(item => item.status === 'pending' && item.ordinal < active.ordinal);
+        const head: string | undefined = byKey.get(cursor)?.parentKey ?? (byKey.get(cursor)?.kind === 'foreach' ? cursor : undefined);
+        const auditor = head ? graph.nodes.filter(node => node.parentKey === head).find(node => built[node.templateIndex].stageType === 'qa_validation') : undefined;
+        const resumeCursor = byKey.get(cursor)?.parentKey ? cursor : auditor?.key;
+        if (prerequisite && head && resumeCursor) {
+          const saved = { ...snapshot, cursor: resumeCursor,
+            previousOutput: byKey.get(cursor)?.kind === 'foreach' ? judgedContext.get(resumeCursor) ?? previousOutput : previousOutput };
+          const latest = await this.getPipeline(pipeline.id);
+          const deferred = (latest?.metadata?.deferredItems ?? {}) as Record<string, unknown>;
+          await this.updatePipeline(pipeline.id, { metadata: { ...latest?.metadata, deferredItems: { ...deferred, [currentItem.id]: deferred[currentItem.id] ?? serializeWalk(saved) } } });
+          await pipelineRepository.updatePlanItem(currentItem.id, { status: 'pending' });
+          cursor = head; currentItem = null; resumedAttempt = resumedPartial = undefined;
+          continue;
+        }
+      }
       const checkpoint = await pipelineRepository.saveCheckpoint({
         pipelineId: pipeline.id,
         nodeKey: cursor,
@@ -1531,6 +1577,23 @@ export class PipelineManager {
         currentItem = stepResult.item;
         outcome = stepResult.outcome;
 
+        if (outcome === 'loop_next' && currentItem) {
+          const latest = await this.getPipeline(pipeline.id);
+          const deferred = (latest?.metadata?.deferredItems ?? {}) as Record<string, unknown>;
+          const saved = hydrateWalk(deferred[currentItem.id]);
+          if (saved) {
+            const prerequisiteOutput = previousOutput;
+            const { [currentItem.id]: _restored, ...remaining } = deferred;
+            currentItem = await restoreWalk(saved, true);
+            previousOutput += `\n\nCompleted prerequisite evidence: ${prerequisiteOutput.slice(-8000)}`;
+            // Persist the restored checkpoint before consuming its recovery record.
+            await pipelineRepository.saveCheckpoint({ pipelineId: pipeline.id, nodeKey: saved.cursor,
+              state: serializeWalk({ ...saved, previousOutput, steps }) });
+            await this.updatePipeline(pipeline.id, { metadata: { ...latest?.metadata, deferredItems: remaining } });
+            continue;
+          }
+        }
+
         if (outcome === 'loop_next') {
           // Each item starts from the state the loop was entered in. Two things
           // are per-item, not per-run: the retry budget on the body's QA edges
@@ -1552,7 +1615,15 @@ export class PipelineManager {
         const stageTemplate = template.stages[gnode.templateIndex];
         const isQa = b.stageType === 'qa_validation';
         // Only a stage inside the plan loop is judging one item.
-        const itemAcceptance = currentItem && gnode.parentKey ? currentItem.acceptance ?? [] : [];
+        const coordinatorCriteria = currentItem && gnode.parentKey ? (currentItem.acceptance ?? []).filter(coordinatorCriterion) : [];
+        let coordinatorEvidence = '';
+        if (coordinatorCriteria.length) {
+          const visible = await workPlanRepository.read(pipeline.sessionId, pipeline.userId);
+          const unmet = coordinatorCriteria.find(criterion => !coordinatorCriterionSatisfied(criterion, visible.current?.steps ?? []));
+          if (unmet) return this.pauseForCoordinator(pipeline, node, `Coordinator-owned criterion is unmet: ${unmet}`, attemptId, currentItem?.id ?? null);
+          coordinatorEvidence = `Coordinator verified these visible-plan checks at revision ${visible.revision}: ${coordinatorCriteria.join("; ")}. Do not invoke coordinator-only plan tools; verify the product acceptance below.`;
+        }
+        const itemAcceptance = currentItem && gnode.parentKey ? (currentItem.acceptance ?? []).filter(criterion => !coordinatorCriterion(criterion)) : [];
 
         // An auditor-only re-run must re-read the work it judged, not its own
         // previous verdict — otherwise a real retry followed by a rubber stamp
@@ -1580,8 +1651,8 @@ export class PipelineManager {
         if (currentItem && gnode.parentKey) {
           input += `\n\n---\nCURRENT PLAN ITEM (#${currentItem.ordinal + 1}): ${currentItem.title}` +
             (currentItem.detail ? `\n${currentItem.detail}` : '') +
-            (currentItem.acceptance?.length
-              ? `\n\nAcceptance criteria (QA will check each one):\n${currentItem.acceptance.map((c) => `- ${c}`).join('\n')}`
+            (itemAcceptance.length
+              ? `\n\nAcceptance criteria (QA will check each one):\n${itemAcceptance.map((c) => `- ${c}`).join('\n')}`
               : '') +
             `\n\nWork ONLY on this item. Anything else you discover: add it to the plan with ` +
             `\`plan__add_items\` instead of doing it here.`;
@@ -1596,6 +1667,7 @@ export class PipelineManager {
 
         // Non-terminal nodes emit a structured ```handoff block for whoever
         // runs next; `createHandoffContext` prefers it over regex scraping.
+        if (coordinatorEvidence) input = `${coordinatorEvidence}\n\n${input}`;
         if (graph.edges.some((e) => e.from === cursor)) input += HANDOFF_EMIT_INSTRUCTION;
         // A rejected REPORT is corrected, not re-audited (`qaVerdictCorrectionInput`).
         // Without the report to hand — a resume from a checkpoint written before
@@ -1677,7 +1749,14 @@ export class PipelineManager {
         const retryKey = `${currentItem?.id ?? "run"}:${cursor}`;
         const retryCount = contractRetries.get(retryKey) ?? 0;
         const retryLimit = stageTemplate.maxRetries ?? 3;
-        if (contractFeedback) input += `\n\nPrevious attempt failed its stage contract: ${contractFeedback}\nCorrect this failure and provide evidence of the required work.`;
+        if (contractFeedback) input += `\n\nPrevious attempt failed its stage contract: ${contractFeedback}\nCorrect this failure and provide evidence of the required work. If a real pending user decision blocks work, report blockedOnDecision with its plan item id and question. Do not fabricate edits, weaken assertions, or repeat a noisy benchmark to satisfy a file count.`;
+        const decisions = persisted?.metadata?.userDecisions;
+        const verificationOnly = b.producesArtifacts && Array.isArray(decisions) && decisions.some((decision: unknown) => {
+          if (!decision || typeof decision !== 'object') return false;
+          const recorded = decision as Record<string, unknown>;
+          return recorded.blockedItemId === currentItem?.id && recorded.nodeKey === node.nodeKey && recorded.attemptId === attemptId;
+        });
+        const declaredWork = verificationOnly ? { ...b, producesArtifacts: false, runsCommands: true } : b;
         const stepResult = await this.runStepNode({
           retryContract: retryCount < retryLimit,
           pipeline,
@@ -1689,10 +1768,10 @@ export class PipelineManager {
           // the stage for obeying — and the command it declares it must execute
           // has been executed, by the framework, for this visit.
           declared: correcting
-            ? correctionDeclaration(b)
+            ? correctionDeclaration(declaredWork)
             : frameworkVerified
-              ? { ...b, runsCommands: false }
-              : b,
+              ? { ...declaredWork, runsCommands: false }
+              : declaredWork,
           stageTemplate,
           input,
           // A correction visit is told to re-read nothing, and its own prompt
@@ -2426,6 +2505,7 @@ export class PipelineManager {
           // said nothing changed" from "there was no snapshot" — the two reasons
           // a counters-only failure can happen.
           filesTouched,
+          ...(failure ? { reason: failure } : {}),
           ...(measured
             ? {
                 filesChanged: counters.filesChanged,
@@ -2476,6 +2556,7 @@ export class PipelineManager {
     }
 
     if (failure) {
+      if (declared.readOnly && filesTouched !== null && filesTouched > 0) throw new StageReadOnlyViolation(failure);
       throw new StageContractError(
         `Stage "${stageName}" did not do what it declared: ${failure}. ` +
           `Reporting it complete would claim work that did not happen.`,
@@ -2838,6 +2919,15 @@ export class PipelineManager {
    * the node failed) — the caller returns that verbatim, so every exit still
    * goes through one place.
    */
+  private async pauseForCoordinator(pipeline: Pipeline, node: PipelineNodeRow, reason: string, attemptId: string, itemId: string | null) {
+    const current = await this.getPipeline(pipeline.id);
+    const summary = `Coordinator action required at "${node.name}": ${reason}`;
+    await this.updateNode(node.id, { status: 'pending', error: reason });
+    await this.updatePipeline(pipeline.id, { status: 'paused', summary, metadata: { ...current?.metadata,
+      coordinatorRequest: { nodeKey: node.nodeKey, attemptId, itemId, reason, action: 'Use root get_work_plan/update_work_plan or correct the coordinator-owned criterion, then resume the saved attempt.' } } });
+    return { pipelineId: pipeline.id, result: summary };
+  }
+
   private async pauseForEnvironment(pipeline: Pipeline, node: PipelineNodeRow, reason: string, attemptId: string, itemId: string | null) {
     const current = await this.getPipeline(pipeline.id);
     const summary = `Environment blocked at "${node.name}". Repair the required toolchain/service, then resume the saved attempt. ${reason}`;
@@ -2875,11 +2965,13 @@ export class PipelineManager {
     partial?: StagePartial;
   }): Promise<{ output: string; raw: string; contractFailure?: string; stopped?: { pipelineId: string; result: string } }> {
     const { pipeline, node, declared, stageTemplate, stageContext, context, registry, workspaceRoot, title, attemptId, itemId, checkpoint } = args;
-    const input = args.partial ? `${incompleteAttemptNote(args.partial.text)}\n\n${args.input}` : args.input;
+    let input = args.partial ? `${incompleteAttemptNote(args.partial.text)}\n\n${args.input}` : args.input;
     const rootAgent = getAgentService();
     const sessionId = pipeline.sessionId;
     // Progress of this attempt, on its checkpoint: a restart or a cold retry
     // gets it back as INCOMPLETE output, never as the stage's result.
+    let stageReport = '';
+    if (declared.readOnly) input = 'READ-ONLY STAGE: Do not edit product files, the contract/plan document, or the visible work plan. Put all evidence and proposed plan updates in your report/handoff for the coordinator to record. A brief asking to update the plan does not authorize this stage to write it.\n\n' + input;
     let partialText = args.partial?.text ?? '';
     let partialWrite: Promise<unknown> = Promise.resolve();
     const savePartial = (text: string | null) => {
@@ -3004,6 +3096,7 @@ export class PipelineManager {
         },
       );
 
+      stageReport = String(result ?? '');
       // A node that returns nothing has not reported, whatever its status.
       if (String(result ?? '').trim() === '') {
         throw new Error(
@@ -3019,6 +3112,44 @@ export class PipelineManager {
       }
       const handoff = parseStructuredHandoff(String(result));
       const verdict = declared.stageType === 'qa_validation' ? this.parseQAResult(String(result)) : null;
+      const itemsForDecision = handoff ? await pipelineRepository.getPlanItems(pipeline.id) : [];
+      const referenced = handoff?.openQuestions.find(question => /user|decision|approval|rule|blocked/i.test(question)
+        && itemsForDecision.some(item => item.id !== itemId && !['done', 'skipped'].includes(item.status)
+          && (question.includes(item.id) || question.includes(item.id.slice(0, 8))) && /decision|user|approval|rule/i.test(item.title + ' ' + (item.detail ?? ''))));
+      const pendingDecision = handoff?.blockedOnDecision ?? (referenced ? {
+        itemId: itemsForDecision.find(item => item.id !== itemId && !['done', 'skipped'].includes(item.status)
+          && /decision|user|approval|rule/i.test(item.title + ' ' + (item.detail ?? ''))
+          && (referenced.includes(item.id) || referenced.includes(item.id.slice(0, 8))))!.id, question: referenced,
+      } : undefined);
+      if (pendingDecision) {
+        const matches = itemsForDecision.filter(item => item.id === pendingDecision.itemId || item.id.startsWith(pendingDecision.itemId));
+        const decisionItem = matches.length === 1 ? matches[0] : undefined;
+        if (!decisionItem || decisionItem.id === itemId || ['done', 'skipped'].includes(decisionItem.status)) {
+          return { output: '', raw: '', stopped: await this.pauseForCoordinator(pipeline, node, `Decision reference is unavailable or already settled: ${pendingDecision.itemId}. Inspect the existing decision instead of retrying implementation.`, attemptId, itemId) };
+        }
+        const current = await this.getPipeline(pipeline.id);
+        await this.updateNode(node.id, { status: 'pending', output: stripPipelineControlBlocks(stageReport) });
+        await this.updatePipeline(pipeline.id, { metadata: { ...current?.metadata, pendingDecision: {
+          ...pendingDecision, itemId: decisionItem.id, blockedItemId: itemId, nodeKey: node.nodeKey, attemptId, report: stageReport,
+        } } });
+        const answer = await this.requestPipelineApproval(pipeline, node, rootAgent,
+          `User decision required before this item can proceed: ${decisionItem.title}`,
+          pendingDecision.question, context, pendingDecision.options, 'question') as { approved?: boolean; response?: string; decidedBy?: string; decidedAt?: string };
+        if (!answer.approved || !answer.response?.trim() || /^(pause|cancel|defer|not now)$/i.test(answer.response.trim()) || (!pendingDecision.options?.length && /^approved?$/i.test(answer.response.trim()))) {
+          await this.updatePipeline(pipeline.id, { status: 'paused', summary: `Blocked on user decision ${decisionItem.id}: ${pendingDecision.question}` });
+          return { output: '', raw: '', stopped: { pipelineId: pipeline.id, result: 'Pipeline paused for a real user decision; no file-change contract or item retry was consumed.' } };
+        }
+        const decision = { itemId: decisionItem.id, blockedItemId: itemId, nodeKey: node.nodeKey, attemptId, question: pendingDecision.question, response: answer.response,
+          decidedBy: answer.decidedBy ?? pipeline.userId, decidedAt: answer.decidedAt ?? new Date().toISOString() };
+        await pipelineRepository.updatePlanItem(decisionItem.id, { status: 'done', result: JSON.stringify(decision), completedAt: new Date() });
+        const answered = await this.getPipeline(pipeline.id);
+        const { pendingDecision: _settled, ...metadata } = answered?.metadata ?? {};
+        await this.updatePipeline(pipeline.id, { status: 'running', metadata: { ...metadata,
+          userDecisions: [...(Array.isArray(metadata.userDecisions) ? metadata.userDecisions : []), decision] } });
+        return this.runStepNode({ ...args, partial: undefined,
+          declared: declared.producesArtifacts ? { ...declared, producesArtifacts: false, runsCommands: true } : declared,
+          input: `${input}\n\nRECORDED USER DECISION: ${JSON.stringify(decision)}\nUse this decision for the required work. Verification-only work is valid for this approved decision: do not manufacture file changes. Run the previously blocked required gate once and report evidence; do not relax acceptance criteria.`, startReason: 'user_decision' });
+      }
       const environment = handoff?.environmentBlocked || ((handoff?.stopped || verdict?.passed === false)
         ? stageEnvironmentReason(verdict ? [...verdict.issues, verdict.feedback].join('\n') : String(result)) : undefined);
       if (environment) throw new StageEnvironmentError(environment);
@@ -3071,9 +3202,13 @@ export class PipelineManager {
       const output = stripPipelineControlBlocks(raw);
 
       const completedRun = await this.getPipeline(pipeline.id);
-      const block = completedRun?.metadata?.environmentBlock as { nodeKey?: string } | undefined;
-      if (block?.nodeKey === node.nodeKey) {
-        const { environmentBlock: _resolved, ...metadata } = completedRun?.metadata ?? {};
+      const block = completedRun?.metadata?.environmentBlock as { nodeKey?: string; itemId?: string | null; attemptId?: string } | undefined;
+      const coordinator = completedRun?.metadata?.coordinatorRequest as { nodeKey?: string } | undefined;
+      const resolvedBlock = block?.nodeKey === node.nodeKey && (block.itemId ?? null) === itemId && block.attemptId === attemptId;
+      if (resolvedBlock || coordinator?.nodeKey === node.nodeKey) {
+        const metadata = { ...completedRun?.metadata };
+        if (resolvedBlock) delete metadata.environmentBlock;
+        if (coordinator?.nodeKey === node.nodeKey) delete metadata.coordinatorRequest;
         await this.updatePipeline(pipeline.id, { metadata });
       }
       await this.updateNode(node.id, { status: 'completed', output, completedAt: new Date() });
@@ -3127,7 +3262,24 @@ export class PipelineManager {
         await this.updateNode(node.id, { status: 'pending' });
         return { output: '', raw: '', stopped: { pipelineId: pipeline.id, result: 'Pipeline stopped; resume from the saved stage checkpoint.' } };
       }
+      if (error instanceof StageReadOnlyViolation) {
+        const current = await this.getPipeline(pipeline.id);
+        await this.updateNode(node.id, { status: 'pending', output: stripPipelineControlBlocks(stageReport), error: errorMsg });
+        await this.updatePipeline(pipeline.id, { status: 'paused', summary: `Read-only write flagged at "${node.name}". Its report/verdict was retained for coordinator inspection; the item was not failed. ${errorMsg}`,
+          metadata: { ...current?.metadata, readOnlyViolation: { nodeKey: node.nodeKey, attemptId, itemId, reason: errorMsg, report: stageReport, verdict: this.parseQAResult(stageReport) } } });
+        return { output: '', raw: '', stopped: { pipelineId: pipeline.id, result: 'Read-only write flagged; verdict retained. Coordinator must inspect the write before resuming verification.' } };
+      }
+      if (/Tool is not available to this agent/i.test(errorMsg) || /update_work_plan|get_work_plan/i.test(errorMsg) && /not available|environment blocked/i.test(errorMsg)) {
+        return { output: '', raw: '', stopped: await this.pauseForCoordinator(pipeline, node, errorMsg, attemptId, itemId) };
+      }
       if (error instanceof StageEnvironmentError || stageEnvironmentReason(errorMsg)) {
+        const current = await this.getPipeline(pipeline.id);
+        const corrections = (current?.metadata?.environmentCorrections ?? {}) as Record<string, number>;
+        if (!corrections[attemptId]) {
+          await this.updatePipeline(pipeline.id, { metadata: { ...current?.metadata, environmentCorrections: { ...corrections, [attemptId]: 1 } } });
+          return this.runStepNode({ ...args, partial: undefined,
+            input: `${input}\n\nENVIRONMENT REPORT NEEDS CORRECTION (one retry of this stage, not the item): ${errorMsg}\nA failed ad-hoc probe is not an environment blocker. Check the correct workspace package cwd and use its installed dependencies (zod may only resolve in packages/shared; tsx may be absent). Use available tools; coordinator-only plan tools are not yours. Run the required contract gates. Report environmentBlocked only if a required gate or a declared toolchain/service is still unavailable; include the exact required command and error. Do not fabricate file changes. Respect run invariants: do not rerun a benchmark without a relevant change or newly recorded rule; report blockedOnDecision when a real user choice is pending.`, startReason: 'environment_probe_correction' });
+        }
         return { output: '', raw: '', stopped: await this.pauseForEnvironment(pipeline, node, errorMsg, attemptId, itemId) };
       }
       if (isApprovalWaitEnded(errorMsg)) return this.awaitStageApproval(args, { since: stageStartedAt, reason: errorMsg, workerIds, partialText });

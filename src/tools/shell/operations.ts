@@ -45,6 +45,8 @@ export interface ShellEnvOptions {
   unsetEnv?: readonly string[];
   /** Extra read-write paths for the process sandbox (the run's tool home). */
   extraReadWrite?: string[];
+  /** Read-only runtime or same-user workspace paths. */
+  extraReadOnly?: string[];
 }
 
 export interface ShellExecResult {

@@ -12,13 +12,7 @@ export interface PermissionRequest {
   args?: Record<string, unknown>;
 }
 
-export interface ApprovalRequest {
-  requestId: string;
-  sessionId?: string;
-  summary: string;
-  question: string;
-  options?: string[];
-}
+export type ApprovalRequest = Omit<import('../../src/core/gateway/protocol').PendingApproval, 'sessionId'> & { sessionId?: string };
 
 interface PermissionContextValue {
   /** Currently pending permission requests (tool permissions) */
@@ -90,7 +84,7 @@ export function PermissionProvider({ children }: { children: ReactNode }) {
         .map((r) => ({ requestId: r.requestId, sessionId: r.sessionId, skillId: r.toolId, action: r.action || r.toolName, args: r.args })));
       setApprovals(message.approvals
         .filter((a) => !resolved.current.has(a.requestId))
-        .map((a) => ({ requestId: a.requestId, sessionId: a.sessionId, summary: a.summary, question: a.question, options: a.options })));
+        .map((a) => ({ requestId: a.requestId, sessionId: a.sessionId, summary: a.summary, question: a.question, options: a.options, kind: a.kind })));
       return;
     }
     if (message.type === 'error') {
@@ -122,6 +116,7 @@ export function PermissionProvider({ children }: { children: ReactNode }) {
         const approval: ApprovalRequest = {
           requestId,
           sessionId: event.sessionId ?? (typeof payload.sessionId === 'string' ? payload.sessionId : undefined),
+          kind: payload.kind === 'question' ? 'question' : 'gate',
           summary: String(payload.summary ?? ''),
           question: String(payload.question ?? ''),
           options: Array.isArray(payload.options) ? payload.options.map(String) : undefined,

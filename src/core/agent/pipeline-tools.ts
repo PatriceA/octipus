@@ -1,3 +1,4 @@
+import { activeEnvironmentBlock } from './pipeline-environment';
 import { pipelinePermissionProfileSchema } from '@/shared/pipeline-permissions';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { WorkspaceFS } from '@/security/workspace-fs';
@@ -55,7 +56,7 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
     discoverOnly: true,
     ...(name === 'get_pipeline_status' ? { permissionAction: 'read', replaySafety: 'read_only' as const } : {}),
     description: name === 'stop_pipeline' ? 'Stop a pipeline in this session, preserving its checkpoint for resume. Returns the resumable stopped state, never a failure.'
-      : name === 'update_pipeline_items' ? 'Change a running pipeline plan in this session. Queue skips, additions and ordering for its next item boundary. Requires evidence or the user decision explaining the change. Active items must be stopped before skipping.'
+      : name === 'update_pipeline_items' ? 'Change a running pipeline plan in this session. Queue skips, additions and ordering at its next stage boundary. Prerequisites can be inserted with beforeItemId. Requires evidence or the user decision explaining the change. Active items must be stopped before skipping.'
       : name === 'get_pipeline_status'
       ? 'Read a pipeline handle: stage status, completed outputs, remaining items, failure reason, and the pending approval when awaiting_approval. Synthesize the result for the user.'
       : name === 'resume_pipeline'
@@ -66,7 +67,7 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
       ...(name === 'get_pipeline_status' ? { includeHistory: { type: 'boolean', description: 'Include per-item attempt history (default true). Use false for frequent polling.' } } : {}),
       ...(name === 'update_pipeline_items' ? {
         skip: { type: 'array', items: { type: 'string' } },
-        add: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, detail: { type: 'string' }, acceptance: { type: 'array', items: { type: 'string' } } }, required: ['title'] } },
+        add: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, beforeItemId: { type: 'string', description: 'Place prerequisite before this existing item.' }, detail: { type: 'string' }, acceptance: { type: 'array', items: { type: 'string' } } }, required: ['title'] } },
         order: { type: 'array', items: { type: 'string' } },
         evidence: { type: 'string', description: 'Why the plan is changing: user decision or verification evidence' },
       } : {}),
@@ -95,7 +96,7 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
           await pipelineRepository.applyItemEdits(pipeline.id);
           return { id: pipeline.id, applied: true, appliesAt: 'before_resume', ...edit };
         }
-        return { id: pipeline.id, queued: true, appliesAt: 'next_item_boundary', ...edit };
+        return { id: pipeline.id, queued: true, appliesAt: 'next_stage_boundary', ...edit };
       }
       const nodes = await pipelineRepository.getNodes(pipeline.id);
       if (name === 'get_pipeline_status') {
@@ -107,7 +108,10 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
         const history = args.includeHistory === false ? [] : pipelineStageHistory(await pipelineRepository.getStageHistory(pipeline.id, pipeline.sessionId));
         return { id: pipeline.id, status: pipeline.status, summary: pipelineSummary(pipeline, nodes, items), history, historyIncluded: args.includeHistory !== false,
           budget: pipelineBudget(pipeline, nodes, items, getConfig().agent.pipelineTokenBudget),
-          environmentBlock: pipeline.metadata?.environmentBlock ?? null,
+          environmentBlock: activeEnvironmentBlock(pipeline, items, newest),
+          coordinatorRequest: pipeline.metadata?.coordinatorRequest ?? null,
+          pendingDecision: pipeline.metadata?.pendingDecision ?? null,
+          readOnlyViolation: pipeline.metadata?.readOnlyViolation ?? null,
           deniedRequests: pipeline.metadata?.deniedRequests ?? [],
           permissionProfile: pipeline.metadata?.permissionProfile ?? null,
           interruption: pipeline.metadata?.interruption ?? null,

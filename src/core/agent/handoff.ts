@@ -217,6 +217,7 @@ interface StructuredHandoff {
   stopped?: boolean;
   /** Required toolchain/service could not be used; pause for environment repair. */
   environmentBlocked?: string;
+  blockedOnDecision?: { itemId: string; question: string; options?: string[] };
 }
 
 const HANDOFF_ITEM_MAX = 500; // per-item char bound, matches the regex extractors
@@ -259,6 +260,7 @@ export function parseStructuredHandoff(output: string): StructuredHandoff | null
     return c === 'high' || c === 'medium' || c === 'low' ? c : undefined;
   };
 
+  const decision = h.blockedOnDecision && typeof h.blockedOnDecision === 'object' ? h.blockedOnDecision as Record<string, unknown> : null;
   return {
     decisions: strArray(h.decisions),
     openQuestions: strArray(h.openQuestions),
@@ -268,6 +270,9 @@ export function parseStructuredHandoff(output: string): StructuredHandoff | null
     completedWork: str(h.completedWork),
     confidence: conf(h.confidence),
     ...(h.stopped === true ? { stopped: true } : {}),
+    ...(decision && typeof decision.itemId === 'string' && decision.itemId.trim().length >= 8 && typeof decision.question === 'string' && decision.question.trim().length > 0
+      ? { blockedOnDecision: { itemId: decision.itemId, question: decision.question.slice(0, 4000),
+        ...(Array.isArray(decision.options) ? { options: strArray(decision.options).slice(0, 8) } : {}) } } : {}),
     ...(typeof h.environmentBlocked === 'string' && h.environmentBlocked.trim() ? { environmentBlocked: h.environmentBlocked.slice(0, 2000) } : {}),
   };
 }
@@ -294,7 +299,8 @@ PIPELINE HANDOFF — after your normal report above, append a fenced code block 
 - openQuestions (string[]): anything unresolved the next stage should address
 - nextStageInstructions (string): explicit, actionable instruction for the next stage
 - confidence ("high" | "medium" | "low"): how confident you are in what you are handing off. An honest "low" is welcome — it routes a closer look at this stage rather than counting against you
-- environmentBlocked (string, optional): the required gate command and exact missing toolchain/service error. Use this when verification cannot run; the pipeline pauses for environment repair instead of failing the item.
+- blockedOnDecision (optional object): {itemId, question, options?} naming an existing pending user-decision plan item. When no safe code change is possible before that decision, report it here and in openQuestions; do not fabricate edits, weaken checks or repeatedly rerun a noisy benchmark. The coordinator asks the user.
+- environmentBlocked (string, optional): the required gate command and exact missing toolchain/service error. Use only for a required contract gate or declared toolchain/service after checking the correct package cwd. A failed ad-hoc probe (missing tsx, package-local zod, wrong import path) is yours to fix. Never classify refused coordinator-only plan tools as environment failure.
 - stopped (boolean): true only when you stopped before delivering this stage's work. The pipeline then re-runs this stage, so never report a stop as finished work
 
 Use [] for any list with nothing to report. Emit the block exactly once — do not copy these field descriptions. It is internal pipeline data (stripped before the user sees it); keep your prose report above it.`;

@@ -1,3 +1,4 @@
+import { browserRuntimePaths } from '@/security/runtime-path';
 import { getExecutionSignal } from '@/core/execution-scope';
 import { isToolNotExecutedResult, ToolNotExecutedError } from '@/core/tool-execution-error';
 import { isAbsolute, resolve } from 'path';
@@ -42,11 +43,13 @@ export function spaceRunOptions(env: Record<string, string> | undefined, home: S
  * network plus the Docker socket, so gates like `docker compose build` or a
  * local Postgres work under the process sandbox. Exported for the tests.
  */
-export function withHostServices<T extends { allowNetwork?: boolean; extraReadWrite?: string[] }>(
+export function withHostServices<T extends { allowNetwork?: boolean; extraReadWrite?: string[]; extraReadOnly?: string[]; env?: Record<string, string> }>(
   metadata: Record<string, unknown> | undefined, options: T,
 ): T {
   if (metadata?.hostServices !== true) return options;
-  return { ...options, allowNetwork: true, extraReadWrite: [...(options.extraReadWrite ?? []), '/var/run/docker.sock'] };
+  return { ...options, allowNetwork: true, extraReadWrite: [...(options.extraReadWrite ?? []), '/var/run/docker.sock'],
+    extraReadOnly: [...(options.extraReadOnly ?? []), ...browserRuntimePaths()],
+    env: { ...options.env, PLAYWRIGHT_BROWSERS_PATH: options.env?.PLAYWRIGHT_BROWSERS_PATH ?? process.env.PLAYWRIGHT_BROWSERS_PATH ?? browserRuntimePaths()[0] } };
 }
 
 /** A fresh tool home for one run of a space agent, or null outside a space. */
@@ -133,6 +136,7 @@ export class ShellTool extends BaseTool {
           result = await this.ops.exec(command, cwd, withHostServices(context?.metadata, {
             timeout, unsafe, allowNetwork, signal: getExecutionSignal(context),
             ...spaceRunOptions(args.env as Record<string, string> | undefined, home),
+            extraReadOnly: context && !cwd.startsWith(WorkspaceFS.forAgent(context).root) ? [WorkspaceFS.forAgent(context).root] : [],
           }));
         } finally {
           home?.dispose();
@@ -218,7 +222,8 @@ export class ShellTool extends BaseTool {
         let pid: number | undefined;
         try {
           ({ pid } = await this.ops.spawnBackground(command, cwd, withHostServices(context?.metadata, {
-            unsafe, allowNetwork, ...spaceRunOptions(args.env as Record<string, string> | undefined, home), onExit: () => home?.dispose(),
+            unsafe, allowNetwork, ...spaceRunOptions(args.env as Record<string, string> | undefined, home),
+            extraReadOnly: context && !cwd.startsWith(WorkspaceFS.forAgent(context).root) ? [WorkspaceFS.forAgent(context).root] : [], onExit: () => home?.dispose(),
           })));
         } catch (err) {
           home?.dispose();

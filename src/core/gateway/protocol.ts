@@ -681,6 +681,7 @@ export interface PendingPermission {
 
 /** An open root-agent approval, as `agent.approval_required` carries it. */
 export interface PendingApproval {
+  kind?: 'gate' | 'question';
   requestId: string;
   sessionId: string;
   summary: string;

@@ -1,3 +1,4 @@
+import { coordinatorCriterion } from '@/core/agent/pipeline-environment';
 import type { ToolManifest } from '@/core/types';
 import { pipelineRepository } from '@/db/repositories/pipeline-repository';
 import { toolLogger } from '@/utils/logger';
@@ -85,6 +86,7 @@ export class PlanTool extends BaseTool {
         'you were given — the loop picks up appended items in the same run. Each item should be one ' +
         'independently completable piece of work.',
       createParameterSchema({
+        beforeItemId: { type: 'string', description: 'Insert these prerequisites before an existing item in this pipeline, instead of appending after later phases.' },
         items: {
           type: 'array',
           description:
@@ -114,6 +116,8 @@ export class PlanTool extends BaseTool {
           .filter((item) => item.title.length > 0);
 
         if (parsed.length === 0) return { error: 'No items with a title were provided.' };
+        const coordinatorOnly = parsed.flatMap(item => item.acceptance ?? []).find(coordinatorCriterion);
+        if (coordinatorOnly) return { error: `Coordinator-only acceptance criterion: ${coordinatorOnly}. Ask the coordinator to update the visible plan; item acceptance must describe work the stage can verify.` };
 
         const fresh = withoutDuplicates(await pipelineRepository.getPlanItems(pipelineId), parsed);
         const duplicates = parsed.length - fresh.length;
@@ -129,6 +133,7 @@ export class PlanTool extends BaseTool {
             acceptance: item.acceptance,
             createdByNodeKey: this.nodeKeyOf(context),
           })),
+          typeof args.beforeItemId === 'string' ? args.beforeItemId : undefined,
         );
         toolLogger.info({ pipelineId, added: created.length }, 'Plan items appended');
         return { added: created.length, ...(duplicates ? { duplicates } : {}), items: created.map((i) => ({ id: i.id, ordinal: i.ordinal, title: i.title })) };

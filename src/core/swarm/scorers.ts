@@ -1,3 +1,4 @@
+import { browserRuntimePaths } from '@/security/runtime-path';
 /**
  * Scorer gates — deterministic verifiers a parent attaches to a `spawn_child`
  * call to check the child actually met its contract, instead of trusting the
@@ -1115,7 +1116,7 @@ async function evaluate(
         const res = await new LocalShellOperations().exec(repaired, cwd, {
           timeout: remainingTimeout,
           // A pipeline stage's `hostServices` opt-in reaches its verify command too.
-          ...(ctx.hostServices ? { allowNetwork: true, extraReadWrite: ['/var/run/docker.sock'] } : {}),
+          ...(ctx.hostServices ? { allowNetwork: true, extraReadWrite: ['/var/run/docker.sock'], extraReadOnly: browserRuntimePaths(), env: { PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH ?? browserRuntimePaths()[0] } } : {}),
           ...(ctx.signal ? { signal: ctx.signal } : {}),
           // Never `unsafe`. Safe mode is what makes `tokenizeSafe` reject shell
           // metacharacters, and it is the whole security argument for letting an

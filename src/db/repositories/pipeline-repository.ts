@@ -73,8 +73,17 @@ export class PipelineRepository {
           CASE WHEN ${pipelines.metadata} ? 'pendingItemEdits'
           THEN jsonb_build_object('pendingItemEdits', ${pipelines.metadata}->'pendingItemEdits') ELSE '{}'::jsonb END` } : {}),
         updatedAt: new Date() }).where(eq(pipelines.id, id));
+      if (data.metadata?.environmentBlock) await this.clearSettledEnvironmentBlock(tx, id);
       await this.syncWorkPlan(tx, id);
     });
+  }
+
+  private async clearSettledEnvironmentBlock(tx: Parameters<Parameters<ReturnType<typeof getDb>['transaction']>[0]>[0], pipelineId: string): Promise<void> {
+    // i2: both the outer pipeline and its settled item are constrained to this authorized pipeline id.
+    const settled = sql`EXISTS (SELECT 1 FROM ${planItems} WHERE ${planItems.pipelineId} = ${pipelines.id}
+      AND ${planItems.id}::text = ${pipelines.metadata}->'environmentBlock'->>'itemId' AND ${planItems.status} IN ('done', 'skipped'))`;
+    await tx.update(pipelines).set({ metadata: sql`${pipelines.metadata} - 'environmentBlock'` })
+      .where(and(eq(pipelines.id, pipelineId), sql`${pipelines.metadata} ? 'environmentBlock'`, settled));
   }
 
   async createNodes(rows: NewPipelineNode[]): Promise<PipelineNodeRow[]> {
@@ -121,6 +130,7 @@ export class PipelineRepository {
       for (const id of [...edit.skip, ...(edit.order ?? [])]) {
         if (!items.some(item => item.id === id)) throw new Error(`Unknown pipeline item: ${id}`);
       }
+      for (const item of edit.add) if (item.beforeItemId && !items.some(existing => existing.id === item.beforeItemId)) throw new Error(`Unknown insertion target: ${item.beforeItemId}`);
       if (new Set(edit.order).size !== (edit.order?.length ?? 0)) throw new Error('order contains duplicate item ids');
       if (!['paused', 'stopped'].includes(pipeline.status) && edit.skip.some(id => items.some(item => item.id === id && item.status === 'running'))) throw new Error('Cannot skip the active item; stop the pipeline first');
       const edits = (pipeline.metadata?.pendingItemEdits ?? []) as PipelineItemEdit[];
@@ -136,20 +146,22 @@ export class PipelineRepository {
       const [pipeline] = await tx.select().from(pipelines).where(eq(pipelines.id, pipelineId)).for('update');
       const edits = (pipeline?.metadata?.pendingItemEdits ?? []) as PipelineItemEdit[];
       if (!edits.length) return;
-      const items = await tx.select().from(planItems).where(eq(planItems.pipelineId, pipelineId)).orderBy(asc(planItems.ordinal));
-      let ordinal = items.reduce((max, item) => Math.max(max, item.ordinal), -1) + 1;
+      let items = await tx.select().from(planItems).where(eq(planItems.pipelineId, pipelineId)).orderBy(asc(planItems.ordinal));
       for (const edit of edits) {
         for (const id of edit.skip) await tx.update(planItems).set({ status: 'skipped', result: edit.evidence, updatedAt: new Date() })
-          .where(and(eq(planItems.pipelineId, pipelineId), eq(planItems.id, id),
-            inArray(planItems.status, ['paused', 'stopped'].includes(pipeline.status) ? ['pending', 'running', 'failed'] : ['pending'])));
-        for (const item of edit.add) await tx.insert(planItems).values({ ...item, pipelineId, ordinal: ordinal++, detail: item.detail ?? edit.evidence });
-        if (edit.order) {
-          const order = [...edit.order, ...items.map(item => item.id).filter(id => !edit.order!.includes(id))];
-          for (const [index, id] of order.entries()) await tx.update(planItems).set({ ordinal: index }).where(and(eq(planItems.pipelineId, pipelineId), eq(planItems.id, id)));
+          .where(and(eq(planItems.pipelineId, pipelineId), eq(planItems.id, id), inArray(planItems.status, ['pending', 'running', 'failed'])));
+        if (edit.order) items = [...edit.order.map(id => items.find(item => item.id === id)!), ...items.filter(item => !edit.order!.includes(item.id))];
+        for (const { beforeItemId, ...item } of edit.add) {
+          const position = beforeItemId ? items.findIndex(existing => existing.id === beforeItemId) : items.length;
+          if (position < 0) throw new Error(`Unknown insertion target: ${beforeItemId}`);
+          const [created] = await tx.insert(planItems).values({ ...item, pipelineId, ordinal: items.length, detail: item.detail ?? edit.evidence }).returning();
+          items.splice(position, 0, created);
         }
       }
+      for (const [index, item] of items.entries()) await tx.update(planItems).set({ ordinal: index }).where(eq(planItems.id, item.id));
       const { pendingItemEdits: _applied, ...metadata } = pipeline.metadata ?? {};
       await tx.update(pipelines).set({ metadata, updatedAt: new Date() }).where(eq(pipelines.id, pipelineId));
+      if (edits.some(edit => edit.skip.length)) await this.clearSettledEnvironmentBlock(tx, pipelineId);
       await this.syncWorkPlan(tx, pipelineId);
     });
   }
@@ -197,9 +209,23 @@ export class PipelineRepository {
       .orderBy(asc(planItems.ordinal), asc(planItems.createdAt));
   }
 
-  async addPlanItems(rows: NewPlanItem[]): Promise<PlanItemRow[]> {
+  async addPlanItems(rows: NewPlanItem[], beforeItemId?: string): Promise<PlanItemRow[]> {
     if (rows.length === 0) return [];
     return this.db.transaction(async tx => {
+      if (beforeItemId) {
+        const pipelineId = rows[0].pipelineId;
+        if (rows.some(row => row.pipelineId !== pipelineId)) throw new Error('Priority insertion must belong to one pipeline');
+        // i2: stage metadata or the root recovery tool authorizes this pipeline; every row and insertion target is scoped to that id.
+        await tx.select().from(pipelines).where(eq(pipelines.id, pipelineId)).for('update');
+        const existing = await tx.select().from(planItems).where(eq(planItems.pipelineId, pipelineId)).orderBy(asc(planItems.ordinal));
+        const index = existing.findIndex(item => item.id === beforeItemId);
+        if (index < 0) throw new Error(`Unknown insertion target: ${beforeItemId}`);
+        const created = await tx.insert(planItems).values(rows).returning();
+        existing.splice(index, 0, ...created);
+        for (const [ordinal, item] of existing.entries()) await tx.update(planItems).set({ ordinal }).where(eq(planItems.id, item.id));
+        await this.syncWorkPlan(tx, pipelineId);
+        return created.map(item => ({ ...item, ordinal: existing.findIndex(candidate => candidate.id === item.id) }));
+      }
       const created = await tx.insert(planItems).values(rows).returning();
       for (const id of [...new Set(rows.map(row => row.pipelineId))].sort()) await this.syncWorkPlan(tx, id);
       return created;
@@ -210,7 +236,10 @@ export class PipelineRepository {
     return this.db.transaction(async tx => {
       const [row] = await tx.update(planItems).set({ ...data, updatedAt: new Date() })
         .where(eq(planItems.id, id)).returning();
-      if (row) await this.syncWorkPlan(tx, row.pipelineId);
+      if (row) {
+        if (['done', 'skipped'].includes(row.status)) await this.clearSettledEnvironmentBlock(tx, row.pipelineId);
+        await this.syncWorkPlan(tx, row.pipelineId);
+      }
       return row ?? null;
     });
   }

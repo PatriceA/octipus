@@ -123,3 +123,19 @@ test('CLI custom answers work on a narrow screen and cancellation does not submi
     type: 'permission.respond', requestId: 'custom', approved: false,
   });
 });
+
+
+test('a pipeline decision asks for a concrete answer rather than generic approval', async ({ authenticatedPage: page }) => {
+  const gateway = await stubGateway(page);
+  gateway.setPending({ approvals: [{ requestId: 'decision-1', sessionId: 'sess-1', kind: 'question',
+    summary: 'A user decision is required', question: 'How should near ties count?' }] });
+  await page.goto('/chat');
+  await expect(page.getByLabel('Your decision')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Approve', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Submit decision' })).toBeDisabled();
+  await page.getByLabel('Your decision').fill('Near ties are inconclusive. Run the benchmark once.');
+  await page.getByRole('button', { name: 'Submit decision' }).click();
+  await expect.poll(() => gateway.sent.find(message => message.type === 'approval.respond')).toMatchObject({
+    requestId: 'decision-1', approved: true, response: 'Near ties are inconclusive. Run the benchmark once.',
+  });
+});

@@ -19,7 +19,7 @@
  * left behind.
  */
 import { randomBytes } from 'node:crypto';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -1043,7 +1043,7 @@ test.each(['go: Kommando nicht gefunden', 'ECONNREFUSED ::1:5433', '/var/run/doc
   const { pipelineId } = await run('verify the project');
   expect(await planItemStatuses(pipelineId)).toEqual(['running', 'pending']);
   expect(calls.filter(call => call.stageName === 'Implement')).toHaveLength(1);
-  expect(calls.filter(call => call.stageName === 'QA')).toHaveLength(1);
+  expect(calls.filter(call => call.stageName === 'QA')).toHaveLength(2);
   expect(await manager.getPipeline(pipelineId)).toMatchObject({ status: 'paused', metadata: {
     environmentBlock: { reason: expect.stringContaining(reason), itemId: expect.any(String), attemptId: expect.any(String) },
   } });
@@ -1091,4 +1091,197 @@ test.each([false, true])('framework gate environment checks preserve successful 
     expect(calls.filter(call => call.stageName === 'QA')).toHaveLength(passed ? 2 : 1);
     expect(probe.mock.calls[0][2]).toMatchObject({ hostServices: true });
   } finally { probe.mockRestore(); }
+});
+
+
+async function stageFixture(name: string, changes: Record<string, unknown>) {
+  const { rows } = await queryRaw("SELECT steps FROM pipeline_templates WHERE name = 'loop-fixture' LIMIT 1");
+  const steps = (rows[0].steps as Array<Record<string, unknown>>).map(step => ({ ...step, ...(changes[String(step.name)] as object ?? {}) }));
+  await executeRaw(`INSERT INTO pipeline_templates (name, is_preset, steps) VALUES ('${name}', true, '${JSON.stringify(steps)}'::jsonb)`);
+}
+
+test('read-only evidence writes preserve a completed verdict and pause for inspection (#56)', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'read-only-evidence-'));
+  writeFileSync(join(root, 'contract.md'), 'Existing contract');
+  const workspace = vi.spyOn(manager as unknown as { resolveWorkspaceRoot: () => Promise<string> }, 'resolveWorkspaceRoot').mockResolvedValue(root);
+  await stageFixture('read-only-evidence', { QA: { readOnly: true } });
+  replies = { QA: [QA_PASS] };
+  onSpawn = async stage => { if (stage === 'QA') writeFileSync(join(root, 'contract.md'), 'QA evidence; gates passed'); };
+  try {
+    const { pipelineId } = await run('verify without writing the contract', 'read-only-evidence');
+    expect(await manager.getPipeline(pipelineId)).toMatchObject({ status: 'paused', metadata: {
+      readOnlyViolation: { verdict: { passed: true }, report: expect.stringContaining('whatIDidNotCheck') },
+    } });
+    expect(await planItemStatuses(pipelineId)).toEqual(['running', 'pending']);
+    expect(calls.filter(call => call.stageName === 'QA')).toHaveLength(1);
+    expect(calls.find(call => call.stageName === 'QA')?.input).toContain('Do not edit product files, the contract/plan document');
+  } finally { workspace.mockRestore(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('an ad-hoc probe mistake gets one corrective stage retry instead of a human pause (#57)', async () => {
+  replies = { QA: ['```handoff\n' + JSON.stringify({ stopped: true, environmentBlocked: 'pnpm exec tsx probe failed; ERR_MODULE_NOT_FOUND zod from repo root' }) + '\n```', QA_PASS] };
+  const { pipelineId } = await run('run the actual package gates');
+  expect((await manager.getPipeline(pipelineId))?.status).toBe('completed');
+  const qa = calls.filter(call => call.stageName === 'QA');
+  expect(qa[1].input).toContain('correct workspace package cwd');
+  expect(qa[0].metadata.attemptId).toBe(qa[1].metadata.attemptId);
+  expect(calls.filter(call => call.stageName === 'Implement')).toHaveLength(2);
+  expect(approvalsAsked).toBe(0);
+});
+
+test('coordinator-only visible-plan acceptance pauses before spending on implementation (#58)', async () => {
+  onSpawn = async (stage, pipelineId) => {
+    if (stage === 'Plan') {
+      const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+      await pipelineRepository.addPlanItems([{ pipelineId, ordinal: 0, title: 'Work requiring coordinator', acceptance: ['The visible plan step g1 must be working'] }]);
+    }
+  };
+  const { pipelineId } = await run('verify coordinator-owned state separately');
+  expect(await manager.getPipeline(pipelineId)).toMatchObject({ status: 'paused', metadata: {
+    coordinatorRequest: { reason: expect.stringContaining('visible plan step g1') },
+  } });
+  expect(calls.some(call => call.stageName === 'Implement')).toBe(false);
+  expect((await manager.getPipeline(pipelineId))?.metadata?.environmentBlock).toBeUndefined();
+});
+
+test('a blocked decision is asked before the zero-file contract and recorded before work resumes (#59)', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'decision-evidence-'));
+  const workspace = vi.spyOn(manager as unknown as { resolveWorkspaceRoot: () => Promise<string> }, 'resolveWorkspaceRoot').mockResolvedValue(root);
+  await stageFixture('decision-fixture', { Implement: { producesArtifacts: true } });
+  approvalAnswer = { approved: true, response: 'Near ties are inconclusive; run the benchmark once.' };
+  replies = { QA: [QA_PASS] };
+  let decisionId = '';
+  onSpawn = async (stage, pipelineId) => {
+    const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+    if (stage === 'Plan') {
+      const items = await pipelineRepository.addPlanItems([{ pipelineId, ordinal: 0, title: 'Implement decided rule' }, { pipelineId, ordinal: 1, title: 'User decision on near-tie rule' }]);
+      decisionId = items[1].id;
+      replies.Implement = ['```handoff\n' + JSON.stringify({ stopped: true, openQuestions: ['Pending user decision ' + decisionId], blockedOnDecision: { itemId: decisionId, question: 'How should a single-round near tie count?' } }) + '\n```', 'No product changes needed; ran the required benchmark once under the recorded decision'];
+    }
+
+  };
+  try {
+    const { pipelineId } = await run('block honestly without fabricated edits', 'decision-fixture');
+    expect((await manager.getPipeline(pipelineId))?.status).toBe('completed');
+    expect(approvalsAsked).toBe(1);
+    expect(calls.filter(call => call.stageName === 'Implement')).toHaveLength(2);
+    expect(calls.filter(call => call.stageName === 'Implement')[1].input).toContain('RECORDED USER DECISION');
+    expect(await planItemStatuses(pipelineId)).toEqual(['done', 'done']);
+    expect(await manager.getPipeline(pipelineId)).toMatchObject({ metadata: { userDecisions: [expect.objectContaining({ itemId: decisionId, decidedBy: userId })] } });
+  } finally { workspace.mockRestore(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a prioritized prerequisite runs before the interrupted QA without replaying its implementation (#56)', async () => {
+  replies = { QA: [QA_PASS] };
+  let inserted = false;
+  onSpawn = async (stage, pipelineId) => {
+    if (stage !== 'Implement' || inserted) return;
+    inserted = true;
+    const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+    const items = await pipelineRepository.getPlanItems(pipelineId);
+    const current = items.find(item => item.status === 'running')!;
+    const [prerequisite] = await pipelineRepository.addPlanItems([{ pipelineId, ordinal: 100, title: 'Priority prerequisite' }], current.id);
+    expect(prerequisite.ordinal).toBe(0);
+  };
+  const { pipelineId } = await run('finish prerequisites before accepting phase one');
+  expect((await manager.getPipeline(pipelineId))?.status).toBe('completed');
+  expect(calls.map(call => call.stageName)).toEqual(['Plan', 'Implement', 'Implement', 'QA', 'QA', 'Implement', 'QA']);
+  expect(calls.filter(call => call.stageName === 'Implement')[1].input).toContain('Priority prerequisite');
+  expect(await planItemStatuses(pipelineId)).toEqual(['done', 'done', 'done']);
+});
+
+test('queued edits apply before the next stage even if the current item has not reached its boundary (#56)', async () => {
+  replies = { QA: [QA_PASS] };
+  let queued = false, seen = false;
+  onSpawn = async (stage, pipelineId) => {
+    const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+    const items = await pipelineRepository.getPlanItems(pipelineId);
+    if (stage === 'Implement' && !queued) {
+      queued = true;
+      await pipelineRepository.queueItemEdit(pipelineId, { skip: [items[1].id], add: [], evidence: 'Root skipped the later item' });
+    }
+    if (stage === 'QA') seen = items[1].status === 'skipped';
+  };
+  const { pipelineId } = await run('apply pending root changes promptly');
+  expect(seen).toBe(true);
+  expect(await planItemStatuses(pipelineId)).toEqual(['done', 'skipped']);
+});
+
+
+test('declining a pending decision preserves the unfinished item without artifact-contract retries (#59)', async () => {
+  replies = { Implement: ['waiting'] };
+  onSpawn = async (stage, pipelineId) => {
+    if (stage !== 'Plan') return;
+    const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+    const items = await pipelineRepository.addPlanItems([{ pipelineId, ordinal: 0, title: 'Blocked implementation' }, { pipelineId, ordinal: 1, title: 'User decision' }]);
+    replies.Implement = ['```handoff\n' + JSON.stringify({ stopped: true,
+      openQuestions: ['Work item ' + items[0].id.slice(0, 8) + ' is blocked on pending user decision ' + items[1].id.slice(0, 8)] }) + '\n```'];
+  };
+  const { pipelineId } = await run('wait for the real user decision');
+  expect((await manager.getPipeline(pipelineId))?.status).toBe('paused');
+  expect((await manager.getPipeline(pipelineId))?.metadata?.pendingDecision).toBeDefined();
+  expect(await planItemStatuses(pipelineId)).toEqual(['running', 'pending']);
+  expect(calls.filter(call => call.stageName === 'Implement')).toHaveLength(1);
+  expect(approvalsAsked).toBe(1);
+});
+
+test('queued priority additions keep their before placement when an explicit order is also supplied (#56)', async () => {
+  replies = { QA: [QA_PASS] };
+  let queued = false;
+  onSpawn = async (stage, pipelineId) => {
+    if (stage !== 'Implement' || queued) return;
+    queued = true;
+    const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+    const items = await pipelineRepository.getPlanItems(pipelineId);
+    await pipelineRepository.queueItemEdit(pipelineId, { skip: [], add: [{ title: 'Queued prerequisite', beforeItemId: items[0].id }],
+      order: items.map(item => item.id), evidence: 'Prerequisite must run before Phase 1 verification' });
+  };
+  const { pipelineId } = await run('ordered queued prerequisites');
+  expect((await manager.getPipeline(pipelineId))?.status).toBe('completed');
+  expect(calls.map(call => call.stageName)).toEqual(['Plan', 'Implement', 'Implement', 'QA', 'QA', 'Implement', 'QA']);
+});
+
+
+test('a deferred item keeps its own QA ledger instead of inheriting its prerequisite verdicts', async () => {
+  replies = { QA: [qaFail('requires a prerequisite fix'), QA_PASS] };
+  let originalItem = '', added = false;
+  onSpawn = async (stage, pipelineId) => {
+    if (stage !== 'QA' || added) return;
+    added = true;
+    const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+    const items = await pipelineRepository.getPlanItems(pipelineId);
+    originalItem = items.find(item => item.status === 'running')!.id;
+    await pipelineRepository.addPlanItems([{ pipelineId, ordinal: 100, title: 'Required prerequisite fix' }], originalItem);
+  };
+  const { pipelineId } = await run('preserve the per-item verdict ledger');
+  expect((await manager.getPipeline(pipelineId))?.status).toBe('completed');
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  const checkpoints = await pipelineRepository.getCheckpoints(pipelineId, 50);
+  const state = checkpoints.find(checkpoint => checkpoint.state.currentItemId === originalItem)!;
+  const ledgers = Object.values(state.state.qaAttempts as Record<string, Array<{ passed: boolean }>>);
+  expect(ledgers.flat().map(attempt => attempt.passed)).toEqual([false, true]);
+});
+
+
+test('a refused agent capability is coordinator work, never a host environment pause (#58)', async () => {
+  replies = { QA: ['```handoff\n' + JSON.stringify({ stopped: true, environmentBlocked: 'Agent bridge rejected request (400): Tool is not available to this agent' }) + '\n```'] };
+  const { pipelineId } = await run('do not misclassify a refused coordinator capability');
+  const pipeline = await manager.getPipeline(pipelineId);
+  expect(pipeline).toMatchObject({ status: 'paused', metadata: { coordinatorRequest: { reason: expect.stringContaining('Tool is not available') } } });
+  expect(pipeline?.metadata?.environmentBlock).toBeUndefined();
+  expect(calls.filter(call => call.stageName === 'QA')).toHaveLength(1);
+});
+
+
+test.each(['skipped', 'done'] as const)('settling a blocked item as %s clears its environment block atomically (#61)', async status => {
+  replies = { QA: [qaFail('go: command not found')] };
+  const { pipelineId } = await run('clear settled item diagnostics');
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  const before = await pipelineRepository.findById(pipelineId);
+  const block = before!.metadata!.environmentBlock as { itemId: string };
+  await pipelineRepository.updatePlanItem(block.itemId, { status });
+  expect((await pipelineRepository.findById(pipelineId))?.metadata?.environmentBlock).toBeUndefined();
+  // An in-flight stale metadata snapshot must not resurrect a settled item's block.
+  await pipelineRepository.updatePipeline(pipelineId, { metadata: before!.metadata });
+  expect((await pipelineRepository.findById(pipelineId))?.metadata?.environmentBlock).toBeUndefined();
 });

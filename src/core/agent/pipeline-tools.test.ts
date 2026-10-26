@@ -206,3 +206,15 @@ it('opens a top-up prompt without resuming or raising spend before the user appr
   expect(fixture.resume).not.toHaveBeenCalled();
   answer({ approved: false });
 });
+
+
+it('never advertises a skipped previous item environment error as the current Testing block (#61)', async () => {
+  fixture.find.mockResolvedValue({ id: 'pipeline', userId: 'owner', sessionId: 'session', workspaceId: 'workspace', status: 'paused',
+    metadata: { environmentBlock: { itemId: 'old', nodeKey: 'testing', attemptId: 'old-attempt', reason: 'Playwright missing' } } });
+  fixture.items.mockResolvedValue([{ id: 'old', status: 'skipped' }, { id: 'next', status: 'running' }]);
+  fixture.checkpoints.mockResolvedValue([{ seq: 9, nodeKey: 'testing', state: { currentItemId: 'next', attemptId: 'next-attempt' } }]);
+  expect(await tool('get_pipeline_status').execute({ id: 'pipeline' }, context)).toMatchObject({ environmentBlock: null });
+  fixture.find.mockResolvedValue({ id: 'pipeline', userId: 'owner', sessionId: 'session', workspaceId: 'workspace', status: 'paused',
+    metadata: { environmentBlock: { itemId: 'next', nodeKey: 'testing', attemptId: 'next-attempt', reason: 'Database unavailable' } } });
+  expect(await tool('get_pipeline_status').execute({ id: 'pipeline' }, context)).toMatchObject({ environmentBlock: { itemId: 'next', attemptId: 'next-attempt' } });
+});
