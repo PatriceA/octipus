@@ -1,3 +1,4 @@
+import type { ShellSshAgent } from './shell-ssh-agent';
 import { runtimePath } from './runtime-path';
 /**
  * Shell sandbox — Phase 3e multi-user.
@@ -51,6 +52,8 @@ export type SandboxRunner = 'bwrap' | 'firejail';
 export type SandboxMode = 'off' | 'auto' | 'required';
 
 export interface WrapOptions {
+  /** Server-resolved opt-in; never a whole ~/.ssh mount. */
+  sshAgent?: ShellSshAgent;
   /** Workspace root that should be writable inside the sandbox. */
   workspaceRoot: string;
   /** Allow network access. Defaults to `false` — sandboxed shells
@@ -187,6 +190,10 @@ function buildBwrapArgs(binary: string, options: WrapOptions, scratch: string): 
   for (const p of options.extraReadWrite ?? []) {
     args.push('--bind-try', p, p);
   }
+  if (options.sshAgent) {
+    args.push('--ro-bind', options.sshAgent.socket, options.sshAgent.socket, '--setenv', 'SSH_AUTH_SOCK', options.sshAgent.socket);
+    if (options.sshAgent.knownHosts) args.push('--ro-bind', options.sshAgent.knownHosts, options.sshAgent.knownHosts);
+  }
   // Sentinel separator so the original command isn't confused with
   // bwrap's own flags.
   args.push('--');
@@ -220,6 +227,12 @@ function buildFirejailArgs(binary: string, options: WrapOptions): string[] {
   args.push(`--env=PATH=${runtimePath(options.path)}`);
   for (const p of options.extraReadWrite ?? []) {
     args.push(`--whitelist=${p}`);
+  }
+  if (options.sshAgent) {
+    for (const path of [options.sshAgent.socket, options.sshAgent.knownHosts].filter((path): path is string => !!path)) {
+      args.push(`--whitelist=${path}`, `--read-only=${path}`);
+    }
+    args.push(`--env=SSH_AUTH_SOCK=${options.sshAgent.socket}`);
   }
   // firejail uses `--` to separate flags from the command.
   args.push('--');

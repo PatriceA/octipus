@@ -136,6 +136,7 @@ export class ShellTool extends BaseTool {
           result = await this.ops.exec(command, cwd, withHostServices(context?.metadata, {
             timeout, unsafe, allowNetwork, signal: getExecutionSignal(context),
             ...spaceRunOptions(args.env as Record<string, string> | undefined, home),
+            allowHostSshAgent: context ? !WorkspaceFS.forAgent(context).isSpace : false,
             extraReadOnly: context && !cwd.startsWith(WorkspaceFS.forAgent(context).root) ? [WorkspaceFS.forAgent(context).root] : [],
           }));
         } finally {
@@ -223,6 +224,7 @@ export class ShellTool extends BaseTool {
         try {
           ({ pid } = await this.ops.spawnBackground(command, cwd, withHostServices(context?.metadata, {
             unsafe, allowNetwork, ...spaceRunOptions(args.env as Record<string, string> | undefined, home),
+            allowHostSshAgent: context ? !WorkspaceFS.forAgent(context).isSpace : false,
             extraReadOnly: context && !cwd.startsWith(WorkspaceFS.forAgent(context).root) ? [WorkspaceFS.forAgent(context).root] : [], onExit: () => home?.dispose(),
           })));
         } catch (err) {

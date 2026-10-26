@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { posixShellArgv, windowsCmdShim } from '@/utils/proc';
@@ -252,5 +252,21 @@ describe('posixShellArgv — no `sh` on Windows', () => {
     expect(posixShellArgv('x', { ...base, PATH: join(dir, 'Win', 'System32') }, 'win32'))
       .toEqual(['C:\\Windows\\cmd.exe', '/d', '/s', '/c', 'x']);
     expect(posixShellArgv('x', { ...base, PATH: join(dir, 'msys') }, 'win32')).toEqual([msys, '-c', 'x']);
+  });
+});
+
+describe('missing working directory diagnostics', () => {
+  it('reports the cwd before launching a foreground or background command', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'octi-cwd-'));
+    const missing = join(root, 'missing');
+    try {
+    const ops = new LocalShellOperations();
+    await expect(ops.exec('true', missing)).rejects.toThrow(`cwd not found: ${missing}`);
+    await expect(ops.spawnBackground('true', missing)).rejects.toThrow(`cwd not found: ${missing}`);
+    await expect(ops.exec(`cd "${missing}" && true`, process.cwd())).rejects.toThrow(`cwd not found: ${missing}`);
+    const file = join(missing, '..', 'file');
+    writeFileSync(file, 'not a directory');
+    await expect(ops.exec('true', file)).rejects.toThrow('cwd is not a directory');
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

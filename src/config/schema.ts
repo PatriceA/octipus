@@ -91,6 +91,8 @@ export const securityConfigSchema = z.object({
    * `auto` reduces to `off`.
    */
   shellSandbox: z.enum(['off', 'auto', 'required']).default('off'),
+  /** Expose only the host SSH agent socket and known_hosts to personal shell runs. */
+  shellSshAgent: z.boolean().default(false),
   vaultDenyUnscopedSecrets: z.boolean().default(false),
   /**
    * Docker tool per-user isolation — Phase 3f. When `'enforce'`, the

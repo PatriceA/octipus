@@ -1,3 +1,5 @@
+import { statSync } from 'node:fs';
+import { shellSshAgent } from '@/security/shell-ssh-agent';
 import { runtimePath, packageStorePath } from '@/security/runtime-path';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { markToolNotExecuted, ToolNotExecutedError } from '@/core/tool-execution-error';
@@ -72,7 +74,34 @@ function childEnv(options: { env?: Record<string, string> } & ShellEnvOptions): 
   const env = buildChildEnv();
   env.npm_config_store_dir ??= packageStorePath();
   for (const k of options.unsetEnv ?? []) delete env[k];
-  return { ...env, ...options.env };
+  const result = { ...env, ...options.env };
+  if (options.allowHostSshAgent === false || options.unsetEnv?.includes('SSH_AUTH_SOCK')) {
+    delete result.SSH_AUTH_SOCK;
+    delete result.SSH_AGENT_PID;
+  }
+  return result;
+}
+
+/** Diagnose a missing cwd before spawn can misattribute ENOENT to bwrap. */
+function assertCwd(cwd: string): void {
+  try {
+    if (!statSync(cwd).isDirectory()) throw new ToolNotExecutedError('shell', `cwd is not a directory: ${cwd}`);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT' || (error as NodeJS.ErrnoException).code === 'ENOTDIR') {
+      throw new ToolNotExecutedError('shell', `cwd not found: ${cwd}`, { cause: error });
+    }
+    if (error instanceof ToolNotExecutedError) throw error;
+    throw new ToolNotExecutedError('shell', `cwd unavailable: ${cwd}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+  }
+}
+
+/** The same policy feeds foreground and background spawns. Space identity scrubbing wins. */
+function sshAgentFor(options: ShellEnvOptions) {
+  try {
+    return shellSshAgent(options.allowHostSshAgent !== true || options.unsetEnv?.includes('SSH_AUTH_SOCK') === true);
+  } catch (error) {
+    throw new ToolNotExecutedError('shell', error instanceof Error ? error.message : String(error), { cause: error });
+  }
 }
 
 export class LocalShellOperations implements ShellOperations {
@@ -136,10 +165,13 @@ export class LocalShellOperations implements ShellOperations {
       ? posixShellArgv(command)
       : [argv![0], ...argv!.slice(1)];
 
+    assertCwd(cwd);
     const { wrapCommand } = await import('@/security/shell-sandbox');
     let wrap: ReturnType<typeof wrapCommand>;
+    let sshAgent: ReturnType<typeof sshAgentFor>;
     try {
-      wrap = wrapCommand(baseArgv, { workspaceRoot: cwd, allowNetwork: resolveAllowNetwork(options), path: options.env?.PATH, extraReadWrite: options.extraReadWrite, extraReadOnly: options.extraReadOnly });
+      sshAgent = sshAgentFor(options);
+      wrap = wrapCommand(baseArgv, { sshAgent, workspaceRoot: cwd, allowNetwork: resolveAllowNetwork(options), path: options.env?.PATH, extraReadWrite: options.extraReadWrite, extraReadOnly: options.extraReadOnly });
     } catch (error) {
       throw new ToolNotExecutedError('shell', error instanceof Error ? error.message : String(error), { cause: error });
     }
@@ -168,6 +200,7 @@ export class LocalShellOperations implements ShellOperations {
       let child: ChildProcessWithoutNullStreams;
       try {
         const env = childEnv(options);
+        if (sshAgent) env.SSH_AUTH_SOCK = sshAgent.socket;
         const run = windowsCmdShim(finalArgv, env, process.platform, cwd);
         // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn; shell only for a Windows .cmd with every arg quoted and cmd-expanding chars refused (windowsCmdShim)
         child = spawn(run.argv[0], run.argv.slice(1), {
@@ -288,8 +321,11 @@ export class LocalShellOperations implements ShellOperations {
       ? posixShellArgv(command)
       : [argv![0], ...argv!.slice(1)];
 
+    assertCwd(cwd);
     const { wrapCommand } = await import('@/security/shell-sandbox');
+    const sshAgent = sshAgentFor(options);
     const wrap = wrapCommand(baseArgv, {
+      sshAgent, path: options.env?.PATH,
       workspaceRoot: cwd,
       allowNetwork: resolveAllowNetwork(options),
       extraReadWrite: options.extraReadWrite,
@@ -298,6 +334,7 @@ export class LocalShellOperations implements ShellOperations {
     const done = () => { wrap.cleanup(); options.onExit?.(); };
 
     const env = childEnv(options);
+    if (sshAgent) env.SSH_AUTH_SOCK = sshAgent.socket;
     let run: ReturnType<typeof windowsCmdShim>;
     try { run = windowsCmdShim(wrap.argv, env, process.platform, cwd); } catch (error) { done(); throw new ToolNotExecutedError('shell', (error as Error).message, { cause: error }); }
     // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn; shell only for a Windows .cmd with every arg quoted and cmd-expanding chars refused (windowsCmdShim)

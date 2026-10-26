@@ -244,6 +244,16 @@ stages whose commands you trust. It covers the stage's own commands only:
 agents the stage spawns run in the default sandbox. The setting has no effect
 when the sandbox is off.
 
+Personal shell runs can opt into the host SSH agent with
+`security.shellSshAgent: true` (or `SHELL_SSH_AGENT=true`). This is a separate
+boolean from the existing `security.shellSandbox` mode. Start Octipus with a
+live, absolute `SSH_AUTH_SOCK`; a missing or invalid socket produces an explicit
+error. The sandbox exposes only that socket and `~/.ssh/known_hosts` read-only,
+allowing agent-backed signing without mounting private keys or all of `~/.ssh`.
+Shared-space runs never receive this host identity, even when the setting is on.
+Network access still requires the command's normal network permission. The
+setting defaults to off and does not select keys or load them into the agent.
+
 ## Authenticate with a vault credential
 
 Managed CLI agents receive these instructions automatically in their system prompt;

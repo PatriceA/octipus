@@ -41,6 +41,8 @@ export interface ShellOperations {
 
 /** How a run's environment and sandbox differ from the default (a space run's tool home, coworking §9.5). */
 export interface ShellEnvOptions {
+  /** Explicit server-side authorization for the host agent; never granted to shared spaces. */
+  allowHostSshAgent?: boolean;
   /** Variables removed from the inherited environment (before `env` is laid over it). */
   unsetEnv?: readonly string[];
   /** Extra read-write paths for the process sandbox (the run's tool home). */

@@ -923,6 +923,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'SHELL_SANDBOX',
   },
   {
+    key: 'security.shellSshAgent',
+    category: 'security',
+    valueType: 'boolean',
+    defaultValue: false,
+    description: 'Forward the host SSH_AUTH_SOCK agent into personal shell sandboxes, with ~/.ssh/known_hosts read-only. Allows signing with agent-loaded keys without exposing private key files. Shared spaces never receive the host agent. Octipus must inherit a live SSH_AUTH_SOCK when started.',
+    isSecret: false,
+    envVar: 'SHELL_SSH_AGENT',
+  },
+  {
     key: 'security.sessionMaxAge',
     category: 'security',
     valueType: 'number',
