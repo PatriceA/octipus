@@ -86,3 +86,19 @@ test('provider retries rebind stage delegation to the replacement worker before 
   expect(await fail('workspace routing discovery failed', { onWorkerReady: ready })).toBe('QA passed');
   expect(ready).toHaveBeenCalledOnce();
 });
+
+
+test('a provider retry includes its detached children in stage evidence', async () => {
+  const { swarmNodeRepository } = await import('@/core/swarm/node-repository');
+  const { emptyCounters } = await import('@/core/swarm/receipt');
+  const childEffects = { ...emptyCounters(), toolCalls: 3, commandsRun: 3, byName: { shell__run: 3 }, uncertainActionIds: ['child-recovery-record'] };
+  const descendants = vi.spyOn(swarmNodeRepository, 'findDescendants').mockResolvedValue([{ result: { receipt: { sideEffects: childEffects } } }] as never);
+  const own = { ...emptyCounters(), toolCalls: 2, byName: { spawn_child: 1, collect_children: 1 } };
+  retry.spawn.mockResolvedValue({ ...retryWorker(async () => 'Delegated gates finished'), getSideEffectCounters: () => own });
+  const counters = vi.fn();
+  try {
+    expect(await fail('workspace routing discovery failed', { hasSwarmParent: true, onCounters: counters })).toBe('Delegated gates finished');
+    expect(descendants).toHaveBeenCalledWith('retry');
+    expect(counters).toHaveBeenCalledWith(expect.objectContaining({ commandsRun: 3, toolCalls: 5, uncertainActionIds: ['child-recovery-record'] }));
+  } finally { descendants.mockRestore(); }
+});

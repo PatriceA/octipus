@@ -1757,11 +1757,11 @@ export class PipelineManager {
         const itemDecisions = Array.isArray(decisions) ? decisions.filter((decision: unknown): decision is Record<string, unknown> => {
           if (!decision || typeof decision !== 'object') return false;
           const recorded = decision as Record<string, unknown>;
-          return recorded.blockedItemId === currentItem?.id && typeof recorded.question === 'string'
+          return (recorded.blockedItemId === currentItem?.id || recorded.itemId === currentItem?.id) && typeof recorded.question === 'string'
             && typeof recorded.response === 'string' && recorded.response.trim().length > 0;
         }) : [];
         if (itemDecisions.length) input += `\n\nRECORDED USER DECISIONS: ${JSON.stringify(itemDecisions)}\nFollow these recorded answers for this item's required work; do not re-ask settled questions or invent a different rule.`;
-        const verificationOnly = b.producesArtifacts && itemDecisions.some(recorded => recorded.nodeKey === node.nodeKey && recorded.attemptId === attemptId);
+        const verificationOnly = b.producesArtifacts && itemDecisions.some(recorded => recorded.blockedItemId === currentItem?.id && recorded.nodeKey === node.nodeKey && recorded.attemptId === attemptId);
         const declaredWork = verificationOnly ? { ...b, producesArtifacts: false, runsCommands: true } : b;
         const stepResult = await this.runStepNode({
           retryContract: retryCount < retryLimit,

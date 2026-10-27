@@ -24,3 +24,9 @@ test('a profile can cover a target repo and a second repo without approving othe
   expect(profileAllows(target, call('pnpm test', '/work/octipus'))).toBe(false);
   expect(target.allowTimedOutCommands).toBe(false);
 });
+
+
+test.each([undefined, null, '', '.', './repo'])('a profile never substitutes its repo for an unknown execution cwd: %j', cwd => {
+  const approved = pipelinePermissionProfileSchema.parse({ repoPath: process.cwd(), commands: ['pnpm test'] });
+  expect(profileAllows(approved, { toolId: 'shell', toolName: 'run', action: 'execute', args: { command: 'pnpm test', ...(cwd === undefined ? {} : { cwd }) } })).toBe(false);
+});

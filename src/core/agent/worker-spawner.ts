@@ -883,7 +883,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   // worker id once `agentManager.spawn` returns; `createSpawnChildTool`
   // closes over the node by reference, so the tool sees the real id by
   // the time it can be invoked.
-  if (typeof context.metadata?.pipelineId === 'string') systemPrompt += '\n\nPipeline approval gates: request_user_approval and coordinator plan updates are not stage tools. If the item asks for user approval, return a handoff with blockedOnDecision: {itemId, question, options?}, using the current item id or a pending decision item. Include the tested change and evidence. The coordinator presents the approval and parks the stage; do not probe unavailable tools or call this an environment block. For a future date, return deferredUntil (ISO timestamp) and deferredReason instead of manufacturing edits.';
+  if (typeof context.metadata?.pipelineId === 'string') systemPrompt += '\n\nRun profile scope: always pass an explicit absolute cwd to shell__run; omitted or relative cwd is not covered by a run profile.\n\nPipeline approval gates: request_user_approval and coordinator plan updates are not stage tools. If the item asks for user approval, return a handoff with blockedOnDecision: {itemId, question, options?}, using the current item id or a pending decision item. Include the tested change and evidence. The coordinator presents the approval and parks the stage; do not probe unavailable tools or call this an environment block. For a future date, return deferredUntil (ISO timestamp) and deferredReason instead of manufacturing edits.';
   let stageNode: AgentNode | null = null;
   let stageDelegation: ReturnType<typeof createStageDelegation> | undefined;
   if (overrides?.swarmParent) {
@@ -1319,6 +1319,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
       maxTokenBudget: overrides?.maxTokenBudget,
       signal: overrides?.swarmParent?.signal,
       onWorkerSpawned: overrides?.onWorkerSpawned,
+      hasSwarmParent: !!overrides?.swarmParent,
       onWorkerReady: next => {
         stageDelegation?.bind(next);
         if (stageNode) {
@@ -1338,6 +1339,8 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
  * this, retried/fallback workers silently ran as a different, weaker persona.
  */
 interface WorkerRespawnContext {
+  /** Pipeline retry workers can own detached children under their new agent id. */
+  hasSwarmParent?: boolean;
   onWorkerReady?: (worker: Awaited<ReturnType<ReturnType<typeof getAgentManager>['spawn']>>) => void;
   signal?: AbortSignal;
   onWorkerSpawned?: (id: string) => void;
@@ -1510,10 +1513,9 @@ export async function handleWorkerFailure(
       }
       } catch (error) { coreLogger.error({ error, workerId }, 'Could not persist provider retry status; preserving the worker result'); }
     }
-    // The respawned worker is a fresh agent id with no swarm node of its own,
-    // so there are no children to fold in — its own counters are the whole
-    // story. Routed through the same helper so both paths stay in step.
-    respawnCtx.onCounters?.(await stageCounters(retryWorker, null));
+    // Rebound delegation registers children under the replacement worker id.
+    // Include their receipts even though the retry has no swarm row of its own.
+    respawnCtx.onCounters?.(await stageCounters(retryWorker, respawnCtx.hasSwarmParent ? retryWorker.getContext().id : null));
     deps.emit({
       type: 'worker_completed',
       sessionId: context.sessionId,

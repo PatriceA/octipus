@@ -151,13 +151,16 @@ test('an approved overnight profile covers each stage, records denials and prese
   const pipeline = await pipelineRepository.create({ rootAgentId: 'root', sessionId, userId, title: 'overnight', type: 'development', status: 'running',
     metadata: { permissionProfile: { profile, repoPath: '/repo', approvedBy: userId } } });
   const caller = { userId, sessionId, attended: false, metadata: { pipelineId: pipeline.id, nodeKey: 'testing', attemptId: 'one' } };
-  const read = { toolId: 'cli-native:Bash', action: 'Bash', toolName: 'Bash', args: { command: "curl --head 'https://go.dev/dl/?mode=json&include=all'" } };
+  const read = { toolId: 'cli-native:Bash', action: 'Bash', toolName: 'Bash', args: { command: "curl --head 'https://go.dev/dl/?mode=json&include=all'", cwd: '/repo' } };
   expect(await routeApprovalFor(caller, read, { level: 'ASK' })).toMatchObject({ route: 'execute', source: 'pipeline-approval' });
   expect(await routeApprovalFor({ ...caller, metadata: { ...caller.metadata, nodeKey: 'qa', attemptId: 'two' } }, read, { level: 'ASK' })).toMatchObject({ route: 'execute' });
   expect(await routeApprovalFor(caller, read, { level: 'DENY', source: 'permission:deny' })).toMatchObject({ route: 'deny' });
   const outside = { ...read, args: { command: 'curl https://outside.example' } };
   expect(await routeApprovalFor(caller, outside, { level: 'ASK' })).toMatchObject({ route: 'deny', reason: expect.stringContaining('morning summary') });
   expect((await pipelineRepository.findById(pipeline.id))?.metadata?.deniedRequests).toHaveLength(2);
+  // A target repo in the profile does not establish the native/shell execution cwd.
+  expect(await routeApprovalFor(caller, { ...read, args: { command: read.args.command } }, { level: 'ASK' })).toMatchObject({ route: 'deny' });
+  expect(await routeApprovalFor(caller, { ...read, args: { ...read.args, cwd: '/workspace/octipus' } }, { level: 'ASK' })).toMatchObject({ route: 'deny' });
   // Simulate a real human decision in attended mode; the exact fingerprint then holds across stages.
   await rememberRunDecision(caller, outside);
   expect(await routeApprovalFor({ ...caller, metadata: { ...caller.metadata, nodeKey: 'qa', attemptId: 'three' } }, outside, { level: 'ASK' })).toMatchObject({ route: 'execute' });

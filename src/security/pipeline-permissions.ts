@@ -1,5 +1,5 @@
 import { isUuid } from '@/db/repositories/scoped';
-import { resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 import { pipelinePermissionProfileSchema, type PipelinePermissionProfile } from '@/shared/pipeline-permissions';
 import { pipelineRepository } from '@/db/repositories/pipeline-repository';
 import type { ApprovalCaller } from './approval-route';
@@ -13,7 +13,11 @@ export function profileAllows(profile: PipelinePermissionProfile, call: SpaceToo
   const args = call.args ?? {};
   const command = args.command;
   if (typeof command !== 'string' || Object.keys(args).some(key => !['command', 'cwd', 'timeout', 'description', 'network', 'useShell'].includes(key))) return false;
-  if (![profile.repoPath, ...profile.repoPaths].some(repo => resolve(String(args.cwd ?? profile.repoPath)) === resolve(repo)) || matchDestructiveCommand(command)) return false;
+  // The shell and vendor CLIs can default to different workspaces/worktrees.
+  // A profile is authority for a named repo, never evidence of execution cwd.
+  if (typeof args.cwd !== 'string' || !isAbsolute(args.cwd)) return false;
+  const cwd = resolve(args.cwd);
+  if (![profile.repoPath, ...profile.repoPaths].some(repo => cwd === resolve(repo)) || matchDestructiveCommand(command)) return false;
   if (profile.commands.includes(command)) return true;
   if (/[;&|`$\n<>\\]/.test(command.replace(/'[^']*'|"[^"]*"/g, '')) || /[$`]/.test(command)) return false;
   const words = command.match(/"[^"]*"|'[^']*'|[^\s]+/g)?.map(word => word.replace(/^(['"])(.*)\1$/, '$2')) ?? [];

@@ -1169,6 +1169,8 @@ test('a blocked decision is asked before the zero-file contract and recorded bef
     expect(approvalsAsked).toBe(1);
     expect(calls.filter(call => call.stageName === 'Implement')).toHaveLength(3);
     expect(calls.filter(call => call.stageName === 'Implement')[1].input).toContain('RECORDED USER DECISION');
+    expect(calls.filter(call => call.stageName === 'Implement')[2].input).toContain('Near ties are inconclusive; run the benchmark once.');
+    expect(calls.filter(call => call.stageName === 'Implement')[2].input).not.toContain('Verification-only work is valid');
     expect(await planItemStatuses(pipelineId)).toEqual(['done', 'done']);
     expect(await manager.getPipeline(pipelineId)).toMatchObject({ metadata: { userDecisions: [expect.objectContaining({ itemId: decisionId, decidedBy: userId })] } });
   } finally { workspace.mockRestore(); rmSync(root, { recursive: true, force: true }); }

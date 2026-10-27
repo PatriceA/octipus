@@ -149,6 +149,9 @@ stages run; a model-supplied profile is a proposal, never an authorization.
 `repoPath` names the target repository. `repoPaths` can name additional repositories.
 Each path must be accessible to the session's filesystem scope (including its
 configured additional paths); the profile does not grant new filesystem access.
+Profile auto-approval requires an explicit absolute `cwd` matching an approved
+repo path. Omitted or relative directories use normal permissions: the profile
+does not determine where the shell or vendor CLI actually runs.
 
 ```json
 {
@@ -785,11 +788,12 @@ coordinator before dispatch and omitted from workers' product checks once met.
 A handoff can report `blockedOnDecision: {itemId, question, options?}` referencing
 the current item or a pending user-decision item in this run. Stages use this
 handoff even when item text names the coordinator-only `request_user_approval`.
-The coordinator asks a real question and records its answer and actor atomically;
-the item used to route the question keeps its status and must complete its stages,
-then continues the saved stage. The recorded answer is included again after
-restart and in subsequent stages for the blocked item. A missing answer
-pauses with `pendingDecision`. This happens before artifact/command contracts,
+The coordinator asks a real question, records its answer and actor atomically,
+and continues the saved stage. The item used to route the question keeps its
+status and must complete its own stages. The recorded answer is included again after
+restart and in subsequent stages for both the blocked item and the routing item.
+Forwarding the answer to the routing item does not waive its artifact contract.
+A missing answer pauses with `pendingDecision`. This happens before artifact/command contracts,
 so the worker need not fabricate edits while waiting. After a recorded decision,
 verification-only implementation is valid for that attempt when it executes the
 required checks; it is never asked to manufacture a file change.
@@ -836,7 +840,9 @@ The date-blocked item report previously duplicated issue #66. It is tracked as
 - #66: the stage prompt uses `blockedOnDecision` to request approvals through the
   coordinator, including for the current item.
 - #67: pipeline stage workers wire detached spawning, collection and steering
-  before starting the worker. `spawn_child` returns a pending handle.
+  before starting the worker. `spawn_child` returns a pending handle. Replacement
+  workers after provider retries also aggregate their children's execution
+  receipts, including uncertain-action record ids.
 - #68: failed runs accept audited item edits and reopen operations before resume.
   The visible plan shows the failed active item as blocked and follows its resume.
 - #69: a stage may return `deferredUntil` (an ISO timestamp with timezone) and
