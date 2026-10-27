@@ -19,7 +19,10 @@ describe.skipIf(process.platform === 'win32')('SSH agent forwarding', () => {
   beforeEach(async () => {
     root = mkdtempSync(join(tmpdir(), 'octi-ssh-'));
     vi.mocked(homedir).mockReturnValue(root);
-    const socket = join(root, 'agent.sock');
+    // Match modern ssh-agent's nested ~/.ssh/agent layout. known_hosts is
+    // mounted afterward under the same ~/.ssh parent and must not hide it.
+    mkdirSync(join(root, '.ssh', 'agent'), { recursive: true });
+    const socket = join(root, '.ssh', 'agent', 'test.sock');
     received.length = 0;
     server = createServer(connection => { connection.on('data', data => { received.push(data.toString()); connection.end('agent-ok'); }); });
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(socket, resolve); });
@@ -36,7 +39,7 @@ describe.skipIf(process.platform === 'win32')('SSH agent forwarding', () => {
   });
 
   test('opt-in and server authorization are both required; private keys are never selected', () => {
-    mkdirSync(join(root, '.ssh'));
+    mkdirSync(join(root, '.ssh'), { recursive: true });
     writeFileSync(join(root, '.ssh', 'known_hosts'), 'example.test ssh-ed25519 public-host-key');
     writeFileSync(join(root, '.ssh', 'id_ed25519'), 'TEST-PRIVATE-KEY-MUST-STAY-HIDDEN');
     expect(shellSshAgent(false)).toBeUndefined();
@@ -73,7 +76,7 @@ describe.skipIf(process.platform === 'win32')('SSH agent forwarding', () => {
       getConfig().security.shellSandbox = 'required';
       const project = join(root, 'project');
       mkdirSync(project);
-      mkdirSync(join(root, '.ssh'));
+      mkdirSync(join(root, '.ssh'), { recursive: true });
       writeFileSync(join(root, '.ssh', 'known_hosts'), 'PUBLIC-HOST-MARKER');
       writeFileSync(join(root, '.ssh', 'id_ed25519'), 'PRIVATE-KEY-MARKER');
       const probe = `const fs=require('node:fs'); const net=require('node:net'); const assert=require('node:assert/strict');
@@ -87,6 +90,13 @@ describe.skipIf(process.platform === 'win32')('SSH agent forwarding', () => {
       expect(result.exitCode, result.stderr).toBe(0);
       expect(result.stdout).toBe('agent-ok');
       expect(received).toEqual(['sign-probe']);
+      if (existsSync('/usr/bin/ssh')) {
+        // Parse configuration without connecting to a real host or agent.
+        const config = await new LocalShellOperations().exec('ssh -G example.test', project,
+          { allowHostSshAgent: true, timeout: 5000 });
+        expect(config.exitCode, config.stderr).toBe(0);
+        expect(config.stdout).toContain('hostname example.test');
+      }
       let exited!: () => void;
       const backgroundDone = new Promise<void>(resolve => { exited = resolve; });
       await new LocalShellOperations().spawnBackground('node probe.cjs background-marker', project, { allowHostSshAgent: true, onExit: exited });

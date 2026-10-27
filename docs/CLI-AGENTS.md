@@ -214,6 +214,10 @@ The bridge clock for a running call is its base deadline (30 s) plus the tool's 
 `timeout` argument or schema default, so `shell__run` with `timeout: 600000` ends
 with its own timed-out result instead of an uncertain outcome. A queued call's
 wait clock starts only when the call ahead settles or passes its deadline.
+Human approval waits suspend the running call's bridge clock. Once answered,
+the call gets a fresh execution budget; the separate five-minute approval
+deadline still applies. Approval expiry returns `code: "approval_timeout"` and
+`executed: false`, rather than reporting an uncertain execution outcome.
 Inside a pipeline stage, `shell__run` raises any shorter limit to 10 minutes
 (`PIPELINE_SHELL_TIMEOUT_FLOOR_MS`), and the bridge uses the same floor. A shell
 command killed by its own timeout still records an uncertain outcome by design.
@@ -250,6 +254,9 @@ boolean from the existing `security.shellSandbox` mode. Start Octipus with a
 live, absolute `SSH_AUTH_SOCK`; a missing or invalid socket produces an explicit
 error. The sandbox exposes only that socket and `~/.ssh/known_hosts` read-only,
 allowing agent-backed signing without mounting private keys or all of `~/.ssh`.
+With bubblewrap forwarding, optional `/etc/ssh/ssh_config.d` includes are masked
+to avoid OpenSSH rejecting files whose owners are unmapped in a user namespace.
+The main SSH config and host-key verification remain in effect.
 Shared-space runs never receive this host identity, even when the setting is on.
 Network access still requires the command's normal network permission. The
 setting defaults to off and does not select keys or load them into the agent.
@@ -721,7 +728,8 @@ notifications refresh metadata without preloading resource contents.
 
 ### Approval waits in managed CLI runs
 
-An unanswered approval pauses the active-work budget, but a managed CLI run
+An unanswered approval pauses both the active-work budget and the bridge's
+execution deadline, but a managed CLI run
 waits at most five minutes for it. Expiry fails the run and cancels its pending
 requests; it never grants permission or executes the waiting command. A tool
 caller disconnecting during approval also fails the run immediately. Queued

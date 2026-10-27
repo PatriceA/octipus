@@ -410,6 +410,36 @@ it.skipIf(!!process.env.OCTIPUS_LIVE_CLI || process.platform === 'win32')('repor
 });
 
 
+it.each([true, false])('accepts a delayed approval decision beyond the bridge base deadline: approved=%s', async approved => {
+  const nativeTimeout = globalThis.setTimeout;
+  const timerSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((callback: (...args: any[]) => void, ms?: number, ...args: any[]) =>
+    nativeTimeout(callback, ms === 30_000 ? 80 : ms, ...args)) as typeof setTimeout);
+  const requestId = '0b0b0b0b-0000-4000-8000-000000000001';
+  fixture.check.mockResolvedValue({ level: 'ASK', route: 'ask_human' });
+  fixture.requestApproval.mockResolvedValue(requestId);
+  fixture.wait.mockImplementation(async () => {
+    fixture.waitListener?.('a', true, requestId);
+    await new Promise(resolve => nativeTimeout(resolve, 120));
+    fixture.waitListener?.('a', false, requestId);
+    return approved;
+  });
+  fixture.execute.mockResolvedValue('jira result');
+  writeFileSync(fixture.script, `
+    const response = await fetch(process.env.OCTIPUS_AGENT_URL + '/call', {method:'POST',
+      headers:{Authorization:'Bearer '+process.env.OCTIPUS_AGENT_KEY},body:JSON.stringify({name:'approval_sample',arguments:{}})});
+    const result = await response.json();
+    console.log(JSON.stringify({type:'result',subtype:'success',result:JSON.stringify(result),num_turns:1}));
+  `);
+  const worker = new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own', id: 'a', sessionId: 's', userId: 'u', root: true, model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+    { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
+  worker.registerTool({ name: 'approval_sample', toolId: 'sample', description: '', parameters: { type: 'object' }, execute: fixture.execute });
+  try {
+    if (approved) await expect(worker.run('sample')).resolves.toContain('jira result');
+    else await expect(worker.run('sample')).rejects.toThrow('approval was not granted');
+    expect(fixture.execute).toHaveBeenCalledTimes(approved ? 1 : 0);
+  } finally { worker.stop(); timerSpy.mockRestore(); }
+});
+
 it.each(['deadline', 'disconnect', 'premature-finish'] as const)('approval %s ends the CLI as failed without running the command', async mode => {
   const nativeTimeout = globalThis.setTimeout;
   const timerSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((callback: (...args: any[]) => void, ms?: number, ...args: any[]) =>

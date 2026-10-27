@@ -191,6 +191,10 @@ function buildBwrapArgs(binary: string, options: WrapOptions, scratch: string): 
     args.push('--bind-try', p, p);
   }
   if (options.sshAgent) {
+    // Some hosts expose root-owned SSH include files as unmapped users inside
+    // a user namespace. OpenSSH refuses those before contacting the agent.
+    // Keep host verification and the main config; hide only optional includes.
+    if (existsSync('/etc/ssh/ssh_config.d')) args.push('--tmpfs', '/etc/ssh/ssh_config.d');
     args.push('--ro-bind', options.sshAgent.socket, options.sshAgent.socket, '--setenv', 'SSH_AUTH_SOCK', options.sshAgent.socket);
     if (options.sshAgent.knownHosts) args.push('--ro-bind', options.sshAgent.knownHosts, options.sshAgent.knownHosts);
   }

@@ -17,6 +17,67 @@ const call = (url: string, key: string, name = 'read_context') => fetch(`${url}/
   method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
   body: JSON.stringify({ name, arguments: {} }),
 });
+
+it.each([true, false])('keeps approval pending beyond the execution deadline, decision=%s', async approved => {
+  let decide!: () => void;
+  let entered!: () => void;
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  const decision = new Promise<void>(resolve => { decide = resolve; });
+  const executed = vi.fn();
+  const abandoned = vi.fn();
+  const bridge = await startCliToolBridge({
+    active: () => true, timeoutMs: 80, abandoned,
+    tools: () => [{ name: 'mcp_call_tool', description: '', parameters: {}, execute: async () => null }],
+    execute: async () => {
+      bridge.setApprovalWaiting(true);
+      entered();
+      await decision;
+      bridge.setApprovalWaiting(false);
+      if (!approved) return { isError: true, content: [{ type: 'text', text: 'Approval denied. The command was not run.' }] };
+      // Execution gets its full budget after approval, not the remainder.
+      await new Promise(resolve => setTimeout(resolve, 50));
+      executed();
+      return { content: [{ type: 'text', text: 'jira result' }] };
+    },
+  });
+  bridges.push(bridge);
+  const pending = call(bridge.url, bridge.key, 'mcp_call_tool');
+  await waiting;
+  await new Promise(resolve => setTimeout(resolve, 120));
+  expect(abandoned).not.toHaveBeenCalled();
+  decide();
+  const response = await pending;
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject(approved ? { content: [{ text: 'jira result' }] } : { isError: true });
+  expect(executed).toHaveBeenCalledTimes(approved ? 1 : 0);
+});
+
+it('returns an explicit approval timeout with executed=false and releases the waiter after flushing', async () => {
+  let release!: () => void;
+  let entered!: () => void;
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  const abandoned = vi.fn();
+  let ended = false;
+  const bridge = await startCliToolBridge({
+    active: () => true, timeoutMs: 80, abandoned,
+    tools: () => [{ name: 'mcp_call_tool', description: '', parameters: {}, execute: async () => null }],
+    execute: async () => {
+      bridge.setApprovalWaiting(true); entered();
+      await new Promise<void>(resolve => { release = resolve; });
+      return { content: [] };
+    },
+    delivered: () => { ended = true; release(); },
+  });
+  bridges.push(bridge);
+  const pending = call(bridge.url, bridge.key, 'mcp_call_tool');
+  await waiting;
+  expect(bridge.endApprovalWait('Approval timed out. The command was not run.')).toBe(true);
+  const response = await pending;
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({ error: 'Approval timed out. The command was not run.', code: 'approval_timeout', executed: false });
+  expect(ended).toBe(true);
+  expect(abandoned).not.toHaveBeenCalled();
+});
 describe('CLI run capability bridge', () => {
   it('isolates simultaneous agents and rejects other capabilities', async () => {
     const a = await setup('user A/session A');

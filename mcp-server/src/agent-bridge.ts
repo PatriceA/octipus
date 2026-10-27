@@ -54,7 +54,7 @@ export function createAgentBridgeServer(): Server {
     const heartbeat = progressToken === undefined ? undefined : setInterval(() => {
       extra.sendNotification({ method: 'notifications/progress', params: { progressToken, progress: ++progress } })
         .catch(() => { /* the response itself still reports the outcome */ });
-    }, 60_000);
+    }, 15_000);
     try {
       // Pass cancellation through so the backend sees the drop and keeps the result.
       return CallToolResultSchema.parse(await agentBridgeRequest('/call', { name: params.name, arguments: params.arguments ?? {} }, extra.signal));

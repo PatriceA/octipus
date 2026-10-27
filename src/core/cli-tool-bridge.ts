@@ -11,7 +11,9 @@ import type { ToolHandler } from './agent-base';
  * goes to the log, and the caller gets a flat failure instead (CodeQL
  * js/stack-trace-exposure).
  */
-class BridgeError extends Error {}
+class BridgeError extends Error {
+  constructor(message: string, readonly code?: string, readonly executed?: boolean) { super(message); }
+}
 
 const callSchema = z.object({ name: z.string().min(1), arguments: z.record(z.string(), z.unknown()).default({}) }).strict();
 export interface BridgeResult { content: Array<{ type: 'text'; text: string }>; isError?: boolean }
@@ -43,10 +45,16 @@ export async function startCliToolBridge(options: {
   toolTimeoutFloorMs?: number;
   /** The caller dropped the connection before this tool's result could be sent. */
   undelivered?: (name: string) => void;
-}): Promise<{ url: string; key: string; close: () => Promise<void> }> {
+  /** Called after a response is flushed, including a terminal approval refusal. */
+  delivered?: () => void;
+}): Promise<{ url: string; key: string; close: () => Promise<void>;
+  setApprovalWaiting: (waiting: boolean) => void; endApprovalWait: (reason: string) => boolean }> {
   const key = randomBytes(32).toString('hex');
   let closed = false;
   let closing: Promise<void> | undefined;
+  // Only the serialized executor can wait on permissions. Unqueued context
+  // reads must never take ownership of its approval state or deadline.
+  let approvalCall: { waiting: boolean; change: (waiting: boolean) => void; end: (reason: string) => void } | undefined;
   // Serialize calls to the worker's executor; separate agents have separate queues.
   let queue = Promise.resolve();
   // Settles when the call ahead settles or passes its own deadline; a queued call's wait clock starts there.
@@ -54,7 +62,7 @@ export async function startCliToolBridge(options: {
   const server = createServer(async (req, res) => {
     const reply = (status: number, value: unknown) => {
       res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-      res.end(JSON.stringify(value));
+      res.end(JSON.stringify(value), () => options.delivered?.());
     };
     const socket = req.socket;
     let expired = false;
@@ -102,6 +110,22 @@ export async function startCliToolBridge(options: {
       const mine = new Promise<void>(resolve => { bounded = resolve; });
       let expire!: (err: Error) => void;
       const timedOut = new Promise<never>((_, reject) => { expire = reject; });
+      const executionBudget = base + ownTimeout(input.name, input.arguments, options.tools(), options.toolTimeoutFloorMs);
+      const approval = {
+        waiting: false,
+        change: (waiting: boolean) => {
+          approval.waiting = waiting;
+          clearTimeout(deadline);
+          // The worker owns the separate five-minute human decision deadline.
+          if (!waiting && !expired && !settled && !options.longWait?.has(input.name)) arm(executionBudget);
+        },
+        end: (reason: string) => {
+          expired = true;
+          clearTimeout(deadline);
+          bounded();
+          expire(new BridgeError(reason, 'approval_timeout', false));
+        },
+      };
       // One clock per phase: queue wait (base) once the call ahead is done or
       // expired, then execution (base + the tool's own timeout) once it starts.
       const arm = (ms: number) => {
@@ -124,10 +148,11 @@ export async function startCliToolBridge(options: {
             : 'Tool is not available to this agent');
         }
         started = true;
+        if (!unqueued(input.name)) approvalCall = approval;
         if (options.longWait?.has(input.name)) clearTimeout(deadline);
-        else arm(base + ownTimeout(input.name, input.arguments, options.tools(), options.toolTimeoutFloorMs));
+        else arm(executionBudget);
         try { return await options.execute(input.name, input.arguments); }
-        finally { settled = true; }
+        finally { settled = true; if (approvalCall === approval) approvalCall = undefined; }
       };
       // ponytail: one queue per worker; unqueued read-only tools keep context reads
       // responsive while an awaited delegation holds the queue. Parallel executor
@@ -144,16 +169,17 @@ export async function startCliToolBridge(options: {
       let result: BridgeResult;
       try {
         result = await Promise.race([operation, timedOut]);
-      } finally { clearTimeout(deadline); }
+      } finally { clearTimeout(deadline); if (approvalCall === approval) approvalCall = undefined; }
       // The caller gave up (transport timeout, cancel) while the tool ran; a
       // write now goes nowhere, so let the owner keep what it would lose.
-      if (socket.destroyed) { options.undelivered?.(input.name); return; }
+      if (socket.destroyed) { options.undelivered?.(input.name); options.delivered?.(); return; }
       reply(200, result);
     } catch (err) {
       // A deliberate refusal is the agent's to read; a malformed call gets the
       // schema complaint, which is about ITS request, not our internals.
       if (err instanceof BridgeError || err instanceof z.ZodError) {
-        reply(400, { error: err instanceof z.ZodError ? `Invalid tool call: ${err.issues.map(i => i.message).join('; ')}` : err.message });
+        reply(400, { error: err instanceof z.ZodError ? `Invalid tool call: ${err.issues.map(i => i.message).join('; ')}` : err.message,
+          ...(err instanceof BridgeError && err.code ? { code: err.code, executed: err.executed } : {}) });
         return;
       }
       agentLogger.error({ err }, 'CLI tool bridge request failed');
@@ -172,6 +198,12 @@ export async function startCliToolBridge(options: {
   if (!address || typeof address === 'string') throw new Error('Agent bridge has no TCP address');
   return {
     url: `http://127.0.0.1:${address.port}`, key,
+    setApprovalWaiting: waiting => approvalCall?.change(waiting),
+    endApprovalWait: reason => {
+      if (!approvalCall?.waiting) return false;
+      approvalCall.end(reason);
+      return true;
+    },
     close: () => {
       if (!closing) {
         closed = true;

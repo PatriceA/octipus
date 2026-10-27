@@ -114,6 +114,11 @@ export class CLIAgentWorker extends BaseAgentWorker {
   private endApprovalWait(reason: string): void {
     if (!this.pauseReasons.has('approval') || this.terminalEmitted || this.aborted) return;
     this.runError = approvalWaitReason(reason, this.awaitedRequestId);
+    // Flush an explicit not-run result before terminating the CLI transport.
+    if (reason === APPROVAL_TIMEOUT_REASON && this.bridge?.endApprovalWait(this.runError)) {
+      this.context.status = 'failed';
+      return;
+    }
     this.stop();
   }
   private setPause(reason: string, on: boolean): void {
@@ -283,6 +288,12 @@ When a task matches one of these skills, load it with get_skill before starting 
         // Preserve an existing user cancellation instead of reclassifying it.
         if (!this.aborted) {
           this.runError = error instanceof Error ? error.message : String(error);
+          if (this.runError.startsWith(`Permission denied for "${name}": the approval was not granted `)) {
+            // Reject queued calls immediately, but flush the approval refusal
+            // before stop() kills the subprocess. Other faults stay private.
+            this.context.status = 'failed';
+            return { isError: true, content: [{ type: 'text', text: this.runError }] };
+          }
           this.stop();
         }
         throw error;
@@ -496,6 +507,7 @@ When a task matches one of these skills, load it with get_skill before starting 
       if (agentId !== this.context.id) return;
       this.awaitedRequestId = waiting ? requestId : undefined;
       this.setPause('approval', waiting);
+      this.bridge?.setApprovalWaiting(waiting);
       clearTimeout(this.approvalDeadline);
       this.approvalDeadline = undefined;
       if (waiting) {
@@ -527,6 +539,7 @@ When a task matches one of these skills, load it with get_skill before starting 
         active: () => this.context.status === 'running' && !this.aborted,
         execute: (name, args) => this.executeBridgedTool(name, args),
         abandoned: () => this.endApprovalWait(APPROVAL_DISCONNECT_REASON),
+        delivered: () => { if (this.runError && !this.aborted) this.stop(); },
         unqueued: new Set(['get_cli_run_context', 'get_work_plan']),
         longWait: DELEGATION_TOOLS,
         toolTimeoutFloorMs: typeof this.context.metadata?.pipelineId === 'string' ? PIPELINE_SHELL_TIMEOUT_FLOOR_MS : undefined,
