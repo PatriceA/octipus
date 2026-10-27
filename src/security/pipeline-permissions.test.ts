@@ -16,3 +16,11 @@ test('scope includes the repository and argument-dependent destructive action', 
   expect(profileAllows(profile, call('pnpm install', '/other'))).toBe(false);
   expect(profileAllows(profile, { ...call('pnpm install'), action: 'execute_destructive' })).toBe(false);
 });
+
+test('a profile can cover a target repo and a second repo without approving other directories (#54)', () => {
+  const target = pipelinePermissionProfileSchema.parse({ repoPath: '/work/moco-rebuild', repoPaths: ['/work/shared'], packageManagers: ['pnpm'] });
+  expect(profileAllows(target, call('pnpm test', '/work/moco-rebuild'))).toBe(true);
+  expect(profileAllows(target, call('pnpm test', '/work/shared'))).toBe(true);
+  expect(profileAllows(target, call('pnpm test', '/work/octipus'))).toBe(false);
+  expect(target.allowTimedOutCommands).toBe(false);
+});

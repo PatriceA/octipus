@@ -1,3 +1,4 @@
+import { createStageDelegation } from './stage-delegation';
 import { WorkerInterruptedError, type Interruption } from '@/core/interruption';
 import { getExecutionSignal } from '@/core/execution-scope';
 import { setTimeout as retryDelay } from 'node:timers/promises';
@@ -17,7 +18,6 @@ import { getSwarmLedger } from '@/core/swarm/ledger';
 import { swarmNodeRepository } from '@/core/swarm/node-repository';
 import { mergeCounters, type SideEffectCounters } from '@/core/swarm/receipt';
 import { taskFingerprint } from '@/core/swarm/spawner';
-import { createSpawnChildTool } from '@/core/swarm/swarm-tool';
 import { type AgentNode, getLevelDefault } from '@/core/swarm/types';
 import type { AgentContext } from '@/core/types';
 import { sessionRepository } from '@/db/repositories/session-repository';
@@ -860,7 +860,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   // last static index is the natural cache breakpoint for explicit-cache
   // providers (Phase 2b).
   const staticPrefix = staticParts.join('');
-  const systemPrompt = staticPrefix + semiStaticParts.join('') + volatileParts.join('');
+  let systemPrompt = staticPrefix + semiStaticParts.join('') + volatileParts.join('');
 
   // What did we just build? Measured per section so an over-long prompt names
   // its own biggest contributor instead of just reporting a total.
@@ -883,7 +883,9 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   // worker id once `agentManager.spawn` returns; `createSpawnChildTool`
   // closes over the node by reference, so the tool sees the real id by
   // the time it can be invoked.
+  if (typeof context.metadata?.pipelineId === 'string') systemPrompt += '\n\nPipeline approval gates: request_user_approval and coordinator plan updates are not stage tools. If the item asks for user approval, return a handoff with blockedOnDecision: {itemId, question, options?}, using the current item id or a pending decision item. Include the tested change and evidence. The coordinator presents the approval and parks the stage; do not probe unavailable tools or call this an environment block. For a future date, return deferredUntil (ISO timestamp) and deferredReason instead of manufacturing edits.';
   let stageNode: AgentNode | null = null;
+  let stageDelegation: ReturnType<typeof createStageDelegation> | undefined;
   if (overrides?.swarmParent) {
     const lvl = getLevelDefault(1);
     stageNode = {
@@ -917,7 +919,8 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
       // expert's `modelPreference` can pin to a different size. Keying off the
       // topic would hand the keyword table a capable model's deliberate role
       // choice, which is precisely the inversion being removed elsewhere.
-      roleTools.push(createSpawnChildTool(stageNode, undefined, undefined, { weakModel: finalIsSmall }));
+      stageDelegation = createStageDelegation(stageNode, finalIsSmall);
+      roleTools.push(...stageDelegation.tools);
     } catch (err) {
       coreLogger.error({ err, role: agentRole }, 'Failed to inject spawn_child for pipeline stage — stage runs without subagent spawning');
     }
@@ -1020,6 +1023,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
 
   // ── Register stage in swarm_nodes + announce on hub ──
   if (stageNode && overrides?.swarmParent) {
+    stageDelegation?.bind(worker);
     stageNode.id = workerId;
     stageNode.signal = worker.getAbortSignal();
     stageNode.ownTokenUsage = () => worker.getBillableTokens();
@@ -1315,6 +1319,13 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
       maxTokenBudget: overrides?.maxTokenBudget,
       signal: overrides?.swarmParent?.signal,
       onWorkerSpawned: overrides?.onWorkerSpawned,
+      onWorkerReady: next => {
+        stageDelegation?.bind(next);
+        if (stageNode) {
+          stageNode.id = next.getContext().id; stageNode.signal = next.getAbortSignal();
+          stageNode.ownTokenUsage = () => next.getBillableTokens();
+        }
+      },
       onPartialOutput: overrides?.onPartialOutput,
     });
   }
@@ -1327,6 +1338,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
  * this, retried/fallback workers silently ran as a different, weaker persona.
  */
 interface WorkerRespawnContext {
+  onWorkerReady?: (worker: Awaited<ReturnType<ReturnType<typeof getAgentManager>['spawn']>>) => void;
   signal?: AbortSignal;
   onWorkerSpawned?: (id: string) => void;
   onPartialOutput?: (text: string) => void;
@@ -1473,6 +1485,7 @@ export async function handleWorkerFailure(
       contextMetadata: pipelineMetadata(context.metadata),
       parentSignal: recoverySignal,
     });
+    respawnCtx.onWorkerReady?.(retryWorker);
     respawnCtx.onWorkerSpawned?.(retryWorker.getContext().id);
     const progress = respawnCtx.onPartialOutput ? setInterval(() => { const text = retryWorker.getPartialOutput(); if (text) respawnCtx.onPartialOutput?.(text); }, 15_000) : undefined;
     const workerMessage = input

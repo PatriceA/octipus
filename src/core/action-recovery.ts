@@ -6,10 +6,11 @@ import { routeApprovalFor } from '@/security/approval-route';
 import { coreLogger } from '@/utils/logger';
 import { assertExecutionActive, getExecutionSignal } from './execution-scope';
 import type { AgentContext } from './types';
-import { isToolNotExecutedResult, ToolNotExecutedError } from './tool-execution-error';
+import { isToolNotExecutedResult, markToolExecutionUncertain, ToolNotExecutedError } from './tool-execution-error';
 import { WorkspaceFsError } from '@/security/workspace-fs';
 
 export class RecoveryReviewRequiredError extends Error {
+  constructor(message: string, readonly recordIds: string[] = []) { super(message); }
   readonly code = 'recovery_review_required';
 }
 
@@ -79,11 +80,14 @@ export class ActionRecovery {
   private async reviewPending(context: AgentContext, toolName: string, toolId: string): Promise<void> {
     for (;;) {
       assertExecutionActive(context);
-      const pending = (await this.repository.pending(context.userId, context.sessionId)).filter(row => !this.active.has(row.id) && actionsConflict(row.toolId, toolId)).slice(0, 20);
+      const unresolved = await this.repository.pending(context.userId, context.sessionId);
+      const bookkeeping = unresolved.filter(row => row.toolId === 'plan' && !this.active.has(row.id));
+      if (bookkeeping.length) await this.repository.acknowledge(context.userId, context.sessionId, bookkeeping.map(row => row.id), 'local-plan-bookkeeping');
+      const pending = unresolved.filter(row => row.toolId !== 'plan').filter(row => !this.active.has(row.id) && actionsConflict(row.toolId, toolId)).slice(0, 20);
       if (!pending.length) return;
       const decision = await routeApprovalFor(context, { toolId: 'action_recovery', action: 'retry' }, { level: 'ASK' });
       if (decision.route !== 'ask_human') throw new RecoveryReviewRequiredError(
-        `Previous tool actions have uncertain outcomes. Check external state and obtain recovery approval before another mutation. ${describeActions(pending)}`);
+        `Previous tool actions have uncertain outcomes. Check external state and obtain recovery approval before another mutation. ${describeActions(pending)}`, pending.map(row => row.id));
       const manager = getPermissionManager();
       const id = await manager.requestApproval(context.userId, context.id, 'action_recovery', 'retry', {
         warning: `The earlier actions listed below have no confirmed outcome. This is not a request for more retries and does not change the configured retry limit. This is separate from permission to run ${toolName}. Check their external state: changes may already exist. Approving permits further changes and may repeat earlier effects; rejecting leaves read-only checks available.`,
@@ -131,7 +135,17 @@ export class ActionRecovery {
         (value.timedOut === true || value.killed === true || value.aborted === true ||
           (!shellExited && (value.isError === true || value.success === false || value.outcome === 'error')) ||
           (toolId === 'shell' && typeof value.signal === 'string'));
-      try { await this.repository.finish(scope, isToolNotExecutedResult(toolId, result) ? 'not_executed' : uncertain ? 'uncertain' : 'completed'); }
+      let timeoutAcknowledged = false;
+      if (toolId === 'shell' && value?.timedOut === true && value.aborted !== true && value.killed === true) {
+        try {
+          const { runPermissionProfile, profileAllows } = await import('@/security/pipeline-permissions');
+          const run = await runPermissionProfile(context);
+          timeoutAcknowledged = run?.profile.allowTimedOutCommands === true
+            && profileAllows(run.profile, { toolId, toolName: 'run', action: 'execute', args });
+        } catch (error) { coreLogger.error({ error, actionId: id }, 'Could not validate timeout recovery scope; retaining uncertainty'); }
+      }
+      if (uncertain && !timeoutAcknowledged && !isToolNotExecutedResult(toolId, result)) markToolExecutionUncertain(result, id);
+      try { await this.repository.finish(scope, isToolNotExecutedResult(toolId, result) ? 'not_executed' : uncertain && !timeoutAcknowledged ? 'uncertain' : 'completed'); }
       catch (err) {
         // Preserve the known output. The durable started record remains and
         // gates the next mutation; a logging outage must not invite a retry.
@@ -143,6 +157,7 @@ export class ActionRecovery {
       // no-op, not an uncertain mutation (measured 2026-09-17: one refused
       // `/tmp` write gated the rest of the run behind a review nobody could give).
       const notExecuted = !entered || isToolNotExecutedResult(toolId, error) || (error instanceof ToolNotExecutedError && error.toolId === toolId) || error instanceof WorkspaceFsError;
+      if (!notExecuted) markToolExecutionUncertain(error, id);
       try { await this.repository.finish(scope, notExecuted ? 'not_executed' : 'uncertain'); }
       catch (err) { coreLogger.error({ err, actionId: id }, 'Could not record tool termination; action remains uncertain'); }
       throw error;
@@ -155,7 +170,10 @@ export class ActionRecovery {
     await this.locked(context, async () => {
       for (;;) {
         assertExecutionActive(context);
-        const allRows = await this.repository.pipeline(context.userId, context.sessionId, pipelineId);
+        const recorded = await this.repository.pipeline(context.userId, context.sessionId, pipelineId);
+        const bookkeeping = recorded.filter(row => row.toolId === 'plan' && !this.active.has(row.id));
+        if (bookkeeping.length) await this.repository.acknowledge(context.userId, context.sessionId, bookkeeping.map(row => row.id), 'local-plan-bookkeeping');
+        const allRows = recorded.filter(row => row.toolId !== 'plan');
         if (allRows.some(row => this.active.has(row.id))) throw new RecoveryReviewRequiredError('Previous pipeline tool actions are still running. Wait for them to settle before resuming.');
         const rows = allRows.slice(0, 20);
         if (!rows.length && !hasPriorVisits) return;
@@ -169,7 +187,7 @@ export class ActionRecovery {
           if (!rows.length) return;
           continue;
         }
-        if (context.attended === false) throw new RecoveryReviewRequiredError('Resuming previous work requires an attended recovery review; no workers have been restarted.');
+        if (context.attended === false && !ask) throw new RecoveryReviewRequiredError(`Resuming previous work requires an attended recovery review; no workers have been restarted.\n${describeActions(rows)}`, rows.map(row => row.id));
         const requestReview = ask ?? (async (summary: string) => {
           const manager = getPermissionManager();
           const reviewId = await manager.requestApproval(context.userId, context.id, 'action_recovery', 'replay_pipeline',

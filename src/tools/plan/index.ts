@@ -138,7 +138,7 @@ export class PlanTool extends BaseTool {
         toolLogger.info({ pipelineId, added: created.length }, 'Plan items appended');
         return { added: created.length, ...(duplicates ? { duplicates } : {}), items: created.map((i) => ({ id: i.id, ordinal: i.ordinal, title: i.title })) };
       },
-      { permissionAction: 'write' },
+      { permissionAction: 'write', recoverySafe: true },
     );
 
     this.registerTool(
@@ -200,7 +200,7 @@ export class PlanTool extends BaseTool {
         const updated = await pipelineRepository.updatePlanItem(id, patch);
         return updated ? { id: updated.id, title: updated.title, status: updated.status } : { error: 'Update failed.' };
       },
-      { permissionAction: 'write' },
+      { permissionAction: 'write', recoverySafe: true },
     );
   }
 }

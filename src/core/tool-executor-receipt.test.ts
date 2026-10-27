@@ -159,3 +159,11 @@ describe('ToolExecutor — side-effect counters', () => {
     expect(exec.getSideEffectCounters().toolCalls).toBe(2);
   });
 });
+
+test('an executed shell call with an uncertain outcome counts as run and carries the record (#64)', async () => {
+  const { markToolExecutionUncertain } = await import('./tool-execution-error');
+  const error = new Error('connection lost after shell started');
+  const exec = freshExecutor(tool('shell__run', async () => { markToolExecutionUncertain(error, 'record1'); throw error; }));
+  await exec.handleToolCalls([{ id: 'uncertain', name: 'shell__run', arguments: {} }]);
+  expect(exec.getSideEffectCounters()).toMatchObject({ commandsRun: 1, uncertainActionIds: ['record1'], toolErrors: 1 });
+});

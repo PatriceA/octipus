@@ -1,3 +1,4 @@
+import { uncertainExecutionRecord } from './tool-execution-error';
 import { actionRecovery, isReadOnlyAction } from './action-recovery';
 import { withExecutionSignal } from './execution-scope';
 import { isToolOn, toolOffMessage } from '@/core/modules/registry';
@@ -709,6 +710,11 @@ export class ToolExecutor {
             }
           }
         } catch (error) {
+          const uncertainRecord = uncertainExecutionRecord(error);
+          if (uncertainRecord) {
+            this.recordExecuted(toolCall.name);
+            this.counters.uncertainActionIds = [...(this.counters.uncertainActionIds ?? []), uncertainRecord];
+          }
           // If a final tool fails, propagate immediately — avoids a slow LLM round-trip
           // just to relay the error message to the user. Count it first so the
           // receipt records the failure (the normal branch counts it too).
@@ -939,6 +945,8 @@ export class ToolExecutor {
               }
             }));
         const toolExecMs = Date.now() - toolExecStart;
+        const uncertainRecord = uncertainExecutionRecord(executed);
+        if (uncertainRecord) this.counters.uncertainActionIds = [...(this.counters.uncertainActionIds ?? []), uncertainRecord];
         const result = await this.withheldFromHarness(executed);
 
         agentLogger.info({
@@ -1037,6 +1045,11 @@ export class ToolExecutor {
           }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in tool-executor'));
         } catch { /* hooks not ready */ }
       } catch (error) {
+        const uncertainRecord = uncertainExecutionRecord(error);
+        if (uncertainRecord) {
+          this.recordExecuted(toolCall.name);
+          this.counters.uncertainActionIds = [...(this.counters.uncertainActionIds ?? []), uncertainRecord];
+        }
         const cancelled = isCancellationError(error);
         if (cancelled) {
           // Tool aborted because the agent (or an ancestor) was cancelled.

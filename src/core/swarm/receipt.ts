@@ -23,11 +23,13 @@ import type { WorktreeReport } from './worktree';
  * is a count of an event the executor actually observed — no inference.
  */
 export interface SideEffectCounters {
-  /** Total successful tool calls — derived as the sum of `byName`. */
+  /** Commands/actions entered execution but did not return a definitive outcome. */
+  uncertainActionIds?: string[];
+  /** Total executed tool calls, including uncertain attempts — derived as the sum of `byName`. */
   toolCalls: number;
   /** Successful file-mutating calls (FILE_CHANGE_TOOLS) — derived from `byName`. */
   filesChanged: number;
-  /** Successful shell command executions (`shell__run*`) — derived from `byName`. */
+  /** Shell command executions, including uncertain attempts (`shell__run*`) — derived from `byName`. */
   commandsRun: number;
   /** ASK-level calls that prompted a human and were approved or pending. */
   approvalsRequired: number;
@@ -77,6 +79,7 @@ export function mergeCounters(a: SideEffectCounters, b: SideEffectCounters): Sid
     permissionDenials: a.permissionDenials + b.permissionDenials,
     toolErrors: a.toolErrors + b.toolErrors,
     byName,
+    ...((a.uncertainActionIds?.length || b.uncertainActionIds?.length) ? { uncertainActionIds: [...new Set([...(a.uncertainActionIds ?? []), ...(b.uncertainActionIds ?? [])])] } : {}),
   };
 }
 

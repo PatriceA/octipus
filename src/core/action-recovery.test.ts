@@ -211,3 +211,50 @@ test('an uncertain shell action does not block an unrelated integration (#43)', 
   await run(async () => 'mail sent');
   expect(request).not.toHaveBeenCalled();
 });
+
+test.each([
+  { optIn: false, command: 'pnpm test', aborted: false, expected: 'uncertain' },
+  { optIn: true, command: 'pnpm test', aborted: false, expected: 'completed' },
+  { optIn: true, command: 'node unapproved.js', aborted: false, expected: 'uncertain' },
+  { optIn: true, command: 'pnpm test', aborted: true, expected: 'uncertain' },
+])('only an approved, covered self-timeout can be acknowledged: %j (#55)', async ({ optIn, command, aborted, expected }) => {
+  const profiles = await import('@/security/pipeline-permissions');
+  const { pipelinePermissionProfileSchema } = await import('@/shared/pipeline-permissions');
+  const profile = pipelinePermissionProfileSchema.parse({ repoPath: '/repo', commands: ['pnpm test'], allowTimedOutCommands: optIn });
+  vi.spyOn(profiles, 'runPermissionProfile').mockResolvedValue({ profile } as never);
+  const result = { timedOut: true, killed: true, aborted, signal: 'SIGKILL', exitCode: null, outcome: 'error' };
+  await recovery.run(ctx(), 'shell', 'shell__run', { command, cwd: '/repo' }, async () => result);
+  expect(repo.rows[0].status).toBe(expected);
+  const { uncertainExecutionRecord } = await import('./tool-execution-error');
+  expect(uncertainExecutionRecord(result)).toBe(expected === 'uncertain' ? repo.rows[0].id : undefined);
+});
+
+test('legacy uncertain plan bookkeeping cannot lock subsequent work (#62)', async () => {
+  await expect(recovery.run(ctx(), 'plan', 'plan__add_items', {}, async () => { throw new Error('lost bookkeeping response'); })).rejects.toThrow();
+  const previous = repo.rows[0];
+  expect(previous.status).toBe('uncertain');
+  recovery = new ActionRecovery(repo);
+  await run(async () => 'legitimate work');
+  expect(previous.reviewId).toBe('local-plan-bookkeeping');
+  expect(request).not.toHaveBeenCalled();
+});
+
+test('a shell exception carries its actual execution record; a refused preflight does not (#64)', async () => {
+  const { uncertainExecutionRecord } = await import('./tool-execution-error');
+  const error = new Error('transport lost after execution');
+  await expect(recovery.run(ctx(), 'shell', 'shell__run', {}, async () => { throw error; })).rejects.toBe(error);
+  expect(uncertainExecutionRecord(error)).toBe(repo.rows[0].id);
+  const refused = new ToolNotExecutedError('shell', 'refused before execution');
+  await repo.acknowledge('u', 's', [repo.rows[0].id], 'checked');
+  await expect(recovery.run(ctx(), 'shell', 'shell__run', {}, async () => { throw refused; })).rejects.toBe(refused);
+  expect(uncertainExecutionRecord(refused)).toBeUndefined();
+});
+
+test('an unattended pipeline can present recovery to its coordinator with the record ids (#64)', async () => {
+  await uncertain();
+  const ask = vi.fn().mockResolvedValue({ approved: true, reviewId: 'coordinator-review' });
+  await recovery.reviewPipeline({ ...ctx(), attended: false }, 'p', true, ask);
+  expect(ask).toHaveBeenCalledOnce();
+  expect(ask.mock.calls[0][0]).toContain(repo.rows[0].id);
+  expect(repo.rows[0].reviewId).toBe('coordinator-review');
+});

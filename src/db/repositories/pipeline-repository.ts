@@ -78,7 +78,7 @@ export class PipelineRepository {
     });
   }
 
-  /** Commit the answer and its decision item together, preserving concurrent run edits. */
+  /** Commit the answer without completing the item used to route the question. */
   async settleUserDecision(pipelineId: string, decision: PipelineUserDecision): Promise<boolean> {
     return this.db.transaction(async tx => {
       // i2: the runtime supplies its authorized pipeline id; the decision item is constrained to the same pipeline.
@@ -87,10 +87,9 @@ export class PipelineRepository {
       const pending = pipeline.metadata?.pendingDecision as Partial<PipelineUserDecision> | undefined;
       if (pending?.itemId !== decision.itemId || pending.blockedItemId !== decision.blockedItemId
         || pending.nodeKey !== decision.nodeKey || pending.attemptId !== decision.attemptId) return false;
-      const [item] = await tx.update(planItems).set({ status: 'done', result: JSON.stringify(decision), completedAt: new Date(), updatedAt: new Date() })
-        .where(and(eq(planItems.id, decision.itemId), eq(planItems.pipelineId, pipelineId), notInArray(planItems.status, ['done', 'skipped'])))
-        .returning({ id: planItems.id });
-      if (!item) return false;
+      const [item] = await tx.select().from(planItems).where(and(eq(planItems.id, decision.itemId), eq(planItems.pipelineId, pipelineId)));
+      if (!item || ['done', 'skipped'].includes(item.status)) return false;
+      // The reference routes the question; only the execution loop may complete work.
       const { pendingDecision: _settled, ...metadata } = pipeline.metadata ?? {};
       await tx.update(pipelines).set({ status: 'running', summary: 'User decision recorded; continuing the saved stage.', updatedAt: new Date(),
         metadata: { ...metadata, userDecisions: [...(Array.isArray(metadata.userDecisions) ? metadata.userDecisions : []), decision] },
@@ -107,6 +106,13 @@ export class PipelineRepository {
       AND ${planItems.id}::text = ${pipelines.metadata}->'environmentBlock'->>'itemId' AND ${planItems.status} IN ('done', 'skipped'))`;
     await tx.update(pipelines).set({ metadata: sql`${pipelines.metadata} - 'environmentBlock'` })
       .where(and(eq(pipelines.id, pipelineId), sql`${pipelines.metadata} ? 'environmentBlock'`, settled));
+  }
+
+  async dueDeferred(now: Date): Promise<Pipeline[]> {
+    return this.db.select().from(pipelines).where(and(eq(pipelines.status, 'paused'),
+      sql`${pipelines.metadata}->>'resumeAfter' IS NOT NULL`,
+      sql`${pipelines.metadata}->>'resumeAfter' <= ${now.toISOString()}`,
+      sql`NOT (${pipelines.metadata} ? 'deferredWakeError')`)).limit(50);
   }
 
   async createNodes(rows: NewPipelineNode[]): Promise<PipelineNodeRow[]> {
@@ -148,14 +154,14 @@ export class PipelineRepository {
     await this.db.transaction(async tx => {
       // i2: caller authorizes the pipeline's owner/session/workspace before queueing edits
       const [pipeline] = await tx.select().from(pipelines).where(eq(pipelines.id, pipelineId)).for('update');
-      if (!pipeline || ['completed', 'failed'].includes(pipeline.status)) throw new Error('Pipeline is not active; resume it before editing items');
+      if (!pipeline || pipeline.status === 'completed') throw new Error('Pipeline is not active; resume it before editing items');
       const items = await tx.select().from(planItems).where(eq(planItems.pipelineId, pipelineId));
-      for (const id of [...edit.skip, ...(edit.order ?? [])]) {
+      for (const id of [...edit.skip, ...(edit.reopen ?? []), ...(edit.update ?? []).map(item => item.id), ...(edit.order ?? [])]) {
         if (!items.some(item => item.id === id)) throw new Error(`Unknown pipeline item: ${id}`);
       }
       for (const item of edit.add) if (item.beforeItemId && !items.some(existing => existing.id === item.beforeItemId)) throw new Error(`Unknown insertion target: ${item.beforeItemId}`);
       if (new Set(edit.order).size !== (edit.order?.length ?? 0)) throw new Error('order contains duplicate item ids');
-      if (!['paused', 'stopped'].includes(pipeline.status) && edit.skip.some(id => items.some(item => item.id === id && item.status === 'running'))) throw new Error('Cannot skip the active item; stop the pipeline first');
+      if (!['paused', 'stopped', 'failed'].includes(pipeline.status) && [...edit.skip, ...(edit.reopen ?? []), ...(edit.update ?? []).map(item => item.id)].some(id => items.some(item => item.id === id && item.status === 'running'))) throw new Error('Cannot edit the active item; stop the pipeline first');
       const edits = (pipeline.metadata?.pendingItemEdits ?? []) as PipelineItemEdit[];
       if (edits.length >= 20) throw new Error('Too many pending item edits; wait for the next item boundary');
       await tx.update(pipelines).set({ metadata: { ...pipeline.metadata, pendingItemEdits: [...edits, edit] }, updatedAt: new Date() }).where(eq(pipelines.id, pipelineId));
@@ -173,6 +179,10 @@ export class PipelineRepository {
       for (const edit of edits) {
         for (const id of edit.skip) await tx.update(planItems).set({ status: 'skipped', result: edit.evidence, updatedAt: new Date() })
           .where(and(eq(planItems.pipelineId, pipelineId), eq(planItems.id, id), inArray(planItems.status, ['pending', 'running', 'failed'])));
+        for (const id of edit.reopen ?? []) await tx.update(planItems).set({ status: 'pending', error: null, completedAt: null, updatedAt: new Date() })
+          .where(and(eq(planItems.pipelineId, pipelineId), eq(planItems.id, id)));
+        for (const { id, ...patch } of edit.update ?? []) await tx.update(planItems).set({ ...patch, updatedAt: new Date() })
+          .where(and(eq(planItems.pipelineId, pipelineId), eq(planItems.id, id)));
         if (edit.order) items = [...edit.order.map(id => items.find(item => item.id === id)!), ...items.filter(item => !edit.order!.includes(item.id))];
         for (const { beforeItemId, ...item } of edit.add) {
           const position = beforeItemId ? items.findIndex(existing => existing.id === beforeItemId) : items.length;
@@ -183,6 +193,10 @@ export class PipelineRepository {
       }
       for (const [index, item] of items.entries()) await tx.update(planItems).set({ ordinal: index }).where(eq(planItems.id, item.id));
       const { pendingItemEdits: _applied, ...metadata } = pipeline.metadata ?? {};
+      if (edits.some(edit => [...(edit.reopen ?? []), ...(edit.update ?? []).map(item => item.id), ...edit.skip].includes(String(metadata.deferredItemId)))) {
+        delete metadata.resumeAfter; delete metadata.deferredItemId; delete metadata.deferredReason; delete metadata.deferredWakeError;
+      }
+      metadata.itemEditHistory = [...(Array.isArray(metadata.itemEditHistory) ? metadata.itemEditHistory : []), ...edits.map(edit => ({ ...edit, appliedAt: new Date().toISOString() }))];
       await tx.update(pipelines).set({ metadata, updatedAt: new Date() }).where(eq(pipelines.id, pipelineId));
       if (edits.some(edit => edit.skip.length)) await this.clearSettledEnvironmentBlock(tx, pipelineId);
       await this.syncWorkPlan(tx, pipelineId);

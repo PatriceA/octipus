@@ -308,3 +308,10 @@ test('explicit contract fences never leak into user-facing output', async () => 
   const { stripPipelineControlBlocks } = await import('./handoff');
   expect(stripPipelineControlBlocks('Tests passed.\n```contract\nmalformed internal report\n```')).toBe('Tests passed.');
 });
+
+test('a date deferral preserves a timezone-qualified timestamp and its reason (#69, formerly duplicate #66)', () => {
+  expect(parseStructuredHandoff('```handoff\n' + JSON.stringify({ stopped: true, deferredUntil: '2026-11-10T11:40:18Z', deferredReason: 'Wait for retention window' }) + '\n```'))
+    .toMatchObject({ stopped: true, deferredUntil: '2026-11-10T11:40:18.000Z', deferredReason: 'Wait for retention window' });
+  expect(parseStructuredHandoff('```handoff\n{"deferredUntil":"not a date"}\n```')?.deferredUntil).toBeUndefined();
+  expect(parseStructuredHandoff('```handoff\n{"deferredUntil":"2026-11-10T11:40:18"}\n```')?.deferredUntil).toBeUndefined();
+});

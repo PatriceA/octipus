@@ -463,6 +463,8 @@ async function main() {
     // (e.g. artifact cleanup) fills the storage queue but nothing ever drains it.
     const { getScheduler } = await import('@/core/scheduler');
     getScheduler().start();
+    const { startDeferredPipelineWakeups } = await import('@/core/agent/pipeline-deferred');
+    const stopDeferredPipelineWakeups = startDeferredPipelineWakeups();
 
     logger.info('Octipus started successfully');
 
@@ -491,6 +493,7 @@ async function main() {
     // SIGINT (or a double Ctrl-C) must not run the teardown twice.
     let shuttingDown = false;
     const shutdown = async () => {
+      stopDeferredPipelineWakeups();
       if (shuttingDown) return;
       shuttingDown = true;
       logger.info('Shutting down...');

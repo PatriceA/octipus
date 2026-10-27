@@ -1,3 +1,4 @@
+vi.mock('@/db/repositories/tool-action-repository', () => ({ toolActionRepository: { pipeline: async () => [] } }));
 import { describe, expect, test, vi } from 'vitest';
 import { readProbe, probe } from './probes';
 import type { AgentContext } from '@/core/types';

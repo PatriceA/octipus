@@ -36,10 +36,10 @@ export function projectPipelinePlan(state: WorkPlanState, pipeline: Pipeline, it
     const rootEvidence = previous?.pipelineSnapshot && previous.evidence !== previous.pipelineSnapshot.evidence;
     return { id, pipelineItemId: item.id,
       title: rootTitle ? previous!.title : snapshot.title,
-      status: queued ? 'skipped' : rootStatus ? previous!.status : status(item),
+      status: queued ? 'skipped' : pipeline.status === 'failed' && item.status === 'running' ? 'blocked' : rootStatus ? previous!.status : status(item),
       evidence: queued ? `Queued for next stage boundary: ${queued.evidence ?? ''}`.slice(0, 2000) : rootEvidence ? previous!.evidence : snapshot.evidence,
       pipelineSnapshot: { title: rootTitle ? previous!.pipelineSnapshot!.title : snapshot.title,
-        status: rootStatus ? previous!.pipelineSnapshot!.status : queued ? 'skipped' : snapshot.status,
+        status: pipeline.status === 'failed' && item.status === 'running' ? 'blocked' : rootStatus ? previous!.pipelineSnapshot!.status : queued ? 'skipped' : snapshot.status,
         evidence: rootEvidence ? previous!.pipelineSnapshot!.evidence : queued ? `Queued for next stage boundary: ${queued.evidence ?? ''}`.slice(0, 2000) : snapshot.evidence },
     };
   });

@@ -196,3 +196,28 @@ test('deleting a session removes its recovery evidence', async () => {
   expect(await sessionRepository.delete(ctx.sessionId)).toBe(true);
   expect(await toolActionRepository.pending(userId, ctx.sessionId)).toEqual([]);
 });
+
+test('plan add is recovery-safe even with a legacy uncertain record, and retry is idempotent (#62)', async () => {
+  const { PlanTool } = await import('@/tools/plan');
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const ctx = context(); ctx.attended = false;
+  await sessionRepository.create({ id: ctx.sessionId, userId, channelType: 'webchat', channelId: 'plan-recovery-test' });
+  const pipeline = await pipelineRepository.create({ rootAgentId: ctx.id, sessionId: ctx.sessionId, userId, title: 'Plan recovery', type: 'test', status: 'running' });
+  ctx.metadata = { pipelineId: pipeline.id, nodeKey: 'implementation' };
+  const staleId = randomUUID();
+  await toolActionRepository.start({ id: staleId, userId, sessionId: ctx.sessionId, agentId: ctx.id, pipelineId: pipeline.id, toolId: 'plan', toolName: 'plan__add_items', argumentHash: 'legacy', status: 'uncertain' });
+  const plan = new PlanTool(); await getToolRegistry().register(plan);
+  await getPermissionManager().setPermission(userId, 'plan', 'write', 'ALLOW');
+  const executor = new ToolExecutor(ctx, () => {}); executor.registerTools(plan.getToolHandlers());
+  const intent = { items: [{ title: 'Required audit endpoint regression', acceptance: ['GET audit regression passes'] }] };
+  const first = await executor.handleToolCalls([{ id: 'add', name: 'plan__add_items', arguments: intent }]);
+  expect(first[0].content).toContain('"added":1');
+  const retry = await executor.handleToolCalls([{ id: 'retry-add', name: 'plan__add_items', arguments: intent }]);
+  expect(retry[0].content).toContain('"added":0');
+  expect(await pipelineRepository.getPlanItems(pipeline.id)).toHaveLength(1);
+  const records = await toolActionRepository.pending(userId, ctx.sessionId);
+  expect(records.map(row => row.id)).toEqual([staleId]);
+  await new ActionRecovery().run(ctx, 'shell', 'shell__run', {}, async () => ({ exitCode: 0, signal: null }));
+  expect(await toolActionRepository.pending(userId, ctx.sessionId)).toEqual([]);
+});

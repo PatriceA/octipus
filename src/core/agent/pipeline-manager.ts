@@ -2,7 +2,6 @@ import { workPlanRepository } from '@/db/repositories/work-plan-repository';
 import { stageHostServices, stageEnvironmentReason, StageEnvironmentError, coordinatorCriterion, coordinatorCriterionSatisfied } from './pipeline-environment';
 import type { PendingStageApproval } from '@/shared/pipeline-approval';
 import { replyAnswer } from './approval-manager';
-import { resolve as resolvePath } from 'node:path';
 import { WorkerInterruptedError } from '@/core/interruption';
 import { pipelineBudget } from './pipeline-budget';
 import { pipelinePermissionProfileSchema } from '@/shared/pipeline-permissions';
@@ -430,7 +429,7 @@ QA VERDICT (required) — append your verdict now, as a fenced code block tagged
 
 \`passed\` is false if ANY critical or major issue remains. An honest \`"low"\` confidence is welcome — it routes follow-up work rather than counting against you. A pass whose \`feedback\` does not account for the stages it covers is rejected and re-run.
 
-Long gates (whole test suites, race tests, compose builds) need shell__run timeout of at least 600000 ms; in a stage shorter limits are raised to that floor. A command killed by its own timeout is not an environment block, and it leaves an uncertain outcome that blocks further commands until a human reviews it, so size limits generously instead of retrying short ones. If a required gate cannot run because a toolchain, test database or Docker socket is unavailable, include the exact command and error in issues and say ENVIRONMENT BLOCKED. Do not classify an unavailable environment as a code defect or invent a pass. The pipeline pauses for repair.
+Long gates (whole test suites, race tests, compose builds) need shell__run timeout of at least 600000 ms; in a stage shorter limits are raised to that floor. A command killed by its own timeout is not an environment block. It may leave partial effects: inspect them before retrying with a larger timeout. Further commands require recovery review unless the user-approved run profile explicitly enables allowTimedOutCommands and covers that exact call. Size limits generously instead of retrying short ones. If a required gate cannot run because a toolchain, test database or Docker socket is unavailable, include the exact command and error in issues and say ENVIRONMENT BLOCKED. Do not classify an unavailable environment as a code defect or invent a pass. The pipeline pauses for repair.
 
 Emit the block exactly once, as the LAST thing in your reply.`;
 
@@ -972,8 +971,10 @@ export class PipelineManager {
 
     const requestedProfile = options?.permissionProfile === undefined ? undefined : pipelinePermissionProfileSchema.parse(options.permissionProfile);
     if (requestedProfile) {
-      const root = await this.resolveWorkspaceRoot(sessionId, context);
-      if (!root || resolvePath(requestedProfile.repoPath) !== resolvePath(root)) throw new Error('permissionProfile.repoPath must match this pipeline’s actual workspace root');
+      const session = await sessionRepository.findById(sessionId);
+      if (!session) throw new Error('Pipeline session not found');
+      const fs = WorkspaceFS.forSession(session, { space: context.space ?? null });
+      for (const repo of [requestedProfile.repoPath, ...requestedProfile.repoPaths]) fs.resolve(repo);
     }
     const originPlan = (await sessionRepository.findById(sessionId))?.metadata?.workPlan;
     const linkedPlan = originPlan ? workPlanStateSchema.parse(originPlan).current : null;
@@ -1344,7 +1345,7 @@ export class PipelineManager {
         cursor = loopHead;
         currentItem = null;
         resumedAttempt = resumedPartial = undefined;
-      } else if (currentItem?.status === 'failed') {
+      } else if (currentItem && ['failed', 'pending'].includes(currentItem.status)) {
         await pipelineRepository.updatePlanItem(currentItem.id, { status: 'running' });
         currentItem.status = 'running';
       }
@@ -2217,6 +2218,7 @@ export class PipelineManager {
   ): Promise<{ pipelineId: string; result: string }> {
     const pipeline = await this.getPipeline(pipelineId);
     if (!pipeline) throw new Error(`Pipeline ${pipelineId} not found.`);
+    if (typeof pipeline.metadata?.resumeAfter === 'string' && Date.parse(pipeline.metadata.resumeAfter) > Date.now()) throw new Error(`Pipeline deferred until ${pipeline.metadata.resumeAfter}. Edit the item's scope with evidence to waive this constraint before resuming.`);
     // Two walkers on one pipeline would write the same node rows and pay for
     // the same workers twice. `awaiting_approval` counts as live: a walker is
     // sitting inside `requestApproval` with the run in hand. After a restart
@@ -2350,8 +2352,8 @@ export class PipelineManager {
     const currentPlan = published ? workPlanStateSchema.parse(published).current : null;
     const linkPlan = !meta.workPlanId && currentPlan && !currentPlan.sourcePipelineId;
     if (linkPlan) meta.workPlanId = currentPlan.id;
-    if (meta.pauseRequested || linkPlan) {
-      const { pauseRequested: _drop, ...rest } = meta;
+    if (meta.pauseRequested || meta.resumeAfter || linkPlan) {
+      const { pauseRequested: _drop, resumeAfter: _date, deferredItemId: _item, deferredReason: _reason, deferredWakeError: _wake, ...rest } = meta;
       signal?.throwIfAborted();
       await this.updatePipeline(pipelineId, { metadata: rest });
     }
@@ -2924,12 +2926,12 @@ export class PipelineManager {
    * the node failed) — the caller returns that verbatim, so every exit still
    * goes through one place.
    */
-  private async pauseForCoordinator(pipeline: Pipeline, node: PipelineNodeRow, reason: string, attemptId: string, itemId: string | null) {
+  private async pauseForCoordinator(pipeline: Pipeline, node: PipelineNodeRow, reason: string, attemptId: string, itemId: string | null, action = 'Use root get_work_plan/update_work_plan or correct the coordinator-owned criterion, then resume the saved attempt.') {
     const current = await this.getPipeline(pipeline.id);
     const summary = `Coordinator action required at "${node.name}": ${reason}`;
     await this.updateNode(node.id, { status: 'pending', error: reason });
     await this.updatePipeline(pipeline.id, { status: 'paused', summary, metadata: { ...current?.metadata,
-      coordinatorRequest: { nodeKey: node.nodeKey, attemptId, itemId, reason, action: 'Use root get_work_plan/update_work_plan or correct the coordinator-owned criterion, then resume the saved attempt.' } } });
+      coordinatorRequest: { nodeKey: node.nodeKey, attemptId, itemId, reason, action } } });
     return { pipelineId: pipeline.id, result: summary };
   }
 
@@ -3115,7 +3117,18 @@ export class PipelineManager {
         await this.updateNode(node.id, { status: 'pending' });
         return { output: '', raw: '', stopped: { pipelineId: pipeline.id, result: 'Pipeline stopped; resume from the saved stage checkpoint.' } };
       }
+      const uncertainIds = (counters as SideEffectCounters | null)?.uncertainActionIds;
+      if (uncertainIds?.length) {
+        return { output: '', raw: '', stopped: await this.pauseForCoordinator(pipeline, node, `Stage ran commands/actions whose outcomes are uncertain. Inspect and resolve recovery records before retrying: ${uncertainIds.join(', ')}. Stage report: ${stageReport.slice(-2000)}`, attemptId, itemId, 'Inspect uncertain actions and their external effects, resolve the named records through resolve_tool_action, then resume the saved stage.') };
+      }
       const handoff = parseStructuredHandoff(String(result));
+      if (handoff?.deferredUntil && Date.parse(handoff.deferredUntil) > Date.now()) {
+        const current = await this.getPipeline(pipeline.id);
+        const summary = `Item ${itemId ?? '(stage)'} deferred until ${handoff.deferredUntil}: ${handoff.deferredReason}`;
+        await this.updateNode(node.id, { status: 'pending', output: stripPipelineControlBlocks(stageReport) });
+        await this.updatePipeline(pipeline.id, { status: 'paused', summary, metadata: { ...current?.metadata, resumeAfter: handoff.deferredUntil, deferredItemId: itemId, deferredReason: handoff.deferredReason } });
+        return { output: '', raw: '', stopped: { pipelineId: pipeline.id, result: summary } };
+      }
       const verdict = declared.stageType === 'qa_validation' ? this.parseQAResult(String(result)) : null;
       const itemsForDecision = handoff ? await pipelineRepository.getPlanItems(pipeline.id) : [];
       const referenced = handoff?.openQuestions.find(question => /user|decision|approval|rule|blocked/i.test(question)
@@ -3129,7 +3142,7 @@ export class PipelineManager {
       if (pendingDecision) {
         const matches = itemsForDecision.filter(item => item.id === pendingDecision.itemId || item.id.startsWith(pendingDecision.itemId));
         const decisionItem = matches.length === 1 ? matches[0] : undefined;
-        if (!decisionItem || decisionItem.id === itemId || ['done', 'skipped'].includes(decisionItem.status)) {
+        if (!decisionItem || ['done', 'skipped'].includes(decisionItem.status)) {
           return { output: '', raw: '', stopped: await this.pauseForCoordinator(pipeline, node, `Decision reference is unavailable or already settled: ${pendingDecision.itemId}. Inspect the existing decision instead of retrying implementation.`, attemptId, itemId) };
         }
         const current = await this.getPipeline(pipeline.id);

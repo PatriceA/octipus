@@ -42,8 +42,11 @@ as resumable `stopped`, distinct from `failed`. `update_pipeline_items({id,
 skip: [itemId], add: [{title, detail, acceptance}], order: [itemId], evidence})`
 queues changes atomically for the next item boundary. The owner can use these
 tools from a later root turn in the same session/workspace. Stop before skipping
-the active item; edits to stopped or paused runs apply before resume. Completed
-items keep their results. New items are appended; `order` lists existing items
+or editing the active item; edits to stopped, paused or failed runs apply before
+resume. `reopen: [itemId]` restores settled items to pending while preserving
+their ids and evidence. `update: [{id, title?, detail?, acceptance?}]` changes
+scope in place. Evidence and applied edits remain in `itemEditHistory`. Completed
+items keep their results unless explicitly reopened. New items are appended; `order` lists existing items
 first, followed by unlisted items.
 
 Stage events include item id/title, attempt id/number, and the start reason.
@@ -143,11 +146,15 @@ For overnight work, pass `permissionProfile` to `create_pipeline`, or supply it
 to `resume_pipeline` for an existing stopped/paused run. `POST /api/pipelines`
 also accepts the profile. The user receives one consolidated approval before
 stages run; a model-supplied profile is a proposal, never an authorization.
-`repoPath` must equal the session's actual workspace/project root.
+`repoPath` names the target repository. `repoPaths` can name additional repositories.
+Each path must be accessible to the session's filesystem scope (including its
+configured additional paths); the profile does not grant new filesystem access.
 
 ```json
 {
   "repoPath": "/absolute/path/to/project",
+  "repoPaths": [],
+  "allowTimedOutCommands": false,
   "commands": ["pnpm exec vitest run"],
   "packageManagers": ["pnpm", "go"],
   "publicHosts": ["go.dev", "proxy.golang.org", "registry.npmjs.org"],
@@ -220,7 +227,11 @@ deadline still applies. Approval expiry returns `code: "approval_timeout"` and
 `executed: false`, rather than reporting an uncertain execution outcome.
 Inside a pipeline stage, `shell__run` raises any shorter limit to 10 minutes
 (`PIPELINE_SHELL_TIMEOUT_FLOOR_MS`), and the bridge uses the same floor. A shell
-command killed by its own timeout still records an uncertain outcome by design.
+command killed by its own timeout records an uncertain outcome by default.
+An explicitly approved `allowTimedOutCommands: true` profile acknowledges a
+self-timeout only when the profile covers that exact shell call. It remains a
+failed command, may leave partial effects, and is never an environment block.
+Cancellation and transport loss still require recovery review.
 Delegation calls (`spawn_child`, `collect_children`, `invoke_recipe`, `create_pipeline`,
 `escalate_to_other_lane`) get no bridge clock once running; the CLI's own tool
 timeout bounds them, and calls queued behind them wait until they settle.
@@ -772,8 +783,10 @@ criteria are rejected by the planning tool; legacy criteria are checked by the
 coordinator before dispatch and omitted from workers' product checks once met.
 
 A handoff can report `blockedOnDecision: {itemId, question, options?}` referencing
-a pending user-decision item in this run. The coordinator asks a real question,
-records its answer and actor atomically with completion of the decision item,
+the current item or a pending user-decision item in this run. Stages use this
+handoff even when item text names the coordinator-only `request_user_approval`.
+The coordinator asks a real question and records its answer and actor atomically;
+the item used to route the question keeps its status and must complete its stages,
 then continues the saved stage. The recorded answer is included again after
 restart and in subsequent stages for the blocked item. A missing answer
 pauses with `pendingDecision`. This happens before artifact/command contracts,
@@ -799,3 +812,43 @@ Environment diagnostics are scoped to the item, node and attempt that emitted
 them. Completing or skipping that item clears the block, including queued
 skips; a stale metadata writer cannot reinstate it. Status does not advertise a
 previous item's diagnostic as the next item's blocker.
+
+
+### Pipeline recovery fixes (27 October 2026)
+
+The date-blocked item report previously duplicated issue #66. It is tracked as
+**#69** here; #66 remains the unavailable stage approval-tool report.
+
+- #54: profiles can name accessible target repositories and additional repo paths.
+- #55: `allowTimedOutCommands` is an explicit, user-approved opt-in for covered
+  self-timeouts. The default retains recovery review for possible partial effects.
+- #62: local plan bookkeeping bypasses mutation recovery; legacy uncertain plan
+  records are acknowledged as local bookkeeping, with normal permissions intact.
+- #63: decision answers never finish their routing item. Root item edits can reopen
+  settled work without losing its id or result evidence.
+- #64: an uncertain executed command counts as run and carries its recovery record
+  id. The stage parks for recovery before the zero-command evidence check. Resume
+  handles and status expose `recoveryRequired`; a resume can present the review
+  through its coordinator even if the stage was unattended.
+- #65: personal shell sandboxes mount `~/.gitconfig` and `~/.config/git/config`
+  read-only. Space runs retain their separate tool-home identity. Required gate
+  variables inherited from the host are preserved in personal shells.
+- #66: the stage prompt uses `blockedOnDecision` to request approvals through the
+  coordinator, including for the current item.
+- #67: pipeline stage workers wire detached spawning, collection and steering
+  before starting the worker. `spawn_child` returns a pending handle.
+- #68: failed runs accept audited item edits and reopen operations before resume.
+  The visible plan shows the failed active item as blocked and follows its resume.
+- #69: a stage may return `deferredUntil` (an ISO timestamp with timezone) and
+  `deferredReason` in its handoff. The run pauses with `resumeAfter` and
+  `deferredItemId`, without consuming an artifact failure or a retry. A durable
+  30-second sweep wakes it on the date, using normal scope and replay review.
+  Stopping the run prevents the wake. A wake error is exposed as
+  `deferredWakeError` and stops automatic retries. An audited edit or reopen of
+  the deferred item clears the date, allowing an explicit waiver before resume.
+
+Status history defaults to the newest 20 events. Use `historyLimit` (up to 50)
+and `historyBeforeSeq` with `historyNextBeforeSeq` to page older events; use
+`itemOffset`/`itemLimit` for large plans. Oversized evidence is compacted inside
+the JSON object, with `outputCompacted: true`, before reaching the bridge's text
+limit. Detailed history remains available through the cursors and stored events.

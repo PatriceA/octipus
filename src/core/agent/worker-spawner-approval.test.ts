@@ -78,3 +78,11 @@ test('malformed JSON retries the primary before falling back to the configured b
   expect(retry.delay.mock.calls.map(call => call[0])).toEqual([1000, 2000, 4000]);
   expect(retry.spawn.mock.calls.map(call => call[0].model)).toEqual(['primary', 'primary', 'primary', 'backup']);
 });
+
+test('provider retries rebind stage delegation to the replacement worker before run', async () => {
+  const ready = vi.fn();
+  const replacement = retryWorker(async () => { expect(ready).toHaveBeenCalledWith(replacement); return 'QA passed'; });
+  retry.spawn.mockResolvedValue(replacement);
+  expect(await fail('workspace routing discovery failed', { onWorkerReady: ready })).toBe('QA passed');
+  expect(ready).toHaveBeenCalledOnce();
+});

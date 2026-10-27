@@ -1,3 +1,5 @@
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { browserRuntimePaths } from '@/security/runtime-path';
 import { getExecutionSignal } from '@/core/execution-scope';
 import { isToolNotExecutedResult, ToolNotExecutedError } from '@/core/tool-execution-error';
@@ -32,9 +34,9 @@ export function effectiveShellTimeout(requested: unknown, metadata?: Record<stri
  * into the process sandbox. Exported for the tests.
  */
 export function spaceRunOptions(env: Record<string, string> | undefined, home: SpaceToolHome | null): {
-  env?: Record<string, string>; unsetEnv?: readonly string[]; extraReadWrite?: string[];
+  env?: Record<string, string>; unsetEnv?: readonly string[]; extraReadWrite?: string[]; extraReadOnly?: string[];
 } {
-  if (!home) return { env };
+  if (!home) return { env, extraReadOnly: [join(homedir(), '.gitconfig'), join(homedir(), '.config/git/config')] };
   return { env: withToolHome(env ?? {}, home), unsetEnv: HOST_IDENTITY_ENV, extraReadWrite: [home.dir] };
 }
 
@@ -137,7 +139,7 @@ export class ShellTool extends BaseTool {
             timeout, unsafe, allowNetwork, signal: getExecutionSignal(context),
             ...spaceRunOptions(args.env as Record<string, string> | undefined, home),
             allowHostSshAgent: context ? !WorkspaceFS.forAgent(context).isSpace : false,
-            extraReadOnly: context && !cwd.startsWith(WorkspaceFS.forAgent(context).root) ? [WorkspaceFS.forAgent(context).root] : [],
+            extraReadOnly: [...(spaceRunOptions(args.env as Record<string, string> | undefined, home).extraReadOnly ?? []), ...(context && !cwd.startsWith(WorkspaceFS.forAgent(context).root) ? [WorkspaceFS.forAgent(context).root] : [])],
           }));
         } finally {
           home?.dispose();
@@ -225,7 +227,7 @@ export class ShellTool extends BaseTool {
           ({ pid } = await this.ops.spawnBackground(command, cwd, withHostServices(context?.metadata, {
             unsafe, allowNetwork, ...spaceRunOptions(args.env as Record<string, string> | undefined, home),
             allowHostSshAgent: context ? !WorkspaceFS.forAgent(context).isSpace : false,
-            extraReadOnly: context && !cwd.startsWith(WorkspaceFS.forAgent(context).root) ? [WorkspaceFS.forAgent(context).root] : [], onExit: () => home?.dispose(),
+            extraReadOnly: [...(spaceRunOptions(args.env as Record<string, string> | undefined, home).extraReadOnly ?? []), ...(context && !cwd.startsWith(WorkspaceFS.forAgent(context).root) ? [WorkspaceFS.forAgent(context).root] : [])], onExit: () => home?.dispose(),
           })));
         } catch (err) {
           home?.dispose();

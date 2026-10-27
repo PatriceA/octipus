@@ -92,3 +92,12 @@ it('preserves root edits and projects queued skips before the item boundary (#50
   const next = projectPipelinePlan(edited, { ...pipeline, metadata: { pendingItemEdits: [{ skip: ['one'], evidence: 'User explicitly skipped it' }] } }, [item('one')]);
   expect(next.current?.steps[0]).toMatchObject({ id: 'one', title: 'User decision', status: 'skipped', evidence: expect.stringContaining('Queued') });
 });
+
+it('a failed run overrides a stale root working status and follows a later resume (#68)', () => {
+  const running = item('active', 'running');
+  let state = projectPipelinePlan(emptyWorkPlan(), pipeline, [running]);
+  state = { ...state, current: { ...state.current!, steps: state.current!.steps.map(step => ({ ...step, status: 'working', pipelineSnapshot: { ...step.pipelineSnapshot!, status: 'pending' } })) } };
+  const failed = projectPipelinePlan(state, { ...pipeline, status: 'failed', summary: 'Date constraint' }, [running]);
+  expect(failed.current?.steps[0].status).toBe('blocked');
+  expect(projectPipelinePlan(failed, pipeline, [running]).current?.steps[0].status).toBe('working');
+});

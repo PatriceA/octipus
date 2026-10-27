@@ -1,8 +1,8 @@
+import { toolActionRepository } from '@/db/repositories/tool-action-repository';
 import { activeEnvironmentBlock } from './pipeline-environment';
 import { pipelinePermissionProfileSchema } from '@/shared/pipeline-permissions';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { WorkspaceFS } from '@/security/workspace-fs';
-import { resolve as resolvePath } from 'node:path';
 import { z } from 'zod';
 import { getConfig } from '@/config';
 import { pipelineBudget } from './pipeline-budget';
@@ -16,7 +16,7 @@ import { getPermissionManager } from '@/security/permissions';
 import { coreLogger } from '@/utils/logger';
 import { stripPipelineControlBlocks } from './handoff';
 import type { PendingStageApproval, WalkState } from './pipeline-manager';
-import { pipelineSummary, pipelineStageHistory, pipelineStageRuns } from './pipeline-status';
+import { compactPipelineStatus, pipelineSummary, pipelineStageHistory, pipelineStageRuns } from './pipeline-status';
 import { replyAnswer } from './approval-manager';
 
 const pendingOf = (pipeline: Pipeline) =>
@@ -32,12 +32,13 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
     const checkpoint = checkpoints.find(checkpoint => (!nodeKey || checkpoint.nodeKey === nodeKey)
       && (!opts.attemptId || attemptOf(checkpoint.state) === opts.attemptId));
     if (!checkpoint) throw new Error(opts.attemptId ? 'No saved checkpoint for the blocked stage attempt' : 'No saved checkpoint for this stage');
+    const recoveryRecords = (await toolActionRepository.pipeline(pipeline.userId!, pipeline.sessionId, pipeline.id)).filter(row => ['started', 'uncertain'].includes(row.status)).map(row => ({ id: row.id, toolName: row.toolName, status: row.status }));
     const { getPipelineManager } = await import('./pipeline-manager');
     return new Promise((resolve, reject) => {
       const completion = getPipelineManager().resume(pipeline.id, { fromSeq: checkpoint.seq, freshAttempt: opts.freshAttempt,
         onAccepted: () => {
           trackPipeline?.(pipeline.id, completion);
-          resolve({ id: pipeline.id, status: 'resuming', fromStage: checkpoint.nodeKey,
+          resolve({ id: pipeline.id, status: 'resuming', fromStage: checkpoint.nodeKey, recoveryRequired: recoveryRecords,
             message: 'Resume scheduled. Check get_pipeline_status for replay approval or stage progress.' });
         },
         onResumed: () => {
@@ -56,7 +57,7 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
     discoverOnly: true,
     ...(name === 'get_pipeline_status' ? { permissionAction: 'read', replaySafety: 'read_only' as const } : {}),
     description: name === 'stop_pipeline' ? 'Stop a pipeline in this session, preserving its checkpoint for resume. Returns the resumable stopped state, never a failure.'
-      : name === 'update_pipeline_items' ? 'Change a running pipeline plan in this session. Queue skips, additions and ordering at its next stage boundary. Prerequisites can be inserted with beforeItemId. Requires evidence or the user decision explaining the change. Active items must be stopped before skipping.'
+      : name === 'update_pipeline_items' ? 'Edit a running, paused, stopped or failed pipeline plan in this session. Reopen settled items or update scope in place with evidence. Queue skips, additions and ordering at its next stage boundary. Prerequisites can be inserted with beforeItemId. Requires evidence or the user decision explaining the change. Active items must be stopped before skipping.'
       : name === 'get_pipeline_status'
       ? 'Read a pipeline handle: stage status, completed outputs, remaining items, failure reason, and the pending approval when awaiting_approval. Synthesize the result for the user.'
       : name === 'resume_pipeline'
@@ -64,9 +65,11 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
         : 'Ask the user, in this conversation, to answer the approval a pipeline stage is waiting on (see pendingApproval in get_pipeline_status). The user decides; the stage then continues or the run pauses.',
     parameters: { type: 'object', properties: {
       id: { type: 'string', description: 'Pipeline handle returned by create_pipeline' },
-      ...(name === 'get_pipeline_status' ? { includeHistory: { type: 'boolean', description: 'Include per-item attempt history (default true). Use false for frequent polling.' } } : {}),
+      ...(name === 'get_pipeline_status' ? { includeHistory: { type: 'boolean', description: 'Include recent attempt history (default true). Use false for frequent polling.' }, historyLimit: { type: 'integer', minimum: 1, maximum: 50 }, historyBeforeSeq: { type: 'integer', description: 'Read older history before this sequence number.' }, itemOffset: { type: 'integer', minimum: 0 }, itemLimit: { type: 'integer', minimum: 1, maximum: 50 } } : {}),
       ...(name === 'update_pipeline_items' ? {
         skip: { type: 'array', items: { type: 'string' } },
+        reopen: { type: 'array', items: { type: 'string' }, description: 'Return settled items to pending, preserving ids and evidence.' },
+        update: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, title: { type: 'string' }, detail: { type: 'string' }, acceptance: { type: 'array', items: { type: 'string' } } }, required: ['id'] } },
         add: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, beforeItemId: { type: 'string', description: 'Place prerequisite before this existing item.' }, detail: { type: 'string' }, acceptance: { type: 'array', items: { type: 'string' } } }, required: ['title'] } },
         order: { type: 'array', items: { type: 'string' } },
         evidence: { type: 'string', description: 'Why the plan is changing: user decision or verification evidence' },
@@ -92,7 +95,7 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
       if (name === 'update_pipeline_items') {
         const edit = pipelineItemEditSchema.parse(args);
         await pipelineRepository.queueItemEdit(pipeline.id, edit);
-        if (['paused', 'stopped'].includes(pipeline.status)) {
+        if (['paused', 'stopped', 'failed'].includes(pipeline.status)) {
           await pipelineRepository.applyItemEdits(pipeline.id);
           return { id: pipeline.id, applied: true, appliesAt: 'before_resume', ...edit };
         }
@@ -105,16 +108,28 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
         // An interrupted attempt's progress, from the newest checkpoint: never a stage result.
         const [newest] = await pipelineRepository.getCheckpoints(pipeline.id, 1);
         const partial = (newest?.state as unknown as WalkState | undefined)?.partial;
-        const history = args.includeHistory === false ? [] : pipelineStageHistory(await pipelineRepository.getStageHistory(pipeline.id, pipeline.sessionId));
-        return { id: pipeline.id, status: pipeline.status, summary: pipelineSummary(pipeline, nodes, items), history, historyIncluded: args.includeHistory !== false,
+        const allHistory = args.includeHistory === false ? [] : pipelineStageHistory(await pipelineRepository.getStageHistory(pipeline.id, pipeline.sessionId));
+        const historyLimit = typeof args.historyLimit === 'number' ? Math.max(1, Math.min(50, Math.floor(args.historyLimit))) : 20;
+        const eligibleHistory = allHistory.filter(event => typeof args.historyBeforeSeq !== 'number' || event.seq < args.historyBeforeSeq);
+        const history = eligibleHistory.slice(-historyLimit);
+        const itemOffset = typeof args.itemOffset === 'number' ? Math.max(0, Math.floor(args.itemOffset)) : 0;
+        const itemLimit = typeof args.itemLimit === 'number' ? Math.max(1, Math.min(50, Math.floor(args.itemLimit))) : 30;
+        return compactPipelineStatus({ id: pipeline.id, status: pipeline.status, summary: pipelineSummary(pipeline, nodes, items), history, historyIncluded: args.includeHistory !== false,
+          historyTotal: allHistory.length, historyNextBeforeSeq: eligibleHistory.length > history.length ? history[0]?.seq ?? null : null,
           budget: pipelineBudget(pipeline, nodes, items, getConfig().agent.pipelineTokenBudget),
           environmentBlock: activeEnvironmentBlock(pipeline, items, newest),
           coordinatorRequest: pipeline.metadata?.coordinatorRequest ?? null,
+          resumeAfter: pipeline.metadata?.resumeAfter ?? null,
+          deferredItemId: pipeline.metadata?.deferredItemId ?? null,
+          deferredReason: pipeline.metadata?.deferredReason ?? null,
+          deferredWakeError: pipeline.metadata?.deferredWakeError ?? null,
           pendingDecision: pipeline.metadata?.pendingDecision ?? null,
           readOnlyViolation: pipeline.metadata?.readOnlyViolation ?? null,
-          deniedRequests: pipeline.metadata?.deniedRequests ?? [],
+          deniedRequests: Array.isArray(pipeline.metadata?.deniedRequests) ? pipeline.metadata.deniedRequests.slice(-20) : [],
+          deniedRequestCount: Array.isArray(pipeline.metadata?.deniedRequests) ? pipeline.metadata.deniedRequests.length : 0,
           permissionProfile: pipeline.metadata?.permissionProfile ?? null,
           interruption: pipeline.metadata?.interruption ?? null,
+          recoveryRequired: (await toolActionRepository.pipeline(context.userId, context.sessionId, pipeline.id)).filter(row => ['started', 'uncertain'].includes(row.status)).map(row => ({ id: row.id, toolName: row.toolName, status: row.status, createdAt: row.createdAt })),
           ...(pipeline.status === 'awaiting_approval' && !pending ? { recovery: {
             reason: 'Orphaned waiting state: no actionable approval is attached.',
             action: 'stop_pipeline, then resume_pipeline from the saved checkpoint to reissue the question',
@@ -129,8 +144,10 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
           stages: nodes.map(node => ({ key: node.nodeKey, name: node.name, status: node.status, attempt: node.visits, provider: (pipeline.metadata?.stageProviders as Record<string, unknown> | undefined)?.[node.nodeKey] ?? null,
             output: stripPipelineControlBlocks(node.output ?? ''), error: node.error })),
           currentItemId: items.find(item => item.status === 'running')?.id ?? null,
-          items: items.map(item => ({ id: item.id, title: item.title, status: item.status, tokensSpent: (pipeline.metadata?.tokensByItem as Record<string, number> | undefined)?.[item.id] ?? null, stages: pipelineStageRuns(history, item.id), result: stripPipelineControlBlocks(item.result ?? '') })),
-          remainingItems: items.filter(item => !['done', 'skipped'].includes(item.status)).map(item => item.title) };
+          itemTotal: items.length, itemNextOffset: itemOffset + itemLimit < items.length ? itemOffset + itemLimit : null,
+          items: items.slice(itemOffset, itemOffset + itemLimit).map(item => ({ id: item.id, title: item.title, status: item.status, tokensSpent: (pipeline.metadata?.tokensByItem as Record<string, number> | undefined)?.[item.id] ?? null, stages: pipelineStageRuns(history, item.id), result: stripPipelineControlBlocks(item.result ?? '') })),
+          remainingItemCount: items.filter(item => !['done', 'skipped'].includes(item.status)).length,
+          remainingItems: items.filter(item => !['done', 'skipped'].includes(item.status)).slice(itemOffset, itemOffset + itemLimit).map(item => item.title) });
       }
       if (name === 'answer_pipeline_approval') {
         const pending = pendingOf(pipeline);
@@ -220,7 +237,9 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
         const profile = args.permissionProfile === undefined ? undefined : pipelinePermissionProfileSchema.parse(args.permissionProfile);
         if (profile) {
           const session = await sessionRepository.findById(pipeline.sessionId);
-          if (!session || resolvePath(profile.repoPath) !== resolvePath(WorkspaceFS.forSession(session, { space: context.space ?? null }).root)) throw new Error('Profile repository must match the actual pipeline workspace root');
+          if (!session) throw new Error('Pipeline session not found');
+          const fs = WorkspaceFS.forSession(session, { space: context.space ?? null });
+          for (const repo of [profile.repoPath, ...profile.repoPaths]) fs.resolve(repo);
         }
         if (typeof budget !== 'number' || !Number.isSafeInteger(budget) || budget <= spent || budget <= 0) throw new Error('tokenBudget must be a positive integer greater than recorded spend');
         const { getAgentService } = await import('./service');

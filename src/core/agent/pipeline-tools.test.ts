@@ -3,13 +3,14 @@ import type { AgentContext } from '@/core/types';
 import { createPipelineRecoveryTools } from './pipeline-tools';
 import { createMetaTools } from './meta-tools';
 const fixture = vi.hoisted(() => ({
-  present: vi.fn(), history: vi.fn(), stop: vi.fn(), edit: vi.fn(), find: vi.fn(), nodes: vi.fn(), items: vi.fn(), checkpoints: vi.fn(), resume: vi.fn(),
+  recovery: vi.fn(), apply: vi.fn(), present: vi.fn(), history: vi.fn(), stop: vi.fn(), edit: vi.fn(), find: vi.fn(), nodes: vi.fn(), items: vi.fn(), checkpoints: vi.fn(), resume: vi.fn(),
   updateItem: vi.fn(), updatePipeline: vi.fn(), ask: vi.fn(), approve: vi.fn(), deny: vi.fn(),
 }));
 vi.mock('@/db/repositories/pipeline-repository', () => ({ pipelineRepository: {
   getStageHistory: fixture.history, queueItemEdit: fixture.edit, findById: fixture.find, getNodes: fixture.nodes, getPlanItems: fixture.items, getCheckpoints: fixture.checkpoints,
-  updatePlanItem: fixture.updateItem, updatePipeline: fixture.updatePipeline,
+  applyItemEdits: fixture.apply, updatePlanItem: fixture.updateItem, updatePipeline: fixture.updatePipeline,
 } }));
+vi.mock('@/db/repositories/tool-action-repository', () => ({ toolActionRepository: { pipeline: fixture.recovery } }));
 vi.mock('@/security/permissions', () => ({ getPermissionManager: () => ({ approve: fixture.approve, deny: fixture.deny }) }));
 vi.mock('./service', () => ({ getAgentService: () => ({ requestApproval: fixture.ask, presentApproval: fixture.present }) }));
 vi.mock('./pipeline-manager', () => ({ getPipelineManager: () => ({ resume: fixture.resume, stop: fixture.stop }) }));
@@ -19,6 +20,7 @@ const tool = (name: string) => createPipelineRecoveryTools().find(tool => tool.n
 beforeEach(() => {
   vi.resetAllMocks();
   fixture.history.mockResolvedValue([]);
+  fixture.recovery.mockResolvedValue([]);
   fixture.deny.mockResolvedValue(true);
   fixture.find.mockResolvedValue({ id: 'pipeline', userId: 'owner', sessionId: 'session', workspaceId: 'workspace', status: 'failed' });
   fixture.nodes.mockResolvedValue([{ nodeKey: 'qa', name: 'QA', status: 'failed', output: 'Checks failed\n```handoff\n{}\n```' }]);
@@ -217,4 +219,43 @@ it('never advertises a skipped previous item environment error as the current Te
   fixture.find.mockResolvedValue({ id: 'pipeline', userId: 'owner', sessionId: 'session', workspaceId: 'workspace', status: 'paused',
     metadata: { environmentBlock: { itemId: 'next', nodeKey: 'testing', attemptId: 'next-attempt', reason: 'Database unavailable' } } });
   expect(await tool('get_pipeline_status').execute({ id: 'pipeline' }, context)).toMatchObject({ environmentBlock: { itemId: 'next', attemptId: 'next-attempt' } });
+});
+
+it('edits and reopens failed-run items in place before resume (#63/#68)', async () => {
+  const result = await tool('update_pipeline_items').execute({ id: 'pipeline', reopen: ['phase7'],
+    update: [{ id: 'phase7', detail: 'User waived the wait; all data is test data.', acceptance: ['Cutover checks pass'] }], evidence: 'User decision on the waiting period' }, context);
+  expect(result).toMatchObject({ applied: true, appliesAt: 'before_resume', reopen: ['phase7'] });
+  expect(fixture.apply).toHaveBeenCalledWith('pipeline');
+  expect(fixture.edit).toHaveBeenCalledWith('pipeline', expect.objectContaining({ update: [{ id: 'phase7', detail: expect.any(String), acceptance: ['Cutover checks pass'] }] }));
+  expect(fixture.resume).not.toHaveBeenCalled();
+});
+it('names uncertain recovery records in both status and the resume handle (#64)', async () => {
+  fixture.recovery.mockResolvedValue([{ id: 'record1', toolName: 'shell__run', status: 'uncertain' }, { id: 'completed', status: 'completed' }]);
+  expect(await tool('get_pipeline_status').execute({ id: 'pipeline' }, context)).toMatchObject({ recoveryRequired: [{ id: 'record1', toolName: 'shell__run' }] });
+  fixture.resume.mockImplementation(async (_id, opts) => { opts.onAccepted(); return new Promise(() => {}); });
+  expect(await tool('resume_pipeline').execute({ id: 'pipeline' }, context)).toMatchObject({ status: 'resuming', recoveryRequired: [{ id: 'record1' }] });
+});
+it('pages newest history first and offers a cursor to older approval events', async () => {
+  fixture.history.mockResolvedValue(Array.from({ length: 75 }, (_, index) => ({ seq: index + 1, subjectId: 'qa', event: index === 0 ? 'approval' : 'spawn', payload: {} })));
+  const latest = await tool('get_pipeline_status').execute({ id: 'pipeline' }, context) as { history: Array<{ seq: number }>; historyNextBeforeSeq: number };
+  expect(latest.history[0].seq).toBe(56);
+  expect(latest.history.at(-1)?.seq).toBe(75);
+  const oldest = await tool('get_pipeline_status').execute({ id: 'pipeline', historyBeforeSeq: latest.historyNextBeforeSeq, historyLimit: 50 }, context) as { historyNextBeforeSeq: number };
+  expect(oldest.historyNextBeforeSeq).toBe(6);
+  expect(await tool('get_pipeline_status').execute({ id: 'pipeline', historyBeforeSeq: 6 }, context)).toMatchObject({ history: [expect.objectContaining({ event: 'approval', seq: 1 }), ...Array.from({ length: 4 }, (_, i) => expect.objectContaining({ seq: i + 2 }))] });
+});
+
+it('accepts an accessible target repository outside the workspace root after asking for approval (#54)', async () => {
+  const { WorkspaceFS } = await import('@/security/workspace-fs');
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const checkPath = vi.fn((path: string) => path);
+  const fs = vi.spyOn(WorkspaceFS, 'forSession').mockReturnValue({ root: '/workspace/octipus', resolve: checkPath } as never);
+  const session = vi.spyOn(sessionRepository, 'findById').mockResolvedValue({ id: 'session', userId: 'owner' } as never);
+  fixture.ask.mockResolvedValue({ approved: false });
+  try {
+    expect(await tool('resume_pipeline').execute({ id: 'pipeline', permissionProfile: { repoPath: '/workspace/moco-rebuild', repoPaths: ['/workspace/shared'], commands: ['pnpm test'] } }, context)).toMatchObject({ presented: true });
+    expect(checkPath.mock.calls).toEqual([['/workspace/moco-rebuild'], ['/workspace/shared']]);
+    expect(fixture.ask).toHaveBeenCalled();
+    expect(fixture.resume).not.toHaveBeenCalled();
+  } finally { fs.mockRestore(); session.mockRestore(); }
 });

@@ -217,6 +217,8 @@ interface StructuredHandoff {
   stopped?: boolean;
   /** Required toolchain/service could not be used; pause for environment repair. */
   environmentBlocked?: string;
+  deferredUntil?: string;
+  deferredReason?: string;
   blockedOnDecision?: { itemId: string; question: string; options?: string[] };
 }
 
@@ -269,6 +271,8 @@ export function parseStructuredHandoff(output: string): StructuredHandoff | null
     instructions: str(h.instructions) || str(h.nextStageInstructions),
     completedWork: str(h.completedWork),
     confidence: conf(h.confidence),
+    ...(typeof h.deferredUntil === 'string' && /(?:Z|[+-]\d{2}:\d{2})$/.test(h.deferredUntil) && Number.isFinite(Date.parse(h.deferredUntil))
+      ? { deferredUntil: new Date(h.deferredUntil).toISOString(), deferredReason: str(h.deferredReason) || str(h.completedWork) || 'Item is not eligible yet.' } : {}),
     ...(h.stopped === true ? { stopped: true } : {}),
     ...(decision && typeof decision.itemId === 'string' && decision.itemId.trim().length >= 8 && typeof decision.question === 'string' && decision.question.trim().length > 0
       ? { blockedOnDecision: { itemId: decision.itemId, question: decision.question.slice(0, 4000),
@@ -299,7 +303,8 @@ PIPELINE HANDOFF — after your normal report above, append a fenced code block 
 - openQuestions (string[]): anything unresolved the next stage should address
 - nextStageInstructions (string): explicit, actionable instruction for the next stage
 - confidence ("high" | "medium" | "low"): how confident you are in what you are handing off. An honest "low" is welcome — it routes a closer look at this stage rather than counting against you
-- blockedOnDecision (optional object): {itemId, question, options?} naming an existing pending user-decision plan item. When no safe code change is possible before that decision, report it here and in openQuestions; do not fabricate edits, weaken checks or repeatedly rerun a noisy benchmark. The coordinator asks the user.
+- deferredUntil (optional ISO timestamp with timezone) and deferredReason: when this item cannot run before a date, report it here. The coordinator parks the stage until that date; no edits or retries are required.
+- blockedOnDecision (optional object): {itemId, question, options?} naming the current item or an existing pending user-decision plan item. When no safe code change is possible before that decision, report it here and in openQuestions; do not fabricate edits, weaken checks or repeatedly rerun a noisy benchmark. The coordinator asks the user.
 - environmentBlocked (string, optional): the required gate command and exact missing toolchain/service error. Use only for a required contract gate or declared toolchain/service after checking the correct package cwd. A failed ad-hoc probe (missing tsx, package-local zod, wrong import path) is yours to fix. Never classify refused coordinator-only plan tools as environment failure.
 - stopped (boolean): true only when you stopped before delivering this stage's work. The pipeline then re-runs this stage, so never report a stop as finished work
 

@@ -1,3 +1,4 @@
+vi.mock('@/db/repositories/tool-action-repository', () => ({ toolActionRepository: { pipeline: async () => [] } }));
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';

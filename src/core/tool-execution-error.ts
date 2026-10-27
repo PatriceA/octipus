@@ -22,3 +22,11 @@ export function markToolNotExecuted<T extends object>(toolId: string, result: T)
 export function isToolNotExecutedResult(toolId: string, result: unknown): boolean {
   return result !== null && typeof result === 'object' && unexecutedResults.get(result) === toolId;
 }
+
+const uncertainExecutions = new WeakMap<object, string>();
+export function markToolExecutionUncertain(error: unknown, recordId: string): void {
+  if (error !== null && (typeof error === 'object' || typeof error === 'function')) uncertainExecutions.set(error, recordId);
+}
+export function uncertainExecutionRecord(error: unknown): string | undefined {
+  return error !== null && (typeof error === 'object' || typeof error === 'function') ? uncertainExecutions.get(error) : undefined;
+}

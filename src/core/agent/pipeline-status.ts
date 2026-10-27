@@ -39,3 +39,31 @@ export function pipelineStageRuns(history: ReturnType<typeof pipelineStageHistor
   }
   return [...runs.values()];
 }
+
+/** Keep status structured below the bridge's 50 KB text ceiling. */
+export function compactPipelineStatus<T extends Record<string, unknown>>(status: T): T & { outputCompacted?: boolean } {
+  const clip = (value: unknown, chars: number, depth = 0, field = ''): unknown => {
+    if (typeof value === 'string') return value.length > chars ? `${value.slice(0, chars)} … [clipped]` : value;
+    if (value instanceof Date) return value;
+    if (depth > 10) return '[details omitted]';
+    if (Array.isArray(value)) {
+      const page = depth === 1 && ['items', 'stages', 'history', 'recoveryRequired', 'remainingItems'].includes(field);
+      return (page ? value : value.slice(0, chars <= 120 ? 3 : 20)).map(entry => clip(entry, chars, depth + 1));
+    }
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key,
+      // IDs, statuses, dates and pagination cursors remain lossless.
+      /^(?:id|.*Id|status|.*At|seq|stageKey|key|resumeAfter)$/.test(key) ? entry : clip(entry, chars, depth + 1, key)]));
+    return value;
+  };
+  if (JSON.stringify(status).length <= 40_000) return status;
+  const out = clip(status, 500) as T & { outputCompacted?: boolean };
+  out.outputCompacted = true;
+  const history = out.history as unknown[] | undefined;
+  const items = out.items as Array<{ stages?: unknown[] }> | undefined;
+  if (items) for (const item of items) item.stages = [];
+  while (JSON.stringify(out).length > 40_000 && history && history.length > 1) history.shift();
+  if (history?.length) (out as Record<string, unknown>).historyNextBeforeSeq = (history[0] as { seq: number }).seq;
+  // Large plans still expose every id/status; verbose fields yield to the state.
+  if (JSON.stringify(out).length > 40_000) return { ...clip(out, 120) as T, outputCompacted: true };
+  return out;
+}
