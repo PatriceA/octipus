@@ -852,3 +852,73 @@ describe('argument data is not a command position (#71, #72)', () => {
     expect(matchElevatedCommand(command)).toBe(expected);
   });
 });
+
+
+describe('executable shell syntax retains policy checks (#71, #72 review)', () => {
+  it.each([
+    `watch -- echo -x 'ready; shutdown -h now'`,
+    'builtin exec shutdown -h now',
+    'sh <<EOF\nreboot\nEOF',
+    `bash -c 'cat | sh' <<'EOF'\nshutdown -h now\nEOF`,
+    `bash -c 'sh -c sh' <<'EOF'\nreboot\nEOF`,
+    `bash <<'EOF'\nshutdown -h now\nEOF`,
+    `cat <<'EOF' | sh\nshutdown -h now\nEOF`,
+    `cat <<'EOF' | env -i bash -s\nreboot\nEOF`,
+    '{fd}>/dev/null shutdown -h now',
+    'exec {fd}>/dev/null shutdown -h now',
+    `find . -name '-exec' -exec shutdown -h now \\;`,
+    `find /dev/null -maxdepth 0 -exec sh \\; <<'EOF'\nshutdown -h now\nEOF`,
+    `bash /dev/stdin <<'EOF'\nshutdown -h now\nEOF`,
+    `source /dev/stdin <<'EOF'\nreboot\nEOF`,
+    `. /dev/fd/0 <<'EOF'\nreboot\nEOF`,
+    `cat <<'EOF' |& sh\nreboot\nEOF`,
+    `xargs -I{} sh -c '{}' <<'EOF'\nshutdown -h now\nEOF`,
+    `bash script.sh <<'EOF'\nshutdown\nEOF`,
+    `bash <<< 'shutdown -h now'`,
+    `cat <<< 'reboot' | sh`,
+    '> /tmp/log shutdown -h now', '2>&1 reboot', '>/tmp/log /sbin/halt',
+    'exec -a innocent shutdown -h now', 'systemd-run --unit test shutdown -h now',
+    'firejail --profile /tmp/profile shutdown -h now',
+    'find . -maxdepth 0 -exec shutdown -h now \\;',
+    'find . -execdir /sbin/shutdown -h now {} +',
+    'find . -ok shutdown -h now \\;',
+    `watch -n 1 "echo ready; shutdown -h now"`,
+    `trap 'echo ready; shutdown -h now' EXIT`,
+    'function stop { shutdown -h now; }; stop',
+    'stop(){ shutdown -h now; }; stop',
+    'cat <<EOF\n$(shutdown -h now)\nEOF',
+    "cat <<'EOF'\nshutdown\nEOF\nreboot",
+  ])('refuses actual process control in %s', command => {
+    expect(commandPolicyViolation(command)).toMatch(/Blocked command detected/);
+  });
+  it.each([
+    ["watch -n 1 'echo ready; sudo id'", 'sudo'],
+    ["trap 'chmod 600 file' EXIT", 'chmod'],
+    ['2>&1 chmod 600 file', 'chmod'],
+    ['find . -exec chmod 600 {} \\;', 'chmod'],
+    ['function touchfile { chmod 600 file; }; touchfile', 'chmod'],
+    ['cat <<EOF\n$(sudo id)\nEOF', 'sudo'],
+  ])('retains elevation in %s', (command, expected) => {
+    expect(matchElevatedCommand(command)).toBe(expected);
+  });
+  it.each([
+    "cat <<'EOF'\nshutdown\nchmod\n$(reboot)\nEOF",
+    'cat <<EOF\nshutdown\nchmod\nEOF',
+    "cat <<-'EOF'\n\tshutdown\n\tEOF",
+    `sh -c 'echo harmless'; cat <<'EOF'\nshutdown\nEOF`,
+    `cat <<'EOF' | grep shutdown\nshutdown\nEOF`,
+    `bash -c 'cat' <<'EOF'\nshutdown\nEOF`,
+    `cat <<< 'shutdown'`,
+    `bash -c 'cat' <<< 'shutdown'`,
+    'echo harmless > shutdown',
+    'find . -name shutdown -print',
+    `find . -name '-exec' -exec echo shutdown \\;`,
+    `find . -exec echo -exec shutdown \\;`,
+    'find . -exec echo shutdown \\;',
+    `trap 'echo shutdown' EXIT`,
+    `watch -x rg 'shutdown|chmod' README.md`,
+  ])('keeps literal data out of command positions in %s', command => {
+    expect(commandPolicyViolation(command)).toBeNull();
+    expect(matchElevatedCommand(command)).toBeNull();
+  });
+});

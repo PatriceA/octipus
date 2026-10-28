@@ -430,7 +430,7 @@ const COMMAND_WRAPPERS = new Set([
   // list cannot be complete — which is why the DENYLIST does not depend on it —
   // but each name here is one the elevation check would otherwise miss.
   'flock', 'strace', 'ltrace', 'proxychains', 'proxychains4', 'runuser', 'command', 'busybox',
-  'firejail', 'systemd-run', 'runner',
+  'firejail', 'systemd-run', 'runner', 'builtin',
   'if', 'then', 'else', 'do', 'while', 'until', '!', '{',
 ]);
 
@@ -485,6 +485,9 @@ const VALUE_TAKING_FLAGS: Record<string, ReadonlySet<string>> = {
   // keeps `-c` off `script` below. A flag whose value is a command must have
   // that value examined, not stepped over.
   env: new Set(['-u', '--unset', '-c', '--chdir']),
+  exec: new Set(['-a']),
+  'systemd-run': new Set(['-u', '--unit', '--description', '-p', '--property', '--uid', '--gid', '--working-directory']),
+  firejail: new Set(['--profile', '--name', '--hostname', '--net', '--dns']),
   timeout: new Set(['-s', '--signal', '-k', '--kill-after']),
   nice: new Set(['-n', '--adjustment']),
   ionice: new Set(['-c', '--class', '-n', '--classdata']),
@@ -677,6 +680,21 @@ function commandCandidates(segment: string): string[] {
 function commandStringPayloads(candidate: string[]): string[] {
   const head = basename(candidate[0]);
   if (head === 'eval') return [candidate.slice(1).join(' ')];
+  if (head === 'trap') {
+    if (candidate.slice(1).some(arg => ['-l', '-p'].includes(arg))) return [];
+    const payload = candidate[candidate[1] === '--' ? 2 : 1];
+    return payload && payload !== '-' ? [payload] : [];
+  }
+  if (head === 'watch') {
+    let i = 1, exec = false;
+    while (i < candidate.length && candidate[i].startsWith('-')) {
+      const option = candidate[i];
+      if (['-x', '--exec'].includes(option)) exec = true;
+      i += VALUE_TAKING_FLAGS.watch.has(option.toLowerCase()) ? 2 : 1;
+      if (option === '--') break;
+    }
+    return exec ? [] : [candidate.slice(i).join(' ')];
+  }
   const shell = ['sh', 'bash', 'zsh', 'ksh', 'dash', 'ash', 'fish'].includes(head);
   if (!shell && !COMMAND_STRING_FLAGS[head]) return [];
   for (let i = 1; i < candidate.length; i++) {
@@ -696,22 +714,78 @@ function commandStringPayloads(candidate: string[]): string[] {
   return [];
 }
 
+/** Only prove stdin is data for known data consumers or statically data-only
+ * shell strings. Unknown consumers stay conservative: scripts, find, source,
+ * xargs, and stdin paths can all feed a document back into a shell.
+ */
+function executableHeredoc(pipeline: string[][]): boolean {
+  return !pipeline.every(argv => dataOnlyConsumer(argv));
+}
+
+function dataOnlyConsumer(argv: string[], depth = 0): boolean {
+  if (depth > MAX_PEEL_DEPTH) return false;
+  const transparent = new Set(['env', 'timeout', 'nohup', 'nice', 'ionice', 'setsid', 'stdbuf', 'time', 'command', 'exec', 'builtin']);
+  for (const candidate of candidateArgv(argv)) {
+    if (/^[a-z_][a-z0-9_]*=/i.test(candidate[0])) continue;
+    const head = basename(candidate[0]);
+    if (transparent.has(head)) continue;
+    if (['sh', 'bash', 'zsh', 'ksh', 'dash', 'ash', 'fish'].includes(head)) {
+      const payloads = commandStringPayloads(candidate);
+      return payloads.length > 0 && payloads.every(source => {
+        const commands = shellCommandSegments(source);
+        return commands !== null && commands.every(command => dataOnlyConsumer(command, depth + 1));
+      });
+    }
+    if (['cat', 'echo', 'printf', 'head', 'tail', 'wc', 'grep', 'egrep', 'fgrep', 'rg'].includes(head)) {
+      return !candidate.some(arg => /^--pre(?:=|$)/.test(arg));
+    }
+    return head === 'git' && candidate[1] === 'grep' && !candidate.some(arg => /^--open-files-in-pager(?:=|$)/.test(arg));
+  }
+  return false;
+}
+
 /** Actual heads after transparent launchers; quoted data remains one argument. */
 function positionCandidates(command: string, depth = 0): string[] {
-  if (depth > MAX_PEEL_DEPTH) return command.split(/&&|\|\||[;&|\n()`]/).flatMap(commandCandidates);
-  const segments = shellCommandSegments(command);
-  if (!segments) return command.split(/&&|\|\||[;&|\n()`]/).flatMap(commandCandidates);
-  const result: string[] = [];
-  for (const argv of segments) {
-    const candidates = candidateArgv(argv);
-    const payloads = candidates.flatMap(commandStringPayloads).filter(Boolean);
-    for (const candidate of candidates) {
-      // A shell's source is parsed recursively, never compared as a program
-      // path: basename('echo /bin/chmod') would invent a chmod invocation.
-      if (!payloads.includes(candidate[0])) result.push([basename(candidate[0]), ...candidate.slice(1)].join(' ').toLowerCase());
-    }
-    for (const payload of payloads) result.push(...positionCandidates(payload, depth + 1));
+  const segments = shellCommandSegments(command, executableHeredoc);
+  if (depth > MAX_PEEL_DEPTH || !segments) {
+    // An unparsed boundary must not turn a formerly refused executable into
+    // an allowed call. Retain the conservative token scan for this case.
+    return dequotedForms(command).flatMap(form => form.split(/[\s;&|()\n`]+/)).map(basename);
   }
+  return segments.flatMap(argv => argvPositions(argv, depth));
+}
+
+const FIND_VALUE_OPTIONS = new Set([
+  '-D', '-name', '-iname', '-path', '-ipath', '-wholename', '-iwholename',
+  '-regex', '-iregex', '-lname', '-ilname', '-type', '-xtype', '-user', '-group',
+  '-uid', '-gid', '-perm', '-size', '-links', '-inum', '-samefile', '-newer',
+  '-anewer', '-cnewer', '-mtime', '-mmin', '-atime', '-amin', '-ctime', '-cmin',
+  '-used', '-printf', '-fprint', '-fprint0', '-fls', '-maxdepth', '-mindepth',
+  '-regextype', '-context', '-fstype',
+]);
+
+function argvPositions(argv: string[], depth: number): string[] {
+  if (depth > MAX_PEEL_DEPTH) return argv.map(basename);
+  const candidates = candidateArgv(argv);
+  const payloads = candidates.flatMap(commandStringPayloads).filter(Boolean);
+  const result: string[] = [];
+  for (const candidate of candidates) {
+    // Source is parsed recursively, never compared as a program path:
+    // basename('echo /bin/chmod') would invent a chmod invocation.
+    if (!payloads.includes(candidate[0])) result.push([basename(candidate[0]), ...candidate.slice(1)].join(' ').toLowerCase());
+    if (basename(candidate[0]) === 'find') {
+      for (let i = 1; i < candidate.length; i++) {
+        if (FIND_VALUE_OPTIONS.has(candidate[i]) || /^-newer[a-z]{2}$/i.test(candidate[i])) { i++; continue; }
+        if (candidate[i] === '-fprintf') { i += 2; continue; }
+        if (!['-exec', '-execdir', '-ok', '-okdir'].includes(candidate[i])) continue;
+        let end = i + 1;
+        while (end < candidate.length && ![';', '+'].includes(candidate[end])) end++;
+        result.push(...argvPositions(candidate.slice(i + 1, end), depth + 1));
+        i = end;
+      }
+    }
+  }
+  for (const payload of payloads) result.push(...positionCandidates(payload, depth + 1));
   return result;
 }
 
@@ -824,7 +898,7 @@ export function commandPolicyViolation(command: string): string | null {
 
   const processCommands = new Set(['shutdown', 'reboot', 'halt', 'poweroff']);
   const positions = positionCandidates(command);
-  const malformed = shellCommandSegments(command) === null;
+  const malformed = shellCommandSegments(command, executableHeredoc) === null;
   for (const blocked of processCommands) {
     if (malformed ? invokesCommand(command, blocked) : headOfSegmentIs(command, blocked, positions)) return `Blocked command detected: ${blocked}`;
   }

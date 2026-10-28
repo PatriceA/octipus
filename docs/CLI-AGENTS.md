@@ -881,7 +881,9 @@ limit. Detailed history remains available through the cursors and stored events.
   Search patterns and test flags are data, including regex alternatives such as
   `chmod|shutdown`. Actual command positions behind supported launchers, shell
   command strings and active substitutions remain checked. Reverse-shell and
-  destructive-content rules retain their conservative behavior.
+  destructive-content rules retain their conservative behavior. Heredocs and
+  here-strings are checked as possible source unless their consumer is provably
+  data-only; this includes shell stdin paths and indirect consumers such as find.
 - #71: preflight refusals log a credential-redacted command. Trusted content-policy
   refusals also carry their rule through execution receipts; a stopped stage's
   retry names Octipus policy instead of attributing the stop to its own probe.
