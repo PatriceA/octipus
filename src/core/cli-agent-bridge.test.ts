@@ -623,3 +623,79 @@ it.each(['deadline', 'disconnect', 'premature-finish'] as const)('approval %s en
    expect(JSON.stringify(second)).not.toContain('interrupted by new guidance');
    expect(JSON.stringify(second)).toContain('child finished normally');
  });
+
+
+it.skipIf(!!process.env.OCTIPUS_LIVE_CLI).each(['interrupt', 'unsupported'])('keeps Claude stdin open for a queued guidance batch and permissions (%s)', async mode => {
+  writeFileSync(fixture.script, `
+    import { createInterface } from 'node:readline';
+    const emit = event => console.log(JSON.stringify(event));
+    let inputs = 0, guidance;
+    for await (const line of createInterface({input:process.stdin})) {
+      const event = JSON.parse(line);
+      if (event.type === 'control_request') {
+        emit({type:'control_response',response:{subtype:${JSON.stringify(mode === 'unsupported' ? 'error' : 'success')},request_id:event.request_id,response:{}}});
+        if (${JSON.stringify(mode)} === 'interrupt') emit({type:'result',subtype:'success',result:'Old turn ended',num_turns:1});
+        continue;
+      }
+      if (event.type === 'control_response') {
+        emit({type:'result',subtype:'success',result:'Handled: ' + guidance,num_turns:1});
+        continue;
+      }
+      if (event.type !== 'user') continue;
+      if (++inputs === 1) {
+        emit({type:'assistant',message:{id:'batch-start',content:[{type:'tool_use',id:'read',name:'Read',input:{}}]}});
+        setTimeout(() => emit({type:'user',message:{role:'user',content:[{type:'tool_result',tool_use_id:'read',content:'finished'}]}}), 40);
+      } else {
+        guidance = event.message.content;
+        if (!guidance.includes('First question') || !guidance.includes('Second question')) throw new Error('Guidance must be one user turn');
+        emit(event);
+        // An older CLI can acknowledge queued input before the previous turn
+        // finishes. Receipt alone must never close the permission channel.
+        if (${JSON.stringify(mode)} === 'unsupported') emit({type:'result',subtype:'success',result:'Old turn ended',num_turns:1});
+        emit({type:'control_request',request_id:'permission-after-guidance',request:{subtype:'can_use_tool',tool_name:'Bash',input:{command:'true'}}});
+      }
+    }
+  `);
+  const worker = sampleWorker();
+  let sent = false;
+  worker.onEvent(event => {
+    if (!sent && (event.data as {type?: string}).type === 'cli_tool_use') {
+      sent = true;
+      for (const content of ['First question', 'Second question']) worker.steer({role:'user',content,timestamp:new Date()});
+    }
+  });
+  const result = await worker.run('sample');
+  expect(result).toContain('Handled: First question');
+  expect(result).toContain('Second question');
+  expect(worker.getStatus()).toBe('completed');
+});
+
+it.skipIf(!!process.env.OCTIPUS_LIVE_CLI).each([
+  { failure: 'EACCES writing output', errors: [] },
+  { failure: 'EACCES writing /tmp/interrupted/output', errors: [] },
+  { failure: 'EACCES writing output', errors: ['Execution interrupted'] },
+])('preserves an unrelated execution failure that coincides with steering: %j', async ({ failure, errors }) => {
+  writeFileSync(fixture.script, `
+    import { createInterface } from 'node:readline';
+    const emit = event => console.log(JSON.stringify(event));
+    for await (const line of createInterface({input:process.stdin})) {
+      const event = JSON.parse(line);
+      if (event.type === 'control_request') {
+        emit({type:'control_response',response:{subtype:'success',request_id:event.request_id,response:{}}});
+        emit({type:'result',subtype:'error_during_execution',is_error:true,result:${JSON.stringify(failure)},errors:${JSON.stringify(errors)},num_turns:1});
+      } else if (event.type === 'user') {
+        emit({type:'assistant',message:{id:'thinking',content:[{type:'text',text:'Working'}]}});
+      }
+    }
+  `);
+  const worker = sampleWorker();
+  let sent = false;
+  worker.onEvent(event => {
+    if (!sent && (event.data as {type?: string}).type === 'iteration_update') {
+      sent = true;
+      worker.steer({role:'user',content:'Answer my question',timestamp:new Date()});
+    }
+  });
+  await expect(worker.run('sample')).rejects.toThrow(failure);
+  expect(worker.getStatus()).toBe('failed');
+});

@@ -367,7 +367,9 @@ control request, then submit guidance as a new user message through stream-json
 stdin. If a tool is running, Octipus waits for its result (all results for a
 parallel batch); an idle model is woken immediately. A pending `collect_children`
 wait returns promptly while its children keep running. Context reads and tool
-response attachments do not consume guidance before live delivery. If a CLI
+response attachments do not consume guidance before live delivery. Messages
+queued behind a tool become one user turn; the input stream remains open for
+permission responses until that turn finishes. If a CLI
 cannot finish the interrupt within 30 seconds, Octipus submits input through the
 stream and retains the unacknowledged-input fallback.
 `--replay-user-messages` acknowledges receipt; a pipe

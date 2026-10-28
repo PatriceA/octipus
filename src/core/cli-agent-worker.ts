@@ -134,7 +134,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
   }
   private bridgeErrors = new Map<string, boolean>();
   private steeringQueue: AgentMessage[] = [];
-  private liveGuidance = new Map<string, AgentMessage>();
+  private liveGuidance = new Map<string, AgentMessage[]>();
   /**
    * Unacknowledged live guidance an Octipus tool response has already gone
    * back past. A vendor that reads queued input only at its turn end would
@@ -145,6 +145,8 @@ export class CLIAgentWorker extends BaseAgentWorker {
   private acceptsLiveGuidance = false;
   private activeBridgeCalls = 0;
   private liveTurnActive = false;
+  /** Results still owed, including the previous turn when an older CLI queues input. */
+  private liveResultsPending = 0;
   private liveTools = new Set<string>();
   private seenLiveTools = new Set<string>();
   private steeringInterrupt?: { requestId: string; acknowledged: boolean };
@@ -190,7 +192,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
   private wakeForGuidance(): void {
     const stdin = this.process?.stdin;
     if (!this.acceptsLiveGuidance || !stdin?.writable || stdin.writableEnded || this.aborted || !this.steeringQueue.length) return;
-    if (this.activeBridgeCalls || this.liveTools.size || this.steeringInterrupt) return;
+    if (this.activeBridgeCalls || this.liveTools.size || this.steeringInterrupt || this.liveGuidance.size || this.liveResultsPending > 1) return;
     if (!this.liveTurnActive) { this.submitLiveGuidance(); return; }
     const requestId = randomUUID();
     this.steeringInterrupt = { requestId, acknowledged: false };
@@ -219,24 +221,33 @@ export class CLIAgentWorker extends BaseAgentWorker {
   private submitLiveGuidance(): void {
     const stdin = this.process?.stdin;
     if (!this.acceptsLiveGuidance || !stdin?.writable || stdin.writableEnded || this.aborted) return;
-    for (const message of this.steeringQueue.splice(0)) {
-      const uuid = randomUUID();
-      this.liveGuidance.set(uuid, message);
-      this.liveTurnActive = true;
-      const restore = () => {
-        if (this.liveGuidance.delete(uuid)) this.steeringQueue.push(message);
-      };
-      try {
-        stdin.write(JSON.stringify({ type: 'user', uuid, message: { role: 'user', content: message.content } }) + '\n', err => {
-          if (!err) return;
-          agentLogger.warn({ agentId: this.context.id, err }, 'Live guidance could not be written to the CLI input stream; queued for the next tool response instead');
-          restore();
-        });
-        this.emit('thought', { type: 'steering_submitted', delivery: 'CLI input stream', id: uuid });
-      } catch (err) {
+    const guidance = this.steeringQueue.splice(0);
+    if (!guidance.length) return;
+    // One user turn per queued batch: replay acknowledges input, not completion.
+    // Separate turns could acknowledge together, then the first result would
+    // close stdin before the next turn's permission exchange.
+    const uuid = randomUUID();
+    this.liveGuidance.set(uuid, guidance);
+    this.liveResultsPending++;
+    this.liveTurnActive = true;
+    const restore = () => {
+      if (this.liveGuidance.delete(uuid)) {
+        this.liveGuidancePassed.delete(uuid);
+        this.liveResultsPending--;
+        this.liveTurnActive = this.liveResultsPending > 0;
+        this.steeringQueue.unshift(...guidance);
+      }
+    };
+    try {
+      stdin.write(JSON.stringify({ type: 'user', uuid, message: { role: 'user', content: guidance.map(message => message.content).join('\n\n') } }) + '\n', err => {
+        if (!err) return;
         agentLogger.warn({ agentId: this.context.id, err }, 'Live guidance could not be written to the CLI input stream; queued for the next tool response instead');
         restore();
-      }
+      });
+      this.emit('thought', { type: 'steering_submitted', delivery: 'CLI input stream', id: uuid, count: guidance.length });
+    } catch (err) {
+      agentLogger.warn({ agentId: this.context.id, err }, 'Live guidance could not be written to the CLI input stream; queued for the next tool response instead');
+      restore();
     }
   }
 
@@ -1398,6 +1409,7 @@ When a task matches one of these skills, load it with get_skill before starting 
       this.liveTools.clear();
       this.seenLiveTools.clear();
       this.liveTurnActive = true;
+      this.liveResultsPending = 1;
       this.wakeForGuidance();
 
       // A caller-minted id (Claude: --session-id / --resume) is known before
@@ -1481,29 +1493,42 @@ When a task matches one of these skills, load it with get_skill before starting 
               if (guidance) {
                 this.liveGuidance.delete(event.uuid);
                 this.liveGuidancePassed.delete(event.uuid);
-                this.messages.push(guidance);
+                this.messages.push(...guidance);
                 this.emit('thought', { type: 'steering_delivered', delivery: 'CLI acknowledged input', id: event.uuid });
+                queueMicrotask(() => this.wakeForGuidance());
               }
             }
             // A result can belong to the previous turn while submitted input
             // is still queued. Keep stdin available for that turn's permission
             // responses until the vendor acknowledges the guidance.
-            const interruptedTurn = built.keepStdinOpen && event.type === 'result' && !!this.steeringInterrupt;
+            const turnDiagnostics = [event.result, ...(Array.isArray(event.errors) ? event.errors : [])]
+              .filter((value): value is string => typeof value === 'string' && !!value.trim());
+            const interruptedCancellation = built.keepStdinOpen && event.type === 'result' && !!this.steeringInterrupt
+              && event.subtype === 'error_during_execution'
+              && turnDiagnostics.length > 0 && turnDiagnostics.every(value => /^(?:error:\s*)?(?:(?:execution|request|turn|operation|run|task)\s+(?:was\s+)?)?(?:interrupted|aborted)\b/i.test(value.trim()));
+            consecutiveNonJson = 0;
+            // Account for the superseded turn, but suppress only an explicit
+            // interrupt diagnostic. A coincident EACCES/provider failure stays
+            // a failure rather than being hidden by the steering wake-up.
+            const result = parser.parse(interruptedCancellation ? { ...event, subtype: 'success', is_error: false } : event, adapterKey);
             if (built.keepStdinOpen && event.type === 'result') {
-              this.liveTurnActive = false;
+              this.liveResultsPending = Math.max(0, this.liveResultsPending - 1);
+              this.liveTurnActive = this.liveResultsPending > 0;
               this.liveTools.clear();
-              if (this.steeringInterrupt) this.finishSteeringInterrupt();
-              else if (this.steeringQueue.length) this.submitLiveGuidance();
-              else if (this.liveGuidance.size === 0) {
+              if (this.runError) {
+                clearTimeout(this.steeringInterruptTimer);
+                this.steeringInterruptTimer = undefined;
+                this.steeringInterrupt = undefined;
+                this.acceptsLiveGuidance = false;
+                proc.stdin?.end();
+              } else if (this.steeringInterrupt) this.finishSteeringInterrupt();
+              else if (this.steeringQueue.length && !this.liveTurnActive) this.submitLiveGuidance();
+              else if (this.liveGuidance.size === 0 && !this.liveTurnActive) {
                 this.acceptsLiveGuidance = false;
                 proc.stdin?.end();
               }
+              queueMicrotask(() => this.wakeForGuidance());
             }
-            consecutiveNonJson = 0;
-            // An interrupted turn is superseded by the user's guidance. Keep
-            // usage accounting, but don't turn its cancellation into runError.
-            const result = parser.parse(interruptedTurn && event.subtype === 'error_during_execution'
-              ? { ...event, subtype: 'success', is_error: false } : event, adapterKey);
             if (built.keepStdinOpen && event.type === 'user' && Array.isArray(event.message?.content)) {
               for (const block of event.message.content) {
                 if (block.type === 'tool_result') this.liveTools.delete(block.tool_use_id);
@@ -1548,9 +1573,10 @@ When a task matches one of these skills, load it with get_skill before starting 
         this.liveTools.clear();
         this.seenLiveTools.clear();
         this.liveTurnActive = false;
+        this.liveResultsPending = 0;
         // A pipe write is not an acknowledgement. Retain unacknowledged input
         // for the bridge/follow-up path if the vendor exited without reading it.
-        this.steeringQueue.unshift(...this.liveGuidance.values());
+        this.steeringQueue.unshift(...[...this.liveGuidance.values()].flat());
         this.liveGuidance.clear();
         this.liveGuidancePassed.clear();
         clearInterval(hardTimeout);
