@@ -70,18 +70,22 @@ test.describe('dashboard — while you were away', () => {
   });
 
   test('a failed poll keeps the last good digest on screen', async ({ authenticatedPage: page }) => {
-    let calls = 0;
-    await page.route('**/api/digest/away**', (route) => {
-      calls += 1;
-      return calls === 1 ? json(route, 200, digest) : json(route, 502, { error: 'gateway' });
-    });
+    await page.clock.install();
+    let failPoll = false;
+    await page.route('**/api/digest/away**', (route) =>
+      failPoll ? json(route, 500, { error: 'server failure' }) : json(route, 200, digest));
     await page.goto('/');
+    // Workspace initialization changes the query key and can fetch twice.
+    // Both initial requests must succeed before testing a failed refresh.
+    await page.waitForLoadState('networkidle');
     const card = page.getByTestId('away-digest');
     await expect(card.getByText('Delete branch')).toBeVisible();
-    // Force a refetch (window focus triggers react-query's refetchOnWindowFocus).
-    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
-    await page.waitForTimeout(500);
+    failPoll = true;
+    const failedRefresh = page.waitForResponse(response => response.url().includes('/api/digest/away') && response.status() === 500);
+    // Window-focus refetches are disabled globally; run the actual 60s poll.
+    await page.clock.fastForward(60_000);
+    await (await failedRefresh).finished();
+    await page.waitForLoadState('networkidle');
     await expect(card.getByText('Delete branch')).toBeVisible();
   });
 });
