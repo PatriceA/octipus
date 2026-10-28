@@ -973,7 +973,8 @@ export class PipelineManager {
     if (requestedProfile) {
       const session = await sessionRepository.findById(sessionId);
       if (!session) throw new Error('Pipeline session not found');
-      const fs = WorkspaceFS.forSession(session, { space: context.space ?? null });
+      // Stage shells accept the server-configured additional repositories too.
+      const fs = WorkspaceFS.forSession(session, { space: context.space ?? null }, { extraAllowedPrefixes: getConfig().workspace.additionalPaths });
       for (const repo of [requestedProfile.repoPath, ...requestedProfile.repoPaths]) fs.resolve(repo);
     }
     const originPlan = (await sessionRepository.findById(sessionId))?.metadata?.workPlan;

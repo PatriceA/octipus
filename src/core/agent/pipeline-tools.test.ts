@@ -245,17 +245,48 @@ it('pages newest history first and offers a cursor to older approval events', as
   expect(await tool('get_pipeline_status').execute({ id: 'pipeline', historyBeforeSeq: 6 }, context)).toMatchObject({ history: [expect.objectContaining({ event: 'approval', seq: 1 }), ...Array.from({ length: 4 }, (_, i) => expect.objectContaining({ seq: i + 2 }))] });
 });
 
-it('accepts an accessible target repository outside the workspace root after asking for approval (#54)', async () => {
-  const { WorkspaceFS } = await import('@/security/workspace-fs');
+it.each(['repoPath', 'repoPaths'])('accepts a configured external repo in %s using the real filesystem resolver (#54)', async field => {
+  const { mkdtempSync, mkdirSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { getConfig } = await import('@/config');
   const { sessionRepository } = await import('@/db/repositories/session-repository');
-  const checkPath = vi.fn((path: string) => path);
-  const fs = vi.spyOn(WorkspaceFS, 'forSession').mockReturnValue({ root: '/workspace/octipus', resolve: checkPath } as never);
-  const session = vi.spyOn(sessionRepository, 'findById').mockResolvedValue({ id: 'session', userId: 'owner' } as never);
+  const root = mkdtempSync(join(tmpdir(), 'octi-profile-scope-'));
+  const workspace = join(root, 'octipus'); const external = join(root, 'moco-rebuild');
+  mkdirSync(workspace); mkdirSync(external);
+  const previous = getConfig().workspace.additionalPaths;
+  getConfig().workspace.additionalPaths = [external];
+  const session = vi.spyOn(sessionRepository, 'findById').mockResolvedValue({ id: 'session', userId: 'owner', context: { devMode: true, projectPath: workspace } } as never);
   fixture.ask.mockResolvedValue({ approved: false });
   try {
-    expect(await tool('resume_pipeline').execute({ id: 'pipeline', permissionProfile: { repoPath: '/workspace/moco-rebuild', repoPaths: ['/workspace/shared'], commands: ['pnpm test'] } }, context)).toMatchObject({ presented: true });
-    expect(checkPath.mock.calls).toEqual([['/workspace/moco-rebuild'], ['/workspace/shared']]);
+    const profile = { repoPath: field === 'repoPath' ? external : workspace, repoPaths: field === 'repoPaths' ? [external] : [], commands: ['pnpm test'] };
+    expect(await tool('resume_pipeline').execute({ id: 'pipeline', permissionProfile: profile }, context)).toMatchObject({ presented: true });
     expect(fixture.ask).toHaveBeenCalled();
     expect(fixture.resume).not.toHaveBeenCalled();
-  } finally { fs.mockRestore(); session.mockRestore(); }
+  } finally { session.mockRestore(); getConfig().workspace.additionalPaths = previous; rmSync(root, { recursive: true, force: true }); }
+});
+
+it.each(['unconfigured', 'space'])('rejects an external profile repo when %s access forbids it (#54)', async scope => {
+  const { mkdtempSync, mkdirSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { randomUUID } = await import('node:crypto');
+  const { getConfig } = await import('@/config');
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const { noteSharedWorkspace, forgetWorkspaceRow } = await import('@/security/workspace-fs');
+  const root = mkdtempSync(join(tmpdir(), 'octi-profile-denied-'));
+  const workspace = join(root, 'octipus'); const external = join(root, 'moco-rebuild');
+  mkdirSync(workspace); mkdirSync(external);
+  const previous = getConfig().workspace.additionalPaths;
+  getConfig().workspace.additionalPaths = scope === 'space' ? [external] : [];
+  const workspaceId = scope === 'space' ? randomUUID() : 'workspace';
+  if (scope === 'space') noteSharedWorkspace(workspaceId);
+  const session = vi.spyOn(sessionRepository, 'findById').mockResolvedValue({ id: 'session', userId: 'owner', workspaceId, context: { devMode: true, projectPath: workspace } } as never);
+  const scoped = { ...context, workspaceId, ...(scope === 'space' ? { space: { workspaceId, role: 'owner' } } : {}) } as AgentContext;
+  fixture.find.mockResolvedValue({ id: 'pipeline', userId: 'owner', sessionId: 'session', workspaceId, status: 'failed' });
+  try {
+    await expect(tool('resume_pipeline').execute({ id: 'pipeline', permissionProfile: { repoPath: external, commands: ['pnpm test'] } }, scoped)).rejects.toThrow(/outside workspace/);
+    expect(fixture.ask).not.toHaveBeenCalled();
+    expect(fixture.resume).not.toHaveBeenCalled();
+  } finally { session.mockRestore(); forgetWorkspaceRow(workspaceId); getConfig().workspace.additionalPaths = previous; rmSync(root, { recursive: true, force: true }); }
 });

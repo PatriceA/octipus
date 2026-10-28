@@ -19,7 +19,7 @@
  * left behind.
  */
 import { randomBytes } from 'node:crypto';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -1436,4 +1436,23 @@ test('uncertain execution parks for named recovery before a zero-artifact contra
   expect(pipeline?.summary).not.toContain('ran 0 commands');
   expect(calls.filter(call => call.stageName === 'Implement')).toHaveLength(1);
   expect(calls.some(call => call.stageName === 'QA')).toBe(false);
+});
+
+test.each(['repoPath', 'repoPaths'])('creating a run accepts configured external repositories in %s (#54)', async field => {
+  const { getConfig } = await import('@/config');
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const root = mkdtempSync(join(tmpdir(), 'octi-create-profile-'));
+  const workspace = join(root, 'octipus'); const external = join(root, 'moco-rebuild');
+  mkdirSync(workspace); mkdirSync(external);
+  const previous = getConfig().workspace.additionalPaths;
+  getConfig().workspace.additionalPaths = [external];
+  const original = (await sessionRepository.findById(sessionId))!;
+  const session = vi.spyOn(sessionRepository, 'findById').mockResolvedValue({ ...original, context: { devMode: true, projectPath: workspace } });
+  try {
+    const profile = { repoPath: field === 'repoPath' ? external : workspace, repoPaths: field === 'repoPaths' ? [external] : [], commands: ['pnpm test'] };
+    await manager.createAndRun('root', sessionId, userId, 'external profile', 'loop-fixture', 'deliver both items',
+      { userId, sessionId, attended: true, role: 'general' } as AgentContext, { permissionProfile: profile });
+    expect(approvalsAsked).toBe(1);
+    expect(calls).toHaveLength(0);
+  } finally { session.mockRestore(); getConfig().workspace.additionalPaths = previous; rmSync(root, { recursive: true, force: true }); }
 });

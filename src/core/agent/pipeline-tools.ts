@@ -238,7 +238,8 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
         if (profile) {
           const session = await sessionRepository.findById(pipeline.sessionId);
           if (!session) throw new Error('Pipeline session not found');
-          const fs = WorkspaceFS.forSession(session, { space: context.space ?? null });
+          // Stage shells accept the server-configured additional repositories too.
+          const fs = WorkspaceFS.forSession(session, { space: context.space ?? null }, { extraAllowedPrefixes: getConfig().workspace.additionalPaths });
           for (const repo of [profile.repoPath, ...profile.repoPaths]) fs.resolve(repo);
         }
         if (typeof budget !== 'number' || !Number.isSafeInteger(budget) || budget <= spent || budget <= 0) throw new Error('tokenBudget must be a positive integer greater than recorded spend');
