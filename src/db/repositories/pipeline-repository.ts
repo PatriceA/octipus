@@ -109,6 +109,7 @@ export class PipelineRepository {
   }
 
   async dueDeferred(now: Date): Promise<Pipeline[]> {
+    // i2: server-only wake sweep, never returned to a caller; resume rechecks each owner's session and space membership before dispatch.
     return this.db.select().from(pipelines).where(and(eq(pipelines.status, 'paused'),
       sql`${pipelines.metadata}->>'resumeAfter' IS NOT NULL`,
       sql`${pipelines.metadata}->>'resumeAfter' <= ${now.toISOString()}`,
