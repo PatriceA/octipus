@@ -1,3 +1,5 @@
+import { ToolNotExecutedError } from '@/core/tool-execution-error';
+import { redactedCommand } from '@/utils/command-log';
 import { rememberRunDecision } from '@/security/pipeline-permissions';
 import { actionRecovery, isReadOnlyAction } from '@/core/action-recovery';
 import { assertExecutionActive, getExecutionSignal } from '@/core/execution-scope';
@@ -296,6 +298,10 @@ export abstract class BaseTool {
           { toolId: this.id, tool: toolName, reason: (error as Error).message },
           'Tool execution cancelled'
         );
+      } else if (error instanceof ToolNotExecutedError) {
+        execStatus = 'error';
+        toolLogger.warn({ toolId: this.id, tool: toolName, reason: redactedCommand(error.message),
+          ...(typeof args.command === 'string' ? { command: redactedCommand(args.command) } : {}) }, 'Tool refused before execution');
       } else {
         execStatus = 'error';
         toolLogger.error({ err: error, toolId: this.id, tool: toolName }, 'Tool execution failed');

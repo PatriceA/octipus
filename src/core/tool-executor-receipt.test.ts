@@ -167,3 +167,27 @@ test('an executed shell call with an uncertain outcome counts as run and carries
   await exec.handleToolCalls([{ id: 'uncertain', name: 'shell__run', arguments: {} }]);
   expect(exec.getSideEffectCounters()).toMatchObject({ commandsRun: 1, uncertainActionIds: ['record1'], toolErrors: 1 });
 });
+
+
+test('policy refusal carries its rule and logs the redacted command, without execution evidence (#71)', async () => {
+  const { ToolPolicyRefusalError } = await import('./tool-execution-error');
+  const { agentLogger } = await import('@/utils/logger');
+  const warn = vi.spyOn(agentLogger, 'warn').mockImplementation(() => {});
+  const exec = freshExecutor(tool('shell__run', async () => { throw new ToolPolicyRefusalError('shell', 'Blocked command detected: shutdown'); }));
+  try {
+    await exec.handleToolCalls([{ id: 'refused', name: 'shell__run', arguments: { command: 'TOKEN=private-value shutdown -h now' } }]);
+    const counters = exec.getSideEffectCounters();
+    expect(counters).toMatchObject({ policyRefusals: ['Blocked command detected: shutdown'], commandsRun: 0, toolErrors: 1 });
+    expect(warn).toHaveBeenCalledWith(expect.objectContaining({ command: 'TOKEN=[REDACTED] shutdown -h now' }), 'Tool refused before execution');
+    counters.policyRefusals!.push('tampering');
+    expect(exec.getSideEffectCounters().policyRefusals).toHaveLength(1);
+  } finally { warn.mockRestore(); }
+});
+
+test('a no-match search counts as an executed command without a tool error (#73)', async () => {
+  const { interpretExit } = await import('@/tools/shell/exit-code-semantics');
+  const exec = freshExecutor(tool('shell__run', async () => ({ exitCode: 1, stdout: '', stderr: '', ...interpretExit("git grep -l -E 'secret|password'", 1, '') })));
+  const messages = await exec.handleToolCalls([{ id: 'search', name: 'shell__run', arguments: {} }]);
+  expect(exec.getSideEffectCounters()).toMatchObject({ commandsRun: 1, toolErrors: 0 });
+  expect(messages[0].content).toContain('no_match');
+});

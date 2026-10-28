@@ -397,14 +397,9 @@ describe('tier 2 — short words, matched at any token start', () => {
     expect(commandPolicyViolation(command)).toBeNull();
   });
 
-  it('refuses a script NAMED after an entry — the accepted cost', () => {
-    // `npm run halt` puts `halt` at a token start, so it is refused. That is
-    // the price of not needing a complete wrapper list, it is what the
-    // substring rule on main did too, and the alternative let `strace nc` and
-    // `flock … nc` through. Recorded so the trade-off is a decision rather
-    // than a surprise.
-    expect(commandPolicyViolation('timeout 60 npm run halt')).toMatch(/Blocked command detected/);
-    expect(commandPolicyViolation('npm run reboot')).toMatch(/Blocked command detected/);
+  it('permits process-control words used as script names (#71)', () => {
+    expect(commandPolicyViolation('timeout 60 npm run halt')).toBeNull();
+    expect(commandPolicyViolation('npm run reboot')).toBeNull();
   });
 });
 
@@ -539,13 +534,8 @@ describe('a wrapper’s flags belong to the wrapper', () => {
     expect(commandPolicyViolation(command)).toMatch(/Blocked command detected/);
   });
 
-  it('and a flag VALUE spelling an entry is refused — the accepted cost', () => {
-    // There is no "a token after a bare flag is that flag's value" rule any
-    // more. To be safe it has to know which head is a wrapper, and that list
-    // can never be complete — `firejail --quiet nc …` and `systemd-run --quiet
-    // nc …` walked through it. So `--grep shutdown` is refused, exactly as the
-    // substring rule on main refused it, and the bypass stays shut.
-    expect(commandPolicyViolation('npm test -- --grep shutdown')).toMatch(/Blocked command detected/);
+  it('permits a process-control word used as a test-pattern flag value (#71)', () => {
+    expect(commandPolicyViolation('npm test -- --grep shutdown')).toBeNull();
   });
 });
 
@@ -822,5 +812,43 @@ describe('Windows command names', () => {
     'python -c "print(\'{}\'.format(1))"',
   ])('%s is not', (cmd) => {
     expect(matchDestructiveCommand(cmd)).toBeNull();
+  });
+});
+
+
+describe('argument data is not a command position (#71, #72)', () => {
+  it.each([
+    "go test -run shutdown ./...",
+    "go test -run 'TestGracefulShutdown|shutdown|reboot|halt' ./...",
+    "rg -n 'MkdirAll|store.Open|chmod|USER|VOLUME' cmd/yakpo/main.go Dockerfile",
+    "grep 'shutdown; reboot | halt' README.md",
+    "git grep -E 'sudo|chmod|shutdown'",
+    'node probe.js --name shutdown',
+    "echo 'shutdown'",
+    `sh -c 'rg "chmod|sudo" README.md'`,
+    'env X=shutdown timeout 10 go test -run shutdown ./...',
+    `env X=1 rg -s 'sudo|shutdown' README.md`,
+    `bash scripts/test.sh -c shutdown`,
+    `sh -c 'echo /bin/chmod'`,
+    `env -i sh -lc 'rg "/bin/sudo|/sbin/shutdown" README.md'`,
+  ])('permits literal arguments in %s', command => {
+    expect(commandPolicyViolation(command)).toBeNull();
+    expect(matchElevatedCommand(command)).toBeNull();
+  });
+  it.each([
+    "'shutdown' -h now", '/usr/sbin/shutdown -h now', 'true && reboot',
+    'echo "$(shutdown -h now)"', 'echo `halt`', "sh -lc 'echo ok; reboot'",
+    'env -i timeout 5 /sbin/poweroff', 'if true; then reboot; fi',
+    '{ halt; }', 'runner --quiet shutdown -h now',
+  ])('still refuses actual process-control invocation %s', command => {
+    expect(commandPolicyViolation(command)).toMatch(/Blocked command detected/);
+  });
+  it.each([
+    ['echo "$(chmod 600 file)"', 'chmod'],
+    ["sh -lc 'echo ok; chmod 600 file'", 'chmod'],
+    [`env -i sh -c 'rg "chmod|USER" Dockerfile; sudo id'`, 'sudo'],
+    ['echo ok | chmod 600 file', 'chmod'],
+  ])('still detects actual elevated invocation %s', (command, expected) => {
+    expect(matchElevatedCommand(command)).toBe(expected);
   });
 });

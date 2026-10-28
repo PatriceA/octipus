@@ -59,6 +59,7 @@ let approvalAnswer: { approved: boolean; response?: string; reason?: string } = 
 let tokenCharges: Record<string, number> = {};
 let commandCounts: number[] = [];
 let uncertainByStage: Record<string, string[]> = {};
+let policyByStage: Record<string, string[]> = {};
 let stopAtStage: string | undefined;
 /** Stage name → per-call plan: a string (or one built from the call) makes that call throw it, undefined runs normally. */
 let throwPlan: Record<string, Array<string | ((call: WorkerCall) => string) | undefined>> = {};
@@ -191,7 +192,7 @@ beforeAll(async () => {
     if (progress) options?.onPartialOutput?.(progress);
     const thrown = throwPlan[stageName]?.shift();
     if (thrown) throw new Error(typeof thrown === 'function' ? thrown(call) : thrown);
-    options?.onCounters?.({ ...(uncertainByStage[stageName] ? { uncertainActionIds: uncertainByStage[stageName] } : {}), filesChanged: 0, commandsRun: stageName === 'QA' ? commandCounts.shift() ?? 1 : 1, toolCalls: 1, toolErrors: 0, approvalsRequired: 0, approvalsDenied: 0, autoApproved: 0, permissionDenials: 0, byName: {} });
+    options?.onCounters?.({ ...(policyByStage[stageName] ? { policyRefusals: policyByStage[stageName] } : {}), ...(uncertainByStage[stageName] ? { uncertainActionIds: uncertainByStage[stageName] } : {}), filesChanged: 0, commandsRun: stageName === 'QA' ? commandCounts.shift() ?? 1 : 1, toolCalls: 1, toolErrors: 0, approvalsRequired: 0, approvalsDenied: 0, autoApproved: 0, permissionDenials: 0, byName: {} });
 
     if (stageName === 'Plan') {
       const pipelineId = (context.metadata as { pipelineId?: string })?.pipelineId;
@@ -221,6 +222,7 @@ afterAll(async () => {
 beforeEach(() => {
   calls = [];
   uncertainByStage = {};
+  policyByStage = {};
   replies = {};
   approvalsAsked = 0;
   tokenCharges = {};
@@ -1455,4 +1457,17 @@ test.each(['repoPath', 'repoPaths'])('creating a run accepts configured external
     expect(approvalsAsked).toBe(1);
     expect(calls).toHaveLength(0);
   } finally { session.mockRestore(); getConfig().workspace.additionalPaths = previous; rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test('a stage stopped by content policy gets a policy retry reason, never probe blame (#71)', async () => {
+  policyByStage = { QA: ['Blocked command detected: shutdown'] };
+  replies = { QA: ['Stopped\n```handoff\n{"stopped":true}\n```', QA_PASS] };
+  commandCounts = [0, 1, 1];
+  await run('verify graceful shutdown');
+  const qa = calls.filter(call => call.stageName === 'QA');
+  expect(qa.length).toBeGreaterThanOrEqual(2);
+  expect(qa[1].input).toContain('blocked by Octipus policy: Blocked command detected: shutdown');
+  expect(qa[1].input).not.toContain('A failed probe of your own');
+  expect(qa[1].input).not.toContain('ran 0 commands');
 });

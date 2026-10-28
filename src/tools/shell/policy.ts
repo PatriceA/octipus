@@ -1,3 +1,4 @@
+import { shellCommandSegments } from './command-positions';
 import { withoutOwnedTempCleanup } from './owned-temp-cleanup';
 /**
  * What a command is allowed to be, independent of who is running it.
@@ -163,10 +164,9 @@ const INJECTION_PATTERNS = [
  * pipe / `;` / `&&` separator, else null.
  */
 export function matchElevatedCommand(command: string): string | null {
-  for (const candidate of [command.trim().toLowerCase(), ...dequotedForms(command)]) {
-    for (const elevated of ELEVATED_COMMANDS) {
-      if (headOfSegmentIs(candidate, elevated)) return elevated;
-    }
+  const candidates = positionCandidates(command);
+  for (const elevated of ELEVATED_COMMANDS) {
+    if (headOfSegmentIs(command, elevated, candidates)) return elevated;
   }
   return null;
 }
@@ -371,28 +371,26 @@ const UNBOUNDED_GLOB = /(^|\/)\.?\*$/;
  * block a command; it routes one to the DENY-by-default `execute_elevated`
  * permission, so a false positive refuses ordinary work — an npm script called
  * `kill` or `service` is not the binary, and `timeout 5 npm run kill` was not
- * elevated before this branch either. The denylist takes the opposite bias
- * because the mistake it guards against is worse.
+ * elevated before this branch either. Process-control names use this same
+ * position check; reverse-shell tool names retain their conservative scan.
  */
-function headOfSegmentIs(text: string, name: string): boolean {
+function headOfSegmentIs(text: string, name: string, candidates = positionCandidates(text)): boolean {
   const b = name.toLowerCase().trim();
   if (!b) return false;
-  for (const segment of text.split(/&&|\|\||[;&|\n()`]/)) {
-    for (const candidate of commandCandidates(segment)) {
-      if (!candidate.startsWith(b)) continue;
-      const next = candidate[b.length];
-      // A dot continues the name — `kill.sh` and `service.sh` are project
-      // scripts, not the binaries they are named after.
-      if (next === undefined || /[\s/~]/.test(next)) return true;
-      // A dash continues a TOOL's name (`docker-compose`, `iptables-restore`,
-      // which the old `\b` matcher caught) but also a SCRIPT's
-      // (`kill-stale.sh`, `service-check.sh`). The file extension is what tells
-      // them apart: a dashed name ending in one is a script in the repo, not a
-      // privileged binary, and refusing it would deny ordinary work.
-      if (next === '-') {
-        const remainder = candidate.slice(b.length).split(/\s/)[0];
-        if (!looksLikeFilename(remainder.slice(remainder.lastIndexOf('.') + 1))) return true;
-      }
+  for (const candidate of candidates) {
+    if (!candidate.startsWith(b)) continue;
+    const next = candidate[b.length];
+    // A dot continues the name — `kill.sh` and `service.sh` are project
+    // scripts, not the binaries they are named after.
+    if (next === undefined || /[\s/~]/.test(next)) return true;
+    // A dash continues a TOOL's name (`docker-compose`, `iptables-restore`,
+    // which the old `\b` matcher caught) but also a SCRIPT's
+    // (`kill-stale.sh`, `service-check.sh`). The file extension is what tells
+    // them apart: a dashed name ending in one is a script in the repo, not a
+    // privileged binary, and refusing it would deny ordinary work.
+    if (next === '-') {
+      const remainder = candidate.slice(b.length).split(/\s/)[0];
+      if (!looksLikeFilename(remainder.slice(remainder.lastIndexOf('.') + 1))) return true;
     }
   }
   return false;
@@ -432,6 +430,8 @@ const COMMAND_WRAPPERS = new Set([
   // list cannot be complete — which is why the DENYLIST does not depend on it —
   // but each name here is one the elevation check would otherwise miss.
   'flock', 'strace', 'ltrace', 'proxychains', 'proxychains4', 'runuser', 'command', 'busybox',
+  'firejail', 'systemd-run', 'runner',
+  'if', 'then', 'else', 'do', 'while', 'until', '!', '{',
 ]);
 
 /** A token that is a flag (`-c`, `--signal=KILL`), not the command. */
@@ -603,14 +603,11 @@ export const basename = (token: string): string =>
  * candidate, because peeling an assignment and a wrapper together skips the
  * command in between: `env A=1 sudo npm i` would go straight to `npm i`.
  */
-function commandCandidates(segment: string): string[] {
-  let rest = segment.trim().split(/\s+/).filter(Boolean);
+function candidateArgv(segment: string | string[]): string[][] {
+  let rest = typeof segment === 'string' ? segment.trim().split(/\s+/).filter(Boolean) : segment;
   if (rest.length === 0) return [];
 
-  const normalize = (list: string[]): string =>
-    list.length === 0 ? '' : [basename(list[0]), ...list.slice(1)].join(' ');
-
-  const candidates = [normalize(rest)];
+  const candidates = [rest];
   for (let depth = 0; depth < MAX_PEEL_DEPTH; depth++) {
     const before = rest;
 
@@ -618,7 +615,7 @@ function commandCandidates(segment: string): string[] {
     while (i < rest.length && /^[a-z_][a-z0-9_]*=/i.test(rest[i])) i++;
     if (i > 0) {
       rest = rest.slice(i);
-      if (rest.length > 0) candidates.push(normalize(rest));
+      if (rest.length > 0) candidates.push(rest);
     }
 
     if (rest.length > 0 && COMMAND_WRAPPERS.has(basename(rest[0]))) {
@@ -643,7 +640,7 @@ function commandCandidates(segment: string): string[] {
         // `env -u FOO sudo …`, `strace -o out.txt sudo …` and
         // `timeout --signal KILL 5 sudo …` stopped at the value instead.
         const prev = rest[j - 1];
-        const isOptionValue = j > 1 && !!prev && (VALUE_TAKING_FLAGS[basename(rest[0])]?.has(prev) ?? false);
+        const isOptionValue = j > 1 && !!prev && (VALUE_TAKING_FLAGS[basename(rest[0])]?.has(prev.toLowerCase()) ?? false);
         // Stop the moment a token names a command: `timeout 5 /usr/bin/sudo x`
         // has a path-shaped argument that IS the payload, and consuming it
         // dropped the whole invocation to the ASK-level permission. An option's
@@ -664,12 +661,58 @@ function commandCandidates(segment: string): string[] {
         j++;
       }
       rest = inlineCommand ?? rest.slice(j);
-      if (rest.length > 0) candidates.push(normalize(rest));
+      if (rest.length > 0) candidates.push(rest);
     }
 
     if (rest === before) break;
   }
-  return candidates.filter(Boolean);
+  return candidates.filter(argv => argv.length > 0);
+}
+
+function commandCandidates(segment: string): string[] {
+  return candidateArgv(segment).map(argv => [basename(argv[0]), ...argv.slice(1)].join(' '));
+}
+
+/** Only these wrapper options treat an argument as executable source. */
+function commandStringPayloads(candidate: string[]): string[] {
+  const head = basename(candidate[0]);
+  if (head === 'eval') return [candidate.slice(1).join(' ')];
+  const shell = ['sh', 'bash', 'zsh', 'ksh', 'dash', 'ash', 'fish'].includes(head);
+  if (!shell && !COMMAND_STRING_FLAGS[head]) return [];
+  for (let i = 1; i < candidate.length; i++) {
+    const token = candidate[i];
+    if (token === '--') break;
+    const [name, ...value] = token.split('=');
+    const stringFlag = COMMAND_STRING_FLAGS[head]?.has(name.toLowerCase()) || shell && /^-[a-z]*c[a-z]*$/i.test(name);
+    if (stringFlag) return [value.length ? value.join('=') : candidate[i + 1] ?? ''];
+    if (shell && ['-o', '-O', '--rcfile', '--init-file'].includes(token)
+      || VALUE_TAKING_FLAGS[head]?.has(token.toLowerCase())) { i++; continue; }
+    if (head === 'env' && /^[a-z_][a-z0-9_]*=/i.test(token)) continue;
+    // A shell script / env payload ends the launcher's options. Its -c or -s
+    // argument belongs to that program, not to the launcher. su/script accept
+    // options after their username/logfile positional, so keep inspecting them.
+    if ((shell || head === 'env') && !token.startsWith('-')) break;
+  }
+  return [];
+}
+
+/** Actual heads after transparent launchers; quoted data remains one argument. */
+function positionCandidates(command: string, depth = 0): string[] {
+  if (depth > MAX_PEEL_DEPTH) return command.split(/&&|\|\||[;&|\n()`]/).flatMap(commandCandidates);
+  const segments = shellCommandSegments(command);
+  if (!segments) return command.split(/&&|\|\||[;&|\n()`]/).flatMap(commandCandidates);
+  const result: string[] = [];
+  for (const argv of segments) {
+    const candidates = candidateArgv(argv);
+    const payloads = candidates.flatMap(commandStringPayloads).filter(Boolean);
+    for (const candidate of candidates) {
+      // A shell's source is parsed recursively, never compared as a program
+      // path: basename('echo /bin/chmod') would invent a chmod invocation.
+      if (!payloads.includes(candidate[0])) result.push([basename(candidate[0]), ...candidate.slice(1)].join(' ').toLowerCase());
+    }
+    for (const payload of payloads) result.push(...positionCandidates(payload, depth + 1));
+  }
+  return result;
 }
 
 /**
@@ -779,9 +822,16 @@ export function commandPolicyViolation(command: string): string | null {
   // collapsing them would let a second line read as arguments to the first.
   const forms = [raw.toLowerCase().replace(/[^\S\n]+/g, ' '), ...dequotedForms(command)];
 
+  const processCommands = new Set(['shutdown', 'reboot', 'halt', 'poweroff']);
+  const positions = positionCandidates(command);
+  const malformed = shellCommandSegments(command) === null;
+  for (const blocked of processCommands) {
+    if (malformed ? invokesCommand(command, blocked) : headOfSegmentIs(command, blocked, positions)) return `Blocked command detected: ${blocked}`;
+  }
   for (const form of forms) {
     const squeezed = form.replace(/\s+/g, '');
     for (const blocked of BLOCKED_COMMANDS) {
+      if (processCommands.has(blocked)) continue;
       const b = blocked.toLowerCase();
       const hit = MATCH_ANYWHERE.has(blocked)
         ? form.includes(b.trim()) ||

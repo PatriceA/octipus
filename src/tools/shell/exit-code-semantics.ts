@@ -1,3 +1,5 @@
+import { shellCommandSegments } from './command-positions';
+
 /**
  * Contextualize shell exit codes. Many tools exit non-zero for normal
  * conditions (grep=1 "no matches", diff=1 "files differ", test=1 "false").
@@ -26,24 +28,32 @@ const SIMPLE: Record<string, CodeMap> = {
 };
 
 const GIT_SUBCOMMAND: Record<string, CodeMap> = {
+  'grep': { 1: 'no_match', 2: 'error' },
   'diff': { 1: 'has_changes' },
   'diff-index': { 1: 'has_changes' },
   'diff-tree': { 1: 'has_changes' },
 };
 
 function headCommand(cmd: string): { bin: string; arg1?: string; flags: string[] } {
-  const trimmed = cmd.trim();
-  if (!trimmed) return { bin: '', flags: [] };
-  const firstSegment = trimmed.split(/[|;&]/)[0]!.trim();
-  const parts = firstSegment.split(/\s+/);
-  const bin = (parts[0] ?? '').replace(/.*\//, '');
-  const rest = parts.slice(1);
+  const segments = shellCommandSegments(cmd);
+  if (!segments || segments.length !== 1) return { bin: '', flags: [] };
+  const parts = segments[0];
+  const bin = (parts[0] ?? '').replace(/.*[/\\]/, '');
+  let rest = parts.slice(1);
+  if (bin === 'git') {
+    const valueFlags = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--super-prefix']);
+    while (rest.length && rest[0].startsWith('-')) {
+      const option = rest[0];
+      rest = rest.slice(valueFlags.has(option) ? 2 : 1);
+      if (option === '--') break;
+    }
+  }
   const arg1 = rest.find(p => !p.startsWith('-'));
   const flags = rest.filter(p => p.startsWith('-'));
   return { bin, arg1, flags };
 }
 
-export function interpretExit(command: string, exitCode: number): ExitInterpretation {
+export function interpretExit(command: string, exitCode: number, stderr = ''): ExitInterpretation {
   if (exitCode === 0) return { outcome: 'ok' };
 
   const { bin, arg1, flags } = headCommand(command);
@@ -57,14 +67,18 @@ export function interpretExit(command: string, exitCode: number): ExitInterpreta
       if (sub === 'diff' && !flags.includes('--exit-code') && exitCode === 1) {
         return { outcome: 'error' };
       }
-      return { outcome: 'expected_nonzero', semantic: map[exitCode] };
+      const semantic = map[exitCode];
+      return semantic === 'error' || semantic === 'no_match' && !!stderr.trim()
+        ? { outcome: 'error', semantic: 'error' } : { outcome: 'expected_nonzero', semantic };
     }
     return { outcome: 'error' };
   }
 
   const map = SIMPLE[bin];
   if (map && map[exitCode]) {
-    return { outcome: 'expected_nonzero', semantic: map[exitCode] };
+    const semantic = map[exitCode];
+    return semantic === 'error' || semantic === 'no_match' && !!stderr.trim()
+        ? { outcome: 'error', semantic: 'error' } : { outcome: 'expected_nonzero', semantic };
   }
 
   return { outcome: 'error' };

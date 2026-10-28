@@ -3167,6 +3167,10 @@ export class PipelineManager {
           declared: declared.producesArtifacts ? { ...declared, producesArtifacts: false, runsCommands: true } : declared,
           input: `${input}\n\nRECORDED USER DECISION: ${JSON.stringify(decision)}\nUse this decision for the required work. Verification-only work is valid for this approved decision: do not manufacture file changes. Run the previously blocked required gate once and report evidence; do not relax acceptance criteria.`, startReason: 'user_decision' });
       }
+      const policyRefusals = (counters as SideEffectCounters | null)?.policyRefusals;
+      if ((handoff?.stopped || handoff?.environmentBlocked) && policyRefusals?.length) {
+        throw new StageContractError(`Stage "${node.name}" stopped: blocked by Octipus policy: ${policyRefusals.join('; ')}. The refused command was not executed. Choose a permitted way to complete the required checks; never bypass the policy.`);
+      }
       const environment = handoff?.environmentBlocked || ((handoff?.stopped || verdict?.passed === false)
         ? stageEnvironmentReason(verdict ? [...verdict.issues, verdict.feedback].join('\n') : String(result)) : undefined);
       if (environment) throw new StageEnvironmentError(environment);

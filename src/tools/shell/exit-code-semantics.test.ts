@@ -60,7 +60,24 @@ describe('interpretExit', () => {
     expect(interpretExit('', 1).outcome).toBe('error');
   });
 
-  test('piped command uses first segment', () => {
-    expect(interpretExit('grep foo x.txt | head', 1).semantic).toBe('no_match');
+  test('a compound exit is not attributed to an earlier search', () => {
+    expect(interpretExit('grep foo x.txt | head', 1).outcome).toBe('error');
   });
+});
+
+
+test.each([
+  "git grep -l -I -E '(BEGIN PRIVATE KEY|AKIA[0-9]+|gh[pousr]_)'",
+  "git -C '/repo with space' grep -q secret",
+  "git -c color.ui=false grep -q secret",
+  "rg -n 'chmod|shutdown|USER|VOLUME' Dockerfile",
+  '/usr/bin/grep -q secret file',
+])('search exit 1 with empty stderr means no matches: %s (#73)', command => {
+  expect(interpretExit(command, 1, '')).toEqual({ outcome: 'expected_nonzero', semantic: 'no_match' });
+  expect(interpretExit(command, 1, 'permission denied').outcome).toBe('error');
+  expect(interpretExit(command, 2, '').outcome).toBe('error');
+});
+
+test.each(['git grep x; false', 'rg x && false', 'grep x | failing-filter', 'echo "$(rg x)"'])('does not hide a compound-command failure: %s', command => {
+  expect(interpretExit(command, 1).outcome).toBe('error');
 });

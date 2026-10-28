@@ -1,4 +1,5 @@
-import { uncertainExecutionRecord } from './tool-execution-error';
+import { redactedCommand } from '@/utils/command-log';
+import { ToolNotExecutedError, ToolPolicyRefusalError, uncertainExecutionRecord } from './tool-execution-error';
 import { actionRecovery, isReadOnlyAction } from './action-recovery';
 import { withExecutionSignal } from './execution-scope';
 import { isToolOn, toolOffMessage } from '@/core/modules/registry';
@@ -268,6 +269,14 @@ export class ToolExecutor {
     this._toolsDisabled = true;
   }
 
+  private recordPreflightRefusal(error: unknown, toolCall: ToolCall): void {
+    if (error instanceof ToolPolicyRefusalError) this.counters.policyRefusals = [...new Set([...(this.counters.policyRefusals ?? []), error.rule])];
+    if (error instanceof ToolNotExecutedError) {
+      agentLogger.warn({ agentId: this.context.id, sessionId: this.context.sessionId, tool: toolCall.name, reason: redactedCommand(error.message),
+        ...(typeof toolCall.arguments.command === 'string' ? { command: redactedCommand(toolCall.arguments.command) } : {}) }, 'Tool refused before execution');
+    }
+  }
+
   /**
    * Snapshot of the deterministic side-effect counters accumulated so far.
    * `toolCalls`/`filesChanged`/`commandsRun` are DERIVED from `byName` here
@@ -285,7 +294,7 @@ export class ToolExecutor {
       if (FILE_CHANGE_TOOLS.has(name)) filesChanged += n;
       if (COMMAND_TOOLS.has(name)) commandsRun += n;
     }
-    return { ...this.counters, toolCalls, filesChanged, commandsRun, byName };
+    return { ...this.counters, ...(this.counters.policyRefusals ? { policyRefusals: [...this.counters.policyRefusals] } : {}), toolCalls, filesChanged, commandsRun, byName };
   }
 
   /**
@@ -710,6 +719,7 @@ export class ToolExecutor {
             }
           }
         } catch (error) {
+          this.recordPreflightRefusal(error, toolCall);
           const uncertainRecord = uncertainExecutionRecord(error);
           if (uncertainRecord) {
             this.recordExecuted(toolCall.name);
@@ -1045,6 +1055,7 @@ export class ToolExecutor {
           }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in tool-executor'));
         } catch { /* hooks not ready */ }
       } catch (error) {
+        this.recordPreflightRefusal(error, toolCall);
         const uncertainRecord = uncertainExecutionRecord(error);
         if (uncertainRecord) {
           this.recordExecuted(toolCall.name);
@@ -1059,7 +1070,7 @@ export class ToolExecutor {
             { agentId: this.context.id, tool: toolCall.name, reason: (error as Error).message },
             'Tool execution cancelled'
           );
-        } else {
+        } else if (!(error instanceof ToolNotExecutedError)) {
           agentLogger.error(
             { err: error, agentId: this.context.id, tool: toolCall.name },
             'Tool execution failed'

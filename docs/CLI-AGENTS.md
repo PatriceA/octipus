@@ -867,3 +867,25 @@ and `historyBeforeSeq` with `historyNextBeforeSeq` to page older events; use
 `itemOffset`/`itemLimit` for large plans. Oversized evidence is compacted inside
 the JSON object, with `outputCompacted: true`, before reaching the bridge's text
 limit. Detailed history remains available through the cursors and stored events.
+
+
+### yakpo pipeline diagnostics (28 October 2026)
+
+- #70: detached pipeline handles are explicitly marked as pipelines. They cannot
+  be passed to `steer_child`, which targets one worker; refusal now names that
+  limitation and is logged at warn level. Inspect `get_pipeline_status`; stop the
+  pipeline before changing its active item through `update_pipeline_items`, keep
+  its full existing detail and acceptance requirements, and resume afterward.
+  This does not add live steering to pipelines or rewrite an item's requirements.
+- #71–#72: process-control and elevated command checks preserve quote boundaries.
+  Search patterns and test flags are data, including regex alternatives such as
+  `chmod|shutdown`. Actual command positions behind supported launchers, shell
+  command strings and active substitutions remain checked. Reverse-shell and
+  destructive-content rules retain their conservative behavior.
+- #71: preflight refusals log a credential-redacted command. Trusted content-policy
+  refusals also carry their rule through execution receipts; a stopped stage's
+  retry names Octipus policy instead of attributing the stop to its own probe.
+- #73: `grep`, `rg` and `git grep` exit 1 with empty stderr is `no_match`, logged
+  at info level and counted as an executed command without a tool error. Exit 2,
+  diagnostic stderr, killed processes and ambiguous compound-command failures
+  remain errors.

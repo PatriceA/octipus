@@ -146,3 +146,25 @@ test('a read-only recovery hint never bypasses an explicit permission denial', a
   expect(execute).not.toHaveBeenCalled();
   expect(toolActionRepository.start).not.toHaveBeenCalled();
 });
+
+
+test('a registered shell no-match logs info and contributes no tool error (#73)', async () => {
+  const { ShellTool } = await import('@/tools/shell');
+  const { toolLogger } = await import('@/utils/logger');
+  const info = vi.spyOn(toolLogger, 'info').mockImplementation(() => {});
+  const warn = vi.spyOn(toolLogger, 'warn').mockImplementation(() => {});
+  vi.spyOn(auditRepository, 'log').mockResolvedValue(undefined as never);
+  const command = "git grep -l -I -E '(BEGIN PRIVATE KEY|AKIA[0-9]+|gh[pousr]_)'";
+  const operations = { exec: vi.fn(async () => ({ exitCode: 1, stdout: '', stderr: '', killed: false })) };
+  const shell = new ShellTool(operations as never);
+  await shell.initialize();
+  const context = { ...makeContext(), userId: '33333333-3333-3333-3333-333333333333' };
+  const exec = new ToolExecutor(context, () => {});
+  exec.registerTool(shell.getTool('run')!);
+  const response = await exec.handleToolCalls([call('shell__run', { command })]);
+  expect(operations.exec).toHaveBeenCalledOnce();
+  expect(response[0].content).toContain('no_match');
+  expect(exec.getSideEffectCounters()).toMatchObject({ commandsRun: 1, toolErrors: 0 });
+  expect(info).toHaveBeenCalledWith(expect.objectContaining({ semantic: 'no_match', exitCode: 1 }), 'Shell search completed with no matches');
+  expect(warn.mock.calls.some(args => args[1] === 'Shell command failed')).toBe(false);
+});

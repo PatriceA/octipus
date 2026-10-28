@@ -101,7 +101,7 @@ export function createMetaTools(
   const trackPipeline = (id: string, completion: Promise<unknown>, taskBrief = 'Resume pipeline') => {
     const startedAt = Date.now();
     options?.swarmRefs?.detachHookRef.current?.registerPendingChild({
-      childId: id, startedAt, taskBrief, topic: 'pipeline',
+      childId: id, kind: 'pipeline', startedAt, taskBrief, topic: 'pipeline',
       promise: completion.then(async result => {
         const pipeline = await pipelineRepository.findById(id);
         // The run's report as text, control blocks removed — not the raw `{pipelineId, result}` wrapper (#7).

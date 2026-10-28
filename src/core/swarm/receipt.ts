@@ -25,6 +25,8 @@ import type { WorktreeReport } from './worktree';
 export interface SideEffectCounters {
   /** Commands/actions entered execution but did not return a definitive outcome. */
   uncertainActionIds?: string[];
+  /** Content-policy rules that refused execution; not a model-inferred reason. */
+  policyRefusals?: string[];
   /** Total executed tool calls, including uncertain attempts — derived as the sum of `byName`. */
   toolCalls: number;
   /** Successful file-mutating calls (FILE_CHANGE_TOOLS) — derived from `byName`. */
@@ -79,6 +81,7 @@ export function mergeCounters(a: SideEffectCounters, b: SideEffectCounters): Sid
     permissionDenials: a.permissionDenials + b.permissionDenials,
     toolErrors: a.toolErrors + b.toolErrors,
     byName,
+    ...((a.policyRefusals?.length || b.policyRefusals?.length) ? { policyRefusals: [...new Set([...(a.policyRefusals ?? []), ...(b.policyRefusals ?? [])])] } : {}),
     ...((a.uncertainActionIds?.length || b.uncertainActionIds?.length) ? { uncertainActionIds: [...new Set([...(a.uncertainActionIds ?? []), ...(b.uncertainActionIds ?? [])])] } : {}),
   };
 }

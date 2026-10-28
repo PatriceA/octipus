@@ -91,3 +91,22 @@ it('says a pending child whose worker has not started yet cannot be steered', as
   expect(await tool.execute({ childId: 'h1', message: 'change' }, {} as never)).toContain('not started running yet');
   expect(state.get).not.toHaveBeenCalled();
 });
+
+
+it('identifies a pipeline handle at any age and warns instead of reporting it unstarted (#70)', async () => {
+  const { agentLogger } = await import('@/utils/logger');
+  const warn = vi.spyOn(agentLogger, 'warn').mockImplementation(() => {});
+  const parent = { listPendingDetached: () => [{ childId: 'pipeline', kind: 'pipeline', topic: 'pipeline', startedAt: Date.now() - 1_796_000 }],
+    getContext: () => ({ id: 'parent', userId: 'u', sessionId: 's' }) } as unknown as AgentWorker;
+  state.get.mockClear();
+  try {
+    const output = await createSteerChildTool({ current: parent }).execute({ childId: 'pipeline', message: 'New requirements' }, {} as never);
+    expect(output).toContain('pipeline handles cannot be steered');
+    expect(output).toContain('stop_pipeline first');
+    expect(output).toContain('update_pipeline_items');
+    expect(output).toContain('preserve all requirements');
+    expect(output).not.toContain('not started');
+    expect(warn).toHaveBeenCalledWith(expect.objectContaining({ childId: 'pipeline', agentId: 'parent' }), 'Child steering refused');
+    expect(state.get).not.toHaveBeenCalled();
+  } finally { warn.mockRestore(); }
+});

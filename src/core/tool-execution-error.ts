@@ -10,6 +10,11 @@ export class ToolNotExecutedError extends Error {
   }
 }
 
+/** Trusted evidence of a content-policy refusal, before any process started. */
+export class ToolPolicyRefusalError extends ToolNotExecutedError {
+  constructor(toolId: string, readonly rule: string) { super(toolId, rule); }
+}
+
 // Preserve APIs that return aborted outcomes or throw typed preflight errors,
 // without trusting serializable flags that arbitrary tool responses could imitate.
 const unexecutedResults = new WeakMap<object, string>();

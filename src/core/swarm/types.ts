@@ -314,6 +314,8 @@ export interface SpawnChildParams {
  * at finalize, and cancel on parent failure.
  */
 export interface PendingChild {
+  /** Pipelines are orchestration handles, not one steerable worker. */
+  kind?: 'pipeline';
   /** Handle `spawn_child` returned to the parent — NOT the child's agent id. */
   childId: string;
   /**

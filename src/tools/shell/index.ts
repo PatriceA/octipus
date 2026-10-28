@@ -1,8 +1,9 @@
+import { redactedCommand } from '@/utils/command-log';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { browserRuntimePaths } from '@/security/runtime-path';
 import { getExecutionSignal } from '@/core/execution-scope';
-import { isToolNotExecutedResult, ToolNotExecutedError } from '@/core/tool-execution-error';
+import { isToolNotExecutedResult, ToolNotExecutedError, ToolPolicyRefusalError } from '@/core/tool-execution-error';
 import { isAbsolute, resolve } from 'path';
 import { WorkspaceFS, WorkspaceFsError } from '@/security/workspace-fs';
 import { isSensitiveEnvName } from '@/security/child-env';
@@ -126,7 +127,7 @@ export class ShellTool extends BaseTool {
         this.validateCommand(command);
 
         toolLogger.info({
-          command: command.slice(0, 500),
+          command: redactedCommand(command),
           cwd,
           unsafe,
           agentId: context?.id,
@@ -157,7 +158,7 @@ export class ShellTool extends BaseTool {
         // is told WHICH kill, and what the budget was, because "retry it" and
         // "raise the timeout or split the work" are different next moves.
         const interpretation = result.exitCode !== null && !result.killed
-          ? interpretExit(command, result.exitCode)
+          ? interpretExit(command, result.exitCode, result.stderr)
           : {
               outcome: 'error' as const,
               semantic: result.timedOut
@@ -167,9 +168,12 @@ export class ShellTool extends BaseTool {
                   : undefined,
             };
 
+        if (interpretation.outcome === 'expected_nonzero' && interpretation.semantic === 'no_match') {
+          toolLogger.info({ command: redactedCommand(command), exitCode: result.exitCode, agentId: context?.id, semantic: 'no_match' }, 'Shell search completed with no matches');
+        }
         if (interpretation.outcome === 'error') {
           toolLogger.warn({
-            command: command.slice(0, 200),
+            command: redactedCommand(command),
             exitCode: result.exitCode,
             killed: result.killed,
             timedOut: result.timedOut,
@@ -213,7 +217,7 @@ export class ShellTool extends BaseTool {
         this.validateCommand(command);
 
         toolLogger.info({
-          command: command.slice(0, 500),
+          command: redactedCommand(command),
           cwd,
           unsafe,
           background: true,
@@ -345,11 +349,11 @@ export class ShellTool extends BaseTool {
     // Content policy lives in `./policy` so the `command_exit_zero` scorer
     // enforces the same denylist rather than a second copy of it.
     const violation = commandPolicyViolation(command);
-    if (violation) throw new ToolNotExecutedError('shell', violation);
+    if (violation) throw new ToolPolicyRefusalError('shell', violation);
 
     const elevated = matchElevatedCommand(command);
     if (elevated) {
-      toolLogger.warn({ command: command.slice(0, 200), elevated }, 'Elevated command detected — requires elevated permission');
+      toolLogger.warn({ command: redactedCommand(command), elevated }, 'Elevated command detected — requires elevated permission');
     }
   }
 
