@@ -228,7 +228,7 @@ Human approval waits suspend the running call's bridge clock. Once answered,
 the call gets a fresh execution budget; the separate five-minute approval
 deadline still applies. Approval expiry returns `code: "approval_timeout"` and
 `executed: false`, rather than reporting an uncertain execution outcome.
-Inside a pipeline stage, `shell__run` raises any shorter limit to 10 minutes
+Inside a pipeline stage, `shell__run` raises any shorter limit to 30 minutes
 (`PIPELINE_SHELL_TIMEOUT_FLOOR_MS`), and the bridge uses the same floor. A shell
 command killed by its own timeout records an uncertain outcome by default.
 An explicitly approved `allowTimedOutCommands: true` profile acknowledges a

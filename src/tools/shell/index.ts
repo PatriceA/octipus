@@ -17,8 +17,9 @@ import { commandPolicyViolation, matchDestructiveCommand, matchElevatedCommand }
 
 const DEFAULT_TIMEOUT = 30000; // 30 seconds
 
-/** Pipeline stages run whole gate suites (go test -race, pnpm -r test); a shorter limit only kills them mid-run and gates the stage behind recovery review (#55). */
-export const PIPELINE_SHELL_TIMEOUT_FLOOR_MS = 600_000;
+/** Pipeline stages run whole gate suites (go test -race, pnpm -r test), often two at once; a shorter limit only kills them mid-run and gates the stage behind recovery review (#55, #69: a 4-min Go gate ran past 10 min beside pnpm -r test). */
+// ponytail: 30 min fixed floor; make it per-run (profile) if a suite ever needs longer.
+export const PIPELINE_SHELL_TIMEOUT_FLOOR_MS = 1_800_000;
 
 export function effectiveShellTimeout(requested: unknown, metadata?: Record<string, unknown>): number {
   const asked = typeof requested === 'number' && requested > 0 ? requested : DEFAULT_TIMEOUT;
