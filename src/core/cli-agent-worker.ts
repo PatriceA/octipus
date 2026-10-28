@@ -144,6 +144,11 @@ export class CLIAgentWorker extends BaseAgentWorker {
   private liveGuidancePassed = new Set<string>();
   private acceptsLiveGuidance = false;
   private activeBridgeCalls = 0;
+  private liveTurnActive = false;
+  private liveTools = new Set<string>();
+  private seenLiveTools = new Set<string>();
+  private steeringInterrupt?: { requestId: string; acknowledged: boolean };
+  private steeringInterruptTimer?: ReturnType<typeof setTimeout>;
   /**
    * True once THIS run is confirmed to resume a vendor session (Task 6) — the
    * vendor already holds every earlier turn, so buildPrompt() sends only the
@@ -177,9 +182,38 @@ export class CLIAgentWorker extends BaseAgentWorker {
     this.config.maxIterations += 1;
     this.detached.interruptWaits();
     this.emit('thought', { type: 'steering_queued', delivery: this.acceptsLiveGuidance ? 'CLI input stream' : 'next Octipus tool response or follow-up turn' });
-    // A blocked collect returns the guidance in its tool response. Native CLI
-    // work has no such response, so use the bidirectional adapter protocol.
-    if (this.activeBridgeCalls === 0) this.submitLiveGuidance();
+    // Wake Claude at the next completed tool boundary. Merely appending user
+    // input can leave it queued until the vendor finishes the entire turn.
+    this.wakeForGuidance();
+  }
+
+  private wakeForGuidance(): void {
+    const stdin = this.process?.stdin;
+    if (!this.acceptsLiveGuidance || !stdin?.writable || stdin.writableEnded || this.aborted || !this.steeringQueue.length) return;
+    if (this.activeBridgeCalls || this.liveTools.size || this.steeringInterrupt) return;
+    if (!this.liveTurnActive) { this.submitLiveGuidance(); return; }
+    const requestId = randomUUID();
+    this.steeringInterrupt = { requestId, acknowledged: false };
+    // Claude's documented streaming control protocol. Do not terminate the
+    // process or cancel detached children, and never interrupt a running tool.
+    stdin.write(JSON.stringify({ type: 'control_request', request_id: requestId, request: { subtype: 'interrupt' } }) + '\n');
+    this.emit('thought', { type: 'steering_wakeup', delivery: 'CLI interrupt at tool boundary' });
+    // Older CLI builds may not implement interrupts. Preserve live delivery
+    // and the unacknowledged-input fallback instead of hanging the worker.
+    this.steeringInterruptTimer = setTimeout(() => {
+      this.steeringInterrupt = undefined;
+      this.steeringInterruptTimer = undefined;
+      this.emit('observation', { type: 'warning', message: 'CLI did not finish the steering interrupt within 30 seconds; submitting guidance through its input stream.' });
+      this.submitLiveGuidance();
+    }, 30_000);
+  }
+
+  private finishSteeringInterrupt(): void {
+    if (!this.steeringInterrupt?.acknowledged || this.liveTurnActive) return;
+    clearTimeout(this.steeringInterruptTimer);
+    this.steeringInterruptTimer = undefined;
+    this.steeringInterrupt = undefined;
+    this.submitLiveGuidance();
   }
 
   private submitLiveGuidance(): void {
@@ -188,6 +222,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
     for (const message of this.steeringQueue.splice(0)) {
       const uuid = randomUUID();
       this.liveGuidance.set(uuid, message);
+      this.liveTurnActive = true;
       const restore = () => {
         if (this.liveGuidance.delete(uuid)) this.steeringQueue.push(message);
       };
@@ -249,9 +284,11 @@ When a task matches one of these skills, load it with get_skill before starting 
 
   private async controlContext(): Promise<string> {
     const state = await workPlanRepository.read(this.context.sessionId, this.context.userId);
-    const guidance = this.steeringQueue.splice(0);
-    this.messages.push(...guidance);
-    if (guidance.length) this.emit('thought', { type: 'steering_delivered', delivery: 'CLI context', count: guidance.length });
+    // Streaming guidance remains queued until Claude acknowledges a real user
+    // message. A JSON context attachment alone must not consume the wake-up.
+    const guidance = this.acceptsLiveGuidance ? [...this.steeringQueue] : this.steeringQueue.splice(0);
+    if (!this.acceptsLiveGuidance) this.messages.push(...guidance);
+    if (guidance.length && !this.acceptsLiveGuidance) this.emit('thought', { type: 'steering_delivered', delivery: 'CLI context', count: guidance.length });
     return JSON.stringify({
       agentId: this.context.id, sessionId: this.context.sessionId,
       workspaceId: this.context.workspaceId, planMode: this.connection?.planMode ?? false,
@@ -539,7 +576,10 @@ When a task matches one of these skills, load it with get_skill before starting 
         active: () => this.context.status === 'running' && !this.aborted,
         execute: (name, args) => this.executeBridgedTool(name, args),
         abandoned: () => this.endApprovalWait(APPROVAL_DISCONNECT_REASON),
-        delivered: () => { if (this.runError && !this.aborted) this.stop(); },
+        delivered: () => {
+          if (this.runError && !this.aborted) this.stop();
+          else queueMicrotask(() => this.wakeForGuidance());
+        },
         unqueued: new Set(['get_cli_run_context', 'get_work_plan']),
         longWait: DELEGATION_TOOLS,
         toolTimeoutFloorMs: typeof this.context.metadata?.pipelineId === 'string' ? PIPELINE_SHELL_TIMEOUT_FLOOR_MS : undefined,
@@ -1355,7 +1395,10 @@ When a task matches one of these skills, load it with get_skill before starting 
 
       this.process = proc;
       this.acceptsLiveGuidance = built.keepStdinOpen === true;
-      this.submitLiveGuidance();
+      this.liveTools.clear();
+      this.seenLiveTools.clear();
+      this.liveTurnActive = true;
+      this.wakeForGuidance();
 
       // A caller-minted id (Claude: --session-id / --resume) is known before
       // the process even starts, so unlike a captured id there is nothing to
@@ -1399,6 +1442,28 @@ When a task matches one of these skills, load it with get_skill before starting 
           if (!line.trim() || this.aborted) continue;
           try {
             const event = JSON.parse(line);
+            if (built.keepStdinOpen && event.type === 'control_response' && this.steeringInterrupt && event.response?.request_id === this.steeringInterrupt.requestId) {
+              if (event.response.subtype === 'error') {
+                clearTimeout(this.steeringInterruptTimer);
+                this.steeringInterruptTimer = undefined;
+                this.steeringInterrupt = undefined;
+                this.submitLiveGuidance();
+              } else {
+                this.steeringInterrupt.acknowledged = true;
+                this.finishSteeringInterrupt();
+              }
+              continue;
+            }
+            if (built.keepStdinOpen && event.type === 'assistant') {
+              // Register the entire parallel batch before parser callbacks can
+              // steer, so completing one tool cannot interrupt its sibling.
+              for (const block of event.message?.content ?? []) {
+                if (block.type === 'tool_use' && block.id && !this.seenLiveTools.has(block.id)) {
+                  this.seenLiveTools.add(block.id);
+                  this.liveTools.add(block.id);
+                }
+              }
+            }
             if (built.keepStdinOpen && event.type === 'control_request') {
               void answerCliPermissionRequest(event, this.context, (type, data) => this.emit(type, data), this.abortController.signal,
                 this.bridge ? () => this.availableBridgeTools() : undefined,
@@ -1423,12 +1488,28 @@ When a task matches one of these skills, load it with get_skill before starting 
             // A result can belong to the previous turn while submitted input
             // is still queued. Keep stdin available for that turn's permission
             // responses until the vendor acknowledges the guidance.
-            if (built.keepStdinOpen && event.type === 'result' && this.liveGuidance.size === 0) {
-              this.acceptsLiveGuidance = false;
-              proc.stdin?.end();
+            const interruptedTurn = built.keepStdinOpen && event.type === 'result' && !!this.steeringInterrupt;
+            if (built.keepStdinOpen && event.type === 'result') {
+              this.liveTurnActive = false;
+              this.liveTools.clear();
+              if (this.steeringInterrupt) this.finishSteeringInterrupt();
+              else if (this.steeringQueue.length) this.submitLiveGuidance();
+              else if (this.liveGuidance.size === 0) {
+                this.acceptsLiveGuidance = false;
+                proc.stdin?.end();
+              }
             }
             consecutiveNonJson = 0;
-            const result = parser.parse(event, adapterKey);
+            // An interrupted turn is superseded by the user's guidance. Keep
+            // usage accounting, but don't turn its cancellation into runError.
+            const result = parser.parse(interruptedTurn && event.subtype === 'error_during_execution'
+              ? { ...event, subtype: 'success', is_error: false } : event, adapterKey);
+            if (built.keepStdinOpen && event.type === 'user' && Array.isArray(event.message?.content)) {
+              for (const block of event.message.content) {
+                if (block.type === 'tool_result') this.liveTools.delete(block.tool_use_id);
+              }
+              queueMicrotask(() => this.wakeForGuidance());
+            }
             if (result) {
               if (result.replace) {
                 accumulatedText = result.text;
@@ -1461,6 +1542,12 @@ When a task matches one of these skills, load it with get_skill before starting 
 
       proc.on('close', async (code, signal) => {
         this.acceptsLiveGuidance = false;
+        clearTimeout(this.steeringInterruptTimer);
+        this.steeringInterruptTimer = undefined;
+        this.steeringInterrupt = undefined;
+        this.liveTools.clear();
+        this.seenLiveTools.clear();
+        this.liveTurnActive = false;
         // A pipe write is not an acknowledgement. Retain unacknowledged input
         // for the bridge/follow-up path if the vendor exited without reading it.
         this.steeringQueue.unshift(...this.liveGuidance.values());

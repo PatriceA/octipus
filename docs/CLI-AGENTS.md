@@ -362,8 +362,15 @@ User steering targets the session's running root. It interrupts a pending
 automatically steering any child. The root decides whether to use `steer_child`
 on one of its own pending children or handle the change after collecting.
 
-Claude-based adapters also submit guidance through their stream-json stdin while
-native CLI work is running. `--replay-user-messages` acknowledges receipt; a pipe
+Claude-based adapters wake the current turn through the streaming `interrupt`
+control request, then submit guidance as a new user message through stream-json
+stdin. If a tool is running, Octipus waits for its result (all results for a
+parallel batch); an idle model is woken immediately. A pending `collect_children`
+wait returns promptly while its children keep running. Context reads and tool
+response attachments do not consume guidance before live delivery. If a CLI
+cannot finish the interrupt within 30 seconds, Octipus submits input through the
+stream and retains the unacknowledged-input fallback.
+`--replay-user-messages` acknowledges receipt; a pipe
 write emits `steering_submitted`, and replay emits `steering_delivered`. Inputs
 not acknowledged before process exit are retained for a follow-up. Acknowledged
 input does not prove the requested change was applied. See the

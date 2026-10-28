@@ -78,6 +78,16 @@ beforeEach(() => {
   fixture.status.mockReset().mockResolvedValue(undefined);
   writeFileSync(fixture.script, `
     import { readFileSync } from 'node:fs';
+    import { createInterface } from 'node:readline';
+    let finalEvent, inputs = 0;
+    createInterface({input:process.stdin}).on('line', line => {
+      const event = JSON.parse(line);
+      if (event.type === 'control_request') console.log(JSON.stringify({type:'control_response',response:{subtype:'success',request_id:event.request_id,response:{}}}));
+      if (event.type === 'user' && ++inputs > 1) {
+        console.log(JSON.stringify(event));
+        if (finalEvent) console.log(JSON.stringify(finalEvent));
+      }
+    });
     const config = JSON.parse(readFileSync(process.argv[process.argv.indexOf('--mcp-config') + 1], 'utf8'));
     if (config.mcpServers.octipus.env.OCTIPUS_API_KEY) throw new Error('Admin credential leaked');
     if (config.mcpServers.octipus.env.OCTIPUS_AGENT_KEY !== process.env.OCTIPUS_AGENT_KEY) throw new Error('Wrong capability');
@@ -95,7 +105,8 @@ beforeEach(() => {
     const feedback = current.current.feedback;
     await call('update_work_plan', {revision:current.revision,title:'Sample',goal:'Check scoped tools',summary:'Done',steps:[{id:'one',title:'Check context',status:'done',evidence:'Observed sample write'}],feedbackResponses:feedback.map(f=>({id:f.id,status:'applied',response:'Checked guidance'}))});
     const final = await call('get_cli_run_context');
-    console.log(JSON.stringify({type:'result',subtype:'success',result:JSON.stringify({initial,write,denied,final}),num_turns:1}));
+    finalEvent = {type:'result',subtype:'success',result:JSON.stringify({initial,write,denied,final}),num_turns:1};
+    console.log(JSON.stringify(finalEvent));
   `);
 });
 afterEach(() => rmSync(fixture.dir, { recursive: true, force: true }));
@@ -473,23 +484,38 @@ it.each(['deadline', 'disconnect', 'premature-finish'] as const)('approval %s en
   } finally { worker.stop(); timerSpy.mockRestore(); }
 });
 
- it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('delivers steering over live stdin during native CLI work and observes its acknowledgement', async () => {
+ it.skipIf(!!process.env.OCTIPUS_LIVE_CLI).each(['native', 'parallel', 'idle'])('wakes Claude for steering after %s work without waiting for its whole turn', async mode => {
    writeFileSync(fixture.script, `
      import { createInterface } from 'node:readline';
-     let inputs = 0;
+     const mode = ${JSON.stringify(mode)};
+     let inputs = 0, tools = 0, interrupted = false;
+     const emit = event => console.log(JSON.stringify(event));
      for await (const line of createInterface({input: process.stdin})) {
        const event = JSON.parse(line);
-       if (event.type === 'control_response') {
-         console.log(JSON.stringify({type:'result',subtype:'success',result:'Received: Change root plan; decide about children',num_turns:1}));
+       if (event.type === 'control_request') {
+         if (tools) throw new Error('Interrupted an unfinished tool');
+         interrupted = true;
+         // Both orders occur: don't send the next user turn until BOTH frames.
+         const ack = {type:'control_response',response:{subtype:'success',request_id:event.request_id,response:{}}};
+         const result = {type:'result',subtype:'error_during_execution',is_error:true,result:'Execution interrupted',num_turns:1};
+         emit(mode === 'parallel' ? result : ack);
+         setTimeout(() => emit(mode === 'parallel' ? ack : result), 20);
          continue;
        }
        if (event.type !== 'user') continue;
        if (++inputs === 1) {
-         console.log(JSON.stringify({type:'assistant',message:{id:'native-work',content:[{type:'text',text:'Native work started.'},{type:'tool_use',id:'native',name:'Read',input:{}}]}}));
+         const count = mode === 'parallel' ? 2 : mode === 'native' ? 1 : 0;
+         tools = count;
+         emit({type:'assistant',message:{id:'native-work',content:[{type:'text',text:'Work started.'}, ...Array.from({length:count}, (_, i) => ({type:'tool_use',id:'tool'+i,name:'Read',input:{}}))]}});
+         for (let i = 0; i < count; i++) setTimeout(() => {
+           tools--;
+           emit({type:'user',message:{role:'user',content:[{type:'tool_result',tool_use_id:'tool'+i,content:'finished'}]}});
+         }, 40 + i * 40);
+         // This turn deliberately never finishes until explicitly interrupted.
        } else {
-         console.log(JSON.stringify({type:'result',subtype:'success',result:'Previous turn finished',num_turns:1}));
-         console.log(JSON.stringify(event));
-         console.log(JSON.stringify({type:'control_request',request_id:'after-guidance',request:{subtype:'can_use_tool',tool_name:'Bash',input:{command:'true'}}}));
+         if (!interrupted || tools) throw new Error('Guidance arrived before safe interrupt');
+         emit(event);
+         emit({type:'result',subtype:'success',result:'Received: ' + event.message.content,num_turns:1});
        }
      }
    `);
@@ -498,20 +524,41 @@ it.each(['deadline', 'disconnect', 'premature-finish'] as const)('approval %s en
    let sent = false;
    worker.onEvent(event => {
      if (event.type === 'thought') thoughts.push(event.data);
-     if (!sent && event.type === 'action' && (event.data as {toolName?: string}).toolName === 'Read') {
+     const data = event.data as {type?: string};
+     if (!sent && (mode === 'idle' ? data.type === 'iteration_update' : data.type === 'cli_tool_use')) {
        sent = true;
-       worker.steer({role:'user',content:'Change root plan; decide about children',timestamp:new Date()});
+       worker.steer({role:'user',content:'Answer my question now; keep children running',timestamp:new Date()});
      }
    });
-   expect(await worker.run('sample')).toContain('Received: Change root plan; decide about children');
-   expect(thoughts).toContainEqual(expect.objectContaining({type:'steering_submitted'}));
+   expect(await worker.run('sample')).toContain('Received: Answer my question now; keep children running');
+   expect(thoughts).toContainEqual(expect.objectContaining({type:'steering_wakeup'}));
    expect(thoughts).toContainEqual(expect.objectContaining({type:'steering_delivered',delivery:'CLI acknowledged input'}));
+   expect(worker.getStatus()).toBe('completed');
  });
 
  it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('steering interrupts a bridged collect and reaches the root in its response', async () => {
    writeFileSync(fixture.script, `
-     const r = await fetch(process.env.OCTIPUS_AGENT_URL + '/call', {method:'POST',headers:{Authorization:'Bearer ' + process.env.OCTIPUS_AGENT_KEY},body:JSON.stringify({name:'collect_children',arguments:{}})});
-     console.log(JSON.stringify({type:'result',subtype:'success',result:JSON.stringify(await r.json()),num_turns:1}));
+     import { createInterface } from 'node:readline';
+     const emit = event => console.log(JSON.stringify(event));
+     let inputs = 0, collected;
+     for await (const line of createInterface({input: process.stdin})) {
+       const event = JSON.parse(line);
+       if (event.type === 'control_request') {
+         emit({type:'control_response',response:{subtype:'success',request_id:event.request_id,response:{}}});
+         emit({type:'result',subtype:'success',result:'Interrupted collect turn',num_turns:1});
+         continue;
+       }
+       if (event.type !== 'user') continue;
+       if (++inputs === 1) {
+         emit({type:'assistant',message:{id:'collect-turn',content:[{type:'tool_use',id:'collect',name:'mcp__octipus__collect_children',input:{}}]}});
+         const r = await fetch(process.env.OCTIPUS_AGENT_URL + '/call', {method:'POST',headers:{Authorization:'Bearer ' + process.env.OCTIPUS_AGENT_KEY},body:JSON.stringify({name:'collect_children',arguments:{}})});
+         collected = await r.json();
+         emit({type:'user',message:{role:'user',content:[{type:'tool_result',tool_use_id:'collect',content:JSON.stringify(collected)}]}});
+       } else {
+         emit(event);
+         emit({type:'result',subtype:'success',result:JSON.stringify(collected) + event.message.content,num_turns:1});
+       }
+     }
    `);
    const worker = sampleWorker();
    let finish!: (r: import('./swarm/types').ChildResult) => void;
@@ -539,9 +586,15 @@ it.each(['deadline', 'disconnect', 'premature-finish'] as const)('approval %s en
      let inputs = 0;
      for await (const line of createInterface({input: process.stdin})) {
        const event = JSON.parse(line);
+       if (event.type === 'control_request') {
+         console.log(JSON.stringify({type:'control_response',response:{subtype:'success',request_id:event.request_id,response:{}}}));
+         console.log(JSON.stringify({type:'result',subtype:'success',result:'Previous turn interrupted',num_turns:1}));
+         continue;
+       }
        if (event.type !== 'user') continue;
        if (++inputs === 1) {
          console.log(JSON.stringify({type:'assistant',message:{id:'w',content:[{type:'tool_use',id:'native',name:'Read',input:{}}]}}));
+         setTimeout(() => console.log(JSON.stringify({type:'user',message:{role:'user',content:[{type:'tool_result',tool_use_id:'native',content:'finished'}]}})), 30);
          continue;
        }
        const first = await call('collect_children');
