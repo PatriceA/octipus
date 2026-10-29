@@ -11,7 +11,7 @@ export function assertNoCredentialTemplates(value: unknown): void {
     if (typeof input === 'string') {
       if (/\{\{\s*secret\s*:/i.test(input) || /\$\{\s*vault\s*\./i.test(input)) {
         throw new ToolPolicyRefusalError('credentials',
-          'Vault interpolation is disabled in general tool arguments and persisted content. Use a configured authenticated integration with a named credential; do not put credential values in commands, files, URLs, plans or notes.');
+          'Vault interpolation is disabled in general tool arguments and persisted content. Policy credential-boundary blocks general interpolation. Use connections__list and connections__request (or connections__git_fetch/git_push) with a configured connection name; MCP credentials belong in operator-configured credentialConnection bindings. If no profile exists, report missing connection configuration rather than invalid credentials; do not put credential values in commands, files, URLs, plans or notes.');
       }
       return;
     }

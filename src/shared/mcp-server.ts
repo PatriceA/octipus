@@ -52,6 +52,8 @@ export interface MCPServer extends McpExposureConfig {
   sseUrl?: string;
   postUrl?: string;
   headers?: Record<string, string>;
+  /** Operator-configured named credential connection; never a plaintext value. */
+  credentialConnection?: string;
   /** A plugin package's server (see `PluginBinding`). */
   plugin?: PluginBinding;
   /** Hand a stdio server only its `env` and a minimal host environment. */

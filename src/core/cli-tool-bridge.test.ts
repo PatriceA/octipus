@@ -334,3 +334,11 @@ it('lets a delegation wait run past the base deadline and queues the next call b
   expect((await queued).status).toBe(200);
   expect(executed).toEqual(['spawn_child', 'next']);
 });
+
+it('lets transport execution metadata extend the bridge deadline without adding remote tool arguments', async () => {
+  const bridge=await startCliToolBridge({active:()=>true,timeoutMs:20,
+    tools:()=>[{name:'mcp_call_tool',description:'',parameters:{type:'object'},executionTimeoutMs:()=>200,execute:async()=>null}],
+    execute:async()=>{await new Promise(r=>setTimeout(r,60));return {content:[{type:'text',text:'completed'}]};},
+  });bridges.push(bridge);
+  const response=await call(bridge.url,bridge.key,'mcp_call_tool');expect(response.status).toBe(200);expect(await response.json()).toMatchObject({content:[{text:'completed'}]});
+});

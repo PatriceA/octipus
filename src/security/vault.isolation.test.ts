@@ -223,3 +223,21 @@ describe('Vault scope migration (backfill behavior)', () => {
     expect(rows[0]?.scope).toBe('system');
   });
 });
+
+
+test('connection readers authorize the exact credential row and explicit workspace scope', async () => {
+  const {getVault}=await import('@/security/vault');const vault=getVault();
+  const ws='33333333-3333-3333-3333-333333333333';
+  const {queryRaw}=await import('@/db/postgres');
+  await queryRaw('INSERT INTO workspaces (id,user_id,name,slug,files_dir) VALUES ($1,$2,$3,$4,$5)',[ws,aliceId,'Connection scope','connection-scope',ws]);
+  await vault.store(aliceId,'connection-scope','user-canary',{credentialType:'api_key',allowedTools:['connections'],allowedAgents:['user-agent']});
+  await vault.store(aliceId,'connection-scope','workspace-canary',{credentialType:'api_key',scope:'workspace',workspaceId:ws,allowedTools:['connections'],allowedAgents:['workspace-agent']});
+  const user={userId:aliceId,workspaceId:null,toolId:'connections',agentId:'user-agent'};
+  expect(await vault.getByNameAuthorized(user,'connection-scope')).toBe('user-canary');
+  expect(await vault.getByNameAuthorized({...user,workspaceId:ws},'connection-scope')).toBeNull();
+  expect(await vault.getByNameAuthorized({...user,workspaceId:ws,agentId:'workspace-agent'},'connection-scope')).toBe('workspace-canary');
+  expect(await vault.getByNameAuthorized({...user,userId:bobId},'connection-scope')).toBeNull();
+  expect(await vault.getByNameAuthorized({...user,toolId:'shell'},'connection-scope')).toBeNull();
+  // Only the MCP startup binding may bypass a worker allowlist; ordinary connections cannot.
+  expect(await vault.getByNameAuthorized({...user,agentId:'other'},'connection-scope',{trustedMcpTransport:true})).toBeNull();
+});

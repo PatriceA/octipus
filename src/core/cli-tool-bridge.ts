@@ -20,9 +20,12 @@ export interface BridgeResult { content: Array<{ type: 'text'; text: string }>; 
 
 /** A tool that takes its own `timeout` (shell__run) ends itself with a clean result; never cut it off first. */
 function ownTimeout(name: string, args: Record<string, unknown>, tools: ToolHandler[], floor = 0): number {
-  const schema = tools.find(t => t.name === name)?.parameters as { properties?: { timeout?: { default?: unknown } } } | undefined;
-  const value = args.timeout ?? schema?.properties?.timeout?.default;
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.max(value, floor) : 0;
+  const tool = tools.find(t => t.name === name);
+  const schema = tool?.parameters as { properties?: { timeout?: { default?: unknown } } } | undefined;
+  const configured = typeof tool?.executionTimeoutMs === 'function' ? tool.executionTimeoutMs(args) : tool?.executionTimeoutMs;
+  const values = [args.timeout ?? schema?.properties?.timeout?.default, configured]
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0);
+  return values.length ? Math.max(...values, floor) : 0;
 }
 
 /** A run-local capability, never an API/admin credential. No caller-supplied identity. */

@@ -107,3 +107,10 @@ revisions, recompute note hashes and invalidate affected note embeddings. It
 cannot erase PostgreSQL WAL, backups, opaque archives, third-party transcripts
 or data already held by active workers. Report those separately and rotate any
 exposed live credential. Git history rewriting requires a separate decision.
+
+Authenticated HTTP, Git and explicitly trusted MCP transports can use named
+[credential connection profiles](docs/AUTHENTICATED-CONNECTIONS.md). These retain
+vault references in configuration and resolve authentication only inside the
+credential-consuming transport. They do not restore shell/file interpolation.
+The documentation states the trust boundary for approved remote endpoints, Git
+pack content, stdio server code and unrestricted native host access.

@@ -5,6 +5,7 @@ export interface StreamableHTTPTransportOptions {
   url: string;
   /** Optional headers (e.g. Authorization) */
   headers?: Record<string, string>;
+  request?: typeof fetch;
 }
 
 /**
@@ -23,6 +24,7 @@ export class StreamableHTTPTransport implements MCPTransport {
   private errorHandlers: ErrorHandler[] = [];
   private closeHandlers: CloseHandler[] = [];
   private closed = false;
+  private readonly requestsAbort = new AbortController();
   private sseAbortController: AbortController | null = null;
 
   constructor(options: StreamableHTTPTransportOptions) {
@@ -76,21 +78,23 @@ export class StreamableHTTPTransport implements MCPTransport {
    * Send a JSON-RPC message via POST.
    * The response is parsed and dispatched to message handlers.
    */
-  send(message: string): void {
+  send(message: string, signal?: AbortSignal): void {
     if (this.closed) return;
 
-    this.doPost(message).catch((error) => {
+    this.doPost(message, signal).catch((error) => {
       for (const handler of this.errorHandlers) {
         handler(error as Error);
       }
     });
   }
 
-  private async doPost(message: string): Promise<void> {
+  private async doPost(message: string, signal?: AbortSignal): Promise<void> {
     let response: Response;
     try {
-      response = await fetch(this.options.url, {
+      response = await (this.options.request ?? fetch)(this.options.url, {
         method: 'POST',
+        signal: signal ? AbortSignal.any([signal, this.requestsAbort.signal]) : this.requestsAbort.signal,
+      redirect: 'manual',
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json, text/event-stream',
@@ -181,6 +185,7 @@ export class StreamableHTTPTransport implements MCPTransport {
 
   close(): void {
     this.closed = true;
+    this.requestsAbort.abort();
     this.sseAbortController?.abort();
     for (const handler of this.closeHandlers) {
       handler();

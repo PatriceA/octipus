@@ -463,11 +463,25 @@ export class Vault {
     return this.readByName(userId, name, opts);
   }
 
+  /** Select, authorize and decrypt the SAME row; workspace overrides cannot change between ACL check and read. */
+  async getByNameAuthorized(agent: { userId: string; workspaceId?: string | null; toolId: string; agentId?: string }, name: string,
+    options?: { trustedMcpTransport?: boolean }): Promise<string | null> {
+    if (agent.userId === 'system') refuseReserved(name);
+    return this.readByName(agent.userId, name, { workspaceId: agent.workspaceId }, row => {
+      if (row.allowedTools?.length && !row.allowedTools.includes(agent.toolId)) return false;
+      // Transport startup is an operator binding, not an autonomous agent.
+      // Its caller must verify the exact configured server before using this option.
+      if (options?.trustedMcpTransport && agent.toolId === 'mcp') return true;
+      return !row.allowedAgents?.length || (!!agent.agentId && row.allowedAgents.includes(agent.agentId));
+    });
+  }
+
   /** `getByName` without the reserved-name refusal: the internal readers only. */
   private async readByName(
     userId: string,
     name: string,
     opts?: { workspaceId?: string | null },
+    authorize?: (row: VaultEntry) => boolean,
   ): Promise<string | null> {
     const scope = inferScope(userId);
     const workspaceId = opts?.workspaceId ?? null;
@@ -490,7 +504,7 @@ export class Vault {
       .orderBy(desc(vault.scope)) // 'workspace' > 'user' > 'system' lexicographically; workspace overrides win
       .limit(1);
 
-    if (!entry[0]) {
+    if (!entry[0] || (authorize && !authorize(entry[0]))) {
       return null;
     }
 

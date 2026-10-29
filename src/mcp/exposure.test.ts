@@ -166,7 +166,7 @@ describe('exposure review fixes', () => {
   test('a tool named after an Object.prototype member is still hidden', async () => {
     const bridge = bridgeWith({ exposure: 'hidden' }, ['constructor', 'toString', 'search']);
     expect(bridge.toolExposure('gh', 'constructor')).toBe('hidden');
-    expect(await handler(bridge, 'mcp_list_tools').execute({}, ctx())).toEqual({ message: 'No MCP servers connected.' });
+    expect(await handler(bridge, 'mcp_list_tools').execute({}, ctx())).toEqual({ message: 'No authorized MCP servers connected for this user/workspace.' });
     await expect(bridge.callTool('gh', 'constructor', {}, ctx())).rejects.toThrow(/hidden/);
   });
 
@@ -193,9 +193,9 @@ describe('exposure review fixes', () => {
 
   test('a server whose tools are all hidden, or that is hidden itself, is not named by mcp_list_tools', async () => {
     const allHidden = bridgeWith({ toolExposure: { '*': 'hidden' } });
-    expect(await handler(allHidden, 'mcp_list_tools').execute({}, ctx())).toEqual({ message: 'No MCP servers connected.' });
+    expect(await handler(allHidden, 'mcp_list_tools').execute({}, ctx())).toEqual({ message: 'No authorized MCP servers connected for this user/workspace.' });
     const emptyHidden = bridgeWith({ exposure: 'hidden' }, []);
-    expect(await handler(emptyHidden, 'mcp_list_tools').execute({}, ctx())).toEqual({ message: 'No MCP servers connected.' });
+    expect(await handler(emptyHidden, 'mcp_list_tools').execute({}, ctx())).toEqual({ message: 'No authorized MCP servers connected for this user/workspace.' });
     // A codemode-only server is still named, with its count, so the model knows to script it.
     const scripted = bridgeWith({ exposure: 'codemode' });
     expect(await listed(scripted, true)).toEqual({ names: [], codemodeOnly: 4 });

@@ -7,7 +7,7 @@ export type CloseHandler = () => void;
  */
 export interface MCPTransport {
   connect(): Promise<void>;
-  send(message: string): void;
+  send(message: string, signal?: AbortSignal): void;
   onMessage(handler: MessageHandler): void;
   onError(handler: ErrorHandler): void;
   onClose(handler: CloseHandler): void;

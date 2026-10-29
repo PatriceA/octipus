@@ -7,6 +7,7 @@ export interface SSETransportOptions {
   postUrl: string;
   /** Optional headers (e.g. Authorization) */
   headers?: Record<string, string>;
+  request?: typeof fetch;
 }
 
 /**
@@ -33,8 +34,9 @@ export class SSETransport implements MCPTransport {
 
   private async startSSEListener(): Promise<void> {
     try {
-      const response = await fetch(this.options.sseUrl, {
+      const response = await (this.options.request ?? fetch)(this.options.sseUrl, {
         headers: this.options.headers,
+        redirect: 'manual',
         signal: this.abortController!.signal,
       });
 
@@ -82,9 +84,11 @@ export class SSETransport implements MCPTransport {
     }
   }
 
-  send(message: string): void {
-    fetch(this.options.postUrl, {
+  send(message: string, signal?: AbortSignal): void {
+    (this.options.request ?? fetch)(this.options.postUrl, {
       method: 'POST',
+      signal: this.abortController ? (signal ? AbortSignal.any([signal, this.abortController.signal]) : this.abortController.signal) : signal,
+      redirect: 'manual',
       headers: {
         'Content-Type': 'application/json',
         ...this.options.headers,

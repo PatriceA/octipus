@@ -1,3 +1,5 @@
+import { getExecutionSignal } from '@/core/execution-scope';
+import { assertCredentialConnectionAccess, canUseCredentialConnection, createCredentialTransport } from './credential-transport';
 import { assertNoCredentialTemplates } from '@/security/credential-boundary';
 import type { MCPServerEdit, MCPServerConfigView } from '@/shared/mcp-config';
 import { markToolNotExecuted } from '@/core/tool-execution-error';
@@ -194,7 +196,7 @@ export class MCPBridge extends EventEmitter {
     this.clearReconnectTimer(server.id);
 
     const protocol = new MCPProtocol();
-    const transport = this.createTransport(server);
+    const transport = server.credentialConnection ? await createCredentialTransport(server) : this.createTransport(server);
 
     const connection: MCPServerConnection = {
       id: server.id,
@@ -614,6 +616,7 @@ export class MCPBridge extends EventEmitter {
     const readOnlyConnection = this.recoverySafety(serverId, toolName) === 'read_only' ? this.connections.get(serverId) : undefined;
     let connection: MCPServerConnection;
     try {
+      await assertCredentialConnectionAccess(this.connections.get(serverId)?.server ?? this.serverConfigs.find(s => s.id === serverId)!, context);
       // These checks happen before any tools/call request is sent.
       if (this.toolExposure(serverId, toolName) === 'hidden') {
         throw new Error(`MCP tool '${toolName}' on server '${serverId}' is hidden by the server's exposure setting.`);
@@ -633,6 +636,7 @@ export class MCPBridge extends EventEmitter {
       if (readOnlyConnection && (current !== readOnlyConnection || this.recoverySafety(serverId, toolName) !== 'read_only')) {
         throw new Error('MCP recovery declaration changed before dispatch; rediscover the tool and retry.');
       }
+      await assertCredentialConnectionAccess(current.server, context);
       connection = current;
     } catch (err) {
       // Preserve approval/cancellation error types and codes for existing callers.
@@ -640,7 +644,8 @@ export class MCPBridge extends EventEmitter {
     }
 
     const send = (message: string) => {
-      connection.transport.send(message);
+      const signal = context ? getExecutionSignal(context) : undefined;
+      if (signal) connection.transport.send(message, signal); else connection.transport.send(message);
     };
 
     try {
@@ -668,6 +673,9 @@ export class MCPBridge extends EventEmitter {
     }
   }
 
+  /** Transport budget, independent of arbitrary remote tool argument schemas. */
+  requestBudget(serverId: string): number { return this.configOf(serverId)?.requestTimeoutMs ?? 30_000; }
+
   /** Classification is taken from the active connection, never the call's arguments. */
   private recoverySafety(serverId: string, toolName: string): 'read_only' | undefined {
     const connection = this.connections.get(serverId);
@@ -679,16 +687,19 @@ export class MCPBridge extends EventEmitter {
   /**
    * Read a resource from an MCP server
    */
-  async readResource(serverId: string, uri: string): Promise<unknown> {
+  async readResource(serverId: string, uri: string, context?: AgentContext): Promise<unknown> {
     this.assertServerNotHidden(serverId);
+    await assertCredentialConnectionAccess(this.connections.get(serverId)?.server ?? this.serverConfigs.find(s => s.id === serverId)!, context);
     await this.ensureConnected(serverId);
     const connection = this.connections.get(serverId);
     if (!connection || connection.status !== 'connected') {
       throw new Error(`MCP server not connected: ${serverId}`);
     }
 
+    await assertCredentialConnectionAccess(connection.server, context);
     const send = (message: string) => {
-      connection.transport.send(message);
+      const signal = context ? getExecutionSignal(context) : undefined;
+      if (signal) connection.transport.send(message, signal); else connection.transport.send(message);
     };
 
     const result = await connection.protocol.sendRequest(send, MCPMethods.ReadResource, { uri });
@@ -699,16 +710,19 @@ export class MCPBridge extends EventEmitter {
   /**
    * Get a prompt from an MCP server
    */
-  async getPrompt(serverId: string, name: string, args?: Record<string, string>): Promise<unknown> {
+  async getPrompt(serverId: string, name: string, args?: Record<string, string>, context?: AgentContext): Promise<unknown> {
     this.assertServerNotHidden(serverId);
+    await assertCredentialConnectionAccess(this.connections.get(serverId)?.server ?? this.serverConfigs.find(s => s.id === serverId)!, context);
     await this.ensureConnected(serverId);
     const connection = this.connections.get(serverId);
     if (!connection || connection.status !== 'connected') {
       throw new Error(`MCP server not connected: ${serverId}`);
     }
 
+    await assertCredentialConnectionAccess(connection.server, context);
     const send = (message: string) => {
-      connection.transport.send(message);
+      const signal = context ? getExecutionSignal(context) : undefined;
+      if (signal) connection.transport.send(message, signal); else connection.transport.send(message);
     };
 
     const result = await connection.protocol.sendRequest(send, MCPMethods.GetPrompt, {
@@ -778,7 +792,7 @@ export class MCPBridge extends EventEmitter {
    */
   serversSection(opts: { codemode: boolean }): string | undefined {
     const listings: ServerListing[] = [...this.serverConfigs, ...this.pluginServers]
-      .filter((server) => server.isEnabled)
+      .filter((server) => server.isEnabled && !server.credentialConnection)
       .map((server) => ({ id: server.id, description: server.description, exposures: configuredExposures(server) }));
     return renderServersSection(listings, opts);
   }
@@ -1027,7 +1041,7 @@ export class MCPBridge extends EventEmitter {
     const bridge = this; // capture for closures
 
     for (const connection of this.connections.values()) {
-      if (connection.status !== 'connected') continue;
+      if (connection.status !== 'connected' || connection.server.credentialConnection) continue;
 
       for (const tool of connection.tools) {
         const serverId = connection.id;
@@ -1037,6 +1051,7 @@ export class MCPBridge extends EventEmitter {
           parameters: tool.inputSchema,
           toolId: 'mcp',
           permissionAction: `${serverId}.${tool.name}`,
+          executionTimeoutMs: () => bridge.requestBudget(serverId),
           recoverySafety: () => bridge.recoverySafety(serverId, tool.name),
           maxResultChars: (args) => bridge.maxResultChars(serverId, tool.name, args),
           execute: async (args, context) => {
@@ -1066,6 +1081,7 @@ export class MCPBridge extends EventEmitter {
       ...resourceHandlers(bridge),
       {
         name: 'mcp_list_tools',
+        executionTimeoutMs: args => bridge.requestBudget(String(args.server_id ?? '')),
         description:
           'List available tools from connected MCP (Model Context Protocol) servers. ' +
           'Call this to discover what external tools are available before calling mcp_call_tool. ' +
@@ -1100,9 +1116,9 @@ export class MCPBridge extends EventEmitter {
             tools: Array<{ name: string; description: string; parameters?: unknown }>;
           }> = [];
 
-          if (serverId) await bridge.ensureConnected(serverId);
+          if (serverId) { await assertCredentialConnectionAccess(bridge.configOf(serverId), context); await bridge.ensureConnected(serverId); }
           for (const connection of [...bridge.connections.values()].sort((a, b) => a.id.localeCompare(b.id))) {
-            if (connection.status !== 'connected') continue;
+            if (connection.status !== 'connected' || !await canUseCredentialConnection(connection.server, context)) continue;
             if (serverId && connection.id !== serverId) continue;
 
             // `hidden` tools are never listed. `codemode` tools are listed only
@@ -1138,7 +1154,7 @@ export class MCPBridge extends EventEmitter {
           }
 
           if (result.length === 0) {
-            return { message: serverId ? `MCP server '${serverId}' not found or not connected.` : 'No MCP servers connected.' };
+            return { message: serverId ? `MCP server '${serverId}' not found or not connected.` : 'No authorized MCP servers connected for this user/workspace.' };
           }
 
           return result;
@@ -1146,6 +1162,7 @@ export class MCPBridge extends EventEmitter {
       },
       {
         name: 'mcp_call_tool',
+        executionTimeoutMs: args => bridge.requestBudget(String(args.server_id ?? '')),
         description:
           'Call a tool on a connected MCP server. Use mcp_list_tools first to discover available tools, ' +
           'server IDs, and parameter schemas.',
@@ -1185,7 +1202,7 @@ export class MCPBridge extends EventEmitter {
   /** Connected servers with each tool's model-facing name and exposure. */
   private exposedTools(): Array<{ connection: MCPServerConnection; tool: MCPToolDefinition; name: string; exposure: McpExposure }> {
     const connected = [...this.connections.values()]
-      .filter((c) => c.status === 'connected')
+      .filter((c) => c.status === 'connected' && !c.server.credentialConnection)
       .sort((a, b) => a.id.localeCompare(b.id));
     // Named across ALL servers at once: two server ids that sanitise alike
     // must not hand out the same handler name.
@@ -1216,6 +1233,7 @@ export class MCPBridge extends EventEmitter {
           parameters: objectSchema(tool.inputSchema),
           toolId: 'mcp',
           permissionAction: () => action,
+          executionTimeoutMs: () => this.requestBudget(serverId),
           recoverySafety: () => this.recoverySafety(serverId, tool.name),
           maxResultChars: (args: Record<string, unknown>) => this.maxResultChars(serverId, tool.name, args),
           // Authorized in mcp_call_tool's wrapped shape: authorizeMcpDispatch

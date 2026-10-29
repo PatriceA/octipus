@@ -2,7 +2,7 @@ import type { RoleMeta } from '../types';
 export const meta: RoleMeta = {
   role: 'ai',
   description: 'ML/AI/RAG/prompt engineering',
-  toolIds: ['shell', 'filesystem', 'browser', 'browser-ext', 'websearch', 'knowledge', 'task_state', 'mcp'],
+  toolIds: ['shell', 'connections', 'filesystem', 'browser', 'browser-ext', 'websearch', 'knowledge', 'task_state', 'mcp'],
   // Lazy tool discovery (Ollama, non-small only): hot path is shell + filesystem
   // + websearch + knowledge (the prompt mandates search_knowledge as step 1).
   // browser/browser-ext (~16k of schema) + task_state become the long tail via
