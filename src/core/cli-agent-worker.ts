@@ -1537,12 +1537,15 @@ When a task matches one of these skills, load it with get_skill before starting 
               .filter((value): value is string => typeof value === 'string' && !!value.trim());
             const noDiagnostics = (event.result == null || event.result === '')
               && (event.errors == null || (Array.isArray(event.errors) && event.errors.length === 0));
-            const explicitCancellation = turnDiagnostics.length > 0
+            const expectedCancellation = turnDiagnostics.length > 0
               && (event.result == null || typeof event.result === 'string')
               && (event.errors == null || (Array.isArray(event.errors) && event.errors.every((value: unknown) => typeof value === 'string')))
-              && turnDiagnostics.every(value => /^(?:error:\s*)?(?:\[request interrupted by user\]|(?:(?:execution|request|turn|operation|run|task)\s+(?:was\s+)?)?(?:interrupted|aborted)(?: by user)?)[.!]?$/i.test(value.trim()));
+              && turnDiagnostics.every(value => /^(?:error:\s*)?(?:\[request interrupted by user\]|(?:(?:execution|request|turn|operation|run|task)\s+(?:was\s+)?)?(?:interrupted|aborted)(?: by user)?)[.!]?$/i.test(value.trim())
+                // Claude 2.1.312 also reports this structural diagnostic when
+                // our interrupt ends a turn immediately after a tool result.
+                || value.trim() === '[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use');
             const interruptedCancellation = built.keepStdinOpen && event.type === 'result' && !!this.steeringInterrupt
-              && event.subtype === 'error_during_execution' && (noDiagnostics || explicitCancellation);
+              && event.subtype === 'error_during_execution' && (noDiagnostics || expectedCancellation);
             if (interruptedCancellation) this.steeringInterrupt!.cancellationReported = true;
             consecutiveNonJson = 0;
             // Claude can end an interrupted turn with no diagnostic at all.
