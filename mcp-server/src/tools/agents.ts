@@ -8,6 +8,23 @@ import type { OctiClient } from '../client.js';
 
 export function registerAgentTools(server: McpServer, client: OctiClient): void {
   server.tool(
+    'octipus_get_agent_activity',
+    'Read durable execution and provider-attempt history, including failed or collected children. UI agent prefixes must be unambiguous. Access remains scoped to the authenticated workspace and authorized sessions.',
+    { session_id: z.string(), agent_id: z.string().optional(), dispatch_id: z.string().optional(),
+      after_agent_id: z.string().optional(), after_event_id: z.number().int().min(0).optional(),
+      include_events: z.boolean().optional(), limit: z.number().int().min(1).max(100).optional() },
+    async ({ session_id, agent_id, dispatch_id, after_agent_id, after_event_id, include_events, limit }) => {
+      try {
+        const result = await client.getAgentActivity({ sessionId: session_id, agentId: agent_id, dispatchId: dispatch_id,
+          afterAgentId: after_agent_id, afterEventId: after_event_id, includeEvents: include_events, limit });
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] };
+      } catch {
+        return { isError: true, content: [{ type: 'text' as const, text: 'Agent history could not be retrieved. Check session/workspace authorization and diagnostic availability.' }] };
+      }
+    },
+  );
+
+  server.tool(
     'octipus_list_agents',
     'List all running agents with their status, model, and topic.',
     {},

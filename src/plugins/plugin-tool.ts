@@ -1,6 +1,6 @@
 import { manifestTools } from '@octipus/plugin-sdk';
 import type { AgentContext, ToolManifest } from '@/core/types';
-import { getVault } from '@/security/vault';
+import { ToolNotExecutedError } from '@/core/tool-execution-error';
 import { BaseTool, createParameterSchema } from '@/tools/base-tool';
 import type { LoadedPlugin } from './types';
 
@@ -77,14 +77,12 @@ export class PluginTool extends BaseTool {
     const secrets = this.plugin.manifest.secrets;
     if (!secrets) return config;
 
-    const vault = getVault();
-    for (const [configKey, secretName] of Object.entries(secrets)) {
-      const value = await vault.getForAgent(
-        { userId: context.userId, toolId: this.id, agentId: context.id },
-        secretName,
-      );
-      if (value !== null) config[configKey] = value;
-    }
+    // Plugin handlers can run arbitrary code and persist their config. Until
+    // an integration has a bounded credential-consuming client, do not hand
+    // vault values to it (even if output would later be redacted).
+    void context;
+    if (Object.keys(secrets).length) throw new ToolNotExecutedError(this.id,
+      'Automatic vault injection into plugin handlers is disabled. Use a configured authenticated integration.');
     return config;
   }
 

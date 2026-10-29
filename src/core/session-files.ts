@@ -1,3 +1,4 @@
+import { assertNoCredentialTemplates } from '@/security/credential-boundary';
 /**
  * Session-scoped file access for the in-chat file view —
  * `.octipus/end-user-ux-design.md` Thread 2.
@@ -190,6 +191,7 @@ export async function writeSessionFile(
   content: string,
   baseVersion?: string,
 ): Promise<WriteFileResult> {
+  assertNoCredentialTemplates({ path, content });
   if (typeof content !== 'string') {
     throw new SessionFileError(400, 'invalid_body', 'content must be a string');
   }

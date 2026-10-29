@@ -57,6 +57,18 @@ afterAll(async () => {
 });
 
 describe('Vault scope isolation', () => {
+  test('restricted credentials deny callers with missing tool or agent identity', async () => {
+    const { getVault } = await import('@/security/vault');
+    const vault = getVault();
+    const row = await vault.store(aliceId, 'identity-required', 'synthetic-canary-only', {
+      credentialType: 'api_key', allowedTools: ['data'], allowedAgents: ['authorized-agent'],
+    });
+    expect(await vault.canAccess(aliceId, row.id, {})).toBe(false);
+    expect(await vault.canAccess(aliceId, row.id, { toolId: 'data' })).toBe(false);
+    expect(await vault.canAccess(aliceId, row.id, { agentId: 'authorized-agent' })).toBe(false);
+    expect(await vault.canAccess(aliceId, row.id, { toolId: 'data', agentId: 'authorized-agent' })).toBe(true);
+  });
+
   test('user-scoped secrets are not readable across tenants', async () => {
     const { getVault } = await import('@/security/vault');
     const vault = getVault();

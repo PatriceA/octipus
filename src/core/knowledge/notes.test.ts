@@ -62,6 +62,25 @@ describe('NoteService', () => {
     await executeRaw('TRUNCATE TABLE knowledge_links');
   });
 
+  test('automated learnings cannot crowd ordinary or pinned notes out of the first page', async () => {
+    const { getDb } = await import('@/db/postgres');
+    const { notes } = await import('@/db/schema/notes');
+    const { createHash } = await import('node:crypto');
+    const bodySha256 = createHash('sha256').update('').digest('hex');
+    const manual = randomUUID(), pin = randomUUID();
+    await getDb().insert(notes).values([
+      ...Array.from({ length: 501 }, (_, i) => ({ userId, id: randomUUID(), slug: `automatic-${i}`, title: `Automatic ${i}`, bodySha256, tags: ['session-learning'], updatedAt: new Date('2026-10-29') })),
+      { userId, id: manual, slug: 'my-decision', title: 'My decision', bodySha256, tags: ['project'], updatedAt: new Date('2000-01-01') },
+      { userId, id: pin, slug: 'pinned-lesson', title: 'Pinned lesson', bodySha256, tags: ['session-learning'], pinned: true, updatedAt: new Date('1990-01-01') },
+    ]);
+    const first = await svc.list(personalNoteScope(userId), { limit: 500 });
+    expect(first[0].id).toBe(pin);
+    expect(first.map(note => note.id)).toContain(manual);
+    const explicit = await svc.list(personalNoteScope(userId), { tag: 'session-learning', limit: 500 });
+    expect(explicit).toHaveLength(500);
+    expect(explicit.every(note => note.tags.includes('session-learning'))).toBe(true);
+  });
+
   test('save creates a note, derives slug, and wires wikilinks + tags', async () => {
     const r = await svc.save({
       scope: personalNoteScope(userId),

@@ -104,6 +104,9 @@ function rawReadPattern(names: string[]): RegExp {
 const ACCESS_LAYER = 'access layer';
 const PERSONAL_READER = 'personal reader';
 const ALLOWLIST: Record<string, string> = {
+  'src/core/agent/activity-tools.ts': 'Read-only diagnostic access layer: owner and exact workspace scope plus current target-session control access before returning identities/events.',
+  'src/db/repositories/credential-remediation.ts': 'Administrative security cleanup, not an agent tool: server-owned owner predicates on every read and CAS mutation; reports only redacted metadata.',
+
   // The access layer itself.
   'src/db/repositories/scoped.ts': ACCESS_LAYER,
   'src/db/repositories/space.ts': ACCESS_LAYER,

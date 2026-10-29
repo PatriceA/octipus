@@ -357,9 +357,7 @@ describe('space secrets (§9.5)', () => {
     expect(await spaceRepos(owner).secrets.read('team_token')).toBe('space-value-123');
 
     const { injectSecrets } = await import('@/security/secret-injector');
-    const injected = await injectSecrets('curl -H "x: {{secret:team_token}}"', { userId: ownerId, toolId: 'shell' });
-    expect(injected.content).not.toContain('space-value-123');
-    expect(injected.errors[0]).toContain('team_token');
+    await expect(injectSecrets('curl -H "x: {{secret:team_token}}"', { userId: ownerId, toolId: 'shell' })).rejects.toThrow('Vault interpolation is disabled');
     const { isVaultAuthenticated } = await import('@/security/flow-guard');
     expect(await isVaultAuthenticated(ownerId, { toolId: 'shell', action: 'execute', args: { command: 'curl', env: { T: '{{secret:team_token}}' } } })).toBe(false);
 

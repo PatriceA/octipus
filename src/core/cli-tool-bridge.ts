@@ -28,6 +28,7 @@ function ownTimeout(name: string, args: Record<string, unknown>, tools: ToolHand
 /** A run-local capability, never an API/admin credential. No caller-supplied identity. */
 export async function startCliToolBridge(options: {
   tools: () => ToolHandler[];
+  registered?: (name: string) => boolean;
   /** Tools the executor blocked after repeated failures — named in the refusal. */
   blocked?: (name: string) => boolean;
   advertisedTools?: () => ToolHandler[];
@@ -143,9 +144,11 @@ export async function startCliToolBridge(options: {
         // Exact membership check before ToolExecutor's fuzzy name recovery.
         if (!options.tools().some(t => t.name === input.name)) {
           // A CLI agent never sees the executor's system message, so say why here.
-          throw new BridgeError(options.blocked?.(input.name)
-            ? `Tool ${input.name} is blocked for this run after failing the same way repeatedly; use other tools and report the failure`
-            : 'Tool is not available to this agent');
+          if (options.blocked?.(input.name)) throw new BridgeError(
+            `Tool ${input.name} is blocked for this run after failing the same way repeatedly; use other tools and report the failure`, 'TOOL_BLOCKED', false);
+          if (options.registered?.(input.name)) throw new BridgeError(
+            'Tool is registered but unavailable under this run permission state', 'TOOL_PERMISSION_DENIED', false);
+          throw new BridgeError('Tool is not registered in this agent authorized tool set. Call list_tools; this does not establish whether the tool exists elsewhere in Octipus.', 'TOOL_NOT_REGISTERED_FOR_AGENT', false);
         }
         started = true;
         if (!unqueued(input.name)) approvalCall = approval;

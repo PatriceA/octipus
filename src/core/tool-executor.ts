@@ -1,3 +1,4 @@
+import { assertNoCredentialTemplates } from '@/security/credential-boundary';
 import { redactedCommand } from '@/utils/command-log';
 import { ToolNotExecutedError, ToolPolicyRefusalError, uncertainExecutionRecord } from './tool-execution-error';
 import { actionRecovery, isReadOnlyAction } from './action-recovery';
@@ -604,10 +605,25 @@ export class ToolExecutor {
     const results: ToolResult[] = [];
     // Swarm: detect parallelGroup spawn_child calls and execute them
     // concurrently. Results keyed by toolCallId for merge-in-order below.
-    const parallelResults = await this.executeParallelSwarmGroups(toolCalls);
+    const credentialFailures = new Map<string, string>();
+    for (const call of toolCalls) {
+      try { assertNoCredentialTemplates(call.arguments); }
+      catch (error) { credentialFailures.set(call.id, (error as Error).message); }
+    }
+    const parallelResults = await this.executeParallelSwarmGroups(toolCalls.filter(call => !credentialFailures.has(call.id)));
 
     for (const toolCall of toolCalls) {
       this.assertCanExecute();
+      if (credentialFailures.has(toolCall.id)) {
+        const error = credentialFailures.get(toolCall.id)!;
+        this.counters.permissionDenials++;
+        this.counters.toolErrors++;
+        this.counters.policyRefusals = [...new Set([...(this.counters.policyRefusals ?? []), error])];
+        this.emitFn('action', { type: 'tool_call_complete', toolCallId: toolCall.id,
+          name: toolCall.name, role: this.context.role, status: 'error', error });
+        results.push({ toolCallId: toolCall.id, result: null, errorCode: 'permission_denied', error });
+        continue;
+      }
       // Swarm: if this call was handled by the parallel fan-out, skip
       // execution but still tally it so the receipt's call count is
       // independent of whether spawns ran in parallel or sequentially.
@@ -809,7 +825,7 @@ export class ToolExecutor {
       };
       await ensureSharedAudienceKnown(this.context.sessionId);
       let permResult = applyFlowGuard(getConfig().agent?.flowGuard, this.context.sessionId, flowCall, storedPermission);
-      // Vault-authenticated calls ({{secret:NAME}}) are the sanctioned way to use credentials.
+      // Model-supplied vault references do not establish authentication.
       if (permResult !== storedPermission && await isVaultAuthenticated(this.context.userId, flowCall)) permResult = storedPermission;
       // A message to the caller's own chats reaches no one else.
       if (permResult !== storedPermission && isOwnerOnlyDelivery(this.context.userId, flowCall)) permResult = storedPermission;

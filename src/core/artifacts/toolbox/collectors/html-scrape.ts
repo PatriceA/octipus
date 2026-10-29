@@ -67,7 +67,7 @@ export const htmlScrapeCollector: ToolboxTool<Params, Result> = {
     },
     headers: {
       type: 'object',
-      description: 'Request headers; `${vault.<key>}` placeholders are resolved.',
+      description: 'Non-secret request headers. Vault interpolation is disabled; use a configured authenticated integration.',
     },
     limit: { type: 'number', description: 'Maximum rows to return (default 100, max 500).' },
   },

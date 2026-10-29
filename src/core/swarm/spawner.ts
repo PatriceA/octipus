@@ -1,3 +1,4 @@
+import { runDelegationAttempt, type DelegationAttempt } from './attempt-history';
 import { getConfig } from '@/config';
 import type { AnyAgentWorker } from '@/core/agent-manager';
 import { getAgentManager } from '@/core/agent-manager';
@@ -160,6 +161,7 @@ function readTaskAncestry(metadata: Record<string, unknown> | undefined): string
 
 /** Options accepted by spawnChild internally — extends the tool params. */
 export interface SpawnChildInternalOpts {
+  dispatchId?: string;
   /** Used by `escalate_to_other_lane` to pick a different expert. */
   excludeExpertId?: string;
   /** Tag logged on spawn — distinguishes normal spawns from escalation. */
@@ -662,6 +664,11 @@ export class SwarmSpawner {
         parentContext.sponsor,
       ));
 
+    if (params.routePolicy?.primaryModel && ![childModel, childModelName].includes(params.routePolicy.primaryModel)) {
+      graph.releaseFingerprint(briefHash);
+      return this.denialResult(parent, 'Requested primaryModel does not match the configured topic route. No child was started; change the topic binding or request its configured model.');
+    }
+
     // Small-tier child: cap the tool surface, mirroring the worker path. Role
     // tool lists are priority-ordered so the core groups survive. Applied here —
     // after resolution (the tier needs the bound model) but BEFORE the skill
@@ -885,6 +892,7 @@ export class SwarmSpawner {
     // not spawns per turn: a long turn could otherwise spawn only `cap` children
     // in total, however many had finished.
     parent.budget.fanOut.used++;
+
     const result = await releaseOnThrow(() => this.runChildWithRetry({
       parent,
       parentContext,
@@ -909,6 +917,10 @@ export class SwarmSpawner {
       childIsSmall: isSmall,
       resumeKey,
       onWorkerStarted: internal.onWorkerStarted,
+      dispatchId: internal.dispatchId ?? randomUUID(),
+      allowBackup: params.routePolicy?.allowBackup !== false,
+      requestedModel: childModel,
+      attempts: [],
     })).finally(() => {
       parent.budget.fanOut.used = Math.max(0, parent.budget.fanOut.used - 1);
     });
@@ -964,6 +976,11 @@ export class SwarmSpawner {
   // ── Child run + retry orchestration ────────────────────────────────
 
   private async runChildWithRetry(opts: {
+    dispatchId: string;
+    allowBackup: boolean;
+    requestedModel: string;
+    route?: 'primary' | 'backup';
+    attempts: DelegationAttempt[];
     parent: AgentNode;
     parentContext: AgentContext;
     childDepth: 1 | 2;
@@ -1016,6 +1033,10 @@ export class SwarmSpawner {
     /** See `SpawnChildInternalOpts.onWorkerStarted`; every attempt reports. */
     onWorkerStarted?: (agentId: string) => void;
   }): Promise<ChildResult> {
+    opts.dispatchId ??= randomUUID();
+    opts.requestedModel ??= opts.childModel;
+    opts.attempts ??= [];
+    opts.allowBackup ??= true;
     opts.fsBaselines ??= new Map();
     if (opts.worktree === undefined) opts.worktree = await this.prepareWorktree(opts);
     const wt = opts.worktree;
@@ -1167,6 +1188,7 @@ export class SwarmSpawner {
     /** The model the surviving attempt ran on — not always `opts.childModel`. */
     let survivingModel = opts.childModel;
     let survivingModelName = opts.childModelName;
+    let survivingRoute = opts.route ?? 'primary';
     // Every attempt that failed before the one we ultimately return. Without
     // this the retry's clean `ok` is all the parent ever sees, and a run where
     // the first attempt lost every tool it had is indistinguishable from one
@@ -1211,12 +1233,12 @@ export class SwarmSpawner {
     // still failed on a model/provider error after the retries above, make ONE
     // more attempt on a fresh node bound to the topic's configured backup.
     // Skipped when no backup is bound or it would rerun the same model.
-    if (lastResult && (lastResult.status === 'provider_error' || lastResult.status === 'tool_error')) {
+    if (opts.allowBackup && lastResult && (lastResult.status === 'provider_error' || lastResult.status === 'tool_error')) {
       try {
         // The install lane's backup — personal bindings have none (spec §8.2).
         const backup = await resolveModel({ userId: opts.parentContext.userId, topic: opts.childLane, backup: true,
           inSpace: !!opts.parentContext.space, spaceRole: opts.parentContext.space?.role, sponsor: opts.parentContext.sponsor });
-        if (backup && backup.modelId !== opts.childModel) {
+        if (backup && (backup.modelId !== opts.childModel || (backup.name && backup.name !== opts.childModelName))) {
           coreLogger.warn(
             { parentNodeId: opts.parent.id, failedModel: opts.childModel, backupModel: backup.modelId, topic: opts.childLane },
             'Swarm child failed on primary model — retrying once on topic backup model',
@@ -1229,11 +1251,12 @@ export class SwarmSpawner {
           // Same reset as the crash retry: a new node, a new allowance.
           opts.budget.fanOut = { cap: opts.budget.fanOut.cap, used: 0 };
           lastResult = await this.singleSpawnAndRun(
-            { ...opts, childModel: backup.modelId, childModelName: backup.name, reason: 'retry' },
+            { ...opts, childModel: backup.modelId, childModelName: backup.name, route: 'backup', reason: 'retry' },
             true,
           );
           survivingModel = backup.modelId;
           survivingModelName = backup.name;
+          survivingRoute = 'backup';
           noteFailure(superseded);
           discardedTokens += superseded.usedTokens ?? 0;
         }
@@ -1262,7 +1285,7 @@ export class SwarmSpawner {
       // `opts.childModel` runs the corrective attempt on the model that already
       // failed — which then gets discarded as an unrelated failure, a whole
       // child run charged to the parent for nothing.
-      { ...opts, childModel: survivingModel, childModelName: survivingModelName },
+      { ...opts, childModel: survivingModel, childModelName: survivingModelName, route: survivingRoute },
       lastResult,
       noteFailure,
       // Everything the crash retry and the backup-model attempt already burned.
@@ -1293,6 +1316,11 @@ export class SwarmSpawner {
       );
     }
     if (lastResult && discardedTokens > 0) lastResult.discardedTokens = discardedTokens;
+    if (lastResult) {
+      lastResult.dispatchId = opts.dispatchId;
+      lastResult.appliedRoutePolicy = { primaryModel: opts.requestedModel, backup: opts.allowBackup ? 'configured_topic_backup' : 'disabled', proseConstraintsControlRouting: false };
+      lastResult.attempts = [...opts.attempts];
+    }
     return lastResult!;
   }
 
@@ -1524,6 +1552,10 @@ export class SwarmSpawner {
     opts: Parameters<SwarmSpawner['runChildWithRetry']>[0],
     isCrashRetry: boolean,
   ): Promise<ChildResult> {
+    opts.dispatchId ??= randomUUID();
+    opts.requestedModel ??= opts.childModel;
+    opts.attempts ??= [];
+    opts.allowBackup ??= true;
     const agentManager = getAgentManager();
     const startTime = Date.now();
     let worker: AnyAgentWorker;
@@ -1666,6 +1698,7 @@ export class SwarmSpawner {
         // `producesPlan` stage that spawned a planner produced no plan items and
         // the loop that reads them ran zero times — reading as success.
         contextMetadata: {
+          delegationDispatchId: opts.dispatchId,
           originalRequest:
             ((opts.parentContext.metadata as Record<string, unknown>)?.originalRequest as string) ??
             opts.brief.originalUserRequest,
@@ -1870,7 +1903,14 @@ export class SwarmSpawner {
 
     while (true) {
       try {
-        output = await worker.run(opts.childMessage);
+        output = await runDelegationAttempt({
+          dispatchId: opts.dispatchId, agentId: childId, uiAgentId: childId,
+          appliedRoutePolicy: { primaryModel: opts.requestedModel, backupAllowed: opts.allowBackup },
+          requestedModel: opts.requestedModel, selectedModel: opts.childModel, selectedModelName: opts.childModelName,
+          route: opts.route ?? 'primary',
+          ...(opts.attempts.length ? { fallbackReason: opts.attempts.at(-1)?.error ?? 'Retry after an unsuccessful attempt' } : {}),
+        }, opts.attempts, () => worker.run(opts.childMessage), opts.parentContext,
+          () => 'getExecutionDiagnostics' in worker ? worker.getExecutionDiagnostics() : null);
         status = 'ok';
         break;
       } catch (err) {

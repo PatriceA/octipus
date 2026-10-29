@@ -1,3 +1,4 @@
+import { assertNoCredentialTemplates } from '@/security/credential-boundary';
 import type { PendingStageApproval } from '@/shared/pipeline-approval';
 import { sessions } from '../schema/sessions';
 import { emptyWorkPlan, workPlanStateSchema } from '@/shared/work-plan';
@@ -40,6 +41,7 @@ export class PipelineRepository {
   private get db() { return getDb(); }
 
   async create(data: NewPipeline): Promise<Pipeline> {
+    assertNoCredentialTemplates(data);
     const [row] = await this.db.insert(pipelines).values(data).returning();
     return row;
   }
@@ -65,6 +67,7 @@ export class PipelineRepository {
 
   /** Keep the visible plan in step with failures and resumed execution too. */
   async updatePipeline(id: string, data: Partial<NewPipeline>): Promise<void> {
+    assertNoCredentialTemplates(data);
     await this.db.transaction(async tx => {
       await tx.update(pipelines).set({ ...data,
         // A stage may have read metadata before a root queued plan edits.
@@ -117,6 +120,7 @@ export class PipelineRepository {
   }
 
   async createNodes(rows: NewPipelineNode[]): Promise<PipelineNodeRow[]> {
+    assertNoCredentialTemplates(rows);
     if (rows.length === 0) return [];
     return this.db.insert(pipelineNodes).values(rows).returning();
   }
@@ -248,6 +252,7 @@ export class PipelineRepository {
   }
 
   async addPlanItems(rows: NewPlanItem[], beforeItemId?: string): Promise<PlanItemRow[]> {
+    assertNoCredentialTemplates(rows);
     if (rows.length === 0) return [];
     return this.db.transaction(async tx => {
       if (beforeItemId) {
@@ -271,6 +276,7 @@ export class PipelineRepository {
   }
 
   async updatePlanItem(id: string, data: Partial<NewPlanItem>): Promise<PlanItemRow | null> {
+    assertNoCredentialTemplates(data);
     return this.db.transaction(async tx => {
       const [row] = await tx.update(planItems).set({ ...data, updatedAt: new Date() })
         .where(eq(planItems.id, id)).returning();

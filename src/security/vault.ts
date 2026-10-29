@@ -661,13 +661,13 @@ export class Vault {
 
     // Check tool permission
     const allowedTools = entry[0].allowedTools || [];
-    if (allowedTools.length > 0 && options.toolId && !allowedTools.includes(options.toolId)) {
+    if (allowedTools.length > 0 && (!options.toolId || !allowedTools.includes(options.toolId))) {
       return false;
     }
 
     // Check agent permission
     const allowedAgents = entry[0].allowedAgents || [];
-    if (allowedAgents.length > 0 && options.agentId && !allowedAgents.includes(options.agentId)) {
+    if (allowedAgents.length > 0 && (!options.agentId || !allowedAgents.includes(options.agentId))) {
       return false;
     }
 

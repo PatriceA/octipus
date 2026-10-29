@@ -1,3 +1,6 @@
+import { redactAgentDiagnostics } from '@/security/credential-redaction';
+import { createAgentActivityTools } from './agent/activity-tools';
+import { buildToolDiscoveryHandlers } from '@/tools/tool-discovery';
 import { providerResetAt } from '@/core/errors/provider-recovery';
 import { readSessionFile } from '@/core/session-files';
 import type { CliImageAttachment } from './cli-adapters';
@@ -303,6 +306,8 @@ When a task matches one of these skills, load it with get_skill before starting 
     return JSON.stringify({
       agentId: this.context.id, sessionId: this.context.sessionId,
       workspaceId: this.context.workspaceId, planMode: this.connection?.planMode ?? false,
+      shellCapabilities: { hostServices: this.context.metadata?.hostServices === true,
+        note: 'Registered shell commands use the Octipus sandbox. Without approved hostServices a missing Docker socket describes that sandbox, not the host. Native vendor CLI Bash may have different host access.' },
       workPlan: formatWorkPlanContext(state), guidance: guidance.map(m => m.content),
       ...(this.detached.count() > 0 ? {
         detachedChildren: this.detached.list().map(pc => ({ childId: pc.childId, topic: pc.topic, runningMs: Date.now() - pc.startedAt })),
@@ -402,6 +407,8 @@ When a task matches one of these skills, load it with get_skill before starting 
    * is_error, codex turn.failed / error). The close handler rejects with this
    * so an error run surfaces as failed, never a soft success (C3).
    */
+  private executionDiagnostics: { providerStartedAt: string | null; credentialSource: 'operator_cli' | 'personal_cli'; credentialOwnerId: string | null; quotaProvider: string; exitCode?: number | null; signal?: string | null } | null = null;
+  getExecutionDiagnostics() { return this.executionDiagnostics ? { ...this.executionDiagnostics } : null; }
   private runError: string | null = null;
   private accountingModelName: string | undefined;
   /** Whose CLI login this run uses — null for the install's own (§8.5). Set by getCLISettings. */
@@ -576,8 +583,18 @@ When a task matches one of these skills, load it with get_skill before starting 
       // run, here: its cold retries and merge turns reuse it, and a /clear
       // mid-run then rejects its save like any stale root write.
       if (!isRootAgent(this.context)) this.generation = sessionGeneration(session.context as SessionContext | undefined);
+      // Full-advertisement CLI workers need the same callable discovery tools
+      // promised by their prompt as lazy workers. Derive from authorized tools.
+      for (const handler of createAgentActivityTools()) {
+        if (!this.toolExecutor.getTools().has(handler.name)) this.registerTool(handler);
+      }
+      const registered = [...this.toolExecutor.getTools().values()];
+      for (const handler of buildToolDiscoveryHandlers(registered)) {
+        if (!this.toolExecutor.getTools().has(handler.name)) this.registerTool(handler);
+      }
       this.bridge = await startCliToolBridge({
         tools: () => this.availableBridgeTools(),
+        registered: name => this.toolExecutor.getTools().has(name),
         blocked: name => this.toolExecutor.isToolBlocked(name),
         advertisedTools: () => {
           const tools = this.availableBridgeTools();
@@ -623,7 +640,7 @@ When a task matches one of these skills, load it with get_skill before starting 
 ` +
         `Use native MCP calls when supported. Only if your CLI lacks MCP support or loading this MCP server actually fails, use its terminal tool to run the bridge helper: ${quote(process.execPath)} ${quote(helper)} tools; or ${quote(process.execPath)} ${quote(helper)} call <tool-name> '<JSON arguments>'. Quote arguments safely. Credentials are supplied by the parent environment; never print them.
 ` +
-        `Use list_tools and describe_tool to discover additional tools, then call_discovered_tool with their name and arguments.
+        `Use list_tools and describe_tool to discover authorized Octipus tools, then call_discovered_tool with their name and arguments. mcp_list_tools discovers external MCP servers; an empty external-server list does not mean the parent Octipus MCP connection is unavailable. For failed or already-collected child execution history use get_agent_activity.
 ` +
         `Delegate only through Octipus spawn_child and collect_children. Your CLI's native subagents are disabled: they live inside this CLI process, and background work is lost when the process exits.`);
       const skillIndex = await this.cliSkillIndex();
@@ -934,6 +951,8 @@ When a task matches one of these skills, load it with get_skill before starting 
     // The row's settings and credential owner first: the quota key is per owner.
     const settings = await this.getCLISettings();
     const quotaKey = cliQuotaKey(toolConfig.quotaProvider, this.credentialOwner);
+    this.executionDiagnostics = { providerStartedAt: null, credentialSource: this.credentialOwner ? 'personal_cli' : 'operator_cli',
+      credentialOwnerId: this.credentialOwner?.userId ?? null, quotaProvider: toolConfig.quotaProvider };
 
     // Check quota
     const quotaTracker = getQuotaTracker();
@@ -1377,6 +1396,7 @@ When a task matches one of these skills, load it with get_skill before starting 
         windowsHide: true,
       });
       proc.once('spawn', () => {
+        if (this.executionDiagnostics) this.executionDiagnostics.providerStartedAt = new Date().toISOString();
         if (toolConfig.bufferOutput && !this.aborted) {
           this.emit('thought', {
             status: 'running',
@@ -1566,6 +1586,7 @@ When a task matches one of these skills, load it with get_skill before starting 
       });
 
       proc.on('close', async (code, signal) => {
+        if (this.executionDiagnostics) Object.assign(this.executionDiagnostics, { exitCode: code, signal });
         this.acceptsLiveGuidance = false;
         clearTimeout(this.steeringInterruptTimer);
         this.steeringInterruptTimer = undefined;
@@ -1696,13 +1717,19 @@ When a task matches one of these skills, load it with get_skill before starting 
           // Match only the vendor's error channels (stderr, the reported run
           // error), never the agent's own answer text: a run failing on e.g.
           // max-turns whose answer quoted a quota error re-armed the block.
+          if (stderr || this.runError) {
+            const safe = await redactAgentDiagnostics(this.context.userId, this.context.workspaceId ?? null,
+              { stderr, runError: this.runError }).catch(() => { throw new Error('CLI failure diagnostics withheld: credential redaction is unavailable'); }) as { stderr: string; runError: string | null };
+            stderr = safe.stderr;
+            this.runError = safe.runError;
+          }
           const failed = code !== 0 || !!signal || !!this.runError;
           if (failed && toolConfig.isQuotaError(`${stderr}\n${this.runError ?? ''}`)) {
             const quotaMessage = `${stderr}\n${this.runError ?? ''}`;
             const resetsAt = providerResetAt(quotaMessage);
             await quotaTracker.markExhausted(quotaKey, resetsAt);
-            reject(new ClassifiedError({ reason: FailoverReason.QUOTA_EXHAUSTED, recovery: RecoveryAction.FALLBACK_PROVIDER,
-              providerHint: toolConfig.quotaProvider, message: `Quota exhausted for ${toolConfig.name}: ${quotaMessage}`, metadata: { resetsAt: resetsAt?.toISOString() } }));
+            reject(Object.assign(new ClassifiedError({ reason: FailoverReason.QUOTA_EXHAUSTED, recovery: RecoveryAction.FALLBACK_PROVIDER,
+              providerHint: toolConfig.quotaProvider, message: `Quota exhausted for ${toolConfig.name}: ${quotaMessage}`, metadata: { resetsAt: resetsAt?.toISOString() } }), { cliDiagnostics: { exitCode: code, signal, stderr, credentialSource: credentialOwnerId ? 'personal_cli' : 'operator_cli', credentialOwnerId: credentialOwnerId ?? null, quotaProvider: toolConfig.quotaProvider } }));
             return;
           }
 
@@ -1735,7 +1762,7 @@ When a task matches one of these skills, load it with get_skill before starting 
           // CLI reported its own failure (Claude error_max_turns/is_error,
           // codex turn.failed/error) — never resolve as success (C3).
           if (this.runError) {
-            reject(new Error(this.runError));
+            reject(Object.assign(new Error(this.runError), { cliDiagnostics: { exitCode: code, signal, stderr, credentialSource: credentialOwnerId ? 'personal_cli' : 'operator_cli', credentialOwnerId: credentialOwnerId ?? null, quotaProvider: toolConfig.quotaProvider } }));
             return;
           }
 
@@ -1749,7 +1776,7 @@ When a task matches one of these skills, load it with get_skill before starting 
             const reason = signal ? `signal ${signal}` : `code ${code ?? 'unknown'}`;
             const message = `CLI ${binary} exited with ${reason}: ${diagnostic || 'no failure diagnostic reported'}`;
             agentLogger.error({ agentId: this.context.id, exitCode: code, signal, stderrTail: stderr.slice(-4000) }, message);
-            reject(new Error(message));
+            reject(Object.assign(new Error(message), { cliDiagnostics: { exitCode: code, signal, stderr, credentialSource: credentialOwnerId ? 'personal_cli' : 'operator_cli', credentialOwnerId: credentialOwnerId ?? null, quotaProvider: toolConfig.quotaProvider } }));
             return;
           }
 

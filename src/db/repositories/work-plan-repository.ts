@@ -1,3 +1,4 @@
+import { assertNoCredentialTemplates } from '@/security/credential-boundary';
 import { and, eq, sql } from 'drizzle-orm';
 import { getDb } from '../postgres';
 import { backgroundJobs } from '../schema/background-jobs';
@@ -14,6 +15,7 @@ export const workPlanRepository = {
     return row.metadata?.workPlan === undefined ? emptyWorkPlan() : workPlanStateSchema.parse(row.metadata.workPlan);
   },
   async save(sessionId: string, userId: string, expected: number, state: WorkPlanState): Promise<void> {
+    assertNoCredentialTemplates(state);
     await getDb().transaction(async tx => {
       const [old] = await tx.select({ metadata: sessions.metadata, workspaceId: sessions.workspaceId }).from(sessions)
         .where(and(eq(sessions.id, sessionId), eq(sessions.userId, userId))).for('update');

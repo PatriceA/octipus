@@ -1,3 +1,4 @@
+import { formatAttemptHistory } from './attempt-history';
 import type { ToolHandler } from '@/core/agent-worker';
 import type { AgentWorker } from '@/core/agent-worker';
 import { swarmNodeRepository } from './node-repository';
@@ -135,7 +136,7 @@ export function formatCollectedResults(results: ChildResult[]): string {
     // never saw filesChanged/toolErrors/denials on the flow it actually uses —
     // the ground-truth audit was computed, persisted to swarm_nodes, and then
     // dropped before it reached the model that needed it.
-    return `<ChildResult ${meta}>${formatReceiptBlock(r.receipt)}\n  <output>${outStr}</output>${notes}${scorerFail}\n</ChildResult>`;
+    return `<ChildResult ${meta}>${formatReceiptBlock(r.receipt)}${formatAttemptHistory(r)}\n  <output>${outStr}</output>${notes}${scorerFail}\n</ChildResult>`;
   });
   return `<CollectChildren count="${results.length}">\n${lines.join('\n')}\n</CollectChildren>`;
 }

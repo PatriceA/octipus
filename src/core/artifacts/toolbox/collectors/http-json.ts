@@ -28,7 +28,7 @@ export const httpJsonCollector: ToolboxTool<Params, unknown> = {
     headers: {
       type: 'object',
       description:
-        'Request headers. Values may reference vault secrets via ${vault.<key>} placeholders.',
+        'Non-secret request headers. Vault interpolation is disabled.',
     },
     body: { type: 'object', description: 'JSON body, sent only when method=POST.' },
     jsonpath: {
@@ -44,11 +44,11 @@ export const httpJsonCollector: ToolboxTool<Params, unknown> = {
       params: { url: 'https://api.github.com/repos/PatriceA/octipus' },
     },
     {
-      summary: 'Authenticated POST with vault token',
+      summary: 'POST a public query',
       params: {
         url: 'https://api.example.com/query',
         method: 'POST',
-        headers: { authorization: 'Bearer ${vault.example_api_token}' },
+        headers: { 'content-type': 'application/json' },
         body: { q: 'select 1' },
         jsonpath: 'rows.0',
       },

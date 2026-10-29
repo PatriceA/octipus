@@ -193,7 +193,7 @@ export class NoteRepository {
       .select()
       .from(notes)
       .where(and(...conditions))
-      .orderBy(desc(notes.updatedAt))
+      .orderBy(desc(notes.pinned), sql`('session-learning' = ANY(${notes.tags})) ASC`, desc(notes.updatedAt))
       .limit(opts.limit ?? 50)
       .offset(opts.offset ?? 0);
   }

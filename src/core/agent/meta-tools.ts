@@ -1,3 +1,4 @@
+import { createAgentActivityTools } from './activity-tools';
 import { createActionRecoveryTools } from './recovery-tools';
 import { pipelinePermissionProfileSchema } from '@/shared/pipeline-permissions';
 import { z } from 'zod';
@@ -114,7 +115,7 @@ export function createMetaTools(
         durationMs: Date.now() - startedAt, spawnedChildren: [] })),
     });
   };
-  const tools: ToolHandler[] = [...createActionRecoveryTools(), ...createWorkPlanTools(), ...createPipelineRecoveryTools(trackPipeline)];
+  const tools: ToolHandler[] = [...createAgentActivityTools(), ...createActionRecoveryTools(), ...createWorkPlanTools(), ...createPipelineRecoveryTools(trackPipeline)];
 
   // Swarm: register `spawn_child` on the Root agent (depth 0). With
   // `swarmRefs` we also enable detach mode + `collect_children`, so the
@@ -646,7 +647,7 @@ export function createMetaTools(
 
   if (lite) {
     return tools.filter(
-      (t) => t.name === 'spawn_child' || t.name === 'collect_children' || t.name === 'steer_child' || t.name === 'remember_this' || t.name === 'get_work_plan' || t.name === 'update_work_plan' || t.name === 'exit_plan_mode' || t.name === 'complete_taken_task',
+      (t) => t.name === 'get_agent_activity' || t.name === 'spawn_child' || t.name === 'collect_children' || t.name === 'steer_child' || t.name === 'remember_this' || t.name === 'get_work_plan' || t.name === 'update_work_plan' || t.name === 'exit_plan_mode' || t.name === 'complete_taken_task',
     );
   }
   return tools;

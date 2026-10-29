@@ -1,3 +1,5 @@
+// Worker lifecycle persistence is covered by activity-tools.test; these fake workers only exercise worktree routing.
+vi.mock('./attempt-history', () => ({ runDelegationAttempt: async (_input: unknown, _history: unknown, run: () => Promise<unknown>) => run() }));
 /**
  * `swarm.worktreeIsolation` through the spawner's real retry path.
  *

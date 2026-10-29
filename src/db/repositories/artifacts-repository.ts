@@ -1,3 +1,4 @@
+import { assertNoCredentialTemplates } from '@/security/credential-boundary';
 import { and, desc, eq, inArray, isNotNull, isNull, lt } from 'drizzle-orm';
 import { revokeArtifactViewers } from '@/core/artifacts/viewer-access';
 import { getDb } from '../postgres';
@@ -50,6 +51,7 @@ export class ArtifactsRepository {
 
   // ── artifacts ────────────────────────────────────────────────
   async create(record: NewArtifact): Promise<Artifact> {
+    assertNoCredentialTemplates(record);
     const result = await this.db.insert(artifacts).values(record).returning();
     return result[0];
   }
@@ -106,6 +108,7 @@ export class ArtifactsRepository {
    * (`revokeArtifactViewers`): their tokens were minted under the old one.
    */
   async update(id: string, patch: Partial<NewArtifact>): Promise<void> {
+    assertNoCredentialTemplates(patch);
     const before = patch.visibility !== undefined ? await this.getById(id) : null;
     await this.db
       .update(artifacts)
@@ -134,6 +137,7 @@ export class ArtifactsRepository {
 
   // ── versions ─────────────────────────────────────────────────
   async createVersion(record: NewArtifactVersion): Promise<ArtifactVersion> {
+    assertNoCredentialTemplates(record);
     const result = await this.db.insert(artifactVersions).values(record).returning();
     return result[0];
   }
@@ -158,6 +162,7 @@ export class ArtifactsRepository {
 
   // ── sources ──────────────────────────────────────────────────
   async createSource(record: NewArtifactDataSource): Promise<ArtifactDataSource> {
+    assertNoCredentialTemplates(record);
     const result = await this.db.insert(artifactDataSources).values(record).returning();
     return result[0];
   }
@@ -236,6 +241,7 @@ export class ArtifactsRepository {
 
   // ── snapshots ────────────────────────────────────────────────
   async createSnapshot(record: NewArtifactDataSnapshot): Promise<ArtifactDataSnapshot> {
+    assertNoCredentialTemplates(record);
     const result = await this.db.insert(artifactDataSnapshots).values(record).returning();
     return result[0];
   }
@@ -279,6 +285,7 @@ export class ArtifactsRepository {
 
   // ── share links ──────────────────────────────────────────────
   async createShareLink(record: NewArtifactShareLink): Promise<ArtifactShareLink> {
+    assertNoCredentialTemplates(record);
     const result = await this.db.insert(artifactShareLinks).values(record).returning();
     return result[0];
   }
@@ -317,6 +324,7 @@ export class ArtifactsRepository {
 
   // ── transforms ───────────────────────────────────────────────
   async createTransform(record: NewArtifactTransform): Promise<ArtifactTransform> {
+    assertNoCredentialTemplates(record);
     const result = await this.db.insert(artifactTransforms).values(record).returning();
     return result[0];
   }
@@ -341,6 +349,7 @@ export class ArtifactsRepository {
 
   // ── widgets ──────────────────────────────────────────────────
   async createWidget(record: NewArtifactWidget): Promise<ArtifactWidget> {
+    assertNoCredentialTemplates(record);
     const result = await this.db.insert(artifactWidgets).values(record).returning();
     return result[0];
   }
@@ -365,6 +374,7 @@ export class ArtifactsRepository {
 
   // ── exports ──────────────────────────────────────────────────
   async createExport(record: NewArtifactExport): Promise<ArtifactExport> {
+    assertNoCredentialTemplates(record);
     const result = await this.db.insert(artifactExports).values(record).returning();
     return result[0];
   }

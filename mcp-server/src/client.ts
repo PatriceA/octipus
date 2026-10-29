@@ -216,10 +216,20 @@ export class OctiClient {
     });
   }
 
+  async getAgentActivity(args: Record<string, string | number | boolean | undefined>): Promise<unknown> {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(args)) if (value !== undefined) query.set(key, String(value));
+    const result = await this.request<{ error?: string }>(`/api/agents/activity?${query}`);
+    if (result.error) throw new Error(result.error);
+    return result;
+  }
+
   async getAgentEvents(agentId: string, after?: number): Promise<AgentEvent[]> {
     const qs = after !== undefined ? `?after=${after}` : '';
-    const res = await this.request<{ events: AgentEvent[] }>(`/api/agents/${agentId}/events${qs}`);
-    return res.events || [];
+    const res = await this.request<{ events?: AgentEvent[]; error?: string }>(`/api/agents/${encodeURIComponent(agentId)}/events${qs}`);
+    if (res.error) throw new Error(res.error);
+    if (!Array.isArray(res.events)) throw new Error('Agent events response is missing its event list');
+    return res.events;
   }
 
   // ─── Sessions ───

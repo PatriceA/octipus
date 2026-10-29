@@ -1,3 +1,4 @@
+vi.mock('@/security/credential-redaction', () => ({ redactAgentDiagnostics: async (_user: string, _workspace: string, data: unknown) => data }));
 vi.mock('./cli-executable', () => ({ configuredCliBinary: (binary: string) => binary }));
 /**
  * Task 5: the worker resumes the vendor CLI session across turns of one

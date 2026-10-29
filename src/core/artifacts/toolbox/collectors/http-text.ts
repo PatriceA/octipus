@@ -32,7 +32,7 @@ export const httpTextCollector: ToolboxTool<Params, Result> = {
     method: { type: 'string', enum: ['GET', 'POST'], default: 'GET', description: 'HTTP method.' },
     headers: {
       type: 'object',
-      description: 'Request headers. Values may reference ${vault.<key>}.',
+      description: 'Non-secret request headers. Vault interpolation is disabled.',
     },
     body: { type: 'string', description: 'Raw request body, sent as-is when method=POST.' },
   },

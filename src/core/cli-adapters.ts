@@ -1,3 +1,4 @@
+import { redactedCommand } from '@/utils/command-log';
 import { execFile } from 'node:child_process';
 import { createHash, randomBytes } from 'crypto';
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs';
@@ -1304,7 +1305,9 @@ export class CLIOutputParser {
     }
 
     if (type === 'result') {
-      const result = (event.result || '') as string;
+      const result = typeof event.result === 'string' ? event.result : '';
+      const vendorErrors = Array.isArray(event.errors)
+        ? event.errors.filter((error): error is string => typeof error === 'string').map(error => redactedCommand(error)).join('\n') : '';
       const subtype = event.subtype as string | undefined;
       const isError = event.is_error === true || (typeof subtype === 'string' && subtype.startsWith('error'));
       const numTurns = event.num_turns as number | undefined;
@@ -1369,7 +1372,8 @@ export class CLIOutputParser {
             : subtype === 'error_during_execution'
               ? 'Claude Code failed during execution'
               : `Claude Code reported an error${subtype ? ` (${subtype})` : ''}`;
-        this.callbacks.onRunError?.(result ? `${reason}: ${result.slice(0, 500)}` : reason);
+        const diagnostics = [result, vendorErrors].filter(Boolean).join('\n');
+        this.callbacks.onRunError?.(diagnostics ? `${reason}: ${redactedCommand(diagnostics).slice(0, 16_000)}` : reason);
       }
 
       return result ? { text: result, replace: true } : null;

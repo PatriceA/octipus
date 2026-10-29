@@ -11,7 +11,7 @@ Reference for Paths A/B: `docs/ARTIFACTS-COOKBOOK.md` (tool tables, GitHub recip
 
 Don't warm up with `filesystem.list_directory`, `shell.which`, or `git remote -v` on A/B.
 
-**GitHub-backed artifact?** Ask up front: public or private repo? If private, which vault secret holds the token (e.g. `github_token`)? If none, surface cookbook §6.1 and STOP. Never build with `${vault.<unknown>}` — resolution fails loud and writes `last_error`.
+**Private GitHub or authenticated artifact?** Use a configured authenticated integration. Generic HTTP collectors cannot consume vault credentials or templates. Report a missing connector rather than inserting a credential into a source config.
 
 ## Path A — Build Live Artifact (must end in `artifacts.create_live_artifact`)
 `artifacts` is the CRUD API. In order:

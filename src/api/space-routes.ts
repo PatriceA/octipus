@@ -76,7 +76,7 @@ export type SpaceTarget =
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Static segments under `/api/agents` and `/api/pipelines` that are not ids. */
-const AGENT_STATIC = new Set(['route']);
+const AGENT_STATIC = new Set(['route', 'activity']);
 
 /**
  * What a member may do to their own agent or pipeline in a space from a
@@ -109,7 +109,7 @@ export function spaceTargetOf(method: string, pathname: string, searchParams: UR
   if (agent && !AGENT_STATIC.has(agent[1])) return { kind: 'agent', id: decodeURIComponent(agent[1]) };
   const pipeline = /^\/api\/pipelines\/([^/]+)(?:\/|$)/.exec(pathname);
   if (pipeline && UUID_RE.test(pipeline[1])) return { kind: 'pipeline', id: pipeline[1] };
-  if (pathname === '/api/agents' || pathname === '/api/pipelines') {
+  if (pathname === '/api/agents' || pathname === '/api/agents/activity' || pathname === '/api/pipelines') {
     const sessionId = searchParams.get('sessionId');
     if (sessionId && UUID_RE.test(sessionId)) return { kind: 'session', id: sessionId };
   }

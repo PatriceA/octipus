@@ -186,7 +186,7 @@ describe('error replies never leak internals (CodeQL js/stack-trace-exposure)', 
         body: JSON.stringify({ name: 'not_mine', arguments: {} }),
       });
       expect(res.status).toBe(400);
-      expect((await res.json() as { error: string }).error).toBe('Tool is not available to this agent');
+      expect((await res.json() as { error: string }).error).toContain('not registered in this agent authorized tool set');
     } finally { await bridge.close(); }
   });
 

@@ -198,6 +198,9 @@ export interface TaskBrief {
  * Stored in `swarm_nodes.result` (jsonb).
  */
 export interface ChildResult {
+  dispatchId?: string;
+  appliedRoutePolicy?: { primaryModel: string; backup: 'configured_topic_backup' | 'disabled'; proseConstraintsControlRouting: false };
+  attempts?: import('./attempt-history').DelegationAttempt[];
   nodeId: string;
   kind: 'agent' | 'subagent';
   status: ChildResultStatus;
@@ -267,6 +270,7 @@ export interface AgentNode {
 
 /** Params accepted by `spawn_child` tool (after validation). */
 export interface SpawnChildParams {
+  routePolicy?: { primaryModel?: string; allowBackup?: boolean };
   expertId?: string;
   role?: AgentRole;
   topic: string;

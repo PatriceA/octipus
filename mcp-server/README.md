@@ -152,3 +152,27 @@ ID, and role assignments are preserved. Custom skills require their owner or an
 administrator. Mounted skills remain read-only: edit the source and use
 **Reload mounted skills** in Octipus. The same `update_skill` tool is available
 to internal agents without an MCP connection.
+
+### Delegated execution history
+
+`octipus_get_agent_activity` reads durable agent/attempt history by session,
+dispatch handle or full/unambiguous short UI agent id. It includes failed and
+already-collected executions, ordered attempt timestamps, selected models,
+primary/fallback errors, exit diagnostics when reported and the real UI links.
+Page agents with `after_agent_id` and events with `after_event_id`. Workspace and
+current target-session access are rechecked for every lookup. Legacy dispatch
+handles and original provider failures cannot be reconstructed if they were
+never recorded. An unknown upstream account is reported as unknown; an operator
+CLI or personal credential owner is not proof of a particular subscription.
+
+Managed CLI agents call `get_agent_activity`, `list_tools` and `describe_tool`
+through their run-scoped bridge. `mcp_list_tools` discovers external servers;
+an empty external-server list does not describe the parent Octipus connection.
+`task_state` indexes task/output records, while `collect_children` collects
+run-local handles; neither is the complete historical execution ledger.
+
+`spawn_child.routePolicy.primaryModel` restricts the request to its configured
+primary model id or row name; a mismatch refuses the spawn. `allowBackup=false`
+prohibits backup attempts. Default fallback uses the configured topic backup,
+and receipts report the applied policy. Prose constraints do not override
+provider routing.

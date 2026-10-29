@@ -1,3 +1,4 @@
+import { databaseCredentialValues, redactCredentialData } from '@/security/credential-redaction';
 import { DataQueryError, runPostgresQuery, runTabularQuery } from '@/core/data/query';
 import { SqlGuardError } from '@/core/data/sql-guard';
 import { isTabularFile, loadTabularFile, TabularError } from '@/core/data/tabular';
@@ -151,6 +152,7 @@ export class DataTool extends BaseTool {
           return { error: `Connection "${name}" is not readable by this tool. Check the secret's allowed tools.` };
         }
 
+        const credentials = databaseCredentialValues(dsn);
         try {
           const result = await runPostgresQuery({
             dsn,
@@ -159,9 +161,9 @@ export class DataTool extends BaseTool {
             limit: typeof args.limit === 'number' ? args.limit : undefined,
             timeoutMs: typeof args.timeout_ms === 'number' ? args.timeout_ms : undefined,
           });
-          return { connection: name, ...capResult(result) };
+          return redactCredentialData({ connection: name, ...capResult(result) }, credentials);
         } catch (error) {
-          return { error: this.explain(error) };
+          return { error: redactCredentialData(this.explain(error), credentials) };
         }
       },
       { permissionAction: 'query' },

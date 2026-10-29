@@ -1,3 +1,4 @@
+import { assertNoCredentialTemplates } from '@/security/credential-boundary';
 import type { MCPServerEdit, MCPServerConfigView } from '@/shared/mcp-config';
 import { markToolNotExecuted } from '@/core/tool-execution-error';
 import { EventEmitter } from 'events';
@@ -606,6 +607,7 @@ export class MCPBridge extends EventEmitter {
    * Call a tool on an MCP server
    */
   async callTool(serverId: string, toolName: string, args: Record<string, unknown>, context: AgentContext, authorizationArgs = args): Promise<unknown> {
+    assertNoCredentialTemplates(args);
     const breaker = getMcpCircuitBreaker();
     // The executor may have skipped journaling using this connection's read hint.
     // Refuse if reconnect/authorization waits replace that evidence before send.

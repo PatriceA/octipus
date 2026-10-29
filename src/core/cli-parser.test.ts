@@ -491,3 +491,12 @@ describe('CLIOutputParser — Claude background task tracking', () => {
     expect(parser.getOpenBackgroundTasks()).toEqual([]);
   });
 });
+
+
+it('preserves Claude errors when the final result text is empty', () => {
+  const h = makeParser();
+  h.parser.parse({ type: 'result', subtype: 'error_during_execution', is_error: true,
+    errors: ['Primary provider connection failed', 'api_key=synthetic-parser-canary'], result: '' }, 'Claude Code');
+  expect(h.runErrors[0]).toContain('Primary provider connection failed');
+  expect(h.runErrors[0]).not.toContain('synthetic-parser-canary');
+});

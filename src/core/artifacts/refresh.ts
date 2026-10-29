@@ -1,3 +1,4 @@
+import { assertNoCredentialTemplates } from '@/security/credential-boundary';
 /**
  * Live artifact refresh engine — fetches data for one source, normalizes it,
  * writes a snapshot, updates source status. Loud failure: errors log via
@@ -228,13 +229,9 @@ export interface VaultResolveContext {
   workspaceId?: string | null;
 }
 
-const VAULT_PLACEHOLDER_RE = /\$\{vault\.([^}]+)\}/g;
-
 /**
- * Resolve `${vault.<key>}` placeholders in header values via a real vault
- * lookup. Throws if any referenced key is unknown / unreadable for the
- * principal — fail loud, per the house rules. Header values may contain
- * multiple placeholders; all are resolved before fetch.
+ * Validate headers before an artifact fetch. Vault interpolation is refused because arbitrary destinations and
+ * their response snapshots are not constrained credential-consuming clients.
  */
 export async function resolveVaultHeaders(
   headers: Record<string, string>,
@@ -243,51 +240,10 @@ export async function resolveVaultHeaders(
   if (!ctx?.principalId) {
     throw new Error('resolveVaultHeaders: missing principalId — refusing to resolve vault placeholders without an owning principal');
   }
-  // Collect every distinct key referenced across all headers so we only
-  // hit the vault once per name even if reused (e.g. same token in two
-  // headers).
-  const keys = new Set<string>();
-  for (const v of Object.values(headers)) {
-    if (typeof v !== 'string') continue;
-    for (const m of v.matchAll(VAULT_PLACEHOLDER_RE)) {
-      const name = m[1]?.trim();
-      if (name) keys.add(name);
-    }
-  }
-
-  if (keys.size === 0) {
-    // Nothing to resolve — return headers as-is (but still typed Record<string,string>).
-    return { ...headers };
-  }
-
-  const { getVault } = await import('@/security/vault');
-  const vault = getVault();
-  const resolved: Record<string, string> = {};
-  await Promise.all(
-    [...keys].map(async (name) => {
-      const value = await vault.getByName(ctx.principalId, name, {
-        workspaceId: ctx.workspaceId ?? null,
-      });
-      if (value == null) {
-        throw new Error(
-          `vault: secret "${name}" not found for principal ${ctx.principalId}` +
-            (ctx.workspaceId ? ` (workspace ${ctx.workspaceId})` : '') +
-            ' — store it via the vault API or fix the placeholder name',
-        );
-      }
-      resolved[name] = value;
-    }),
-  );
-
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(headers)) {
-    if (typeof v !== 'string') {
-      out[k] = v;
-      continue;
-    }
-    out[k] = v.replace(VAULT_PLACEHOLDER_RE, (_, name) => resolved[(name as string).trim()] ?? '');
-  }
-  return out;
+  // An arbitrary URL may reflect authentication into a durable snapshot, or
+  // redirect it to another origin. Artifact fetches are not credential sinks.
+  assertNoCredentialTemplates(headers);
+  return { ...headers };
 }
 
 /** Minimal dotted path: `a.b.0.c`. Returns `undefined` if path misses. */

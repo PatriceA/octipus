@@ -81,6 +81,8 @@ describe('SPACE_ROUTES classification', () => {
     expect(spaceTargetOf('GET', '/api/agents/agent-1', q(''))).toEqual({ kind: 'agent', id: 'agent-1' });
     expect(spaceTargetOf('DELETE', '/api/agents/agent-1', q(''))).toEqual({ kind: 'agent', id: 'agent-1' });
     expect(spaceTargetOf('GET', '/api/agents/route', q(''))).toBeNull();
+    expect(spaceTargetOf('GET', '/api/agents/activity', q(''))).toBeNull();
+    expect(spaceTargetOf('GET', '/api/agents/activity', q(`sessionId=${id}`))).toEqual({ kind: 'session', id });
     expect(spaceTargetOf('POST', `/api/pipelines/${id}/pause`, q(''))).toEqual({ kind: 'pipeline', id });
     expect(spaceTargetOf('GET', '/api/pipelines/templates', q(''))).toBeNull();
     expect(spaceTargetOf('GET', '/api/agents', q(`sessionId=${id}`))).toEqual({ kind: 'session', id });
@@ -203,7 +205,7 @@ const SPACE_ACTING = [
   'GET /__artifacts__/a/:slug', 'GET /__artifacts__/a/:slug/embed', 'GET /__artifacts__/a/:slug/bundle.js',
   'GET /__artifacts__/a/:slug/export/:exportId',
   // Personal routes kept in the space by the row they address: reads and stops only.
-  'GET /api/agents (by target)', 'GET /api/agents/:id (by target)', 'POST /api/agents/:id/stop (by target)',
+  'GET /api/agents/activity (by target)', 'GET /api/agents (by target)', 'GET /api/agents/:id (by target)', 'POST /api/agents/:id/stop (by target)',
   'DELETE /api/agents/:id (by target)', 'GET /api/agents/:id/events (by target)',
   'GET /api/pipelines (by target)', 'GET /api/pipelines/:id (by target)', 'GET /api/pipelines/:id/plan (by target)',
   'GET /api/pipelines/:id/checkpoints (by target)', 'POST /api/pipelines/:id/pause (by target)', 'POST /api/pipelines/:id/stop (by target)',

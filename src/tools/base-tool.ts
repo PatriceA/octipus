@@ -14,7 +14,7 @@ import { auditRepository } from '@/db/repositories/audit-repository';
 import { routeApprovalFor } from '@/security/approval-route';
 import { askStillAuthorized } from '@/security/approved-calls';
 import { getPermissionManager } from '@/security/permissions';
-import { injectSecrets, redactSecretValues } from '@/security/secret-injector';
+import { assertNoCredentialTemplates } from '@/security/credential-boundary';
 import { toolLogger } from '@/utils/logger';
 
 export interface ToolContext extends AgentContext {
@@ -35,6 +35,7 @@ export interface ToolExecutionOptions {
    * command being run.
    */
   permissionAction?: string | ((args: Record<string, unknown>) => string);
+  /** @deprecated General interpolation is prohibited; false does not bypass validation. */
   injectSecrets?: boolean;
 }
 
@@ -111,6 +112,7 @@ export abstract class BaseTool {
         // A tool of a module that is off (docs/MODULES.md) runs for nobody,
         // however its handler was reached: a running worker's snapshot, a
         // hook's `execute_tool`, another tool calling it.
+        assertNoCredentialTemplates(args);
         const off = toolOffMessage(this.id);
         if (off) return { error: off };
         // Enforce the `required` list the parameter schema already declares.
@@ -185,6 +187,7 @@ export abstract class BaseTool {
     }
     // A `tool:before` handler may have rewritten the arguments.
     args = before.args;
+    assertNoCredentialTemplates(args);
 
     const action = typeof options?.permissionAction === 'function'
       ? options.permissionAction(args) : options?.permissionAction || toolName;
@@ -233,12 +236,10 @@ export abstract class BaseTool {
       details: { authorizationSource, agentId: context.id, action, toolId: this.id },
     });
 
-    // Inject secrets if needed
-    let processedArgs = args;
-    const resolvedSecretValues: string[] = [];
-    if (options?.injectSecrets !== false) {
-      processedArgs = await this.injectSecretsInArgs(args, context.userId, resolvedSecretValues);
-    }
+    // Revalidate after hook rewriting. Never resolve vault data into arbitrary
+    // tool callbacks, including shell env or content persisted by file tools.
+    assertNoCredentialTemplates(args);
+    const processedArgs = args;
 
     assertExecutionActive(context);
 
@@ -266,28 +267,6 @@ export abstract class BaseTool {
       execResult = result;
       toolLogger.debug({ toolId: this.id, tool: toolName }, 'Tool executed successfully');
 
-      // Egress control (M2): scrub any resolved secret value from the result so
-      // a resolved {{secret:NAME}} cannot be echoed back to the model or logs.
-      // No-op when nothing was resolved; non-serializable results are left as-is
-      // (they aren't stringified into model context here).
-      if (resolvedSecretValues.length > 0) {
-        try {
-          const serialized = JSON.stringify(result);
-          const redacted = redactSecretValues(serialized, resolvedSecretValues);
-          if (redacted !== serialized) {
-            toolLogger.warn(
-              { toolId: this.id, tool: toolName },
-              'Redacted resolved secret value(s) from tool output'
-            );
-            // Keep the hook payload in sync with what the model gets — a
-            // `tool:after` subscriber must never see the unredacted secret.
-            execResult = JSON.parse(redacted);
-            return execResult;
-          }
-        } catch {
-          /* non-serializable result — nothing to redact */
-        }
-      }
       return result;
     } catch (error) {
       execError = error;
@@ -326,50 +305,6 @@ export abstract class BaseTool {
         durationMs,
       });
     }
-  }
-
-  /**
-   * Inject secrets in tool arguments.
-   *
-   * Walks arbitrarily nested objects/arrays. Arrays must be detected before
-   * the generic object branch — `typeof [] === 'object'` is true, so without
-   * the explicit `Array.isArray` check the old code rebuilt arrays as plain
-   * objects keyed by numeric strings. That mangling silently turned every
-   * array param into `{ "0": ..., "1": ... }`, so downstream validators
-   * (e.g. `art_toolbox_validate`'s `sources must be an array` guard) saw a
-   * non-array and rejected the call.
-   */
-  private async injectSecretsInArgs(
-    args: Record<string, unknown>,
-    userId: string,
-    resolvedValues?: string[]
-  ): Promise<Record<string, unknown>> {
-    const result: Record<string, unknown> = {};
-
-    for (const [key, value] of Object.entries(args)) {
-      result[key] = await this.injectIntoValue(value, userId, resolvedValues);
-    }
-
-    return result;
-  }
-
-  private async injectIntoValue(
-    value: unknown,
-    userId: string,
-    resolvedValues?: string[]
-  ): Promise<unknown> {
-    if (typeof value === 'string') {
-      const { content, resolvedValues: resolved } = await injectSecrets(value, { userId, toolId: this.id });
-      if (resolvedValues && resolved.length > 0) resolvedValues.push(...resolved);
-      return content;
-    }
-    if (Array.isArray(value)) {
-      return Promise.all(value.map((item) => this.injectIntoValue(item, userId, resolvedValues)));
-    }
-    if (typeof value === 'object' && value !== null) {
-      return this.injectSecretsInArgs(value as Record<string, unknown>, userId, resolvedValues);
-    }
-    return value;
   }
 
   /**

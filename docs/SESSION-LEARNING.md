@@ -32,3 +32,12 @@ One bounded review call produces project lessons, personal facts and at most one
 The chat inspector's **Learning** disclosure lists the latest 30 checks, reasons, output IDs and partial failures. It does not add chat messages. Authenticated session-scoped `GET /api/sessions/:id/learning` exposes the same receipts; `POST` queues a manual check and requires chat scope. Raw evidence is not returned by this API. Completed/error/interrupted jobs also appear in the existing away digest.
 
 Checks created after deployment run automatically; existing long sessions can be reviewed using **Check recent work**. Existing skill proposals still need approval on the Skills page.
+
+In the Notes navigator, unpinned `session-learning` notes appear in a collapsed
+**Session learnings** group below ordinary notes. Search and explicit tag filters
+show matching learning notes normally. A user pin keeps a learning visible, and
+the automatic tag is listed after ordinary tags regardless of its count.
+
+Note listing prioritizes pins and ordinary notes before automated learnings
+before applying the page limit. Selecting a tag queries that tag on the server,
+so a large automated collection cannot hide older user notes from the first page.

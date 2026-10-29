@@ -1,3 +1,4 @@
+import { assertNoCredentialTemplates } from '@/security/credential-boundary';
 import { getConfig } from '@/config';
 import { type DocOrigin, type DocumentHub, NoteTooLargeError, StaleWriteError } from '@/core/docs/hub';
 import { getDocHub } from '@/core/docs';
@@ -172,6 +173,7 @@ export class NoteService {
 
   async save(input: SaveNoteInput): Promise<SaveNoteResult> {
     const { scope, title } = input;
+    assertNoCredentialTemplates({ title: input.title, body: input.body, tags: input.tags, frontmatter: input.frontmatter });
     assertNoteAccess(scope, 'write');
     const store = this.store(scope);
     let body = input.body ?? '';

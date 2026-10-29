@@ -1,3 +1,4 @@
+import { readAgentActivity } from '@/core/agent/activity-tools';
 import { Elysia, t } from '@/api/http';
 import { inheritScope, recheckSponsor, recheckSpace } from '@/core/agent/context';
 import type { AgentContext } from '@/core/types';
@@ -68,6 +69,23 @@ async function mayRunLive(userId: string, context: LiveContext & Pick<AgentConte
  */
 export const agentRoutes = new Elysia({ prefix: '/agents' })
   .use(apiContext)
+  .get('/activity', async ({ user, principal, query, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    const sessionId = String(query.sessionId ?? '');
+    const session = await contentRepos(principal).sessions.findById(sessionId);
+    if (!session || (session.workspaceId ?? null) !== (principal.workspaceId ?? null)
+      || !await canActInSession(session, user.id, 'control')) { set.status = 404; return { error: 'Session not found' }; }
+    try {
+      return await readAgentActivity({ ...query,
+        includeEvents: query.includeEvents === 'true', limit: Number(query.limit) || 30,
+        afterEventId: Number(query.afterEventId) || 0,
+      }, { userId: user.id, sessionId, workspaceId: principal.workspaceId });
+    } catch {
+      set.status = 503;
+      return { error: 'Agent history unavailable; credential redaction must succeed before diagnostics can be returned' };
+    }
+  }, { query: t.Object({ sessionId: t.String(), agentId: t.Optional(t.String()), dispatchId: t.Optional(t.String()),
+    afterAgentId: t.Optional(t.String()), afterEventId: t.Optional(t.String()), includeEvents: t.Optional(t.String()), limit: t.Optional(t.String()) }), detail: { tags: ['agents'] } })
   // List all agents (in-memory live + DB history)
   .get(
     '/',

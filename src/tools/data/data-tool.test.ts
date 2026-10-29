@@ -15,7 +15,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import type { ToolHandler } from '@/core/agent-worker';
 import type { AgentContext, ToolManifest } from '@/core/types';
 import { WorkspaceFS } from '@/security/workspace-fs';
@@ -122,6 +122,25 @@ describe('list_connections', () => {
 });
 
 describe('sql_query', () => {
+  test('named authenticated queries work while returned rows and driver errors mask the credential', async () => {
+    const query = await import('@/core/data/query');
+    const dsn = 'postgres://user:pw@localhost:1/analytics';
+    const mock = vi.spyOn(query, 'runPostgresQuery');
+    try {
+      mock.mockResolvedValueOnce({ columns: ['value'], rows: [[dsn], [Buffer.from(dsn).toString('base64')], ['pw']], rowCount: 3, truncated: false, elapsedMs: 1 });
+      const result = await call('sql_query', { connection: 'analytics', query: 'SELECT 1' }, aliceId);
+      expect(result.connection).toBe('analytics');
+      expect(result.rows[2][0]).toBe('[REDACTED_CREDENTIAL]');
+      expect(JSON.stringify(result)).not.toContain(dsn);
+      expect(JSON.stringify(result)).not.toContain(Buffer.from(dsn).toString('base64'));
+      mock.mockRejectedValueOnce(new Error(`Driver failed for ${dsn}; password pw`));
+      const failure = await call('sql_query', { connection: 'analytics', query: 'SELECT 1' }, aliceId);
+      expect(failure.error).toContain('Driver failed');
+      expect(failure.error).not.toContain(dsn);
+      expect(failure.error).not.toContain('password pw');
+    } finally { mock.mockRestore(); }
+  });
+
   test('refuses a connection name that is not registered', async () => {
     const res = await call('sql_query', { connection: 'nope', query: 'SELECT 1' }, aliceId);
     expect(res.error).toContain('Unknown connection "nope"');

@@ -68,7 +68,7 @@ export function NotesWorkspace() {
   // the SAME note doesn't clobber in-progress edits.
   const loadedRef = useRef<string | null>(null);
 
-  const list = useQuery<NoteListResponse>({ queryKey: ['notes', workspaceId], queryFn: () => api.get<NoteListResponse>('/notes?limit=500') });
+  const list = useQuery<NoteListResponse>({ queryKey: ['notes', workspaceId, activeTag], queryFn: () => api.get<NoteListResponse>(`/notes?limit=500${activeTag ? `&tag=${encodeURIComponent(activeTag)}` : ''}`) });
   const detail = useQuery<NoteDetail>({
     queryKey: ['note', selectedId, workspaceId],
     queryFn: () => api.get<NoteDetail>(`/notes/${selectedId}`),

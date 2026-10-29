@@ -76,3 +76,34 @@ Stay in touch via GitHub Watch → Releases to get notified.
 ## Non-goals
 
 Octipus is distributed under the MIT license. It comes with **no warranty**. Running it in production is your call; running it against untrusted input without sandboxing is not recommended. See [LICENSE](./LICENSE).
+
+## Credential execution boundary
+
+Vault names are integration selectors, not a content template language.
+General tools, shell environments, file content, work plans, notes, artifact
+configs and remote MCP arguments reject vault interpolation before execution.
+Generic plugin credential injection and credentials in arbitrary artifact HTTP
+headers are disabled. Use a configured authenticated client that authorizes the
+caller and consumes its credential within that client. Missing tool or agent
+identity cannot satisfy a restrictive credential allowlist.
+
+Provider clients, operator-managed CLI logins, installed integration code and
+host filesystem access remain trusted runtime boundaries. A host terminal with
+access to a credential file can read it; Octipus does not claim to prevent that
+through command-string matching. Do not expose vault values to arbitrary
+programs, even through environment variables: a program can encode them, put
+them in argv, redirect them to a file or send them elsewhere before returning.
+
+Diagnostic masking covers known active credentials and common raw, JSON,
+URL, base64 and hex representations. It is defense in depth, not arbitrary
+transformation tracking. If diagnostic redaction fails, details are withheld.
+An unavailable or unsupported authenticated operation must fail closed rather
+than falling back to secret-bearing shell execution.
+
+The administrative credential-remediation repository scans owner-scoped current
+records and supported history stores without passing plaintext as a search
+parameter. Conditional updates preserve concurrent writes, advance affected plan
+revisions, recompute note hashes and invalidate affected note embeddings. It
+cannot erase PostgreSQL WAL, backups, opaque archives, third-party transcripts
+or data already held by active workers. Report those separately and rotate any
+exposed live credential. Git history rewriting requires a separate decision.

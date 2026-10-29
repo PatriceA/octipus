@@ -1,3 +1,4 @@
+import { formatAttemptHistory } from './attempt-history';
 import { randomUUID } from 'crypto';
 import { classifyMessage } from '@/core/agent/classifier';
 import { ROLE_CONFIGS } from '@/core/agent/roles';
@@ -338,7 +339,7 @@ export function createSpawnChildTool(
     // depth-1 agent on a small local model is equally unable to hold the role
     // choice but keeps its full schema, so it sets `weakModel` alone. Without
     // this the role-fit rewrite was live at exactly one call site.
-    const internal = { rootIsLite: opts?.weakModel ?? opts?.lite === true };
+    const internal = { rootIsLite: opts?.weakModel ?? opts?.lite === true, dispatchId: randomUUID() };
 
     // Reading is evidence of prior investigation, not proof that the root can
     // finish the task. Require a bounded context transfer instead of allowing
@@ -387,7 +388,7 @@ export function createSpawnChildTool(
           'Call collect_children to pick up results before spawning more.';
       }
       params.mode = 'detach';
-      const childHandle = randomUUID();
+      const childHandle = internal.dispatchId;
       // The handle is ours; the child's agent id only exists once the spawner
       // creates its worker, so record it on the pending entry as it does.
       const pending: Omit<PendingChild, 'promise'> = {
@@ -419,7 +420,7 @@ export function createSpawnChildTool(
         }
       })();
       hooks.registerPending(Object.assign(pending, { promise }));
-      return `<ChildResult nodeId="${childHandle}" status="pending" mode="detach">\n<output>Subagent started in the background. Result is NOT yet available — call collect_children (or let the framework auto-collect before your final answer) to retrieve it.</output>\n</ChildResult>`;
+      return `<ChildResult nodeId="${childHandle}" dispatchId="${childHandle}" status="pending" mode="detach">\n<output>Subagent started in the background. Result is NOT yet available — call collect_children (or let the framework auto-collect before your final answer) to retrieve it.</output>\n</ChildResult>`;
     }
 
     // ── Await fallback (no detach budget / no hooks) ─────────────────
@@ -544,6 +545,12 @@ export function createSpawnChildTool(
           pattern: RESUME_KEY_PATTERN.source,
           description:
             'Optional task id. Pass the same value (with the same role) to continue a previous child\'s CLI session on the same task. Omit for a fresh child.',
+        },
+        routePolicy: {
+          type: 'object',
+          description: 'Enforced routing restriction. Primary must match the configured topic model (id or row name), otherwise no child runs. Set allowBackup=false to prohibit fallback. Prose constraints do not select providers.',
+          properties: { primaryModel: { type: 'string' }, allowBackup: { type: 'boolean' } },
+          additionalProperties: false,
         },
         constraints: {
           type: 'array',
@@ -704,7 +711,17 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
   // `mode` is no longer LLM-controlled — spawn_child always detaches when the
   // depth has a detach budget, else awaits. The execute path sets params.mode
   // to reflect what actually happened (for spawn_node bookkeeping).
+  let routePolicy: SpawnChildParams['routePolicy'];
+  if (args.routePolicy !== undefined) {
+    const policy = args.routePolicy as Record<string, unknown> | null;
+    if (!policy || typeof policy !== 'object' || Array.isArray(policy)
+      || Object.keys(policy).some(key => !['primaryModel', 'allowBackup'].includes(key))
+      || (policy.primaryModel !== undefined && (typeof policy.primaryModel !== 'string' || !policy.primaryModel.trim()))
+      || (policy.allowBackup !== undefined && typeof policy.allowBackup !== 'boolean')) return { error: 'invalid routePolicy' };
+    routePolicy = policy as SpawnChildParams['routePolicy'];
+  }
   const params: SpawnChildParams = {
+    routePolicy,
     role,
     topic,
     subtopic,
@@ -748,5 +765,5 @@ export function formatChildResult(result: ChildResult): string {
           .map((f) => `${f.scorer}: ${f.reason}`)
           .join('; ')}</scorers>`
       : '';
-  return `<ChildResult ${meta}>${formatReceiptBlock(result.receipt)}\n<output>${outStr}</output>${notes}${scorerFail}\n</ChildResult>`;
+  return `<ChildResult ${meta}>${formatReceiptBlock(result.receipt)}${formatAttemptHistory(result)}\n<output>${outStr}</output>${notes}${scorerFail}\n</ChildResult>`;
 }

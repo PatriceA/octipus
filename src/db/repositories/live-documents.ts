@@ -1,3 +1,4 @@
+import { assertNoCredentialTemplates } from '@/security/credential-boundary';
 /**
  * Persistence of live documents (docs/plans/coworking-spec.md §7, S3): the
  * document hub's note reads and conditional writes, note revisions, edit
@@ -89,6 +90,7 @@ export async function writeBodyIfUnchanged(
   bodySha256: string,
   extra: { title?: string; tags?: string[] } = {},
 ): Promise<Note | null> {
+  assertNoCredentialTemplates({ body, ...extra });
   const [row] = await getDb()
     .update(notes)
     .set({ body, bodySha256, ...extra, updatedAt: new Date() })
@@ -113,6 +115,7 @@ export interface NewRevision {
 }
 
 export async function insertRevision(rev: NewRevision): Promise<NoteRevision> {
+  assertNoCredentialTemplates(rev);
   const [row] = await getDb()
     .insert(noteRevisions)
     .values({ ...rev, authors: [...new Set(rev.authors)], restoredFrom: rev.restoredFrom ?? null })

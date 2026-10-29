@@ -88,7 +88,6 @@ const NETWORK_CMD_RE =
 const MCP_READ_VERB_RE = /^(get|list|search|read|fetch|query|find|describe|lookup|view|show|count|retrieve)(_|-|[A-Z]|$)/;
 
 /** Same shape as `SECRET_PLACEHOLDER_PATTERN` in db/schema/vault.ts. */
-const VAULT_PLACEHOLDER_RE = /\{\{secret:([a-zA-Z0-9_-]+)\}\}/g;
 
 const CLAUDE_READERS = new Set(['Read', 'Grep', 'Glob', 'NotebookRead', 'LS']);
 
@@ -500,18 +499,6 @@ export function flowBlockReason(label: FlowLabel, contract: FlowContract): strin
 }
 
 /**
- * Is this an Octipus tool call authenticated through the vault? Such a call
- * is exempt from the egress check: the credential never enters the session,
- * and the vault is the sanctioned way to use one. Every `{{secret:NAME}}` in
- * the arguments must name an active entry this tool may use — tools leave an
- * unresolved placeholder as plain text, so a made-up one must not buy an
- * exemption. Vendor-native CLI tools never resolve placeholders, so never
- * qualify. Only consulted when the guard would otherwise ask: no DB read on
- * the common path, and no secret is decrypted. Only `user` and `system` rows
- * count (`canAccessByName`): a space connector's secret (scope `space`,
- * coworking §9.5) is never injected, so it never buys an exemption either.
- */
-/**
  * Is this a message to the caller's own chats only? `send_to_user` with the
  * caller's own id (and no `target`, which only `send_message` takes) is
  * delivered to that user's verified identities and nowhere else
@@ -524,17 +511,11 @@ export function isOwnerOnlyDelivery(userId: string, call: FlowCall): boolean {
 }
 
 export async function isVaultAuthenticated(userId: string, call: FlowCall): Promise<boolean> {
-  if (call.toolId.startsWith('cli-native:')) return false;
-  const names = [...new Set([...argText(call.args).matchAll(VAULT_PLACEHOLDER_RE)].map(m => m[1] as string))];
-  if (names.length === 0) return false;
-  const { getVault } = await import('./vault');
-  const vault = getVault();
-  for (const name of names) {
-    const ok = (userId && userId !== 'system' && await vault.canAccessByName(userId, name, { toolId: call.toolId }))
-      || await vault.canAccessByName('system', name, { toolId: call.toolId });
-    if (!ok) return false;
-  }
-  return true;
+  // A model-supplied reference is not evidence of authenticated execution.
+  // General interpolation is refused before dispatch and grants no exemption.
+  void userId;
+  void call;
+  return false;
 }
 
 /**

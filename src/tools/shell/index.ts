@@ -109,7 +109,7 @@ export class ShellTool extends BaseTool {
         command: { type: 'string', description: 'Shell command to execute', required: true },
         cwd: { type: 'string', description: 'Working directory for command execution' },
         timeout: { type: 'number', description: 'Command timeout in milliseconds', default: DEFAULT_TIMEOUT },
-        env: { type: 'object', description: 'Additional environment variables. For vault authentication use {"GH_TOKEN":"{{secret:github_token}}"} with command "gh api user" (example; use the real vault name and program-specific variable). Octipus resolves placeholders at execution. Keep secrets out of command text; vendor-native terminal calls do not perform this substitution.' },
+        env: { type: 'object', description: 'Additional non-secret environment variables. Vault interpolation is prohibited in shell arguments, including env. Use a configured authenticated integration for credential-consuming operations.' },
         useShell: { type: 'boolean', description: 'Set true ONLY when the command genuinely needs shell features (pipes, redirects, $(), backticks). Audited. Default false.', default: false },
         network: { type: 'boolean', description: 'Set true when the command needs the internet (npm install, pip install, git fetch/push, curl). Only has an effect when the process sandbox is enabled, where commands are network-isolated by default. Default false.', default: false },
       }),
@@ -198,7 +198,7 @@ export class ShellTool extends BaseTool {
       createParameterSchema({
         command: { type: 'string', description: 'Shell command to execute', required: true },
         cwd: { type: 'string', description: 'Working directory' },
-        env: { type: 'object', description: 'Additional environment variables. For vault authentication use {"GH_TOKEN":"{{secret:github_token}}"} with command "gh api user" (example; use the real vault name and program-specific variable). Octipus resolves placeholders at execution. Keep secrets out of command text; vendor-native terminal calls do not perform this substitution.' },
+        env: { type: 'object', description: 'Additional non-secret environment variables. Vault interpolation is prohibited in shell arguments, including env. Use a configured authenticated integration for credential-consuming operations.' },
         useShell: { type: 'boolean', description: 'Set true ONLY when the command genuinely needs shell features (pipes, redirects, $(), backticks). Audited. Default false.', default: false },
         network: { type: 'boolean', description: 'Set true when the command needs the internet (npm install, pip install, git fetch/push, curl). Only has an effect when the process sandbox is enabled, where commands are network-isolated by default. Default false.', default: false },
       }),

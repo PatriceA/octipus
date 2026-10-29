@@ -1,3 +1,4 @@
+vi.mock('@/security/credential-redaction', () => ({ redactAgentDiagnostics: async (_user: string, _workspace: string, data: unknown) => data }));
 vi.mock('./cli-executable', () => ({ configuredCliBinary: (binary: string) => binary }));
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -98,6 +99,8 @@ beforeEach(() => {
     };
     const initial = await call('get_work_plan');
     await call('update_work_plan', {revision:0,title:'Sample',goal:'Check scoped tools',summary:'Start',steps:[{id:'one',title:'Check context',status:'pending',evidence:''}]});
+    const discovery = await call('list_tools');
+    const described = await call('describe_tool', {name:'get_work_plan'});
     const write = await call('filesystem__write_file', {path:'sample.txt',content:'ok'});
     const denied = await call('denied__write', {});
     const plan = await call('get_work_plan');
@@ -105,7 +108,7 @@ beforeEach(() => {
     const feedback = current.current.feedback;
     await call('update_work_plan', {revision:current.revision,title:'Sample',goal:'Check scoped tools',summary:'Done',steps:[{id:'one',title:'Check context',status:'done',evidence:'Observed sample write'}],feedbackResponses:feedback.map(f=>({id:f.id,status:'applied',response:'Checked guidance'}))});
     const final = await call('get_cli_run_context');
-    finalEvent = {type:'result',subtype:'success',result:JSON.stringify({initial,write,denied,final}),num_turns:1};
+    finalEvent = {type:'result',subtype:'success',result:JSON.stringify({initial,write,denied,final,discovery,described}),num_turns:1};
     console.log(JSON.stringify(finalEvent));
   `);
 });
@@ -143,6 +146,9 @@ describe.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('CLI worker with actual subproce
     expect(fixture.execute).toHaveBeenCalledWith(expect.objectContaining({ id: 'a', userId: 'u', sessionId: 's', workspaceId: 'w' }));
     expect(denied).not.toHaveBeenCalled();
     expect(result.denied.isError).toBe(true);
+    expect(result.discovery.isError).not.toBe(true);
+    expect(JSON.stringify(result.discovery)).toContain('filesystem__write_file');
+    expect(JSON.stringify(result.described)).toContain('get_work_plan');
     expect(JSON.stringify(result.write)).toContain('Also explain your check');
     expect(fixture.plan.current?.feedback[0].status).toBe('applied');
     // Handled feedback is compacted to { id, status } in the run context (the

@@ -54,17 +54,17 @@ test('a send after a credential read is held for approval; unattended it is bloc
   expect(String(msg?.content)).toMatch(/Approval required: flow guard: this session read credential material/);
 });
 
-test('a vault-authenticated call is exempt; a made-up placeholder is not', async () => {
+test('general tool calls cannot interpolate real or made-up vault references', async () => {
   const exec = new ToolExecutor(context(), () => {});
   exec.registerTool(readFile);
   exec.registerTool(sendMessage);
   await exec.handleToolCalls([{ id: 'c1', name: 'filesystem__read_file', arguments: { path: '.env' } }]);
 
-  await exec.handleToolCalls([{ id: 'c2', name: 'messaging__send', arguments: { text: 'hi', token: '{{secret:slack_token}}' } }]);
-  expect(send).toHaveBeenCalledOnce();
-
+  const [real] = await exec.handleToolCalls([{ id: 'c2', name: 'messaging__send', arguments: { text: 'hi', token: '{{secret:slack_token}}' } }]);
   const [fake] = await exec.handleToolCalls([{ id: 'c3', name: 'messaging__send', arguments: { text: 'hi', token: '{{secret:made_up}}' } }]);
-  expect(send).toHaveBeenCalledOnce();
-  expect(String(fake?.content)).toMatch(/flow guard/);
-  expect(vault.canAccessByName).toHaveBeenCalledWith('system', 'made_up', { toolId: 'messaging' });
+  expect(send).not.toHaveBeenCalled();
+  expect(String(real?.content)).toContain('Vault interpolation is disabled');
+  expect(String(fake?.content)).toContain('Vault interpolation is disabled');
+  expect(vault.canAccessByName).not.toHaveBeenCalled();
+  expect(exec.getSideEffectCounters()).toMatchObject({ commandsRun: 0, toolCalls: 1, toolErrors: 2, permissionDenials: 2, policyRefusals: [expect.stringContaining('Vault interpolation is disabled')] });
 });

@@ -14,6 +14,9 @@ const fixture = vi.hoisted(() => ({
   backup: 'backup', models: [] as string[], runs: [] as string[], error: null as unknown,
   failSpawn: false,
 }));
+// This fixture intentionally has no database; durable history is exercised
+// by activity-tools.test.ts with real persisted records.
+vi.mock('./attempt-history', () => ({ runDelegationAttempt: async (_input: unknown, _history: unknown, run: () => Promise<unknown>) => run() }));
 vi.mock('@/models/model-registry', () => ({ getModelRegistry: () => ({
   getBackupModelForTopic: async () => fixture.backup ? { modelId: fixture.backup } : null,
   getModel: async () => null, getModelByModelId: async () => null,
