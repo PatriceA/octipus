@@ -172,6 +172,22 @@ function gitCommit(projectDir) {
   return r.status === 0 ? r.stdout.trim() : null;
 }
 
+/** Checkout identity alone cannot identify a copied or restored bundle. */
+export function readBuildIdentity(entry) {
+  const sha256 = sha256File(entry);
+  try {
+    const info = JSON.parse(readFileSync(join(dirname(entry),'build-info.json'),'utf8'));
+    const outputsMatch = info.outputs && typeof info.outputs === 'object' && !Array.isArray(info.outputs) && info.outputs['index.js'] === sha256
+      && Object.entries(info.outputs).every(([name,hash]) => (name === 'index.js' || /^[a-zA-Z0-9_.-]+\.py$/.test(name))
+        && typeof hash === 'string' && /^[a-f0-9]{64}$/.test(hash) && sha256File(join(dirname(entry),name)) === hash);
+    if (info.version === 1 && sha256 && outputsMatch && info.bundleSha256 === sha256) return {
+      sha256, commit: typeof info.commit === 'string' && /^[a-f0-9]{40}$/i.test(info.commit) ? info.commit : null,
+      dirty: typeof info.dirty === 'boolean' ? info.dirty : null,
+    };
+  } catch { /* Legacy or mismatched artifact: identity is unknown. */ }
+  return {sha256,commit:null,dirty:null};
+}
+
 /** GET a URL; resolves with the status code, or 0 when nothing answered in time. */
 function probe(host, port, path, timeoutMs = 5000) {
   return new Promise((done) => {
@@ -223,7 +239,9 @@ export class Supervisor {
     this.stableTimer = null;
     this.healthTimer = null;
     this.lastGood = this.readLastGoodMeta();
-    this.commit = gitCommit(settings.projectDir);
+    this.checkoutCommit = gitCommit(settings.projectDir);
+    this.artifact = readBuildIdentity(settings.entry);
+    this.commit = this.artifact.commit;
   }
 
   log(level, msg, extra = {}) {
@@ -265,6 +283,9 @@ export class Supervisor {
       attempts: this.attempts.slice(-10),
       lastGood: this.lastGood,
       commit: this.commit,
+      checkoutCommit: this.checkoutCommit,
+      artifactSha256: this.artifact.sha256,
+      buildDirty: this.artifact.dirty,
       nextAutoRetryAt: this.retryAt ?? null,
     };
   }
@@ -378,7 +399,9 @@ export class Supervisor {
     const startedAt = Date.now();
     const attempt = { startedAt: new Date(startedAt).toISOString(), build, outcome: 'starting' };
     this.attempts.push(attempt);
-    this.commit = gitCommit(this.s.projectDir);
+    this.checkoutCommit = gitCommit(this.s.projectDir);
+    this.artifact = readBuildIdentity(this.entryFor(build));
+    this.commit = this.artifact.commit;
     if (!existsSync(this.entryFor(build))) {
       attempt.outcome = 'missing-build';
       attempt.detail = `${this.entryFor(build)} does not exist (run npm run build)`;

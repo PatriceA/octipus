@@ -13,6 +13,9 @@
 import { build } from 'esbuild';
 import { copyFileSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { backendInputFingerprint, writeBackendBuildInfo } from './needs-build.mjs';
+
+const inputsFingerprint = backendInputFingerprint(process.cwd());
 
 const EXTERNAL = [
   'playwright',
@@ -58,6 +61,9 @@ if (result.errors.length > 0) process.exit(1);
 // Python workers the voice modules spawn by path next to themselves
 // (`join(import.meta.dirname, '<worker>.py')`). Bundled, "next to themselves"
 // is `dist/`, so they have to be there too or local STT/TTS fails to start.
+const runtimeFiles = ['index.js'];
 for (const file of readdirSync('src/voice').filter((name) => name.endsWith('.py'))) {
   copyFileSync(join('src/voice', file), join('dist', file));
+  runtimeFiles.push(file);
 }
+writeBackendBuildInfo(process.cwd(), inputsFingerprint, runtimeFiles);

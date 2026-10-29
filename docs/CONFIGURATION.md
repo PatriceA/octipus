@@ -356,3 +356,15 @@ when untrusted users can author artifacts in your workspace.
 | `ARTIFACT_SDK_SHA256`     | sha256 of `octipus-artifact-client.js` — pinned in CSP.   |
 | `ARTIFACT_TOKEN_SECRET`   | HMAC key for artifact-scoped JWT. Falls back to JWT_SECRET HKDF. |
 | `ARTIFACT_BUNDLES_DIR`    | Filesystem root for custom JS bundles. Default `data/artifacts/`. |
+
+## Backend build freshness
+
+`npm run build` records source-content fingerprints and runtime-output checksums
+in `dist/build-info.json`. In a source checkout, `octi start`/`restart` rebuilds
+when inputs or outputs differ, including restored files with fresh timestamps.
+Older bundles without a receipt rebuild once. Packaged installs without source
+retain their existing launch behavior.
+
+Supervisor status separates the checkout's `checkoutCommit` from the verified
+artifact's `commit`, `artifactSha256` and `buildDirty`. An unverified or legacy
+artifact reports an unknown commit rather than borrowing the checkout's SHA.
