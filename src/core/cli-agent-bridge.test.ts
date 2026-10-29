@@ -490,7 +490,14 @@ it.each(['deadline', 'disconnect', 'premature-finish'] as const)('approval %s en
   } finally { worker.stop(); timerSpy.mockRestore(); }
 });
 
- it.skipIf(!!process.env.OCTIPUS_LIVE_CLI).each(['native', 'parallel', 'idle'])('wakes Claude for steering after %s work without waiting for its whole turn', async mode => {
+ it.skipIf(!!process.env.OCTIPUS_LIVE_CLI).each(
+   ['native', 'parallel', 'idle'].flatMap(mode => [
+     { mode, diagnostic: 'Execution interrupted' },
+     { mode, diagnostic: '' },
+     { mode, diagnostic: undefined },
+     { mode, diagnostic: '[Request interrupted by user]' },
+   ]),
+ )('wakes Claude for steering after work: %j', async ({ mode, diagnostic }) => {
    writeFileSync(fixture.script, `
      import { createInterface } from 'node:readline';
      const mode = ${JSON.stringify(mode)};
@@ -503,7 +510,7 @@ it.each(['deadline', 'disconnect', 'premature-finish'] as const)('approval %s en
          interrupted = true;
          // Both orders occur: don't send the next user turn until BOTH frames.
          const ack = {type:'control_response',response:{subtype:'success',request_id:event.request_id,response:{}}};
-         const result = {type:'result',subtype:'error_during_execution',is_error:true,result:'Execution interrupted',num_turns:1};
+         const result = {type:'result',subtype:'error_during_execution',is_error:true,result:${JSON.stringify(diagnostic)},errors:[],num_turns:1};
          emit(mode === 'parallel' ? result : ack);
          setTimeout(() => emit(mode === 'parallel' ? ack : result), 20);
          continue;
@@ -680,6 +687,9 @@ it.skipIf(!!process.env.OCTIPUS_LIVE_CLI).each([
   { failure: 'EACCES writing output', errors: [] },
   { failure: 'EACCES writing /tmp/interrupted/output', errors: [] },
   { failure: 'EACCES writing output', errors: ['Execution interrupted'] },
+  { failure: 'Execution interrupted: EACCES writing output', errors: [] },
+  { failure: '', errors: ['EACCES reading provider configuration'] },
+  { failure: '', errors: [{ message: 'Provider execution failed' }] },
 ])('preserves an unrelated execution failure that coincides with steering: %j', async ({ failure, errors }) => {
   writeFileSync(fixture.script, `
     import { createInterface } from 'node:readline';
@@ -702,6 +712,55 @@ it.skipIf(!!process.env.OCTIPUS_LIVE_CLI).each([
       worker.steer({role:'user',content:'Answer my question',timestamp:new Date()});
     }
   });
-  await expect(worker.run('sample')).rejects.toThrow(failure);
+  await expect(worker.run('sample')).rejects.toThrow(failure || 'Claude Code failed during execution');
+  expect(worker.getStatus()).toBe('failed');
+});
+
+
+it.skipIf(!!process.env.OCTIPUS_LIVE_CLI).each(['rejected', 'timeout', 'exit', 'wrong-request'] as const)(
+  'fails an undetailed cancellation without interrupt acknowledgement: %s', async mode => {
+    const nativeTimeout = globalThis.setTimeout;
+    const timerSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((callback: (...args: any[]) => void, ms?: number, ...args: any[]) =>
+      nativeTimeout(callback, ms === 30_000 ? 50 : ms, ...args)) as typeof setTimeout);
+    writeFileSync(fixture.script, `
+      import { createInterface } from 'node:readline';
+      const emit = event => console.log(JSON.stringify(event));
+      for await (const line of createInterface({input:process.stdin})) {
+        const event = JSON.parse(line);
+        if (event.type === 'control_request') {
+          emit({type:'result',subtype:'error_during_execution',is_error:true,errors:[],num_turns:1});
+          if (${JSON.stringify(mode)} === 'rejected') setTimeout(() => emit({type:'control_response',response:{subtype:'error',request_id:event.request_id,error:'Not supported'}}), 5);
+          if (${JSON.stringify(mode)} === 'exit') setTimeout(() => process.exit(0), 5);
+          if (${JSON.stringify(mode)} === 'wrong-request') emit({type:'control_response',response:{subtype:'success',request_id:event.request_id+'wrong',response:{}}});
+        } else if (event.type === 'user') {
+          emit({type:'assistant',message:{id:'thinking',content:[{type:'text',text:'Working'}]}});
+        }
+      }
+    `);
+    const worker = sampleWorker();
+    let sent = false;
+    worker.onEvent(event => {
+      if (!sent && (event.data as {type?: string}).type === 'iteration_update') {
+        sent = true;
+        worker.steer({role:'user',content:'Answer my question',timestamp:new Date()});
+      }
+    });
+    try {
+      await expect(worker.run('sample')).rejects.toThrow(/interrupt.*(rejected|timed out)|exited before acknowledging/);
+      expect(worker.getStatus()).toBe('failed');
+    } finally { worker.stop(); timerSpy.mockRestore(); }
+  },
+);
+
+
+it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('preserves an undetailed execution failure when no steering interrupt was requested', async () => {
+  writeFileSync(fixture.script, `
+    import { createInterface } from 'node:readline';
+    for await (const line of createInterface({input:process.stdin})) {
+      if (JSON.parse(line).type === 'user') console.log(JSON.stringify({type:'result',subtype:'error_during_execution',is_error:true,errors:[],num_turns:1}));
+    }
+  `);
+  const worker = sampleWorker();
+  await expect(worker.run('sample')).rejects.toThrow('Claude Code failed during execution');
   expect(worker.getStatus()).toBe('failed');
 });

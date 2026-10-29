@@ -152,7 +152,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
   private liveResultsPending = 0;
   private liveTools = new Set<string>();
   private seenLiveTools = new Set<string>();
-  private steeringInterrupt?: { requestId: string; acknowledged: boolean };
+  private steeringInterrupt?: { requestId: string; acknowledged: boolean; cancellationReported?: boolean };
   private steeringInterruptTimer?: ReturnType<typeof setTimeout>;
   /**
    * True once THIS run is confirmed to resume a vendor session (Task 6) — the
@@ -206,11 +206,22 @@ export class CLIAgentWorker extends BaseAgentWorker {
     // Older CLI builds may not implement interrupts. Preserve live delivery
     // and the unacknowledged-input fallback instead of hanging the worker.
     this.steeringInterruptTimer = setTimeout(() => {
+      const failed = this.failUnacknowledgedCancellation('interrupt acknowledgement timed out');
       this.steeringInterrupt = undefined;
       this.steeringInterruptTimer = undefined;
+      if (failed) return;
       this.emit('observation', { type: 'warning', message: 'CLI did not finish the steering interrupt within 30 seconds; submitting guidance through its input stream.' });
       this.submitLiveGuidance();
     }, 30_000);
+  }
+
+  /** An otherwise unexplained cancellation is safe only after our interrupt is acknowledged. */
+  private failUnacknowledgedCancellation(reason: string): boolean {
+    if (!this.steeringInterrupt?.cancellationReported || this.steeringInterrupt.acknowledged) return false;
+    this.runError ??= `Claude Code failed during execution: ${reason}; queued steering was not delivered`;
+    this.acceptsLiveGuidance = false;
+    this.process?.stdin?.end();
+    return true;
   }
 
   private finishSteeringInterrupt(): void {
@@ -1475,11 +1486,12 @@ When a task matches one of these skills, load it with get_skill before starting 
           try {
             const event = JSON.parse(line);
             if (built.keepStdinOpen && event.type === 'control_response' && this.steeringInterrupt && event.response?.request_id === this.steeringInterrupt.requestId) {
-              if (event.response.subtype === 'error') {
+              if (event.response.subtype !== 'success') {
+                const failed = this.failUnacknowledgedCancellation('interrupt was rejected');
                 clearTimeout(this.steeringInterruptTimer);
                 this.steeringInterruptTimer = undefined;
                 this.steeringInterrupt = undefined;
-                this.submitLiveGuidance();
+                if (!failed) this.submitLiveGuidance();
               } else {
                 this.steeringInterrupt.acknowledged = true;
                 this.finishSteeringInterrupt();
@@ -1523,13 +1535,20 @@ When a task matches one of these skills, load it with get_skill before starting 
             // responses until the vendor acknowledges the guidance.
             const turnDiagnostics = [event.result, ...(Array.isArray(event.errors) ? event.errors : [])]
               .filter((value): value is string => typeof value === 'string' && !!value.trim());
+            const noDiagnostics = (event.result == null || event.result === '')
+              && (event.errors == null || (Array.isArray(event.errors) && event.errors.length === 0));
+            const explicitCancellation = turnDiagnostics.length > 0
+              && (event.result == null || typeof event.result === 'string')
+              && (event.errors == null || (Array.isArray(event.errors) && event.errors.every((value: unknown) => typeof value === 'string')))
+              && turnDiagnostics.every(value => /^(?:error:\s*)?(?:\[request interrupted by user\]|(?:(?:execution|request|turn|operation|run|task)\s+(?:was\s+)?)?(?:interrupted|aborted)(?: by user)?)[.!]?$/i.test(value.trim()));
             const interruptedCancellation = built.keepStdinOpen && event.type === 'result' && !!this.steeringInterrupt
-              && event.subtype === 'error_during_execution'
-              && turnDiagnostics.length > 0 && turnDiagnostics.every(value => /^(?:error:\s*)?(?:(?:execution|request|turn|operation|run|task)\s+(?:was\s+)?)?(?:interrupted|aborted)\b/i.test(value.trim()));
+              && event.subtype === 'error_during_execution' && (noDiagnostics || explicitCancellation);
+            if (interruptedCancellation) this.steeringInterrupt!.cancellationReported = true;
             consecutiveNonJson = 0;
-            // Account for the superseded turn, but suppress only an explicit
-            // interrupt diagnostic. A coincident EACCES/provider failure stays
-            // a failure rather than being hidden by the steering wake-up.
+            // Claude can end an interrupted turn with no diagnostic at all.
+            // Account for it while waiting for the matching control response;
+            // rejection, timeout or exit without acknowledgement still fails.
+            // A coincident EACCES/provider failure remains a failure.
             const result = parser.parse(interruptedCancellation ? { ...event, subtype: 'success', is_error: false } : event, adapterKey);
             if (built.keepStdinOpen && event.type === 'result') {
               this.liveResultsPending = Math.max(0, this.liveResultsPending - 1);
@@ -1588,6 +1607,7 @@ When a task matches one of these skills, load it with get_skill before starting 
       proc.on('close', async (code, signal) => {
         if (this.executionDiagnostics) Object.assign(this.executionDiagnostics, { exitCode: code, signal });
         this.acceptsLiveGuidance = false;
+        this.failUnacknowledgedCancellation('CLI exited before acknowledging the interrupt');
         clearTimeout(this.steeringInterruptTimer);
         this.steeringInterruptTimer = undefined;
         this.steeringInterrupt = undefined;
