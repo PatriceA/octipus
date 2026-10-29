@@ -1,3 +1,4 @@
+import type { ApiConnectionConfig } from '@/shared/api-connection';
 import { boolean, index, integer, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 export const credentialTypeEnum = pgEnum('credential_type', [
@@ -100,6 +101,8 @@ export const vault = pgTable('vault', {
 export type VaultScope = typeof vaultScopeEnum.enumValues[number];
 
 export interface VaultMetadata {
+  apiConnection?: ApiConnectionConfig;
+  apiConnectionNetwork?: 'operator' | 'public';
   service?: string;
   environment?: 'production' | 'staging' | 'development';
   rotationPolicy?: {

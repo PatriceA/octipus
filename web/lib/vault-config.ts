@@ -1,3 +1,4 @@
+import type { ApiConnectionConfig } from '../../src/shared/api-connection';
 export interface VaultKeyEntry {
   label: string;
   vaultName: string;
@@ -23,6 +24,10 @@ export interface Credential {
   id: string;
   name: string;
   credentialType: string;
+  scope?: 'user' | 'workspace' | 'system';
+  workspaceId?: string | null;
+  metadata?: { apiConnection?: ApiConnectionConfig };
+  apiConnections?: Array<{id:string;origin:string;pathPrefix:string;methods:string[];managedBy:'operator'|'vault'}>;
   description?: string;
   tags: string[];
   accessCount: string;

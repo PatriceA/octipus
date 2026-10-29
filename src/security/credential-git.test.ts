@@ -7,7 +7,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { authenticatedGit } from './credential-git';
 import { connectionProfileSchema } from './credential-connections';
 const fx=vi.hoisted(()=>({secret:'CANARY_GIT_PASSWORD_39x!',spawns:[] as unknown[]}));
-vi.mock('./vault',()=>({getVault:()=>({getByNameAuthorized:async()=>fx.secret})}));
+vi.mock('./vault',()=>({getVault:()=>({list:async()=>[],getByNameAuthorized:async()=>fx.secret})}));
 vi.mock('node:child_process',async original=>{const actual=await original<typeof import('node:child_process')>();return {...actual,spawn:(...args: Parameters<typeof actual.spawn>)=>{fx.spawns.push(args);return actual.spawn(...args);}};});
 let dir='';let stop:(()=>Promise<void>)|undefined;
 afterEach(async()=>{await stop?.();stop=undefined;if(dir)await rm(dir,{recursive:true,force:true});});

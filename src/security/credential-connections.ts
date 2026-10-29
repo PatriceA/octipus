@@ -1,3 +1,5 @@
+import { fetchGuarded } from '@/utils/sanitize';
+import { connectionAuthSchema, apiConnectionSchema } from '@/shared/api-connection';
 import { createHash } from 'node:crypto';
 import { readFile, lstat } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -7,18 +9,14 @@ import { getVault } from './vault';
 import { redactCredentialData } from './credential-redaction';
 import { assertNoCredentialTemplates } from './credential-boundary';
 
-const authSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('bearer') }).strict(),
-  z.object({ type: z.literal('basic'), username: z.string().min(1).optional(), usernameCredential: z.string().regex(/^[a-zA-Z0-9_-]+$/).optional() }).strict().refine(a => Number(!!a.username) + Number(!!a.usernameCredential) === 1),
-  z.object({ type: z.literal('header'), name: z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/), prefix: z.string().default('') }).strict(),
-]);
 export const connectionProfileSchema = z.object({
   id: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/),
   userId: z.string().min(1), workspaceId: z.string().nullable(),
-  credential: z.string().regex(/^[a-zA-Z0-9_-]+$/),
+  credential: z.string().min(1),
   http: z.object({
-    origin: z.string().url(), auth: authSchema,
+    origin: z.string().url(), auth: connectionAuthSchema,
     allowInsecureHttp: z.boolean().default(false),
+    networkPolicy: z.enum(['operator', 'public']).default('operator'),
     pathPrefix: z.string().startsWith('/').default('/'),
     methods: z.array(z.enum(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'])).min(1),
     git: z.boolean().default(false),
@@ -57,9 +55,23 @@ export async function readConnectionProfiles(): Promise<ConnectionProfile[]> {
 export function principalCanUse(p: ConnectionProfile, caller: ConnectionPrincipal): boolean {
   return !caller.space && p.userId === caller.userId && (p.workspaceId === null || p.workspaceId === caller.workspaceId);
 }
+/** Personal HTTP grants saved by the credential owner through the vault UI. */
+export async function readAvailableConnectionProfiles(caller: ConnectionPrincipal): Promise<ConnectionProfile[]> {
+  if (caller.space) return [];
+  const profiles = (await readConnectionProfiles()).filter(p => principalCanUse(p, caller));
+  for (const row of await getVault().list(caller.userId, { workspaceId: caller.workspaceId })) {
+    const parsed = apiConnectionSchema.safeParse(row.metadata?.apiConnection);
+    if (!parsed.success) continue;
+    const c = parsed.data;
+    profiles.push(connectionProfileSchema.parse({ id: c.id, userId: caller.userId,
+      workspaceId: row.scope === 'workspace' ? row.workspaceId : null, credential: row.name, http: { origin:c.origin, pathPrefix:c.pathPrefix, auth:c.auth, methods:c.methods, allowInsecureHttp:c.allowInsecureHttp, networkPolicy:row.metadata?.apiConnectionNetwork === 'operator' ? 'operator' : 'public' } }));
+  }
+  if (new Set(profiles.map(p => p.id)).size !== profiles.length) throw new Error('Connection name is configured more than once; choose a unique name in Secrets');
+  return profiles;
+}
 export async function connectionFor(id: string, caller: ConnectionPrincipal): Promise<ConnectionProfile> {
-  const p = (await readConnectionProfiles()).find(p => p.id === id && principalCanUse(p, caller));
-  if (!p) throw new Error('Connection unavailable for this user/workspace. Ask the operator to configure a named credential connection.');
+  const p = (await readAvailableConnectionProfiles(caller)).find(p => p.id === id);
+  if (!p) throw new Error('Connection unavailable for this user/workspace. Open Secrets → Connect API for this token to approve a server, authentication, path and allowed requests; an administrator must configure internal servers.');
   return p;
 }
 export async function resolveConnectionCredential(p: ConnectionProfile, caller: ConnectionPrincipal, toolId = 'connections', trustedMcpServerId?: string): Promise<string> {
@@ -84,7 +96,7 @@ export function connectionUrl(p: ConnectionProfile, path: string): URL {
 export function connectionAuth(p: ConnectionProfile, secret: string, resolvedUsername?: string): { name: string; value: string } {
   if (!p.http) throw new Error('Connection does not support HTTP');
   const a = p.http.auth;
-  const auth = a.type === 'basic' ? { name: 'Authorization', value: `Basic ${Buffer.from(`${a.username ?? resolvedUsername}:${secret}`).toString('base64')}` }
+  const auth = a.type === 'basic-token' ? { name: 'Authorization', value: `Basic ${Buffer.from(`${secret}:`).toString('base64')}` } : a.type === 'basic' ? { name: 'Authorization', value: `Basic ${Buffer.from(`${a.username ?? resolvedUsername}:${secret}`).toString('base64')}` }
     : a.type === 'bearer' ? { name: 'Authorization', value: `Bearer ${secret}` } : { name: a.name, value: a.prefix + secret };
   if (/[\x00-\x1f\x7f-\uffff]/.test(auth.value)) throw new Error('Invalid connection authentication');
   return auth;
@@ -102,7 +114,8 @@ export async function authenticatedFetch(p: ConnectionProfile, caller: Connectio
   if (['host', 'authorization', 'cookie', 'proxy-authorization', 'content-length', 'transfer-encoding', 'connection', 'upgrade', auth.name].some(n => headers.has(n))) throw new Error('Authentication and routing headers are controlled by the connection');
   try {
     headers.set(auth.name, auth.value);
-    const response = await fetch(url, { ...init, method, headers, redirect: 'manual' });
+    const request = { ...init, method, headers, redirect: 'manual' as const };
+    const response = p.http!.networkPolicy === 'public' ? await fetchGuarded(url.toString(), request) : await fetch(url, request);
     return { response, credentialVersion: createHash('sha256').update(JSON.stringify([secret, username])).digest('hex'), mask: value => redactCredentialData(value, [secret, ...(username ? [username] : []), auth.value, auth.value.replace(/^Basic /, '')]) };
   } catch { throw new Error('Authenticated connection request failed (network, TLS, cancellation or timeout); credentials withheld'); }
 }

@@ -25,3 +25,46 @@ test.describe('secrets / vault page', () => {
     expect(body).not.toContain('sk-FULLKEYHERE');
   });
 });
+
+ test('a stored API token can be connected without re-entering or exposing its value', async ({ authenticatedPage: page }) => {
+   const secret={id:'11111111-1111-4111-8111-111111111111',name:'SONAR_API_TOKEN',scope:'user',credentialType:'api_key',tags:[],accessCount:'0',allowedAgents:[],isActive:true,metadata:{},apiConnections:[] as unknown[]};
+   let settings:Record<string,unknown>|null=null;
+   await page.route('**/api/vault?*',route=>json(route,200,{credentials:[secret]}));
+   await page.route('**/api/vault',route=>json(route,200,{credentials:[secret]}));
+   await page.route('**/api/vault/*/api-connection*',async route=>{
+     settings=route.request().postDataJSON();secret.metadata={apiConnection:settings};secret.apiConnections=[{...settings,managedBy:'vault'}];await json(route,200,{connection:settings});
+   });
+   await page.goto('/secrets');
+   await expect(page.getByText(/save the secret, choose/i)).toBeVisible();
+   await page.getByRole('button',{name:'Connect API for SONAR_API_TOKEN'}).click();
+   await page.getByLabel('Connection name',{exact:true}).fill('sonarqube');
+   await page.getByLabel('Server origin',{exact:true}).fill('http://192.0.2.58');
+   await page.getByLabel('Allowed path prefix',{exact:true}).fill('/api');
+   await page.getByLabel('Authentication',{exact:true}).selectOption('basic-token');
+   await expect(page.getByLabel('GET',{exact:true})).toBeChecked();await expect(page.getByLabel('POST',{exact:true})).not.toBeChecked();
+   await expect(page.getByRole('button',{name:'Save API connection'})).toBeDisabled();
+   await page.getByLabel(/Allow unencrypted HTTP/).check();
+   await page.getByRole('button',{name:'Save API connection'}).click();
+   await expect(page.getByRole('status')).toContainText('API connection sonarqube saved');
+   expect(settings).toMatchObject({id:'sonarqube',origin:'http://192.0.2.58',pathPrefix:'/api',methods:['GET'],auth:{type:'basic-token'},allowInsecureHttp:true});
+   expect(JSON.stringify(settings)).not.toContain('value');
+   await expect(page.locator('body')).not.toContainText('SYNTHETIC_SECRET_VALUE');
+   await expect(page.getByText('API: sonarqube · GET /api')).toBeVisible();
+ });
+
+test('saving a new token offers the API setup step immediately', async ({ authenticatedPage: page }) => {
+  const secret={id:'22222222-2222-4222-8222-222222222222',name:'NEW_API_TOKEN',scope:'user',credentialType:'api_key',tags:[],accessCount:'0',allowedAgents:[],isActive:true,metadata:{},apiConnections:[]};
+  let stored=false;let secretPayload:Record<string,unknown>|null=null;
+  await page.route('**/api/vault?*',route=>json(route,200,{credentials:stored?[secret]:[]}));
+  await page.route('**/api/vault',async route=>{if(route.request().method()==='POST'){secretPayload=route.request().postDataJSON();stored=true;await json(route,200,secret);}else await json(route,200,{credentials:stored?[secret]:[]});});
+  await page.goto('/secrets');await page.getByRole('button',{name:'Add Secret',exact:true}).click();
+  await page.getByPlaceholder('my_api_key',{exact:true}).fill('NEW_API_TOKEN');
+  await page.getByLabel('Value',{exact:true}).fill('SYNTHETIC_SECRET_VALUE');
+  await expect(page.getByLabel(/Set up API access after saving/)).toBeChecked();
+  await page.getByRole('button',{name:'Save secret & set up API'}).click();
+  await expect(page.getByRole('heading',{name:'connect api',exact:true})).toBeVisible();
+  await expect(page.getByLabel('Server origin',{exact:true})).toBeVisible();
+  expect(secretPayload).toMatchObject({name:'NEW_API_TOKEN',value:'SYNTHETIC_SECRET_VALUE'});
+  await expect(page.getByLabel('Value',{exact:true})).toHaveCount(0);
+  await expect(page.locator('body')).not.toContainText('SYNTHETIC_SECRET_VALUE');
+});

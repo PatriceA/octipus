@@ -1,7 +1,8 @@
 'use client';
 
-import { AlertTriangle, Plus, RotateCcw, Search, Trash2, } from 'lucide-react';
+import { AlertTriangle, Link2, Plus, RotateCcw, Search, Trash2, } from 'lucide-react';
 import { useState, } from 'react';
+import { ApiConnectionForm } from './api-connection-form';
 import { Modal } from '@/components/ui/modal';
 import { api } from '@/lib/api';
 import {
@@ -19,6 +20,8 @@ interface VaultTableProps {
 }
 
 export function VaultTable({ credentials, onRefresh, workspaceId, workspaceName }: VaultTableProps) {
+  const [connectCredential, setConnectCredential] = useState<Credential | null>(null);
+  const [notice, setNotice] = useState('');
   const [search, setSearch] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
   const [rotateId, setRotateId] = useState<string | null>(null);
@@ -62,15 +65,19 @@ export function VaultTable({ credentials, onRefresh, workspaceId, workspaceName 
     description?: string;
     tags?: string[];
     scope: 'user' | 'workspace';
+    connectApi?: boolean;
   }) => {
     try {
-      const payload: Record<string, unknown> = { ...data };
+      const { connectApi, ...secret } = data;
+      const payload: Record<string, unknown> = { ...secret };
       if (data.scope === 'workspace' && workspaceId) {
         payload.workspaceId = workspaceId;
       }
-      await api.post('/vault', payload);
+      const saved = await api.post<Credential>('/vault', payload);
       setShowAddModal(false);
       onRefresh();
+      if (connectApi) setConnectCredential(saved);
+      else setNotice('Secret stored. To use it with an API, choose Connect API and approve the server and allowed requests.');
     } catch (error) {
       console.error('Failed to add credential:', error);
     }
@@ -91,6 +98,8 @@ export function VaultTable({ credentials, onRefresh, workspaceId, workspaceName 
         </button>
       </div>
 
+      <p className="mb-3 text-sm text-on-surface-variant">For an API token: save the secret, choose <strong>Connect API</strong>, then approve the server, authentication and allowed requests. Tell your agent the connection name. Model provider and channel cards above already configure their integrations.</p>
+      {notice && <p role="status" className="mb-3 text-sm text-on-surface-variant">{notice}</p>}
       {/* Search */}
       <div className="relative mb-3">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface-variant" />
@@ -132,6 +141,7 @@ export function VaultTable({ credentials, onRefresh, workspaceId, workspaceName 
                   >
                     <td className="py-2.5 px-4">
                       <div className="font-medium text-sm text-on-surface">{cred.name}</div>
+                      {!!cred.apiConnections?.length && <p className="text-xs text-on-surface-variant mt-1">API: {cred.apiConnections.map(c=>`${c.id} · ${c.methods.join('/')} ${c.pathPrefix}`).join(', ')}</p>}
                       {cred.description && (
                         <div className="text-xs text-on-surface-variant mt-0.5">{cred.description}</div>
                       )}
@@ -163,6 +173,7 @@ export function VaultTable({ credentials, onRefresh, workspaceId, workspaceName 
                     </td>
                     <td className="py-2.5 px-4">
                       <div className="flex items-center gap-1">
+                        {cred.scope !== 'system' && <button onClick={() => setConnectCredential(cred)} title={`Connect API for ${cred.name}`} aria-label={`Connect API for ${cred.name}`} className="p-1.5 text-on-surface-variant hover:text-primary rounded-md hover:bg-surface-container-high cursor-pointer"><Link2 className="w-3.5 h-3.5" /></button>}
                         <button
                           onClick={() => setRotateId(cred.id)}
                           className="p-1.5 text-on-surface-variant hover:text-primary rounded-md hover:bg-surface-container-high cursor-pointer"
@@ -187,6 +198,9 @@ export function VaultTable({ credentials, onRefresh, workspaceId, workspaceName 
         </div>
       )}
 
+      <Modal open={!!connectCredential} onClose={() => setConnectCredential(null)} title="Connect API" maxWidth="md">
+        {connectCredential && <ApiConnectionForm key={connectCredential.id} credential={connectCredential} workspaceId={workspaceId} onCancel={() => setConnectCredential(null)} onSaved={name => {setConnectCredential(null);setNotice(name ? `API connection ${name} saved. Tell your agent to use the ${name} connection. Vault access restrictions still apply.` : 'API connection removed. The secret remains in the vault.');onRefresh();}} />}
+      </Modal>
       {/* Add Modal */}
       <Modal open={showAddModal} onClose={() => setShowAddModal(false)} title="Add Secret" maxWidth="md">
         <AddSecretForm
@@ -238,10 +252,11 @@ function AddSecretForm({
   workspaceAvailable,
 }: {
   onCancel: () => void;
-  onAdd: (data: { name: string; value: string; credentialType: CredentialType; description?: string; tags?: string[]; scope: 'user' | 'workspace' }) => void;
+  onAdd: (data: { name: string; value: string; credentialType: CredentialType; description?: string; tags?: string[]; scope: 'user' | 'workspace'; connectApi?: boolean }) => void;
   workspaceName: string | null;
   workspaceAvailable: boolean;
 }) {
+  const [connectApi, setConnectApi] = useState(true);
   const [name, setName] = useState('');
   const [value, setValue] = useState('');
   const [credentialType, setCredentialType] = useState<CredentialType>('api_key');
@@ -252,10 +267,11 @@ function AddSecretForm({
   const isSystemSecret = SYSTEM_SCOPED_SECRET_NAMES.has(name.trim());
 
   return (
-    <div className="space-y-3">
+    <div className="max-h-[75vh] overflow-y-auto space-y-3 pr-1">
       <div>
-        <label className="text-xs font-bold text-on-surface-variant uppercase mb-2 block">Name</label>
+        <label htmlFor="vault-secret-name" className="text-xs font-bold text-on-surface-variant uppercase mb-2 block">Name</label>
         <input
+          id="vault-secret-name"
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -276,8 +292,9 @@ function AddSecretForm({
         </div>
       )}
       <div>
-        <label className="text-xs font-bold text-on-surface-variant uppercase mb-2 block">Value</label>
+        <label htmlFor="vault-secret-value" className="text-xs font-bold text-on-surface-variant uppercase mb-2 block">Value</label>
         <input
+          id="vault-secret-value"
           type="password"
           value={value}
           onChange={(e) => setValue(e.target.value)}
@@ -332,6 +349,7 @@ function AddSecretForm({
           placeholder="production, openai"
         />
       </div>
+      {!isSystemSecret && !['ssh_key','certificate'].includes(credentialType) && <label className="flex items-start gap-2 text-xs text-on-surface-variant"><input type="checkbox" checked={connectApi} onChange={e=>setConnectApi(e.target.checked)}/>Set up API access after saving. You will choose the server and allowed requests next; no need to paste this token again.</label>}
       <div className="flex justify-end gap-3 pt-2">
         <button
           onClick={onCancel}
@@ -348,12 +366,13 @@ function AddSecretForm({
               description: description || undefined,
               tags: tags ? tags.split(',').map((t) => t.trim()).filter(Boolean) : undefined,
               scope,
+              connectApi: connectApi && !isSystemSecret && !['ssh_key','certificate'].includes(credentialType),
             })
           }
           disabled={!name || !value}
           className="px-4 py-2 text-sm bg-primary text-[#0e0e0e] rounded-lg hover:bg-primary-container disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
         >
-          Add
+          {connectApi && !isSystemSecret && !['ssh_key','certificate'].includes(credentialType) ? 'Save secret & set up API' : 'Save secret'}
         </button>
       </div>
     </div>

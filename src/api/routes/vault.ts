@@ -1,3 +1,7 @@
+import { readConnectionProfiles } from '@/security/credential-connections';
+import { ToolPolicyRefusalError } from '@/core/tool-execution-error';
+import { apiConnectionSchema } from '@/shared/api-connection';
+import { saveVaultApiConnection, VaultConnectionError } from '@/db/repositories/vault-api-connection';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getVault, isReservedSecretName } from '@/security/vault';
@@ -48,7 +52,14 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
       });
       // Admins also see system-level credentials, but avoid duplicates if user IS system
       const systemEntries = (user.isAdmin && user.id !== 'system') ? await vault.list('system') : [];
-      return { credentials: [...entries, ...systemEntries].filter((e) => !isReservedSecretName(e.name)) };
+      let operatorProfiles: Awaited<ReturnType<typeof readConnectionProfiles>> = [];
+      try { operatorProfiles = await readConnectionProfiles(); } catch { apiLogger.warn('API connection configuration unavailable while listing vault metadata'); }
+      return { credentials: [...entries, ...systemEntries].filter((e) => !isReservedSecretName(e.name)).map(e => ({ ...e,
+        apiConnections: [
+          ...operatorProfiles.filter(p => p.http && p.userId === user.id && e.userId === user.id && p.credential === e.name && p.workspaceId === (e.scope === 'workspace' ? e.workspaceId : null)).map(p => ({ id:p.id,origin:p.http!.origin,pathPrefix:p.http!.pathPrefix,methods:p.http!.methods,managedBy:'operator' })),
+          ...(apiConnectionSchema.safeParse(e.metadata?.apiConnection).success ? [{...e.metadata!.apiConnection!,managedBy:'vault'}] : []),
+        ],
+      })) };
     },
     {
       query: t.Object({
@@ -57,6 +68,21 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
       detail: { tags: ['vault'] },
     }
   )
+
+  // The owner explicitly approves the destination and methods; never an agent tool.
+  .put('/:id/api-connection', async ({ user, params, query, body, set }) => {
+    if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+    const parsed = body === null ? { success: true as const, data: null } : apiConnectionSchema.safeParse(body);
+    if (!parsed.success) { set.status = 400; return { error: 'Invalid API connection settings. Check the name, service origin, path, authentication and allowed methods.' }; }
+    try {
+      return { connection: await saveVaultApiConnection(user.id, params.id, query.workspaceId ?? null, parsed.data, { allowPrivateOrigins: user.isAdmin }) };
+    } catch (error) {
+      if (error instanceof VaultConnectionError) { set.status = error.code === 'not_found' ? 404 : error.code === 'public_destination_required' ? 403 : 409; return { error: error.message }; }
+      if (error instanceof ToolPolicyRefusalError) { set.status = 400; return { error: 'Use connection settings only; secret values and templates are not allowed.' }; }
+      apiLogger.warn({ errorClass: error instanceof Error ? error.name : 'unknown' }, 'API connection settings could not be saved');
+      set.status = 503; return { error: 'API connection settings could not be saved. Please try again or check the server connection configuration.' };
+    }
+  }, { params: t.Object({ id: t.String({ format: 'uuid' }) }), query: t.Object({ workspaceId: t.Optional(t.String({ format: 'uuid' })) }), body: t.Unknown(), detail: { tags: ['vault'] } })
 
   // Create credential
   .post(

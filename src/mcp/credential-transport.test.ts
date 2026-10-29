@@ -8,7 +8,7 @@ import { resourceHandlers } from './resource-tools';
 import { createCredentialTransport, assertCredentialConnectionAccess } from './credential-transport';
 import type { AgentContext,MCPServer } from '@/core/types';
 const fx=vi.hoisted(()=>({secret:'CANARY_MCP_SECRET_742!',reads:vi.fn(),allowedAgents:[] as string[]}));
-vi.mock('@/security/vault',()=>({getVault:()=>({getByNameAuthorized:async(agent:{agentId?:string},_name:string,options?:{trustedMcpTransport?:boolean})=>{if(fx.allowedAgents.length&&!options?.trustedMcpTransport&&!fx.allowedAgents.includes(agent.agentId??''))return null;fx.reads();return fx.secret;}})}));
+vi.mock('@/security/vault',()=>({getVault:()=>({list:async()=>[],getByNameAuthorized:async(agent:{agentId?:string},_name:string,options?:{trustedMcpTransport?:boolean})=>{if(fx.allowedAgents.length&&!options?.trustedMcpTransport&&!fx.allowedAgents.includes(agent.agentId??''))return null;fx.reads();return fx.secret;}})}));
 let dir:string;const saved=process.env.OCTIPUS_CONNECTIONS_FILE;let stop:(()=>Promise<void>)|undefined;
 beforeEach(async()=>{dir=await mkdtemp(join(tmpdir(),'octi-mcp-credential-'));process.env.OCTIPUS_CONNECTIONS_FILE=join(dir,'profiles.json');fx.secret='CANARY_MCP_SECRET_742!';fx.allowedAgents=[];fx.reads.mockClear();});
 afterEach(async()=>{await stop?.();stop=undefined;if(saved===undefined)delete process.env.OCTIPUS_CONNECTIONS_FILE;else process.env.OCTIPUS_CONNECTIONS_FILE=saved;await rm(dir,{recursive:true,force:true});});

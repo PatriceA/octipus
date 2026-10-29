@@ -191,6 +191,7 @@ const ALLOWLIST: Record<string, string> = {
   'src/api/routes/orgs.ts': 'org spend, admin billing',
   // The vault: a user's secrets; workspace-scoped secrets follow transfer.
   'src/security/vault.ts': 'secret store',
+  'src/db/repositories/vault-api-connection.ts': 'owner-only API settings for user/workspace vault rows; reads no space rows or credential values',
   'src/security/oauth.ts': "a user's OAuth tokens in the secret store",
   // Group channels (enrolments, not content): a bound one names its space (§9.4).
   'src/channels/group-channels.ts': "channel enrolments; a binding grants nothing to the channel's owner",

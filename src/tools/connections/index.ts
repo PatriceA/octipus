@@ -1,6 +1,6 @@
 import type { AgentContext, ToolManifest } from '@/core/types';
 import { getExecutionSignal } from '@/core/execution-scope';
-import { authenticatedFetch, connectionUrl, connectionFor, principalCanUse, readBoundedResponse, readConnectionProfiles } from '@/security/credential-connections';
+import { authenticatedFetch, connectionUrl, connectionFor, readBoundedResponse, readAvailableConnectionProfiles } from '@/security/credential-connections';
 import { authenticatedGit } from '@/security/credential-git';
 import { BaseTool, createParameterSchema } from '../base-tool';
 
@@ -17,7 +17,7 @@ export class ConnectionsTool extends BaseTool {
   ], tools: [] }; }
   protected async registerTools(): Promise<void> {
     this.registerTool('list', 'List connection names and approved origins/methods. Credentials are never returned. If empty, report missing connection configuration, not a missing service or invalid credential.', createParameterSchema({}), async (_args, c) =>
-      (await readConnectionProfiles()).filter(p => p.http && principalCanUse(p, c)).map(p => ({ connection: p.id, origin: p.http!.origin, pathPrefix: p.http!.pathPrefix, methods: p.http!.methods, git: p.http!.git })), { permissionAction: 'read', readOnly: true });
+      (await readAvailableConnectionProfiles(c)).filter(p => p.http).map(p => ({ connection: p.id, origin: p.http!.origin, pathPrefix: p.http!.pathPrefix, methods: p.http!.methods, git: p.http!.git })), { permissionAction: 'read', readOnly: true });
     const requestSchema = createParameterSchema({
       connection: { type: 'string', required: true, description: 'Configured connection name' }, path: { type: 'string', required: true, description: 'Origin-relative path; e.g. /api/json or /api/v4/projects' },
       timeout: { type: 'number', description: 'Execution timeout in milliseconds (1–600000)', default: 120000 },

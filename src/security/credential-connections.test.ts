@@ -7,7 +7,7 @@ import { authenticatedFetch, connectionFor, connectionUrl, readBoundedResponse, 
 import { assertNoCredentialTemplates } from './credential-boundary';
 
 const fx = vi.hoisted(() => ({ value: 'CANARY_CONNECTION_SECRET_9x~!', allowedTools: [] as string[], allowedAgents: [] as string[], reads: vi.fn() }));
-vi.mock('./vault', () => ({ getVault: () => ({ getByNameAuthorized: async (agent: {toolId:string;agentId?:string}) => {
+vi.mock('./vault', () => ({ getVault: () => ({ list: async () => [], getByNameAuthorized: async (agent: {toolId:string;agentId?:string}) => {
   if ((fx.allowedTools.length && !fx.allowedTools.includes(agent.toolId)) || (fx.allowedAgents.length && !fx.allowedAgents.includes(agent.agentId??''))) return null;
   fx.reads(); return fx.value;
 } }) }));
@@ -67,6 +67,15 @@ describe('credential connection boundary', () => {
     fx.value = 'PRIVATE_CANARY' + invalid + 'suffix';
     let failure: unknown; try { await authenticatedFetch(profile,caller,'/api'); } catch(error) { failure=error; }
     expect(failure).toBeInstanceOf(Error); expect(String(failure)).not.toContain('PRIVATE_CANARY');
+  });
+  it('supports token-as-Basic-username authentication without a password', async () => {
+    profile.http!.auth={type:'basic-token'};
+    await endpoint((req,res)=>{expect(req.headers.authorization).toBe(`Basic ${Buffer.from(fx.value+':').toString('base64')}`);res.end('ok');});
+    const {response}=await authenticatedFetch(profile,caller,'/api');expect(await readBoundedResponse(response)).toBe('ok');
+  });
+  it('enforces the public-network policy for self-service profiles at request time', async () => {
+    let requests=0;await endpoint((_req,res)=>{requests++;res.end('unexpected');});profile.http!.networkPolicy='public';
+    await expect(authenticatedFetch(profile,caller,'/api')).rejects.toThrow(/request failed/);expect(requests).toBe(0);
   });
   it('continues rejecting shell redirection, file templates and nested general interpolation without creating a file', async () => {
     const path=join(dir,'leak');

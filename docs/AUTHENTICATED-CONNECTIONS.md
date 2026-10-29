@@ -5,7 +5,39 @@ It supports HTTP APIs and Git without installing a separate client for each serv
 MCP transports can use the same named profiles. General shell, file and tool-argument
 interpolation remains blocked by `credential-boundary`.
 
-## Configuration
+## Set up an API token in the UI
+
+1. Open **Secrets → Add Secret** and save the token. Leave **Set up API access
+   after saving** selected, or choose **Connect API** beside an existing secret.
+2. Enter a connection name (the name you tell the agent), the server origin
+   (protocol + host + optional port), and the allowed API path prefix.
+3. Select the service's authentication scheme. The token comes from the vault;
+   do not paste it again. Select GET for read-only access, and only add methods
+   that the API needs. HTTP requires an explicit unencrypted-transport choice.
+4. Save the API connection. It appears below the secret, and authorized agents
+   can discover it immediately with `connections__list`; no restart is needed.
+
+For SonarQube 9.x, use **Basic token (empty password)**. For example: name
+`sonarqube`, origin `https://sonarqube.example.com`, path `/api`, GET only. Newer SonarQube
+versions also support bearer tokens; use the authentication documented for the
+installed version. [SonarQube 9.9 authentication documentation](https://docs.sonarsource.com/sonarqube-server/9.9/extension-guide/web-api).
+
+Storing a token alone does not approve a destination. Provider/channel cards
+already configure their own clients; arbitrary API tokens need the connection
+step above. The API setup screen stores only connection settings alongside the
+credential metadata. It does not read the token or reset its access restrictions.
+Removing an API connection leaves the secret in the vault.
+
+Ordinary users can approve public API destinations. Public requests use the
+existing public-address validation and pinned DNS transport, including after DNS
+changes. Administrators can approve internal/LAN servers. This permission is
+recorded by the server and cannot be supplied in a setup request. Personal API
+connections cannot be used in shared-space sessions.
+
+## Advanced operator configuration (Git and MCP)
+
+Simple HTTP APIs can be configured in the UI above. Operator profiles remain
+available for Git, explicitly trusted MCP servers, and managed deployments.
 
 The operator maintains `~/.octipus/credential-connections.json` (or the server's
 `OCTIPUS_CONNECTIONS_FILE`). It is a JSON array, owned by the backend's OS user,
