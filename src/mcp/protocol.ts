@@ -205,10 +205,10 @@ export class MCPProtocol extends EventEmitter {
   /**
    * Clean up pending requests
    */
-  cleanup(): void {
+  cleanup(error = new Error('MCP connection closed')): void {
     for (const [_id, pending] of this.pendingRequests) {
       clearTimeout(pending.timeout);
-      pending.reject(new Error('MCP connection closed'));
+      pending.reject(error);
     }
     this.pendingRequests.clear();
   }

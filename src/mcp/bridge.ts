@@ -209,10 +209,11 @@ export class MCPBridge extends EventEmitter {
       prompts: [],
       status: 'connecting',
     };
+    const assertInitializing = () => {
+      if (connection.status !== 'connecting') throw new Error(connection.error ?? 'MCP connection closed');
+    };
 
     try {
-      await transport.connect();
-
       // Wire transport messages to protocol
       transport.onMessage((line) => {
         try {
@@ -227,10 +228,19 @@ export class MCPBridge extends EventEmitter {
         coreLogger.error({ err: error, serverId: server.id, errorMessage: error.message }, 'MCP transport error');
         connection.status = 'error';
         connection.error = error.message;
-        this.emit('error', server.id, error);
+        protocol.cleanup(error);
+        // EventEmitter treats an unobserved `error` as a process exception.
+        // Optional integrations must not take the gateway down. Preserve the
+        // existing event for subscribers; logging/status work without one.
+        if (this.listenerCount('error') > 0) this.emit('error', server.id, error);
       });
 
       transport.onClose(() => {
+        if (connection.status === 'connecting') {
+          connection.status = 'error';
+          connection.error = 'MCP transport closed during initialization';
+        }
+        protocol.cleanup();
         // Ignore a close fired by a connection we've already replaced/removed
         // (e.g. the reconnect timer closing a stale transport, or a still-alive
         // child re-firing 'close' on kill). Only the currently-registered
@@ -245,6 +255,11 @@ export class MCPBridge extends EventEmitter {
           this.scheduleReconnect(server);
         }
       });
+
+      // Install handlers before starting a transport: startup itself can emit
+      // errors/messages (including a child executable that does not exist).
+      await transport.connect();
+      assertInitializing();
 
       // Send function via transport
       const send = (message: string) => {
@@ -296,6 +311,9 @@ export class MCPBridge extends EventEmitter {
         protocol.setRequestTimeout(server.requestTimeoutMs);
       }
 
+      // Optional catalog requests may swallow their own failure. They must
+      // never turn a transport that has already failed back into connected.
+      assertInitializing();
       connection.status = 'connected';
       let refreshing = Promise.resolve();
       protocol.on('request', message => {
@@ -327,6 +345,8 @@ export class MCPBridge extends EventEmitter {
     } catch (error) {
       connection.status = 'error';
       connection.error = (error as Error).message;
+      protocol.cleanup();
+      transport.close();
       coreLogger.error({ err: error, serverId: server.id, errorMessage: (error as Error).message }, 'Failed to connect to MCP server');
       throw error;
     }
