@@ -39,6 +39,8 @@ describe('credential connection boundary', () => {
     });
     const result=await authenticatedFetch(profile,caller,'/v1/databases');
     expect(await readBoundedResponse(result.response)).toBe('ok');
+    const repeated=await authenticatedFetch(profile,caller,'/v1/databases',{headers:{'x-appwrite-project':'synthetic-project'}});
+    expect(await readBoundedResponse(repeated.response)).toBe('ok');
     await expect(authenticatedFetch(profile,caller,'/v1/databases',{headers:{'x-appwrite-project':'another-project'}})).rejects.toThrow(/cannot be overridden/);
   });
   it.each(['Authorization','Cookie','Host','X-Appwrite-Key','X-Api-Token','X-API-Key'])('rejects sensitive or routing headers in public settings: %s', name => {

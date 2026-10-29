@@ -114,7 +114,7 @@ export async function authenticatedFetch(p: ConnectionProfile, caller: Connectio
   const headers = new Headers(init.headers);
   if (['host', 'authorization', 'cookie', 'proxy-authorization', 'content-length', 'transfer-encoding', 'connection', 'upgrade', auth.name].some(n => headers.has(n))) throw new Error('Authentication and routing headers are controlled by the connection');
   for (const [name, value] of Object.entries(p.http!.headers ?? {})) {
-    if (name.toLowerCase() === auth.name.toLowerCase() || headers.has(name)) throw new Error('Configured public headers cannot be overridden');
+    if (name.toLowerCase() === auth.name.toLowerCase() || (headers.has(name) && headers.get(name) !== value.trim())) throw new Error('Configured public headers cannot be overridden');
     headers.set(name, value);
   }
   try {
