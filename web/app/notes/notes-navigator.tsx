@@ -210,6 +210,7 @@ export function NotesNavigator({
   // Default-expanded: a folder is open unless explicitly collapsed.
   const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() => new Set());
   const [showTags, setShowTags] = useState(true);
+  const [showLearnings, setShowLearnings] = useState(false);
 
   const visible = useMemo(() => {
     let r = notes;
@@ -226,7 +227,15 @@ export function NotesNavigator({
     return r;
   }, [notes, filter, activeTag, search]);
 
-  const tree = useMemo(() => buildFolderTree(visible), [visible]);
+  // Automated learning notes remain searchable, but do not crowd the default view.
+  // A user pin is an explicit choice and keeps that note in the ordinary list.
+  const groupLearnings = filter === 'all' && !activeTag && !search.trim();
+  const learnings = useMemo(() => groupLearnings
+    ? visible.filter(n => !n.pinned && n.tags.includes('session-learning'))
+    : [], [visible, groupLearnings]);
+  const tree = useMemo(() => buildFolderTree(groupLearnings
+    ? visible.filter(n => n.pinned || !n.tags.includes('session-learning'))
+    : visible), [visible, groupLearnings]);
   const tagTree = useMemo(() => buildTagTree(tags), [tags]);
 
   const showPinned = filter === 'all' && !activeTag && !search.trim();
@@ -246,7 +255,8 @@ export function NotesNavigator({
 
   const rootFolders = [...tree.folders.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   const rootNotes = [...tree.notes].sort((a, b) => a.title.localeCompare(b.title));
-  const tagRoots = [...tagTree.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  const tagRoots = [...tagTree.values()].sort((a, b) => Number(a.full === 'session-learning') - Number(b.full === 'session-learning')
+    || b.count - a.count || a.name.localeCompare(b.name));
 
   return (
     <div className="h-full flex flex-col">
@@ -336,6 +346,21 @@ export function NotesNavigator({
           <FolderBranch key={name} name={name} path={name} node={node} depth={0} ctx={rowCtx} />
         ))}
         {rootNotes.map((n) => <NoteRowButton key={n.id} note={n} depth={0} ctx={rowCtx} />)}
+
+        {learnings.length > 0 && (
+          <div className="mt-3 pt-2 border-t border-outline-variant/20">
+            <button
+              type="button"
+              aria-expanded={showLearnings}
+              onClick={() => setShowLearnings(v => !v)}
+              className="w-full px-2 py-1 text-[12px] flex items-center gap-1 text-on-surface-variant hover:text-on-surface"
+            >
+              {showLearnings ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+              Session learnings ({learnings.length})
+            </button>
+            {showLearnings && learnings.map(n => <NoteRowButton key={n.id} note={n} depth={1} ctx={rowCtx} />)}
+          </div>
+        )}
 
         {tagRoots.length > 0 && (
           <div className="mt-3 pt-2 border-t border-outline-variant/20">

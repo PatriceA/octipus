@@ -1457,7 +1457,7 @@ export class PipelineManager {
         const budget = pipelineBudget(persisted ?? pipeline, [...nodes.values()], items, pool);
         await this.updatePipeline(pipeline.id, { metadata: { ...persisted?.metadata, budgetWarning: budget } });
         void getNotificationService().notify(pipeline.userId, 'pipeline_budget', 'Pipeline token pool is at least 80% spent',
-          `${Math.round(budget.percent ?? 0)}% spent. Projected remaining: ${budget.projectedRemainingTokens ?? 'not enough evidence'} tokens. The current item will finish verification; the next item requires budget acknowledgement.`, { pipelineId: pipeline.id })
+          `${Math.round(budget.percent ?? 0)}% spent. Projected remaining: ${budget.projectedRemainingTokens ?? 'not enough evidence'} tokens. The current item will finish verification. A budget acknowledgement is required only if projected remaining work exceeds the pool.`, { pipelineId: pipeline.id })
           .catch(error => coreLogger.error({ error }, 'Could not notify pipeline budget warning'));
       }
 
@@ -3545,7 +3545,7 @@ export class PipelineManager {
         await this.updatePipeline(pipeline.id, { status: 'paused', summary, metadata: { ...current?.metadata, budgetWarning: budget } });
         return { outcome: 'loop_done', item: null, stopped: { pipelineId: pipeline.id, result: summary } };
       }
-      if (budget.warning && current?.metadata?.budgetAcknowledgedPool !== budget.pool) {
+      if ((budget.exhausted || budget.projectionExceedsPool) && current?.metadata?.budgetAcknowledgedPool !== budget.pool) {
         const approval = context.attended === false ? { approved: false } : await this.requestPipelineApproval(pipeline, node, rootAgent,
           `Token pool ${budget.spent}/${budget.pool} (${Math.round(budget.percent ?? 0)}%). Projected remaining cost: ${budget.projectedRemainingTokens ?? 'unknown'} tokens (${budget.projectionBasis}).`,
           'Continue with the next item? Its implementation, review and QA may exceed the pool. The run will stop before starting another item; resume_pipeline can raise tokenBudget.',

@@ -158,30 +158,6 @@ function sessionDirPath(context: AgentContext | undefined, root: string): string
 }
 
 /**
- * Get or create the session output directory for an agent.
- * Format: {workspace}/sessions/{YYYY-MM-DD}-{topic}/
- */
-async function getSessionOutputDir(context: AgentContext | undefined, root: string): Promise<string | null> {
-  try {
-    const sessionDir = sessionDirPath(context, root);
-    if (!sessionDir) return null;
-
-    if (!existsSync(sessionDir)) {
-      await mkdir(sessionDir, { recursive: true });
-      coreLogger.info({ sessionDir }, 'Created session output directory');
-    }
-
-    return sessionDir;
-  } catch (err) {
-    // Don't let a session-dir failure block the write — fall back to the
-    // workspace root. But surface it: a swallowed ENOSPC/EACCES here silently
-    // scatters output into the root, so log at warn rather than debug.
-    coreLogger.warn({ err }, 'Failed to prepare session output dir; writing to workspace root');
-    return null;
-  }
-}
-
-/**
  * Auto-index a written file into the RAG knowledge base (fire-and-forget).
  *
  * Prose/docs only (`purpose='document'`). Code is deliberately NOT
@@ -326,7 +302,7 @@ export class FilesystemTool extends BaseTool {
         // agent's output lands in a throwaway session folder and nothing ends
         // up in the repo.
         const projectPath = (context?.metadata as Record<string, unknown> | undefined)?.projectPath as string | undefined;
-        const sessionDir = projectPath ? null : await getSessionOutputDir(context, root);
+        const sessionDir = projectPath ? null : sessionDirPath(context, root);
         /** Where the write would have gone with no session redirect — set only when one actually moved it. */
         let redirectedFrom: string | null = null;
         if (sessionDir) {

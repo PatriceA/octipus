@@ -8,8 +8,10 @@ export function pipelineBudget(pipeline: Pipeline, nodes: PipelineNodeRow[], ite
   const completed = items.filter(item => item.status === 'done' && typeof byItem[item.id] === 'number');
   const remaining = items.filter(item => !['done', 'skipped'].includes(item.status)).length;
   const average = completed.length ? completed.reduce((sum, item) => sum + byItem[item.id], 0) / completed.length : null;
-  return { pool, spent, percent: pool > 0 ? spent / pool * 100 : null,
-    remainingItems: remaining, projectedRemainingTokens: average === null ? null : Math.ceil(average * remaining),
+  const projectedRemainingTokens = average === null ? null : Math.ceil(average * remaining);
+  return { projectionExceedsPool: pool > 0 && projectedRemainingTokens !== null && spent + projectedRemainingTokens > pool,
+    pool, spent, percent: pool > 0 ? spent / pool * 100 : null,
+    remainingItems: remaining, projectedRemainingTokens,
     projectionBasis: completed.length ? `${completed.length} completed items in this run` : 'Insufficient completed-item evidence',
     exhausted: pool > 0 && spent >= pool, warning: pool > 0 && spent >= pool * .8, byItem };
 }

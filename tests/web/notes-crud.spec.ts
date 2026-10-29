@@ -42,3 +42,34 @@ test('note create, edit, failed-save draft, reload and archive', async ({ authen
   await page.getByTitle('Archive note', { exact: true }).click();
   await expect.poll(() => notes.length).toBe(0);
 });
+
+test('automated session learnings are collapsed below personal notes and remain searchable', async ({ authenticatedPage: page }) => {
+  const row = (id: string, title: string, tags: string[], pinned = false) => ({
+    id, title, slug: id, tags, pinned, body: 'Saved note', noteKind: 'note', frontmatter: {},
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  });
+  const notes = [row('personal', 'My project decisions', ['project']),
+    row('pinned-learning', 'Pinned useful learning', ['session-learning'], true),
+    ...Array.from({ length: 100 }, (_, i) => row(`learning-${i}`, `Automated finding ${i}`, ['session-learning']))];
+  await page.route('**/api/notes**', async route => {
+    const path = new URL(route.request().url()).pathname.replace(/\/$/, '');
+    if (path.endsWith('/tags')) return json(route, 200, { tags: [{ tag: 'session-learning', count: 101 }, { tag: 'project', count: 1 }] });
+    if (path.endsWith('/suggestions')) return json(route, 200, { suggestions: [] });
+    if (path === '/api/notes' || path.endsWith('/index')) return json(route, 200, { notes, total: notes.length });
+    return json(route, 200, { ...notes[0], backlinks: [], outgoing: [] });
+  });
+  await page.goto('/notes');
+  const group = page.getByRole('button', { name: 'Session learnings (100)', exact: true });
+  await expect(group).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('button', { name: /My project decisions/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Pinned useful learning/ }).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: /Automated finding 0/ })).toHaveCount(0);
+  await group.click();
+  await expect(page.getByRole('button', { name: /Automated finding 0/ })).toBeVisible();
+  await group.click();
+  await page.getByPlaceholder('search notes…').fill('Automated finding 99');
+  await expect(page.getByRole('button', { name: /Automated finding 99/ })).toBeVisible();
+  await page.getByPlaceholder('search notes…').clear();
+  await page.getByRole('button', { name: 'session-learning 101', exact: true }).click();
+  await expect(page.getByRole('button', { name: /Automated finding 0/ })).toBeVisible();
+});
