@@ -22,6 +22,14 @@ For SonarQube 9.x, use **Basic token (empty password)**. For example: name
 versions also support bearer tokens; use the authentication documented for the
 installed version. [SonarQube 9.9 authentication documentation](https://docs.sonarsource.com/sonarqube-server/9.9/extension-guide/web-api).
 
+For Appwrite, choose **Use Appwrite settings**. Enter the origin without `/v1`
+(for example `https://appwrite.example.com`), path `/v1`, authentication **API key
+header**, header name `X-Appwrite-Key`, and leave its prefix empty. Add your
+project ID as the public header `X-Appwrite-Project`. Public headers contain
+non-secret settings only, and agents cannot override them. The API key remains
+in the vault; do not add it as a public header. Select only the methods needed
+for the task; GET is enough for reads. [Appwrite REST authentication](https://appwrite.io/docs/apis/rest).
+
 Storing a token alone does not approve a destination. Provider/channel cards
 already configure their own clients; arbitrary API tokens need the connection
 step above. The API setup screen stores only connection settings alongside the

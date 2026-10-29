@@ -1,6 +1,6 @@
 import { readConnectionProfiles } from '@/security/credential-connections';
 import { ToolPolicyRefusalError } from '@/core/tool-execution-error';
-import { apiConnectionSchema } from '@/shared/api-connection';
+import { apiConnectionSchema, apiConnectionValidationMessage } from '@/shared/api-connection';
 import { saveVaultApiConnection, VaultConnectionError } from '@/db/repositories/vault-api-connection';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
@@ -73,7 +73,10 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
   .put('/:id/api-connection', async ({ user, params, query, body, set }) => {
     if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
     const parsed = body === null ? { success: true as const, data: null } : apiConnectionSchema.safeParse(body);
-    if (!parsed.success) { set.status = 400; return { error: 'Invalid API connection settings. Check the name, service origin, path, authentication and allowed methods.' }; }
+    if (!parsed.success) {
+      set.status = 400;
+      return { error: `Invalid API connection settings: ${apiConnectionValidationMessage(parsed.error)}` };
+    }
     try {
       return { connection: await saveVaultApiConnection(user.id, params.id, query.workspaceId ?? null, parsed.data, { allowPrivateOrigins: user.isAdmin }) };
     } catch (error) {
@@ -82,7 +85,7 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
       apiLogger.warn({ errorClass: error instanceof Error ? error.name : 'unknown' }, 'API connection settings could not be saved');
       set.status = 503; return { error: 'API connection settings could not be saved. Please try again or check the server connection configuration.' };
     }
-  }, { params: t.Object({ id: t.String({ format: 'uuid' }) }), query: t.Object({ workspaceId: t.Optional(t.String({ format: 'uuid' })) }), body: t.Unknown(), detail: { tags: ['vault'] } })
+  }, { params: t.Object({ id: t.String({ pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' }) }), query: t.Object({ workspaceId: t.Optional(t.String({ pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' })) }), body: t.Unknown(), detail: { tags: ['vault'] } })
 
   // Create credential
   .post(

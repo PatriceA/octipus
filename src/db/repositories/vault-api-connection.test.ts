@@ -84,3 +84,12 @@ test('does not report settings saved when the authorized write no longer applies
  try{await expect(saveVaultApiConnection(owner,id,null,{...config,id:'not-applied'},{allowPrivateOrigins:true})).rejects.toMatchObject({code:'not_found'});}
  finally{await queryRaw('DROP TRIGGER skip_vault_api_fixture ON vault');await queryRaw('DROP FUNCTION skip_vault_api_fixture()');}
 });
+
+test('a public project header survives persistence and scoped connection discovery',async()=>{
+ const{saveVaultApiConnection}=await import('./vault-api-connection');
+ const appwrite={...config,id:'appwrite-project',origin:'https://appwrite.example.test',pathPrefix:'/v1',allowInsecureHttp:false,
+  auth:{type:'header' as const,name:'X-Appwrite-Key',prefix:''},headers:{'X-Appwrite-Project':'synthetic-project'}};
+ await saveVaultApiConnection(owner,id,null,appwrite,{allowPrivateOrigins:true});
+ const{connectionFor}=await import('@/security/credential-connections');
+ expect((await connectionFor('appwrite-project',{userId:owner})).http).toMatchObject({headers:appwrite.headers,auth:appwrite.auth});
+});

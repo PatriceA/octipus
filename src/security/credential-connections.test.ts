@@ -29,6 +29,21 @@ async function endpoint(handler: RequestListener) {
   profile.http!.origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`; profile.http!.allowInsecureHttp = true;
 }
 describe('credential connection boundary', () => {
+  it('injects the Appwrite key and fixed public project header, and refuses overrides', async () => {
+    profile.http!.auth={type:'header',name:'X-Appwrite-Key',prefix:''};
+    profile.http!.headers={'X-Appwrite-Project':'synthetic-project'};
+    await endpoint((req,res)=>{
+      expect(req.headers['x-appwrite-key']).toBe(fx.value);
+      expect(req.headers['x-appwrite-project']).toBe('synthetic-project');
+      expect(req.headers.authorization).toBeUndefined();res.end('ok');
+    });
+    const result=await authenticatedFetch(profile,caller,'/v1/databases');
+    expect(await readBoundedResponse(result.response)).toBe('ok');
+    await expect(authenticatedFetch(profile,caller,'/v1/databases',{headers:{'x-appwrite-project':'another-project'}})).rejects.toThrow(/cannot be overridden/);
+  });
+  it.each(['Authorization','Cookie','Host','X-Appwrite-Key','X-Api-Token','X-API-Key'])('rejects sensitive or routing headers in public settings: %s', name => {
+    expect(connectionProfileSchema.safeParse({...profile,http:{...profile.http,headers:{[name]:'not-public'}}}).success).toBe(false);
+  });
   it('binds an authorized named profile, rejects foreign user/workspace before reading the vault', async () => {
     await store(); expect((await connectionFor('test', caller)).id).toBe('test');
     for (const c of [{...caller,userId:'bob'},{...caller,workspaceId:'w2'},{...caller,space:{id:'space'}}]) await expect(connectionFor('test',c)).rejects.toThrow(/unavailable/);

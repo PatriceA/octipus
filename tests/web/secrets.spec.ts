@@ -68,3 +68,28 @@ test('saving a new token offers the API setup step immediately', async ({ authen
   await expect(page.getByLabel('Value',{exact:true})).toHaveCount(0);
   await expect(page.locator('body')).not.toContainText('SYNTHETIC_SECRET_VALUE');
 });
+
+test('Appwrite setup uses key authentication, public project context and validates before saving', async ({ authenticatedPage: page }) => {
+  const secret={id:'11111111-1111-4111-8111-111111111111',name:'APPWRITE_API_KEY',scope:'user',credentialType:'api_key',tags:[],accessCount:'0',allowedAgents:[],isActive:true,metadata:{},apiConnections:[]};
+  let settings:Record<string,unknown>|null=null;
+  await page.route('**/api/vault?*',route=>json(route,200,{credentials:[secret]}));
+  await page.route('**/api/vault',route=>json(route,200,{credentials:[secret]}));
+  await page.route('**/api/vault/*/api-connection*',async route=>{settings=route.request().postDataJSON();await json(route,200,{connection:settings});});
+  await page.goto('/secrets');
+  await page.getByRole('button',{name:'Connect API for APPWRITE_API_KEY'}).click();
+  await page.getByLabel('Server origin',{exact:true}).fill('https://appwrite.example.com/v1');
+  await page.getByRole('button',{name:'Save API connection'}).click();
+  await expect(page.getByRole('alert')).toContainText('without a path');
+  expect(settings).toBeNull();
+  await page.getByText('Appwrite setup help',{exact:true}).click();
+  await page.getByRole('button',{name:'Use Appwrite settings'}).click();
+  await expect(page.getByLabel('Server origin',{exact:true})).toHaveValue('https://appwrite.example.com');
+  await expect(page.getByLabel('Allowed path prefix',{exact:true})).toHaveValue('/v1');
+  await expect(page.getByLabel('Authentication',{exact:true})).toHaveValue('header');
+  await expect(page.getByLabel('Header name',{exact:true})).toHaveValue('X-Appwrite-Key');
+  await expect(page.getByLabel('Header prefix (optional)',{exact:true})).toHaveValue('');
+  await page.getByLabel('Public header 1 value',{exact:true}).fill('synthetic-project');
+  await page.getByRole('button',{name:'Save API connection'}).click();
+  await expect(page.getByRole('status')).toContainText('API connection appwrite saved');
+  expect(settings).toMatchObject({origin:'https://appwrite.example.com',pathPrefix:'/v1',auth:{type:'header',name:'X-Appwrite-Key',prefix:''},headers:{'X-Appwrite-Project':'synthetic-project'},methods:['GET']});
+});

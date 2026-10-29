@@ -1,5 +1,5 @@
 import { fetchGuarded } from '@/utils/sanitize';
-import { connectionAuthSchema, apiConnectionSchema } from '@/shared/api-connection';
+import { connectionAuthSchema, apiConnectionSchema, publicConnectionHeadersSchema } from '@/shared/api-connection';
 import { createHash } from 'node:crypto';
 import { readFile, lstat } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -15,6 +15,7 @@ export const connectionProfileSchema = z.object({
   credential: z.string().min(1),
   http: z.object({
     origin: z.string().url(), auth: connectionAuthSchema,
+    headers: publicConnectionHeadersSchema.optional(),
     allowInsecureHttp: z.boolean().default(false),
     networkPolicy: z.enum(['operator', 'public']).default('operator'),
     pathPrefix: z.string().startsWith('/').default('/'),
@@ -64,7 +65,7 @@ export async function readAvailableConnectionProfiles(caller: ConnectionPrincipa
     if (!parsed.success) continue;
     const c = parsed.data;
     profiles.push(connectionProfileSchema.parse({ id: c.id, userId: caller.userId,
-      workspaceId: row.scope === 'workspace' ? row.workspaceId : null, credential: row.name, http: { origin:c.origin, pathPrefix:c.pathPrefix, auth:c.auth, methods:c.methods, allowInsecureHttp:c.allowInsecureHttp, networkPolicy:row.metadata?.apiConnectionNetwork === 'operator' ? 'operator' : 'public' } }));
+      workspaceId: row.scope === 'workspace' ? row.workspaceId : null, credential: row.name, http: { origin:c.origin, pathPrefix:c.pathPrefix, auth:c.auth, ...(c.headers ? {headers:c.headers} : {}), methods:c.methods, allowInsecureHttp:c.allowInsecureHttp, networkPolicy:row.metadata?.apiConnectionNetwork === 'operator' ? 'operator' : 'public' } }));
   }
   if (new Set(profiles.map(p => p.id)).size !== profiles.length) throw new Error('Connection name is configured more than once; choose a unique name in Secrets');
   return profiles;
@@ -112,6 +113,10 @@ export async function authenticatedFetch(p: ConnectionProfile, caller: Connectio
   const auth = connectionAuth(p, secret, username);
   const headers = new Headers(init.headers);
   if (['host', 'authorization', 'cookie', 'proxy-authorization', 'content-length', 'transfer-encoding', 'connection', 'upgrade', auth.name].some(n => headers.has(n))) throw new Error('Authentication and routing headers are controlled by the connection');
+  for (const [name, value] of Object.entries(p.http!.headers ?? {})) {
+    if (name.toLowerCase() === auth.name.toLowerCase() || headers.has(name)) throw new Error('Configured public headers cannot be overridden');
+    headers.set(name, value);
+  }
   try {
     headers.set(auth.name, auth.value);
     const request = { ...init, method, headers, redirect: 'manual' as const };
