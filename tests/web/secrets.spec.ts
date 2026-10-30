@@ -212,3 +212,17 @@ test('ordinary owners can inspect and save Proxmox certificate trust on an exist
  await expect(page.getByRole('status')).toContainText('proxmox_nuc saved');
  expect(settings).toMatchObject({...config,tls:{mode:'pinned',certificateSha256:'b'.repeat(64)}});
 });
+
+test('two-entry authentication header configuration saves named references rather than secret values',async({authenticatedPage:page})=>{
+ await stubAllDefaults(page);
+ const entry={id:'11111111-1111-4111-8111-111111111111',name:'PROXMOX_SECRET',scope:'user',credentialType:'api_key',tags:[],accessCount:'0',isActive:true,metadata:{},apiConnections:[]};
+ let config:Record<string,unknown>|null=null;
+ await page.route('**/api/vault?*',route=>json(route,200,{credentials:[entry]}));await page.route('**/api/vault',route=>json(route,200,{credentials:[entry]}));
+ await page.route('**/api/vault/*/api-connection*',async route=>{config=route.request().postDataJSON();await json(route,200,{connection:config});});
+ await page.goto('/secrets');await page.getByRole('button',{name:'Connect API for PROXMOX_SECRET'}).click();
+ await page.getByLabel('Server origin',{exact:true}).fill('https://192.168.1.10:8006');await page.getByLabel('Allowed path prefix',{exact:true}).fill('/api2/json');
+ await page.getByLabel('Authentication',{exact:true}).selectOption('header-template');await page.getByLabel('Header name',{exact:true}).fill('Authorization');
+ await page.getByLabel('Authentication header template',{exact:true}).fill('PVEAPIToken=<PROXMOX_TOKEN_ID>=<PROXMOX_SECRET>');
+ await page.getByRole('button',{name:'Save API connection',exact:true}).click();await expect(page.getByRole('status')).toContainText('proxmox_secret saved');
+ expect(config).toMatchObject({auth:{type:'header-template',name:'Authorization',template:'PVEAPIToken=<PROXMOX_TOKEN_ID>=<PROXMOX_SECRET>'}});
+});

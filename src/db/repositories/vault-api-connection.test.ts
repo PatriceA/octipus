@@ -121,3 +121,13 @@ test('Login API consent requires the encrypted entry domain and Login authentica
  await saveVaultApiConnection(owner,row.id,null,settings,{allowPrivateOrigins:true});
  const {connectionFor}=await import('@/security/credential-connections');expect((await connectionFor('saved-login',{userId:owner})).http?.auth.type).toBe('login');
 });
+
+test('two-entry authentication header templates remain named references in durable settings',async()=>{
+ const{saveVaultApiConnection}=await import('./vault-api-connection');const{getVault}=await import('@/security/vault');
+ const template={...config,id:'two-entry-header',auth:{type:'header-template' as const,name:'Authorization',template:'Prefix=<SONAR_API_TOKEN>=<ANOTHER_TOKEN>'}};
+ await saveVaultApiConnection(owner,id,null,template,{allowPrivateOrigins:true});
+ const stored=(await getVault().list(owner)).find(row=>row.id===id);
+ expect(stored?.metadata?.apiConnection?.auth).toEqual(template.auth);
+ expect(JSON.stringify(stored)).not.toContain('SYNTHETIC_CANARY_93x');expect(JSON.stringify(stored)).not.toContain('SYNTHETIC_OTHER_39x');
+ await expect(saveVaultApiConnection(owner,id,null,{...template,auth:{...template.auth,template:'Prefix=<UNRELATED>=<ANOTHER_TOKEN>'}},{allowPrivateOrigins:true})).rejects.toMatchObject({code:'header_reference_required'});
+});

@@ -1,3 +1,4 @@
+import {headerTemplateReferences} from '@/shared/header-template';
 import { createHash } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 import type { AgentContext, MCPServer } from '@/core/types';
@@ -19,6 +20,11 @@ export async function assertCredentialConnectionAccess(server: MCPServer | undef
   if (boundProfiles.has(server) && boundProfiles.get(server) !== digest(JSON.stringify(profile))) throw new Error('MCP credential connection configuration changed; reconnect this server');
   // Revalidate vault tool/agent ACLs on every dispatch, even if a cached transport is already connected.
   const current = await resolveConnectionCredential(profile, { ...context, agentId: context.id }, 'mcp');
+  if(server.transport==='sse'||server.transport==='streamable-http'){
+    const auth=profile.http?.auth;
+    const companions=auth?.type==='header-template'?headerTemplateReferences(auth.template):auth?.type==='basic'&&auth.usernameCredential?[auth.usernameCredential]:[];
+    for(const name of new Set(companions))if(name!==profile.credential)await resolveConnectionCredential({...profile,credential:name},{...context,agentId:context.id},'mcp');
+  }
   if (boundSecrets.has(server) && boundSecrets.get(server) !== digest(current)) throw new Error('MCP stdio credential rotated; reconnect this trusted server');
 }
 

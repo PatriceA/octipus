@@ -83,7 +83,7 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
     try {
       return { connection: await saveVaultApiConnection(user.id, params.id, query.workspaceId ?? null, parsed.data, { allowPrivateOrigins: user.isAdmin }) };
     } catch (error) {
-      if (error instanceof VaultConnectionError) { set.status = error.code === 'not_found' ? 404 : error.code === 'login_domain_required' ? 400 : error.code==='public_destination_required' ? 403 : 409; return { error: error.message }; }
+      if (error instanceof VaultConnectionError) { set.status = error.code === 'not_found' ? 404 : ['login_domain_required','header_reference_required'].includes(error.code) ? 400 : error.code==='public_destination_required' ? 403 : 409; return { error: error.message }; }
       if (error instanceof ToolPolicyRefusalError) { set.status = 400; return { error: 'Use connection settings only; secret values and templates are not allowed.' }; }
       apiLogger.warn({ errorClass: error instanceof Error ? error.name : 'unknown' }, 'API connection settings could not be saved');
       set.status = 503; return { error: 'API connection settings could not be saved. Please try again or check the server connection configuration.' };

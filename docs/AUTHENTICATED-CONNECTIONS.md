@@ -245,3 +245,18 @@ For an API using a client-generated double-submit CSRF pair, enable **Generate a
 For SSP fd-dev specifically: domain `https://ssp-api-fd-dev.services.fintus.io`, prefix `/api`, login `/api/login`, refresh `/api/public/refresh-access-token`, language `de`, CSRF query `_csrf` and header `X-XSRF-TOKEN`. The defaults match its `access_token`, `refresh_token`, `expires_in` response and `{refreshToken}` refresh body. Agents should request a protected API resource using `ssp_login_fd_dev`; they should not manually submit `/api/login`.
 
 Certificate trust is available for every personal/workspace HTTPS API entry, regardless of credential type. Owners can inspect and explicitly pin a public server's exact certificate. For an internal server already approved by an administrator, they can save a certificate change while preserving its existing origin, path, methods and authentication. New internal destinations or broader grants still require administrator approval. Public connections keep public-IP validation and DNS pinning even when a custom certificate is trusted.
+
+### Two vault entries in one authentication header
+
+In **Connect API**, select **API header (two vault entries)**. Set **Header name** to the API's authentication header, and enter a template containing exactly two different vault entry names in `<NAME>` syntax. One reference must name the entry whose Connect API form you opened. The client resolves both entries within the connection's user/workspace scope and applies each entry's expiry and tool/agent restrictions. Missing or denied entries stop the request before any header is sent. Settings and audits retain names only; both values and their composed header are redacted from responses.
+
+For the `PROXMOX_SECRET` entry:
+
+```text
+Header name: Authorization
+Authentication header template: PVEAPIToken=<PROXMOX_TOKEN_ID>=<PROXMOX_SECRET>
+```
+
+`PROXMOX_TOKEN_ID` must contain the complete token identifier, such as `user@realm!token-name`; `PROXMOX_SECRET` contains its secret. The brackets are part of Octipus's reference syntax and are removed when the header is built. Names are case-sensitive. The same mode can combine other APIs' two-part credentials using their required literal prefix and separator.
+
+This syntax resolves only in the dedicated authentication-header configuration consumed by the authenticated HTTP client. It is not a general interpolation mechanism for tool arguments, public headers, shell commands, URLs, plans or files. Existing one-secret API headers keep their existing prefix behavior. Two-entry header mode is not supported by the Git credential broker.

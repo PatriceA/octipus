@@ -1,4 +1,5 @@
 import {isDeepStrictEqual} from 'node:util';
+import {headerTemplateReferences} from '@/shared/header-template';
 import { validateExternalUrl } from '@/utils/sanitize';
 import { and, eq, ne, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
@@ -9,7 +10,7 @@ import { readConnectionProfiles } from '@/security/credential-connections';
 import { auditRepository } from './audit-repository';
 
 export class VaultConnectionError extends Error {
-  constructor(readonly code: 'not_found' | 'duplicate_name' | 'public_destination_required' | 'login_domain_required') { super(code === 'not_found' ? 'Secret not found in this workspace' : code === 'duplicate_name' ? 'Connection name is already in use; choose another name' : code==='login_domain_required'?'Use the login’s saved domain and Login authentication':'This origin is not a verified public destination. Check the server address; an administrator must configure access to internal servers.'); }
+  constructor(readonly code: 'not_found' | 'duplicate_name' | 'public_destination_required' | 'login_domain_required' | 'header_reference_required') { super(code === 'not_found' ? 'Secret not found in this workspace' : code === 'duplicate_name' ? 'Connection name is already in use; choose another name' : code==='header_reference_required'?'The header template must reference this vault entry':code==='login_domain_required'?'Use the login’s saved domain and Login authentication':'This origin is not a verified public destination. Check the server address; an administrator must configure access to internal servers.'); }
 }
 /** Owner-only HTTP grants. Neither request bodies nor responses contain a credential value. */
 export async function saveVaultApiConnection(userId: string, credentialId: string, workspaceId: string | null, input: ApiConnectionConfig | null, options: { allowPrivateOrigins?: boolean } = {}): Promise<ApiConnectionConfig | null> {
@@ -24,8 +25,9 @@ export async function saveVaultApiConnection(userId: string, credentialId: strin
     if (config) await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`vault-api-name:${userId}:${config.id}`}))`);
     const ownedCredential = and(eq(vault.id, credentialId), eq(vault.userId, userId), eq(vault.isActive, true),
       or(eq(vault.scope, 'user'), workspaceId ? and(eq(vault.scope, 'workspace'), eq(vault.workspaceId, workspaceId)) : undefined));
-    const [entry] = await tx.select({ id: vault.id,credentialType:vault.credentialType,metadata:vault.metadata }).from(vault).where(ownedCredential).limit(1);
+    const [entry] = await tx.select({ id: vault.id,credentialType:vault.credentialType,metadata:vault.metadata,name:vault.name }).from(vault).where(ownedCredential).limit(1);
     if (!entry) throw new VaultConnectionError('not_found');
+    if(config?.auth.type==='header-template'&&!headerTemplateReferences(config.auth.template).includes(entry.name))throw new VaultConnectionError('header_reference_required');
     if(config&&((entry.credentialType==='login'&&(!['login','login-token'].includes(config.auth.type)||config.origin!==entry.metadata?.login?.origin))||(entry.credentialType!=='login'&&['login','login-token'].includes(config.auth.type))))throw new VaultConnectionError('login_domain_required');
     if(config){
       const previous=apiConnectionSchema.safeParse(entry.metadata?.apiConnection);

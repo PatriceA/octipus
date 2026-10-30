@@ -1,5 +1,6 @@
 import {loginTokenSession,invalidateLoginToken,LoginTokenError} from './credential-token-session';
 import {randomBytes} from 'node:crypto';
+import {headerTemplateReferences,renderHeaderTemplate} from '@/shared/header-template';
 import { fetchGuarded } from '@/utils/sanitize';
 import { connectionAuthSchema, apiConnectionSchema, publicConnectionHeadersSchema, connectionTlsSchema } from '@/shared/api-connection';
 import { CertificatePinMismatchError, PublicCertificateDestinationError, certificateVerificationCode, fetchWithCertificatePin } from './connection-tls';
@@ -50,7 +51,7 @@ export async function readConnectionProfiles(): Promise<ConnectionProfile[]> {
       const u = new URL(p.http.origin);
       if (u.origin !== p.http.origin || u.username || u.password || !['https:', 'http:'].includes(u.protocol)
         || (u.protocol === 'http:' && !p.http.allowInsecureHttp)) throw new Error('Invalid connection origin');
-      if (p.http.auth.type === 'header' && /^(?:host|cookie|content-length|transfer-encoding|connection|proxy-authorization)$/i.test(p.http.auth.name)) throw new Error('Invalid credential header');
+      if ((p.http.auth.type==='header'||p.http.auth.type==='header-template') && /^(?:host|cookie|content-length|transfer-encoding|connection|proxy-authorization)$/i.test(p.http.auth.name)) throw new Error('Invalid credential header');
     }
     return parsed;
   } catch (error) {
@@ -103,7 +104,7 @@ export function connectionUrl(p: ConnectionProfile, path: string): URL {
 export function connectionAuth(p: ConnectionProfile, secret: string, resolvedUsername?: string): { name: string; value: string } {
   if (!p.http) throw new Error('Connection does not support HTTP');
   const a = p.http.auth;
-  if(a.type==='login'||a.type==='login-token')throw new Error('Saved logins must be resolved by their domain-bound consumer');
+  if(a.type==='login'||a.type==='login-token'||a.type==='header-template')throw new Error('Saved logins must be resolved by their domain-bound consumer');
   const auth = a.type === 'basic-token' ? { name: 'Authorization', value: `Basic ${Buffer.from(`${secret}:`).toString('base64')}` } : a.type === 'basic' ? { name: 'Authorization', value: `Basic ${Buffer.from(`${a.username ?? resolvedUsername}:${secret}`).toString('base64')}` }
     : a.type === 'bearer' ? { name: 'Authorization', value: `Bearer ${secret}` } : { name: a.name, value: a.prefix + secret };
   if (/[\x00-\x1f\x7f-\uffff]/.test(auth.value)) throw new Error('Invalid connection authentication');
@@ -127,11 +128,18 @@ export async function authenticatedFetch(p: ConnectionProfile, caller: Connectio
   if(p.http!.tls?.mode==='pinned'&&url.protocol!=='https:')throw new Error('Certificate trust requires an HTTPS connection');
   const login=['login','login-token'].includes(p.http!.auth.type)?await getVault().getLoginAuthorized({...caller,workspaceId:p.workspaceId,toolId},p.credential,url.origin):null;
   if(['login','login-token'].includes(p.http!.auth.type)&&!login)throw new Error('Login unavailable, expired, denied, or bound to a different domain');
+  const templateAuth=p.http!.auth.type==='header-template'?p.http!.auth:null;
+  const templateReferences=templateAuth?headerTemplateReferences(templateAuth.template):[];
+  if(templateAuth&&!templateReferences.includes(p.credential))throw new Error('The header template must reference this connection’s vault entry');
   const secret = login?.password??await resolveConnectionCredential(p, caller, toolId, trustedMcpServerId);
   const username = login?.username??(p.http!.auth.type === 'basic' && p.http!.auth.usernameCredential
     ? await resolveConnectionCredential({ ...p, credential: p.http!.auth.usernameCredential }, caller, toolId, trustedMcpServerId) : undefined);
   if(!tokenAuth&&login?.username.includes(':'))throw new Error('This username cannot be used for HTTP Basic authentication');
-  let auth = tokenAuth?{name:'Authorization',value:''}:login?{name:'Authorization',value:`Basic ${Buffer.from(`${login.username}:${login.password}`).toString('base64')}`}:connectionAuth(p, secret, username);
+  const headerValues=new Map<string,string>();
+  if(templateAuth)for(const name of templateReferences)headerValues.set(name,name===p.credential?secret:await resolveConnectionCredential({...p,credential:name},caller,toolId,trustedMcpServerId));
+  const headerComposite=templateAuth?renderHeaderTemplate(templateAuth.template.slice(templateAuth.template.indexOf('<'),templateAuth.template.lastIndexOf('>')+1),headerValues):null;
+  let auth = templateAuth?{name:templateAuth.name,value:renderHeaderTemplate(templateAuth.template,headerValues)}:tokenAuth?{name:'Authorization',value:''}:login?{name:'Authorization',value:`Basic ${Buffer.from(`${login.username}:${login.password}`).toString('base64')}`}:connectionAuth(p, secret, username);
+  if(/[\x00-\x1f\x7f-\uffff]/.test(auth.value))throw new Error('Invalid connection authentication');
   const headers = new Headers(init.headers);
   if (['host', 'authorization', 'cookie', 'proxy-authorization', 'content-length', 'transfer-encoding', 'connection', 'upgrade', auth.name].some(n => headers.has(n))) throw new Error('Authentication and routing headers are controlled by the connection');
   for (const [name, value] of Object.entries(p.http!.headers ?? {})) {
@@ -159,7 +167,7 @@ export async function authenticatedFetch(p: ConnectionProfile, caller: Connectio
     const request = { ...init, method, headers, redirect: 'manual' as const };
     const response = await send(url,request);
     if(tokenAuth&&response.status===401)invalidateLoginToken(tokenKey);
-    return { response, credentialVersion: createHash('sha256').update(JSON.stringify([secret, username])).digest('hex'), mask: value => redactCredentialData(value, [secret, ...(username ? [username] : []), auth.value, auth.value.replace(/^Basic /, ''),...tokenSecrets]) };
+    return { response, credentialVersion: createHash('sha256').update(JSON.stringify([secret, username,...headerValues.values()])).digest('hex'), mask: value => redactCredentialData(value, [secret, ...(username ? [username] : []), auth.value, auth.value.replace(/^Basic /, ''),...headerValues.values(),...(headerComposite?[headerComposite]:[]),...tokenSecrets]) };
   } catch(error) {
     if(error instanceof LoginTokenError)throw error;
     if(error instanceof PublicCertificateDestinationError)throw new Error(error.message);

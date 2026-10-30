@@ -7,10 +7,10 @@ import { MCPBridge } from './bridge';
 import { resourceHandlers } from './resource-tools';
 import { createCredentialTransport, assertCredentialConnectionAccess } from './credential-transport';
 import type { AgentContext,MCPServer } from '@/core/types';
-const fx=vi.hoisted(()=>({secret:'CANARY_MCP_SECRET_742!',reads:vi.fn(),allowedAgents:[] as string[]}));
-vi.mock('@/security/vault',()=>({getVault:()=>({list:async()=>[],getByNameAuthorized:async(agent:{agentId?:string},_name:string,options?:{trustedMcpTransport?:boolean})=>{if(fx.allowedAgents.length&&!options?.trustedMcpTransport&&!fx.allowedAgents.includes(agent.agentId??''))return null;fx.reads();return fx.secret;}})}));
+const fx=vi.hoisted(()=>({secret:'CANARY_MCP_SECRET_742!',reads:vi.fn(),allowedAgents:[] as string[],allowedByName:new Map<string,string[]>()}));
+vi.mock('@/security/vault',()=>({getVault:()=>({list:async()=>[],getByNameAuthorized:async(agent:{agentId?:string},_name:string,options?:{trustedMcpTransport?:boolean})=>{if(!options?.trustedMcpTransport&&((fx.allowedAgents.length&&!fx.allowedAgents.includes(agent.agentId??''))||(fx.allowedByName.has(_name)&&!fx.allowedByName.get(_name)!.includes(agent.agentId??''))))return null;fx.reads();return fx.secret;}})}));
 let dir:string;const saved=process.env.OCTIPUS_CONNECTIONS_FILE;let stop:(()=>Promise<void>)|undefined;
-beforeEach(async()=>{dir=await mkdtemp(join(tmpdir(),'octi-mcp-credential-'));process.env.OCTIPUS_CONNECTIONS_FILE=join(dir,'profiles.json');fx.secret='CANARY_MCP_SECRET_742!';fx.allowedAgents=[];fx.reads.mockClear();});
+beforeEach(async()=>{dir=await mkdtemp(join(tmpdir(),'octi-mcp-credential-'));process.env.OCTIPUS_CONNECTIONS_FILE=join(dir,'profiles.json');fx.secret='CANARY_MCP_SECRET_742!';fx.allowedAgents=[];fx.allowedByName.clear();fx.reads.mockClear();});
 afterEach(async()=>{await stop?.();stop=undefined;if(saved===undefined)delete process.env.OCTIPUS_CONNECTIONS_FILE;else process.env.OCTIPUS_CONNECTIONS_FILE=saved;await rm(dir,{recursive:true,force:true});});
 const context={userId:'alice',workspaceId:'w',id:'a'} as AgentContext;
 it('authenticates remote MCP in its transport, redacts replies, and rejects cross-workspace dispatch',async()=>{
@@ -79,4 +79,21 @@ it('keeps a healthy persistent SSE listener open past the POST request deadline'
   const transport=await createCredentialTransport({id:'sse',name:'sse',command:'',isEnabled:true,transport:'sse',sseUrl:origin+'/sse',postUrl:origin+'/messages',credentialConnection:'sse',requestTimeoutMs:50});
   const errors:string[]=[];const frames:string[]=[];transport.onError(e=>errors.push(e.message));transport.onMessage(m=>frames.push(m));
   await transport.connect();try{await new Promise(r=>setTimeout(r,150));expect(frames).toContain(JSON.stringify({ready:true}));expect(errors).toEqual([]);}finally{transport.close();}
+});
+
+it.each(['header-template','basic'])('checks the secondary %s credential against the dispatching agent before MCP sends anything',async(type)=>{
+ const auth=type==='header-template'?{type,name:'Authorization',template:'Prefix=<MCP_ID>=<MCP_TOKEN>'}:{type:'basic',usernameCredential:'MCP_ID'};
+ await writeFile(process.env.OCTIPUS_CONNECTIONS_FILE!,JSON.stringify([{id:'dual',userId:'alice',workspaceId:'w',credential:'MCP_TOKEN',http:{origin:'https://mcp.example.test',auth,methods:['POST'],mcpServers:['dual']}}]),{mode:0o600});
+ const cfg:MCPServer={id:'dual',name:'dual',command:'',isEnabled:true,transport:'streamable-http',sseUrl:'https://mcp.example.test/mcp',credentialConnection:'dual'};
+ fx.allowedByName.set('MCP_ID',['a']);
+ const transport=await createCredentialTransport(cfg);await transport.connect();
+ const bridge=new MCPBridge(),send=vi.fn();
+ (bridge as unknown as {connections:Map<string,unknown>}).connections.set('dual',{id:'dual',server:cfg,status:'connected',tools:[{name:'sample'}],transport:{send}});
+ await expect(bridge.callTool('dual','sample',{}, {...context,id:'b'})).rejects.toThrow(/denied/);
+ expect(send).not.toHaveBeenCalled();await expect(assertCredentialConnectionAccess(cfg,context)).resolves.toBeUndefined();transport.close();
+});
+it('a stdio binding does not consume a separate HTTP header companion',async()=>{
+ await writeFile(process.env.OCTIPUS_CONNECTIONS_FILE!,JSON.stringify([{id:'dual-mode',userId:'alice',workspaceId:'w',credential:'MCP_TOKEN',http:{origin:'https://mcp.example.test',auth:{type:'header-template',name:'Authorization',template:'Prefix=<MCP_ID>=<MCP_TOKEN>'},methods:['POST']},stdio:[]}]),{mode:0o600});
+ fx.allowedByName.set('MCP_ID',['somebody-else']);
+ await expect(assertCredentialConnectionAccess({id:'stdio',name:'stdio',command:process.execPath,isEnabled:true,transport:'stdio',credentialConnection:'dual-mode'},context)).resolves.toBeUndefined();
 });
