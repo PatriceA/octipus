@@ -1,5 +1,10 @@
 import { z } from 'zod';
 
+export const connectionTlsSchema = z.discriminatedUnion('mode', [
+  z.object({mode:z.literal('system')}).strict(),
+  z.object({mode:z.literal('pinned'),certificateSha256:z.string().regex(/^[a-fA-F0-9]{64}$/).transform(value=>value.toLowerCase())}).strict(),
+]);
+
 /** Public routing context, never another place to enter a credential. */
 export const publicConnectionHeadersSchema = z.record(
   z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/),
@@ -23,6 +28,7 @@ export const apiConnectionSchema = z.object({
   pathPrefix: z.string().startsWith('/').default('/'),
   auth: connectionAuthSchema,
   headers: publicConnectionHeadersSchema.optional(),
+  tls: connectionTlsSchema.optional(),
   methods: z.array(z.enum(['GET','HEAD','POST','PUT','PATCH','DELETE'])).min(1),
   allowInsecureHttp: z.boolean().default(false),
 }).strict().superRefine((c, ctx) => {
@@ -31,12 +37,13 @@ export const apiConnectionSchema = z.object({
   if (/[\\?#%\0\r\n]/.test(c.pathPrefix) || c.pathPrefix.split('/').some(p => p === '..' || p === '.')) ctx.addIssue({code:'custom',message:'Use a plain API path prefix, such as /api'});
   if (c.auth.type === 'header' && /^(?:host|cookie|content-length|transfer-encoding|connection|upgrade|proxy-authorization)$/i.test(c.auth.name)) ctx.addIssue({code:'custom',message:'This header cannot carry credentials'});
   const auth = c.auth;
+  if (c.tls?.mode === 'pinned' && u.protocol !== 'https:') ctx.addIssue({code:'custom',message:'Certificate trust requires an HTTPS origin'});
   if (auth.type === 'header' && Object.keys(c.headers ?? {}).some(name => name.toLowerCase() === auth.name.toLowerCase())) ctx.addIssue({code:'custom',message:'The authentication header cannot also be a public header'});
 });
 export type ApiConnectionConfig = z.infer<typeof apiConnectionSchema>;
 
 /** Do not echo unknown object keys or rejected values into diagnostics. */
 export function apiConnectionValidationMessage(error: z.ZodError): string {
-  const labels: Record<string,string> = {id:'Connection name',origin:'Server origin',pathPrefix:'Allowed path prefix',auth:'Authentication',headers:'Public request headers',methods:'Allowed requests',allowInsecureHttp:'Unencrypted HTTP'};
+  const labels: Record<string,string> = {id:'Connection name',origin:'Server origin',pathPrefix:'Allowed path prefix',auth:'Authentication',headers:'Public request headers',tls:'TLS certificate trust',methods:'Allowed requests',allowInsecureHttp:'Unencrypted HTTP'};
   return [...new Set(error.issues.map(issue => issue.code === 'custom' ? issue.message : `${labels[String(issue.path[0])] ?? 'Connection settings'}: invalid or unsupported value`))].join('; ');
 }

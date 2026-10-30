@@ -1,6 +1,6 @@
 import dns from 'node:dns';
 import { request as httpRequest } from 'node:http';
-import { request as httpsRequest } from 'node:https';
+import { type Agent as HttpsAgent, request as httpsRequest } from 'node:https';
 import { Readable } from 'node:stream';
 
 /**
@@ -194,7 +194,7 @@ export function pinnedLookup(ip: string): never {
  * has a `lookup` hook, which pins the address without touching the URL, so
  * nothing has to be un-done afterwards.
  */
-export async function fetchPinned(url: string, ip: string, init: RequestInit = {}): Promise<Response> {
+export async function fetchPinned(url: string, ip: string | null, init: RequestInit = {}, httpsAgent?: HttpsAgent): Promise<Response> {
   const parsed = new URL(url);
   const send = parsed.protocol === 'https:' ? httpsRequest : httpRequest;
 
@@ -226,7 +226,8 @@ export async function fetchPinned(url: string, ip: string, init: RequestInit = {
       {
         method: init.method ?? 'GET',
         headers,
-        lookup: pinnedLookup(ip),
+        lookup: ip === null ? undefined : pinnedLookup(ip),
+        agent: httpsAgent,
       },
       (res) => {
         const resHeaders = new Headers();
@@ -255,6 +256,7 @@ export async function fetchPinned(url: string, ip: string, init: RequestInit = {
       const abort = (): void => {
         req.destroy(new Error('The operation was aborted'));
       };
+      req.once('close',()=>signal.removeEventListener('abort',abort));
       if (signal.aborted) abort();
       else signal.addEventListener('abort', abort, { once: true });
     }

@@ -93,3 +93,36 @@ test('Appwrite setup uses key authentication, public project context and validat
   await expect(page.getByRole('status')).toContainText('API connection appwrite saved');
   expect(settings).toMatchObject({origin:'https://appwrite.example.com',pathPrefix:'/v1',auth:{type:'header',name:'X-Appwrite-Key',prefix:''},headers:{'X-Appwrite-Project':'synthetic-project'},methods:['GET']});
 });
+
+test('trusting a device certificate requires inspection and consent, and changing origin clears it', async ({ authenticatedPage: page }) => {
+ const secret={id:'11111111-1111-4111-8111-111111111111',name:'OPNsense_SECRET',scope:'user',credentialType:'api_key',tags:[],accessCount:'0',allowedAgents:[],isActive:true,metadata:{},apiConnections:[]};
+ let settings:Record<string,unknown>|null=null;
+ await page.route('**/api/vault?*',route=>json(route,200,{credentials:[secret]}));
+ await page.route('**/api/vault',route=>json(route,200,{credentials:[secret]}));
+ await page.route('**/api/vault/*/api-connection*',async route=>{settings=route.request().postDataJSON();await json(route,200,{connection:settings});});
+ await page.route('**/api/vault/*/api-certificate*',route=>json(route,200,{certificate:{origin:'https://192.0.2.1',certificateSha256:'a'.repeat(64),commonName:'synthetic-device',issuer:'synthetic-device',validFrom:'Jan 1 2012 GMT',validTo:'Feb 1 2013 GMT',verificationError:'CERT_HAS_EXPIRED'}}));
+ await page.goto('/secrets');await page.getByRole('button',{name:'Connect API for OPNsense_SECRET'}).click();
+ await page.getByLabel('Connection name',{exact:true}).fill('opnsense');
+ await page.getByLabel('Server origin',{exact:true}).fill('https://192.0.2.1');
+ await expect(page.getByLabel('Certificate trust',{exact:true})).toHaveValue('system');
+ await page.getByLabel('Authentication',{exact:true}).selectOption('basic');
+ await page.getByLabel('Or username vault entry',{exact:true}).fill('OPNsense_KEY');
+ await page.getByLabel('Certificate trust',{exact:true}).selectOption('pinned');
+ await expect(page.getByRole('button',{name:'Save API connection'})).toBeDisabled();
+ await page.getByRole('button',{name:'Inspect server certificate'}).click();
+ await expect(page.getByText(/CERT_HAS_EXPIRED/)).toBeVisible();
+ await expect(page.getByRole('button',{name:'Save API connection'})).toBeDisabled();
+ await page.getByLabel(/I trust this exact certificate/).check();
+ await expect(page.getByRole('button',{name:'Save API connection'})).toBeEnabled();
+ await page.getByLabel('Server origin',{exact:true}).fill('https://other-device.example.com');
+ await expect(page.getByLabel('Certificate trust',{exact:true})).toHaveValue('system');
+ await expect(page.getByLabel(/I trust this exact certificate/)).toHaveCount(0);
+ await page.getByLabel('Server origin',{exact:true}).fill('https://192.0.2.1');
+ await page.getByLabel('Certificate trust',{exact:true}).selectOption('pinned');
+ await page.getByRole('button',{name:'Inspect server certificate'}).click();
+ await page.getByLabel(/I trust this exact certificate/).check();
+ await page.getByRole('button',{name:'Save API connection'}).click();
+ await expect(page.getByRole('status')).toContainText('API connection opnsense saved');
+ expect(settings).toMatchObject({id:'opnsense',tls:{mode:'pinned',certificateSha256:'a'.repeat(64)},auth:{type:'basic',usernameCredential:'OPNsense_KEY'}});
+ expect(JSON.stringify(settings)).not.toContain('SYNTHETIC_TLS_CANARY');
+});

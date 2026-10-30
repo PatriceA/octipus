@@ -36,6 +36,24 @@ step above. The API setup screen stores only connection settings alongside the
 credential metadata. It does not read the token or reset its access restrictions.
 Removing an API connection leaves the secret in the vault.
 
+### Self-signed or expired HTTPS certificates
+
+Normal certificate verification is the default. For a device such as OPNsense,
+an administrator can choose **Certificate trust → Trust one exact certificate**,
+then **Inspect server certificate**. Inspection sends no HTTP request or vault
+credentials. Check the server and fingerprint, select the explicit trust checkbox,
+and save. The connection then accepts only that exact SHA-256 certificate,
+including an otherwise invalid issuer, expiry or hostname. A replacement
+certificate requires another inspection and approval; requests fail before
+sending authentication when the fingerprint changes.
+
+This exception belongs to one approved HTTPS connection. It does not change
+global TLS settings or public-network validation. The approval fingerprint and
+origin are recorded in the credential audit. Select **Normal certificate
+verification** and save to remove the exception. OPNsense uses Basic authentication
+with its API key as the username (choose its vault-entry name) and API secret as
+the password; the path prefix is `/api`.
+
 Ordinary users can approve public API destinations. Public requests use the
 existing public-address validation and pinned DNS transport, including after DNS
 changes. Administrators can approve internal/LAN servers. This permission is

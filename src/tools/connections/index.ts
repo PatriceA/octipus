@@ -17,7 +17,7 @@ export class ConnectionsTool extends BaseTool {
   ], tools: [] }; }
   protected async registerTools(): Promise<void> {
     this.registerTool('list', 'List connection names and approved origins/methods. Credentials are never returned. If empty, report missing connection configuration, not a missing service or invalid credential.', createParameterSchema({}), async (_args, c) =>
-      (await readAvailableConnectionProfiles(c)).filter(p => p.http).map(p => ({ connection: p.id, origin: p.http!.origin, pathPrefix: p.http!.pathPrefix, methods: p.http!.methods, git: p.http!.git })), { permissionAction: 'read', readOnly: true });
+      (await readAvailableConnectionProfiles(c)).filter(p => p.http).map(p => ({ connection: p.id, origin: p.http!.origin, pathPrefix: p.http!.pathPrefix, methods: p.http!.methods, git: p.http!.git, tlsMode:p.http!.tls?.mode??'system' })), { permissionAction: 'read', readOnly: true });
     const requestSchema = createParameterSchema({
       connection: { type: 'string', required: true, description: 'Configured connection name' }, path: { type: 'string', required: true, description: 'Origin-relative path; e.g. /api/json or /api/v4/projects' },
       timeout: { type: 'number', description: 'Execution timeout in milliseconds (1–600000)', default: 120000 },

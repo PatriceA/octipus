@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { apiConnectionSchema, apiConnectionValidationMessage, type ApiConnectionConfig } from '../../../src/shared/api-connection';
 import { useAuth } from '@/lib/auth-context';
 import { api } from '@/lib/api';
@@ -14,6 +14,11 @@ export function ApiConnectionForm({ credential, workspaceId, onSaved, onCancel }
   const current = credential.metadata?.apiConnection;
   const [name,setName] = useState(current?.id ?? credential.name.toLowerCase().replace(/(?:_api)?_(?:token|key)$/,'').replace(/[^a-z0-9_-]/g,'-'));
   const [origin,setOrigin] = useState(current?.origin ?? '');
+  const originRef=useRef(origin);
+  const [tlsMode,setTlsMode]=useState<'system'|'pinned'>(current?.tls?.mode??'system');
+  const [pin,setPin]=useState(current?.tls?.mode==='pinned'?current.tls.certificateSha256:'');
+  const [trusted,setTrusted]=useState(current?.tls?.mode==='pinned');
+  const [certificate,setCertificate]=useState<{origin:string;certificateSha256:string;commonName:string;issuer:string;validFrom:string;validTo:string;verificationError:string|null}|null>(null);
   const [prefix,setPrefix] = useState(current?.pathPrefix ?? '/api');
   const [auth,setAuth] = useState<ApiConnectionConfig['auth']['type']>(current?.auth.type ?? 'bearer');
   const [username,setUsername] = useState(current?.auth.type === 'basic' ? current.auth.username ?? '' : '');
@@ -25,15 +30,29 @@ export function ApiConnectionForm({ credential, workspaceId, onSaved, onCancel }
   const [allowHttp,setAllowHttp] = useState(current?.allowInsecureHttp ?? false);
   const [busy,setBusy] = useState(false); const [error,setError] = useState('');
   const endpoint = `/vault/${encodeURIComponent(credential.id)}/api-connection${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ''}`;
+  function changeOrigin(value:string){
+    if(value.trim()!==originRef.current.trim()){setPin('');setTrusted(false);setCertificate(null);setTlsMode('system');}
+    originRef.current=value;setOrigin(value);
+  }
+  async function inspectCertificate(){
+    setBusy(true);setError('');const requested=origin.trim();
+    try{
+      const result=await api.post<{certificate:NonNullable<typeof certificate>}>(endpoint.replace('/api-connection','/api-certificate'),{origin:requested});
+      if(originRef.current.trim()!==requested)return;
+      setCertificate(result.certificate);setPin(result.certificate.certificateSha256);setTrusted(false);
+    }catch(e){setError(e instanceof Error?e.message:'Could not inspect the certificate');}finally{setBusy(false);}
+  }
   function useAppwrite() {
     setAuth('header');setHeader('X-Appwrite-Key');setHeaderPrefix('');setPrefix('/v1');
-    try { if(origin.trim())setOrigin(new URL(origin.trim()).origin); } catch { /* keep input for validation */ }
+    try { if(origin.trim())changeOrigin(new URL(origin.trim()).origin); } catch { /* keep input for validation */ }
     setPublicHeaders(rows=>rows.some(row=>row.name.toLowerCase()==='x-appwrite-project')?rows:[...rows,{name:'X-Appwrite-Project',value:''}]);
   }
   async function save(remove=false) {
     setBusy(true);setError('');
     try {
+      if(!remove&&tlsMode==='pinned'&&(!pin||!trusted)){setError('Inspect and explicitly trust this certificate before saving.');return;}
       const config = remove ? null : { id:name.trim(), origin:origin.trim(), pathPrefix:prefix.trim(), methods, allowInsecureHttp:allowHttp,
+        ...(tlsMode==='pinned'?{tls:{mode:'pinned',certificateSha256:pin}}:{}),
         ...(publicHeaders.length?{headers:Object.fromEntries(publicHeaders.map(row=>[row.name.trim(),row.value.trim()]))}:{}),
         auth:auth==='basic' ? {type:auth,...(usernameCredential.trim()?{usernameCredential:usernameCredential.trim()}:{username:username.trim()})}
           : auth==='header' ? {type:auth,name:header.trim(),prefix:headerPrefix} : {type:auth} };
@@ -49,7 +68,8 @@ export function ApiConnectionForm({ credential, workspaceId, onSaved, onCancel }
     {!user?.isAdmin && <p className="text-xs text-on-surface-variant">Public APIs can be connected here. Ask an administrator to configure internal servers.</p>}
     <details className="rounded-md border border-outline-variant p-3 text-xs space-y-2"><summary className="cursor-pointer">Appwrite setup help</summary><p>For Appwrite, use your server origin, path <code>/v1</code>, the API key header <code>X-Appwrite-Key</code> (no prefix), and your project ID in <code>X-Appwrite-Project</code>.</p><button type="button" className="text-primary underline" onClick={useAppwrite}>Use Appwrite settings</button></details>
     <div><label htmlFor="api-connection-name" className="block text-xs mb-1">Connection name</label><input id="api-connection-name" className={inputClass} required pattern="[a-zA-Z0-9_-]{1,80}" value={name} onChange={e=>setName(e.target.value)} placeholder="sonarqube"/><p className="text-xs text-on-surface-variant mt-1">The name you tell your agent to use.</p></div>
-    <div><label htmlFor="api-connection-origin" className="block text-xs mb-1">Server origin</label><input id="api-connection-origin" type="url" required className={inputClass} value={origin} onChange={e=>setOrigin(e.target.value)} placeholder="https://api.example.com"/><p className="text-xs text-on-surface-variant mt-1">Protocol, server and optional port; no API path or credentials.</p></div>
+    <div><label htmlFor="api-connection-origin" className="block text-xs mb-1">Server origin</label><input id="api-connection-origin" type="url" required className={inputClass} value={origin} onChange={e=>changeOrigin(e.target.value)} disabled={busy} placeholder="https://api.example.com"/><p className="text-xs text-on-surface-variant mt-1">Protocol, server and optional port; no API path or credentials.</p></div>
+    {origin.trim().startsWith('https:')&&<fieldset className="rounded-md border border-outline-variant p-3 space-y-2"><legend className="text-xs">HTTPS certificate verification</legend><label htmlFor="api-connection-tls" className="block text-xs">Certificate trust</label><select id="api-connection-tls" className={inputClass} value={tlsMode} disabled={busy} onChange={e=>{setTlsMode(e.target.value as typeof tlsMode);setTrusted(false);}}><option value="system">Normal certificate verification</option><option value="pinned" disabled={!user?.isAdmin}>Trust one exact certificate (administrator)</option></select>{tlsMode==='pinned'&&<><p className="text-xs text-on-surface-variant">For devices such as OPNsense with self-signed or expired certificates. HTTPS remains encrypted. Normal issuer, expiry and hostname checks are replaced with the exact certificate fingerprint below; a changed certificate is refused. This applies only to this connection.</p><button type="button" disabled={busy||!user?.isAdmin} className="text-xs text-primary underline disabled:opacity-40" onClick={()=>void inspectCertificate()}>Inspect server certificate</button>{certificate&&<dl className="text-xs space-y-1"><div>Server: {certificate.origin}</div><div>Name: {certificate.commonName}</div><div>Issuer: {certificate.issuer}</div><div>Valid from: {certificate.validFrom}</div><div>Valid until: {certificate.validTo}</div>{certificate.verificationError&&<div>Verification: {certificate.verificationError}</div>}</dl>}{pin&&<><p className="text-xs break-all">SHA-256: <code>{pin}</code></p><label className="flex items-start gap-2 text-xs"><input type="checkbox" checked={trusted} disabled={busy||!user?.isAdmin} onChange={e=>setTrusted(e.target.checked)}/>I trust this exact certificate for this connection, including its expiry, issuer and hostname exceptions.</label></>}</>}</fieldset>}
     <div><label htmlFor="api-connection-path" className="block text-xs mb-1">Allowed path prefix</label><input id="api-connection-path" required className={inputClass} value={prefix} onChange={e=>setPrefix(e.target.value)} placeholder="/api"/></div>
     <div><label htmlFor="api-connection-auth" className="block text-xs mb-1">Authentication</label><select id="api-connection-auth" className={inputClass} value={auth} onChange={e=>setAuth(e.target.value as typeof auth)}>
       <option value="bearer">Bearer token</option><option value="basic-token">Basic token (empty password)</option><option value="basic">Basic username + this secret as password</option><option value="header">API key header</option>
@@ -60,6 +80,6 @@ export function ApiConnectionForm({ credential, workspaceId, onSaved, onCancel }
     <fieldset><legend className="text-xs mb-2">Allowed requests</legend><div className="flex flex-wrap gap-3">{['GET','HEAD','POST','PUT','PATCH','DELETE'].map(method=><label key={method} className="flex items-center gap-1.5 text-xs"><input type="checkbox" checked={methods.includes(method)} onChange={e=>setMethods(e.target.checked?[...methods,method]:methods.filter(m=>m!==method))}/>{method}</label>)}</div><p className="text-xs text-on-surface-variant mt-2">GET is read-only. Other requests may change data and still require normal tool permission.</p></fieldset>
     {origin.trim().startsWith('http:') && <label className="flex items-start gap-2 text-xs text-on-surface-variant"><input type="checkbox" checked={allowHttp} onChange={e=>setAllowHttp(e.target.checked)}/>Allow unencrypted HTTP to this server. Authentication is sent without TLS.</label>}
     {error && <p role="alert" className="text-sm text-error">{error}</p>}
-    <div className="flex flex-wrap justify-end gap-3 pt-2">{current && <button type="button" disabled={busy} onClick={()=>void save(true)} className="text-xs text-error mr-auto">Remove API connection</button>}<button type="button" onClick={onCancel} disabled={busy} className="px-3 py-2 text-sm">Cancel</button><button type="submit" disabled={busy||!name.trim()||!origin.trim()||!prefix.trim()||!methods.length||(origin.trim().startsWith('http:')&&!allowHttp)} className="rounded-lg bg-primary px-4 py-2 text-sm text-[#0e0e0e] disabled:opacity-40">{busy?'Saving…':'Save API connection'}</button></div>
+    <div className="flex flex-wrap justify-end gap-3 pt-2">{current && <button type="button" disabled={busy} onClick={()=>void save(true)} className="text-xs text-error mr-auto">Remove API connection</button>}<button type="button" onClick={onCancel} disabled={busy} className="px-3 py-2 text-sm">Cancel</button><button type="submit" disabled={busy||!name.trim()||!origin.trim()||!prefix.trim()||!methods.length||(tlsMode==='pinned'&&(!trusted||!pin))||(origin.trim().startsWith('http:')&&!allowHttp)} className="rounded-lg bg-primary px-4 py-2 text-sm text-[#0e0e0e] disabled:opacity-40">{busy?'Saving…':'Save API connection'}</button></div>
   </form>;
 }

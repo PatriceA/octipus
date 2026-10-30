@@ -1,5 +1,6 @@
 import { fetchGuarded } from '@/utils/sanitize';
-import { connectionAuthSchema, apiConnectionSchema, publicConnectionHeadersSchema } from '@/shared/api-connection';
+import { connectionAuthSchema, apiConnectionSchema, publicConnectionHeadersSchema, connectionTlsSchema } from '@/shared/api-connection';
+import { CertificatePinMismatchError, certificateVerificationCode, fetchWithCertificatePin } from './connection-tls';
 import { createHash } from 'node:crypto';
 import { readFile, lstat } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -16,6 +17,7 @@ export const connectionProfileSchema = z.object({
   http: z.object({
     origin: z.string().url(), auth: connectionAuthSchema,
     headers: publicConnectionHeadersSchema.optional(),
+    tls: connectionTlsSchema.optional(),
     allowInsecureHttp: z.boolean().default(false),
     networkPolicy: z.enum(['operator', 'public']).default('operator'),
     pathPrefix: z.string().startsWith('/').default('/'),
@@ -23,7 +25,9 @@ export const connectionProfileSchema = z.object({
     git: z.boolean().default(false),
     repositoryRoots: z.array(z.string()).default([]),
     mcpServers: z.array(z.string()).default([]),
-  }).strict().optional(),
+  }).strict().superRefine((http,ctx)=>{
+    if(http.tls?.mode==='pinned'&&(new URL(http.origin).protocol!=='https:'||http.networkPolicy!=='operator'))ctx.addIssue({code:'custom',message:'Certificate trust requires an operator-approved HTTPS connection'});
+  }).optional(),
   // A local server is an explicitly trusted executable, not an arbitrary shell.
   stdio: z.array(z.object({ serverId: z.string(), command: z.string(), args: z.array(z.string()), envName: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), cwd: z.string(), env: z.record(z.string(), z.string()).default({}) }).strict()).default([]),
 }).strict();
@@ -65,7 +69,7 @@ export async function readAvailableConnectionProfiles(caller: ConnectionPrincipa
     if (!parsed.success) continue;
     const c = parsed.data;
     profiles.push(connectionProfileSchema.parse({ id: c.id, userId: caller.userId,
-      workspaceId: row.scope === 'workspace' ? row.workspaceId : null, credential: row.name, http: { origin:c.origin, pathPrefix:c.pathPrefix, auth:c.auth, ...(c.headers ? {headers:c.headers} : {}), methods:c.methods, allowInsecureHttp:c.allowInsecureHttp, networkPolicy:row.metadata?.apiConnectionNetwork === 'operator' ? 'operator' : 'public' } }));
+      workspaceId: row.scope === 'workspace' ? row.workspaceId : null, credential: row.name, http: { origin:c.origin, pathPrefix:c.pathPrefix, auth:c.auth, ...(c.headers ? {headers:c.headers} : {}), ...(c.tls?{tls:c.tls}:{}), methods:c.methods, allowInsecureHttp:c.allowInsecureHttp, networkPolicy:row.metadata?.apiConnectionNetwork === 'operator' ? 'operator' : 'public' } }));
   }
   if (new Set(profiles.map(p => p.id)).size !== profiles.length) throw new Error('Connection name is configured more than once; choose a unique name in Secrets');
   return profiles;
@@ -107,6 +111,7 @@ export async function authenticatedFetch(p: ConnectionProfile, caller: Connectio
   const url = connectionUrl(p, path);
   const method = (init.method ?? 'GET').toUpperCase();
   if (!p.http!.methods.includes(method as never)) throw new Error('HTTP method is not allowed by this connection');
+  if(p.http!.tls?.mode==='pinned'&&(url.protocol!=='https:'||p.http!.networkPolicy!=='operator'))throw new Error('Certificate trust requires an operator-approved HTTPS connection');
   const secret = await resolveConnectionCredential(p, caller, toolId, trustedMcpServerId);
   const username = p.http!.auth.type === 'basic' && p.http!.auth.usernameCredential
     ? await resolveConnectionCredential({ ...p, credential: p.http!.auth.usernameCredential }, caller, toolId, trustedMcpServerId) : undefined;
@@ -120,9 +125,15 @@ export async function authenticatedFetch(p: ConnectionProfile, caller: Connectio
   try {
     headers.set(auth.name, auth.value);
     const request = { ...init, method, headers, redirect: 'manual' as const };
-    const response = p.http!.networkPolicy === 'public' ? await fetchGuarded(url.toString(), request) : await fetch(url, request);
+    const response = p.http!.tls?.mode==='pinned' ? await fetchWithCertificatePin(url,request,p.http!.tls.certificateSha256)
+      : p.http!.networkPolicy === 'public' ? await fetchGuarded(url.toString(), request) : await fetch(url, request);
     return { response, credentialVersion: createHash('sha256').update(JSON.stringify([secret, username])).digest('hex'), mask: value => redactCredentialData(value, [secret, ...(username ? [username] : []), auth.value, auth.value.replace(/^Basic /, '')]) };
-  } catch { throw new Error('Authenticated connection request failed (network, TLS, cancellation or timeout); credentials withheld'); }
+  } catch(error) {
+    if(error instanceof CertificatePinMismatchError)throw new Error(error.message);
+    const code=certificateVerificationCode(error);
+    if(code)throw new Error(`TLS certificate verification failed (${code}). Inspect and approve this server's certificate in Secrets → Connect API, or install a valid certificate. Credentials withheld.`);
+    throw new Error('Authenticated connection request failed (network, TLS, cancellation or timeout); credentials withheld');
+  }
 }
 export async function readBoundedResponse(response: Response, maxBytes = 4 * 1024 * 1024): Promise<string> {
   const reader = response.body?.getReader();

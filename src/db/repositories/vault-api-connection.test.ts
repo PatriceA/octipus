@@ -93,3 +93,13 @@ test('a public project header survives persistence and scoped connection discove
  const{connectionFor}=await import('@/security/credential-connections');
  expect((await connectionFor('appwrite-project',{userId:owner})).http).toMatchObject({headers:appwrite.headers,auth:appwrite.auth});
 });
+test('certificate exceptions need operator approval and survive scoped discovery without credential reads',async()=>{
+ const{saveVaultApiConnection}=await import('./vault-api-connection');
+ const pinned={...config,id:'pinned-device',origin:'https://93.184.216.34',allowInsecureHttp:false,tls:{mode:'pinned' as const,certificateSha256:'a'.repeat(64)}};
+ await expect(saveVaultApiConnection(owner,id,null,pinned)).rejects.toMatchObject({code:'tls_operator_required'});
+ await saveVaultApiConnection(owner,id,null,pinned,{allowPrivateOrigins:true});
+ const{connectionFor}=await import('@/security/credential-connections');
+ expect((await connectionFor('pinned-device',{userId:owner})).http).toMatchObject({tls:pinned.tls,networkPolicy:'operator'});
+ await saveVaultApiConnection(owner,id,null,{...pinned,tls:{mode:'system'}},{allowPrivateOrigins:true});
+ expect((await connectionFor('pinned-device',{userId:owner})).http?.tls?.mode).toBe('system');
+});
