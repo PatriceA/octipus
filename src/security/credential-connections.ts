@@ -2,7 +2,7 @@ import {loginTokenSession,invalidateLoginToken,LoginTokenError} from './credenti
 import {randomBytes} from 'node:crypto';
 import { fetchGuarded } from '@/utils/sanitize';
 import { connectionAuthSchema, apiConnectionSchema, publicConnectionHeadersSchema, connectionTlsSchema } from '@/shared/api-connection';
-import { CertificatePinMismatchError, certificateVerificationCode, fetchWithCertificatePin } from './connection-tls';
+import { CertificatePinMismatchError, PublicCertificateDestinationError, certificateVerificationCode, fetchWithCertificatePin } from './connection-tls';
 import { createHash } from 'node:crypto';
 import { readFile, lstat } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -28,7 +28,7 @@ export const connectionProfileSchema = z.object({
     repositoryRoots: z.array(z.string()).default([]),
     mcpServers: z.array(z.string()).default([]),
   }).strict().superRefine((http,ctx)=>{
-    if(http.tls?.mode==='pinned'&&(new URL(http.origin).protocol!=='https:'||http.networkPolicy!=='operator'))ctx.addIssue({code:'custom',message:'Certificate trust requires an operator-approved HTTPS connection'});
+    if(http.tls?.mode==='pinned'&&new URL(http.origin).protocol!=='https:')ctx.addIssue({code:'custom',message:'Certificate trust requires an HTTPS connection'});
   }).optional(),
   // A local server is an explicitly trusted executable, not an arbitrary shell.
   stdio: z.array(z.object({ serverId: z.string(), command: z.string(), args: z.array(z.string()), envName: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), cwd: z.string(), env: z.record(z.string(), z.string()).default({}) }).strict()).default([]),
@@ -124,7 +124,7 @@ export async function authenticatedFetch(p: ConnectionProfile, caller: Connectio
   }
   const method = (init.method ?? 'GET').toUpperCase();
   if (!p.http!.methods.includes(method as never)) throw new Error('HTTP method is not allowed by this connection');
-  if(p.http!.tls?.mode==='pinned'&&(url.protocol!=='https:'||p.http!.networkPolicy!=='operator'))throw new Error('Certificate trust requires an operator-approved HTTPS connection');
+  if(p.http!.tls?.mode==='pinned'&&url.protocol!=='https:')throw new Error('Certificate trust requires an HTTPS connection');
   const login=['login','login-token'].includes(p.http!.auth.type)?await getVault().getLoginAuthorized({...caller,workspaceId:p.workspaceId,toolId},p.credential,url.origin):null;
   if(['login','login-token'].includes(p.http!.auth.type)&&!login)throw new Error('Login unavailable, expired, denied, or bound to a different domain');
   const secret = login?.password??await resolveConnectionCredential(p, caller, toolId, trustedMcpServerId);
@@ -140,7 +140,7 @@ export async function authenticatedFetch(p: ConnectionProfile, caller: Connectio
   }
   const tokenKey=tokenAuth?createHash('sha256').update(JSON.stringify([p,toolId,caller.agentId,secret,username])).digest('hex'):'';
   const tokenSecrets:string[]=[];
-  const send=async(target:URL,request:RequestInit)=>p.http!.tls?.mode==='pinned'?fetchWithCertificatePin(target,{...request,redirect:'manual'},p.http!.tls.certificateSha256)
+  const send=async(target:URL,request:RequestInit)=>p.http!.tls?.mode==='pinned'?fetchWithCertificatePin(target,{...request,redirect:'manual'},p.http!.tls.certificateSha256,{publicOnly:p.http!.networkPolicy==='public'})
     :p.http!.networkPolicy==='public'?fetchGuarded(target.toString(),{...request,redirect:'manual'}):fetch(target,{...request,redirect:'manual'});
   try {
     if(tokenAuth&&login){
@@ -162,6 +162,7 @@ export async function authenticatedFetch(p: ConnectionProfile, caller: Connectio
     return { response, credentialVersion: createHash('sha256').update(JSON.stringify([secret, username])).digest('hex'), mask: value => redactCredentialData(value, [secret, ...(username ? [username] : []), auth.value, auth.value.replace(/^Basic /, ''),...tokenSecrets]) };
   } catch(error) {
     if(error instanceof LoginTokenError)throw error;
+    if(error instanceof PublicCertificateDestinationError)throw new Error(error.message);
     if(error instanceof CertificatePinMismatchError)throw new Error(error.message);
     const code=certificateVerificationCode(error);
     if(code)throw new Error(`TLS certificate verification failed (${code}). Inspect and approve this server's certificate in Secrets → Connect API, or install a valid certificate. Credentials withheld.`);

@@ -193,3 +193,22 @@ test('Login API form configures JSON sign-in, CSRF and automatic token refresh w
  await expect(page.getByRole('status')).toContainText('ssp_login_fd_dev saved');
  expect(saved).toMatchObject({origin:secret.metadata.login.origin,pathPrefix:'/api',methods:['GET'],auth:{type:'login-token',loginPath:'/api/login',refreshPath:'/api/public/refresh-access-token',language:'de',usernameField:'username',passwordField:'password',accessTokenField:'access_token',refreshTokenField:'refresh_token',refreshTokenRequestField:'refreshToken',expiresInField:'expires_in',csrf:{query:'_csrf',header:'X-XSRF-TOKEN'}}});
 });
+
+test('ordinary owners can inspect and save Proxmox certificate trust on an existing approved API entry',async({authenticatedPage:page})=>{
+ await stubAllDefaults(page);
+ await page.route('**/api/auth/me',route=>json(route,200,{id:'e2e-user-id',username:'owner',isAdmin:false}));
+ const config={id:'proxmox_nuc',origin:'https://192.168.1.11:8006',pathPrefix:'/api2/json',auth:{type:'header',name:'Authorization',prefix:'PVEAPIToken='},methods:['GET'],allowInsecureHttp:false};
+ const entry={id:'11111111-1111-4111-8111-111111111111',name:'PROXMOX_NUC_TOKEN',scope:'user',credentialType:'api_key',tags:[],accessCount:'0',isActive:true,metadata:{apiConnection:config,apiConnectionNetwork:'operator'},apiConnections:[{...config,managedBy:'vault'}]};
+ let settings:Record<string,unknown>|null=null;
+ await page.route('**/api/vault?*',route=>json(route,200,{credentials:[entry]}));await page.route('**/api/vault',route=>json(route,200,{credentials:[entry]}));
+ await page.route('**/api/vault/*/api-certificate*',route=>json(route,200,{certificate:{origin:config.origin,certificateSha256:'b'.repeat(64),commonName:'proxmox-nuc',issuer:'Proxmox CA',validFrom:'Jan 1 2020 GMT',validTo:'Jan 1 2030 GMT',verificationError:'UNABLE_TO_VERIFY_LEAF_SIGNATURE'}}));
+ await page.route('**/api/vault/*/api-connection*',async route=>{settings=route.request().postDataJSON();await json(route,200,{connection:settings});});
+ await page.goto('/secrets');await page.getByRole('button',{name:'Connect API for PROXMOX_NUC_TOKEN'}).click();
+ await expect(page.getByLabel('Certificate trust',{exact:true}).locator('option[value=pinned]')).toBeEnabled();
+ await page.getByLabel('Certificate trust',{exact:true}).selectOption('pinned');
+ await page.getByRole('button',{name:'Inspect server certificate',exact:true}).click();
+ await expect(page.getByText('Name: proxmox-nuc',{exact:true})).toBeVisible();
+ await page.getByLabel(/I trust this exact certificate/).check();await page.getByRole('button',{name:'Save API connection',exact:true}).click();
+ await expect(page.getByRole('status')).toContainText('proxmox_nuc saved');
+ expect(settings).toMatchObject({...config,tls:{mode:'pinned',certificateSha256:'b'.repeat(64)}});
+});

@@ -86,7 +86,7 @@ test('the broker uses both vault references with pinned TLS, preserves ACLs and 
  await expect(authenticatedFetch(profile,{userId:'other'},'/api/status')).rejects.toThrow(/access denied/);
  expect(vaultReads).not.toHaveBeenCalled();expect(e.requests()).toBe(1);
  const publicProfile={...profile,http:{...profile.http!,networkPolicy:'public' as const}};
- expect(connectionProfileSchema.safeParse(publicProfile).success).toBe(false);
- await expect(authenticatedFetch(publicProfile,{userId:'owner'},'/api/status')).rejects.toThrow(/operator-approved/);
- expect(vaultReads).not.toHaveBeenCalled();
+ expect(connectionProfileSchema.safeParse(publicProfile).success).toBe(true);
+ await expect(authenticatedFetch(publicProfile,{userId:'owner'},'/api/status')).rejects.toThrow(/public destinations/);
+ expect(e.requests()).toBe(1);
 });

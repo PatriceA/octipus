@@ -40,16 +40,16 @@ test('removes a connection through the same UUID-validated route',async()=>{
   expect(await response.json()).toEqual({connection:null});
 });
 const inspect=(origin='https://device.example.com')=>app.handle(new Request(`http://test/api/vault/${id}/api-certificate?workspaceId=${workspaceId}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({origin})}));
-test('only an administrator owning an active personal/workspace credential may inspect a certificate',async()=>{
+test('only the owner of an active personal/workspace credential may inspect its certificate',async()=>{
  fixture.user=null;expect((await inspect()).status).toBe(401);
- fixture.user={id:'owner',isAdmin:false};expect((await inspect()).status).toBe(403);
+ fixture.user={id:'owner',isAdmin:false};expect((await inspect()).status).toBe(200);expect(fixture.inspect).toHaveBeenCalledWith('https://device.example.com',{publicOnly:true});fixture.inspect.mockClear();
  fixture.user={id:'owner',isAdmin:true};
  for(const entry of [{id,scope:'space',isActive:true},{id,scope:'system',isActive:true},{id,scope:'workspace',workspaceId:'another',isActive:true},{id,scope:'user',isActive:false}]){
   fixture.entries=[entry];expect((await inspect()).status).toBe(404);
  }
  expect(fixture.inspect).not.toHaveBeenCalled();
  fixture.entries=[{id,scope:'workspace',workspaceId,isActive:true}];const response=await inspect();
- expect(response.status).toBe(200);expect(fixture.inspect).toHaveBeenCalledWith('https://device.example.com');
+ expect(response.status).toBe(200);expect(fixture.inspect).toHaveBeenCalledWith('https://device.example.com',{publicOnly:false});
  expect(JSON.stringify(await response.json())).not.toContain('SYNTHETIC_SECRET');
 });
 test('certificate inspection refuses HTTP, URL paths and credential-bearing addresses',async()=>{
@@ -79,4 +79,11 @@ test('normal secret upsert rejects a name already belonging to a Login without d
  fixture.entries=[{id,name:'saved-login',scope:'user',credentialType:'login'}];
  const response=await loginRequest({name:'saved-login',credentialType:'api_key',value:'synthetic-token'});expect(response.status).toBe(409);
  expect((await response.json()).error).toContain('Login settings');
+});
+
+test('an ordinary owner may inspect an approved internal origin but cannot gain a new internal destination',async()=>{
+ fixture.user={id:'owner',isAdmin:false};fixture.entries=[{id,scope:'user',isActive:true,metadata:{apiConnectionNetwork:'operator',apiConnection:{...config,origin:'https://192.168.1.10:8006'}}}];
+ expect((await inspect('https://192.168.1.10:8006')).status).toBe(200);expect(fixture.inspect).toHaveBeenLastCalledWith('https://192.168.1.10:8006',{publicOnly:false});
+ const{PublicCertificateDestinationError}=await import('@/security/connection-tls');fixture.inspect.mockRejectedValue(new PublicCertificateDestinationError());
+ expect((await inspect('https://192.168.1.11:8006')).status).toBe(403);expect(fixture.inspect).toHaveBeenLastCalledWith('https://192.168.1.11:8006',{publicOnly:true});
 });

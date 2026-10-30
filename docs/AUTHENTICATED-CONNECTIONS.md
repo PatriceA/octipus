@@ -39,7 +39,7 @@ Removing an API connection leaves the secret in the vault.
 ### Self-signed or expired HTTPS certificates
 
 Normal certificate verification is the default. For a device such as OPNsense,
-an administrator can choose **Certificate trust → Trust one exact certificate**,
+the credential owner can choose **Certificate trust → Trust one exact certificate**,
 then **Inspect server certificate**. Inspection sends no HTTP request or vault
 credentials. Check the server and fingerprint, select the explicit trust checkbox,
 and save. The connection then accepts only that exact SHA-256 certificate,
@@ -228,7 +228,7 @@ Tell your agent the entry name. `browser__fill_login` and `browser-ext__fill_log
 
 A browser used for saved Logins blocks arbitrary JavaScript, cookie/storage access and raw screenshots/captures; normal navigation and page controls remain available. A context previously used for arbitrary agent scripts cannot receive a saved Login. Use a fresh browser context/profile instead. The Chrome extension must be reloaded after updating to version 2.1.0, and connected with your personal API token. Its protection persists across reconnects; reconnecting does not make an existing browser safe for arbitrary code.
 
-For HTTP Basic APIs, choose **Connect API** on the Login entry, then approve the path and methods. Authentication uses both saved fields and the domain cannot be changed there. Internal servers and certificate exceptions retain their administrator approval requirements. Use the connection name with the existing `connections` tools.
+For HTTP Basic APIs, choose **Connect API** on the Login entry, then approve the path and methods. Authentication uses both saved fields and the domain cannot be changed there. Internal servers require administrator approval; afterwards the owner can change only the certificate trust without broadening that approved connection. Public HTTPS certificate trust is available to each credential owner. Use the connection name with the existing `connections` tools.
 
 **Edit Login** changes either field without displaying existing values. Leave a field blank to keep it. Changing the domain removes the saved API consent; approve the new destination again. Generic secret reads and rotation cannot expose or overwrite a Login bundle.
 
@@ -243,3 +243,5 @@ Octipus rechecks vault ownership, workspace, expiry and tool/agent access before
 For an API using a client-generated double-submit CSRF pair, enable **Generate a matching CSRF query parameter and header**. Octipus generates a fresh matching pair for login, refresh and resource requests. This mode does not implement cookie-derived CSRF challenges, CAPTCHA, MFA, nested JSON token paths, or arbitrary login scripts.
 
 For SSP fd-dev specifically: domain `https://ssp-api-fd-dev.services.fintus.io`, prefix `/api`, login `/api/login`, refresh `/api/public/refresh-access-token`, language `de`, CSRF query `_csrf` and header `X-XSRF-TOKEN`. The defaults match its `access_token`, `refresh_token`, `expires_in` response and `{refreshToken}` refresh body. Agents should request a protected API resource using `ssp_login_fd_dev`; they should not manually submit `/api/login`.
+
+Certificate trust is available for every personal/workspace HTTPS API entry, regardless of credential type. Owners can inspect and explicitly pin a public server's exact certificate. For an internal server already approved by an administrator, they can save a certificate change while preserving its existing origin, path, methods and authentication. New internal destinations or broader grants still require administrator approval. Public connections keep public-IP validation and DNS pinning even when a custom certificate is trusted.

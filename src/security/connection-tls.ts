@@ -3,7 +3,7 @@ import { Agent, type RequestOptions } from 'node:https';
 import { isIP } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { connect, type TLSSocket } from 'node:tls';
-import { fetchPinned } from '@/utils/sanitize';
+import { fetchPinned,validateExternalUrl } from '@/utils/sanitize';
 
 const sha256 = (socket: TLSSocket) => {
   const raw=socket.getPeerCertificate().raw;
@@ -28,12 +28,25 @@ function serviceOrigin(origin:string):URL {
   return url;
 }
 
+export class PublicCertificateDestinationError extends Error {
+  constructor(){super('This connection only permits public destinations. An administrator must approve access to an internal server.');}
+}
+async function publicAddress(url:URL):Promise<string>{
+  const validation=await validateExternalUrl(url.toString());
+  if(!validation.valid)throw new PublicCertificateDestinationError();
+  const host=url.hostname.replace(/^\[|\]$/g,'');
+  const address=isIP(host)?host:validation.addresses?.[0];
+  if(!address)throw new PublicCertificateDestinationError();
+  return address;
+}
+
 /** Public certificate only; never send credentials or an HTTP request. */
-export async function inspectConnectionCertificate(origin:string) {
+export async function inspectConnectionCertificate(origin:string,options:{publicOnly?:boolean}={}) {
   const url=serviceOrigin(origin),host=url.hostname.replace(/^\[|\]$/g,'');
+  const address=options.publicOnly?await publicAddress(url):host;
   return new Promise<{origin:string;certificateSha256:string;commonName:string;issuer:string;validFrom:string;validTo:string;verificationError:string|null}>((resolve,reject)=>{
-    // nosemgrep: problem-based-packs.insecure-transport.js-node.bypass-tls-verification.bypass-tls-verification -- Admin-only public certificate inspection sends no HTTP request or credentials.
-    const socket=connect({host,port:Number(url.port||443),servername:isIP(host)?undefined:host,rejectUnauthorized:false});
+    // nosemgrep: problem-based-packs.insecure-transport.js-node.bypass-tls-verification.bypass-tls-verification -- Owner-approved certificate inspection sends no HTTP request or credentials; public-only callers use a vetted IP.
+    const socket=connect({host:address,port:Number(url.port||443),servername:isIP(host)?undefined:host,rejectUnauthorized:false});
     const timer=setTimeout(()=>socket.destroy(new Error('Certificate inspection timed out')),10000);
     socket.once('error',reject);socket.once('close',()=>{clearTimeout(timer);reject(new Error('TLS connection closed during certificate inspection'));});
     socket.once('secureConnect',()=>{
@@ -51,7 +64,7 @@ class CertificateAgent extends Agent {
   constructor(private readonly fingerprint:string,private readonly onClose:()=>void){super({keepAlive:false,maxCachedSessions:0});}
   override createConnection(options:RequestOptions,callback?:(error:Error|null,stream:Duplex)=>void) {
     const host=String(options.hostname??options.host??'localhost').replace(/^\[|\]$/g,'');
-    // nosemgrep: problem-based-packs.insecure-transport.js-node.bypass-tls-verification.bypass-tls-verification -- Per-request operator-approved pin replaces CA checks; HTTP cannot write until timingSafeEqual succeeds below.
+    // nosemgrep: problem-based-packs.insecure-transport.js-node.bypass-tls-verification.bypass-tls-verification -- Per-request owner-approved pin replaces CA checks; HTTP cannot write until timingSafeEqual succeeds below.
     const socket=connect({host,port:Number(options.port??443),servername:options.servername||(isIP(host)?undefined:host),lookup:options.lookup,rejectUnauthorized:false,ALPNProtocols:['http/1.1']});
     this.candidates.add(socket);
     let finished=false;
@@ -73,15 +86,16 @@ class CertificateAgent extends Agent {
   override destroy(){for(const socket of this.candidates)socket.destroy(new Error('TLS request cancelled'));super.destroy();}
 }
 
-export async function fetchWithCertificatePin(url:URL,init:RequestInit,fingerprint:string):Promise<Response> {
+export async function fetchWithCertificatePin(url:URL,init:RequestInit,fingerprint:string,options:{publicOnly?:boolean}={}):Promise<Response> {
   serviceOrigin(url.origin);
   if(!/^[a-f0-9]{64}$/i.test(fingerprint))throw new Error('Invalid certificate fingerprint');
+  const address=options.publicOnly?await publicAddress(url):null;
   const agent=new CertificateAgent(fingerprint,()=>init.signal?.removeEventListener('abort',abort));
   const abort=()=>agent.destroy();
   if(init.signal?.aborted)throw new Error('Request aborted');
   init.signal?.addEventListener('abort',abort,{once:true});
   try {
-    const response=await fetchPinned(url.toString(),null,init,agent);
+    const response=await fetchPinned(url.toString(),address,init,agent);
     // The body owns the socket after headers; keep abort support until close.
     return response;
   }catch(error){init.signal?.removeEventListener('abort',abort);agent.destroy();throw error;}

@@ -6,7 +6,7 @@ import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getVault, VaultLoginError, isReservedSecretName } from '@/security/vault';
 import { apiLogger, coreLogger } from '@/utils/logger';
-import { inspectConnectionCertificate } from '@/security/connection-tls';
+import { inspectConnectionCertificate,PublicCertificateDestinationError } from '@/security/connection-tls';
 
 /** Secret names that, when changed, require a telephony provider cache reset. */
 const TELEPHONY_SECRET_NAMES = new Set([
@@ -83,7 +83,7 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
     try {
       return { connection: await saveVaultApiConnection(user.id, params.id, query.workspaceId ?? null, parsed.data, { allowPrivateOrigins: user.isAdmin }) };
     } catch (error) {
-      if (error instanceof VaultConnectionError) { set.status = error.code === 'not_found' ? 404 : error.code === 'login_domain_required' ? 400 : ['public_destination_required','tls_operator_required'].includes(error.code) ? 403 : 409; return { error: error.message }; }
+      if (error instanceof VaultConnectionError) { set.status = error.code === 'not_found' ? 404 : error.code === 'login_domain_required' ? 400 : error.code==='public_destination_required' ? 403 : 409; return { error: error.message }; }
       if (error instanceof ToolPolicyRefusalError) { set.status = 400; return { error: 'Use connection settings only; secret values and templates are not allowed.' }; }
       apiLogger.warn({ errorClass: error instanceof Error ? error.name : 'unknown' }, 'API connection settings could not be saved');
       set.status = 503; return { error: 'API connection settings could not be saved. Please try again or check the server connection configuration.' };
@@ -92,14 +92,15 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
 
   .post('/:id/api-certificate',async({user,params,query,body,set})=>{
     if(!user){set.status=401;return{error:'Not authenticated'};}
-    if(!user.isAdmin){set.status=403;return{error:'An administrator must inspect and approve certificate exceptions'};}
-    const owned=(await getVault().list(user.id,{workspaceId:query.workspaceId})).some(row=>row.id===params.id&&row.isActive
+    const owned=(await getVault().list(user.id,{workspaceId:query.workspaceId})).find(row=>row.id===params.id&&row.isActive
       &&(row.scope==='user'||(row.scope==='workspace'&&row.workspaceId===query.workspaceId)));
     if(!owned){set.status=404;return{error:'Secret not found in this workspace'};}
     const parsed=apiConnectionSchema.safeParse({id:'inspection',origin:body.origin,pathPrefix:'/',auth:{type:'bearer'},methods:['GET'],allowInsecureHttp:false});
     if(!parsed.success||!body.origin.startsWith('https:')){set.status=400;return{error:'Use an HTTPS origin without a path or credentials'};}
-    try{return{certificate:await inspectConnectionCertificate(body.origin)};}
-    catch{set.status=502;return{error:'Could not inspect the server certificate. Check the HTTPS address and service availability.'};}
+    const previous=apiConnectionSchema.safeParse(owned.metadata?.apiConnection);
+    const approvedInternal=owned.metadata?.apiConnectionNetwork==='operator'&&previous.success&&previous.data.origin===body.origin;
+    try{return{certificate:await inspectConnectionCertificate(body.origin,{publicOnly:!user.isAdmin&&!approvedInternal})};}
+    catch(error){if(error instanceof PublicCertificateDestinationError){set.status=403;return {error:error.message};}set.status=502;return{error:'Could not inspect the server certificate. Check the HTTPS address and service availability.'};}
   },{params:connectionParams,query:connectionQuery,body:t.Object({origin:t.String({minLength:1,maxLength:2048})}),detail:{tags:['vault']}})
 
   .put('/:id/login', async ({user,params,query,body,set}) => {

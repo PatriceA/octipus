@@ -93,15 +93,22 @@ test('a public project header survives persistence and scoped connection discove
  const{connectionFor}=await import('@/security/credential-connections');
  expect((await connectionFor('appwrite-project',{userId:owner})).http).toMatchObject({headers:appwrite.headers,auth:appwrite.auth});
 });
-test('certificate exceptions need operator approval and survive scoped discovery without credential reads',async()=>{
+test('owners can save public certificate pins and retain existing internal grants without broadening them',async()=>{
  const{saveVaultApiConnection}=await import('./vault-api-connection');
  const pinned={...config,id:'pinned-device',origin:'https://93.184.216.34',allowInsecureHttp:false,tls:{mode:'pinned' as const,certificateSha256:'a'.repeat(64)}};
- await expect(saveVaultApiConnection(owner,id,null,pinned)).rejects.toMatchObject({code:'tls_operator_required'});
+ await saveVaultApiConnection(owner,id,null,pinned);
+ const{getVault}=await import('@/security/vault');expect((await getVault().list(owner)).find(e=>e.id===id)?.metadata?.apiConnectionNetwork).toBe('public');
  await saveVaultApiConnection(owner,id,null,pinned,{allowPrivateOrigins:true});
  const{connectionFor}=await import('@/security/credential-connections');
  expect((await connectionFor('pinned-device',{userId:owner})).http).toMatchObject({tls:pinned.tls,networkPolicy:'operator'});
  await saveVaultApiConnection(owner,id,null,{...pinned,tls:{mode:'system'}},{allowPrivateOrigins:true});
  expect((await connectionFor('pinned-device',{userId:owner})).http?.tls?.mode).toBe('system');
+ const internal={...pinned,origin:'https://192.168.1.10:8006'};
+ await saveVaultApiConnection(owner,id,null,{...internal,tls:{mode:'system'}},{allowPrivateOrigins:true});
+ await saveVaultApiConnection(owner,id,null,internal);
+ expect((await connectionFor('pinned-device',{userId:owner})).http).toMatchObject({networkPolicy:'operator',tls:internal.tls});
+ for(const changed of [{...internal,origin:'https://192.168.1.11:8006'},{...internal,methods:['GET','POST','DELETE'] as const},{...internal,pathPrefix:'/'},{...internal,auth:{type:'bearer' as const}}])await expect(saveVaultApiConnection(owner,id,null,changed as typeof internal)).rejects.toMatchObject({code:'public_destination_required'});
+
 });
 
 test('Login API consent requires the encrypted entry domain and Login authentication',async()=>{
