@@ -5,6 +5,7 @@ export const credentialTypeEnum = pgEnum('credential_type', [
   'api_key',
   'oauth_token',
   'password',
+  'login',
   'ssh_key',
   'certificate',
   'other',
@@ -101,6 +102,7 @@ export const vault = pgTable('vault', {
 export type VaultScope = typeof vaultScopeEnum.enumValues[number];
 
 export interface VaultMetadata {
+  login?: {origin:string;allowInsecureHttp:boolean};
   apiConnection?: ApiConnectionConfig;
   apiConnectionNetwork?: 'operator' | 'public';
   service?: string;

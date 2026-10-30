@@ -103,3 +103,14 @@ test('certificate exceptions need operator approval and survive scoped discovery
  await saveVaultApiConnection(owner,id,null,{...pinned,tls:{mode:'system'}},{allowPrivateOrigins:true});
  expect((await connectionFor('pinned-device',{userId:owner})).http?.tls?.mode).toBe('system');
 });
+
+test('Login API consent requires the encrypted entry domain and Login authentication',async()=>{
+ const {getVault}=await import('@/security/vault');const {saveVaultApiConnection}=await import('./vault-api-connection');
+ const row=await getVault().saveLogin(owner,{name:'basic-login',domain:'http://192.168.200.58',allowInsecureHttp:true,username:'canary-user',password:'canary-password'});
+ const settings={...config,id:'saved-login',origin:'http://192.168.200.58',auth:{type:'login' as const}};
+ await expect(saveVaultApiConnection(owner,row.id,null,{...settings,origin:'http://192.168.200.59'},{allowPrivateOrigins:true})).rejects.toMatchObject({code:'login_domain_required'});
+ await expect(saveVaultApiConnection(owner,row.id,null,{...settings,auth:{type:'bearer'}},{allowPrivateOrigins:true})).rejects.toMatchObject({code:'login_domain_required'});
+ await expect(saveVaultApiConnection(owner,second,null,settings,{allowPrivateOrigins:true})).rejects.toMatchObject({code:'login_domain_required'});
+ await saveVaultApiConnection(owner,row.id,null,settings,{allowPrivateOrigins:true});
+ const {connectionFor}=await import('@/security/credential-connections');expect((await connectionFor('saved-login',{userId:owner})).http?.auth.type).toBe('login');
+});

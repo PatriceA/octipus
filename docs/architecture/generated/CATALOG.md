@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-598 mounted routes across 82 route files. The path is the full one, group prefix included — what a client actually calls.
+599 mounted routes across 82 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -585,6 +585,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | PATCH | `/api/vault/:id` | `src/api/routes/vault.ts` |
 | POST | `/api/vault/:id/api-certificate` | `src/api/routes/vault.ts` |
 | PUT | `/api/vault/:id/api-connection` | `src/api/routes/vault.ts` |
+| PUT | `/api/vault/:id/login` | `src/api/routes/vault.ts` |
 | POST | `/api/vault/:id/rotate` | `src/api/routes/vault.ts` |
 | GET | `/api/verification/:sessionId` | `src/api/routes/verification.ts` |
 | GET | `/api/voice/calls` | `src/api/routes/voice.ts` |
@@ -743,7 +744,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `security` | `core` | 22 |
 | `security` | `db` | 82 |
 | `security` | `mcp` | 2 |
-| `security` | `shared` | 3 |
+| `security` | `shared` | 4 |
 | `security` | `tools` | 2 |
 | `security` | `utils` | 32 |
 | `services` | `capabilities` | 5 |
@@ -777,7 +778,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `mcp` | 2 |
 | `tools` | `models` | 8 |
 | `tools` | `plugins` | 1 |
-| `tools` | `security` | 42 |
+| `tools` | `security` | 46 |
 | `tools` | `services` | 1 |
 | `tools` | `shared` | 7 |
 | `tools` | `skills` | 5 |

@@ -1,7 +1,9 @@
 import { getBrowserBridge } from '@/api/browser-bridge';
-import type { ToolManifest } from '@/core/types';
+import {redactCredentialData} from '@/security/credential-redaction';
+import {getVault} from '@/security/vault';
+import type {AgentContext, ToolManifest } from '@/core/types';
 import { toolLogger } from '@/utils/logger';
-import { BaseTool, createParameterSchema } from '../base-tool';
+import { BaseTool, createParameterSchema, type ToolExecutionOptions } from '../base-tool';
 
 // Tabs opened by an agent via new_tab — closed when the agent finishes.
 const agentTabs = new Map<string, Set<number>>();
@@ -41,6 +43,36 @@ export class BrowserExtTool extends BaseTool {
   readonly version = '2.0.0';
   readonly description = 'Interact with the user\'s real browser via Octipus Chrome extension. Full browser control: navigate, click, type, screenshot, tabs, cookies, storage, network, console, and more. Uses existing cookies and sessions — no bot detection.';
 
+  private protectedUsers=new Map<string,string[]>();
+  private protectedScopes=new Map<string,string|null>();
+  private commandTail:Promise<unknown>=Promise.resolve();
+  protected override registerTool(name:string,description:string,parameters:Record<string,unknown>,execute:(args:Record<string,unknown>,context:AgentContext)=>Promise<unknown>,options?:ToolExecutionOptions):void{
+    super.registerTool(name,description,parameters,(args,context)=>{
+      const run=this.commandTail.catch(()=>{}).then(async()=>{
+        const info=getBrowserBridge().getStatus().extensionInfo;
+        if(info.userId&&info.userId!==context.userId)throw new Error('Browser extension access denied');
+        const browserKey=`${context.userId}:${info.browserId??'legacy'}`;
+        const values=this.protectedUsers.get(browserKey);
+        const protectedBrowser=!!values||info.loginProtected===true;
+        if(protectedBrowser&&info.userId!==context.userId)throw new Error('Reconnect this saved Login browser with your personal API token');
+        const scope=this.protectedScopes.has(browserKey)?this.protectedScopes.get(browserKey):info.loginWorkspaceId;
+        if(protectedBrowser&&(context.space||scope!==(context.workspaceId??null)))throw new Error('This saved Login browser belongs to another private workspace');
+        if(protectedBrowser&&name==='navigate'&&typeof args.url==='string'&&!/^https?:/i.test(args.url))throw new Error('Saved Login browsers only allow HTTP(S) navigation');
+        if(protectedBrowser&&['evaluate','screenshot','get_cookies','set_cookies','get_storage','set_storage','get_network','get_console'].includes(name))throw new Error('This browser contains a saved Login. Script execution, cookies, storage and raw captures are disabled; use normal page controls.');
+        if(name==='evaluate'||(name==='navigate'&&typeof args.url==='string'&&!/^https?:/i.test(args.url)))info.loginUnsafe=true;
+        try{
+          const result=await execute(args,context);
+          const mask=this.protectedUsers.get(browserKey);
+          const safe=mask?redactCredentialData(result,mask):result;
+          return protectedBrowser?await getVault().redactLoginDiagnostics(context.userId,context.workspaceId??null,safe):safe;
+        }catch(error){
+          if(protectedBrowser||this.protectedUsers.has(browserKey))throw new Error('Browser command failed in a protected Login session; credential-bearing details withheld');
+          throw error;
+        }
+      });this.commandTail=run;return run;
+    },options);
+  }
+
   getManifest(): ToolManifest {
     return {
       id: this.id,
@@ -56,7 +88,7 @@ export class BrowserExtTool extends BaseTool {
         { action: 'cookies', description: 'Read/write cookies and localStorage/sessionStorage', defaultLevel: 'ASK', dangerous: true },
         { action: 'tabs', description: 'Create, close, and switch browser tabs', defaultLevel: 'ASK' },
       ],
-      tools: [
+      tools: [{name:'fill_login',description:'Fill a domain-bound vault Login without exposing credentials. Does not submit.',parameters:{credential:{type:'string',description:'Login name',required:true},tabId:{type:'number',description:'Exact tab ID',required:true},usernameSelector:{type:'string',description:'Username input selector',required:true},passwordSelector:{type:'string',description:'Password input selector',required:true}},returns:'Filled confirmation'},
         { name: 'observe', description: 'Read a pinned page status', parameters: {}, returns: 'URL and status text' },
         // Navigation & tabs
         { name: 'navigate', description: 'Navigate the active tab to a URL', parameters: { url: { type: 'string', description: 'URL', required: true } }, returns: 'Page URL and title' },
@@ -95,6 +127,33 @@ export class BrowserExtTool extends BaseTool {
 
   protected async registerTools(): Promise<void> {
     const bridge = getBrowserBridge();
+    this.registerTool('fill_login','Fill a saved Login on its exact domain. Credentials remain in the vault. Does not submit.',createParameterSchema({
+      credential:{type:'string',description:'Vault Login entry name',required:true},tabId:{type:'number',description:'Exact tab ID',required:true},
+      usernameSelector:{type:'string',description:'Unique username input selector',required:true},passwordSelector:{type:'string',description:'Unique password input selector',required:true},
+    }),async(args,context)=>{
+      const status=bridge.getStatus();
+      const browserKey=`${context.userId}:${status.extensionInfo.browserId??'legacy'}`;
+      if(status.extensionInfo.loginUnsafe===true)throw new Error('Use a fresh browser profile for saved Logins; arbitrary scripts were previously run here');
+      if(context.space||!status.connected||status.extensionInfo.userId!==context.userId)throw new Error('Reconnect the browser extension with your personal API token to use Logins');
+      if(typeof status.extensionInfo.browserId!=='string')throw new Error('Reload the Octipus browser extension to enable saved Logins');
+      if(!Array.isArray(status.extensionInfo.capabilities)||!status.extensionInfo.capabilities.includes('fill_login'))throw new Error('Reload the Octipus browser extension to enable saved Logins');
+      if(!Number.isInteger(args.tabId))throw new Error('An exact tab ID is required');
+      const result=await bridge.sendCommand('get_tabs',{}) as {tabs?:Array<{id?:number;tabId?:number;url?:string}>};
+      const tab=result.tabs?.find(t=>(t.tabId??t.id)===args.tabId);
+      if(!tab?.url)throw new Error('Target browser tab not found');
+      const origin=new URL(tab.url).origin;
+      const login=await getVault().getLoginAuthorized({...context,toolId:this.id,agentId:context.id},args.credential as string,origin);
+      if(!login)throw new Error('Login unavailable, expired, denied, or bound to a different domain');
+      try{
+        if(bridge.getStatus().extensionInfo!==status.extensionInfo)throw new Error();
+        this.protectedScopes.set(browserKey,context.workspaceId??null);
+        this.protectedUsers.set(browserKey,[...(this.protectedUsers.get(browserKey)??[]),login.username,login.password,Buffer.from(`${login.username}:${login.password}`).toString('base64')]);
+        const filled=await bridge.sendCommand('fill_login',{tabId:args.tabId,workspaceId:context.workspaceId??null,origin,username:login.username,password:login.password,usernameSelector:args.usernameSelector,passwordSelector:args.passwordSelector}) as {filled?:boolean};
+        if(!filled?.filled)throw new Error();
+        return {filled:true,origin,submitted:false};
+      }catch{throw new Error('Login was not filled. Check the domain and visible same-origin username/password fields.');}
+    },{permissionAction:'interact'});
+
 
     this.registerTool('observe', 'Read a specific status element only if the tab still has the expected URL. Suitable for persistent monitors.', createParameterSchema({
       tabId: { type: 'number', description: 'Exact browser tab ID', required: true },

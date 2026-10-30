@@ -141,8 +141,15 @@ async function handleBackendMessage(msg) {
   // Server finished authenticating the token — now safe to handshake.
   if (msg.type === 'ready') {
     const tabs = await chrome.tabs.query({});
+    const protection=await chrome.storage.local.get(['octipusLoginProtected','octipusLoginUnsafe','octipusLoginWorkspaceId','octipusBrowserId']);
+    if(!protection.octipusBrowserId){protection.octipusBrowserId=crypto.randomUUID();await chrome.storage.local.set({octipusBrowserId:protection.octipusBrowserId});}
     ws.send(JSON.stringify({
       type: 'connect',
+      capabilities: ['fill_login'],
+      browserId:protection.octipusBrowserId,
+      loginProtected:protection.octipusLoginProtected===true,
+      loginWorkspaceId:protection.octipusLoginWorkspaceId,
+      loginUnsafe:protection.octipusLoginUnsafe===true,
       version: chrome.runtime.getManifest().version,
       tabCount: tabs.length,
       userAgent: navigator.userAgent,
@@ -172,7 +179,20 @@ function sendResult(commandId, result, error) {
   }));
 }
 
-async function executeCommand(command, params) {
+// The queue survives WebSocket reconnects in this service worker. Credential
+// protection checks and execution must be atomic with respect to other commands.
+let browserCommandTail=Promise.resolve();
+function executeCommand(command,params){
+  const run=browserCommandTail.catch(()=>{}).then(()=>executeCommandNow(command,params));
+  browserCommandTail=run;
+  return run;
+}
+async function executeCommandNow(command, params) {
+  const protection=await chrome.storage.local.get(['octipusLoginProtected','octipusLoginUnsafe','octipusLoginWorkspaceId']);
+  const unsafe=command==='evaluate'||(command==='navigate'&&!/^https?:/i.test(params.url||''));
+  if(protection.octipusLoginProtected&&(unsafe||['screenshot','get_cookies','set_cookies','get_storage','set_storage','get_network','get_console'].includes(command)))throw new Error('Saved Login browser protection refuses scripts and raw captures');
+  if(unsafe)await chrome.storage.local.set({octipusLoginUnsafe:true});
+
   switch (command) {
     // ── Original commands ──
     case 'navigate':       return cmdNavigate(params);
@@ -180,6 +200,7 @@ async function executeCommand(command, params) {
     case 'observe':       return cmdObserve(params);
     case 'extract_content': return cmdExtractContent(params);
     case 'click':          return cmdClick(params);
+    case 'fill_login':     return cmdFillLogin(params);
     case 'fill':           return cmdFill(params);
     case 'evaluate':       return cmdEvaluate(params);
     case 'get_tabs':       return cmdGetTabs(params);
@@ -266,11 +287,12 @@ async function cmdScreenshot({ tabId, format }) {
 }
 
 async function cmdExtractContent({ tabId, selector }) {
+  const protection=await chrome.storage.local.get('octipusLoginProtected');
   const tab = await getTargetTab({ tabId });
   const results = await chrome.scripting.executeScript({
     target: { tabId: tab.id },
     func: extractPageContent,
-    args: [selector || null],
+    args: [selector || null,protection.octipusLoginProtected===true],
   });
   if (!results || !results[0]) throw new Error('Content extraction failed');
   return results[0].result;
@@ -564,7 +586,7 @@ async function cmdHandleDialog({ action, text, tabId }) {
 
 // ── Injected Functions (run in page context via executeScript) ──────
 
-function extractPageContent(selector) {
+function extractPageContent(selector,protectLogin=false) {
   const root = selector ? document.querySelector(selector) : document.body;
   if (!root) return { error: `Element not found: ${selector}` };
 
@@ -583,7 +605,7 @@ function extractPageContent(selector) {
         name: i.name || i.id,
         type: i.type,
         placeholder: i.placeholder,
-        value: i.type === 'password' ? '***' : (i.value || '').slice(0, 100),
+        value: protectLogin?'[REDACTED_LOGIN_FIELD]':i.type === 'password' ? '***' : (i.value || '').slice(0, 100),
       })),
     })),
     meta: {
@@ -1055,4 +1077,35 @@ async function cmdObserve({ tabId, url, selector }) {
   });
   if (!results?.[0]?.result) throw new Error('Monitor observation unavailable');
   return results[0].result;
+}
+
+async function cmdFillLogin({tabId,workspaceId=null,origin,username,password,usernameSelector,passwordSelector}) {
+  try {
+    if(!Number.isInteger(tabId))throw new Error();
+    const state=await chrome.storage.local.get(['octipusLoginUnsafe','octipusLoginProtected','octipusLoginWorkspaceId']);
+    if(state.octipusLoginUnsafe||(state.octipusLoginProtected&&state.octipusLoginWorkspaceId!==workspaceId))throw new Error();
+    const tab=await chrome.tabs.get(tabId);
+    if(new URL(tab.url).origin!==origin)throw new Error();
+    await chrome.storage.local.set({octipusLoginProtected:true,octipusLoginWorkspaceId:workspaceId});
+    const results=await chrome.scripting.executeScript({target:{tabId},func:fillSavedLogin,args:[{origin,username,password,usernameSelector,passwordSelector}]});
+    if(results.length!==1||results[0].result!==true)throw new Error();
+    return {filled:true};
+  }catch{throw new Error('Login fill refused: check domain and visible same-origin login fields');}
+}
+function fillSavedLogin(input) {
+  if(location.origin!==input.origin)return false;
+  const users=document.querySelectorAll(input.usernameSelector);
+  const passwords=document.querySelectorAll(input.passwordSelector);
+  if(users.length!==1||passwords.length!==1)return false;
+  const user=users[0],password=passwords[0];
+  if(!(user instanceof HTMLInputElement)||!(password instanceof HTMLInputElement)||user===password)return false;
+  if(!['text','email','tel'].includes(user.type)||password.type!=='password')return false;
+  if([user,password].some(el=>el.disabled||el.readOnly||!el.getClientRects().length))return false;
+  if(user.form!==password.form)return false;
+  if(user.form&&new URL(user.form.action,location.href).origin!==input.origin)return false;
+  const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;
+  if(!setter)return false;
+  setter.call(user,input.username);setter.call(password,input.password);
+  for(const el of [user,password]){el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));}
+  return true;
 }

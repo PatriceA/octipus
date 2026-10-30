@@ -26,7 +26,7 @@ export interface Credential {
   credentialType: string;
   scope?: 'user' | 'workspace' | 'system';
   workspaceId?: string | null;
-  metadata?: { apiConnection?: ApiConnectionConfig };
+  metadata?: { apiConnection?: ApiConnectionConfig; login?: {origin:string;allowInsecureHttp:boolean} };
   apiConnections?: Array<{id:string;origin:string;pathPrefix:string;methods:string[];managedBy:'operator'|'vault'}>;
   description?: string;
   tags: string[];
@@ -40,7 +40,7 @@ export interface Credential {
   expiresAt?: string;
 }
 
-export type CredentialType = 'api_key' | 'oauth_token' | 'password' | 'ssh_key' | 'certificate' | 'other';
+export type CredentialType = 'api_key' | 'oauth_token' | 'password' | 'login' | 'ssh_key' | 'certificate' | 'other';
 
 export const PROVIDER_KEY_GROUPS: VaultKeyGroup[] = [
   {
@@ -158,6 +158,7 @@ export const SYSTEM_SCOPED_SECRET_NAMES = new Set<string>(
 export const CREDENTIAL_TYPE_COLORS: Record<string, { bg: string; text: string }> = {
   api_key: { bg: 'bg-blue-100 dark:bg-blue-900/30', text: 'text-blue-700 dark:text-blue-400' },
   oauth_token: { bg: 'bg-purple-100 dark:bg-purple-900/30', text: 'text-purple-700 dark:text-purple-400' },
+  login: { bg: 'bg-amber-100 dark:bg-amber-900/30', text: 'text-amber-700 dark:text-amber-400' },
   password: { bg: 'bg-amber-100 dark:bg-amber-900/30', text: 'text-amber-700 dark:text-amber-400' },
   ssh_key: { bg: 'bg-green-100 dark:bg-green-900/30', text: 'text-green-700 dark:text-green-400' },
   certificate: { bg: 'bg-teal-100 dark:bg-teal-900/30', text: 'text-teal-700 dark:text-teal-400' },

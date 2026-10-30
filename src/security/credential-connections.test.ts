@@ -7,7 +7,7 @@ import { authenticatedFetch, connectionFor, connectionUrl, readBoundedResponse, 
 import { assertNoCredentialTemplates } from './credential-boundary';
 
 const fx = vi.hoisted(() => ({ value: 'CANARY_CONNECTION_SECRET_9x~!', allowedTools: [] as string[], allowedAgents: [] as string[], reads: vi.fn() }));
-vi.mock('./vault', () => ({ getVault: () => ({ list: async () => [], getByNameAuthorized: async (agent: {toolId:string;agentId?:string}) => {
+vi.mock('./vault', () => ({ getVault: () => ({ getLoginAuthorized:async(agent:{userId:string;workspaceId?:string;toolId:string;agentId?:string},_name:string,origin:string)=>{fx.reads();if(agent.userId!=='alice'||agent.workspaceId!=='w1'||!origin.startsWith('http://127.0.0.1:'))return null;return {username:'canary-login-user',password:fx.value};}, list: async () => [], getByNameAuthorized: async (agent: {toolId:string;agentId?:string}) => {
   if ((fx.allowedTools.length && !fx.allowedTools.includes(agent.toolId)) || (fx.allowedAgents.length && !fx.allowedAgents.includes(agent.agentId??''))) return null;
   fx.reads(); return fx.value;
 } }) }));
@@ -100,3 +100,15 @@ describe('credential connection boundary', () => {
     await expect(readFile(path)).rejects.toThrow(); expect(fx.reads).not.toHaveBeenCalled();
   });
 });
+
+ it('Login Basic requests inject both fields privately, mask reflected values and deny foreign principals',async()=>{
+ profile.http!.auth={type:'login'};
+ await endpoint((req,res)=>{expect(req.headers.authorization).toBe(`Basic ${Buffer.from('canary-login-user:'+fx.value).toString('base64')}`);res.end(JSON.stringify({user:'canary-login-user',password:fx.value,authorization:req.headers.authorization}));});
+ const result=await authenticatedFetch(profile,caller,'/api');
+ const safe=JSON.stringify(result.mask(await readBoundedResponse(result.response)));
+ expect(safe).not.toContain('canary-login-user');expect(safe).not.toContain(fx.value);
+ fx.reads.mockClear();
+ for(const other of [{...caller,userId:'bob'},{...caller,workspaceId:'w2'},{...caller,space:{id:'other'}}])await expect(authenticatedFetch(profile,other,'/api')).rejects.toThrow('access denied');
+ expect(fx.reads).not.toHaveBeenCalled();
+ profile.http!.origin='https://different.example.test';await expect(authenticatedFetch(profile,caller,'/api')).rejects.toThrow('different domain');
+ });

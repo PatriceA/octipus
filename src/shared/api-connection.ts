@@ -16,6 +16,7 @@ export const publicConnectionHeadersSchema = z.record(
 });
 
 export const connectionAuthSchema = z.discriminatedUnion('type', [
+  z.object({type:z.literal('login')}).strict(),
   z.object({ type: z.literal('bearer') }).strict(),
   z.object({ type: z.literal('basic-token') }).strict(),
   z.object({ type: z.literal('basic'), username: z.string().min(1).optional(), usernameCredential: z.string().min(1).optional() }).strict().refine(a => Number(!!a.username) + Number(!!a.usernameCredential) === 1),

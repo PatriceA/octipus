@@ -12,6 +12,8 @@ import {
   SYSTEM_SCOPED_SECRET_NAMES,
 } from '@/lib/vault-config';
 
+type NewSecret={name:string;value?:string;username?:string;password?:string;domain?:string;allowInsecureHttp?:boolean;credentialType:CredentialType;description?:string;tags?:string[];scope:'user'|'workspace';connectApi?:boolean};
+
 interface VaultTableProps {
   credentials: Credential[];
   onRefresh: () => void;
@@ -22,6 +24,8 @@ interface VaultTableProps {
 export function VaultTable({ credentials, onRefresh, workspaceId, workspaceName }: VaultTableProps) {
   const [connectCredential, setConnectCredential] = useState<Credential | null>(null);
   const [notice, setNotice] = useState('');
+  const [addError,setAddError]=useState('');
+  const [editLogin,setEditLogin]=useState<Credential|null>(null);
   const [search, setSearch] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
   const [rotateId, setRotateId] = useState<string | null>(null);
@@ -58,15 +62,8 @@ export function VaultTable({ credentials, onRefresh, workspaceId, workspaceName 
     }
   };
 
-  const handleAdd = async (data: {
-    name: string;
-    value: string;
-    credentialType: CredentialType;
-    description?: string;
-    tags?: string[];
-    scope: 'user' | 'workspace';
-    connectApi?: boolean;
-  }) => {
+  const handleAdd = async (data: NewSecret) => {
+    setAddError('');
     try {
       const { connectApi, ...secret } = data;
       const payload: Record<string, unknown> = { ...secret };
@@ -79,7 +76,7 @@ export function VaultTable({ credentials, onRefresh, workspaceId, workspaceName 
       if (connectApi) setConnectCredential(saved);
       else setNotice('Secret stored. To use it with an API, choose Connect API and approve the server and allowed requests.');
     } catch (error) {
-      console.error('Failed to add credential:', error);
+      setAddError(error instanceof Error?error.message:'Could not save credential');
     }
   };
 
@@ -141,6 +138,7 @@ export function VaultTable({ credentials, onRefresh, workspaceId, workspaceName 
                   >
                     <td className="py-2.5 px-4">
                       <div className="font-medium text-sm text-on-surface">{cred.name}</div>
+                      {cred.metadata?.login&&<p className="text-xs text-on-surface-variant">{cred.metadata.login.origin}</p>}
                       {!!cred.apiConnections?.length && <p className="text-xs text-on-surface-variant mt-1">API: {cred.apiConnections.map(c=>`${c.id} · ${c.methods.join('/')} ${c.pathPrefix}`).join(', ')}</p>}
                       {cred.description && (
                         <div className="text-xs text-on-surface-variant mt-0.5">{cred.description}</div>
@@ -175,9 +173,9 @@ export function VaultTable({ credentials, onRefresh, workspaceId, workspaceName 
                       <div className="flex items-center gap-1">
                         {cred.scope !== 'system' && <button onClick={() => setConnectCredential(cred)} title={`Connect API for ${cred.name}`} aria-label={`Connect API for ${cred.name}`} className="p-1.5 text-on-surface-variant hover:text-primary rounded-md hover:bg-surface-container-high cursor-pointer"><Link2 className="w-3.5 h-3.5" /></button>}
                         <button
-                          onClick={() => setRotateId(cred.id)}
+                          onClick={() => cred.credentialType==='login'?setEditLogin(cred):setRotateId(cred.id)}
                           className="p-1.5 text-on-surface-variant hover:text-primary rounded-md hover:bg-surface-container-high cursor-pointer"
-                          title="Rotate"
+                          title={cred.credentialType==='login'?'Edit Login':'Rotate'}
                         >
                           <RotateCcw className="w-3.5 h-3.5" />
                         </button>
@@ -206,11 +204,15 @@ export function VaultTable({ credentials, onRefresh, workspaceId, workspaceName 
         <AddSecretForm
           onCancel={() => setShowAddModal(false)}
           onAdd={handleAdd}
+          error={addError}
           workspaceName={workspaceName ?? null}
           workspaceAvailable={!!workspaceId}
         />
       </Modal>
 
+      <Modal open={!!editLogin} onClose={()=>setEditLogin(null)} title="Edit Login" maxWidth="md">
+        {editLogin&&<EditLoginForm key={editLogin.id} credential={editLogin} workspaceId={workspaceId} onCancel={()=>setEditLogin(null)} onSaved={()=>{setEditLogin(null);onRefresh();}}/>}
+      </Modal>
       {/* Rotate Modal */}
       <Modal open={!!rotateId} onClose={() => setRotateId(null)} title="Rotate Secret" maxWidth="sm">
         <RotateForm
@@ -250,9 +252,11 @@ function AddSecretForm({
   onAdd,
   workspaceName,
   workspaceAvailable,
+  error,
 }: {
   onCancel: () => void;
-  onAdd: (data: { name: string; value: string; credentialType: CredentialType; description?: string; tags?: string[]; scope: 'user' | 'workspace'; connectApi?: boolean }) => void;
+  onAdd: (data: NewSecret) => void;
+  error:string;
   workspaceName: string | null;
   workspaceAvailable: boolean;
 }) {
@@ -260,6 +264,9 @@ function AddSecretForm({
   const [name, setName] = useState('');
   const [value, setValue] = useState('');
   const [credentialType, setCredentialType] = useState<CredentialType>('api_key');
+  const [username,setUsername]=useState('');
+  const [domain,setDomain]=useState('');
+  const [allowHttp,setAllowHttp]=useState(false);
   const [description, setDescription] = useState('');
   const [tags, setTags] = useState('');
   const [scope, setScope] = useState<'user' | 'workspace'>('user');
@@ -291,7 +298,8 @@ function AddSecretForm({
           </p>
         </div>
       )}
-      <div>
+      {credentialType==='login'&&<LoginFields username={username} onUsername={setUsername} password={value} onPassword={setValue} domain={domain} onDomain={setDomain} allowHttp={allowHttp} onAllowHttp={setAllowHttp}/>}
+      {credentialType!=='login'&&<div>
         <label htmlFor="vault-secret-value" className="text-xs font-bold text-on-surface-variant uppercase mb-2 block">Value</label>
         <input
           id="vault-secret-value"
@@ -300,10 +308,10 @@ function AddSecretForm({
           onChange={(e) => setValue(e.target.value)}
           className="w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
         />
-      </div>
+      </div>}
       <div>
-        <label className="text-xs font-bold text-on-surface-variant uppercase mb-2 block">Type</label>
-        <select
+        <label htmlFor="vault-secret-type" className="text-xs font-bold text-on-surface-variant uppercase mb-2 block">Type</label>
+        <select id="vault-secret-type"
           value={credentialType}
           onChange={(e) => setCredentialType(e.target.value as CredentialType)}
           className="w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
@@ -311,6 +319,7 @@ function AddSecretForm({
           <option value="api_key">API Key</option>
           <option value="oauth_token">OAuth Token</option>
           <option value="password">Password</option>
+          <option value="login">Login (username + password)</option>
           <option value="ssh_key">SSH Key</option>
           <option value="certificate">Certificate</option>
           <option value="other">Other</option>
@@ -349,7 +358,8 @@ function AddSecretForm({
           placeholder="production, openai"
         />
       </div>
-      {!isSystemSecret && !['ssh_key','certificate'].includes(credentialType) && <label className="flex items-start gap-2 text-xs text-on-surface-variant"><input type="checkbox" checked={connectApi} onChange={e=>setConnectApi(e.target.checked)}/>Set up API access after saving. You will choose the server and allowed requests next; no need to paste this token again.</label>}
+      {!isSystemSecret && !['ssh_key','certificate','login'].includes(credentialType) && <label className="flex items-start gap-2 text-xs text-on-surface-variant"><input type="checkbox" checked={connectApi} onChange={e=>setConnectApi(e.target.checked)}/>Set up API access after saving. You will choose the server and allowed requests next; no need to paste this token again.</label>}
+      {error&&<p role="alert" className="text-sm text-error">{error}</p>}
       <div className="flex justify-end gap-3 pt-2">
         <button
           onClick={onCancel}
@@ -361,18 +371,18 @@ function AddSecretForm({
           onClick={() =>
             onAdd({
               name,
-              value,
+              ...(credentialType==='login'?{username,password:value,domain,allowInsecureHttp:allowHttp}:{value}),
               credentialType,
               description: description || undefined,
               tags: tags ? tags.split(',').map((t) => t.trim()).filter(Boolean) : undefined,
               scope,
-              connectApi: connectApi && !isSystemSecret && !['ssh_key','certificate'].includes(credentialType),
+              connectApi: connectApi && !isSystemSecret && !['ssh_key','certificate','login'].includes(credentialType),
             })
           }
-          disabled={!name || !value}
+          disabled={!name || !value || (credentialType==='login'&&(!username||!domain||(domain.startsWith('http:')&&!allowHttp)))}
           className="px-4 py-2 text-sm bg-primary text-[#0e0e0e] rounded-lg hover:bg-primary-container disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
         >
-          {connectApi && !isSystemSecret && !['ssh_key','certificate'].includes(credentialType) ? 'Save secret & set up API' : 'Save secret'}
+          {connectApi && !isSystemSecret && !['ssh_key','certificate','login'].includes(credentialType) ? 'Save secret & set up API' : 'Save secret'}
         </button>
       </div>
     </div>
@@ -416,4 +426,24 @@ function RotateForm({
       </div>
     </div>
   );
+}
+
+function LoginFields({username,onUsername,password,onPassword,domain,onDomain,allowHttp,onAllowHttp,editing=false}:{username:string;onUsername:(v:string)=>void;password:string;onPassword:(v:string)=>void;domain:string;onDomain:(v:string)=>void;allowHttp:boolean;onAllowHttp:(v:boolean)=>void;editing?:boolean}){
+  const style='w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm';
+  return <fieldset className="space-y-3"><legend className="text-xs text-on-surface-variant">Credentials stay in the vault. Agents can fill this website or use an approved HTTP Basic API connection.</legend>
+    <div><label htmlFor="login-domain" className="block text-xs mb-1">Domain</label><input id="login-domain" className={style} value={domain} onChange={e=>onDomain(e.target.value)} placeholder="https://example.com"/><p className="text-xs text-on-surface-variant">Exact server, including protocol and port. Subdomains require their own entry.</p></div>
+    <div><label htmlFor="login-username" className="block text-xs mb-1">Username</label><input id="login-username" className={style} autoComplete="off" value={username} onChange={e=>onUsername(e.target.value)} placeholder={editing?'Leave blank to keep current username':''}/></div>
+    <div><label htmlFor="login-password" className="block text-xs mb-1">Password</label><input id="login-password" className={style} type="password" autoComplete="new-password" value={password} onChange={e=>onPassword(e.target.value)} placeholder={editing?'Leave blank to keep current password':''}/></div>
+    {domain.startsWith('http:')&&<label className="flex gap-2 text-xs"><input type="checkbox" checked={allowHttp} onChange={e=>onAllowHttp(e.target.checked)}/>Allow unencrypted HTTP for this domain. Credentials can be intercepted.</label>}
+  </fieldset>;
+}
+function EditLoginForm({credential,workspaceId,onCancel,onSaved}:{credential:Credential;workspaceId?:string|null;onCancel:()=>void;onSaved:()=>void}){
+  const [domain,setDomain]=useState(credential.metadata?.login?.origin??'');
+  const [username,setUsername]=useState('');const [password,setPassword]=useState('');
+  const [allowHttp,setAllowHttp]=useState(credential.metadata?.login?.allowInsecureHttp??false);
+  const [error,setError]=useState('');const [busy,setBusy]=useState(false);
+  async function save(){setBusy(true);setError('');try{
+    await api.put(`/vault/${credential.id}/login${workspaceId?`?workspaceId=${encodeURIComponent(workspaceId)}`:''}`,{domain,allowInsecureHttp:allowHttp,...(username?{username}:{}),...(password?{password}:{})});onSaved();
+  }catch(e){setError(e instanceof Error?e.message:'Could not save Login');}finally{setBusy(false);}}
+  return <form className="space-y-4" onSubmit={e=>{e.preventDefault();void save();}}><p className="text-sm">{credential.name}. Leave credentials blank to keep them. Changing the domain removes the existing API connection; approve it again afterwards.</p><LoginFields username={username} onUsername={setUsername} password={password} onPassword={setPassword} domain={domain} onDomain={setDomain} allowHttp={allowHttp} onAllowHttp={setAllowHttp} editing/>{error&&<p role="alert" className="text-error text-sm">{error}</p>}<div className="flex justify-end gap-3"><button type="button" onClick={onCancel} disabled={busy}>Cancel</button><button type="submit" disabled={busy||!domain||(domain.startsWith('http:')&&!allowHttp)} className="rounded-lg bg-primary px-4 py-2 text-sm text-[#0e0e0e] disabled:opacity-40">{busy?'Saving…':'Save Login'}</button></div></form>;
 }

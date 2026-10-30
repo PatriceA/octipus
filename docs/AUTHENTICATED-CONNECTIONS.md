@@ -22,7 +22,7 @@ For SonarQube 9.x, use **Basic token (empty password)**. For example: name
 versions also support bearer tokens; use the authentication documented for the
 installed version. [SonarQube 9.9 authentication documentation](https://docs.sonarsource.com/sonarqube-server/9.9/extension-guide/web-api).
 
-For Appwrite, choose **Use Appwrite settings**. Enter the origin without `/v1`
+For Appwrite, enter the origin without `/v1`
 (for example `https://appwrite.example.com`), path `/v1`, authentication **API key
 header**, header name `X-Appwrite-Key`, and leave its prefix empty. Add your
 project ID as the public header `X-Appwrite-Project`. Public headers contain
@@ -219,3 +219,15 @@ from that user's configuration by this file's permissions. Registered general
 shell/file operations still cannot request vault interpolation. No claim is made
 that these profiles safely supply secrets to arbitrary scripts, arbitrary MCP
 arguments, untrusted local servers or arbitrary file generators.
+
+### Logins for websites and HTTP Basic APIs
+
+In **Secrets → Add Secret**, choose **Login (username + password)** and enter a name, username, password and domain, such as `https://example.com`. Both fields are encrypted together. The domain is an exact origin: protocol, hostname and port must match; subdomains are separate. HTTP requires explicit consent because it sends credentials without TLS. Logins may belong to your user or current workspace.
+
+Tell your agent the entry name. `browser__fill_login` and `browser-ext__fill_login` take that name, an exact page/tab ID and the two input selectors. They fill visible username/password inputs on the saved origin, with a same-origin form action, without returning the credentials or submitting. The website and its own scripts are trusted recipients, as with a password manager. This cannot protect credentials from a malicious site on the approved domain or software controlling your browser.
+
+A browser used for saved Logins blocks arbitrary JavaScript, cookie/storage access and raw screenshots/captures; normal navigation and page controls remain available. A context previously used for arbitrary agent scripts cannot receive a saved Login. Use a fresh browser context/profile instead. The Chrome extension must be reloaded after updating to version 2.1.0, and connected with your personal API token. Its protection persists across reconnects; reconnecting does not make an existing browser safe for arbitrary code.
+
+For HTTP Basic APIs, choose **Connect API** on the Login entry, then approve the path and methods. Authentication uses both saved fields and the domain cannot be changed there. Internal servers and certificate exceptions retain their administrator approval requirements. Use the connection name with the existing `connections` tools.
+
+**Edit Login** changes either field without displaying existing values. Leave a field blank to keep it. Changing the domain removes the saved API consent; approve the new destination again. Generic secret reads and rotation cannot expose or overwrite a Login bundle.

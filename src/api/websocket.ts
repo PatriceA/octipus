@@ -93,6 +93,12 @@ export function setupWebSocket(app: Elysia): void {
       switch (parsed.type) {
         case 'connect':
           bridge.registerConnection(ws, {
+            userId: wsData(ws).userId,
+            browserId:typeof parsed.browserId==='string'&&/^[a-zA-Z0-9-]{36}$/.test(parsed.browserId)?parsed.browserId:undefined,
+            loginProtected: parsed.loginProtected===true,
+            loginWorkspaceId:typeof parsed.loginWorkspaceId==='string'?parsed.loginWorkspaceId:parsed.loginWorkspaceId===null?null:undefined,
+            loginUnsafe: parsed.loginUnsafe===true,
+            capabilities: Array.isArray(parsed.capabilities)?parsed.capabilities.filter((c:unknown)=>typeof c==='string').slice(0,30):[],
             version: parsed.version,
             tabCount: parsed.tabCount,
             userAgent: parsed.userAgent,

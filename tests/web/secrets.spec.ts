@@ -81,8 +81,13 @@ test('Appwrite setup uses key authentication, public project context and validat
   await page.getByRole('button',{name:'Save API connection'}).click();
   await expect(page.getByRole('alert')).toContainText('without a path');
   expect(settings).toBeNull();
-  await page.getByText('Appwrite setup help',{exact:true}).click();
-  await page.getByRole('button',{name:'Use Appwrite settings'}).click();
+  await expect(page.getByText('Appwrite setup help',{exact:true})).toHaveCount(0);
+  await page.getByLabel('Server origin',{exact:true}).fill('https://appwrite.example.com');
+  await page.getByLabel('Allowed path prefix',{exact:true}).fill('/v1');
+  await page.getByLabel('Authentication',{exact:true}).selectOption('header');
+  await page.getByLabel('Header name',{exact:true}).fill('X-Appwrite-Key');
+  await page.getByRole('button',{name:'Add public header'}).click();
+  await page.getByLabel('Public header 1 name',{exact:true}).fill('X-Appwrite-Project');
   await expect(page.getByLabel('Server origin',{exact:true})).toHaveValue('https://appwrite.example.com');
   await expect(page.getByLabel('Allowed path prefix',{exact:true})).toHaveValue('/v1');
   await expect(page.getByLabel('Authentication',{exact:true})).toHaveValue('header');
@@ -125,4 +130,45 @@ test('trusting a device certificate requires inspection and consent, and changin
  await expect(page.getByRole('status')).toContainText('API connection opnsense saved');
  expect(settings).toMatchObject({id:'opnsense',tls:{mode:'pinned',certificateSha256:'a'.repeat(64)},auth:{type:'basic',usernameCredential:'OPNsense_KEY'}});
  expect(JSON.stringify(settings)).not.toContain('SYNTHETIC_TLS_CANARY');
+});
+
+test('Login stores a username/password for a domain, edits without revealing credentials and configures Basic API use',async({authenticatedPage:page})=>{
+ await stubAllDefaults(page);
+ let entries:Record<string,unknown>[]=[];let created:Record<string,unknown>|null=null;let edited:Record<string,unknown>|null=null;let connection:Record<string,unknown>|null=null;
+ const id='11111111-1111-4111-8111-111111111111';
+ await page.route('**/api/vault?*',route=>json(route,200,{credentials:entries}));
+ await page.route('**/api/vault',async route=>{
+   if(route.request().method()==='POST'){
+     created=route.request().postDataJSON();
+     const row={id,name:created!.name,credentialType:'login',scope:'user',tags:[],accessCount:'0',allowedAgents:[],isActive:true,metadata:{login:{origin:'https://login.example.com',allowInsecureHttp:false}},apiConnections:[]};
+     entries=[row];await json(route,200,row);
+   }else await json(route,200,{credentials:entries});
+ });
+ await page.route('**/api/vault/*/login*',async route=>{edited=route.request().postDataJSON();await json(route,200,entries[0]);});
+ await page.route('**/api/vault/*/api-connection*',async route=>{connection=route.request().postDataJSON();await json(route,200,{connection});});
+ await page.goto('/secrets');await page.getByRole('button',{name:'Add Secret',exact:true}).click();
+ await page.getByLabel('Type',{exact:true}).selectOption('login');
+ await page.getByLabel('Name',{exact:true}).fill('website-login');
+ await page.getByLabel('Domain',{exact:true}).fill('https://login.example.com');
+ await page.getByLabel('Username',{exact:true}).fill('synthetic-login-user');
+ await page.getByLabel('Password',{exact:true}).fill('synthetic-login-password');
+ await page.getByRole('button',{name:'Save secret',exact:true}).click();
+ await expect(page.getByText('website-login',{exact:true})).toBeVisible();
+ expect(created).toMatchObject({credentialType:'login',username:'synthetic-login-user',password:'synthetic-login-password',domain:'https://login.example.com'});
+ expect(created).not.toHaveProperty('value');
+ await page.getByTitle('Edit Login',{exact:true}).click();
+ await expect(page.getByLabel('Username',{exact:true})).toHaveValue('');await expect(page.getByLabel('Password',{exact:true})).toHaveValue('');
+ await expect(page.getByLabel('Domain',{exact:true})).toHaveValue('https://login.example.com');
+ await page.getByLabel('Password',{exact:true}).fill('new-synthetic-login-password');
+ await page.getByRole('button',{name:'Save Login',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Save Login',exact:true})).toHaveCount(0);
+ expect(edited).toEqual({domain:'https://login.example.com',password:'new-synthetic-login-password',allowInsecureHttp:false});
+ await page.getByRole('button',{name:'Connect API for website-login'}).click();
+ await expect(page.getByLabel('Server origin',{exact:true})).toHaveValue('https://login.example.com');
+ await expect(page.getByLabel('Server origin',{exact:true})).toHaveAttribute('readonly','');
+ await expect(page.getByLabel('Authentication',{exact:true})).toHaveValue('login');
+ await expect(page.getByText('Appwrite setup help',{exact:true})).toHaveCount(0);
+ await page.getByRole('button',{name:'Save API connection',exact:true}).click();
+ await expect(page.getByRole('status')).toContainText('API connection website-login saved');
+ expect(connection).toMatchObject({auth:{type:'login'},origin:'https://login.example.com',methods:['GET']});
 });

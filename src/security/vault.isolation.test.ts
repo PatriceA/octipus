@@ -241,3 +241,73 @@ test('connection readers authorize the exact credential row and explicit workspa
   // Only the MCP startup binding may bypass a worker allowlist; ordinary connections cannot.
   expect(await vault.getByNameAuthorized({...user,agentId:'other'},'connection-scope',{trustedMcpTransport:true})).toBeNull();
 });
+
+describe('domain-bound Logins',()=>{
+  const credentials={name:'login-canary',username:'canary-login-user',password:'  canary-login-password  ',domain:'https://login.example.test'};
+  const principal={userId:aliceId,toolId:'browser',agentId:'allowed-agent'};
+  test('encrypts both fields, refuses generic reads, checks origin and ACL before use',async()=>{
+    const {getVault}=await import('@/security/vault');const vault=getVault();
+    const entry=await vault.saveLogin(aliceId,credentials,{allowedTools:['browser','connections'],allowedAgents:['allowed-agent']});
+    const listed=(await vault.list(aliceId)).find(row=>row.id===entry.id)!;
+    expect(listed.metadata?.login?.origin).toBe(credentials.domain);
+    for(const data of [entry,listed])for(const value of [credentials.username,credentials.password])expect(JSON.stringify(data)).not.toContain(value);
+    expect(await vault.get(aliceId,entry.id)).toBeNull();
+    expect(await vault.getByName(aliceId,credentials.name)).toBeNull();
+    expect(await vault.getByNameAuthorized(principal,credentials.name)).toBeNull();
+    for(const origin of ['https://other.example.test','http://login.example.test','https://sub.login.example.test','https://login.example.test:444'])expect(await vault.getLoginAuthorized(principal,credentials.name,origin)).toBeNull();
+    for(const denied of [{...principal,userId:bobId},{...principal,toolId:'shell'},{...principal,agentId:'other-agent'},{...principal,space:{id:'shared'}}])expect(await vault.getLoginAuthorized(denied,credentials.name,credentials.domain)).toBeNull();
+    const login=await vault.getLoginAuthorized(principal,credentials.name,credentials.domain);
+    expect(login?.username).toBe(credentials.username);expect(login?.password).toBe(credentials.password);
+    await expect(vault.rotate(aliceId,entry.id,'replacement')).rejects.toThrow('Login settings');
+    await expect(vault.update(aliceId,entry.id,{value:'replacement'})).rejects.toThrow('Login settings');
+    await expect(vault.saveLogin(aliceId,credentials)).rejects.toThrow('already exists');
+    await expect(vault.store(aliceId,credentials.name,'replacement-token',{credentialType:'api_key'})).rejects.toThrow('already exists');
+    const masked=JSON.stringify(await vault.redactLoginDiagnostics(aliceId,null,{user:credentials.username,password:credentials.password,basic:Buffer.from(`${credentials.username}:${credentials.password}`).toString('base64')}));
+    expect(masked).not.toContain(credentials.username);expect(masked).not.toContain('canary-login-password');
+  });
+  test('owner edits preserve omitted fields and revoke API consent when domain changes',async()=>{
+    const {getVault}=await import('@/security/vault');const vault=getVault();
+    const entry=await vault.saveLogin(aliceId,{...credentials,name:'edit-login'});
+    await vault.update(aliceId,entry.id,{metadata:{...entry.metadata,apiConnection:{id:'bound-api'},apiConnectionNetwork:{policy:'operator'}}});
+    await expect(vault.saveLogin(bobId,{domain:credentials.domain},{id:entry.id})).rejects.toThrow('not found');
+    const updated=await vault.saveLogin(aliceId,{domain:'https://new.example.test',password:'new-canary-password'},{id:entry.id});
+    expect(updated.metadata?.apiConnection).toBeUndefined();expect(updated.metadata?.apiConnectionNetwork).toBeUndefined();
+    const login=await vault.getLoginAuthorized(principal,'edit-login','https://new.example.test');
+    expect(login?.username).toBe(credentials.username);expect(login?.password).toBe('new-canary-password');
+    expect(await vault.getLoginAuthorized(principal,'edit-login',credentials.domain)).toBeNull();
+  });
+  test('workspace entries, expiry and explicit HTTP consent remain enforced',async()=>{
+    const {getVault}=await import('@/security/vault');const vault=getVault();
+    const ws='33333333-3333-4333-8333-333333333333';
+    const {executeRaw}=await import('@/db/postgres');
+    await executeRaw(`INSERT INTO workspaces (id,user_id,name,slug,files_dir) VALUES ('${ws}','${aliceId}','login-test','login-test','/tmp/login-test') ON CONFLICT DO NOTHING`);
+    const entry=await vault.saveLogin(aliceId,{...credentials,name:'workspace-login'},{scope:'workspace',workspaceId:ws});
+    expect(await vault.getLoginAuthorized(principal,'workspace-login',credentials.domain)).toBeNull();
+    expect(await vault.getLoginAuthorized({...principal,workspaceId:ws},'workspace-login',credentials.domain)).not.toBeNull();
+    await vault.saveLogin(aliceId,{domain:credentials.domain,password:'workspace-updated'},{id:entry.id,workspaceId:ws});
+    expect((await vault.getLoginAuthorized({...principal,workspaceId:ws},'workspace-login',credentials.domain))?.password).toBe('workspace-updated');
+    await vault.saveLogin(aliceId,{...credentials,name:'expired-login'},{expiresAt:new Date(0)});
+    expect(await vault.getLoginAuthorized(principal,'expired-login',credentials.domain)).toBeNull();
+    await expect(vault.saveLogin(aliceId,{...credentials,name:'http-login',domain:'http://login.example.test'})).rejects.toThrow('valid username');
+    const http=await vault.saveLogin(aliceId,{...credentials,name:'http-login',domain:'http://login.example.test',allowInsecureHttp:true});
+    expect(http.metadata?.login?.allowInsecureHttp).toBe(true);
+    for(const domain of ['https://login.example.test/path','https://user:pw@login.example.test','https://*.example.test'])await expect(vault.saveLogin(aliceId,{...credentials,name:'invalid-login',domain})).rejects.toThrow();
+  });
+});
+
+test('a user-level Basic Login API consumes its approved row rather than a workspace namesake',async()=>{
+ const {getVault}=await import('@/security/vault');const {authenticatedFetch,connectionProfileSchema}=await import('@/security/credential-connections');
+ const {createServer}=await import('node:http');
+ let received='';const server=createServer((req,res)=>{received=req.headers.authorization??'';res.end('ok');});
+ await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
+ try{
+ const origin=`http://127.0.0.1:${(server.address() as {port:number}).port}`;
+ const ws='33333333-3333-4333-8333-333333333333';
+ const login={name:'scope-bound-login',domain:origin,allowInsecureHttp:true,username:'user-login',password:'user-canary-password'};
+ await getVault().saveLogin(aliceId,login);
+ await getVault().saveLogin(aliceId,{...login,username:'workspace-login',password:'workspace-canary-password'},{scope:'workspace',workspaceId:ws});
+ const profile=connectionProfileSchema.parse({id:'user-login-api',userId:aliceId,workspaceId:null,credential:login.name,http:{origin,auth:{type:'login'},allowInsecureHttp:true,methods:['GET']}});
+ const result=await authenticatedFetch(profile,{userId:aliceId,workspaceId:ws},'/api');await result.response.text();
+ expect(received).toBe(`Basic ${Buffer.from(`${login.username}:${login.password}`).toString('base64')}`);
+ }finally{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
+});

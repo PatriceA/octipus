@@ -1,12 +1,12 @@
 import { beforeEach, expect, test, vi } from 'vitest';
 import { App } from '@/api/http';
-const fixture = vi.hoisted(() => ({ user: {id:'owner',isAdmin:true} as {id:string;isAdmin:boolean}|null, save:vi.fn(), inspect:vi.fn(),entries:[] as Record<string,unknown>[] }));
+const fixture = vi.hoisted(() => ({ user: {id:'owner',isAdmin:true} as {id:string;isAdmin:boolean}|null, save:vi.fn(),login:vi.fn(),inspect:vi.fn(),entries:[] as Record<string,unknown>[] }));
 vi.mock('@/api/context', async () => {
   const { App } = await import('@/api/http');
   return { apiContext: new App().derive(() => ({user:fixture.user})) };
 });
 vi.mock('@/db/repositories/vault-api-connection', () => ({ saveVaultApiConnection:fixture.save, VaultConnectionError:class extends Error {} }));
-vi.mock('@/security/vault',()=>({getVault:()=>({list:async()=>fixture.entries}),isReservedSecretName:()=>false}));
+vi.mock('@/security/vault',()=>({getVault:()=>({list:async()=>fixture.entries,saveLogin:fixture.login}),isReservedSecretName:()=>false,VaultLoginError:class extends Error {constructor(readonly code:string){super('Invalid Login settings');}}}));
 vi.mock('@/security/connection-tls',async()=>({...await vi.importActual('@/security/connection-tls'),inspectConnectionCertificate:fixture.inspect}));
 import { vaultRoutes } from './vault';
 const app = new App().group('/api', group => group.use(vaultRoutes));
@@ -55,4 +55,28 @@ test('only an administrator owning an active personal/workspace credential may i
 test('certificate inspection refuses HTTP, URL paths and credential-bearing addresses',async()=>{
  for(const origin of ['http://device.example.com','https://device.example.com/api','https://user:password@device.example.com'])expect((await inspect(origin)).status).toBe(400);
  expect(fixture.inspect).not.toHaveBeenCalled();
+});
+
+const loginRequest=(body:unknown,edit=false)=>app.handle(new Request(edit?`http://test/api/vault/${id}/login?workspaceId=${workspaceId}`:'http://test/api/vault',{method:edit?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}));
+test('Login create and edit return only encrypted-safe metadata, never credential fields',async()=>{
+ fixture.login.mockResolvedValue({id,name:'saved-login',credentialType:'login',encryptedValue:'encrypted-canary',encryptionIv:'iv',encryptionAuthTag:'tag',metadata:{login:{origin:'https://login.example.test'}}});
+ const data={name:'saved-login',credentialType:'login',username:'synthetic-user',password:'synthetic-password',domain:'https://login.example.test',scope:'workspace',workspaceId};
+ const response=await loginRequest(data);expect(response.status).toBe(200);
+ expect(fixture.login).toHaveBeenCalledWith('owner',expect.objectContaining({username:'synthetic-user',password:'synthetic-password',domain:data.domain}),expect.objectContaining({scope:'workspace',workspaceId}));
+ const serialized=JSON.stringify(await response.json());for(const value of ['synthetic-user','synthetic-password','encrypted-canary','encryptionIv','encryptionAuthTag'])expect(serialized).not.toContain(value);
+ const edited=await loginRequest({domain:data.domain,password:'replacement'},true);expect(edited.status).toBe(200);
+ expect(fixture.login).toHaveBeenLastCalledWith('owner',{domain:data.domain,password:'replacement'},{id,workspaceId});
+ fixture.user=null;expect((await loginRequest(data)).status).toBe(401);expect((await loginRequest({domain:data.domain},true)).status).toBe(401);
+});
+test('Login validation rejects system scope and malformed fields without reflecting values',async()=>{
+ const data={name:'saved-login',credentialType:'login',username:'synthetic-user',password:'synthetic-password',domain:'https://login.example.test'};
+ expect((await loginRequest({...data,scope:'system'})).status).toBe(400);expect(fixture.login).not.toHaveBeenCalled();
+ const response=await loginRequest({...data,password:'p'.repeat(20001)});expect(response.status).toBe(422);expect(JSON.stringify(await response.json())).not.toContain('synthetic-user');
+ const {VaultLoginError}=await import('@/security/vault');fixture.login.mockRejectedValue(new VaultLoginError('invalid'));
+ const invalid=await loginRequest({...data,domain:'https://login.example.test/path'});expect(invalid.status).toBe(400);expect(JSON.stringify(await invalid.json())).not.toContain('synthetic-password');
+});
+test('normal secret upsert rejects a name already belonging to a Login without decrypting it',async()=>{
+ fixture.entries=[{id,name:'saved-login',scope:'user',credentialType:'login'}];
+ const response=await loginRequest({name:'saved-login',credentialType:'api_key',value:'synthetic-token'});expect(response.status).toBe(409);
+ expect((await response.json()).error).toContain('Login settings');
 });

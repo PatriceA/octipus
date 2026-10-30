@@ -1093,6 +1093,13 @@
       "when": 1793440884550,
       "tag": "0155_session_protection_level",
       "breakpoints": true
+    },
+    {
+      "idx": 156,
+      "version": "7",
+      "when": 1793440944550,
+      "tag": "0156_vault_logins",
+      "breakpoints": true
     }
   ]
 }

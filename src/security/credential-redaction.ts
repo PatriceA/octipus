@@ -64,5 +64,6 @@ export async function redactAgentDiagnostics(userId: string, workspaceId: string
       if (value !== null) values.push(value);
     }
   }
-  return redactCredentialData(data, values);
+  const masked=redactCredentialData(data, values);
+  return vault.redactLoginDiagnostics(userId,workspaceId,masked);
 }

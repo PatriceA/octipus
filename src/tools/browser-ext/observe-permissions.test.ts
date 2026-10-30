@@ -2,7 +2,7 @@ import { beforeEach, expect, test, vi } from 'vitest';
 import { BrowserExtTool } from './index';
 import type { AgentContext } from '@/core/types';
 const mocks = vi.hoisted(() => ({ check: vi.fn(), send: vi.fn(), recovery: vi.fn() }));
-vi.mock('@/api/browser-bridge', () => ({ getBrowserBridge: () => ({ sendCommand: mocks.send }) }));
+vi.mock('@/api/browser-bridge', () => ({ getBrowserBridge: () => ({ sendCommand: mocks.send, getStatus:()=>({connected:true,extensionInfo:{}}) }) }));
 vi.mock('@/security/permissions', () => ({ getPermissionManager: () => ({ check: mocks.check }) }));
 vi.mock('@/db/repositories/audit-repository', () => ({ auditRepository: { log: async () => {} } }));
 vi.mock('@/core/action-recovery', () => ({ actionRecovery: { run: mocks.recovery }, isReadOnlyAction: (a: string) => a === 'read' }));

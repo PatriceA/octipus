@@ -1,11 +1,18 @@
 import { createHash, pbkdf2Sync } from 'crypto';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, or, sql } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { getDb } from '@/db/postgres';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { type NewVaultEntry, type VaultEntry, type VaultScope, vault } from '@/db/schema/vault';
 import { decrypt, deriveDek, encrypt } from '@/utils/crypto';
 import { securityLogger } from '@/utils/logger';
+import { loginDomainSchema, loginRecordSchema, parseLoginRecord, type LoginRecord } from '@/shared/vault-login';
+
+export class VaultLoginError extends Error {
+  constructor(readonly code:'invalid'|'not_found'|'duplicate_name'|'use_login_editor'){
+    super(code==='not_found'?'Login entry not found':code==='duplicate_name'?'A vault entry with this name already exists in this scope':code==='use_login_editor'?'Use Login settings to change a login username or password':'Enter a valid username, password and domain');this.name='VaultLoginError';
+  }
+}
 
 /** Master key in raw form — held in memory only so HKDF can derive
  *  per-user DEKs on demand. Phase 1b-2 onwards. */
@@ -323,6 +330,10 @@ export class Vault {
     if (scope === 'space') throw new Error('Space secrets are stored through the space access layer');
     if (scope === 'system') refuseReserved(name);
     const workspaceId = scope === 'workspace' ? (options.workspaceId ?? null) : null;
+    if(options.credentialType==='login'){
+      const login=parseLoginRecord(value);if(!login||!['user','workspace'].includes(scope))throw new VaultLoginError('invalid');
+      options={...options,metadata:{...options.metadata,login:{origin:login.origin,allowInsecureHttp:login.allowInsecureHttp}}};
+    }
     const dek = dekFor({ scope, userId, workspaceId });
     const encrypted = encrypt(trimSecret(value), dek);
 
@@ -344,7 +355,12 @@ export class Vault {
       metadata: options.metadata || {},
     };
 
-    const result = await this.db.insert(vault).values(entry).returning();
+    const result = await this.db.transaction(async tx=>{
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`vault-login:${userId}:${scope}:${workspaceId??''}:${name}`}))`);
+      const [existing]=await tx.select({type:vault.credentialType}).from(vault).where(and(eq(vault.userId,userId),eq(vault.name,name),eq(vault.scope,scope),scope==='workspace'?eq(vault.workspaceId,workspaceId!):undefined,eq(vault.isActive,true))).limit(1);
+      if(existing&&(existing.type==='login'||options.credentialType==='login'))throw new VaultLoginError('duplicate_name');
+      return tx.insert(vault).values(entry).returning();
+    });
 
     await auditRepository.log({
       userId,
@@ -377,7 +393,7 @@ export class Vault {
       ))
       .limit(1);
 
-    if (!entry[0]) {
+    if (!entry[0] || entry[0].credentialType==='login') {
       return null;
     }
     if (scope === 'system') refuseReserved(entry[0].name);
@@ -476,12 +492,64 @@ export class Vault {
     });
   }
 
+  /** Purpose-bound consumption; no generic getter returns a login bundle. */
+  async getLoginAuthorized(agent:{userId:string;workspaceId?:string|null;toolId:string;agentId?:string;space?:unknown},name:string,origin:string):Promise<LoginRecord|null>{
+    if(agent.space||agent.userId==='system')return null;
+    const canonical=loginDomainSchema.safeParse(origin);if(!canonical.success||canonical.data!==origin)return null;
+    const value=await this.readByName(agent.userId,name,{workspaceId:agent.workspaceId},row=>{
+      if(row.credentialType!=='login'||row.metadata?.login?.origin!==origin)return false;
+      return (!row.allowedTools?.length||row.allowedTools.includes(agent.toolId))&&(!row.allowedAgents?.length||!!agent.agentId&&row.allowedAgents.includes(agent.agentId));
+    },true);
+    if(!value)return null;const login=parseLoginRecord(value);return login?.origin===origin?login:null;
+  }
+
+  /** Owner edits never return decrypted fields; omitted fields stay encrypted. */
+  async saveLogin(userId:string,input:{name?:string;username?:string;password?:string;domain:string;allowInsecureHttp?:boolean},options:{id?:string;scope?:'user'|'workspace';workspaceId?:string|null;description?:string;tags?:string[];allowedTools?:string[];allowedAgents?:string[];expiresAt?:Date}={}):Promise<VaultEntry>{
+    if(inferScope(userId)==='system')throw new VaultLoginError('invalid');
+    const origin=loginDomainSchema.safeParse(input.domain);if(!origin.success)throw new VaultLoginError('invalid');
+    const entry=await this.db.transaction(async tx=>{
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`vault-login:${userId}:${options.id??`${options.scope??'user'}:${options.scope==='workspace'?options.workspaceId??'':''}:${input.name?.trim()??''}`}`}))`);
+      const personalScope=or(eq(vault.scope,'user'),options.workspaceId?and(eq(vault.scope,'workspace'),eq(vault.workspaceId,options.workspaceId)):undefined);
+      const [old]=options.id?await tx.select().from(vault).where(and(eq(vault.id,options.id),eq(vault.userId,userId),personalScope,eq(vault.isActive,true))).for('update').limit(1):[];
+      if(options.id&&(!old||old.credentialType!=='login'))throw new VaultLoginError('not_found');
+      const scope=old?.scope??options.scope??'user',workspaceId=old?.workspaceId??(scope==='workspace'?options.workspaceId??null:null);
+      if(scope==='workspace'&&!workspaceId)throw new VaultLoginError('invalid');
+      const name=old?.name??input.name?.trim();if(!name)throw new VaultLoginError('invalid');refuseReserved(name);
+      if(!old){
+        const [duplicate]=await tx.select({id:vault.id}).from(vault).where(and(eq(vault.userId,userId),eq(vault.name,name),eq(vault.scope,scope),scope==='workspace'?eq(vault.workspaceId,workspaceId!):undefined,eq(vault.isActive,true))).limit(1);
+        if(duplicate)throw new VaultLoginError('duplicate_name');
+      }
+      const previous=old?parseLoginRecord(decryptRow(old).plaintext):null;
+      const parsed=loginRecordSchema.safeParse({version:1,origin:origin.data,username:input.username??previous?.username,password:input.password??previous?.password,allowInsecureHttp:input.allowInsecureHttp??false});
+      if(!parsed.success)throw new VaultLoginError('invalid');
+      const login=parsed.data,encrypted=encrypt(JSON.stringify(login),dekFor({scope,userId,workspaceId}));
+      const metadata={...old?.metadata,login:{origin:login.origin,allowInsecureHttp:login.allowInsecureHttp}};
+      if(old?.metadata?.login?.origin!==login.origin){delete metadata.apiConnection;delete metadata.apiConnectionNetwork;}
+      const fields={encryptedValue:encrypted.ciphertext,encryptionIv:encrypted.iv,encryptionAuthTag:encrypted.authTag,keyVersion:CURRENT_KEY_VERSION,metadata,updatedAt:new Date(),...(options.description!==undefined?{description:options.description}:{}),...(options.tags?{tags:options.tags}:{})};
+      const [saved]=old?await tx.update(vault).set(fields).where(and(eq(vault.id,old.id),eq(vault.userId,userId),eq(vault.scope,old.scope))).returning()
+        :await tx.insert(vault).values({...fields,userId,scope,workspaceId,name,credentialType:'login',allowedTools:options.allowedTools??[],allowedAgents:options.allowedAgents??[],expiresAt:options.expiresAt}).returning();
+      return saved;
+    });
+    await auditRepository.log({userId,action:options.id?'credential_updated':'credential_created',resourceType:'credential',resourceId:entry.id,details:{name:entry.name,credentialType:'login',scope:entry.scope,origin:origin.data}});
+    return entry;
+  }
+
+  /** Diagnostic masking is not a credential-consumption API. */
+  async redactLoginDiagnostics(userId:string,workspaceId:string|null,data:unknown):Promise<unknown>{
+    const rows=await this.db.select().from(vault).where(and(eq(vault.userId,userId),eq(vault.credentialType,'login'),
+      or(eq(vault.scope,'user'),workspaceId?and(eq(vault.scope,'workspace'),eq(vault.workspaceId,workspaceId)):undefined)));
+    const values:string[]=[];
+    for(const row of rows){const raw=decryptRow(row).plaintext,login=parseLoginRecord(raw);values.push(raw);if(login)values.push(login.username,login.password,Buffer.from(`${login.username}:${login.password}`).toString('base64'));}
+    return (await import('./credential-redaction')).redactCredentialData(data,values);
+  }
+
   /** `getByName` without the reserved-name refusal: the internal readers only. */
   private async readByName(
     userId: string,
     name: string,
     opts?: { workspaceId?: string | null },
     authorize?: (row: VaultEntry) => boolean,
+    allowLogin=false,
   ): Promise<string | null> {
     const scope = inferScope(userId);
     const workspaceId = opts?.workspaceId ?? null;
@@ -504,7 +572,7 @@ export class Vault {
       .orderBy(desc(vault.scope)) // 'workspace' > 'user' > 'system' lexicographically; workspace overrides win
       .limit(1);
 
-    if (!entry[0] || (authorize && !authorize(entry[0]))) {
+    if (!entry[0] || (entry[0].credentialType==='login'&&!allowLogin) || (authorize && !authorize(entry[0]))) {
       return null;
     }
 
@@ -576,6 +644,7 @@ export class Vault {
     }
   ): Promise<VaultEntry | null> {
     await this.refuseReservedId(userId, credentialId);
+    if(updates.value!==undefined){const[row]=await this.db.select({type:vault.credentialType}).from(vault).where(and(eq(vault.id,credentialId),eq(vault.userId,userId))).limit(1);if(row?.type==='login')throw new VaultLoginError('use_login_editor');}
     const updateData: Partial<NewVaultEntry> = {};
 
     if (updates.value) {
@@ -721,6 +790,7 @@ export class Vault {
    */
   async rotate(userId: string, credentialId: string, newValue: string): Promise<boolean> {
     await this.refuseReservedId(userId, credentialId);
+    const[row]=await this.db.select({type:vault.credentialType}).from(vault).where(and(eq(vault.id,credentialId),eq(vault.userId,userId))).limit(1);if(row?.type==='login')throw new VaultLoginError('use_login_editor');
     const scope = inferScope(userId);
     const dek = dekFor({ scope, userId, workspaceId: null });
     const encrypted = encrypt(newValue, dek);

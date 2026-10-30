@@ -101,6 +101,7 @@ export function connectionUrl(p: ConnectionProfile, path: string): URL {
 export function connectionAuth(p: ConnectionProfile, secret: string, resolvedUsername?: string): { name: string; value: string } {
   if (!p.http) throw new Error('Connection does not support HTTP');
   const a = p.http.auth;
+  if(a.type==='login')throw new Error('Saved logins must be resolved by their domain-bound consumer');
   const auth = a.type === 'basic-token' ? { name: 'Authorization', value: `Basic ${Buffer.from(`${secret}:`).toString('base64')}` } : a.type === 'basic' ? { name: 'Authorization', value: `Basic ${Buffer.from(`${a.username ?? resolvedUsername}:${secret}`).toString('base64')}` }
     : a.type === 'bearer' ? { name: 'Authorization', value: `Bearer ${secret}` } : { name: a.name, value: a.prefix + secret };
   if (/[\x00-\x1f\x7f-\uffff]/.test(auth.value)) throw new Error('Invalid connection authentication');
@@ -108,14 +109,18 @@ export function connectionAuth(p: ConnectionProfile, secret: string, resolvedUse
 }
 /** Fetch is bound to an operator-approved origin. Private/LAN origins are intentional. No redirects. */
 export async function authenticatedFetch(p: ConnectionProfile, caller: ConnectionPrincipal, path: string, init: RequestInit = {}, toolId = 'connections', trustedMcpServerId?: string): Promise<{ response: Response; mask: (value: unknown) => unknown; credentialVersion: string }> {
+  if (!principalCanUse(p, caller)) throw new Error('Connection access denied');
   const url = connectionUrl(p, path);
   const method = (init.method ?? 'GET').toUpperCase();
   if (!p.http!.methods.includes(method as never)) throw new Error('HTTP method is not allowed by this connection');
   if(p.http!.tls?.mode==='pinned'&&(url.protocol!=='https:'||p.http!.networkPolicy!=='operator'))throw new Error('Certificate trust requires an operator-approved HTTPS connection');
-  const secret = await resolveConnectionCredential(p, caller, toolId, trustedMcpServerId);
-  const username = p.http!.auth.type === 'basic' && p.http!.auth.usernameCredential
-    ? await resolveConnectionCredential({ ...p, credential: p.http!.auth.usernameCredential }, caller, toolId, trustedMcpServerId) : undefined;
-  const auth = connectionAuth(p, secret, username);
+  const login=p.http!.auth.type==='login'?await getVault().getLoginAuthorized({...caller,workspaceId:p.workspaceId,toolId},p.credential,url.origin):null;
+  if(p.http!.auth.type==='login'&&!login)throw new Error('Login unavailable, expired, denied, or bound to a different domain');
+  const secret = login?.password??await resolveConnectionCredential(p, caller, toolId, trustedMcpServerId);
+  const username = login?.username??(p.http!.auth.type === 'basic' && p.http!.auth.usernameCredential
+    ? await resolveConnectionCredential({ ...p, credential: p.http!.auth.usernameCredential }, caller, toolId, trustedMcpServerId) : undefined);
+  if(login?.username.includes(':'))throw new Error('This username cannot be used for HTTP Basic authentication');
+  const auth = login?{name:'Authorization',value:`Basic ${Buffer.from(`${login.username}:${login.password}`).toString('base64')}`}:connectionAuth(p, secret, username);
   const headers = new Headers(init.headers);
   if (['host', 'authorization', 'cookie', 'proxy-authorization', 'content-length', 'transfer-encoding', 'connection', 'upgrade', auth.name].some(n => headers.has(n))) throw new Error('Authentication and routing headers are controlled by the connection');
   for (const [name, value] of Object.entries(p.http!.headers ?? {})) {

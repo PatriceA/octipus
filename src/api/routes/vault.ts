@@ -4,7 +4,7 @@ import { apiConnectionSchema, apiConnectionValidationMessage } from '@/shared/ap
 import { saveVaultApiConnection, VaultConnectionError } from '@/db/repositories/vault-api-connection';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
-import { getVault, isReservedSecretName } from '@/security/vault';
+import { getVault, VaultLoginError, isReservedSecretName } from '@/security/vault';
 import { apiLogger, coreLogger } from '@/utils/logger';
 import { inspectConnectionCertificate } from '@/security/connection-tls';
 
@@ -44,9 +44,9 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
   // List credentials (metadata only)
   .get(
     '/',
-    async ({ user, query }) => {
+    async ({ user, query, set }) => {
       if (!user) {
-        return { error: 'Not authenticated' };
+        set.status=401;return { error: 'Not authenticated' };
       }
 
       const vault = getVault();
@@ -83,7 +83,7 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
     try {
       return { connection: await saveVaultApiConnection(user.id, params.id, query.workspaceId ?? null, parsed.data, { allowPrivateOrigins: user.isAdmin }) };
     } catch (error) {
-      if (error instanceof VaultConnectionError) { set.status = error.code === 'not_found' ? 404 : ['public_destination_required','tls_operator_required'].includes(error.code) ? 403 : 409; return { error: error.message }; }
+      if (error instanceof VaultConnectionError) { set.status = error.code === 'not_found' ? 404 : error.code === 'login_domain_required' ? 400 : ['public_destination_required','tls_operator_required'].includes(error.code) ? 403 : 409; return { error: error.message }; }
       if (error instanceof ToolPolicyRefusalError) { set.status = 400; return { error: 'Use connection settings only; secret values and templates are not allowed.' }; }
       apiLogger.warn({ errorClass: error instanceof Error ? error.name : 'unknown' }, 'API connection settings could not be saved');
       set.status = 503; return { error: 'API connection settings could not be saved. Please try again or check the server connection configuration.' };
@@ -102,12 +102,27 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
     catch{set.status=502;return{error:'Could not inspect the server certificate. Check the HTTPS address and service availability.'};}
   },{params:connectionParams,query:connectionQuery,body:t.Object({origin:t.String({minLength:1,maxLength:2048})}),detail:{tags:['vault']}})
 
+  .put('/:id/login', async ({user,params,query,body,set}) => {
+    if(!user){set.status=401;return {error:'Not authenticated'};}
+    try {
+      const entry=await getVault().saveLogin(user.id,body,{id:params.id,workspaceId:query.workspaceId});
+      const {encryptedValue,encryptionIv,encryptionAuthTag,...safe}=entry;
+      return safe;
+    } catch(error) {
+      if(error instanceof VaultLoginError){set.status=error.code==='not_found'?404:error.code==='duplicate_name'?409:400;return {error:error.message};}
+      set.status=503;return {error:'Could not save Login settings'};
+    }
+  },{params:connectionParams,query:connectionQuery,body:t.Object({
+    domain:t.String({minLength:1,maxLength:2048}),username:t.Optional(t.String({minLength:1,maxLength:2000})),
+    password:t.Optional(t.String({minLength:1,maxLength:20000})),allowInsecureHttp:t.Optional(t.Boolean()),
+  }),detail:{tags:['vault']}})
+
   // Create credential
   .post(
     '/',
     async ({ user, body, set }) => {
       if (!user) {
-        return { error: 'Not authenticated' };
+        set.status=401;return { error: 'Not authenticated' };
       }
 
       // System-scoped secrets are instance-wide (channel bot tokens, provider
@@ -129,6 +144,25 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
       const scope = body.scope ?? (body.systemLevel ? 'system' : 'user');
       const workspaceId = scope === 'workspace' ? body.workspaceId ?? null : null;
 
+      if(body.credentialType==='login'){
+        if(scope==='system'||body.systemLevel){set.status=400;return {error:'Logins belong to a user or workspace'};}
+        try {
+          const entry=await vault.saveLogin(user.id,{name:body.name,username:body.username,password:body.password,
+            domain:body.domain??'',allowInsecureHttp:body.allowInsecureHttp},
+            {scope,workspaceId,description:body.description,tags:body.tags,allowedTools:body.allowedTools,
+              allowedAgents:body.allowedAgents,expiresAt:body.expiresAt?new Date(body.expiresAt):undefined});
+          const {encryptedValue,encryptionIv,encryptionAuthTag,...safe}=entry;
+          return safe;
+        }catch(error){
+          if(error instanceof VaultLoginError){set.status=error.code==='duplicate_name'?409:400;return {error:error.message};}
+          set.status=503;return {error:'Could not save Login settings'};
+        }
+      }
+      if(!body.value){set.status=400;return {error:'A secret value is required'};}
+      if(body.username!==undefined||body.password!==undefined||body.domain!==undefined){set.status=400;return {error:'Choose Login to save a username, password and domain'};}
+
+      const collision=(await vault.list(ownerId,{workspaceId})).find(row=>row.name===body.name&&row.scope===scope&&(scope!=='workspace'||row.workspaceId===workspaceId));
+      if(collision?.credentialType==='login'){set.status=409;return {error:'This name belongs to a Login. Use Login settings to edit it.'};}
       // Check if credential already exists — update instead of creating duplicate
       const existing = await vault.getByName(ownerId, body.name);
       if (existing !== null) {
@@ -158,7 +192,8 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
         expiresAt: body.expiresAt ? new Date(body.expiresAt) : undefined,
         scope,
         workspaceId,
-      });
+      }).catch(error=>{if(error instanceof VaultLoginError)return null;throw error;});
+      if(!entry){set.status=409;return {error:'This name belongs to a Login. Use Login settings to edit it.'};}
 
       resetTelephonyIfNeeded(body.name);
 
@@ -170,11 +205,16 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
     {
       body: t.Object({
         name: t.String({ minLength: 1 }),
-        value: t.String({ minLength: 1 }),
+        value: t.Optional(t.String({ minLength: 1 })),
+        username:t.Optional(t.String({minLength:1,maxLength:2000})),
+        password:t.Optional(t.String({minLength:1,maxLength:20000})),
+        domain:t.Optional(t.String({minLength:1,maxLength:2048})),
+        allowInsecureHttp:t.Optional(t.Boolean()),
         credentialType: t.Union([
           t.Literal('api_key'),
           t.Literal('oauth_token'),
           t.Literal('password'),
+          t.Literal('login'),
           t.Literal('ssh_key'),
           t.Literal('certificate'),
           t.Literal('other'),
@@ -201,7 +241,7 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
     '/:id',
     async ({ user, params, body, set }) => {
       if (!user) {
-        return { error: 'Not authenticated' };
+        set.status=401;return { error: 'Not authenticated' };
       }
 
       // The vault refuses it too; answering 403 here says why.
@@ -218,10 +258,10 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
         allowedTools: body.allowedTools,
         allowedAgents: body.allowedAgents,
         expiresAt: body.expiresAt ? new Date(body.expiresAt) : undefined,
-      });
+      }).catch(error=>{if(error instanceof VaultLoginError)return null;throw error;});
 
       if (!entry) {
-        return { error: 'Credential not found' };
+        set.status=400;return { error: 'Credential not found or requires Login settings' };
       }
 
       resetTelephonyIfNeeded(entry.name);
@@ -248,7 +288,7 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
     '/:id',
     async ({ user, params, set }) => {
       if (!user) {
-        return { error: 'Not authenticated' };
+        set.status=401;return { error: 'Not authenticated' };
       }
 
       // The vault refuses it too; answering 403 here says why.
@@ -281,7 +321,7 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
     '/:id/rotate',
     async ({ user, params, body, set }) => {
       if (!user) {
-        return { error: 'Not authenticated' };
+        set.status=401;return { error: 'Not authenticated' };
       }
 
       const vault = getVault();
@@ -293,13 +333,13 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
       }
       const secretName = await credentialName(user, params.id);
 
-      let rotated = await vault.rotate(user.id, params.id, body.value);
+      let rotated = await vault.rotate(user.id, params.id, body.value).catch(error=>{if(error instanceof VaultLoginError)return false;throw error;});
       if (!rotated && user.isAdmin) {
         rotated = await vault.rotate('system', params.id, body.value);
       }
 
       if (!rotated) {
-        return { error: 'Credential not found' };
+        set.status=400;return { error: 'Credential not found or requires Login settings' };
       }
 
       if (secretName) resetTelephonyIfNeeded(secretName);
