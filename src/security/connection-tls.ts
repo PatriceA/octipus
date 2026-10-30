@@ -32,6 +32,7 @@ function serviceOrigin(origin:string):URL {
 export async function inspectConnectionCertificate(origin:string) {
   const url=serviceOrigin(origin),host=url.hostname.replace(/^\[|\]$/g,'');
   return new Promise<{origin:string;certificateSha256:string;commonName:string;issuer:string;validFrom:string;validTo:string;verificationError:string|null}>((resolve,reject)=>{
+    // nosemgrep: problem-based-packs.insecure-transport.js-node.bypass-tls-verification.bypass-tls-verification -- Admin-only public certificate inspection sends no HTTP request or credentials.
     const socket=connect({host,port:Number(url.port||443),servername:isIP(host)?undefined:host,rejectUnauthorized:false});
     const timer=setTimeout(()=>socket.destroy(new Error('Certificate inspection timed out')),10000);
     socket.once('error',reject);socket.once('close',()=>{clearTimeout(timer);reject(new Error('TLS connection closed during certificate inspection'));});
@@ -50,6 +51,7 @@ class CertificateAgent extends Agent {
   constructor(private readonly fingerprint:string,private readonly onClose:()=>void){super({keepAlive:false,maxCachedSessions:0});}
   override createConnection(options:RequestOptions,callback?:(error:Error|null,stream:Duplex)=>void) {
     const host=String(options.hostname??options.host??'localhost').replace(/^\[|\]$/g,'');
+    // nosemgrep: problem-based-packs.insecure-transport.js-node.bypass-tls-verification.bypass-tls-verification -- Per-request operator-approved pin replaces CA checks; HTTP cannot write until timingSafeEqual succeeds below.
     const socket=connect({host,port:Number(options.port??443),servername:options.servername||(isIP(host)?undefined:host),lookup:options.lookup,rejectUnauthorized:false,ALPNProtocols:['http/1.1']});
     this.candidates.add(socket);
     let finished=false;
