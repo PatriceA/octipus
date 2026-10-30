@@ -172,3 +172,24 @@ test('Login stores a username/password for a domain, edits without revealing cre
  await expect(page.getByRole('status')).toContainText('API connection website-login saved');
  expect(connection).toMatchObject({auth:{type:'login'},origin:'https://login.example.com',methods:['GET']});
 });
+
+test('Login API form configures JSON sign-in, CSRF and automatic token refresh without credential fields',async({authenticatedPage:page})=>{
+ await stubAllDefaults(page);
+ const secret={id:'11111111-1111-4111-8111-111111111111',name:'SSP_Login_FD_Dev',credentialType:'login',scope:'user',tags:[],accessCount:'0',allowedAgents:[],isActive:true,metadata:{login:{origin:'https://ssp-api-fd-dev.services.fintus.io',allowInsecureHttp:false}},apiConnections:[]};
+ let saved:Record<string,unknown>|null=null;
+ await page.route('**/api/vault?*',route=>json(route,200,{credentials:[secret]}));
+ await page.route('**/api/vault',route=>json(route,200,{credentials:[secret]}));
+ await page.route('**/api/vault/*/api-connection*',async route=>{saved=route.request().postDataJSON();await json(route,200,{connection:saved});});
+ await page.goto('/secrets');await page.getByRole('button',{name:'Connect API for SSP_Login_FD_Dev'}).click();
+ await page.getByLabel('Authentication',{exact:true}).selectOption('login-token');
+ await page.getByLabel('Connection name',{exact:true}).fill('ssp_login_fd_dev');
+ await page.getByLabel('Login endpoint',{exact:true}).fill('/api/login');
+ await page.getByLabel('Refresh endpoint (optional)',{exact:true}).fill('/api/public/refresh-access-token');
+ await page.getByLabel('Login language (optional)',{exact:true}).fill('de');
+ await page.getByLabel('Generate a matching CSRF query parameter and header',{exact:true}).check();
+ await expect(page.getByLabel('CSRF query parameter',{exact:true})).toHaveValue('_csrf');await expect(page.getByLabel('CSRF header',{exact:true})).toHaveValue('X-XSRF-TOKEN');
+ await expect(page.getByLabel('Username',{exact:true})).toHaveCount(0);await expect(page.getByLabel('Password',{exact:true})).toHaveCount(0);
+ await page.getByRole('button',{name:'Save API connection',exact:true}).click();
+ await expect(page.getByRole('status')).toContainText('ssp_login_fd_dev saved');
+ expect(saved).toMatchObject({origin:secret.metadata.login.origin,pathPrefix:'/api',methods:['GET'],auth:{type:'login-token',loginPath:'/api/login',refreshPath:'/api/public/refresh-access-token',language:'de',usernameField:'username',passwordField:'password',accessTokenField:'access_token',refreshTokenField:'refresh_token',refreshTokenRequestField:'refreshToken',expiresInField:'expires_in',csrf:{query:'_csrf',header:'X-XSRF-TOKEN'}}});
+});

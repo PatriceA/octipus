@@ -24,7 +24,7 @@ export async function saveVaultApiConnection(userId: string, credentialId: strin
       or(eq(vault.scope, 'user'), workspaceId ? and(eq(vault.scope, 'workspace'), eq(vault.workspaceId, workspaceId)) : undefined));
     const [entry] = await tx.select({ id: vault.id,credentialType:vault.credentialType,metadata:vault.metadata }).from(vault).where(ownedCredential).limit(1);
     if (!entry) throw new VaultConnectionError('not_found');
-    if(config&&((entry.credentialType==='login'&&(config.auth.type!=='login'||config.origin!==entry.metadata?.login?.origin))||(entry.credentialType!=='login'&&config.auth.type==='login')))throw new VaultConnectionError('login_domain_required');
+    if(config&&((entry.credentialType==='login'&&(!['login','login-token'].includes(config.auth.type)||config.origin!==entry.metadata?.login?.origin))||(entry.credentialType!=='login'&&['login','login-token'].includes(config.auth.type))))throw new VaultConnectionError('login_domain_required');
     if(config?.tls?.mode==='pinned'&&!options.allowPrivateOrigins)throw new VaultConnectionError('tls_operator_required');
     if (config && !options.allowPrivateOrigins && !(await validateExternalUrl(config.origin)).valid) throw new VaultConnectionError('public_destination_required');
     if (config) {
@@ -38,6 +38,6 @@ export async function saveVaultApiConnection(userId: string, credentialId: strin
     if (!changed.length) throw new VaultConnectionError('not_found');
   });
   await auditRepository.log({ userId, action: 'credential_updated', resourceType: 'credential', resourceId: credentialId,
-    details: config ? { connection: config.id, origin: config.origin, methods: config.methods, tls:config.tls??{mode:'system'}, networkPolicy: options.allowPrivateOrigins ? 'operator' : 'public' } : { removed: true } });
+    details: config ? { connection: config.id, origin: config.origin, methods: config.methods, authentication:config.auth.type,...(config.auth.type==='login-token'?{authenticationPostEndpoints:[config.auth.loginPath,...(config.auth.refreshPath?[config.auth.refreshPath]:[])]}:{}),tls:config.tls??{mode:'system'}, networkPolicy: options.allowPrivateOrigins ? 'operator' : 'public' } : { removed: true } });
   return config;
 }

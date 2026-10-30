@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import {loginTokenAuthSchema} from './login-token-auth';
 
 export const connectionTlsSchema = z.discriminatedUnion('mode', [
   z.object({mode:z.literal('system')}).strict(),
@@ -17,6 +18,7 @@ export const publicConnectionHeadersSchema = z.record(
 
 export const connectionAuthSchema = z.discriminatedUnion('type', [
   z.object({type:z.literal('login')}).strict(),
+  loginTokenAuthSchema,
   z.object({ type: z.literal('bearer') }).strict(),
   z.object({ type: z.literal('basic-token') }).strict(),
   z.object({ type: z.literal('basic'), username: z.string().min(1).optional(), usernameCredential: z.string().min(1).optional() }).strict().refine(a => Number(!!a.username) + Number(!!a.usernameCredential) === 1),
@@ -38,6 +40,10 @@ export const apiConnectionSchema = z.object({
   if (/[\\?#%\0\r\n]/.test(c.pathPrefix) || c.pathPrefix.split('/').some(p => p === '..' || p === '.')) ctx.addIssue({code:'custom',message:'Use a plain API path prefix, such as /api'});
   if (c.auth.type === 'header' && /^(?:host|cookie|content-length|transfer-encoding|connection|upgrade|proxy-authorization)$/i.test(c.auth.name)) ctx.addIssue({code:'custom',message:'This header cannot carry credentials'});
   const auth = c.auth;
+  if(auth.type==='login-token'){
+    const prefix=c.pathPrefix.replace(/\/$/,'');
+    for(const path of [auth.loginPath,auth.refreshPath].filter((v):v is string=>!!v))if(prefix&&path!==prefix&&!path.startsWith(prefix+'/'))ctx.addIssue({code:'custom',message:'Login and refresh endpoints must stay inside the approved path prefix'});
+  }
   if (c.tls?.mode === 'pinned' && u.protocol !== 'https:') ctx.addIssue({code:'custom',message:'Certificate trust requires an HTTPS origin'});
   if (auth.type === 'header' && Object.keys(c.headers ?? {}).some(name => name.toLowerCase() === auth.name.toLowerCase())) ctx.addIssue({code:'custom',message:'The authentication header cannot also be a public header'});
 });

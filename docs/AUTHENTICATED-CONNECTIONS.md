@@ -231,3 +231,15 @@ A browser used for saved Logins blocks arbitrary JavaScript, cookie/storage acce
 For HTTP Basic APIs, choose **Connect API** on the Login entry, then approve the path and methods. Authentication uses both saved fields and the domain cannot be changed there. Internal servers and certificate exceptions retain their administrator approval requirements. Use the connection name with the existing `connections` tools.
 
 **Edit Login** changes either field without displaying existing values. Leave a field blank to keep it. Changing the domain removes the saved API consent; approve the new destination again. Generic secret reads and rotation cannot expose or overwrite a Login bundle.
+
+### JSON sign-in followed by Bearer tokens
+
+For APIs that accept `{username, password}` in a JSON login body, choose **Saved Login (JSON sign-in and Bearer tokens)** in Connect API. HTTP Basic is a different protocol and will not populate that body. Configure the login endpoint, optional refresh endpoint and the API's JSON field names; optional `language` is a public login setting. Fields are top-level JSON names, not templates or executable expressions.
+
+Saving this mode explicitly approves internal authentication POST requests to those endpoints, while **Allowed requests** still limits ordinary API calls. Both endpoints must stay on the saved Login origin and inside the approved path prefix. Redirects are refused. Login/refresh endpoints cannot be called as ordinary agent requests, and their responses never become tool results.
+
+Octipus rechecks vault ownership, workspace, expiry and tool/agent access before every request, including when using a cached token. Tokens remain in bounded process memory; restart requires a new sign-in. It refreshes shortly before the returned `expires_in`, or uses the configurable fallback lifetime when no expiry is returned. Refresh-token rotation is supported. A rejected refresh (HTTP 400/401) permits one new sign-in; other refresh failures stop the request. An application request returning HTTP 401 is never replayed automatically, so a mutation cannot run twice as part of token recovery. The next request refreshes authentication.
+
+For an API using a client-generated double-submit CSRF pair, enable **Generate a matching CSRF query parameter and header**. Octipus generates a fresh matching pair for login, refresh and resource requests. This mode does not implement cookie-derived CSRF challenges, CAPTCHA, MFA, nested JSON token paths, or arbitrary login scripts.
+
+For SSP fd-dev specifically: domain `https://ssp-api-fd-dev.services.fintus.io`, prefix `/api`, login `/api/login`, refresh `/api/public/refresh-access-token`, language `de`, CSRF query `_csrf` and header `X-XSRF-TOKEN`. The defaults match its `access_token`, `refresh_token`, `expires_in` response and `{refreshToken}` refresh body. Agents should request a protected API resource using `ssp_login_fd_dev`; they should not manually submit `/api/login`.

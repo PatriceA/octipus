@@ -1,3 +1,5 @@
+import {loginTokenSession,invalidateLoginToken,LoginTokenError} from './credential-token-session';
+import {randomBytes} from 'node:crypto';
 import { fetchGuarded } from '@/utils/sanitize';
 import { connectionAuthSchema, apiConnectionSchema, publicConnectionHeadersSchema, connectionTlsSchema } from '@/shared/api-connection';
 import { CertificatePinMismatchError, certificateVerificationCode, fetchWithCertificatePin } from './connection-tls';
@@ -101,7 +103,7 @@ export function connectionUrl(p: ConnectionProfile, path: string): URL {
 export function connectionAuth(p: ConnectionProfile, secret: string, resolvedUsername?: string): { name: string; value: string } {
   if (!p.http) throw new Error('Connection does not support HTTP');
   const a = p.http.auth;
-  if(a.type==='login')throw new Error('Saved logins must be resolved by their domain-bound consumer');
+  if(a.type==='login'||a.type==='login-token')throw new Error('Saved logins must be resolved by their domain-bound consumer');
   const auth = a.type === 'basic-token' ? { name: 'Authorization', value: `Basic ${Buffer.from(`${secret}:`).toString('base64')}` } : a.type === 'basic' ? { name: 'Authorization', value: `Basic ${Buffer.from(`${a.username ?? resolvedUsername}:${secret}`).toString('base64')}` }
     : a.type === 'bearer' ? { name: 'Authorization', value: `Bearer ${secret}` } : { name: a.name, value: a.prefix + secret };
   if (/[\x00-\x1f\x7f-\uffff]/.test(auth.value)) throw new Error('Invalid connection authentication');
@@ -111,29 +113,55 @@ export function connectionAuth(p: ConnectionProfile, secret: string, resolvedUse
 export async function authenticatedFetch(p: ConnectionProfile, caller: ConnectionPrincipal, path: string, init: RequestInit = {}, toolId = 'connections', trustedMcpServerId?: string): Promise<{ response: Response; mask: (value: unknown) => unknown; credentialVersion: string }> {
   if (!principalCanUse(p, caller)) throw new Error('Connection access denied');
   const url = connectionUrl(p, path);
+  const tokenAuth=p.http!.auth.type==='login-token'?p.http!.auth:null;
+  if(tokenAuth){
+    const canonicalPath=decodeURIComponent(url.pathname).toLowerCase();
+    if(canonicalPath.includes('//')||/[;\s]/.test(canonicalPath))throw new Error('Use a canonical API path without duplicate slashes or path parameters');
+    for(const authPath of [tokenAuth.loginPath,tokenAuth.refreshPath].filter((v):v is string=>!!v)){
+      connectionUrl(p,authPath);
+      if(canonicalPath.replace(/\/+$/,'')===authPath.toLowerCase().replace(/\/+$/,'')||canonicalPath.startsWith(authPath.toLowerCase().replace(/\/+$/,'')+'.'))throw new Error('Login and refresh endpoints are managed internally; request the protected API resource instead');
+    }
+  }
   const method = (init.method ?? 'GET').toUpperCase();
   if (!p.http!.methods.includes(method as never)) throw new Error('HTTP method is not allowed by this connection');
   if(p.http!.tls?.mode==='pinned'&&(url.protocol!=='https:'||p.http!.networkPolicy!=='operator'))throw new Error('Certificate trust requires an operator-approved HTTPS connection');
-  const login=p.http!.auth.type==='login'?await getVault().getLoginAuthorized({...caller,workspaceId:p.workspaceId,toolId},p.credential,url.origin):null;
-  if(p.http!.auth.type==='login'&&!login)throw new Error('Login unavailable, expired, denied, or bound to a different domain');
+  const login=['login','login-token'].includes(p.http!.auth.type)?await getVault().getLoginAuthorized({...caller,workspaceId:p.workspaceId,toolId},p.credential,url.origin):null;
+  if(['login','login-token'].includes(p.http!.auth.type)&&!login)throw new Error('Login unavailable, expired, denied, or bound to a different domain');
   const secret = login?.password??await resolveConnectionCredential(p, caller, toolId, trustedMcpServerId);
   const username = login?.username??(p.http!.auth.type === 'basic' && p.http!.auth.usernameCredential
     ? await resolveConnectionCredential({ ...p, credential: p.http!.auth.usernameCredential }, caller, toolId, trustedMcpServerId) : undefined);
-  if(login?.username.includes(':'))throw new Error('This username cannot be used for HTTP Basic authentication');
-  const auth = login?{name:'Authorization',value:`Basic ${Buffer.from(`${login.username}:${login.password}`).toString('base64')}`}:connectionAuth(p, secret, username);
+  if(!tokenAuth&&login?.username.includes(':'))throw new Error('This username cannot be used for HTTP Basic authentication');
+  let auth = tokenAuth?{name:'Authorization',value:''}:login?{name:'Authorization',value:`Basic ${Buffer.from(`${login.username}:${login.password}`).toString('base64')}`}:connectionAuth(p, secret, username);
   const headers = new Headers(init.headers);
   if (['host', 'authorization', 'cookie', 'proxy-authorization', 'content-length', 'transfer-encoding', 'connection', 'upgrade', auth.name].some(n => headers.has(n))) throw new Error('Authentication and routing headers are controlled by the connection');
   for (const [name, value] of Object.entries(p.http!.headers ?? {})) {
     if (name.toLowerCase() === auth.name.toLowerCase() || (headers.has(name) && headers.get(name) !== value.trim())) throw new Error('Configured public headers cannot be overridden');
     headers.set(name, value);
   }
+  const tokenKey=tokenAuth?createHash('sha256').update(JSON.stringify([p,toolId,caller.agentId,secret,username])).digest('hex'):'';
+  const tokenSecrets:string[]=[];
+  const send=async(target:URL,request:RequestInit)=>p.http!.tls?.mode==='pinned'?fetchWithCertificatePin(target,{...request,redirect:'manual'},p.http!.tls.certificateSha256)
+    :p.http!.networkPolicy==='public'?fetchGuarded(target.toString(),{...request,redirect:'manual'}):fetch(target,{...request,redirect:'manual'});
   try {
+    if(tokenAuth&&login){
+      if(tokenAuth.csrf&&(headers.has(tokenAuth.csrf.header)||url.searchParams.has(tokenAuth.csrf.query)))throw new LoginTokenError('CSRF headers and query fields are managed by the Login connection');
+      const session=await loginTokenSession(tokenKey,tokenAuth,login,async(authPath,request)=>{
+        const authHeaders=new Headers(p.http!.headers);
+        new Headers(request.headers).forEach((value,name)=>authHeaders.set(name,value));
+        const timeout=AbortSignal.timeout(30000);
+        return send(connectionUrl(p,authPath),{...request,headers:authHeaders,signal:request.signal?AbortSignal.any([request.signal,timeout]):timeout});
+      },init.signal??undefined);
+      tokenSecrets.push(...session.secrets);
+      auth={name:'Authorization',value:`Bearer ${session.accessToken}`};
+      if(tokenAuth.csrf){const csrf=randomBytes(24).toString('hex');url.searchParams.set(tokenAuth.csrf.query,csrf);headers.set(tokenAuth.csrf.header,csrf);}
+    }
     headers.set(auth.name, auth.value);
     const request = { ...init, method, headers, redirect: 'manual' as const };
-    const response = p.http!.tls?.mode==='pinned' ? await fetchWithCertificatePin(url,request,p.http!.tls.certificateSha256)
-      : p.http!.networkPolicy === 'public' ? await fetchGuarded(url.toString(), request) : await fetch(url, request);
-    return { response, credentialVersion: createHash('sha256').update(JSON.stringify([secret, username])).digest('hex'), mask: value => redactCredentialData(value, [secret, ...(username ? [username] : []), auth.value, auth.value.replace(/^Basic /, '')]) };
+    const response = await send(url,request);
+    if(tokenAuth&&response.status===401)invalidateLoginToken(tokenKey);
+    return { response, credentialVersion: createHash('sha256').update(JSON.stringify([secret, username])).digest('hex'), mask: value => redactCredentialData(value, [secret, ...(username ? [username] : []), auth.value, auth.value.replace(/^Basic /, ''),...tokenSecrets]) };
   } catch(error) {
+    if(error instanceof LoginTokenError)throw error;
     if(error instanceof CertificatePinMismatchError)throw new Error(error.message);
     const code=certificateVerificationCode(error);
     if(code)throw new Error(`TLS certificate verification failed (${code}). Inspect and approve this server's certificate in Secrets → Connect API, or install a valid certificate. Credentials withheld.`);

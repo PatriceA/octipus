@@ -17,7 +17,7 @@ export class ConnectionsTool extends BaseTool {
   ], tools: [] }; }
   protected async registerTools(): Promise<void> {
     this.registerTool('list', 'List connection names and approved origins/methods. Credentials are never returned. If empty, report missing connection configuration, not a missing service or invalid credential.', createParameterSchema({}), async (_args, c) =>
-      (await readAvailableConnectionProfiles(c)).filter(p => p.http).map(p => ({ connection: p.id, origin: p.http!.origin, pathPrefix: p.http!.pathPrefix, methods: p.http!.methods, git: p.http!.git, tlsMode:p.http!.tls?.mode??'system' })), { permissionAction: 'read', readOnly: true });
+      (await readAvailableConnectionProfiles(c)).filter(p => p.http).map(p => ({ connection: p.id, origin: p.http!.origin, pathPrefix: p.http!.pathPrefix, methods: p.http!.methods, git: p.http!.git, tlsMode:p.http!.tls?.mode??'system',authentication:p.http!.auth.type })), { permissionAction: 'read', readOnly: true });
     const requestSchema = createParameterSchema({
       connection: { type: 'string', required: true, description: 'Configured connection name' }, path: { type: 'string', required: true, description: 'Origin-relative path; e.g. /api/json or /api/v4/projects' },
       timeout: { type: 'number', description: 'Execution timeout in milliseconds (1–600000)', default: 120000 },
@@ -45,7 +45,7 @@ export class ConnectionsTool extends BaseTool {
       let body: unknown = text; if (response.headers.get('content-type')?.includes('application/json')) { try { body = JSON.parse(text); } catch { /* preserve redacted text */ } }
       return mask({ status: response.status, ok: response.ok, redirected: response.status >= 300 && response.status < 400, body });
     };
-    this.registerTool('request', 'Authenticated HTTP API request through a configured connection. Use a relative path, method, query, headers and optional JSON/form fields. No secret values or templates. Redirects are not followed.', requestSchema, request, { permissionAction: 'request' });
+    this.registerTool('request', 'Authenticated HTTP API request through a configured connection. Use a relative path, method, query, headers and optional JSON/form fields. No secret values or templates. Redirects are not followed. JSON Login connections sign in and refresh internally; request the protected resource, never the login/refresh endpoint.', requestSchema, request, { permissionAction: 'request' });
     this.registerTool('get', 'Read an authenticated HTTP API through a configured connection using GET. Returns status and redacted JSON/text; no secret values or templates.', createParameterSchema({
       connection: { type: 'string', required: true, description: 'Configured connection name' }, path: { type: 'string', required: true, description: 'Origin-relative API path' },
       query: { type: 'object', description: 'Query string fields' }, headers: { type: 'object', description: 'Non-authentication headers' },
