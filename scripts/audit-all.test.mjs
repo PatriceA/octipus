@@ -10,7 +10,7 @@ import { auditFindings } from './audit-exceptions.mjs';
 const script = fileURLToPath(new URL('./audit-all.mjs', import.meta.url));
 const root = fileURLToPath(new URL('../', import.meta.url));
 
-for (const failure of ['', 'octipus', 'web', 'mcp-server']) {
+for (const failure of ['', '.', 'web', 'mcp-server']) {
   test(`audits every package and propagates ${failure || 'no'} failure`, () => {
     const temp = mkdtempSync(join(tmpdir(), 'octipus-audit-'));
     try {
@@ -18,11 +18,11 @@ for (const failure of ['', 'octipus', 'web', 'mcp-server']) {
       const log = join(temp, 'calls.jsonl');
       writeFileSync(cli, `
         const { appendFileSync } = require('node:fs');
-        const { basename } = require('node:path');
+        const { relative } = require('node:path');
         appendFileSync(process.env.AUDIT_TEST_LOG, JSON.stringify({
           cwd: process.cwd(), args: process.argv.slice(2)
         }) + '\\n');
-        const failing = basename(process.cwd()) === process.env.AUDIT_TEST_FAILURE;
+        const failing = (relative(process.env.AUDIT_TEST_ROOT, process.cwd()) || '.') === process.env.AUDIT_TEST_FAILURE;
         process.stdout.write(JSON.stringify({ vulnerabilities: failing
           ? { leftpad: { severity: 'high', via: [{ url: 'https://github.com/advisories/GHSA-aaaa-bbbb-cccc', title: 'test' }], nodes: ['node_modules/leftpad'] } }
           : {} }));
@@ -30,7 +30,7 @@ for (const failure of ['', 'octipus', 'web', 'mcp-server']) {
       `);
       const result = spawnSync(process.execPath, [script], {
         cwd: temp,
-        env: { ...process.env, npm_execpath: cli, AUDIT_TEST_LOG: log, AUDIT_TEST_FAILURE: failure },
+        env: { ...process.env, npm_execpath: cli, AUDIT_TEST_LOG: log, AUDIT_TEST_ROOT: root, AUDIT_TEST_FAILURE: failure },
         encoding: 'utf8',
       });
       assert.equal(result.status, failure ? 1 : 0, result.stderr);
