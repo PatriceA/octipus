@@ -180,6 +180,7 @@ const ALLOWLIST: Record<string, string> = {
   'src/core/learning/queue.ts': "a session's learning jobs and events, keyed by session id",
   'src/api/routes/sessions.ts': "a session's learning jobs, after the scoped session lookup",
   'src/core/notification-service.ts': "a user's own inbox (every notification of a user is theirs)",
+  'src/db/repositories/docker-project-repository.ts': 'global daemon/project reservation: ownership is compared against caller user, workspace and repo before any operation',
   'src/security/orgs.ts': 'workspace transfer/delete, by workspace id',
   'src/security/permissions.ts': "a workspace's permission requests, by workspace id",
   'src/security/quotas.ts': 'counts for quota enforcement',

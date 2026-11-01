@@ -54,6 +54,9 @@ export const WORKSPACE_TABLES: readonly WorkspaceTable[] = [
   { table: 'contacts', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   // Billing history: who spent what, where. Outlives the space.
   { table: 'cost_log', ownerColumn: 'user_id', transfer: 'n/a', purge: 'keep' },
+  // Permanent daemon ownership prevents another workspace adopting retained volumes.
+  // Transfer/purge never grants a new principal authority over those host resources.
+  { table: 'docker_project_owners', ownerColumn: 'user_id', transfer: 'n/a', purge: 'keep' },
   { table: 'documents', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   // A space file's "Ben is editing" lease (S3); spaces are never transferred.
   // A group channel bound to a space (§9.4): the enrolment is its owner's and
