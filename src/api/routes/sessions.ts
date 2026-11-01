@@ -1,3 +1,4 @@
+import { getConfig } from '@/config';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { backgroundJobs } from '@/db/schema/background-jobs';
@@ -477,7 +478,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
       try {
         // forSession: dev-mode sessions resolve against the project dir the
         // agent actually ran in, not the per-user workspace (P1.8).
-        const fs = WorkspaceFS.forSession(session, spaceAccessOf(principal));
+        const fs = WorkspaceFS.forSession(session, spaceAccessOf(principal), { extraAllowedPrefixes: getConfig().workspace.additionalPaths });
         const result = await readSessionFile(fs, query.path);
         if ('version' in result) set.headers.ETag = `"${result.version}"`;
         return result;

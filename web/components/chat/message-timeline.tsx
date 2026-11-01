@@ -194,8 +194,8 @@ function ElapsedTimer({ startTime, active = true }: { startTime: number; active?
 // notes all render markdown identically.
 // ---------------------------------------------------------------------------
 
-function MessageContent({ content, untrusted }: { content: string; untrusted?: boolean }) {
-  return <Markdown content={content} untrusted={untrusted} />;
+function MessageContent({ content, untrusted, onOpenFile }: { content: string; untrusted?: boolean; onOpenFile?: (path: string) => void }) {
+  return <Markdown content={content} untrusted={untrusted} onOpenFile={onOpenFile} />;
 }
 
 // ---------------------------------------------------------------------------
@@ -235,7 +235,7 @@ function LimitRefusalCard({ limit, fallback }: { limit: LimitRefusal; fallback: 
 // MessageBubble
 // ---------------------------------------------------------------------------
 
-function MessageBubble({ message, untrusted, companionName, companionAppearance, motionPaused }: { message: ChatMessageData; untrusted?: boolean; companionName: string; companionAppearance?: CompanionAppearance; motionPaused: boolean }) {
+function MessageBubble({ message, untrusted, onOpenFile, companionName, companionAppearance, motionPaused }: { message: ChatMessageData; untrusted?: boolean; onOpenFile?: (path: string) => void; companionName: string; companionAppearance?: CompanionAppearance; motionPaused: boolean }) {
   const { role, content, timestamp, classification, metadata } = message;
   const timeStr = new Date(timestamp).toLocaleTimeString();
   // Only a freshly mounted reply celebrates. Reopening a session must not
@@ -249,7 +249,7 @@ function MessageBubble({ message, untrusted, companionName, companionAppearance,
         <CompanionAvatar size={28} appearance={message.companion?.appearance} />
         <div className="min-w-0 border-l-2 border-primary/30 pl-3 text-sm text-on-surface-variant">
           <p className="mb-1 text-[11px]">{message.companion ? `${message.companion.name} · ${message.companion.ownerName}’s companion` : 'Octipus'} · update</p>
-          <MessageContent content={content} untrusted={untrusted} />
+          <MessageContent content={content} untrusted={untrusted} onOpenFile={onOpenFile} />
           <p className="mt-1 text-[10px] opacity-60">{timeStr}</p>
         </div>
       </div>
@@ -260,7 +260,7 @@ function MessageBubble({ message, untrusted, companionName, companionAppearance,
     return (
       <div className="flex justify-center py-2">
         <div className="text-center text-sm italic text-on-surface-variant max-w-lg px-4 py-2 rounded-lg bg-surface-container/60">
-          <MessageContent content={content} untrusted={untrusted} />
+          <MessageContent content={content} untrusted={untrusted} onOpenFile={onOpenFile} />
           <p className="text-[10px] mt-1 text-on-surface-variant/60">{timeStr}</p>
         </div>
       </div>
@@ -339,7 +339,7 @@ function MessageBubble({ message, untrusted, companionName, companionAppearance,
         ) : (
           <div className="bg-surface-container border border-outline-variant/10 px-4 py-3 rounded-2xl rounded-tl-md shadow-xs text-on-surface min-w-0">
             {/* Interactive answers render as blocks between the markdown parts. */}
-            <AssistantContent content={content} untrusted={untrusted} />
+            <AssistantContent content={content} untrusted={untrusted} onOpenFile={onOpenFile} />
           </div>
         )}
 
@@ -1044,7 +1044,7 @@ export default function MessageTimeline({
       {timeline.map((entry, idx) => {
         switch (entry.kind) {
           case 'message':
-            return <div key={`msg-${entry.data.id}`} data-message-id={entry.data.id} tabIndex={-1}><MemoMessageBubble message={entry.data} untrusted={untrusted} companionName={companionName} companionAppearance={companionAppearance} motionPaused={motionPaused} /></div>;
+            return <div key={`msg-${entry.data.id}`} data-message-id={entry.data.id} tabIndex={-1}><MemoMessageBubble message={entry.data} untrusted={untrusted} onOpenFile={onOpenFile} companionName={companionName} companionAppearance={companionAppearance} motionPaused={motionPaused} /></div>;
           case 'agent':
             return <MemoAgentActivityInline key={`agent-${entry.data.id}`} agent={entry.data} onOpenFile={onOpenFile} />;
           case 'team':

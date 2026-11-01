@@ -14,7 +14,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Elysia } from '@/api/http';
@@ -271,4 +271,23 @@ describe('message history pagination', () => {
       expect(count).toHaveBeenCalledTimes(1);
     } finally { count.mockRestore(); }
   });
+});
+
+
+test('file links can read operator-approved repositories while foreign sessions stay inaccessible', async () => {
+  const { getConfig, refreshConfigKey } = await import('@/config');
+  const previous = getConfig().workspace.additionalPaths;
+  const repo = mkdtempSync(join(tmpdir(), 'octipus-approved-file-link-'));
+  const path = join(repo, 'demo shared.log'); writeFileSync(path, 'synthetic demo evidence');
+  try {
+    refreshConfigKey('workspace.additionalPaths', [repo]);
+    const own = await get(bobApp, `/api/sessions/${bobSessionId}/files?path=${encodeURIComponent(path)}`);
+    expect(own.status).toBe(200); expect(own.body.content).toBe('synthetic demo evidence');
+    const other = await get(aliceApp, `/api/sessions/${bobSessionId}/files?path=${encodeURIComponent(path)}`);
+    expect(other.body).toEqual({ error: 'Session not found' });
+    refreshConfigKey('workspace.additionalPaths', []);
+    const revoked = await get(bobApp, `/api/sessions/${bobSessionId}/files?path=${encodeURIComponent(path)}`);
+    expect(revoked).toMatchObject({ status: 400, body: { code: 'invalid_path' } });
+    expect(revoked.body).not.toHaveProperty('content');
+  } finally { refreshConfigKey('workspace.additionalPaths', previous); rmSync(repo, { recursive: true, force: true }); }
 });

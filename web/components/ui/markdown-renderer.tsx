@@ -7,6 +7,7 @@ import remarkGfm from 'remark-gfm';
 import { AuthedImage } from '@/components/ui/authed-image';
 import { remarkWikilink } from '@/lib/remark-wikilink';
 import { pointsHere, remoteImage } from '@/lib/remote-content';
+import { localFileLink } from '../../../src/shared/local-file-link';
 import { cn } from '@/lib/utils';
 
 // ---------------------------------------------------------------------------
@@ -70,6 +71,7 @@ export function Markdown({
   className,
   onWikilink,
   onTag,
+  onOpenFile,
   untrusted = false,
 }: {
   content: string;
@@ -80,6 +82,8 @@ export function Markdown({
   onWikilink?: (slug: string) => void;
   /** When set, inline `#tags` render as clickable chips. */
   onTag?: (tag: string) => void;
+  /** Open host file references in the authenticated session file viewer. */
+  onOpenFile?: (path: string) => void;
 }) {
   const enableInline = !!(onWikilink || onTag);
   // Component identity must survive polling and streaming renders. Defining
@@ -185,7 +189,9 @@ export function Markdown({
                 </button>
               );
             }
-            if (untrusted && (!href || pointsHere(href, here()))) return <span>{children}</span>;
+            const filePath = localFileLink(href, here());
+            if (untrusted && (filePath || !href || pointsHere(href, here()))) return <span>{children}</span>;
+            if (filePath && onOpenFile) return <button type="button" onClick={() => onOpenFile(filePath)} className="text-primary underline hover:opacity-80" title={`Open ${filePath}`}>{children}</button>;
             return (
               <a
                 href={href ?? '#'}
@@ -216,16 +222,16 @@ export function Markdown({
           ol({ children }) {
             return <ol className="list-decimal pl-5 space-y-0.5">{children}</ol>;
           },
-  }), [onWikilink, onTag, untrusted]);
+  }), [onWikilink, onTag, onOpenFile, untrusted]);
   return (
     <div className={cn('space-y-2 text-sm leading-relaxed', className)}>
       <ReactMarkdown
         remarkPlugins={enableInline ? [remarkGfm, remarkWikilink] : [remarkGfm]}
-        urlTransform={
-          enableInline
-            ? (url) => (url.startsWith('wikilink:') || url.startsWith('tag:') ? url : defaultUrlTransform(url))
-            : undefined
-        }
+        urlTransform={(url) => {
+          if (enableInline && (url.startsWith('wikilink:') || url.startsWith('tag:'))) return url;
+          if (!untrusted && onOpenFile && localFileLink(url, here())) return url;
+          return defaultUrlTransform(url);
+        }}
         components={components}
       >
         {content}

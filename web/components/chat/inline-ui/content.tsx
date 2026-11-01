@@ -21,16 +21,16 @@ import { useInlineUiHost } from './context';
 import { InlineUiBlock } from './block';
 import { InlineUiFrame } from './frame';
 
-export function AssistantContent({ content, untrusted }: { content: string; untrusted?: boolean }) {
+export function AssistantContent({ content, untrusted, onOpenFile }: { content: string; untrusted?: boolean; onOpenFile?: (path: string) => void }) {
   const host = useInlineUiHost();
   const segments = useMemo(() => splitInlineUiSegments(content), [content]);
-  if (segments.length === 1 && segments[0].kind === 'text') return <Markdown content={content} untrusted={untrusted} />;
-  if (!host) return <Markdown content={inlineUiFallbackText(content)} untrusted={untrusted} />;
+  if (segments.length === 1 && segments[0].kind === 'text') return <Markdown content={content} untrusted={untrusted} onOpenFile={onOpenFile} />;
+  if (!host) return <Markdown content={inlineUiFallbackText(content)} untrusted={untrusted} onOpenFile={onOpenFile} />;
   return (
     <>
       {segments.map((segment, i) =>
         segment.kind === 'text'
-          ? <Markdown key={`t${i}`} content={segment.text} untrusted={untrusted} />
+          ? <Markdown key={`t${i}`} content={segment.text} untrusted={untrusted} onOpenFile={onOpenFile} />
           : <InlineUiBlock key={`b${i}:${segment.id}`} id={segment.id} title={segment.title} />,
       )}
     </>

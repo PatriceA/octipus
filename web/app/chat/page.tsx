@@ -2203,6 +2203,7 @@ export default function ChatPage() {
       {openFilePath && activeSessionId && (
         <div className="workspace-file-view flex min-h-0 min-w-[24rem] flex-1 flex-col border-l border-outline-variant/10">
           <FileViewer
+            key={`${activeSessionId}:${openFilePath}`}
             sessionId={activeSessionId}
             path={openFilePath}
             onClose={() => setOpenFilePath(null)}
