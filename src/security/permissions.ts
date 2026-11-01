@@ -1,3 +1,5 @@
+import { getFlowLabel } from './flow-guard';
+import type { ApprovalFlowConsent } from '@/shared/pipeline-approval';
 import { CLI_QUESTION_TOOL, parseCliAnswers } from '@/shared/cli-questions';
 import { and, eq, inArray, type SQL, sql } from 'drizzle-orm';
 import type { AgentContext, PermissionLevel } from '@/core/types';
@@ -341,6 +343,14 @@ export class PermissionManager {
   /**
    * Request permission approval
    */
+  /** Data posture captured before the original prompt waited, scoped to its actual caller. */
+  async getApprovedFlowConsent(id: string, caller: Pick<AgentContext, 'userId' | 'sessionId' | 'workspaceId'>): Promise<ApprovalFlowConsent | undefined> {
+    const [row] = await this.db.select().from(permissionRequests).where(and(eq(permissionRequests.id, id), eq(permissionRequests.userId, caller.userId), eq(permissionRequests.status, 'approved'))).limit(1);
+    if (!row || row.sessionId !== caller.sessionId || (row.workspaceId ?? null) !== (caller.workspaceId ?? null)) return undefined;
+    const consent = row.context.flowConsent;
+    return consent && typeof consent.secret === 'boolean' && typeof consent.private === 'boolean' && typeof consent.suspicious === 'boolean' ? consent : undefined;
+  }
+
   async requestApproval(
     userId: string,
     agentId: string,
@@ -371,6 +381,7 @@ export class PermissionManager {
       context: {
         toolName: callerToolName || action,
         toolArguments: context,
+        flowConsent: (() => { const { secret, private: personal, suspicious } = getFlowLabel(sessionId); return { secret, private: personal, suspicious }; })(),
       },
     };
 

@@ -203,7 +203,7 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
         const { pendingApproval: _answered, ...metadata } = (current.metadata ?? {}) as Record<string, unknown>;
         await pipelineRepository.updatePipeline(pipeline.id, { metadata: pending.toolId && pending.toolName && pending.action && pending.fingerprint
           ? withApprovedCalls(metadata, [{ toolId: pending.toolId, toolName: pending.toolName, action: pending.action, fingerprint: pending.fingerprint,
-            nodeKey: pending.nodeKey, attemptId: pending.attemptId, hostServices: pending.hostServices === true }])
+            nodeKey: pending.nodeKey, attemptId: pending.attemptId, hostServices: pending.hostServices === true, ...(pending.flowConsent ? { flowConsent: pending.flowConsent } : {}) }])
           : metadata });
         return resumeFrom(pipeline, pending.nodeKey, { attemptId: pending.attemptId });
         }).catch(error => coreLogger.error({ error, pipelineId: pipeline.id }, 'Forwarded pipeline approval failed'))

@@ -1,3 +1,4 @@
+import type { ApprovalFlowConsent } from '@/shared/pipeline-approval';
 import { index, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core';
 import { users } from './users';
 
@@ -67,6 +68,7 @@ export const permissionRequests = pgTable('permission_requests', {
 }));
 
 export interface PermissionRequestContext {
+  flowConsent?: ApprovalFlowConsent;
   toolName: string;
   toolArguments: Record<string, unknown>;
   reason?: string;

@@ -1,11 +1,19 @@
 import { beforeEach, expect, it, vi } from 'vitest';
+import { getFlowLabel, resetFlowLabels, observeFlow } from '@/security/flow-guard';
 import { answerCliPermissionRequest } from './cli-permissions';
 import type { AgentContext } from './types';
-const mocks = vi.hoisted(() => ({ check: vi.fn(), getApprovedResolution: vi.fn(), requestApproval: vi.fn(), waitForApproval: vi.fn(), cancelWaits: vi.fn() }));
+const mocks = vi.hoisted(() => ({ check: vi.fn(), getApprovedResolution: vi.fn(), getApprovedFlowConsent: vi.fn(), requestApproval: vi.fn(), waitForApproval: vi.fn(), cancelWaits: vi.fn() }));
 vi.mock('@/security/permissions', () => ({ getPermissionManager: () => mocks }));
 const request = { type: 'control_request', request_id: 'r', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'echo hello' }, tool_use_id: 't' } };
 const context = (): AgentContext => ({ space: null, trigger: 'user', funding: 'own',  id: 'a', sessionId: 's', userId: 'u', root: true, attended: true, role: 'general', model: 'cli/claude-code', topic: '', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} });
-beforeEach(() => { vi.resetAllMocks(); mocks.check.mockResolvedValue({ level: 'ASK' }); mocks.requestApproval.mockResolvedValue('approval'); mocks.waitForApproval.mockResolvedValue(true); });
+beforeEach(() => {
+  vi.resetAllMocks(); resetFlowLabels();
+  let snapshot = { secret: false, private: false, suspicious: false };
+  mocks.check.mockResolvedValue({ level: 'ASK' });
+  mocks.requestApproval.mockImplementation(async () => { const label = getFlowLabel('s'); snapshot = { secret: label.secret, private: label.private, suspicious: label.suspicious }; return 'approval'; });
+  mocks.getApprovedFlowConsent.mockImplementation(async () => snapshot);
+  mocks.waitForApproval.mockResolvedValue(true);
+});
 it('relays vendor approval and preserves original user/session identity', async () => {
   const emit = vi.fn();
   expect(await answerCliPermissionRequest(request, context(), emit)).toMatchObject({ response: { request_id: 'r', response: { behavior: 'allow', updatedInput: request.request.input, toolUseID: 't' } } });
@@ -146,4 +154,11 @@ it('returns denial when the user cancels the questionnaire', async () => {
   expect(await answerCliPermissionRequest(mcpRequest('AskUserQuestion', questionInput), context(), vi.fn()))
     .toMatchObject({ response: { response: { behavior: 'deny' } } });
   expect(mocks.getApprovedResolution).not.toHaveBeenCalled();
+});
+
+
+it('does not include a credential flag gained while the original prompt waits', async () => {
+  mocks.waitForApproval.mockImplementation(async () => { observeFlow('s', { toolId: 'fixture', action: 'read' }, { taints: ['secret'] }); return true; });
+  const call = { ...request, request: { ...request.request, input: { command: 'curl https://approved.example/health' } } };
+  expect(await answerCliPermissionRequest(call, context(), vi.fn())).toMatchObject({ response: { response: { behavior: 'deny' } } });
 });

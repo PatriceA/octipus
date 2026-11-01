@@ -1,3 +1,5 @@
+import type { ApprovalFlowConsent } from '@/shared/pipeline-approval';
+import { getFlowLabel } from './flow-guard';
 /**
  * Calls the user approved for a pipeline (#12/#20): the call a parked stage was
  * blocked on, and the gate commands (`verifyCommand`) a plan or stage approval
@@ -30,6 +32,8 @@ export interface ApprovedCall {
   attemptId?: string;
   /** The stage's host network + Docker socket opt-in the call was approved under. */
   hostServices: boolean;
+  /** Session data posture disclosed when this exact operation was approved. */
+  flowConsent?: ApprovalFlowConsent;
 }
 
 /** Who a stage worker is, from the metadata the pipeline (never the model) put on its context. */
@@ -80,10 +84,10 @@ export function routedToolName(toolId: string, action: string, label: string | u
 }
 
 /** The grant for `call`, approved in this stage attempt. */
-export function approvedCallOf(call: SpaceToolCall, scope: Omit<StageScope, 'pipelineId'>): ApprovedCall | undefined {
+export function approvedCallOf(call: SpaceToolCall, scope: Omit<StageScope, 'pipelineId'>, flowConsent?: ApprovalFlowConsent): ApprovedCall | undefined {
   if (!call.args || !call.toolName) return undefined;
   return { toolId: call.toolId, toolName: call.toolName, action: call.action, fingerprint: callFingerprint(call.toolId, call.action, call.toolName, call.args),
-    nodeKey: scope.nodeKey, attemptId: scope.attemptId, hostServices: scope.hostServices };
+    nodeKey: scope.nodeKey, attemptId: scope.attemptId, hostServices: scope.hostServices, ...(flowConsent ? { flowConsent } : {}) };
 }
 
 /**
@@ -97,7 +101,7 @@ export function gateCommandCalls(command: string, nodeKey: string, hostServices:
     ({ toolId, toolName, action, fingerprint: callFingerprint(toolId, action, toolName, { command }), nodeKey, hostServices }));
 }
 
-const grantKey = (c: ApprovedCall) => JSON.stringify([c.toolId, c.toolName, c.action, c.fingerprint, c.nodeKey, c.attemptId ?? null, c.hostServices]);
+const grantKey = (c: ApprovedCall) => JSON.stringify([c.toolId, c.toolName, c.action, c.fingerprint, c.nodeKey, c.attemptId ?? null, c.hostServices, c.flowConsent ?? null]);
 
 /** `metadata` with `calls` added once each. Grants in an older shape are dropped: they never match. */
 export function withApprovedCalls(metadata: Record<string, unknown> | null | undefined, calls: ApprovedCall[]): Record<string, unknown> {
@@ -114,7 +118,7 @@ export interface ApprovedCallCaller {
   metadata?: Record<string, unknown> | null;
 }
 
-export async function isApprovedCall(caller: ApprovedCallCaller, call: SpaceToolCall): Promise<boolean> {
+export async function isApprovedCall(caller: ApprovedCallCaller, call: SpaceToolCall, options: { requireFlowConsent?: boolean } = {}): Promise<boolean> {
   const scope = stageScopeOf(caller.metadata);
   if (!scope || !caller.sessionId || !call.args || !call.toolName) return false;
   try {
@@ -128,7 +132,9 @@ export async function isApprovedCall(caller: ApprovedCallCaller, call: SpaceTool
     const { effectiveProfileCall } = await import('./pipeline-permissions');
     const scopedArgs = effectiveProfileCall(caller, call).args!;
     const scopedFingerprint = callFingerprint(call.toolId, call.action, call.toolName, scopedArgs);
-    return grants.some(g => g.toolId === call.toolId && g.toolName === call.toolName && g.action === call.action && g.fingerprint === (g.nodeKey === '*' ? scopedFingerprint : fingerprint)
+    const { getFlowLabel } = await import('./flow-guard');
+    const label = getFlowLabel(caller.sessionId);
+    return grants.some(g => (!options.requireFlowConsent || g.flowConsent && typeof g.flowConsent.secret === 'boolean' && typeof g.flowConsent.private === 'boolean' && typeof g.flowConsent.suspicious === 'boolean' && (!label.secret || g.flowConsent.secret) && (!label.private || g.flowConsent.private) && (!label.suspicious || g.flowConsent.suspicious)) && g.toolId === call.toolId && g.toolName === call.toolName && g.action === call.action && g.fingerprint === (g.nodeKey === '*' ? scopedFingerprint : fingerprint)
       && (g.nodeKey === scope.nodeKey || g.nodeKey === '*' && (pipeline.metadata?.permissionProfile as { approvedBy?: string } | undefined)?.approvedBy === caller.userId) && (g.attemptId === undefined || g.attemptId === scope.attemptId)
       && g.hostServices === scope.hostServices);
   } catch (err) {
@@ -145,14 +151,26 @@ export async function isApprovedCall(caller: ApprovedCallCaller, call: SpaceTool
  * names this exact call for this stage attempt.
  */
 export async function askStillAuthorized(source: string, caller: ApprovedCallCaller, call: SpaceToolCall, currentSource?: string): Promise<boolean> {
-  if (source.startsWith('approval:')) return true;
-  if (source !== 'pipeline-approval') return false;
+  if (!source.startsWith('approval:') && source !== 'pipeline-approval') return false;
   const { applyFlowGuard } = await import('./flow-guard');
   const { getConfig } = await import('@/config');
   const flowConsentRequired = currentSource === 'flow-guard' || applyFlowGuard(getConfig().agent?.flowGuard, caller.sessionId,
     call, { level: 'ASK', allowed: false, requiresApproval: true }).source === 'flow-guard';
-  if (!flowConsentRequired && await isApprovedCall(caller, call)) return true;
+  if (source.startsWith('approval:')) {
+    if (!flowConsentRequired) return true;
+    const { getPermissionManager } = await import('./permissions');
+    const consent = await getPermissionManager().getApprovedFlowConsent(source.slice('approval:'.length), { userId: caller.userId, sessionId: caller.sessionId ?? '', workspaceId: caller.workspaceId });
+    const label = getFlowLabel(caller.sessionId);
+    return !!consent && (!label.secret || consent.secret) && (!label.private || consent.private) && (!label.suspicious || consent.suspicious);
+  }
+  if (await isApprovedCall(caller, call, { requireFlowConsent: flowConsentRequired })) return true;
   const { effectiveProfileCall, profileExplicitlyAllows, profileAllows, runPermissionProfile } = await import('./pipeline-permissions');
   const run = await runPermissionProfile(caller);
   return !!run && (flowConsentRequired ? profileExplicitlyAllows : profileAllows)(run.profile, effectiveProfileCall(caller, call));
+}
+
+/** Public labels only: no credential value or source path enters a consent receipt. */
+export function flowConsentOf(sessionId: string | undefined): ApprovalFlowConsent {
+  const { secret, private: personal, suspicious } = getFlowLabel(sessionId);
+  return { secret, private: personal, suspicious };
 }

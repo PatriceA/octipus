@@ -1,3 +1,5 @@
+import { runPermissionProfile } from '@/security/pipeline-permissions';
+import { redactedCommand } from '@/utils/command-log';
 import { redactAgentDiagnostics } from '@/security/credential-redaction';
 import { createAgentActivityTools } from './agent/activity-tools';
 import { buildToolDiscoveryHandlers } from '@/tools/tool-discovery';
@@ -314,13 +316,15 @@ When a task matches one of these skills, load it with get_skill before starting 
     const guidance = this.acceptsLiveGuidance ? [...this.steeringQueue] : this.steeringQueue.splice(0);
     if (!this.acceptsLiveGuidance) this.messages.push(...guidance);
     if (guidance.length && !this.acceptsLiveGuidance) this.emit('thought', { type: 'steering_delivered', delivery: 'CLI context', count: guidance.length });
+    const permissionRun = await runPermissionProfile(this.context);
     return JSON.stringify({
+      ...(permissionRun ? { pipelineApproval: { pipelineId: permissionRun.pipeline.id, approvedAt: (permissionRun.pipeline.metadata?.permissionProfile as { approvedAt?: string })?.approvedAt, repositories: [permissionRun.profile.repoPath, ...permissionRun.profile.repoPaths], commands: permissionRun.profile.commands.map(redactedCommand), note: 'Use these approved commands for remote verification; transport/output-only verification variants retain the same fixed target. Other commands still need consent.' } } : {}),
       agentId: this.context.id, sessionId: this.context.sessionId,
       workspaceId: this.context.workspaceId, planMode: this.connection?.planMode ?? false,
       shellCapabilities: { hostServices: this.context.metadata?.hostServices === true,
         browserCache: 'Shared host browser runtimes are mounted read-only independently of hostServices; compatible revisions must already be installed.',
         docker: 'Use permitted dedicated docker tools for host containers; compose_project provides repository-scoped local lifecycle when available. Remote stacks require approved SSH shell commands.',
-        note: 'Registered shell commands use the Octipus sandbox. Without approved hostServices a missing Docker socket describes that sandbox, not the host. Native vendor CLI Bash may have different host access.' },
+        note: 'Registered shell commands use the Octipus sandbox. Without approved hostServices a missing Docker socket describes that sandbox, not the host. Native vendor CLI Bash may have different host access. A root context does not inherit child pipeline approval; inspect that pipeline status for its scope.' },
       workPlan: formatWorkPlanContext(state), guidance: guidance.map(m => m.content),
       ...(this.detached.count() > 0 ? {
         detachedChildren: this.detached.list().map(pc => ({ childId: pc.childId, topic: pc.topic, runningMs: Date.now() - pc.startedAt })),

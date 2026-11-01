@@ -1,3 +1,6 @@
+import { isApprovedCall } from '@/security/approved-calls';
+import { implicitVerificationCommand } from '@/security/verification-command';
+import { profileVerificationRewrite, runPermissionProfile } from '@/security/pipeline-permissions';
 import { resolveShellCwd } from '@/security/shell-cwd';
 import { redactedCommand } from '@/utils/command-log';
 import { homedir } from 'node:os';
@@ -10,7 +13,7 @@ import { isSensitiveEnvName } from '@/security/child-env';
 import { HOST_IDENTITY_ENV, openSpaceToolHome, type SpaceToolHome, withToolHome } from '@/security/space-tool-env';
 import type { AgentContext, ToolManifest } from '@/core/types';
 import { toolLogger } from '@/utils/logger';
-import { BaseTool, createParameterSchema } from '../base-tool';
+import { BaseTool, createParameterSchema, type ToolContext } from '../base-tool';
 import { interpretExit } from './exit-code-semantics';
 import { LocalShellOperations } from './local-operations';
 import type { ShellExecResult, ShellOperations } from './operations';
@@ -116,8 +119,9 @@ export class ShellTool extends BaseTool {
         if (typeof args.command !== 'string' || !args.command) {
           throw new ToolNotExecutedError('shell', 'Missing required parameter "command". The tool call arguments may have been truncated or malformed.');
         }
-        const command = args.command;
+        const requestedCommand = args.command;
         const cwd = resolveShellCwd(args.cwd, context);
+        const command = await this.profileCommand({ ...args, cwd }, context, 'run');
         const timeout = effectiveShellTimeout(args.timeout, context?.metadata);
         const unsafe = args.useShell === true;
         const allowNetwork = args.network === true;
@@ -127,6 +131,7 @@ export class ShellTool extends BaseTool {
 
         toolLogger.info({
           command: redactedCommand(command),
+          ...(command !== requestedCommand ? { requestedCommand: redactedCommand(requestedCommand), rewriteReason: 'Use the explicitly approved Compose file; remote default discovery is not authorized' } : {}),
           cwd,
           unsafe,
           agentId: context?.id,
@@ -184,6 +189,7 @@ export class ShellTool extends BaseTool {
 
         return {
           ...result,
+          ...(command !== requestedCommand ? { requestedCommand: redactedCommand(requestedCommand), executedCommand: redactedCommand(command), rewriteReason: 'Anchored to the explicitly approved Compose file' } : {}),
           ...(browserRuntimeDiagnostic(result.stderr) ? { environmentDiagnostic: browserRuntimeDiagnostic(result.stderr) } : {}),
           outcome: interpretation.outcome,
           ...(interpretation.semantic ? { semantic: interpretation.semantic } : {}),
@@ -206,8 +212,9 @@ export class ShellTool extends BaseTool {
         if (typeof args.command !== 'string' || !args.command) {
           throw new Error('Missing required parameter "command". The tool call arguments may have been truncated or malformed.');
         }
-        const command = args.command;
+        const requestedCommand = args.command;
         const cwd = resolveShellCwd(args.cwd, context);
+        const command = await this.profileCommand({ ...args, cwd }, context, 'run_background');
         const unsafe = args.useShell === true;
         const allowNetwork = args.network === true;
 
@@ -239,7 +246,7 @@ export class ShellTool extends BaseTool {
           throw err;
         }
 
-        return { pid, command, status: 'running' };
+        return { pid, command, status: 'running', ...(command !== requestedCommand ? { requestedCommand: redactedCommand(requestedCommand), executedCommand: redactedCommand(command), rewriteReason: 'Anchored to the explicitly approved Compose file' } : {}) };
       },
       { permissionAction: (args) => this.resolvePermissionAction(args.command as string) }
     );
@@ -316,6 +323,21 @@ export class ShellTool extends BaseTool {
    * the work — correctness, not a sandbox: a command can still `cd` wherever
    * the process may.
    */
+
+  private async profileCommand(args: Record<string, unknown>, context: AgentContext, toolName: string): Promise<string> {
+    const requested = args.command as string;
+    const call = { toolId: this.id, action: this.resolvePermissionAction(requested), toolName, args };
+    const run = await runPermissionProfile(context);
+    if (run?.profile.commands.includes(requested)) return requested;
+    const rewritten = run ? profileVerificationRewrite(run.profile, call) : undefined;
+    if (rewritten) return rewritten;
+    if (typeof context.metadata?.pipelineId === 'string' && implicitVerificationCommand(requested)
+      && !(context as ToolContext).authorizationSource?.startsWith('approval:')
+      && !await isApprovedCall(context, call, { requireFlowConsent: true })) {
+      throw new ToolNotExecutedError('shell', 'The current approved Compose anchor is unavailable. No remote command was executed; use an explicit approved -f command or obtain consent for discovery.');
+    }
+    return requested;
+  }
 
   private validateCommand(command: string): void {
     // Content policy lives in `./policy` so the `command_exit_zero` scorer

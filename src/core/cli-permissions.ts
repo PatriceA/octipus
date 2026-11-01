@@ -1,3 +1,4 @@
+import { askStillAuthorized } from '@/security/approved-calls';
 import { rememberRunDecision } from '@/security/pipeline-permissions';
 import { cliQuestionsSchema, parseCliAnswers } from '@/shared/cli-questions';
 import { z } from 'zod';
@@ -69,6 +70,7 @@ export async function answerCliPermissionRequest(
   const decision = await routeApprovalFor(context, { toolId, action: request.tool_name, toolName: request.tool_name, args: request.input },
     isQuestion && permission.level !== 'DENY' ? { ...permission, level: 'ASK' } : permission, { unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions });
   let allowed = decision.route === 'execute';
+  let authorizationSource = decision.source ?? 'policy';
   if (decision.route === 'ask_human' && context.status === 'running' && !signal?.aborted) {
     const id = await manager.requestApproval(context.userId, context.id, toolId, request.tool_name,
       request.input, context.sessionId, `CLI: ${request.tool_name}`, signal, context.workspaceId);
@@ -76,7 +78,8 @@ export async function answerCliPermissionRequest(
     emit('permission_request', { requestId: id, toolName: `CLI: ${request.tool_name}`, args: request.input, toolId,
       ...(decision.source === 'flow-guard' || decision.source === 'space-flow' ? { reason: decision.reason } : {}) });
     allowed = await manager.waitForApproval(id, { agentId: context.id });
-    if (allowed) await rememberRunDecision(context, { ...flowCall, toolName: request.tool_name });
+    if (allowed) authorizationSource = `approval:${id}`;
+    if (allowed) await rememberRunDecision(context, { ...flowCall, toolName: request.tool_name }, undefined, id);
     if (allowed && isQuestion) {
       let answers: ReturnType<typeof parseCliAnswers>;
       try {
@@ -91,7 +94,13 @@ export async function answerCliPermissionRequest(
   }
   if (allowed) {
     const current = await manager.check(context.userId, toolId, request.tool_name, request.input, context, { revalidate: true });
-    if (current.level === 'DENY') allowed = false;
+    const currentFlow = applyFlowGuard(getConfig().agent?.flowGuard, context.sessionId, flowCall, current);
+    if (currentFlow.level === 'DENY') allowed = false;
+    else if (currentFlow.level === 'ASK') {
+      allowed = authorizationSource.startsWith('approval:') || authorizationSource === 'pipeline-approval'
+        ? await askStillAuthorized(authorizationSource, context, { ...flowCall, toolName: request.tool_name }, currentFlow.source)
+        : (await routeApprovalFor(context, { ...flowCall, toolName: request.tool_name }, currentFlow)).route === 'execute';
+    }
   }
   if (context.status !== 'running' || signal?.aborted) allowed = false;
   if (allowed) observeFlow(context.sessionId, flowCall);

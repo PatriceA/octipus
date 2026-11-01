@@ -170,7 +170,7 @@ export async function routeApprovalFor(
   // The user already approved this exact call for this stage of its pipeline
   // (`approved-calls.ts`). Only a plain policy ASK: space, room and flow-guard
   // asks keep asking, and a DENY never gets here.
-  if (['ask_human', 'blocked'].includes(decision.route) && !space && context.trigger !== 'remote' && source !== 'flow-guard' && await isApprovedCall(context, call)) {
+  if (['ask_human', 'blocked'].includes(decision.route) && !space && context.trigger !== 'remote' && await isApprovedCall(context, call, { requireFlowConsent: source === 'flow-guard' })) {
     return { route: 'execute', level, source: 'pipeline-approval' };
   }
   // A turn a member of another install asked for has nobody here to ask
@@ -188,7 +188,7 @@ export async function routeApprovalFor(
         ? profileExplicitlyAllows(run.profile, effectiveProfileCall(context, call))
         : profileAllows(run.profile, effectiveProfileCall(context, call)) || await isApprovedCall(context, call))) return { route: 'execute', level, source: 'pipeline-approval' };
     if (run?.profile.overnight) {
-      const mismatch = source === 'flow-guard' ? `flow guard requires consent for this exact command: ${reason ?? 'data egress'}; command-family approval is insufficient` : profileMismatch(run.profile, effectiveProfileCall(context, call));
+      const mismatch = source === 'flow-guard' ? `flow guard requires consent for this command or its verification target: ${reason ?? 'data egress'}; command-family approval is insufficient` : profileMismatch(run.profile, effectiveProfileCall(context, call));
       const profileRevision = createHash('sha256').update(JSON.stringify(run.profile)).digest('hex').slice(0, 12);
       const detail = `Outside the approved overnight profile: ${mismatch}. Approval: ${(run.pipeline.metadata?.permissionProfile as { approvedAt?: string })?.approvedAt ?? 'unknown'}; pipeline ${run.pipeline.id}, profile revision ${profileRevision}.`;
       await (await import('@/db/repositories/pipeline-repository')).pipelineRepository.appendRunMetadata(run.pipeline.id, 'deniedRequests', {

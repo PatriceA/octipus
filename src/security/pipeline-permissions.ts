@@ -1,3 +1,5 @@
+import { matchingVerificationCommand, rewriteVerificationCommand } from './verification-command';
+import type { ApprovalFlowConsent } from '@/shared/pipeline-approval';
 import type { AgentContext } from '@/core/types';
 import { resolveShellCwd } from './shell-cwd';
 import { isUuid } from '@/db/repositories/scoped';
@@ -21,6 +23,8 @@ export function profileAllows(profile: PipelinePermissionProfile, call: SpaceToo
   const cwd = resolve(args.cwd);
   if (![profile.repoPath, ...profile.repoPaths].some(repo => cwd === resolve(repo)) || matchDestructiveCommand(command)) return false;
   if (profile.commands.includes(command)) return true;
+  const verification = matchingVerificationCommand(profile.commands, command);
+  if (verification && (!rewriteVerificationCommand(verification, command) || call.toolId === 'shell' && ['run', 'run_background'].includes(call.toolName ?? ''))) return true;
   if (/[;&|`$\n<>\\]/.test(command.replace(/'[^']*'|"[^"]*"/g, '')) || /[$`]/.test(command)) return false;
   const words = command.match(/"[^"]*"|'[^']*'|[^\s]+/g)?.map(word => word.replace(/^(['"])(.*)\1$/, '$2')) ?? [];
   if (words.some(word => /^(?:-C|--(?:prefix|cwd|dir|directory|project-directory|env-file|file)(?:=|$))/.test(word))) return false;
@@ -59,15 +63,20 @@ export async function runPermissionProfile(caller: ApprovalCaller) {
 }
 
 /** Save the actual authorized arguments, never an agent-authored pattern. */
-export async function rememberRunDecision(caller: ApprovalCaller, call: SpaceToolCall): Promise<void> {
+export async function rememberRunDecision(caller: ApprovalCaller, call: SpaceToolCall, flowConsent?: ApprovalFlowConsent, approvalId?: string): Promise<void> {
   const run = await runPermissionProfile(caller);
   if (!run?.profile.rememberDecisions || !call.args) return;
+  if (approvalId) {
+    const { getPermissionManager } = await import('./permissions');
+    flowConsent = await getPermissionManager().getApprovedFlowConsent(approvalId, { userId: caller.userId, sessionId: caller.sessionId ?? '', workspaceId: caller.workspaceId });
+  }
   call = effectiveProfileCall(caller, call);
   const name = routedToolName(call.toolId, call.action, call.toolName);
   if (!name) return;
   await pipelineRepository.appendRunMetadata(run.pipeline.id, 'approvedCalls', {
     toolId: call.toolId, toolName: name, action: call.action, fingerprint: callFingerprint(call.toolId, call.action, name, call.args!),
     nodeKey: '*', hostServices: caller.metadata?.hostServices === true,
+    ...(flowConsent ? { flowConsent } : {}),
   });
 }
 
@@ -85,7 +94,14 @@ export function profileMismatch(profile: PipelinePermissionProfile, call: SpaceT
   return 'command or permission action does not match an approved command or command family';
 }
 
-/** A fixed, user-reviewed command can satisfy flow consent; a command family cannot. */
+/** Listed commands and narrowly anchored verification targets satisfy consent; general families cannot. */
 export function profileExplicitlyAllows(profile: PipelinePermissionProfile, call: SpaceToolCall): boolean {
-  return typeof call.args?.command === 'string' && profile.commands.includes(call.args.command) && profileAllows(profile, call);
+  return typeof call.args?.command === 'string' && (profile.commands.includes(call.args.command) || !!matchingVerificationCommand(profile.commands, call.args.command)) && profileAllows(profile, call);
+}
+
+/** The shell discloses this rewrite and executes the approved file, not discovery/overrides. */
+export function profileVerificationRewrite(profile: PipelinePermissionProfile, call: SpaceToolCall): string | undefined {
+  if (!profileAllows(profile, call) || typeof call.args?.command !== 'string' || profile.commands.includes(call.args.command)) return undefined;
+  const approved = matchingVerificationCommand(profile.commands, call.args.command);
+  return approved ? rewriteVerificationCommand(approved, call.args.command) : undefined;
 }

@@ -1,3 +1,5 @@
+export interface ApprovalFlowConsent { secret: boolean; private: boolean; suspicious: boolean }
+
 export interface PendingStageApproval {
   kind?: 'conversation' | 'permission';
   requestId: string;
@@ -10,6 +12,7 @@ export interface PendingStageApproval {
   /** `callFingerprint` of the blocked call, so an answer after a restart grants exactly it. */
   fingerprint: string | null;
   hostServices: boolean;
+  flowConsent?: ApprovalFlowConsent;
   itemId: string | null;
   item: string | null;
   toolId: string | null;

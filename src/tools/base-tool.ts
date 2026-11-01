@@ -19,6 +19,8 @@ import { toolLogger } from '@/utils/logger';
 
 export interface ToolContext extends AgentContext {
   toolId: string;
+  /** Server-only dispatch provenance; never read from tool arguments. */
+  authorizationSource?: string;
 }
 
 export interface ToolExecutionOptions {
@@ -198,7 +200,7 @@ export abstract class BaseTool {
     const check = await permissionManager.check(context.userId, this.id, action, args, context,
       { revalidate: !!priorAuthorization, defaultLevel: manifestPermission?.defaultLevel, dangerous: manifestPermission?.dangerous });
     const decision = await routeApprovalFor(context, { toolId: this.id, action, toolName, args }, check);
-    let authorizationSource = decision.source ?? 'policy';
+    let authorizationSource = priorAuthorization?.startsWith('approval:') && decision.route === 'execute' ? priorAuthorization : decision.source ?? 'policy';
     if (decision.route === 'deny') {
       throw new ToolPolicyRefusalError(this.id, `Permission denied for ${this.id}.${action}: ${decision.reason}`);
     }
@@ -243,6 +245,7 @@ export abstract class BaseTool {
 
     assertExecutionActive(context);
 
+    toolContext.authorizationSource = authorizationSource;
     // Execute the tool
     toolLogger.debug({ toolId: this.id, tool: toolName }, 'Executing tool');
 
@@ -253,13 +256,13 @@ export abstract class BaseTool {
     let execResult: unknown;
     let execError: unknown;
     try {
-      if (authorizationSource.startsWith('approval:')) await rememberRunDecision(context, { toolId: this.id, action, toolName, args });
+      if (authorizationSource.startsWith('approval:')) await rememberRunDecision(context, { toolId: this.id, action, toolName, args }, undefined, authorizationSource.slice('approval:'.length));
       const result = options?.readOnly || options?.recoverySafe || isReadOnlyAction(action)
         ? await execute(processedArgs, toolContext)
         : await actionRecovery.run(context, this.id, `${this.id}__${toolName}`, args, () => execute(processedArgs, toolContext), async () => {
           const current = await permissionManager.check(context.userId, this.id, action, args, context,
             { revalidate: true, defaultLevel: manifestPermission?.defaultLevel, dangerous: manifestPermission?.dangerous });
-          if (current.level === 'DENY' || (current.level === 'ASK'
+          if (current.level === 'DENY' || ((current.level === 'ASK' || authorizationSource.startsWith('approval:') || authorizationSource === 'pipeline-approval')
             && !await askStillAuthorized(authorizationSource, context, { toolId: this.id, action, toolName, args }, current.source))) {
             throw new Error('Permission changed before tool execution; obtain action authorization again.');
           }

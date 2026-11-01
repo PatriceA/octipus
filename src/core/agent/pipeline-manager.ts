@@ -39,7 +39,7 @@ import type {
 import { pipelineNodes, pipelines } from '@/db/schema/pipelines';
 import { permissionRequests } from '@/db/schema/permissions';
 import { getPermissionManager } from '@/security/permissions';
-import { approvalSubject, approvedCallOf, callFingerprint, gateCommandCalls, routedToolName, withApprovedCalls } from '@/security/approved-calls';
+import { approvalSubject, approvedCallOf, flowConsentOf, callFingerprint, gateCommandCalls, routedToolName, withApprovedCalls } from '@/security/approved-calls';
 import { approvalWaitRequestId, isApprovalWaitEnded } from '@/core/approval-wait';
 import { applyDecisionQaVerdict } from './qa-decision';
 import type { ModelConfigEntry } from '@/db/schema/models';
@@ -3445,12 +3445,13 @@ export class PipelineManager {
     const item = args.itemId ? (await pipelineRepository.getPlanItems(pipeline.id)).find(i => i.id === args.itemId) : undefined;
     const signal = this.signals.get(pipeline.id);
     const permissions = getPermissionManager();
+    const approvalFlowConsent = flowConsentOf(pipeline.sessionId);
     const requestId = await permissions.requestApproval(pipeline.userId, agentId, asked?.toolId ?? 'pipeline',
       asked?.action ?? 'resume_stage', toolArgs, pipeline.sessionId,
       `Pipeline stage "${node.name}": ${asked?.context?.toolName ?? 'continue'}`, signal, pipeline.workspaceId);
     const pendingApproval: PendingStageApproval = {
       requestId, workerRequestId: asked?.id ?? null, stage: node.name, nodeKey: node.nodeKey, attemptId,
-      fingerprint: asked && toolName ? callFingerprint(asked.toolId, asked.action, toolName, toolArgs) : null, hostServices,
+      fingerprint: asked && toolName ? callFingerprint(asked.toolId, asked.action, toolName, toolArgs) : null, hostServices, flowConsent: approvalFlowConsent,
       itemId: item?.id ?? null, item: item?.title ?? null,
       toolId: asked?.toolId ?? null, action: asked?.action ?? null, toolName: toolName ?? null,
       subject: approvalSubject(toolArgs) ?? null, reason,
@@ -3470,7 +3471,7 @@ export class PipelineManager {
     const current = await this.getPipeline(pipeline.id);
     const { pendingApproval: _answered, ...metadata } = (current?.metadata ?? {}) as Record<string, unknown>;
     if (approved && current?.status === 'awaiting_approval') {
-      const call = asked ? approvedCallOf({ toolId: asked.toolId, toolName, action: asked.action, args: toolArgs }, { nodeKey: node.nodeKey, attemptId, hostServices }) : undefined;
+      const call = asked ? approvedCallOf({ toolId: asked.toolId, toolName, action: asked.action, args: toolArgs }, { nodeKey: node.nodeKey, attemptId, hostServices }, pendingApproval.flowConsent) : undefined;
       await this.updatePipeline(pipeline.id, { status: 'running', summary: `Approval granted at "${node.name}"; continuing the stage.`, metadata: call ? withApprovedCalls(metadata, [call]) : metadata });
       // Same attempt, same `resumeKey`: a resumable CLI continues the conversation
       // it stopped in (#20); a cold one gets what it had said so far.

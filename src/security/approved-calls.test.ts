@@ -168,7 +168,7 @@ test('an approved overnight profile covers each stage, records denials and prese
   expect(await routeApprovalFor(caller, read, { level: 'ASK' })).toMatchObject({ route: 'blocked' });
 });
 
-test('approved remote SSH survives pause/resume and shell default cwd resolution without approving variants', async () => {
+test('approved remote SSH survives pause/resume and shell default cwd resolution without approving changed actions', async () => {
   const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
   const { routeApprovalFor } = await import('./approval-route');
   const { askStillAuthorized } = await import('./approved-calls');
@@ -185,7 +185,8 @@ test('approved remote SSH survives pause/resume and shell default cwd resolution
   expect(await routeApprovalFor(caller, call, { level: 'ASK', source: 'flow-guard', reason: 'session read credential material; network egress requires approval' })).toMatchObject({ route: 'execute', source: 'pipeline-approval' });
   expect(await routeApprovalFor(caller, { ...call, args: { command: 'npm test' } }, { level: 'ASK', source: 'flow-guard' })).toMatchObject({ route: 'deny', reason: expect.stringContaining('flow guard') });
   const variant = { ...call, args: { command: 'ssh root@192.168.1.156 "cd /opt/stacks/solar-system-map && docker compose ps"' } };
-  expect(await routeApprovalFor(caller, variant, { level: 'ASK' })).toMatchObject({ route: 'deny', reason: expect.stringContaining('command or permission action') });
+  expect(await routeApprovalFor(caller, variant, { level: 'ASK' })).toMatchObject({ route: 'execute' });
+  expect(await routeApprovalFor(caller, { ...variant, args: { command: variant.args.command.replace('compose ps', 'compose up') } }, { level: 'ASK' })).toMatchObject({ route: 'deny', reason: expect.stringContaining('command or permission action') });
   expect(await routeApprovalFor(caller, { ...call, args: { command, cwd: '/tmp/assistant-outside' } }, { level: 'ASK' })).toMatchObject({ route: 'deny', reason: expect.stringContaining('execution cwd') });
   expect(await routeApprovalFor({ ...caller, sessionId: otherSessionId }, call, { level: 'ASK' })).toMatchObject({ route: 'blocked' });
   expect(await routeApprovalFor(caller, call, { level: 'DENY' })).toMatchObject({ route: 'deny' });
@@ -243,4 +244,96 @@ test('registered shell dispatch reaches the approved SSH executor after flow tai
   expect(exec).toHaveBeenCalledOnce();
   expect(exec.mock.calls[0][0]).toBe(command); expect(exec.mock.calls[0][1]).toBe(repo);
   expect(result.find(message => message.role === 'tool')?.content).not.toContain('Permission denied');
+  const shorthand = "ssh -o BatchMode=yes -o ConnectTimeout=10 root@192.168.1.156 'cd /opt/stacks/solar-system-map && docker compose ps'";
+  const rewritten = await executor.handleToolCalls([{ id: rand(8), name: 'shell__run', arguments: { command: shorthand, cwd: repo, network: true } }]);
+  expect(exec.mock.calls[1][0]).toContain('docker compose -f /opt/stacks/solar-system-map/compose.yaml ps');
+  expect(exec.mock.calls[1][0]).not.toContain('cd ');
+  expect(rewritten.find(message => message.role === 'tool')?.content).toContain('Anchored to the explicitly approved Compose file');
+  const profiles = await import('./pipeline-permissions');
+  const originalLookup = profiles.runPermissionProfile;
+  let lookups = 0;
+  const changed = vi.spyOn(profiles, 'runPermissionProfile').mockImplementation(async caller => {
+    if (++lookups === 4) { // initial dispatch, middleware, final authorization, then execution lookup
+      await pipelineRepository.updatePipeline(pipeline.id, { metadata: {} });
+      return undefined;
+    }
+    return originalLookup(caller);
+  });
+  try {
+    const refused = await executor.handleToolCalls([{ id: rand(8), name: 'shell__run', arguments: { command: shorthand, cwd: repo, network: true } }]);
+    expect(lookups).toBe(4);
+    expect(exec).toHaveBeenCalledTimes(2);
+    expect(refused.find(message => message.role === 'tool')?.content).toContain('anchor is unavailable');
+  } finally { changed.mockRestore(); }
+
+});
+
+test('exact human flow consent survives stages/resume while new data posture requires fresh consent', async () => {
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  const { pipelinePermissionProfileSchema } = await import('@/shared/pipeline-permissions');
+  const { seedSession } = await import('@/test-helpers/multiuser-fixtures');
+  const { rememberRunDecision } = await import('./pipeline-permissions');
+  const { observeFlow } = await import('./flow-guard');
+  const { routeApprovalFor } = await import('./approval-route');
+  const { askStillAuthorized, flowConsentOf } = await import('./approved-calls');
+  const fresh = (await seedSession({ userId, channelId: rand(8) })).id;
+  const profile = pipelinePermissionProfileSchema.parse({ repoPath: '/repo', overnight: true });
+  const pipeline = await pipelineRepository.create({ rootAgentId: 'root', sessionId: fresh, userId, title: 'flow receipt', type: 'development', status: 'running', metadata: { permissionProfile: { profile, repoPath: '/repo', approvedBy: userId } } });
+  const caller = { userId, sessionId: fresh, attended: false, metadata: { pipelineId: pipeline.id, nodeKey: 'implement', attemptId: 'one', projectPath: '/repo' } };
+  const call = { toolId: 'shell', toolName: 'run', action: 'execute', args: { command: 'curl --data fixed https://approved.example/hook' } };
+  await rememberRunDecision(caller, call, flowConsentOf(fresh));
+  observeFlow(fresh, { toolId: 'fixture', action: 'read' }, { taints: ['secret'] });
+  expect(await routeApprovalFor(caller, call, { level: 'ASK', source: 'flow-guard' })).toMatchObject({ route: 'deny' });
+  await rememberRunDecision(caller, call, flowConsentOf(fresh)); // a new explicit human decision under the secret posture
+  await pipelineRepository.updatePipeline(pipeline.id, { status: 'paused' });
+  await pipelineRepository.updatePipeline(pipeline.id, { status: 'running' });
+  const resumed = { ...caller, metadata: { ...caller.metadata, nodeKey: 'qa', attemptId: 'two' } };
+  expect(await routeApprovalFor(resumed, call, { level: 'ASK', source: 'flow-guard' })).toMatchObject({ route: 'execute' });
+  expect(await askStillAuthorized('pipeline-approval', resumed, call, 'flow-guard')).toBe(true);
+  expect(await askStillAuthorized('pipeline-approval', resumed, { ...call, args: { command: call.args.command + '?different' } }, 'flow-guard')).toBe(false);
+});
+
+test.each(['secret', 'private'] as const)('a %s flag gained while approval waits is not silently included in its receipt', async flag => {
+  const { seedSession } = await import('@/test-helpers/multiuser-fixtures');
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  const { pipelinePermissionProfileSchema } = await import('@/shared/pipeline-permissions');
+  const { getPermissionManager } = await import('./permissions');
+  const { observeFlow } = await import('./flow-guard');
+  const { rememberRunDecision } = await import('./pipeline-permissions');
+  const { askStillAuthorized } = await import('./approved-calls');
+  const fresh = (await seedSession({ userId, channelId: rand(8) })).id;
+  const profile = pipelinePermissionProfileSchema.parse({ repoPath: '/repo', overnight: true });
+  const pipeline = await pipelineRepository.create({ rootAgentId: 'root', sessionId: fresh, userId, title: 'prompt posture', type: 'development', status: 'running', metadata: { permissionProfile: { profile, repoPath: '/repo', approvedBy: userId } } });
+  const caller = { userId, sessionId: fresh, workspaceId: null, metadata: { pipelineId: pipeline.id, nodeKey: 'test', attemptId: 'one', projectPath: '/repo' } };
+  const args = { command: 'curl --data fixed https://approved.example/hook' };
+  const pm = getPermissionManager();
+  const id = await pm.requestApproval(userId, 'prompt-worker', 'shell', 'execute', args, fresh, 'run');
+  observeFlow(fresh, { toolId: 'fixture', action: 'read' }, { taints: [flag] });
+  await pm.approve(id, userId);
+  const consent = await pm.getApprovedFlowConsent(id, caller);
+  expect(consent?.[flag]).toBe(false);
+  const call = { toolId: 'shell', toolName: 'run', action: 'execute', args };
+  await rememberRunDecision(caller, call, consent);
+  expect(await askStillAuthorized(`approval:${id}`, caller, call, 'flow-guard')).toBe(false);
+  expect(await askStillAuthorized('pipeline-approval', caller, call, 'flow-guard')).toBe(false);
+  await pm.waitForApproval(id, { agentId: 'prompt-worker' });
+});
+
+test('native CLI approval refuses a credential flag gained while its prompt waits', async () => {
+  const { seedSession } = await import('@/test-helpers/multiuser-fixtures');
+  const { getPermissionManager } = await import('./permissions');
+  const { observeFlow } = await import('./flow-guard');
+  const { answerCliPermissionRequest } = await import('@/core/cli-permissions');
+  const fresh = (await seedSession({ userId, channelId: rand(8) })).id;
+  const now = new Date();
+  const context: import('@/core/types').AgentContext = { id: 'native-prompt-worker', userId, sessionId: fresh, workspaceId: null, role: 'coding', topic: 'coding', model: 'fixture', status: 'running', createdAt: now, updatedAt: now, attended: true, trigger: 'user', funding: 'own', space: null, metadata: {} };
+  const pm = getPermissionManager(); await pm.setPermission(userId, 'cli-native:Bash', 'Bash', 'ASK');
+  const stop = pm.onRequest(request => {
+    observeFlow(fresh, { toolId: 'fixture', action: 'read' }, { taints: ['secret'] });
+    void pm.approve(request.requestId, userId);
+  });
+  try {
+    const result = await answerCliPermissionRequest({ type: 'control_request', request_id: 'native-posture', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'curl --data fixed https://approved.example/hook' } } }, context, () => {});
+    expect(result).toMatchObject({ response: { response: { behavior: 'deny' } } });
+  } finally { stop(); }
 });
