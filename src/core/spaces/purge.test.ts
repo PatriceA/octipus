@@ -151,6 +151,7 @@ async function seedSpaceRows(ws: string, author: string): Promise<{ sessionId: s
   // History that outlives the space.
   await q(`INSERT INTO audit_log (user_id, action, workspace_id) VALUES ($1, 'task_mutated', $2)`, [author, ws]);
   await q(`INSERT INTO cost_log (user_id, session_id, model_name, input_tokens, output_tokens, total_cost, workspace_id) VALUES ($1, $2, 'm', 1, 1, 0.01, $3)`, [author, session.id, ws]);
+  await q(`INSERT INTO docker_project_owners (identity, repo_path, user_id, workspace_id) VALUES ($1, '/reserved-project', $2, $3)`, [`daemon:${randomUUID()}`, author, ws]);
   await q(`INSERT INTO cleanup_audit_log (user_id, workspace_id) VALUES ($1, $2)`, [author, ws]);
   return { sessionId: session.id, tables: [...seeded].sort() };
 }
