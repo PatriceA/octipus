@@ -125,7 +125,10 @@ export async function isApprovedCall(caller: ApprovedCallCaller, call: SpaceTool
     const grants = (pipeline.metadata as { approvedCalls?: ApprovedCall[] } | null)?.approvedCalls;
     if (!Array.isArray(grants)) return false;
     const fingerprint = callFingerprint(call.toolId, call.action, call.toolName, call.args);
-    return grants.some(g => g.toolId === call.toolId && g.toolName === call.toolName && g.action === call.action && g.fingerprint === fingerprint
+    const { effectiveProfileCall } = await import('./pipeline-permissions');
+    const scopedArgs = effectiveProfileCall(caller, call).args!;
+    const scopedFingerprint = callFingerprint(call.toolId, call.action, call.toolName, scopedArgs);
+    return grants.some(g => g.toolId === call.toolId && g.toolName === call.toolName && g.action === call.action && g.fingerprint === (g.nodeKey === '*' ? scopedFingerprint : fingerprint)
       && (g.nodeKey === scope.nodeKey || g.nodeKey === '*' && (pipeline.metadata?.permissionProfile as { approvedBy?: string } | undefined)?.approvedBy === caller.userId) && (g.attemptId === undefined || g.attemptId === scope.attemptId)
       && g.hostServices === scope.hostServices);
   } catch (err) {
@@ -141,11 +144,15 @@ export async function isApprovedCall(caller: ApprovedCallCaller, call: SpaceTool
  * pipeline grant that still holds: the pipeline is live and the grant still
  * names this exact call for this stage attempt.
  */
-export async function askStillAuthorized(source: string, caller: ApprovedCallCaller, call: SpaceToolCall): Promise<boolean> {
+export async function askStillAuthorized(source: string, caller: ApprovedCallCaller, call: SpaceToolCall, currentSource?: string): Promise<boolean> {
   if (source.startsWith('approval:')) return true;
   if (source !== 'pipeline-approval') return false;
-  if (await isApprovedCall(caller, call)) return true;
-  const { profileAllows, runPermissionProfile } = await import('./pipeline-permissions');
+  const { applyFlowGuard } = await import('./flow-guard');
+  const { getConfig } = await import('@/config');
+  const flowConsentRequired = currentSource === 'flow-guard' || applyFlowGuard(getConfig().agent?.flowGuard, caller.sessionId,
+    call, { level: 'ASK', allowed: false, requiresApproval: true }).source === 'flow-guard';
+  if (!flowConsentRequired && await isApprovedCall(caller, call)) return true;
+  const { effectiveProfileCall, profileExplicitlyAllows, profileAllows, runPermissionProfile } = await import('./pipeline-permissions');
   const run = await runPermissionProfile(caller);
-  return !!run && profileAllows(run.profile, call);
+  return !!run && (flowConsentRequired ? profileExplicitlyAllows : profileAllows)(run.profile, effectiveProfileCall(caller, call));
 }

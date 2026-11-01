@@ -170,8 +170,8 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
         const completion = service.requestApproval(
           `Pipeline stage "${pending.stage}"${pending.item ? ` (item: ${pending.item})` : ''} is waiting for approval: ` +
             `${pending.toolName ?? 'continue'}${pending.subject ? ` — ${pending.subject}` : ''}.`,
-          'Allow this call and continue the stage? This prompt waits up to 5 minutes; no answer leaves the pipeline waiting.',
-          { ...context, metadata: { ...context.metadata, approvalTimeoutMs: 300_000 } }, ['Approve', 'Deny'],
+          'Allow this call and continue the stage? This prompt waits up to one hour; no answer leaves the pipeline waiting.',
+          { ...context, metadata: { ...context.metadata, approvalTimeoutMs: 3_600_000 } }, ['Approve', 'Deny'],
         );
         void completion.then(async result => {
         const answer = result as { approved: boolean; response?: string; reason?: string; requestId?: string; decidedBy?: string; decidedAt?: string };

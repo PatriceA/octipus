@@ -1,4 +1,4 @@
-import { ToolNotExecutedError } from '@/core/tool-execution-error';
+import { ToolNotExecutedError, ToolPolicyRefusalError } from '@/core/tool-execution-error';
 import { redactedCommand } from '@/utils/command-log';
 import { rememberRunDecision } from '@/security/pipeline-permissions';
 import { actionRecovery, isReadOnlyAction } from '@/core/action-recovery';
@@ -200,7 +200,7 @@ export abstract class BaseTool {
     const decision = await routeApprovalFor(context, { toolId: this.id, action, toolName, args }, check);
     let authorizationSource = decision.source ?? 'policy';
     if (decision.route === 'deny') {
-      throw new Error(`Permission denied for ${this.id}.${action}: ${decision.reason}`);
+      throw new ToolPolicyRefusalError(this.id, `Permission denied for ${this.id}.${action}: ${decision.reason}`);
     }
     // The route decides, not the level: a call the user already approved for
     // this pipeline stage keeps its ASK level but routes to `execute`
@@ -260,7 +260,7 @@ export abstract class BaseTool {
           const current = await permissionManager.check(context.userId, this.id, action, args, context,
             { revalidate: true, defaultLevel: manifestPermission?.defaultLevel, dangerous: manifestPermission?.dangerous });
           if (current.level === 'DENY' || (current.level === 'ASK'
-            && !await askStillAuthorized(authorizationSource, context, { toolId: this.id, action, toolName, args }))) {
+            && !await askStillAuthorized(authorizationSource, context, { toolId: this.id, action, toolName, args }, current.source))) {
             throw new Error('Permission changed before tool execution; obtain action authorization again.');
           }
         });

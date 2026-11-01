@@ -8,6 +8,7 @@ export const toolActions = pgTable('tool_actions', {
   agentId: text('agent_id').notNull(),
   pipelineId: text('pipeline_id'),
   nodeKey: text('node_key'),
+  attemptId: text('attempt_id'),
   toolId: text('tool_id').notNull(),
   toolName: text('tool_name').notNull(),
   argumentHash: text('argument_hash').notNull(),

@@ -1,5 +1,5 @@
 import type { ShellSshAgent } from './shell-ssh-agent';
-import { runtimePath } from './runtime-path';
+import { browserRuntimeMounts, browserRuntimePaths, runtimePath } from './runtime-path';
 /**
  * Shell sandbox — Phase 3e multi-user.
  *
@@ -172,6 +172,7 @@ function buildBwrapArgs(binary: string, options: WrapOptions, scratch: string): 
     '--ro-bind-try', join(homedir(), '.local/go'), join(homedir(), '.local/go'),
     '--ro-bind-try', join(homedir(), 'go/bin'), join(homedir(), 'go/bin'),
     '--setenv', 'PATH', commandPath,
+    '--setenv', 'PLAYWRIGHT_BROWSERS_PATH', process.env.PLAYWRIGHT_BROWSERS_PATH ?? browserRuntimePaths()[0],
     // Per-spawn scratch (the legacy /tmp/assistant- prefix lives here).
     // Bound BEFORE the workspace so that workspaces under /tmp aren't
     // shadowed by this overlay — order matters in bwrap.
@@ -228,7 +229,7 @@ function buildFirejailArgs(binary: string, options: WrapOptions): string[] {
   for (const p of [...runtimeDirs, ...(options.extraReadOnly ?? [])].filter(path => existsSync(path))) {
     args.push(`--whitelist=${p}`, `--read-only=${p}`);
   }
-  args.push(`--env=PATH=${runtimePath(options.path)}`);
+  args.push(`--env=PATH=${runtimePath(options.path)}`, `--env=PLAYWRIGHT_BROWSERS_PATH=${process.env.PLAYWRIGHT_BROWSERS_PATH ?? browserRuntimePaths()[0]}`);
   for (const p of options.extraReadWrite ?? []) {
     args.push(`--whitelist=${p}`);
   }
@@ -254,6 +255,7 @@ function buildFirejailArgs(binary: string, options: WrapOptions): string[] {
  * failure).
  */
 export function wrapCommand(argv: string[], options: WrapOptions): WrapResult {
+  options = { ...options, extraReadOnly: [...new Set([...(options.extraReadOnly ?? []), ...browserRuntimeMounts()])] };
   const mode = getSandboxMode();
   if (mode === 'off') {
     return { wrapped: false, runner: null, argv, cleanup: () => {} };

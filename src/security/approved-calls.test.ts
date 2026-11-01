@@ -6,7 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 
 const rand = (n: number) => randomBytes(n).toString('hex');
 process.env.MASTER_KEY ??= `test-master-${rand(24)}`;
@@ -166,4 +166,81 @@ test('an approved overnight profile covers each stage, records denials and prese
   expect(await routeApprovalFor({ ...caller, metadata: { ...caller.metadata, nodeKey: 'qa', attemptId: 'three' } }, outside, { level: 'ASK' })).toMatchObject({ route: 'execute' });
   await pipelineRepository.updatePipeline(pipeline.id, { status: 'completed' });
   expect(await routeApprovalFor(caller, read, { level: 'ASK' })).toMatchObject({ route: 'blocked' });
+});
+
+test('approved remote SSH survives pause/resume and shell default cwd resolution without approving variants', async () => {
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  const { routeApprovalFor } = await import('./approval-route');
+  const { askStillAuthorized } = await import('./approved-calls');
+  const { pipelinePermissionProfileSchema } = await import('@/shared/pipeline-permissions');
+  const repo = '/home/patrice/docker-services/solar-system-map';
+  const command = 'ssh root@192.168.1.156 "docker compose -f /opt/stacks/solar-system-map/compose.yaml ps --format json"';
+  const profile = pipelinePermissionProfileSchema.parse({ repoPath: repo, commands: [command], overnight: true, hostServices: true });
+  const pipeline = await pipelineRepository.create({ rootAgentId: 'root', sessionId, userId, title: 'remote deployment', type: 'development', status: 'paused', metadata: { permissionProfile: { profile, repoPath: repo, approvedBy: userId, approvedAt: '2026-10-31T23:06:51.989Z' } } });
+  await pipelineRepository.updatePipeline(pipeline.id, { status: 'running' });
+  const caller = { userId, sessionId, attended: false, metadata: { pipelineId: pipeline.id, nodeKey: 'deploy', attemptId: 'resumed', projectPath: repo, hostServices: true } };
+  const call = { toolId: 'shell', toolName: 'run', action: 'execute', args: { command } };
+  expect(await routeApprovalFor(caller, call, { level: 'ASK' })).toMatchObject({ route: 'execute', source: 'pipeline-approval' });
+  expect(await askStillAuthorized('pipeline-approval', caller, call)).toBe(true);
+  expect(await routeApprovalFor(caller, call, { level: 'ASK', source: 'flow-guard', reason: 'session read credential material; network egress requires approval' })).toMatchObject({ route: 'execute', source: 'pipeline-approval' });
+  expect(await routeApprovalFor(caller, { ...call, args: { command: 'npm test' } }, { level: 'ASK', source: 'flow-guard' })).toMatchObject({ route: 'deny', reason: expect.stringContaining('flow guard') });
+  const variant = { ...call, args: { command: 'ssh root@192.168.1.156 "cd /opt/stacks/solar-system-map && docker compose ps"' } };
+  expect(await routeApprovalFor(caller, variant, { level: 'ASK' })).toMatchObject({ route: 'deny', reason: expect.stringContaining('command or permission action') });
+  expect(await routeApprovalFor(caller, { ...call, args: { command, cwd: '/tmp/assistant-outside' } }, { level: 'ASK' })).toMatchObject({ route: 'deny', reason: expect.stringContaining('execution cwd') });
+  expect(await routeApprovalFor({ ...caller, sessionId: otherSessionId }, call, { level: 'ASK' })).toMatchObject({ route: 'blocked' });
+  expect(await routeApprovalFor(caller, call, { level: 'DENY' })).toMatchObject({ route: 'deny' });
+});
+
+test('flow consent is rechecked and remembered shell grants bind the actual default cwd', async () => {
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  const { rememberRunDecision } = await import('./pipeline-permissions');
+  const { isApprovedCall, askStillAuthorized } = await import('./approved-calls');
+  const { pipelinePermissionProfileSchema } = await import('@/shared/pipeline-permissions');
+  const profile = pipelinePermissionProfileSchema.parse({ repoPath: '/repo-a', packageManagers: ['pnpm'] });
+  const pipeline = await pipelineRepository.create({ rootAgentId: 'root', sessionId, userId, title: 'consent revalidation', type: 'development', status: 'running', metadata: { permissionProfile: { profile, repoPath: '/repo-a', approvedBy: userId } } });
+  const caller = { userId, sessionId, metadata: { pipelineId: pipeline.id, nodeKey: 'test', attemptId: 'one', projectPath: '/repo-a' } };
+  const command = { toolId: 'shell', toolName: 'run', action: 'execute', args: { command: 'pnpm test' } };
+  expect(await askStillAuthorized('pipeline-approval', caller, command)).toBe(true);
+  expect(await askStillAuthorized('pipeline-approval', caller, command, 'flow-guard')).toBe(false);
+  const custom = { ...command, args: { command: 'custom-approved-check' } };
+  await rememberRunDecision(caller, custom);
+  expect(await isApprovedCall(caller, custom)).toBe(true);
+  expect(await isApprovedCall({ ...caller, metadata: { ...caller.metadata, projectPath: '/repo-b' } }, custom)).toBe(false);
+});
+
+test('Compose reservations survive cleanup and refuse foreign scope and unknown retained resources', async () => {
+  const { claimDockerProject } = await import('@/db/repositories/docker-project-repository');
+  const identity = `test-daemon:${rand(8)}`;
+  await claimDockerProject(identity, '/repo', { userId }, true, false);
+  await claimDockerProject(identity, '/repo', { userId }, false, true);
+  await expect(claimDockerProject(identity, '/other', { userId }, true, false)).rejects.toThrow('another repository');
+  await expect(claimDockerProject(identity, '/repo', { userId, workspaceId: 'other' }, false, false)).rejects.toThrow('execution scope');
+  await expect(claimDockerProject(`test-daemon:${rand(8)}`, '/repo', { userId }, true, true)).rejects.toThrow('ownership is unknown');
+});
+
+test('registered shell dispatch reaches the approved SSH executor after flow taint and resume', async () => {
+  const { ShellTool } = await import('@/tools/shell');
+  const { ToolExecutor } = await import('@/core/tool-executor');
+  const { observeFlow } = await import('./flow-guard');
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  const { getPermissionManager } = await import('./permissions');
+  const { pipelinePermissionProfileSchema } = await import('@/shared/pipeline-permissions');
+  const repo = '/home/patrice/docker-services/solar-system-map';
+  const command = 'ssh root@192.168.1.156 "docker compose -f /opt/stacks/solar-system-map/compose.yaml ps --format json"';
+  const profile = pipelinePermissionProfileSchema.parse({ repoPath: repo, commands: [command], overnight: true });
+  const pipeline = await pipelineRepository.create({ rootAgentId: 'root', sessionId, userId, title: 'registered SSH regression', type: 'development', status: 'paused', metadata: { permissionProfile: { profile, repoPath: repo, approvedBy: userId } } });
+  await pipelineRepository.updatePipeline(pipeline.id, { status: 'running' });
+  const exec = vi.fn<import('@/tools/shell/operations').ShellOperations['exec']>(async () => ({ exitCode: 0, stdout: '[]', stderr: '', killed: false, timedOut: false, aborted: false, signal: null }));
+  const shell = new ShellTool({ exec, spawnBackground: async () => ({ pid: undefined }), which: async () => null, getEnv: async () => ({}) });
+  await shell.initialize();
+  await getPermissionManager().setPermission(userId, 'shell', 'execute', 'ASK');
+  observeFlow(sessionId, { toolId: 'fixture', action: 'read' }, { taints: ['secret'] });
+  const now = new Date();
+  const context: import('@/core/types').AgentContext = { id: 'approved-ssh-worker', userId, sessionId, workspaceId: null, role: 'coding', topic: 'coding', model: 'fixture', status: 'running', createdAt: now, updatedAt: now, attended: false, trigger: 'user', funding: 'own', space: null, metadata: { pipelineId: pipeline.id, nodeKey: 'deploy', attemptId: 'resumed', projectPath: repo } };
+  const executor = new ToolExecutor(context, () => {});
+  executor.registerTool(shell.getToolHandlers().find(tool => tool.name === 'shell__run')!);
+  const result = await executor.handleToolCalls([{ id: rand(8), name: 'shell__run', arguments: { command, cwd: repo, network: true } }]);
+  expect(exec).toHaveBeenCalledOnce();
+  expect(exec.mock.calls[0][0]).toBe(command); expect(exec.mock.calls[0][1]).toBe(repo);
+  expect(result.find(message => message.role === 'tool')?.content).not.toContain('Permission denied');
 });

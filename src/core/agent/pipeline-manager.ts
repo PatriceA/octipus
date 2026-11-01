@@ -2268,7 +2268,7 @@ export class PipelineManager {
       root: true,
       model: '',
       status: 'running',
-      metadata: { pipelineId, resumed: true, overnightRun: (pipeline.metadata?.permissionProfile as { profile?: { overnight?: boolean } } | undefined)?.profile?.overnight === true, approvedRunReplay: (pipeline.metadata?.permissionProfile as { profile?: { allowCheckpointReplay?: boolean } } | undefined)?.profile?.allowCheckpointReplay === true, approvedRunGates: (pipeline.metadata?.permissionProfile as { profile?: { autoApproveGates?: boolean } } | undefined)?.profile?.autoApproveGates === true },
+      metadata: { pipelineId, resumed: true, approvedContinuationAttemptId: !opts.freshAttempt && checkpoint.seq === (await pipelineRepository.getCheckpoints(pipelineId, 1))[0]?.seq ? resumeState.attemptId : undefined, overnightRun: (pipeline.metadata?.permissionProfile as { profile?: { overnight?: boolean } } | undefined)?.profile?.overnight === true, approvedRunReplay: (pipeline.metadata?.permissionProfile as { profile?: { allowCheckpointReplay?: boolean } } | undefined)?.profile?.allowCheckpointReplay === true, approvedRunGates: (pipeline.metadata?.permissionProfile as { profile?: { autoApproveGates?: boolean } } | undefined)?.profile?.autoApproveGates === true },
     });
     return withAgentUsage(pipeline.userId, scope, () => this.resumeWalk(pipeline, pipelineId, opts, checkpoint, resumeState, context));
   }

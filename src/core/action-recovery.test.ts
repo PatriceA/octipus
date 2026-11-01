@@ -10,7 +10,7 @@ import { WorkspaceFsError } from '@/security/workspace-fs';
 class MemoryJournal extends ToolActionRepository {
   rows: ToolAction[] = [];
   override async start(row: typeof toolActions.$inferInsert) {
-    this.rows.push({ ...row, pipelineId: row.pipelineId ?? null, nodeKey: row.nodeKey ?? null,
+    this.rows.push({ ...row, pipelineId: row.pipelineId ?? null, nodeKey: row.nodeKey ?? null, attemptId: row.attemptId ?? null,
       createdAt: new Date(), finishedAt: null, reviewedAt: null, reviewId: null });
   }
   override async finish(scope: Pick<ToolAction, 'id' | 'userId' | 'sessionId'>, status: ToolAction['status']) {
@@ -257,4 +257,25 @@ test('an unattended pipeline can present recovery to its coordinator with the re
   expect(ask).toHaveBeenCalledOnce();
   expect(ask.mock.calls[0][0]).toContain(repo.rows[0].id);
   expect(repo.rows[0].reviewId).toBe('coordinator-review');
+});
+
+test('continuing an approved attempt avoids another replay prompt for known completed actions', async () => {
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  const context = ctx(); context.metadata = { ...context.metadata, approvedContinuationAttemptId: 'current', attemptId: 'current' };
+  vi.spyOn(pipelineRepository, 'findById').mockResolvedValue({ userId: context.userId, sessionId: context.sessionId, workspaceId: null, metadata: { permissionProfile: { approvedBy: context.userId, profile: {} } } } as never);
+  await run(async () => 'done', context);
+  const ask = vi.fn();
+  await recovery.reviewPipeline(context, 'p', true, ask);
+  expect(ask).not.toHaveBeenCalled(); expect(repo.rows[0].reviewId).toBe('run-profile:p');
+});
+test.each(['uncertain', 'workspace', 'legacy', 'other-attempt'])('continuation still reviews %s records or scope', async condition => {
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  const context = ctx(); context.metadata = { ...context.metadata, approvedContinuationAttemptId: 'current', attemptId: 'current' };
+  vi.spyOn(pipelineRepository, 'findById').mockResolvedValue({ userId: context.userId, sessionId: context.sessionId, workspaceId: condition === 'workspace' ? 'other' : null, metadata: { permissionProfile: { approvedBy: context.userId, profile: {} } } } as never);
+  if (condition === 'uncertain') await uncertain();
+  if (condition === 'other-attempt') await run(async () => 'old done', { ...context, metadata: { ...context.metadata, attemptId: 'old' } });
+  if (condition === 'workspace') await run(async () => 'done', context);
+  const ask = vi.fn().mockResolvedValue({ approved: false });
+  await expect(recovery.reviewPipeline(context, 'p', true, ask)).rejects.toThrow('not approved');
+  expect(ask).toHaveBeenCalledOnce();
 });

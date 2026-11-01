@@ -1,3 +1,5 @@
+import type { AgentContext } from '@/core/types';
+import { resolveShellCwd } from './shell-cwd';
 import { isUuid } from '@/db/repositories/scoped';
 import { isAbsolute, resolve } from 'node:path';
 import { pipelinePermissionProfileSchema, type PipelinePermissionProfile } from '@/shared/pipeline-permissions';
@@ -60,10 +62,30 @@ export async function runPermissionProfile(caller: ApprovalCaller) {
 export async function rememberRunDecision(caller: ApprovalCaller, call: SpaceToolCall): Promise<void> {
   const run = await runPermissionProfile(caller);
   if (!run?.profile.rememberDecisions || !call.args) return;
+  call = effectiveProfileCall(caller, call);
   const name = routedToolName(call.toolId, call.action, call.toolName);
   if (!name) return;
   await pipelineRepository.appendRunMetadata(run.pipeline.id, 'approvedCalls', {
-    toolId: call.toolId, toolName: name, action: call.action, fingerprint: callFingerprint(call.toolId, call.action, name, call.args),
+    toolId: call.toolId, toolName: name, action: call.action, fingerprint: callFingerprint(call.toolId, call.action, name, call.args!),
     nodeKey: '*', hostServices: caller.metadata?.hostServices === true,
   });
+}
+
+/** Resolve Octipus shell defaults exactly as execution does, independently of the profile. */
+export function effectiveProfileCall(caller: ApprovalCaller, call: SpaceToolCall): SpaceToolCall {
+  if (call.toolId !== 'shell' || !['run', 'run_background'].includes(call.toolName ?? '')) return call;
+  return { ...call, args: { ...call.args, cwd: resolveShellCwd(call.args?.cwd, caller as AgentContext) } };
+}
+
+export function profileMismatch(profile: PipelinePermissionProfile, call: SpaceToolCall): string {
+  if (call.toolId !== 'shell' && call.toolId !== 'cli-native:Bash' && call.toolId !== 'docker') return `tool ${call.toolId}.${call.action} is not covered`;
+  if (typeof call.args?.cwd !== 'string' || !isAbsolute(call.args.cwd)) return 'execution cwd is missing or not absolute';
+  if (![profile.repoPath, ...profile.repoPaths].some(repo => resolve(repo) === resolve(call.args!.cwd as string))) return `execution cwd ${call.args.cwd} is outside approved repositories`;
+  if (Object.keys(call.args ?? {}).some(key => !['command', 'cwd', 'timeout', 'description', 'network', 'useShell'].includes(key))) return 'additional execution arguments are not covered by the profile';
+  return 'command or permission action does not match an approved command or command family';
+}
+
+/** A fixed, user-reviewed command can satisfy flow consent; a command family cannot. */
+export function profileExplicitlyAllows(profile: PipelinePermissionProfile, call: SpaceToolCall): boolean {
+  return typeof call.args?.command === 'string' && profile.commands.includes(call.args.command) && profileAllows(profile, call);
 }

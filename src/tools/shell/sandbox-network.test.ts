@@ -1,4 +1,4 @@
-import { browserRuntimePaths } from '@/security/runtime-path';
+import { browserRuntimeMounts, browserRuntimePaths } from '@/security/runtime-path';
 import { describe, expect, test } from 'vitest';
 import { resolveAllowNetwork } from './local-operations';
 
@@ -41,9 +41,10 @@ describe('asking for the network', () => {
 describe('pipeline stage host services (#17)', () => {
   test('are off unless the stage opted in', async () => {
     const { withHostServices } = await import('./index');
-    expect(withHostServices({ pipelineId: 'p' }, { allowNetwork: false })).toEqual({ allowNetwork: false });
+    expect(withHostServices({ pipelineId: 'p' }, { allowNetwork: false })).toMatchObject({ allowNetwork: false, extraReadOnly: browserRuntimeMounts(), env: { PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH ?? browserRuntimePaths()[0] } });
+    expect(withHostServices({}, {})).not.toHaveProperty('extraReadWrite');
     expect(withHostServices({ hostServices: true }, { allowNetwork: false, extraReadWrite: ['/home/tool'] }))
-      .toMatchObject({ allowNetwork: true, extraReadWrite: ['/home/tool', '/var/run/docker.sock'], extraReadOnly: browserRuntimePaths(),
+      .toMatchObject({ allowNetwork: true, extraReadWrite: ['/home/tool', '/var/run/docker.sock'], extraReadOnly: browserRuntimeMounts(),
         env: { PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH ?? browserRuntimePaths()[0] } });
   });
 });

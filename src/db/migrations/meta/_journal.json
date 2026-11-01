@@ -1100,6 +1100,13 @@
       "when": 1793440944550,
       "tag": "0156_vault_logins",
       "breakpoints": true
+    },
+    {
+      "idx": 157,
+      "version": "7",
+      "when": 1793530000000,
+      "tag": "0157_execution_scope",
+      "breakpoints": true
     }
   ]
 }

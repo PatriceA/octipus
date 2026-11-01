@@ -1,11 +1,11 @@
+import { resolveShellCwd } from '@/security/shell-cwd';
 import { redactedCommand } from '@/utils/command-log';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { browserRuntimePaths } from '@/security/runtime-path';
+import { browserRuntimeDiagnostic, browserRuntimeMounts, browserRuntimePaths } from '@/security/runtime-path';
 import { getExecutionSignal } from '@/core/execution-scope';
 import { isToolNotExecutedResult, ToolNotExecutedError, ToolPolicyRefusalError } from '@/core/tool-execution-error';
-import { isAbsolute, resolve } from 'path';
-import { WorkspaceFS, WorkspaceFsError } from '@/security/workspace-fs';
+import { WorkspaceFS } from '@/security/workspace-fs';
 import { isSensitiveEnvName } from '@/security/child-env';
 import { HOST_IDENTITY_ENV, openSpaceToolHome, type SpaceToolHome, withToolHome } from '@/security/space-tool-env';
 import type { AgentContext, ToolManifest } from '@/core/types';
@@ -50,9 +50,8 @@ export function spaceRunOptions(env: Record<string, string> | undefined, home: S
 export function withHostServices<T extends { allowNetwork?: boolean; extraReadWrite?: string[]; extraReadOnly?: string[]; env?: Record<string, string> }>(
   metadata: Record<string, unknown> | undefined, options: T,
 ): T {
-  if (metadata?.hostServices !== true) return options;
-  return { ...options, allowNetwork: true, extraReadWrite: [...(options.extraReadWrite ?? []), '/var/run/docker.sock'],
-    extraReadOnly: [...(options.extraReadOnly ?? []), ...browserRuntimePaths()],
+  return { ...options, ...(metadata?.hostServices === true ? { allowNetwork: true, extraReadWrite: [...(options.extraReadWrite ?? []), '/var/run/docker.sock'] } : {}),
+    extraReadOnly: [...(options.extraReadOnly ?? []), ...browserRuntimeMounts()],
     env: { ...options.env, PLAYWRIGHT_BROWSERS_PATH: options.env?.PLAYWRIGHT_BROWSERS_PATH ?? process.env.PLAYWRIGHT_BROWSERS_PATH ?? browserRuntimePaths()[0] } };
 }
 
@@ -118,7 +117,7 @@ export class ShellTool extends BaseTool {
           throw new ToolNotExecutedError('shell', 'Missing required parameter "command". The tool call arguments may have been truncated or malformed.');
         }
         const command = args.command;
-        const cwd = this.resolveCwd(args.cwd, context);
+        const cwd = resolveShellCwd(args.cwd, context);
         const timeout = effectiveShellTimeout(args.timeout, context?.metadata);
         const unsafe = args.useShell === true;
         const allowNetwork = args.network === true;
@@ -185,6 +184,7 @@ export class ShellTool extends BaseTool {
 
         return {
           ...result,
+          ...(browserRuntimeDiagnostic(result.stderr) ? { environmentDiagnostic: browserRuntimeDiagnostic(result.stderr) } : {}),
           outcome: interpretation.outcome,
           ...(interpretation.semantic ? { semantic: interpretation.semantic } : {}),
         };
@@ -207,7 +207,7 @@ export class ShellTool extends BaseTool {
           throw new Error('Missing required parameter "command". The tool call arguments may have been truncated or malformed.');
         }
         const command = args.command;
-        const cwd = this.resolveCwd(args.cwd, context);
+        const cwd = resolveShellCwd(args.cwd, context);
         const unsafe = args.useShell === true;
         const allowNetwork = args.network === true;
 
@@ -306,14 +306,6 @@ export class ShellTool extends BaseTool {
    * `.root` is a pure path computation with no filesystem side effects. Same
    * fix, same reason as the workspace hint in `worker-spawner.ts`.
    */
-  private getWorkspaceRoot(context: AgentContext): string {
-    return this.projectPath(context) ?? WorkspaceFS.forAgent(context).root;
-  }
-
-  private projectPath(context: AgentContext): string | undefined {
-    const projectPath = (context.metadata as Record<string, unknown> | undefined)?.projectPath;
-    return typeof projectPath === 'string' && projectPath ? resolve(projectPath) : undefined;
-  }
 
   /**
    * The directory a command runs in. A named `cwd` must lie inside the
@@ -324,26 +316,6 @@ export class ShellTool extends BaseTool {
    * the work — correctness, not a sandbox: a command can still `cd` wherever
    * the process may.
    */
-  private resolveCwd(requested: unknown, context: AgentContext | undefined): string {
-    if (!context) {
-      throw new ToolNotExecutedError('shell', 'shell commands run for an agent: no agent context was given');
-    }
-    const base = this.getWorkspaceRoot(context);
-    if (requested === undefined || requested === null || requested === '') return base;
-    if (typeof requested !== 'string') {
-      throw new ToolNotExecutedError('shell', 'cwd must be a string');
-    }
-    const projectPath = this.projectPath(context);
-    const fs = WorkspaceFS.forAgent(context, { extraAllowedPrefixes: projectPath ? [projectPath] : [] });
-    try {
-      return fs.resolve(isAbsolute(requested) ? requested : resolve(base, requested));
-    } catch (err) {
-      if (err instanceof WorkspaceFsError) {
-        throw new ToolNotExecutedError('shell', `cwd '${requested}' is outside the workspace; run the command from the workspace or the project`);
-      }
-      throw err;
-    }
-  }
 
   private validateCommand(command: string): void {
     // Content policy lives in `./policy` so the `command_exit_zero` scorer

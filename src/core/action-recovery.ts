@@ -114,7 +114,8 @@ export class ActionRecovery {
         await this.repository.start({ ...scope, agentId: context.id, toolId, toolName,
           argumentHash: createHash('sha256').update(canonical(args)).digest('hex'), status: 'started',
           pipelineId: typeof context.metadata?.pipelineId === 'string' ? context.metadata.pipelineId : null,
-          nodeKey: typeof context.metadata?.nodeKey === 'string' ? context.metadata.nodeKey : null });
+          nodeKey: typeof context.metadata?.nodeKey === 'string' ? context.metadata.nodeKey : null,
+          attemptId: typeof context.metadata?.attemptId === 'string' ? context.metadata.attemptId : null });
       } catch (error) { this.active.delete(id); throw error; }
     }, ['shell', 'filesystem', 'git', 'docker', 'terminal'].includes(toolId) ? 'workspace' : toolId);
     let entered = false;
@@ -177,11 +178,12 @@ export class ActionRecovery {
         if (allRows.some(row => this.active.has(row.id))) throw new RecoveryReviewRequiredError('Previous pipeline tool actions are still running. Wait for them to settle before resuming.');
         const rows = allRows.slice(0, 20);
         if (!rows.length && !hasPriorVisits) return;
-        const pipeline = context.metadata?.approvedRunReplay === true
+        const pipeline = context.metadata?.approvedRunReplay === true || typeof context.metadata?.approvedContinuationAttemptId === 'string'
           ? await (await import('@/db/repositories/pipeline-repository')).pipelineRepository.findById(pipelineId) : null;
         const grant = pipeline?.metadata?.permissionProfile as { approvedBy?: string; profile?: { allowCheckpointReplay?: boolean } } | undefined;
         if (pipeline?.userId === context.userId && pipeline.sessionId === context.sessionId && grant?.approvedBy === context.userId
-          && grant.profile?.allowCheckpointReplay && allRows.every(row => row.status === 'completed')) {
+          && (pipeline.workspaceId ?? null) === (context.workspaceId ?? null)
+          && (grant.profile?.allowCheckpointReplay || typeof context.metadata?.approvedContinuationAttemptId === 'string' && allRows.length > 0 && allRows.every(row => row.attemptId === context.metadata?.approvedContinuationAttemptId)) && allRows.every(row => row.status === 'completed')) {
           await this.repository.acknowledge(context.userId, context.sessionId, rows.map(row => row.id), `run-profile:${pipelineId}`);
           hasPriorVisits = false;
           if (!rows.length) return;

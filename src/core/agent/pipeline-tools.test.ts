@@ -138,7 +138,7 @@ describe('a stage parked on an approval (#24)', () => {
     await expect(tool('answer_pipeline_approval').execute({ id: 'pipeline' }, context)).resolves.toMatchObject({ decided: false, status: 'awaiting_approval' });
     expect(fixture.deny).not.toHaveBeenCalled();
     expect(fixture.approve).not.toHaveBeenCalled();
-    expect(fixture.ask.mock.calls[0][2].metadata.approvalTimeoutMs).toBe(300_000);
+    expect(fixture.ask.mock.calls[0][2].metadata.approvalTimeoutMs).toBe(3_600_000);
   });
   it('answer_pipeline_approval forwards the question; only the user answer resolves the request', async () => {
     fixture.ask.mockResolvedValue({ approved: true, response: 'Approve' });

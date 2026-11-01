@@ -248,3 +248,16 @@ console.log('user CLI executed; runtime read-only; credentials hidden');
     getConfig().security.shellSandbox = 'off';
   });
 });
+
+test.skipIf(!hasBwrap)('browser cache is mounted read-only without a host-services socket grant', async () => {
+  const { getConfig } = await import('@/config');
+  const { wrapCommand } = await import('./shell-sandbox');
+  const { browserRuntimeMounts } = await import('./runtime-path');
+  getConfig().security.shellSandbox = 'required';
+  const wrapped = wrapCommand(['/bin/true'], { workspaceRoot: workspace });
+  try {
+    for (const path of browserRuntimeMounts()) expect(wrapped.argv.join('\n')).toContain(['--ro-bind-try', path, path].join('\n'));
+    expect(wrapped.argv).not.toContain('/var/run/docker.sock');
+    expect(wrapped.argv).toContain('--unshare-net');
+  } finally { wrapped.cleanup(); getConfig().security.shellSandbox = 'off'; }
+});

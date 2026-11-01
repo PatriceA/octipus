@@ -6,7 +6,7 @@ import { getConfig, refreshConfigKey, resetConfig } from '@/config';
 import { ToolNotExecutedError } from '@/core/tool-execution-error';
 import type { AgentContext } from '@/core/types';
 import { WorkspaceFS } from '@/security/workspace-fs';
-import { ShellTool } from './index';
+import { resolveShellCwd } from '@/security/shell-cwd';
 
 // `shell__run` used to default to the FLAT `config.workspace.rootPath` while
 // every `filesystem__*` call was sandboxed to the per-user nested root two
@@ -32,23 +32,20 @@ beforeAll(() => {
 });
 afterAll(() => resetConfig());
 
-const shell = new ShellTool() as unknown as {
-  getWorkspaceRoot(c: AgentContext): string;
-  resolveCwd(cwd: unknown, c: AgentContext | undefined): string;
-};
+
 
 describe('shell default cwd', () => {
   test('is the same root the filesystem sandbox enforces for the agent', () => {
-    expect(shell.getWorkspaceRoot(agentCtx())).toBe(WorkspaceFS.forAgent(agentCtx()).root);
+    expect(resolveShellCwd(undefined, agentCtx())).toBe(WorkspaceFS.forAgent(agentCtx()).root);
   });
 
   test("is the dev-mode project when the agent has one", () => {
     const project = mkdtempSync(join(tmpdir(), 'octi-shell-project-'));
-    expect(shell.resolveCwd(undefined, agentCtx({ projectPath: project }))).toBe(project);
+    expect(resolveShellCwd(undefined, agentCtx({ projectPath: project }))).toBe(project);
   });
 
   test('refuses to run without an agent context rather than pick a shared root', () => {
-    expect(() => shell.resolveCwd(undefined, undefined)).toThrow(ToolNotExecutedError);
+    expect(() => resolveShellCwd(undefined, undefined)).toThrow(ToolNotExecutedError);
   });
 });
 
@@ -57,24 +54,24 @@ describe('shell named cwd — inside the workspace, an allowed extra, or the pro
     const fs = WorkspaceFS.forAgent(agentCtx());
     mkdirSync(join(fs.root, 'sub'), { recursive: true });
     const root = realpathSync(fs.root);
-    expect(shell.resolveCwd(join(fs.root, 'sub'), agentCtx())).toBe(join(root, 'sub'));
-    expect(shell.resolveCwd('sub', agentCtx())).toBe(join(root, 'sub'));
+    expect(resolveShellCwd(join(fs.root, 'sub'), agentCtx())).toBe(join(root, 'sub'));
+    expect(resolveShellCwd('sub', agentCtx())).toBe(join(root, 'sub'));
   });
 
   test('a cwd outside the workspace root is refused before the command runs', () => {
-    expect(() => shell.resolveCwd('/etc', agentCtx())).toThrow(ToolNotExecutedError);
-    expect(() => shell.resolveCwd('../../..', agentCtx())).toThrow(/outside the workspace/);
+    expect(() => resolveShellCwd('/etc', agentCtx())).toThrow(ToolNotExecutedError);
+    expect(() => resolveShellCwd('../../..', agentCtx())).toThrow(/outside the workspace/);
   });
 
   test('a cwd inside the dev-mode project is accepted', () => {
     const project = realpathSync(mkdtempSync(join(tmpdir(), 'octi-shell-project-')));
     mkdirSync(join(project, 'pkg'));
-    expect(shell.resolveCwd(join(project, 'pkg'), agentCtx({ projectPath: project }))).toBe(join(project, 'pkg'));
-    expect(shell.resolveCwd('pkg', agentCtx({ projectPath: project }))).toBe(join(project, 'pkg'));
+    expect(resolveShellCwd(join(project, 'pkg'), agentCtx({ projectPath: project }))).toBe(join(project, 'pkg'));
+    expect(resolveShellCwd('pkg', agentCtx({ projectPath: project }))).toBe(join(project, 'pkg'));
   });
 
   test('the transient-file prefix stays an allowed extra', () => {
     const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'assistant-shell-')));
-    expect(shell.resolveCwd(tmp, agentCtx())).toBe(tmp);
+    expect(resolveShellCwd(tmp, agentCtx())).toBe(tmp);
   });
 });

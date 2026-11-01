@@ -1,0 +1,29 @@
+# Pipeline approvals and host execution
+
+A run permission profile belongs to its owner, session and workspace. It is reloaded from the pipeline record for each decision and survives pause/resume and backend restarts. Explicit DENY rules, shared-space restrictions and credential boundaries still apply.
+
+For shell calls, authorization resolves the effective cwd using the same code as execution: an explicit directory, a relative path against the project/workspace, or the shell's actual default. It never substitutes the profile's repository for an unknown execution directory. Prefer an explicit absolute `cwd` in the target repository. A profile is not an SSH connection: a remote command remains an SSH command and never becomes local Docker execution.
+
+An exact entry in `commands` authorizes that fixed command within the approved repositories, including personal-session flow-guard consent. Package-manager and public-host command families do not grant flow-guard consent for arbitrary data egress. A variant such as `cd ... && docker compose ps` is different from an approved `docker compose -f ... ps --format json`. Overnight refusals identify the effective directory or command/flow rule, pipeline id, profile revision and approval timestamp. Refused operations have not executed; they have no process exit code.
+
+Forwarded pipeline approval prompts wait up to one hour. Ordinary tool permission requests remain durable until answered or the worker is stopped. Continuing the same saved attempt under its approved profile does not add a replay prompt for known completed journal actions. A deliberate rewind, missing/legacy journal evidence, active actions and uncertain outcomes retain recovery review. A timeout can leave effects; neither resume nor a run profile proves those effects absent.
+
+## Shared browser runtime
+
+All bubblewrap/firejail sandbox jobs receive read-only mounts of installed host Playwright runtime directories (browser profiles stored alongside the cache are excluded), independently of `hostServices`. Foreground, background and stage shells use the same default cache; an operator can configure an absolute server-side `PLAYWRIGHT_BROWSERS_PATH`. No browser is installed or downloaded automatically. A project still needs a compatible revision already provisioned there.
+
+Before a long showcase, run a small Playwright launch/close smoke check through the same registered shell and project dependency version. Shell launch failures include `environmentDiagnostic` distinguishing an absent host cache, a missing revision and an existing host executable inaccessible to the job. Background job logs retain the original launch error; inspect their expected revision against the shared cache before retrying. Browser smoke success is not evidence that the full application showcase passed.
+
+## Dedicated local Docker Compose lifecycle
+
+A shell without `hostServices` lacks the Docker socket; this says nothing about the host daemon. Use permitted `docker__list_containers`, `docker__exec_command` and `docker__compose_project` instead of concluding Docker is unavailable.
+
+`docker__compose_project` accepts `operation` (`status`, `up`, `logs`, `down`), an explicit `project`, an absolute approved `cwd`, an optional repository-relative `file` (default `compose.yaml`), `approvedPorts`, `approvedBindPaths` and an execution `timeout` in milliseconds. Example:
+
+```json
+{"operation":"up","project":"composer-test","cwd":"/approved/repository","approvedPorts":[4300,4301],"approvedBindPaths":["/opt/app/data"],"timeout":600000}
+```
+
+The normal Docker `compose` permission/approval applies to the full request, including port and host bind-path consent. Existing host paths listed in `approvedBindPaths` may be bound into containers; sources are resolved to canonical paths and must stay within the explicitly approved roots. Cleanup preserves that host data. `up` creates services and waits for health; status and logs are project-scoped. Results include exit status and stdout/stderr, health output where applicable, and cleanup success for `down`. Cleanup removes project orphans, checks for remaining containers, and preserves volumes and images. Permanent project reservations bind the local daemon project to its user, workspace and repository, including after down preserves volumes. Unknown existing resources cannot be adopted; choose a new approved project name. Status/log reads also enforce this ownership. A project name already attached to another working directory is refused. External resources, custom container names, host privileges, unapproved bind mounts and published ports are unsupported. Imports, inline builds, env files and host secret/config-file sources are unsupported; use prebuilt images and self-contained configuration. Source YAML and normalized configuration are captured into private temporary snapshots before lifecycle execution; the repository file is not reread. Automatic `.env` loading is disabled. Approved host bind directories and their ancestors must remain stable during execution, including when repository scripts or background jobs can modify them. Canonical checks do not make these paths race-proof against concurrent agent or host filesystem changes. Repository contents remain executable configuration and must be trusted/reviewed; this tool is not a sandbox for malicious Dockerfiles or images.
+
+Compose is currently refused under enforced per-user Docker isolation; existing isolated container operations remain available. No shell socket is granted as a fallback. Remote stacks still require independently approved SSH commands and their deployment backup/rollback checks.

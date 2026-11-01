@@ -1,4 +1,5 @@
-import { profileAllows, runPermissionProfile } from './pipeline-permissions';
+import { createHash } from 'node:crypto';
+import { effectiveProfileCall, profileMismatch, profileExplicitlyAllows, profileAllows, runPermissionProfile } from './pipeline-permissions';
 /**
  * One decision function for every tool call (docs/plans/coworking-spec.md
  * §5.6; I4, I6, D5).
@@ -182,14 +183,19 @@ export async function routeApprovalFor(
   }
   if (level === 'ASK' && context.trigger !== 'remote') {
     const run = await runPermissionProfile(context);
-    if (run && !['flow-guard', 'space-flow', 'space-room', 'space-federated'].includes(source ?? '')
-      && (profileAllows(run.profile, call) || await isApprovedCall(context, call))) return { route: 'execute', level, source: 'pipeline-approval' };
+    if (run && !space && !['space-flow', 'space-room', 'space-federated'].includes(source ?? '')
+      && (source === 'flow-guard'
+        ? profileExplicitlyAllows(run.profile, effectiveProfileCall(context, call))
+        : profileAllows(run.profile, effectiveProfileCall(context, call)) || await isApprovedCall(context, call))) return { route: 'execute', level, source: 'pipeline-approval' };
     if (run?.profile.overnight) {
+      const mismatch = source === 'flow-guard' ? `flow guard requires consent for this exact command: ${reason ?? 'data egress'}; command-family approval is insufficient` : profileMismatch(run.profile, effectiveProfileCall(context, call));
+      const profileRevision = createHash('sha256').update(JSON.stringify(run.profile)).digest('hex').slice(0, 12);
+      const detail = `Outside the approved overnight profile: ${mismatch}. Approval: ${(run.pipeline.metadata?.permissionProfile as { approvedAt?: string })?.approvedAt ?? 'unknown'}; pipeline ${run.pipeline.id}, profile revision ${profileRevision}.`;
       await (await import('@/db/repositories/pipeline-repository')).pipelineRepository.appendRunMetadata(run.pipeline.id, 'deniedRequests', {
         toolId: call.toolId, action: call.action, command: call.args?.command,
-        reason: 'Outside the approved overnight profile', at: new Date().toISOString(),
+        cwd: effectiveProfileCall(context, call).args?.cwd, decisionSource: source, profileRevision, reason: detail, at: new Date().toISOString(),
       });
-      return { route: 'deny', level, source: 'pipeline-profile', reason: 'Outside the approved overnight profile. This command was denied and recorded for the morning summary. Continue with permitted alternatives; do not bypass the denial.' };
+      return { route: 'deny', level, source: 'pipeline-profile', reason: `${detail} Not executed. This denial was recorded for the morning summary; do not bypass it.` };
     }
   }
   if (level === 'DENY' && !space) {

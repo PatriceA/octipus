@@ -966,7 +966,7 @@ export class ToolExecutor {
             : actionRecovery.run(this.context, toolId, toolId === 'mcp' ? permAction : toolCall.name, toolCall.arguments, () => tool.execute(toolCall.arguments, this.context), async () => {
               const current = await permissionManager.check(this.context.userId, toolId, permAction, toolCall.arguments, this.context, { revalidate: true });
               if (current.level === 'DENY' || (current.level === 'ASK' && !await askStillAuthorized(authorizationSource, this.context,
-                { toolId, action: permAction, toolName: bareName, args: toolCall.arguments }))) {
+                { toolId, action: permAction, toolName: bareName, args: toolCall.arguments }, current.source))) {
                 throw new Error('Permission changed before tool execution; obtain action authorization again.');
               }
             }));

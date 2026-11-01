@@ -318,6 +318,8 @@ When a task matches one of these skills, load it with get_skill before starting 
       agentId: this.context.id, sessionId: this.context.sessionId,
       workspaceId: this.context.workspaceId, planMode: this.connection?.planMode ?? false,
       shellCapabilities: { hostServices: this.context.metadata?.hostServices === true,
+        browserCache: 'Shared host browser runtimes are mounted read-only independently of hostServices; compatible revisions must already be installed.',
+        docker: 'Use permitted dedicated docker tools for host containers; compose_project provides repository-scoped local lifecycle when available. Remote stacks require approved SSH shell commands.',
         note: 'Registered shell commands use the Octipus sandbox. Without approved hostServices a missing Docker socket describes that sandbox, not the host. Native vendor CLI Bash may have different host access.' },
       workPlan: formatWorkPlanContext(state), guidance: guidance.map(m => m.content),
       ...(this.detached.count() > 0 ? {
