@@ -689,3 +689,45 @@ test('guidance during native auto-collection reopens the root and preserves the 
     expect(calls).toBe(3);
   } finally { spies.forEach(spy => spy.mockRestore()); }
 });
+
+test('a run whose every tool call keeps failing is nudged, then made to report', async () => {
+  const spies = [
+    vi.spyOn(auditRepository, 'logAgentCompleted').mockResolvedValue(undefined as never),
+    vi.spyOn(agentRepository, 'updateStatus').mockResolvedValue(undefined as never),
+    vi.spyOn(messageRepository, 'create').mockResolvedValue({ id: 'message', createdAt: new Date() } as never),
+    vi.spyOn(sessionRepository, 'incrementMessageCount').mockResolvedValue(undefined as never),
+  ];
+  try {
+    const worker = new AgentWorker(mkCtx(), cfg({ maxIterations: 20 }));
+    const priv = worker as unknown as {
+      messages: import('@/core/types').AgentMessage[];
+      getCompletion: () => Promise<CompletionResult>;
+      toolExecutor: {
+        toolsDisabled: boolean;
+        handleToolCalls: (tc: { id: string }[]) => Promise<import('@/core/types').AgentMessage[]>;
+        lastBatchOutcome: () => { calls: number; failed: number; errors: string[] };
+      };
+    };
+    worker.registerTools([{ name: 'filesystem__read_file', description: 'read', parameters: { type: 'object', properties: {} }, execute: async () => 'unused' }]);
+    let round = 0;
+    // A different wrong path each round: no per-tool streak and no repeat check sees it.
+    priv.toolExecutor.handleToolCalls = async (tc) => {
+      round++;
+      return [{ role: 'tool', toolCallId: tc[0].id, content: `ENOENT: no such file /src/guess-${round}.ts`, timestamp: new Date() }];
+    };
+    priv.toolExecutor.lastBatchOutcome = () => ({ calls: 1, failed: 1, errors: [`ENOENT: no such file /src/guess-${round}.ts`] });
+    const seen: string[] = [];
+    priv.getCompletion = async () => {
+      const last = priv.messages.at(-1)?.content;
+      if (typeof last === 'string' && last.startsWith('[SYSTEM] Every tool call')) seen.push(last);
+      if (priv.toolExecutor.toolsDisabled) return completion('I could not find the file: every path I tried was missing.');
+      return { ...completion(''), toolCalls: [{ id: `call-${round + 1}`, name: 'filesystem__read_file', arguments: { path: `/src/guess-${round + 1}.ts` } }] };
+    };
+    expect(await worker.run('Read the config loader')).toContain('could not find the file');
+    expect(round).toBe(8);
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toContain('last 4 rounds failed');
+    expect(seen[0]).toContain('guess-4.ts');
+    expect(seen[1]).toContain('Tools are now disabled');
+  } finally { spies.forEach(spy => spy.mockRestore()); }
+});

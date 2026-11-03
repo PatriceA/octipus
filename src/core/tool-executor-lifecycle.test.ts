@@ -168,4 +168,13 @@ describe('consecutive failures block only the failing tool', () => {
     for (const id of ['1', '2', '3', '4']) await exec.handleToolCalls([call(id, 'shell__run')]);
     expect(exec.isToolBlocked('shell__run')).toBe(false);
   });
+
+  test('the last batch outcome counts calls that returned nothing as failed', async () => {
+    const exec = new ToolExecutor(context(), () => {});
+    exec.registerTools([tool('shell__run', async () => { throw new Error('rejected command'); }), tool('git__diff', async () => 'diff')]);
+    await exec.handleToolCalls([call('1', 'shell__run'), call('2', 'git__diff')]);
+    expect(exec.lastBatchOutcome()).toEqual({ calls: 2, failed: 1, errors: [expect.stringContaining('rejected command')] });
+    await exec.handleToolCalls([call('3', 'shell__run')]);
+    expect(exec.lastBatchOutcome()).toMatchObject({ calls: 1, failed: 1 });
+  });
 });
