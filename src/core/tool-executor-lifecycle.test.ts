@@ -5,6 +5,7 @@ import { messageRepository } from '@/db/repositories/message-repository';
 import * as permissions from '@/security/permissions';
 import * as hooks from '@/hooks/manager';
 import { ToolExecutor } from './tool-executor';
+import { beginReadOnlyTurn, resetReadOnlyTurns } from '@/security/read-only-turn';
 import type { AgentContext, ToolCall } from './types';
 
 const context = (): AgentContext => ({ space: null, trigger: 'user', funding: 'own', 
@@ -26,7 +27,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-const tool = (name: string, execute: () => Promise<unknown>, toolId = 'agent') => ({
+const tool = (name: string, execute: (args?: unknown) => Promise<unknown>, toolId = 'agent') => ({
   name, execute, toolId, parameters: {}, description: '',
 });
 
@@ -176,5 +177,42 @@ describe('consecutive failures block only the failing tool', () => {
     expect(exec.lastBatchOutcome()).toEqual({ calls: 2, failed: 1, errors: [expect.stringContaining('rejected command')] });
     await exec.handleToolCalls([call('3', 'shell__run')]);
     expect(exec.lastBatchOutcome()).toMatchObject({ calls: 1, failed: 1 });
+  });
+});
+
+describe('a read-only turn', () => {
+  afterEach(() => resetReadOnlyTurns());
+
+  test('runs reads, refuses the rest before it executes, delegation included', async () => {
+    const ran: string[] = [];
+    const exec = new ToolExecutor(context(), () => {});
+    exec.registerTools([
+      { ...tool('filesystem__read_file', async () => { ran.push('read'); return 'contents'; }, 'filesystem'), permissionAction: 'read' },
+      { ...tool('shell__run', async () => { ran.push('shell'); return 'ok'; }, 'shell'), permissionAction: 'execute' },
+      tool('spawn_child', async () => { ran.push('spawn'); return 'child'; }),
+    ]);
+    beginReadOnlyTurn(context().sessionId);
+    const [read, shell, spawn] = await exec.handleToolCalls([
+      call('1', 'filesystem__read_file'), call('2', 'shell__run'), call('3', 'spawn_child', { parallelGroup: 'g', task: 'x' }),
+    ]);
+    expect(ran).toEqual(['read']);
+    expect(String(read.content)).toBe('contents');
+    expect(String(shell.content)).toMatch(/read-only turn: shell.execute is not available/);
+    expect(String(spawn.content)).toMatch(/read-only turn: agent.spawn_child/);
+  });
+
+  test("the notify step runs without approval even though messaging.send defaults to ASK", async () => {
+    vi.spyOn(permissions, 'getPermissionManager').mockReturnValue({
+      check: vi.fn().mockResolvedValue({ allowed: false, level: 'ASK', requiresApproval: true }),
+    } as unknown as permissions.PermissionManager);
+    const sent: unknown[] = [];
+    const exec = new ToolExecutor({ ...context(), attended: false }, () => {});
+    exec.registerTools([{ ...tool('messaging__send_to_user', async (args?: unknown) => { sent.push(args); return 'sent'; }, 'messaging'), permissionAction: 'send' }]);
+    beginReadOnlyTurn(context().sessionId);
+    const [own] = await exec.handleToolCalls([call('1', 'messaging__send_to_user', { user_id: 'test', message: 'CI red' })]);
+    expect(String(own.content)).toBe('sent');
+    const [other] = await exec.handleToolCalls([call('2', 'messaging__send_to_user', { user_id: 'someone-else', message: 'x' })]);
+    expect(String(other.content)).toMatch(/read-only turn/);
+    expect(sent).toHaveLength(1);
   });
 });

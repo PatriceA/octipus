@@ -7,6 +7,7 @@ import type { AgentEvent, ToolHandler } from './agent-base';
 import { getPermissionManager } from '@/security/permissions';
 import { routeApprovalFor } from '@/security/approval-route';
 import { applyFlowGuard, ensureSharedAudienceKnown, observeFlow } from '@/security/flow-guard';
+import { readOnlyRefusal } from '@/security/read-only-turn';
 import { getConfig } from '@/config';
 import { agentLogger } from '@/utils/logger';
 
@@ -63,6 +64,9 @@ export async function answerCliPermissionRequest(
   // Native tools never pass ToolExecutor, so the flow guard runs here: it can
   // turn ALLOW into ASK, and an allowed call's reads join the session label.
   const flowCall = { toolId, action: request.tool_name, args: request.input };
+  // A read-only turn (security/read-only-turn.ts) refuses before anyone is asked.
+  const readOnly = readOnlyRefusal(context.sessionId, context.userId, flowCall);
+  if (readOnly) return deny(`Octipus ${readOnly}`);
   await ensureSharedAudienceKnown(context.sessionId);
   const permission = applyFlowGuard(getConfig().agent?.flowGuard, context.sessionId, flowCall,
     await manager.check(context.userId, toolId, request.tool_name, request.input, context));

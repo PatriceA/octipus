@@ -11,6 +11,7 @@ import { coreLogger } from '@/utils/logger';
 import { inlineUiFallbackText } from '@/shared/inline-ui/fence';
 import type { TriggerContext } from './triggers';
 import { summarizeWebhookPayload } from './webhook-summary';
+import { beginReadOnlyTurn, endReadOnlyTurn } from '@/security/read-only-turn';
 import { fence, isWebhookPath, UNTRUSTED_WEBHOOK_NOTE, WEBHOOK_EVENT_TAG, WEBHOOK_VALUE_TAG } from './untrusted';
 import { canActInSession } from '@/core/rooms/access';
 
@@ -428,8 +429,13 @@ async function executeSpawnAgent(
   }
 
   const withDigest = (text: string) => (digestBlock ? `${digestBlock}\n\n${text}` : text);
-  prompt = withDigest(prompt);
-  const message = context.message?.content ? withDigest(context.message.content) : prompt;
+  // Read-only (security/read-only-turn.ts): the turn may only read, and tells
+  // the owner with send_to_user when something needs them. Not for a role
+  // heartbeat, which exists to work the board.
+  const readOnly = config.readOnly === true && !heartbeatRole;
+  const withReadOnly = (text: string) => (readOnly ? `${text}\n\n${readOnlyTurnInstructions(userId)}` : text);
+  prompt = withReadOnly(withDigest(prompt));
+  const message = context.message?.content ? withReadOnly(withDigest(context.message.content)) : prompt;
 
   // A role heartbeat (triggerConfig.role) is that role's agent working the
   // board, so it runs AS the role whatever `orchestrated` says: the root
@@ -453,12 +459,22 @@ async function executeSpawnAgent(
     // A heartbeat hook routes on the 'heartbeat' channel so the run is tagged
     // origin='heartbeat' (RunContext) for auditability; everything else is 'hook'.
     const channel = hook?.trigger === 'heartbeat' ? 'heartbeat' : 'hook';
-    const result = await rootAgent.handleMessage(sessionId, userId, message, channel, [], undefined, undefined, undefined, 'schedule');
+    // A read-only mark is set inside the session's turn queue, so a turn
+    // queued ahead of this one (the user's) runs before it, unmarked.
+    let marked = false;
+    const beforeStart = readOnly ? async () => { beginReadOnlyTurn(sessionId); marked = true; } : undefined;
+    let result: Awaited<ReturnType<typeof rootAgent.handleMessage>>;
+    try {
+      result = await rootAgent.handleMessage(sessionId, userId, message, channel, [], undefined, beforeStart, undefined, 'schedule');
+    } finally {
+      if (marked) endReadOnlyTurn(sessionId);
+    }
 
     // For orchestrated hooks, notify the owner with the result if either:
     // - notifyRoot is true (scheduled tasks that should deliver results)
     // - notifyOwner is true (explicit owner notification)
-    if ((config.notifyRoot || config.notifyOwner) && userId && result.response) {
+    // A read-only turn's answer stays in its session: send_to_user is its only way out.
+    if (!readOnly && (config.notifyRoot || config.notifyOwner) && userId && result.response) {
       notifyOwnerWithResult(userId, result.response).catch((err) => {
         coreLogger.error({ error: err }, 'Failed to notify owner with orchestrated result');
       });
@@ -467,8 +483,14 @@ async function executeSpawnAgent(
     await closeThreadIfEnded(thread, hook);
     return {
       success: true,
-      data: { agentId: result.agentId, response: result.response, orchestrated: true, ...threadData(thread) },
+      data: { agentId: result.agentId, response: result.response, orchestrated: true, ...(readOnly ? { readOnly: true } : {}), ...threadData(thread) },
     };
+  }
+
+  // A direct spawn holds no messaging tool, so a read-only turn there could
+  // never notify anyone: refuse it rather than run a turn nobody hears from.
+  if (readOnly) {
+    return { success: false, error: 'A read-only hook runs through the root agent: set "orchestrated": true (Route through rootAgent).' };
   }
 
   // Direct spawn (non-orchestrated) — use longer timeout for hook-triggered agents
@@ -512,6 +534,15 @@ async function executeSpawnAgent(
 
   await closeThreadIfEnded(thread, hook);
   return { success: true, data: { agentId: agent.getContext().id, ...threadData(thread) } };
+}
+
+/** What a read-only turn is told (security/read-only-turn.ts). */
+export function readOnlyTurnInstructions(userId: string): string {
+  return 'READ-ONLY TURN. This turn was started by an external event. You may read files, git history, issues, '
+    + 'pull requests, check logs and the knowledge base. You cannot edit, run commands, fetch web pages, post, push or '
+    + 'delegate: those calls are refused. Decide whether the owner needs to act. If they do, tell them once with '
+    + `\`send_to_user\` (user_id \`${userId}\`): what happened, why it matters, and the action you propose. If nothing `
+    + 'needs them, do not message them; end with a one-line note of what you checked.';
 }
 
 type ThreadResolution = {

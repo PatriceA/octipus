@@ -9,14 +9,28 @@ import { executeAction } from './actions';
 import type { TriggerContext } from './triggers';
 import { fence, neutralizeFenceTags, UNTRUSTED_WEBHOOK_NOTE } from './untrusted';
 
-const turns = vi.hoisted(() => ({ messages: [] as Array<{ sessionId: string; message: string }> }));
+const turns = vi.hoisted(() => ({
+  messages: [] as Array<{ sessionId: string; message: string; readOnlyDuring?: boolean }>,
+  response: '',
+  readOnlyBefore: undefined as boolean | undefined,
+  fail: false,
+}));
 vi.mock('@/core/agent', () => ({
   getAgentService: () => ({
-    handleMessage: async (sessionId: string, _userId: string, message: string) => {
-      turns.messages.push({ sessionId, message });
-      return { agentId: 'agent-1', response: '' };
+    handleMessage: async (sessionId: string, _userId: string, message: string, _c: unknown, _f: unknown, _o: unknown, beforeStart?: () => Promise<unknown>) => {
+      const { isReadOnlyTurn } = await import('@/security/read-only-turn');
+      turns.readOnlyBefore = isReadOnlyTurn(sessionId);
+      await beforeStart?.();
+      if (turns.fail) throw new Error('model down');
+      turns.messages.push({ sessionId, message, readOnlyDuring: isReadOnlyTurn(sessionId) });
+      return { agentId: 'agent-1', response: turns.response };
     },
   }),
+}));
+const notified = vi.hoisted(() => ({ calls: 0 }));
+vi.mock('@/channels/ownership', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/channels/ownership')>()),
+  loadNotifyScope: async (userId: string) => { notified.calls++; return { userId, identities: [], owned: new Set(), allowlist: new Set() }; },
 }));
 vi.mock('@/db/repositories/session-repository', () => ({
   sessionRepository: { findById: async () => null, addFlowLabel: async () => {}, clearFlowLabel: async () => {} },
@@ -38,6 +52,9 @@ const comment = (body: string, extra: Record<string, unknown> = {}): TriggerCont
 
 beforeEach(() => {
   turns.messages = [];
+  turns.response = '';
+  turns.fail = false;
+  notified.calls = 0;
   resetFlowLabels();
 });
 
@@ -77,5 +94,40 @@ describe('spawn_agent with a webhook event', () => {
     await executeAction({ ...hook({ agentPrompt: 'Morning briefing' }), trigger: 'schedule' } as Hook, {});
     expect(turns.messages[0].message).toBe('Morning briefing');
     expect(getFlowLabel(SESSION).suspicious).toBe(false);
+  });
+});
+
+describe('spawn_agent with readOnly', () => {
+  test('the turn is marked read-only inside the turn queue, and only for its length', async () => {
+    const { isReadOnlyTurn } = await import('@/security/read-only-turn');
+    const r = await executeAction(hook({ agentPrompt: 'Triage it.', readOnly: true }), comment('x'));
+    expect(r).toMatchObject({ success: true, data: { readOnly: true } });
+    expect(turns.readOnlyBefore).toBe(false);
+    expect(turns.messages[0].readOnlyDuring).toBe(true);
+    expect(isReadOnlyTurn(SESSION)).toBe(false);
+    expect(turns.messages[0].message).toContain('READ-ONLY TURN');
+    expect(turns.messages[0].message).toContain('send_to_user` (user_id `11111111-1111-4111-8111-111111111111`)');
+  });
+
+  test('its answer is not sent to the owner; without readOnly it is', async () => {
+    turns.response = 'Nothing needs you.';
+    await executeAction(hook({ agentPrompt: 'Triage it.', readOnly: true, notifyOwner: true }), comment('x'));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(notified.calls).toBe(0);
+    await executeAction(hook({ agentPrompt: 'Triage it.', notifyOwner: true }), comment('x'));
+    await vi.waitFor(() => expect(notified.calls).toBe(1));
+  });
+
+  test('a failing turn still clears the mark', async () => {
+    const { isReadOnlyTurn } = await import('@/security/read-only-turn');
+    turns.fail = true;
+    const r = await executeAction(hook({ agentPrompt: 'Triage it.', readOnly: true }), comment('x'));
+    expect(r).toMatchObject({ success: false, error: 'model down' });
+    expect(isReadOnlyTurn(SESSION)).toBe(false);
+  });
+
+  test('a direct (non-orchestrated) read-only hook is refused: it could never notify', async () => {
+    const r = await executeAction(hook({ agentPrompt: 'Triage it.', readOnly: true, orchestrated: false }), comment('x'));
+    expect(r).toMatchObject({ success: false, error: expect.stringContaining('orchestrated') });
   });
 });

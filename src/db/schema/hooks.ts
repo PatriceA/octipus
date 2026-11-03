@@ -207,6 +207,12 @@ export interface ActionConfig {
   threadKey?: string;
   /** Payload actions (`action`, or GitLab `object_attributes.action`) that end a thread, such as `closed`. */
   threadEndActions?: string[];
+  /**
+   * For spawn_agent (orchestrated): run the turn read-only — reads only, and
+   * `send_to_user` to the owner as the one way out; the answer itself is not
+   * sent (security/read-only-turn.ts).
+   */
+  readOnly?: boolean;
   // For incoming webhook response delivery
   channelType?: string;
   channelId?: string;

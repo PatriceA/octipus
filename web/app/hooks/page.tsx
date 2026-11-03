@@ -390,16 +390,20 @@ const ACTION_OPTIONS = [
 ];
 
 /** The thread fields of a spawn_agent webhook hook (src/hooks/thread-sessions.ts); empty ones are left out. */
-function threadConfig(trigger: string, threadKey: string, endActions: string): Record<string, unknown> {
-  if (trigger !== 'webhook' || !threadKey.trim()) return {};
+function threadConfig(trigger: string, threadKey: string, endActions: string, readOnly = false): Record<string, unknown> {
+  if (trigger !== 'webhook') return {};
   const ends = endActions.split(',').map(s => s.trim()).filter(Boolean);
-  return { threadKey: threadKey.trim(), ...(ends.length ? { threadEndActions: ends } : {}) };
+  return {
+    ...(threadKey.trim() ? { threadKey: threadKey.trim(), ...(ends.length ? { threadEndActions: ends } : {}) } : {}),
+    ...(readOnly ? { readOnly: true } : {}),
+  };
 }
 
 const THREAD_KEY_EXAMPLE = '{{webhook.body.repository.full_name}}#{{webhook.body.pull_request.number}}';
 
-function ThreadFields({ threadKey, setThreadKey, endActions, setEndActions }: {
+function ThreadFields({ threadKey, setThreadKey, endActions, setEndActions, readOnly, setReadOnly }: {
   threadKey: string; setThreadKey: (v: string) => void; endActions: string; setEndActions: (v: string) => void;
+  readOnly: boolean; setReadOnly: (v: boolean) => void;
 }) {
   const cls = 'w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary';
   return (
@@ -419,6 +423,13 @@ function ThreadFields({ threadKey, setThreadKey, endActions, setEndActions }: {
           <p className="mt-1 text-xs text-on-surface-variant">Payload actions that close the thread; the next event on its key starts a new session.</p>
         </div>
       )}
+      <label className="flex items-start gap-2 text-sm text-on-surface">
+        <input type="checkbox" checked={readOnly} onChange={e => setReadOnly(e.target.checked)} className="rounded mt-1" />
+        <span>
+          Read-only: the agent may only read, and messages you when something needs you
+          <span className="block text-xs text-on-surface-variant">Event text is written by others. With this on, the turn cannot edit, run commands, fetch pages, post or push. Needs "Route through rootAgent".</span>
+        </span>
+      </label>
     </>
   );
 }
@@ -442,6 +453,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
   const [agentPrompt, setAgentPrompt] = useState('');
   const [threadKey, setThreadKey] = useState('');
   const [threadEndActions, setThreadEndActions] = useState('');
+  const [readOnly, setReadOnly] = useState(false);
   const [orchestrated, setOrchestrated] = useState(true);
   const [notifyOwner, setNotifyOwner] = useState(true);
   const [notifyChannels, setNotifyChannels] = useState('');
@@ -490,7 +502,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
         actionConfig.agentPrompt = agentPrompt;
         actionConfig.orchestrated = orchestrated;
         actionConfig.notifyOwner = notifyOwner;
-        Object.assign(actionConfig, threadConfig(trigger, threadKey, threadEndActions));
+        Object.assign(actionConfig, threadConfig(trigger, threadKey, threadEndActions, readOnly));
       }
       if (action === 'notify') {
         actionConfig.notifyOwner = notifyOwner;
@@ -709,7 +721,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                 </p>
               </div>
               {trigger === 'webhook' && (
-                <ThreadFields threadKey={threadKey} setThreadKey={setThreadKey} endActions={threadEndActions} setEndActions={setThreadEndActions} />
+                <ThreadFields threadKey={threadKey} setThreadKey={setThreadKey} endActions={threadEndActions} setEndActions={setThreadEndActions} readOnly={readOnly} setReadOnly={setReadOnly} />
               )}
               <label className="flex items-center gap-2 text-sm text-on-surface">
                 <input
@@ -851,6 +863,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
   const [agentPrompt, setAgentPrompt] = useState((hook.actionConfig?.agentPrompt as string) || '');
   const [threadKey, setThreadKey] = useState((hook.actionConfig?.threadKey as string) || '');
   const [threadEndActions, setThreadEndActions] = useState(((hook.actionConfig?.threadEndActions as string[]) || []).join(', '));
+  const [readOnly, setReadOnly] = useState(hook.actionConfig?.readOnly === true);
   const [orchestrated, setOrchestrated] = useState(Boolean(hook.actionConfig?.orchestrated));
   const [agentTopic, setAgentTopic] = useState((hook.actionConfig?.agentTopic as string) || '');
   const [agentModel, setAgentModel] = useState((hook.actionConfig?.agentModel as string) || '');
@@ -913,7 +926,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
         cfg.notifyOwner = notifyOwner;
         if (agentTopic) cfg.agentTopic = agentTopic;
         if (agentModel) cfg.agentModel = agentModel;
-        Object.assign(cfg, threadConfig(trigger, threadKey, threadEndActions));
+        Object.assign(cfg, threadConfig(trigger, threadKey, threadEndActions, readOnly));
         break;
       case 'notify':
         cfg.notifyOwner = notifyOwner;
@@ -1067,7 +1080,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
                 <p className="mt-1 text-xs text-on-surface-variant">Use {'{{webhook.body.field}}'} for template variables</p>
               </div>
               {trigger === 'webhook' && (
-                <ThreadFields threadKey={threadKey} setThreadKey={setThreadKey} endActions={threadEndActions} setEndActions={setThreadEndActions} />
+                <ThreadFields threadKey={threadKey} setThreadKey={setThreadKey} endActions={threadEndActions} setEndActions={setThreadEndActions} readOnly={readOnly} setReadOnly={setReadOnly} />
               )}
               <label className="flex items-center gap-2 text-sm text-on-surface">
                 <input type="checkbox" checked={orchestrated} onChange={e => setOrchestrated(e.target.checked)} className="rounded" />
