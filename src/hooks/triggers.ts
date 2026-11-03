@@ -27,6 +27,12 @@ export interface TriggerContext {
     scheduledTime: Date;
     hookName?: string;
   };
+  /**
+   * Set on the merged turn of an `onlyOnChange` hook: the checks that turned
+   * failing in its window (hooks/event-changes.ts). Already decided, so the
+   * turn is not filtered again.
+   */
+  checkChanges?: import('./event-changes').CheckObservation[];
 }
 
 /**

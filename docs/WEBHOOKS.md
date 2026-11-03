@@ -320,6 +320,19 @@ For events anyone can trigger, a hook can run its turn read-only. The agent then
 
 The pattern follows DeepSeek Harness's proposal for event-triggered automation. Accepting a proposed action is still manual: reply in your own session.
 
+#### Only when a check turns failing (`onlyOnChange`)
+
+A hook on GitHub's `check_run`, `check_suite`, `workflow_run` or `status` events gets one delivery per check per push, and most are green. With `onlyOnChange: true`, code decides before any model call:
+
+- Each result is reduced to pass, fail or other, and compared with the last result this hook saw for the same check. The subject is the repository and pull request, or the branch when there is no pull request.
+- Only a check turning failing starts a turn. A check that stays red does not start another one, and a pass followed by a new failure does. Cancelled and pending results neither count nor reset the state.
+- Failures on one subject within `changeMergeWindowSeconds` (default 60) become one turn. A push that fails three checks wakes the agent once, and the event block lists all three. With `0`, each failure is its own turn, started from its delivery.
+- Other events (comments, reviews, opened pull requests) carry new content every time and are not filtered.
+- The execution log records a skipped delivery as `skipped: "no change"` and a merged one as `deferred: true`. The merged turn runs when its window closes and is not a separate log entry.
+- State is kept for 30 days in the key-value store, which is in memory in embedded mode. It is written when the turn fires, so a restart inside a merge window loses that turn. The next red result of the same check then counts as a change again.
+
+Combined with `readOnly` and `threadKey`, a failing PR check wakes one read-only agent per pull request. That agent reads the job log and messages you with the cause.
+
 ### notify (direct notification)
 
 Best for: simple alerts that don't need AI processing.

@@ -390,20 +390,21 @@ const ACTION_OPTIONS = [
 ];
 
 /** The thread fields of a spawn_agent webhook hook (src/hooks/thread-sessions.ts); empty ones are left out. */
-function threadConfig(trigger: string, threadKey: string, endActions: string, readOnly = false): Record<string, unknown> {
+function threadConfig(trigger: string, threadKey: string, endActions: string, readOnly = false, onlyOnChange = false): Record<string, unknown> {
   if (trigger !== 'webhook') return {};
   const ends = endActions.split(',').map(s => s.trim()).filter(Boolean);
   return {
     ...(threadKey.trim() ? { threadKey: threadKey.trim(), ...(ends.length ? { threadEndActions: ends } : {}) } : {}),
     ...(readOnly ? { readOnly: true } : {}),
+    ...(onlyOnChange ? { onlyOnChange: true } : {}),
   };
 }
 
 const THREAD_KEY_EXAMPLE = '{{webhook.body.repository.full_name}}#{{webhook.body.pull_request.number}}';
 
-function ThreadFields({ threadKey, setThreadKey, endActions, setEndActions, readOnly, setReadOnly }: {
+function ThreadFields({ threadKey, setThreadKey, endActions, setEndActions, readOnly, setReadOnly, onlyOnChange, setOnlyOnChange }: {
   threadKey: string; setThreadKey: (v: string) => void; endActions: string; setEndActions: (v: string) => void;
-  readOnly: boolean; setReadOnly: (v: boolean) => void;
+  readOnly: boolean; setReadOnly: (v: boolean) => void; onlyOnChange: boolean; setOnlyOnChange: (v: boolean) => void;
 }) {
   const cls = 'w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary';
   return (
@@ -430,6 +431,13 @@ function ThreadFields({ threadKey, setThreadKey, endActions, setEndActions, read
           <span className="block text-xs text-on-surface-variant">Event text is written by others. With this on, the turn cannot edit, run commands, fetch pages, post or push. Needs "Route through rootAgent".</span>
         </span>
       </label>
+      <label className="flex items-start gap-2 text-sm text-on-surface">
+        <input type="checkbox" checked={onlyOnChange} onChange={e => setOnlyOnChange(e.target.checked)} className="rounded mt-1" />
+        <span>
+          Only when a check turns failing
+          <span className="block text-xs text-on-surface-variant">GitHub check, workflow and status deliveries start a turn only when a check goes red, once per pull request per minute. Other events are not filtered.</span>
+        </span>
+      </label>
     </>
   );
 }
@@ -454,6 +462,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
   const [threadKey, setThreadKey] = useState('');
   const [threadEndActions, setThreadEndActions] = useState('');
   const [readOnly, setReadOnly] = useState(false);
+  const [onlyOnChange, setOnlyOnChange] = useState(false);
   const [orchestrated, setOrchestrated] = useState(true);
   const [notifyOwner, setNotifyOwner] = useState(true);
   const [notifyChannels, setNotifyChannels] = useState('');
@@ -502,7 +511,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
         actionConfig.agentPrompt = agentPrompt;
         actionConfig.orchestrated = orchestrated;
         actionConfig.notifyOwner = notifyOwner;
-        Object.assign(actionConfig, threadConfig(trigger, threadKey, threadEndActions, readOnly));
+        Object.assign(actionConfig, threadConfig(trigger, threadKey, threadEndActions, readOnly, onlyOnChange));
       }
       if (action === 'notify') {
         actionConfig.notifyOwner = notifyOwner;
@@ -721,7 +730,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                 </p>
               </div>
               {trigger === 'webhook' && (
-                <ThreadFields threadKey={threadKey} setThreadKey={setThreadKey} endActions={threadEndActions} setEndActions={setThreadEndActions} readOnly={readOnly} setReadOnly={setReadOnly} />
+                <ThreadFields threadKey={threadKey} setThreadKey={setThreadKey} endActions={threadEndActions} setEndActions={setThreadEndActions} readOnly={readOnly} setReadOnly={setReadOnly} onlyOnChange={onlyOnChange} setOnlyOnChange={setOnlyOnChange} />
               )}
               <label className="flex items-center gap-2 text-sm text-on-surface">
                 <input
@@ -864,6 +873,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
   const [threadKey, setThreadKey] = useState((hook.actionConfig?.threadKey as string) || '');
   const [threadEndActions, setThreadEndActions] = useState(((hook.actionConfig?.threadEndActions as string[]) || []).join(', '));
   const [readOnly, setReadOnly] = useState(hook.actionConfig?.readOnly === true);
+  const [onlyOnChange, setOnlyOnChange] = useState(hook.actionConfig?.onlyOnChange === true);
   const [orchestrated, setOrchestrated] = useState(Boolean(hook.actionConfig?.orchestrated));
   const [agentTopic, setAgentTopic] = useState((hook.actionConfig?.agentTopic as string) || '');
   const [agentModel, setAgentModel] = useState((hook.actionConfig?.agentModel as string) || '');
@@ -926,7 +936,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
         cfg.notifyOwner = notifyOwner;
         if (agentTopic) cfg.agentTopic = agentTopic;
         if (agentModel) cfg.agentModel = agentModel;
-        Object.assign(cfg, threadConfig(trigger, threadKey, threadEndActions, readOnly));
+        Object.assign(cfg, threadConfig(trigger, threadKey, threadEndActions, readOnly, onlyOnChange));
         break;
       case 'notify':
         cfg.notifyOwner = notifyOwner;
@@ -1080,7 +1090,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
                 <p className="mt-1 text-xs text-on-surface-variant">Use {'{{webhook.body.field}}'} for template variables</p>
               </div>
               {trigger === 'webhook' && (
-                <ThreadFields threadKey={threadKey} setThreadKey={setThreadKey} endActions={threadEndActions} setEndActions={setThreadEndActions} readOnly={readOnly} setReadOnly={setReadOnly} />
+                <ThreadFields threadKey={threadKey} setThreadKey={setThreadKey} endActions={threadEndActions} setEndActions={setThreadEndActions} readOnly={readOnly} setReadOnly={setReadOnly} onlyOnChange={onlyOnChange} setOnlyOnChange={setOnlyOnChange} />
               )}
               <label className="flex items-center gap-2 text-sm text-on-surface">
                 <input type="checkbox" checked={orchestrated} onChange={e => setOrchestrated(e.target.checked)} className="rounded" />

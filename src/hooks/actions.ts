@@ -356,6 +356,15 @@ async function executeSpawnAgent(
     }
   }
 
+  // Only a check that turned red starts a turn, merged per subject
+  // (hooks/event-changes.ts). Decided before a session is minted.
+  if (hook && !heartbeatRole && config.onlyOnChange === true && context.webhook && !context.checkChanges) {
+    const gated = await gateCheckChange(config, context, hook);
+    if ('result' in gated) return gated.result;
+    // The trigger context is shared with every hook this delivery matched: a copy.
+    context = gated.context;
+  }
+
   // A thread key keeps one session per thread of work (a PR, an issue): see
   // hooks/thread-sessions.ts. An event the key does not apply to (no such
   // field) runs in the hook's own session, as a hook without a key does.
@@ -418,6 +427,10 @@ async function executeSpawnAgent(
     // Summarize the payload instead of dumping the full JSON, which flooded
     // the user-visible message with repo metadata (see webhook-summary.ts).
     let event = renderedMessage || summarizeWebhookPayload(context.webhook.body);
+    if (context.checkChanges?.length) {
+      const { describeChanges } = await import('./event-changes');
+      event += `\n${describeChanges(context.checkChanges)}`;
+    }
     if (context.webhook.headers) {
       const eventType = context.webhook.headers['x-github-event'] || context.webhook.headers['x-gitlab-event'] || '';
       if (eventType) event += `\nEvent type: ${eventType}`;
@@ -534,6 +547,44 @@ async function executeSpawnAgent(
 
   await closeThreadIfEnded(thread, hook);
   return { success: true, data: { agentId: agent.getContext().id, ...threadData(thread) } };
+}
+
+/**
+ * An `onlyOnChange` hook's filter: the result to return instead of a turn, or
+ * the context this delivery's turn runs with now. A check result that is no change is
+ * recorded and skipped; a change opens (or joins) its subject's merge window,
+ * whose turn runs later through executeAction with the merged changes.
+ * Deliveries that are not check results are not filtered.
+ */
+async function gateCheckChange(
+  config: Hook['actionConfig'],
+  context: TriggerContext,
+  hook: Hook,
+): Promise<{ result: ActionResult } | { context: TriggerContext }> {
+  const changes = await import('./event-changes');
+  const webhook = context.webhook!;
+  const observed = changes.observeGithubCheck(webhook.headers?.['x-github-event'], webhook.body);
+  if (!observed) return { context };
+  const check = { subject: observed.subject, name: observed.name, state: observed.state };
+  const { change, previous } = await changes.isCheckChange(hook.id, observed);
+  if (!change) {
+    await changes.recordCheckStates(hook.id, [observed]);
+    return { result: { success: true, data: { skipped: 'no change', check, previous } } };
+  }
+  const seconds = Number(config.changeMergeWindowSeconds ?? changes.DEFAULT_MERGE_WINDOW_SECONDS);
+  const windowMs = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 0;
+  const fire = async (merged: typeof observed[]) => {
+    await changes.recordCheckStates(hook.id, merged);
+    const result = await executeAction(hook, { ...context, checkChanges: merged });
+    if (!result.success) coreLogger.error({ hookId: hook.id, subject: observed.subject, error: result.error }, 'Merged check-change turn failed');
+  };
+  if (windowMs === 0) {
+    // No window: this delivery is the turn.
+    await changes.recordCheckStates(hook.id, [observed]);
+    return { context: { ...context, checkChanges: [observed] } };
+  }
+  const opened = changes.mergeCheckChange(hook.id, observed, windowMs, fire);
+  return { result: { success: true, data: { deferred: true, merged: !opened, check, previous, windowSeconds: windowMs / 1000 } } };
 }
 
 /** What a read-only turn is told (security/read-only-turn.ts). */
