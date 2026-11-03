@@ -361,11 +361,6 @@ export class UnifiedMessageInterface extends EventEmitter {
     return Array.from(this.channels.values()).filter((c) => c.isConnected());
   }
 
-  /** Is this platform set up on this install (registered), connected or not? */
-  isChannelRegistered(type: ChannelType): boolean {
-    return this.channels.has(type);
-  }
-
   /**
    * Check if a channel is registered and connected
    */

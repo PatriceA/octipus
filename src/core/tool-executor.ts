@@ -570,9 +570,12 @@ export class ToolExecutor {
   private async executeBatch(toolCalls: ToolCall[]): Promise<AgentMessage[]> {
     const results = await this.runCalls(toolCalls);
     // Same definition of "failed" as trackFailures: a call that ran and returned
-    // a result (red tests, a non-zero exit) worked as a tool.
-    const failed = results.filter((r) => r.error && r.result == null);
-    this.lastOutcome = { calls: results.length, failed: failed.length, errors: failed.map((r) => r.error as string) };
+    // a result (red tests, a non-zero exit) worked as a tool, and a server that
+    // is down right now is a state, not a failure of the agent's approach — it
+    // counts neither way, so a restarting MCP server cannot switch tools off.
+    const counted = results.filter((r) => !(r.error && r.result == null && TRANSIENT_TOOL_ERROR.test(r.error)));
+    const failed = counted.filter((r) => r.error && r.result == null);
+    this.lastOutcome = { calls: counted.length, failed: failed.length, errors: failed.map((r) => r.error as string) };
     return this.buildToolMessages(toolCalls, results);
   }
 

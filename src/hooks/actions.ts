@@ -445,7 +445,14 @@ async function executeSpawnAgent(
     // A heartbeat hook routes on the 'heartbeat' channel so the run is tagged
     // origin='heartbeat' (RunContext) for auditability; everything else is 'hook'.
     const channel = hook?.trigger === 'heartbeat' ? 'heartbeat' : 'hook';
-    const result = await rootAgent.handleMessage(sessionId, userId, message, channel, [], undefined, undefined, undefined, 'schedule');
+    let result: Awaited<ReturnType<typeof rootAgent.handleMessage>>;
+    try {
+      result = await rootAgent.handleMessage(sessionId, userId, message, channel, [], undefined, undefined, undefined, 'schedule');
+    } catch (err) {
+      // A closing event ends its thread even when its turn fails.
+      await closeThreadIfEnded(thread, hook);
+      throw err;
+    }
 
     // For orchestrated hooks, notify the owner with the result if either:
     // - notifyRoot is true (scheduled tasks that should deliver results)
@@ -477,15 +484,21 @@ async function executeSpawnAgent(
   const { resolveAgentScope, withAgentUsage } = await import('@/core/agent/context');
   const scope = await resolveAgentScope({ session: await sessionRepository.findById(sessionId), userId, trigger: 'schedule' });
 
-  const agent = await agentManager.spawn({
-    sessionId,
-    userId,
-    ...scope,
-    topic: config.agentTopic,
-    model: config.agentModel,
-    systemPrompt: prompt,
-    timeout: hookTimeout,
-  });
+  let agent: Awaited<ReturnType<typeof agentManager.spawn>>;
+  try {
+    agent = await agentManager.spawn({
+      sessionId,
+      userId,
+      ...scope,
+      topic: config.agentTopic,
+      model: config.agentModel,
+      systemPrompt: prompt,
+      timeout: hookTimeout,
+    });
+  } catch (err) {
+    await closeThreadIfEnded(thread, hook);
+    throw err;
+  }
 
   // Run the agent and optionally notify owner with the result
   if (message) {
@@ -529,7 +542,7 @@ export async function resolveThreadSession(
   const template = typeof config.threadKey === 'string' ? config.threadKey.trim() : '';
   if (!template) return null;
   const { checkThreadKey, endsThread, threadSession } = await import('./thread-sessions');
-  const checked = checkThreadKey(interpolateTemplate(template, context));
+  const checked = checkThreadKey(renderThreadKey(template, context));
   if (checked.key === null) {
     coreLogger.info({ hookId: hook.id, reason: checked.reason }, 'Hook event has no thread; running in the hook session');
     return { key: null, reason: checked.reason };
@@ -798,6 +811,19 @@ function interpolateTemplate(template: string, context: TriggerContext): string 
   return template.replace(/\{\{([^}]+)\}\}/g, (match, path) => {
     const value = getNestedValue(context, path.trim());
     return value !== undefined ? String(value) : match;
+  });
+}
+
+/**
+ * A thread key from its template. Only a string, number or boolean is a key
+ * part: a field that is null or an object would render as `null` or
+ * `[object Object]` and put every event that has it in one thread, so it is
+ * left as its placeholder, which checkThreadKey reports as missing.
+ */
+function renderThreadKey(template: string, context: TriggerContext): string {
+  return template.replace(/\{\{([^}]+)\}\}/g, (match, rawPath: string) => {
+    const value = getNestedValue(context, rawPath.trim());
+    return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? String(value) : match;
   });
 }
 

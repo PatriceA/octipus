@@ -27,6 +27,8 @@ import { and, eq, inArray, lt, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { type ChannelDelivery, channelDeliveries } from '@/db/schema/channel-deliveries';
 import { channelLogger } from '@/utils/logger';
+import type { ChannelType } from '@/core/types';
+import { getUMI } from './interface';
 import { deliver, type DeliveryResult, EXTERNAL_CHANNELS, loadNotifyScope, type NotifyScope, sendResolved, type TargetResolution } from './ownership';
 
 /** Delay before each retry, by attempt already made (1-based). The last entry repeats. */
@@ -38,6 +40,13 @@ export const STALE_SENDING_MS = 5 * 60_000;
 /** Finished rows are kept this long. */
 export const RETENTION_MS = 7 * 24 * 60 * 60_000;
 const FLUSH_BATCH = 25;
+const RETENTION_SWEEP_MS = 60 * 60_000;
+let lastRetentionSweep = 0;
+
+/** Test seam: run the retention sweep on the next pass. */
+export function _resetRetentionSweep(): void {
+  lastRetentionSweep = 0;
+}
 const DEFAULT_FLUSH_INTERVAL_MS = 15_000;
 
 export interface DurableMessage {
@@ -111,10 +120,12 @@ export async function deliverDurably(
   const result = opts.resolved
     ? await sendResolved(opts.resolved, message)
     : await deliver(opts.scope ?? await loadNotifyScope(userId), channelType, channelId, message);
-  // `unresolved` is retried too: a Teams chat whose conversation is not known
-  // yet may become known (the user messages the bot), and if it does not, the
-  // user is told after the last attempt rather than never.
-  if (result.ok || result.reason === 'not_allowed' || !EXTERNAL_CHANNELS.has(channelType)) return result;
+  // Only a platform failure is queued. `not_allowed` is a decision; an
+  // `unresolved` Teams chat stays unknown until the user messages the bot; a
+  // platform this install never set up cannot come back by waiting. Retrying
+  // those for 38 minutes would end in a failure notice per message.
+  if (result.ok || result.reason !== 'send_failed' || !EXTERNAL_CHANNELS.has(channelType)) return result;
+  if (!getUMI().getChannel(channelType as ChannelType)) return result;
   try {
     const [row] = await getDb().insert(channelDeliveries).values({
       userId, channelType, channelId,
@@ -187,6 +198,14 @@ async function attempt(row: ChannelDelivery): Promise<'sent' | 'retry' | 'failed
     await finish(row.id, 'dropped', { attempts: row.attempts + 1, lastError: result.error });
     return 'dropped';
   }
+  if (result.reason === 'unresolved') {
+    // Queued after a platform failure, and now the chat cannot be found: it
+    // will not appear by waiting, so the user is told now, not 38 minutes on.
+    const attempts = row.attempts + 1;
+    await finish(row.id, 'failed', { attempts, lastError: result.error });
+    await reportGaveUp({ ...row, attempts, lastError: result.error });
+    return 'failed';
+  }
   return retryOrFail(row, result.error);
 }
 
@@ -220,7 +239,7 @@ export async function flushDeliveries(): Promise<FlushResult> {
       SELECT id FROM channel_deliveries
       WHERE status = 'pending' AND next_attempt_at <= now()
         AND (meta->>${PROCESS_KEY} IS NULL OR meta->>${PROCESS_KEY} = ${PROCESS_ID}
-             OR created_at < ${new Date(Date.now() - ORPHANED_LOCAL_ROW_MS)})
+             OR created_at < ${new Date(Date.now() - ORPHANED_LOCAL_ROW_MS).toISOString()}::timestamptz)
       ORDER BY next_attempt_at
       LIMIT ${FLUSH_BATCH}
       FOR UPDATE SKIP LOCKED
@@ -228,6 +247,10 @@ export async function flushDeliveries(): Promise<FlushResult> {
     .returning();
   for (const row of claimed) {
     try {
+      // Stamp the row as being sent now, not when the batch was claimed: a
+      // batch of slow sends must not look abandoned to another process's
+      // stale-sending sweep while it is still being worked through.
+      await db.update(channelDeliveries).set({ updatedAt: new Date() }).where(eq(channelDeliveries.id, row.id));
       out[await attempt(row)]++;
     } catch (err) {
       // A check or the database failed mid-attempt: it counts as an attempt,
@@ -242,10 +265,14 @@ export async function flushDeliveries(): Promise<FlushResult> {
       }
     }
   }
-  await db.delete(channelDeliveries).where(and(
-    inArray(channelDeliveries.status, ['sent', 'failed', 'dropped']),
-    lt(channelDeliveries.updatedAt, new Date(Date.now() - RETENTION_MS)),
-  ));
+  // Finished rows age out over a week: an hourly sweep is plenty.
+  if (Date.now() - lastRetentionSweep >= RETENTION_SWEEP_MS) {
+    lastRetentionSweep = Date.now();
+    await db.delete(channelDeliveries).where(and(
+      inArray(channelDeliveries.status, ['sent', 'failed', 'dropped']),
+      lt(channelDeliveries.updatedAt, new Date(Date.now() - RETENTION_MS)),
+    ));
+  }
   if (claimed.length > 0) channelLogger.info(out, 'Channel delivery retries');
   return out;
 }

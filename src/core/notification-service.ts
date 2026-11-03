@@ -86,7 +86,7 @@ export class NotificationService {
             // A platform this install never set up is skipped. One that is set
             // up but offline (reconnecting) is tried: its failed send is queued
             // and retried (channels/delivery-queue.ts).
-            if (EXTERNAL_CHANNELS.has(channelType) && !umi.isChannelRegistered(channelType as any)) continue;
+            if (EXTERNAL_CHANNELS.has(channelType) && !umi.getChannel(channelType as any)) continue;
             // deliverDurably() sends only to the notified user's own chats or
             // approved shared destinations.
             void deliverDurably(userId, channelType, channelId, {
