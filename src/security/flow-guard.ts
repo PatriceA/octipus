@@ -207,6 +207,16 @@ export function observeFlow(sessionId: string | undefined, call: FlowCall, contr
   if (Object.keys(gained).length > 0) persistGained(sessionId, gained);
 }
 
+/**
+ * Taint a session from something that is not a tool call: a turn whose prompt
+ * itself carries outsider text (a webhook's payload). Same effect as a call
+ * whose contract adds `taint`: monotonic, persisted the first time.
+ */
+export function markFlowTaint(sessionId: string | undefined, taint: 'suspicious' | 'private' | 'secret', source: string): void {
+  const [toolId, ...rest] = source.split(':');
+  observeFlow(sessionId, { toolId, action: rest.join(':') || 'input' }, { taints: [taint] });
+}
+
 export function clearFlowLabel(sessionId: string): void {
   labels.delete(sessionId);
   sharedAudience.delete(sessionId);

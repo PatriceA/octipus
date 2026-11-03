@@ -11,6 +11,7 @@ import { coreLogger } from '@/utils/logger';
 import { inlineUiFallbackText } from '@/shared/inline-ui/fence';
 import type { TriggerContext } from './triggers';
 import { summarizeWebhookPayload } from './webhook-summary';
+import { fence, isWebhookPath, UNTRUSTED_WEBHOOK_NOTE, WEBHOOK_EVENT_TAG, WEBHOOK_VALUE_TAG } from './untrusted';
 import { canActInSession } from '@/core/rooms/access';
 
 export interface ActionResult {
@@ -379,7 +380,16 @@ async function executeSpawnAgent(
   // Use the hook owner's userId so notifications and permissions resolve correctly
   const userId = hook?.userId || context.message?.userId || context.agent?.userId || 'system';
 
-  let prompt = interpolateTemplate(config.agentPrompt || '', context);
+  // The turn's prompt carries text written by whoever triggered the event:
+  // the session starts the turn as if it had read an issue comment itself, so
+  // the flow guard asks before it sends out anything private (hooks/untrusted.ts).
+  if (context.webhook) {
+    const { markFlowTaint } = await import('@/security/flow-guard');
+    markFlowTaint(sessionId, 'suspicious', `webhook:${context.webhook.path}`);
+  }
+
+  // Values from the payload are fenced as untrusted (hooks/untrusted.ts).
+  let prompt = interpolateTemplate(config.agentPrompt || '', context, { fenceWebhookValues: true });
 
   // The away digest is deterministic — read it here and hand the agent the
   // facts, rather than spending a model turn asking it to collect them.
@@ -404,17 +414,15 @@ async function executeSpawnAgent(
     // If a rendered message template is available (from incoming webhook), use it
     const webhookBody = context.webhook.body as Record<string, unknown> | undefined;
     const renderedMessage = webhookBody?._renderedMessage as string | undefined;
-    if (renderedMessage) {
-      prompt += `\n\n${renderedMessage}`;
-    } else {
-      // Summarize the payload instead of dumping the full JSON, which flooded
-      // the user-visible message with repo metadata (see webhook-summary.ts).
-      prompt += `\n\n${summarizeWebhookPayload(context.webhook.body)}`;
-    }
+    // Summarize the payload instead of dumping the full JSON, which flooded
+    // the user-visible message with repo metadata (see webhook-summary.ts).
+    let event = renderedMessage || summarizeWebhookPayload(context.webhook.body);
     if (context.webhook.headers) {
       const eventType = context.webhook.headers['x-github-event'] || context.webhook.headers['x-gitlab-event'] || '';
-      if (eventType) prompt += `\nEvent type: ${eventType}`;
+      if (eventType) event += `\nEvent type: ${eventType}`;
     }
+    // Written by whoever triggered the event, not by the hook's owner.
+    prompt += `\n\n${UNTRUSTED_WEBHOOK_NOTE}\n${fence(WEBHOOK_EVENT_TAG, event)}`;
   } else if (context.tool) {
     prompt += `\n\n--- Tool Context ---\n${JSON.stringify(context.tool, null, 2)}`;
   }
@@ -794,11 +802,20 @@ async function notifyOwnerWithResult(userId: string, result: string): Promise<vo
  * Interpolate template strings with context values
  * Supports {{field.path}} syntax
  */
-function interpolateTemplate(template: string, context: TriggerContext): string {
-  return template.replace(/\{\{([^}]+)\}\}/g, (match, path) => {
-    const value = getNestedValue(context, path.trim());
-    return value !== undefined ? String(value) : match;
+function interpolateTemplate(template: string, context: TriggerContext, opts: { fenceWebhookValues?: boolean } = {}): string {
+  let fenced = false;
+  const out = template.replace(/\{\{([^}]+)\}\}/g, (match, rawPath: string) => {
+    const path = rawPath.trim();
+    const value = getNestedValue(context, path);
+    if (value === undefined) return match;
+    if (opts.fenceWebhookValues && isWebhookPath(path)) {
+      fenced = true;
+      return fence(WEBHOOK_VALUE_TAG, typeof value === 'object' ? JSON.stringify(value) : String(value));
+    }
+    return String(value);
   });
+  // The note goes with fenced values unless the event block below adds it.
+  return fenced && !context.webhook ? `${UNTRUSTED_WEBHOOK_NOTE}\n\n${out}` : out;
 }
 
 function getNestedValue(obj: unknown, path: string): unknown {
