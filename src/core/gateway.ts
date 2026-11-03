@@ -87,6 +87,15 @@ export class Gateway {
         coreLogger.error({ err }, 'Swarm orphan reaper failed to start (non-fatal)');
       }
 
+      // Retry loop for chat messages whose first send failed
+      // (src/channels/delivery-queue.ts). Non-fatal like the reaper.
+      try {
+        const { startDeliveryQueue } = await import('@/channels/delivery-queue');
+        this.cleanupHandlers.push(startDeliveryQueue());
+      } catch (err) {
+        coreLogger.error({ err }, 'Channel delivery retry loop failed to start (non-fatal)');
+      }
+
       // The knowledge-base self-check runs later, off the boot path, once
       // the runtime config is loaded (src/index.ts).
 

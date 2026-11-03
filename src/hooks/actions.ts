@@ -1,5 +1,4 @@
 import {
-  deliver,
   loadNotifyScope,
   type NotifyScope,
   ownerTargets,
@@ -221,14 +220,18 @@ async function executeNotify(
     return { success: false, error: 'No notification channels configured. Enable "Notify me" or add explicit channels.' };
   }
 
-  const results: { channel: string; success: boolean; error?: string }[] = [];
+  const results: { channel: string; success: boolean; queued?: boolean; error?: string }[] = [];
   const skipped: string[] = [];
   const skipErrors: string[] = [];
 
+  const { deliverDurably } = await import('@/channels/delivery-queue');
   for (const ch of targets) {
-    const r = await deliver(scope, ch.type, ch.id, { content: message });
+    // A send the platform failed is queued and retried (channels/delivery-queue.ts).
+    const r = await deliverDurably(hook.userId, ch.type, ch.id, { content: message }, { kind: 'hook_notify', meta: { hookId: hook.id }, scope });
     if (r.ok) {
       results.push({ channel: ch.label, success: true });
+    } else if (r.queued) {
+      results.push({ channel: ch.label, success: false, queued: true, error: `${r.error} (queued for retry)` });
     } else if (r.reason === 'not_allowed') {
       skipped.push(ch.label);
       skipErrors.push(r.error);
@@ -241,7 +244,8 @@ async function executeNotify(
     }
   }
 
-  const anySuccess = results.some((r) => r.success);
+  // A queued send has not failed yet: the run is not an error while it retries.
+  const anySuccess = results.some((r) => r.success || r.queued);
   if (!anySuccess && results.length === 0) {
     return { success: false, data: { skipped }, error: skipErrors.join('; ') };
   }
@@ -779,9 +783,10 @@ async function notifyOwnerWithResult(userId: string, result: string): Promise<vo
   const text = inlineUiFallbackText(result);
   const truncated = text.length > 3000 ? text.slice(0, 3000) + '\n\n…(truncated)' : text;
 
+  const { deliverDurably } = await import('@/channels/delivery-queue');
   for (const t of targets) {
-    const r = await deliver(scope, t.channelType, t.channelId, { content: truncated });
-    if (!r.ok) coreLogger.warn({ error: r.error, reason: r.reason, channel: t.channelType }, 'Failed to notify owner channel');
+    const r = await deliverDurably(userId, t.channelType, t.channelId, { content: truncated }, { kind: 'hook_result', scope });
+    if (!r.ok && !r.queued) coreLogger.warn({ error: r.error, reason: r.reason, channel: t.channelType }, 'Failed to notify owner channel');
   }
 }
 

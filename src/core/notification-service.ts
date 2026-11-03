@@ -75,26 +75,30 @@ export class NotificationService {
       if (deliverTo?.length) {
         try {
           const { getUMI } = await import('@/channels/interface');
-          const { deliver, EXTERNAL_CHANNELS, loadNotifyScope, parseChannelTarget } = await import('@/channels/ownership');
+          const { EXTERNAL_CHANNELS, loadNotifyScope, parseChannelTarget } = await import('@/channels/ownership');
+          const { deliverDurably } = await import('@/channels/delivery-queue');
           const umi = getUMI();
           const scope = await loadNotifyScope(userId);
           for (const target of deliverTo) {
             const parsed = parseChannelTarget(String(target));
             if (!parsed) continue;
             const { channelType, channelId } = parsed;
-            if (EXTERNAL_CHANNELS.has(channelType) && !umi.isChannelAvailable(channelType as any)) continue;
-            // deliver() sends only to the notified user's own chats or
+            // A platform this install never set up is skipped. One that is set
+            // up but offline (reconnecting) is tried: its failed send is queued
+            // and retried (channels/delivery-queue.ts).
+            if (EXTERNAL_CHANNELS.has(channelType) && !umi.isChannelRegistered(channelType as any)) continue;
+            // deliverDurably() sends only to the notified user's own chats or
             // approved shared destinations.
-            void deliver(scope, channelType, channelId, {
+            void deliverDurably(userId, channelType, channelId, {
               content: `${title}${body ? `\n${body}` : ''}`,
-            }).then((r) => {
-              if (r.ok) return;
+            }, { kind: 'notification', meta: { type }, scope }).then((r) => {
+              if (r.ok || r.queued) return;
               if (r.reason === 'not_allowed') {
                 coreLogger.warn({ userId, type, target }, 'Notification deliverTo target is not linked to the user nor an approved shared destination; skipped');
               } else {
                 coreLogger.error({ err: r.error, reason: r.reason, target }, 'Channel delivery failed');
               }
-            });
+            }).catch((err) => coreLogger.error({ err, userId, type, target }, 'Channel delivery failed'));
           }
         } catch (err) { coreLogger.error({ err }, 'silent failure in notification-service'); }
       }

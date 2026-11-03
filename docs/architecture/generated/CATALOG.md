@@ -656,12 +656,12 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `capabilities` | `tools` | 4 |
 | `capabilities` | `utils` | 6 |
 | `channels` | `config` | 7 |
-| `channels` | `core` | 42 |
-| `channels` | `db` | 41 |
+| `channels` | `core` | 43 |
+| `channels` | `db` | 43 |
 | `channels` | `models` | 6 |
 | `channels` | `security` | 23 |
 | `channels` | `shared` | 5 |
-| `channels` | `utils` | 23 |
+| `channels` | `utils` | 24 |
 | `channels` | `voice` | 2 |
 | `config` | `channels` | 2 |
 | `config` | `core` | 4 |
@@ -678,7 +678,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `connectors` | `shared` | 1 |
 | `connectors` | `utils` | 5 |
 | `core` | `capabilities` | 2 |
-| `core` | `channels` | 12 |
+| `core` | `channels` | 14 |
 | `core` | `config` | 66 |
 | `core` | `connectors` | 4 |
 | `core` | `db` | 402 |
@@ -710,7 +710,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `eval` | `utils` | 5 |
 | `extensions` | `core` | 2 |
 | `extensions` | `utils` | 4 |
-| `hooks` | `channels` | 2 |
+| `hooks` | `channels` | 4 |
 | `hooks` | `config` | 2 |
 | `hooks` | `core` | 18 |
 | `hooks` | `db` | 15 |
