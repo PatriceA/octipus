@@ -61,6 +61,13 @@ const kinds = new Map<string, DeliveryKind>();
  */
 const PROCESS_ID = crypto.randomUUID();
 const PROCESS_KEY = '__process';
+/**
+ * A process-local row is claimed only by the process that queued it, so a
+ * second live process never drops another's approval prompt. Past this age
+ * its owner is gone (approvals expire within the hour) and any process may
+ * claim it, only to drop it.
+ */
+export const ORPHANED_LOCAL_ROW_MS = 2 * 60 * 60_000;
 
 /** Register the checks of one kind of message. Idempotent per kind. */
 export function registerDeliveryKind(kind: string, handlers: DeliveryKind): void {
@@ -104,7 +111,10 @@ export async function deliverDurably(
   const result = opts.resolved
     ? await sendResolved(opts.resolved, message)
     : await deliver(opts.scope ?? await loadNotifyScope(userId), channelType, channelId, message);
-  if (result.ok || result.reason !== 'send_failed' || !EXTERNAL_CHANNELS.has(channelType)) return result;
+  // `unresolved` is retried too: a Teams chat whose conversation is not known
+  // yet may become known (the user messages the bot), and if it does not, the
+  // user is told after the last attempt rather than never.
+  if (result.ok || result.reason === 'not_allowed' || !EXTERNAL_CHANNELS.has(channelType)) return result;
   try {
     const [row] = await getDb().insert(channelDeliveries).values({
       userId, channelType, channelId,
@@ -151,7 +161,8 @@ async function attempt(row: ChannelDelivery): Promise<'sent' | 'retry' | 'failed
   const kind = kinds.get(row.kind);
   const owner = row.meta?.[PROCESS_KEY];
   if (owner !== undefined && owner !== PROCESS_ID) {
-    await finish(row.id, 'dropped', { lastError: 'queued by an earlier process' });
+    // Only claimed once orphaned (ORPHANED_LOCAL_ROW_MS): its process is gone.
+    await finish(row.id, 'dropped', { lastError: 'queued by a process that has ended' });
     return 'dropped';
   }
   if (kind?.stillWanted && !(await kind.stillWanted(row))) {
@@ -171,19 +182,24 @@ async function attempt(row: ChannelDelivery): Promise<'sent' | 'retry' | 'failed
     }
     return 'sent';
   }
-  const attempts = row.attempts + 1;
-  if (result.reason !== 'send_failed') {
+  if (result.reason === 'not_allowed') {
     // Unlinked or no longer approved since: a decision, not something to retry.
-    await finish(row.id, 'dropped', { attempts, lastError: result.error });
+    await finish(row.id, 'dropped', { attempts: row.attempts + 1, lastError: result.error });
     return 'dropped';
   }
+  return retryOrFail(row, result.error);
+}
+
+/** Count one more failed attempt: back off, or give up and tell the user. */
+async function retryOrFail(row: ChannelDelivery, error: string): Promise<'retry' | 'failed'> {
+  const attempts = row.attempts + 1;
   if (attempts >= MAX_ATTEMPTS) {
-    await finish(row.id, 'failed', { attempts, lastError: result.error });
-    await reportGaveUp({ ...row, attempts, lastError: result.error });
+    await finish(row.id, 'failed', { attempts, lastError: error });
+    await reportGaveUp({ ...row, attempts, lastError: error });
     return 'failed';
   }
   await getDb().update(channelDeliveries).set({
-    status: 'pending', attempts, lastError: result.error, updatedAt: new Date(),
+    status: 'pending', attempts, lastError: error, updatedAt: new Date(),
     nextAttemptAt: new Date(Date.now() + retryDelay(attempts)),
   }).where(eq(channelDeliveries.id, row.id));
   return 'retry';
@@ -203,6 +219,8 @@ export async function flushDeliveries(): Promise<FlushResult> {
     .where(inArray(channelDeliveries.id, sql`(
       SELECT id FROM channel_deliveries
       WHERE status = 'pending' AND next_attempt_at <= now()
+        AND (meta->>${PROCESS_KEY} IS NULL OR meta->>${PROCESS_KEY} = ${PROCESS_ID}
+             OR created_at < ${new Date(Date.now() - ORPHANED_LOCAL_ROW_MS)})
       ORDER BY next_attempt_at
       LIMIT ${FLUSH_BATCH}
       FOR UPDATE SKIP LOCKED
@@ -212,11 +230,16 @@ export async function flushDeliveries(): Promise<FlushResult> {
     try {
       out[await attempt(row)]++;
     } catch (err) {
-      // A database error mid-attempt: put the row back for the next pass.
-      channelLogger.error({ err, deliveryId: row.id }, 'Delivery retry failed unexpectedly; requeued');
-      await finish(row.id, 'pending', { lastError: (err as Error).message }).catch((e) =>
-        channelLogger.error({ err: e, deliveryId: row.id }, 'Could not requeue delivery; the stale-sending sweep will'));
-      out.retry++;
+      // A check or the database failed mid-attempt: it counts as an attempt,
+      // with backoff, so a row that always throws ends in `failed` and a
+      // notice instead of being retried every pass forever.
+      channelLogger.error({ err, deliveryId: row.id }, 'Delivery retry failed unexpectedly');
+      try {
+        out[await retryOrFail(row, (err as Error).message)]++;
+      } catch (e) {
+        channelLogger.error({ err: e, deliveryId: row.id }, 'Could not record the failed attempt; the stale-sending sweep will requeue it');
+        out.retry++;
+      }
     }
   }
   await db.delete(channelDeliveries).where(and(

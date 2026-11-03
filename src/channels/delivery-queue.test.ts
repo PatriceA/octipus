@@ -145,14 +145,41 @@ describe('flushDeliveries', () => {
     expect(followed).toEqual(['req-2']);
   });
 
-  test('a process-local row from an earlier process is dropped, not sent', async () => {
+  test("another live process's local row is left to it; once orphaned it is dropped, not sent", async () => {
     umi.fail = true;
     await q.deliverDurably(aliceId, 'telegram', 'tg-alice', { content: 'approve?' }, { kind: 'approval', processLocal: true, meta: { requestId: 'r' } });
-    await executeRaw(`UPDATE channel_deliveries SET meta = jsonb_set(meta, '{__process}', '"an-earlier-process"')`);
+    await executeRaw(`UPDATE channel_deliveries SET meta = jsonb_set(meta, '{__process}', '"another-process"')`);
     umi.fail = false;
     await due();
+    expect(await q.flushDeliveries()).toEqual({ sent: 0, retry: 0, failed: 0, dropped: 0 });
+    expect(await rows('SELECT status FROM channel_deliveries')).toEqual([{ status: 'pending' }]);
+    await executeRaw(`UPDATE channel_deliveries SET created_at = now() - interval '3 hours'`);
     expect(await q.flushDeliveries()).toMatchObject({ dropped: 1, sent: 0 });
     expect(umi.sent).toHaveLength(0);
+  });
+
+  test("this process's own local row is retried", async () => {
+    umi.fail = true;
+    await q.deliverDurably(aliceId, 'telegram', 'tg-alice', { content: 'approve?' }, { kind: 'approval-local-test', processLocal: true });
+    umi.fail = false;
+    await due();
+    expect(await q.flushDeliveries()).toMatchObject({ sent: 1 });
+  });
+
+  test('an attempt that throws counts, backs off, and ends in failed with a notice', async () => {
+    q.registerDeliveryKind('throws', { stillWanted: () => { throw new Error('approval service unavailable'); } });
+    umi.fail = true;
+    await q.deliverDurably(aliceId, 'telegram', 'tg-alice', { content: 'x' }, { kind: 'throws' });
+    umi.fail = false;
+    await due();
+    expect(await q.flushDeliveries()).toMatchObject({ retry: 1 });
+    const [row] = await rows<{ attempts: number; next_attempt_at: Date; last_error: string }>('SELECT attempts, next_attempt_at, last_error FROM channel_deliveries');
+    expect(row.attempts).toBe(2);
+    expect(row.last_error).toBe('approval service unavailable');
+    expect(new Date(row.next_attempt_at).getTime()).toBeGreaterThan(Date.now() + 30_000);
+    for (let i = 2; i < q.MAX_ATTEMPTS; i++) { await due(); await q.flushDeliveries(); }
+    expect(await rows('SELECT status FROM channel_deliveries')).toEqual([{ status: 'failed' }]);
+    expect(await rows("SELECT 1 FROM notifications WHERE type = 'channel_delivery_failed'")).toHaveLength(1);
   });
 
   test('a target unlinked since the failure is dropped', async () => {
