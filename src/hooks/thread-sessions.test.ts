@@ -10,10 +10,11 @@ import { join } from 'node:path';
 import type { Hook } from '@/core/types';
 import type { TriggerContext } from './triggers';
 
-const turns = vi.hoisted(() => ({ sessions: [] as string[] }));
+const turns = vi.hoisted(() => ({ sessions: [] as string[], fail: false }));
 vi.mock('@/core/agent', () => ({
   getAgentService: () => ({
     handleMessage: async (sessionId: string) => {
+      if (turns.fail) throw new Error('model down');
       turns.sessions.push(sessionId);
       return { agentId: 'agent-1', response: '' };
     },
@@ -125,6 +126,14 @@ describe('threadSession', () => {
     expect(rows.map((r) => r.thread_key)).toEqual(['acme/app#new']);
   });
 
+  test("an idle thread's own next event starts a new session", async () => {
+    const old = await mod.threadSession(hookId, 'acme/app#idle');
+    await executeRaw(`UPDATE hook_thread_sessions SET last_used_at = now() - interval '${mod.THREAD_IDLE_DAYS + 1} days'`);
+    const next = await mod.threadSession(hookId, 'acme/app#idle');
+    expect(next.created).toBe(true);
+    expect(next.sessionId).not.toBe(old.sessionId);
+  });
+
   test('rows go with their hook', async () => {
     const tmpHook = '55555555-5555-4555-8555-555555555555';
     await executeRaw(
@@ -166,6 +175,25 @@ describe('spawn_agent with a thread key', () => {
     expect(turns.sessions[1]).toBe(turns.sessions[0]);
     expect(turns.sessions[2]).not.toBe(turns.sessions[0]);
     expect(closed.data).toMatchObject({ thread: { key: 'acme/app#9', ended: true } });
+  });
+
+  test('a field that is null or an object is no key part', async () => {
+    const nullPr: TriggerContext = { webhook: { path: 'gh', method: 'POST', headers: {}, body: { action: 'opened', repository: { full_name: 'acme/app' }, pull_request: { number: null } } } };
+    const r = await actions.executeAction(hook(), nullPr);
+    expect(r.data).toMatchObject({ thread: { key: null, reason: 'the event has no webhook.body.pull_request.number' } });
+    const objectKey = await actions.executeAction(hook({ threadKey: '{{webhook.body.pull_request}}' }), prEvent(5));
+    expect(objectKey.data).toMatchObject({ thread: { key: null } });
+    expect(turns.sessions).toEqual([hookSession, hookSession]);
+  });
+
+  test('a closing event whose turn fails still ends its thread', async () => {
+    const h = hook({ threadEndActions: ['closed'] });
+    await actions.executeAction(h, prEvent(11));
+    turns.fail = true;
+    const closed = await actions.executeAction(h, prEvent(11, 'closed'));
+    expect(closed.success).toBe(false);
+    turns.fail = false;
+    expect(await queryRaw(`SELECT 1 FROM hook_thread_sessions WHERE thread_key = 'acme/app#11'`)).toHaveLength(0);
   });
 
   test('a hook without a thread key keeps its one session', async () => {

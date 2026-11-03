@@ -68,6 +68,13 @@ export function endsThread(endActions: unknown, context: TriggerContext): boolea
  */
 export async function threadSession(hookId: string, key: string, attempt = 0): Promise<{ sessionId: string; created: boolean }> {
   const db = getDb();
+  // An idle thread is forgotten: its own stale row goes before the insert, so
+  // this event starts a new session instead of reviving the old one.
+  await db.delete(hookThreadSessions).where(and(
+    eq(hookThreadSessions.hookId, hookId),
+    eq(hookThreadSessions.threadKey, key),
+    lt(hookThreadSessions.lastUsedAt, sql.raw(`now() - interval '${THREAD_IDLE_DAYS} days'`)),
+  ));
   const candidate = crypto.randomUUID();
   const inserted = await db.insert(hookThreadSessions)
     .values({ hookId, threadKey: key, sessionId: candidate })
