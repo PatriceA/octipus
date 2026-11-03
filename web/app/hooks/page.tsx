@@ -389,6 +389,40 @@ const ACTION_OPTIONS = [
   { value: 'execute_tool', label: 'Execute Tool', desc: 'Run a specific tool action' },
 ];
 
+/** The thread fields of a spawn_agent webhook hook (src/hooks/thread-sessions.ts); empty ones are left out. */
+function threadConfig(trigger: string, threadKey: string, endActions: string): Record<string, unknown> {
+  if (trigger !== 'webhook' || !threadKey.trim()) return {};
+  const ends = endActions.split(',').map(s => s.trim()).filter(Boolean);
+  return { threadKey: threadKey.trim(), ...(ends.length ? { threadEndActions: ends } : {}) };
+}
+
+const THREAD_KEY_EXAMPLE = '{{webhook.body.repository.full_name}}#{{webhook.body.pull_request.number}}';
+
+function ThreadFields({ threadKey, setThreadKey, endActions, setEndActions }: {
+  threadKey: string; setThreadKey: (v: string) => void; endActions: string; setEndActions: (v: string) => void;
+}) {
+  const cls = 'w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary';
+  return (
+    <>
+      <div>
+        <label className="block text-xs font-bold text-on-surface-variant uppercase mb-2">Thread key (optional)</label>
+        <input type="text" value={threadKey} onChange={e => setThreadKey(e.target.value)} className={`${cls} font-mono`} placeholder={THREAD_KEY_EXAMPLE} />
+        <p className="mt-1 text-xs text-on-surface-variant">
+          Events with the same key run in the same session, so follow-ups on a pull request reach the agent already working on it.
+          Without a key, every event runs in this hook's one session.
+        </p>
+      </div>
+      {threadKey.trim() && (
+        <div>
+          <label className="block text-xs font-bold text-on-surface-variant uppercase mb-2">Thread ends on (optional)</label>
+          <input type="text" value={endActions} onChange={e => setEndActions(e.target.value)} className={cls} placeholder="closed, merge" />
+          <p className="mt-1 text-xs text-on-surface-variant">Payload actions that close the thread; the next event on its key starts a new session.</p>
+        </div>
+      )}
+    </>
+  );
+}
+
 interface CreateHookModalProps {
   open: boolean;
   onClose: () => void;
@@ -406,6 +440,8 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
   const [scheduledAt, setScheduledAt] = useState<string | null>(null);
   const [messagePattern, setMessagePattern] = useState('');
   const [agentPrompt, setAgentPrompt] = useState('');
+  const [threadKey, setThreadKey] = useState('');
+  const [threadEndActions, setThreadEndActions] = useState('');
   const [orchestrated, setOrchestrated] = useState(true);
   const [notifyOwner, setNotifyOwner] = useState(true);
   const [notifyChannels, setNotifyChannels] = useState('');
@@ -454,6 +490,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
         actionConfig.agentPrompt = agentPrompt;
         actionConfig.orchestrated = orchestrated;
         actionConfig.notifyOwner = notifyOwner;
+        Object.assign(actionConfig, threadConfig(trigger, threadKey, threadEndActions));
       }
       if (action === 'notify') {
         actionConfig.notifyOwner = notifyOwner;
@@ -671,6 +708,9 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                   Use {'{{webhook.body.field}}'} for template variables
                 </p>
               </div>
+              {trigger === 'webhook' && (
+                <ThreadFields threadKey={threadKey} setThreadKey={setThreadKey} endActions={threadEndActions} setEndActions={setThreadEndActions} />
+              )}
               <label className="flex items-center gap-2 text-sm text-on-surface">
                 <input
                   type="checkbox"
@@ -809,6 +849,8 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
 
   // Action config — spawn_agent
   const [agentPrompt, setAgentPrompt] = useState((hook.actionConfig?.agentPrompt as string) || '');
+  const [threadKey, setThreadKey] = useState((hook.actionConfig?.threadKey as string) || '');
+  const [threadEndActions, setThreadEndActions] = useState(((hook.actionConfig?.threadEndActions as string[]) || []).join(', '));
   const [orchestrated, setOrchestrated] = useState(Boolean(hook.actionConfig?.orchestrated));
   const [agentTopic, setAgentTopic] = useState((hook.actionConfig?.agentTopic as string) || '');
   const [agentModel, setAgentModel] = useState((hook.actionConfig?.agentModel as string) || '');
@@ -871,6 +913,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
         cfg.notifyOwner = notifyOwner;
         if (agentTopic) cfg.agentTopic = agentTopic;
         if (agentModel) cfg.agentModel = agentModel;
+        Object.assign(cfg, threadConfig(trigger, threadKey, threadEndActions));
         break;
       case 'notify':
         cfg.notifyOwner = notifyOwner;
@@ -1023,6 +1066,9 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
                 <textarea value={agentPrompt} onChange={e => setAgentPrompt(e.target.value)} rows={3} className={inputCls} placeholder="Review the changes..." />
                 <p className="mt-1 text-xs text-on-surface-variant">Use {'{{webhook.body.field}}'} for template variables</p>
               </div>
+              {trigger === 'webhook' && (
+                <ThreadFields threadKey={threadKey} setThreadKey={setThreadKey} endActions={threadEndActions} setEndActions={setThreadEndActions} />
+              )}
               <label className="flex items-center gap-2 text-sm text-on-surface">
                 <input type="checkbox" checked={orchestrated} onChange={e => setOrchestrated(e.target.checked)} className="rounded" />
                 Route through rootAgent

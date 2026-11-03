@@ -350,11 +350,18 @@ async function executeSpawnAgent(
     }
   }
 
+  // A thread key keeps one session per thread of work (a PR, an issue): see
+  // hooks/thread-sessions.ts. An event the key does not apply to (no such
+  // field) runs in the hook's own session, as a hook without a key does.
+  const thread = hook && !heartbeatRole ? await resolveThreadSession(config, context, hook) : null;
+
   // Reuse the hook's session across runs (see resolveHookSessionId) so a
   // scheduled/webhook hook appends to one session instead of spawning a new
   // one every run. A freshly minted id is persisted back to the hook row.
   // Only sessions the hook owner owns are accepted (resolveOwnedHookSessionId).
-  const { sessionId, minted } = hook
+  const { sessionId, minted } = thread?.sessionId
+    ? { sessionId: thread.sessionId, minted: false }
+    : hook
     ? await resolveOwnedHookSessionId(context, hook)
     : resolveHookSessionId(context, hook);
   if (minted && hook) {
@@ -445,9 +452,10 @@ async function executeSpawnAgent(
       });
     }
 
+    await closeThreadIfEnded(thread, hook);
     return {
       success: true,
-      data: { agentId: result.agentId, response: result.response, orchestrated: true },
+      data: { agentId: result.agentId, response: result.response, orchestrated: true, ...threadData(thread) },
     };
   }
 
@@ -490,7 +498,59 @@ async function executeSpawnAgent(
     });
   }
 
-  return { success: true, data: { agentId: agent.getContext().id } };
+  await closeThreadIfEnded(thread, hook);
+  return { success: true, data: { agentId: agent.getContext().id, ...threadData(thread) } };
+}
+
+type ThreadResolution = {
+  key: string | null;
+  sessionId?: string;
+  created?: boolean;
+  /** Why the event has no thread (it ran in the hook's own session). */
+  reason?: string;
+  ends?: boolean;
+};
+
+/**
+ * The thread session of this event under `actionConfig.threadKey`, or null
+ * when the hook has no key. A key that does not render (the event lacks the
+ * field) resolves to `{ key: null, reason }`: the event runs in the hook's own
+ * session, and the reason is logged and returned with the run's result.
+ */
+export async function resolveThreadSession(
+  config: Hook['actionConfig'],
+  context: TriggerContext,
+  hook: Hook,
+): Promise<ThreadResolution | null> {
+  const template = typeof config.threadKey === 'string' ? config.threadKey.trim() : '';
+  if (!template) return null;
+  const { checkThreadKey, endsThread, threadSession } = await import('./thread-sessions');
+  const checked = checkThreadKey(interpolateTemplate(template, context));
+  if (checked.key === null) {
+    coreLogger.info({ hookId: hook.id, reason: checked.reason }, 'Hook event has no thread; running in the hook session');
+    return { key: null, reason: checked.reason };
+  }
+  const { sessionId, created } = await threadSession(hook.id, checked.key);
+  if (await isForeignSession(sessionId, hook.userId)) {
+    // Not reachable through this table (it mints ids for the hook owner), but
+    // a session is never entered on another user's behalf.
+    throw new Error(`Thread session ${sessionId} of hook ${hook.id} belongs to another user`);
+  }
+  return { key: checked.key, sessionId, created, ends: endsThread(config.threadEndActions, context) };
+}
+
+function threadData(thread: ThreadResolution | null): Record<string, unknown> {
+  if (!thread) return {};
+  return { thread: thread.key === null
+    ? { key: null, reason: thread.reason }
+    : { key: thread.key, sessionId: thread.sessionId, created: thread.created, ended: thread.ends === true } };
+}
+
+async function closeThreadIfEnded(thread: ThreadResolution | null, hook?: Hook): Promise<void> {
+  if (!hook || !thread?.key || !thread.ends) return;
+  const { endThread } = await import('./thread-sessions');
+  await endThread(hook.id, thread.key);
+  coreLogger.info({ hookId: hook.id, threadKey: thread.key, sessionId: thread.sessionId }, 'Hook thread ended; its next event starts a new session');
 }
 
 /**

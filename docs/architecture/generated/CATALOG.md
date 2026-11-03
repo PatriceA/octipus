@@ -713,7 +713,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `hooks` | `channels` | 2 |
 | `hooks` | `config` | 2 |
 | `hooks` | `core` | 18 |
-| `hooks` | `db` | 13 |
+| `hooks` | `db` | 15 |
 | `hooks` | `security` | 1 |
 | `hooks` | `shared` | 1 |
 | `hooks` | `tools` | 1 |

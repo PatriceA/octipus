@@ -1107,6 +1107,13 @@
       "when": 1793530000000,
       "tag": "0157_execution_scope",
       "breakpoints": true
+    },
+    {
+      "idx": 158,
+      "version": "7",
+      "when": 1793620000000,
+      "tag": "0158_hook_thread_sessions",
+      "breakpoints": true
     }
   ]
 }

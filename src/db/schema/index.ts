@@ -23,6 +23,7 @@ export * from './embeddings';
 export * from './evaluations';
 export * from './hook-executions';
 export * from './hooks';
+export * from './hook-thread-sessions';
 export * from './group-channels';
 export * from './impersonation-sessions';
 export * from './knowledge-links';
