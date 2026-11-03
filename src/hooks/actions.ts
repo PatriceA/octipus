@@ -356,13 +356,10 @@ async function executeSpawnAgent(
     }
   }
 
-  // Only a check that turned red starts a turn, merged per subject
-  // (hooks/event-changes.ts). Decided before a session is minted.
-  if (hook && !heartbeatRole && config.onlyOnChange === true && context.webhook && !context.checkChanges) {
-    const gated = await gateCheckChange(config, context, hook);
-    if ('result' in gated) return gated.result;
-    // The trigger context is shared with every hook this delivery matched: a copy.
-    context = gated.context;
+  // A direct spawn holds no messaging tool, so a read-only turn there could
+  // never notify anyone: refuse it before a session is minted or tainted.
+  if (config.readOnly === true && !heartbeatRole && !config.orchestrated) {
+    return { success: false, error: 'A read-only hook runs through the root agent: set "orchestrated": true (Route through rootAgent).' };
   }
 
   // A thread key keeps one session per thread of work (a PR, an issue): see
@@ -500,12 +497,6 @@ async function executeSpawnAgent(
     };
   }
 
-  // A direct spawn holds no messaging tool, so a read-only turn there could
-  // never notify anyone: refuse it rather than run a turn nobody hears from.
-  if (readOnly) {
-    return { success: false, error: 'A read-only hook runs through the root agent: set "orchestrated": true (Route through rootAgent).' };
-  }
-
   // Direct spawn (non-orchestrated) — use longer timeout for hook-triggered agents
   const agentManager = getAgentManager();
   const { getConfig } = await import('@/config');
@@ -547,44 +538,6 @@ async function executeSpawnAgent(
 
   await closeThreadIfEnded(thread, hook);
   return { success: true, data: { agentId: agent.getContext().id, ...threadData(thread) } };
-}
-
-/**
- * An `onlyOnChange` hook's filter: the result to return instead of a turn, or
- * the context this delivery's turn runs with now. A check result that is no change is
- * recorded and skipped; a change opens (or joins) its subject's merge window,
- * whose turn runs later through executeAction with the merged changes.
- * Deliveries that are not check results are not filtered.
- */
-async function gateCheckChange(
-  config: Hook['actionConfig'],
-  context: TriggerContext,
-  hook: Hook,
-): Promise<{ result: ActionResult } | { context: TriggerContext }> {
-  const changes = await import('./event-changes');
-  const webhook = context.webhook!;
-  const observed = changes.observeGithubCheck(webhook.headers?.['x-github-event'], webhook.body);
-  if (!observed) return { context };
-  const check = { subject: observed.subject, name: observed.name, state: observed.state };
-  const { change, previous } = await changes.isCheckChange(hook.id, observed);
-  if (!change) {
-    await changes.recordCheckStates(hook.id, [observed]);
-    return { result: { success: true, data: { skipped: 'no change', check, previous } } };
-  }
-  const seconds = Number(config.changeMergeWindowSeconds ?? changes.DEFAULT_MERGE_WINDOW_SECONDS);
-  const windowMs = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 0;
-  const fire = async (merged: typeof observed[]) => {
-    await changes.recordCheckStates(hook.id, merged);
-    const result = await executeAction(hook, { ...context, checkChanges: merged });
-    if (!result.success) coreLogger.error({ hookId: hook.id, subject: observed.subject, error: result.error }, 'Merged check-change turn failed');
-  };
-  if (windowMs === 0) {
-    // No window: this delivery is the turn.
-    await changes.recordCheckStates(hook.id, [observed]);
-    return { context: { ...context, checkChanges: [observed] } };
-  }
-  const opened = changes.mergeCheckChange(hook.id, observed, windowMs, fire);
-  return { result: { success: true, data: { deferred: true, merged: !opened, check, previous, windowSeconds: windowMs / 1000 } } };
 }
 
 /** What a read-only turn is told (security/read-only-turn.ts). */
@@ -884,20 +837,21 @@ async function notifyOwnerWithResult(userId: string, result: string): Promise<vo
  * Interpolate template strings with context values
  * Supports {{field.path}} syntax
  */
+/**
+ * `{{path}}` from the context. With `fenceWebhookValues`, payload values are
+ * fenced; the note explaining the fence comes with the event block, which every
+ * context that has a payload gets.
+ */
 function interpolateTemplate(template: string, context: TriggerContext, opts: { fenceWebhookValues?: boolean } = {}): string {
-  let fenced = false;
-  const out = template.replace(/\{\{([^}]+)\}\}/g, (match, rawPath: string) => {
+  return template.replace(/\{\{([^}]+)\}\}/g, (match, rawPath: string) => {
     const path = rawPath.trim();
     const value = getNestedValue(context, path);
     if (value === undefined) return match;
     if (opts.fenceWebhookValues && isWebhookPath(path)) {
-      fenced = true;
       return fence(WEBHOOK_VALUE_TAG, typeof value === 'object' ? JSON.stringify(value) : String(value));
     }
     return String(value);
   });
-  // The note goes with fenced values unless the event block below adds it.
-  return fenced && !context.webhook ? `${UNTRUSTED_WEBHOOK_NOTE}\n\n${out}` : out;
 }
 
 function getNestedValue(obj: unknown, path: string): unknown {

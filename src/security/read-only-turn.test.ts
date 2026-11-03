@@ -51,6 +51,10 @@ describe('readOnlyRefusal', () => {
 
   test('send_to_user to the turn\'s own user is the notify step; anyone else is refused', () => {
     beginReadOnlyTurn(S);
+    // `send_to_user` is the action the real handler reports; `send` the manifest action.
+    expect(readOnlyRefusal(S, U, { toolId: 'messaging', action: 'send_to_user', args: { user_id: U, message: 'x' } })).toBeUndefined();
+    // One of the owner's channels is still only the owner.
+    expect(readOnlyRefusal(S, U, { toolId: 'messaging', action: 'send_to_user', args: { user_id: U, channel: 'telegram', message: 'x' } })).toBeUndefined();
     const notify = { toolId: 'messaging', action: 'send', args: { user_id: U, message: 'CI is red' } };
     expect(readOnlyRefusal(S, U, notify)).toBeUndefined();
     expect(readOnlyNotifyAllowed(S, U, notify)).toBe(true);

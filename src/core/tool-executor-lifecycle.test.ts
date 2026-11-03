@@ -207,7 +207,8 @@ describe('a read-only turn', () => {
     } as unknown as permissions.PermissionManager);
     const sent: unknown[] = [];
     const exec = new ToolExecutor({ ...context(), attended: false }, () => {});
-    exec.registerTools([{ ...tool('messaging__send_to_user', async (args?: unknown) => { sent.push(args); return 'sent'; }, 'messaging'), permissionAction: 'send' }]);
+    // As the messaging tool registers it: no permission action, so the call's action is its bare name.
+    exec.registerTools([tool('messaging__send_to_user', async (args?: unknown) => { sent.push(args); return 'sent'; }, 'messaging')]);
     beginReadOnlyTurn(context().sessionId);
     const [own] = await exec.handleToolCalls([call('1', 'messaging__send_to_user', { user_id: 'test', message: 'CI red' })]);
     expect(String(own.content)).toBe('sent');

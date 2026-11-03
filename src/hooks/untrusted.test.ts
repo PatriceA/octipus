@@ -126,8 +126,10 @@ describe('spawn_agent with readOnly', () => {
     expect(isReadOnlyTurn(SESSION)).toBe(false);
   });
 
-  test('a direct (non-orchestrated) read-only hook is refused: it could never notify', async () => {
-    const r = await executeAction(hook({ agentPrompt: 'Triage it.', readOnly: true, orchestrated: false }), comment('x'));
+  test('a direct (non-orchestrated) read-only hook is refused before a session is touched', async () => {
+    const r = await executeAction(hook({ agentPrompt: 'Triage it.', readOnly: true, orchestrated: false, threadKey: '{{webhook.body.comment.body}}' }), comment('x'));
     expect(r).toMatchObject({ success: false, error: expect.stringContaining('orchestrated') });
+    // Refused first: no thread session was resolved and the session was not tainted.
+    expect(getFlowLabel(SESSION).suspicious).toBe(false);
   });
 });

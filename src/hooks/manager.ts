@@ -7,6 +7,7 @@ import { type Hook, hooks, type NewHook, SERVER_TRIGGER_CONFIG_KEYS } from '@/db
 import { users } from '@/db/schema/users';
 import { coreLogger } from '@/utils/logger';
 import { type ActionResult, executeAction } from './actions';
+import { gateCheckChange } from './event-changes';
 import { checkConditions, matchesTrigger, type TriggerContext, type TriggerEvent } from './triggers';
 
 export interface HookExecutionResult {
@@ -145,6 +146,25 @@ export class HookManager extends EventEmitter {
     // Check conditions
     if (!checkConditions(hook.conditions, context)) {
       return null;
+    }
+
+    // An `onlyOnChange` hook skips check deliveries that change nothing, and
+    // defers a change into its merge window (hooks/event-changes.ts). Decided
+    // before cooldown and the reservation, so a skipped delivery uses neither.
+    // The merged turn comes back through triggerHook, gate already decided.
+    if (!manualTest) {
+      const gated = await gateCheckChange(hook, context, async (merged) => {
+        await this.triggerHook(hook.id, event, merged);
+      });
+      if ('result' in gated) {
+        await this.logExecution({
+          hookId: hook.id, source: 'hook', status: 'success', triggerType: event.type, actionType: hook.action,
+          result: gated.result.data as Record<string, unknown> | undefined, durationMs: Date.now() - startTime,
+          triggerContext: this.sanitizeContext(context),
+        });
+        return { hookId: hook.id, hookName: hook.name, triggered: false, result: gated.result, executionTime: Date.now() - startTime };
+      }
+      context = gated.context;
     }
 
     // Check cooldown (a manual test is not a real run, so it isn't throttled)

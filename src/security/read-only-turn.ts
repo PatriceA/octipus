@@ -46,8 +46,13 @@ export function resetReadOnlyTurns(): void {
   active.clear();
 }
 
+/**
+ * The messaging tool's `send_to_user` declares no permission action, so its
+ * calls arrive as `send_to_user`; `send` is the manifest action a caller
+ * may name instead. Either one, to the turn's own user and nobody else.
+ */
 function isOwnerNotify(userId: string, call: ReadOnlyCall): boolean {
-  return call.toolId === 'messaging' && call.action === 'send' && !!userId
+  return call.toolId === 'messaging' && (call.action === 'send_to_user' || call.action === 'send') && !!userId
     && call.args?.user_id === userId && call.args?.target === undefined;
 }
 
