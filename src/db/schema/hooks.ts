@@ -196,6 +196,17 @@ export interface ActionConfig {
    * no model call — the agent reads facts instead of re-discovering them.
    */
   awayDigestHours?: number;
+  /**
+   * For spawn_agent: one session per thread of work instead of one per hook.
+   * A template over the trigger context, such as
+   * `{{webhook.body.repository.full_name}}#{{webhook.body.pull_request.number}}`;
+   * events that render the same key run in the same session
+   * (src/hooks/thread-sessions.ts). An event without the field runs in the
+   * hook's own session.
+   */
+  threadKey?: string;
+  /** Payload actions (`action`, or GitLab `object_attributes.action`) that end a thread, such as `closed`. */
+  threadEndActions?: string[];
   // For incoming webhook response delivery
   channelType?: string;
   channelId?: string;

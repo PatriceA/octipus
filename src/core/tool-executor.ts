@@ -26,6 +26,7 @@ import { localOnlyLevel } from './protection/routing';
 import { pluginProtectionRefusal } from '@/security/mcp-authorization';
 import type { AgentEvent, ToolHandler } from './agent-base';
 import type { AgentContext, AgentMessage, ToolCall, ToolResult } from './types';
+import type { ToolBatchOutcome } from './agent-worker/failure-streak-detector';
 
 const MAX_CONSECUTIVE_TOOL_ERRORS = 3;
 /** Errors that describe a server's momentary state (down, restarting, cooling off), never a failure streak. */
@@ -208,6 +209,7 @@ export class ToolExecutor {
   /** Tools a codemode script's calls blocked: announced with the next batch's results. */
   private blockedByNested: string[] = [];
   private blockedTools = new Set<string>();
+  private lastOutcome: ToolBatchOutcome = { calls: 0, failed: 0, errors: [] };
   private _toolsDisabled: boolean = false;
 
   /**
@@ -567,7 +569,19 @@ export class ToolExecutor {
 
   private async executeBatch(toolCalls: ToolCall[]): Promise<AgentMessage[]> {
     const results = await this.runCalls(toolCalls);
+    // Same definition of "failed" as trackFailures: a call that ran and returned
+    // a result (red tests, a non-zero exit) worked as a tool, and a server that
+    // is down right now is a state, not a failure of the agent's approach — it
+    // counts neither way, so a restarting MCP server cannot switch tools off.
+    const counted = results.filter((r) => !(r.error && r.result == null && TRANSIENT_TOOL_ERROR.test(r.error)));
+    const failed = counted.filter((r) => r.error && r.result == null);
+    this.lastOutcome = { calls: counted.length, failed: failed.length, errors: failed.map((r) => r.error as string) };
     return this.buildToolMessages(toolCalls, results);
+  }
+
+  /** How the last model-issued batch went, for the worker's failure-streak guard. */
+  lastBatchOutcome(): ToolBatchOutcome {
+    return this.lastOutcome;
   }
 
   private async runCalls(toolCalls: ToolCall[]): Promise<ToolResult[]> {

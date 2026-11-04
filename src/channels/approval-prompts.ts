@@ -43,7 +43,8 @@ import { sessionRepository } from '@/db/repositories/session-repository';
 import { channelLogger } from '@/utils/logger';
 import { answerHow } from './group-handler';
 import { getUMI } from './interface';
-import { EXTERNAL_CHANNELS, loadNotifyScope, ownerTargets, resolveTarget, sendResolved } from './ownership';
+import { EXTERNAL_CHANNELS, loadNotifyScope, ownerTargets, resolveTarget } from './ownership';
+import { deliverDurably, registerDeliveryKind } from './delivery-queue';
 import { canActInSession } from '@/core/rooms/access';
 import { isSharedWorkspaceId } from '@/security/workspace-fs';
 
@@ -126,6 +127,41 @@ async function agentService() {
   const { getAgentService } = await import('@/core/agent/service');
   return getAgentService();
 }
+
+/** What a queued approval prompt carries, to be recorded once a retry gets it out. */
+interface ApprovalDeliveryMeta {
+  requestId: string;
+  kind: ApprovalKind;
+  options?: string[];
+  /** Sent to the owner's own chats (a background run): recorded under OWNER_CHATS. */
+  ownerChats?: boolean;
+}
+
+/**
+ * A prompt whose send failed is retried (channels/delivery-queue.ts) only
+ * while its request still waits — answered in the web app meanwhile, it is
+ * dropped — and recorded when it goes out, so a reply in that chat answers it.
+ * Approvals live in this process, so the rows are process-local.
+ */
+registerDeliveryKind('approval', {
+  stillWanted: async (row) => {
+    const requestId = (row.meta as Partial<ApprovalDeliveryMeta>).requestId;
+    return (await agentService()).getPendingApprovals().some((a) => a.id === requestId);
+  },
+  onSent: async (row) => {
+    const meta = row.meta as unknown as ApprovalDeliveryMeta;
+    const live = new Set((await agentService()).getPendingApprovals().map((a) => a.id));
+    record(row.userId, {
+      requestId: meta.requestId,
+      channelType: row.channelType as ChannelType,
+      channelId: meta.ownerChats ? OWNER_CHATS : row.channelId,
+      shared: false,
+      options: meta.options,
+      kind: meta.kind,
+      postedAt: Date.now(),
+    }, live);
+  },
+});
 
 /** Test seam. */
 export function _resetApprovalPromptsForTests(): void {
@@ -231,13 +267,15 @@ export async function announceApproval(event: TurnEvent): Promise<void> {
   const target = await resolveTarget(await loadNotifyScope(userId), channelType, channelId);
   if (target.allowed) {
     if (!live().has(requestId)) return; // answered in the web app meanwhile
-    const sent = await sendResolved(target, {
+    const sent = await deliverDurably(userId, channelType, channelId, {
       content: `${details(data)}\n\n${data.options?.length
         ? 'Reply with one of the options, **yes** to continue, or **no** to cancel.'
         : 'Reply **yes** to continue, or **no** to cancel.'}`,
-    });
+    }, { kind: 'approval', processLocal: true, resolved: target, meta: { requestId, kind, options: data.options } satisfies ApprovalDeliveryMeta });
     if (!sent.ok) {
-      channelLogger.warn({ sessionId: session.id, channelType, reason: sent.reason, error: sent.error }, 'Approval could not be posted in chat');
+      // Queued: recorded by the kind's onSent once a retry gets it out.
+      channelLogger.warn({ sessionId: session.id, channelType, reason: sent.reason, error: sent.error, queued: sent.queued === true },
+        sent.queued ? 'Approval could not be posted in chat yet; retrying' : 'Approval could not be posted in chat');
       return;
     }
     record(userId, { requestId, channelType, channelId, shared: false, options: data.options, kind, postedAt: Date.now() }, live());
@@ -268,13 +306,14 @@ async function forwardToOwnerChats(data: ApprovalEventData, userId: string, requ
     if (!live().has(requestId)) return; // answered in the web app meanwhile
     const target = await resolveTarget(scope, t.channelType, t.channelId);
     if (!target.allowed) continue;
-    const sent = await sendResolved(target, {
+    const sent = await deliverDurably(userId, t.channelType, t.channelId, {
       content: `${details(data)}\n\nThis came from a run in the background (nobody was watching it). ${data.options?.length
         ? 'Reply with one of the options, **yes** to continue, or **no** to cancel.'
         : 'Reply **yes** to continue, or **no** to cancel.'}`,
-    });
+    }, { kind: 'approval', processLocal: true, resolved: target, meta: { requestId, kind, options: data.options, ownerChats: true } satisfies ApprovalDeliveryMeta });
     if (sent.ok) platforms.add(t.channelType as ChannelType);
-    else channelLogger.warn({ channelType: t.channelType, reason: sent.reason }, 'Background approval could not be posted to the owner');
+    else channelLogger.warn({ channelType: t.channelType, reason: sent.reason, queued: sent.queued === true },
+      sent.queued ? 'Background approval could not be posted to the owner yet; retrying' : 'Background approval could not be posted to the owner');
   }
   for (const channelType of platforms) {
     record(userId, { requestId, channelType, channelId: OWNER_CHATS, shared: false, options: data.options, kind, postedAt: Date.now() }, live());

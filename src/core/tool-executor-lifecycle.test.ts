@@ -161,11 +161,29 @@ describe('consecutive failures block only the failing tool', () => {
     expect(exec.getTools().has('flaky')).toBe(true);
   });
 
+  test('a server that is down counts in neither direction of the failure streak', async () => {
+    const exec = new ToolExecutor(context(), () => {});
+    exec.registerTools([tool('mcp_call_tool', async () => { throw new Error('MCP server not connected: editor'); }), tool('git__diff', async () => { throw new Error('bad revision'); })]);
+    await exec.handleToolCalls([call('1', 'mcp_call_tool')]);
+    expect(exec.lastBatchOutcome()).toEqual({ calls: 0, failed: 0, errors: [] });
+    await exec.handleToolCalls([call('2', 'mcp_call_tool'), call('3', 'git__diff')]);
+    expect(exec.lastBatchOutcome()).toEqual({ calls: 1, failed: 1, errors: [expect.stringContaining('bad revision')] });
+  });
+
   test('different refusals in a row are a model adapting, not a loop', async () => {
     let n = 0;
     const exec = new ToolExecutor(context(), () => {});
     exec.registerTools([tool('shell__run', async () => { throw new Error(`rejected command ${++n}`); })]);
     for (const id of ['1', '2', '3', '4']) await exec.handleToolCalls([call(id, 'shell__run')]);
     expect(exec.isToolBlocked('shell__run')).toBe(false);
+  });
+
+  test('the last batch outcome counts calls that returned nothing as failed', async () => {
+    const exec = new ToolExecutor(context(), () => {});
+    exec.registerTools([tool('shell__run', async () => { throw new Error('rejected command'); }), tool('git__diff', async () => 'diff')]);
+    await exec.handleToolCalls([call('1', 'shell__run'), call('2', 'git__diff')]);
+    expect(exec.lastBatchOutcome()).toEqual({ calls: 2, failed: 1, errors: [expect.stringContaining('rejected command')] });
+    await exec.handleToolCalls([call('3', 'shell__run')]);
+    expect(exec.lastBatchOutcome()).toMatchObject({ calls: 1, failed: 1 });
   });
 });

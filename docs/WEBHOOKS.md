@@ -266,6 +266,28 @@ Best for: events that need interpretation before notification.
 - **`orchestrated: true`** — routes through the root agent for role classification and tool access
 - **`notifyOwner: true`** — automatically sends the agent's output to all verified channels when the agent completes
 
+#### One session per pull request or issue (`threadKey`)
+
+Without a thread key, every delivery to a `spawn_agent` hook runs in the hook's one session, so a repository's pull requests all share a single transcript. With `threadKey`, events that render the same key run in the same session. The agent that reviewed PR #42 then reads the follow-up comment on PR #42, with its earlier review in context, and PR #43 gets a session of its own.
+
+```json
+{
+  "action": "spawn_agent",
+  "actionConfig": {
+    "agentPrompt": "Review this pull request event. Pick up from what you already said on this PR.",
+    "orchestrated": true,
+    "threadKey": "{{webhook.body.repository.full_name}}#{{webhook.body.pull_request.number}}",
+    "threadEndActions": ["closed"]
+  }
+}
+```
+
+- **`threadKey`** — a template over the trigger context, with the same `{{…}}` syntax as `agentPrompt`. For issues use `{{webhook.body.issue.number}}`; for GitLab merge requests use `{{webhook.body.project.path_with_namespace}}!{{webhook.body.object_attributes.iid}}`.
+- An event that lacks a field of the key (a GitHub `ping`, a push with no pull request) runs in the hook's own session. The execution log records why: `thread: { key: null, reason: "the event has no webhook.body.pull_request.number" }`.
+- **`threadEndActions`** — payload actions that close the thread: GitHub's `action`, or GitLab's `object_attributes.action`. The closing event still runs in the thread's session, and the next event on that key starts a new one.
+- Events on one thread run one after another, never at the same time. A thread with no event for 30 days is forgotten, and its mappings are removed when the hook is deleted.
+- In the hooks page, the **Thread key** field appears for a `spawn_agent` action on a webhook trigger.
+
 ### notify (direct notification)
 
 Best for: simple alerts that don't need AI processing.

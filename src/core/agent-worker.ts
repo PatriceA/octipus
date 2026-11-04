@@ -47,6 +47,7 @@ import { isRealUserId } from '@/security/principal';
 import { ToolExecutor } from './tool-executor';
 import { DetachedChildManager } from './agent-worker/detached-child-manager';
 import { DriftDetector } from './agent-worker/drift-detector';
+import { FailureStreakDetector, failureStreakNudge, failureStreakStop } from './agent-worker/failure-streak-detector';
 import { ToolLoopDetector } from './agent-worker/tool-loop-detector';
 import { isRootAgent } from './types';
 import type { AgentMessage, ToolCall } from './types';
@@ -218,6 +219,8 @@ export class AgentWorker extends BaseAgentWorker {
   private lengthRetryBoost: number = 0;
   /** Tool-call loop/spam detection (same-args + same-name state machines). */
   private loopDetector = new ToolLoopDetector();
+  /** Consecutive rounds in which every tool call failed (see FailureStreakDetector). */
+  private failureStreak = new FailureStreakDetector();
   /** Seeded in `run()` from the brief; absent until then. */
   private driftDetector?: DriftDetector;
   /** Nudge queued by the drift check, appended once tool results close the turn. */
@@ -1641,6 +1644,27 @@ export class AgentWorker extends BaseAgentWorker {
         if (this.pendingRedundantNudge) {
           this.messages.push({ role: 'user' as const, content: this.pendingRedundantNudge, timestamp: new Date() });
           this.pendingRedundantNudge = undefined;
+        }
+
+        // Nothing worked this round, again. Checked after the results are in
+        // (they are what it counts); the tool_calls are already closed out, so
+        // a stop needs no synthetic results.
+        const failing = this.failureStreak.record(this.toolExecutor.lastBatchOutcome());
+        if (failing.action !== 'none') {
+          agentLogger.warn({
+            agentId: this.context.id, sessionId: this.context.sessionId, iteration: this.iteration,
+            consecutive: failing.consecutive, action: failing.action, errors: failing.errors,
+          }, failing.action === 'stop'
+            ? 'Every tool call failed for many rounds — disabling tools, forcing a plain-text report'
+            : 'Every tool call failed for several rounds — nudging the agent to change approach');
+          if (failing.action === 'stop') this.toolExecutor.disableTools();
+          this.messages.push({
+            role: 'user' as const,
+            content: failing.action === 'stop'
+              ? failureStreakStop(failing.consecutive, failing.errors)
+              : failureStreakNudge(failing.consecutive, failing.errors),
+            timestamp: new Date(),
+          });
         }
 
         agentLogger.info({

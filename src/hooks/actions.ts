@@ -1,5 +1,4 @@
 import {
-  deliver,
   loadNotifyScope,
   type NotifyScope,
   ownerTargets,
@@ -221,14 +220,18 @@ async function executeNotify(
     return { success: false, error: 'No notification channels configured. Enable "Notify me" or add explicit channels.' };
   }
 
-  const results: { channel: string; success: boolean; error?: string }[] = [];
+  const results: { channel: string; success: boolean; queued?: boolean; error?: string }[] = [];
   const skipped: string[] = [];
   const skipErrors: string[] = [];
 
+  const { deliverDurably } = await import('@/channels/delivery-queue');
   for (const ch of targets) {
-    const r = await deliver(scope, ch.type, ch.id, { content: message });
+    // A send the platform failed is queued and retried (channels/delivery-queue.ts).
+    const r = await deliverDurably(hook.userId, ch.type, ch.id, { content: message }, { kind: 'hook_notify', meta: { hookId: hook.id }, scope });
     if (r.ok) {
       results.push({ channel: ch.label, success: true });
+    } else if (r.queued) {
+      results.push({ channel: ch.label, success: false, queued: true, error: `${r.error} (queued for retry)` });
     } else if (r.reason === 'not_allowed') {
       skipped.push(ch.label);
       skipErrors.push(r.error);
@@ -241,7 +244,8 @@ async function executeNotify(
     }
   }
 
-  const anySuccess = results.some((r) => r.success);
+  // A queued send has not failed yet: the run is not an error while it retries.
+  const anySuccess = results.some((r) => r.success || r.queued);
   if (!anySuccess && results.length === 0) {
     return { success: false, data: { skipped }, error: skipErrors.join('; ') };
   }
@@ -350,11 +354,18 @@ async function executeSpawnAgent(
     }
   }
 
+  // A thread key keeps one session per thread of work (a PR, an issue): see
+  // hooks/thread-sessions.ts. An event the key does not apply to (no such
+  // field) runs in the hook's own session, as a hook without a key does.
+  const thread = hook && !heartbeatRole ? await resolveThreadSession(config, context, hook) : null;
+
   // Reuse the hook's session across runs (see resolveHookSessionId) so a
   // scheduled/webhook hook appends to one session instead of spawning a new
   // one every run. A freshly minted id is persisted back to the hook row.
   // Only sessions the hook owner owns are accepted (resolveOwnedHookSessionId).
-  const { sessionId, minted } = hook
+  const { sessionId, minted } = thread?.sessionId
+    ? { sessionId: thread.sessionId, minted: false }
+    : hook
     ? await resolveOwnedHookSessionId(context, hook)
     : resolveHookSessionId(context, hook);
   if (minted && hook) {
@@ -434,7 +445,14 @@ async function executeSpawnAgent(
     // A heartbeat hook routes on the 'heartbeat' channel so the run is tagged
     // origin='heartbeat' (RunContext) for auditability; everything else is 'hook'.
     const channel = hook?.trigger === 'heartbeat' ? 'heartbeat' : 'hook';
-    const result = await rootAgent.handleMessage(sessionId, userId, message, channel, [], undefined, undefined, undefined, 'schedule');
+    let result: Awaited<ReturnType<typeof rootAgent.handleMessage>>;
+    try {
+      result = await rootAgent.handleMessage(sessionId, userId, message, channel, [], undefined, undefined, undefined, 'schedule');
+    } catch (err) {
+      // A closing event ends its thread even when its turn fails.
+      await closeThreadIfEnded(thread, hook);
+      throw err;
+    }
 
     // For orchestrated hooks, notify the owner with the result if either:
     // - notifyRoot is true (scheduled tasks that should deliver results)
@@ -445,9 +463,10 @@ async function executeSpawnAgent(
       });
     }
 
+    await closeThreadIfEnded(thread, hook);
     return {
       success: true,
-      data: { agentId: result.agentId, response: result.response, orchestrated: true },
+      data: { agentId: result.agentId, response: result.response, orchestrated: true, ...threadData(thread) },
     };
   }
 
@@ -465,15 +484,21 @@ async function executeSpawnAgent(
   const { resolveAgentScope, withAgentUsage } = await import('@/core/agent/context');
   const scope = await resolveAgentScope({ session: await sessionRepository.findById(sessionId), userId, trigger: 'schedule' });
 
-  const agent = await agentManager.spawn({
-    sessionId,
-    userId,
-    ...scope,
-    topic: config.agentTopic,
-    model: config.agentModel,
-    systemPrompt: prompt,
-    timeout: hookTimeout,
-  });
+  let agent: Awaited<ReturnType<typeof agentManager.spawn>>;
+  try {
+    agent = await agentManager.spawn({
+      sessionId,
+      userId,
+      ...scope,
+      topic: config.agentTopic,
+      model: config.agentModel,
+      systemPrompt: prompt,
+      timeout: hookTimeout,
+    });
+  } catch (err) {
+    await closeThreadIfEnded(thread, hook);
+    throw err;
+  }
 
   // Run the agent and optionally notify owner with the result
   if (message) {
@@ -490,7 +515,59 @@ async function executeSpawnAgent(
     });
   }
 
-  return { success: true, data: { agentId: agent.getContext().id } };
+  await closeThreadIfEnded(thread, hook);
+  return { success: true, data: { agentId: agent.getContext().id, ...threadData(thread) } };
+}
+
+type ThreadResolution = {
+  key: string | null;
+  sessionId?: string;
+  created?: boolean;
+  /** Why the event has no thread (it ran in the hook's own session). */
+  reason?: string;
+  ends?: boolean;
+};
+
+/**
+ * The thread session of this event under `actionConfig.threadKey`, or null
+ * when the hook has no key. A key that does not render (the event lacks the
+ * field) resolves to `{ key: null, reason }`: the event runs in the hook's own
+ * session, and the reason is logged and returned with the run's result.
+ */
+export async function resolveThreadSession(
+  config: Hook['actionConfig'],
+  context: TriggerContext,
+  hook: Hook,
+): Promise<ThreadResolution | null> {
+  const template = typeof config.threadKey === 'string' ? config.threadKey.trim() : '';
+  if (!template) return null;
+  const { checkThreadKey, endsThread, threadSession } = await import('./thread-sessions');
+  const checked = checkThreadKey(renderThreadKey(template, context));
+  if (checked.key === null) {
+    coreLogger.info({ hookId: hook.id, reason: checked.reason }, 'Hook event has no thread; running in the hook session');
+    return { key: null, reason: checked.reason };
+  }
+  const { sessionId, created } = await threadSession(hook.id, checked.key);
+  if (await isForeignSession(sessionId, hook.userId)) {
+    // Not reachable through this table (it mints ids for the hook owner), but
+    // a session is never entered on another user's behalf.
+    throw new Error(`Thread session ${sessionId} of hook ${hook.id} belongs to another user`);
+  }
+  return { key: checked.key, sessionId, created, ends: endsThread(config.threadEndActions, context) };
+}
+
+function threadData(thread: ThreadResolution | null): Record<string, unknown> {
+  if (!thread) return {};
+  return { thread: thread.key === null
+    ? { key: null, reason: thread.reason }
+    : { key: thread.key, sessionId: thread.sessionId, created: thread.created, ended: thread.ends === true } };
+}
+
+async function closeThreadIfEnded(thread: ThreadResolution | null, hook?: Hook): Promise<void> {
+  if (!hook || !thread?.key || !thread.ends) return;
+  const { endThread } = await import('./thread-sessions');
+  await endThread(hook.id, thread.key);
+  coreLogger.info({ hookId: hook.id, threadKey: thread.key, sessionId: thread.sessionId }, 'Hook thread ended; its next event starts a new session');
 }
 
 /**
@@ -719,9 +796,10 @@ async function notifyOwnerWithResult(userId: string, result: string): Promise<vo
   const text = inlineUiFallbackText(result);
   const truncated = text.length > 3000 ? text.slice(0, 3000) + '\n\n…(truncated)' : text;
 
+  const { deliverDurably } = await import('@/channels/delivery-queue');
   for (const t of targets) {
-    const r = await deliver(scope, t.channelType, t.channelId, { content: truncated });
-    if (!r.ok) coreLogger.warn({ error: r.error, reason: r.reason, channel: t.channelType }, 'Failed to notify owner channel');
+    const r = await deliverDurably(userId, t.channelType, t.channelId, { content: truncated }, { kind: 'hook_result', scope });
+    if (!r.ok && !r.queued) coreLogger.warn({ error: r.error, reason: r.reason, channel: t.channelType }, 'Failed to notify owner channel');
   }
 }
 
@@ -733,6 +811,19 @@ function interpolateTemplate(template: string, context: TriggerContext): string 
   return template.replace(/\{\{([^}]+)\}\}/g, (match, path) => {
     const value = getNestedValue(context, path.trim());
     return value !== undefined ? String(value) : match;
+  });
+}
+
+/**
+ * A thread key from its template. Only a string, number or boolean is a key
+ * part: a field that is null or an object would render as `null` or
+ * `[object Object]` and put every event that has it in one thread, so it is
+ * left as its placeholder, which checkThreadKey reports as missing.
+ */
+function renderThreadKey(template: string, context: TriggerContext): string {
+  return template.replace(/\{\{([^}]+)\}\}/g, (match, rawPath: string) => {
+    const value = getNestedValue(context, rawPath.trim());
+    return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? String(value) : match;
   });
 }
 

@@ -30,6 +30,26 @@ vi.mock('./group-channels', () => ({
   findGroupChannel: async () => fx.group,
   isGroupChannelActive: async () => fx.active,
 }));
+// A failed send is handed to the retry queue; the queue's database is not
+// part of this lane, so the handoff and the registered kind are observed.
+const dq = vi.hoisted(() => ({
+  kinds: new Map<string, { stillWanted?: (row: never) => unknown; onSent?: (row: never) => unknown }>(),
+  queued: [] as Array<{ userId: string; channelType: string; channelId: string; opts: Record<string, unknown> }>,
+}));
+vi.mock('./delivery-queue', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./delivery-queue')>();
+  return {
+    ...actual,
+    registerDeliveryKind: (kind: string, handlers: never) => { dq.kinds.set(kind, handlers); },
+    deliverDurably: async (userId: string, channelType: string, channelId: string, message: never, opts: Record<string, unknown> & { resolved: never }) => {
+      const { sendResolved } = await import('./ownership');
+      const r = await sendResolved(opts.resolved, message);
+      if (r.ok || r.reason !== 'send_failed') return r;
+      dq.queued.push({ userId, channelType, channelId, opts });
+      return { ...r, queued: true };
+    },
+  };
+});
 vi.mock('./ownership', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./ownership')>();
   const { getUMI } = await import('./interface');
@@ -179,6 +199,45 @@ describe('posting approvals in chat', () => {
     });
     await raise(S_DM);
     expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe('an approval whose send failed', () => {
+  beforeEach(() => { dq.queued = []; });
+
+  test('is queued for retry, answers nothing until a retry posts it, then answers', async () => {
+    send.mockRejectedValueOnce(new Error('Telegram 502'));
+    const id = await raise(S_DM, { options: ['Approve', 'Skip'] });
+    expect(dq.queued).toHaveLength(1);
+    expect(dq.queued[0]).toMatchObject({ userId: ANNA, channelType: 'telegram', channelId: '1001' });
+    expect(dq.queued[0].opts).toMatchObject({ kind: 'approval', processLocal: true, meta: { requestId: id, options: ['Approve', 'Skip'] } });
+    // Never posted, so a "yes" in that chat is not an answer to it.
+    expect(await tryResolveApprovalFromChannel(reply('yes'))).toBe(false);
+
+    const kind = dq.kinds.get('approval')!;
+    const row = { userId: ANNA, channelType: 'telegram', channelId: '1001', meta: dq.queued[0].opts.meta } as never;
+    expect(await kind.stillWanted!(row)).toBe(true);
+    await kind.onSent!(row);
+    expect(await tryResolveApprovalFromChannel(reply('Skip'))).toBe(true);
+    expect(fx.resolve).toHaveBeenCalledWith(id, true, 'Skip', expect.anything());
+  });
+
+  test('answered in the web app meanwhile, it is no longer wanted', async () => {
+    send.mockRejectedValueOnce(new Error('Telegram 502'));
+    const id = await raise(S_DM);
+    closeElsewhere(id);
+    const row = { userId: ANNA, channelType: 'telegram', channelId: '1001', meta: dq.queued[0].opts.meta } as never;
+    expect(await dq.kinds.get('approval')!.stillWanted!(row)).toBe(false);
+  });
+
+  test("a background run's prompt retried to the owner's chat is answered from there", async () => {
+    fx.identities = [{ channelType: 'telegram', externalId: '1001' }];
+    send.mockRejectedValueOnce(new Error('Telegram 502'));
+    const id = await raise(S_HEARTBEAT);
+    expect(dq.queued[0].opts).toMatchObject({ meta: { requestId: id, ownerChats: true } });
+    await dq.kinds.get('approval')!.onSent!({ userId: ANNA, channelType: 'telegram', channelId: '1001', meta: dq.queued[0].opts.meta } as never);
+    expect(await tryResolveApprovalFromChannel(reply('yes'))).toBe(true);
+    expect(fx.resolve).toHaveBeenCalledWith(id, true, 'yes', expect.anything());
   });
 });
 

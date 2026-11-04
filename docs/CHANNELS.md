@@ -57,6 +57,17 @@ Once linked, your channel identity is bound to your web account. This enables sh
 
 Hooks, scheduled tasks, monitors, notifications and agents (the `messaging` tool) may always message your own linked chats, including your 1:1 conversation with the bot. Shared channels, groups and Teams group chats or channels are different: the bot only posts there when an admin has approved the chat under **Admin → Notification destinations**, for everyone or for your org. Other targets are refused, or skipped when a hook runs. For Teams, the bot must also have received a message from the conversation once (for your personal chat: message the bot in Teams once). See [Who a hook may notify](HOOKS.md#who-a-hook-may-notify).
 
+#### When a send fails
+
+Notifications, hook `notify` actions, hook results (`notifyOwner`) and approval prompts are retried when the platform fails the send: the API is down, the bot is reconnecting, or the server restarted in between. A message that goes out on the first try is not stored. A failed one goes into `channel_deliveries` and is retried after 30 s, 1, 2, 5, 10 and 20 minutes, about 38 minutes in all. If every attempt fails, the row is marked `failed` and you get an in-app notification (`channel_delivery_failed`) with the last error and the start of the message.
+
+- Only a platform failure is queued. These fail once, as before, and are not queued: a target you may not message, a platform this install never set up, and a Teams chat whose conversation is not known yet (it becomes known only after you message the bot).
+- A queued message whose target was unlinked since is dropped on its next attempt. One whose Teams chat can no longer be found ends in `failed`, and you get the notification at once rather than after every retry.
+- An attempt that fails inside Octipus (a check or the database) counts as an attempt too, so such a message also ends in `failed` with a notification instead of being retried forever.
+- An approval prompt is retried only while the request still waits. If it is answered in the web app meanwhile, the retry is dropped. Once a retry posts it, a reply in that chat answers it. Approvals live in the process that raised them, so only that process retries their prompts, even when several processes share the database. After a restart, the earlier process's prompts are dropped once they are two hours old. The approval itself is still open in the web app.
+- Delivery is at least once. If the server dies after a platform accepts a message but before it is marked sent, that message is sent again after the restart.
+- Not covered: replies to a chat turn, the `messaging` tool (the agent sees the failure and decides), and monitor results (they have their own delivery state).
+
 ---
 
 ## Telegram

@@ -34,6 +34,7 @@ vi.mock('@/channels/interface', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/channels/interface')>()),
   getUMI: () => ({
     isChannelAvailable: () => true,
+    getChannel: () => ({}),
     send: async (type: string, id: string, res: { content: string }) => {
       sent.calls.push({ type, id, content: res.content });
       return 'msg-1';
