@@ -24,6 +24,8 @@
  * permission relay (core/cli-permissions.ts).
  */
 
+import { isOwnerOnlyDelivery } from './flow-guard';
+
 /** Sessions in a read-only turn, with how many such turns hold the mark. */
 const active = new Map<string, number>();
 
@@ -47,16 +49,6 @@ export function resetReadOnlyTurns(): void {
 }
 
 /**
- * The messaging tool's `send_to_user` declares no permission action, so its
- * calls arrive as `send_to_user`; `send` is the manifest action a caller
- * may name instead. Either one, to the turn's own user and nobody else.
- */
-function isOwnerNotify(userId: string, call: ReadOnlyCall): boolean {
-  return call.toolId === 'messaging' && (call.action === 'send_to_user' || call.action === 'send') && !!userId
-    && call.args?.user_id === userId && call.args?.target === undefined;
-}
-
-/**
  * The notify step needs no approval in a read-only turn: `send_to_user` to the
  * turn's own user defaults to ASK, which an unattended hook run cannot answer,
  * and it reaches only that user's verified chats (the messaging tool refuses
@@ -64,7 +56,7 @@ function isOwnerNotify(userId: string, call: ReadOnlyCall): boolean {
  * only, and only for that call.
  */
 export function readOnlyNotifyAllowed(sessionId: string | undefined, userId: string, call: ReadOnlyCall): boolean {
-  return isReadOnlyTurn(sessionId) && isOwnerNotify(userId, call);
+  return isReadOnlyTurn(sessionId) && isOwnerOnlyDelivery(userId, call);
 }
 
 /** Tool ids whose `read` / `list` / `search` actions only read. */
@@ -88,7 +80,8 @@ export interface ReadOnlyCall {
  */
 export function readOnlyRefusal(sessionId: string | undefined, userId: string, call: ReadOnlyCall): string | undefined {
   if (!isReadOnlyTurn(sessionId)) return undefined;
-  if (isOwnerNotify(userId, call)) return undefined;
+  // The notify step: the same check the flow guard exempts (security/flow-guard.ts).
+  if (isOwnerOnlyDelivery(userId, call)) return undefined;
   if (call.toolId.startsWith('cli-native:')) {
     if (CLI_READERS.has(call.toolId.slice('cli-native:'.length))) return undefined;
   } else if (call.readOnlyHandler || (READ_TOOL_IDS.has(call.toolId) && READ_ACTIONS.has(call.action))) {

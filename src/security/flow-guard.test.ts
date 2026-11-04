@@ -123,5 +123,9 @@ describe('isOwnerOnlyDelivery', () => {
     expect(isOwnerOnlyDelivery('u1', send({ user_id: 'u1', channel: 'slack', target: 'C-shared', message: 'hi' }))).toBe(false);
     expect(isOwnerOnlyDelivery('u1', { toolId: 'google-workspace', action: 'gmail_send', args: { user_id: 'u1' } })).toBe(false);
     expect(isOwnerOnlyDelivery('', send({ user_id: '', message: 'hi' }))).toBe(false);
+    // As the real handler reports it: no permission action, so its bare name.
+    expect(isOwnerOnlyDelivery('u1', { toolId: 'messaging', action: 'send_to_user', args: { user_id: 'u1', message: 'hi' } })).toBe(true);
+    expect(isOwnerOnlyDelivery('u1', { toolId: 'messaging', action: 'send_to_user', args: { user_id: 'u2', message: 'hi' } })).toBe(false);
+    expect(isOwnerOnlyDelivery('u1', { toolId: 'messaging', action: 'send_message', args: { user_id: 'u1', message: 'hi' } })).toBe(false);
   });
 });
