@@ -207,6 +207,16 @@ export function observeFlow(sessionId: string | undefined, call: FlowCall, contr
   if (Object.keys(gained).length > 0) persistGained(sessionId, gained);
 }
 
+/**
+ * Taint a session from something that is not a tool call: a turn whose prompt
+ * itself carries outsider text (a webhook's payload). Same effect as a call
+ * whose contract adds `taint`: monotonic, persisted the first time.
+ */
+export function markFlowTaint(sessionId: string | undefined, taint: 'suspicious' | 'private' | 'secret', source: string): void {
+  const [toolId, ...rest] = source.split(':');
+  observeFlow(sessionId, { toolId, action: rest.join(':') || 'input' }, { taints: [taint] });
+}
+
 export function clearFlowLabel(sessionId: string): void {
   labels.delete(sessionId);
   sharedAudience.delete(sessionId);
@@ -504,9 +514,15 @@ export function flowBlockReason(label: FlowLabel, contract: FlowContract): strin
  * delivered to that user's verified identities and nowhere else
  * (`ownerTargets` in channels/ownership.ts), so it carries nothing to a third
  * party. Pure.
+ *
+ * The one check for it: the flow guard's exemption and the read-only turn's
+ * notify step (security/read-only-turn.ts) both call this. The messaging tool
+ * registers `send_to_user` without a permission action, so its calls arrive
+ * with the action `send_to_user`; `send` is the manifest action, which a
+ * caller resolving through the manifest names instead. Both count.
  */
 export function isOwnerOnlyDelivery(userId: string, call: FlowCall): boolean {
-  return call.toolId === 'messaging' && call.action === 'send' && !!userId
+  return call.toolId === 'messaging' && (call.action === 'send_to_user' || call.action === 'send') && !!userId
     && call.args?.user_id === userId && call.args?.target === undefined;
 }
 

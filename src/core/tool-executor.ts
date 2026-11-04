@@ -27,6 +27,7 @@ import { pluginProtectionRefusal } from '@/security/mcp-authorization';
 import type { AgentEvent, ToolHandler } from './agent-base';
 import type { AgentContext, AgentMessage, ToolCall, ToolResult } from './types';
 import type { ToolBatchOutcome } from './agent-worker/failure-streak-detector';
+import { readOnlyNotifyAllowed, readOnlyRefusal } from '@/security/read-only-turn';
 
 const MAX_CONSECUTIVE_TOOL_ERRORS = 3;
 /** Errors that describe a server's momentary state (down, restarting, cooling off), never a failure streak. */
@@ -579,6 +580,19 @@ export class ToolExecutor {
     return this.buildToolMessages(toolCalls, results);
   }
 
+  /** Why a read-only turn refuses `call`, or undefined (security/read-only-turn.ts). */
+  private readOnlyRefusalFor(call: ToolCall): string | undefined {
+    const tool = this.tools.get(call.name);
+    if (!tool) return undefined; // reported as unknown below
+    const bareName = call.name.includes('__') ? (call.name.split('__').pop() as string) : call.name;
+    const action = typeof tool.permissionAction === 'function'
+      ? tool.permissionAction(call.arguments)
+      : tool.permissionAction || bareName;
+    return readOnlyRefusal(this.context.sessionId, this.context.userId, {
+      toolId: tool.toolId || 'agent', action, args: call.arguments, readOnlyHandler: tool.replaySafety === 'read_only',
+    });
+  }
+
   /** How the last model-issued batch went, for the worker's failure-streak guard. */
   lastBatchOutcome(): ToolBatchOutcome {
     return this.lastOutcome;
@@ -624,7 +638,15 @@ export class ToolExecutor {
       try { assertNoCredentialTemplates(call.arguments); }
       catch (error) { credentialFailures.set(call.id, (error as Error).message); }
     }
-    const parallelResults = await this.executeParallelSwarmGroups(toolCalls.filter(call => !credentialFailures.has(call.id)));
+    // A read-only turn (security/read-only-turn.ts) refuses everything but
+    // reads and the notify step, delegation included, before anything runs.
+    const readOnlyFailures = new Map<string, string>();
+    for (const call of toolCalls) {
+      const refusal = this.readOnlyRefusalFor(call);
+      if (refusal) readOnlyFailures.set(call.id, refusal);
+    }
+    const parallelResults = await this.executeParallelSwarmGroups(
+      toolCalls.filter(call => !credentialFailures.has(call.id) && !readOnlyFailures.has(call.id)));
 
     for (const toolCall of toolCalls) {
       this.assertCanExecute();
@@ -633,6 +655,15 @@ export class ToolExecutor {
         this.counters.permissionDenials++;
         this.counters.toolErrors++;
         this.counters.policyRefusals = [...new Set([...(this.counters.policyRefusals ?? []), error])];
+        this.emitFn('action', { type: 'tool_call_complete', toolCallId: toolCall.id,
+          name: toolCall.name, role: this.context.role, status: 'error', error });
+        results.push({ toolCallId: toolCall.id, result: null, errorCode: 'permission_denied', error });
+        continue;
+      }
+      if (readOnlyFailures.has(toolCall.id)) {
+        const error = readOnlyFailures.get(toolCall.id)!;
+        this.counters.permissionDenials++;
+        agentLogger.info({ agentId: this.context.id, tool: toolCall.name }, 'Read-only turn refused a tool call');
         this.emitFn('action', { type: 'tool_call_complete', toolCallId: toolCall.id,
           name: toolCall.name, role: this.context.role, status: 'error', error });
         results.push({ toolCallId: toolCall.id, result: null, errorCode: 'permission_denied', error });
@@ -838,12 +869,16 @@ export class ToolExecutor {
           ? (toolCall.arguments.arguments as Record<string, unknown> | undefined) ?? {} : toolCall.arguments,
       };
       await ensureSharedAudienceKnown(this.context.sessionId);
-      let permResult = applyFlowGuard(getConfig().agent?.flowGuard, this.context.sessionId, flowCall, storedPermission);
+      // A read-only turn's notify step (security/read-only-turn.ts): ASK, never DENY, becomes ALLOW.
+      const basePermission = storedPermission.level === 'ASK' && readOnlyNotifyAllowed(this.context.sessionId, this.context.userId, flowCall)
+        ? { ...storedPermission, level: 'ALLOW' as const, allowed: true, requiresApproval: false, source: 'read-only-notify' }
+        : storedPermission;
+      let permResult = applyFlowGuard(getConfig().agent?.flowGuard, this.context.sessionId, flowCall, basePermission);
       // Model-supplied vault references do not establish authentication.
-      if (permResult !== storedPermission && await isVaultAuthenticated(this.context.userId, flowCall)) permResult = storedPermission;
+      if (permResult !== basePermission && await isVaultAuthenticated(this.context.userId, flowCall)) permResult = basePermission;
       // A message to the caller's own chats reaches no one else.
-      if (permResult !== storedPermission && isOwnerOnlyDelivery(this.context.userId, flowCall)) permResult = storedPermission;
-      if (permResult !== storedPermission) {
+      if (permResult !== basePermission && isOwnerOnlyDelivery(this.context.userId, flowCall)) permResult = basePermission;
+      if (permResult !== basePermission) {
         agentLogger.info({ agentId: this.context.id, tool: toolCall.name, reason: permResult.reason }, 'Flow guard escalated tool call to approval');
       }
 
@@ -978,7 +1013,10 @@ export class ToolExecutor {
           () => tool.recordsActions || tool.replaySafety === 'read_only' || tool.recoverySafety?.(toolCall.arguments) === 'read_only' || isReadOnlyAction(permAction) || toolId === 'agent'
             ? tool.execute(toolCall.arguments, this.context)
             : actionRecovery.run(this.context, toolId, toolId === 'mcp' ? permAction : toolCall.name, toolCall.arguments, () => tool.execute(toolCall.arguments, this.context), async () => {
-              const current = await permissionManager.check(this.context.userId, toolId, permAction, toolCall.arguments, this.context, { revalidate: true });
+              const checked = await permissionManager.check(this.context.userId, toolId, permAction, toolCall.arguments, this.context, { revalidate: true });
+              // The same lift as above for a read-only turn's notify step: ASK only, never DENY.
+              const current = checked.level === 'ASK' && readOnlyNotifyAllowed(this.context.sessionId, this.context.userId, { toolId, action: permAction, args: toolCall.arguments })
+                ? { ...checked, level: 'ALLOW' as const } : checked;
               if (current.level === 'DENY' || ((current.level === 'ASK' || authorizationSource.startsWith('approval:') || authorizationSource === 'pipeline-approval') && !await askStillAuthorized(authorizationSource, this.context,
                 { toolId, action: permAction, toolName: bareName, args: toolCall.arguments }, current.source))) {
                 throw new Error('Permission changed before tool execution; obtain action authorization again.');

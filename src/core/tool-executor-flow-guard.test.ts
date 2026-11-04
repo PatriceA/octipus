@@ -68,3 +68,21 @@ test('general tool calls cannot interpolate real or made-up vault references', a
   expect(vault.canAccessByName).not.toHaveBeenCalled();
   expect(exec.getSideEffectCounters()).toMatchObject({ commandsRun: 0, toolCalls: 1, toolErrors: 2, permissionDenials: 2, policyRefusals: [expect.stringContaining('Vault interpolation is disabled')] });
 });
+
+test("send_to_user to the caller themself is exempt as the messaging tool really registers it", async () => {
+  // No permission action, as in tools/messaging: the call's action is its bare name.
+  const sendToUser: ToolHandler = { name: 'messaging__send_to_user', toolId: 'messaging',
+    recordsActions: true, description: '', parameters: {}, execute: send };
+  const exec = new ToolExecutor(context(), () => {});
+  exec.registerTool(readFile);
+  exec.registerTool(sendToUser);
+  await exec.handleToolCalls([{ id: 'c1', name: 'filesystem__read_file', arguments: { path: '/srv/app/.env' } }]);
+
+  const [own] = await exec.handleToolCalls([{ id: 'c2', name: 'messaging__send_to_user', arguments: { user_id: 'user-test', message: 'the deploy key expired' } }]);
+  expect(send).toHaveBeenCalledOnce();
+  expect(String(own?.content)).toBe('sent');
+
+  const [other] = await exec.handleToolCalls([{ id: 'c3', name: 'messaging__send_to_user', arguments: { user_id: 'someone-else', message: 'x' } }]);
+  expect(send).toHaveBeenCalledOnce();
+  expect(String(other?.content)).toMatch(/Approval required: flow guard/);
+});

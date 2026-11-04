@@ -11,6 +11,8 @@ import { coreLogger } from '@/utils/logger';
 import { inlineUiFallbackText } from '@/shared/inline-ui/fence';
 import type { TriggerContext } from './triggers';
 import { summarizeWebhookPayload } from './webhook-summary';
+import { beginReadOnlyTurn, endReadOnlyTurn } from '@/security/read-only-turn';
+import { fence, isWebhookPath, UNTRUSTED_WEBHOOK_NOTE, WEBHOOK_EVENT_TAG, WEBHOOK_VALUE_TAG } from './untrusted';
 import { canActInSession } from '@/core/rooms/access';
 
 export interface ActionResult {
@@ -354,6 +356,12 @@ async function executeSpawnAgent(
     }
   }
 
+  // A direct spawn holds no messaging tool, so a read-only turn there could
+  // never notify anyone: refuse it before a session is minted or tainted.
+  if (config.readOnly === true && !heartbeatRole && !config.orchestrated) {
+    return { success: false, error: 'A read-only hook runs through the root agent: set "orchestrated": true (Route through rootAgent).' };
+  }
+
   // A thread key keeps one session per thread of work (a PR, an issue): see
   // hooks/thread-sessions.ts. An event the key does not apply to (no such
   // field) runs in the hook's own session, as a hook without a key does.
@@ -379,7 +387,16 @@ async function executeSpawnAgent(
   // Use the hook owner's userId so notifications and permissions resolve correctly
   const userId = hook?.userId || context.message?.userId || context.agent?.userId || 'system';
 
-  let prompt = interpolateTemplate(config.agentPrompt || '', context);
+  // The turn's prompt carries text written by whoever triggered the event:
+  // the session starts the turn as if it had read an issue comment itself, so
+  // the flow guard asks before it sends out anything private (hooks/untrusted.ts).
+  if (context.webhook) {
+    const { markFlowTaint } = await import('@/security/flow-guard');
+    markFlowTaint(sessionId, 'suspicious', `webhook:${context.webhook.path}`);
+  }
+
+  // Values from the payload are fenced as untrusted (hooks/untrusted.ts).
+  let prompt = interpolateTemplate(config.agentPrompt || '', context, { fenceWebhookValues: true });
 
   // The away digest is deterministic — read it here and hand the agent the
   // facts, rather than spending a model turn asking it to collect them.
@@ -404,24 +421,31 @@ async function executeSpawnAgent(
     // If a rendered message template is available (from incoming webhook), use it
     const webhookBody = context.webhook.body as Record<string, unknown> | undefined;
     const renderedMessage = webhookBody?._renderedMessage as string | undefined;
-    if (renderedMessage) {
-      prompt += `\n\n${renderedMessage}`;
-    } else {
-      // Summarize the payload instead of dumping the full JSON, which flooded
-      // the user-visible message with repo metadata (see webhook-summary.ts).
-      prompt += `\n\n${summarizeWebhookPayload(context.webhook.body)}`;
+    // Summarize the payload instead of dumping the full JSON, which flooded
+    // the user-visible message with repo metadata (see webhook-summary.ts).
+    let event = renderedMessage || summarizeWebhookPayload(context.webhook.body);
+    if (context.checkChanges?.length) {
+      const { describeChanges } = await import('./event-changes');
+      event += `\n${describeChanges(context.checkChanges)}`;
     }
     if (context.webhook.headers) {
       const eventType = context.webhook.headers['x-github-event'] || context.webhook.headers['x-gitlab-event'] || '';
-      if (eventType) prompt += `\nEvent type: ${eventType}`;
+      if (eventType) event += `\nEvent type: ${eventType}`;
     }
+    // Written by whoever triggered the event, not by the hook's owner.
+    prompt += `\n\n${UNTRUSTED_WEBHOOK_NOTE}\n${fence(WEBHOOK_EVENT_TAG, event)}`;
   } else if (context.tool) {
     prompt += `\n\n--- Tool Context ---\n${JSON.stringify(context.tool, null, 2)}`;
   }
 
   const withDigest = (text: string) => (digestBlock ? `${digestBlock}\n\n${text}` : text);
-  prompt = withDigest(prompt);
-  const message = context.message?.content ? withDigest(context.message.content) : prompt;
+  // Read-only (security/read-only-turn.ts): the turn may only read, and tells
+  // the owner with send_to_user when something needs them. Not for a role
+  // heartbeat, which exists to work the board.
+  const readOnly = config.readOnly === true && !heartbeatRole;
+  const withReadOnly = (text: string) => (readOnly ? `${text}\n\n${readOnlyTurnInstructions(userId)}` : text);
+  prompt = withReadOnly(withDigest(prompt));
+  const message = context.message?.content ? withReadOnly(withDigest(context.message.content)) : prompt;
 
   // A role heartbeat (triggerConfig.role) is that role's agent working the
   // board, so it runs AS the role whatever `orchestrated` says: the root
@@ -445,19 +469,26 @@ async function executeSpawnAgent(
     // A heartbeat hook routes on the 'heartbeat' channel so the run is tagged
     // origin='heartbeat' (RunContext) for auditability; everything else is 'hook'.
     const channel = hook?.trigger === 'heartbeat' ? 'heartbeat' : 'hook';
+    // A read-only mark is set inside the session's turn queue, so a turn
+    // queued ahead of this one (the user's) runs before it, unmarked.
+    let marked = false;
+    const beforeStart = readOnly ? async () => { beginReadOnlyTurn(sessionId); marked = true; } : undefined;
     let result: Awaited<ReturnType<typeof rootAgent.handleMessage>>;
     try {
-      result = await rootAgent.handleMessage(sessionId, userId, message, channel, [], undefined, undefined, undefined, 'schedule');
+      result = await rootAgent.handleMessage(sessionId, userId, message, channel, [], undefined, beforeStart, undefined, 'schedule');
     } catch (err) {
       // A closing event ends its thread even when its turn fails.
       await closeThreadIfEnded(thread, hook);
       throw err;
+    } finally {
+      if (marked) endReadOnlyTurn(sessionId);
     }
 
     // For orchestrated hooks, notify the owner with the result if either:
     // - notifyRoot is true (scheduled tasks that should deliver results)
     // - notifyOwner is true (explicit owner notification)
-    if ((config.notifyRoot || config.notifyOwner) && userId && result.response) {
+    // A read-only turn's answer stays in its session: send_to_user is its only way out.
+    if (!readOnly && (config.notifyRoot || config.notifyOwner) && userId && result.response) {
       notifyOwnerWithResult(userId, result.response).catch((err) => {
         coreLogger.error({ error: err }, 'Failed to notify owner with orchestrated result');
       });
@@ -466,7 +497,7 @@ async function executeSpawnAgent(
     await closeThreadIfEnded(thread, hook);
     return {
       success: true,
-      data: { agentId: result.agentId, response: result.response, orchestrated: true, ...threadData(thread) },
+      data: { agentId: result.agentId, response: result.response, orchestrated: true, ...(readOnly ? { readOnly: true } : {}), ...threadData(thread) },
     };
   }
 
@@ -517,6 +548,15 @@ async function executeSpawnAgent(
 
   await closeThreadIfEnded(thread, hook);
   return { success: true, data: { agentId: agent.getContext().id, ...threadData(thread) } };
+}
+
+/** What a read-only turn is told (security/read-only-turn.ts). */
+export function readOnlyTurnInstructions(userId: string): string {
+  return 'READ-ONLY TURN. This turn was started by an external event. You may read files, git history, issues, '
+    + 'pull requests, check logs and the knowledge base. You cannot edit, run commands, fetch web pages, post, push or '
+    + 'delegate: those calls are refused. Decide whether the owner needs to act. If they do, tell them once with '
+    + `\`send_to_user\` (user_id \`${userId}\`): what happened, why it matters, and the action you propose. If nothing `
+    + 'needs them, do not message them; end with a one-line note of what you checked.';
 }
 
 type ThreadResolution = {
@@ -807,10 +847,20 @@ async function notifyOwnerWithResult(userId: string, result: string): Promise<vo
  * Interpolate template strings with context values
  * Supports {{field.path}} syntax
  */
-function interpolateTemplate(template: string, context: TriggerContext): string {
-  return template.replace(/\{\{([^}]+)\}\}/g, (match, path) => {
-    const value = getNestedValue(context, path.trim());
-    return value !== undefined ? String(value) : match;
+/**
+ * `{{path}}` from the context. With `fenceWebhookValues`, payload values are
+ * fenced; the note explaining the fence comes with the event block, which every
+ * context that has a payload gets.
+ */
+function interpolateTemplate(template: string, context: TriggerContext, opts: { fenceWebhookValues?: boolean } = {}): string {
+  return template.replace(/\{\{([^}]+)\}\}/g, (match, rawPath: string) => {
+    const path = rawPath.trim();
+    const value = getNestedValue(context, path);
+    if (value === undefined) return match;
+    if (opts.fenceWebhookValues && isWebhookPath(path)) {
+      return fence(WEBHOOK_VALUE_TAG, typeof value === 'object' ? JSON.stringify(value) : String(value));
+    }
+    return String(value);
   });
 }
 

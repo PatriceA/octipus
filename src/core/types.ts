@@ -331,6 +331,20 @@ export interface ActionConfig {
   threadKey?: string;
   /** Payload actions (`action`, or GitLab `object_attributes.action`) that end a thread, such as `closed`. */
   threadEndActions?: string[];
+  /**
+   * For spawn_agent (orchestrated): run the turn read-only — reads only, and
+   * `send_to_user` to the owner as the one way out; the answer itself is not
+   * sent (security/read-only-turn.ts).
+   */
+  readOnly?: boolean;
+  /**
+   * For spawn_agent on GitHub check deliveries (check_run, check_suite,
+   * workflow_run, status): start a turn only when a check turns failing,
+   * merged per pull request or branch (src/hooks/event-changes.ts).
+   */
+  onlyOnChange?: boolean;
+  /** The merge window of `onlyOnChange`, in seconds (default 60; 0 runs each change at once). */
+  changeMergeWindowSeconds?: number;
   // For webhook
   webhookUrl?: string;
   webhookMethod?: 'GET' | 'POST' | 'PUT';

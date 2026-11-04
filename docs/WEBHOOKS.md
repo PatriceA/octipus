@@ -288,6 +288,53 @@ Without a thread key, every delivery to a `spawn_agent` hook runs in the hook's 
 - Events on one thread run one after another, never at the same time. A thread with no event for 30 days is forgotten, and its mappings are removed when the hook is deleted.
 - In the hooks page, the **Thread key** field appears for a `spawn_agent` action on a webhook trigger.
 
+#### Event text is untrusted
+
+Whoever triggers the event writes part of the prompt: a pull request comment, a review, a commit message, an issue title. Octipus treats that text as untrusted:
+
+- The event block (the rendered `messageTemplate`, or the payload summary) goes inside `<webhook_event>` tags. Every `{{webhook.…}}` value interpolated into `agentPrompt` goes inside `<webhook_value>` tags, with one line telling the agent that tagged text is data, not instructions. A tag inside the content is broken up, so it cannot close its fence. This makes injection harder but does not prevent it.
+- The session is marked as having read outsider content for the [flow guard](FLOW-GUARD.md) before the turn starts. This part is enforced. Once that session also reads private data (mail, chat, drive), a send, post or push needs approval, which an unattended hook run cannot get.
+
+#### Read-only hooks (`readOnly`)
+
+For events anyone can trigger, a hook can run its turn read-only. The agent then looks, decides whether you need to act, and messages you if you do.
+
+```json
+{
+  "action": "spawn_agent",
+  "actionConfig": {
+    "agentPrompt": "A check failed on this pull request. Read the job log and tell me whether it is the change or a flake.",
+    "orchestrated": true,
+    "readOnly": true,
+    "threadKey": "{{webhook.body.repository.full_name}}#{{webhook.body.check_suite.pull_requests.0.number}}"
+  }
+}
+```
+
+- **Allowed:** reads (`read`, `list`, `search`) of files, git, GitHub, GitLab, Atlassian and the knowledge base, tools that declare themselves read-only, and `send_to_user` to you, which is the notify step. The notify step needs no approval in a read-only turn even though `messaging.send` defaults to ASK. A stored DENY still applies.
+- **Refused before they run:** shell, file writes, web search and fetch (a URL can carry data out), MCP, posting, pushing, and delegation (`spawn_child`, pipelines). The list is an allowlist, so a tool added later stays refused until it is named.
+- **The agent's answer is not sent** to your chats, whatever `notifyOwner` says. It stays in the session, and `send_to_user` is the only way the turn reaches you.
+- **Needs `orchestrated: true`.** A direct spawn has no messaging tool and could never notify you, so the run is refused.
+- **API models only.** A vendor CLI agent can run its own tools without asking, so a read-only turn refuses to start one. Bind the hook's topic to an API model.
+- The mark covers this turn only, and is set inside the session's turn queue. A message you send in the same session runs as a normal turn.
+
+The pattern follows DeepSeek Harness's proposal for event-triggered automation. Accepting a proposed action is still manual: reply in your own session.
+
+#### Only when a check turns failing (`onlyOnChange`)
+
+A hook on GitHub's `check_run`, `check_suite`, `workflow_run` or `status` events gets one delivery per check per push, and most are green. With `onlyOnChange: true`, code decides before any model call:
+
+- Each result is reduced to pass, fail or other, and compared with the last result this hook saw for the same check. The subject is the repository and pull request, or the branch when there is no pull request.
+- Only a check turning failing starts a turn. A check that stays red does not start another one, and a pass followed by a new failure does. Cancelled and pending results neither count nor reset the state.
+- Failures on one subject within `changeMergeWindowSeconds` (default 60) become one turn. A push that fails three checks wakes the agent once, and the event block lists all three. With `0`, each failure is its own turn, started from its delivery.
+- A delivery for a check that has not finished (`created`, `in_progress`, `requested`, a pending status) starts nothing.
+- Other events (comments, reviews, opened pull requests) carry new content every time and are not filtered.
+- The filter runs before the hook's cooldown and `maxExecutions`, so skipped deliveries use neither. The execution log records them as `skipped: "no change"` or `skipped: "check not finished"`, and a change that opened or joined a window as `deferred: true`.
+- The merged turn runs when its window closes, through the same path as a delivery. The hook is read again, so a hook that was disabled or whose owner was deactivated meanwhile does not run. The turn uses cooldown and the execution count once and is logged as its own run.
+- State is kept for 30 days in the key-value store, which is in memory in embedded mode. It is written when the turn fires, so a restart inside a merge window loses that turn. The next red result of the same check then counts as a change again.
+
+Combined with `readOnly` and `threadKey`, a failing PR check wakes one read-only agent per pull request. That agent reads the job log and messages you with the cause.
+
 ### notify (direct notification)
 
 Best for: simple alerts that don't need AI processing.

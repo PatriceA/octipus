@@ -29,6 +29,7 @@ import { isSmallModel } from './agent/small-model';
 import { getMCPBridge } from '@/mcp/bridge';
 import { modelCandidates } from './agent/model-selector';
 import { localRowInstead, PSEUDONYMIZED } from './protection/routing';
+import { isReadOnlyTurn } from '@/security/read-only-turn';
 
 /**
  * Put `section` at the end of the prompt's static (cacheable) part, before the
@@ -331,6 +332,13 @@ export class AgentManager {
     // space tools and web reads only; a CLI agent brings its own tools.
     if (isCLI && options.contextMetadata?.remoteRoom) {
       throw new Error(`${routedModel} is a CLI agent, which brings its own tools: your agent in a space on another install runs on API models only`);
+    }
+
+    // A read-only turn (security/read-only-turn.ts) holds only reads and the
+    // notify step; a vendor CLI may run its own tools without asking, which
+    // Octipus could not refuse.
+    if (isCLI && isReadOnlyTurn(options.sessionId)) {
+      throw new Error(`${routedModel} is a CLI agent, which can run its own tools without asking: a read-only hook turn runs on API models only. Bind this hook's topic to an API model.`);
     }
 
     let worker: AnyAgentWorker;
