@@ -26,7 +26,9 @@ jobs:
   integration:
     name: Integration (postgres)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # The serial database lane outgrew 25 minutes: that limit cancelled a
+    # progressing run before all suites could finish. Keep per-test deadlines.
+    timeout-minutes: 60
     # Dummy 32+ char secrets satisfy config-load validation — the same reason
     # the `CI` workflow sets them. Integration tests mock LLM providers, so no
     # real API keys are needed; only Docker (Postgres) is required.

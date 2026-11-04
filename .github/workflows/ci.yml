@@ -37,10 +37,10 @@ jobs:
   backend:
     name: Backend (typecheck · lint · test)
     runs-on: ubuntu-latest
-    # The full suite (database lane runs one file at a time) now takes about
-    # 14 minutes; 15 cut a passing run off at the coverage step. Slow runners
-    # took 7-12 minutes for the browser install alone before it was cached.
-    timeout-minutes: 30
+    # Nearly 190 database suites run serially to avoid shared-DB deadlocks
+    # and concurrent PGlite hangs. Allow the complete suite plus coverage on
+    # slower hosted runners; individual test/hook deadlines remain unchanged.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
         with:
