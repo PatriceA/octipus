@@ -15,6 +15,7 @@ import { type Ref, useCallback, useEffect, useId, useImperativeHandle, useRef, u
 import type { RealtimeState } from '@/hooks/useVoiceRealtime';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { PROTECTION_LEVELS, PROTECTION_LEVEL_LABELS, type ProtectionLevel } from '../../../src/shared/protection';
 import { AudioWaveform } from './audio-waveform';
 
 const subscribeNoop = () => () => {};
@@ -41,7 +42,9 @@ export interface PromptInputHandle {
 }
 
 interface PromptInputProps {
-  onSend: (message: string, attachments?: Attachment[], options?: { inlineUiProvenance?: string }) => void;
+  onSend: (message: string, attachments?: Attachment[], options?: { inlineUiProvenance?: string; attachmentProtectionLevel?: ProtectionLevel }) => void;
+  /** Files already attached from the workspace file viewer. */
+  hasAttachedFiles?: boolean;
   /** The composer handle (`insertDraft`). */
   composerRef?: Ref<PromptInputHandle>;
   disabled?: boolean;
@@ -85,7 +88,7 @@ function truncateFilename(name: string, maxLen = 20): string {
 }
 
 const ACCEPTED_TYPES =
-  'image/*,audio/*,.txt,.md,.js,.ts,.py,.json,.csv,.html,.css';
+  'image/*,audio/*,.pdf,.txt,.md,.js,.ts,.py,.json,.csv,.html,.css';
 
 const MAX_HISTORY = 50;
 
@@ -101,6 +104,7 @@ const REALTIME_STATE_LABEL: Record<RealtimeState, string> = {
 
 export default function PromptInput({
   onSend,
+  hasAttachedFiles = false,
   disabled = false,
   placeholder = 'Type a message...',
   realtimeMode = false,
@@ -125,6 +129,12 @@ export default function PromptInput({
   const matchingCommands = commands.filter(command => command.name.startsWith(text.slice(1).toLowerCase()));
   const selectedCommand = matchingCommands[commandIndex] ?? matchingCommands[0];
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [attachmentProtectionLevel, setAttachmentProtectionLevel] = useState<ProtectionLevel | ''>('');
+  const hasFiles = attachments.length > 0 || hasAttachedFiles;
+  const sensitivityId = useId();
+  useEffect(() => {
+    if (!hasFiles) setAttachmentProtectionLevel('');
+  }, [hasFiles]);
   const [isDragging, setIsDragging] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -196,6 +206,7 @@ export default function PromptInput({
       };
     });
     setAttachments((prev) => [...prev, ...newAttachments]);
+    setAttachmentProtectionLevel('');
   }, []);
 
   const removeAttachment = useCallback((id: string) => {
@@ -208,8 +219,8 @@ export default function PromptInput({
 
   const handleSend = useCallback(() => {
     const trimmed = text.trim();
-    if (!trimmed && attachments.length === 0) return;
-    if (disabled) return;
+    if (!trimmed && !hasFiles) return;
+    if (disabled || hasFiles && attachmentProtectionLevel === '') return;
 
     if (trimmed) {
       setHistory((prev) => {
@@ -220,9 +231,13 @@ export default function PromptInput({
     setHistoryIndex(-1);
     setBrowsingHistory(false);
 
-    onSend(trimmed, attachments.length > 0 ? attachments : undefined, inlineUiSource ? { inlineUiProvenance: inlineUiSource.inlineUiId } : undefined);
+    onSend(trimmed, attachments.length > 0 ? attachments : undefined, {
+      ...(inlineUiSource ? { inlineUiProvenance: inlineUiSource.inlineUiId } : {}),
+      ...(hasFiles && attachmentProtectionLevel !== '' ? { attachmentProtectionLevel } : {}),
+    });
     setText('');
     setAttachments([]);
+    setAttachmentProtectionLevel('');
     setInlineUiSource(null);
 
     setTimeout(() => {
@@ -231,7 +246,7 @@ export default function PromptInput({
         textareaRef.current.focus();
       }
     }, 0);
-  }, [text, attachments, disabled, onSend, inlineUiSource]);
+  }, [text, attachments, disabled, onSend, inlineUiSource, hasFiles, attachmentProtectionLevel]);
 
   useImperativeHandle(composerRef, () => ({
     insertDraft: (inserted, source) => {
@@ -502,7 +517,7 @@ export default function PromptInput({
     };
   }, []);
 
-  const canSend = (text.trim().length > 0 || attachments.length > 0) && !disabled;
+  const canSend = (text.trim().length > 0 || hasFiles) && !disabled && (!hasFiles || attachmentProtectionLevel !== '');
 
   return (
     <div
@@ -590,6 +605,19 @@ export default function PromptInput({
               </div>
             );
           })}
+        </div>
+      )}
+
+      {hasFiles && (
+        <div className="mb-3 space-y-1 text-xs">
+          <label htmlFor={sensitivityId} className="block font-medium text-on-surface">Attachment sensitivity</label>
+          <select id={sensitivityId} value={attachmentProtectionLevel}
+            onChange={event => setAttachmentProtectionLevel(event.target.value ? Number(event.target.value) as ProtectionLevel : '')}
+            disabled={disabled} className="w-full rounded-lg border border-outline-variant/40 bg-surface-container-high px-3 py-2 text-on-surface">
+            <option value="">Choose sensitivity before sending</option>
+            {PROTECTION_LEVELS.map(level => <option key={level} value={level}>{PROTECTION_LEVEL_LABELS[level]}</option>)}
+          </select>
+          <p className="text-on-surface-variant">Applies to all attached files. Choose the most sensitive content: Public, Internal, Confidential (personal data), or Strictly confidential (health, HR, legal, bank data). Strictly confidential files require a local model. Earlier protected content in this conversation still applies.</p>
         </div>
       )}
 

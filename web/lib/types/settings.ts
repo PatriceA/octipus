@@ -12,6 +12,7 @@ export interface UserProfile {
   totpEnabled: boolean;
   channelBindings?: ChannelBinding[];
   preferences?: {
+    autoApproveRecovery?: boolean;
     theme?: string;
     language?: string;
     notifications?: boolean;

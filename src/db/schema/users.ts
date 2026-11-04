@@ -67,6 +67,8 @@ import type { ChannelBinding } from '@/shared/types';
 export type { ChannelBinding };
 
 export interface UserPreferences {
+  /** Automatically acknowledge uncertain tool outcomes and pipeline replay reviews in personal runs. */
+  autoApproveRecovery?: boolean;
   theme?: 'light' | 'dark' | 'system';
   language?: string;
   notificationsEnabled?: boolean;

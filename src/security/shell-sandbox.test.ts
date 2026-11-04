@@ -261,3 +261,33 @@ test.skipIf(!hasBwrap)('browser cache is mounted read-only without a host-servic
     expect(wrapped.argv).toContain('--unshare-net');
   } finally { wrapped.cleanup(); getConfig().security.shellSandbox = 'off'; }
 });
+
+test.skipIf(!hasBwrap)('Android SDK is readable by isolated test jobs while SDK writes and adjacent credentials stay blocked', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'octipus-android-home-'));
+  const sdk = join(home, 'Android/Sdk');
+  mkdirSync(join(sdk, 'platforms'), { recursive: true });
+  mkdirSync(join(sdk, 'build-tools'));
+  mkdirSync(join(home, '.android'));
+  writeFileSync(join(sdk, 'platforms/android.jar'), 'installed-sdk-marker');
+  writeFileSync(join(home, '.android/adbkey'), 'PRIVATE-ADB-IDENTITY');
+  vi.mocked(homedir).mockReturnValue(home);
+  vi.stubEnv('ANDROID_HOME', sdk);
+  vi.stubEnv('ANDROID_SDK_ROOT', sdk);
+  const { getConfig } = await import('@/config');
+  const { wrapCommand } = await import('./shell-sandbox');
+  getConfig().security.shellSandbox = 'required';
+  const code = `const fs=require('fs'),a=require('assert/strict');a.equal(process.env.ANDROID_HOME,${JSON.stringify(sdk)});a.equal(process.env.ANDROID_SDK_ROOT,process.env.ANDROID_HOME);a.equal(fs.readFileSync(process.env.ANDROID_HOME+'/platforms/android.jar','utf8'),'installed-sdk-marker');a.equal(fs.existsSync(${JSON.stringify(join(home, '.android/adbkey'))}),false);a.throws(()=>fs.writeFileSync(process.env.ANDROID_HOME+'/write-probe','denied'));`;
+  const wrapped = wrapCommand(['/usr/bin/node', '-e', code], { workspaceRoot: workspace });
+  try {
+    const { spawnSync } = await import('node:child_process');
+    const result = spawnSync(wrapped.argv[0], wrapped.argv.slice(1), { encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(0);
+    expect(wrapped.argv).toContain('--unshare-net');
+    expect(wrapped.argv).not.toContain('/var/run/docker.sock');
+  } finally {
+    wrapped.cleanup(); vi.unstubAllEnvs();
+    vi.mocked(homedir).mockImplementation((await vi.importActual<typeof import('node:os')>('node:os')).homedir);
+    rmSync(home, { recursive: true, force: true });
+    getConfig().security.shellSandbox = 'off';
+  }
+});

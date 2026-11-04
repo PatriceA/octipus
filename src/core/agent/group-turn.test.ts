@@ -204,9 +204,16 @@ describe('group-channel turns', () => {
   });
 
   test('forwards original attachment references for model-aware root delivery', async () => {
-    const attachedFiles = [{ path: '.octipus/attachments/screen.png' }];
+    const attachedFiles = [{ path: '.octipus/attachments/screen.png', protectionLevel: 1 as const }];
     await new AgentService().handleMessage('dm-session', 'user', 'Inspect this screenshot', 'webchat', attachedFiles);
     expect(fx.root.mock.calls[0]![11]).toMatchObject({ attachedFiles });
+  });
+
+  test('unclassified attachments stop before model or memory processing', async () => {
+    const result = await new AgentService().handleMessage('dm-session', 'user', 'Make slides from this PDF', 'webchat', [{ path: '.octipus/attachments/brief.pdf' }]);
+    expect(result.response).toContain('have not been classified');
+    expect(fx.root).not.toHaveBeenCalled();
+    expect(fx.retrieve).not.toHaveBeenCalled();
   });
 
   test('a 1:1 session never looks for taken tasks', async () => {

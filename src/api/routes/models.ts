@@ -183,8 +183,9 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
         // editor. Keeping a topic writer here would be a second source of truth.
         isEnabled: t.Optional(t.Boolean()),
         priority: t.Optional(t.Number()),
-        // supportsTools, supportsVision, supportsStreaming are intentionally
-        // excluded — capabilities are preset per provider and not user-editable.
+        supportsTools: t.Optional(t.Boolean()),
+        supportsVision: t.Optional(t.Boolean()),
+        supportsStreaming: t.Optional(t.Boolean()),
         costPerInputToken: t.Optional(t.Number()),
         costPerOutputToken: t.Optional(t.Number()),
         metadata: t.Optional(t.Any()),

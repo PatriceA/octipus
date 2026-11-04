@@ -351,3 +351,93 @@ describe('CLI question answers', () => {
     expect(await pm.getApprovedResolution(id, aliceId)).toBeUndefined();
   });
 });
+
+describe('durable recovery consent', () => {
+  async function action(sessionId: string, owner = aliceId, createdAt = new Date(Date.now() - 1000)) {
+    const { randomUUID } = await import('node:crypto');
+    const { toolActionRepository } = await import('@/db/repositories/tool-action-repository');
+    const id = randomUUID();
+    await toolActionRepository.start({ id, userId: owner, sessionId, agentId:'old-worker', toolId:'shell', toolName:'shell__run', argumentHash:'fixture', status:'uncertain', createdAt });
+    return id;
+  }
+  test('a pipeline coordinator approval acknowledges the same snapshot even after its worker was cancelled', async () => {
+    const { randomUUID } = await import('node:crypto');
+    const { getPermissionManager } = await import('./permissions');
+    const { toolActionRepository } = await import('@/db/repositories/tool-action-repository');
+    const { getDb } = await import('@/db/postgres');
+    const { toolActions } = await import('@/db/schema/tool-actions');
+    const { eq } = await import('drizzle-orm');
+    const pm = getPermissionManager(); const session = randomUUID(); const id = await action(session);
+    const args = { recoveryActionIds:[id], previousActions:'one uncertain shell attempt' };
+    const worker = await pm.requestApproval(aliceId,'gone-worker','action_recovery','retry',args,session);
+    pm.cancelWaits('gone-worker');
+    await pm.waitForApproval(worker,{agentId:'gone-worker'});
+    const parent = await pm.requestApproval(aliceId,'pipeline:fixture','action_recovery','retry',args,session);
+    expect(await pm.approve(parent,aliceId)).toBe(true);
+    const [row] = await getDb().select().from(toolActions).where(eq(toolActions.id,id));
+    expect(row.reviewId).toBe(parent); expect(row.reviewedAt).not.toBeNull(); expect(row.status).toBe('uncertain');
+    expect(await toolActionRepository.pending(aliceId,session)).toEqual([]);
+  });
+  test('acknowledgement survives cancellation before the original worker receives the approved answer', async () => {
+    const {randomUUID}=await import('node:crypto'); const {getPermissionManager}=await import('./permissions');
+    const {toolActionRepository}=await import('@/db/repositories/tool-action-repository');
+    const pm=getPermissionManager();const session=randomUUID();const id=await action(session);
+    const request=await pm.requestApproval(aliceId,'cancel-on-resolution','action_recovery','retry',{recoveryActionIds:[id]},session);
+    const waiting=pm.waitForApproval(request,{agentId:'cancel-on-resolution'});
+    const unsubscribe=pm.onResolved(event=>{if(event.requestId===request&&event.status==='approved')pm.cancelWaits('cancel-on-resolution');});
+    try {
+      expect(await pm.approve(request,aliceId)).toBe(true);expect(await waiting).toBe(false);
+      expect(await toolActionRepository.pending(aliceId,session)).toEqual([]);
+    } finally {unsubscribe();}
+  });
+  test('recovery scope cannot acknowledge another user/session, newer effects or denied requests', async () => {
+    const { randomUUID } = await import('node:crypto');
+    const { getPermissionManager } = await import('./permissions');
+    const { toolActionRepository } = await import('@/db/repositories/tool-action-repository');
+    const session=randomUUID();const own=await action(session);const foreign=await action(session,bobId);const otherSession=randomUUID();const elsewhere=await action(otherSession);
+    const future=await action(session,aliceId,new Date(Date.now()+60_000));const pm=getPermissionManager();
+    const denied=await pm.requestApproval(aliceId,'denied-review','action_recovery','retry',{recoveryActionIds:[own]},session);
+    await pm.deny(denied,aliceId);expect((await toolActionRepository.pending(aliceId,session)).some(row=>row.id===own)).toBe(true);
+    const review=await pm.requestApproval(aliceId,'actual-review','action_recovery','retry',{recoveryActionIds:[own,foreign,elsewhere,future]},session);
+    expect(await pm.approve(review,bobId)).toBe(false);
+    expect(await pm.approve(review,aliceId)).toBe(true);
+    expect((await toolActionRepository.pending(aliceId,session)).map(row=>row.id)).toEqual([future]);
+    expect((await toolActionRepository.pending(bobId,session)).map(row=>row.id)).toEqual([foreign]);
+    expect((await toolActionRepository.pending(aliceId,otherSession)).map(row=>row.id)).toEqual([elsewhere]);
+  });
+  test('approval and recovery acknowledgement roll back together on a journal write failure', async () => {
+    const { randomUUID } = await import('node:crypto');const { getPermissionManager }=await import('./permissions');
+    const consent=await import('@/db/repositories/recovery-consent');const pm=getPermissionManager();const session=randomUUID();const id=await action(session);
+    const request=await pm.requestApproval(aliceId,'atomic-review','action_recovery','retry',{recoveryActionIds:[id]},session);
+    const broken=vi.spyOn(consent,'acknowledgeRecoveryApproval').mockRejectedValueOnce(new Error('journal unavailable'));
+    try { await expect(pm.approve(request,aliceId)).rejects.toThrow('journal unavailable'); }
+    finally { broken.mockRestore(); }
+    expect((await pm.getPendingRequests(aliceId)).some(row=>row.id===request)).toBe(true);
+    expect(await pm.approve(request,aliceId)).toBe(true);
+  });
+  test('microsecond ordering survives approval and reconciliation when the original waiter is gone', async () => {
+    const {randomUUID}=await import('node:crypto');const {getDb}=await import('@/db/postgres');
+    const {toolActions}=await import('@/db/schema/tool-actions');const {permissionRequests}=await import('@/db/schema/permissions');
+    const {toolActionRepository}=await import('@/db/repositories/tool-action-repository');const {getPermissionManager}=await import('./permissions');const {eq,sql}=await import('drizzle-orm');
+    const session=randomUUID();const id=await action(session);const pm=getPermissionManager();
+    const request=await pm.requestApproval(aliceId,'pipeline:precision','action_recovery','retry',{recoveryActionIds:[id]},session);
+    await getDb().update(toolActions).set({createdAt:sql`'2026-01-01T00:00:00.123100Z'::timestamptz`}).where(eq(toolActions.id,id));
+    await getDb().update(permissionRequests).set({createdAt:sql`'2026-01-01T00:00:00.123900Z'::timestamptz`}).where(eq(permissionRequests.id,request));
+    expect(await pm.approve(request,aliceId)).toBe(true);
+    expect(await toolActionRepository.pending(aliceId,session)).toEqual([]);
+    // Simulate an approval persisted by an older process without acknowledgement.
+    await getDb().update(toolActions).set({reviewedAt:null,reviewId:null}).where(eq(toolActions.id,id));
+    expect(await toolActionRepository.reconcileApproved(aliceId,session,[id])).toBe(1);
+    expect(await toolActionRepository.pending(aliceId,session)).toEqual([]);
+  });
+  test('a fresh process reconciles approved legacy recovery prompts without assuming the unknown action failed', async () => {
+    const { randomUUID }=await import('node:crypto');const { getDb }=await import('@/db/postgres');
+    const { permissionRequests }=await import('@/db/schema/permissions');const { toolActions }=await import('@/db/schema/tool-actions');
+    const { toolActionRepository }=await import('@/db/repositories/tool-action-repository');const { eq }=await import('drizzle-orm');
+    const session=randomUUID();const id=await action(session);const request=randomUUID();
+    await getDb().insert(permissionRequests).values({id:request,userId:aliceId,sessionId:session,agentId:'pipeline:old',toolId:'action_recovery',action:'retry',status:'approved',resolvedBy:aliceId,resolvedAt:new Date(),context:{toolName:'Recovery',toolArguments:{previousActions:`- shell__run at ${new Date().toISOString()}: outcome unknown; record ${id}`}}});
+    expect(await toolActionRepository.reconcileApproved(aliceId,session,[id])).toBe(1);
+    expect(await toolActionRepository.reconcileApproved(aliceId,session,[id])).toBe(0);
+    const [row]=await getDb().select().from(toolActions).where(eq(toolActions.id,id));expect(row.reviewId).toBe(request);expect(row.status).toBe('uncertain');
+  });
+});

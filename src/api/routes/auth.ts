@@ -331,6 +331,16 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
     { detail: { tags: ['auth'] } }
   )
 
+  .put('/recovery-policy', async ({ user, body, set }) => {
+    if (!user) { set.status = 401; return { error: 'Authentication required' }; }
+    const updated = await userRepository.setAutomaticRecovery(user.id, body.autoApproveRecovery);
+    if (!updated) { set.status = 404; return { error: 'Account not found' }; }
+    await auditRepository.log({ userId: user.id, action: 'settings_changed', resourceType: 'user', resourceId: user.id,
+      details: { setting: 'preferences.autoApproveRecovery', enabled: body.autoApproveRecovery } })
+      .catch(error => apiLogger.error({ error, userId: user.id }, 'Recovery preference saved but audit write failed'));
+    return { autoApproveRecovery: updated.preferences?.autoApproveRecovery === true };
+  }, { body: t.Object({ autoApproveRecovery: t.Boolean() }) })
+
   // Get current user
   .get(
     '/me',

@@ -19,6 +19,7 @@ function stubDb(manager: PermissionManager, onExpire: () => void) {
   Object.defineProperty(manager, 'db', {
     configurable: true,
     get: () => ({
+      transaction: async (work: (db: unknown) => Promise<unknown>) => work((manager as unknown as { db: unknown }).db),
       insert: () => ({ values: async () => {} }),
       select: () => ({ from: () => ({ where: () => ({ limit: async () => [row] }) }) }),
       update: () => ({

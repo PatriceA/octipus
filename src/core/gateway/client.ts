@@ -6,7 +6,7 @@ import type { ChatAttachment } from '@/shared/chat-attachments';
 const DEFAULT_GATEWAY_URL = 'ws://localhost:3007/gateway';
 
 /** A session file a turn names (`chat.send` `fileRefs`). */
-export interface FileRef { path: string; version?: string }
+export interface FileRef { path: string; version?: string; protectionLevel?: import('@/shared/protection').ProtectionLevel }
 
 /** One file stored by `POST /sessions/:id/attachments`. */
 export interface UploadedAttachment { path: string; name: string }

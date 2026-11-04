@@ -1645,10 +1645,10 @@ export default function ChatPage() {
   };
 
   // Send message
-  const sendMessage = async (userInput: string, attachments?: Attachment[], options?: { voice?: boolean; inlineUiProvenance?: string }) => {
+  const sendMessage = async (userInput: string, attachments?: Attachment[], options?: { voice?: boolean; inlineUiProvenance?: string; attachmentProtectionLevel?: 1 | 2 | 3 | 4 }) => {
     let sid = activeSessionId;
     // Snapshot edit-and-continue attachments for this turn; cleared once sent.
-    let fileRefs: Array<{ path: string; version?: string }> | undefined = attachedFiles.length ? attachedFiles : undefined;
+    let fileRefs: Array<{ path: string; version?: string; protectionLevel?: 1 | 2 | 3 | 4 }> | undefined = attachedFiles.length ? attachedFiles : undefined;
     // Chat/work split override: 'auto' → no override (heuristic decides).
     const outputModeOverride = outputMode === 'auto' ? undefined : outputMode === 'chat' ? 'inline' : 'file';
 
@@ -1696,6 +1696,10 @@ export default function ChatPage() {
         }] }));
         return;
       }
+    }
+
+    if (fileRefs?.length && options?.attachmentProtectionLevel !== undefined) {
+      fileRefs = fileRefs.map(file => ({ ...file, protectionLevel: options.attachmentProtectionLevel }));
     }
 
     const userMessage: ChatMessageData = {
@@ -2177,6 +2181,7 @@ export default function ChatPage() {
           </div>
           <PromptInput
             onSend={sendMessage}
+            hasAttachedFiles={attachedFiles.length > 0}
             composerRef={composerRef}
             /* The new-session dialog is a choice that is not yet made: a message
                sent while it is open auto-creates its own session, and confirming

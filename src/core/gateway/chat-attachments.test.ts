@@ -11,16 +11,16 @@ vi.mock('@/security/workspace-fs', () => ({ WorkspaceFS: { forSession: () => ({ 
 vi.mock('@/models/cost-tracker', () => ({ getCostTracker: () => ({ getSessionStats: async () => ({}) }) }));
 import { wireMessageHandler } from './message-handler';
 beforeEach(() => { vi.clearAllMocks(); });
-test('gateway decodes image bytes and forwards persisted refs to the general agent', async () => {
+test.each([undefined, 2] as const)('gateway forwards persisted refs and attachment sensitivity (%s)', async protectionLevel => {
   let handler!: (id: string, context: ConnectionContext, message: ClientMessage) => Promise<void>;
   const send = vi.fn();
   wireMessageHandler({ setMessageHandler: (fn: typeof handler) => { handler = fn; }, setPendingSnapshotProvider: vi.fn(), setConnectionClosedHandler: vi.fn(), publishEvent: vi.fn(), connectionManager: { sendToConnection: send } } as unknown as GatewayHub);
   await handler('connection', { userId: 'user', trustLevel: 'user', clientType: 'tui' } as ConnectionContext,
-    { type: 'chat.send', sessionId: sid, content: 'Describe [image1]', attachments: [{ name: 'paste.png', mimeType: 'image/png', data: 'aW1hZ2U=' }] });
+    { type: 'chat.send', sessionId: sid, content: 'Describe [image1]', attachments: [{ name: 'paste.png', mimeType: 'image/png', data: 'aW1hZ2U=', protectionLevel }] });
   expect(mock.store).toHaveBeenCalledTimes(1);
   const files = mock.store.mock.calls[0][1] as File[];
   expect(Buffer.from(await files[0].arrayBuffer()).toString()).toBe('image');
-  expect(mock.handle).toHaveBeenCalledWith(sid, 'user', expect.stringContaining('Describe [image1]'), 'tui', [{ path: '.octipus/attachments/id/paste.png' }], undefined,
+  expect(mock.handle).toHaveBeenCalledWith(sid, 'user', expect.stringContaining('Describe [image1]'), 'tui', [{ path: '.octipus/attachments/id/paste.png', ...(protectionLevel !== undefined ? { protectionLevel } : {}) }], undefined,
     undefined, undefined, undefined, { renders: undefined, notes: [], provenanceId: undefined });
   expect(mock.handle.mock.calls[0][2]).toContain('Attached file: .octipus/attachments/id/paste.png');
   expect(send).not.toHaveBeenCalled();

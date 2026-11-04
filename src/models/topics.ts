@@ -140,6 +140,21 @@ export function canonicalTopic(topic: string): string {
   return RETIRED_TOPIC_ALIASES[topic] ?? topic;
 }
 
+/** Specialist-only rows must never become a conversational fallback. */
+export function canServeText(row: {
+  modelId: string;
+  topics?: readonly string[] | null;
+  topicRoles?: Record<string, unknown> | null;
+}): boolean {
+  // Discovery can overstate tool support (notably for Ollama OCR models).
+  if (/ocr|embed/i.test(row.modelId)) return false;
+  const topics = [...(row.topics ?? []), ...Object.keys(row.topicRoles ?? {})];
+  return topics.length === 0 || topics.some((topic) => {
+    const kind = TOPICS.find((t) => t.value === canonicalTopic(topic))?.kind;
+    return kind === 'text' || kind === 'background';
+  });
+}
+
 /** All topic values. */
 export const ALL_TOPIC_VALUES: readonly string[] = TOPICS.map((t) => t.value);
 

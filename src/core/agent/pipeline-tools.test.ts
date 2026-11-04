@@ -28,6 +28,15 @@ beforeEach(() => {
   fixture.checkpoints.mockResolvedValue([{ seq: 4, nodeKey: 'qa' }, { seq: 3, nodeKey: 'implementation' }]);
 });
 describe('pipeline recovery tools', () => {
+  it('status exposes a later policy repair beside historical refusal timestamps', async () => {
+    fixture.find.mockResolvedValue({ id: 'pipeline', userId: 'owner', sessionId: 'session', workspaceId: 'workspace', status: 'paused', metadata: {
+      deniedRequests: [{ at: '2026-11-02T17:17:23Z', command: 'stat' }],
+      policyRepair: { resolvedAt: '2026-11-02T17:27:49Z', status: 'verification_authorized' },
+    } });
+    expect(await tool('get_pipeline_status').execute({ id: 'pipeline' }, context)).toMatchObject({
+      policyRepair: { status: 'verification_authorized' }, denialHistory: { total: 1, lastDeniedAt: '2026-11-02T17:17:23Z', denialsSinceRecordedRepair: 0 },
+    });
+  });
   it('returns a resume handle before replay approval is answered', async () => {
     fixture.resume.mockImplementation(async (_id, options) => { await Promise.resolve(); options.onAccepted(); return new Promise(() => {}); });
     const track = vi.fn();

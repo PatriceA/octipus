@@ -63,6 +63,22 @@ export function SecurityTab() {
     <div className="space-y-6">
       <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">Security</h2>
 
+      <div className="space-y-3 rounded-lg bg-surface-container-low p-4">
+        <label className="flex items-center justify-between gap-4">
+          <span className="font-medium text-on-surface">Automatically approve recovery</span>
+          <input type="checkbox" role="switch" aria-label="Automatically approve recovery" checked={profile?.preferences?.autoApproveRecovery === true} disabled={loading || !profile} onChange={async event => {
+            const enabled = event.target.checked;
+            const previous = queryClient.getQueryData<UserProfile>(['profile']);
+            queryClient.setQueryData<UserProfile>(['profile'], current => current ? { ...current, preferences: { ...current.preferences, autoApproveRecovery: enabled } } : current);
+            setLoading(true); setError('');
+            try { await api.put('/auth/recovery-policy', { autoApproveRecovery: enabled }); await queryClient.invalidateQueries({ queryKey: ['profile'] }); }
+            catch (err) { queryClient.setQueryData(['profile'], previous); setError((err as Error).message); }
+            finally { setLoading(false); }
+          }} />
+        </label>
+        <p className="text-sm text-on-surface-variant">Continue your personal runs automatically after uncertain tool outcomes or a pipeline resume. Earlier effects may happen again. Normal command permissions still apply, and running commands must finish first. Shared spaces continue to require review.</p>
+      </div>
+
       <div className="space-y-4">
         <div className="flex items-center justify-between p-4 bg-surface-container-low rounded-lg">
           <div>

@@ -1,6 +1,17 @@
 import { describe, expect, test } from 'vitest';
-import { ALL_TOPIC_VALUES, canonicalTopic, RETIRED_TOPIC_ALIASES, TEXT_TOPIC_VALUES, TOPICS } from './topics';
+import { ALL_TOPIC_VALUES, canServeText, canonicalTopic, RETIRED_TOPIC_ALIASES, TEXT_TOPIC_VALUES, TOPICS } from './topics';
 import { SINGLE_MODEL_CHAT_TOPICS } from './single-model-binding';
+
+test('text eligibility checks specialist bindings and known specialist ids', () => {
+  for (const topic of ['ocr', 'vision', 'embedding', 'decision']) {
+    expect(canServeText({ modelId: 'specialist', topics: [topic] })).toBe(false);
+    expect(canServeText({ modelId: 'specialist', topicRoles: { [topic]: 'primary' } })).toBe(false);
+  }
+  expect(canServeText({ modelId: 'deepseek-ocr:latest' })).toBe(false);
+  expect(canServeText({ modelId: 'nomic-embed-text' })).toBe(false);
+  expect(canServeText({ modelId: 'multimodal-chat', topics: ['vision', 'coding'] })).toBe(true);
+  expect(canServeText({ modelId: 'chat' })).toBe(true);
+});
 
 describe('canonical topic registry', () => {
   test('topic values are unique', () => {

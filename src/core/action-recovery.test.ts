@@ -22,6 +22,8 @@ class MemoryJournal extends ToolActionRepository {
   override async pipeline(userId: string, sessionId: string, pipelineId: string) {
     return this.rows.filter(r => r.userId === userId && r.sessionId === sessionId && r.pipelineId === pipelineId && !r.reviewedAt && r.status !== 'not_executed');
   }
+  override async reconcileApproved() { return 0; }
+  override async findReplayApproval() { return undefined; }
   override async acknowledge(userId: string, sessionId: string, ids: string[], reviewId: string) {
     for (const row of this.rows) if (row.userId === userId && row.sessionId === sessionId && ids.includes(row.id)) {
       row.reviewedAt = new Date(); row.reviewId = reviewId;
@@ -177,6 +179,46 @@ describe('durable action recovery', () => {
     await expect(recovery.reviewPipeline(ctx(), 'p', true, ask)).rejects.toThrow('not approved');
     expect(ask.mock.calls[0][0]).toContain('returned previously'); expect(repo.rows[0].reviewedAt).toBeNull();
   });
+  test('one resume approval covers the whole earlier run rather than batches of 20', async () => {
+    for (let i = 0; i < 65; i++) await recovery.run(ctx(), 'shell', 'shell__run', {}, async () => ({ exitCode: 0 }));
+    // Include an unknown outcome beyond the displayed preview.
+    await uncertain();
+    const ask = vi.fn().mockResolvedValue({ approved: true, reviewId: 'resume-all' });
+    await recovery.reviewPipeline(ctx(), 'p', true, ask);
+    expect(ask.mock.calls[0][1]).toHaveLength(66);
+    expect(ask).toHaveBeenCalledOnce();
+    expect(ask.mock.calls[0][0]).toContain('all 66 earlier recorded actions');
+    expect(ask.mock.calls[0][0]).toContain('46 additional actions');
+    expect(repo.rows.every(row => row.reviewId === 'resume-all')).toBe(true);
+    await run(async () => 'continued');
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  test('denying a large resume leaves every earlier action unacknowledged', async () => {
+    for (let i = 0; i < 45; i++) await run(async () => 'sent');
+    const ask = vi.fn().mockResolvedValue({ approved: false });
+    await expect(recovery.reviewPipeline(ctx(), 'p', true, ask)).rejects.toThrow('not approved');
+    expect(ask).toHaveBeenCalledOnce();
+    expect(repo.rows.every(row => row.reviewedAt === null)).toBe(true);
+  });
+
+  test('resume consent covers only the pipeline snapshot shown before the decision', async () => {
+    await run(async () => 'earlier action');
+    let calls = 0;
+    const ask = vi.fn(async () => {
+      calls++;
+      if (calls === 1) {
+        // Another effect appears while the first approval is pending.
+        await repo.start({ ...repo.rows[0], id: 'later-action', reviewedAt: null, reviewId: null });
+        return { approved: true, reviewId: 'first-snapshot' };
+      }
+      return { approved: false };
+    });
+    await expect(recovery.reviewPipeline(ctx(), 'p', true, ask)).rejects.toThrow('not approved');
+    expect(repo.rows[0].reviewId).toBe('first-snapshot');
+    expect(repo.rows[1].reviewedAt).toBeNull();
+    expect(ask).toHaveBeenCalledTimes(2);
+  });
   test('legacy and native CLI work without records still gets a replay warning', async () => {
     const ask = vi.fn().mockResolvedValue({ approved: true });
     await recovery.reviewPipeline(ctx(), 'p', true, ask);
@@ -278,4 +320,30 @@ test.each(['uncertain', 'workspace', 'legacy', 'other-attempt'])('continuation s
   const ask = vi.fn().mockResolvedValue({ approved: false });
   await expect(recovery.reviewPipeline(context, 'p', true, ask)).rejects.toThrow('not approved');
   expect(ask).toHaveBeenCalledOnce();
+});
+
+test('personal automatic recovery continues unattended without prompting and retains the uncertain outcome', async () => {
+  const policy=await import('@/security/automatic-recovery'); const {auditRepository}=await import('@/db/repositories/audit-repository');
+  vi.spyOn(policy,'automaticRecoveryAllowed').mockResolvedValue(true);const audit=vi.spyOn(auditRepository,'log').mockResolvedValue();
+  await uncertain(); const old=repo.rows[0];
+  expect(await run(async()=>'continued',{...ctx(),attended:false})).toBe('continued');
+  expect(request).not.toHaveBeenCalled();expect(old.status).toBe('uncertain');expect(old.reviewId).toMatch(/^automatic-recovery:/);
+  expect(audit).toHaveBeenCalledWith(expect.objectContaining({action:'permission_granted',details:expect.objectContaining({automatic:true,recordIds:[old.id]})}));
+});
+test('personal automatic recovery covers the entire pipeline snapshot, including legacy unjournaled replay', async () => {
+  const policy=await import('@/security/automatic-recovery');const {auditRepository}=await import('@/db/repositories/audit-repository');
+  vi.spyOn(policy,'automaticRecoveryAllowed').mockResolvedValue(true);vi.spyOn(auditRepository,'log').mockResolvedValue();
+  for(let i=0;i<65;i++)await recovery.run(ctx(),'shell','shell__run',{},async()=>({exitCode:0}));
+  await uncertain();const ask=vi.fn();
+  await recovery.reviewPipeline({...ctx(),attended:false},'p',true,ask);
+  expect(ask).not.toHaveBeenCalled();expect(repo.rows.every(row=>row.reviewId?.startsWith('automatic-recovery:'))).toBe(true);
+  await recovery.reviewPipeline({...ctx(),attended:false},'p',true,ask);expect(ask).not.toHaveBeenCalled();
+});
+test('automatic recovery never approves over a still-running pipeline action', async () => {
+  const policy=await import('@/security/automatic-recovery');vi.spyOn(policy,'automaticRecoveryAllowed').mockResolvedValue(true);
+  let complete!:()=>void;
+  const running=recovery.run(ctx(),'shell','shell__run',{},()=>new Promise<void>(resolve=>{complete=resolve;}));
+  await vi.waitFor(()=>expect(complete).toBeDefined());
+  await expect(recovery.reviewPipeline(ctx(),'p',true)).rejects.toThrow('still running');
+  expect(repo.rows[0].reviewedAt).toBeNull();complete();await running;
 });

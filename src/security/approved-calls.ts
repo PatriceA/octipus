@@ -11,11 +11,14 @@ import { getFlowLabel } from './flow-guard';
  * the caller's user, session and workspace, still running or awaiting
  * approval), same stage, same attempt for a blocked-call grant, same
  * `hostServices` capability — and the call is the same tool and action with
- * the same arguments (`callFingerprint`). A different cwd, env, network or
+ * the same arguments (`callFingerprint`), or an explicitly approved metadata
+ * scope naming a host, cwd and individual files. Metadata scopes allow only
+ * static stat output (name/size/mode/type), never file contents. A different cwd, env, network or
  * useShell flag, different file contents, a child the stage spawned, the root
  * agent or another pipeline: all still ask. A DENY never reaches this check.
  */
 import { createHash } from 'node:crypto';
+import { matchesSshFileMetadata, type SshFileMetadataScope } from './ssh-file-metadata';
 import { pipelineRepository } from '@/db/repositories/pipeline-repository';
 import { securityLogger } from '@/utils/logger';
 import type { SpaceToolCall } from './space-tools';
@@ -34,6 +37,8 @@ export interface ApprovedCall {
   hostServices: boolean;
   /** Session data posture disclosed when this exact operation was approved. */
   flowConsent?: ApprovalFlowConsent;
+  /** Explicitly approved read-only metadata for named files; never file contents. */
+  fileMetadataScope?: SshFileMetadataScope;
 }
 
 /** Who a stage worker is, from the metadata the pipeline (never the model) put on its context. */
@@ -101,7 +106,7 @@ export function gateCommandCalls(command: string, nodeKey: string, hostServices:
     ({ toolId, toolName, action, fingerprint: callFingerprint(toolId, action, toolName, { command }), nodeKey, hostServices }));
 }
 
-const grantKey = (c: ApprovedCall) => JSON.stringify([c.toolId, c.toolName, c.action, c.fingerprint, c.nodeKey, c.attemptId ?? null, c.hostServices, c.flowConsent ?? null]);
+const grantKey = (c: ApprovedCall) => JSON.stringify([c.toolId, c.toolName, c.action, c.fingerprint, c.nodeKey, c.attemptId ?? null, c.hostServices, c.flowConsent ?? null, c.fileMetadataScope ?? null]);
 
 /** `metadata` with `calls` added once each. Grants in an older shape are dropped: they never match. */
 export function withApprovedCalls(metadata: Record<string, unknown> | null | undefined, calls: ApprovedCall[]): Record<string, unknown> {
@@ -134,7 +139,7 @@ export async function isApprovedCall(caller: ApprovedCallCaller, call: SpaceTool
     const scopedFingerprint = callFingerprint(call.toolId, call.action, call.toolName, scopedArgs);
     const { getFlowLabel } = await import('./flow-guard');
     const label = getFlowLabel(caller.sessionId);
-    return grants.some(g => (!options.requireFlowConsent || g.flowConsent && typeof g.flowConsent.secret === 'boolean' && typeof g.flowConsent.private === 'boolean' && typeof g.flowConsent.suspicious === 'boolean' && (!label.secret || g.flowConsent.secret) && (!label.private || g.flowConsent.private) && (!label.suspicious || g.flowConsent.suspicious)) && g.toolId === call.toolId && g.toolName === call.toolName && g.action === call.action && g.fingerprint === (g.nodeKey === '*' ? scopedFingerprint : fingerprint)
+    return grants.some(g => (!options.requireFlowConsent || g.flowConsent && typeof g.flowConsent.secret === 'boolean' && typeof g.flowConsent.private === 'boolean' && typeof g.flowConsent.suspicious === 'boolean' && (!label.secret || g.flowConsent.secret) && (!label.private || g.flowConsent.private) && (!label.suspicious || g.flowConsent.suspicious)) && g.toolId === call.toolId && g.toolName === call.toolName && g.action === call.action && (g.fingerprint === (g.nodeKey === '*' ? scopedFingerprint : fingerprint) || !!g.fileMetadataScope && matchesSshFileMetadata(g.fileMetadataScope, { ...call, args: scopedArgs }))
       && (g.nodeKey === scope.nodeKey || g.nodeKey === '*' && (pipeline.metadata?.permissionProfile as { approvedBy?: string } | undefined)?.approvedBy === caller.userId) && (g.attemptId === undefined || g.attemptId === scope.attemptId)
       && g.hostServices === scope.hostServices);
   } catch (err) {

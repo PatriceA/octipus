@@ -1,3 +1,6 @@
+import { pipelineReplayScope } from '@/shared/pipeline-replay';
+import { automaticRecoveryAllowed } from '@/security/automatic-recovery';
+import { auditRepository } from '@/db/repositories/audit-repository';
 import { createHash, randomUUID } from 'node:crypto';
 import { toolActionRepository, type ToolActionRepository } from '@/db/repositories/tool-action-repository';
 import type { ToolAction } from '@/db/schema/tool-actions';
@@ -77,21 +80,35 @@ export class ActionRecovery {
     }
   }
 
+  private async automaticallyReview(context: AgentContext, rows: ToolAction[], replay = false): Promise<boolean> {
+    if (!await automaticRecoveryAllowed(context)) return false;
+    const reviewId = `automatic-recovery:${randomUUID()}`;
+    await this.repository.acknowledge(context.userId, context.sessionId, rows.map(row => row.id), reviewId);
+    await auditRepository.log({ userId: context.userId, sessionId: context.sessionId, action: 'permission_granted',
+      resourceType: 'action_recovery', resourceId: reviewId,
+      details: { automatic: true, policy: 'preferences.autoApproveRecovery', recordIds: rows.map(row => row.id), replay,
+        ...(typeof context.metadata?.pipelineId === 'string' ? { pipelineId: context.metadata.pipelineId } : {}) },
+    }).catch(error => coreLogger.error({ error, reviewId }, 'Automatic recovery recorded in journal but audit write failed'));
+    return true;
+  }
+
   private async reviewPending(context: AgentContext, toolName: string, toolId: string): Promise<void> {
     for (;;) {
       assertExecutionActive(context);
       const unresolved = await this.repository.pending(context.userId, context.sessionId);
+      if (unresolved.length && await this.repository.reconcileApproved(context.userId, context.sessionId, unresolved.map(row => row.id))) continue;
       const bookkeeping = unresolved.filter(row => row.toolId === 'plan' && !this.active.has(row.id));
       if (bookkeeping.length) await this.repository.acknowledge(context.userId, context.sessionId, bookkeeping.map(row => row.id), 'local-plan-bookkeeping');
-      const pending = unresolved.filter(row => row.toolId !== 'plan').filter(row => !this.active.has(row.id) && actionsConflict(row.toolId, toolId)).slice(0, 20);
+      const pending = unresolved.filter(row => row.toolId !== 'plan').filter(row => !this.active.has(row.id) && actionsConflict(row.toolId, toolId));
       if (!pending.length) return;
+      if (await this.automaticallyReview(context, pending)) continue;
       const decision = await routeApprovalFor(context, { toolId: 'action_recovery', action: 'retry' }, { level: 'ASK' });
       if (decision.route !== 'ask_human') throw new RecoveryReviewRequiredError(
         `Previous tool actions have uncertain outcomes. Check external state and obtain recovery approval before another mutation. ${describeActions(pending)}`, pending.map(row => row.id));
       const manager = getPermissionManager();
       const id = await manager.requestApproval(context.userId, context.id, 'action_recovery', 'retry', {
         warning: `The earlier actions listed below have no confirmed outcome. This is not a request for more retries and does not change the configured retry limit. This is separate from permission to run ${toolName}. Check their external state: changes may already exist. Approving permits further changes and may repeat earlier effects; rejecting leaves read-only checks available.`,
-        previousActions: describeActions(pending), nextTool: toolName,
+        previousActions: describeActions(pending), nextTool: toolName, recoveryActionIds: pending.map(row => row.id),
       }, context.sessionId, `Check earlier ${pending[0].toolName} outcome before continuing`, getExecutionSignal(context), context.workspaceId);
       const approved = await manager.waitForApproval(id, { agentId: context.id });
       assertExecutionActive(context);
@@ -167,17 +184,23 @@ export class ActionRecovery {
 
   /** Before a resumed/rewound pipeline changes any checkpoints. */
   async reviewPipeline(context: AgentContext, pipelineId: string, hasPriorVisits: boolean,
-    ask?: (summary: string) => Promise<{ approved: boolean; reviewId?: string }>): Promise<void> {
+    ask?: (summary: string, recoveryActionIds: string[]) => Promise<{ approved: boolean; reviewId?: string }>): Promise<void> {
     await this.locked(context, async () => {
       for (;;) {
         assertExecutionActive(context);
         const recorded = await this.repository.pipeline(context.userId, context.sessionId, pipelineId);
+        if (recorded.length && await this.repository.reconcileApproved(context.userId, context.sessionId, recorded.map(row => row.id))) continue;
         const bookkeeping = recorded.filter(row => row.toolId === 'plan' && !this.active.has(row.id));
         if (bookkeeping.length) await this.repository.acknowledge(context.userId, context.sessionId, bookkeeping.map(row => row.id), 'local-plan-bookkeeping');
         const allRows = recorded.filter(row => row.toolId !== 'plan');
         if (allRows.some(row => this.active.has(row.id))) throw new RecoveryReviewRequiredError('Previous pipeline tool actions are still running. Wait for them to settle before resuming.');
-        const rows = allRows.slice(0, 20);
+        const rows = allRows;
         if (!rows.length && !hasPriorVisits) return;
+        if (await this.automaticallyReview(context, rows, true)) {
+          hasPriorVisits = false;
+          if (!rows.length) return;
+          continue;
+        }
         const pipeline = context.metadata?.approvedRunReplay === true || typeof context.metadata?.approvedContinuationAttemptId === 'string'
           ? await (await import('@/db/repositories/pipeline-repository')).pipelineRepository.findById(pipelineId) : null;
         const grant = pipeline?.metadata?.permissionProfile as { approvedBy?: string; profile?: { allowCheckpointReplay?: boolean } } | undefined;
@@ -189,21 +212,32 @@ export class ActionRecovery {
           if (!rows.length) return;
           continue;
         }
+        const replayScope = pipelineReplayScope(context.metadata?.replayScope);
+        if (!rows.length && replayScope?.pipelineId === pipelineId) {
+          const requestId = await this.repository.findReplayApproval(context.userId, context.sessionId, context.workspaceId ?? null, replayScope);
+          if (requestId) {
+            context.metadata = { ...context.metadata, replayApprovalReceipt: { requestId, userId: context.userId, sessionId: context.sessionId, workspaceId: context.workspaceId ?? null, scope: replayScope } };
+            return;
+          }
+        }
         if (context.attended === false && !ask) throw new RecoveryReviewRequiredError(`Resuming previous work requires an attended recovery review; no workers have been restarted.\n${describeActions(rows)}`, rows.map(row => row.id));
-        const requestReview = ask ?? (async (summary: string) => {
+        const requestReview = ask ?? (async (summary: string, recoveryActionIds: string[]) => {
           const manager = getPermissionManager();
           const reviewId = await manager.requestApproval(context.userId, context.id, 'action_recovery', 'replay_pipeline',
-            { warning: summary, pipelineId }, context.sessionId, 'Review pipeline replay', getExecutionSignal(context), context.workspaceId);
+            { warning: summary, pipelineId, recoveryActionIds, ...(replayScope ? { replayScope } : {}) }, context.sessionId, 'Review pipeline replay', getExecutionSignal(context), context.workspaceId);
           return { approved: await manager.waitForApproval(reviewId, { agentId: context.id }), reviewId };
         });
         const result = await requestReview(
+          `Approve this pipeline resume once, including replay permission for all ${rows.length} earlier recorded actions. ` +
           'Resuming or rewinding reruns work from a checkpoint. Completed actions can happen again; unknown outcomes must be checked before retrying. ' +
           'This is permission to replay work, not confirmation that previous actions failed.\n\n' +
-          (rows.length ? describeActions(rows) : 'No action records establish the effects of the previous run. Older runs and vendor-native CLI tools may have performed actions outside this journal.'));
+          (rows.length ? describeActions(rows) : 'No action records establish the effects of the previous run. Older runs and vendor-native CLI tools may have performed actions outside this journal.'), rows.map(row => row.id));
         assertExecutionActive(context);
         if (!result.approved) throw new RecoveryReviewRequiredError('Recovery review was not approved. Pipeline checkpoints were preserved.');
         await this.repository.acknowledge(context.userId, context.sessionId, rows.map(row => row.id), result.reviewId ?? `pipeline-resume:${randomUUID()}`);
-        // Only newly uncertain/completed records need another review.
+        if (replayScope && result.reviewId) context.metadata = { ...context.metadata, replayApprovalReceipt: { requestId: result.reviewId, userId: context.userId, sessionId: context.sessionId, workspaceId: context.workspaceId ?? null, scope: replayScope } };
+        // Newly recorded effects during the approval wait are outside this
+        // snapshot; earlier records never produce another batch prompt.
         hasPriorVisits = false;
       }
     });

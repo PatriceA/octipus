@@ -1,4 +1,5 @@
 import { getModelRegistry } from '@/models/model-registry';
+import { canServeText } from '@/models/topics';
 import type { ModelConfigEntry } from '@/db/schema/models';
 import type { SpaceRole } from '@/db/schema/organizations';
 import { InstallModelsDeniedError, mayUseInstallModels } from '@/models/install-access';
@@ -57,7 +58,7 @@ export async function findToolCapableFallback(
 
   const { defaultModel, rows: allModels } = await modelCandidates(requester);
   if (
-    defaultModel && defaultModel.supportsTools
+    defaultModel && defaultModel.supportsTools && canServeText(defaultModel)
     && defaultModel.modelId !== modelId
     && localProviders.includes(defaultModel.provider)
   ) {
@@ -65,7 +66,7 @@ export async function findToolCapableFallback(
   }
 
   const toolModel = allModels.find((m) =>
-    m.supportsTools
+    m.supportsTools && canServeText(m)
     && m.provider !== 'cli'
     && localProviders.includes(m.provider)
     && m.modelId !== modelId,
@@ -200,7 +201,7 @@ export class ModelSelector {
    * branch above. Returns the final model id the root agent should run with.
    */
   private async validateRootModel(
-    modelMeta: { modelId: string; name: string; supportsTools: boolean; provider: string },
+    modelMeta: Pick<ModelConfigEntry, 'modelId' | 'name' | 'supportsTools' | 'provider'> & Partial<Pick<ModelConfigEntry, 'topics' | 'topicRoles'>>,
     requester: ModelRequester,
   ): Promise<SelectedModel> {
     const chosen: SelectedModel = { modelId: modelMeta.modelId, name: modelMeta.name };
@@ -211,11 +212,12 @@ export class ModelSelector {
     // providers run their own harness and never route through the shim, so
     // they are exempt.
     const shimUnreliable = modelMeta.provider !== 'cli' && hasRecentShim(modelMeta.modelId);
-    if (!isReasoner && !noTools && !shimUnreliable) return chosen;
+    const specialist = !canServeText(modelMeta);
+    if (!isReasoner && !noTools && !shimUnreliable && !specialist) return chosen;
 
-    const reason = isReasoner ? 'reasoner' : noTools ? 'no-tools' : 'shim-unreliable';
-    const isSuitable = (m: { modelId: string; supportsTools: boolean; provider: string }): boolean =>
-      m.supportsTools &&
+    const reason = specialist ? 'specialist-only' : isReasoner ? 'reasoner' : noTools ? 'no-tools' : 'shim-unreliable';
+    const isSuitable = (m: ModelConfigEntry): boolean =>
+      canServeText(m) && m.supportsTools &&
       !m.modelId.includes('reasoner') &&
       !m.modelId.includes('thinking') &&
       m.provider !== 'cli' &&
@@ -233,6 +235,7 @@ export class ModelSelector {
       );
       return { modelId: suitable.modelId, name: suitable.name };
     }
+    if (specialist) throw new Error('No conversational model configured. Bind a chat model to a text topic in the Models page.');
     coreLogger.warn(
       { candidateModel: modelMeta.modelId, reason },
       'Candidate model unsuitable for orchestration and no alternative configured — attempting anyway',
@@ -328,6 +331,7 @@ export class ModelSelector {
       const allModels = await registry.getAllModels();
       const cheapModel = allModels.find(m =>
         m.isEnabled &&
+        canServeText(m) &&
         m.provider !== 'cli' &&
         m.priority < (defaultModel?.priority || 100) &&
         m.modelId !== defaultModelId

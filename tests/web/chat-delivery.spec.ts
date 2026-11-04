@@ -61,16 +61,47 @@ test('a pasted image is uploaded, referenced in the turn, and survives history r
     element.dispatchEvent(new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true }));
   });
   await expect(page.getByText('paste.png', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Send message' })).toBeDisabled();
+  await input.press('Enter');
+  expect(gateway.sent.some(m => m.type === 'chat.send')).toBe(false);
+  await page.getByLabel('Attachment sensitivity').selectOption('2');
   await input.press('Enter');
   await expect.poll(() => gateway.sent.find(m => m.type === 'chat.send')?.type).toBe('chat.send');
   const sent = gateway.sent.find(m => m.type === 'chat.send')!;
-  expect(sent.fileRefs).toEqual([{ path: '.octipus/attachments/upload/paste.png' }]);
+  expect(sent.fileRefs).toEqual([{ path: '.octipus/attachments/upload/paste.png', protectionLevel: 2 }]);
   expect(sent.content).toContain('Read this image');
   expect(sent.content).toContain('Attached file: .octipus/attachments/upload/paste.png');
   persisted = [{ id: 'persisted-image-message', role: 'user', content: sent.content, createdAt: new Date().toISOString() }];
   await page.reload();
   await selectChatSession(page, 'sess-1');
   await expect(page.getByText(/Attached file: .octipus\/attachments\/upload\/paste.png/)).toBeVisible();
+});
+
+for (const level of [1, 4]) test(`a PDF requires an explicit sensitivity choice and sends level ${level}`, async ({ authenticatedPage: page }) => {
+  const gateway = await stubGateway(page);
+  let uploads = 0;
+  await page.route('**/api/sessions/sess-1/attachments', route => {
+    uploads++;
+    return json(route, 200, { uploaded: [{ path: '.octipus/attachments/upload/brief.pdf', name: 'brief.pdf' }] });
+  });
+  await page.goto('/chat');
+  await selectChatSession(page, 'sess-1');
+  await expect.poll(() => gateway.subscribed()).toBe(1);
+  const input = page.getByPlaceholder(/send a message/i).first();
+  await input.fill('Create a presentation using my exact words');
+  const fileInput = page.locator('input[type=file]').first();
+  await expect(fileInput).toHaveAttribute('accept', /\.pdf/);
+  await fileInput.setInputFiles({ name: 'brief.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF synthetic test') });
+  await expect(page.getByLabel('Attachment sensitivity')).toHaveValue('');
+  await expect(page.getByRole('button', { name: 'Send message' })).toBeDisabled();
+  await input.press('Enter');
+  expect(uploads).toBe(0);
+  await page.getByLabel('Attachment sensitivity').selectOption(String(level));
+  await input.press('Enter');
+  await expect.poll(() => gateway.sent.find(m => m.type === 'chat.send')?.fileRefs).toEqual([{ path: '.octipus/attachments/upload/brief.pdf', protectionLevel: level }]);
+  await expect(page.getByLabel('Attachment sensitivity')).toHaveCount(0);
+  await fileInput.setInputFiles({ name: 'other.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF another') });
+  await expect(page.getByLabel('Attachment sensitivity')).toHaveValue('');
 });
 
 test('stale refresh cannot erase a live answer while activity history is loading', async ({ authenticatedPage: page }) => {

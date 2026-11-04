@@ -13,12 +13,12 @@ export function validateComposeConfig(config: Record<string, unknown>, repo: str
   }
   for (const service of Object.values((config.services ?? {}) as Record<string, Record<string, unknown>>)) {
     const deploy = service.deploy as { resources?: { reservations?: { devices?: unknown } } } | undefined;
-    if (deploy?.resources?.reservations?.devices || service.runtime || service.gpus || service.env_file || service.device_cgroup_rules || service.userns_mode || service.cgroup || service.cgroup_parent || service.security_opt || service.privileged || service.network_mode || service.pid || service.ipc || service.devices || service.cap_add || service.volumes_from || service.container_name || service.use_api_socket || service.develop || service.provider || service.post_start || service.pre_stop) throw new Error('Compose host privileges, shared namespaces and custom container names are unsupported');
+    if (deploy?.resources?.reservations?.devices || service.runtime || service.gpus || service.device_cgroup_rules || service.userns_mode || service.cgroup || service.cgroup_parent || service.security_opt || service.privileged || service.network_mode || service.pid || service.ipc || service.devices || service.cap_add || service.volumes_from || service.container_name || service.use_api_socket || service.develop || service.provider || service.post_start || service.pre_stop) throw new Error('Compose host privileges, shared namespaces and custom container names are unsupported');
     for (const volume of (service.volumes ?? []) as { type?: string; source?: string }[]) {
       if (volume.type === 'bind' && (!volume.source || !approvedBind(volume.source))) throw new Error('Compose bind source requires an explicitly approved host path in approvedBindPaths');
     }
     const build = service.build as Record<string, unknown> | undefined;
-    if (build) throw new Error('Compose inline builds are unsupported; build images with the approved build_image tool first');
+    if (build && (build.privileged || build.network === 'host' || build.entitlements || build.ssh || build.secrets || build.additional_contexts)) throw new Error('Compose build host privileges, SSH forwarding, secrets and additional contexts require a separately configured build runtime');
     for (const port of (service.ports ?? []) as { published?: string | number; host_ip?: string }[]) {
       if (!/^\d+$/.test(String(port.published)) || !approvedPorts.includes(Number(port.published))) throw new Error(`Compose published port ${port.published ?? '(dynamic)'} requires explicit approvedPorts consent`);
     }
@@ -28,7 +28,10 @@ export function validateComposeConfig(config: Record<string, unknown>, repo: str
 /** Lexical containment is insufficient for repository symlinks. */
 export async function validateComposeFilesystem(config: Record<string, unknown>, repo: string): Promise<void> {
   const check = async (path: string) => {
-    const actual = await realpath(resolve(repo, path));
+    const requested = resolve(repo, path);
+    const lexical = relative(repo, requested);
+    if (lexical.startsWith('..') || isAbsolute(lexical)) throw new Error('Compose host files must resolve inside the approved repository');
+    const actual = await realpath(requested);
     const rel = relative(repo, actual);
     if (rel.startsWith('..') || isAbsolute(rel)) throw new Error('Compose host files must resolve inside the approved repository');
   };
@@ -39,9 +42,23 @@ export async function validateComposeFilesystem(config: Record<string, unknown>,
     for (const volume of (service.volumes ?? []) as (string | { type?: string; source?: string })[]) {
       if (typeof volume !== 'string' && volume.type === 'bind' && volume.source) await realpath(volume.source);
     }
-    for (const file of (service.env_file ?? []) as (string | { path: string })[]) await check(typeof file === 'string' ? file : file.path);
-    const build = service.build as { context: string; dockerfile?: string } | undefined;
-    if (build) { await check(build.context); await check(resolve(build.context, build.dockerfile ?? 'Dockerfile')); }
+    const envFiles = service.env_file ? (Array.isArray(service.env_file) ? service.env_file : [service.env_file]) : [];
+    for (const file of envFiles as (string | { path: string; required?: boolean })[]) {
+      const path = typeof file === 'string' ? file : file.path;
+      try { await check(path); } catch (error) {
+        if (typeof file !== 'string' && file.required === false && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+          const parent = await realpath(resolve(repo, path, '..'));
+          const rel = relative(repo, parent);
+          if (rel.startsWith('..') || isAbsolute(rel)) throw new Error('Compose host files must resolve inside the approved repository');
+        } else throw error;
+      }
+    }
+    const build = service.build as string | { context?: string; dockerfile?: string; dockerfile_inline?: string } | undefined;
+    if (build) {
+      const context = typeof build === 'string' ? build : build.context ?? '.';
+      await check(context);
+      if (typeof build === 'string' || !build.dockerfile_inline) await check(resolve(repo, context, typeof build === 'string' ? 'Dockerfile' : build.dockerfile ?? 'Dockerfile'));
+    }
   }
 }
 
@@ -57,11 +74,15 @@ export async function validateRawCompose(file: string, repo: string): Promise<st
   try { raw = load(text) as Record<string, unknown>; } catch { throw new Error('Invalid Compose YAML; parser excerpts are omitted to protect credential values'); }
   if (!raw || typeof raw !== 'object' || raw.include) throw new Error('Compose include is unsupported; keep configuration in the approved repository');
   for (const service of Object.values((raw.services ?? {}) as Record<string, Record<string, unknown>>)) if (service.extends) throw new Error('Compose extends is unsupported; keep configuration in the approved repository');
-  // Reject imports and host-file consumers before Docker parses the raw file.
+  // Inspect file sources before Compose reads env files or flattens build provenance.
   for (const service of Object.values((raw.services ?? {}) as Record<string, Record<string, unknown>>)) {
-    if (service.env_file || service.build) throw new Error('Compose env_file and inline builds are unsupported; use image-contained configuration and prebuilt images');
+    const build = service.build as string | Record<string, unknown> | undefined;
+    const sources = [service.env_file, typeof build === 'string' ? build : build?.context, typeof build === 'object' ? build.dockerfile : undefined];
+    if (sources.some(value => value !== undefined && JSON.stringify(value).includes('$'))) throw new Error('Compose file and build paths must be literal repository paths; environment interpolation in these paths is unsupported');
+    if (build && typeof build === 'object' && (build.privileged || build.network === 'host' || build.entitlements || build.ssh || build.secrets || build.additional_contexts)) throw new Error('Compose build requires a separately configured runtime for host privileges or external sources');
   }
   for (const kind of ['secrets', 'configs']) for (const resource of Object.values((raw[kind] ?? {}) as Record<string, Record<string, unknown>>)) if (resource.file || resource.environment) throw new Error('Compose host secret/config sources are unsupported');
+  await validateComposeFilesystem(raw, repo);
   return text;
 }
 

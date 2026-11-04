@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { buildFcmMessage, isUnregistered } from './fcm';
+import { appwriteTargetId, buildAppwritePush, buildFcmMessage, isUnregistered } from './fcm';
 
 describe('buildFcmMessage', () => {
   test('carries title, body and string data for one token', () => {
@@ -28,5 +28,19 @@ describe('isUnregistered', () => {
     expect(isUnregistered(gone)).toBe(true);
     expect(isUnregistered(badBody)).toBe(false);
     expect(isUnregistered('not json')).toBe(false);
+  });
+});
+
+describe('Appwrite transport', () => {
+  test('target id is a stable, Appwrite-valid hash of the token', () => {
+    const id = appwriteTargetId('x'.repeat(200));
+    expect(id).toMatch(/^[a-f0-9]{32}$/);
+    expect(appwriteTargetId('x'.repeat(200))).toBe(id);
+  });
+
+  test('createPush body addresses targets with high priority', () => {
+    const b = buildAppwritePush(['t1'], { title: 'Approval', data: { kind: 'approval' } });
+    expect(b).toMatchObject({ title: 'Approval', body: '', targets: ['t1'], data: { kind: 'approval' }, priority: 'high' });
+    expect(b.messageId.length).toBeLessThanOrEqual(36);
   });
 });

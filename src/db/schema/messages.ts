@@ -52,6 +52,9 @@ export interface MessageMetadata {
   pipelineId?: string;
   stageId?: string;
   pipelineEvent?: string;
+  /** New denials in this execution versus the pipeline's accumulated history. */
+  newDenialCount?: number;
+  totalDenialCount?: number;
   /**
    * The turn was refused by a user cap: `LimitRefusal` from
    * `src/core/errors/limit-refusal.ts` ({ code, reason }). Typed loosely here

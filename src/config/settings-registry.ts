@@ -94,6 +94,17 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'FCM_SERVICE_ACCOUNT_JSON',
   },
   {
+    key: 'push.appwrite',
+    category: 'notifications',
+    valueType: 'string',
+    defaultValue: '',
+    description:
+      'Appwrite Messaging push config JSON: {"endpoint":"https://…/v1","projectId":"…","providerId":"<FCM provider id>","apiKey":"<server key with users.write, targets.write, messages.write>"}. Takes precedence over the FCM service account. Empty disables it.',
+    isSecret: true,
+    vaultName: 'appwrite_push',
+    envVar: 'APPWRITE_PUSH_JSON',
+  },
+  {
     key: 'litellm.timeout',
     category: 'litellm',
     valueType: 'number',
@@ -912,6 +923,10 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
   },
 
   // ── Security (runtime-changeable subset) ──
+  { key: 'security.cliKubeconfigs', category: 'security', valueType: 'json', defaultValue: [], isSecret: false,
+    description: 'Owner-approved existing kubeconfig paths for personal shell commands and verification gates. Manage in Settings → CLI tools. Only paths/context names are stored; shared spaces never receive them.' },
+  { key: 'security.cliRuntimes', category: 'security', valueType: 'json', defaultValue: [], isSecret: false,
+    description: 'Executable runtimes approved for sandboxed shell commands and test runners. Manage discovery and approval in Settings → CLI tools. Does not grant credentials or network access.' },
   {
     key: 'security.shellSandbox',
     category: 'security',

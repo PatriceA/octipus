@@ -1,5 +1,7 @@
+import type { PipelineReplayReceipt, PipelineReplayScope } from '@/shared/pipeline-replay';
 import { workPlanRepository } from '@/db/repositories/work-plan-repository';
-import { stageHostServices, stageEnvironmentReason, StageEnvironmentError, coordinatorCriterion, coordinatorCriterionSatisfied } from './pipeline-environment';
+import { pipelineNewDenialSummary } from './pipeline-status';
+import { stageHostServices, stageEnvironmentReason, stagePolicyRepairReason, StageEnvironmentError, coordinatorCriterion, coordinatorCriterionSatisfied } from './pipeline-environment';
 import type { PendingStageApproval } from '@/shared/pipeline-approval';
 import { replyAnswer } from './approval-manager';
 import { WorkerInterruptedError } from '@/core/interruption';
@@ -17,7 +19,7 @@ import type { AgentTrigger } from '@/core/types';
 import { actionRecovery } from '@/core/action-recovery';
 import { channelCanPrompt } from '@/security/approval-policy';
 import { getConfig } from '@/config';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { and, desc, eq, gte, inArray, ne, sql } from 'drizzle-orm';
 import { getNotificationService } from '@/core/notification-service';
 import { recordRunEvent } from '@/core/run-log';
@@ -1171,6 +1173,7 @@ export class PipelineManager {
     resumeState?: WalkState;
   }): Promise<{ pipelineId: string; result: string }> {
     const { pipeline } = args;
+    const previousDenialCount = Array.isArray(pipeline.metadata?.deniedRequests) ? pipeline.metadata.deniedRequests.length : 0;
     if (this.walking.has(pipeline.id)) {
       throw new Error(`Pipeline ${pipeline.id} is already being walked in this process.`);
     }
@@ -1217,12 +1220,11 @@ export class PipelineManager {
     } finally {
       try {
         const current = await this.getPipeline(pipeline.id);
-        const denied = current?.metadata?.deniedRequests as Array<{ toolId?: string; action?: string; command?: string; reason?: string }> | undefined;
-        if ((current?.metadata?.permissionProfile as { profile?: { overnight?: boolean } } | undefined)?.profile?.overnight && denied?.length) {
-          const body = `${denied.length} commands were denied outside the approved run profile. Pipeline status: ${current?.status}.\n`
-            + denied.slice(-50).map(row => `- ${row.toolId}.${row.action}: ${row.command?.slice(0, 300) ?? row.reason}`).join('\n');
+        const denialSummary = current ? pipelineNewDenialSummary(current, previousDenialCount) : undefined;
+        if ((current?.metadata?.permissionProfile as { profile?: { overnight?: boolean } } | undefined)?.profile?.overnight && denialSummary) {
+          const { body, newCount, totalCount } = denialSummary;
           await messageRepository.create({ sessionId: pipeline.sessionId, role: 'system', content: body,
-            metadata: { pipelineId: pipeline.id, pipelineEvent: 'overnight_summary' } });
+            metadata: { pipelineId: pipeline.id, pipelineEvent: 'overnight_summary', newDenialCount: newCount, totalDenialCount: totalCount } });
           await getNotificationService().notify(pipeline.userId, 'pipeline_summary', 'Overnight pipeline summary', body, { pipelineId: pipeline.id });
         }
       } catch (error) { coreLogger.error({ error, pipelineId: pipeline.id }, 'Could not publish overnight denial summary'); }
@@ -1414,7 +1416,8 @@ export class PipelineManager {
         pipelineId: pipeline.id,
         nodeKey: cursor,
         state: serializeWalk(snapshot),
-      });
+      }, context.metadata?.replayApprovalReceipt as PipelineReplayReceipt | undefined);
+      if (context.metadata?.replayApprovalReceipt) delete context.metadata.replayApprovalReceipt;
 
       if (await this.pauseRequested(pipeline.id)) {
         await this.updatePipeline(pipeline.id, {
@@ -2257,6 +2260,10 @@ export class PipelineManager {
     if (scope.space && !can(scope.space.role, 'run_agent_write')) {
       throw new SpaceError('forbidden_role', `Your role (${scope.space.role}) cannot resume a pipeline in this space`);
     }
+    const replayScope: PipelineReplayScope = { pipelineId, checkpointSeq: checkpoint.seq,
+      headSeq: (await pipelineRepository.getCheckpoints(pipelineId, 1))[0]?.seq ?? checkpoint.seq,
+      stateHash: createHash('sha256').update(JSON.stringify(checkpoint.state)).digest('hex'),
+      nodeKey: checkpoint.nodeKey, attemptId: resumeState.attemptId ?? null, freshAttempt: opts.freshAttempt === true };
     const context = buildAgentContext({
       attended: (pipeline.metadata?.permissionProfile as { profile?: { overnight?: boolean } } | undefined)?.profile?.overnight ? false : channelCanPrompt(originSession?.channelType),
       id: pipeline.rootAgentId,
@@ -2268,7 +2275,7 @@ export class PipelineManager {
       root: true,
       model: '',
       status: 'running',
-      metadata: { pipelineId, resumed: true, approvedContinuationAttemptId: !opts.freshAttempt && checkpoint.seq === (await pipelineRepository.getCheckpoints(pipelineId, 1))[0]?.seq ? resumeState.attemptId : undefined, overnightRun: (pipeline.metadata?.permissionProfile as { profile?: { overnight?: boolean } } | undefined)?.profile?.overnight === true, approvedRunReplay: (pipeline.metadata?.permissionProfile as { profile?: { allowCheckpointReplay?: boolean } } | undefined)?.profile?.allowCheckpointReplay === true, approvedRunGates: (pipeline.metadata?.permissionProfile as { profile?: { autoApproveGates?: boolean } } | undefined)?.profile?.autoApproveGates === true },
+      metadata: { pipelineId, resumed: true, replayScope, approvedContinuationAttemptId: !opts.freshAttempt && checkpoint.seq === (await pipelineRepository.getCheckpoints(pipelineId, 1))[0]?.seq ? resumeState.attemptId : undefined, overnightRun: (pipeline.metadata?.permissionProfile as { profile?: { overnight?: boolean } } | undefined)?.profile?.overnight === true, approvedRunReplay: (pipeline.metadata?.permissionProfile as { profile?: { allowCheckpointReplay?: boolean } } | undefined)?.profile?.allowCheckpointReplay === true, approvedRunGates: (pipeline.metadata?.permissionProfile as { profile?: { autoApproveGates?: boolean } } | undefined)?.profile?.autoApproveGates === true },
     });
     return withAgentUsage(pipeline.userId, scope, () => this.resumeWalk(pipeline, pipelineId, opts, checkpoint, resumeState, context));
   }
@@ -2289,10 +2296,10 @@ export class PipelineManager {
     opts.onAccepted?.();
     const resumeSignal = this.resuming.get(pipelineId)?.signal;
     await withExecutionSignal(context, resumeSignal,
-      () => actionRecovery.reviewPipeline(context, pipelineId, priorNodes.some(node => node.visits > 0), async summary => {
+      () => actionRecovery.reviewPipeline(context, pipelineId, priorNodes.some(node => node.visits > 0), async (summary, recoveryActionIds) => {
         const permissions = getPermissionManager();
         const reviewId = await permissions.requestApproval(context.userId, `pipeline:${pipelineId}`, 'action_recovery', 'replay_pipeline',
-          { warning: summary, pipelineId }, context.sessionId, 'Review pipeline replay', resumeSignal, context.workspaceId);
+          { warning: summary, pipelineId, recoveryActionIds, replayScope: context.metadata?.replayScope }, context.sessionId, 'Review pipeline replay', resumeSignal, context.workspaceId);
         const pendingApproval: PendingStageApproval = { requestId: reviewId, workerRequestId: null, stage: 'Resume review',
           nodeKey: resumeState.cursor, attemptId: resumeState.attemptId ?? '', itemId: resumeState.currentItemId, item: null,
           toolId: 'action_recovery', action: 'replay_pipeline', toolName: 'resume_pipeline', subject: summary, reason: 'Review possible repeated effects before resuming', fingerprint: null, hostServices: false };
@@ -3123,6 +3130,13 @@ export class PipelineManager {
         return { output: '', raw: '', stopped: await this.pauseForCoordinator(pipeline, node, `Stage ran commands/actions whose outcomes are uncertain. Inspect and resolve recovery records before retrying: ${uncertainIds.join(', ')}. Stage report: ${stageReport.slice(-2000)}`, attemptId, itemId, 'Inspect uncertain actions and their external effects, resolve the named records through resolve_tool_action, then resume the saved stage.') };
       }
       const handoff = parseStructuredHandoff(String(result));
+      const policyRepair = stagePolicyRepairReason(handoff, counters);
+      if (policyRepair) {
+        await this.updateNode(node.id, { output: stripPipelineControlBlocks(stageReport) });
+        return { output: '', raw: '', stopped: await this.pauseForCoordinator(pipeline, node,
+          `Policy enforcement requires repair: ${policyRepair}`, attemptId, itemId,
+          'Inspect the refused command and its effective permission or flow-consent binding. Apply an existing concrete approval when available; if consent is missing, request approval for the actual tool call and persist its scope. Do not redispatch unchanged work or ask the same generic user-decision question. Resume only after the required command is authorized.') };
+      }
       if (handoff?.deferredUntil && Date.parse(handoff.deferredUntil) > Date.now()) {
         const current = await this.getPipeline(pipeline.id);
         const summary = `Item ${itemId ?? '(stage)'} deferred until ${handoff.deferredUntil}: ${handoff.deferredReason}`;
@@ -3471,7 +3485,7 @@ export class PipelineManager {
     const current = await this.getPipeline(pipeline.id);
     const { pendingApproval: _answered, ...metadata } = (current?.metadata ?? {}) as Record<string, unknown>;
     if (approved && current?.status === 'awaiting_approval') {
-      const call = asked ? approvedCallOf({ toolId: asked.toolId, toolName, action: asked.action, args: toolArgs }, { nodeKey: node.nodeKey, attemptId, hostServices }, pendingApproval.flowConsent) : undefined;
+      const call = asked && asked.toolId !== 'action_recovery' ? approvedCallOf({ toolId: asked.toolId, toolName, action: asked.action, args: toolArgs }, { nodeKey: node.nodeKey, attemptId, hostServices }, pendingApproval.flowConsent) : undefined;
       await this.updatePipeline(pipeline.id, { status: 'running', summary: `Approval granted at "${node.name}"; continuing the stage.`, metadata: call ? withApprovedCalls(metadata, [call]) : metadata });
       // Same attempt, same `resumeKey`: a resumable CLI continues the conversation
       // it stopped in (#20); a cold one gets what it had said so far.

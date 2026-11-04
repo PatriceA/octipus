@@ -289,6 +289,7 @@ export const AuthMessageSchema = z.object({
 export const FileRefSchema = z.object({
   path: z.string().min(1).max(4096),
   version: z.string().max(128).optional(),
+  protectionLevel: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]).optional(),
 });
 
 /**
@@ -326,6 +327,7 @@ export const ChatSendSchema = z.object({
     name: z.string().min(1).max(255),
     mimeType: z.string().min(1).max(128),
     data: z.string().min(1).max(CHAT_INLINE_ATTACHMENT_MAX_CHARS),
+    protectionLevel: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]).optional(),
   })).max(10).optional(),
   /** Session files to inline (current version) into this turn's context. */
   fileRefs: z.array(FileRefSchema).max(10).optional(),

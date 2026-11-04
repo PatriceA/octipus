@@ -1,4 +1,4 @@
-import { matchingVerificationCommand, rewriteVerificationCommand } from './verification-command';
+import { implicitVerificationCommand, matchingVerificationCommand, rewriteVerificationCommand } from './verification-command';
 import type { ApprovalFlowConsent } from '@/shared/pipeline-approval';
 import type { AgentContext } from '@/core/types';
 import { resolveShellCwd } from './shell-cwd';
@@ -24,7 +24,7 @@ export function profileAllows(profile: PipelinePermissionProfile, call: SpaceToo
   if (![profile.repoPath, ...profile.repoPaths].some(repo => cwd === resolve(repo)) || matchDestructiveCommand(command)) return false;
   if (profile.commands.includes(command)) return true;
   const verification = matchingVerificationCommand(profile.commands, command);
-  if (verification && (!rewriteVerificationCommand(verification, command) || call.toolId === 'shell' && ['run', 'run_background'].includes(call.toolName ?? ''))) return true;
+  if (verification && (!implicitVerificationCommand(command) || call.toolId === 'shell' && ['run', 'run_background'].includes(call.toolName ?? ''))) return true;
   if (/[;&|`$\n<>\\]/.test(command.replace(/'[^']*'|"[^"]*"/g, '')) || /[$`]/.test(command)) return false;
   const words = command.match(/"[^"]*"|'[^']*'|[^\s]+/g)?.map(word => word.replace(/^(['"])(.*)\1$/, '$2')) ?? [];
   if (words.some(word => /^(?:-C|--(?:prefix|cwd|dir|directory|project-directory|env-file|file)(?:=|$))/.test(word))) return false;

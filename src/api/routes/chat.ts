@@ -258,6 +258,7 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
         fileRefs: t.Optional(t.Array(t.Object({
           path: t.String(),
           version: t.Optional(t.String()),
+          protectionLevel: t.Optional(t.Union([t.Literal(1), t.Literal(2), t.Literal(3), t.Literal(4)])),
         }), { maxItems: 10 })),
         // Chat/work split (Thread 3): force the deliverable mode for this message.
         outputMode: t.Optional(t.Union([t.Literal('inline'), t.Literal('file')])),

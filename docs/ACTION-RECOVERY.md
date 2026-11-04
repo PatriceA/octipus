@@ -2,7 +2,7 @@
 
 Octipus records mutating tool calls before executing them. If a call's outcome
 cannot be established, later mutations in the same user/session require a
-separate recovery approval. This protects against silently repeating an action
+recovery acknowledgement. By default a person approves it; a user can enable automatic recovery for their personal runs. This protects against silently repeating an action
 that may already have happened.
 
 For example, a tool sends a message and its connection then fails. Octipus must
@@ -25,12 +25,31 @@ should skip.
   command would only inspect something.
 - Normal permission denials still apply. Recovery approval cannot grant a tool
   permission revoked while the prompt was open.
-- Unattended work cannot approve its own recovery. It reports that review is
-  required.
+- Without an explicit automatic-recovery preference, unattended work cannot approve its own recovery. It reports that review is required.
 
-The review covers specific records, in batches of up to 20. An action that
+The review covers its entire captured snapshot; only the first 20 records are displayed in the preview. An action that
 becomes uncertain while the user is deciding needs its own review. Recovery
 approval does not become a permanent tool permission.
+
+## Automatic recovery
+
+Enable **Settings → Security → Automatically approve recovery** to continue
+personal runs without repeated uncertain-outcome or pipeline-replay prompts.
+This preference belongs to the signed-in account; shared spaces and remote or
+federated turns keep requiring review. Normal command permissions and retry
+limits still apply. An active pipeline action cannot be approved over while it
+is still running. Earlier effects may happen again when work is resumed.
+
+Automatic acknowledgements retain the original outcome and record an
+`automatic-recovery:` review ID plus an audit event identifying the account's
+policy and reviewed snapshot. Turning the setting off affects subsequent
+recovery checks and does not rewrite earlier decisions.
+
+Explicit recovery approvals commit their journal acknowledgements in the same
+transaction as the approval, even if a pipeline coordinator reissued a stopped
+worker's request. The request stores the captured record IDs. On recovery,
+approved historical prompts can reconcile their named records without asking
+again; no successful/failed outcome is inferred from that consent.
 
 ## MCP server recovery declarations
 
@@ -68,6 +87,13 @@ Older runs and vendor-native CLI tools may have no action journal records.
 Missing records do not establish that no action happened: the replay prompt
 explicitly warns about that uncertainty. A pipeline paused before any stage
 ran does not need this replay review.
+
+A manual replay approval is bound to the checkpoint, its unchanged state, the
+current history head and the fresh/continue mode. If the process stops before
+the resume writes its first checkpoint, that unconsumed approval can be reused
+for the identical proposal. Saving the first new checkpoint consumes the receipt
+in the same transaction. Later deliberate replays or changed checkpoints require
+fresh consent unless the account enabled automatic recovery.
 
 Rejecting a replay preserves the checkpoints. Concurrent resume requests
 cannot start a second walker while the first request is awaiting review.

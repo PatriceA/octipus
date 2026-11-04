@@ -1,3 +1,5 @@
+import type { PipelineReplayReceipt } from '@/shared/pipeline-replay';
+import { permissionRequests } from '../schema/permissions';
 import { assertNoCredentialTemplates } from '@/security/credential-boundary';
 import type { PendingStageApproval } from '@/shared/pipeline-approval';
 import { sessions } from '../schema/sessions';
@@ -331,8 +333,22 @@ export class PipelineRepository {
    * further back than the window is not offered; upgrade path if it is ever
    * wanted: store the chain by reference instead of by value.
    */
-  async saveCheckpoint(row: NewPipelineCheckpoint): Promise<PipelineCheckpointRow> {
-    const [saved] = await this.db.insert(pipelineCheckpoints).values(row).returning();
+  async saveCheckpoint(row: NewPipelineCheckpoint, receipt?: PipelineReplayReceipt): Promise<PipelineCheckpointRow> {
+    const saved = await this.db.transaction(async tx => {
+      const [checkpoint] = await tx.insert(pipelineCheckpoints).values(row).returning();
+      if (receipt) {
+        if (receipt.scope.pipelineId !== row.pipelineId) throw new Error('Replay approval belongs to another pipeline');
+        const consumed = await tx.update(permissionRequests).set({ context: sql`jsonb_set(${permissionRequests.context}, '{toolArguments,replayConsumedByCheckpoint}', ${JSON.stringify(checkpoint.seq)}::jsonb)` })
+          .where(and(eq(permissionRequests.id, receipt.requestId), eq(permissionRequests.userId, receipt.userId),
+            eq(permissionRequests.sessionId, receipt.sessionId),
+            sql`${permissionRequests.workspaceId} IS NOT DISTINCT FROM ${receipt.workspaceId}::uuid`,
+            eq(permissionRequests.toolId, 'action_recovery'), eq(permissionRequests.action, 'replay_pipeline'), eq(permissionRequests.status, 'approved'),
+            sql`${permissionRequests.context}->'toolArguments'->'replayScope' = ${JSON.stringify(receipt.scope)}::jsonb`,
+            sql`${permissionRequests.context}->'toolArguments'->>'replayConsumedByCheckpoint' IS NULL`)).returning({ id: permissionRequests.id });
+        if (!consumed.length) throw new Error('Replay approval is no longer available; no stage was started');
+      }
+      return checkpoint;
+    });
     // Pruned by COUNT, not by seq arithmetic: `seq` is global, so "newest minus
     // fifty" would mean "fifty rows written anywhere", which deletes a quiet
     // pipeline's whole history the moment a busy one runs alongside it.

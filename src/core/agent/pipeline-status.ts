@@ -2,6 +2,42 @@ import type { Pipeline, PipelineNodeRow, PlanItemRow } from '@/db/schema/pipelin
 import type { RunEventRecord } from '@/db/schema/run-events';
 import { stripPipelineControlBlocks } from './handoff';
 
+interface DeniedRequest { toolId?: string; action?: string; command?: string; reason?: string; at?: string }
+
+function denialRecords(pipeline: Pick<Pipeline, 'metadata'>): DeniedRequest[] {
+  return Array.isArray(pipeline.metadata?.deniedRequests) ? pipeline.metadata.deniedRequests as DeniedRequest[] : [];
+}
+
+/** Past denials are not a current permission check after an approval repair. */
+export function pipelineDenialHistory(pipeline: Pick<Pipeline, 'metadata'>) {
+  const records = denialRecords(pipeline);
+  const repair = pipeline.metadata?.policyRepair as { resolvedAt?: string } | undefined;
+  const repairAt = repair?.resolvedAt && Number.isFinite(Date.parse(repair.resolvedAt)) ? repair.resolvedAt : null;
+  const dated = records.filter(row => row.at && Number.isFinite(Date.parse(row.at)));
+  return {
+    total: records.length,
+    recordedCallGrantCount: Array.isArray(pipeline.metadata?.approvedCalls) ? pipeline.metadata.approvedCalls.length : 0,
+    lastDeniedAt: dated.length ? dated.reduce((last, row) => Date.parse(row.at!) > Date.parse(last.at!) ? row : last).at : null,
+    lastRecordedRepairAt: repairAt,
+    denialsSinceRecordedRepair: repairAt ? dated.filter(row => Date.parse(row.at!) > Date.parse(repairAt)).length : null,
+    undatedDenialCount: records.length - dated.length,
+    note: 'Historical dispatch outcomes, not current permission checks. Check the current summary, coordinator request, repair record and effective grants before retrying or requesting consent.',
+  };
+}
+
+/** A resumed execution reports only requests newly denied during that execution. */
+export function pipelineNewDenialSummary(pipeline: Pick<Pipeline, 'metadata' | 'status'>, previousCount: number): { body: string; newCount: number; totalCount: number } | undefined {
+  const records = denialRecords(pipeline);
+  const added = records.slice(previousCount);
+  if (!added.length) return undefined;
+  return {
+    newCount: added.length, totalCount: records.length,
+    body: `This execution recorded ${added.length} new denied requests. Pipeline status: ${pipeline.status}. Historical total: ${records.length}.\n`
+      + 'These are past outcomes, not a fresh permission check; later repairs may have changed authorization.\n'
+      + added.slice(-50).map(row => `- ${row.at ?? 'time not recorded'} — ${row.toolId}.${row.action}: ${row.command?.slice(0, 300) ?? row.reason}`).join('\n'),
+  };
+}
+
 /** Live state takes precedence over a summary left by an earlier transition. */
 export function pipelineSummary(pipeline: Pipeline, nodes: PipelineNodeRow[], items: PlanItemRow[]): string {
   const node = nodes.find(n => n.nodeKey === pipeline.currentNodeKey);

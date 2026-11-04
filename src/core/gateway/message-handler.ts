@@ -415,7 +415,9 @@ async function handleChatSend(
       const session = await sessionRepository.findById(message.sessionId);
       if (!session || !(await canActInSession(session, userId, 'chat'))) throw new Error('Session not found');
       const uploaded = await storeChatUploads(WorkspaceFS.forSession(session, await sessionFsAccess(session, userId)), message.attachments.map(decodeChatAttachment));
-      message.fileRefs = [...(message.fileRefs ?? []), ...uploaded.map(file => ({ path: file.path }))];
+      message.fileRefs = [...(message.fileRefs ?? []), ...uploaded.map((file, index) => ({ path: file.path,
+        ...(message.attachments![index].protectionLevel !== undefined ? { protectionLevel: message.attachments![index].protectionLevel } : {}),
+      }))];
       message.content += '\n\n' + uploaded.map(file => `Attached file: ${file.path}`).join('\n');
     }
 

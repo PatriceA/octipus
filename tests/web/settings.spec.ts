@@ -72,3 +72,63 @@ test('root and child swarm budgets have distinct labels and root tokens save to 
   await page.getByRole('button', { name: 'Configuration', exact: true }).click();
   await expect(page.getByRole('spinbutton', { name: 'root.tokens', exact: true })).toHaveValue('20000000');
 });
+
+test('CLI tools can be discovered, approved, reloaded, removed and added by path', async ({ authenticatedPage: page }) => {
+  const tool = { name: 'oc', path: '/home/you/.local/bin/oc', resolvedPath: '/home/you/tools/oc' };
+  let approved: Array<typeof tool & { available: boolean }> = [];
+  const writes: unknown[] = [];
+  await page.route('**/api/settings/cli-tools', route => json(route, 200, { approved, discovered: [tool] }));
+  await page.route('**/api/settings/cli-tools/*', route => {
+    if (route.request().method() === 'PUT') {
+      writes.push(route.request().postDataJSON());
+      approved = [{ ...tool, available: true }];
+    } else approved = [];
+    return json(route, 200, { success: true });
+  });
+  await page.goto('/settings?tab=cli-tools');
+  await expect(page.getByRole('heading', { name: 'CLI tools', exact: true })).toBeVisible();
+  await page.getByRole('textbox', { name: 'Search installed commands' }).fill('oc');
+  await expect(page.getByText('Points to /home/you/tools/oc')).toBeVisible();
+  await page.getByRole('button', { name: 'Approve', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Remove', exact: true })).toBeVisible();
+  await expect.poll(() => writes).toEqual([{ path: tool.path }]);
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Remove', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Remove', exact: true }).click();
+  await expect(page.getByText('No additional tools approved yet.')).toBeVisible();
+  await page.getByLabel('Add by executable path').fill(tool.path);
+  await page.getByRole('button', { name: 'Approve path', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Remove', exact: true })).toBeVisible();
+  await expect.poll(() => writes.length).toBe(2);
+});
+
+test('CLI tools offer existing kubeconfig selection and removal without exposing credentials', async ({ authenticatedPage: page }) => {
+  const candidate = { path: '/home/you/.kube/config', context: 'your-cluster-context' };
+  let selected: typeof candidate | null = null;
+  const writes: unknown[] = [];
+  await page.route('**/api/settings/cli-tools', route => json(route, 200, { approved: [], discovered: [], kubeconfig: selected, kubeconfigCandidates: [candidate] }));
+  await page.route('**/api/settings/cli-tools-kubeconfig', route => {
+    const body = route.request().postDataJSON(); writes.push(body);
+    selected = body.path ? candidate : null;
+    return json(route, 200, { success: true });
+  });
+  await page.goto('/settings?tab=cli-tools');
+  await page.getByRole('button', { name: 'Use this kubeconfig', exact: true }).click();
+  await expect(page.getByText('Selected: /home/you/.kube/config')).toBeVisible();
+  await expect.poll(() => writes).toEqual([{ path: candidate.path }]);
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Remove kubeconfig access' })).toBeVisible();
+  await page.getByRole('button', { name: 'Remove kubeconfig access' }).click();
+  await expect(page.getByRole('button', { name: 'Use this kubeconfig', exact: true })).toBeVisible();
+  await expect.poll(() => writes).toEqual([{ path: candidate.path }, { path: null }]);
+});
+
+test('automatic recovery is a persistent personal setting',async({authenticatedPage:page})=>{
+ let enabled=false;const writes:unknown[]=[];
+ await page.route('**/api/auth/me',route=>json(route,200,{id:'e2e-user-id',username:'e2etest',isAdmin:true,totpEnabled:false,preferences:{autoApproveRecovery:enabled}}));
+ await page.route('**/api/auth/recovery-policy',route=>{const body=route.request().postDataJSON();writes.push(body);enabled=body.autoApproveRecovery;return json(route,200,{autoApproveRecovery:enabled});});
+ await page.goto('/settings?tab=security');const toggle=page.getByRole('switch',{name:'Automatically approve recovery'});
+ await expect(toggle).not.toBeChecked();await toggle.check();await expect(toggle).toBeChecked();
+ await expect.poll(()=>writes).toEqual([{autoApproveRecovery:true}]);await page.reload();await expect(toggle).toBeChecked();
+ await toggle.uncheck();await expect(toggle).not.toBeChecked();await expect.poll(()=>writes).toEqual([{autoApproveRecovery:true},{autoApproveRecovery:false}]);
+});

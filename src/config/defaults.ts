@@ -39,6 +39,8 @@ export const defaultConfig: Partial<Config> = {
     passkeyOrigin: 'http://localhost:3000',
     shellSandbox: 'off',
     shellSshAgent: false,
+    cliRuntimes: [],
+    cliKubeconfigs: [],
     vaultDenyUnscopedSecrets: false,
     dockerIsolation: 'off',
     trustedProxies: [],

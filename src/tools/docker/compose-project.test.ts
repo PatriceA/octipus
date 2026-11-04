@@ -62,3 +62,45 @@ test('an explicitly approved host bind can lie outside the repository', async ()
   run.mockImplementation(async args => ({ stdout: args.includes('config') ? JSON.stringify({ name: 'demo', services: { web: { image: 'nginx', volumes: [{ type: 'bind', source: host, target: '/data' }] } } }) : '', stderr: '', exitCode: 0 }));
   expect(await tool.composeProject({ cwd, project: 'demo', operation: 'up', approvedBindPaths: [host] }, context)).toMatchObject({ executed: true, exitCode: 0 });
 });
+
+test('approved existing project can be claimed for status and cleanup after repository labels match', async () => {
+  const { claimDockerProject } = await import('@/db/repositories/docker-project-repository');
+  const { cwd, tool, run, context } = fixture();
+  run.mockImplementation(async args => ({ stdout: args.includes('inspect') ? cwd : args[2] === 'ps' ? 'existing-container' : args.includes('config') ? '{"name":"demo","services":{}}' : '', stderr: '', exitCode: 0 }));
+  expect(await tool.composeProject({ cwd, project: 'demo', operation: 'status' }, context)).toMatchObject({ executed: true });
+  expect(claimDockerProject).toHaveBeenLastCalledWith(expect.stringContaining(':demo'), cwd, context, true, true, true);
+});
+
+test('rebuild and recreate selected services using repository env configuration without returning its contents', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { cwd, tool, run, calls, context } = fixture();
+  writeFileSync(join(cwd, 'compose.yaml'), 'services:\n  app:\n    build: .\n    env_file: .env');
+  writeFileSync(join(cwd, 'Dockerfile'), 'FROM scratch');
+  writeFileSync(join(cwd, '.env'), 'MCP_STORE_KEY=canary-no-output');
+  let consumedEnvironment = false;
+  run.mockImplementation(async args => {
+    calls.push(args);
+    if (args.includes('config')) {
+      consumedEnvironment = args[args.indexOf('--env-file') + 1] === join(cwd, '.env');
+      return { stdout: JSON.stringify({ name: 'demo', services: { app: { build: { context: cwd }, environment: { MCP_STORE_KEY: 'canary-no-output' } } } }), stderr: '', exitCode: 0 };
+    }
+    if (args.includes('up')) {
+      const snapshot = JSON.parse(readFileSync(args[args.indexOf('-f') + 1], 'utf8'));
+      expect(snapshot.services.app.environment.MCP_STORE_KEY).toBe('canary-no-output');
+      expect(args[args.indexOf('--env-file') + 1]).toBe('/dev/null');
+    }
+    return { stdout: '', stderr: '', exitCode: 0 };
+  });
+  const result = await tool.composeProject({ cwd, project: 'demo', operation: 'up', build: true, forceRecreate: true, services: ['app'] }, context);
+  expect(consumedEnvironment).toBe(true);
+  expect(calls.find(args => args.includes('up'))).toEqual(expect.arrayContaining(['--build', '--force-recreate', 'app']));
+  expect(JSON.stringify(result)).not.toContain('canary-no-output');
+});
+
+test('a build context outside the repository and a service-scoped down never reach execution', async () => {
+  const { cwd, tool, calls, context } = fixture();
+  await expect(tool.composeProject({ cwd, project: 'demo', operation: 'down', services: ['app'] }, context)).rejects.toThrow('whole named project');
+  writeFileSync(join(cwd, 'compose.yaml'), 'services:\n  app:\n    build: /outside');
+  await expect(tool.composeProject({ cwd, project: 'demo', operation: 'up', build: true }, context)).rejects.toThrow('inside the approved repository');
+  expect(calls).toHaveLength(0);
+});

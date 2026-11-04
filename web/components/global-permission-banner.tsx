@@ -176,6 +176,7 @@ function PermissionBanner({
     </div>
   );
   const isRecovery = permission.skillId === 'action_recovery';
+  const isPipelineResume = isRecovery && permission.action === 'replay_pipeline';
   const argsEntries = permission.args
     ? Object.entries(permission.args).filter(([, v]) => v != null && String(v).length > 0)
     : [];
@@ -190,7 +191,7 @@ function PermissionBanner({
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <span className="text-[12px] font-bold uppercase tracking-[0.12em] text-warning">{isRecovery ? 'Review uncertain outcome' : 'permission request'}</span>
+              <span className="text-[12px] font-bold uppercase tracking-[0.12em] text-warning">{isPipelineResume ? 'Resume pipeline' : isRecovery ? 'Review uncertain outcome' : 'permission request'}</span>
               {totalCount > 1 && (
                 <span className="text-[10px] text-on-surface-variant bg-surface-container-highest border border-outline-variant/60 px-1.5 py-0.5 rounded-xs">
                   +{totalCount - 1} more
@@ -200,7 +201,7 @@ function PermissionBanner({
             <p className="text-sm text-on-surface-variant truncate">
               <span className="font-mono font-medium">{permission.skillId}</span>
               {' \u00B7 '}
-              <span className="font-mono">{isRecovery ? 'Check earlier effects before continuing' : permission.action}</span>
+              <span className="font-mono">{isPipelineResume ? 'Includes replay permission for all earlier actions' : isRecovery ? 'Check earlier effects before continuing' : permission.action}</span>
             </p>
           </div>
         </div>
@@ -219,7 +220,7 @@ function PermissionBanner({
             onClick={() => onAllow()}
             className="flex items-center gap-1 px-3 py-1.5 text-[13px] font-semibold bg-primary text-on-primary rounded-xs hover:bg-primary-dim transition-colors cursor-pointer"
           >
-            <CheckCircle className="w-4 h-4" /> Allow
+            <CheckCircle className="w-4 h-4" /> {isPipelineResume ? 'Approve resume' : 'Allow'}
           </button>
           <button
             onClick={onDeny}

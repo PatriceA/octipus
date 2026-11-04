@@ -1,3 +1,5 @@
+import { discoverCliKubeconfigs, inspectCliKubeconfig, type CliKubeconfig } from '@/security/cli-kubeconfig';
+import { discoverCliRuntimes, inspectCliRuntime, type CliRuntime } from '@/security/cli-runtimes';
 import { Elysia, t } from '@/api/http';
 import { existsSync, statSync } from 'fs';
 import { resolve } from 'path';
@@ -24,6 +26,50 @@ const MODULES_ELSEWHERE = 'Modules are switched in Settings → Modules (PUT /ap
 
 export const settingsRoutes = new Elysia({ prefix: '/settings' })
   .use(apiContext)
+
+  .get('/cli-tools', async ({ user, set }) => {
+    if (!user?.isAdmin) { set.status = 403; return { error: 'Admin access required' }; }
+    const approved = (await getSettingsService().get('security.cliRuntimes') ?? []) as CliRuntime[];
+    const tools = approved.map(tool => {
+      try {
+        const current = inspectCliRuntime(tool.path);
+        return { ...tool, available: current.name === tool.name && current.resolvedPath === tool.resolvedPath };
+      } catch { return { ...tool, available: false }; }
+    });
+    const identities = (await getSettingsService().get('security.cliKubeconfigs') ?? []) as CliKubeconfig[];
+    const own = identities.find(entry => entry.userId === user.id);
+    return { approved: tools, discovered: discoverCliRuntimes(), kubeconfig: own ? { path: own.path, context: own.context } : null, kubeconfigCandidates: discoverCliKubeconfigs() };
+  })
+  .put('/cli-tools-kubeconfig', async ({ user, body, set }) => {
+    if (!user?.isAdmin) { set.status = 403; return { error: 'Admin access required' }; }
+    try {
+      const selected = body.path === null ? null : inspectCliKubeconfig(body.path);
+      await getSettingsService().update('security.cliKubeconfigs', current => {
+        const entries = ((current ?? []) as CliKubeconfig[]).filter(entry => entry.userId !== user.id);
+        return selected ? [...entries, { ...selected, userId: user.id }] : entries;
+      }, user.id);
+      await auditRepository.log({ userId: user.id, action: 'settings_changed', resourceType: 'setting', resourceId: 'security.cliKubeconfigs', details: { operation: selected ? 'approve' : 'remove', path: selected?.path, context: selected?.context } });
+      return { success: true, kubeconfig: selected ? { path: selected.path, context: selected.context } : null };
+    } catch { set.status = 400; return { error: 'Could not select kubeconfig. Choose a readable, complete kubeconfig with embedded credentials and certificate data.' }; }
+  }, { body: t.Object({ path: t.Union([t.String(), t.Null()]) }) })
+  .put('/cli-tools/:name', async ({ user, params, body, set }) => {
+    if (!user?.isAdmin) { set.status = 403; return { error: 'Admin access required' }; }
+    try {
+      const tool = inspectCliRuntime(body.path);
+      if (tool.name !== params.name) throw new Error('Command name must match the executable filename.');
+      const svc = getSettingsService();
+      await svc.update('security.cliRuntimes', current => [...((current ?? []) as CliRuntime[]).filter(entry => entry.name !== tool.name), tool], user.id);
+      await auditRepository.log({ userId: user.id, action: 'settings_changed', resourceType: 'setting', resourceId: 'security.cliRuntimes', details: { operation: 'approve', tool } });
+      return { success: true, tool };
+    } catch (error) { set.status = 400; return { error: error instanceof Error ? error.message : 'Could not approve executable' }; }
+  }, { body: t.Object({ path: t.String() }) })
+  .delete('/cli-tools/:name', async ({ user, params, set }) => {
+    if (!user?.isAdmin) { set.status = 403; return { error: 'Admin access required' }; }
+    const svc = getSettingsService();
+    await svc.update('security.cliRuntimes', current => ((current ?? []) as CliRuntime[]).filter(entry => entry.name !== params.name), user.id);
+    await auditRepository.log({ userId: user.id, action: 'settings_changed', resourceType: 'setting', resourceId: 'security.cliRuntimes', details: { operation: 'remove', name: params.name } });
+    return { success: true };
+  })
 
   // List all settings grouped by category (secrets masked)
   .get(

@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
     isActive: true,
     totpEnabled: false,
   },
+  authenticated: null as {id:string}|null,
+  setAutomaticRecovery: vi.fn(),
   findByUsername: vi.fn(),
   verifyPassword: vi.fn(),
   createSession: vi.fn(),
@@ -19,6 +21,8 @@ const mocks = vi.hoisted(() => ({
   auditLog: vi.fn(),
 }));
 
+vi.mock('@/api/context', async () => ({ apiContext: new (await import('@/api/http')).Elysia().derive(() => ({ user: mocks.authenticated })) }));
+
 vi.mock('@/db/repositories/audit-repository', () => ({
   auditRepository: { log: mocks.auditLog },
 }));
@@ -26,6 +30,7 @@ vi.mock('@/db/repositories/audit-repository', () => ({
 vi.mock('@/db/repositories/user-repository', () => ({
   userRepository: {
     findByUsername: mocks.findByUsername,
+    setAutomaticRecovery: mocks.setAutomaticRecovery,
   },
 }));
 
@@ -71,6 +76,7 @@ async function login(path: '/auth/login' | '/auth/login-mobile', body: Record<st
 describe('authentication login contracts', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.authenticated = null;
     mocks.user.totpEnabled = false;
     mocks.findByUsername.mockResolvedValue(mocks.user);
     mocks.verifyPassword.mockResolvedValue(true);
@@ -158,4 +164,18 @@ describe('authentication login contracts', () => {
       }));
     },
   );
+});
+
+describe('personal automatic recovery preference',()=>{
+ beforeEach(()=>{vi.clearAllMocks();mocks.authenticated=null;mocks.auditLog.mockResolvedValue(undefined);});
+ const update=(enabled:boolean)=>app.handle(new Request('http://localhost/auth/recovery-policy',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({autoApproveRecovery:enabled})}));
+ test('requires authentication and only updates the authenticated account',async()=>{
+  expect((await update(true)).status).toBe(401);expect(mocks.setAutomaticRecovery).not.toHaveBeenCalled();
+  mocks.authenticated={id:'user-1'};mocks.setAutomaticRecovery.mockResolvedValue({id:'user-1',preferences:{autoApproveRecovery:true}});
+  const result=await update(true);expect(result.status).toBe(200);expect(await result.json()).toEqual({autoApproveRecovery:true});expect(mocks.setAutomaticRecovery).toHaveBeenCalledWith('user-1',true);
+ });
+ test('an audit failure does not misreport a durably saved preference as rejected',async()=>{
+  mocks.authenticated={id:'user-1'};mocks.setAutomaticRecovery.mockResolvedValue({id:'user-1',preferences:{autoApproveRecovery:false}});mocks.auditLog.mockRejectedValue(new Error('audit unavailable'));
+  const result=await update(false);expect(result.status).toBe(200);expect(await result.json()).toEqual({autoApproveRecovery:false});
+ });
 });

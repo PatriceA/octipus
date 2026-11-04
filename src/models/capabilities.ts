@@ -168,8 +168,8 @@ export const PROVIDER_CAPABILITY_DEFAULTS: Record<string, ModelCapabilities> = {
  *  3. DB boolean flags (`supportsTools`, `supportsVision`, `supportsStreaming`)
  *     applied on top of whichever base was chosen above
  *
- * The DB flags exist for legacy/compatibility but are treated as refinements,
- * not as user-settable preferences.  The API strips them from user updates.
+ * The DB flags are model-specific refinements. Administrators can correct
+ * discovery/provider defaults through the model editor.
  */
 export function getCapabilitiesForModel(model: ModelConfigEntry): ModelCapabilities {
   // Start from provider defaults (or a safe all-false baseline for unknown providers)

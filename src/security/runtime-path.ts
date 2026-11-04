@@ -1,6 +1,23 @@
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { delimiter, join, isAbsolute, relative } from 'node:path';
+
+/** Installed Android toolchains only; never the adjacent .android credentials. */
+export function androidSdkPaths(): string[] {
+  const defaultSdk = process.platform === 'darwin' ? join(homedir(), 'Library/Android/sdk')
+    : process.platform === 'win32' ? join(process.env.LOCALAPPDATA || join(homedir(), 'AppData/Local'), 'Android/Sdk')
+    : join(homedir(), 'Android/Sdk');
+  return [...new Set([process.env.ANDROID_HOME, process.env.ANDROID_SDK_ROOT, defaultSdk]
+    .filter((path): path is string => !!path && isAbsolute(path)))].filter(path => {
+      try {
+        const root = realpathSync(path);
+        // An invalid environment setting must not expose the user's home or /.
+        const homeRelative = relative(root, homedir());
+        if (homeRelative === '' || !homeRelative.startsWith('..') && !isAbsolute(homeRelative)) return false;
+        return ['platforms', 'build-tools'].every(directory => statSync(join(root, directory)).isDirectory());
+      } catch { return false; }
+    });
+}
 
 /** Preserve the host PATH and expose supported user-installed toolchains. */
 export function runtimePath(path = process.env.PATH ?? ''): string {

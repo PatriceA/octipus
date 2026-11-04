@@ -1,5 +1,6 @@
+import { approvedCliRuntimes } from './cli-runtimes';
 import type { ShellSshAgent } from './shell-ssh-agent';
-import { browserRuntimeMounts, browserRuntimePaths, runtimePath } from './runtime-path';
+import { androidSdkPaths, browserRuntimeMounts, browserRuntimePaths, runtimePath } from './runtime-path';
 /**
  * Shell sandbox — Phase 3e multi-user.
  *
@@ -137,8 +138,10 @@ export function getSandboxMode(): SandboxMode {
  * /tmp scratch, no network unless asked.
  */
 function buildBwrapArgs(binary: string, options: WrapOptions, scratch: string): string[] {
+  const androidSdk = androidSdkPaths()[0];
   const projectBin = join(options.workspaceRoot, '.venv', 'bin');
-  const commandPath = [existsSync(projectBin) ? projectBin : '', runtimePath(options.path)].filter(Boolean).join(':');
+  const cliTools = approvedCliRuntimes();
+  const commandPath = [cliTools.length ? '/tmp/octipus-cli-bin' : '', existsSync(projectBin) ? projectBin : '', runtimePath(options.path)].filter(Boolean).join(':');
   const args: string[] = [
     binary,
     // New mount namespace + tmp root.
@@ -173,6 +176,7 @@ function buildBwrapArgs(binary: string, options: WrapOptions, scratch: string): 
     '--ro-bind-try', join(homedir(), 'go/bin'), join(homedir(), 'go/bin'),
     '--setenv', 'PATH', commandPath,
     '--setenv', 'PLAYWRIGHT_BROWSERS_PATH', process.env.PLAYWRIGHT_BROWSERS_PATH ?? browserRuntimePaths()[0],
+    ...(androidSdk ? ['--setenv', 'ANDROID_HOME', androidSdk, '--setenv', 'ANDROID_SDK_ROOT', androidSdk] : []),
     // Per-spawn scratch (the legacy /tmp/assistant- prefix lives here).
     // Bound BEFORE the workspace so that workspaces under /tmp aren't
     // shadowed by this overlay — order matters in bwrap.
@@ -190,6 +194,9 @@ function buildBwrapArgs(binary: string, options: WrapOptions, scratch: string): 
   }
   for (const p of options.extraReadWrite ?? []) {
     args.push('--bind-try', p, p);
+  }
+  for (const tool of cliTools) {
+    args.push('--ro-bind', tool.resolvedPath, `/tmp/octipus-cli-bin/${tool.name}`);
   }
   if (options.sshAgent) {
     // Some hosts expose root-owned SSH include files as unmapped users inside
@@ -211,6 +218,8 @@ function buildBwrapArgs(binary: string, options: WrapOptions, scratch: string): 
  * blacklist most of the FS and whitelist only the workspace.
  */
 function buildFirejailArgs(binary: string, options: WrapOptions): string[] {
+  const androidSdk = androidSdkPaths()[0];
+  const cliTools = approvedCliRuntimes();
   const args: string[] = [
     binary,
     '--quiet',
@@ -229,7 +238,12 @@ function buildFirejailArgs(binary: string, options: WrapOptions): string[] {
   for (const p of [...runtimeDirs, ...(options.extraReadOnly ?? [])].filter(path => existsSync(path))) {
     args.push(`--whitelist=${p}`, `--read-only=${p}`);
   }
-  args.push(`--env=PATH=${runtimePath(options.path)}`, `--env=PLAYWRIGHT_BROWSERS_PATH=${process.env.PLAYWRIGHT_BROWSERS_PATH ?? browserRuntimePaths()[0]}`);
+  for (const tool of cliTools) {
+    for (const path of new Set([tool.path, tool.resolvedPath])) args.push(`--whitelist=${path}`, `--read-only=${path}`);
+  }
+  const cliPath = [...new Set(cliTools.map(tool => tool.path.slice(0, tool.path.lastIndexOf('/'))))];
+  args.push(`--env=PATH=${[...cliPath, runtimePath(options.path)].join(':')}`, `--env=PLAYWRIGHT_BROWSERS_PATH=${process.env.PLAYWRIGHT_BROWSERS_PATH ?? browserRuntimePaths()[0]}`);
+  if (androidSdk) args.push(`--env=ANDROID_HOME=${androidSdk}`, `--env=ANDROID_SDK_ROOT=${androidSdk}`);
   for (const p of options.extraReadWrite ?? []) {
     args.push(`--whitelist=${p}`);
   }
@@ -255,7 +269,7 @@ function buildFirejailArgs(binary: string, options: WrapOptions): string[] {
  * failure).
  */
 export function wrapCommand(argv: string[], options: WrapOptions): WrapResult {
-  options = { ...options, extraReadOnly: [...new Set([...(options.extraReadOnly ?? []), ...browserRuntimeMounts()])] };
+  options = { ...options, extraReadOnly: [...new Set([...(options.extraReadOnly ?? []), ...browserRuntimeMounts(), ...androidSdkPaths()])] };
   const mode = getSandboxMode();
   if (mode === 'off') {
     return { wrapped: false, runner: null, argv, cleanup: () => {} };

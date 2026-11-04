@@ -1,5 +1,14 @@
 import { expect, test } from 'vitest';
-import { stageEnvironmentReason, stageHostServices, coordinatorCriterion, coordinatorCriterionSatisfied } from './pipeline-environment';
+import { stageEnvironmentReason, stageHostServices, stagePolicyRepairReason, coordinatorCriterion, coordinatorCriterionSatisfied } from './pipeline-environment';
+
+test('policy repair reports never become generic user decisions', () => {
+  expect(stagePolicyRepairReason({ blockedOnPolicy: 'Exact backup refused' }, null)).toBe('Exact backup refused');
+  expect(stagePolicyRepairReason({ blockedOnDecision: { question: 'Operator policy repair required; no new user approval needed.' } }, null)).toBeDefined();
+  expect(stagePolicyRepairReason({ blockedOnDecision: { question: 'Backup permission?' } }, { permissionDenials: 1 })).toBeDefined();
+  expect(stagePolicyRepairReason({ blockedOnDecision: { question: 'Backup permission?' } }, { policyRefusals: ['Exact command refused'] })).toBe('Exact command refused');
+  expect(stagePolicyRepairReason({ blockedOnDecision: { question: 'Which deployment window should we use?' } }, null)).toBeUndefined();
+  expect(stagePolicyRepairReason(null, { permissionDenials: 1 })).toBeUndefined();
+});
 
 test.each(['go: Kommando nicht gefunden', 'go: command not found', '/home/user/.local/go/bin/go: No such file or directory',
   'ECONNREFUSED ::1:5433', '/var/run/docker.sock: no such file or directory'])

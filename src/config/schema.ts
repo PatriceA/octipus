@@ -93,6 +93,12 @@ export const securityConfigSchema = z.object({
   shellSandbox: z.enum(['off', 'auto', 'required']).default('off'),
   /** Expose only the host SSH agent socket and known_hosts to personal shell runs. */
   shellSshAgent: z.boolean().default(false),
+  cliKubeconfigs: z.array(z.object({ userId: z.string().min(1), path: z.string().startsWith('/'), resolvedPath: z.string().startsWith('/'), context: z.string().min(1) }).strict()).max(200).default([]),
+  cliRuntimes: z.array(z.object({
+    name: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._+-]*$/),
+    path: z.string().startsWith('/').regex(/^[^\x00-\x1f]+$/),
+    resolvedPath: z.string().startsWith('/').regex(/^[^\x00-\x1f]+$/),
+  }).strict()).max(200).refine(entries => new Set(entries.map(entry => entry.name)).size === entries.length, 'CLI names must be unique').default([]),
   vaultDenyUnscopedSecrets: z.boolean().default(false),
   /**
    * Docker tool per-user isolation — Phase 3f. When `'enforce'`, the

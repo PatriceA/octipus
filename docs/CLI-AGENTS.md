@@ -249,6 +249,44 @@ appear before their boundary is reached, and explicit coordinator edits survive
 subsequent pipeline projection. Workers report visible-plan changes in their
 handoff to the root; they use `plan__*` tools for pipeline items.
 
+### Installed CLI tools
+
+Open **Settings → CLI tools** to discover commands installed on the Octipus
+server, search by name, and click **Approve**. Discovery checks executable files
+on the server PATH without running them. **Add by executable path** also accepts
+commands installed elsewhere. The page displays symlink targets, missing tools,
+and a **Remove** action. No configuration file edits or restart are required.
+
+These installation-wide approvals expose additional executable files read-only to
+sandboxed shell commands and test runners. Bubblewrap gives each approved command
+a PATH entry backed by its resolved executable, including when its original
+symlink points outside the workspace. A changed symlink target requires approval
+again. System tools and previously shared runtime directories remain available;
+removing an additional approval does not revoke those baseline paths or stop a
+running process. Scripts may need interpreters or runtime dependencies in addition
+to their entry point. Approving a CLI does not expose its host login files, grant
+network access or bypass action approvals. For example, approving `oc` makes the
+binary available; cluster authentication must still be configured separately.
+
+### Kubernetes and OpenShift CLI login
+
+In **Settings → CLI tools → Kubernetes / OpenShift login**, choose **Use this
+kubeconfig** from the discovered server files, or enter a kubeconfig path. The
+file must contain a complete current context with embedded credentials and
+certificate data; adjacent certificate/key files are not exposed automatically.
+Selection is saved for the approving administrator's own personal shell commands
+and command verification gates. Other users, shared spaces and remote/federated
+turns do not receive it. Only path and context metadata are stored in settings;
+no credential values are returned by the settings API or copied into the repo.
+
+The runtime mounts that existing file read-only and sets `KUBECONFIG` for commands
+and their children, so a Python runner calling `oc` uses the same identity.
+Commands in that personal runtime can read the selected file. Network access and
+normal action permissions still apply. **Remove kubeconfig access** revokes it
+for new commands; running commands are unaffected. A changed current context or
+symlink target requires selecting the file again. Token refreshes at the same
+file/context remain usable. Login remains independent of vault HTTP connections.
+
 ### Host services for gate commands
 
 The process sandbox (`security.shellSandbox`) runs shell commands without the
@@ -261,6 +299,15 @@ default. The Docker socket is root-equivalent on the host, so set it only on
 stages whose commands you trust. It covers the stage's own commands only:
 agents the stage spawns run in the default sandbox. The setting has no effect
 when the sandbox is off.
+
+Android SDKs are shared read-only across sandboxed shell commands and test
+gates, independently of `hostServices`. Octipus discovers installed SDKs from
+the server's `ANDROID_HOME`, `ANDROID_SDK_ROOT`, or the platform's default SDK
+directory (Linux: `~/Android/Sdk`). A valid installation must contain
+`platforms` and `build-tools`. Both SDK environment variables point to the
+selected installation inside the sandbox. Install missing components on the
+host; jobs cannot modify the shared SDK. Adjacent `.android` keys and the rest
+of the host home directory are not exposed by this mount.
 
 Personal shell runs can opt into the host SSH agent with
 `security.shellSshAgent: true` (or `SHELL_SSH_AGENT=true`). This is a separate
@@ -891,3 +938,8 @@ limit. Detailed history remains available through the cursors and stored events.
   at info level and counted as an executed command without a tool error. Exit 2,
   diagnostic stderr, killed processes and ambiguous compound-command failures
   remain errors.
+
+Read-only pipeline verification checks retain their approved target when a
+trailing `# octipus-fallback: reason` comment is added for the CLI network guard.
+The comment does not authorize changed URLs, request bodies, headers, redirects
+or additional commands.

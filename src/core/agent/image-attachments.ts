@@ -17,13 +17,13 @@ export async function buildRootAttachmentContext(
     }
     const bound = await getModelRegistry().getModelForTopic('vision');
     if (!bound) return 'No vision model is configured. Use an image-reading tool on the original file; do not claim to have seen it otherwise.';
-    // An attached file counts as level 4 (docs/PROTECTION-LEVELS.md): a local model reads it, or none.
+    // The session includes the attachment's user-selected protection level.
     let vision: typeof bound;
     try {
       vision = await localRowInstead(bound, sessionId, 'vision', () => modelCandidates({ userId })) ?? bound;
     } catch (err) {
       if (!(err instanceof ProtectionRoutingError)) throw err;
-      return 'The image was not described: attached files stay on local models, and no local model that reads images is bound. Say so; do not claim to have seen it.';
+      return 'The image was not described: this conversation’s protection level requires a local model, and no suitable local image-reading model is configured. Say so; do not claim to have seen it.';
     }
     const result = await getLiteLLMClient().completeVision({
       model: vision.modelId, modelConfigName: vision.name, userId, sessionId,

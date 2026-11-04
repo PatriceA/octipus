@@ -35,7 +35,7 @@ import { isLongTailHandler } from './tool-split';
 import { buildCapabilitiesHandler } from '@/tools/self-report';
 import { modelCandidates, type ModelSelector } from './model-selector';
 import { localRowInstead, ProtectionRoutingError, PSEUDONYMIZED } from '@/core/protection/routing';
-import { raiseSessionLevel } from '@/core/protection/session-level';
+import { prepareAttachmentProtection } from '@/core/protection/attachments';
 import { resolvePromptTier } from './prompt-tier';
 import { buildOutputDirective } from './output-directive';
 import { getRoleConfig, getToolsForRole } from './roles';
@@ -227,16 +227,13 @@ export async function runRootAgent(
   // selector so the worker cannot be spawned under a different lane than the one
   // that chose its model — which is what happened while the root always spawned
   // under `general` (→ everyday) no matter where the request was routed.
+  prepareAttachmentProtection(sessionId, extras.attachedFiles ?? []);
   const laneChoice = await selectLaneWithDecision(message, classification);
   const routedLane = laneChoice.lane;
   // The requester's own choices first (their `/model`, their personal lane
   // binding), then the install's (coworking spec §8.2).
   const inSpace = !!space;
   const requester = { userId, inSpace, spaceRole: space?.role, sponsor: scope.sponsor };
-  // An attached file carries no protection level: unclear, which counts as 4
-  // (docs/PROTECTION-LEVELS.md). Raised before the model is chosen, so a
-  // session holding level 3-4 content runs on a local model from the start.
-  if (extras.attachedFiles?.length) raiseSessionLevel(sessionId, null);
   const chosenModel = await deps.modelSelector.selectForRootAgent(sessionId, classification.type, { message, classification, laneChoice }, requester);
   const chosenMeta = await getModelRegistry().getModel(chosenModel.name);
   const modelMeta = await localRowInstead(chosenMeta, sessionId, 'tools', () => modelCandidates(requester), PSEUDONYMIZED);

@@ -221,3 +221,23 @@ test('plan add is recovery-safe even with a legacy uncertain record, and retry i
   await new ActionRecovery().run(ctx, 'shell', 'shell__run', {}, async () => ({ exitCode: 0, signal: null }));
   expect(await toolActionRepository.pending(userId, ctx.sessionId)).toEqual([]);
 });
+
+test('automatic recovery removes review prompts but cannot override a tool DENY',async()=>{
+  const {userRepository}=await import('@/db/repositories/user-repository');
+  const {sessionRepository}=await import('@/db/repositories/session-repository');
+  const tool=new FixtureTool();await getToolRegistry().register(tool);const ctx=context();const manager=getPermissionManager();
+  await sessionRepository.create({id:ctx.sessionId,userId,channelType:'webchat',channelId:'automatic-recovery-test'});
+  await userRepository.update(userId,{preferences:{theme:'dark'}});
+  expect((await userRepository.setAutomaticRecovery(userId,true))?.preferences).toMatchObject({theme:'dark',autoApproveRecovery:true});
+  const old=randomUUID();await toolActionRepository.start({id:old,userId,sessionId:ctx.sessionId,agentId:'previous',toolId:tool.id,toolName:`${tool.id}__send`,argumentHash:'fixture',status:'uncertain'});
+  const executor=new ToolExecutor(ctx,()=>{});executor.registerTools(tool.getToolHandlers());
+  const asks=vi.fn();const unsubscribe=manager.onRequest(asks);
+  try {
+    await manager.setPermission(userId,tool.id,'write','DENY');
+    await executor.handleToolCalls([{id:'denied',name:`${tool.id}__send`,arguments:{}}]);expect(tool.calls).toBe(0);
+    await manager.setPermission(userId,tool.id,'write','ALLOW');
+    const result=await executor.handleToolCalls([{id:'allowed',name:`${tool.id}__send`,arguments:{}}]);
+    expect(tool.calls).toBe(1);expect(result[0].content).toBe('sent');expect(asks).not.toHaveBeenCalled();
+    expect(await toolActionRepository.pending(userId,ctx.sessionId)).toEqual([]);
+  } finally {unsubscribe();await userRepository.setAutomaticRecovery(userId,false);}
+});

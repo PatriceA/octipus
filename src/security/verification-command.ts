@@ -1,8 +1,20 @@
 import { posix } from 'node:path';
 import { tokenizeSafe } from '@/tools/shell/policy';
 
+/** A trailing CLI fallback annotation is a shell comment, never new executable syntax. */
+export function withoutVerificationFallbackComment(command: string): string {
+  const match = /(?:\r?\n|[ \t]+)#[ \t]*octipus-fallback:[ \t]+[^\r\n]*\S[ \t]*(?:\r?\n)?$/.exec(command);
+  if (!match) return command;
+  const executable = command.slice(0, match.index);
+  // Fail closed for unmatched quotes and multiple lines; the fixed grammar below rejects escaping and extra executable effects.
+  // The caller must still validate the complete fixed verification grammar.
+  if (/[$`\u0000-\u001f\u007f]/.test(executable) || !tokenizeSafe(executable)) return command;
+  return executable;
+}
+
 /** Narrow, static read-only verification identity. Never general shell equivalence. */
 export function verificationCommandKey(command: string): string | undefined {
+  command = withoutVerificationFallbackComment(command);
   if (/[$`\u0000-\u001f\u007f]/.test(command)) return undefined;
   // This tokenizer is not a shell parser. Consent equivalence deliberately
   // excludes escaping and control syntax; only this fixed output literal uses backslashes.
@@ -61,15 +73,18 @@ export function verificationCommandKey(command: string): string | undefined {
 /** Only a listed verification command grants its identical read target. */
 export function matchingVerificationCommand(commands: string[], requested: string): string | undefined {
   const key = verificationCommandKey(requested);
-  return key ? commands.find(command => verificationCommandKey(command) === key && (tokenizeSafe(command)?.[0] !== 'ssh' || /^docker +compose +-f /.test(tokenizeSafe(command)?.at(-1) ?? ''))) : undefined;
+  return key ? commands.find(command => verificationCommandKey(command) === key && (tokenizeSafe(withoutVerificationFallbackComment(command))?.[0] !== 'ssh' || /^docker +compose +-f /.test(tokenizeSafe(withoutVerificationFallbackComment(command))?.at(-1) ?? ''))) : undefined;
 }
 
 /** Anchor a registered-shell shorthand to the approved file; never execute remote discovery. */
 export function rewriteVerificationCommand(approved: string, requested: string): string | undefined {
   const key = verificationCommandKey(requested);
   if (!key || verificationCommandKey(approved) !== key) return undefined;
-  const candidate = tokenizeSafe(requested)!; const original = tokenizeSafe(approved)!;
-  if (candidate[0] !== 'ssh' || !candidate.at(-1)?.startsWith('cd ')) return undefined;
+  const candidate = tokenizeSafe(withoutVerificationFallbackComment(requested))!; const original = tokenizeSafe(withoutVerificationFallbackComment(approved))!;
+  if (candidate[0] !== 'ssh' || !candidate.at(-1)?.startsWith('cd ')) {
+    const executable = withoutVerificationFallbackComment(requested);
+    return executable !== requested ? executable : undefined;
+  }
   const file = /^docker +compose +-f +(\/[a-zA-Z0-9_./-]+\/compose\.yaml) +ps(?: +--format +json)?$/.exec(original.at(-1) ?? '')?.[1];
   if (!file) return undefined;
   // All prefix words passed the SSH target/transport whitelist above.
@@ -78,5 +93,6 @@ export function rewriteVerificationCommand(approved: string, requested: string):
 }
 
 export function implicitVerificationCommand(command: string): boolean {
+  command = withoutVerificationFallbackComment(command);
   return !!verificationCommandKey(command) && tokenizeSafe(command)?.[0] === 'ssh' && !!tokenizeSafe(command)?.at(-1)?.startsWith('cd ');
 }

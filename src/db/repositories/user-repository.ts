@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { assertDeletable } from '@/security/user-deletion';
 import { dbLogger } from '@/utils/logger';
 import { getDb } from '../postgres';
@@ -72,6 +72,15 @@ export class UserRepository {
     }
 
     return result[0] ?? null;
+  }
+
+  /** Set this personal policy without overwriting unrelated preference edits. */
+  async setAutomaticRecovery(id: string, enabled: boolean): Promise<User | null> {
+    const [user] = await this.db.update(users).set({
+      preferences: sql`jsonb_set(COALESCE(${users.preferences}, '{}'::jsonb), '{autoApproveRecovery}', ${JSON.stringify(enabled)}::jsonb)`,
+      updatedAt: new Date(),
+    }).where(eq(users.id, id)).returning();
+    return user ?? null;
   }
 
   /**

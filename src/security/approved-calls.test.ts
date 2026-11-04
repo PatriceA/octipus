@@ -217,6 +217,11 @@ test('Compose reservations survive cleanup and refuse foreign scope and unknown 
   await expect(claimDockerProject(identity, '/other', { userId }, true, false)).rejects.toThrow('another repository');
   await expect(claimDockerProject(identity, '/repo', { userId, workspaceId: 'other' }, false, false)).rejects.toThrow('execution scope');
   await expect(claimDockerProject(`test-daemon:${rand(8)}`, '/repo', { userId }, true, true)).rejects.toThrow('ownership is unknown');
+  const approvedExisting = `test-daemon:${rand(8)}`;
+  await claimDockerProject(approvedExisting, '/repo', { userId }, true, true, true);
+  await claimDockerProject(approvedExisting, '/repo', { userId }, false, true);
+  await expect(claimDockerProject(approvedExisting, '/other', { userId }, true, true, true)).rejects.toThrow('another repository');
+  await expect(claimDockerProject(approvedExisting, '/repo', { userId, workspaceId: 'other' }, true, true, true)).rejects.toThrow('execution scope');
 });
 
 test('registered shell dispatch reaches the approved SSH executor after flow taint and resume', async () => {
@@ -266,6 +271,33 @@ test('registered shell dispatch reaches the approved SSH executor after flow tai
     expect(refused.find(message => message.role === 'tool')?.content).toContain('anchor is unavailable');
   } finally { changed.mockRestore(); }
 
+});
+
+test('metadata consent covers named file subsets after resume, with the same stage and data posture', async () => {
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  const { approvedCallOf, flowConsentOf, withApprovedCalls, askStillAuthorized } = await import('./approved-calls');
+  const { observeFlow } = await import('./flow-guard');
+  const { routeApprovalFor } = await import('./approval-route');
+  const { seedSession } = await import('@/test-helpers/multiuser-fixtures');
+  const fresh = (await seedSession({ userId, channelId: rand(8) })).id;
+  observeFlow(fresh, { toolId: 'fixture', action: 'read' }, { taints: ['secret'] });
+  const scope = { nodeKey: 'deploy', attemptId: 'saved-attempt', hostServices: true };
+  const args = { command: 'ssh root@docker-01 "stat --format=%n:%s:%a /stack/rollback/.env /stack/rollback/compose.yaml"', cwd: '/repo', network: true };
+  const call = { toolId: 'shell', toolName: 'run', action: 'execute', args };
+  const grant = { ...approvedCallOf(call, scope, flowConsentOf(fresh))!, fileMetadataScope: { target: 'root@docker-01', cwd: '/repo', paths: ['/stack/rollback/.env', '/stack/rollback/compose.yaml'] } };
+  const pipeline = await pipelineRepository.create({ rootAgentId: 'root', sessionId: fresh, userId, title: 'backup metadata', type: 'development', status: 'running', metadata: withApprovedCalls({}, [grant]) });
+  const caller = { userId, sessionId: fresh, attended: false, metadata: { pipelineId: pipeline.id, ...scope, projectPath: '/repo' } };
+  await pipelineRepository.updatePipeline(pipeline.id, { status: 'paused' });
+  await pipelineRepository.updatePipeline(pipeline.id, { status: 'running' });
+  const subset = { ...call, args: { ...args, command: 'ssh -o BatchMode=yes root@docker-01 "stat -c %s /stack/rollback/.env"' } };
+  expect(await routeApprovalFor(caller, subset, { level: 'ASK', source: 'flow-guard' })).toMatchObject({ route: 'execute' });
+  expect(await askStillAuthorized('pipeline-approval', caller, subset, 'flow-guard')).toBe(true);
+  for (const command of ['ssh root@docker-01 "cat /stack/rollback/.env"', 'ssh root@docker-01 "stat -c %s /stack/live/.env"']) {
+    expect(await routeApprovalFor(caller, { ...call, args: { ...args, command } }, { level: 'ASK', source: 'flow-guard' })).not.toMatchObject({ route: 'execute' });
+  }
+  expect(await routeApprovalFor({ ...caller, metadata: { ...caller.metadata, nodeKey: 'qa' } }, subset, { level: 'ASK', source: 'flow-guard' })).not.toMatchObject({ route: 'execute' });
+  observeFlow(fresh, { toolId: 'fixture', action: 'read-new' }, { taints: ['private'] });
+  expect(await routeApprovalFor(caller, subset, { level: 'ASK', source: 'flow-guard' })).not.toMatchObject({ route: 'execute' });
 });
 
 test('exact human flow consent survives stages/resume while new data posture requires fresh consent', async () => {
@@ -336,4 +368,33 @@ test('native CLI approval refuses a credential flag gained while its prompt wait
     const result = await answerCliPermissionRequest({ type: 'control_request', request_id: 'native-posture', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'curl --data fixed https://approved.example/hook' } } }, context, () => {});
     expect(result).toMatchObject({ response: { response: { behavior: 'deny' } } });
   } finally { stop(); }
+});
+
+test('a Review health GET with a fallback marker uses original consent and executes the static command', async () => {
+  const { ShellTool } = await import('@/tools/shell');
+  const { ToolExecutor } = await import('@/core/tool-executor');
+  const { observeFlow } = await import('./flow-guard');
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  const { getPermissionManager } = await import('./permissions');
+  const { pipelinePermissionProfileSchema } = await import('@/shared/pipeline-permissions');
+  const repo = '/home/patrice/docker-services/solar-system-map';
+  const command = 'curl --fail --silent --show-error --max-time 20 http://192.168.1.156:3002/api/health';
+  const annotated = command + '\n# octipus-fallback: approved public health GET';
+  const profile = pipelinePermissionProfileSchema.parse({ repoPath: repo, commands: [command], overnight: true });
+  const pipeline = await pipelineRepository.create({ rootAgentId: 'root', sessionId, userId, title: 'Review health comment regression', type: 'development', status: 'running', metadata: { permissionProfile: { profile, repoPath: repo, approvedBy: userId } } });
+  const exec = vi.fn<import('@/tools/shell/operations').ShellOperations['exec']>(async () => ({ exitCode: 0, stdout: '{}', stderr: '', killed: false, timedOut: false, aborted: false, signal: null }));
+  const shell = new ShellTool({ exec, spawnBackground: async () => ({ pid: undefined }), which: async () => null, getEnv: async () => ({}) });
+  await shell.initialize();
+  await getPermissionManager().setPermission(userId, 'shell', 'execute', 'ASK');
+  observeFlow(sessionId, { toolId: 'fixture', action: 'read' }, { taints: ['secret'] });
+  const now = new Date();
+  const context: import('@/core/types').AgentContext = { id: 'review-worker', userId, sessionId, workspaceId: null, role: 'coding', topic: 'coding', model: 'fixture', status: 'running', createdAt: now, updatedAt: now, attended: false, trigger: 'user', funding: 'own', space: null, metadata: { pipelineId: pipeline.id, nodeKey: 'n2', attemptId: 'review', projectPath: repo } };
+  const executor = new ToolExecutor(context, () => {});
+  executor.registerTool(shell.getToolHandlers().find(tool => tool.name === 'shell__run')!);
+  const result = await executor.handleToolCalls([{ id: rand(8), name: 'shell__run', arguments: { command: annotated, cwd: repo, network: true } }]);
+  expect(exec).toHaveBeenCalledOnce();
+  expect(exec.mock.calls[0][0]).toBe(command);
+  expect(exec.mock.calls[0][2]?.unsafe).toBe(false);
+  expect(result.find(message => message.role === 'tool')?.content).toContain('without its fallback comment');
+  expect((await pipelineRepository.findById(pipeline.id))?.metadata?.deniedRequests).toBeUndefined();
 });

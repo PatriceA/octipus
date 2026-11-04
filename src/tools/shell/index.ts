@@ -1,3 +1,4 @@
+import { withCliKubeconfig } from '@/security/cli-kubeconfig';
 import { isApprovedCall } from '@/security/approved-calls';
 import { implicitVerificationCommand } from '@/security/verification-command';
 import { profileVerificationRewrite, runPermissionProfile } from '@/security/pipeline-permissions';
@@ -131,7 +132,7 @@ export class ShellTool extends BaseTool {
 
         toolLogger.info({
           command: redactedCommand(command),
-          ...(command !== requestedCommand ? { requestedCommand: redactedCommand(requestedCommand), rewriteReason: 'Use the explicitly approved Compose file; remote default discovery is not authorized' } : {}),
+          ...(command !== requestedCommand ? { requestedCommand: redactedCommand(requestedCommand), rewriteReason: 'Execute the approved verification target; omit fallback annotations and anchor Compose shorthand' } : {}),
           cwd,
           unsafe,
           agentId: context?.id,
@@ -141,12 +142,12 @@ export class ShellTool extends BaseTool {
         const home = await toolHomeFor(context);
         let result: ShellExecResult;
         try {
-          result = await this.ops.exec(command, cwd, withHostServices(context?.metadata, {
+          result = await this.ops.exec(command, cwd, withCliKubeconfig(context, withHostServices(context?.metadata, {
             timeout, unsafe, allowNetwork, signal: getExecutionSignal(context),
             ...spaceRunOptions(args.env as Record<string, string> | undefined, home),
             allowHostSshAgent: context ? !WorkspaceFS.forAgent(context).isSpace : false,
             extraReadOnly: [...(spaceRunOptions(args.env as Record<string, string> | undefined, home).extraReadOnly ?? []), ...(context && !cwd.startsWith(WorkspaceFS.forAgent(context).root) ? [WorkspaceFS.forAgent(context).root] : [])],
-          }));
+          })));
         } finally {
           home?.dispose();
         }
@@ -189,7 +190,7 @@ export class ShellTool extends BaseTool {
 
         return {
           ...result,
-          ...(command !== requestedCommand ? { requestedCommand: redactedCommand(requestedCommand), executedCommand: redactedCommand(command), rewriteReason: 'Anchored to the explicitly approved Compose file' } : {}),
+          ...(command !== requestedCommand ? { requestedCommand: redactedCommand(requestedCommand), executedCommand: redactedCommand(command), rewriteReason: command.startsWith('ssh ') ? 'Anchored to the explicitly approved Compose file' : 'Execute the approved verification command without its fallback comment' } : {}),
           ...(browserRuntimeDiagnostic(result.stderr) ? { environmentDiagnostic: browserRuntimeDiagnostic(result.stderr) } : {}),
           outcome: interpretation.outcome,
           ...(interpretation.semantic ? { semantic: interpretation.semantic } : {}),
@@ -236,17 +237,17 @@ export class ShellTool extends BaseTool {
         const home = await toolHomeFor(context);
         let pid: number | undefined;
         try {
-          ({ pid } = await this.ops.spawnBackground(command, cwd, withHostServices(context?.metadata, {
+          ({ pid } = await this.ops.spawnBackground(command, cwd, withCliKubeconfig(context, withHostServices(context?.metadata, {
             unsafe, allowNetwork, ...spaceRunOptions(args.env as Record<string, string> | undefined, home),
             allowHostSshAgent: context ? !WorkspaceFS.forAgent(context).isSpace : false,
             extraReadOnly: [...(spaceRunOptions(args.env as Record<string, string> | undefined, home).extraReadOnly ?? []), ...(context && !cwd.startsWith(WorkspaceFS.forAgent(context).root) ? [WorkspaceFS.forAgent(context).root] : [])], onExit: () => home?.dispose(),
-          })));
+          }))));
         } catch (err) {
           home?.dispose();
           throw err;
         }
 
-        return { pid, command, status: 'running', ...(command !== requestedCommand ? { requestedCommand: redactedCommand(requestedCommand), executedCommand: redactedCommand(command), rewriteReason: 'Anchored to the explicitly approved Compose file' } : {}) };
+        return { pid, command, status: 'running', ...(command !== requestedCommand ? { requestedCommand: redactedCommand(requestedCommand), executedCommand: redactedCommand(command), rewriteReason: command.startsWith('ssh ') ? 'Anchored to the explicitly approved Compose file' : 'Execute the approved verification command without its fallback comment' } : {}) };
       },
       { permissionAction: (args) => this.resolvePermissionAction(args.command as string) }
     );

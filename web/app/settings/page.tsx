@@ -20,6 +20,7 @@ import { useState } from 'react';
 import { useModuleOn } from '@/lib/modules';
 import { PageHeader } from '@/components/ui/page-header';
 import { ApiTokensTab } from '@/components/settings/api-tokens-tab';
+import { CliToolsTab } from '@/components/settings/cli-tools-tab';
 import { ChannelsTab } from '@/components/settings/channels-tab';
 import { ConfigurationTab } from '@/components/settings/configuration-tab';
 import { GeneralTab } from '@/components/settings/general-tab';
@@ -44,6 +45,7 @@ export default function SettingsPage() {
     { id: 'general', label: 'General', icon: Settings },
     { id: 'modules', label: 'Modules', icon: Boxes },
     { id: 'configuration', label: 'Configuration', icon: Sliders },
+    { id: 'cli-tools', label: 'CLI tools', icon: Sliders },
     { id: 'integrations', label: 'Integrations', icon: Plug },
     ...(channelsOn ? [{ id: 'channels', label: 'Channels', icon: MessageSquare }] : []),
     { id: 'security', label: 'Security', icon: Shield },
@@ -93,6 +95,7 @@ export default function SettingsPage() {
           {activeTab === 'general' && <GeneralTab />}
           {activeTab === 'modules' && <ModulesTab />}
           {activeTab === 'configuration' && <ConfigurationTab />}
+          {activeTab === 'cli-tools' && <CliToolsTab />}
           {activeTab === 'integrations' && <IntegrationsTab />}
           {activeTab === 'channels' && channelsOn && <ChannelsTab />}
           {activeTab === 'security' && <SecurityTab />}

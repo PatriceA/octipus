@@ -63,6 +63,24 @@ describe('validateRootModel — capability floor reroute', () => {
   const bad = { modelId: 'flash-lite', name: 'flash-lite', supportsTools: true, provider: 'gemini' };
   const good = { modelId: 'deepseek-default', name: 'deepseek-default', supportsTools: true, provider: 'deepseek' };
 
+  test('specialist models cannot orchestrate or become a capability fallback', async () => {
+    const ocr = { ...bad, modelId: 'deepseek-ocr:latest', topics: ['ocr'] };
+    const registry = {
+      getModelForTopic: async () => ocr,
+      getDefaultModel: async () => ocr,
+      getAllModels: async () => [ocr, good],
+    };
+    vi.spyOn(modelRegistry, 'getModelRegistry').mockReturnValue(registry as never);
+    const selector = new ModelSelector();
+    expect(await selectId(selector)).toBe(good.modelId);
+    registry.getAllModels = async () => [ocr];
+    await expect(selectId(selector)).rejects.toThrow('No conversational model configured');
+    registry.getModelForTopic = async () => bad as typeof ocr;
+    recordModelToolCall(bad.modelId, true);
+    registry.getAllModels = async () => [ocr, good];
+    expect(await selectId(selector, undefined, 'task', { message: 'hello', laneChoice: { lane: 'everyday', reason: 'test' } })).toBe(good.modelId);
+  });
+
   test('reroutes a recently-shimmed model to the tool-reliable default', async () => {
     // Spy the module factory so the selector's registry is fully controlled and
     // robust to the singleton being swapped by other suites in a full run.

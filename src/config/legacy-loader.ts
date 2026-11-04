@@ -62,6 +62,8 @@ export function loadFromEnvLegacy(): Partial<Config> {
         return 'off';
       })(),
       shellSshAgent: process.env.SHELL_SSH_AGENT === 'true',
+      cliRuntimes: [],
+      cliKubeconfigs: [],
       vaultDenyUnscopedSecrets: process.env.VAULT_DENY_UNSCOPED_SECRETS === 'true',
       dockerIsolation: process.env.DOCKER_ISOLATION === 'enforce' ? 'enforce' : 'off',
       trustedProxies: process.env.TRUSTED_PROXIES

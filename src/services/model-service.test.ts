@@ -20,6 +20,27 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllEnvs());
 
+describe('model capability edits', () => {
+  it.each([false, true])('persists explicit capability values (%s) while preserving topic ownership', async (enabled) => {
+    registry.getModel.mockResolvedValue({ name: 'ocr', modelId: 'deepseek-ocr:latest', provider: 'ollama' });
+    const capabilities = { supportsTools: enabled, supportsVision: enabled, supportsStreaming: enabled };
+    const result = await updateModel('ocr', { ...capabilities, topics: ['build'], topicRoles: { build: 'primary' } });
+    expect(registry.updateModel).toHaveBeenCalledWith('ocr', capabilities);
+    expect(result).toMatchObject({ ok: true, model: capabilities });
+  });
+
+  it('leaves capability flags untouched when saving other fields', async () => {
+    registry.getModel.mockResolvedValue({ name: 'chat', modelId: 'chat', provider: 'ollama' });
+    await updateModel('chat', { contextWindow: 8192 });
+    expect(registry.updateModel).toHaveBeenCalledWith('chat', { contextWindow: 8192 });
+  });
+
+  it.each(['supportsTools', 'supportsVision', 'supportsStreaming'])('rejects non-boolean %s', async (key) => {
+    expect(await updateModel('ocr', { [key]: 'false' })).toMatchObject({ status: 400 });
+    expect(registry.updateModel).not.toHaveBeenCalled();
+  });
+});
+
 describe('registerModel — OpenRouter slash validation', () => {
   it('rejects an OpenRouter modelId without a slash, naming the offending id', async () => {
     const result = await registerModel({

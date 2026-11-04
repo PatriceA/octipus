@@ -4,6 +4,12 @@ import { auditScopeBefore, handoffConfidenceByStage } from './pipeline-manager';
 import { fileAt } from '@/utils/fs-file';
 
 describe('parseStructuredHandoff', () => {
+  test('preserves a policy blocker separately from user decisions', () => {
+    const handoff = parseStructuredHandoff('```handoff\n' + JSON.stringify({ stopped: true, blockedOnPolicy: 'Backup denied by effective flow policy' }) + '\n```');
+    expect(handoff).toMatchObject({ stopped: true, blockedOnPolicy: 'Backup denied by effective flow policy' });
+    expect(handoff?.blockedOnDecision).toBeUndefined();
+    expect(HANDOFF_EMIT_INSTRUCTION).toContain('blockedOnPolicy');
+  });
   test('reads a fenced ```handoff block', () => {
     const out = 'Some prose.\n```handoff\n' +
       JSON.stringify({

@@ -494,6 +494,42 @@ test('stop after replay approval but before reconstruction completes does not re
 });
 
 
+test.each([false, true])('replay approval survives a stopped pre-checkpoint resume and binds the actual fresh mode (%s)', async forceFresh => {
+  replies = { QA: [QA_PASS] };
+  const {pipelineId}=await run('durable replay receipt fixture');
+  const {pipelineRepository}=await import('@/db/repositories/pipeline-repository');
+  const {getPermissionManager}=await import('@/security/permissions');
+  const {getDb}=await import('@/db/postgres');const {permissionRequests}=await import('@/db/schema/permissions');const {eq}=await import('drizzle-orm');
+  const checkpoints=await pipelineRepository.getCheckpoints(pipelineId,100);const oldest=checkpoints[checkpoints.length-1];
+  const permissions=getPermissionManager();let reviews=0;let requestId='';
+  const unsubscribe=permissions.onRequest(request=>{if(request.toolId==='action_recovery'&&request.action==='replay_pipeline'){reviews++;requestId=request.requestId;void permissions.approve(requestId,userId);}});
+  const original=pipelineRepository.getNodes.bind(pipelineRepository);let reads=0;let release!:()=>void;
+  const lookup=vi.spyOn(pipelineRepository,'getNodes').mockImplementation(async id=>{if(++reads===2)await new Promise<void>(resolve=>{release=resolve;});return original(id);});
+  const first=manager.resume(pipelineId,{fromSeq:oldest.seq});const cancelled=expect(first).rejects.toThrow('Pipeline replay cancelled');
+  try {
+    await vi.waitFor(()=>expect(release).toBeDefined());
+    await manager.stop(pipelineId);release();await cancelled;lookup.mockRestore();
+    expect(reviews).toBe(1);expect(await pipelineRepository.getCheckpoints(pipelineId,100)).toEqual(checkpoints);
+    const [unconsumed]=await getDb().select().from(permissionRequests).where(eq(permissionRequests.id,requestId));
+    const savedScope=unconsumed.context.toolArguments.replayScope as import('@/shared/pipeline-replay').PipelineReplayScope;
+    const {toolActionRepository}=await import('@/db/repositories/tool-action-repository');
+    expect(await toolActionRepository.findReplayApproval(userId,sessionId,unconsumed.workspaceId,savedScope)).toBe(requestId);
+    expect(await toolActionRepository.findReplayApproval(userId,'11111111-1111-4111-8111-111111111111',unconsumed.workspaceId,savedScope)).toBeUndefined();
+    expect(await toolActionRepository.findReplayApproval(userId,sessionId,unconsumed.workspaceId,{...savedScope,stateHash:'0'.repeat(64)})).toBeUndefined();
+    expect(await toolActionRepository.findReplayApproval(userId,sessionId,unconsumed.workspaceId,{...savedScope,freshAttempt:!savedScope.freshAttempt})).toBeUndefined();
+    await manager.resume(pipelineId,{fromSeq:oldest.seq,freshAttempt:forceFresh});expect(reviews).toBe(forceFresh ? 2 : 1);
+    const [receipt]=await getDb().select().from(permissionRequests).where(eq(permissionRequests.id,requestId));
+    expect(receipt.context.toolArguments.replayConsumedByCheckpoint).toEqual(expect.any(Number));
+    const scope=receipt.context.toolArguments.replayScope as import('@/shared/pipeline-replay').PipelineReplayScope;
+    const count=(await pipelineRepository.getCheckpoints(pipelineId,100)).length;
+    await expect(pipelineRepository.saveCheckpoint({pipelineId,nodeKey:oldest.nodeKey,state:oldest.state},{requestId,userId,sessionId,workspaceId:receipt.workspaceId,scope})).rejects.toThrow('no longer available');
+    expect((await pipelineRepository.getCheckpoints(pipelineId,100)).length).toBe(count);
+    // A deliberately new replay after checkpoint progress needs fresh consent.
+    await manager.resume(pipelineId,{fromSeq:oldest.seq,freshAttempt:forceFresh});expect(reviews).toBe(forceFresh ? 3 : 2);
+  } finally {unsubscribe();lookup.mockRestore();}
+});
+
+
 describe('stage contract retries', () => {
   test('retries a failed execution contract with feedback and then finishes all items', async () => {
     replies = { QA: [QA_PASS] };
@@ -733,6 +769,36 @@ describe('an unanswered approval parks the stage instead of failing the run (#12
     expect(implement[1].metadata.attemptId).toBe(implement[0].metadata.attemptId);
     expect(implement[1].input).toContain('`docker compose build` may run now');
     expect(implement[2].resumeKey).not.toBe(implement[0].resumeKey);
+  });
+
+  test('approving a reissued recovery prompt clears its journal snapshot before the replacement worker starts', async () => {
+    const { randomUUID } = await import('node:crypto');
+    const { toolActionRepository } = await import('@/db/repositories/tool-action-repository');
+    const { getPermissionManager } = await import('@/security/permissions');
+    const { approvalWaitReason, APPROVAL_TIMEOUT_REASON } = await import('@/core/approval-wait');
+    let originalRequest = ''; const recordId = randomUUID(); let visits = 0;
+    replies = { QA: [QA_PASS] };
+    throwPlan = { Implement: [() => approvalWaitReason(APPROVAL_TIMEOUT_REASON, originalRequest)] };
+    onSpawn = async (stage, pipelineId, call) => {
+      if (stage !== 'Implement') return;
+      if (++visits === 1) {
+        await toolActionRepository.start({ id:recordId,userId,sessionId,agentId:call.workerId,pipelineId,
+          nodeKey:String(call.metadata.nodeKey),attemptId:String(call.metadata.attemptId),toolId:'shell',toolName:'shell__run',argumentHash:'fixture',status:'uncertain',createdAt:new Date(Date.now()-1000) });
+        originalRequest = await getPermissionManager().requestApproval(userId,call.workerId,'action_recovery','retry',
+          {recoveryActionIds:[recordId],previousActions:'Earlier shell outcome unknown'},sessionId);
+      } else {
+        expect((await toolActionRepository.pending(userId,sessionId)).some(row=>row.id===recordId)).toBe(false);
+      }
+    };
+    const running = run('pipeline recovery handoff');
+    const pending = await parkedApproval();
+    expect(pending).toMatchObject({toolId:'action_recovery',action:'retry',workerRequestId:originalRequest});
+    expect(await getPermissionManager().approve(pending.requestId,userId)).toBe(true);
+    const {pipelineId}=await running;
+    const {pipelineRepository}=await import('@/db/repositories/pipeline-repository');
+    const pipeline=await pipelineRepository.findById(pipelineId);
+    expect(pipeline?.status).toBe('completed');expect(visits).toBe(3);
+    expect((pipeline?.metadata?.approvedCalls as Array<{toolId:string}>|undefined)??[]).not.toEqual(expect.arrayContaining([expect.objectContaining({toolId:'action_recovery'})]));
   });
 
   test('interleaved workers: the stage parks on its own request, never on a newer one from another worker', async () => {
@@ -1459,6 +1525,32 @@ test.each(['repoPath', 'repoPaths'])('creating a run accepts configured external
   } finally { session.mockRestore(); getConfig().workspace.additionalPaths = previous; rmSync(root, { recursive: true, force: true }); }
 });
 
+
+test.each(['explicit', 'legacy', 'denial-counter'])('policy repair parks once without asking or starting another worker (%s)', async mode => {
+  await stageFixture('policy-repair-fixture', { Implement: { producesArtifacts: true } });
+  // An always-approving user must not turn a policy repair into a spawn loop.
+  approvalAnswer = { approved: true, response: 'ok' };
+  if (mode === 'denial-counter') policyByStage = { Implement: ['Outside the approved overnight profile; exact command not executed'] };
+  onSpawn = async (stage, pipelineId) => {
+    if (stage !== 'Plan') return;
+    const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+    const [item] = await pipelineRepository.addPlanItems([{ pipelineId, ordinal: 0, title: 'Final tower deployment and independent original-brief acceptance' }]);
+    replies.Implement = ['```handoff\n' + JSON.stringify({
+      stopped: true,
+      ...(mode === 'explicit' ? { blockedOnPolicy: 'Backup command denied under unchanged profile dc72d0788233' } : {}),
+      blockedOnDecision: { itemId: item.id, question: mode === 'denial-counter' ? 'Please approve backup' : 'Operator policy repair required; no new user approval needed. Backup denied under unchanged profile dc72d0788233.' },
+    }) + '\n```'];
+  };
+  const { pipelineId } = await run('repair policy enforcement, do not repeat approval', 'policy-repair-fixture');
+  const pipeline = await manager.getPipeline(pipelineId);
+  expect(pipeline).toMatchObject({ status: 'paused', metadata: { coordinatorRequest: { reason: expect.stringContaining('Policy enforcement requires repair'), action: expect.stringContaining('Do not redispatch unchanged work') } } });
+  expect(pipeline?.metadata?.pendingDecision).toBeUndefined();
+  expect(pipeline?.metadata?.pendingApproval).toBeUndefined();
+  expect(pipeline?.metadata?.userDecisions).toBeUndefined();
+  expect(approvalsAsked).toBe(0);
+  expect(calls.filter(call => call.stageName === 'Implement')).toHaveLength(1);
+  expect(calls.some(call => call.stageName === 'QA')).toBe(false);
+});
 
 test('a stage stopped by content policy gets a policy retry reason, never probe blame (#71)', async () => {
   policyByStage = { QA: ['Blocked command detected: shutdown'] };

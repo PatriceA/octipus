@@ -44,6 +44,8 @@ export const MAX_ATTACHED_FILE_CONTEXT_BYTES = 64 * 1024;
 export interface AttachedFileRef {
   path: string;
   version?: string;
+  /** Sensitivity explicitly chosen by the person attaching the file. */
+  protectionLevel?: import('@/shared/protection').ProtectionLevel;
 }
 
 /** Typed error the routes map to an HTTP status. */

@@ -15,6 +15,22 @@ export function stageEnvironmentReason(text: string): string | undefined {
 
 export class StageEnvironmentError extends Error {}
 
+/** A policy repair report is not a question a user can fix by answering again. */
+export function stagePolicyRepairReason(handoff: {
+  blockedOnPolicy?: string;
+  blockedOnDecision?: { question: string };
+} | null, counters: { policyRefusals?: string[]; permissionDenials?: number } | null): string | undefined {
+  if (handoff?.blockedOnPolicy) return handoff.blockedOnPolicy;
+  const question = handoff?.blockedOnDecision?.question;
+  if (!question) return undefined;
+  if (counters?.policyRefusals?.length) return counters.policyRefusals.join('; ');
+  if (counters?.permissionDenials) return question;
+  // Older CLI workers may not expose denial counters or the dedicated field.
+  if (/policy|permission|credential.flow|binding/i.test(question)
+    && /repair|reconcil|enforcement|no (?:new|additional|further) user (?:scope )?(?:approval|decision)/i.test(question)) return question;
+  return undefined;
+}
+
 /** Coordinator-owned UI state cannot be an acceptance test for a stage's code. */
 export function coordinatorCriterion(criterion: string): boolean {
   return /(?:visible|work)[ -]?plan|update_work_plan/i.test(criterion) && /\b(?:working|pending|done|blocked|skipped)\b/i.test(criterion);

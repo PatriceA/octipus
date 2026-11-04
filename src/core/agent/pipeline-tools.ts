@@ -16,7 +16,7 @@ import { getPermissionManager } from '@/security/permissions';
 import { coreLogger } from '@/utils/logger';
 import { stripPipelineControlBlocks } from './handoff';
 import type { PendingStageApproval, WalkState } from './pipeline-manager';
-import { compactPipelineStatus, pipelineSummary, pipelineStageHistory, pipelineStageRuns } from './pipeline-status';
+import { compactPipelineStatus, pipelineSummary, pipelineStageHistory, pipelineStageRuns, pipelineDenialHistory } from './pipeline-status';
 import { replyAnswer } from './approval-manager';
 
 const pendingOf = (pipeline: Pipeline) =>
@@ -119,6 +119,9 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
           budget: pipelineBudget(pipeline, nodes, items, getConfig().agent.pipelineTokenBudget),
           environmentBlock: activeEnvironmentBlock(pipeline, items, newest),
           coordinatorRequest: pipeline.metadata?.coordinatorRequest ?? null,
+          policyRepair: pipeline.metadata?.policyRepair ?? null,
+          scopedApprovedCalls: Array.isArray(pipeline.metadata?.approvedCalls) ? pipeline.metadata.approvedCalls : [],
+          denialHistory: pipelineDenialHistory(pipeline),
           resumeAfter: pipeline.metadata?.resumeAfter ?? null,
           deferredItemId: pipeline.metadata?.deferredItemId ?? null,
           deferredReason: pipeline.metadata?.deferredReason ?? null,

@@ -173,8 +173,8 @@ export const deviceRoutes = new Elysia({ prefix: '/devices' })
         set.status = 401;
         return { error: 'Authentication required' };
       }
-      await getPushService().register(user.id, body.token, body.platform, body.deviceName);
-      return { registered: true, pushConfigured: await getPushService().isConfigured() };
+      const error = await getPushService().register(user.id, body.token, body.platform, body.deviceName);
+      return { registered: !error, pushConfigured: await getPushService().isConfigured(), ...(error ? { error } : {}) };
     },
     {
       body: t.Object({

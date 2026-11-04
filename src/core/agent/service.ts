@@ -6,6 +6,7 @@ import { getAgentManager } from '@/core/agent-manager';
 import { handleCommand } from '@/core/commands';
 import { renderMemoriesBlock, retrieveForContext, updateMemoriesAfterTurn } from '@/core/memory';
 import { refreshSessionLevel } from '@/core/protection/session-level';
+import { prepareAttachmentProtection } from '@/core/protection/attachments';
 import { finishContextTurn, runContextHooks } from '@/core/context-hooks';
 import { clearFlowLabel, getFlowLabel, markNotSharedAudience, markSharedAudience, observeFlow } from '@/security/flow-guard';
 import { bareReply, type GroupTurn, groupTurnContext } from '@/core/channels/group-context';
@@ -627,6 +628,7 @@ export class AgentService {
       bindProviderUsageContext({ workspaceId: scope.workspaceId, funding: scope.funding, sessionId: resolvedSessionId });
       // Another process may have raised the session's level since this one read it.
       refreshSessionLevel(resolvedSessionId);
+      prepareAttachmentProtection(resolvedSessionId, attachedFiles);
       // Who reads the replies decides whether personal memories, learning and
       // the profile may enter the turn (D10, I7).
       const audience = await sessionAudience(session);

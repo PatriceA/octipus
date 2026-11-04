@@ -1,7 +1,7 @@
 import { hostname, tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { claimDockerProject } from '@/db/repositories/docker-project-repository';
-import { realpath, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { realpath, mkdtemp, writeFile, rm, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, join } from 'node:path';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { ToolNotExecutedError } from '@/core/tool-execution-error';
@@ -75,7 +75,7 @@ export class DockerTool extends BaseTool {
         { action: 'exec', description: 'Execute arbitrary commands inside running Docker containers', defaultLevel: 'ASK', dangerous: true },
       ],
       tools: [
-        { name: 'compose_project', description: 'Host Compose lifecycle: status, up with health wait, logs, down. Local daemon only; remote deployments require approved SSH shell commands.', parameters: { operation: { type: 'string', description: 'status, up, logs or down', required: true }, project: { type: 'string', description: 'Compose project name', required: true }, cwd: { type: 'string', description: 'Approved absolute repository directory', required: true }, approvedPorts: { type: 'array', description: 'Explicit host ports approved for publication' }, approvedBindPaths: { type: 'array', description: 'Explicit absolute host paths approved for bind mounts' }, file: { type: 'string', description: 'Repository-relative Compose file' }, timeout: { type: 'number', description: 'Total deadline in milliseconds (default 600000)' } }, returns: 'Exit status, stdout/stderr, project health and cleanup status' },
+        { name: 'compose_project', description: 'Host Compose lifecycle: status, up with health wait, logs, down. Local daemon only; remote deployments require approved SSH shell commands.', parameters: { operation: { type: 'string', description: 'status, up, logs or down', required: true }, project: { type: 'string', description: 'Compose project name', required: true }, cwd: { type: 'string', description: 'Approved absolute repository directory', required: true }, build: { type: 'boolean', description: 'Rebuild images during up' }, forceRecreate: { type: 'boolean', description: 'Recreate containers during up' }, services: { type: 'array', description: 'Service names to operate on; omit for the whole project' }, approvedPorts: { type: 'array', description: 'Explicit host ports approved for publication' }, approvedBindPaths: { type: 'array', description: 'Explicit absolute host paths approved for bind mounts' }, file: { type: 'string', description: 'Repository-relative Compose file' }, timeout: { type: 'number', description: 'Total deadline in milliseconds (default 600000)' } }, returns: 'Exit status, stdout/stderr, project health and cleanup status' },
         { name: 'list_containers', description: 'List Docker containers', parameters: { show_all: { type: 'boolean', description: 'Show all' } }, returns: 'Container list' },
         { name: 'start_container', description: 'Start a container', parameters: { container: { type: 'string', description: 'Container name/ID', required: true } }, returns: 'Start result' },
         { name: 'stop_container', description: 'Stop a container', parameters: { container: { type: 'string', description: 'Container name/ID', required: true } }, returns: 'Stop result' },
@@ -88,12 +88,15 @@ export class DockerTool extends BaseTool {
 
   protected async registerTools(): Promise<void> {
     this.registerTool('compose_project',
-      'Manage an explicitly approved local host Docker Compose project. Does not need a Docker socket inside the shell sandbox. Operations: status, up (waits for health), logs, down (project resources only; preserves volumes). Remote deployments still require SSH. Published host ports require approvedPorts and host bind mounts require approvedBindPaths. Host data is preserved on down. Multi-user Docker isolation currently refuses Compose; use isolated container tools.',
+      'Manage an explicitly approved local host Docker Compose project, including existing stacks whose repository matches. Repository-local builds and env files are supported; use up with build:true and forceRecreate:true to rebuild/restart. Does not need a Docker socket inside the shell sandbox. Operations: status, up (waits for health), logs, down (project resources only; preserves volumes). Remote deployments still require SSH. Published host ports require approvedPorts and host bind mounts require approvedBindPaths. Host data is preserved on down. Multi-user Docker isolation currently refuses Compose; use isolated container tools.',
       createParameterSchema({
         operation: { type: 'string', required: true, description: 'status, up, logs or down' },
         project: { type: 'string', required: true, description: 'Explicit Compose project name' },
         cwd: { type: 'string', required: true, description: 'Approved absolute repository directory' },
         file: { type: 'string', description: 'Compose file relative to repository (default compose.yaml)' },
+        build: { type: 'boolean', description: 'Rebuild images with up (default false)' },
+        forceRecreate: { type: 'boolean', description: 'Recreate containers with up (default false)' },
+        services: { type: 'array', items: { type: 'string' }, description: 'Selected service names, or omit for all services; down always covers the whole named project' },
         approvedBindPaths: { type: 'array', items: { type: 'string' }, description: 'Explicit host paths approved for bind mounts; named volumes need no host path grant' },
         approvedPorts: { type: 'array', items: { type: 'integer' }, description: 'Explicit allowed published host port numbers' },
         timeout: { type: 'number', default: 600000, description: 'Total execution deadline in ms, 1000–1800000, default 600000' },
@@ -248,6 +251,11 @@ export class DockerTool extends BaseTool {
     if (!Array.isArray(bindPaths) || bindPaths.some(path => typeof path !== 'string' || !isAbsolute(path))) throw new ToolNotExecutedError('docker', 'approvedBindPaths must contain explicit absolute host paths');
     const timeout = args.timeout ?? 600_000;
     if (typeof timeout !== 'number' || !Number.isInteger(timeout) || timeout < 1000 || timeout > 1_800_000) throw new ToolNotExecutedError('docker', 'Compose timeout must be between 1000 and 1800000 ms');
+    for (const flag of ['build', 'forceRecreate']) if (args[flag] !== undefined && typeof args[flag] !== 'boolean') throw new ToolNotExecutedError('docker', `${flag} must be a boolean`);
+    const services = args.services ?? [];
+    if (!Array.isArray(services) || services.some(name => typeof name !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name))) throw new ToolNotExecutedError('docker', 'services must contain explicit Compose service names');
+    if (args.operation === 'down' && services.length) throw new ToolNotExecutedError('docker', 'down operates on the whole named project; omit services');
+    if (args.operation !== 'up' && (args.build || args.forceRecreate)) throw new ToolNotExecutedError('docker', 'build and forceRecreate apply only to up');
     const deadline = Date.now() + timeout;
     const run = (argv: string[], limit = EXEC_TIMEOUT) => {
       const remaining = deadline - Date.now();
@@ -258,7 +266,15 @@ export class DockerTool extends BaseTool {
     try {
     const sourceFile = join(snapshot, 'source.yaml');
     await writeFile(sourceFile, rawText, { mode: 0o600 });
-    const base = ['compose', '--env-file', '/dev/null', '--project-directory', cwd, '-f', sourceFile, '-p', args.project];
+    let environmentFile = '/dev/null';
+    try {
+      const candidate = await realpath(join(cwd, '.env'));
+      const envRelative = relative(cwd, candidate);
+      if (envRelative.startsWith('..') || isAbsolute(envRelative)) throw new ToolNotExecutedError('docker', 'Compose .env must resolve inside the approved repository');
+      if (!(await stat(candidate)).isFile()) throw new ToolNotExecutedError('docker', 'Compose .env must be a regular file');
+      environmentFile = candidate;
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    const base = ['compose', '--env-file', environmentFile, '--project-directory', cwd, '-f', sourceFile, '-p', args.project];
     // Never operate on a same-named stack belonging to another repository.
     const existing = await run(['ps', '-a', '--filter', `label=com.docker.compose.project=${args.project}`, '--format', '{{.ID}}']);
     if (existing.exitCode !== 0) return { ...existing, project: args.project, operation: args.operation, executed: false };
@@ -270,21 +286,21 @@ export class DockerTool extends BaseTool {
     const networks = await run(['network', 'ls', '--filter', `label=com.docker.compose.project=${args.project}`, '--format', '{{.Name}}']);
     if (volumes.exitCode !== 0 || networks.exitCode !== 0) return { project: args.project, operation: args.operation, executed: false, exitCode: volumes.exitCode || networks.exitCode, error: 'Could not verify Compose project resources' };
     const daemon = createHash('sha256').update(JSON.stringify([hostname(), 'unix:///var/run/docker.sock'])).digest('hex');
-    try { await claimDockerProject(`${daemon}:${args.project}`, cwd, ctx, args.operation === 'up', !!(existing.stdout.trim() || volumes.stdout.trim() || networks.stdout.trim())); }
-    catch (error) { throw new ToolNotExecutedError('docker', (error as Error).message); }
-    const parsed = await run([...base, 'config', '--no-env-resolution', '--format', 'json']);
+    const parsed = await run([...base, 'config', '--format', 'json']);
     if (parsed.exitCode !== 0) return { project: args.project, operation: args.operation, exitCode: parsed.exitCode, executed: false, error: 'Compose configuration validation failed; inspect repository configuration without exposing credentials' };
     let config: Record<string, unknown>;
     try { config = JSON.parse(parsed.stdout); const approvedBinds = await resolveComposeBindPaths(config, bindPaths as string[]); validateComposeConfig(config, cwd, ports as number[], approvedBinds); await validateComposeFilesystem(config, cwd); }
     catch (error) { throw new ToolNotExecutedError('docker', error instanceof SyntaxError ? 'Invalid Compose configuration JSON' : (error as Error).message); }
+    try { await claimDockerProject(`${daemon}:${args.project}`, cwd, ctx, true, !!(existing.stdout.trim() || volumes.stdout.trim() || networks.stdout.trim()), true); }
+    catch (error) { throw new ToolNotExecutedError('docker', (error as Error).message); }
       const snapshotFile = join(snapshot, 'compose.json');
       await writeFile(snapshotFile, JSON.stringify(config).replace(/\$/g, () => '$$'), { mode: 0o600 });
       // The source repository is never reread for lifecycle execution. Bind sources are resolved against explicit host-path consent;
       // skip a second environment interpolation.
       const executionBase = ['compose', '--env-file', '/dev/null', '--project-directory', cwd, '-f', snapshotFile, '-p', args.project];
-    const command = args.operation === 'up' ? ['up', '-d', '--wait', '--wait-timeout', String(Math.max(1, Math.floor(timeout / 1000) - 5))]
+    const command = args.operation === 'up' ? ['up', '-d', ...(args.build ? ['--build'] : []), ...(args.forceRecreate ? ['--force-recreate'] : []), '--wait', '--wait-timeout', String(Math.max(1, Math.floor(timeout / 1000) - 5))]
       : args.operation === 'down' ? ['down', '--remove-orphans'] : args.operation === 'logs' ? ['logs', '--tail', '200', '--no-color'] : ['ps', '--all', '--format', 'json'];
-    const result = await run([...executionBase, ...command], timeout);
+    const result = await run([...executionBase, ...command, ...services as string[]], timeout);
     const health = args.operation === 'up' || args.operation === 'status'
       ? args.operation === 'status' ? result : await run([...executionBase, 'ps', '--all', '--format', 'json']) : undefined;
     const remaining = args.operation === 'down' && result.exitCode === 0 ? await run(['ps', '-a', '--filter', `label=com.docker.compose.project=${args.project}`, '--format', '{{.ID}}']) : undefined;

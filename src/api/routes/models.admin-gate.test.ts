@@ -55,7 +55,7 @@ vi.mock('@/models/providers/presets', () => ({
   listPresets: vi.fn(() => []),
   probeHealth: vi.fn(() => Promise.resolve(true)),
 }));
-import { getAvailableProviderModels } from '@/services/model-service';
+import { getAvailableProviderModels, updateModel } from '@/services/model-service';
 import { modelRoutes } from './models';
 
 const app = new App().group('/api', (route) => route.use(modelRoutes));
@@ -102,6 +102,16 @@ beforeEach(() => {
 });
 
 describe('model routes — admin gate', () => {
+  test.each([false, true])('model edits forward capability checkbox values (%s)', async (enabled) => {
+    fixture.user = ADMIN;
+    const fields = { supportsTools: enabled, supportsVision: enabled, supportsStreaming: enabled };
+    vi.mocked(updateModel).mockResolvedValueOnce({ ok: true, model: fields } as never);
+    const res = await call('PATCH', '/models/ocr', fields);
+    expect(res.status).toBe(200);
+    expect(updateModel).toHaveBeenCalledWith('ocr', fields);
+    expect(await res.json()).toEqual(fields);
+  });
+
   test.each(NEWLY_GATED_READS)('non-admin gets 403 on GET %s', async (path) => {
     fixture.user = MEMBER;
     const res = await call('GET', path);

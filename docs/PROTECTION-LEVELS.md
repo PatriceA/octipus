@@ -80,12 +80,21 @@ as local, and neither does a fallback to the LiteLLM proxy.
 | The documents, cases, mail and records tools | each item's effective level (lists included: titles are content) |
 | `search_documents`, `search_knowledge`, `read_knowledge` | the levels of the documents the hits come from; a document deleted since it was indexed counts as unclear |
 | Recall (passages handed to the agent as it starts) | the same, before the model is chosen |
-| A file attached in the chat | unclear, so 4 |
+| A file attached in the chat | the sensitivity selected by the user before sending (1–4); unclassified files ask for a choice before reading |
 | `raise_protection_level` | the new level |
 
 Notes, tasks and contacts carry no level yet and raise nothing. The level is
 recorded whether or not the module is on, so switching it on later applies
 to what a session already read. It is kept in `sessions.protection_level`.
+
+The web composer asks for attachment sensitivity before sending files. The
+choice applies to all files in the message, including files attached from the
+workspace viewer. The server validates `fileRefs[].protectionLevel` on REST and
+gateway turns. While protection is on, a missing choice stops processing before
+reading the file or raising the conversation level; it does not label the file
+strictly confidential. Existing conversations retain their highest recorded
+level. With protection off, unclassified files that are processed still count
+as 4 if protection is enabled later.
 
 ### What happens at 3-4
 

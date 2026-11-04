@@ -233,22 +233,21 @@ export async function registerModel(body: Record<string, unknown>) {
 }
 
 /**
- * Update a model. Strips capability flags and topic bindings (both are
- * derived/owned elsewhere). Returns `{ ok, model }` on success, or a
+ * Update a model, including explicit capability corrections from the editor.
+ * Strips topic bindings, which are owned by the Topics page.
+ * Returns `{ ok, model }` on success, or a
  * `{ status, error }` describing the HTTP failure. Mirrors the route's
  * previous 404/400 behaviour.
  */
 export async function updateModel(name: string, body: Record<string, unknown>) {
-  // Strip capability flags from user updates — supportsTools, supportsVision,
-  // and supportsStreaming are derived from the provider capabilities system
-  // (see src/models/capabilities.ts) and must not be overridden by user input.
-  // This ensures capability presets remain the single source of truth.
-  // topics/topicRoles are likewise stripped: topic binding is owned by the
+  for (const key of ['supportsTools', 'supportsVision', 'supportsStreaming']) {
+    if (key in body && typeof body[key] !== 'boolean') {
+      return { status: 400 as const, error: `${key} must be a boolean.` };
+    }
+  }
+  // Topic binding is owned by the
   // Topics page, so the model editor must never write it (single source of truth).
   const {
-    supportsTools: _t,
-    supportsVision: _v,
-    supportsStreaming: _s,
     topics: _topics,
     topicRoles: _topicRoles,
     ...safeUpdate

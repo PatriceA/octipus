@@ -52,3 +52,38 @@ test('registered shorthand is anchored before execution and native Bash cannot c
   expect(executed).not.toContain('cd ');
   expect(profileAllows(profile, { ...call, toolId: 'cli-native:Bash', toolName: 'Bash', action: 'Bash' })).toBe(false);
 });
+
+test.each(['\n# octipus-fallback: approved public health GET', ' # octipus-fallback: no registered HTTP tool', '\r\n# octipus-fallback: approved health GET\r\n'])(
+  'a trailing fallback comment retains the approved read-only health target: %j', comment => {
+    expect(allows(health + comment)).toBe(true);
+    expect(allows(health.replace('/api/health', '/other') + comment)).toBe(false);
+    expect(allows('curl --data secret http://192.168.1.156:3002/api/health' + comment)).toBe(false);
+  },
+);
+test.each([
+  health + '\n# octipus-fallback: health GET\ncurl http://other.test/',
+  health + '; echo secret\n# octipus-fallback: health GET',
+  health + '\\\n# octipus-fallback: health GET',
+  'curl "http://192.168.1.156:3002/api/health # octipus-fallback: quoted data"',
+  'curl http://192.168.1.156:3002/api/health # ordinary comment',
+])('a marker cannot hide extra execution or quoted arguments: %j', command => {
+  expect(allows(command)).toBe(false);
+});
+test('SSH shorthand retains its required approved-file rewrite with a fallback comment', async () => {
+  const { profileVerificationRewrite } = await import('./pipeline-permissions');
+  const command = "ssh root@192.168.1.156 'cd /opt/stacks/solar-system-map && docker compose ps'\n# octipus-fallback: approved status";
+  expect(allows(command)).toBe(true);
+  expect(profileVerificationRewrite(profile, { toolId: 'shell', toolName: 'run', action: 'execute', args: { command, cwd: '/repo' } })).toContain('docker compose -f /opt/stacks/solar-system-map/compose.yaml ps');
+});
+
+test('fixed status-output formatting remains approved with a fallback annotation', () => {
+  expect(allows(String.raw`curl --write-out '\nHTTP %{http_code}\n' http://192.168.1.156:3002/api/health` + '\n# octipus-fallback: health status')).toBe(true);
+});
+
+test('native shells retain consent for inert comments without authorizing unanchored remote discovery', async () => {
+  const { profileAllows, profileVerificationRewrite } = await import('./pipeline-permissions');
+  const command = health + '\n# octipus-fallback: approved GET';
+  const call = { toolId: 'shell', toolName: 'run', action: 'execute', args: { command, cwd: '/repo' } };
+  expect(profileVerificationRewrite(profile, call)).toBe(health);
+  expect(profileAllows(profile, { ...call, toolId: 'cli-native:Bash', toolName: 'Bash', action: 'Bash' })).toBe(true);
+});

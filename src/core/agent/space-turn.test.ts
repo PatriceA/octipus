@@ -493,6 +493,7 @@ describe('the role cap holds on all six approval paths', () => {
     const { getPermissionManager } = await import('@/security/permissions');
     const spy = vi.spyOn(getPermissionManager(), 'requestApproval');
     const recovery = new ActionRecovery({
+      reconcileApproved: async () => 0,
       pending: async () => [{ id: randomUUID(), toolName: 'notes__write_note', status: 'started', createdAt: new Date() }],
     } as never);
     const ctx = await spaceContext(commenterId, commenterSession, 'commenter', { attended: true });

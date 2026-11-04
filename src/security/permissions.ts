@@ -1,3 +1,4 @@
+import { acknowledgeRecoveryApproval } from '@/db/repositories/recovery-consent';
 import { getFlowLabel } from './flow-guard';
 import type { ApprovalFlowConsent } from '@/shared/pipeline-approval';
 import { CLI_QUESTION_TOOL, parseCliAnswers } from '@/shared/cli-questions';
@@ -711,18 +712,12 @@ export class PermissionManager {
       }
     }
 
-    const result = await this.db
-      .update(permissionRequests)
-      .set({
-        status,
-        resolvedBy,
-        resolvedAt: new Date(),
-        resolution,
-      })
-      .where(and(...filters))
-      .returning();
-
-    const request = result[0];
+    const request = await this.db.transaction(async tx => {
+      const [row] = await tx.update(permissionRequests).set({ status, resolvedBy, resolvedAt: new Date(), resolution })
+        .where(and(...filters)).returning();
+      if (row) await acknowledgeRecoveryApproval(row, tx);
+      return row;
+    });
     if (!request) return null;
 
     this.emitResolved(request, status);

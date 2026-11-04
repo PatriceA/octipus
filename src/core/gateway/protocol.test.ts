@@ -2,6 +2,13 @@ import { describe, expect, test } from 'vitest';
 import { parseClientMessage, matchesPattern, PROTOCOL_VERSION, SUPPORTED_VERSIONS } from './protocol';
 
 describe('Protocol', () => {
+  test.each([1, 2, 3, 4])('preserves attachment sensitivity %s', protectionLevel => {
+    const result = parseClientMessage(JSON.stringify({ type: 'chat.send', sessionId: '550e8400-e29b-41d4-a716-446655440000', content: 'make slides', fileRefs: [{ path: 'brief.pdf', protectionLevel }] }));
+    expect(result).toMatchObject({ ok: true, message: { fileRefs: [{ path: 'brief.pdf', protectionLevel }] } });
+  });
+  test.each([0, 5, 2.5, '2'])('rejects invalid attachment sensitivity %s', protectionLevel => {
+    expect(parseClientMessage(JSON.stringify({ type: 'chat.send', sessionId: '550e8400-e29b-41d4-a716-446655440000', content: 'make slides', fileRefs: [{ path: 'brief.pdf', protectionLevel }] }))).toMatchObject({ ok: false });
+  });
   describe('parseClientMessage — additional coverage', () => {
     test('parses permission.respond', () => {
       const result = parseClientMessage(JSON.stringify({

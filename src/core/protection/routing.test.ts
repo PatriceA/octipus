@@ -159,6 +159,18 @@ describe('choosing the model', () => {
     raiseSessionLevel(s, 3);
     await expect(localRowInstead(remote, s, 'tools', candidates([remote, cloudOllama]))).rejects.toThrow(/no local model is bound/);
   });
+
+  test.each(['text', 'tools'] as const)('an attachment privacy reroute never uses OCR for %s', async (need) => {
+    const s = session();
+    raiseSessionLevel(s, null); // attachments have an unknown protection level
+    const ocr = row('deepseek-ocr:latest', { provider: 'ollama', supportsTools: true, supportsVision: true, topics: ['ocr'] });
+    const decision = row('jev-local', { provider: 'ollama', topics: ['decision'] });
+    const vision = row('image-reader', { provider: 'ollama', topicRoles: { vision: 'primary' } });
+    expect(await localRowInstead(remote, s, need, candidates([ocr, decision, vision, localOllama], ocr))).toBe(localOllama);
+    await expect(localRowInstead(remote, s, need, candidates([ocr, decision, vision]))).rejects.toBeInstanceOf(ProtectionRoutingError);
+    // OCR remains available for its image-reading job.
+    expect(await localRowInstead(remote, s, 'vision', candidates([ocr]))).toBe(ocr);
+  });
 });
 
 describe('pseudonymization (C6c)', () => {

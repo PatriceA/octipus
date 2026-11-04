@@ -1,3 +1,4 @@
+import { withCliKubeconfig } from '@/security/cli-kubeconfig';
 import { browserRuntimeMounts, browserRuntimePaths } from '@/security/runtime-path';
 /**
  * Scorer gates — deterministic verifiers a parent attaches to a `spawn_child`
@@ -1113,7 +1114,7 @@ async function evaluate(
         if ((ctx.deadline ?? Infinity) - Date.now() < MIN_COMMAND_SCORER_TIMEOUT_MS) {
           return { scorer: label, reason: 'the verification gate has too little budget left after checking its environment' };
         }
-        const res = await new LocalShellOperations().exec(repaired, cwd, {
+        const res = await new LocalShellOperations().exec(repaired, cwd, withCliKubeconfig(ctx, {
           timeout: remainingTimeout,
           // A pipeline stage's `hostServices` opt-in reaches its verify command too.
           ...(ctx.hostServices ? { allowNetwork: true, extraReadWrite: ['/var/run/docker.sock'], extraReadOnly: browserRuntimeMounts(), env: { PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH ?? browserRuntimePaths()[0] } } : {}),
@@ -1121,7 +1122,7 @@ async function evaluate(
           // Never `unsafe`. Safe mode is what makes `tokenizeSafe` reject shell
           // metacharacters, and it is the whole security argument for letting an
           // LLM-authored string reach a process at all.
-        });
+        }));
         if (res.exitCode === 0) return null;
 
         // How it ended, not just that it did. `exitCode` is null for a killed
