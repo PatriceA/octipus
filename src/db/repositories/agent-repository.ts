@@ -54,6 +54,7 @@ export class AgentRepository {
 
   /** Legacy rows predate the explicit root marker; exclude known children. */
   async findLatestRootForSession(sessionId: string, userId: string): Promise<AgentRecord | null> {
+    // i2: internal compaction lookup, restricted to the caller's exact session and owner.
     const result = await this.db.select().from(agents).where(and(
       eq(agents.sessionId, sessionId), eq(agents.userId, userId),
       isNull(agents.parentAgentId),

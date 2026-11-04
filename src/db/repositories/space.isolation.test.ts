@@ -183,6 +183,8 @@ const ALLOWLIST: Record<string, string> = {
   'src/db/repositories/docker-project-repository.ts': 'global daemon/project reservation: ownership is compared against caller user, workspace and repo before any operation',
   'src/security/orgs.ts': 'workspace transfer/delete, by workspace id',
   'src/security/permissions.ts': "a workspace's permission requests, by workspace id",
+  'src/db/repositories/recovery-consent.ts': 'internal recovery consent: caller-owned session journal, exact approved request snapshot and timestamp only',
+  'src/db/repositories/tool-action-repository.ts': 'internal recovery journal and consent: owner/session-bound requests, replay additionally bound to workspace and checkpoint',
   'src/security/quotas.ts': 'counts for quota enforcement',
   'src/security/user-deletion.ts': 'spaces a user authored content in, by user id (ids and names only)',
   // Billing history (cost_log is a keep table): a user's own spend.

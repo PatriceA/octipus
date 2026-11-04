@@ -162,11 +162,13 @@ describe('durable action recovery', () => {
     expect(repo.rows[1].reviewedAt).toBeNull();
   });
   test('an active action does not look like an orphan to concurrent work', async () => {
+    const reconcile = vi.spyOn(repo, 'reconcileApproved');
     let finish!: () => void;
     const active = run(() => new Promise<void>(resolve => { finish = resolve; }));
     await vi.waitFor(() => expect(finish).toBeDefined());
     await run(async () => 'another action'); expect(request).not.toHaveBeenCalled();
     finish(); await active;
+    expect(reconcile).not.toHaveBeenCalled();
   });
   test('different users and sessions cannot acknowledge each other’s uncertainty', async () => {
     await uncertain();
@@ -340,10 +342,12 @@ test('personal automatic recovery covers the entire pipeline snapshot, including
   await recovery.reviewPipeline({...ctx(),attended:false},'p',true,ask);expect(ask).not.toHaveBeenCalled();
 });
 test('automatic recovery never approves over a still-running pipeline action', async () => {
+  const reconcile = vi.spyOn(repo, 'reconcileApproved');
   const policy=await import('@/security/automatic-recovery');vi.spyOn(policy,'automaticRecoveryAllowed').mockResolvedValue(true);
   let complete!:()=>void;
   const running=recovery.run(ctx(),'shell','shell__run',{},()=>new Promise<void>(resolve=>{complete=resolve;}));
   await vi.waitFor(()=>expect(complete).toBeDefined());
   await expect(recovery.reviewPipeline(ctx(),'p',true)).rejects.toThrow('still running');
+  expect(reconcile).not.toHaveBeenCalled();
   expect(repo.rows[0].reviewedAt).toBeNull();complete();await running;
 });

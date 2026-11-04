@@ -95,7 +95,10 @@ export class ActionRecovery {
   private async reviewPending(context: AgentContext, toolName: string, toolId: string): Promise<void> {
     for (;;) {
       assertExecutionActive(context);
-      const unresolved = await this.repository.pending(context.userId, context.sessionId);
+      // Live actions have not lost their outcome. In particular, reconciling
+      // them inside a new DB transaction can deadlock a concurrent action
+      // that already holds a document transaction while finishing its journal.
+      const unresolved = (await this.repository.pending(context.userId, context.sessionId)).filter(row => !this.active.has(row.id));
       if (unresolved.length && await this.repository.reconcileApproved(context.userId, context.sessionId, unresolved.map(row => row.id))) continue;
       const bookkeeping = unresolved.filter(row => row.toolId === 'plan' && !this.active.has(row.id));
       if (bookkeeping.length) await this.repository.acknowledge(context.userId, context.sessionId, bookkeeping.map(row => row.id), 'local-plan-bookkeeping');
@@ -189,11 +192,12 @@ export class ActionRecovery {
       for (;;) {
         assertExecutionActive(context);
         const recorded = await this.repository.pipeline(context.userId, context.sessionId, pipelineId);
-        if (recorded.length && await this.repository.reconcileApproved(context.userId, context.sessionId, recorded.map(row => row.id))) continue;
-        const bookkeeping = recorded.filter(row => row.toolId === 'plan' && !this.active.has(row.id));
+        if (recorded.some(row => row.toolId !== 'plan' && this.active.has(row.id))) throw new RecoveryReviewRequiredError('Previous pipeline tool actions are still running. Wait for them to settle before resuming.');
+        const settled = recorded.filter(row => !this.active.has(row.id));
+        if (settled.length && await this.repository.reconcileApproved(context.userId, context.sessionId, settled.map(row => row.id))) continue;
+        const bookkeeping = settled.filter(row => row.toolId === 'plan');
         if (bookkeeping.length) await this.repository.acknowledge(context.userId, context.sessionId, bookkeeping.map(row => row.id), 'local-plan-bookkeeping');
-        const allRows = recorded.filter(row => row.toolId !== 'plan');
-        if (allRows.some(row => this.active.has(row.id))) throw new RecoveryReviewRequiredError('Previous pipeline tool actions are still running. Wait for them to settle before resuming.');
+        const allRows = settled.filter(row => row.toolId !== 'plan');
         const rows = allRows;
         if (!rows.length && !hasPriorVisits) return;
         if (await this.automaticallyReview(context, rows, true)) {
