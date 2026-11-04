@@ -17,22 +17,8 @@ import { getOAuthManager } from '@/security/oauth';
 import { fetchWithTimeout } from '@/utils/http';
 import { coreLogger } from '@/utils/logger';
 
-export type CalendarProvider = 'google' | 'microsoft';
-
-export interface CalendarEvent {
-  /** The provider's own id, stable across syncs. */
-  id: string;
-  title: string;
-  /** ISO-8601 start. An all-day event starts at midnight in its own zone. */
-  start: string;
-  end?: string;
-  allDay: boolean;
-  description?: string;
-  location?: string;
-  organizer?: Attendee;
-  attendees: Attendee[];
-  provider: CalendarProvider;
-}
+import type { CalendarEvent, CalendarProvider } from '@/shared/calendar';
+export type { CalendarEvent, CalendarProvider } from '@/shared/calendar';
 
 export interface CalendarDeps {
   getToken: (userId: string, provider: CalendarProvider) => Promise<string | null>;
@@ -187,6 +173,8 @@ const PROVIDERS: readonly ProviderSpec[] = [
 ];
 
 export interface CalendarListResult {
+  /** A provider returned more events than this window's bounded response. */
+  truncated?: boolean;
   events: CalendarEvent[];
   /** Providers that answered. Empty means no calendar is connected. */
   providers: CalendarProvider[];
@@ -210,16 +198,18 @@ export async function listCalendarEvents(
 
   const results = await Promise.all(PROVIDERS.map(async (spec) => {
     const token = await deps.getToken(userId, spec.provider).catch(() => null);
-    if (!token) return { events: [] as CalendarEvent[], provider: null, failed: false };
+    if (!token) return { events: [] as CalendarEvent[], provider: null, failed: false, truncated: false };
     try {
       const response = await deps.fetchJson(spec.url(options.from, options.to, limit), spec.headers(token));
-      return { events: spec.parse(response), provider: spec.provider, failed: false };
+      const events = spec.parse(response);
+      const page = response as { nextPageToken?: string; '@odata.nextLink'?: string };
+      return { events, provider: spec.provider, failed: false, truncated: events.length >= limit || !!page.nextPageToken || !!page['@odata.nextLink'] };
     } catch (err) {
       coreLogger.warn(
         { err: (err as Error).message, userId, provider: spec.provider },
         'calendar: could not list events for provider',
       );
-      return { events: [] as CalendarEvent[], provider: spec.provider, failed: true };
+      return { events: [] as CalendarEvent[], provider: spec.provider, failed: true, truncated: false };
     }
   }));
 
@@ -227,5 +217,6 @@ export async function listCalendarEvents(
     events: results.flatMap((r) => r.events).sort((a, b) => a.start.localeCompare(b.start)),
     providers: results.filter((r) => r.provider && !r.failed).map((r) => r.provider as CalendarProvider),
     partial: results.some((r) => r.failed),
+    ...(results.some(r => r.truncated) ? { truncated: true } : {}),
   };
 }

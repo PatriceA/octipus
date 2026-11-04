@@ -18,6 +18,7 @@ it('fetches and pushes through the broker; the Git child and persisted Git files
  const run=(cwd:string,args:string[])=>execFileSync('git',args,{cwd,env:{PATH:process.env.PATH,GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:process.platform==='win32'?'NUL':'/dev/null'},stdio:'pipe'}).toString();
  await mkdir(source);await mkdir(local);run(dir,['init','--bare',remote]);run(source,['init']);run(local,['init']);
  run(source,['-c','user.name=Test','-c','user.email=test@example.test','commit','--allow-empty','-m','seed']);run(source,['push',remote,'HEAD:refs/heads/main']);
+ run(source,['tag','release']);run(source,['push',remote,'refs/tags/release']);
  const server=createServer(async(req,res)=>{
   if(req.headers.authorization!==`Basic ${Buffer.from('oauth2:'+fx.secret).toString('base64')}`){res.writeHead(401).end();return;}
   const u=new URL(req.url!,'http://local');const chunks:Buffer[]=[];for await(const c of req)chunks.push(c);
@@ -34,6 +35,20 @@ it('fetches and pushes through the broker; the Git child and persisted Git files
  run(local,['config','http.proxy','http://127.0.0.1:1']);
  expect(await authenticatedGit(profile,caller,{operation:'fetch',path:local,remotePath:'/remote.git',refspecs:['refs/heads/main:refs/remotes/origin/main']})).toMatchObject({exitCode:0});
  expect(run(local,['rev-parse','refs/remotes/origin/main']).trim()).toBe(run(source,['rev-parse','HEAD']).trim());
+ // Branch-only fetches and audit fetches must not import ordinary local tags.
+ expect(run(local,['for-each-ref','--format=%(refname)','refs/tags/']).trim()).toBe('');
+ expect(await authenticatedGit(profile,caller,{operation:'fetch',path:local,remotePath:'/remote.git',refspecs:[
+  '+refs/heads/*:refs/remotes/pi29-audit/*', '+refs/tags/*:refs/tags/pi29-audit/*',
+ ]})).toMatchObject({exitCode:0});
+ expect(run(local,['rev-parse','refs/remotes/pi29-audit/main']).trim()).toBe(run(source,['rev-parse','HEAD']).trim());
+ expect(run(local,['rev-parse','refs/tags/pi29-audit/release']).trim()).toBe(run(source,['rev-parse','HEAD']).trim());
+ expect(run(local,['for-each-ref','--format=%(refname)','refs/tags/']).trim()).toBe('refs/tags/pi29-audit/release');
+ const beforeInvalid = run(local,['for-each-ref','--format=%(refname) %(objectname)']);
+ const spawnsBeforeInvalid = fx.spawns.length;
+ await expect(authenticatedGit(profile,caller,{operation:'fetch',path:local,remotePath:'//remote.git',refspecs:['+refs/heads/*:refs/remotes/pi29-audit/*']})).rejects.toThrow(/exactly one leading slash/);
+ await expect(authenticatedGit(profile,caller,{operation:'fetch',path:local,remotePath:'/remote.git',refspecs:['+refs/tags/*:refs/pi29-audit/tags/*']})).rejects.toThrow(/refs\/tags\/pi29-audit/);
+ expect(fx.spawns.length).toBe(spawnsBeforeInvalid);
+ expect(run(local,['for-each-ref','--format=%(refname) %(objectname)'])).toBe(beforeInvalid);
  run(remote,['config','http.receivepack','true']);
  expect(await authenticatedGit(profile,caller,{operation:'push',path:local,remotePath:'/remote.git',refspecs:['refs/remotes/origin/main:refs/heads/verified']})).toMatchObject({exitCode:0});
  expect(run(remote,['rev-parse','refs/heads/verified']).trim()).toBe(run(source,['rev-parse','HEAD']).trim());

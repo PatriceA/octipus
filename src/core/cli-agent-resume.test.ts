@@ -197,6 +197,7 @@ beforeEach(() => {
     import { readFileSync, existsSync, unlinkSync, writeFileSync } from 'node:fs';
     import { join } from 'node:path';
     const args = process.argv.slice(2);
+    writeFileSync(join(process.cwd(), 'claude-last-args.json'), JSON.stringify(args));
     const sessionIdx = args.indexOf('--session-id');
     const resumeIdx = args.indexOf('--resume');
     const idArg = sessionIdx >= 0 ? args[sessionIdx + 1] : resumeIdx >= 0 ? args[resumeIdx + 1] : null;
@@ -252,7 +253,7 @@ beforeEach(() => {
   // first run (no --resume yet), so the fake binary generates one and reports
   // it via thread.started, exactly like the real vendor.
   writeFileSync(fixture.codexScript, `
-    import { writeFileSync } from 'node:fs';
+    import { existsSync, readFileSync, writeFileSync } from 'node:fs';
     import { join } from 'node:path';
     const args = process.argv.slice(2);
     // Dumped so the test can assert on the real argv the worker built
@@ -263,7 +264,9 @@ beforeEach(() => {
     const threadId = resumedId || 'codex-thread-' + Math.random().toString(36).slice(2);
     console.log(JSON.stringify({ type: 'thread.started', thread_id: threadId }));
     console.log(JSON.stringify({ type: 'turn.started' }));
-    console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'answer for ' + threadId } }));
+    const answerMarker = join(process.cwd(), 'answer-marker');
+    const answer = existsSync(answerMarker) ? readFileSync(answerMarker, 'utf-8') : 'answer for ' + threadId;
+    console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: answer } }));
     console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }));
   `);
 });
@@ -297,14 +300,26 @@ describe('CLI session reuse', () => {
     expect(completions).toEqual([{ result }]);
   });
 
-  it('interactive turns do not resume or retain vendor transcripts', async () => {
-    const first = makeClaudeWorker({ sessionId: 'inline', inlineUiOffered: true });
-    await first.run('Make a calculator');
-    expect(fixture.sessions.get('inline')?.context.cliSessions).toBeUndefined();
-    const second = makeClaudeWorker({ sessionId: 'inline', inlineUiOffered: true, history: ['[[octi-ui:example|Calculator]]'] });
+  it.each([
+    ['cli/claude-code', 'Claude Code'], ['cli/codex', 'Codex CLI'],
+  ])('interactive turns retain and resume the same %s session after widget output', async (model, adapter) => {
+    writeFileSync(join(fixture.dir, 'answer-marker'), 'Here:\n```octi-ui title="Counter"\n<button type="button">Next</button>\n```');
+    const first = makeWorker(model, { sessionId: 'inline', inlineUiOffered: true });
+    const result = await first.run('Make a counter');
+    expect(result).toContain('[[octi-ui:11111111-1111-4111-8111-111111111111|Counter]]');
+    expect(result).not.toContain('<button');
+    const stored = await loadCliSession('inline', adapter, first.fingerprint);
+    expect(stored).toMatchObject({ id: expect.any(String) });
+    unlinkSync(join(fixture.dir, 'answer-marker'));
+    const second = makeWorker(model, { sessionId: 'inline', inlineUiOffered: true });
     await second.run('Change it');
-    expect(second.lastPrompt).toContain('[[octi-ui:example|Calculator]]');
-    expect(fixture.sessions.get('inline')?.context.cliSessions).toBeUndefined();
+    expect(await loadCliSession('inline', adapter, second.fingerprint)).toMatchObject({ id: stored!.id });
+    if (adapter === 'Codex CLI') expect(lastCodexArgs().slice(0, 3)).toEqual(['exec', 'resume', stored!.id]);
+    else {
+      const args = JSON.parse(readFileSync(join(fixture.dir, 'claude-last-args.json'), 'utf-8')) as string[];
+      expect(args[args.indexOf('--resume') + 1]).toBe(stored!.id);
+      expect(second.lastPrompt).toContain('Change it');
+    }
   });
 
   it('starts fresh and stores the id on the first turn', async () => {

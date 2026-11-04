@@ -163,6 +163,14 @@ must be `refs/remotes/...` or `refs/tags/...`, for example:
 {"connection":"gitlab-git","path":"/srv/projects/example","remotePath":"/group/example.git","refspecs":["+refs/heads/main:refs/remotes/origin/main"]}
 ```
 
+Use exactly one leading slash in `remotePath`; `//group/project.git` is invalid.
+For an isolated audit, map branches to `+refs/heads/*:refs/remotes/pi29-audit/*`
+and tags to `+refs/tags/*:refs/tags/pi29-audit/*`. The destination
+`refs/pi29-audit/tags/*` is unsupported. Fetch imports only explicitly requested
+tags, without automatically creating ordinary local tags. Validate one repository
+before submitting a batch. Argument validation failures require corrected
+arguments, not broader repository access or additional approval.
+
 Git receives a temporary loopback URL, never the vault value, an authentication
 environment variable or an authenticated remote URL. Only the selected Git protocol
 operation is accepted by the broker. Network Git runs from a clean temporary bare

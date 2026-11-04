@@ -8,6 +8,7 @@ import {
   HeartPulse,
   Key,
   MessageSquare,
+  Mail,
   Phone,
   Plug,
   Settings,
@@ -27,6 +28,7 @@ import { GeneralTab } from '@/components/settings/general-tab';
 import { HeartbeatTab } from '@/components/settings/heartbeat-tab';
 import { IntegrationsTab } from '@/components/settings/integrations-tab';
 import { MobileTab } from '@/components/settings/mobile-tab';
+import { MailboxManager } from '@/components/mail/mailbox-manager';
 import { ModulesTab } from '@/components/settings/modules-tab';
 import { MyModelsTab } from '@/components/settings/my-models-tab';
 import { NotificationsTab } from '@/components/settings/notifications-tab';
@@ -41,12 +43,14 @@ export default function SettingsPage() {
   // Tabs of a module that is off are left out (docs/MODULES.md).
   const channelsOn = useModuleOn('channels');
   const voiceOn = useModuleOn('voice');
+  const mailOn = useModuleOn('mail');
   const tabs = [
     { id: 'general', label: 'General', icon: Settings },
     { id: 'modules', label: 'Modules', icon: Boxes },
     { id: 'configuration', label: 'Configuration', icon: Sliders },
     { id: 'cli-tools', label: 'CLI tools', icon: Sliders },
     { id: 'integrations', label: 'Integrations', icon: Plug },
+    ...(mailOn ? [{ id: 'mailboxes', label: 'Mailboxes', icon: Mail }] : []),
     ...(channelsOn ? [{ id: 'channels', label: 'Channels', icon: MessageSquare }] : []),
     { id: 'security', label: 'Security', icon: Shield },
     { id: 'api-tokens', label: 'API Tokens', icon: Key },
@@ -97,6 +101,7 @@ export default function SettingsPage() {
           {activeTab === 'configuration' && <ConfigurationTab />}
           {activeTab === 'cli-tools' && <CliToolsTab />}
           {activeTab === 'integrations' && <IntegrationsTab />}
+          {activeTab === 'mailboxes' && mailOn && <MailboxManager />}
           {activeTab === 'channels' && channelsOn && <ChannelsTab />}
           {activeTab === 'security' && <SecurityTab />}
           {activeTab === 'api-tokens' && <ApiTokensTab />}

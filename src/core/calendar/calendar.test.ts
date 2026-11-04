@@ -187,3 +187,15 @@ describe('eventBody / hasOwnNotes', () => {
     expect(hasOwnNotes(`${eventBody(event).split('_Add what')[0]}\nWe agreed to ship Friday.`)).toBe(true);
   });
 });
+
+it('reports provider pagination even when the combined event count is below the cap', async () => {
+  const listed = await listCalendarEvents('alice', {
+    from: new Date('2026-11-04'), to: new Date('2026-11-11'),
+    deps: {
+      getToken: async (_user, provider) => provider === 'google' ? 'token' : null,
+      fetchJson: async () => ({ items: [], nextPageToken: 'more-events' }),
+    },
+  });
+  expect(listed.truncated).toBe(true);
+  expect(listed.partial).toBe(false);
+});

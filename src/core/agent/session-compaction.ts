@@ -132,7 +132,7 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
     if (session && (await sessionAudience(session)).contentStorageOff) return false;
     // Vendor histories are richer than the Octipus transcript. Automatic
     // maintenance must never rotate them onto a lossy Octipus checkpoint.
-    if (session && rootCliConversation(session)) return false;
+    if (session && await rootCliConversation(session)) return false;
     const manual = Boolean(options.force || options.userInstructions);
     // A pass that failed recently backs off whatever the size (decideCompaction
     // checks it first too); answer that before reading and tokenizing the

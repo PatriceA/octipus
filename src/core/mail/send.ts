@@ -8,6 +8,7 @@
  * the IMAP account's Sent folder when it has one (best-effort).
  */
 import { randomUUID } from 'node:crypto';
+import { mailDraftRevision } from './revision';
 import { ImapFlow } from 'imapflow';
 import nodemailer from 'nodemailer';
 import MailComposer from 'nodemailer/lib/mail-composer';
@@ -143,17 +144,18 @@ function checkRecipients(draft: Pick<MailMessage, 'toAddresses' | 'ccAddresses'>
  * and Message-ID; throws `MailSendError` (the draft is then `failed`, with
  * why, and can be sent again).
  */
-export async function sendDraft(repo: MailRepo, id: string): Promise<{ id: string; messageIdHeader: string }> {
+export async function sendDraft(repo: MailRepo, id: string, expectedRevision?: string): Promise<{ id: string; messageIdHeader: string }> {
   const draft = await repo.message(id);
   if (!draft || (draft.status !== 'draft' && draft.status !== 'failed')) {
     throw new MailSendError('not_found', draft ? 'This message is not a draft' : 'Draft not found');
   }
+  if (expectedRevision && mailDraftRevision(draft) !== expectedRevision) throw new MailSendError('invalid', 'The draft changed after review. Reload it and review the new content before sending.');
   const account = await repo.account(draft.accountId);
   if (!account) throw new MailSendError('not_found', 'Mail account not found');
   if (!account.outgoing) throw new MailSendError('invalid', 'This mail account has no outgoing server');
   checkRecipients(draft);
-  const claimed = await repo.claimForSend(id);
-  if (!claimed) throw new MailSendError('not_found', 'The draft is already being sent');
+  const claimed = await repo.claimForSend(id, draft);
+  if (!claimed) throw new MailSendError('invalid', 'The draft changed or is already being sent. Reload it before trying again.');
   // What goes out is the claimed row: an edit between the check and the claim is checked again.
   try {
     checkRecipients(claimed);

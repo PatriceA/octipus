@@ -1,4 +1,4 @@
-import { eq, inArray, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import type { AgentCompletionReason } from '@/shared/agent-completion';
 import { getDb } from '../postgres';
 import { type AgentRecord, agents, type NewAgentRecord } from '../schema/agents';
@@ -49,6 +49,19 @@ export class AgentRepository {
   async findById(id: string): Promise<AgentRecord | null> {
     // i2: by agent id, for the worker that runs it and system callers; user routes use ScopedAgentRepo
     const result = await this.db.select().from(agents).where(eq(agents.id, id)).limit(1);
+    return result[0] ?? null;
+  }
+
+  /** Legacy rows predate the explicit root marker; exclude known children. */
+  async findLatestRootForSession(sessionId: string, userId: string): Promise<AgentRecord | null> {
+    const result = await this.db.select().from(agents).where(and(
+      eq(agents.sessionId, sessionId), eq(agents.userId, userId),
+      isNull(agents.parentAgentId),
+      or(sql`${agents.metadata}->>'root' = 'true'`, and(
+        sql`NOT (coalesce(${agents.metadata}, '{}'::jsonb) ? 'root')`,
+        inArray(agents.role, ['general', 'orchestrator']),
+      )),
+    )).orderBy(desc(agents.createdAt), desc(agents.id)).limit(1);
     return result[0] ?? null;
   }
 

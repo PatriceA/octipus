@@ -13,10 +13,17 @@ import { killProcessTree } from '@/utils/proc';
 import { recordProviderUsage } from '@/models/providers/instrumented';
 import type { CompletionResult } from '@/models/litellm-client';
 
-export function rootCliConversation(session: Session) {
-  return Object.entries(session.context?.cliSessions ?? {})
+export async function rootCliConversation(session: Session) {
+  const candidates = Object.entries(session.context?.cliSessions ?? {})
     .filter(([key, record]) => !isChildCliSessionKey(key) && record.generation === sessionGeneration(session.context))
-    .sort((a, b) => b[1].lastUsedAt.localeCompare(a[1].lastUsedAt))[0];
+    .filter(([, record]) => !session.context?.clearedAt || record.lastUsedAt > session.context.clearedAt);
+  if (!candidates.length) return undefined;
+  // A cold run without a saved vendor session may leave older vendor IDs
+  // behind. Those are not the conversation the user just had, even when the
+  // adapter matches. Only the latest root's own saved vendor ID is eligible.
+  const latest = await agentRepository.findLatestRootForSession(session.id, session.userId);
+  if (!latest) return undefined;
+  return candidates.find(([, record]) => record.ownerAgentId === latest.id);
 }
 
 /**
@@ -29,7 +36,7 @@ export function rootCliConversation(session: Session) {
  * compacting it would spend their login on the requester's command.
  */
 export async function compactCliConversation(session: Session, instructions: string, requesterId: string): Promise<string | null> {
-  const current = rootCliConversation(session);
+  const current = await rootCliConversation(session);
   if (!current) return null;
   const [key, record] = current;
   const adapter = cliSessionKeyAdapter(key);

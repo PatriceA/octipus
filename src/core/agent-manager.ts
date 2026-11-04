@@ -483,7 +483,10 @@ export class AgentManager {
         role: options.role || 'general',
         model: routedModel,
         topic: routedTopic,
-        metadata: options.contextMetadata?.delegationDispatchId ? { delegationDispatchId: options.contextMetadata.delegationDispatchId } : {},
+        metadata: {
+          root: context.root === true,
+          ...(options.contextMetadata?.delegationDispatchId ? { delegationDispatchId: options.contextMetadata.delegationDispatchId } : {}),
+        },
         status: 'running',
         createdAt: context.createdAt,
       });

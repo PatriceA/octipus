@@ -20,6 +20,17 @@ so a message is read exactly where its account is.
 
 ## Accounts
 
+Open **Settings → Mailboxes**, or choose **Manage mailboxes** on the Email or
+Mailboxes page. Add an address, incoming server and password, and optionally an
+SMTP server. Each account can be edited, tested, synced and removed there.
+Blank password fields retain a saved login; passwords are never read back.
+
+The Email page's mailbox selector switches between the existing Google/Microsoft
+inbox and individual IMAP/POP3 accounts. **Mailboxes** (`/mail`) also works when
+the separate Google/Microsoft inbox module is off. Accounts are scoped to the
+selected local workspace; remote-install mailbox management is not supported.
+The `mail` module must be enabled in Settings → Modules.
+
 An account has:
 
 - **Address and label**, and optionally the display name it sends with.
@@ -134,6 +145,9 @@ A draft is sent over the account's SMTP server:
   wave it through, and an unattended run (a heartbeat, a schedule) is refused.
 - **Once.** The draft is claimed (`draft` → `sending`) in one statement, so two
   sends of one draft cannot both go out.
+- **Reviewed content.** The web UI saves drafts before offering send confirmation.
+  It sends the saved content's revision, and an atomic claim rejects concurrent
+  edits. A changed draft must be reloaded and reviewed again.
 - **Failures are kept.** A failed send is `failed` with the server's answer and
   can be edited or sent again.
 - **Interrupted sends are not resent blindly.** A send cut off between the
@@ -182,11 +196,10 @@ All under `/api/mail`, scoped by the workspace header like every space route.
 | `POST /drafts` | `{ replyTo, body, all }` or `{ accountId, to, cc, subject, body }` |
 | `PATCH /drafts/:id` | Change a draft or a failed send |
 | `DELETE /drafts/:id` | Remove a draft or a failed send |
-| `POST /drafts/:id/send` | `{ confirm: true }` |
+| `POST /drafts/:id/send` | `{ confirm: true, expectedRevision? }`; the web UI supplies the saved message view's revision |
 
 ## Not yet
 
-- A web page for mail (plan point C3b).
 - The heartbeat's "new mail" check for IMAP/POP3 accounts (it covers Gmail
   and Outlook today).
 - Attachments on outgoing mail, and flags or deletion on the server.

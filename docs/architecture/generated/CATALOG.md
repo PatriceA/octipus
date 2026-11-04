@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-599 mounted routes across 82 route files. The path is the full one, group prefix included — what a client actually calls.
+607 mounted routes across 83 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -105,6 +105,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/auth/passkey/auth/verify` | `src/api/routes/auth.ts` |
 | POST | `/api/auth/passkey/register/options` | `src/api/routes/auth.ts` |
 | POST | `/api/auth/passkey/register/verify` | `src/api/routes/auth.ts` |
+| PUT | `/api/auth/recovery-policy` | `src/api/routes/auth.ts` |
 | POST | `/api/auth/register` | `src/api/routes/auth.ts` |
 | GET | `/api/auth/registration` | `src/api/routes/auth.ts` |
 | POST | `/api/auth/totp/disable` | `src/api/routes/auth.ts` |
@@ -114,6 +115,9 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/backups` | `src/api/routes/backups.ts` |
 | POST | `/api/backups/:id/verify` | `src/api/routes/backups.ts` |
 | POST | `/api/backups/run` | `src/api/routes/backups.ts` |
+| GET | `/api/calendar/events` | `src/api/routes/calendar.ts` |
+| POST | `/api/calendar/events` | `src/api/routes/calendar.ts` |
+| PATCH | `/api/calendar/events/:id` | `src/api/routes/calendar.ts` |
 | GET | `/api/capabilities` | `src/api/routes/capabilities.ts` |
 | POST | `/api/capabilities/:id/install` | `src/api/routes/capabilities.ts` |
 | POST | `/api/capabilities/install-all-missing` | `src/api/routes/capabilities.ts` |
@@ -488,6 +492,10 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/settings/:key/reset` | `src/api/routes/settings.ts` |
 | PUT | `/api/settings/batch` | `src/api/routes/settings.ts` |
 | GET | `/api/settings/category/:category` | `src/api/routes/settings.ts` |
+| GET | `/api/settings/cli-tools` | `src/api/routes/settings.ts` |
+| PUT | `/api/settings/cli-tools-kubeconfig` | `src/api/routes/settings.ts` |
+| DELETE | `/api/settings/cli-tools/:name` | `src/api/routes/settings.ts` |
+| PUT | `/api/settings/cli-tools/:name` | `src/api/routes/settings.ts` |
 | GET | `/api/settings/registry` | `src/api/routes/settings.ts` |
 | POST | `/api/settings/setup-complete` | `src/api/routes/settings.ts` |
 | GET | `/api/settings/setup-status` | `src/api/routes/settings.ts` |
@@ -636,14 +644,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 22 |
 | `api` | `config` | 25 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 168 |
+| `api` | `core` | 170 |
 | `api` | `db` | 122 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 4 |
 | `api` | `models` | 39 |
 | `api` | `plugins` | 2 |
-| `api` | `security` | 148 |
+| `api` | `security` | 151 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 15 |
 | `api` | `skills` | 6 |
@@ -681,16 +689,16 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `channels` | 14 |
 | `core` | `config` | 66 |
 | `core` | `connectors` | 4 |
-| `core` | `db` | 402 |
+| `core` | `db` | 403 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 10 |
-| `core` | `models` | 122 |
+| `core` | `models` | 124 |
 | `core` | `modules` | 2 |
-| `core` | `security` | 191 |
+| `core` | `security` | 195 |
 | `core` | `services` | 2 |
 | `core` | `setup` | 1 |
-| `core` | `shared` | 46 |
+| `core` | `shared` | 48 |
 | `core` | `skills` | 11 |
 | `core` | `tools` | 23 |
 | `core` | `utils` | 224 |
@@ -739,13 +747,13 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `plugins` | `tools` | 1 |
 | `plugins` | `utils` | 4 |
 | `security` | `api` | 1 |
-| `security` | `config` | 15 |
+| `security` | `config` | 17 |
 | `security` | `connectors` | 3 |
 | `security` | `core` | 23 |
-| `security` | `db` | 82 |
+| `security` | `db` | 85 |
 | `security` | `mcp` | 2 |
 | `security` | `shared` | 5 |
-| `security` | `tools` | 3 |
+| `security` | `tools` | 4 |
 | `security` | `utils` | 32 |
 | `services` | `capabilities` | 5 |
 | `services` | `config` | 3 |
@@ -778,7 +786,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `mcp` | 2 |
 | `tools` | `models` | 8 |
 | `tools` | `plugins` | 1 |
-| `tools` | `security` | 51 |
+| `tools` | `security` | 52 |
 | `tools` | `services` | 1 |
 | `tools` | `shared` | 7 |
 | `tools` | `skills` | 5 |

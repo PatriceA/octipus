@@ -4,6 +4,7 @@ import { Archive, FileText, ListPlus, Loader2, Mail, Plus, RefreshCw, Send, Spar
 import { useCallback, useEffect, useState } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
+import { MailWorkspace } from '@/components/mail/mail-workspace';
 
 interface Addr { name?: string; email: string }
 interface Triage { priority: 'high' | 'normal' | 'low'; category?: string; reason?: string }
@@ -34,6 +35,10 @@ const priorityRail: Record<string, string> = {
 };
 
 export default function EmailPage() {
+  return <MailWorkspace oauthInbox={<OAuthInbox />} />;
+}
+
+function OAuthInbox() {
   const [items, setItems] = useState<InboxItem[]>([]);
   const [provider, setProvider] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);

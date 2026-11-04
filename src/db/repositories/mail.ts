@@ -231,13 +231,21 @@ export class MailRepo {
    * so two sends of one draft cannot both go out. Null when the scope does
    * not reach it or it is already sending or sent.
    */
-  async claimForSend(id: string): Promise<MailMessage | null> {
+  async claimForSend(id: string, expected?: MailMessage): Promise<MailMessage | null> {
     this.scope.can('write');
     if (!isUuid(id)) return null;
     const [row] = await this.db
       .update(mailMessages)
       .set({ status: 'sending', error: null, authorId: this.scope.principal.userId, updatedAt: new Date() })
-      .where(and(eq(mailMessages.id, id), inArray(mailMessages.status, [...EDITABLE]), ...this.messageRows()))
+      .where(and(eq(mailMessages.id, id), inArray(mailMessages.status, [...EDITABLE]), ...this.messageRows(),
+        ...(expected ? [
+          sql`${mailMessages.toAddresses} = ${JSON.stringify(expected.toAddresses)}::jsonb`,
+          sql`${mailMessages.ccAddresses} = ${JSON.stringify(expected.ccAddresses)}::jsonb`,
+          eq(mailMessages.subject, expected.subject), eq(mailMessages.bodyText, expected.bodyText),
+          sql`${mailMessages.bodyHtml} IS NOT DISTINCT FROM ${expected.bodyHtml}`,
+          sql`${mailMessages.inReplyTo} IS NOT DISTINCT FROM ${expected.inReplyTo}`,
+          sql`${mailMessages.references} IS NOT DISTINCT FROM ${expected.references}`,
+        ] : [])))
       .returning();
     return row ?? null;
   }

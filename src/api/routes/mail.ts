@@ -298,10 +298,10 @@ export const mailRoutes = new Elysia({ prefix: '/mail' })
     if (body.confirm !== true) { set.status = 400; return { error: 'Sending needs confirm: true' }; }
     try {
       const repo = contentRepos(principal).mail;
-      const sent = await sendDraft(repo, params.id);
+      const sent = await sendDraft(repo, params.id, body.expectedRevision);
       const row = await repo.message(sent.id);
       return row ? messageView(row, false) : { id: sent.id, status: 'sent' };
     } catch (err) {
       return refused(err, set);
     }
-  }, { params: ID, body: t.Object({ confirm: t.Boolean() }), detail: { tags: ['mail'] } });
+  }, { params: ID, body: t.Object({ confirm: t.Boolean(), expectedRevision: t.Optional(t.String({ pattern: '^[a-f0-9]{64}$' })) }), detail: { tags: ['mail'] } });

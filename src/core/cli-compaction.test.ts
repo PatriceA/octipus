@@ -2,12 +2,12 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { beforeEach, expect, test, vi } from 'vitest';
 import type { Session } from '@/db/schema/sessions';
-const mock = vi.hoisted(() => ({ exec: vi.fn(), spawn: vi.fn(), owner: vi.fn(), tool: vi.fn(), kill: vi.fn(), row: vi.fn() }));
+const mock = vi.hoisted(() => ({ exec: vi.fn(), spawn: vi.fn(), owner: vi.fn(), latest: vi.fn(), tool: vi.fn(), kill: vi.fn(), row: vi.fn() }));
 vi.mock('node:child_process', () => ({ spawn: mock.spawn }));
 vi.mock('@/utils/proc', () => ({ killProcessTree: mock.kill }));
 vi.mock('@/models/providers/instrumented', () => ({ recordProviderUsage: vi.fn() }));
 vi.mock('@/models/providers/cli-provider', () => ({ acquireCliSlot: async () => () => {}, execCli: mock.exec, windowsShellQuote: (s: string) => s, windowsShellQuoter: () => (s: string) => s }));
-vi.mock('@/db/repositories/agent-repository', () => ({ agentRepository: { findById: mock.owner } }));
+vi.mock('@/db/repositories/agent-repository', () => ({ agentRepository: { findById: mock.owner, findLatestRootForSession: mock.latest } }));
 vi.mock('./cli-agent-factory', () => ({ getCLIToolConfig: mock.tool, resolveCliModelEntry: mock.row }));
 vi.mock('./cli-adapters', () => ({ discoverCodexMcpServers: async () => [] }));
 vi.mock('./cli-session-store', () => ({ isChildCliSessionKey: (key: string) => key.includes('::'), cliSessionKeyAdapter: (key: string) => key.split('@@')[0] }));
@@ -18,6 +18,7 @@ const session = () => ({ id: 'session', userId: 'user', context: { conversationG
 beforeEach(() => {
   vi.clearAllMocks();
   mock.owner.mockResolvedValue({ sessionId: 'session', userId: 'user', model: 'claude-model' });
+  mock.latest.mockResolvedValue({ id: 'root' });
   mock.tool.mockReturnValue({ name: 'Claude Code', binaryPath: 'claude', modelProvider: 'anthropic' });
   mock.row.mockResolvedValue({ metadata: {} });
 });
@@ -42,10 +43,36 @@ test("a conversation on another member's personal model is never compacted with 
   await expect(compactCliConversation(session(), '', 'member')).rejects.toThrow("another member's personal model");
   expect(mock.exec).not.toHaveBeenCalled();
 });
-test('child and cleared vendor conversations are not compacted', () => {
+test('child and cleared vendor conversations are not compacted', async () => {
   const state = session();
   state.context!.cliSessions = { 'Claude Code::task': record, 'Claude Code': { ...record, generation: 'old' } };
-  expect(rootCliConversation(state)).toBeUndefined();
+  expect(await rootCliConversation(state)).toBeUndefined();
+});
+test('ten newer Codex roots without a saved thread never fall back to old Claude', async () => {
+  mock.latest.mockResolvedValue({ id: 'codex-root-10', model: 'cli/codex' });
+  expect(await compactCliConversation(session(), '', 'user')).toBeNull();
+  expect(mock.exec).not.toHaveBeenCalled();
+  expect(mock.spawn).not.toHaveBeenCalled();
+});
+test('a cold run cannot compact an older thread of the same adapter', async () => {
+  mock.latest.mockResolvedValue({ id: 'new-claude-root', model: 'cli/claude' });
+  expect(await rootCliConversation(session())).toBeUndefined();
+});
+test('latest root ownership wins over stale provider timestamps', async () => {
+  const state = session();
+  state.context!.cliSessions!['Claude Code'].lastUsedAt = '2030-01-01T00:00:00Z';
+  state.context!.cliSessions!['Codex CLI'] = { ...record, ownerAgentId: 'codex-root', id: 'codex-thread' };
+  mock.latest.mockResolvedValue({ id: 'codex-root', model: 'cli/codex' });
+  expect(await rootCliConversation(state)).toEqual(['Codex CLI', expect.objectContaining({ id: 'codex-thread' })]);
+});
+test('missing root history does not authorize an arbitrary saved provider', async () => {
+  mock.latest.mockResolvedValue(null);
+  expect(await rootCliConversation(session())).toBeUndefined();
+});
+test('records predating clear are excluded even with a matching generation', async () => {
+  const state = session();
+  state.context!.clearedAt = '2026-10-01T00:00:00Z';
+  expect(await rootCliConversation(state)).toBeUndefined();
 });
 test('Codex waits for the matching completed compaction turn, not the RPC acknowledgement', async () => {
   const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill: vi.fn(), pid: undefined });

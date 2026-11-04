@@ -26,6 +26,7 @@ import { assertHostAllowed, MailHostError, resolveMailHost } from './hosts';
 import { deleteMailPasswords, mailPassword, mailPasswordsSet, outgoingPassword, setMailPassword } from './secrets';
 import { checkOutgoing } from './send';
 import { checkIncoming } from './sources';
+import { mailDraftRevision } from './revision';
 
 export interface MailServerInput {
   host: string;
@@ -235,6 +236,7 @@ export function messageSummary(row: MailSummaryRow): MailMessageSummary {
 
 export function messageView(row: MailMessage, rawKept: boolean): MailMessageView {
   return {
+    revision: mailDraftRevision(row),
     ...messageSummary(row),
     cc: row.ccAddresses,
     messageIdHeader: row.messageIdHeader,

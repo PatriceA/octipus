@@ -34,6 +34,8 @@ const ArtifactsViewPage = lazy(() => import('./app/artifacts/view/page'));
 const ChatPage = lazy(() => import('./app/chat/page'));
 const DocumentsPage = lazy(() => import('./app/documents/page'));
 const EmailPage = lazy(() => import('./app/email/page'));
+const MailPage = lazy(() => import('./app/mail/page'));
+const CalendarPage = lazy(() => import('./app/calendar/page'));
 const EvalPage = lazy(() => import('./app/eval/page'));
 const EvalComparePage = lazy(() => import('./app/eval/compare/page'));
 const EvalRedTeamPage = lazy(() => import('./app/eval/red-team/page'));
@@ -139,6 +141,8 @@ const router = createBrowserRouter([
       { path: 'onboarding', element: <OnboardingPage /> },
       { path: 'documents', element: <DocumentsPage /> },
       { path: 'email', element: <EmailPage /> },
+      { path: 'mail', element: <MailPage /> },
+      { path: 'calendar', element: <CalendarPage /> },
       { path: 'eval', element: <EvalPage /> },
       { path: 'eval/compare', element: <EvalComparePage /> },
       { path: 'eval/red-team', element: <EvalRedTeamPage /> },

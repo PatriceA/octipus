@@ -24,6 +24,7 @@ async function gitCall(args: string[], cwd: string, signal: AbortSignal, input?:
   } finally {signal.removeEventListener('abort',stop);}
 }
 const refMap=(text:string)=>new Map(text.trim().split('\n').filter(Boolean).map(line=>{const [ref,hash]=line.split(' ');if(!/^refs\/[A-Za-z0-9_./-]+$/.test(ref)||! /^[a-f0-9]{40,64}$/.test(hash))throw new Error('Unsupported repository refs');return [ref,hash];}));
+export const GIT_FETCH_REFSPEC_PATTERN = '^\\+?refs/[A-Za-z0-9_./*-]+:refs/(?:remotes|tags)/[A-Za-z0-9_./*-]+$';
 
 /** A short-lived, operation-bound Git HTTP broker. The Git process receives no vault value. */
 export async function authenticatedGit(p: ConnectionProfile, caller: ConnectionPrincipal, args: {
@@ -34,10 +35,10 @@ export async function authenticatedGit(p: ConnectionProfile, caller: ConnectionP
   const cwd = await realpath(args.path);
   const roots = await Promise.all(p.http.repositoryRoots.map(root => realpath(root)));
   if (!roots.some(root => { const rel = relative(root, cwd); return !isAbsolute(rel) && rel !== '..' && !rel.startsWith('../') && !rel.startsWith('..\\'); })) throw new Error('Repository is outside the connection repository roots');
-  if (!/^\/(?:[a-zA-Z0-9_.-]+\/)*[a-zA-Z0-9_.-]+\.git$/.test(args.remotePath)) throw new Error('Use a repository path such as /group/project.git');
+  if (!/^\/(?:[a-zA-Z0-9_.-]+\/)*[a-zA-Z0-9_.-]+\.git$/.test(args.remotePath)) throw new Error('Invalid remotePath: use /group/project.git with exactly one leading slash; do not supply //group/project.git or a full URL. Correct the arguments before retrying other repositories.');
   connectionUrl(p, args.remotePath);
-  if (!args.refspecs.length || args.refspecs.some(ref => typeof ref !== 'string' || !ref || /^-/.test(ref) || /[\s\0-\x1f]/.test(ref))) throw new Error('Explicit Git refspecs are required; flags are not allowed');
-  if (args.operation === 'fetch' && args.refspecs.some(ref => !/^\+?refs\/[A-Za-z0-9_./*-]+:refs\/(?:remotes|tags)\/[A-Za-z0-9_./*-]+$/.test(ref))) throw new Error('Fetch needs explicit refs/...:refs/remotes/... (or refs/tags/...) destinations');
+  if (!Array.isArray(args.refspecs) || !args.refspecs.length || args.refspecs.some(ref => typeof ref !== 'string' || !ref || /^-/.test(ref) || /[\s\0-\x1f]/.test(ref))) throw new Error('Explicit Git refspecs are required; flags are not allowed');
+  if (args.operation === 'fetch' && args.refspecs.some(ref => !new RegExp(GIT_FETCH_REFSPEC_PATTERN).test(ref))) throw new Error('Invalid fetch refspec: destinations must be refs/remotes/... or refs/tags/.... For an isolated audit use +refs/heads/*:refs/remotes/pi29-audit/* and +refs/tags/*:refs/tags/pi29-audit/*. refs/pi29-audit/tags/* is unsupported. Correct the arguments before retrying other repositories.');
   const service = args.operation === 'fetch' ? 'git-upload-pack' : 'git-receive-pack';
   const nonce = randomUUID();
   const prefix = `/${nonce}${args.remotePath}`;
@@ -113,7 +114,7 @@ export async function authenticatedGit(p: ConnectionProfile, caller: ConnectionP
       let result:{stdout:string;stderr:string};
       try { result=await gitCall([...clean,'-c','credential.helper=','-c','protocol.allow=never','-c','protocol.http.allow=always',
         '-c','http.followRedirects=false','-c','http.proxy=','-c','http.extraHeader=',args.operation,
-        ...(args.operation==='fetch'?['--tags','--no-recurse-submodules']:['--no-verify']),'--',url,...args.refspecs],temporary,lifetime,undefined,env); }
+        ...(args.operation==='fetch'?['--no-tags','--no-recurse-submodules']:['--no-verify']),'--',url,...args.refspecs],temporary,lifetime,undefined,env); }
       catch(error){ throw new Error(String(maskOutput((error as Error).message.replaceAll(url,p.http.origin+args.remotePath)))); }
       if(args.operation==='fetch'){
         const after=refMap((await gitCall([...clean,'for-each-ref','--format=%(refname) %(objectname)'],temporary,lifetime,undefined,env)).stdout);

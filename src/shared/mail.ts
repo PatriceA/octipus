@@ -78,6 +78,8 @@ export interface MailMessageSummary {
 }
 
 export interface MailMessageView extends MailMessageSummary {
+  /** Exact saved draft content, used to bind a human's send confirmation. */
+  revision?: string;
   cc: MailAddress[];
   messageIdHeader: string | null;
   inReplyTo: string | null;

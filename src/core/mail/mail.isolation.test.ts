@@ -426,6 +426,22 @@ describe('POP3 and SMTP for real', () => {
     expect(received).toHaveLength(2);
   });
 
+  test('a reviewed draft cannot send after another editor changes it, including during the claim', async () => {
+    const { sendDraft } = await import('./send');
+    const { mailDraftRevision } = await import('./revision');
+    const repos = await personal(admin, true);
+    const account = await repos.mail.account(kim.id);
+    const draft = await repos.mail.createDraft(account!, { toAddresses: [{ address: 'reviewed@kim.telematik' }], ccAddresses: [], subject: 'Reviewed subject', bodyText: 'Reviewed body' });
+    const receipt = mailDraftRevision(draft);
+    const sentBefore = received.length;
+    await repos.mail.updateDraft(draft.id, { toAddresses: [{ address: 'changed@kim.telematik' }] });
+    await expect(sendDraft(repos.mail, draft.id, receipt)).rejects.toThrow(/changed after review/);
+    // Same race after the revision check: the SQL claim must reject stale content.
+    expect(await repos.mail.claimForSend(draft.id, draft)).toBeNull();
+    expect((await repos.mail.message(draft.id))?.status).toBe('draft');
+    expect(received.length).toBe(sentBefore);
+  });
+
   test('a received message links to a case', async () => {
     const { linkToCase, caseLinks } = await import('@/core/cases/links');
     const repos = await personal(admin, true);

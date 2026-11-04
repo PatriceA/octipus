@@ -21,11 +21,14 @@ export function NotificationsTab() {
   const [values, setValues] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.get<Record<string, { settings: Array<{ key: string; value: unknown }> }>>('/settings')
+    api.get<{ settings?: Record<string, Array<{ key: string; value: unknown }>>; error?: string }>('/settings')
       .then(data => {
-        const notifications = data?.notifications?.settings || [];
+        if (!data.settings) throw new Error(data.error || 'Could not load notification settings.');
+        const notifications = data.settings.notifications || [];
         const vals: Record<string, boolean> = {};
         for (const s of notifications) {
           vals[s.key] = s.value === true || s.value === 'true';
@@ -38,19 +41,22 @@ export function NotificationsTab() {
         }
         setValues(vals);
       })
-      .catch(() => {})
+      .catch(error => setLoadError(error instanceof Error ? error.message : 'Could not load notification settings.'))
       .finally(() => setLoading(false));
   }, []);
 
   const handleToggle = async (key: string) => {
     const newValue = !values[key];
+    setSaveError(null);
     setValues(prev => ({ ...prev, [key]: newValue }));
     setSaving(key);
     try {
-      await api.put(`/settings/${encodeURIComponent(key)}`, { value: newValue });
-    } catch {
+      const result = await api.put<{ success?: boolean; error?: string }>(`/settings/${encodeURIComponent(key)}`, { value: newValue });
+      if (!result.success) throw new Error(result.error || 'Could not save notification settings.');
+    } catch (error) {
       // Revert on error
       setValues(prev => ({ ...prev, [key]: !newValue }));
+      setSaveError(error instanceof Error ? error.message : 'Could not save notification settings.');
     }
     setSaving(null);
   };
@@ -66,6 +72,7 @@ export function NotificationsTab() {
   return (
     <div className="space-y-6">
       <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">Notifications</h2>
+      {(loadError || saveError) && <p role="alert" className="text-sm text-error">{loadError || saveError}</p>}
 
       <div className="space-y-4">
         {NOTIFICATION_SETTINGS.map(ns => (
@@ -74,7 +81,7 @@ export function NotificationsTab() {
               type="checkbox"
               checked={values[ns.key] ?? false}
               onChange={() => handleToggle(ns.key)}
-              disabled={saving === ns.key}
+              disabled={saving !== null || loadError !== null}
               className="w-4 h-4 rounded accent-primary mt-0.5"
             />
             <div>

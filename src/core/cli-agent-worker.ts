@@ -1104,9 +1104,9 @@ When a task matches one of these skills, load it with get_skill before starting 
     // Never in a room (§6.4): a vendor session would carry one requester's
     // conversation into the next requester's turn; each room turn starts
     // cold from the fenced transcript.
-    // Interactive turns start from Octipus's stubbed history. A vendor transcript
-    // retains widget source and cannot be scrubbed before the next turn.
-    if (canResume(adapterKey) && this.context.metadata?.inlineUiOffered !== true && !(await isRoomSession(this.context.sessionId))) {
+    // Interactive answers also reuse the vendor session. Its transcript may
+    // retain widget source; Octipus's own history still stores widget markers.
+    if (canResume(adapterKey) && !(await isRoomSession(this.context.sessionId))) {
       const childResumeKey = root ? undefined : this.context.metadata?.resumeKey;
       if (root) storeKey = rootCliSessionKey(adapterKey, credentialOwnerId);
       else if (typeof childResumeKey === 'string' && childResumeKey) {

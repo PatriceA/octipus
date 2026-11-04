@@ -336,6 +336,9 @@ server use the same code. The esbuild syntax check is server-only
   changed message is dropped, because Anthropic and Gemini replay it.
 - Later turns see `[[octi-ui:<id>|<title>]]`; `inline-ui__source` fetches
   the source when the model wants to change a block.
+- **CLI session reuse.** The marker rule applies to Octipus-managed history.
+  Resumed CLI vendor transcripts may retain widget source; interactive answers
+  do not disable session reuse. Widget validation and browser isolation still apply.
 - **Output guard.** The service's `guardOutput` reads the reply together with
   the sources of the blocks it shows (`inlineUiGuardText`), so a widget is
   held to the same checks as text.
@@ -930,7 +933,7 @@ Found while implementing:
 **Revision 3.1** (round 3: 1 blocker, 3 majors, 3 minors):
 - **CSP inheritance.** The content frame inherits the host CSP. The host CSP now allows everything the content CSP allows, a subset test was added, and the spike tests inheritance and `data:` frames (§4.2, §5.0).
 - **Navigation stop signal.** The navigation violation may fire only in the content realm. The stop signal now relies only on what the host observes (D9, spike step 6).
-- **CLI roots.** CLI-provider roots are offered interactive answers. These turns start cold from Octipus history and do not reuse vendor transcripts, so widget source is not replayed (D4, D12).
+- **CLI roots.** CLI-provider roots are offered interactive answers. They reuse vendor sessions; Octipus-managed history uses widget references, while the vendor transcript may retain source (D4, D12).
 - **Steered sends.** Provenance is stored as a structured key on both paths, the steer path included (§6).
 - **Minors.** Gemini replay warning skipped for stubbed messages; one `handleMessage` option; lint/sanitizer parity and render-cost cap tests.
 

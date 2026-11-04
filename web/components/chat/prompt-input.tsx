@@ -131,10 +131,14 @@ export default function PromptInput({
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [attachmentProtectionLevel, setAttachmentProtectionLevel] = useState<ProtectionLevel | ''>('');
   const hasFiles = attachments.length > 0 || hasAttachedFiles;
-  const sensitivityId = useId();
-  useEffect(() => {
+  const [previousHasFiles, setPreviousHasFiles] = useState(hasFiles);
+  // Reset before rendering when parent-owned attachments disappear, so a
+  // later file requires a fresh sensitivity choice without an effect cascade.
+  if (previousHasFiles !== hasFiles) {
+    setPreviousHasFiles(hasFiles);
     if (!hasFiles) setAttachmentProtectionLevel('');
-  }, [hasFiles]);
+  }
+  const sensitivityId = useId();
   const [isDragging, setIsDragging] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);

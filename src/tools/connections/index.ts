@@ -1,7 +1,7 @@
 import type { AgentContext, ToolManifest } from '@/core/types';
 import { getExecutionSignal } from '@/core/execution-scope';
 import { authenticatedFetch, connectionUrl, connectionFor, readBoundedResponse, readAvailableConnectionProfiles } from '@/security/credential-connections';
-import { authenticatedGit } from '@/security/credential-git';
+import { authenticatedGit, GIT_FETCH_REFSPEC_PATTERN } from '@/security/credential-git';
 import { BaseTool, createParameterSchema } from '../base-tool';
 
 export class ConnectionsTool extends BaseTool {
@@ -51,11 +51,13 @@ export class ConnectionsTool extends BaseTool {
       query: { type: 'object', description: 'Query string fields' }, headers: { type: 'object', description: 'Non-authentication headers' },
       timeout: { type: 'number', description: 'Execution timeout in milliseconds (1–600000)', default: 120000 },
     }), (args, c) => request({ ...args, method: 'GET', json: undefined, form: undefined }, c), { permissionAction: 'read', readOnly: true });
-    for (const operation of ['fetch', 'push'] as const) this.registerTool(`git_${operation}`, `Authenticated Git ${operation} using a configured connection. Credentials stay in a temporary HTTP broker, never in git's environment, command line or config. Does not require glab.`, createParameterSchema({
+    for (const operation of ['fetch', 'push'] as const) this.registerTool(`git_${operation}`, `Authenticated Git ${operation} using a configured connection. Credentials stay in a temporary HTTP broker, never in git's environment, command line or config. Does not require glab. Validate one repository before batching calls; fix argument errors before trying other repositories.`, createParameterSchema({
       connection: { type: 'string', required: true, description: 'Configured connection name' }, path: { type: 'string', required: true, description: 'Local repository under the connection repositoryRoots' },
-      remotePath: { type: 'string', required: true, description: '/group/project.git on the configured origin' },
+      remotePath: { type: 'string', required: true, description: '/group/project.git on the configured origin, with exactly one leading slash. No // prefix or full URL.' },
       timeout: { type: 'number', description: 'Git timeout in milliseconds (1–1800000)', default: 600000 },
-      refspecs: { type: 'array', items: { type: 'string' }, required: true, description: 'Explicit source/destination refs; no flags' },
+      refspecs: { type: 'array', items: { type: 'string', ...(operation === 'fetch' ? { pattern: GIT_FETCH_REFSPEC_PATTERN } : {}) }, required: true, description: operation === 'fetch'
+        ? 'Explicit refs/<source>:refs/remotes/<namespace>/... or refs/<source>:refs/tags/<namespace>/... mappings, optional leading +. Audit example: ["+refs/heads/*:refs/remotes/pi29-audit/*", "+refs/tags/*:refs/tags/pi29-audit/*"]. refs/pi29-audit/tags/* is invalid. Only explicitly requested tags are fetched; no flags.'
+        : 'Explicit source/destination refs; no flags' },
     }), async (args, c) => authenticatedGit(await connectionFor(String(args.connection), { ...c, agentId: c.id }), { ...c, agentId: c.id }, {
       operation, timeout: args.timeout as number | undefined, path: String(args.path), remotePath: String(args.remotePath), refspecs: args.refspecs as string[],
     }, getExecutionSignal(c)), { permissionAction: operation });

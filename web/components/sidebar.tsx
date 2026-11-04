@@ -9,6 +9,7 @@ import {
   FolderKanban,
   Brain,
   Cable,
+  CalendarDays,
   Cpu,
   FileText,
   Globe,
@@ -91,6 +92,8 @@ const navGroups: NavGroup[] = [
     { name: 'models', href: '/models', icon: Cpu },
     { name: 'mcp & connectors', href: '/mcp', icon: Cable },
     { name: 'email', href: '/email', icon: Mail },
+    { name: 'mailboxes', href: '/mail', icon: Mail },
+    { name: 'calendar', href: '/calendar', icon: CalendarDays },
   ] },
   { label: 'Settings', items: [
     { name: 'settings & channels', href: '/settings', icon: Settings },

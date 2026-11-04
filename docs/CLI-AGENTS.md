@@ -628,14 +628,22 @@ across root turns while bridge endpoints and credentials remain per-run.
 
 ### Compaction
 
-Octipus summarizes a contiguous prefix, retains recent turns, and publishes a
-checkpoint with exact message coverage. Both Claude and Codex vendor records
-rotate only after successful checkpoint publication. The next launch carries
-that checkpoint plus its suffix. There is no separate credential-bearing CLI
-maintenance subprocess. A failed, incomplete or ineffective automatic summary
-does not rotate the vendor conversation. Turn execution and maintenance are
-serialized within one server process. Only root vendor sessions rotate; child
-task sessions are kept, because they never held the root transcript.
+When the latest root agent saved a resumable CLI session, `/compact` runs that
+provider's native compaction on its exact vendor session ID. The confirmation
+names that provider. Automatic Octipus summarization leaves that session alone.
+Selection follows the latest root agent, rather than the timestamps of older
+saved provider sessions. Child agents are excluded.
+
+Interactive answers reuse CLI sessions too. Widget source may remain in the
+vendor transcript; Octipus's own history stores widget references. If the
+latest root has no saved vendor session, `/compact` summarizes the Octipus transcript instead of
+compacting an older Claude or Codex conversation. It summarizes a contiguous
+prefix, retains recent turns, and publishes a checkpoint with exact message
+coverage. Older root vendor records rotate only after successful checkpoint
+publication. The next launch carries that checkpoint plus its suffix. A failed,
+incomplete or ineffective summary does not rotate them. Turn execution and
+maintenance are serialized within one server process. Child task sessions are
+kept, because they never held the root transcript.
 
 ### Cold fallback
 

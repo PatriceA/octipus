@@ -35,6 +35,10 @@ vi.mock('@/db/repositories/message-repository', () => ({ messageRepository: {
 vi.mock('@/db/repositories/agent-repository', () => ({ agentRepository: { updateStatus: async () => {} } }));
 vi.mock('@/db/repositories/audit-repository', () => ({ auditRepository: { logAgentCompleted: async () => {} } }));
 vi.mock('@/core/agent-task-recorder', () => ({ recordAgentCompletion: async () => {} }));
+vi.mock('@/db/repositories/agent-repository', () => ({ agentRepository: {
+  findLatestRootForSession: async () => ({ id: 'live-cli-root' }),
+  updateStatus: async () => {},
+} }));
 vi.mock('@/tools/browser-ext', () => ({ closeAgentTabs: async () => {} }));
 vi.mock('@/models/model-registry', () => ({ getModelRegistry: () => ({ getDefaultModel: async () => ({ modelId: 'summary-model' }) }) }));
 vi.mock('@/db/repositories/compaction-entry-repository', () => ({ compactionEntryRepository: {
@@ -184,10 +188,19 @@ describe('session lifecycle across ephemeral root workers', () => {
     expect(read).not.toHaveBeenCalled();
     read.mockRestore();
   });
+  test('manual compact summarizes chat when only an older provider session remains', async () => {
+    for (let i = 0; i < 6; i++) await turn(i);
+    fixture.context.cliSessions = { 'Claude Code': {
+      id: 'old-claude', ownerAgentId: 'old-root', fingerprint: 'f', lastUsedAt: '', generation: '',
+    } };
+    expect(await compactSessionCommand('session', '', 'user')).toContain('Session compacted.');
+    expect(fixture.context.checkpoint).toBeDefined();
+    expect(fixture.context.cliSessions?.['Claude Code']).toBeUndefined();
+  });
   test('a live root vendor session is never compacted onto an Octipus checkpoint', async () => {
     for (let i = 0; i < 6; i++) await turn(i);
     const rec = { fingerprint: 'f', lastUsedAt: '', generation: '' };
-    const sessions = { 'Claude Code': { id: 'root', ...rec }, 'Claude Code::general>coding:t1': { id: 'child', ...rec } };
+    const sessions = { 'Claude Code': { id: 'root', ownerAgentId: 'live-cli-root', ...rec }, 'Claude Code::general>coding:t1': { id: 'child', ...rec } };
     fixture.context.cliSessions = structuredClone(sessions);
     expect(await maybeCompactSession('session', { force: true })).toBe(false);
     expect(fixture.context.checkpoint).toBeUndefined();

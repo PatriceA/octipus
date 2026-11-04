@@ -7,7 +7,7 @@ export const mailModule: ModuleDefinition = {
   profiles: ['company'],
   dependsOn: [],
   routes: ['/api/mail'],
-  pages: [],
+  pages: ['/mail'],
   tools: ['mail'],
   jobs: ['mail-sync'],
   caseEntities: ['mail'],
